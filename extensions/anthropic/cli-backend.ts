@@ -115,7 +115,12 @@ function resolveClaudeCliAuthInput(
 }
 
 /** Build the Claude CLI backend plugin descriptor. */
-export function buildAnthropicCliBackend(): CliBackendPlugin {
+export function buildAnthropicCliBackend(
+  options: {
+    ensureDynamicSystemPromptSectionsSupport?: () => Promise<void>;
+    supportsDynamicSystemPromptSections?: () => boolean;
+  } = {},
+): CliBackendPlugin {
   return {
     id: CLAUDE_CLI_BACKEND_ID,
     modelProvider: "anthropic",
@@ -150,6 +155,38 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
     toolAvailabilityEnforcement: "execution-args",
     sideQuestionToolMode: "disabled",
     ownsNativeCompaction: true,
+    manualCompaction: {
+      buildPrompt: (customInstructions) => {
+        const instructions = customInstructions?.trim();
+        return instructions ? `/compact ${instructions}` : "/compact";
+      },
+      input: "arg",
+      validateOutput: (rawOutput) => {
+        for (const line of rawOutput.split("\n")) {
+          try {
+            const event = JSON.parse(line) as {
+              compact_result?: unknown;
+              type?: unknown;
+              subtype?: unknown;
+            };
+            // Claude Code 2.0.76, 2.1.225, and 2.1.226 emit these terminal
+            // records; system/status with status=compacting is progress only.
+            if (
+              event.compact_result === "success" ||
+              (event.type === "system" && event.subtype === "compact_boundary")
+            ) {
+              return { ok: true };
+            }
+          } catch {
+            // Ignore non-JSON process noise; the positive acknowledgement is authoritative.
+          }
+        }
+        return {
+          ok: false,
+          reason: "Claude CLI did not confirm that native compaction ran.",
+        };
+      },
+    },
     // Anthropic routes direct anthropic-messages calls on subscription OAuth
     // tokens to metered extra-usage billing (or rejects them without balance);
     // opted-in embedded runs on subscription credentials execute through this
@@ -215,30 +252,37 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
     normalizeConfig: normalizeClaudeBackendConfig,
     authEpochMode: "profile-only",
     prepareExecution: (context) => {
-      const credentialContext = context as typeof context & {
-        authCredential?: ClaudeCliAuthCredential;
-        isolatedCompletionPrompt?: string;
-        isolatedCompletionSystemPrompt?: string;
+      const prepare = () => {
+        const credentialContext = context as typeof context & {
+          authCredential?: ClaudeCliAuthCredential;
+          isolatedCompletionPrompt?: string;
+          isolatedCompletionSystemPrompt?: string;
+        };
+        const authInput = resolveClaudeCliAuthInput(credentialContext.authCredential);
+        const isolatedCompletion = credentialContext.isolatedCompletionPrompt !== undefined;
+        const env = {
+          ...resolveClaudeCliAutoCompactEnv(context.contextTokenBudget),
+          ...authInput?.env,
+        };
+        return Object.keys(env).length > 0 || isolatedCompletion
+          ? {
+              env,
+              // The paired side-question argv projection disables settings, memory,
+              // hooks, session persistence, and tools before process launch.
+              ...(isolatedCompletion ? { isolatedCompletionEnforced: true as const } : {}),
+              ...(authInput?.clearEnv ? { clearEnv: authInput.clearEnv } : {}),
+              ...(authInput?.secretInput ? { secretInput: authInput.secretInput } : {}),
+              ...(authInput?.cleanup ? { cleanup: authInput.cleanup } : {}),
+            }
+          : undefined;
       };
-      const authInput = resolveClaudeCliAuthInput(credentialContext.authCredential);
-      const isolatedCompletion = credentialContext.isolatedCompletionPrompt !== undefined;
-      const env = {
-        ...resolveClaudeCliAutoCompactEnv(context.contextTokenBudget),
-        ...authInput?.env,
-      };
-      return Object.keys(env).length > 0 || isolatedCompletion
-        ? {
-            env,
-            // The paired side-question argv projection disables settings, memory,
-            // hooks, session persistence, and tools before process launch.
-            ...(isolatedCompletion ? { isolatedCompletionEnforced: true as const } : {}),
-            ...(authInput?.clearEnv ? { clearEnv: authInput.clearEnv } : {}),
-            ...(authInput?.secretInput ? { secretInput: authInput.secretInput } : {}),
-            ...(authInput?.cleanup ? { cleanup: authInput.cleanup } : {}),
-          }
-        : undefined;
+      const supportProbe = options.ensureDynamicSystemPromptSectionsSupport?.();
+      return supportProbe ? supportProbe.then(prepare) : prepare();
     },
     parseJsonlEvent: parseClaudeCliJsonlEvent,
-    resolveExecutionArgs: resolveClaudeCliExecutionArgs,
+    resolveExecutionArgs: (context) =>
+      resolveClaudeCliExecutionArgs(context, {
+        excludeDynamicSystemPromptSections: options.supportsDynamicSystemPromptSections?.(),
+      }),
   };
 }

@@ -22,6 +22,7 @@ import {
   resolveDefaultModelForAgent,
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
+import { resolveThinkingDefaultCore } from "../agents/model-thinking-default-core.js";
 import { publishedModelCatalogOwnerMatchesAgent } from "../agents/prepared-model-catalog-owner.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
@@ -30,12 +31,13 @@ import {
   resolveEffectiveAgentRuntime,
 } from "../agents/thinking-runtime.js";
 import {
-  listThinkingLevelOptions,
   normalizeThinkLevel,
   resolveSupportedThinkingLevel,
+  resolveThinkingProfile,
 } from "../auto-reply/thinking.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveAgentMainSessionKey, type SessionEntry } from "../config/sessions.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
@@ -45,6 +47,27 @@ import {
   type SessionListRowContext,
 } from "./session-utils-contracts.js";
 import type { GatewaySessionsDefaults, SessionsPatchResult } from "./session-utils.types.js";
+import { projectWorkerPlacementAgentRuntime } from "./worker-environments/placement-session-runtime.js";
+
+type ThinkingProviderPolicySource = NonNullable<
+  Parameters<typeof resolveThinkingProfile>[0]["providerPolicySource"]
+>;
+
+function listGatewayThinkingLevelOptions(params: {
+  provider: string;
+  model: string;
+  modelCatalog?: ModelCatalogEntry[];
+  agentRuntime: string;
+  providerPolicySource?: ThinkingProviderPolicySource;
+}) {
+  return resolveThinkingProfile({
+    provider: params.provider,
+    model: params.model,
+    catalog: params.modelCatalog,
+    agentRuntime: params.agentRuntime,
+    providerPolicySource: params.providerPolicySource,
+  }).levels.map(({ id, label }) => ({ id, label }));
+}
 
 function resolveGatewaySessionThinkingLevel(params: {
   provider: string;
@@ -52,6 +75,7 @@ function resolveGatewaySessionThinkingLevel(params: {
   level: NonNullable<ReturnType<typeof normalizeThinkLevel>>;
   modelCatalog?: ModelCatalogEntry[];
   agentRuntime: string;
+  providerPolicySource?: ThinkingProviderPolicySource;
 }) {
   const catalogEntry = params.modelCatalog
     ? findModelCatalogEntry(params.modelCatalog, {
@@ -71,6 +95,7 @@ function resolveGatewaySessionThinkingLevel(params: {
     level: params.level,
     catalog: params.modelCatalog,
     agentRuntime: params.agentRuntime,
+    providerPolicySource: params.providerPolicySource,
   });
 }
 
@@ -81,13 +106,19 @@ function resolveGatewaySessionThinkingDefault(params: {
   agentId?: string;
   modelCatalog?: ModelCatalogEntry[];
   agentRuntime: string;
+  providerPolicySource?: ThinkingProviderPolicySource;
 }) {
   const agentThinkingDefault = params.agentId
     ? resolveAgentConfig(params.cfg, params.agentId)?.thinkingDefault
     : undefined;
+  const resolveDefault =
+    params.providerPolicySource === "active"
+      ? (defaultParams: Parameters<typeof resolveThinkingDefault>[0]) =>
+          resolveThinkingDefaultCore({ ...defaultParams, providerPolicySource: "active" })
+      : resolveThinkingDefault;
   const defaultLevel =
     agentThinkingDefault ??
-    resolveThinkingDefault({
+    resolveDefault({
       cfg: params.cfg,
       provider: params.provider,
       model: params.model,
@@ -100,6 +131,7 @@ function resolveGatewaySessionThinkingDefault(params: {
     level: defaultLevel,
     modelCatalog: params.modelCatalog,
     agentRuntime: params.agentRuntime,
+    providerPolicySource: params.providerPolicySource,
   });
 }
 
@@ -112,6 +144,7 @@ export function resolveGatewayModelThinkingProfile(params: {
   modelCatalog?: ModelCatalogEntry[];
   rowContext?: SessionListRowContext;
   sessionKey?: string;
+  providerPolicySource?: ThinkingProviderPolicySource;
 }): GatewayModelThinkingProfile {
   const catalogEntry = params.modelCatalog
     ? findModelCatalogEntry(params.modelCatalog, {
@@ -132,12 +165,13 @@ export function resolveGatewayModelThinkingProfile(params: {
     });
   if (!params.rowContext) {
     return {
-      thinkingLevels: listThinkingLevelOptions(
-        params.provider,
-        params.model,
-        params.modelCatalog,
+      thinkingLevels: listGatewayThinkingLevelOptions({
+        provider: params.provider,
+        model: params.model,
+        modelCatalog: params.modelCatalog,
         agentRuntime,
-      ),
+        providerPolicySource: params.providerPolicySource,
+      }),
       thinkingDefault: resolveGatewaySessionThinkingDefault({
         cfg: params.cfg,
         provider: params.provider,
@@ -145,10 +179,11 @@ export function resolveGatewayModelThinkingProfile(params: {
         agentId: params.agentId,
         modelCatalog: params.modelCatalog,
         agentRuntime,
+        providerPolicySource: params.providerPolicySource,
       }),
     };
   }
-  const key = `${normalizeAgentId(params.agentId)}\0${agentRuntime}\0${createSessionRowModelCacheKey(
+  const key = `${normalizeAgentId(params.agentId)}\0${agentRuntime}\0${params.providerPolicySource ?? "active-or-bundled"}\0${createSessionRowModelCacheKey(
     params.provider,
     params.model,
   )}`;
@@ -157,12 +192,13 @@ export function resolveGatewayModelThinkingProfile(params: {
     return cached;
   }
   const metadata = {
-    thinkingLevels: listThinkingLevelOptions(
-      params.provider,
-      params.model,
-      params.modelCatalog,
+    thinkingLevels: listGatewayThinkingLevelOptions({
+      provider: params.provider,
+      model: params.model,
+      modelCatalog: params.modelCatalog,
       agentRuntime,
-    ),
+      providerPolicySource: params.providerPolicySource,
+    }),
     thinkingDefault: resolveGatewaySessionThinkingDefault({
       cfg: params.cfg,
       provider: params.provider,
@@ -170,6 +206,7 @@ export function resolveGatewayModelThinkingProfile(params: {
       agentId: params.agentId,
       modelCatalog: params.modelCatalog,
       agentRuntime,
+      providerPolicySource: params.providerPolicySource,
     }),
   };
   params.rowContext.thinkingMetadataByModelRef.set(key, metadata);
@@ -185,6 +222,7 @@ type GatewaySessionThinkingProjectionParams = {
   entry?: SessionEntry;
   modelCatalog?: ModelCatalogEntry[];
   rowContext?: SessionListRowContext;
+  providerPolicySource?: ThinkingProviderPolicySource;
 };
 
 export function resolveGatewaySessionThinkingProjectionInternal(
@@ -245,6 +283,7 @@ export function resolveGatewaySessionThinkingProjectionInternal(
     agentRuntime: thinkingRuntime,
     modelCatalog: params.modelCatalog,
     rowContext: params.rowContext,
+    providerPolicySource: params.providerPolicySource,
   });
   const storedThinkingLevel = normalizeThinkLevel(params.entry?.thinkingLevel);
   const thinkingLevel = storedThinkingLevel
@@ -254,6 +293,7 @@ export function resolveGatewaySessionThinkingProjectionInternal(
         level: storedThinkingLevel,
         modelCatalog: params.modelCatalog,
         agentRuntime: thinkingRuntime,
+        providerPolicySource: params.providerPolicySource,
       })
     : undefined;
   return {
@@ -293,14 +333,16 @@ export function getSessionDefaults(
     lookupContextTokens(resolved.model, { allowAsyncLoad: false }) ??
     DEFAULT_CONTEXT_TOKENS;
   const sessionKey = resolveAgentMainSessionKey({ cfg, agentId });
-  const agentRuntime = resolveModelAgentRuntimeMetadata({
-    cfg,
-    agentId,
-    provider: resolved.provider,
-    model: resolved.model,
-    sessionKey,
-    acpRuntime: false,
-  });
+  const agentRuntime = projectWorkerPlacementAgentRuntime(
+    resolveModelAgentRuntimeMetadata({
+      cfg,
+      agentId,
+      provider: resolved.provider,
+      model: resolved.model,
+      sessionKey,
+      acpRuntime: false,
+    }),
+  );
   const thinkingProfile = resolveGatewayModelThinkingProfile({
     cfg,
     provider: resolved.provider,
@@ -335,6 +377,24 @@ function normalizeGatewayModelCapabilityBaseUrl(value: string | undefined): stri
   }
 }
 
+function isGatewayModelExplicitlyConfiguredTextOnly(params: {
+  snapshot: GatewayModelCatalogSnapshot;
+  provider?: string;
+  model: string;
+}): boolean {
+  if (!params.provider) {
+    return false;
+  }
+  const configuredModel = findNormalizedProviderValue(
+    params.snapshot.config.models?.providers,
+    params.provider,
+  )?.models?.find(
+    (model) =>
+      normalizeLowercaseStringOrEmpty(model.id) === normalizeLowercaseStringOrEmpty(params.model),
+  );
+  return configuredModel?.input !== undefined && !configuredModel.input.includes("image");
+}
+
 function resolveGatewayProviderStaticModel(params: {
   snapshot: GatewayModelCatalogSnapshot;
   agentId?: string;
@@ -365,6 +425,9 @@ function resolveGatewayProviderStaticModel(params: {
     return undefined;
   }
 
+  if (isGatewayModelExplicitlyConfiguredTextOnly(params)) {
+    return undefined;
+  }
   const configuredProvider = findNormalizedProviderValue(
     params.snapshot.config.models?.providers,
     params.provider,
@@ -373,9 +436,6 @@ function resolveGatewayProviderStaticModel(params: {
   const configuredModel = configuredProvider?.models?.find(
     (model) => normalizeLowercaseStringOrEmpty(model.id) === normalizedModelId,
   );
-  if (configuredModel?.input && !configuredModel.input.includes("image")) {
-    return undefined;
-  }
   const configuredApi = configuredModel?.api ?? configuredProvider?.api;
   if (configuredApi && configuredApi !== staticEntry.api) {
     return undefined;
@@ -407,56 +467,87 @@ export async function resolveGatewayModelSupportsImages(params: {
   }
 
   try {
-    const loadParams = {
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      readOnly: false,
-    };
-    const snapshot = params.loadGatewayModelCatalogSnapshot
-      ? await params.loadGatewayModelCatalogSnapshot(loadParams)
-      : undefined;
-    const catalog = snapshot ? snapshot.entries : await params.loadGatewayModelCatalog(loadParams);
-    const catalogEntry = findModelCatalogEntry(catalog, {
-      provider: params.provider,
-      modelId: params.model,
-    });
-    // Same-generation provider facts repair stale discovered capabilities without
-    // crossing agent ownership, physical routes, or authored input policy.
-    const staticEntry =
-      snapshot && (!catalogEntry || !modelSupportsInput(catalogEntry, "image"))
-        ? resolveGatewayProviderStaticModel({
-            snapshot,
-            agentId: params.agentId,
-            provider: params.provider,
-            model: params.model,
-            catalogEntry,
-          })
+    // Attachment admission first consumes lifecycle-prepared capabilities. Runtime-only models
+    // retain the evidence-based live fallback without making known models wait for discovery.
+    for (const readOnly of [true, false]) {
+      const loadParams = {
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+        readOnly,
+      };
+      const snapshot = params.loadGatewayModelCatalogSnapshot
+        ? await params.loadGatewayModelCatalogSnapshot(loadParams)
         : undefined;
-    const modelEntry = staticEntry ?? catalogEntry;
-    const normalizedProvider = normalizeOptionalLowercaseString(
-      params.provider ?? modelEntry?.provider,
-    );
-    const normalizedCandidates = [
-      normalizeLowercaseStringOrEmpty(params.model),
-      normalizeLowercaseStringOrEmpty(modelEntry?.name),
-    ].filter(Boolean);
-    if (modelEntry) {
-      if (modelSupportsInput(modelEntry, "image")) {
-        return true;
-      }
-      // Legacy safety shim for stale persisted Foundry rows that predate
-      // provider-owned capability normalization.
-      if (
-        normalizedProvider === "microsoft-foundry" &&
-        normalizedCandidates.some(
-          (candidate) =>
-            candidate.startsWith("gpt-") ||
-            candidate.startsWith("o1") ||
-            candidate.startsWith("o3") ||
-            candidate.startsWith("o4") ||
-            candidate === "computer-use-preview",
-        )
-      ) {
-        return true;
+      const catalog = snapshot
+        ? snapshot.entries
+        : await params.loadGatewayModelCatalog(loadParams);
+      const catalogEntry = findModelCatalogEntry(catalog, {
+        provider: params.provider,
+        modelId: params.model,
+      });
+      // Same-generation provider facts repair stale discovered capabilities without
+      // crossing agent ownership, physical routes, or authored input policy.
+      const staticEntry =
+        snapshot && (!catalogEntry || !modelSupportsInput(catalogEntry, "image"))
+          ? resolveGatewayProviderStaticModel({
+              snapshot,
+              agentId: params.agentId,
+              provider: params.provider,
+              model: params.model,
+              catalogEntry,
+            })
+          : undefined;
+      const modelEntry = staticEntry ?? catalogEntry;
+      const normalizedProvider = normalizeOptionalLowercaseString(
+        params.provider ?? modelEntry?.provider,
+      );
+      const normalizedCandidates = [
+        normalizeLowercaseStringOrEmpty(params.model),
+        normalizeLowercaseStringOrEmpty(modelEntry?.name),
+      ].filter(Boolean);
+      if (modelEntry) {
+        if (modelSupportsInput(modelEntry, "image")) {
+          return true;
+        }
+        // Legacy safety shim for stale persisted Foundry rows that predate
+        // provider-owned capability normalization.
+        if (
+          normalizedProvider === "microsoft-foundry" &&
+          normalizedCandidates.some(
+            (candidate) =>
+              candidate.startsWith("gpt-") ||
+              candidate.startsWith("o1") ||
+              candidate.startsWith("o3") ||
+              candidate.startsWith("o4") ||
+              candidate === "computer-use-preview",
+          )
+        ) {
+          return true;
+        }
+        if (
+          normalizedProvider === "claude-cli" &&
+          normalizedCandidates.some(
+            (candidate) =>
+              candidate === "opus" ||
+              candidate === "sonnet" ||
+              candidate === "haiku" ||
+              candidate.startsWith("claude-"),
+          )
+        ) {
+          return true;
+        }
+        if (
+          readOnly &&
+          !snapshot?.catalogComplete &&
+          (!snapshot ||
+            !isGatewayModelExplicitlyConfiguredTextOnly({
+              snapshot,
+              provider: params.provider,
+              model: params.model,
+            }))
+        ) {
+          continue;
+        }
+        return false;
       }
       if (
         normalizedProvider === "claude-cli" &&
@@ -470,19 +561,9 @@ export async function resolveGatewayModelSupportsImages(params: {
       ) {
         return true;
       }
-      return false;
-    }
-    if (
-      normalizedProvider === "claude-cli" &&
-      normalizedCandidates.some(
-        (candidate) =>
-          candidate === "opus" ||
-          candidate === "sonnet" ||
-          candidate === "haiku" ||
-          candidate.startsWith("claude-"),
-      )
-    ) {
-      return true;
+      if (readOnly && snapshot?.catalogComplete) {
+        return false;
+      }
     }
     return false;
   } catch {
@@ -585,7 +666,9 @@ export async function projectSessionPatchResult(params: {
   });
   return {
     ok: true,
-    path: params.storePath,
+    path: resolveSqliteTargetFromSessionStorePath(params.storePath, {
+      agentId: params.targetAgentId,
+    }).path,
     key: params.canonicalKey,
     entry: params.entry,
     resolved: {

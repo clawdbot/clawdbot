@@ -248,6 +248,13 @@ api.on(
 );
 ```
 
+When evaluation input includes `correlationId`, OpenClaw forwards it to the
+evaluator event for both manual and apply-triggered evaluations. This value is
+caller-supplied correlation metadata, not authenticated identity or proof of
+authorization. An authorization plugin must mint or replace the value through
+a trusted entry point, bind it to the intended operation, and validate and
+consume it itself.
+
 Stored outcomes identify the evaluator, plugin id, plugin package version,
 status, and returned result. Timeouts and thrown errors are recorded as
 attributed error outcomes; they do not fail the whole evaluation. Applying a
@@ -821,7 +828,7 @@ Decision rules:
 
 ## Install hooks
 
-Use `security.installPolicy` for operator-owned allow/block decisions. That
+Use `security.installPolicy` for operator-owned allow/warn/block decisions. That
 policy runs from OpenClaw config, covers CLI install and update paths, and
 fails closed when enabled but unavailable.
 
@@ -1047,7 +1054,7 @@ before the next major release:
 - **Plaintext channel envelopes** in `inbound_claim` and `message_received`
   handlers. Read `BodyForAgent` and the structured user-context blocks
   instead of parsing flat envelope text. See
-  [Plaintext channel envelopes → BodyForAgent](/plugins/sdk-migration#active-deprecations).
+  [Plaintext channel envelopes → BodyForAgent](/plugins/sdk-migration#removal-timeline).
 - **`subagent_spawning`** remains for compatibility with older plugins, but
   new plugins should not return thread routing from it. Core prepares
   `thread: true` subagent bindings through channel session-binding adapters
@@ -1063,7 +1070,7 @@ before the next major release:
 For the full list - memory capability registration, provider thinking
 profile, external auth providers, provider discovery types, task runtime
 accessors, and the `command-auth` → `command-status` rename - see
-[Plugin SDK migration → Active deprecations](/plugins/sdk-migration#active-deprecations).
+[Plugin SDK migration → Active deprecations](/plugins/sdk-migration#removal-timeline).
 
 ## Related
 

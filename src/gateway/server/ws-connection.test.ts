@@ -16,6 +16,7 @@ const {
   attachWorkerWsMessageHandlerMock,
   broadcastPresenceSnapshotMock,
   cleanupTalkConnectionMock,
+  recordPairedNodeDisconnectionMock,
   touchPresenceMock,
   upsertPresenceMock,
 } = vi.hoisted(() => ({
@@ -23,6 +24,7 @@ const {
   attachWorkerWsMessageHandlerMock: vi.fn((_params: unknown) => vi.fn()),
   broadcastPresenceSnapshotMock: vi.fn(),
   cleanupTalkConnectionMock: vi.fn(),
+  recordPairedNodeDisconnectionMock: vi.fn(async () => ({ recorded: true })),
   touchPresenceMock: vi.fn(),
   upsertPresenceMock: vi.fn(),
 }));
@@ -32,6 +34,9 @@ vi.mock("./ws-connection/message-handler.js", () => ({
 }));
 vi.mock("./ws-connection/worker-connection.js", () => ({
   attachWorkerWsMessageHandler: attachWorkerWsMessageHandlerMock,
+}));
+vi.mock("../../infra/device-pairing-node.js", () => ({
+  recordPairedNodeDisconnection: recordPairedNodeDisconnectionMock,
 }));
 vi.mock("../../infra/system-presence.js", () => ({
   touchPresence: touchPresenceMock,
@@ -99,6 +104,8 @@ describe("attachGatewayWsConnectionHandler", () => {
     attachWorkerWsMessageHandlerMock.mockClear();
     broadcastPresenceSnapshotMock.mockReset();
     cleanupTalkConnectionMock.mockReset();
+    recordPairedNodeDisconnectionMock.mockReset();
+    recordPairedNodeDisconnectionMock.mockResolvedValue({ recorded: true });
     touchPresenceMock.mockReset();
     upsertPresenceMock.mockReset();
   });
@@ -362,6 +369,7 @@ describe("attachGatewayWsConnectionHandler", () => {
   it("terminates a connection after one missed protocol pong", async () => {
     vi.useFakeTimers();
     const unregister = vi.fn();
+    const get = vi.fn(() => undefined);
     const clients = new Set<unknown>();
     const socket = Object.assign(createGatewayWsTestSocket({ ping: true }), {
       terminate: vi.fn(),
@@ -374,7 +382,9 @@ describe("attachGatewayWsConnectionHandler", () => {
       socket,
       options: {
         buildRequestContext: () =>
-          createGatewayWsTestRequestContext({ nodeRegistry: { unregister } }) as never,
+          createGatewayWsTestRequestContext({
+            nodeRegistry: { get, unregister } as never,
+          }) as never,
       },
     });
     const handlerParams = passed as {
@@ -411,15 +421,46 @@ describe("attachGatewayWsConnectionHandler", () => {
     const socket = createGatewayWsTestSocket();
     const { passed } = await connectTestWs({ socket });
     const handlerParams = passed as {
-      send: (frame: unknown) => void;
+      send: (frame: unknown) => { kind: string };
     };
     socket.send.mockClear();
     socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
 
-    handlerParams.send({ type: "res", id: "req-slow", ok: true, payload: { ok: true } });
+    expect(
+      handlerParams.send({ type: "res", id: "req-slow", ok: true, payload: { ok: true } }),
+    ).toEqual({ kind: "unavailable" });
 
     expect(socket.send).not.toHaveBeenCalled();
     expect(socket.close).toHaveBeenCalledWith(1008, "slow consumer");
+  });
+
+  it("distinguishes serialization failure from unavailable transports", async () => {
+    const socket = createGatewayWsTestSocket();
+    const { passed } = await connectTestWs({ socket });
+    const handlerParams = passed as {
+      send: (frame: unknown) => { kind: string; error?: unknown };
+    };
+    socket.send.mockClear();
+
+    const cyclic: { self?: unknown } = {};
+    cyclic.self = cyclic;
+    expect(handlerParams.send(cyclic)).toMatchObject({
+      kind: "serialization",
+      error: expect.any(TypeError),
+    });
+    expect(socket.send).not.toHaveBeenCalled();
+
+    socket.send.mockImplementationOnce(() => {
+      throw new Error("socket unavailable");
+    });
+    expect(handlerParams.send({ type: "event", event: "tick" })).toEqual({
+      kind: "unavailable",
+    });
+
+    socket.emit("close", 1000, Buffer.from("done"));
+    expect(handlerParams.send({ type: "event", event: "tick" })).toEqual({
+      kind: "unavailable",
+    });
   });
 
   it("keeps handshake phase advancement monotonic", async () => {
@@ -560,23 +601,72 @@ describe("attachGatewayWsConnectionHandler", () => {
     );
   });
 
-  it("skips node presence disconnects for stale reconnected sockets", async () => {
-    const unregister = vi.fn(() => null);
-    const { socket } = attachGatewayWsForTest({
-      attach: attachGatewayWsConnectionHandler,
+  it("records disconnect history for the current node connection", async () => {
+    const unregister = vi.fn(() => "node-1");
+    const get = vi.fn();
+    const { socket, passed } = await connectTestWs({
       options: {
         refreshHealthSnapshot: vi.fn(),
         buildRequestContext: () =>
-          createGatewayWsTestRequestContext({ nodeRegistry: { unregister } }) as never,
+          createGatewayWsTestRequestContext({
+            nodeRegistry: { get, unregister } as never,
+          }) as never,
       },
     });
-    await waitForLazyMessageHandler();
+    const handler = passed as {
+      connId: string;
+      setClient: (client: unknown) => boolean;
+    };
+    get.mockReturnValue({
+      nodeId: "node-1",
+      connId: handler.connId,
+      connectedAtMs: 1_000,
+      pairingGeneration: "generation-1",
+    });
+    expect(
+      handler.setClient({
+        socket,
+        connect: {
+          role: "node",
+          client: { id: "openclaw-macos", mode: "node" },
+          device: { id: "node-1" },
+        },
+        connId: handler.connId,
+        presenceKey: "node-1",
+        usesSharedGatewayAuth: false,
+      }),
+    ).toBe(true);
 
-    const passed = firstAttachedHandlerParams() as {
+    socket.emit("close", 1000, Buffer.from("done"));
+
+    await vi.waitFor(() => expect(unregister).toHaveBeenCalledOnce());
+    expect(get).toHaveBeenCalledWith("node-1");
+    await vi.waitFor(() => expect(recordPairedNodeDisconnectionMock).toHaveBeenCalledOnce());
+    expect(recordPairedNodeDisconnectionMock).toHaveBeenCalledWith({
+      nodeId: "node-1",
+      connectedAtMs: 1_000,
+      disconnectedAtMs: expect.any(Number),
+      expectedPairingGeneration: { nodeId: "node-1", key: "generation-1" },
+    });
+  });
+
+  it("skips node presence disconnects for stale reconnected sockets", async () => {
+    const unregister = vi.fn(() => null);
+    const get = vi.fn(() => undefined);
+    const { socket, passed } = await connectTestWs({
+      options: {
+        refreshHealthSnapshot: vi.fn(),
+        buildRequestContext: () =>
+          createGatewayWsTestRequestContext({
+            nodeRegistry: { get, unregister } as never,
+          }) as never,
+      },
+    });
+    const handler = passed as {
       setClient: (client: unknown) => boolean;
     };
     expect(
-      passed.setClient({
+      handler.setClient({
         socket,
         connect: {
           role: "node",
@@ -591,7 +681,8 @@ describe("attachGatewayWsConnectionHandler", () => {
 
     socket.emit("close", 1000, Buffer.from("stale"));
 
-    expect(unregister).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(unregister).toHaveBeenCalledTimes(1));
+    expect(recordPairedNodeDisconnectionMock).not.toHaveBeenCalled();
     expect(upsertPresenceMock).not.toHaveBeenCalled();
     expect(broadcastPresenceSnapshotMock).not.toHaveBeenCalled();
   });

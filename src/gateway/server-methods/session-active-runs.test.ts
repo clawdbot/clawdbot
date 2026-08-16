@@ -17,7 +17,6 @@ import {
   collectTrackedActiveSessionRuns,
   hasRegisteredChatRunForSessionKey,
   hasTrackedActiveSessionRun,
-  hasVisibleActiveSessionRun,
   resolveVisibleActiveSessionRunState,
 } from "./session-active-runs.js";
 
@@ -88,13 +87,13 @@ it("matches session-id-only gateway runs during archive admission", () => {
   } as never;
 
   expect(
-    hasVisibleActiveSessionRun({
+    resolveVisibleActiveSessionRunState({
       context,
       requestedKey: "agent:main:child",
       canonicalKey: "agent:main:child",
       sessionId: "session-1",
       defaultAgentId: "main",
-    }),
+    }).active,
   ).toBe(true);
 });
 

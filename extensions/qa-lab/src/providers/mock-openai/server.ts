@@ -134,7 +134,6 @@ import {
   isHeartbeatPrompt,
 } from "./mock-openai-directives.js";
 import {
-  buildToolCallEvents,
   buildReleaseAuditJson,
   buildReleaseHandoffMarkdown,
   extractPlannedToolName,
@@ -2363,7 +2362,7 @@ async function buildResponsesPayload(
     });
   }
   if (!hasCompletedToolOutput && /\b(read|inspect|repo|docs|scenario|kickoff)\b/i.test(prompt)) {
-    return buildToolCallEvents(prompt);
+    return buildToolCallEventsWithArgs("read", { path: readTargetFromPrompt(prompt) });
   }
   if (/visible skill marker/i.test(prompt) && !hasCompletedToolOutput) {
     return buildAssistantEvents("VISIBLE-SKILL-OK");

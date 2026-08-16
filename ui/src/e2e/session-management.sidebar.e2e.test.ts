@@ -676,7 +676,7 @@ suite.define(() => {
     }
   });
 
-  it("pins a session dropped below an existing row in the Pinned group", async () => {
+  it("pins a session dropped below an existing row in the interleaved sidebar zone", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -723,7 +723,6 @@ suite.define(() => {
       await expect
         .poll(() => trimmedTextContents(pinnedEntry.locator(".sidebar-recent-session__name")))
         .toEqual(["Already pinned"]);
-      await expect.poll(() => page.locator(".sidebar-nav__head--pinned").count()).toBe(1);
       await captureUiProof(page, "sidebar-session-before-pinned-drop.png");
       const pinnedBox = await pinnedEntry.boundingBox();
       if (!pinnedBox) {
@@ -754,6 +753,13 @@ suite.define(() => {
         )
         .toEqual(["Already pinned", "Pin me"]);
       await expect.poll(() => researchGroup.locator(".sidebar-recent-session").count()).toBe(0);
+
+      const pinnedCandidate = page.locator(
+        '[data-sidebar-entry="session:agent:main:candidate"] .sidebar-recent-session',
+      );
+      await pinnedCandidate.click({ button: "right" });
+      await page.getByRole("menuitem", { name: "Unpin session" }).waitFor();
+      expect(await page.getByRole("menuitem", { name: "Reset pinned items" }).count()).toBe(0);
       await captureUiProof(page, "sidebar-session-dropped-into-pinned.png");
     } finally {
       await context.close();

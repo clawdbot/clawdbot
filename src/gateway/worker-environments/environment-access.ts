@@ -1,6 +1,10 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import type { WorkerProvider } from "../../plugins/types.js";
+import { verifyWorkerAdmissionHandshake, type ExpectedWorkerBuild } from "./admission.js";
+import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider.js";
+import type { NodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import type { WorkerDesktopLaunchResult, WorkerDesktopObserveResult } from "./service-contract.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
@@ -13,7 +17,9 @@ const TUNNEL_START_TIMEOUT_MS = 3 * 60_000;
 type WorkerEnvironmentAccessOptions = {
   store: WorkerEnvironmentStore;
   getConfig: () => OpenClawConfig;
+  prepareCurrentBundle: () => Promise<ExpectedWorkerBuild>;
   tunnelManager?: WorkerTunnelManager;
+  nodeTunnelManager?: NodeWorkerTunnelManager;
   resolveWorkerGateway?: () => { host: "127.0.0.1" | "::1"; port: number } | undefined;
   now: () => number;
   identityResolverFor: (
@@ -27,7 +33,6 @@ type WorkerEnvironmentAccessOptions = {
   serviceError: (
     code:
       | "desktop_app_not_found"
-      | "device-runner-transport-unimplemented"
       | "environment_not_found"
       | "invalid_state"
       | "launcher_failure"
@@ -41,6 +46,7 @@ type WorkerEnvironmentAccessOptions = {
 export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOptions) {
   const { store } = options;
   const tunnels = options.tunnelManager;
+  const nodeTunnels = options.nodeTunnelManager;
   const now = options.now;
   const inState = options.inState;
   const providerFor = options.providerFor;
@@ -51,6 +57,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
   const project = (record: WorkerEnvironmentRecord) => {
     const desktopAvailable =
       inState(record, "ready", "idle", "attached") && record.desktop !== null;
+    const nodeTunnelStatus = nodeTunnels?.status(record.environmentId);
     return {
       ...record,
       ...((record.state === "failed" || record.state === "orphaned") && record.lastError
@@ -60,7 +67,10 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       desktopApps: desktopAvailable
         ? (record.desktop?.apps?.map((app) => app.id).toSorted() ?? [])
         : [],
-      tunnelStatus: tunnels?.status(record.environmentId) ?? ("stopped" as const),
+      tunnelStatus:
+        nodeTunnelStatus && nodeTunnelStatus !== "stopped"
+          ? nodeTunnelStatus
+          : (tunnels?.status(record.environmentId) ?? nodeTunnelStatus ?? ("stopped" as const)),
     };
   };
 
@@ -69,10 +79,11 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     if (stopping) {
       throw serviceError("invalid_state", "Worker environment service is stopping");
     }
-    if (!tunnels) {
+    if (!tunnels && !nodeTunnels) {
       throw serviceError("invalid_state", "Worker tunnel runtime is unavailable");
     }
     let startup: Promise<WorkerTunnelHandle> | undefined;
+    let stopStartup: (() => Promise<void>) | undefined;
     await withLock(request.environmentId, async () => {
       stopping = options.isStopping();
       if (stopping) {
@@ -92,12 +103,6 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       ) {
         throw serviceError("invalid_state", `Cannot start tunnel in state: ${record.state}`);
       }
-      if (!record.sshEndpoint) {
-        throw serviceError(
-          "device-runner-transport-unimplemented",
-          "device-runner-transport-unimplemented: device runner launch is not available in this build",
-        );
-      }
       if (!record.bootstrapReceipt) {
         throw serviceError("invalid_state", `Cannot start tunnel in state: ${record.state}`);
       }
@@ -115,6 +120,49 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       ) {
         throw serviceError("invalid_state", "Worker tunnel owner credential is not current");
       }
+      let currentBundle: ExpectedWorkerBuild;
+      try {
+        currentBundle = await options.prepareCurrentBundle();
+      } catch {
+        throw serviceError("invalid_state", "Current worker build identity is unavailable");
+      }
+      if (!verifyWorkerAdmissionHandshake(record.bootstrapReceipt, currentBundle)) {
+        throw serviceError(
+          "invalid_state",
+          "Worker must bootstrap the current build before continuing",
+        );
+      }
+      const nodeBundle =
+        record.providerId === DEVICE_WORKER_PROVIDER_ID &&
+        !record.sshEndpoint &&
+        record.bootstrapReceipt.installKind === "bundle";
+      if (nodeBundle) {
+        const profileSettings = record.profileSnapshot.settings;
+        const deviceId = isRecord(profileSettings) ? profileSettings.device : undefined;
+        const sessionId = record.attachedSessionIds[0];
+        if (!nodeTunnels || typeof deviceId !== "string" || !deviceId.trim() || !sessionId) {
+          throw serviceError("invalid_state", "Device worker tunnel runtime is unavailable");
+        }
+        startup = nodeTunnels.start({
+          environmentId: record.environmentId,
+          ownerEpoch: record.ownerEpoch,
+          deviceId: deviceId.trim(),
+          sessionId,
+          expectedBuild: {
+            bundleHash: currentBundle.bundleHash,
+            openclawVersion: currentBundle.openclawVersion,
+            protocolFeatures: [...currentBundle.protocolFeatures],
+          },
+        });
+        stopStartup = async () => await nodeTunnels.stop(record.environmentId, record.ownerEpoch);
+        return;
+      }
+      if (!record.sshEndpoint) {
+        throw serviceError("invalid_state", "Worker environment has no supported tunnel transport");
+      }
+      if (!tunnels) {
+        throw serviceError("invalid_state", "Worker SSH tunnel runtime is unavailable");
+      }
       const gateway = options.resolveWorkerGateway?.();
       if (!gateway) {
         throw serviceError("invalid_state", "Worker gateway ingress is unavailable");
@@ -124,12 +172,13 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       // lock while SSH connects so drain/destroy can fence an indefinitely reconnecting start.
       startup = tunnels.start({
         ...request,
-        bundleHash: record.bootstrapReceipt.bundleHash,
+        bundleHash: currentBundle.bundleHash,
         gateway,
         ssh: record.sshEndpoint,
         sharedHost: record.sharedHost,
         resolveIdentity: identityResolverFor(record, provider, record.leaseId),
       });
+      stopStartup = async () => await tunnels.stop(record.environmentId, record.ownerEpoch);
     });
     if (!startup) {
       throw serviceError("invalid_state", "Worker tunnel failed to start");
@@ -146,10 +195,10 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       if (error !== timeoutError) {
         throw error;
       }
-      // Stop can itself block on an unkillable SSH child; detach it (rejection observed,
+      // Stop can itself block on an unkillable transport child; detach it (rejection observed,
       // entry stays manager-tracked) so the deadline error is returned on time. Epoch-fenced
       // so a stale timed-out attempt can never tear down a newer owner's tunnel.
-      void tunnels.stop(request.environmentId, request.ownerEpoch).catch(() => undefined);
+      void stopStartup?.().catch(() => undefined);
       throw timeoutError;
     }
   };
@@ -335,7 +384,10 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
 
   const stopTunnel = async (environmentId: string, ownerEpoch?: number): Promise<void> => {
     await withLock(environmentId, async () => {
-      await tunnels?.stop(environmentId, ownerEpoch);
+      await Promise.all([
+        tunnels?.stop(environmentId, ownerEpoch),
+        nodeTunnels?.stop(environmentId, ownerEpoch),
+      ]);
     });
   };
 
@@ -349,7 +401,9 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     observeDesktop,
     project,
     startTunnel,
-    stopAllTunnels: () => tunnels?.stopAll() ?? Promise.resolve(),
+    stopAllTunnels: async () => {
+      await Promise.all([tunnels?.stopAll(), nodeTunnels?.stopAll()]);
+    },
     stopTunnel,
   };
 }

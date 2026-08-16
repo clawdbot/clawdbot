@@ -1,5 +1,6 @@
 import type { Readable, Writable } from "node:stream";
 import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import type { WorkerBrowserRuntime } from "./browser-runtime.js";
 import { parseWorkerLaunchDescriptor, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import { runWorkerDescriptor } from "./worker.runtime.js";
 
@@ -7,10 +8,12 @@ type RunWorkerCommandOptions = {
   input: Readable;
   lifetime?: WorkerCommandLifetime;
   output: Writable;
+  browserRuntime?: WorkerBrowserRuntime;
 };
 
 export type WorkerCommandLifetime = {
   dispose: () => void;
+  reportConnectionFailure: (cause: string | undefined) => void;
   signal: AbortSignal;
   started: Promise<boolean>;
   terminateOwnedTree: () => void;
@@ -76,7 +79,13 @@ export async function runWorkerCommand(options: RunWorkerCommandOptions): Promis
     }
     process.once("SIGINT", stop);
     process.once("SIGTERM", stop);
-    const result = await runWorkerDescriptor(descriptor, { signal: abortController.signal });
+    const result = await runWorkerDescriptor(descriptor, {
+      signal: abortController.signal,
+      ...(options.lifetime
+        ? { onConnectionFailure: options.lifetime.reportConnectionFailure }
+        : {}),
+      ...(options.browserRuntime ? { browserRuntime: options.browserRuntime } : {}),
+    });
     const encoded = `${JSON.stringify(result)}\n`;
     options.output.write(encoded);
   } finally {

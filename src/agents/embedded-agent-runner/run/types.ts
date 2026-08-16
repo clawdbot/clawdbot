@@ -100,6 +100,8 @@ export type EmbeddedRunAttemptTrajectoryRecorder = {
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   admittedRunContext: NonNullable<RunEmbeddedAgentParams["admittedRunContext"]>;
+  /** Explicit session owner captured before fallback agent resolution. */
+  contextEngineAgentId?: string;
   /** Host-resolved sandbox snapshot for plugin harness tool construction. */
   sandbox?: SandboxContext | null;
   /** Host-created authority available only after harness selection. */
@@ -282,6 +284,8 @@ export type EmbeddedRunAttemptResult = {
     asyncTaskId?: string;
   }>;
   acceptedSessionSpawns?: AcceptedSessionSpawn[];
+  /** This attempt accepted work whose future output has a runtime-owned delivery path. */
+  runtimeContinuationStarted?: boolean;
   lastAssistant: AssistantMessage | undefined;
   /**
    * Omission preserves the legacy `lastAssistant` fallback; explicit `undefined`

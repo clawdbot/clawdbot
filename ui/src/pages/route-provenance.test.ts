@@ -176,7 +176,7 @@ describe("route preload gateway provenance", () => {
           agents: [{ id: "main" }],
         })),
       },
-      agentSelection: { state: { selectedId: null, scopeId: null } },
+      agentSelection: { state: { selectedId: "main", scopeId: "main" } },
     } as unknown as ApplicationContext);
 
     mutable.replaceSnapshot(snapshot(replacementClient, true));
@@ -188,13 +188,18 @@ describe("route preload gateway provenance", () => {
   });
 
   it("keeps skills provenance from before its async preload", async () => {
-    const client = {
-      request: vi.fn(async () => ({ skills: [] })),
-    } as unknown as GatewayBrowserClient;
+    const requestMethod = vi.fn(async () => ({ skills: [] }));
+    const client = { request: requestMethod } as unknown as GatewayBrowserClient;
     const originalSnapshot = snapshot(client, true);
     const mutable = mutableGateway(originalSnapshot);
     const gateway = mutable.gateway;
-    const agentsReady = deferred<null>();
+    const agentsList = {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "global" as const,
+      agents: [{ id: "main" }, { id: "research" }],
+    };
+    const agentsReady = deferred<typeof agentsList>();
     const agents = {
       ensureList: vi.fn(() => agentsReady.promise),
     } as unknown as ApplicationContext["agents"];
@@ -204,9 +209,11 @@ describe("route preload gateway provenance", () => {
     } as unknown as ApplicationContext);
 
     mutable.replaceSnapshot(snapshot(client, false));
-    agentsReady.resolve(null);
+    agentsReady.resolve(agentsList);
     const data = await request;
 
+    expect(requestMethod).toHaveBeenCalledWith("skills.status", { agentId: "main" });
+    expect(data.selectedAgentId).toBe("main");
     expect(data.gateway).toBe(gateway);
     expect(data.gatewaySnapshot).toBe(originalSnapshot);
     expect(data.agents).toBe(agents);

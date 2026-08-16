@@ -17,6 +17,7 @@ import { NonEmptyString } from "./primitives.js";
 const GatewayAgentRuntimeSchema = closedObject({
   id: NonEmptyString,
   fallback: Type.Optional(Type.Union([Type.Literal("openclaw"), Type.Literal("none")])),
+  cloudPlacementSupported: Type.Optional(Type.Boolean()),
   source: Type.Union([
     Type.Literal("env"),
     Type.Literal("agent"),
@@ -227,18 +228,31 @@ export const AgentsFilesSetResultSchema = closedObject({
 });
 
 /** Model catalog request with optional visibility scope. */
-export const ModelsListParamsSchema = closedObject({
-  agentId: Type.Optional(NonEmptyString),
-  includeProviderCapabilities: Type.Optional(Type.Boolean()),
-  view: Type.Optional(
-    Type.Union([
-      Type.Literal("default"),
-      Type.Literal("configured"),
-      Type.Literal("provider-config"),
-      Type.Literal("all"),
-    ]),
-  ),
-});
+export const ModelsListParamsSchema = Type.Object(
+  {
+    agentId: Type.Optional(NonEmptyString),
+    includeProviderCapabilities: Type.Optional(Type.Boolean()),
+    /** Reuse prepared/cached facts without starting provider discovery. */
+    preparedOnly: Type.Optional(Type.Boolean()),
+    /** Force replacement of a completed full-catalog generation. */
+    refresh: Type.Optional(Type.Boolean()),
+    view: Type.Optional(
+      Type.Union([
+        Type.Literal("default"),
+        Type.Literal("configured"),
+        Type.Literal("provider-config"),
+        Type.Literal("all"),
+      ]),
+    ),
+  },
+  {
+    additionalProperties: false,
+    not: {
+      properties: { preparedOnly: { const: true }, refresh: { const: true } },
+      required: ["preparedOnly", "refresh"],
+    },
+  },
+);
 
 /** Reads model-provider credential health for one configured agent. */
 export const ModelsAuthStatusParamsSchema = closedObject({
@@ -356,6 +370,14 @@ export const SkillsUploadCommitParamsSchema = closedObject({
   sha256: Type.Optional(Sha256String),
 });
 
+/**
+ * ClawHub resolves a bare slug against every publisher, so requests that carry only the slug
+ * fail with 409 AMBIGUOUS_SKILL_SLUG once two publishers share it. Clients send the reference
+ * `skills.search` returned for the entry the operator picked.
+ */
+const CLAWHUB_SKILL_REF_DESCRIPTION =
+  "ClawHub skill reference: `@owner/slug`, `skills-sh:owner/repo/slug`, or a bare `slug` when no publisher is known.";
+
 /** Installs a skill from legacy install id, ClawHub, or uploaded archive. */
 export const SkillsInstallParamsSchema = Type.Union([
   closedObject({
@@ -374,7 +396,7 @@ export const SkillsInstallParamsSchema = Type.Union([
   closedObject({
     agentId: Type.Optional(NonEmptyString),
     source: Type.Literal("clawhub"),
-    slug: NonEmptyString,
+    slug: Type.String({ minLength: 1, description: CLAWHUB_SKILL_REF_DESCRIPTION }),
     version: Type.Optional(NonEmptyString),
     force: Type.Optional(Type.Boolean()),
     acknowledgeClawHubRisk: Type.Optional(Type.Boolean()),
@@ -420,17 +442,25 @@ export const SkillsSearchResultSchema = closedObject({
     closedObject({
       score: Type.Number(),
       slug: NonEmptyString,
+      installRef: Type.Optional(
+        Type.String({
+          minLength: 1,
+          description:
+            "Publisher-qualified reference for this result. Send it as `slug` to skills.detail and skills.install; several publishers can share one slug.",
+        }),
+      ),
       displayName: NonEmptyString,
       summary: Type.Optional(Type.String()),
+      icon: Type.Optional(Type.Union([Type.String(), Type.Null()])),
       version: Type.Optional(NonEmptyString),
       updatedAt: Type.Optional(Type.Integer()),
     }),
   ),
 });
 
-/** Reads registry detail for one skill slug. */
+/** Reads registry detail for one skill. */
 export const SkillsDetailParamsSchema = closedObject({
-  slug: NonEmptyString,
+  slug: Type.String({ minLength: 1, description: CLAWHUB_SKILL_REF_DESCRIPTION }),
 });
 
 /** Reads current security verdicts for configured skills. */

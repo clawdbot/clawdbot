@@ -157,7 +157,7 @@ export default definePluginEntry({
   `resolveCreateSession({ agentId })` must return a config-derived model/runtime
   target before OpenClaw advertises creation or calls `startTerminalSession`.
   Use
-  [`api.runtime.agent.resolveSessionCatalogCreateTarget(...)`](/plugins/sdk-runtime#apiruntimeagent)
+  [`api.runtime.agent.resolveSessionCatalogCreateTarget(...)`](/plugins/sdk-runtime#api-runtime-agent)
   to apply the host's runtime and model-allowlist policy instead of duplicating
   it.
 
@@ -184,6 +184,22 @@ export default definePluginEntry({
   node's Gateway declaration. OpenClaw evaluates it against the node-local
   startup config; command handlers should still validate availability when
   invoked.
+
+### Computer Use providers
+
+**Import:** `openclaw/plugin-sdk/computer-use`
+
+Node-local Computer Use plugins register one provider through
+`registerComputerUseProvider(api, provider)`. The helper owns the
+`screen.snapshot` and dangerous `computer.act` command registrations and the
+matching Gateway invoke policy; the provider owns availability, execution,
+serialization, frame state, driver lifecycle, and cleanup.
+
+The same entry point exports the canonical TypeBox schemas, static types, and
+compiled validators for the two command payloads and the snapshot result. A
+node host accepts one provider for the command pair; registering another
+provider conflicts with the existing command registration instead of creating
+a fallback stack.
 
 ## `defineChannelPluginEntry`
 

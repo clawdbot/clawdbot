@@ -53,25 +53,6 @@ private actor CoordinatorInvokeLifecycleProbe {
     }
 }
 
-private actor CoordinatorRouteInvalidationHookProbe {
-    private var callCount = 0
-    private let blockedCallGate: AsyncTestGate
-
-    init(blockedCallGate: AsyncTestGate) {
-        self.blockedCallGate = blockedCallGate
-    }
-
-    func run() async {
-        self.callCount += 1
-        guard self.callCount == 2 else { return }
-        await self.blockedCallGate.wait()
-    }
-
-    func calls() -> Int {
-        self.callCount
-    }
-}
-
 private actor CoordinatorDrainSnapshotProbe {
     private var captured = false
 
@@ -86,12 +67,19 @@ private actor CoordinatorDrainSnapshotProbe {
 
 private actor CoordinatorNodeHostWorkerProbe: MacNodeHostWorking {
     private var stopCount = 0
+    private let stopGate = AsyncTestGate()
+    private var blockedRouteClearAuthorityGeneration: UInt64?
+    private let routeClearEnteredGate = AsyncTestGate()
+    private let routeClearReleaseGate = AsyncTestGate()
 
     func start(launch _: MacNodeHostWorkerLaunch) async throws -> MacNodeHostManifest {
         MacNodeHostManifest(version: "test", caps: [], commands: [], pathEnv: "/usr/bin:/bin")
     }
 
-    func supports(_: String) async -> Bool { false }
+    func supports(_: String) async -> Bool {
+        false
+    }
+
     func invoke(_ request: BridgeInvokeRequest) async -> BridgeInvokeResponse {
         BridgeInvokeResponse(id: request.id, ok: false)
     }
@@ -99,10 +87,40 @@ private actor CoordinatorNodeHostWorkerProbe: MacNodeHostWorking {
     func handleInput(invokeId _: String, seq _: Int, payloadJSON _: String) async {}
     func cancel(invokeId _: String) async {}
 
-    func setRoute(_: GatewayNodeSessionRoute?, authorityGeneration _: UInt64) async -> Bool { true }
+    func setRoute(_ route: GatewayNodeSessionRoute?, authorityGeneration: UInt64) async -> Bool {
+        guard route == nil,
+              authorityGeneration == self.blockedRouteClearAuthorityGeneration
+        else { return true }
+        self.routeClearEnteredGate.open()
+        await self.routeClearReleaseGate.wait()
+        return true
+    }
+
+    func blockRouteClear(_ authorityGeneration: UInt64) {
+        self.blockedRouteClearAuthorityGeneration = authorityGeneration
+    }
+
+    func waitUntilBlockedRouteClearEntered() async {
+        await self.routeClearEnteredGate.wait()
+    }
+
+    func releaseBlockedRouteClear() {
+        self.routeClearReleaseGate.open()
+    }
+
     func publishInventory(ifCurrentRoute _: GatewayNodeSessionRoute) async {}
-    func stop() async { self.stopCount += 1 }
-    func stops() -> Int { self.stopCount }
+    func stop() async {
+        self.stopCount += 1
+        self.stopGate.open()
+    }
+
+    func waitUntilStopped() async {
+        await self.stopGate.wait()
+    }
+
+    func stops() -> Int {
+        self.stopCount
+    }
 }
 
 private final class CoordinatorRetrySleeperProbe: @unchecked Sendable {
@@ -154,13 +172,13 @@ struct MacNodeModeCoordinatorTests {
     @MainActor
     private func cleanupRevocationTest(
         lifecycleInvalidationGate: AsyncTestGate,
-        routeInvalidationGate: AsyncTestGate,
+        worker: CoordinatorNodeHostWorkerProbe,
         successor: Task<Void, Error>?,
         gateway: GatewayNodeSession,
         coordinator: MacNodeModeCoordinator) async
     {
         lifecycleInvalidationGate.open()
-        routeInvalidationGate.open()
+        await worker.releaseBlockedRouteClear()
         successor?.cancel()
         if let successor {
             _ = await successor.result
@@ -193,6 +211,38 @@ struct MacNodeModeCoordinatorTests {
         #expect(await worker.stops() == 2)
 
         await coordinator.stopAndWait()
+    }
+
+    @Test @MainActor func `ordinary gateway reconnect preserves the startup scoped worker`() async {
+        let worker = CoordinatorNodeHostWorkerProbe()
+        let session = GatewayNodeSession()
+        let coordinator = MacNodeModeCoordinator(
+            session: session,
+            runtime: MacNodeRuntime(nodeHostWorker: worker),
+            nodeHostWorker: worker)
+
+        coordinator.enqueueRouteInvalidationForTesting()
+        await coordinator.waitForRouteInvalidationForTesting()
+
+        #expect(await worker.stops() == 0)
+        await coordinator.stopAndWait()
+    }
+
+    @Test @MainActor func `terminal stop owns cleanup after coordinator release`() async {
+        let worker = CoordinatorNodeHostWorkerProbe()
+        let session = GatewayNodeSession()
+        var coordinator: MacNodeModeCoordinator? = MacNodeModeCoordinator(
+            session: session,
+            runtime: MacNodeRuntime(nodeHostWorker: worker),
+            nodeHostWorker: worker)
+
+        // The MainActor task cannot begin until this test suspends below.
+        coordinator?.stop()
+        coordinator?.stop()
+        coordinator = nil
+        await worker.waitUntilStopped()
+
+        #expect(await worker.stops() == 1)
     }
 
     @Test @MainActor func `terminal worker failure is reported instead of scheduling another restart`() async throws {
@@ -254,6 +304,27 @@ struct MacNodeModeCoordinatorTests {
         await coordinator.stopAndWait()
     }
 
+    @Test @MainActor func `queued failure from replaced worker does not penalize replacement`() async throws {
+        let worker = CoordinatorNodeHostWorkerProbe()
+        let session = GatewayNodeSession()
+        let coordinator = MacNodeModeCoordinator(
+            session: session,
+            runtime: MacNodeRuntime(nodeHostWorker: worker),
+            nodeHostWorker: worker)
+        let command = ["/usr/local/bin/openclaw", "node", "worker"]
+
+        try coordinator.prepareNodeHostWorkerRetryForTesting(command: command)
+        await coordinator.handleNodeHostConfigurationChangeForTesting()
+        try coordinator.prepareNodeHostWorkerRetryForTesting(command: command)
+
+        // Generation zero belongs to the replaced process. Handle it only after
+        // the successor input is installed so the ordering is deterministic.
+        coordinator.handleNodeHostWorkerFailureForTesting(configurationGeneration: .zero)
+
+        try coordinator.prepareNodeHostWorkerRetryForTesting(command: command)
+        await coordinator.stopAndWait()
+    }
+
     @Test func `paused node state requires route disconnect`() {
         #expect(MacNodeModeCoordinator.pausedStateRequiresDisconnect(true))
         #expect(!MacNodeModeCoordinator.pausedStateRequiresDisconnect(false))
@@ -272,11 +343,18 @@ struct MacNodeModeCoordinatorTests {
             nextPaused: false,
             previousComputerControlEnabled: true,
             nextComputerControlEnabled: true))
+        #expect(MacNodeModeCoordinator.controlTransitionRequiresRouteInvalidation(
+            previousPaused: false,
+            nextPaused: false,
+            previousComputerControlEnabled: true,
+            nextComputerControlEnabled: true,
+            previousComputerControlProvider: .peekaboo,
+            nextComputerControlProvider: .cua))
     }
 
     @Test func `first endpoint snapshot rejects a stale captured endpoint`() throws {
-        let first = GatewayConnection.EndpointSnapshot(
-            config: try GatewayConnection.Config(
+        let first = try GatewayConnection.EndpointSnapshot(
+            config: GatewayConnection.Config(
                 url: #require(URL(string: "wss://first.example.invalid")),
                 token: "first-token",
                 password: nil),
@@ -293,15 +371,15 @@ struct MacNodeModeCoordinatorTests {
     }
 
     @Test func `stop pause and endpoint changes revoke final connect admission`() throws {
-        let first = GatewayConnection.EndpointSnapshot(
-            config: try GatewayConnection.Config(
+        let first = try GatewayConnection.EndpointSnapshot(
+            config: GatewayConnection.Config(
                 url: #require(URL(string: "wss://first.example.invalid")),
                 token: "token",
                 password: nil),
             routeAuthority: nil,
             revision: 1)
-        let replacement = GatewayConnection.EndpointSnapshot(
-            config: try GatewayConnection.Config(
+        let replacement = try GatewayConnection.EndpointSnapshot(
+            config: GatewayConnection.Config(
                 url: #require(URL(string: "wss://second.example.invalid")),
                 token: "token",
                 password: nil),
@@ -372,19 +450,17 @@ struct MacNodeModeCoordinatorTests {
         let webSocketSession = GatewayTestWebSocketSession()
         let gateway = GatewayNodeSession()
         let lifecycleInvalidationGate = AsyncTestGate()
-        let routeInvalidationGate = AsyncTestGate()
         let lifecycle = CoordinatorInvokeLifecycleProbe(
             routeInvalidationGate: lifecycleInvalidationGate)
-        let routeInvalidationHook = CoordinatorRouteInvalidationHookProbe(
-            blockedCallGate: routeInvalidationGate)
         let drainSnapshot = CoordinatorDrainSnapshotProbe()
+        let worker = CoordinatorNodeHostWorkerProbe()
         let runtime = MacNodeRuntime(computerControlEnabled: { true })
         let coordinator = MacNodeModeCoordinator(
             session: gateway,
             runtime: runtime,
+            nodeHostWorker: worker,
             initialPaused: false,
-            initialComputerControlEnabled: true,
-            routeInvalidationHook: { await routeInvalidationHook.run() })
+            initialComputerControlEnabled: true)
         let options = GatewayConnectOptions(
             role: "node",
             scopes: [],
@@ -484,10 +560,9 @@ struct MacNodeModeCoordinatorTests {
             #expect(generationsAfterSecondRevocation.routeAuthority == generationsBeforeRefresh.routeAuthority + 2)
             #expect(generationsAfterSecondRevocation.completedRouteAuthority == generationsBeforeRefresh.routeAuthority)
 
+            await worker.blockRouteClear(generationsAfterSecondRevocation.routeAuthority)
             lifecycleInvalidationGate.open()
-            try await self.waitUntil("second route invalidation hook") {
-                await routeInvalidationHook.calls() == 2
-            }
+            await worker.waitUntilBlockedRouteClearEntered()
             let stateWhileSecondRevocationBlocked = await lifecycle.state()
             #expect(webSocketSession.snapshotMakeCount() == 1)
             #expect(!stateWhileSecondRevocationBlocked.successorConnected)
@@ -498,7 +573,7 @@ struct MacNodeModeCoordinatorTests {
                 generationsAfterSecondRevocation.routeAuthority,
                 isPaused: false))
 
-            routeInvalidationGate.open()
+            await worker.releaseBlockedRouteClear()
             try await successorTask.value
 
             let finalState = await lifecycle.state()
@@ -517,7 +592,7 @@ struct MacNodeModeCoordinatorTests {
         } catch {
             await self.cleanupRevocationTest(
                 lifecycleInvalidationGate: lifecycleInvalidationGate,
-                routeInvalidationGate: routeInvalidationGate,
+                worker: worker,
                 successor: successor,
                 gateway: gateway,
                 coordinator: coordinator)
@@ -525,7 +600,7 @@ struct MacNodeModeCoordinatorTests {
         }
         await self.cleanupRevocationTest(
             lifecycleInvalidationGate: lifecycleInvalidationGate,
-            routeInvalidationGate: routeInvalidationGate,
+            worker: worker,
             successor: successor,
             gateway: gateway,
             coordinator: coordinator)

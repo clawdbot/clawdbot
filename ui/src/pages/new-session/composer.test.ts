@@ -24,7 +24,6 @@ function renderComposer(
     };
     submitting?: boolean;
     messageLocked?: boolean;
-    incognitoDisabledReason?: string;
     visibility?: NewSessionVisibility;
     draftAvailable?: boolean;
     onVisibilityChange?: (visibility: NewSessionVisibility) => void;
@@ -59,7 +58,6 @@ function renderComposer(
       submitting: overrides.submitting ?? false,
       textareaController,
       messageLocked: overrides.messageLocked,
-      incognitoDisabledReason: overrides.incognitoDisabledReason,
       onInput: overrides.onInput ?? (() => undefined),
       onVisibilityChange: overrides.onVisibilityChange,
       onSubmit: overrides.onSubmit ?? (() => undefined),
@@ -311,60 +309,47 @@ describe("new-session composer sizing lifecycle", () => {
 });
 
 describe("new-session composer attachment drops", () => {
-  it("surfaces authorization reasons on disabled session controls", () => {
+  it("surfaces authorization reasons on the disabled submit control", () => {
     const { composer } = renderComposer({
       canSubmit: false,
-      incognitoDisabledReason: "This action requires operator.admin access.",
       submitDisabledReason: "This action requires operator.write access.",
     });
     const submitTooltip = composer.querySelector<HTMLElement>("openclaw-tooltip");
-    const incognito = composer.querySelector<HTMLButtonElement>('[role="switch"]');
 
     expect((submitTooltip as HTMLElement & { content?: string })?.content).toBe(
       "This action requires operator.write access.",
     );
-    expect(incognito?.disabled).toBe(true);
-    expect(incognito?.title).toBe("This action requires operator.admin access.");
   });
 
-  it("renders only the incognito pill when drafts are unavailable, off by default", () => {
-    const onVisibilityChange = vi.fn();
-    const { composer } = renderComposer({ onVisibilityChange });
+  it("places the attachment menu in the composer footer", () => {
+    const { composer } = renderComposer();
+    const attachmentMenu = composer.querySelector<HTMLElement>(".agent-chat__attach-menu");
+
+    expect(attachmentMenu?.closest(".agent-chat__composer-footer")).not.toBeNull();
+    expect(attachmentMenu?.closest(".agent-chat__composer-input-row")).toBeNull();
+  });
+
+  it("keeps page-level incognito out of the composer when drafts are unavailable", () => {
+    const { composer } = renderComposer();
     const switches = composer.querySelectorAll<HTMLButtonElement>('[role="switch"]');
 
-    expect(switches).toHaveLength(1);
-    expect(switches[0]?.getAttribute("aria-checked")).toBe("false");
-    switches[0]?.click();
-    expect(onVisibilityChange).toHaveBeenCalledWith("incognito");
+    expect(switches).toHaveLength(0);
   });
 
-  it("renders a distinct active state when incognito is selected", () => {
-    const { composer } = renderComposer({ visibility: "incognito" });
-    const toggle = composer.querySelector<HTMLButtonElement>('[role="switch"]');
-
-    expect(toggle?.getAttribute("aria-checked")).toBe("true");
-    expect(toggle?.classList.contains("new-session-page__visibility--active")).toBe(true);
-  });
-
-  it("keeps the visibility pills mutually exclusive", () => {
+  it("lets the draft pill replace page-level incognito", () => {
     const onVisibilityChange = vi.fn();
     const { composer } = renderComposer({
       draftAvailable: true,
       visibility: "incognito",
       onVisibilityChange,
     });
-    const [draftPill, incognitoPill] = Array.from(
-      composer.querySelectorAll<HTMLButtonElement>('[role="switch"]'),
-    );
+    const draftPill = composer.querySelector<HTMLButtonElement>('[role="switch"]');
 
     expect(draftPill?.textContent).toContain("Draft");
     expect(draftPill?.getAttribute("aria-checked")).toBe("false");
-    expect(incognitoPill?.getAttribute("aria-checked")).toBe("true");
 
     draftPill?.click();
     expect(onVisibilityChange).toHaveBeenCalledWith("draft");
-    incognitoPill?.click();
-    expect(onVisibilityChange).toHaveBeenCalledWith("normal");
   });
 
   it("adds a dropped file through the shared attachment handling", async () => {

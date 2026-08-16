@@ -1,4 +1,5 @@
 export * from "./clawhub-trust-error-details.js";
+export * from "./install-policy-warning-error-details.js";
 export * from "./system-agent-error-details.js";
 export {
   isMcpAppViewExpiredError,
@@ -48,6 +49,7 @@ export type {
   SecretsStoreMutationResult,
   SecretsStoreSetParams,
 } from "./schema/secrets.js";
+export * from "./schema/portals.js";
 // Explicit schema exports keep public protocol changes reviewable.
 export {
   isCloudWorkerPlacementState,
@@ -316,10 +318,15 @@ export {
   SessionsResetParamsSchema,
   SessionsDeleteParamsSchema,
   SessionGroupSchema,
+  SessionGroupDefaultsSchema,
   SessionsGroupsListParamsSchema,
   SessionsGroupsListResultSchema,
+  SessionsGroupsDefaultsParamsSchema,
+  SessionsGroupsDefaultsResultSchema,
   SessionsGroupsPutParamsSchema,
   SessionsGroupsRenameParamsSchema,
+  SessionsGroupsUpdateParamsSchema,
+  SessionsGroupsUpdateResultSchema,
   SessionsGroupsDeleteParamsSchema,
   SessionsGroupsMutationResultSchema,
   SessionsCompactParamsSchema,

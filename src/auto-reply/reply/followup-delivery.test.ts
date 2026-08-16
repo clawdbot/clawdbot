@@ -715,6 +715,32 @@ describe("resolveFollowupDeliveryDecision", () => {
     });
   });
 
+  it("delivers a sanitized fallback for an empty message-tool-only completion", () => {
+    const turn = createTurn();
+    turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
+
+    const decision = resolveFollowupDeliveryDecision({
+      turn,
+      execution: createSettledExecution(),
+      accounting: createAccounting(),
+    });
+
+    expect(decision).toMatchObject({
+      kind: "deliver",
+      payloads: [
+        {
+          text: expect.stringContaining("did not produce a visible reply"),
+          isError: true,
+        },
+      ],
+    });
+    if (decision.kind === "deliver") {
+      expect(
+        getReplyPayloadMetadata(decision.payloads[0] ?? {})?.deliverDespiteSourceReplySuppression,
+      ).toBe(true);
+    }
+  });
+
   it("keeps a terminal failure when suppressed partial output is present", () => {
     const turn = createTurn();
     turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";

@@ -55,7 +55,8 @@ describe("runCommandWithRuntime", () => {
     );
 
     expect(messages).toHaveLength(1);
-    expect(messages[0]).toContain("TypeError: fetch failed");
+    expect(messages[0]).toContain("fetch failed");
+    expect(messages[0]).not.toContain("TypeError:");
     expect(messages[0]).toContain("invalid onRequestStart method");
     expect(messages[0]).toContain("UND_ERR_INVALID_ARG");
     expect(exits).toEqual([1]);

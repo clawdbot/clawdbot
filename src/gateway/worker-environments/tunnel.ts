@@ -5,6 +5,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
+import { completeWorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
 import type { DesktopSessionRegistry } from "../desktop/session-registry.js";
 import { createWorkerDesktopTunnels } from "./desktop-tunnel.js";
 import {
@@ -78,7 +79,7 @@ directory=$2
 rm -f -- "$socket"
 rmdir -- "$directory" 2>/dev/null || true
 `;
-const WORKER_LAUNCH_SCRIPT = 'exec node "$HOME/.openclaw-worker/$1/openclaw.mjs" worker';
+const WORKER_LAUNCH_SCRIPT = 'exec node "$HOME/.openclaw-worker/$1/worker.mjs"';
 
 type WorkerTunnelStartRequest = WorkerTunnelRequest & {
   bundleHash: string;
@@ -245,14 +246,19 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
     return {
       environmentId: entry.environmentId,
       ownerEpoch: entry.ownerEpoch,
-      connectionEndpoint: { kind: "unix", socketPath: entry.remoteSocketPath },
       launchTurn: (request) =>
         workspace.runWorkspaceCommand({
           transportRetry: "never",
           argv: ["sh", "-c", WORKER_LAUNCH_SCRIPT, "openclaw-worker", entry.bundleHash],
-          input: JSON.stringify(request.descriptor),
+          input: JSON.stringify(
+            completeWorkerLaunchDescriptor(request.plan, {
+              kind: "unix",
+              socketPath: entry.remoteSocketPath,
+            }),
+          ),
           timeoutMs: request.timeoutMs,
           signal: request.signal,
+          onDispatchReady: request.onDispatchReady,
         }),
       ...workspace,
       stop: () => stop(entry.environmentId, entry.ownerEpoch),

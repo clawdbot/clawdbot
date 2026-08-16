@@ -57,7 +57,10 @@ import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
 import { prepareEmbeddedRunRuntime } from "./run/runtime-preparation.js";
 import { createEmbeddedRunSessionPromptState } from "./run/session-prompt-state.js";
 import { prepareTerminalWithSettledTurnFinalization } from "./run/settled-turn-finalization.js";
-import { resolveEmbeddedRunTerminal } from "./run/terminal-resolution.js";
+import {
+  createTerminalToolPresentationTracker,
+  resolveEmbeddedRunTerminal,
+} from "./run/terminal-resolution.js";
 import { createEmbeddedRunTerminalRetryState } from "./run/terminal-retry-state.js";
 import { resolveEmbeddedRunTerminalTimeout } from "./run/terminal-timeout.js";
 import { createAgentTurnTaintState } from "./run/turn-taint-state.js";
@@ -216,22 +219,11 @@ export async function runPreparedEmbeddedLoop(
   });
   let postCompactionAbortController: AbortController | undefined;
   let postCompactionAbortError: PostCompactionLoopPersistedError | undefined;
-  const attemptTerminalToolPresentation = {
-    ordinal: -1,
-    value: undefined as string | undefined,
-  };
-  let nextToolOutcomeOrdinal = 0;
-  const allocateToolOutcomeOrdinal = (): number => nextToolOutcomeOrdinal++;
-  const readAttemptTerminalToolPresentation = (): string | undefined =>
-    attemptTerminalToolPresentation.value;
+  // Presentation survives retry attempts, but a newer tool result must clear stale text.
+  const terminalToolPresentation = createTerminalToolPresentationTracker();
   const turnTaintState = createAgentTurnTaintState();
   const observeToolOutcome = (observation: ToolOutcomeObservation): void => {
-    const observationOrdinal =
-      observation.toolCallOrdinal ?? attemptTerminalToolPresentation.ordinal + 1;
-    if (observationOrdinal >= attemptTerminalToolPresentation.ordinal) {
-      attemptTerminalToolPresentation.ordinal = observationOrdinal;
-      attemptTerminalToolPresentation.value = observation.terminalPresentation;
-    }
+    terminalToolPresentation.observe(observation);
     turnTaintState.observe(observation);
     if (observation.presentationOnly) {
       return;
@@ -364,31 +356,42 @@ export async function runPreparedEmbeddedLoop(
         runLoopIterations: runRetryBudget.attemptsCounted,
         maxRunLoopIterations: runRetryBudget.maxAttempts,
       });
-      const dispatch = await prepareAndDispatchEmbeddedRunAttempt({
-        runInput: admittedRunInput,
-        preparedRuntime,
-        contextEngine,
-        sessionPromptState,
-        terminalRetryState,
-        replayState: accumulatedReplayState,
-        provider,
-        modelId,
-        startupStagesEmitted,
-        bootstrapPromptWarningSignaturesSeen,
-        resolveRuntimeFallbackReason,
-        observeToolOutcome,
-        isTurnTainted: turnTaintState.isTainted,
-        allocateToolOutcomeOrdinal,
-        getPostCompactionAbortError: () => postCompactionAbortError,
-        setPostCompactionAbortController: (controller) => {
-          postCompactionAbortController = controller;
-        },
-        clearPostCompactionAbortController: (controller) => {
-          if (postCompactionAbortController === controller) {
-            postCompactionAbortController = undefined;
-          }
-        },
-      });
+      let dispatch: Awaited<ReturnType<typeof prepareAndDispatchEmbeddedRunAttempt>>;
+      try {
+        dispatch = await prepareAndDispatchEmbeddedRunAttempt({
+          runInput: admittedRunInput,
+          preparedRuntime,
+          contextEngine,
+          sessionPromptState,
+          terminalRetryState,
+          replayState: accumulatedReplayState,
+          provider,
+          modelId,
+          startupStagesEmitted,
+          bootstrapPromptWarningSignaturesSeen,
+          resolveRuntimeFallbackReason,
+          observeToolOutcome,
+          isTurnTainted: turnTaintState.isTainted,
+          allocateToolOutcomeOrdinal: terminalToolPresentation.allocateOrdinal,
+          getPostCompactionAbortError: () => postCompactionAbortError,
+          setPostCompactionAbortController: (controller) => {
+            postCompactionAbortController = controller;
+          },
+          clearPostCompactionAbortController: (controller) => {
+            if (postCompactionAbortController === controller) {
+              postCompactionAbortController = undefined;
+            }
+          },
+        });
+      } catch (error) {
+        const retryTrace = await failoverRetryController.recoverThrownHarnessAuthFailure(error);
+        if (!retryTrace) {
+          throw error;
+        }
+        traceAttempts.push(retryTrace);
+        lastRetryFailoverReason = retryTrace.reason;
+        continue;
+      }
       startupStagesEmitted = dispatch.startupStagesEmitted;
       const { dispatchedAttempt, runtimePlan } = dispatch;
       mcpAttemptCarryover.apply(dispatchedAttempt.rawAttempt);
@@ -520,7 +523,7 @@ export async function runPreparedEmbeddedLoop(
         continue;
       }
       let assistantProfileFailureReason = assistantFailureOutcome.assistantProfileFailureReason;
-      const terminalToolPresentation = readAttemptTerminalToolPresentation();
+      const terminalToolPresentationText = terminalToolPresentation.read();
       const finalizedTerminal = await prepareTerminalWithSettledTurnFinalization({
         initial: {
           attempt,
@@ -550,7 +553,7 @@ export async function runPreparedEmbeddedLoop(
           harness: agentHarness,
           modelApi: effectiveModel.api,
           executionContract,
-          hasTerminalToolPresentation: Boolean(terminalToolPresentation),
+          hasTerminalToolPresentation: Boolean(terminalToolPresentationText),
           noteLaneTaskProgress: input.laneController.noteLaneTaskProgress,
         },
       });
@@ -638,7 +641,7 @@ export async function runPreparedEmbeddedLoop(
           sessionPromptState.suppressNextUserMessagePersistence = value;
         },
         armPostCompactionGuard: () => postCompactionGuard.armPostCompaction(),
-        readTerminalToolPresentation: () => terminalToolPresentation,
+        readTerminalToolPresentation: () => terminalToolPresentationText,
         resolveReplayInvalid: resolveReplayInvalidForAttempt,
         setTerminalLifecycleMeta,
         maybeMarkAuthProfileFailure: failoverRetryController.maybeMarkAuthProfileFailure,

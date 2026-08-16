@@ -34,7 +34,7 @@ import {
   tryResolveSessionCompatibilityOwnerAgentId,
 } from "../session-request-agent.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
-import { hasVisibleActiveSessionRun } from "./session-active-runs.js";
+import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import {
@@ -177,7 +177,9 @@ async function listBranches(options: GatewayRequestHandlerOptions): Promise<void
     return;
   }
   if (readSessionUpstreamLink(current.canonicalKey, current.target.agentId)) {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, EXTERNAL_CONVERSATION_ERROR));
+    // Upstream-linked sessions truthfully have no local branches; only the
+    // mutating siblings (rewind/switch/fork) must fail closed on them.
+    respond(true, { branches: [] }, undefined);
     return;
   }
   const result = await listSessionBranches({
@@ -282,14 +284,14 @@ async function mutateSessionAtMessage(
           initialSessionId,
         ) ??
           false) ||
-        hasVisibleActiveSessionRun({
+        resolveVisibleActiveSessionRunState({
           context,
           requestedKey: sessionKey,
           canonicalKey: current.canonicalKey,
           sessionId: initialSessionId,
           agentId: requestedAgent.agentId,
           defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, sessionKey),
-        });
+        }).active;
     },
     run: async () => {
       if (!targetStillCurrent) {

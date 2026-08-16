@@ -32,6 +32,10 @@ type ModelProvidersPageTestElement = HTMLElement & {
   selectedAgentId: string;
 };
 
+type AgentSelectElement = HTMLElement & {
+  onSelect: (value: string) => void;
+};
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((resolvePromise) => {
@@ -57,7 +61,13 @@ function createHarness(initialScopeId: string) {
           pendingAuthStatus = null;
           await gate;
         }
-        return { ts: 1, providers: [] };
+        return {
+          ts: 1,
+          providers: [],
+          providerCapabilities: [
+            { provider: "anthropic", apiKeySupported: true, quickApiKeySetup: true },
+          ],
+        };
       }
       case "models.list":
         return { models: [] };
@@ -84,7 +94,10 @@ function createHarness(initialScopeId: string) {
   };
   let selectionListener: (() => void) | undefined;
   const agentSelection = {
-    state: { selectedId: initialScopeId, scopeId: initialScopeId as string | null },
+    state: {
+      selectedId: initialScopeId as string | null,
+      scopeId: initialScopeId as string | null,
+    },
     set: vi.fn(),
     setScope: vi.fn(),
     subscribe(listener: () => void) {
@@ -135,8 +148,10 @@ function createHarness(initialScopeId: string) {
           ],
         },
         agentsLoading: false,
+        agentsError: null as string | null,
       },
       ensureList: vi.fn(),
+      refreshList: vi.fn(),
       subscribe,
     },
     agentSelection,
@@ -173,6 +188,17 @@ afterEach(() => {
 });
 
 describe("ModelProvidersPage agent scope", () => {
+  it("switches application ownership from the concrete agent picker", async () => {
+    const { agentSelection, context } = createHarness("main");
+    const page = appendPage(context);
+    await vi.waitFor(() => expect(page.querySelector("openclaw-agent-select")).not.toBeNull());
+
+    page.querySelector<AgentSelectElement>("openclaw-agent-select")?.onSelect("writer");
+
+    expect(agentSelection.set).toHaveBeenCalledWith("writer");
+    expect(agentSelection.setScope).not.toHaveBeenCalled();
+  });
+
   it("links the page subtitle to the model providers guide", async () => {
     const { context } = createHarness("main");
     const page = appendPage(context);
@@ -346,6 +372,7 @@ describe("ModelProvidersPage agent scope", () => {
 
     const saving = page.saveDefaultModels();
     await vi.waitFor(() => expect(runtimeConfig.ensureLoaded).toHaveBeenCalledOnce());
+    agentSelection.state.selectedId = "writer";
     agentSelection.state.scopeId = "writer";
     notifySelection();
     await vi.waitFor(() => expect(page.selectedAgentId).toBe("writer"));
@@ -368,6 +395,7 @@ describe("ModelProvidersPage agent scope", () => {
 
     const saving = page.saveKey("openai", "openai");
     await vi.waitFor(() => expect(runtimeConfig.ensureLoaded).toHaveBeenCalledOnce());
+    agentSelection.state.selectedId = "writer";
     agentSelection.state.scopeId = "writer";
     notifySelection();
     await vi.waitFor(() => expect(page.selectedAgentId).toBe("writer"));
@@ -399,6 +427,7 @@ describe("ModelProvidersPage agent scope", () => {
 
     const adding = page.addProvider();
     await vi.waitFor(() => expect(runtimeConfig.ensureLoaded).toHaveBeenCalledOnce());
+    agentSelection.state.selectedId = "writer";
     agentSelection.state.scopeId = "writer";
     notifySelection();
     await vi.waitFor(() => expect(page.selectedAgentId).toBe("writer"));
@@ -434,9 +463,11 @@ describe("ModelProvidersPage agent scope", () => {
         agentId: "main",
       }),
     );
+    agentSelection.state.selectedId = "writer";
     agentSelection.state.scopeId = "writer";
     notifySelection();
     await vi.waitFor(() => expect(page.selectedAgentId).toBe("writer"));
+    agentSelection.state.selectedId = "main";
     agentSelection.state.scopeId = "main";
     notifySelection();
     await vi.waitFor(() => expect(page.selectedAgentId).toBe("main"));
@@ -464,6 +495,7 @@ describe("ModelProvidersPage agent scope", () => {
     page.probeResults = {
       openai: { provider: "openai", status: "ok", results: [] },
     };
+    agentSelection.state.selectedId = "writer";
     agentSelection.state.scopeId = "writer";
     page.routeData = {
       data: { ...EMPTY_MODEL_PROVIDERS_DATA, config: {}, updatedAt: 1 },
@@ -496,6 +528,7 @@ describe("ModelProvidersPage agent scope", () => {
 
     request.mockClear();
     page.busy = { "logout:openai": true };
+    agentSelection.state.selectedId = "writer";
     agentSelection.state.scopeId = "writer";
     notifySelection();
 
@@ -508,6 +541,57 @@ describe("ModelProvidersPage agent scope", () => {
     );
     expect(request.mock.calls.filter(([method]) => method === "models.authStatus")).toHaveLength(1);
     expect(page.busy).toEqual({});
+  });
+
+  it("keeps the concrete selected owner after another page widens scope to all agents", async () => {
+    const { agentSelection, context, request } = createHarness("writer");
+    agentSelection.state.scopeId = null;
+
+    const page = appendPage(context);
+
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith(
+        "models.authStatus",
+        { agentId: "writer" },
+        { signal: expect.any(AbortSignal) },
+      ),
+    );
+    expect(page.selectedAgentId).toBe("writer");
+  });
+
+  it("does not request model data before a concrete agent is selected", async () => {
+    const { agentSelection, context, request } = createHarness("main");
+    agentSelection.state.selectedId = null;
+    agentSelection.state.scopeId = null;
+
+    const page = appendPage(context);
+    await page.updateComplete;
+
+    expect(page.selectedAgentId).toBe("");
+    expect(
+      request.mock.calls.filter(
+        ([method]) => method === "models.authStatus" || method === "models.list",
+      ),
+    ).toEqual([]);
+  });
+
+  it("shows a roster failure without automatically retrying it", async () => {
+    const { agentSelection, context } = createHarness("main");
+    agentSelection.state.selectedId = null;
+    agentSelection.state.scopeId = null;
+    context.agents.state.agentsList = null;
+    context.agents.state.agentsError = "Agent roster unavailable";
+
+    const page = appendPage(context);
+    await page.updateComplete;
+
+    expect(context.agents.ensureList).not.toHaveBeenCalled();
+    expect(page.textContent).toContain("Agent roster unavailable");
+
+    [...page.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.trim() === "Refresh")
+      ?.click();
+    expect(context.agents.refreshList).toHaveBeenCalledOnce();
   });
 
   it("recovers when the agent changes while a refresh is in flight", async () => {
@@ -525,6 +609,7 @@ describe("ModelProvidersPage agent scope", () => {
     );
     // Invalidate the in-flight refresh mid-await; the stale completion must
     // clear `refreshing` so the new agent's load can proceed.
+    agentSelection.state.selectedId = "writer";
     agentSelection.state.scopeId = "writer";
     notifySelection();
     release();

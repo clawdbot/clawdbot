@@ -502,6 +502,7 @@ describe("LINE webhook spool", () => {
 
   it("keeps a completion tombstone and rejects a repeated delivery", async () => {
     await withQueue(async (queue) => {
+      const enqueue = vi.spyOn(queue, "enqueue");
       const event = createEvent({ webhookEventId: "event-duplicate" });
       const deliver = vi.fn(async (_event, _destination, control) => {
         await control.turnAdoptionLifecycle.onAdopted();
@@ -518,8 +519,9 @@ describe("LINE webhook spool", () => {
         await waitForVerdict(queue, "message:message-event-duplicate", "completed");
 
         await spool.accept(callback(event));
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 600);
+        await expect(enqueue.mock.results.at(-1)?.value).resolves.toMatchObject({
+          kind: "completed",
+          duplicate: true,
         });
 
         expect(deliver).toHaveBeenCalledTimes(1);
@@ -531,6 +533,7 @@ describe("LINE webhook spool", () => {
 
   it("deduplicates a redelivered message id even when webhookEventId changes", async () => {
     await withQueue(async (queue) => {
+      const enqueue = vi.spyOn(queue, "enqueue");
       const deliver = vi.fn(async (_event, _destination, control) => {
         await control.turnAdoptionLifecycle.onAdopted();
       });
@@ -550,8 +553,9 @@ describe("LINE webhook spool", () => {
         await spool.accept(
           callback(createEvent({ webhookEventId: "delivery-b", messageId: "shared-message" })),
         );
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 600);
+        await expect(enqueue.mock.results.at(-1)?.value).resolves.toMatchObject({
+          kind: "completed",
+          duplicate: true,
         });
 
         expect(deliver).toHaveBeenCalledTimes(1);

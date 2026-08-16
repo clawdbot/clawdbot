@@ -1,7 +1,7 @@
 // Discord plugin module implements segment behavior.
-import path from "node:path";
 import { Readable } from "node:stream";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { unlinkIfExists } from "openclaw/plugin-sdk/media-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -28,6 +28,7 @@ const logger = createSubsystemLogger("discord/voice");
 
 export async function processDiscordVoiceSegment(params: {
   entry: VoiceSessionEntry;
+  accountId: string;
   wavPath: string;
   userId: string;
   durationSeconds: number;
@@ -122,6 +123,7 @@ export async function processDiscordVoiceSegment(params: {
     const prompt = formatVoiceIngressPrompt(transcript, ingress.speakerLabel);
     const turn = await runDiscordVoiceAgentTurn({
       entry,
+      accountId: params.accountId,
       userId,
       message: prompt,
       cfg: params.cfg,
@@ -171,32 +173,35 @@ export async function processDiscordVoiceSegment(params: {
     `tts ok (${voiceReplyAudio.speakText.length} chars): guild ${entry.guildId} channel ${entry.channelId}`,
   );
 
+  const releaseAudio =
+    voiceReplyAudio.mode === "stream"
+      ? voiceReplyAudio.release
+      : () => unlinkIfExists(voiceReplyAudio.audioPath);
+  // Synthesis can settle after leave; release before the playback queue gets ownership.
+  if (entry.sessionLifecycle.status === "stopped") {
+    await releaseAudio?.();
+    return;
+  }
   params.enqueuePlayback(entry, async () => {
     const voiceSdk = loadDiscordVoiceSdk();
-    const releaseAudioStream =
-      voiceReplyAudio.mode === "stream" ? voiceReplyAudio.release : undefined;
     try {
-      if (voiceReplyAudio.mode === "stream") {
-        logVoiceVerbose(`playback start: guild ${entry.guildId} channel ${entry.channelId} stream`);
-        const nodeStream = Readable.fromWeb(
-          voiceReplyAudio.audioStream as import("node:stream/web").ReadableStream<Uint8Array>,
-        );
-        const resource = voiceSdk.createAudioResource(createDiscordOpusPlaybackStream(nodeStream), {
-          inputType: voiceSdk.StreamType.Opus,
-        });
-        entry.player.play(resource);
-      } else {
-        logVoiceVerbose(
-          `playback start: guild ${entry.guildId} channel ${entry.channelId} file ${path.basename(voiceReplyAudio.audioPath)}`,
-        );
-        const resource = voiceSdk.createAudioResource(
-          createDiscordOpusPlaybackStream(voiceReplyAudio.audioPath),
-          {
-            inputType: voiceSdk.StreamType.Opus,
-          },
-        );
-        entry.player.play(resource);
+      // Queued playback can outlive its session; a stopped player is reusable by the SDK.
+      if (entry.sessionLifecycle.status === "stopped") {
+        return;
       }
+      const input =
+        voiceReplyAudio.mode === "stream"
+          ? Readable.fromWeb(
+              voiceReplyAudio.audioStream as import("node:stream/web").ReadableStream<Uint8Array>,
+            )
+          : voiceReplyAudio.audioPath;
+      logVoiceVerbose(
+        `playback start: guild ${entry.guildId} channel ${entry.channelId} ${voiceReplyAudio.mode}`,
+      );
+      const resource = voiceSdk.createAudioResource(createDiscordOpusPlaybackStream(input), {
+        inputType: voiceSdk.StreamType.Opus,
+      });
+      entry.player.play(resource);
       await voiceSdk
         .entersState(entry.player, voiceSdk.AudioPlayerStatus.Playing, PLAYBACK_READY_TIMEOUT_MS)
         .catch(() => undefined);
@@ -205,7 +210,7 @@ export async function processDiscordVoiceSegment(params: {
         .catch(() => undefined);
       logVoiceVerbose(`playback done: guild ${entry.guildId} channel ${entry.channelId}`);
     } finally {
-      await releaseAudioStream?.();
+      await releaseAudio?.();
     }
   });
 }

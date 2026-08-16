@@ -7,11 +7,12 @@ import {
   normalizePluginSdkApiSourcePath,
 } from "./api-baseline-normalization.js";
 
-type DeclarationClosure = { hash: string };
+export type PluginSdkApiDeclarationSection = { name: string; text: string };
+type DeclarationClosure = { hash: string; sections: PluginSdkApiDeclarationSection[] };
 
 type DeclarationReference = { mode: ts.ResolutionMode; specifier: string };
 type EmittedDeclaration = { declarationFile: ts.SourceFile; text: string };
-type DeclarationSection = { name: string; text: string };
+type DeclarationSection = PluginSdkApiDeclarationSection;
 type Dependency =
   | { kind: "external" }
   | { kind: "failure" }
@@ -189,6 +190,7 @@ export function createDeclarationClosureRenderer(params: {
   const active = new Set<string>();
   const ambientReachability = new Map<string, Walk>();
   const activeAmbient = new Set<string>();
+  const unresolvedDependencies = new Set<string>();
 
   const baseDiagnostics = [...program.getOptionsDiagnostics(), ...program.getGlobalDiagnostics()];
   if (baseDiagnostics.length > 0) {
@@ -304,6 +306,11 @@ export function createDeclarationClosureRenderer(params: {
       reference.mode,
     ).resolvedModule;
     if (!resolved) {
+      if (!reference.specifier.startsWith("node:")) {
+        unresolvedDependencies.add(
+          `${normalizePluginSdkApiSourcePath(repoRoot, sourceFile.fileName)} -> ${reference.specifier}`,
+        );
+      }
       return {
         kind: ts.isExternalModuleNameRelative(reference.specifier) ? "failure" : "external",
       };
@@ -317,7 +324,10 @@ export function createDeclarationClosureRenderer(params: {
       return relative !== ".." &&
         !relative.startsWith(`..${path.sep}`) &&
         !path.isAbsolute(relative)
-        ? { kind: "failure" }
+        ? (unresolvedDependencies.add(
+            `${normalizePluginSdkApiSourcePath(repoRoot, sourceFile.fileName)} -> ${reference.specifier}`,
+          ),
+          { kind: "failure" })
         : { kind: "external" };
     }
     return isRepoOwned(dependency)
@@ -660,7 +670,13 @@ export function createDeclarationClosureRenderer(params: {
     );
     const closure = {
       hash: createHash("sha256").update(JSON.stringify(uniqueSections), "utf8").digest("hex"),
+      sections: uniqueSections,
     };
+    if (unresolvedDependencies.size > 0) {
+      throw new Error(
+        `Unable to resolve Plugin SDK declaration dependencies:\n${[...unresolvedDependencies].toSorted(compareText).join("\n")}`,
+      );
+    }
     renderedClosures.set(cacheKey, closure);
     return closure;
   };

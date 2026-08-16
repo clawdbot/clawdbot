@@ -42,6 +42,8 @@ a workflow fix that the existing parent run cannot consume.
   approval for its categorized set before mutating the release branch. This
   audit is required for discovery; it does not authorize optional backports on
   an already-frozen candidate.
+- Backports are optional and operator-selected. When a backport is requested
+  without a target, use the newest open `release/` branch.
 - Versions use `YYYY.M.PATCH`, where `PATCH` is the sequential release-train number within the month, not the calendar day.
 - Choose a new beta train from stable and beta releases only. Alpha-only tags do not consume or advance the beta/stable patch number. Continue the highest existing unpublished/published beta train with the next `beta.N` when appropriate; otherwise increment the highest stable/beta patch by one and start at `beta.1`.
 - Example: after stable `2026.6.5`, the next new beta train is `2026.6.6-beta.1`, even if automated alpha-only tags such as `2026.6.10-alpha.1` exist.
@@ -1020,9 +1022,9 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
    under the active release scope lock. Freeze the result as the Code SHA.
 7. Immediately dispatch Actions > `OpenClaw Performance` from the pinned
    trusted workflow source with `target_ref=<code-sha>`, `profile=release`,
-   `repeat=3`, deep profiling
-   off, live OpenAI off, and regression failure off. Let it run in parallel
-   with Code SHA validation.
+   `repeat=3`, deep profiling off, live OpenAI off, and `fail_on_regression`
+   matching Full Release Validation's profile gate: `true` for stable,
+   `false` for beta. Let it run in parallel with Code SHA validation.
 8. Run the deterministic source preflight, then Full Release Validation against
    the exact Code SHA with
    `node scripts/full-release-validation-at-sha.mjs --sha <code-sha> --target-ref release/YYYY.M.PATCH`.
@@ -1044,7 +1046,10 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 12. Run npm preflight and release-note/package/install/update acceptance against
     the exact Release SHA and prepared tarball. A package or install failure that
     exposes a product defect returns to step 6; a tooling failure keeps the
-    Release SHA unchanged.
+    Release SHA unchanged. Review the preflight job's Plugin SDK API diff. If it
+    reports changes, record the 8-character acknowledgement digest printed by
+    the report; omit the acknowledgement when the report says there are no
+    Plugin SDK API changes.
 13. For beta releases, skip mac app build/sign/notarize unless beta scope or a
     release blocker specifically requires it. For stable releases, include the
     mac app, signing, notarization, and appcast path.
@@ -1055,12 +1060,15 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     and release evidence upload pass.
 17. Run `pnpm release:candidate -- --tag <tag> --full-release-run
 <release-sha-validation-run-id> --npm-preflight-run <preflight-run-id>
---skip-dispatch` to consume the existing reused full evidence and exact
-    Release SHA preflight instead of dispatching either again. It completes
-    package/install proof and prints the publish command. Beta and alpha
-    candidates defer Parallels to postpublish `pnpm release:beta-smoke` by
-    default; stable/full candidates run it prepublish. Use `--run-parallels` or
-    `--skip-parallels` only for an explicit operator override.
+--plugin-sdk-api-acknowledgement <reviewed-8-character-digest> --skip-dispatch`
+    when the preflight reported Plugin SDK API changes. Omit the acknowledgement
+    option when it reported none. This consumes the existing reused full
+    evidence and exact Release SHA preflight instead of dispatching either
+    again. It completes package/install proof and prints the publish command.
+    Beta and alpha candidates defer Parallels to postpublish
+    `pnpm release:beta-smoke` by default; stable/full candidates run it
+    prepublish. Use `--run-parallels` or `--skip-parallels` only for an explicit
+    operator override.
 18. Start publication only after the candidate bundle is green. Reuse successful
     immutable child runs/artifacts on retry; do not rebuild or republish versions
     that already succeeded.
@@ -1095,6 +1103,9 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     its exact `full_release_validation_run_attempt`. Preserve the immutable evidence pair as
     `full_release_validation_run_id=<saved-run-id>` and
     `full_release_validation_run_attempt=<saved-attempt>`.
+    If the npm preflight reported Plugin SDK API changes, also pass its reviewed
+    8-character digest as `plugin_sdk_api_acknowledgement`; omit that input when
+    the report said there were no changes.
     For stable publish, also pass the exact non-prerelease
     `openclaw/openclaw-windows-node` tag as `windows_node_tag` and its
     candidate-approved installer digest map as `windows_node_installer_digests`.

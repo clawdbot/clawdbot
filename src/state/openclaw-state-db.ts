@@ -55,12 +55,16 @@ import {
   assertOpenClawStateDatabaseForMaintenance,
   assertOpenClawStateDatabaseV5ForMigration,
   assertOpenClawStateDatabaseV6ForMigration,
+  assertOpenClawStateDatabaseV7ForMigration,
   assertSupportedSchemaVersion,
   resolveDatabasePath,
 } from "./openclaw-state-db-maintenance.js";
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
 import { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
-import { ensureAdditiveStateColumns } from "./openclaw-state-db-schema-additive.js";
+import {
+  ensureAdditiveStateColumns,
+  ensureFirstUseAdditiveStateColumnsForStrictMigration,
+} from "./openclaw-state-db-schema-additive.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
   assertCanonicalStateSchemaShape,
@@ -68,6 +72,7 @@ import {
   dropLegacyStateTables,
   markCurrentStateSchemaVersion,
   migrateRetiredCommitmentsSchema,
+  migrateWorkerPlacementExecutionModeSchema,
   repairAgentDatabasesCompositePrimaryKey,
   repairLegacyGatewayRestartHandoffsForStrictMigration,
 } from "./openclaw-state-db-schema-repair.js";
@@ -80,6 +85,12 @@ import {
 } from "./openclaw-state-ownership.js";
 import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+
+const STATE_MIGRATION_ASSERTIONS = {
+  5: assertOpenClawStateDatabaseV5ForMigration,
+  6: assertOpenClawStateDatabaseV6ForMigration,
+  7: assertOpenClawStateDatabaseV7ForMigration,
+} as const;
 
 export {
   OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
@@ -172,10 +183,8 @@ function repairOpenClawStateDatabaseSchemaWithWriteAccess(
           assertSqliteSchemaTablesPresent(db, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
             allowedMissingTables: LAZY_ADDITIVE_STATE_TABLES,
           });
-        } else if (previousVersion === 6) {
-          assertOpenClawStateDatabaseV6ForMigration(db, { pathname });
-        } else if (previousVersion === 5) {
-          assertOpenClawStateDatabaseV5ForMigration(db, { pathname });
+        } else if (previousVersion === 5 || previousVersion === 6 || previousVersion === 7) {
+          STATE_MIGRATION_ASSERTIONS[previousVersion](db, { pathname });
         }
         if (rebuiltIndexNames.size === 0) {
           assertSqliteIntegrity(db, pathname);
@@ -183,6 +192,9 @@ function repairOpenClawStateDatabaseSchemaWithWriteAccess(
         dropLegacyStateTables(db);
         if (migrateRetiredCommitmentsSchema(db, previousVersion)) {
           applied.push("Retired shared state commitments table and indexes");
+        }
+        if (migrateWorkerPlacementExecutionModeSchema(db, previousVersion)) {
+          applied.push("Migrated cloud worker placements to execution modes");
         }
         if (repairAgentDatabasesCompositePrimaryKey(db)) {
           applied.push(`Migrated shared state agent database registry primary key → agent_id,path`);
@@ -209,6 +221,7 @@ function repairOpenClawStateDatabaseSchemaWithWriteAccess(
           });
           if (previousVersion < OPENCLAW_STATE_STRICT_SCHEMA_VERSION) {
             repairLegacyGatewayRestartHandoffsForStrictMigration(db);
+            ensureFirstUseAdditiveStateColumnsForStrictMigration(db);
           }
           const strictMigration = migrateSqliteSchemaToStrictInTransaction(
             db,
@@ -362,13 +375,12 @@ function ensureSchema(db: DatabaseSync, pathname: string, env: NodeJS.ProcessEnv
           });
           ensureAdditiveStateColumns(db);
           assertCurrentStateRuntimeSchema(db, pathname);
-        } else if (previousVersion === 6) {
-          assertOpenClawStateDatabaseV6ForMigration(db, { pathname });
-        } else if (previousVersion === 5) {
-          assertOpenClawStateDatabaseV5ForMigration(db, { pathname });
+        } else if (previousVersion === 5 || previousVersion === 6 || previousVersion === 7) {
+          STATE_MIGRATION_ASSERTIONS[previousVersion](db, { pathname });
         }
         dropLegacyStateTables(db);
         migrateRetiredCommitmentsSchema(db, previousVersion);
+        migrateWorkerPlacementExecutionModeSchema(db, previousVersion);
         ensureAdditiveStateColumns(db);
         sessionWatchMigration.migrateSessionWatchCursorProvenance(db);
         assertCanonicalStateSchemaShape(db, pathname);
@@ -378,6 +390,7 @@ function ensureSchema(db: DatabaseSync, pathname: string, env: NodeJS.ProcessEnv
         migrateLegacyCronRunLogsToTaskRuns(db);
         if (previousVersion < OPENCLAW_STATE_STRICT_SCHEMA_VERSION) {
           repairLegacyGatewayRestartHandoffsForStrictMigration(db);
+          ensureFirstUseAdditiveStateColumnsForStrictMigration(db);
           migrateSqliteSchemaToStrictInTransaction(
             db,
             getOpenClawStateRuntimeSchema({
@@ -716,8 +729,10 @@ export function closeOpenClawStateDatabaseByPath(pathname: string): boolean {
 }
 
 /** Close all cached shared state database handles. */
-export function closeOpenClawStateDatabase(): void {
-  stateDbCache.closeOpenClawStateDatabase();
+export function closeOpenClawStateDatabase(
+  options?: Parameters<typeof stateDbCache.closeOpenClawStateDatabase>[0],
+): void {
+  stateDbCache.closeOpenClawStateDatabase(options);
 }
 
 /** Test whether any cached shared state database handle is still open. */

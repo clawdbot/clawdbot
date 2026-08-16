@@ -16,6 +16,7 @@ import {
   bashExecutionToText,
   COMPACTION_SUMMARY_PREFIX,
   COMPACTION_SUMMARY_SUFFIX,
+  IMAGE_BLOCK_TOKENS,
 } from "../../runtime/index.js";
 import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
 import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
@@ -28,7 +29,6 @@ const TOOL_RESULT_CHARS_PER_TOKEN = 2;
 const JSON_PAYLOAD_CHARS_PER_TOKEN = 3;
 const MESSAGE_BOUNDARY_OVERHEAD_TOKENS = 12;
 const CONTENT_BLOCK_OVERHEAD_TOKENS = 6;
-const IMAGE_BLOCK_TOKENS = 2_000;
 const TRUNCATION_ROUTE_BUFFER_TOKENS = 512;
 
 /** Pre-prompt routing decision plus the budget facts used to explain it in logs and session state. */
@@ -155,49 +155,52 @@ function estimateContentTokenPressure(
 }
 
 function estimateMessageTokenPressure(message: AgentMessage): number {
-  const record = message as unknown as Record<string, unknown>;
+  // Provider replay can carry legacy aliases outside the canonical AgentMessage union.
+  const legacy: Record<string, unknown> = isRecord(message) ? message : {};
   let tokens = MESSAGE_BOUNDARY_OVERHEAD_TOKENS;
 
-  if (record.role === "toolResult" || record.role === "tool" || record.type === "toolResult") {
-    tokens += estimateContentTokenPressure(record.content, "tool-result");
-    tokens += estimateIdentifierTokenPressure(record.toolName ?? record.tool_name);
+  if (message.role === "toolResult" || legacy.role === "tool" || legacy.type === "toolResult") {
+    const content = message.role === "toolResult" ? message.content : legacy.content;
+    const toolName = message.role === "toolResult" ? message.toolName : legacy.toolName;
+    tokens += estimateContentTokenPressure(content, "tool-result");
+    tokens += estimateIdentifierTokenPressure(toolName ?? legacy.tool_name);
     return tokens;
   }
 
-  if (record.role === "bashExecution") {
-    if (record.excludeFromContext === true) {
+  if (message.role === "bashExecution") {
+    if (message.excludeFromContext === true) {
       return 0;
     }
-    tokens += estimateStringTokenPressure(
-      bashExecutionToText(record as unknown as BashExecutionMessage),
-    );
+    const bashMessage: BashExecutionMessage = message;
+    tokens += estimateStringTokenPressure(bashExecutionToText(bashMessage));
     return tokens;
   }
 
-  if (record.role === "branchSummary" || record.role === "compactionSummary") {
-    const summary = typeof record.summary === "string" ? record.summary : "";
+  if (message.role === "branchSummary" || message.role === "compactionSummary") {
     const [prefix, suffix] =
-      record.role === "branchSummary"
+      message.role === "branchSummary"
         ? [BRANCH_SUMMARY_PREFIX, BRANCH_SUMMARY_SUFFIX]
         : [COMPACTION_SUMMARY_PREFIX, COMPACTION_SUMMARY_SUFFIX];
-    return tokens + estimateStringTokenPressure(prefix + summary + suffix);
+    return tokens + estimateStringTokenPressure(prefix + message.summary + suffix);
   }
 
-  if (record.role === "assistant") {
-    const content = record.content;
-    if (Array.isArray(content)) {
-      for (const block of content) {
-        if (isRecord(block) && (block.type === "toolCall" || block.type === "tool_use")) {
-          tokens += estimateAssistantToolCallTokenPressure(block);
-        } else {
-          tokens += estimateContentBlockTokenPressure(block);
+  if (message.role === "assistant") {
+    if (Array.isArray(message.content)) {
+      for (const block of message.content) {
+        if (isRecord(block)) {
+          const blockType: unknown = block.type;
+          if (blockType === "toolCall" || blockType === "tool_use") {
+            tokens += estimateAssistantToolCallTokenPressure(block);
+            continue;
+          }
         }
+        tokens += estimateContentBlockTokenPressure(block);
       }
     } else {
-      tokens += estimateContentTokenPressure(content);
+      tokens += estimateContentTokenPressure(message.content);
     }
 
-    const toolCalls = record.toolCalls ?? record.tool_calls;
+    const toolCalls = legacy.toolCalls ?? legacy.tool_calls;
     if (Array.isArray(toolCalls)) {
       for (const toolCall of toolCalls) {
         tokens += isRecord(toolCall)
@@ -208,7 +211,7 @@ function estimateMessageTokenPressure(message: AgentMessage): number {
     return tokens;
   }
 
-  tokens += estimateContentTokenPressure(record.content);
+  tokens += estimateContentTokenPressure(legacy.content);
   return tokens;
 }
 

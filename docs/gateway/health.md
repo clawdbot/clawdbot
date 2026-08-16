@@ -96,6 +96,27 @@ The command reports linked creds/auth age when available, per-channel probe summ
 session-store summary, and probe duration. It exits non-zero if the gateway is
 unreachable or the probe fails/times out.
 
+### Queue warnings
+
+A successful health RPC reports top-level `ok: true`. That value means the Gateway
+produced the snapshot; it does not mean every delivery queue is clear. Check
+`deliveryQueues.ingressPressure` for durable inbound lanes that may be blocking later
+events. The field is omitted when no pressured lanes are found.
+
+Ingress pressure uses conservative built-in diagnostic thresholds, not authoritative
+retry or claim policy for any plugin. A durable lane appears only when an active pending
+or claimed row has either reached at least eight attempts and has a recorded delivery
+error, or a claimed row has not refreshed its claim for 30 minutes. Ordinary retries
+1-7 are absent. Claim-recovery increments without a recorded error are also absent,
+while live claims stay absent because their claim timestamp is refreshed. Rows without
+a durable lane key are omitted because they cannot prove that later events are blocked;
+runtime persists a derived lane after a real derived-lane retry.
+
+Each result is grouped by channel account and reports pressured lane, pending, claimed,
+and blocked counts plus the oldest affected receive time. All active rows in a pressured
+lane contribute to those counts. The snapshot never includes lane IDs, event IDs,
+payloads, claim owners or tokens, recorded errors, or session and target identifiers.
+
 Options:
 
 - `--json`: machine-readable JSON output
@@ -103,7 +124,7 @@ Options:
 - `--verbose`: force a live probe and print gateway connection details
 - `--debug`: alias for `--verbose`
 
-The health snapshot includes: `ok` (boolean), `ts` (timestamp), `durationMs` (probe time), per-channel status, agent availability, and session-store summary.
+The health snapshot includes: `ok` (boolean), `ts` (timestamp), `durationMs` (probe time), per-channel status, agent availability, session-store summary, and optional delivery-queue warnings.
 
 ## Related
 

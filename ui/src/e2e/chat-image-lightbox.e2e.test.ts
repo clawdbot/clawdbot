@@ -9,6 +9,7 @@ import {
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -55,8 +56,14 @@ describeControlUiE2e("Control UI image lightbox", () => {
     const banner = await readFile(path.join(process.cwd(), "docs/assets/openclaw-banner-dark.png"));
     const bannerBase64 = banner.toString("base64");
     const dataUrl = `data:image/png;base64,${bannerBase64}`;
+    if (captureUiProofEnabled) {
+      await mkdir(proofDir, { recursive: true });
+    }
     const context = await newContext({
       locale: "en-US",
+      recordVideo: captureUiProofEnabled
+        ? { dir: proofDir, size: { height: 900, width: 1440 } }
+        : undefined,
       serviceWorkers: "block",
       viewport: { height: 900, width: 1440 },
     });
@@ -168,7 +175,7 @@ describeControlUiE2e("Control UI image lightbox", () => {
         .poll(() => transcriptTrigger.evaluate((element) => element.matches(":focus")))
         .toBe(true);
 
-      await page.locator(".chat-workspace-toggle").click();
+      await openChatSidePanelType(page, "Files");
       const artifactRow = page.locator(".chat-workspace-rail__file-open", {
         hasText: "openclaw-banner.png",
       });
@@ -180,7 +187,6 @@ describeControlUiE2e("Control UI image lightbox", () => {
       await sidebarTrigger.waitFor({ state: "visible", timeout: 10_000 });
 
       if (captureUiProofEnabled) {
-        await mkdir(proofDir, { recursive: true });
         await page.screenshot({
           fullPage: true,
           path: path.join(proofDir, "01-sidebar-image.png"),
@@ -207,13 +213,56 @@ describeControlUiE2e("Control UI image lightbox", () => {
       await page.setViewportSize({ height: 844, width: 390 });
       await sidebarTrigger.click();
       await sidebarDialog.waitFor({ state: "visible" });
+      await page.locator("openclaw-image-lightbox wa-dialog").evaluate(async (dialogAdapter) => {
+        const nativeDialog = dialogAdapter.shadowRoot?.querySelector("dialog");
+        await Promise.all(
+          (nativeDialog?.getAnimations({ subtree: true }) ?? []).map(
+            (animation) => animation.finished,
+          ),
+        );
+      });
       const mobileBox = await page.locator("openclaw-image-lightbox .lightbox").boundingBox();
+      const mobileImageLayout = await page
+        .locator("openclaw-image-lightbox .stage")
+        .evaluate((stage) => {
+          const image = stage.querySelector("img");
+          if (!image) {
+            throw new Error("missing lightbox image");
+          }
+          const stageBox = stage.getBoundingClientRect();
+          const imageBox = image.getBoundingClientRect();
+          const style = getComputedStyle(stage);
+          return {
+            image: {
+              bottom: imageBox.bottom,
+              left: imageBox.left,
+              right: imageBox.right,
+              top: imageBox.top,
+            },
+            stage: {
+              bottom: stageBox.bottom - Number.parseFloat(style.paddingBottom),
+              left: stageBox.left + Number.parseFloat(style.paddingLeft),
+              right: stageBox.right - Number.parseFloat(style.paddingRight),
+              top: stageBox.top + Number.parseFloat(style.paddingTop),
+            },
+          };
+        });
       const mobileViewport = await page.evaluate(() => ({
         height: window.innerHeight,
         width: window.innerWidth,
       }));
       expect((mobileBox?.width ?? 0) / mobileViewport.width).toBeGreaterThanOrEqual(0.75);
       expect((mobileBox?.height ?? 0) / mobileViewport.height).toBeGreaterThanOrEqual(0.65);
+      expect(mobileImageLayout.image.left).toBeCloseTo(mobileImageLayout.stage.left, 0);
+      expect(mobileImageLayout.image.right).toBeCloseTo(mobileImageLayout.stage.right, 0);
+      expect(mobileImageLayout.image.top).toBeCloseTo(mobileImageLayout.stage.top, 0);
+      expect(mobileImageLayout.image.bottom).toBeCloseTo(mobileImageLayout.stage.bottom, 0);
+      if (captureUiProofEnabled) {
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(proofDir, "03-mobile-lightbox.png"),
+        });
+      }
       await page.keyboard.press("Escape");
       await expect.poll(() => sidebarDialog.count()).toBe(0);
     } finally {

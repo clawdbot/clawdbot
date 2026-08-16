@@ -82,8 +82,10 @@ describe("method scope resolution", () => {
     ["projects.add", ["operator.write"]],
     ["projects.searchRemote", ["operator.read"]],
     ["sessions.groups.list", ["operator.read"]],
+    ["sessions.groups.defaults", ["operator.write"]],
     ["sessions.groups.put", ["operator.write"]],
     ["sessions.groups.rename", ["operator.write"]],
+    ["sessions.groups.update", ["operator.write"]],
     ["sessions.groups.delete", ["operator.write"]],
     ["sessions.catalog.list", ["operator.read"]],
     ["sessions.catalog.read", ["operator.read"]],
@@ -866,6 +868,7 @@ describe("core gateway method classification", () => {
     expect(isGatewayMethodClassified("node.pluginSurface.refresh")).toBe(true);
     expect(isGatewayMethodClassified("node.pluginTools.update")).toBe(true);
     expect(isGatewayMethodClassified("node.skills.update")).toBe(true);
+    expect(isGatewayMethodClassified("node.runnerInventory.update")).toBe(true);
   });
 
   it("classifies every exposed core gateway handler method", () => {

@@ -9,7 +9,7 @@ import { scheduleSessionDelivery } from "../../../infra/session-delivery-queue-r
 import {
   enqueueClaimedSessionDelivery,
   releaseSessionDeliveryClaim,
-} from "../../../infra/session-delivery-queue.js";
+} from "../../../infra/session-delivery-queue-storage.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { isAgentMediatedCompletionSourceTool } from "../../../sessions/input-provenance.js";
 import { isCronSessionKey } from "../../../sessions/session-key-utils.js";
@@ -25,7 +25,6 @@ import { getSubagentDepthFromSessionStore } from "../spawn/subagent-depth.js";
 import { maybeSteerSubagentAnnounce } from "./subagent-announce-active-wake.js";
 import {
   hasAnnounceSendEvidence,
-  hasWriterClaimReboundAnnounceError,
   isWriterClaimReboundAnnounceError,
   resolveSubagentAnnounceTimeoutMs,
   runAnnounceDeliveryWithRetry,
@@ -269,7 +268,6 @@ const testing = {
     setSubagentAnnounceDeliveryDepsForTest(overrides);
   },
   hasAnnounceSendEvidence,
-  hasWriterClaimReboundAnnounceError,
   isWriterClaimReboundAnnounceError,
 };
 if (process.env.VITEST || process.env.NODE_ENV === "test") {

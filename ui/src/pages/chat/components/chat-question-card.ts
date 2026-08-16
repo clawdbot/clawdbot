@@ -4,7 +4,6 @@ import { property, state } from "lit/decorators.js";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
-import { formatCountdown } from "../../../lib/format.ts";
 
 type QuestionPanelQuestion = {
   questionId: string;
@@ -22,7 +21,6 @@ type QuestionPanelViewModel = {
   collapsed: boolean;
   disabled: boolean;
   submitting?: boolean;
-  countdown?: string;
   answersById?: Record<string, string[]>;
   error?: string | null;
   requestPosition?: { current: number; total: number };
@@ -40,7 +38,6 @@ type QuestionPanelProps = {
 };
 
 type GatewayQuestionPanelOptions = {
-  nowMs: number;
   onChange?: () => void;
   onSubmit?: (answers: Record<string, string[]>) => void | Promise<void>;
   onSkip?: () => void | Promise<void>;
@@ -86,10 +83,6 @@ export function createGatewayQuestionPanelProps(
       collapsed: options.collapsed ?? false,
       disabled: prompt.status !== "pending" || prompt.submitting,
       submitting: prompt.submitting,
-      countdown:
-        prompt.status === "pending"
-          ? formatCountdown(prompt.expiresAtMs, options.nowMs)
-          : undefined,
       answersById: promptDraftAnswers(prompt),
       error: prompt.error,
       requestPosition: options.requestPosition,
@@ -522,13 +515,6 @@ class ChatQuestionPanel extends LitElement {
                   ${icons.chevronRight}
                 </button>
               </div>`
-            : nothing}
-          ${model.countdown
-            ? html`<span
-                class="chat-question-panel__countdown"
-                title=${t("chat.questions.timeRemaining")}
-                >${model.countdown}</span
-              >`
             : nothing}
           <button
             class="chat-question-panel__collapse"

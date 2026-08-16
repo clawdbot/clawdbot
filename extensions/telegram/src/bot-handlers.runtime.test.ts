@@ -13,6 +13,7 @@ describe("registerTelegramHandlers", () => {
     const params: RegisterTelegramHandlerParams = {
       cfg: {},
       accountId: "default",
+      ownerAgentId: "main",
       bot,
       mediaMaxBytes: 1,
       opts: { token: "tok" },

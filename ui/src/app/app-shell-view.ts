@@ -59,28 +59,16 @@ const SCOPE_UPGRADE_BANNER_ELEMENT = {
 function renderScopeUpgradeBanner(
   host: ShellViewHost,
   snapshot: ApplicationContext["gateway"]["snapshot"],
-  chromeOffset: boolean,
 ) {
   const state = readScopeUpgradeAvailability(snapshot);
   if (state.phase === "hidden") {
     return nothing;
-  }
-  if (state.phase === "guidance") {
-    return html`<openclaw-update-banner
-      .props=${{
-        statusBanner: {
-          tone: "warn",
-          text: t("connection.scopeUpgrade.guidance"),
-        },
-      }}
-    ></openclaw-update-banner>`;
   }
   void ensureOptionalElementForHost(host, SCOPE_UPGRADE_BANNER_ELEMENT).catch(() => undefined);
   if (isOptionalElementDefined(SCOPE_UPGRADE_BANNER_ELEMENT)) {
     return html`<openclaw-device-scope-upgrade-banner
       .props=${{
         snapshot,
-        chromeOffset,
       }}
     ></openclaw-device-scope-upgrade-banner>`;
   }
@@ -101,7 +89,6 @@ export interface ShellViewHost {
   readonly commandPaletteElement: OptionalCustomElement;
   readonly custodianMinimizeRequestId: number;
   readonly desktopNavigationExpanded: boolean;
-  readonly devicePairSetupElement: OptionalCustomElement;
   readonly execApprovalElement: OptionalCustomElement;
   readonly nativeHistoryState: NativeHistoryState;
   readonly navDrawerOpen: boolean;
@@ -113,6 +100,10 @@ export interface ShellViewHost {
   readonly settingsSearchQuery: string;
   readonly sidebarWorkboardRenderers: SidebarWorkboardRenderers | undefined;
   readonly sidebarWorkboardSnapshot: SidebarWorkboardSnapshot;
+  readonly devicePairSetupRenderer: DevicePairSetupModule["renderDevicePairSetup"] | null;
+  readonly devicePairSetupLoadFailed: boolean;
+  loadDevicePairSetupRenderer(): void;
+  retryDevicePairSetupRenderer(): void;
   closeNavDrawer(options?: { restoreFocus?: boolean }): void;
   newSessionRouteAgentId(): string;
   enabledRouteIds(): readonly RouteId[];
@@ -133,6 +124,85 @@ export interface ShellViewHost {
   selectChatSession(sessionKey: string, agentId?: string | null): void;
   storedOutboxScopeHost(context: ApplicationContext<RouteId>): StoredOutboxScopeHost;
   toggleNavigationSurface(trigger?: HTMLElement): void;
+}
+
+type DevicePairSetupModule = typeof import("../pages/devices/view-pairing.runtime.ts");
+type DevicePairSetupProps = Parameters<DevicePairSetupModule["renderDevicePairSetup"]>[0];
+
+// Lazy: the pairing modal stays out of the startup chunk (perf budget); it is
+// fetched the first time an operator opens Pair mobile device. The eager shell
+// stays visible during that import so the action never appears to do nothing.
+function renderLazyDevicePairSetup(host: ShellViewHost, props: DevicePairSetupProps) {
+  if (!props.open) {
+    return nothing;
+  }
+  const renderer = host.devicePairSetupRenderer;
+  if (renderer) {
+    return renderer(props);
+  }
+  if (host.devicePairSetupLoadFailed) {
+    return renderDevicePairSetupLoadFailure(host, props);
+  }
+  host.loadDevicePairSetupRenderer();
+  return renderDevicePairSetupLoading(props);
+}
+
+function renderDevicePairSetupLoading(props: DevicePairSetupProps) {
+  const title = t("devices.pairing.title");
+  const message = t("common.loading");
+  return html`<openclaw-modal-dialog
+    label=${title}
+    description=${message}
+    @modal-cancel=${props.onClose}
+  >
+    <section class="device-pair-setup" aria-busy="true">
+      <header class="device-pair-setup__header">
+        <div>
+          <h2>${title}</h2>
+          <p role="status">${message}</p>
+        </div>
+      </header>
+      <footer class="device-pair-setup__footer">
+        <button class="btn btn--ghost" type="button" @click=${props.onClose}>
+          ${t("common.close")}
+        </button>
+      </footer>
+    </section>
+  </openclaw-modal-dialog>`;
+}
+
+// The pairing chunk failed to load while its overlay is open. Reuse the eager
+// modal chrome so the operator still gets a dialog, a reason, and a retry
+// instead of a silently empty surface.
+function renderDevicePairSetupLoadFailure(host: ShellViewHost, props: DevicePairSetupProps) {
+  const title = t("devices.pairing.title");
+  const message = t("devices.pairing.loadFailed");
+  return html`<openclaw-modal-dialog
+    label=${title}
+    description=${message}
+    @modal-cancel=${props.onClose}
+  >
+    <section class="device-pair-setup">
+      <header class="device-pair-setup__header">
+        <div>
+          <h2>${title}</h2>
+          <p>${message}</p>
+        </div>
+      </header>
+      <footer class="device-pair-setup__footer">
+        <button
+          class="btn btn--primary"
+          type="button"
+          @click=${() => host.retryDevicePairSetupRenderer()}
+        >
+          ${t("common.retry")}
+        </button>
+        <button class="btn btn--ghost" type="button" @click=${props.onClose}>
+          ${t("common.close")}
+        </button>
+      </footer>
+    </section>
+  </openclaw-modal-dialog>`;
 }
 
 export function renderApplicationShell(host: ShellViewHost) {
@@ -246,12 +316,18 @@ export function renderApplicationShell(host: ShellViewHost) {
     mobileNavLayout,
   });
   const shellWidth = Math.max(globalThis.innerWidth || 0, NAV_WIDTH_MAX);
-  // Mirror the sidebar brand action: the open new-session route target wins
-  // over persisted selection so the collapsed cluster "+" uses the same agent.
-  const selectedAgentId = normalizeAgentId(
-    host.newSessionRouteAgentId() ||
-      (context.agentSelection.state.selectedId ?? gatewaySnapshot.assistantAgentId),
-  );
+  // A route query is navigation input, not an owner record. Let it override the
+  // live selection only after the roster proves that agent exists.
+  const requestedRouteAgentId = host.newSessionRouteAgentId();
+  const routeAgentId = requestedRouteAgentId ? normalizeAgentId(requestedRouteAgentId) : null;
+  const routeAgentIsKnown =
+    routeAgentId !== null &&
+    context.agents.state.agentsList?.agents.some(
+      (agent) => normalizeAgentId(agent.id) === routeAgentId,
+    ) === true;
+  const selectedAgentId = routeAgentIsKnown
+    ? routeAgentId
+    : normalizeAgentId(context.agentSelection.state.selectedId ?? gatewaySnapshot.assistantAgentId);
   const newSessionAccess = readSessionMethodAccess(gatewaySnapshot, {
     method: "sessions.create",
     params: {},
@@ -506,7 +582,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           : ""} ${activeRoute === "workboard" ? "content--workboard" : ""}"
         .tabIndex=${-1}
       >
-        ${renderScopeUpgradeBanner(host, gatewaySnapshot, !settingsTakeover && !mobileNavLayout)}
+        ${renderScopeUpgradeBanner(host, gatewaySnapshot)}
         ${gatewaySnapshot.hello?.deviceAuthMigration?.pending === true
           ? // The migration banner is registered by a rare-flow dynamic import after first render.
             customElements.get("openclaw-device-auth-migration-banner")
@@ -553,26 +629,34 @@ export function renderApplicationShell(host: ShellViewHost) {
       <openclaw-terminal-panel
         .client=${gatewayConnected ? gatewaySnapshot.client : null}
         .available=${terminalAvailable}
+        .agentId=${selectedAgentId}
         .suppressed=${settingsTakeover}
+        .sessionBottomOnly=${isSessionRouteId(activeRoute)}
         .themeMode=${resolveTerminalThemeMode()}
         .basePath=${context.basePath}
       ></openclaw-terminal-panel>
-      <openclaw-browser-panel
-        .client=${gatewayConnected ? gatewaySnapshot.client : null}
-        .available=${browserPanelAvailable}
-        .suppressed=${settingsTakeover}
-        .basePath=${context.basePath}
-        .authToken=${resolveControlUiAuthToken({
-          hello: gatewaySnapshot.hello,
-          settings: { token: context.gateway.connection.token },
-          password: context.gateway.connection.password,
-        })}
-      ></openclaw-browser-panel>
-      <openclaw-desktop-panel
-        .client=${gatewayConnected ? gatewaySnapshot.client : null}
-        .available=${desktopPanelAvailable}
-        .suppressed=${settingsTakeover}
-      ></openclaw-desktop-panel>
+      ${isSessionRouteId(activeRoute)
+        ? nothing
+        : html`
+            <openclaw-browser-panel
+              data-chat-autotype-exempt
+              .client=${gatewayConnected ? gatewaySnapshot.client : null}
+              .available=${browserPanelAvailable}
+              .suppressed=${settingsTakeover}
+              .basePath=${context.basePath}
+              .authToken=${resolveControlUiAuthToken({
+                hello: gatewaySnapshot.hello,
+                settings: { token: context.gateway.connection.token },
+                password: context.gateway.connection.password,
+              })}
+            ></openclaw-browser-panel>
+            <openclaw-desktop-panel
+              data-chat-autotype-exempt
+              .client=${gatewayConnected ? gatewaySnapshot.client : null}
+              .available=${desktopPanelAvailable}
+              .suppressed=${settingsTakeover}
+            ></openclaw-desktop-panel>
+          `}
       <openclaw-custodian-panel
         .available=${custodianPanelAvailable}
         .suppressed=${activeRoute === "custodian"}
@@ -593,32 +677,23 @@ export function renderApplicationShell(host: ShellViewHost) {
             }}
           ></openclaw-exec-approval>`
         : nothing}
-      ${isOptionalElementDefined(host.devicePairSetupElement)
-        ? html`<openclaw-device-pair-setup
-            .props=${{
-              open: overlaySnapshot.devicePairSetupOpen,
-              loading: overlaySnapshot.devicePairSetupLoading,
-              error: overlaySnapshot.devicePairSetupError,
-              setup: overlaySnapshot.devicePairSetup,
-              access: overlaySnapshot.devicePairSetupAccess,
-              nowMs: Date.now(),
-              pendingCount: overlaySnapshot.devicePairPendingCount,
-              onRefresh: () => void context.overlays.refreshDevicePairSetup(),
-              onAccessChange: (
-                access: Parameters<typeof context.overlays.setDevicePairSetupAccess>[0],
-              ) => void context.overlays.setDevicePairSetupAccess(access),
-              onClose: () => context.overlays.closeDevicePairSetup(),
-              onManageDevices: () => {
-                context.overlays.closeDevicePairSetup();
-                host.navigate("devices");
-              },
-              onGetApps: () => {
-                context.overlays.closeDevicePairSetup();
-                host.navigate("apps");
-              },
-            }}
-          ></openclaw-device-pair-setup>`
-        : nothing}
+      ${renderLazyDevicePairSetup(host, {
+        open: overlaySnapshot.devicePairSetupOpen,
+        lifecycle: overlaySnapshot.devicePairSetupLifecycle,
+        nowMs: Date.now(),
+        pendingCount: overlaySnapshot.devicePairPendingCount,
+        onRefresh: () => void context.overlays.refreshDevicePairSetup(),
+        onAccessChange: (access) => void context.overlays.setDevicePairSetupAccess(access),
+        onClose: () => context.overlays.closeDevicePairSetup(),
+        onManageDevices: () => {
+          context.overlays.closeDevicePairSetup();
+          host.navigate("devices");
+        },
+        onGetApps: () => {
+          context.overlays.closeDevicePairSetup();
+          host.navigate("apps");
+        },
+      })}
       ${onboarding && activeRoute !== "custodian"
         ? html`<openclaw-onboarding-memory-import
             .active=${true}

@@ -17,7 +17,7 @@ type DockerHealthcheckDeps = Partial<DockerHealthcheckPortDeps> & {
   fetch?: typeof globalThis.fetch;
 };
 
-export async function resolveDockerHealthcheckPort(
+async function resolveDockerHealthcheckPort(
   deps: Partial<DockerHealthcheckPortDeps> = {},
 ): Promise<number> {
   const env = deps.env ?? process.env;

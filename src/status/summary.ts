@@ -6,7 +6,7 @@ import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import { getRuntimeConfig, projectConfigOntoRuntimeSourceSnapshot } from "../config/config.js";
-import { resolveMainSessionKey } from "../config/sessions/main-session.js";
+import { resolveSystemMainSessionKey } from "../config/sessions/main-session.js";
 import {
   hasSessionActiveAutoModelFallback,
   hasSessionAutoModelFallbackProvenance,
@@ -16,6 +16,7 @@ import {
   listSessionEntriesReadOnly,
   loadExactSessionEntryReadOnly,
 } from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import {
   resolveFreshSessionTotalTokens,
   resolveSessionTotalTokens,
@@ -357,7 +358,7 @@ export async function getStatusSummary(
       summary.target === "last"
         ? Boolean(route?.channel && route.to)
         : summary.target === "owner"
-          ? hasResolvableHeartbeatOwnerRoute({ cfg, entry, heartbeat })
+          ? hasResolvableHeartbeatOwnerRoute({ cfg, agentId: agent.id, entry, heartbeat })
           : true;
     return {
       agentId: agent.id,
@@ -376,11 +377,12 @@ export async function getStatusSummary(
         }),
       )
     : [];
-  const mainSessionKey = resolveMainSessionKey(cfg);
+  const mainSessionKey = resolveSystemMainSessionKey(cfg);
   const queuedSystemEvents = peekSystemEvents(mainSessionKey);
   const taskMaintenanceModule = await loadTaskRegistryMaintenanceModule();
-  taskMaintenanceModule.configureTaskRegistryMaintenance();
-  const inspectableTasks = taskMaintenanceModule.reconcileInspectableTasks();
+  // Status may overlap a live Gateway, so task inspection must not initialize
+  // the writable process registry or its schema-owning shared-state handle.
+  const inspectableTasks = taskMaintenanceModule.listInspectableTasksReadOnly();
   const rawTasks = taskMaintenanceModule.getInspectableTaskRegistrySummary(inspectableTasks);
   const taskAuditFindings = taskMaintenanceModule.getInspectableTaskAuditFindings(inspectableTasks);
   const now = Date.now();
@@ -549,28 +551,33 @@ export async function getStatusSummary(
       }),
     );
 
-  const storeSources = agentList.agents.map((agent) => ({
-    agentId: agent.id,
-    storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: agent.id }),
-  }));
+  const storeSources = agentList.agents.map((agent) => {
+    const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: agent.id });
+    return {
+      agentId: agent.id,
+      databasePath: resolveSqliteTargetFromSessionStorePath(storePath, {
+        agentId: agent.id,
+      }).path,
+      storePath,
+    };
+  });
   const paths = new Set<string>();
   const pathCounts = new Map<string, number>();
   for (const source of storeSources) {
-    paths.add(source.storePath);
-    pathCounts.set(source.storePath, (pathCounts.get(source.storePath) ?? 0) + 1);
+    paths.add(source.databasePath);
+    pathCounts.set(source.databasePath, (pathCounts.get(source.databasePath) ?? 0) + 1);
   }
 
   const byAgent = await Promise.all(
-    agentList.agents.map(async (agent) => {
-      const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: agent.id });
-      const candidates = loadSessionCandidates(storePath, agent.id);
+    storeSources.map(async ({ agentId, databasePath, storePath }) => {
+      const candidates = loadSessionCandidates(storePath, agentId);
       const sessions = await buildSessionRows(
         selectRecentSessionCandidates(candidates, RECENT_SESSION_LIMIT),
-        { agentIdOverride: agent.id },
+        { agentIdOverride: agentId },
       );
       return {
-        agentId: agent.id,
-        path: storePath,
+        agentId,
+        path: databasePath,
         count: candidates.length,
         recent: sessions,
       };
@@ -579,12 +586,14 @@ export async function getStatusSummary(
 
   const allSessions = storeSources
     .filter((source, index, sources) => {
-      return sources.findIndex((candidate) => candidate.storePath === source.storePath) === index;
+      return (
+        sources.findIndex((candidate) => candidate.databasePath === source.databasePath) === index
+      );
     })
     .flatMap((source) =>
       loadSessionCandidates(
         source.storePath,
-        pathCounts.get(source.storePath) === 1 ? source.agentId : undefined,
+        pathCounts.get(source.databasePath) === 1 ? source.agentId : undefined,
       ),
     );
   const recent = await buildSessionRows(

@@ -83,7 +83,7 @@ export abstract class AgentSessionBase {
   // Compaction state
   protected compactionAbortController: AbortController | undefined = undefined;
   protected autoCompactionAbortController: AbortController | undefined = undefined;
-  protected overflowRecoveryAttempted = false;
+  protected overflowRecoveryAttempts = 0;
   protected contextOverflowRecoveryOwner: "session" | "caller";
 
   // Branch summarization state
@@ -367,7 +367,7 @@ export abstract class AgentSessionBase {
 
     // Retire the exact queued display entry before publishing message_start.
     if (event.type === "message_start" && event.message.role === "user") {
-      this.overflowRecoveryAttempted = false;
+      this.overflowRecoveryAttempts = 0;
       retireQueuedUserMessage(event.message);
     }
 
@@ -436,7 +436,7 @@ export abstract class AgentSessionBase {
         // A length response may still need overflow recovery in checkCompaction();
         // retryCount is independent and resets for every non-error response below.
         if (assistantMsg.stopReason !== "error" && assistantMsg.stopReason !== "length") {
-          this.overflowRecoveryAttempted = false;
+          this.overflowRecoveryAttempts = 0;
         }
 
         // Reset retry counter immediately on successful assistant response
@@ -487,11 +487,10 @@ export abstract class AgentSessionBase {
       return;
     }
 
-    const targetRecord = target as unknown as Record<string, unknown>;
-    for (const key of Object.keys(targetRecord)) {
-      delete targetRecord[key];
+    for (const key of Object.keys(target)) {
+      Reflect.deleteProperty(target, key);
     }
-    Object.assign(targetRecord, replacement);
+    Object.assign(target, replacement);
   }
 
   /** Emit extension events based on agent events */

@@ -36,8 +36,8 @@ import {
 import { resolveSessionToolTargetAgentId } from "./scoped-session-access.js";
 import {
   createAgentToAgentPolicy,
-  createSessionVisibilityGuard,
   resolveEffectiveSessionToolsVisibility,
+  resolveSessionToolAccess,
 } from "./sessions-access.js";
 import { resolveSessionToolContext } from "./sessions-helpers.js";
 import { resolveSessionReference, shouldResolveSessionIdInput } from "./sessions-resolution.js";
@@ -102,6 +102,12 @@ const SessionsToolSchema = Type.Object(
     ),
     label: Type.Optional(
       Type.String({ description: "Sidebar title override. Empty string clears it." }),
+    ),
+    icon: Type.Optional(
+      Type.String({
+        description:
+          "Persistent sidebar icon: a single emoji. Empty string clears it. Distinct from attention, which is temporary.",
+      }),
     ),
     statusNote: Type.Optional(
       Type.String({
@@ -234,6 +240,7 @@ async function resolvePatchTarget(
           requesterAgentId,
         });
   const resolved = await resolveSessionReference({
+    action: "status",
     sessionKey: rawKey,
     agentId: inputAgentId,
     keyAgentId: requesterAgentId,
@@ -260,11 +267,19 @@ async function resolvePatchTarget(
   if (!isRequesterSession) {
     // Session visibility is the configured read/write scope for session tools;
     // the action only selects error copy. Owner gating remains separate.
-    const guard = await createSessionVisibilityGuard({
+    const authorizationKey =
+      agentId !== requesterAgentId && !parseAgentSessionKey(resolved.key)
+        ? `agent:${agentId}:${resolved.key}`
+        : resolved.key;
+    const access = await resolveSessionToolAccess({
       action: "status",
       defaultAgentId: requesterAgentId,
       requesterSessionKey: context.effectiveRequesterKey,
+      authorizationTargetSessionKey: authorizationKey,
       requesterAgentId,
+      targetAgentId: agentId,
+      targetSessionKey: resolved.key,
+      requesterOwned: resolved.requesterOwned === true,
       visibility: resolveEffectiveSessionToolsVisibility({
         cfg: context.cfg,
         sandboxed: opts.sandboxed === true,
@@ -272,11 +287,6 @@ async function resolvePatchTarget(
       a2aPolicy: createAgentToAgentPolicy(context.cfg),
       callGateway,
     });
-    const authorizationKey =
-      agentId !== requesterAgentId && !parseAgentSessionKey(resolved.key)
-        ? `agent:${agentId}:${resolved.key}`
-        : resolved.key;
-    const access = guard.check(authorizationKey);
     if (!access.allowed) {
       throw new ToolAuthorizationError(access.error);
     }
@@ -299,7 +309,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
     label: "Sessions",
     name: "sessions",
     description:
-      "Session settings, reset, delete, and groups: patch label/status, pin, archive/restore, model/thinking override; reset/delete visible sessions; group_list/group_set/group_rename/group_delete.",
+      "Session settings, reset, delete, and groups: patch label/icon/status, pin, archive/restore, model/thinking override; reset/delete visible sessions; group_list/group_set/group_rename/group_delete.",
     parameters: SessionsToolSchema,
     execute: async (_toolCallId, rawArgs) => {
       const params = rawArgs as Record<string, unknown>;
@@ -404,6 +414,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         key,
         ...lifecycleIdentity,
         ...(params.label !== undefined ? { label: readClearableString(params, "label") } : {}),
+        ...(params.icon !== undefined ? { icon: readClearableString(params, "icon") } : {}),
         ...(params.statusNote !== undefined
           ? { statusNote: readClearableString(params, "statusNote") }
           : {}),

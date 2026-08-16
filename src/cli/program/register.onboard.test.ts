@@ -158,7 +158,7 @@ describe("registerOnboardCommand", () => {
       await runCli(["onboard", "--gateway-port", gatewayPort]);
 
       expect(runtime.error).toHaveBeenCalledWith(
-        "Error: --gateway-port must be an integer between 1 and 65535.",
+        "--gateway-port must be an integer between 1 and 65535.",
       );
       expect(runtime.exit).toHaveBeenCalledWith(1);
       expect(setupWizardCommandMock).not.toHaveBeenCalled();
@@ -175,6 +175,11 @@ describe("registerOnboardCommand", () => {
   it("forwards --skip-bootstrap to setup wizard options", async () => {
     await runCli(["onboard", "--skip-bootstrap"]);
     expect(setupWizardOptions().skipBootstrap).toBe(true);
+  });
+
+  it("forwards --agent-name to onboarding", async () => {
+    await runCli(["onboard", "--agent-name", "robby"]);
+    expect(setupWizardOptions().agentName).toBe("robby");
   });
 
   it("forwards explicit --tailscale-reset-on-exit", async () => {
@@ -264,7 +269,7 @@ describe("registerOnboardCommand", () => {
 
     await runCli(["onboard"]);
 
-    expect(runtime.error).toHaveBeenCalledWith("Error: setup failed");
+    expect(runtime.error).toHaveBeenCalledWith("setup failed");
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 

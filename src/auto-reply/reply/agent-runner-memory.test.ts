@@ -10,6 +10,7 @@ import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   loadSessionEntry,
+  readSessionTranscriptActiveStats,
   readTranscriptStatsSync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
@@ -81,6 +82,7 @@ function createReplyOperation(): TestReplyOperation {
   return {
     key: "test",
     sessionId: "session",
+    turnKind: "visible",
     abortSignal: new AbortController().signal,
     staleExpiryReason: undefined,
     resetTriggered: false,
@@ -95,6 +97,10 @@ function createReplyOperation(): TestReplyOperation {
     setPhase: vi.fn<ReplyOperation["setPhase"]>(),
     updateSessionId: vi.fn<ReplyOperation["updateSessionId"]>(),
     updateSessionKey: vi.fn<ReplyOperation["updateSessionKey"]>(),
+    bindToolAuthorityFingerprint: vi.fn(),
+    bindToolAuthorityProjector: vi.fn(),
+    projectToolAuthorityFingerprint: vi.fn(),
+    bindToolAuthorityRoute: vi.fn(),
     attachBackend: vi.fn(),
     detachBackend: vi.fn(),
     freezeAbort: vi.fn(),
@@ -107,6 +113,7 @@ function createReplyOperation(): TestReplyOperation {
     fail: vi.fn(),
     abortByUser: vi.fn(() => true),
     abortForRestart: vi.fn(() => true),
+    supersede: vi.fn(() => true),
     markTerminalRecovery: vi.fn(),
     markAcceptedSteeredInboundAudio: vi.fn(),
     markWaitingForDeferredMaintenance: vi.fn(),
@@ -3264,15 +3271,33 @@ describe("runMemoryFlushIfNeeded", () => {
     });
   });
 
-  it("leaves an under-limit SQLite Codex session to native token compaction", async () => {
+  it("leaves a reset SQLite Codex session below the byte fuse for native compaction", async () => {
     const storePath = path.join(rootDir, "sqlite-codex-under-byte-guard.json");
     const sessionKey = "agent:main:main";
     const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
     await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
     await replaceTranscriptEvents(scope, [
-      { message: { role: "user", content: "small" }, type: "message" },
+      {
+        type: "message",
+        id: "discarded-old",
+        parentId: null,
+        message: { role: "user", content: "x".repeat(20_000) },
+      },
+      {
+        type: "reset",
+        id: "reset-boundary",
+        parentId: "discarded-old",
+        timestamp: "2026-08-15T00:00:00.000Z",
+        reason: "new",
+      },
+      {
+        type: "message",
+        id: "fresh-turn",
+        parentId: "reset-boundary",
+        message: { role: "user", content: "small" },
+      },
     ]);
-    expect(readTranscriptStatsSync(scope).sizeBytes).toBeLessThan(10 * 1024);
+    expect(readSessionTranscriptActiveStats(scope).sizeBytes).toBeLessThan(10 * 1024);
 
     const sessionEntry: SessionEntry = {
       sessionId: "session",
@@ -3301,7 +3326,7 @@ describe("runMemoryFlushIfNeeded", () => {
         sessionKey,
       }),
       defaultModel: "gpt-5.5",
-      agentCfgContextTokens: 350_000,
+      agentCfgContextTokens: 1_000_000,
       sessionEntry,
       sessionStore: { [sessionKey]: sessionEntry },
       sessionKey,
@@ -3672,6 +3697,12 @@ describe("runMemoryFlushIfNeeded", () => {
       compactionCount: 0,
     };
     const onCompactionNotice = vi.fn();
+    compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      compactionKind: "server-endpoint",
+      result: { kind: "server-endpoint", tokensBefore: 8_614, tokensAfter: 736 },
+    });
 
     await runPreflightCompactionIfNeeded({
       cfg: {
@@ -3701,7 +3732,11 @@ describe("runMemoryFlushIfNeeded", () => {
     });
 
     expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");
-    expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "end");
+    expect(onCompactionNotice).toHaveBeenNthCalledWith(
+      2,
+      "end",
+      "🧹 Server-side compaction complete (8.6k → 736)",
+    );
   });
 
   it("emits an incomplete preflight compaction notice when post-compaction state update throws", async () => {

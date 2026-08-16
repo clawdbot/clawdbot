@@ -14,7 +14,7 @@ import { DEVICE_WORKER_PROVIDER_ID } from "../worker-environments/device-provide
 import { projectWorkerSessionPlacement } from "../worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-record.js";
 import {
-  isWorkerPlacementSessionRuntimeSupported,
+  resolveWorkerPlacementExecutionMode,
   resolveWorkerPlacementSessionRuntime,
 } from "../worker-environments/placement-session-runtime.js";
 import type { WorkerPlacementDispatchContract } from "../worker-environments/service-contract.js";
@@ -80,16 +80,6 @@ async function resolveWorkerSessionTarget(params: {
   if (profileId) {
     dispatchTarget = { profileId };
   } else if (deviceId) {
-    const node = (await params.context.nodeRegistry.listCurrentConnected()).find(
-      (candidate) => candidate.nodeId === deviceId && candidate.commands.includes("system.run"),
-    );
-    if (!node) {
-      respondInvalidWorkerSession(
-        params.respond,
-        `device is not a connected session-capable paired node: ${deviceId}`,
-      );
-      return undefined;
-    }
     dispatchTarget = {
       profileId: `device:${deviceId}`,
       deviceId,
@@ -209,10 +199,11 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       agentId: target.target.agentId,
       sessionKey: target.canonicalKey,
     });
-    if (!isWorkerPlacementSessionRuntimeSupported(sessionRuntime)) {
+    const executionMode = resolveWorkerPlacementExecutionMode(sessionRuntime);
+    if (!executionMode) {
       respondInvalidWorkerSession(
         respond,
-        `cloud worker dispatch requires the OpenClaw runtime, not ${sessionRuntime}`,
+        `runtime ${sessionRuntime} lacks cloud placement support`,
       );
       return;
     }
@@ -261,6 +252,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
           sessionId,
           sessionKey: target.canonicalKey,
           agentId: target.target.agentId,
+          executionMode,
           ...dispatchTarget,
         },
         () =>
@@ -308,7 +300,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    if (existingPlacement?.state !== "active") {
+    if (existingPlacement?.state !== "active" && existingPlacement?.state !== "failed") {
       respondInvalidWorkerSession(
         respond,
         `session cannot stop cloud worker from placement ${existingPlacement?.state ?? "local"}`,

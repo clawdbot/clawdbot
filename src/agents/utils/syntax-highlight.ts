@@ -6,6 +6,7 @@
  */
 import { createRequire } from "node:module";
 import { decodeHtmlEntities } from "../../shared/html-entities.js";
+import { getWorkerDeployHighlightJs } from "../../worker/worker-deploy-runtime-registry.js";
 
 type HighlightJs = {
   getLanguage(name: string): unknown;
@@ -15,6 +16,9 @@ type HighlightJs = {
   ): { value: string };
   highlightAuto(code: string, languageSubset?: string[]): { value: string };
 };
+
+let highlightJsRuntime: HighlightJs | undefined;
+declare const WORKER_DEPLOY_BUILD: boolean;
 
 function isHighlightJs(value: unknown): value is HighlightJs {
   return (
@@ -29,14 +33,30 @@ function isHighlightJs(value: unknown): value is HighlightJs {
   );
 }
 
-// highlight.js ships `/// <reference lib="dom" />` in its d.ts, which would
-// silently re-inject DOM globals into the DOM-free core program. Load it
-// untyped and validate the narrow API we use instead of importing its types.
-const highlightJsModule: unknown = createRequire(import.meta.url)("highlight.js");
-if (!isHighlightJs(highlightJsModule)) {
-  throw new TypeError("highlight.js did not expose the expected Node API");
+function setHighlightJsRuntime(runtime: unknown): HighlightJs {
+  if (!isHighlightJs(runtime)) {
+    throw new TypeError("highlight.js did not expose the expected Node API");
+  }
+  highlightJsRuntime = runtime;
+  return runtime;
 }
-const hljs = highlightJsModule;
+
+function loadHighlightJsRuntime(): HighlightJs {
+  if (highlightJsRuntime) {
+    return highlightJsRuntime;
+  }
+  const injected = getWorkerDeployHighlightJs();
+  if (injected !== undefined) {
+    return setHighlightJsRuntime(injected);
+  }
+  if (typeof WORKER_DEPLOY_BUILD === "boolean" && WORKER_DEPLOY_BUILD) {
+    throw new Error("worker highlight.js runtime was not registered before use");
+  }
+  // highlight.js ships `/// <reference lib="dom" />` in its d.ts, which would
+  // silently re-inject DOM globals into the DOM-free core program. Load it
+  // untyped and validate the narrow API we use instead of importing its types.
+  return setHighlightJsRuntime(createRequire(import.meta.url)("highlight.js"));
+}
 
 /** Formatter applied to highlighted text segments. */
 type HighlightFormatter = (text: string) => string;
@@ -176,6 +196,7 @@ function renderHighlightedHtml(html: string, theme: HighlightTheme = {}): string
 
 /** Highlights code using an explicit language or highlight.js auto-detection. */
 export function highlight(code: string, options: HighlightOptions = {}): string {
+  const hljs = loadHighlightJsRuntime();
   const html = options.language
     ? hljs.highlight(code, {
         language: options.language,
@@ -187,5 +208,5 @@ export function highlight(code: string, options: HighlightOptions = {}): string 
 
 /** Returns whether highlight.js has a registered language by this name. */
 export function supportsLanguage(name: string): boolean {
-  return hljs.getLanguage(name) !== undefined;
+  return loadHighlightJsRuntime().getLanguage(name) !== undefined;
 }

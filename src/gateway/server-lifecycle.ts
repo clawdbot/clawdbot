@@ -102,7 +102,8 @@ export async function prepareGatewayLifecycle(params: {
     residentRegistry,
     desktopSessionRegistry,
     nodeDesktopStreamBroker,
-    bindDeviceNodeRegistry,
+    bindDeviceNodeControl,
+    workerPlacementRuntime,
   } = runtime;
   const completeControlUiDeviceAuthMigrationForEffectiveOperator = (
     device: EffectiveOperatorDeviceIdentity,
@@ -164,6 +165,7 @@ export async function prepareGatewayLifecycle(params: {
   const { createGatewayNodeSessionRuntime } = await import("./server-node-session-runtime.js");
   const {
     nodeRegistry,
+    nodeWorkerSupervisorTransport,
     nodePresenceTimers,
     nodeSendToSession,
     nodeSendToAllSubscribed,
@@ -180,6 +182,9 @@ export async function prepareGatewayLifecycle(params: {
     listRegisteredNodePluginToolCommands: () => pluginRuntime.registry.nodeHostCommands,
     nodePluginToolsEnabled: cfgAtStart.gateway?.nodes?.pluginTools?.enabled !== false,
     nodeSkillsEnabled: cfgAtStart.gateway?.nodes?.allowSkills !== false,
+    onRunnerInventoryChanged: (nodeId) => {
+      void workerPlacementRuntime?.scheduleNodeWorkspaceRetention(nodeId);
+    },
     onPairingInvalidated: ({ nodeId, connId }) => {
       void nodeDesktopServiceRef.current?.stopNode(nodeId);
       upsertPresence(nodeId, { reason: "disconnect" });
@@ -200,7 +205,7 @@ export async function prepareGatewayLifecycle(params: {
         })
       : undefined;
   nodeDesktopServiceRef.current = nodeDesktopService;
-  bindDeviceNodeRegistry?.(nodeRegistry);
+  bindDeviceNodeControl?.(nodeWorkerSupervisorTransport);
   const { createWatchNodeHttpRuntime } = await import("./watch-node-http.js");
   const watchNodeHttpRuntime = createWatchNodeHttpRuntime({
     nodeRegistry,
@@ -535,6 +540,7 @@ export async function prepareGatewayLifecycle(params: {
     const { createGatewayCloseHandler, drainActiveSessionsForShutdown } =
       await loadGatewayCloseModule();
     const transport = transportBridge.current();
+    await transport?.portalService.closeAll();
     await createGatewayCloseHandler({
       bonjourStop: runtimeState.bonjourStop,
       tailscaleCleanup: runtimeState.tailscaleCleanup,

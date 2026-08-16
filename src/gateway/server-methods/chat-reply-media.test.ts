@@ -174,7 +174,9 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
 
     expect(payload?.mediaUrl).toBeUndefined();
     expect(payload?.mediaUrls).toBeUndefined();
-    expect(requireString(payload?.text, "suppressed media text")).toBe("⚠️ Media failed.");
+    expect(requireString(payload?.text, "suppressed media text")).toBe(
+      "⚠️ Media failed. Try sending a smaller supported file or a different format.",
+    );
   });
 
   it("does not stage sensitive media before display suppression", async () => {
@@ -200,6 +202,28 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     expect(payload?.mediaUrl).toBeUndefined();
     expect(payload?.mediaUrls).toEqual([dataUrl]);
     await expectOutboundMediaMissing(stateDir);
+  });
+
+  it("projects bounded retry guidance when managed media preparation fails", async () => {
+    const source = "data:audio/mpeg;base64,not-valid!";
+    const errors: string[] = [];
+
+    const content = await buildAssistantDisplayContentFromReplyPayloads({
+      sessionKey: TEST_SESSION_KEY,
+      agentId: "main",
+      payloads: [{ mediaUrls: [source] }],
+      onManagedMediaPrepareError: (message) => errors.push(message),
+    });
+
+    expect(content).toEqual([
+      {
+        type: "text",
+        text: "⚠️ Media failed. Try sending a smaller supported file or a different format.",
+      },
+    ]);
+    expect(errors).toEqual(["Invalid image data URL"]);
+    expect(JSON.stringify(content)).not.toContain(source);
+    expect(Buffer.byteLength(JSON.stringify(content))).toBeLessThan(256);
   });
 
   it("preserves local audio paths for WebChat audio embedding", async () => {
@@ -342,7 +366,13 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
       managedMediaLocalRoots: [workspaceDir],
     });
 
-    expect(content).toEqual([expect.objectContaining({ type: "audio", mimeType: "audio/mpeg" })]);
+    expect(content).toEqual([
+      expect.objectContaining({ type: "audio", mimeType: "audio/mpeg" }),
+      {
+        type: "text",
+        text: "⚠️ Media failed. Try sending a smaller supported file or a different format.",
+      },
+    ]);
   });
 
   it("preserves media order across interleaved trust classes", async () => {
@@ -384,7 +414,9 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
 
     expect(payload?.mediaUrl).toBeUndefined();
     expect(payload?.mediaUrls).toBeUndefined();
-    expect(requireString(payload?.text, "suppressed media text")).toBe("⚠️ Media failed.");
+    expect(requireString(payload?.text, "suppressed media text")).toBe(
+      "⚠️ Media failed. Try sending a smaller supported file or a different format.",
+    );
     await expectOutboundMediaMissing(stateDir);
   });
 

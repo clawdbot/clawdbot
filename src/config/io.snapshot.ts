@@ -283,7 +283,9 @@ export async function readConfigFileSnapshotInternal(
     }
     const snapshotConfig = await deps.measure("config.snapshot.read.materialize", () =>
       materializeRuntimeConfig(validated.config, "snapshot", {
-        manifestRegistry: pluginMetadata.getSnapshot()?.manifestRegistry,
+        manifestRegistry:
+          pluginMetadata.getSnapshot()?.manifestRegistry ??
+          (context.options.pluginValidation === "core-only" ? { plugins: [] } : undefined),
       }),
     );
     return await deps.measure("config.snapshot.read.observe", () =>
@@ -400,7 +402,6 @@ export async function readConfigFileSnapshotForWriteFromContext(
   const assertConfigPathForWrite = () => {
     if (resolveConfigPathForDeps(context.deps) !== context.configPath) {
       throw new ConfigMutationConflictError("config path changed since last load", {
-        currentHash: null,
         retryable: false,
       });
     }

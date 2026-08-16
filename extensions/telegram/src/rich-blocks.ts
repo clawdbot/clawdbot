@@ -104,11 +104,10 @@ function resolveTelegramLinkAction(
     return null;
   }
   const label = source.slice(link.start, link.end);
-  if (context.origin === "linkify" && isAutoLinkedFileRef(href, label)) {
-    // Bare file refs (README.md, openclaw.json) must render as code, not links:
-    // Telegram's server-side entity detection would otherwise re-linkify them
-    // and show spurious domain previews for TLD-like extensions.
-    return { kind: "code" };
+  if (context.origin === "linkify") {
+    // File refs need code to suppress false links. Other bare links stay plain
+    // because Telegram typed URLs escape query separators (observed 2026-08).
+    return isAutoLinkedFileRef(href, label) ? { kind: "code" } : null;
   }
   if (href.startsWith("#")) {
     // In-message fragments are RichTextAnchorLink, not RichTextUrl.

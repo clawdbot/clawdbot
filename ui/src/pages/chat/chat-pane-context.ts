@@ -43,6 +43,7 @@ import {
 } from "./run-lifecycle.ts";
 import { cancelChatScroll } from "./scroll.ts";
 import { clearChatMessagesFromCache } from "./session-message-cache.ts";
+import { migrateLegacyDockVisibility } from "./sidebar-layout-legacy-migration.ts";
 import { normalizeSidebarLayout } from "./sidebar-layout.ts";
 import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream.ts";
 
@@ -105,7 +106,11 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     this.refreshSwarmRoster();
     const selectedSession = selectedChatSessionRow(state);
     if (applySelectedSessionProjection(state, selectedSession)) {
-      this.markSessionRead(selectedSession);
+      // Hidden retained panes keep this subscription alive; only the pane the
+      // user is actually looking at may clear unread/attention state.
+      if (this.presented) {
+        this.markSessionRead(selectedSession);
+      }
     }
     this.syncSessionSuggestionTarget(
       stateValue.agentId ?? resolveChatAgentId(state) ?? "main",
@@ -220,6 +225,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       // A reconnect can retain the browser client. Keep async ownership tied
       // to the logical connection, not only the transport object identity.
       this.connectionGeneration += 1;
+      this.retireHeaderSessionMutations();
       invalidateChatAvatarCache(state);
       invalidateAssistantIdentityCache(state.client);
       state.assistantIdentityRequestVersion += 1;
@@ -237,6 +243,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.sessionDiscussionOpenUrls.clear();
       this.sessionDiscussionPanels.clear();
       this.sessionParticipationTracker.reset();
+      if (state.client !== snapshot.client) {
+        this.sessionCompanionThreads.retire();
+      }
       // A new gateway/account owns its own membership + identity data; drop the
       // previous connection's sharing cache so a stale loading entry cannot
       // suppress the fresh load or leak the prior account's identities.
@@ -260,10 +269,28 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       releaseChatMediaResourceSubscriber(state.requestUpdate);
     }
     state.canvasPluginSurfaceUrl = snapshot.canvasPluginSurfaceUrl;
+    state.terminalAvailable =
+      this.context.config.current.terminalEnabled &&
+      snapshot.phase === "connected" &&
+      hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
+      isGatewayMethodAdvertised(snapshot, "terminal.open") === true;
+    state.browserPanelAvailable =
+      snapshot.phase === "connected" &&
+      hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
+      isGatewayMethodAdvertised(snapshot, "browser.request") === true;
+    const desktopPanelAvailable =
+      snapshot.phase === "connected" &&
+      hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
+      isGatewayMethodAdvertised(snapshot, "desktop.observe") === true;
     const sidebarSessionKey = canonicalUiSessionKeyForPersistence(state, state.sessionKey);
     const sidebarKeyChanged = sidebarSessionKey !== previousSidebarSessionKey;
     if (sidebarSessionKey && (clientChanged || sidebarKeyChanged)) {
-      const sidebarSettings = loadSettings();
+      const sidebarSettings = migrateLegacyDockVisibility({
+        settings: loadSettings(),
+        sessionKey: sidebarSessionKey,
+        browserAvailable: state.browserPanelAvailable,
+        desktopAvailable: desktopPanelAvailable,
+      });
       const persistedLayout = sidebarSettings.sidebarSessionLayouts?.[sidebarSessionKey];
       if (persistedLayout !== undefined) {
         state.sidebarLayout = normalizeSidebarLayout(persistedLayout);
@@ -290,15 +317,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       });
       this.deferSessionHydrationUntilTranscript(state.sessionKey, historyRefresh);
     }
-    state.terminalAvailable =
-      this.context.config.current.terminalEnabled &&
-      snapshot.phase === "connected" &&
-      hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
-      isGatewayMethodAdvertised(snapshot, "terminal.open") === true;
-    state.browserPanelAvailable =
-      snapshot.phase === "connected" &&
-      hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
-      isGatewayMethodAdvertised(snapshot, "browser.request") === true;
     state.assistantAgentId = snapshot.assistantAgentId;
     const routeSessionKey = this.sessionKey.trim();
     const catalogRouteKey = parseCatalogSessionKey(routeSessionKey);
@@ -350,11 +368,18 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       const startupGeneration = this.connectionGeneration;
       const startupSessionKey = state.sessionKey;
       const agentsListBeforeStartup = this.context.agents.state.agentsList;
+      const rosterRevisionBeforeStartup = this.context.agents.state.listRevision;
       const clientIsCurrent = () =>
         this.connectionGeneration === startupGeneration &&
         this.connectedClient === startupClient &&
         state.client === startupClient &&
         state.connected;
+      state.onAgentsList = (agentsList, client) => {
+        const ownsRoster =
+          clientIsCurrent() &&
+          this.context.agents.adoptList(agentsList, client, rosterRevisionBeforeStartup);
+        return ownsRoster;
+      };
       const finishStartup = async () => {
         if (!clientIsCurrent()) {
           return;
@@ -395,6 +420,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       });
       this.deferSessionHydrationUntilTranscript(startupSessionKey, historyRefresh);
       void historyRefresh.finally(() => {
+        if (clientIsCurrent()) {
+          state.onAgentsList = undefined;
+        }
         void finishStartup();
       });
       void refreshChatModelAuthStatus(state).finally(() => state.requestUpdate?.());

@@ -840,6 +840,29 @@ describe("xai web search config resolution", () => {
     expect(transportSignal?.reason).toBe(reason);
   });
 
+  it("does not cache a Grok result completed after caller cancellation", async () => {
+    const controller = new AbortController();
+    const reason = new Error("Grok search cancelled after response");
+    const mockFetch = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        controller.abort(reason);
+        return xaiAnswerResponse("Cancelled Grok answer");
+      })
+      .mockResolvedValueOnce(xaiAnswerResponse("Recovered Grok answer"));
+    global.fetch = withFetchPreconnect(mockFetch);
+    const tool = requireXaiWebSearchTool({
+      config: xaiPluginConfig({ webSearch: { apiKey: "xai-cancel-cache-key" } }),
+    });
+    const query = "unique Grok late-cancel cache regression";
+
+    await expect(tool.execute({ query }, { signal: controller.signal })).rejects.toBe(reason);
+    const recovered = await tool.execute({ query });
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(recovered.content).toContain("Recovered Grok answer");
+  });
+
   it("does not contact the generic xAI provider when the caller is already cancelled", async () => {
     const mockFetch = installXaiWebSearchFetch();
     const controller = new AbortController();
@@ -924,12 +947,24 @@ describe("xai web search response parsing", () => {
 describe("xai provider models", () => {
   it("publishes only current selectable chat models newest first", () => {
     expect(buildXaiCatalogModels().map((model) => model.id)).toEqual([
+      "grok-4.6",
       "grok-4.5",
       "grok-build-0.1",
       "grok-4.3",
       "grok-4.20-0309-reasoning",
       "grok-4.20-0309-non-reasoning",
     ]);
+  });
+
+  it("publishes Grok 4.6 with its current metadata", () => {
+    expectCatalogEntry("grok-4.6", {
+      id: "grok-4.6",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 500_000,
+      maxTokens: 64_000,
+      cost: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+    });
   });
 
   it("publishes Grok 4.5 with its current metadata", () => {
@@ -939,7 +974,7 @@ describe("xai provider models", () => {
       input: ["text", "image"],
       contextWindow: 500_000,
       maxTokens: 64_000,
-      cost: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+      cost: { input: 2, output: 6, cacheRead: 0.3, cacheWrite: 0 },
     });
   });
 
@@ -950,7 +985,7 @@ describe("xai provider models", () => {
       input: ["text", "image"],
       contextWindow: 500_000,
       maxTokens: 64_000,
-      cost: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+      cost: { input: 2, output: 6, cacheRead: 0.3, cacheWrite: 0 },
     });
   });
 

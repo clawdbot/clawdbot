@@ -57,7 +57,7 @@ suite.define(() => {
           terminalEnabled: true,
         });
 
-        await page.goto(suite.server.baseUrl);
+        await page.goto(`${suite.server.baseUrl}activity`);
         await waitForControlUiGatewayReady(page);
         await waitForControlUiTerminalReady(page);
         await page.keyboard.press("Control+Backquote");

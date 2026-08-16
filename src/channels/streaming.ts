@@ -168,8 +168,6 @@ export type ChannelProgressLineOptions = {
   commandText?: ChannelStreamingCommandTextMode;
 };
 
-type ChannelProgressDraftRenderMode = "text" | "rich";
-
 export type AgentPlanStepStatus = "pending" | "in_progress" | "completed";
 
 export type AgentPlanStep = {
@@ -954,14 +952,6 @@ export function resolveChannelProgressDraftMaxLineChars(
 ): number {
   const configured = asInteger(resolveChannelProgressDraftConfig(entry).maxLineChars);
   return configured && configured > 0 ? configured : defaultValue;
-}
-
-export function resolveChannelProgressDraftRender(
-  entry: StreamingCompatEntry | null | undefined,
-  defaultValue: ChannelProgressDraftRenderMode = "text",
-): ChannelProgressDraftRenderMode {
-  const configured = resolveChannelProgressDraftConfig(entry).render;
-  return configured === "rich" || configured === "text" ? configured : defaultValue;
 }
 
 function sliceCodePoints(value: string, start: number, end?: number): string {

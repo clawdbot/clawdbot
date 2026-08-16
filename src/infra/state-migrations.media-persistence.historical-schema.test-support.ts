@@ -59,6 +59,11 @@ export function historicalV15AgentSchemaSql(): string {
     "CREATE TABLE IF NOT EXISTS memory_index_chunk_recall_metadata (",
     "CREATE TABLE IF NOT EXISTS memory_embedding_cache (",
   );
+  sql = removeSchemaRange(
+    sql,
+    "-- Canonical cold-tier owner for reclaimed transcript generations.",
+    "CREATE TABLE IF NOT EXISTS transcript_rewrite_watermarks (",
+  );
   return removeSchemaRange(
     sql,
     "CREATE TABLE IF NOT EXISTS standing_intents (",

@@ -2,14 +2,15 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { validateCronAddParams } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { normalizeCronJobCreate } from "../cron/normalize.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { installClawCronJobs, readClawCronRefs } from "./cron.js";
+import { clawCronGatewayInput, installClawCronJobs, readClawCronRefs } from "./cron.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawSourceIdentity } from "./types.js";
 
-afterEach(() => closeOpenClawStateDatabaseForTest());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => closeOpenClawStateDatabaseForTest());
 
 async function fixture() {
   const root = tempDirs.make("openclaw-claw-cron-");
@@ -30,6 +31,7 @@ async function fixture() {
   if (!parsed.ok) {
     throw new Error(JSON.stringify(parsed.diagnostics));
   }
+
   const source: ClawSourceIdentity = {
     kind: "package",
     name: "@acme/worker",
@@ -46,6 +48,24 @@ async function fixture() {
     context: { workspace: join(root, "workspace"), agentId: "worker-two" },
   });
   return { root, plan, env: { OPENCLAW_STATE_DIR: join(root, "state") } };
+}
+
+function listedCronJob(
+  agentId: string,
+  ref: ReturnType<typeof readClawCronRefs>[number],
+  id: string,
+) {
+  const normalized = normalizeCronJobCreate(clawCronGatewayInput(agentId, ref));
+  if (!normalized) {
+    throw new Error("expected normalized cron job");
+  }
+  return {
+    ...normalized,
+    id,
+    createdAtMs: 1,
+    updatedAtMs: 1,
+    state: {},
+  };
 }
 
 describe("installClawCronJobs", () => {
@@ -121,6 +141,49 @@ describe("installClawCronJobs", () => {
       }),
     ).resolves.toMatchObject([{ schedulerJobId: "scheduler-123", status: "complete" }]);
     expect(waitUntilAgentAvailable).not.toHaveBeenCalled();
+    expect(add).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when a complete scheduler job disappeared", async () => {
+    const current = await fixture();
+    await installClawCronJobs(current.plan, {
+      env: current.env,
+      gateway: { add: vi.fn().mockResolvedValue({ id: "scheduler-123" }) },
+    });
+    const list = vi.fn().mockResolvedValue({ jobs: [] });
+    const add = vi.fn();
+
+    await expect(
+      installClawCronJobs(current.plan, {
+        env: current.env,
+        gateway: { add, list },
+      }),
+    ).rejects.toMatchObject({ code: "cron_reconcile_conflict" });
+
+    expect(list).toHaveBeenCalledOnce();
+    expect(add).not.toHaveBeenCalled();
+    expect(readClawCronRefs("worker-two", { env: current.env })).toMatchObject([
+      { schedulerJobId: "scheduler-123", status: "complete" },
+    ]);
+  });
+
+  it("rejects a same-key scheduler job whose declaration drifted", async () => {
+    const current = await fixture();
+    await installClawCronJobs(current.plan, {
+      env: current.env,
+      gateway: { add: vi.fn().mockResolvedValue({ id: "scheduler-123" }) },
+    });
+    const [ref] = readClawCronRefs("worker-two", { env: current.env });
+    const drifted = listedCronJob("worker-two", ref!, "scheduler-123");
+    drifted.payload = { kind: "agentTurn", message: "Different declaration" };
+    const add = vi.fn();
+
+    await expect(
+      installClawCronJobs(current.plan, {
+        env: current.env,
+        gateway: { add, list: vi.fn().mockResolvedValue({ jobs: [drifted] }) },
+      }),
+    ).rejects.toMatchObject({ code: "cron_reconcile_conflict" });
     expect(add).not.toHaveBeenCalled();
   });
 

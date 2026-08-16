@@ -361,14 +361,9 @@ vi.doMock("./bot-message-context.session.runtime.js", async () => {
   };
 });
 
-vi.mock("./bot.agent.runtime.js", () => ({
-  resolveDefaultAgentId: vi.fn(() => "default"),
-}));
-
 vi.mock("./bot-handlers.agent.runtime.js", () => ({
   resolveAgentDir: vi.fn(() => "/tmp/agent"),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
-  resolveDefaultAgentId: vi.fn(() => "default"),
   resolveDefaultModelForAgent: vi.fn(() => ({
     provider: "openai",
     model: "gpt-test",

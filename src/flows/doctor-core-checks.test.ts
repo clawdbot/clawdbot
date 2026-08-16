@@ -327,50 +327,6 @@ describe("CORE_HEALTH_CHECKS", () => {
     );
   });
 
-  it("warns when autonomous Skill Workshop capture is enabled but policy hides its tool", async () => {
-    const check = getCheck(
-      createCoreHealthChecks(createDeps()),
-      "core/doctor/skill-workshop-tool-policy",
-    );
-
-    const findings = await check.detect({
-      mode: "doctor",
-      runtime,
-      cfg: {
-        skills: { workshop: { autonomous: { mode: "propose" } } },
-        tools: { profile: "messaging" },
-      },
-    });
-
-    expect(findings).toEqual([
-      expect.objectContaining({
-        checkId: "core/doctor/skill-workshop-tool-policy",
-        severity: "warning",
-        message: 'tools.profile: "messaging" does not include "skill_workshop".',
-        path: "tools.profile",
-        fixHint: 'Add tools.alsoAllow: ["skill_workshop"].',
-      }),
-    ]);
-  });
-
-  it("does not warn when autonomous Skill Workshop capture is disabled", async () => {
-    const check = getCheck(
-      createCoreHealthChecks(createDeps()),
-      "core/doctor/skill-workshop-tool-policy",
-    );
-
-    await expect(
-      check.detect({
-        mode: "doctor",
-        runtime,
-        cfg: {
-          skills: { workshop: { autonomous: { mode: "off" } } },
-          tools: { profile: "messaging" },
-        },
-      }),
-    ).resolves.toEqual([]);
-  });
-
   it("threads deep mode into structured extra gateway service detection", async () => {
     const check = getCheck(
       createCoreHealthChecks(createDeps()),
@@ -498,6 +454,7 @@ describe("CORE_HEALTH_CHECKS", () => {
 
   it("converts unavailable skills into repair-capable health findings", async () => {
     const unavailableSkill = createSkill();
+    const detectUnavailableSkills = vi.fn(async () => [unavailableSkill]);
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -507,18 +464,20 @@ describe("CORE_HEALTH_CHECKS", () => {
       },
     };
     const check = getCheck(
-      createCoreHealthChecks(
-        createDeps({
-          async detectUnavailableSkills(): Promise<readonly SkillStatusEntry[]> {
-            return [unavailableSkill];
-          },
-        }),
-      ),
+      createCoreHealthChecks(createDeps({ detectUnavailableSkills })),
       "core/doctor/skills-readiness",
     );
 
     expect(check).toMatchObject({ defaultEnabled: false });
     expect(check["repair"]).toBeTypeOf("function");
+    await expect(
+      check.detect({
+        mode: "lint",
+        runtime,
+        cfg: { agents: { list: [{ id: "alpha", default: true }, { id: "beta" }] } },
+      }),
+    ).resolves.toEqual([]);
+    expect(detectUnavailableSkills).not.toHaveBeenCalled();
 
     const findings = await check.detect({
       mode: "lint",
@@ -671,7 +630,9 @@ describe("CORE_HEALTH_CHECKS", () => {
         },
       },
     };
-    expect(hooksModelCatalogCase.calls).toContainEqual([{ config: cfg, readOnly: true }]);
+    expect(hooksModelCatalogCase.calls).toContainEqual([
+      { config: cfg, readOnly: true, providerDiscoveryProviderIds: [] },
+    ]);
   });
 
   it("skips gateway auth warning when SecretRef-managed token resolves in lint checks", async () => {
@@ -1010,47 +971,6 @@ describe("CORE_HEALTH_CHECKS", () => {
         checkId: "core/doctor/provider-catalog-projection",
         severity: "error",
         target: "mockplugin",
-      }),
-    );
-  });
-});
-
-describe("core/doctor/bootstrap-size", () => {
-  let tmp: string | undefined;
-
-  afterEach(async () => {
-    if (tmp !== undefined) {
-      await fs.rm(tmp, { recursive: true, force: true });
-      tmp = undefined;
-    }
-  });
-
-  it("honors the per-agent bootstrapMaxChars override in health findings", async () => {
-    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-bootstrap-"));
-    // This size fits the global default but exceeds the default agent's effective budget.
-    await fs.writeFile(join(tmp, "AGENTS.md"), "a".repeat(15_000), "utf-8");
-
-    const check = getCheck(CORE_HEALTH_CHECKS, "core/doctor/bootstrap-size");
-    const findings = await check.detect({
-      mode: "lint",
-      runtime,
-      cfg: {
-        agents: {
-          defaults: {
-            workspace: tmp,
-            bootstrapMaxChars: 20_000,
-          },
-          list: [{ id: "custom-agent", default: true, bootstrapMaxChars: 10_000 }],
-        },
-      },
-    });
-
-    expect(findings).toContainEqual(
-      expect.objectContaining({
-        checkId: "core/doctor/bootstrap-size",
-        severity: "warning",
-        message: expect.stringContaining("AGENTS.md"),
-        fixHint: expect.stringContaining("agents.entries.*.bootstrapMaxChars"),
       }),
     );
   });

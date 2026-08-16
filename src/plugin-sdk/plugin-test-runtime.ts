@@ -143,6 +143,7 @@ export {
   type WizardPrompter,
 } from "../test-utils/plugin-setup-wizard.js";
 export { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
+export { createAdmittedHostCapabilityTestFixture } from "../agents/harness/host-capability.test-support.js";
 export { buildPluginApi } from "../plugins/api-builder.js";
 export {
   createCapturedPluginRegistration,

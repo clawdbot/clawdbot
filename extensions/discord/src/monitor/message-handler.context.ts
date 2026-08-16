@@ -104,6 +104,7 @@ export async function buildDiscordMessageProcessContext(params: {
     boundSessionKey,
     route,
     commandAuthorized,
+    resolveChannelIngress,
   } = ctx;
 
   const fromLabel = isDirectMessage
@@ -360,7 +361,22 @@ export async function buildDiscordMessageProcessContext(params: {
           sessionKey: effectiveSessionKey,
         });
 
-  const ctxPayload = await buildChannelInboundEventContext({
+  // Auto-threading owns the dispatch session, so bind admission only after that session is final.
+  const channelIngress = await resolveChannelIngress(
+    {
+      agentId: route.agentId,
+      sessionKey: effectiveSessionKey,
+      messageId: canonicalMessageId ?? message.id,
+      inboundEventKind: ctx.inboundEventKind,
+    },
+    {
+      parentId: threadChannel ? threadParentId : undefined,
+      threadId: threadChannel?.id ?? autoThreadContext?.createdThreadId ?? undefined,
+    },
+  );
+
+  const ctxPayload = await (ctx.buildContext ?? buildChannelInboundEventContext)({
+    channelIngress,
     channel: "discord",
     resolveSupplementalMedia: true,
     contextVisibility: contextVisibilityMode,
@@ -384,7 +400,9 @@ export async function buildDiscordMessageProcessContext(params: {
       id: messageChannelId,
       nativeChannelId: messageChannelId,
       label: fromLabel,
-      spaceId: isGuildMessage ? (guildInfo?.id ?? guildSlug) || undefined : undefined,
+      spaceId: isGuildMessage
+        ? (guildInfo?.id ?? data.guild?.id ?? data.guild_id ?? guildSlug) || undefined
+        : undefined,
       parentId: threadChannel ? threadParentId : undefined,
       threadId: threadChannel?.id ?? autoThreadContext?.createdThreadId ?? undefined,
     },

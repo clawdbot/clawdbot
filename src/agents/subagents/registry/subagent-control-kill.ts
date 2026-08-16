@@ -115,6 +115,7 @@ export async function killAllControlledSubagentRuns(params: {
   cfg: OpenClawConfig;
   controller: ResolvedSubagentController;
   runs: SubagentRunRecord[];
+  suppressTaskDelivery?: boolean;
 }) {
   if (params.controller.controlScope !== "children") {
     return {
@@ -130,6 +131,7 @@ export async function killAllControlledSubagentRuns(params: {
     cache: new Map<string, Record<string, SessionEntry>>(),
     seenChildSessionKeys: new Set<string>(),
     controllerSessionKey: params.controller.controllerSessionKey,
+    suppressTaskDelivery: params.suppressTaskDelivery,
   });
   if (result.errors.length > 0) {
     return {

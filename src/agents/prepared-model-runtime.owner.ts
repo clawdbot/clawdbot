@@ -11,10 +11,7 @@ import {
   resolveAgentWorkspaceDir,
 } from "./agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
-import {
-  requiresAgentHarnessPluginSelection,
-  resolveSelectedAgentHarnessRuntime,
-} from "./harness/runtime-plugin-load-plan.js";
+import { resolveSelectedAgentHarnessRuntime } from "./harness/runtime-plugin-load-plan.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
 import { resolveDefaultModelForAgent } from "./model-selection-config.js";
@@ -222,7 +219,6 @@ export function normalizePreparedModelRuntimeInput(
   const runtimePluginSelections = input.runtimePluginSelections
     ? Object.freeze(
         [...input.runtimePluginSelections]
-          .filter((selection) => requiresAgentHarnessPluginSelection(selection, input.config))
           .map((selection) => {
             const runtime = resolveSelectedAgentHarnessRuntime(selection, input.config);
             const { agentId: _agentId, ...normalized } = selection;
@@ -258,6 +254,7 @@ export function ownerKey(input: PreparedModelRuntimeInput): string {
     agentDir: input.agentDir,
     inheritedAuthDir: input.inheritedAuthDir,
     readOnly: input.readOnly === true,
+    loadRuntimePlugins: input.loadRuntimePlugins === true,
     skipCredentials: input.skipCredentials === true,
     workspaceDir: input.workspaceDir,
     env: environmentFingerprint(input.env),
@@ -288,8 +285,15 @@ export function resolvePublishedOwner(
       owner.input.agentDir === input.agentDir &&
       owner.input.inheritedAuthDir === input.inheritedAuthDir &&
       owner.input.readOnly === input.readOnly &&
+      owner.input.loadRuntimePlugins === input.loadRuntimePlugins &&
       owner.input.skipCredentials === input.skipCredentials &&
-      owner.input.allowGatewaySubagentBinding === input.allowGatewaySubagentBinding &&
+      // Binding is a publication-time build capability readers cannot know;
+      // absent (= undefined after normalization) is a wildcard like the
+      // clauses below. Requiring equality made every flagless gateway reader
+      // (models.list, catalog loads) miss the configured owner and silently
+      // rebuild a live ephemeral catalog per request.
+      (input.allowGatewaySubagentBinding === undefined ||
+        owner.input.allowGatewaySubagentBinding === input.allowGatewaySubagentBinding) &&
       (input.runtimePluginSelections === undefined ||
         JSON.stringify(owner.input.runtimePluginSelections) ===
           JSON.stringify(input.runtimePluginSelections)) &&
@@ -309,6 +313,7 @@ export function hasSameLifecycleInput(
     left.agentId === right.agentId &&
     left.inheritedAuthDir === right.inheritedAuthDir &&
     left.readOnly === right.readOnly &&
+    left.loadRuntimePlugins === right.loadRuntimePlugins &&
     left.skipCredentials === right.skipCredentials &&
     left.workspaceDir === right.workspaceDir &&
     environmentFingerprint(left.env) === environmentFingerprint(right.env) &&

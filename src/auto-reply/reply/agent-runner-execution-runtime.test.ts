@@ -36,6 +36,7 @@ describe("executeAgentTurn: runtime selection", () => {
 
       const executeAgentTurn = await getExecuteAgentTurnForTest();
       const followupRun = createFollowupRun();
+      followupRun.run.agentId = "main";
       followupRun.run.provider = "codex-cli";
       followupRun.run.model = "gpt-5.4";
       followupRun.run.sessionKey = "agent:main:opaque:binding";
@@ -74,6 +75,7 @@ describe("executeAgentTurn: runtime selection", () => {
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
+    followupRun.run.agentId = "main";
     followupRun.run.provider = "codex-cli";
     followupRun.run.model = "gpt-5.4";
     followupRun.run.sessionKey = "agent:main:opaque:binding";

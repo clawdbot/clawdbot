@@ -560,7 +560,7 @@ Narrow, explicit allowlists are fastest and least flaky:
 - Tool calling across several providers:
   - `OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.6-luna,anthropic/claude-opus-4-6,google/gemini-3.5-flash,deepseek/deepseek-v4-flash,zai/glm-5.1,minimax/MiniMax-M3" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
-- Z.AI Coding Plan GLM-5.2 direct smoke:
+- Z.AI Coding Plan GLM-5.3 direct smoke:
   - `ZAI_CODING_LIVE_TEST=1 pnpm test:live src/agents/zai.live.test.ts`
 
 - Google focus:
@@ -598,11 +598,12 @@ Live is opt-in, so there is no fixed "CI model list." `OPENCLAW_LIVE_MODELS=mode
 | `deepseek/deepseek-v4-flash`                  |            |
 | `deepseek/deepseek-v4-pro`                    |            |
 | `minimax/MiniMax-M3`                          |            |
-| `openai/gpt-5.5`                              |            |
+| `openai/gpt-5.6`                              |            |
 | `openrouter/openai/gpt-5.2-chat`              |            |
 | `openrouter/minimax/minimax-m2.7`             |            |
 | `opencode-go/glm-5`                           |            |
 | `openrouter/ai21/jamba-large-1.7`             |            |
+| `xai/grok-4.6`                                |            |
 | `xai/grok-4.5`                                |            |
 | `xai/grok-4.20-0309-reasoning`                |            |
 | `zai/glm-5.1`                                 |            |
@@ -624,7 +625,7 @@ The curated **small-model** list (`OPENCLAW_LIVE_MODELS=small` / `OPENCLAW_LIVE_
 
 Notes on the modern list:
 
-- `codex` and `codex-cli` providers are excluded from the default modern sweep (they cover CLI-backend/ACP behavior, tested separately above). `openai/gpt-5.5` itself routes through the Codex app-server harness by default; see [Live: Codex app-server harness smoke](#live-codex-app-server-harness-smoke).
+- `codex` and `codex-cli` providers are excluded from the default modern sweep (they cover CLI-backend/ACP behavior, tested separately above). `openai/gpt-5.6` itself routes through the Codex app-server harness by default; see [Live: Codex app-server harness smoke](#live-codex-app-server-harness-smoke).
 - `fireworks`, `google`, `openrouter`, and `xai` only run their explicitly curated model ids in the modern sweep (no automatic "every model from this provider" expansion).
 - Include at least one image-capable model (Claude/Gemini/OpenAI-family vision variants, etc.) in `OPENCLAW_LIVE_GATEWAY_MODELS` to exercise the image probe.
 

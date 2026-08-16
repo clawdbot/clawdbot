@@ -13,6 +13,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { FULL_RELEASE_WAIT_TIMEOUT_MINUTES } from "../../scripts/full-release-validation-at-sha.mts";
 import { createReleaseWorkflowMatrixPlan } from "../../scripts/plan-release-workflow-matrix.mjs";
+import {
+  pluginPrereleaseTimeoutComponents,
+  releaseTimeoutForProfile as timeoutForProfile,
+  releaseWorkflowJobNeeds as jobNeeds,
+} from "../helpers/release-workflow-timeouts.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const PACKAGE_ACCEPTANCE_WORKFLOW = ".github/workflows/package-acceptance.yml";
@@ -208,29 +213,6 @@ function workflowStep(job: WorkflowJob, stepName: string): WorkflowStep {
   return step;
 }
 
-function jobNeeds(job: WorkflowJob): string[] {
-  return Array.isArray(job.needs) ? job.needs : job.needs ? [job.needs] : [];
-}
-
-function timeoutForProfile(
-  timeout: number | string | undefined,
-  profile: "beta" | "stable" | "full",
-): number {
-  if (typeof timeout === "number") {
-    return timeout;
-  }
-  if (timeout === "${{ matrix.group.timeout_minutes || 60 }}") {
-    return 60;
-  }
-  const match = timeout?.match(
-    /^\$\{\{ inputs\.(?:release_profile|release_test_profile) == 'full' && ([0-9]+) \|\| ([0-9]+) \}\}$/u,
-  );
-  if (!match) {
-    throw new Error(`Unsupported release timeout expression: ${String(timeout)}`);
-  }
-  return Number(profile === "full" ? match[1] : match[2]);
-}
-
 function evaluatedJobTimeouts(path: string, jobName: string, job: WorkflowJob): number[] {
   const timeout = job["timeout-minutes"];
   if (typeof timeout === "number") {
@@ -284,41 +266,8 @@ function pluginPrereleaseTimeoutFloor(
   liveE2e: Workflow,
   profile: "beta" | "stable" | "full",
 ): number {
-  const preflight = pluginPrerelease.jobs?.preflight;
-  const dockerSuite = pluginPrerelease.jobs?.["plugin-prerelease-docker-suite"];
-  const suite = pluginPrerelease.jobs?.["plugin-prerelease-suite"];
-  const validateSelectedRef = liveE2e.jobs?.validate_selected_ref;
-  const prepareImage = liveE2e.jobs?.prepare_docker_e2e_image;
-  const imageReady = liveE2e.jobs?.docker_e2e_image_ready;
-  const dockerLanes = liveE2e.jobs?.validate_docker_lanes;
-  if (
-    !preflight ||
-    !dockerSuite ||
-    !suite ||
-    !validateSelectedRef ||
-    !prepareImage ||
-    !imageReady ||
-    !dockerLanes
-  ) {
-    throw new Error("Missing plugin prerelease timeout-chain job");
-  }
-
-  expect(jobNeeds(dockerSuite)).toContain("preflight");
-  expect(jobNeeds(prepareImage)).toEqual(["validate_selected_ref"]);
-  expect(jobNeeds(imageReady)).toEqual(["prepare_docker_e2e_image"]);
-  expect(jobNeeds(dockerLanes)).toEqual(
-    expect.arrayContaining(["prepare_docker_e2e_image", "docker_e2e_image_ready"]),
-  );
-  expect(jobNeeds(suite)).toContain("plugin-prerelease-docker-suite");
-
-  return [
-    timeoutForProfile(preflight["timeout-minutes"], profile),
-    timeoutForProfile(validateSelectedRef["timeout-minutes"], profile),
-    timeoutForProfile(prepareImage["timeout-minutes"], profile),
-    timeoutForProfile(imageReady["timeout-minutes"], profile),
-    timeoutForProfile(dockerLanes["timeout-minutes"], profile),
-    timeoutForProfile(suite["timeout-minutes"], profile),
-  ].reduce((total, value) => total + value, 0);
+  const components = pluginPrereleaseTimeoutComponents({ pluginPrerelease, liveE2e, profile });
+  return Object.values(components).reduce((total, value) => total + value, 0);
 }
 
 function runFullReleaseInputValidation(releaseProfile: string, skipTelegram: string) {
@@ -1042,6 +991,60 @@ function runReleaseChecksSummary(params: {
 }
 
 describe("package acceptance workflow", () => {
+  it("forwards Plugin SDK acknowledgement through the canonical publish dispatch", () => {
+    const workflow = readWorkflow(RELEASE_PUBLISH_WORKFLOW);
+    const input = workflow.on?.workflow_dispatch?.inputs?.plugin_sdk_api_acknowledgement;
+    const resolveJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target");
+    const downloadPreflight = workflowStep(resolveJob, "Download OpenClaw npm preflight manifest");
+    const validateEvidence = workflowStep(resolveJob, "Validate OpenClaw npm preflight manifest");
+    const publishJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
+    const dispatch = workflowStep(publishJob, "Dispatch publish workflows");
+
+    expect(readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8")).toContain(
+      "group: openclaw-release-publish-${{ inputs.npm_dist_tag }}",
+    );
+
+    expect(input).toEqual({
+      default: "",
+      description:
+        "8-character digest from the Plugin SDK API diff report when the release changes the SDK",
+      required: false,
+      type: "string",
+    });
+    expect(dispatch.env?.PLUGIN_SDK_API_ACKNOWLEDGEMENT).toBe(
+      "${{ inputs.plugin_sdk_api_acknowledgement }}",
+    );
+    expect(validateEvidence.env?.PLUGIN_SDK_API_ACKNOWLEDGEMENT).toBe(
+      "${{ inputs.plugin_sdk_api_acknowledgement }}",
+    );
+    expect(validateEvidence.env?.PLUGIN_SDK_API_VALIDATOR).toContain(
+      "plugin-sdk-api-release-evidence.mjs",
+    );
+    expect(validateEvidence.run).toContain('node "$PLUGIN_SDK_API_VALIDATOR"');
+    expect(validateEvidence.run).toContain('--acknowledge "$PLUGIN_SDK_API_ACKNOWLEDGEMENT"');
+    expect(validateEvidence.run).toContain('npm view "openclaw@${RELEASE_NPM_DIST_TAG}" version');
+    expect(validateEvidence.run).toContain('--current-selector-ref "$current_selector_ref"');
+    expect(validateEvidence.run).toContain('--current-selector-sha "$current_selector_sha"');
+    expect(validateEvidence.run).toContain("Immutable Plugin SDK API evidence artifact is missing");
+    expect(validateEvidence.run).toContain("cmp -s <(jq -S '.pluginSdkApi'");
+    expect(downloadPreflight.run).toContain('preflight_conclusion" != "success"');
+    expect(downloadPreflight.run).toContain(
+      'expected_extended_stable_branch="extended-stable/${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.33"',
+    );
+    expect(downloadPreflight.run).toContain(
+      'preflight_path" != ".github/workflows/openclaw-npm-release.yml"',
+    );
+    expect(validateEvidence.run).toContain(
+      'git merge-base --is-ancestor "$PREFLIGHT_WORKFLOW_SHA" "$WORKFLOW_SHA"',
+    );
+    expect(validateEvidence.run).toContain('"$PREFLIGHT_WORKFLOW_SHA" == "$EXPECTED_SHA"');
+    expect(validateEvidence.run).toContain('--workflow-sha "$PREFLIGHT_WORKFLOW_SHA"');
+    expect(publishJob.needs).toEqual(["resolve_release_target"]);
+    expect(dispatch.run).toContain(
+      '-f plugin_sdk_api_acknowledgement="${PLUGIN_SDK_API_ACKNOWLEDGEMENT}"',
+    );
+  });
+
   it("requires selected plugin names or complete immutable evidence for broad publication", () => {
     const selected = runReleasePublishInputValidation({
       FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "",
@@ -1514,7 +1517,6 @@ describe("package acceptance workflow", () => {
     const setupNodeAction = readFileSync(".github/actions/setup-node-env/action.yml", "utf8");
     expect(setupNodeAction).toContain("Normalize container toolcache");
     expect(setupNodeAction).toContain("ln -s /__t /opt/hostedtoolcache");
-    expect(setupNodeAction).toContain("use-actions-cache: ${{ inputs.use-actions-cache }}");
 
     for (const workflowPath of workflowPaths()) {
       const workflowText = readFileSync(workflowPath, "utf8");
@@ -3580,12 +3582,9 @@ describe("package artifact reuse", () => {
     expect(workflow).not.toContain('PNPM_CONFIG_STORE_DIR: "/tmp/openclaw-pnpm-store"');
     expect(workflow).not.toContain("PNPM_CONFIG_MODULES_DIR");
     expect(workflow).not.toContain("PNPM_CONFIG_VIRTUAL_STORE_DIR");
-    expect(setupNodeWith["sticky-disk"]).toBe(
-      "${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}",
-    );
-    expect(setupNodeWith["use-actions-cache"]).toBe(
-      "${{ github.event_name == 'workflow_dispatch' && 'false' || 'true' }}",
-    );
+    expect(setupNodeWith).not.toHaveProperty("dependency-cache");
+    expect(setupNodeWith).not.toHaveProperty("sticky-disk");
+    expect(setupNodeWith["use-actions-cache"]).toBe("true");
     expect(checkTestboxJob["timeout-minutes"]).toBe(
       "${{ fromJSON(inputs.timeout_minutes || '120') }}",
     );
@@ -3602,7 +3601,9 @@ describe("package artifact reuse", () => {
       checkTestboxSteps.indexOf(runTestboxStep) + 1,
     );
     expect(runArmTestboxStep.if).toBe("always()");
-    expect(runBuildArtifactsTestboxStep.if).toBe("always()");
+    expect(runBuildArtifactsTestboxStep.if).toBe(
+      "github.event_name == 'workflow_dispatch' && always()",
+    );
     expect(runWindowsTestboxStep.if).toBe("always()");
     expect(runTestboxStep["continue-on-error"]).toBeUndefined();
   });

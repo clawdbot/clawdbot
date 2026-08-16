@@ -32,6 +32,7 @@ const AGENTS_DELETE_SHARED_WORKSPACE_DOCKER_E2E_PATH =
   "scripts/e2e/agents-delete-shared-workspace-docker.sh";
 const OPENWEBUI_DOCKER_E2E_PATH = "scripts/e2e/openwebui-docker.sh";
 const ONBOARD_DOCKER_E2E_PATH = "scripts/e2e/onboard-docker.sh";
+const ONBOARD_SCENARIO_PATH = "scripts/e2e/lib/onboard/scenario.sh";
 const KITCHEN_SINK_PLUGIN_DOCKER_E2E_PATH = "scripts/e2e/kitchen-sink-plugin-docker.sh";
 const KITCHEN_SINK_RPC_DOCKER_E2E_PATH = "scripts/e2e/kitchen-sink-rpc-docker.sh";
 const CODEX_ON_DEMAND_DOCKER_E2E_PATH = "scripts/e2e/codex-on-demand-docker.sh";
@@ -127,6 +128,16 @@ function extractUpgradeSurvivorPayload(script: string) {
   }
   return quoted.slice(1, -1).replaceAll(`'"'"'`, "'");
 }
+
+// Prompt-driving scripts must consume public prompts in the order the CLI renders them.
+function expectOrderedScriptFragments(script: string, fragments: readonly string[]): void {
+  let offset = 0;
+  for (const fragment of fragments) {
+    const index = script.indexOf(fragment, offset);
+    expect(index, `missing ordered script fragment: ${fragment}`).toBeGreaterThanOrEqual(offset);
+    offset = index + fragment.length;
+  }
+}
 const BOUNDED_CLIENT_LOG_DOCKER_E2E_SCRIPTS = [
   "scripts/e2e/cron-mcp-cleanup-docker.sh",
   "scripts/e2e/mcp-channels-docker.sh",
@@ -182,6 +193,15 @@ function writeExecutables(directory: string, files: Record<string, string>): voi
 function expectTextToIncludeAll(text: string, snippets: readonly string[]): void {
   for (const snippet of snippets) {
     expect(text).toContain(snippet);
+  }
+}
+
+function expectTextToIncludeInOrder(text: string, snippets: readonly string[]): void {
+  let offset = 0;
+  for (const snippet of snippets) {
+    const index = text.indexOf(snippet, offset);
+    expect(index).toBeGreaterThanOrEqual(offset);
+    offset = index + snippet.length;
   }
 }
 
@@ -2610,6 +2630,25 @@ docker_e2e_docker_run_cmd run demo
     expect(script).not.toContain('"$HOME/.openclaw/agents/main/agent/auth-profiles.json"');
   });
 
+  it("keeps real-TTY onboarding drivers aligned with the first-agent prompt", () => {
+    expectOrderedScriptFragments(readFileSync(RELEASE_TYPED_ONBOARDING_SCENARIO_PATH, "utf8"), [
+      'wait_for_log "Continue?"',
+      "send $'y\\r'",
+      'wait_for_log "What should we call your first agent?"',
+      "send $'\\r'",
+      'wait_for_log "to search"',
+      "send $'ollama\\r'",
+    ]);
+    expectOrderedScriptFragments(readFileSync(ONBOARD_SCENARIO_PATH, "utf8"), [
+      'wait_for_log "What should we call your first agent?"',
+      "send $'\\r'",
+      'wait_for_log "How should I set things up?"',
+      "send $'\\r'",
+      'wait_for_log "Use Current model?"',
+      "send $'\\r'",
+    ]);
+  });
+
   it("keeps append-only mock E2E state under per-run scratch roots", () => {
     const scripts = [
       {
@@ -3284,9 +3323,37 @@ if (starts === 1) {
     const runner = readFileSync(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "utf8");
     const publishedRunner = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
 
+    expectTextToIncludeInOrder(runner, [
+      "update_status=$?",
+      'if [ "$update_status" -ne 0 ]; then',
+      'echo "openclaw update failed" >&2',
+      "openclaw config validate --json >/tmp/openclaw-upgrade-survivor-post-update-validate.json",
+      'echo "post-update config validation probe status=$validate_status" >&2',
+      "openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-post-update-validate.err >&2 || true",
+      "openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-post-update-validate.json >&2 || true",
+      "openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-update.err >&2 || true",
+      "openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-update.json >&2 || true",
+      'exit "$update_status"',
+    ]);
+    expectTextToIncludeInOrder(publishedRunner, [
+      "local update_status=0",
+      'openclaw "${update_args[@]}" >"$UPDATE_JSON" 2>"$UPDATE_ERR" || update_status=$?',
+      'if [ "$update_status" -ne 0 ]; then',
+      'echo "openclaw update failed" >&2',
+      'openclaw config validate --json >"$POST_UPDATE_VALIDATE_JSON"',
+      'echo "post-update config validation probe status=$validate_status" >&2',
+      'openclaw_e2e_print_log "$POST_UPDATE_VALIDATE_ERR" >&2 || true',
+      'openclaw_e2e_print_log "$POST_UPDATE_VALIDATE_JSON" >&2 || true',
+      'openclaw_e2e_print_log "$UPDATE_ERR" >&2 || true',
+      'openclaw_e2e_print_log "$UPDATE_JSON" >&2 || true',
+      'return "$update_status"',
+    ]);
+
     expectTextToIncludeAll(runner, [
       "openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-update.err",
       "openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-update.json",
+      "openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-post-update-validate.err",
+      "openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-post-update-validate.json",
       "openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-doctor.log",
       "openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-status.err",
       "openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-status.json",
@@ -3297,6 +3364,8 @@ if (starts === 1) {
 
     expect(runner).not.toContain("cat /tmp/openclaw-upgrade-survivor-update.err");
     expect(runner).not.toContain("cat /tmp/openclaw-upgrade-survivor-update.json");
+    expect(runner).not.toContain("cat /tmp/openclaw-upgrade-survivor-post-update-validate.err");
+    expect(runner).not.toContain("cat /tmp/openclaw-upgrade-survivor-post-update-validate.json");
     expect(runner).not.toContain("cat /tmp/openclaw-upgrade-survivor-doctor.log");
     expect(runner).not.toContain("cat /tmp/openclaw-upgrade-survivor-status.err");
     expect(runner).not.toContain("cat /tmp/openclaw-upgrade-survivor-status.json");

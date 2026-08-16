@@ -17,7 +17,6 @@ const statusSummaryMocks = vi.hoisted(() => ({
       entry: Record<string, unknown>;
     }>
   >(() => []),
-  configureTaskRegistryMaintenance: vi.fn(),
   taskRegistrySummary: {
     total: 0,
     active: 0,
@@ -40,7 +39,7 @@ const statusSummaryMocks = vi.hoisted(() => ({
     },
   } as TaskRegistrySummary,
   inspectableTasks: [] as TaskRecord[],
-  reconcileInspectableTasks: vi.fn(() => statusSummaryMocks.inspectableTasks),
+  listInspectableTasksReadOnly: vi.fn(() => statusSummaryMocks.inspectableTasks),
   getInspectableTaskRegistrySummary: vi.fn(
     (_tasks?: TaskRecord[]) => statusSummaryMocks.taskRegistrySummary,
   ),
@@ -164,8 +163,7 @@ vi.mock("../infra/system-events.js", () => ({
 }));
 
 vi.mock("../tasks/task-registry.maintenance.js", () => ({
-  configureTaskRegistryMaintenance: statusSummaryMocks.configureTaskRegistryMaintenance,
-  reconcileInspectableTasks: statusSummaryMocks.reconcileInspectableTasks,
+  listInspectableTasksReadOnly: statusSummaryMocks.listInspectableTasksReadOnly,
   getInspectableTaskRegistrySummary: statusSummaryMocks.getInspectableTaskRegistrySummary,
   getInspectableTaskAuditFindings: statusSummaryMocks.getInspectableTaskAuditFindings,
 }));
@@ -490,7 +488,7 @@ describe("getStatusSummary", () => {
 
     await getStatusSummary();
 
-    expect(statusSummaryMocks.reconcileInspectableTasks).toHaveBeenCalledTimes(1);
+    expect(statusSummaryMocks.listInspectableTasksReadOnly).toHaveBeenCalledTimes(1);
     expect(statusSummaryMocks.getInspectableTaskRegistrySummary).toHaveBeenCalledWith(
       inspectableTasks,
     );
@@ -872,32 +870,6 @@ describe("getStatusSummary", () => {
       ["main", 1],
       ["ops", 1],
     ]);
-  });
-
-  it("aggregates shared file session stores only once", async () => {
-    vi.mocked(listGatewayAgentsBasic).mockReturnValue({
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "main" }, { id: "ops" }],
-    });
-    vi.mocked(resolveSessionStorePathCore).mockReturnValue("/tmp/shared-sessions.json");
-    statusSummaryMocks.listSessionEntriesCore.mockReturnValue(
-      toSessionEntrySummaries({
-        main: { sessionId: "shared-session", updatedAt: 1 },
-      }),
-    );
-
-    const summary = await getStatusSummary({ includeChannelSummary: false });
-
-    expect(summary.sessions.count).toBe(1);
-    expect(summary.sessions.byAgent.map((agent) => [agent.agentId, agent.count])).toEqual([
-      ["main", 1],
-      ["ops", 1],
-    ]);
-    expect(statusSummaryMocks.listSessionEntriesCore).toHaveBeenCalledWith({
-      storePath: "/tmp/shared-sessions.json",
-    });
   });
 
   it("includes configured and selected model labels for pinned sessions", async () => {

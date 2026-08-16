@@ -272,7 +272,7 @@ describe("plugins cli update", () => {
     }
   });
 
-  it("shows the deprecated unsafe install flag in update help", () => {
+  it("documents the install policy warning acknowledgement in update help", () => {
     const program = new Command();
     registerPluginsCli(program);
 
@@ -281,9 +281,11 @@ describe("plugins cli update", () => {
     const helpText = updateCommand?.helpInformation() ?? "";
 
     expect(helpText).toContain("--dangerously-force-unsafe-install");
+    expect(helpText).toContain("--acknowledge-install-policy-warning");
     expect(helpText).toContain("Deprecated no-op");
+    expect(helpText).toContain("Acknowledge");
     expect(helpText).toContain("security.installPolicy");
-    expect(helpText).toContain("may still block");
+    expect(helpText).toMatch(/blocks and\s+failures remain terminal/u);
   });
 
   it("refuses plugin updates in Nix mode before package-manager work", async () => {
@@ -450,11 +452,17 @@ describe("plugins cli update", () => {
       ],
     });
 
-    await runPluginsCommand(["plugins", "update", "demo-hooks"]);
+    await runPluginsCommand([
+      "plugins",
+      "update",
+      "demo-hooks",
+      "--dangerously-force-unsafe-install",
+    ]);
 
     const hookUpdateParams = expectSingleCallParams(updateNpmInstalledHookPacksMock);
     expect(hookUpdateParams.config).toEqual({ ...cfg, plugins: { installs: {} } });
     expect(hookUpdateParams.hookIds).toEqual(["demo-hooks"]);
+    expect(hookUpdateParams.dangerouslyForceUnsafeInstall).toBe(true);
     expect(updateNpmInstalledPluginsMock).not.toHaveBeenCalled();
     expect(configWriteMock).toHaveBeenCalledWith(nextConfig);
     expect(replaceConfigFileMock).toHaveBeenCalledWith(
@@ -1329,12 +1337,12 @@ describe("plugins cli update", () => {
     expect(updateParams.pluginIds).toEqual(["openclaw-codex-app-server"]);
     expect(updateParams.dangerouslyForceUnsafeInstall).toBe(true);
     expect(
-      pluginsCliRuntimeLogs.some((message) =>
+      pluginsCliRuntimeLogs.filter((message) =>
         message.includes(
           "--dangerously-force-unsafe-install is deprecated and no longer affects plugin updates",
         ),
       ),
-    ).toBe(true);
+    ).toHaveLength(1);
   });
 
   it.each([
@@ -1494,6 +1502,94 @@ describe("plugins cli update", () => {
     expect(updateParams.dryRun).toBe(true);
     expect(updateParams.acknowledgeClawHubRisk).not.toBe(true);
     expect(updateParams.onClawHubRisk).toBeUndefined();
+    expect(updateParams.onInstallPolicyWarning).toBeUndefined();
+  });
+
+  it("passes an install-policy warning prompt to interactive plugin updates", async () => {
+    setTty(true);
+    const config = createTrackedPluginConfig({
+      pluginId: "openclaw-codex-app-server",
+      spec: "openclaw-codex-app-server",
+    });
+    pluginCliConfigMock.mockReturnValue(config);
+    setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
+    updateNpmInstalledPluginsMock.mockResolvedValue({ config, changed: false, outcomes: [] });
+
+    await runPluginsCommand(["plugins", "update", "openclaw-codex-app-server"]);
+
+    const updateParams = expectSingleCallParams(updateNpmInstalledPluginsMock);
+    expect(updateParams.onInstallPolicyWarning).toEqual(expect.any(Function));
+  });
+
+  it("passes noninteractive install-policy acknowledgement to plugin updates", async () => {
+    setTty(false);
+    const config = createTrackedPluginConfig({
+      pluginId: "openclaw-codex-app-server",
+      spec: "openclaw-codex-app-server",
+    });
+    pluginCliConfigMock.mockReturnValue(config);
+    setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
+    updateNpmInstalledPluginsMock.mockResolvedValue({ config, changed: false, outcomes: [] });
+
+    await runPluginsCommand([
+      "plugins",
+      "update",
+      "openclaw-codex-app-server",
+      "--acknowledge-install-policy-warning",
+    ]);
+
+    const updateParams = expectSingleCallParams(updateNpmInstalledPluginsMock);
+    expect(updateParams.onInstallPolicyWarning).toEqual(expect.any(Function));
+  });
+
+  it("shares invocation-wide install-policy acknowledgement across bulk plugin and hook updates", async () => {
+    setTty(false);
+    const config = createTrackedPluginConfig({
+      pluginId: "openclaw-codex-app-server",
+      spec: "openclaw-codex-app-server",
+    });
+    pluginCliConfigMock.mockReturnValue(config);
+    setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
+    setHookInstallRecords({
+      "demo-hooks": {
+        source: "npm",
+        spec: "@acme/demo-hooks@1.0.0",
+        installPath: "/tmp/hooks/demo-hooks",
+      },
+    });
+    primePluginUpdate(config);
+    updateNpmInstalledHookPacksMock.mockResolvedValue({
+      config,
+      changed: false,
+      outcomes: [],
+    });
+
+    await runPluginsCommand(["plugins", "update", "--all", "--acknowledge-install-policy-warning"]);
+
+    const pluginAcknowledgement = expectSingleCallParams(
+      updateNpmInstalledPluginsMock,
+    ).onInstallPolicyWarning;
+    const hookAcknowledgement = expectSingleCallParams(
+      updateNpmInstalledHookPacksMock,
+    ).onInstallPolicyWarning;
+    if (typeof pluginAcknowledgement !== "function") {
+      throw new Error("expected plugin install-policy acknowledgement callback");
+    }
+    expect(hookAcknowledgement).toBe(pluginAcknowledgement);
+    await expect(
+      pluginAcknowledgement({
+        targetName: "openclaw-codex-app-server",
+        targetType: "plugin",
+        requestMode: "update",
+      }),
+    ).resolves.toEqual({ status: "approved" });
+    await expect(
+      pluginAcknowledgement({
+        targetName: "demo-hooks",
+        targetType: "plugin",
+        requestMode: "update",
+      }),
+    ).resolves.toEqual({ status: "approved" });
   });
 
   it("keeps durable state when transaction cleanup fails after the write", async () => {

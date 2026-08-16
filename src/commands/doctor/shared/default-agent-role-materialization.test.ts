@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { listAgentEntries, resolveDefaultAgentId } from "../../../agents/agent-scope-config.js";
+import {
+  AgentSelectionRequiredError,
+  listAgentEntries,
+  resolveDefaultAgentId,
+  resolveSystemAgentTargetAgentId,
+} from "../../../agents/agent-scope-config.js";
 import { materializeLegacyDefaultAgentRoles } from "../../../config/legacy.default-agent-roles.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveCronJobEffectiveAgentId } from "../../../cron/agent-id.js";
 import { resolveHeartbeatAgents } from "../../../infra/heartbeat-runner.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
-import { resolveSystemAgentTargetAgentId } from "../../../system-agent/inference-route.js";
 import { resolveTalkSessionAgentId, resolveTalkTargetAgentId } from "../../../talk/agent-target.js";
 
 function materializeDefaultAgentRoles(cfg: OpenClawConfig) {
@@ -19,7 +23,7 @@ function materializeDefaultAgentRoles(cfg: OpenClawConfig) {
 type SurfaceSnapshot = {
   channel: { agentId: string; sessionKey: string };
   heartbeat: string[];
-  consult: string;
+  consult: string | null;
   voice: string;
   cron: string;
   cli: string;
@@ -36,7 +40,16 @@ function snapshotSurfaces(cfg: OpenClawConfig): SurfaceSnapshot {
   return {
     channel: { agentId: channel.agentId, sessionKey: channel.sessionKey },
     heartbeat: resolveHeartbeatAgents(cfg).map((entry) => entry.agentId),
-    consult: resolveSystemAgentTargetAgentId(cfg),
+    consult: (() => {
+      try {
+        return resolveSystemAgentTargetAgentId(cfg);
+      } catch (error) {
+        if (error instanceof AgentSelectionRequiredError) {
+          return null;
+        }
+        throw error;
+      }
+    })(),
     voice: resolveTalkTargetAgentId(cfg),
     cron: resolveCronJobEffectiveAgentId({}, defaultAgentId),
     cli: defaultAgentId,
@@ -85,7 +98,9 @@ describe("default agent role materialization", () => {
   it.each(fixtures)("preserves all ambient surface routing for $name", ({ config }) => {
     const before = snapshotSurfaces(config);
     const result = materializeDefaultAgentRoles(config);
-    expect(snapshotSurfaces(result.config)).toEqual(before);
+    expect(snapshotSurfaces(result.config)).toEqual(
+      before.consult === null ? { ...before, consult: resolveDefaultAgentId(config) } : before,
+    );
 
     const second = materializeDefaultAgentRoles(result.config);
     expect(second.changes).toEqual([]);

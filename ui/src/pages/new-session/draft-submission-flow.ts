@@ -1,4 +1,7 @@
-import type { SessionsCatalogStartTerminalResult } from "../../../../packages/gateway-protocol/src/index.js";
+import type {
+  ProjectsAddResult,
+  SessionsCatalogStartTerminalResult,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../../app/context.ts";
 import { navigateWithRouteTransition } from "../../app/route-transition.ts";
@@ -29,19 +32,11 @@ import {
 } from "./create-params.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
-import type { NewSessionRouteData } from "./location.ts";
+import type {
+  DraftSubmissionCallbacks,
+  DraftSubmissionSnapshot,
+} from "./draft-submission-contract.ts";
 import { retainRejectedInitialTurn } from "./rejected-initial-turn.ts";
-
-type DraftSubmissionSnapshot = Readonly<{
-  context: ApplicationContext | undefined;
-  data: NewSessionRouteData | undefined;
-  isConnected: boolean;
-}>;
-
-type DraftSubmissionCallbacks = {
-  requestUpdate: () => void;
-  closeTransientUi: () => void;
-};
 
 export class DraftSubmissionFlow {
   private visibilityValue: NewSessionVisibility = "normal";
@@ -150,6 +145,7 @@ export class DraftSubmissionFlow {
       visibility?: NewSessionVisibility;
     } = {},
   ): Record<string, unknown> {
+    const snapshot = this.read();
     return assembleDraftSessionCreateParams({
       agentId: this.place.agentId,
       message: options.message ?? "",
@@ -157,14 +153,15 @@ export class DraftSubmissionFlow {
       thinkingLevel: this.place.modelControl.thinkingLevel,
       visibility: options.visibility ?? this.visibilityValue,
       attachments: options.attachments,
-      projectId: this.place.projectId,
+      projectId: this.place.browser.remoteProject?.projectId ?? this.place.browser.projectId,
       worktree: this.place.worktree,
       baseRef: this.place.baseRef,
       worktreeName: this.place.worktreeName,
       cwd: this.place.folder,
       workspace: this.place.workspacePath(),
       execNode: this.place.execNode,
-      catalogId: this.read().data?.catalogId,
+      catalogId: snapshot.data?.catalogId,
+      category: this.gateway.resolvedGroupCategory(),
     });
   }
 
@@ -174,6 +171,13 @@ export class DraftSubmissionFlow {
   ): SessionMethodAccess {
     const gateway = this.read().context?.gateway.snapshot;
     const pendingCloud = Boolean(this.pendingCloud.sessionKey);
+    const remoteProject = this.place.browser.remoteProject;
+    if (!pendingCloud && remoteProject && !remoteProject.projectId) {
+      return readSessionMethodAccess(gateway, {
+        method: "projects.add",
+        requiredScope: "operator.write",
+      });
+    }
     if (!pendingCloud || this.pendingCloud.phase === "creating") {
       const createAccess = readSessionMethodAccess(gateway, {
         method: "sessions.create",
@@ -190,6 +194,12 @@ export class DraftSubmissionFlow {
   }
 
   submitDisabledReason(): string | undefined {
+    if (catalog.isRoutePending(this.read().data, this.read().context?.sessions)) {
+      return t("newSession.catalogUnavailable");
+    }
+    if (this.place.modelControl.isModelUnavailable(this.place.selectedAgent())) {
+      return `${t("modelSetup.failure.auth")}. ${t("modelSetup.failureGuidance.auth")}`;
+    }
     const access = this.submissionAccess();
     return access.allowed ? undefined : access.reason;
   }
@@ -219,6 +229,8 @@ export class DraftSubmissionFlow {
       this.submittingValue ||
       this.gateway.preferenceLoading ||
       this.requiresModelSetup() ||
+      catalog.isRoutePending(this.read().data, this.read().context?.sessions) ||
+      this.place.modelControl.isModelUnavailable(this.place.selectedAgent()) ||
       this.attachmentDraft.pendingReads > 0 ||
       (!pendingCloud && this.submissionOutcomeUnknownValue) ||
       (kind === "session" && !message && !hasAttachments) ||
@@ -413,6 +425,18 @@ export class DraftSubmissionFlow {
     this.callbacks.closeTransientUi();
     this.callbacks.requestUpdate();
     try {
+      const remoteProject = pendingCloud ? null : this.place.browser.remoteProject;
+      if (remoteProject && !remoteProject.projectId && !this.place.browser.projectId) {
+        const project = await submissionClient.request<ProjectsAddResult>(
+          "projects.add",
+          { gitUrl: remoteProject.cloneUrl },
+          { timeoutMs: null },
+        );
+        if (requestId !== this.submitRequestToken || this.gateway.client !== submissionClient) {
+          return;
+        }
+        this.place.browser.recordRemoteProjectId(remoteProject.cloneUrl, project.id);
+      }
       const cloudProfileId = this.cloudProfileForSubmission();
       const draftRetired = this.visibilityValue === "draft" && !this.canStartAsDraft();
       const createParams = this.buildDraftSessionCreateParams({
@@ -599,6 +623,10 @@ export class DraftSubmissionFlow {
           focusComposer: true,
         }).options,
       );
+    } catch (error) {
+      if (requestId === this.submitRequestToken && this.gateway.client === submissionClient) {
+        this.errorValue = error instanceof Error ? error.message : String(error);
+      }
     } finally {
       if (requestId === this.submitRequestToken) {
         this.submittingValue = false;
@@ -687,12 +715,12 @@ export class DraftSubmissionFlow {
   }
 
   private cloudRuntimeUnsupportedReason(): string | undefined {
-    const runtime = this.place.modelControl.resolveAgentRuntimeId({
+    const runtime = this.place.modelControl.resolveAgentRuntime({
       agent: this.place.selectedAgent(),
       context: this.read().context,
     });
-    return runtime && runtime !== "openclaw"
-      ? t("newSession.cloudRequiresOpenClawRuntime", { runtime })
+    return runtime?.cloudPlacementSupported === false
+      ? t("newSession.cloudRuntimeUnsupported", { runtime: runtime.id })
       : undefined;
   }
 

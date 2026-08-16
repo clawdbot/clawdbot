@@ -420,7 +420,7 @@ gh workflow run package-acceptance.yml --ref main \
     homeserver. Source-checkout only - packaged installs do not ship
     `qa-lab`.
   - Full CLI, profile/scenario catalog, env vars, and artifact layout:
-    [Matrix smoke lanes](/concepts/qa-e2e-automation#matrix-smoke-lanes).
+    [Matrix smoke lanes](/concepts/qa-e2e-automation#matrix-live-lane).
 - `pnpm openclaw qa telegram`
   - Runs the Telegram live QA lane against a real private group using the
     driver and SUT bot tokens from env.
@@ -495,7 +495,7 @@ table through the Mantis GitHub App when `pr_number` is set.
 
 Live transport lanes share one standard contract so new transports do not
 drift; the per-lane coverage matrix lives in
-[QA overview - Live transport coverage](/concepts/qa-e2e-automation#live-transport-coverage).
+[QA overview - Live transport coverage](/concepts/qa-e2e-automation#buzz%2C-discord%2C-slack%2C-telegram%2C-and-whatsapp-qa-reference).
 `qa-channel` is the broad synthetic suite and is not part of that matrix.
 
 ### Shared Telegram credentials via Convex (v1)

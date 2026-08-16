@@ -337,9 +337,10 @@ retain raw stable channel IDs and `channel:<id>` compatibility. The channel
 prefixes `slack:`, `group:`, and `mpim:` fail startup.
 
 Enterprise user policy entries in `allowFrom`, `reactionAllowlist`, and
-per-channel `users` must use `team:<team-id>:user:<user-id>` or `"*"`. A
-workspace-scoped sender never matches a bare user ID. Workspace installations
-retain raw stable user IDs, `slack:<user-id>`, and `user:<user-id>` compatibility.
+per-channel `users` accept raw stable Slack user IDs, `slack:<user-id>`,
+`user:<user-id>`, `team:<team-id>:user:<user-id>`, or `"*"`. Unqualified
+entries compare only the user ID and can match an org-wide user in any
+workspace. Qualified entries compare both the workspace and user ID.
 Enterprise `toolsBySender` keys accept raw stable user IDs, `id:<user-id>`,
 `channel:slack:<user-id>`, or `"*"`. Names, slugs, display names, and email
 addresses fail startup. IDs must use Slack's canonical uppercase prefix and body
@@ -359,9 +360,9 @@ rejected before authorization or system-event handling.
 Enterprise DMs support the same `disabled`, `open`, `allowlist`, and `pairing`
 policies as workspace installs. Pairing approvals are stored as
 `team:<team-id>:user:<user-id>` and are applied only to events from that
-workspace. Explicit account `allowFrom` entries use the same qualified form and
-apply only to that workspace; channel and sender policy continues to apply to
-channel messages.
+workspace. Explicit account `allowFrom` entries can omit the workspace for an
+org-wide user ID or include it to limit access to one workspace; channel and
+sender policy continues to apply to channel messages.
 
 ## Install
 
@@ -572,7 +573,7 @@ openclaw config patch --file ./slack.socket.patch.json5 --dry-run
 openclaw config patch --file ./slack.socket.patch.json5
 ```
 
-        Env fallback (default account only):
+        Default-account credential fallback after `channels.slack` is configured:
 
 ```bash
 SLACK_APP_TOKEN=slack-app-token-example
@@ -1314,7 +1315,7 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
 
     Channel allowlist lives under `channels.slack.channels` and **must use stable Slack channel IDs** (for example `C12345678`) as config keys. Enterprise Grid org installs require `team:<team-id>:channel:<channel-id>` so policies cannot cross workspace boundaries.
 
-    Runtime note: if `channels.slack` is completely missing (env-only setup), runtime falls back to `groupPolicy="allowlist"` and logs a warning (even if `channels.defaults.groupPolicy` is set).
+    Without a `channels.slack` block, the Gateway does not auto-start Slack from `SLACK_*` environment variables. Once the block exists, those variables remain default-account credential fallbacks. Passing `--ambient-channels` opts into env-only auto-configuration; that path uses `groupPolicy="allowlist"` and logs a warning, even if `channels.defaults.groupPolicy` is set.
 
     Name/ID resolution:
 
@@ -1518,9 +1519,11 @@ Hide raw command/exec text while keeping compact progress lines:
 
 `channels.slack.streaming.nativeTransport` controls Slack native text streaming when `channels.slack.streaming.mode` is `partial` (default: `true`).
 
-The default session card shows the current title, optional narration, plan checklist, recent activity, tool/file totals, and elapsed time. Completion changes the header to success or error while preserving the last plan and activity. When `gateway.publicOrigin` is configured, terminal cards include an **Open in OpenClaw** button linked to that session. If the Control UI is served below a path prefix, also set `gateway.controlUi.basePath`.
+In `progress` mode, Slack's native agent card is the default: the whole turn is one streamed message that interleaves narration with a live plan/task card and finishes with the assistant's answer in that same message. The card appears only once a turn does real work — tool or plan activity still running after a short delay — so a plain question is answered without one.
 
-Slack native progress task cards remain a separate opt-in path. Set `channels.slack.streaming.progress.nativeTaskCards` to `true` with `channels.slack.streaming.mode="progress"` to use Slack's native plan/task stream instead of the Block Kit session card. This setting is unchanged.
+Set `channels.slack.streaming.progress.nativeTaskCards` to `false` to fall back to the Block Kit session card, which posts a separate message showing title, narration, plan checklist, recent activity, tool/file totals, and elapsed time, and finalizes to success or error.
+
+Both surfaces link the session with **Open in OpenClaw**, but only when that link can work: `gateway.publicOrigin` must be set (the externally reachable Gateway origin) and the Control UI must not be disabled via `gateway.controlUi.enabled: false`. Installations that leave `publicOrigin` unset — where there is no way to reach OpenClaw from Slack — get no link rather than a dead one. If the Control UI is served below a path prefix, also set `gateway.controlUi.basePath`.
 
 - A reply thread must be available for native text streaming and Slack assistant thread status to appear. Thread selection still follows `replyToMode`.
 - Channel, group-chat, and top-level DM roots can still use the normal draft preview when native streaming is unavailable or no reply thread exists.
@@ -1903,7 +1906,10 @@ Slack does not send presence changes through the Events API or Socket Mode. Open
 {
   channels: {
     slack: {
-      presenceEvents: { mode: "auto" },
+      presenceEvents: {
+        mode: "auto",
+        prompt: "Do not send a greeting. Stay silent.",
+      },
       channels: {
         C0123456789: { presenceEvents: { mode: "on" } },
         C0987654321: { presenceEvents: { mode: "off" } },
@@ -1919,6 +1925,10 @@ Slack does not send presence changes through the Events API or Socket Mode. Open
 
 OpenClaw polls at most 45 unique workspace-user pairs per minute per Slack account, seeds the first result without waking the agent, and only wakes on an observed `away` to `active` transition. A durable 8-hour cooldown applies per Slack account, workspace, and user, even if that person participates in several threads. The event routes only to that person's most recently active eligible conversation and tells the agent to consult memory/wiki and known timezone context before deciding whether to send one short greeting. The agent may stay silent.
 
+The event includes `observed_away_at_ms`, `observed_active_at_ms`, and `observed_away_duration_ms`. The duration is the elapsed time between the first sampled `away` state in the current monitor run and the later sampled `active` state. It is not exact time away because presence can change between polls, and the observation starts fresh after the monitor restarts or the target expires. The event records what Slack reported, not whether the person was at their keyboard; Slack can mark someone away automatically or manually, and `users.getPresence` does not distinguish those cases for another user.
+
+`presenceEvents.prompt` replaces the default greeting guidance after the event facts. The account-level value applies by default, and `channels.<channel-id>.presenceEvents.prompt` can override it for one channel. The custom value is included verbatim and is limited to 20,000 characters, matching the default per-file `AGENTS.md` bootstrap limit. Set it to an empty string to omit event-specific guidance and let workspace instructions such as `AGENTS.md` decide how to handle the event. The presence facts are always included.
+
 The bot token needs `users:read`, which is already included in the recommended manifest. Enterprise Grid org-wide installs create a workspace-scoped polling client only after an authorized event identifies that workspace; presence state, cooldowns, and delivery targets remain partitioned by workspace.
 
 ## Configuration reference
@@ -1932,7 +1942,7 @@ Primary reference: [Configuration reference - Slack](/gateway/config-channels#sl
 - compatibility toggle: `dangerouslyAllowNameMatching` (break-glass; keep off unless needed)
 - channel access: `groupPolicy`, `channels.*`, `channels.*.users`, `channels.*.requireMention`, `implicitMentions.*`
 - threading/history: `replyToMode`, `replyToModeByChatType`, `thread.*`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
-- presence wakes: `presenceEvents.mode`, `channels.*.presenceEvents.mode` (`off|auto|on`; default `off`)
+- presence wakes: `presenceEvents.mode`, `presenceEvents.prompt`, `channels.*.presenceEvents.*` (`off|auto|on`; default `off`)
 - delivery: `textChunkLimit`, `streaming.chunkMode`, `mediaMaxMb`, `streaming`, `streaming.nativeTransport`, `streaming.preview.toolProgress`
 - unfurls: `unfurlLinks` (default: `false`), `unfurlMedia` for `chat.postMessage` link/media preview control; set `unfurlLinks: true` to opt back into link previews
 - ops/features: `configWrites`, `commands.native`, `slashCommand.*`, `actions.*`, `userToken`, `userTokenReadOnly`

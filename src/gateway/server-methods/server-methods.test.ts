@@ -38,7 +38,8 @@ import {
   sanitizeChatHistoryMessages,
 } from "../chat-display-projection.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
-import { createChatRunState } from "../server-chat-state.js";
+import type { HealthSummary } from "../health/types.js";
+import { createChatAbortMarker, createChatRunState } from "../server-chat-state.js";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
@@ -2890,7 +2891,7 @@ describe("exec approval handlers", () => {
 
   it("rejects approval registration after the owning run was aborted", async () => {
     const { manager, handlers, broadcasts, respond, context } = createExecApprovalFixture();
-    context.chatRunState.getOrCreate("run-aborted").abortMarker = Date.now();
+    context.chatRunState.getOrCreate("run-aborted").abortMarker = createChatAbortMarker();
 
     await requestExecApproval({
       handlers,
@@ -2940,7 +2941,8 @@ describe("exec approval handlers", () => {
       "approval-allowed-before-abort",
     );
     expect(manager.resolve("approval-allowed-before-abort", "allow-once")).toBe(true);
-    context.chatRunState.getOrCreate("run-allowed-before-abort").abortMarker = Date.now();
+    context.chatRunState.getOrCreate("run-allowed-before-abort").abortMarker =
+      createChatAbortMarker();
     await requestPromise;
 
     const waitRespond = vi.fn();
@@ -3565,8 +3567,8 @@ describe("exec approval handlers", () => {
     const pendingRecord = manager.create({ command: "echo new", host: "gateway" }, 2_000, "abcdef");
     void manager.register(pendingRecord, 2_000);
 
-    expect(manager.lookupPendingId("abc")).toEqual({ kind: "none" });
-    expect(manager.lookupPendingId("abcdef")).toEqual({ kind: "exact", id: "abcdef" });
+    expect(manager.lookupApprovalId("abc")).toEqual({ kind: "none" });
+    expect(manager.lookupApprovalId("abcdef")).toEqual({ kind: "exact", id: "abcdef" });
   });
 
   it("stores versioned system.run binding and sorted env keys on approval request", async () => {
@@ -4736,7 +4738,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
     }
   });
 
-  it("merges live dead-lettered delivery queue counts into cached health responses", async () => {
+  it("retains cached ingress pressure while merging live dead letters", async () => {
     const openClawState = await createOpenClawTestState({
       layout: "state-only",
       prefix: "openclaw-health-cached-dq-",
@@ -4744,29 +4746,61 @@ describe("gateway healthHandlers.health cache freshness", () => {
     try {
       const { moveDeliveryQueueEntryToFailed, upsertDeliveryQueueEntry } =
         await import("../../infra/delivery-queue-sqlite.js");
-      // The cached snapshot was built before this delivery dead-lettered.
-      const cached = createHealthSnapshot({});
+      const cachedPressure = [
+        {
+          channelId: "slack",
+          accountId: "cached",
+          laneCount: 2,
+          pendingCount: 3,
+          claimedCount: 1,
+          blockedCount: 2,
+          oldestReceivedAt: 500,
+        },
+      ];
+      const cached = createHealthSnapshot({
+        deliveryQueues: { failed: [], ingressPressure: cachedPressure },
+      });
       upsertDeliveryQueueEntry({
         queueName: "outbound",
-        entry: { id: "dead-1", enqueuedAt: 1_000, retryCount: 5 },
+        entry: { id: "dead-1", enqueuedAt: 1_000, retryCount: 5, retainOnFailure: true },
       });
       moveDeliveryQueueEntryToFailed("outbound", "dead-1");
+      const { createChannelIngressQueue } = await import("../../channels/message/ingress-queue.js");
+      const { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } =
+        await import("../../channels/message/ingress-retry-policy.js");
+      const ingressQueue = createChannelIngressQueue<{ text: string }>({
+        channelId: "telegram",
+        accountId: "ops",
+      });
+      await ingressQueue.enqueue("dead-inbound", { text: "recover me" });
+      const deadClaim = await ingressQueue.claim("dead-inbound", { ownerId: "worker" });
+      if (!deadClaim) {
+        throw new Error("Expected inbound dead-letter claim");
+      }
+      await ingressQueue.fail(deadClaim, { reason: "handler-error", failedAt: 50_000 });
+      await ingressQueue.enqueue("retry-head", { text: "head" }, { laneKey: "lane" });
+      await ingressQueue.enqueue("retry-follower", { text: "follower" }, { laneKey: "lane" });
+      for (let attempt = 0; attempt < DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS; attempt += 1) {
+        const claim = await ingressQueue.claim("retry-head", { ownerId: "worker" });
+        if (!claim) {
+          throw new Error("Expected retry head claim");
+        }
+        await ingressQueue.release(claim, { lastError: "retryable failure" });
+      }
 
       const { respond } = await requestHealthSnapshot({ cached });
 
-      const payload = mockCallArg(respond, 0, 1) as
-        | {
-            deliveryQueues?: {
-              failed?: Array<{ queueName?: string; count?: number; oldestFailedAt?: number }>;
-            };
-          }
-        | undefined;
+      const payload = mockCallArg(respond, 0, 1) as HealthSummary | undefined;
       expect(payload?.deliveryQueues?.failed).toHaveLength(1);
       expect(payload?.deliveryQueues?.failed?.[0]).toMatchObject({
         queueName: "outbound",
         count: 1,
       });
       expect(typeof payload?.deliveryQueues?.failed?.[0]?.oldestFailedAt).toBe("number");
+      expect(payload?.deliveryQueues?.ingressFailed).toEqual([
+        { channelId: "telegram", accountId: "ops", count: 1, oldestFailedAt: 50_000 },
+      ]);
+      expect(payload?.deliveryQueues?.ingressPressure).toEqual(cachedPressure);
       expect(mockCallArg(respond, 0, 3)).toEqual({ cached: true });
     } finally {
       await openClawState.cleanup();

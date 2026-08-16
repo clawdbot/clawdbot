@@ -10,6 +10,7 @@ import type { ConnectParams } from "../../packages/gateway-protocol/src/index.js
 import type { NodePairingRequestInput, PairedDeviceNode } from "../infra/device-pairing-node.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { resolveEffectiveComputerUseDescriptor } from "./node-computer-use-descriptor.js";
 import { reconcileNodePairingOnConnect } from "./node-connect-reconcile.js";
 
 function makeNodeConnectParams(overrides?: Partial<ConnectParams>): ConnectParams {
@@ -42,6 +43,18 @@ function makePendingPairingRequest(requestId: string) {
     request: { ...input, requestId, ts: 1 },
     created: true,
   }));
+}
+
+function computerUseDescriptor() {
+  return {
+    contractVersion: 2 as const,
+    provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
+    actions: ["screenshot", "left_click"],
+    targets: ["screen"],
+    deliveryModes: ["foreground"],
+    observations: ["image"],
+    features: { recording: false, agentCursor: false, multiDisplay: false },
+  };
 }
 
 function expectNodePairingRequest(
@@ -216,6 +229,7 @@ describe("reconcileNodePairingOnConnect", () => {
       },
       caps: ["screen", "computer"],
       commands: ["screen.snapshot", "computer.act"],
+      computerUse: computerUseDescriptor(),
     });
     const requestPairing = vi.fn();
 
@@ -234,6 +248,13 @@ describe("reconcileNodePairingOnConnect", () => {
     expect(requestPairing).not.toHaveBeenCalled();
     expect(result.declaredCommands).toEqual(["screen.snapshot", "computer.act"]);
     expect(result.effectiveCommands).toEqual(["screen.snapshot", "computer.act"]);
+    expect(result.declaredComputerUse).toEqual(computerUseDescriptor());
+    expect(
+      resolveEffectiveComputerUseDescriptor({
+        commands: result.effectiveCommands,
+        declared: result.declaredComputerUse,
+      }),
+    ).toEqual(computerUseDescriptor());
     expect(result.shouldClearPendingPairings).toBe(true);
   });
 
@@ -252,6 +273,7 @@ describe("reconcileNodePairingOnConnect", () => {
         },
         caps: ["screen", "computer"],
         commands: ["screen.snapshot", "computer.act"],
+        computerUse: computerUseDescriptor(),
       }),
       pairedNode: makePairedNode({
         caps: ["screen"],
@@ -267,6 +289,13 @@ describe("reconcileNodePairingOnConnect", () => {
       }),
     );
     expect(result.effectiveCommands).toEqual(["screen.snapshot"]);
+    expect(result.declaredComputerUse).toEqual(computerUseDescriptor());
+    expect(
+      resolveEffectiveComputerUseDescriptor({
+        commands: result.effectiveCommands,
+        declared: result.declaredComputerUse,
+      }),
+    ).toBeUndefined();
     expect(result.pendingPairing?.request.requestId).toBe("req-computer");
   });
 

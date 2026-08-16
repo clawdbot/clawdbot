@@ -244,24 +244,6 @@ describe("processDiscordMessage ack reactions", () => {
     }
   });
 
-  it("debounces intermediate phase reactions and jumps to done for short runs", async () => {
-    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.replyOptions?.onReasoningStream?.();
-      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
-      return createNoQueuedDispatchResult();
-    });
-
-    const ctx = await createAutomaticSourceDeliveryContext();
-
-    await runProcessDiscordMessage(ctx);
-
-    const emojis = getReactionEmojis();
-    expect(emojis).toContain("👀");
-    expect(emojis).toContain(DEFAULT_EMOJIS.done);
-    expect(emojis).not.toContain(DEFAULT_EMOJIS.thinking);
-    expect(emojis).not.toContain(DEFAULT_EMOJIS.coding);
-  });
-
   it("marks automatic visible replies as failed when final Discord delivery fails", async () => {
     dispatchInboundMessage.mockResolvedValueOnce({
       queuedFinal: false,
@@ -308,12 +290,14 @@ describe("processDiscordMessage ack reactions", () => {
         args: {
           action: "react",
           channelId: "c1",
-          messageId: "m1",
+          messageId: "tracked-m1",
           emoji: "📈",
           trackToolCalls: true,
         },
       });
-      await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, DEFAULT_TIMING.debounceMs);
+      });
       return createNoQueuedDispatchResult();
     });
 
@@ -321,12 +305,13 @@ describe("processDiscordMessage ack reactions", () => {
       cfg: { messages: { ackReaction: "👀" } },
     });
 
-    await runProcessDiscordMessage(ctx);
+    const runPromise = runProcessDiscordMessage(ctx);
+    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
     await vi.runAllTimersAsync();
+    await runPromise;
 
-    expectReactionCallsContain("c1", "m1", "📈");
-    expectReactionCallsContain("c1", "m1", "✉️");
-    expectReactionCallsContain("c1", "m1", DEFAULT_EMOJIS.done);
+    expectReactionCallsContain("c1", "tracked-m1", "📈");
+    expectReactionCallsContain("c1", "tracked-m1", "✉️");
   });
 
   it("resolves tracked reaction to targets like the Discord reaction action", async () => {
@@ -343,7 +328,9 @@ describe("processDiscordMessage ack reactions", () => {
           trackToolCalls: true,
         },
       });
-      await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, DEFAULT_TIMING.debounceMs);
+      });
       return createNoQueuedDispatchResult();
     });
 
@@ -351,8 +338,10 @@ describe("processDiscordMessage ack reactions", () => {
       cfg: { messages: { ackReaction: "👀" } },
     });
 
-    await runProcessDiscordMessage(ctx);
+    const runPromise = runProcessDiscordMessage(ctx);
+    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
     await vi.runAllTimersAsync();
+    await runPromise;
 
     const resolveCall = firstMockCall(
       discordTargetMocks.resolveDiscordTargetChannelId,
@@ -364,37 +353,6 @@ describe("processDiscordMessage ack reactions", () => {
     );
     expectReactionCallsContain("dm-u1", "m1", "📈");
     expectReactionCallsContain("dm-u1", "m1", "✉️");
-    expectReactionCallsContain("dm-u1", "m1", DEFAULT_EMOJIS.done);
-  });
-
-  it("shows stall emojis for long no-progress runs", async () => {
-    vi.useFakeTimers();
-    let releaseDispatch: (() => void) | undefined;
-    const dispatchGate = new Promise<void>((resolve) => {
-      releaseDispatch = () => resolve();
-    });
-    dispatchInboundMessage.mockImplementationOnce(async () => {
-      await dispatchGate;
-      return createNoQueuedDispatchResult();
-    });
-
-    const ctx = await createAutomaticSourceDeliveryContext();
-    const runPromise = runProcessDiscordMessage(ctx);
-
-    await vi.advanceTimersByTimeAsync(30_001);
-    if (!releaseDispatch) {
-      throw new Error("Expected Discord dispatch release callback to be initialized");
-    }
-    releaseDispatch();
-    await vi.runAllTimersAsync();
-
-    await runPromise;
-    const emojis = (
-      sendMocks.reactMessageDiscord.mock.calls as unknown as Array<[unknown, unknown, string]>
-    ).map((call) => call[2]);
-    expect(emojis).toContain(DEFAULT_EMOJIS.stallSoft);
-    expect(emojis).toContain(DEFAULT_EMOJIS.stallHard);
-    expect(emojis).toContain(DEFAULT_EMOJIS.done);
   });
 
   it("falls back to plain ack when status reactions are disabled", async () => {
@@ -407,10 +365,7 @@ describe("processDiscordMessage ack reactions", () => {
       cfg: {
         messages: {
           ackReaction: "👀",
-          statusReactions: {
-            enabled: false,
-            timing: { debounceMs: 0 },
-          },
+          statusReactions: { enabled: false },
         },
         session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
       },
@@ -437,12 +392,7 @@ describe("processDiscordMessage ack reactions", () => {
 
     const ctx = await createAutomaticSourceDeliveryContext({
       cfg: {
-        messages: {
-          ackReaction: "👀",
-          statusReactions: {
-            timing: { debounceMs: 0 },
-          },
-        },
+        messages: { ackReaction: "👀" },
         session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
       },
     });
@@ -455,24 +405,5 @@ describe("processDiscordMessage ack reactions", () => {
     const emojis = getReactionEmojis();
     expect(emojis).toContain(DEFAULT_EMOJIS.compacting);
     expect(emojis).toContain(DEFAULT_EMOJIS.thinking);
-  });
-
-  it("keeps the plain ack reaction when status reactions are disabled", async () => {
-    const ctx = await createAutomaticSourceDeliveryContext({
-      cfg: {
-        messages: {
-          ackReaction: "👀",
-          statusReactions: {
-            enabled: false,
-          },
-        },
-        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
-      },
-    });
-
-    await runProcessDiscordMessage(ctx);
-
-    expect(getReactionEmojis()).toEqual(["👀"]);
-    expect(sendMocks.removeReactionDiscord).not.toHaveBeenCalled();
   });
 });

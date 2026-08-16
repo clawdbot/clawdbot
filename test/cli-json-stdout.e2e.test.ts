@@ -301,4 +301,55 @@ describe("cli json stdout contract", () => {
       { prefix: "openclaw-config-validate-json-e2e-" },
     );
   });
+
+  it("returns structured Doctor lint output when llama.cpp is not bundled", async () => {
+    await withTempHome(
+      async (tempHome) => {
+        const bundledPluginsDir = path.join(tempHome, "packaged-extensions");
+        const memoryCoreDir = path.join(bundledPluginsDir, "memory-core");
+        await fs.mkdir(memoryCoreDir, { recursive: true });
+        await fs.writeFile(
+          path.join(memoryCoreDir, "api.js"),
+          [
+            "export function registerMemoryCoreDoctorChecks(host) {",
+            "  host.registerHealthCheck({",
+            '    id: "memory-core/managed-local-embedding-setup",',
+            '    kind: "plugin",',
+            '    source: "memory-core",',
+            '    description: "packaged Memory Core readiness fixture",',
+            "    async detect() { return []; },",
+            "  });",
+            "}",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+
+        const result = runSourceCli(
+          tempHome,
+          [
+            "doctor",
+            "--lint",
+            "--only",
+            "memory-core/managed-local-embedding-setup",
+            "--severity-min",
+            "error",
+            "--json",
+          ],
+          {
+            OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
+            OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+          },
+        );
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          ok: true,
+          checksRun: 1,
+          findings: [],
+        });
+      },
+      { prefix: "openclaw-doctor-packaged-json-e2e-" },
+    );
+  });
 });

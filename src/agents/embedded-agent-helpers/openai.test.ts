@@ -95,6 +95,37 @@ describe("normalizeOpenAIResponsesToolCallIds", () => {
     expect(toolResultId(secondResult)).toBe(secondCallId);
   });
 
+  it("strips a checkpoint when rekeying a pre-checkpoint tool call", () => {
+    const rawId = "functions.gateway:0|fc_tmp_checkpoint";
+    const owner: AssistantMessage = {
+      ...buildAssistantToolCall(rawId),
+      content: [
+        { type: "toolCall", id: rawId, name: "gateway", arguments: {} },
+        { type: "text", text: "after checkpoint" },
+      ],
+      providerReplay: {
+        v: 1,
+        type: "openai-responses-compaction",
+        id: "cmp_replay",
+        data: "opaque-checkpoint",
+        replayIndex: 1,
+        provider: "openrouter",
+        api: "openai-responses",
+        model: "moonshotai/kimi-k2.5",
+      },
+    };
+
+    const [rewrittenOwner, rewrittenResult] = normalizeOpenAIResponsesToolCallIds([
+      owner,
+      buildToolResult(rawId),
+    ]);
+
+    expect(rewrittenOwner?.role === "assistant" ? rewrittenOwner.providerReplay : undefined).toBe(
+      undefined,
+    );
+    expect(toolResultId(rewrittenResult)).toBe(toolCallId(rewrittenOwner));
+  });
+
   it("normalizes mixed result aliases and incomplete persisted pairings independently", () => {
     const pairedId = "functions.gateway:0|fc_tmp_paired";
     const assistantOnlyId = "functions.read:0|fc_tmp_assistant_only";

@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { MockCallSource } from "./manager.e2e.test-support.js";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 
@@ -212,6 +215,7 @@ defineDiscordVoiceTests(
       ).speakerContext;
 
       await segmentModule.processDiscordVoiceSegment({
+        accountId: "default",
         entry: {
           guildId: "g1",
           channelId: "1001",
@@ -220,6 +224,7 @@ defineDiscordVoiceTests(
           route: { sessionKey: "discord:g1:1001", agentId: "agent-1" },
           connection: createConnectionMock(),
           player: createAudioPlayerMock(),
+          sessionLifecycle: { status: "active" },
           playbackQueue: Promise.resolve(),
           processingQueue: Promise.resolve(),
           capture: createVoiceCaptureState(),
@@ -282,6 +287,10 @@ defineDiscordVoiceTests(
     });
 
     it("runs voice replies under Discord voice output policy", async () => {
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-voice-"));
+      const audioPath = path.join(tempDir, "reply.mp3");
+      await fs.writeFile(audioPath, "voice");
+      textToSpeechMock.mockResolvedValueOnce({ success: true, audioPath });
       agentCommandMock.mockResolvedValueOnce({
         payloads: [{ text: "hello back" }],
       } as never);
@@ -292,7 +301,18 @@ defineDiscordVoiceTests(
         client,
         {},
       );
-      await processVoiceSegment(manager, "u-guest");
+      try {
+        await processVoiceSegment(manager, "u-guest");
+        await vi.waitFor(async () => {
+          const exists = await fs.access(audioPath).then(
+            () => true,
+            () => false,
+          );
+          expect(exists).toBe(false);
+        });
+      } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
 
       const commandArgs = lastAgentCommandArgs() as
         | { message?: string; messageChannel?: string; messageProvider?: string }
@@ -366,6 +386,51 @@ defineDiscordVoiceTests(
         throw new Error("expected Discord audio resource input");
       }
       await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1));
+    });
+
+    it("releases late TTS without playback after the voice session leaves", async () => {
+      const connection = createConnectionMock();
+      joinVoiceChannelMock.mockReturnValueOnce(connection);
+      decodeOpusStreamMock.mockResolvedValueOnce(Buffer.alloc(96_000));
+      agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "late voice reply" }] });
+      const release = vi.fn(async () => undefined);
+      let resolveStream!: (value: unknown) => void;
+      textToSpeechStreamMock.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveStream = resolve;
+        }),
+      );
+      connection.receiver.subscribe.mockReturnValueOnce({
+        on: vi.fn(),
+        off: vi.fn(),
+        destroy: vi.fn(),
+        destroyed: false,
+        async *[Symbol.asyncIterator]() {},
+      });
+      const manager = createManager(
+        makeVoiceConfig({}, { groupPolicy: "open", allowFrom: ["discord:u-speaker"] }),
+      );
+      await manager.join({ guildId: "g1", channelId: "1001" });
+      const entry = getSessionEntry(manager);
+
+      const speaking = handleSpeakingStart(manager, entry, "u-speaker");
+      await vi.waitFor(() => expect(textToSpeechStreamMock).toHaveBeenCalledOnce());
+      await manager.leave({ guildId: "g1" });
+      resolveStream({
+        success: true,
+        audioStream: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.close();
+          },
+        }),
+        release,
+      });
+      await speaking;
+      await entry.processingQueue;
+      await entry.playbackQueue;
+
+      expect(entry.player.play).not.toHaveBeenCalled();
+      expect(release).toHaveBeenCalledOnce();
     });
 
     it("passes per-channel system prompt context to voice agent runs", async () => {

@@ -591,6 +591,7 @@ async function agentCommandWithAdmissionIngress(
     opts,
     runtime,
     deps,
+    operatorAuthority: admissionIngress.kind === "local-cli",
     run: async (prepared, resolvedDeps) =>
       await agentCommandInternal(prepared, prepared.opts, admissionIngress, runtime, resolvedDeps),
   });
@@ -629,6 +630,7 @@ async function agentCommandFromIngressInternal(
   const lifecycleGeneration =
     opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(opts.runId ?? "");
   return await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
+    let preparedAgentDir: string | undefined;
     const result = await runWithAgentCommandRecoveryOwner({
       lifecycleGeneration,
       mode: "claim",
@@ -639,8 +641,9 @@ async function agentCommandFromIngressInternal(
       },
       prepare: async (preparedOpts) => await prepareAgentCommandExecution(preparedOpts, runtime),
       restoreAdmittedRecovery: recovery?.restoreAdmittedRecovery,
-      run: async (prepared) =>
-        await withAgentPluginRegistry({
+      run: async (prepared) => {
+        preparedAgentDir = prepared.agentDir;
+        return await withAgentPluginRegistry({
           config: prepared.cfg,
           workspaceDir: prepared.workspaceDir,
           run: async () =>
@@ -651,11 +654,12 @@ async function agentCommandFromIngressInternal(
               runtime,
               deps,
             ),
-        }),
+        });
+      },
     });
 
-    if (result) {
-      emitIngressModelUsageDiagnostic(result, opts);
+    if (result && preparedAgentDir) {
+      emitIngressModelUsageDiagnostic(result, opts, preparedAgentDir);
     }
 
     return result;

@@ -11,6 +11,10 @@ import { GatewayClientRequestError, type GatewayReconnectPausedInfo } from "../g
 import { resolveGatewayCredentialsWithSecretInputs } from "../gateway/credentials-secret-inputs.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
+import {
+  NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+  NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+} from "../infra/node-runner-inventory.js";
 import { VERSION } from "../version.js";
 import { configureNodeHost, type NodeHostGatewayConfig } from "./config.js";
 import { createNodeHostGatewayCandidateConnection } from "./gateway-candidate-connection.js";
@@ -124,9 +128,16 @@ function isExactUnknownMethodError(error: unknown, method: string): boolean {
   );
 }
 
-function isExactLegacyNodeAuthorizationError(error: unknown, gatewayProtocol: number): boolean {
+function isExactLegacyNodeAuthorizationError(
+  error: unknown,
+  method: string,
+  gatewayProtocol: number,
+): boolean {
+  const legacyUnknownMethodShape =
+    gatewayProtocol === 3 ||
+    (gatewayProtocol === 4 && method === NODE_RUNNER_INVENTORY_UPDATE_METHOD);
   return (
-    gatewayProtocol === 3 &&
+    legacyUnknownMethodShape &&
     error instanceof GatewayClientRequestError &&
     error.gatewayCode === "INVALID_REQUEST" &&
     error.message === "unauthorized role: node"
@@ -140,7 +151,7 @@ function classifyNodeMethodFailure(
 ): "legacy-unsupported" | "rejected" | "transient" {
   if (
     isExactUnknownMethodError(error, method) ||
-    isExactLegacyNodeAuthorizationError(error, gatewayProtocol)
+    isExactLegacyNodeAuthorizationError(error, method, gatewayProtocol)
   ) {
     return "legacy-unsupported";
   }
@@ -151,6 +162,7 @@ function classifyNodeMethodFailure(
 }
 
 type NodeOptionalPublicationMethod =
+  | typeof NODE_RUNNER_INVENTORY_UPDATE_METHOD
   | typeof NODE_PLUGIN_TOOLS_UPDATE_METHOD
   | typeof NODE_SKILLS_UPDATE_METHOD;
 
@@ -229,6 +241,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     config: cfg,
     env: process.env,
     enableAgentRuns: true,
+    enableWorkerRuns: true,
     installedAppsSharingEnabled: config.installedAppsSharing,
   });
   const { token, password } = opts.preferGatewayBootstrapToken
@@ -239,6 +252,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       });
 
   let inventory: NodeHostInventory = preparedRuntime.initialInventory;
+  let workerRunsAvailable = false;
   let gatewayHelloReceived = false;
   let gatewayConnectionGeneration = 0;
   let connectedGatewayProtocol = 0;
@@ -445,6 +459,21 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     );
   };
 
+  const publishRunnerInventory = () => {
+    // The handshake keeps the immutable build ceiling. Live inventory withdraws
+    // only new-launch eligibility while full, leaving status/cancel negotiated.
+    queueOptionalPublication(
+      NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+      {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        ...(workerRunsAvailable && preparedRuntime.manifest.workerRuns
+          ? { workerRuns: preparedRuntime.manifest.workerRuns }
+          : {}),
+      },
+      "runner inventory",
+    );
+  };
+
   const persistWinningGateway = (winningGateway: NodeHostGatewayConfig) => {
     void configureNodeHost({
       nodeId,
@@ -477,6 +506,8 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       // restart-scoped availability, not a capability upgrade requiring re-pairing.
       caps: preparedRuntime.manifest.caps,
       commands: preparedRuntime.manifest.commands,
+      computerUse: preparedRuntime.manifest.computerUse,
+      workerRuns: preparedRuntime.manifest.workerRuns,
       pathEnv: preparedRuntime.manifest.pathEnv,
       permissions: undefined,
       deviceIdentity: loadOrCreateDeviceIdentity(),
@@ -516,6 +547,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
         void finish(0);
         return;
       }
+      publishRunnerInventory();
       publishInventory();
     },
     onConnectError: (error) => {
@@ -545,6 +577,10 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     onInventoryChanged: (nextInventory) => {
       inventory = nextInventory;
       publishInventory();
+    },
+    onRunnerAvailabilityChanged: (available) => {
+      workerRunsAvailable = available;
+      publishRunnerInventory();
     },
     onManifestChanged: (manifest) => {
       // Manifest changes force a reconnect. Retire the current publication queue

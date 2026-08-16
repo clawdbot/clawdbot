@@ -18,6 +18,12 @@ import type { AgentRouteBinding } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import {
+  logSessionOwnershipLookupFailure,
+  lookupFailedDenialMessage,
+  lookupFailedOperationMessage,
+  sessionOwnershipLookupFailure,
+} from "../../plugin-sdk/session-visibility-internal.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { normalizeRouteBindingChannelId } from "../../routing/binding-scope.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
@@ -70,11 +76,13 @@ import {
 } from "./in-process-gateway.js";
 import { runWithScopedSessionAccess } from "./scoped-session-access.js";
 import {
-  createSessionVisibilityGuard,
   createSessionVisibilityRowChecker,
   createAgentToAgentPolicy,
+  isExpectedSessionLookupMiss,
+  resolveDisplaySessionKey,
   resolveEffectiveSessionToolsVisibility,
   resolveSessionReference,
+  resolveSessionToolAccess,
   resolveSessionToolContext,
   resolveVisibleSessionReference,
 } from "./sessions-helpers.js";
@@ -496,6 +504,7 @@ export function createSessionsSendTool(opts?: {
 
       let sessionKey = sessionKeyParam;
       let resolvedTargetAgentId: string | undefined;
+      let resolvedLabelKey: string | undefined;
       if (!sessionKey && !labelParam && labelAgentIdParam) {
         const agentMainKey = resolveConfiguredAgentMainSessionKey({
           cfg,
@@ -557,19 +566,22 @@ export function createSessionsSendTool(opts?: {
           resolvedKey = normalizeOptionalString(resolved?.key) ?? "";
           resolvedTargetAgentId = normalizeOptionalString(resolved?.agentId);
         } catch (err) {
-          const msg = formatErrorMessage(err);
-          if (restrictToSpawned) {
+          if (isExpectedSessionLookupMiss(err)) {
+            resolvedKey = "";
+          } else {
+            const failure = sessionOwnershipLookupFailure(err);
+            logSessionOwnershipLookupFailure({
+              requesterSessionKey: effectiveRequesterKey,
+              failure,
+            });
             return jsonResult({
               runId: crypto.randomUUID(),
-              status: "forbidden",
-              error: "Session not visible from this sandboxed agent session.",
+              status: restrictToSpawned ? "forbidden" : "error",
+              error: restrictToSpawned
+                ? lookupFailedDenialMessage("send", failure.kind)
+                : lookupFailedOperationMessage("send", failure.kind),
             });
           }
-          return jsonResult({
-            runId: crypto.randomUUID(),
-            status: "error",
-            error: msg || `No session found with label: ${labelParam}`,
-          });
         }
 
         if (!resolvedKey) {
@@ -587,6 +599,7 @@ export function createSessionsSendTool(opts?: {
           });
         }
         sessionKey = resolvedKey;
+        resolvedLabelKey = resolvedKey;
       }
 
       if (!sessionKey) {
@@ -601,15 +614,25 @@ export function createSessionsSendTool(opts?: {
         sessionKey,
         mainKey,
       });
-      const resolvedSession = await resolveSessionReference({
-        sessionKey,
-        keyAgentId: requesterAgentId,
-        alias,
-        mainKey,
-        requesterInternalKey: effectiveRequesterKey,
-        restrictToSpawned,
-        callGateway: gatewayCall,
-      });
+      const resolvedSession = resolvedLabelKey
+        ? {
+            ok: true as const,
+            ...(resolvedTargetAgentId ? { agentId: resolvedTargetAgentId } : {}),
+            key: resolvedLabelKey,
+            displayKey: resolveDisplaySessionKey({ key: resolvedLabelKey, alias, mainKey }),
+            resolvedViaSessionId: false,
+            requesterOwned: restrictToSpawned,
+          }
+        : await resolveSessionReference({
+            action: "send",
+            sessionKey,
+            keyAgentId: requesterAgentId,
+            alias,
+            mainKey,
+            requesterInternalKey: effectiveRequesterKey,
+            restrictToSpawned,
+            callGateway: gatewayCall,
+          });
       if (!resolvedSession.ok) {
         return jsonResult({
           runId: crypto.randomUUID(),
@@ -696,14 +719,7 @@ export function createSessionsSendTool(opts?: {
         resolvedKeyAgentId ??
         (isLiteralUnscopedMainTarget ? requesterAgentId : undefined) ??
         compatibilityTargetAgentId;
-      const mayUseRequesterForLiteralSentinel =
-        isLiteralUnscopedMainTarget &&
-        (!targetAgentId || normalizeAgentId(targetAgentId) === requesterAgentId);
-      if (
-        !targetAgentId &&
-        !resolvedKeyAgentId &&
-        (!isUnscopedSessionKeySentinel(resolvedKey) || resolvedSession.resolvedViaSessionId)
-      ) {
+      if (!targetAgentId) {
         return jsonResult({
           runId: crypto.randomUUID(),
           status: "forbidden",
@@ -712,6 +728,8 @@ export function createSessionsSendTool(opts?: {
           sessionKey: unresolvedDisplayKey,
         });
       }
+      const mayUseRequesterForLiteralSentinel =
+        isLiteralUnscopedMainTarget && normalizeAgentId(targetAgentId) === requesterAgentId;
       const rawRequesterSessionKey = opts?.agentSessionKey ? effectiveRequesterKey : undefined;
       const parsedRequesterSessionKey = parseAgentSessionKey(rawRequesterSessionKey);
       const requesterRouteBindings = cfg.bindings?.filter(
@@ -837,20 +855,24 @@ export function createSessionsSendTool(opts?: {
           sessionKey: unresolvedDisplayKey,
         });
       }
-      const visibilityGuard = await createSessionVisibilityGuard({
-        action: "send",
-        requesterAgentId,
-        requesterSessionKey: effectiveRequesterKey,
-        visibility: sessionVisibility,
-        a2aPolicy,
-        callGateway: gatewayCall,
-      });
       const authorizationTargetKey = mayUseRequesterForLiteralSentinel
         ? effectiveRequesterKey
         : targetAgentId && !parseAgentSessionKey(resolvedKey)
           ? `agent:${targetAgentId}:${resolvedKey}`
           : resolvedKey;
-      const access = visibilityGuard.check(authorizationTargetKey);
+      const access = await resolveSessionToolAccess({
+        action: "send",
+        defaultAgentId: requesterAgentId,
+        requesterAgentId,
+        requesterSessionKey: effectiveRequesterKey,
+        targetAgentId,
+        targetSessionKey: resolvedKey,
+        authorizationTargetSessionKey: authorizationTargetKey,
+        requesterOwned: visibleSession.requesterOwned,
+        visibility: sessionVisibility,
+        a2aPolicy,
+        callGateway: gatewayCall,
+      });
       if (!access.allowed) {
         return jsonResult({
           runId: crypto.randomUUID(),

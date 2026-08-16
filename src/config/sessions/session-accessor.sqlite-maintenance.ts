@@ -1,11 +1,11 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { sql } from "kysely";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { getChildLogger } from "../../logging/logger.js";
 import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { publishSessionStateArchives } from "./session-accessor.sqlite-archive-store.js";
 import {
   materializeSessionStateDeletePlans,
   type SessionStateDeletePlan,
@@ -69,6 +69,7 @@ function hasStaleSqliteSessionEntryCandidate(
   database: OpenClawAgentDatabase,
   pruneAfterMs: number,
   preserveKeys: ReadonlySet<string> | undefined,
+  preserveRecentMs: number | null,
 ): boolean {
   const cutoffMs = Date.now() - pruneAfterMs;
   const db = getSessionKysely(database.db);
@@ -78,10 +79,7 @@ function hasStaleSqliteSessionEntryCandidate(
       .selectFrom("session_nodes")
       .select(["entry_json", "session_key"])
       .where("updated_at", "<", cutoffMs)
-      .where(
-        /* kysely-allow-raw: archivedAt lives inside the canonical JSON entry, not a SQL column. */
-        sql<boolean>`json_extract(entry_json, '$.archivedAt') IS NULL`,
-      )
+      .where("archived_at", "is", null)
       .orderBy("updated_at", "asc"),
   ).rows;
   return rows.some((row) => {
@@ -93,8 +91,27 @@ function hasStaleSqliteSessionEntryCandidate(
       key: normalizeStoreSessionKey(row.session_key),
       entry,
       preserveKeys,
+      preserveRecentMs,
     });
   });
+}
+
+function loadSqliteSessionMaintenanceStore(
+  database: OpenClawAgentDatabase,
+): Record<string, SessionEntry> {
+  const db = getSessionKysely(database.db);
+  const rows = executeSqliteQuerySync(
+    database.db,
+    db.selectFrom("session_nodes").select(["session_key", "entry_json"]).orderBy("session_key"),
+  ).rows;
+  const store: Record<string, SessionEntry> = {};
+  for (const row of rows) {
+    const entry = parseSessionEntryRow(row);
+    if (entry) {
+      store[row.session_key] = entry;
+    }
+  }
+  return store;
 }
 
 export function applySessionEntryMaintenance(
@@ -116,14 +133,17 @@ export function applySessionEntryMaintenance(
     return { entryRemovals: [], stateDeletePlans: [] };
   }
 
+  // Count all rows before loading their payloads. Protection controls eviction candidates, not
+  // whether a row consumes maxEntries; the full snapshot is needed only when maintenance runs.
   const entryCount = readSessionEntryCount(database);
   const preserveCandidateKeys = collectSessionMaintenancePreserveKeys([params.activeSessionKey]);
   const hasStaleCandidate = hasStaleSqliteSessionEntryCandidate(
     database,
     maintenance.pruneAfterMs,
     preserveCandidateKeys,
+    maintenance.preserveRecentMs ?? null,
   );
-  const shouldLoadStore =
+  const shouldMaintainStore =
     params.forceMaintenance === true ||
     entryCount > maintenance.maxEntries ||
     hasStaleCandidate ||
@@ -137,23 +157,17 @@ export function applySessionEntryMaintenance(
       maxEntries: maintenance.maxEntries,
       force: params.forceMaintenance,
     });
-  if (!shouldLoadStore) {
+  if (!shouldMaintainStore) {
     return { entryRemovals: [], stateDeletePlans: [] };
   }
 
-  const db = getSessionKysely(database.db);
-  const rows = executeSqliteQuerySync(
-    database.db,
-    db.selectFrom("session_nodes").select(["session_key", "entry_json"]).orderBy("session_key"),
-  ).rows;
-  const store: Record<string, SessionEntry> = {};
-  for (const row of rows) {
-    const entry = parseSessionEntryRow(row);
-    if (entry) {
-      store[row.session_key] = entry;
-    }
-  }
-
+  const store = loadSqliteSessionMaintenanceStore(database);
+  const preserveKeys =
+    collectSessionMaintenancePreserveKeysForStore({
+      storePath: params.storePath,
+      store,
+      baseKeys: collectSqliteSessionMaintenanceBaseKeys(store, params.activeSessionKey),
+    }) ?? new Set<string>();
   const removedKeys = new Set<string>();
   const removedEntriesByKey = new Map<string, SessionEntry>();
   const removedSessionIds = new Set<string>();
@@ -164,39 +178,36 @@ export function applySessionEntryMaintenance(
       removedSessionIds.add(sessionId);
     }
   };
-  const preserveKeys =
-    collectSessionMaintenancePreserveKeysForStore({
-      storePath: params.storePath,
-      store,
-      baseKeys: collectSqliteSessionMaintenanceBaseKeys(store, params.activeSessionKey),
-    }) ?? new Set<string>();
+  let remainingEntryCount = entryCount;
   if (
     shouldRunModelRunPrune({
       maintenance,
-      entryCount: Object.keys(store).length,
+      entryCount: remainingEntryCount,
       force: params.forceMaintenance,
     })
   ) {
-    pruneStaleModelRunEntries(store, maintenance.modelRunPruneAfterMs, {
+    remainingEntryCount -= pruneStaleModelRunEntries(store, maintenance.modelRunPruneAfterMs, {
       log: false,
       onPruned: rememberRemovedEntry,
       preserveKeys,
+      preserveRecentMs: maintenance.preserveRecentMs,
     });
   }
   if (
     params.forceMaintenance === true ||
     hasStaleCandidate ||
-    Object.keys(store).length > maintenance.maxEntries
+    remainingEntryCount > maintenance.maxEntries
   ) {
-    pruneStaleEntries(store, maintenance.pruneAfterMs, {
+    remainingEntryCount -= pruneStaleEntries(store, maintenance.pruneAfterMs, {
       log: false,
       onPruned: rememberRemovedEntry,
       preserveKeys,
+      preserveRecentMs: maintenance.preserveRecentMs,
     });
   }
   if (
     shouldRunSessionEntryMaintenance({
-      entryCount: Object.keys(store).length,
+      entryCount: remainingEntryCount,
       maxEntries: maintenance.maxEntries,
       force: params.forceMaintenance,
     })
@@ -205,6 +216,7 @@ export function applySessionEntryMaintenance(
       log: false,
       onCapped: rememberRemovedEntry,
       preserveKeys,
+      preserveRecentMs: maintenance.preserveRecentMs,
     });
   }
   for (const sessionId of readSessionGenerationIdsForKeys(database, removedKeys)) {
@@ -287,7 +299,7 @@ async function finalizeSqliteSessionEntryMaintenancePlansWithCommit(
       return committed;
     });
     emitCommittedSessionEntryRemovals(entryRemovals);
-    return archivedTranscripts;
+    return await publishSessionStateArchives(scope, archivedTranscripts);
   } catch (error) {
     getChildLogger({ subsystem: "session-sqlite" }).warn(
       "SQLite session maintenance cleanup failed",

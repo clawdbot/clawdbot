@@ -3,7 +3,11 @@ import markdownItTaskLists from "markdown-it-task-lists";
 import type Token from "markdown-it/lib/token.mjs";
 import { t } from "../i18n/index.ts";
 import { fileKindForPath, shortestFileLabels } from "./file-kind.ts";
-import { formatGitHubItemReference, parseGitHubItemPath } from "./github-link-target.ts";
+import {
+  formatGitHubItemReference,
+  isGitHubItemRootPath,
+  parseGitHubItemPath,
+} from "./github-link-target.ts";
 import {
   installAssistantTranscriptRoleImageRenderer,
   installAssistantTranscriptRoleMarkdown,
@@ -514,7 +518,7 @@ export function createMarkdownParser(): MarkdownIt {
             break;
           }
         }
-        if (generatedUrlLabel && itemTarget && labelToken) {
+        if (generatedUrlLabel && itemTarget && labelToken && isGitHubItemRootPath(url)) {
           labelToken.content = formatGitHubItemReference(itemTarget);
         }
       }

@@ -180,12 +180,21 @@ describe("OpenClaw Codex sandbox exec-server", () => {
       processId: "proc-1",
       argv: ["/bin/sh", "-lc", "printf ok"],
       cwd: "file:///workspace",
-      env: { POLICY_SET: "env-wins", TEST_FLAG: "1" },
+      env: {
+        POLICY_SET: "env-wins",
+        TEST_FLAG: "1",
+        CODEX_API_KEY: "must-not-cross",
+        OPENAI_API_KEY: "must-not-cross",
+      },
       envPolicy: {
         inherit: "none",
         ignoreDefaultExcludes: true,
         exclude: [],
-        set: { POLICY_SET: "policy", POLICY_ONLY: "1" },
+        set: {
+          POLICY_SET: "policy",
+          POLICY_ONLY: "1",
+          CODEX_ACCESS_TOKEN: "must-not-cross",
+        },
         includeOnly: [],
       },
       tty: false,

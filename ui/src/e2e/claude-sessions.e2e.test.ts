@@ -28,6 +28,13 @@ type VirtualRowPaintSample = {
 type VirtualRowPaintProbe = {
   frameIds: number[];
   observer: MutationObserver;
+  pendingSamples: number;
+  samples: VirtualRowPaintSample[];
+  timerIds: number[];
+};
+
+type VirtualRowPaintResult = {
+  pending: boolean;
   samples: VirtualRowPaintSample[];
 };
 
@@ -71,12 +78,15 @@ async function startVirtualRowPaintProbe(thread: Locator, anchor: VisibleVirtual
     if (staleProbe) {
       staleProbe.observer.disconnect();
       staleProbe.frameIds.forEach((frameId) => cancelAnimationFrame(frameId));
+      staleProbe.timerIds.forEach((timerId) => clearTimeout(timerId));
       delete target.chatPrependPaintProbe;
     }
     const probe: VirtualRowPaintProbe = {
       frameIds: [],
       observer: new MutationObserver(() => undefined),
+      pendingSamples: 0,
       samples: [],
+      timerIds: [],
     };
     const sample = () => {
       const viewport = element.getBoundingClientRect();
@@ -100,18 +110,30 @@ async function startVirtualRowPaintProbe(thread: Locator, anchor: VisibleVirtual
         viewportTop: rect ? rect.top - viewport.top : null,
       });
     };
-    const scheduleSample = () => {
-      if (probe.frameIds.length > 0) {
-        return;
+    const removePendingId = (ids: number[], id: number) => {
+      const index = ids.indexOf(id);
+      if (index !== -1) {
+        ids.splice(index, 1);
       }
+    };
+    const scheduleSample = () => {
+      // Each mutation batch owns a post-paint sample; later mutations must not
+      // cancel an earlier frame that could expose a visible anchor jump.
+      probe.pendingSamples += 1;
       const firstFrame = requestAnimationFrame(() => {
+        removePendingId(probe.frameIds, firstFrame);
         const secondFrame = requestAnimationFrame(() => {
-          probe.frameIds = [];
-          sample();
+          removePendingId(probe.frameIds, secondFrame);
+          const timerId = window.setTimeout(() => {
+            removePendingId(probe.timerIds, timerId);
+            sample();
+            probe.pendingSamples -= 1;
+          }, 0);
+          probe.timerIds.push(timerId);
         });
-        probe.frameIds = [secondFrame];
+        probe.frameIds.push(secondFrame);
       });
-      probe.frameIds = [firstFrame];
+      probe.frameIds.push(firstFrame);
     };
     probe.observer = new MutationObserver(scheduleSample);
     probe.observer.observe(element, {
@@ -124,7 +146,24 @@ async function startVirtualRowPaintProbe(thread: Locator, anchor: VisibleVirtual
   }, anchor);
 }
 
-async function stopVirtualRowPaintProbe(thread: Locator): Promise<VirtualRowPaintSample[]> {
+async function readVirtualRowPaintProbe(thread: Locator) {
+  return thread.evaluate(() => {
+    const probe = (
+      globalThis as typeof globalThis & {
+        chatPrependPaintProbe?: VirtualRowPaintProbe;
+      }
+    ).chatPrependPaintProbe;
+    if (!probe) {
+      throw new Error("expected an active virtual row paint probe");
+    }
+    return {
+      pendingSamples: probe.pendingSamples,
+      samples: probe.samples,
+    };
+  });
+}
+
+async function stopVirtualRowPaintProbe(thread: Locator): Promise<VirtualRowPaintResult> {
   return thread.evaluate(() => {
     const target = globalThis as typeof globalThis & {
       chatPrependPaintProbe?: VirtualRowPaintProbe;
@@ -133,42 +172,52 @@ async function stopVirtualRowPaintProbe(thread: Locator): Promise<VirtualRowPain
     if (!probe) {
       throw new Error("expected an active virtual row paint probe");
     }
+    const pending = probe.pendingSamples > 0;
     probe.observer.disconnect();
     probe.frameIds.forEach((frameId) => cancelAnimationFrame(frameId));
+    probe.timerIds.forEach((timerId) => clearTimeout(timerId));
     delete target.chatPrependPaintProbe;
-    return probe.samples;
+    return { pending, samples: probe.samples };
   });
 }
 
-function expectPaintedVirtualRowAnchor(
-  anchor: VisibleVirtualRow,
-  samples: VirtualRowPaintSample[],
-) {
-  const evidence = JSON.stringify({ anchor, samples });
-  expect(samples.length, evidence).toBeGreaterThan(0);
-  expect(
-    samples.some(
+function virtualRowAnchorStatus(anchor: VisibleVirtualRow, samples: VirtualRowPaintSample[]) {
+  return {
+    advanced: samples.some(
       (sample) =>
         (sample.index !== null && sample.index > anchor.index) ||
         sample.totalSize > anchor.totalSize,
     ),
-    evidence,
-  ).toBe(true);
-  expect(
-    samples.every((sample) => sample.viewportTop !== null),
-    evidence,
-  ).toBe(true);
-  expect(
-    samples.every((sample) => sample.intersectsViewport),
-    evidence,
-  ).toBe(true);
-  expect(
-    samples.every(
+    anchored: samples.every(
       (sample) =>
         sample.viewportTop !== null && Math.abs(sample.viewportTop - anchor.viewportTop) <= 2,
     ),
+    present: samples.length > 0 && samples.every((sample) => sample.viewportTop !== null),
+    visible: samples.every((sample) => sample.intersectsViewport),
+  };
+}
+
+async function waitForPaintedVirtualRowAnchor(thread: Locator, anchor: VisibleVirtualRow) {
+  await expect
+    .poll(async () => {
+      const probe = await readVirtualRowPaintProbe(thread);
+      return probe.pendingSamples === 0 && virtualRowAnchorStatus(anchor, probe.samples).advanced;
+    })
+    .toBe(true);
+}
+
+function expectPaintedVirtualRowAnchor(anchor: VisibleVirtualRow, result: VirtualRowPaintResult) {
+  const evidence = JSON.stringify({ anchor, ...result });
+  expect(
+    { pending: result.pending, ...virtualRowAnchorStatus(anchor, result.samples) },
     evidence,
-  ).toBe(true);
+  ).toEqual({
+    pending: false,
+    advanced: true,
+    anchored: true,
+    present: true,
+    visible: true,
+  });
 }
 
 function resumableClaudeCatalog() {
@@ -277,11 +326,14 @@ async function catalogHeaderAffordances(header: Locator) {
 
 async function expandCodingSection(page: Page) {
   const toggle = page.locator('[data-session-section="work"] .sidebar-session-group-toggle');
-  await page.waitForFunction(() =>
-    Boolean(
-      document.querySelector('[data-session-section="work"]') ??
-      document.querySelector('[data-session-section^="catalog:"]'),
-    ),
+  await page.waitForFunction(
+    () =>
+      Boolean(
+        document.querySelector('[data-session-section="work"]') ??
+        document.querySelector('[data-session-section^="catalog:"]'),
+      ),
+    undefined,
+    { timeout: 30_000 },
   );
   if ((await toggle.count()) === 0) {
     return;
@@ -291,14 +343,22 @@ async function expandCodingSection(page: Page) {
   }
 }
 
-async function openClaudeCatalogTerminal(page: Page) {
+async function navigateToClaudeCatalog(page: Page) {
   await page.goto(`${suite.server.baseUrl}chat`);
   await expandCodingSection(page);
+}
+
+async function triggerClaudeCatalogTerminal(page: Page, options: { force?: boolean } = {}) {
   const row = page.locator('[data-session-key^="catalog:"]').filter({
     hasText: "Native Claude terminal",
   });
-  await row.click({ button: "right" });
-  await page.locator('wa-dropdown-item[value="terminal"]').click();
+  await row.click({ button: "right", force: options.force });
+  await page.locator('wa-dropdown-item[value="terminal"]').click({ force: options.force });
+}
+
+async function openClaudeCatalogTerminal(page: Page) {
+  await navigateToClaudeCatalog(page);
+  await triggerClaudeCatalogTerminal(page);
 }
 
 suite.define(() => {
@@ -493,14 +553,19 @@ suite.define(() => {
       });
 
       await openClaudeCatalogTerminal(page);
-      const open = await gateway.waitForRequest("terminal.open");
-      expect(open.params).toMatchObject({
-        catalog: {
-          catalogId: "claude",
-          hostId: "gateway:local",
-          threadId: "claude-terminal-session",
-        },
-      });
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("terminal.open")).map((request) => request.params),
+        )
+        .toContainEqual(
+          expect.objectContaining({
+            catalog: {
+              catalogId: "claude",
+              hostId: "gateway:local",
+              threadId: "claude-terminal-session",
+            },
+          }),
+        );
       const connecting = page.getByRole("status").filter({ hasText: "Connecting to session" });
       await connecting.waitFor();
       expect(await page.locator(".tabstrip-tab.is-connecting").count()).toBe(1);
@@ -560,22 +625,29 @@ suite.define(() => {
         terminalEnabled: true,
       });
 
+      await navigateToClaudeCatalog(page);
       await page.clock.install();
-      await openClaudeCatalogTerminal(page);
-      await gateway.waitForRequest("terminal.open");
+      await triggerClaudeCatalogTerminal(page, { force: true });
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("terminal.open")).map((request) => request.params),
+        )
+        .toContainEqual(
+          expect.objectContaining({ catalog: expect.objectContaining({ catalogId: "claude" }) }),
+        );
       await page.getByRole("status").filter({ hasText: "Connecting to session" }).waitFor();
-      await page.clock.runFor(30_001);
+      await page.clock.fastForward(30_001);
+      await page.clock.runFor(100);
 
       await page.getByText("Session did not connect within 30 seconds.", { exact: true }).waitFor();
       const close = await gateway.waitForRequest("terminal.close");
       expect(close.params).toEqual({ sessionId: "claude-terminal-timeout" });
-      expect(await page.locator(".tabstrip-tab").count()).toBe(0);
+      expect(await page.locator("openclaw-terminal-panel .tabstrip-tab").count()).toBe(0);
     });
   });
 
   it("auto-loads older chat without moving the viewport and disables paired-node continuation", async () => {
     const page = await suite.browser.newPage();
-    await page.clock.install();
     const catalogResponse = (threadId: string, name: string, nextCursor?: string) => ({
       catalogs: [
         {
@@ -669,7 +741,14 @@ suite.define(() => {
       cursors: { "node:devbox": "catalog-page-2" },
     });
     const catalogRequestCount = (await gateway.getRequests("sessions.catalog.list")).length;
-    await page.clock.runFor(30_000);
+    await page.clock.install();
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await page.clock.runFor(50);
+    await expect
+      .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
+      .toBeGreaterThanOrEqual(catalogRequestCount + 1);
+    await page.clock.fastForward(30_000);
+    await page.clock.runFor(100);
     await expect
       .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
       .toBeGreaterThanOrEqual(catalogRequestCount + 2);
@@ -704,7 +783,7 @@ suite.define(() => {
     expect(await catalogPane.getByRole("button", { name: "Load older" }).count()).toBe(0);
     const anchor = await captureTopVisibleVirtualRow(thread);
     await startVirtualRowPaintProbe(thread, anchor);
-    let paintedSamples: VirtualRowPaintSample[];
+    let paintResult: VirtualRowPaintResult;
     try {
       await gateway.resolveDeferred("sessions.catalog.read");
       await expect
@@ -715,12 +794,11 @@ suite.define(() => {
           ),
         )
         .toBe(41);
-      // Each mutation is sampled after a full paint, once anchor compensation has settled.
       await page.clock.runFor(100);
     } finally {
-      paintedSamples = await stopVirtualRowPaintProbe(thread);
+      paintResult = await stopVirtualRowPaintProbe(thread);
     }
-    expectPaintedVirtualRowAnchor(anchor, paintedSamples);
+    expectPaintedVirtualRowAnchor(anchor, paintResult);
     expect(
       await catalogPane.locator(".agent-chat__composer-combobox > textarea").isDisabled(),
     ).toBe(true);
@@ -774,7 +852,7 @@ suite.define(() => {
 
   it("auto-loads older native history with a spinner and stable viewport", async () => {
     const page = await suite.browser.newPage({ viewport: { width: 1280, height: 800 } });
-    await page.clock.install();
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const historyMessage = (seq: number, prefix: string) => ({
       __openclaw: { seq },
       content: [
@@ -838,9 +916,16 @@ suite.define(() => {
     await page.locator('.chat-virtual-row:not([data-virtual-row-key="history"])').first().waitFor();
     await gateway.waitForRequest("chat.history");
     await page.locator(".chat-history-loading").waitFor();
+    if (artifactDir) {
+      await fs.mkdir(artifactDir, { recursive: true });
+      await page.screenshot({
+        path: path.join(artifactDir, "01-native-history-loading.png"),
+        fullPage: true,
+      });
+    }
     const anchor = await captureTopVisibleVirtualRow(thread);
     await startVirtualRowPaintProbe(thread, anchor);
-    let paintedSamples: VirtualRowPaintSample[];
+    let paintResult: VirtualRowPaintResult;
     try {
       await gateway.resolveDeferred("chat.history");
       await expect
@@ -854,12 +939,17 @@ suite.define(() => {
             ),
         )
         .toBe(140);
-      // Each mutation is sampled after a full paint, once anchor compensation has settled.
-      await page.clock.runFor(100);
+      await waitForPaintedVirtualRowAnchor(thread, anchor);
     } finally {
-      paintedSamples = await stopVirtualRowPaintProbe(thread);
+      paintResult = await stopVirtualRowPaintProbe(thread);
     }
-    expectPaintedVirtualRowAnchor(anchor, paintedSamples);
+    expectPaintedVirtualRowAnchor(anchor, paintResult);
+    if (artifactDir) {
+      await page.screenshot({
+        path: path.join(artifactDir, "02-native-history-prepended-stable.png"),
+        fullPage: true,
+      });
+    }
     expect((await gateway.getRequests("chat.history")).at(-1)?.params).toMatchObject({
       limit: 100,
       offset: 100,
@@ -869,9 +959,8 @@ suite.define(() => {
       element.scrollTop = 0;
       element.dispatchEvent(new Event("scroll"));
     });
-    await page.clock.runFor(100);
     await page.getByText(/^older native message 1\n/).waitFor();
-    await page.clock.runFor(300);
+    await expect.poll(() => page.locator(".chat-history-sentinel").count()).toBe(0);
     expect(await page.locator(".chat-history-loading").count()).toBe(0);
     expect(await gateway.getRequests("chat.history")).toHaveLength(exhaustedRequestCount);
     await page.close();

@@ -14,11 +14,18 @@ import {
   TERMINAL_PANEL_TOGGLE_EVENT,
   UI_COMMAND_EVENT,
 } from "../components/panel-toggle-contract.ts";
+import { takeSessionPanelToggle } from "../components/session-panel-toggle-buffer.ts";
 import { i18n } from "../i18n/index.ts";
 import { SESSION_FACE_PREFERENCE_PARAM } from "../lib/sessions/route-navigation.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { selectShellRouteState } from "./app-host-route-state.ts";
-import { resetAppHostTestGlobals, type ShellKeyboardState } from "./app-host.test-support.ts";
+import {
+  createLazyElementSpec,
+  resetAppHostTestGlobals,
+  type ShellKeyboardState,
+  type TestOptionalCustomElement,
+} from "./app-host.test-support.ts";
+import { ShellGatewayOwner, type ShellGatewayHost } from "./app-shell-gateway.ts";
 import "./app-host.ts";
 import type {
   ApplicationContext,
@@ -60,11 +67,6 @@ type ShellInitializationState = {
   ) => void;
 };
 
-type ShellGatewaySynchronizationState = {
-  outboxStoreImport: { load: () => Promise<unknown> };
-  synchronizeGateway: (snapshot: ApplicationGatewaySnapshot) => void;
-};
-
 type I18nRecoveryWiring = {
   localeLoadRecovery?: {
     isUnrecoverableError: (error: unknown) => boolean;
@@ -77,17 +79,12 @@ type ShellServerPreferencesState = {
   reconcileServerUiPrefs: (runtimeConfig: ApplicationContext["runtimeConfig"]) => void;
 };
 
-type TestOptionalCustomElement = {
-  tagName: string;
-  label: string;
-  loadModule: () => Promise<unknown>;
-};
-
 type ShellLazySurfaceState = ShellKeyboardState & {
   browserPanelElement: TestOptionalCustomElement;
   commandPaletteElement: TestOptionalCustomElement;
   handleDeferredBrowserToggle: (event: Event) => void;
   handleDeferredTerminalToggle: (event: Event) => void;
+  routeState: { routeId: string };
   terminalPanelElement: TestOptionalCustomElement;
 };
 
@@ -151,20 +148,6 @@ function createRosterRefreshContext(params: {
     ensureIdentity,
     setSelection,
     refreshConfig,
-  };
-}
-
-let lazyElementSequence = 0;
-
-function createLazyElementSpec(label: string): TestOptionalCustomElement {
-  lazyElementSequence += 1;
-  const tagName = `openclaw-app-host-lazy-${lazyElementSequence}`;
-  return {
-    tagName,
-    label,
-    loadModule: async () => {
-      customElements.define(tagName, class extends HTMLElement {});
-    },
   };
 }
 
@@ -319,10 +302,27 @@ describe("OpenClaw shell source initialization", () => {
 
   it("retries a pending locale once when the Gateway becomes connected", () => {
     const retryPendingLocale = vi.spyOn(i18n, "retryPendingLocale").mockImplementation(() => {});
-    const shell = document.createElement(
-      "openclaw-app-shell",
-    ) as unknown as ShellGatewaySynchronizationState;
-    shell.outboxStoreImport = { load: vi.fn(async () => undefined) };
+    // Owner-direct: the shared jsdom lane can retain a sibling graph's
+    // openclaw-app-shell class bound to a different i18n instance; constructing
+    // the owner keeps the spy and the callee in the current module graph.
+    const host = {
+      activeSessionKey: "",
+      agentRosterRefreshTimer: null,
+      agentsListClient: null,
+      agentsListSource: null,
+      context: undefined,
+      criticalNoticeRuntime: null,
+      lastLocalePrefSignature: null,
+      outboxStoreImport: { load: vi.fn(async () => undefined) },
+      previousGatewayPhase: null,
+      routeState: {},
+      runtimeConfigClient: null,
+      runtimeConfigSource: null,
+      sessionKeyClient: null,
+      sidebarWorkboardRuntime: null,
+      syncSidebarWorkboard: vi.fn(),
+    } as unknown as ShellGatewayHost;
+    const owner = new ShellGatewayOwner(host);
     const reconnecting = {
       client: null,
       phase: "reconnecting",
@@ -334,10 +334,10 @@ describe("OpenClaw shell source initialization", () => {
       sessionKey: "",
     } as ApplicationGatewaySnapshot;
 
-    shell.synchronizeGateway(reconnecting);
-    shell.synchronizeGateway(connected);
-    shell.synchronizeGateway({ ...connected });
-    shell.synchronizeGateway({ ...connected });
+    owner.synchronizeGateway(reconnecting);
+    owner.synchronizeGateway(connected);
+    owner.synchronizeGateway({ ...connected });
+    owner.synchronizeGateway({ ...connected });
 
     expect(retryPendingLocale).toHaveBeenCalledOnce();
     retryPendingLocale.mockRestore();
@@ -913,6 +913,19 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       expect(terminalToggle).toHaveBeenCalledWith(terminalEvent);
       expect(browserToggle).toHaveBeenCalledWith(browserEvent);
     });
+  });
+
+  it("buffers panel toggle events until the active chat pane mounts", () => {
+    const terminalElement = createLazyElementSpec("session terminal panel");
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellLazySurfaceState;
+    shell.terminalPanelElement = terminalElement;
+    shell.routeState = { routeId: "chat" };
+
+    const event = new CustomEvent(TERMINAL_PANEL_TOGGLE_EVENT, { detail: { open: true } });
+    shell.handleDeferredTerminalToggle(event);
+
+    expect(customElements.get(terminalElement.tagName)).toBeUndefined();
+    expect(takeSessionPanelToggle("terminal")).toBe(event);
   });
 
   it("opens approvals after the modal module loads on demand", async () => {

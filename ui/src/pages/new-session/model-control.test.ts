@@ -13,9 +13,12 @@ function contextWith(
   models: ModelCatalogEntry[],
   runtime = "openclaw",
   featureMethods: string[] = [],
+  cloudPlacementSupported?: boolean,
 ) {
   const request = vi.fn().mockResolvedValue({ models });
+  const navigate = vi.fn();
   const context = {
+    navigate,
     gateway: {
       snapshot: {
         phase: "connected",
@@ -29,14 +32,18 @@ function contextWith(
           defaults: {
             model: "openai/gpt-5.6-luna",
             modelProvider: "openai",
-            agentRuntime: { id: runtime, source: "defaults" },
+            agentRuntime: {
+              id: runtime,
+              ...(cloudPlacementSupported === undefined ? {} : { cloudPlacementSupported }),
+              source: "defaults",
+            },
           },
           sessions: [],
         },
       },
     },
   } as unknown as ApplicationContext;
-  return { context, request };
+  return { context, navigate, request };
 }
 
 function startupUnavailableError(retryAfterMs = 250): GatewayRequestError {
@@ -382,8 +389,21 @@ describe("new-session model runtime", () => {
     );
   });
 
-  it("renders a successful empty catalog as an explicit empty result", async () => {
-    const { context, request } = contextWith([]);
+  it("renders an all-cold catalog as disabled intent with a setup action", async () => {
+    const { context, navigate, request } = contextWith([
+      {
+        id: "gpt-5.6-luna",
+        name: "GPT-5.6 Luna",
+        provider: "openai",
+        available: false,
+      },
+      {
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        provider: "openai",
+        available: false,
+      },
+    ]);
     const control = new NewSessionModelControl(() => undefined);
 
     control.load(context, "main", true);
@@ -397,12 +417,26 @@ describe("new-session model runtime", () => {
           ?.getAttribute("data-chat-model-catalog-state"),
       ).toBe("ready");
       expect(container.querySelector('[data-chat-model-select="true"]')?.textContent).toContain(
-        "No models available",
+        "GPT-5.6 Luna",
       );
     });
     const container = renderControl(control, context);
-    expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(0);
+    const options = container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]");
+    expect(
+      control.isModelUnavailable({
+        id: "main",
+        model: { primary: "openai/gpt-5.6-luna" },
+      }),
+    ).toBe(true);
+    expect(options).toHaveLength(2);
+    expect(options[0]?.textContent).toContain("Sign-in needed");
+    expect([...options].every((option) => option.disabled)).toBe(true);
+    expect(container.textContent).toContain(
+      "Authentication failed. Review the provider credential or sign-in, then retry.",
+    );
     expect(container.querySelector('[data-chat-model-catalog-retry="true"]')).toBeNull();
+    container.querySelector<HTMLButtonElement>('[data-chat-model-setup="true"]')?.click();
+    expect(navigate).toHaveBeenCalledWith("model-setup");
   });
 
   it("keeps a successful empty catalog explicit when its refresh fails", async () => {
@@ -419,7 +453,7 @@ describe("new-session model runtime", () => {
     request.mockReturnValueOnce(refresh.promise);
 
     control.load(context, "main", true);
-    expect(renderControl(control, context).textContent).toContain("No models available");
+    expect(renderControl(control, context).textContent).toContain("Authentication failed");
 
     refresh.reject(new Error("refresh failed"));
     await vi.waitFor(() =>
@@ -430,7 +464,7 @@ describe("new-session model runtime", () => {
     const container = renderControl(control, context);
     expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(0);
     expect(container.querySelector('[data-chat-model-select="true"]')?.textContent).toContain(
-      "No models available",
+      "Authentication failed",
     );
     expect(container.textContent).not.toContain("GPT-5.6 Luna");
   });
@@ -724,7 +758,7 @@ describe("new-session model runtime", () => {
         id: "gpt-5.6-luna",
         name: "GPT-5.6 Luna",
         provider: "openai",
-        agentRuntime: { id: "codex", source: "model" },
+        agentRuntime: { id: "codex", cloudPlacementSupported: true, source: "model" },
       },
     ]);
     const control = new NewSessionModelControl(() => undefined);
@@ -740,7 +774,11 @@ describe("new-session model runtime", () => {
     );
     await vi.waitFor(() => {
       control.selected = "openai/gpt-5.6-luna";
-      expect(control.resolveAgentRuntimeId({ context })).toBe("codex");
+      expect(control.resolveAgentRuntime({ context })).toEqual({
+        id: "codex",
+        cloudPlacementSupported: true,
+        source: "model",
+      });
     });
   });
 
@@ -748,11 +786,28 @@ describe("new-session model runtime", () => {
     const { context } = contextWith([]);
     const agent = {
       id: "main",
-      agentRuntime: { id: "claude-cli", source: "agent" },
-    } satisfies GatewayAgentRow;
+      agentRuntime: { id: "claude-cli", cloudPlacementSupported: false, source: "agent" },
+    } satisfies GatewayAgentRow & {
+      agentRuntime: { id: string; cloudPlacementSupported: boolean; source: "agent" };
+    };
     const control = new NewSessionModelControl(() => undefined);
 
-    expect(control.resolveAgentRuntimeId({ agent, context })).toBe("claude-cli");
+    expect(control.resolveAgentRuntime({ agent, context })).toEqual({
+      id: "claude-cli",
+      cloudPlacementSupported: false,
+      source: "agent",
+    });
+  });
+
+  it("falls back to the session defaults runtime capability", () => {
+    const { context } = contextWith([], "codex", [], true);
+    const control = new NewSessionModelControl(() => undefined);
+
+    expect(control.resolveAgentRuntime({ context })).toEqual({
+      id: "codex",
+      cloudPlacementSupported: true,
+      source: "defaults",
+    });
   });
 
   it.each(["auto", "default"])(
@@ -761,7 +816,7 @@ describe("new-session model runtime", () => {
       const { context } = contextWith([], runtime);
       const control = new NewSessionModelControl(() => undefined);
 
-      expect(control.resolveAgentRuntimeId({ context })).toBeUndefined();
+      expect(control.resolveAgentRuntime({ context })).toBeUndefined();
     },
   );
 
@@ -774,7 +829,7 @@ describe("new-session model runtime", () => {
     control.load(context, "main", true);
     control.selected = "anthropic/sonnet-4.6";
 
-    await vi.waitFor(() => expect(control.resolveAgentRuntimeId({ context })).toBeUndefined());
+    await vi.waitFor(() => expect(control.resolveAgentRuntime({ context })).toBeUndefined());
   });
 
   it("retries canonical startup-sidecars unavailability and restores the catalog", async () => {

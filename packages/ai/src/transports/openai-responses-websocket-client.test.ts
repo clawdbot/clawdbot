@@ -263,6 +263,7 @@ async function run(
     timeoutMs?: number;
     headers?: Record<string, string>;
     observations?: ResponsesPromptObservation[];
+    onCompactionRejected?: () => void;
   } = {},
 ): Promise<AssistantMessage> {
   const options = {
@@ -272,6 +273,7 @@ async function run(
     reasoningEffort: "low",
     timeoutMs: overrides.timeoutMs,
     headers: overrides.headers,
+    onCompactionRejected: overrides.onCompactionRejected,
   };
   if (overrides.observations) {
     responsesPromptObserver.set(options, (observation) =>
@@ -584,26 +586,129 @@ describe("native OpenAI Responses WebSocket client integration", () => {
     expect(transportState.websocketCloseCount).toBe(1);
   });
 
-  it("does not replay over SSE after an ambiguous post-dispatch disconnect", async () => {
-    transportState.responseBatches.push([
+  it("recovers a rejected WebSocket compaction replay over full-history SSE", async () => {
+    const onCompactionRejected = vi.fn();
+    transportState.responseBatches.push(
+      [
+        message(
+          completedEvent("resp_checkpoint", [
+            {
+              type: "compaction",
+              id: "cmp_rejected",
+              encrypted_content: "opaque-rejected-compaction",
+            },
+          ]),
+        ),
+      ],
+      [
+        {
+          type: "error",
+          error: wrappedSdkServerError({
+            code: "invalid_encrypted_content",
+            message: "compaction checkpoint could not be decrypted",
+            param: "input[0].encrypted_content",
+            status: 400,
+          }),
+        },
+      ],
+      [message(completedEvent("resp_next"))],
+    );
+    transportState.sdkOutcomes.push(sdkCompletion("resp_recovered"));
+    const firstUser = userMessage("full history before compaction", 1);
+    const checkpoint = await run({ messages: [firstUser], tools: [] }, { transport: "websocket" });
+    expect(checkpoint.providerReplay).toMatchObject({ type: "openai-responses-compaction" });
+    transportState.websocketRequests.length = 0;
+    const observations: ResponsesPromptObservation[] = [];
+    const context = {
+      messages: [firstUser, checkpoint, userMessage("continue after compaction", 2)],
+      tools: [],
+    } satisfies Context;
+
+    const result = await run(context, {
+      observations,
+      transport: "websocket",
+      onCompactionRejected,
+    });
+    const next = await run(
       {
-        type: "error",
-        error: wrappedSdkServerError({
-          code: "invalid_websocket_request",
-          message: "request may have been dispatched",
-          param: "input",
-          status: 400,
-        }),
+        ...context,
+        messages: [...context.messages, result, userMessage("continue again", 3)],
       },
+      { observations, transport: "websocket" },
+    );
+
+    expect(result).toMatchObject({
+      stopReason: "stop",
+      providerReplay: {
+        type: "openai-responses-compaction-suppression",
+        data: "rejected",
+      },
+    });
+    expect(next.stopReason).toBe("stop");
+    expect(onCompactionRejected).toHaveBeenCalledOnce();
+    expect(transportState.websocketRequests).toHaveLength(2);
+    expect(JSON.stringify(transportState.websocketRequests[0]?.input)).toContain(
+      '"type":"compaction"',
+    );
+    expect(JSON.stringify(transportState.websocketRequests[0]?.input)).not.toContain(
+      "full history before compaction",
+    );
+    expect(transportState.sdkRequests).toHaveLength(1);
+    expect(JSON.stringify(transportState.sdkRequests[0]?.input)).not.toContain(
+      '"type":"compaction"',
+    );
+    expect(JSON.stringify(transportState.sdkRequests[0]?.input)).toContain(
+      "full history before compaction",
+    );
+    expect(JSON.stringify(transportState.websocketRequests[1]?.input)).not.toContain(
+      '"type":"compaction"',
+    );
+    expect(observations.map(({ egress, payloadVariant }) => ({ egress, payloadVariant }))).toEqual([
+      { egress: "responses-websocket", payloadVariant: "initial" },
+      { egress: "responses-sdk", payloadVariant: "compaction-stripped" },
+      { egress: "responses-websocket", payloadVariant: "initial" },
     ]);
-
-    const result = await run({ messages: [userMessage("hello", 1)], tools: [] });
-
-    expect(result.stopReason).toBe("error");
-    expect(result.errorCode).toBe(PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE);
-    expect(transportState.websocketRequests).toHaveLength(1);
-    expect(transportState.sdkRequests).toEqual([]);
   });
+
+  it.each([
+    [
+      "invalid_websocket_request",
+      "request may have been dispatched",
+      PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
+    ],
+    [
+      "invalid_encrypted_content",
+      "encrypted reasoning was rejected without compaction",
+      "invalid_encrypted_content",
+    ],
+    [
+      "thinking_signature_invalid",
+      "thinking signature was rejected without replayable reasoning",
+      "thinking_signature_invalid",
+    ],
+  ])(
+    "does not replay over SSE after a post-dispatch %s without compaction",
+    async (code, text, expectedCode) => {
+      transportState.responseBatches.push([
+        {
+          type: "error",
+          error: wrappedSdkServerError({
+            code,
+            message: text,
+            param: "input",
+            status: 400,
+          }),
+        },
+      ]);
+
+      const result = await run({ messages: [userMessage("hello", 1)], tools: [] });
+
+      expect(result.stopReason).toBe("error");
+      expect(result.errorCode).toBe(expectedCode);
+      expect(transportState.websocketRequests).toHaveLength(1);
+      expect(transportState.sdkRequests).toEqual([]);
+    },
+  );
 
   it("applies the request timeout after dispatch without falling back", async () => {
     transportState.responseBatches.push([{ type: "delay", ms: 25 }]);

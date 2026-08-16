@@ -45,6 +45,7 @@ const sidebarSessionGatewayBindings = new WeakMap<
 >();
 
 export type SidebarLifecycleState = HTMLElement & {
+  hiddenSessionCatalogIds: ReadonlySet<string>;
   activeRouteId?: string;
   activeWorkboardBoardId: string;
   enabledRouteIds?: readonly NavigationRouteId[];
@@ -69,6 +70,11 @@ export type SidebarLifecycleState = HTMLElement & {
   ) => void;
   readonly sessionData: SessionDataController;
   readonly sessionOrganizer: SessionOrganizerController;
+  listSessionGroupFolders(path?: string): Promise<{
+    path: string;
+    home: string;
+    entries: Array<{ name: string; path: string; type: "directory" | "file" }>;
+  }>;
   requestUpdate: () => void;
   updateComplete: Promise<boolean>;
   updateAvailable: { currentVersion: string; latestVersion: string; channel: string } | null;
@@ -88,6 +94,8 @@ export type LobsterPetElement = HTMLElement & {
 
 export type TestSessionMenu = HTMLElement & {
   forkDisabled: boolean;
+  forkFromLastCompleted: boolean;
+  onAction: (action: { kind: "fork" }) => void;
   selectionCount: number;
   readonly updateComplete: Promise<boolean>;
 };
@@ -199,6 +207,7 @@ export function createSessionState(agentId: string, keys: string[]): SessionStat
     error: null,
     deletedSessions: [],
     groups: [],
+    groupSettings: [],
     sectionOrder: [],
   };
 }
@@ -307,6 +316,9 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
       }
     },
     groupsLoad: () => Promise.resolve(),
+    groupsGeneration: () => 0,
+    groupsStatus: () => "ready",
+    groupsInvalidate: () => undefined,
     groupsPut,
     groupsRename,
     groupsDelete,
