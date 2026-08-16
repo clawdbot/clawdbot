@@ -78,7 +78,8 @@ fi
 
 resolve_peekaboo_source_commit() {
   local resolved_file="$ROOT_DIR/apps/macos/Package.resolved"
-  /usr/bin/python3 - "$resolved_file" <<'PY'
+  local revision
+  revision="$(/usr/bin/python3 - "$resolved_file" <<'PY'
 import json
 from pathlib import Path
 import re
@@ -107,6 +108,17 @@ if not isinstance(revision, str) or re.fullmatch(r"[0-9a-f]{40}", revision) is N
 
 print(revision, end="")
 PY
+  )"
+  local expected="${OPENCLAW_EXPECTED_PEEKABOO_SOURCE_COMMIT:-}"
+  if [[ -n "$expected" && ! "$expected" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "ERROR: OPENCLAW_EXPECTED_PEEKABOO_SOURCE_COMMIT must be a full lowercase 40-character SHA" >&2
+    return 1
+  fi
+  if [[ -n "$expected" && "$revision" != "$expected" ]]; then
+    echo "ERROR: Peekaboo pin '$revision' does not match requested release source '$expected'" >&2
+    return 1
+  fi
+  printf '%s' "$revision"
 }
 
 sparkle_canonical_build_from_version() {
@@ -177,6 +189,26 @@ run_with_locked_swift_packages() {
   fi
   rm "$resolved_snapshot"
   return "$command_status"
+}
+
+compiled_peekaboo_commit() {
+  local build_path="$1" expected="$2"
+  local checkout="$build_path/checkouts/Peekaboo"
+  [[ -d "$checkout/.git" || -f "$checkout/.git" ]] || {
+    echo "ERROR: Resolved Peekaboo checkout not found at $checkout" >&2
+    return 1
+  }
+  local commit
+  commit="$(git -C "$checkout" rev-parse HEAD)"
+  [[ "$commit" == "$expected" ]] || {
+    echo "ERROR: Compiled Peekaboo checkout '$commit' does not match locked source '$expected'" >&2
+    return 1
+  }
+  [[ -z "$(git -C "$checkout" status --porcelain --untracked-files=all)" ]] || {
+    echo "ERROR: Compiled Peekaboo checkout contains uncommitted changes" >&2
+    return 1
+  }
+  printf '%s' "$commit"
 }
 
 PATCHED_SWIFTPM_RESOURCE_SOURCES=()
@@ -389,6 +421,8 @@ merge_framework_machos() {
 }
 
 PEEKABOO_SOURCE_COMMIT="$(resolve_peekaboo_source_commit)"
+PEEKABOO_LOCKED_SOURCE_COMMIT="$PEEKABOO_SOURCE_COMMIT"
+COMPILED_PEEKABOO_SOURCE_COMMIT=""
 
 require_swift_toolchain
 
@@ -441,6 +475,12 @@ for arch in "${BUILD_ARCHS[@]}"; do
   patch_swiftpm_resource_lookups "$BUILD_PATH"
   echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [$arch]"
   run_with_locked_swift_packages swift build -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
+  arch_peekaboo_commit="$(compiled_peekaboo_commit "$BUILD_PATH" "$PEEKABOO_LOCKED_SOURCE_COMMIT")"
+  if [[ -n "$COMPILED_PEEKABOO_SOURCE_COMMIT" && "$COMPILED_PEEKABOO_SOURCE_COMMIT" != "$arch_peekaboo_commit" ]]; then
+    echo "ERROR: Peekaboo checkout differs across requested architectures" >&2
+    exit 1
+  fi
+  COMPILED_PEEKABOO_SOURCE_COMMIT="$arch_peekaboo_commit"
   restore_swiftpm_resource_sources
   if [[ "$SKIP_MLX_TTS" == "1" ]]; then
     echo "🔇 Skipping $MLX_TTS_HELPER_PRODUCT (OPENCLAW_SKIP_MLX_TTS=1) — app will lack the local MLX voice helper [$arch]"
@@ -449,6 +489,11 @@ for arch in "${BUILD_ARCHS[@]}"; do
     build_mlx_tts_helper "$arch"
   fi
 done
+[[ -n "$COMPILED_PEEKABOO_SOURCE_COMMIT" ]] || {
+  echo "ERROR: No compiled Peekaboo checkout was verified" >&2
+  exit 1
+}
+PEEKABOO_SOURCE_COMMIT="$COMPILED_PEEKABOO_SOURCE_COMMIT"
 
 BIN_PRIMARY="$(bin_for_arch "$PRIMARY_ARCH")"
 echo "pkg: binary $BIN_PRIMARY" >&2

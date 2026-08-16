@@ -172,7 +172,7 @@ function getPeekabooSourceCommitHelperBlock(): string {
   return script.slice(start, end);
 }
 
-function runPeekabooSourceCommitHarness(packageResolved: string) {
+function runPeekabooSourceCommitHarness(packageResolved: string, expectedRevision?: string) {
   const root = tempDirs.make("openclaw-package-peekaboo-source-");
   const resolvedFile = path.join(root, "apps", "macos", "Package.resolved");
   mkdirSync(path.dirname(resolvedFile), { recursive: true });
@@ -181,6 +181,7 @@ function runPeekabooSourceCommitHarness(packageResolved: string) {
   return runHelper(`
     set -euo pipefail
     ROOT_DIR=${JSON.stringify(root)}
+    ${expectedRevision ? `export OPENCLAW_EXPECTED_PEEKABOO_SOURCE_COMMIT=${JSON.stringify(expectedRevision)}` : "unset OPENCLAW_EXPECTED_PEEKABOO_SOURCE_COMMIT"}
     ${getPeekabooSourceCommitHelperBlock()}
     resolve_peekaboo_source_commit
   `);
@@ -260,6 +261,47 @@ function getSwiftPackageResolutionBlock(): string {
   expect(end).toBeGreaterThan(start);
 
   return script.slice(start, end);
+}
+
+function getCompiledPeekabooHelperBlock(): string {
+  const script = readFileSync(scriptPath, "utf8");
+  const start = script.indexOf("compiled_peekaboo_commit() {");
+  const end = script.indexOf("PATCHED_SWIFTPM_RESOURCE_SOURCES=()", start);
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+  return script.slice(start, end);
+}
+
+function runCompiledPeekabooHarness(options: { head: string; expected: string; status?: string }) {
+  const root = tempDirs.make("openclaw-compiled-peekaboo-");
+  const binDir = path.join(root, "bin");
+  const buildPath = path.join(root, "build");
+  mkdirSync(path.join(buildPath, "checkouts", "Peekaboo", ".git"), { recursive: true });
+  mkdirSync(binDir, { recursive: true });
+  const gitPath = path.join(binDir, "git");
+  writeFileSync(
+    gitPath,
+    [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      'case "$*" in',
+      "  *'rev-parse HEAD'*) printf '%s\\n' \"$MOCK_HEAD\" ;;",
+      "  *'status --porcelain'*) printf '%s' \"$MOCK_STATUS\" ;;",
+      "  *) exit 2 ;;",
+      "esac",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  chmodSync(gitPath, 0o755);
+  return runHelper(`
+    set -euo pipefail
+    PATH=${JSON.stringify(`${binDir}:/usr/bin:/bin`)}
+    export MOCK_HEAD=${JSON.stringify(options.head)}
+    export MOCK_STATUS=${JSON.stringify(options.status ?? "")}
+    ${getCompiledPeekabooHelperBlock()}
+    compiled_peekaboo_commit ${JSON.stringify(buildPath)} ${JSON.stringify(options.expected)}
+  `);
 }
 
 function getStopPackagedAppBlock(): string {
@@ -692,13 +734,34 @@ describe("package-mac-app plist stamping", () => {
   });
 
   it("resolves the exact pinned Peekaboo source revision from Package.resolved", () => {
-    const expectedRevision = "a2fb16764a7d1c53bf696127c287ba32703f614f";
     const packageResolved = readFileSync("apps/macos/Package.resolved", "utf8");
+    const parsed = JSON.parse(packageResolved) as {
+      pins: Array<{ identity: string; state: { revision?: string } }>;
+    };
+    const expectedRevision = parsed.pins.find((pin) => pin.identity === "peekaboo")?.state.revision;
     const result = runPeekabooSourceCommitHarness(packageResolved);
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe(expectedRevision);
     expect(result.stderr).toBe("");
+  });
+
+  it("requires the locked Peekaboo pin to match the requested elevation release source", () => {
+    const requestedRevision = "b".repeat(40);
+    const packageResolved = readFileSync("apps/macos/Package.resolved", "utf8");
+    const parsed = JSON.parse(packageResolved) as {
+      pins: Array<{ identity: string; state: { revision?: string } }>;
+    };
+    const pinnedRevision = parsed.pins.find((pin) => pin.identity === "peekaboo")?.state.revision;
+    expect(pinnedRevision).toMatch(/^[0-9a-f]{40}$/);
+
+    const matching = runPeekabooSourceCommitHarness(packageResolved, pinnedRevision!);
+    expect(matching.status, matching.stderr).toBe(0);
+    expect(matching.stdout).toBe(pinnedRevision);
+
+    const mismatched = runPeekabooSourceCommitHarness(packageResolved, requestedRevision);
+    expect(mismatched.status).toBe(1);
+    expect(mismatched.stderr).toContain("does not match requested release source");
   });
 
   it.each([
@@ -1344,6 +1407,25 @@ describe("package-mac-app plist stamping", () => {
     expect(script).toContain(resolveCall);
     expect(script).toContain(buildCall);
     expect(script.indexOf(resolveCall)).toBeLessThan(script.indexOf(buildCall));
+  });
+
+  it("stamps only the clean Peekaboo source that SwiftPM actually compiled", () => {
+    const revision = "d".repeat(40);
+    const matching = runCompiledPeekabooHarness({ head: revision, expected: revision });
+    expect(matching.status, matching.stderr).toBe(0);
+    expect(matching.stdout).toBe(revision);
+
+    const mismatched = runCompiledPeekabooHarness({ head: "e".repeat(40), expected: revision });
+    expect(mismatched.status).toBe(1);
+    expect(mismatched.stderr).toContain("does not match locked source");
+
+    const dirty = runCompiledPeekabooHarness({
+      head: revision,
+      expected: revision,
+      status: " M file",
+    });
+    expect(dirty.status).toBe(1);
+    expect(dirty.stderr).toContain("contains uncommitted changes");
   });
 
   it("restores and rejects a Swift package resolution that changes the lockfile", () => {
