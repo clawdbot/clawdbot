@@ -324,12 +324,12 @@ export async function handleInlineActions(params: {
   const slashCommandName = resolveSlashCommandName(command.commandBodyNormalized);
   const hasSkillReferences =
     command.isAuthorizedSender && hasSkillReferenceCandidate(initialCleanedBody);
+  const hasSkillSlashCandidate =
+    command.isAuthorizedSender &&
+    slashCommandName !== null &&
+    (slashCommandName === "skill" || !getBuiltinSlashCommands().has(slashCommandName));
   const shouldLoadSkillCommands =
-    allowTextCommands &&
-    (hasSkillReferences ||
-      (slashCommandName !== null &&
-        // `/skill …` needs the full skill command list.
-        (slashCommandName === "skill" || !getBuiltinSlashCommands().has(slashCommandName))));
+    allowTextCommands && (hasSkillReferences || hasSkillSlashCandidate);
   const canReusePreloadedSkillCommands = execOverrides === undefined;
   const skillCommands =
     shouldLoadSkillCommands &&
@@ -349,7 +349,7 @@ export async function handleInlineActions(params: {
           })
         : [];
   const allSkillCommands =
-    allowTextCommands && hasSkillReferences && skillFilter !== undefined
+    allowTextCommands && (hasSkillReferences || hasSkillSlashCandidate) && skillFilter !== undefined
       ? (await loadSkillCommandsRuntime()).listSkillCommandsForWorkspace({
           workspaceDir,
           cfg,
@@ -518,9 +518,9 @@ export async function handleInlineActions(params: {
 
   if (
     allowTextCommands &&
-    hasSkillReferences &&
+    (hasSkillReferences || hasSkillSlashCandidate) &&
     !skillInvocation &&
-    resolveSlashCommandName(cleanedBody) === null
+    (hasSkillSlashCandidate || resolveSlashCommandName(cleanedBody) === null)
   ) {
     const referenced = expandExplicitSkillReferences({
       text: cleanedBody,

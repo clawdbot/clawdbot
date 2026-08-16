@@ -984,6 +984,50 @@ describe("handleInlineActions", () => {
     expect(typing.cleanup).toHaveBeenCalledOnce();
   });
 
+  it("returns a visible error for an allowlist-hidden leading skill slash command", async () => {
+    const typing = createTypingController();
+    const original = "/office_hours review this";
+    const ctx = buildTestCtx({ Body: original, CommandBody: original });
+    listSkillCommandsForWorkspaceMock.mockImplementation(
+      (params: { includeAllowlistHidden?: boolean }) =>
+        params.includeAllowlistHidden
+          ? [
+              {
+                name: "office_hours",
+                skillName: "office-hours",
+                description: "Engineering office hours",
+                skillFile: "/tmp/skills/office-hours/SKILL.md",
+              },
+            ]
+          : [],
+    );
+
+    const result = await runTestInlineActions({
+      ctx,
+      typing,
+      cleanedBody: original,
+      command: {
+        isAuthorizedSender: true,
+        rawBodyNormalized: original,
+        commandBodyNormalized: original,
+      },
+      overrides: {
+        allowTextCommands: true,
+        cfg: { commands: { text: true } },
+        skillCommands: [],
+        skillFilter: ["another-skill"],
+      },
+    });
+
+    expect(result).toEqual({
+      kind: "reply",
+      reply: {
+        text: 'Skill "office-hours" is not available for this agent. Update the skill allowlist or choose an allowed skill.',
+      },
+    });
+    expect(typing.cleanup).toHaveBeenCalledOnce();
+  });
+
   it("keeps hidden skill references literal when text commands are disabled", async () => {
     const typing = createTypingController();
     const original = "Review with $office_hours.";
