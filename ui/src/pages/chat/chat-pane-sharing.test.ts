@@ -333,6 +333,25 @@ describe("chat pane sharing authorization", () => {
       result: sharingResult(replacement),
     });
   });
+
+  it("drops a sharing load failure after leaving and returning", async () => {
+    const row = sessionRow();
+    const listed = createDeferred<SessionMembersListResult>();
+    const request = vi.fn(() => listed.promise);
+    const { pane: testPane } = createSharingTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessions: {} as SessionCapability,
+    });
+    const pane = testPane as SharingPane;
+    const pending = pane.loadSessionSharing(row);
+    pane.presented = false;
+    pane.presented = true;
+
+    listed.reject(new Error("stale sharing load failed"));
+    await pending;
+
+    expect(pane.sessionSharingStates.get(pane.sessionSharingCacheKey(row.key))).toBeUndefined();
+  });
 });
 
 describe.each(mutations)("chat pane $name mutation connection ownership", (mutation) => {
@@ -464,6 +483,36 @@ describe.each(mutations)("chat pane $name mutation connection ownership", (mutat
       loading: false,
       error: `Error: ${mutation.name} failed after session switch`,
     });
+    expect(state.lastError).toBeNull();
+    expect(state.chatError).toBeNull();
+    expect(sessions.refreshReplacement).not.toHaveBeenCalled();
+  });
+
+  it("drops a failure after leaving and returning to the retained pane", async () => {
+    const response = createDeferred<unknown>();
+    const request = vi.fn((method: string) => {
+      if (method !== mutation.method) {
+        throw new Error(`unexpected request: ${method}`);
+      }
+      return response.promise;
+    });
+    const sessions = {
+      refreshReplacement: vi.fn(),
+    } as unknown as SessionCapability;
+    const { pane: testPane, state } = createSharingTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessions,
+    });
+    const pane = testPane as SharingPane;
+    const row = sessionRow();
+    const pending = mutation.invoke(pane, row);
+    pane.presented = false;
+    pane.presented = true;
+
+    response.reject(new Error(`stale ${mutation.name} failed`));
+    await pending;
+
+    expect(pane.sessionSharingStates.get(pane.sessionSharingCacheKey(row.key))).toBeUndefined();
     expect(state.lastError).toBeNull();
     expect(state.chatError).toBeNull();
     expect(sessions.refreshReplacement).not.toHaveBeenCalled();

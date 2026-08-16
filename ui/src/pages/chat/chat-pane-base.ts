@@ -78,6 +78,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   // before route data resolves).
   @property({ attribute: false }) sessionKey = "";
   private activeValue = false;
+  private headerPresentationGeneration = 0;
   private presentedValue = true;
   get presented(): boolean {
     return this.presentedValue;
@@ -87,11 +88,18 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     if (value === previous) {
       return;
     }
+    this.headerPresentationGeneration += 1;
     this.presentedValue = value;
     this.requestUpdate("presented", previous);
     this.presentedChanged(value);
   }
   protected presentedChanged(_presented: boolean): void {}
+  protected get headerOutcomeOwner(): string {
+    return `${this.connectionGeneration}:${this.headerPresentationGeneration}`;
+  }
+  protected ownsHeaderOutcome(owner: string): boolean {
+    return this.presented && owner === this.headerOutcomeOwner;
+  }
   get active(): boolean {
     return this.activeValue;
   }
@@ -416,7 +424,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected abstract reconcileWaitingApprovalSnapshot(
     approvalQueue?: ChatPageContext["overlays"]["snapshot"]["approvalQueue"],
   ): boolean;
-  protected abstract publishHeaderError(error: unknown): void;
+  protected abstract publishHeaderError(error: unknown, owner?: string): void;
   protected abstract probeSessionDiscussion(sessionKey: string): Promise<void>;
   protected abstract loadHeaderPlatform(
     client: GatewayBrowserClient,
