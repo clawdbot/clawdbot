@@ -100,6 +100,20 @@ describe("readConfiguredLogTail", () => {
     expect(result).toBe(devLog);
   });
 
+  it("sets truncated flag when line count exceeds limit", async () => {
+    const { readConfiguredLogTail } = await import("./log-tail.js");
+    const tempDir = tempDirs.make("openclaw-log-tail-");
+    const file = path.join(tempDir, "openclaw-2026-01-22.log");
+    const lines = Array.from({ length: 10 }, (_, i) => `line-${i}`);
+    await fs.writeFile(file, lines.join("\n") + "\n");
+    setLoggerOverride({ file });
+
+    const result = await readConfiguredLogTail({ limit: 5 });
+
+    expect(result.lines).toEqual(["line-5", "line-6", "line-7", "line-8", "line-9"]);
+    expect(result.truncated).toBe(true);
+  });
+
   it("does not reinterpret an explicit profile-shaped logging.file as rolling", async () => {
     const { readConfiguredLogTail } = await import("./log-tail.js");
     const tempDir = tempDirs.make("openclaw-log-tail-");
