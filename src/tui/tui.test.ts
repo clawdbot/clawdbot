@@ -13,6 +13,7 @@ import {
   beginTuiShutdown,
   createBackspaceDeduper,
   createDeferredTuiFinish,
+  createTuiConnectionLineage,
   createTuiSignalHandlers,
   drainAndStopTuiSafely,
   installTuiTerminalLossExitHandler,
@@ -732,6 +733,20 @@ describe("resolveTuiCtrlCAction", () => {
       action: "force-exit",
       nextLastCtrlCAt: 1000,
     });
+  });
+});
+
+describe("createTuiConnectionLineage", () => {
+  it("keeps a startup retry before the first hello out of reconnect recovery", () => {
+    const lineage = createTuiConnectionLineage();
+
+    lineage.disconnect();
+    expect(lineage.wasDisconnected()).toBe(false);
+    expect(lineage.connect()).toBe(false);
+
+    lineage.disconnect();
+    expect(lineage.wasDisconnected()).toBe(true);
+    expect(lineage.connect()).toBe(true);
   });
 });
 

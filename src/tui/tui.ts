@@ -683,6 +683,25 @@ export function resolveTuiCtrlCAction(params: {
   return resolveCtrlCAction(params);
 }
 
+export function createTuiConnectionLineage() {
+  let hasConnected = false;
+  let wasDisconnected = false;
+  return {
+    connect: () => {
+      const reconnected = wasDisconnected;
+      hasConnected = true;
+      wasDisconnected = false;
+      return reconnected;
+    },
+    disconnect: () => {
+      if (hasConnected) {
+        wasDisconnected = true;
+      }
+    },
+    wasDisconnected: () => wasDisconnected,
+  };
+}
+
 function resolveEmptySessionInfoDefaults(config: OpenClawConfig): SessionInfo {
   return {
     verboseLevel: config.agents?.defaults?.verboseDefault,
@@ -749,7 +768,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   const sessionGenerations = new Map<string, number>();
   const sessionIds = new Map<string, string>();
   let connectionGeneration = 0;
-  let wasDisconnected = false;
+  const connectionLineage = createTuiConnectionLineage();
   let remediationShown = false;
   const localRunIds = createTuiRunIdTracker();
   const localBtwRunIds = createTuiRunIdTracker();
@@ -1623,7 +1642,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       now,
       lastCtrlCAt: state.lastCtrlCAt,
       exitRequested,
-      wasDisconnected,
+      wasDisconnected: connectionLineage.wasDisconnected(),
       exitWindowMs: opts.ctrlCExitWindowMs,
     });
     if (decision.action === "force-exit") {
@@ -1725,8 +1744,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       connectedGeneration === connectionGeneration && state.isConnected && !exitRequested;
     state.isConnected = true;
     remediationShown = false;
-    const reconnected = wasDisconnected;
-    wasDisconnected = false;
+    const reconnected = connectionLineage.connect();
     if (reconnected) {
       reconnectStreamingWatchdog();
     }
@@ -1842,7 +1860,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     }
     connectionGeneration += 1;
     state.isConnected = false;
-    wasDisconnected = true;
+    connectionLineage.disconnect();
     state.historyLoaded = false;
     dynamicSlashCommands = [];
     dynamicSlashCommandsKey = null;
