@@ -97,9 +97,7 @@ export async function prepareLocalWorkspaceRsyncBoundary(
     throw new Error("test rsync transfer is missing its bundled receiver invocation");
   }
   const receiverEntry = path.join(remoteHome, invocation.receiverEntryPath);
-  const installRoot = path.join(remoteHome, ".openclaw-worker", BUNDLE_HASH);
   await fs.mkdir(path.dirname(receiverEntry), { recursive: true });
-  await fs.writeFile(path.join(installRoot, "package.json"), '{"type":"module"}\n');
   const tsxApi = import.meta.resolve("tsx/esm/api");
   const sourceEntry = pathToFileURL(path.resolve("src/worker/workspace-rsync-receiver.ts")).href;
   await fs.writeFile(

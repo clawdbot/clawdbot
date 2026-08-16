@@ -6,9 +6,16 @@ import module from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse, type Node as AcornNode } from "acorn";
+import {
+  WORKER_BUNDLE_ENTRY_PATH,
+  WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
+} from "../src/shared/worker-bundle-hash.js";
 
 const DEFAULT_ENTRYPOINTS = ["dist/entry.js", "dist/cli/run-main.js"];
-const WORKER_DEPLOY_ENTRYPOINT = "dist/worker/worker.mjs";
+const WORKER_DEPLOY_ENTRYPOINTS = [
+  `dist/worker/${WORKER_BUNDLE_ENTRY_PATH}`,
+  `dist/worker/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}`,
+] as const;
 const DEFAULT_GATEWAY_RUN_CHUNK_MAX_BYTES = 70 * 1024;
 const GATEWAY_RUN_CHUNK_MARKER_SETS = [
   ["const GATEWAY_AUTH_MODES", "function addGatewayRunCommand"],
@@ -31,7 +38,6 @@ type CliBootstrapCheckParams = {
   entrypoints?: string[];
   distDir?: string;
   gatewayRunChunkMaxBytes?: number;
-  workerEntrypoint?: string;
   fs?: typeof fs;
   logger?: { error(message: string): void };
 };
@@ -350,26 +356,36 @@ export function collectGatewayRunChunkBudgetErrors(params: CliBootstrapCheckPara
 export function collectWorkerDeployArtifactErrors(params: CliBootstrapCheckParams = {}) {
   const rootDir = params.rootDir ?? process.cwd();
   const fsImpl = params.fs ?? fs;
-  const entrypoint = path.resolve(rootDir, params.workerEntrypoint ?? WORKER_DEPLOY_ENTRYPOINT);
-  const artifactDir = path.dirname(entrypoint);
-  const relativeEntrypoint = path.relative(rootDir, entrypoint) || entrypoint;
+  const entrypoints = WORKER_DEPLOY_ENTRYPOINTS.map((entrypoint) =>
+    path.resolve(rootDir, entrypoint),
+  );
+  const artifactDir = path.dirname(entrypoints[0]!);
+  const artifactNames = new Set(
+    entrypoints.flatMap((entrypoint) => {
+      const name = path.basename(entrypoint);
+      return [name, `${name}.map`];
+    }),
+  );
   const errors: string[] = [];
-  let source: string;
-  try {
-    const stats = fsImpl.lstatSync(entrypoint);
-    if (stats.isSymbolicLink() || !stats.isFile()) {
-      return [`Worker deploy artifact ${relativeEntrypoint} must be a regular file.`];
+  const sources: Array<{ relativeEntrypoint: string; source: string }> = [];
+  for (const entrypoint of entrypoints) {
+    const relativeEntrypoint = path.relative(rootDir, entrypoint) || entrypoint;
+    try {
+      const stats = fsImpl.lstatSync(entrypoint);
+      if (stats.isSymbolicLink() || !stats.isFile()) {
+        return [`Worker deploy artifact ${relativeEntrypoint} must be a regular file.`];
+      }
+      sources.push({
+        relativeEntrypoint,
+        source: fsImpl.readFileSync(entrypoint, "utf8"),
+      });
+    } catch {
+      return [`Worker deploy artifact ${relativeEntrypoint} is missing. Run pnpm build first.`];
     }
-    source = fsImpl.readFileSync(entrypoint, "utf8");
-  } catch {
-    return [`Worker deploy artifact ${relativeEntrypoint} is missing. Run pnpm build first.`];
   }
   try {
     for (const entry of fsImpl.readdirSync(artifactDir, { withFileTypes: true })) {
-      if (
-        entry.name === path.basename(entrypoint) ||
-        entry.name === `${path.basename(entrypoint)}.map`
-      ) {
+      if (artifactNames.has(entry.name)) {
         continue;
       }
       if (entry.name === "package.json") {
@@ -392,20 +408,23 @@ export function collectWorkerDeployArtifactErrors(params: CliBootstrapCheckParam
       `Worker deploy artifact directory ${path.relative(rootDir, artifactDir)} is unreadable.`,
     );
   }
-  try {
-    for (const specifier of listRuntimeImportSpecifiers(source)) {
-      if (!isBuiltinSpecifier(specifier)) {
+  for (const { relativeEntrypoint, source } of sources) {
+    try {
+      for (const specifier of listRuntimeImportSpecifiers(source)) {
+        if (isBuiltinSpecifier(specifier)) {
+          continue;
+        }
         errors.push(
           `Worker deploy artifact ${relativeEntrypoint} retains runtime import "${specifier}" instead of bundling it.`,
         );
       }
+    } catch (error) {
+      errors.push(
+        `Worker deploy artifact ${relativeEntrypoint} is not parseable JavaScript: ${
+          error instanceof Error ? error.message : String(error)
+        }.`,
+      );
     }
-  } catch (error) {
-    errors.push(
-      `Worker deploy artifact ${relativeEntrypoint} is not parseable JavaScript: ${
-        error instanceof Error ? error.message : String(error)
-      }.`,
-    );
   }
   return errors.toSorted((left, right) => left.localeCompare(right));
 }

@@ -753,6 +753,13 @@ suite.define(() => {
         )
         .toEqual(["Already pinned", "Pin me"]);
       await expect.poll(() => researchGroup.locator(".sidebar-recent-session").count()).toBe(0);
+
+      const pinnedCandidate = page.locator(
+        '[data-sidebar-entry="session:agent:main:candidate"] .sidebar-recent-session',
+      );
+      await pinnedCandidate.click({ button: "right" });
+      await page.getByRole("menuitem", { name: "Unpin session" }).waitFor();
+      expect(await page.getByRole("menuitem", { name: "Reset pinned items" }).count()).toBe(0);
       await captureUiProof(page, "sidebar-session-dropped-into-pinned.png");
     } finally {
       await context.close();

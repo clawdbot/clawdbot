@@ -16,15 +16,24 @@ const configs = Array.isArray(config) ? config : [config];
 type TsdownConfig = (typeof configs)[number];
 type OutExtensions = NonNullable<TsdownConfig["outExtensions"]>;
 
-function isWorkerDeployConfig(config: TsdownConfig): boolean {
+function hasWorkerEntry(config: TsdownConfig, name: string, source: string): boolean {
   const entry = config.entry;
   if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
     return false;
   }
-  return (
-    (entry as Record<string, unknown>)["worker/worker"] === "src/worker/worker-deploy-entry.ts"
-  );
+  return (entry as Record<string, unknown>)[name] === source;
 }
+
+const isWorkerDeployConfig = (config: TsdownConfig) =>
+  hasWorkerEntry(config, "worker/worker", "src/worker/worker-deploy-entry.ts");
+const isWorkerRsyncReceiverConfig = (config: TsdownConfig) =>
+  hasWorkerEntry(
+    config,
+    "worker/workspace-rsync-receiver",
+    "src/worker/workspace-rsync-receiver.ts",
+  );
+const isWorkerBuildConfig = (config: TsdownConfig) =>
+  isWorkerDeployConfig(config) || isWorkerRsyncReceiverConfig(config);
 
 describe("tsdown config", () => {
   it.each(["tsdown.config.ts", "tsdown.ai.config.ts"])(
@@ -96,12 +105,15 @@ describe("tsdown config", () => {
     expect(privateDeclarationSources).toContain("src/plugin-sdk/tts-runtime.ts");
   });
 
-  it("builds one worker-only executable with every package dependency bundled", () => {
+  it("builds self-contained worker deploy executables with every dependency bundled", () => {
     const workerConfig = configs.find(isWorkerDeployConfig);
+    const receiverConfig = configs.find(isWorkerRsyncReceiverConfig);
     expect(workerConfig?.entry).toEqual({
       "worker/worker": "src/worker/worker-deploy-entry.ts",
     });
-    expect(workerConfig?.dts).toBe(false);
+    expect(receiverConfig?.entry).toEqual({
+      "worker/workspace-rsync-receiver": "src/worker/workspace-rsync-receiver.ts",
+    });
     const packageVersion = (
       JSON.parse(fs.readFileSync("package.json", "utf8")) as {
         version: string;
@@ -129,26 +141,35 @@ describe("tsdown config", () => {
       codeSplitting: false,
       assetFileNames: "worker/[name][extname]",
     });
-    expect(workerConfig?.deps?.onlyBundle).toBe(false);
-    expect(workerConfig?.deps?.alwaysBundle).toBeTypeOf("function");
-    const alwaysBundle = workerConfig?.deps?.alwaysBundle;
-    if (typeof alwaysBundle !== "function") {
-      throw new Error("worker deploy config must define dependency bundling");
-    }
-    expect(alwaysBundle("json5", undefined)).toBe(true);
-    expect(alwaysBundle("node:fs", undefined)).toBe(false);
+    expect(receiverConfig?.define).toBeUndefined();
+    expect(receiverConfig?.alias).toBeUndefined();
+    expect(receiverConfig?.plugins).toBeUndefined();
+    expect(receiverConfig?.outputOptions).toEqual({ codeSplitting: false });
 
     const context = {
       format: "es",
       options: {},
       pkgType: "module",
     } as Parameters<OutExtensions>[0];
-    expect(workerConfig?.outExtensions?.(context)).toEqual({ js: ".mjs", dts: ".d.ts" });
+    for (const config of [workerConfig, receiverConfig]) {
+      expect(config?.dts).toBe(false);
+      expect(config?.outDir).toBe("dist");
+      expect(config?.shims).toBe(true);
+      expect(config?.deps?.onlyBundle).toBe(false);
+      expect(config?.deps?.alwaysBundle).toBeTypeOf("function");
+      const alwaysBundle = config?.deps?.alwaysBundle;
+      if (typeof alwaysBundle !== "function") {
+        throw new Error("worker deploy config must define dependency bundling");
+      }
+      expect(alwaysBundle("json5", undefined)).toBe(true);
+      expect(alwaysBundle("node:fs", undefined)).toBe(false);
+      expect(config?.outExtensions?.(context)).toEqual({ js: ".mjs", dts: ".d.ts" });
+    }
   });
 
   it("keeps node package artifacts on the declared js and dts extensions", () => {
     const nodePackageConfigs = configs.filter(
-      (entry) => entry.fixedExtension === false && !isWorkerDeployConfig(entry),
+      (entry) => entry.fixedExtension === false && !isWorkerBuildConfig(entry),
     );
     expect(nodePackageConfigs).not.toHaveLength(0);
 

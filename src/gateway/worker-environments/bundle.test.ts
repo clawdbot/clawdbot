@@ -9,6 +9,7 @@ import {
   resolveWorkerNpmInstallationArtifact,
   type WorkerInstallationArtifact,
 } from "./bundle.js";
+import { workerWorkspaceRsyncReceiverEntryPath } from "./workspace-sync-helpers.js";
 
 type WorkerBundleArtifact = Extract<WorkerInstallationArtifact, { install: "bundle" }>;
 
@@ -32,6 +33,11 @@ async function writeFixture(
     encoding: "utf8",
     mode: 0o755,
   });
+  await fs.writeFile(
+    path.join(packageRoot, "dist", "worker", "workspace-rsync-receiver.mjs"),
+    "export const receiver = true;\n",
+    { encoding: "utf8", mode: 0o755 },
+  );
 }
 
 async function listTarball(tarballPath: string): Promise<string[]> {
@@ -59,7 +65,25 @@ function bundleArtifact(overrides: Partial<WorkerBundleArtifact> = {}): WorkerBu
 }
 
 describe("worker bundle producer", () => {
-  it("hashes and archives only the dedicated deploy artifact", async () => {
+  it("stages the workspace rsync receiver at the path used by transfers", async () => {
+    await withTestDir({ prefix: "openclaw-worker-bundle-receiver-" }, async (root) => {
+      const packageRoot = path.join(root, "package");
+      await writeFixture(packageRoot);
+      const artifact = await createWorkerBundleProducer({
+        packageRoot,
+        cacheDir: path.join(root, "cache"),
+      }).prepare();
+      const installPrefix = `.openclaw-worker/${artifact.bundleHash}/`;
+      const receiverPath = workerWorkspaceRsyncReceiverEntryPath(artifact.bundleHash);
+
+      expect(receiverPath.startsWith(installPrefix)).toBe(true);
+      await expect(listTarball(artifact.tarballPath)).resolves.toContain(
+        receiverPath.slice(installPrefix.length),
+      );
+    });
+  });
+
+  it("hashes and archives only the dedicated deploy artifacts", async () => {
     await withTestDir({ prefix: "openclaw-worker-bundle-" }, async (root) => {
       const packageA = path.join(root, "package-a");
       const packageB = path.join(root, "package-b");
@@ -107,13 +131,19 @@ describe("worker bundle producer", () => {
         openclawVersion: first.openclawVersion,
         protocolFeatures: first.protocolFeatures,
       });
-      await expect(listTarball(first.tarballPath)).resolves.toEqual(["worker.mjs"]);
+      await expect(listTarball(first.tarballPath)).resolves.toEqual([
+        "worker.mjs",
+        "workspace-rsync-receiver.mjs",
+      ]);
       const extractRoot = path.join(root, "extract");
       await fs.mkdir(extractRoot);
       await tar.extract({ file: first.tarballPath, cwd: extractRoot });
       await expect(fs.readFile(path.join(extractRoot, "worker.mjs"), "utf8")).resolves.toContain(
         "worker = true",
       );
+      await expect(
+        fs.readFile(path.join(extractRoot, "workspace-rsync-receiver.mjs"), "utf8"),
+      ).resolves.toContain("receiver = true");
       await expect(fs.access(path.join(extractRoot, "package.json"))).rejects.toThrow();
       await expect(fs.access(path.join(extractRoot, "node_modules"))).rejects.toThrow();
     });
@@ -139,6 +169,13 @@ describe("worker bundle producer", () => {
       );
       const changed = await createWorkerBundleProducer({ packageRoot, cacheDir }).prepare();
       expect(changed.bundleHash).not.toBe(first.bundleHash);
+
+      await fs.writeFile(
+        path.join(packageRoot, "dist", "worker", "workspace-rsync-receiver.mjs"),
+        "export const receiver = false;\n",
+      );
+      const receiverChanged = await createWorkerBundleProducer({ packageRoot, cacheDir }).prepare();
+      expect(receiverChanged.bundleHash).not.toBe(changed.bundleHash);
     });
   });
 
@@ -293,22 +330,30 @@ describe("worker bundle producer", () => {
       const repaired = await createWorkerBundleProducer({ packageRoot, cacheDir }).prepare();
 
       expect(repaired.bundleHash).toBe(first.bundleHash);
-      await expect(listTarball(repaired.tarballPath)).resolves.toEqual(["worker.mjs"]);
+      await expect(listTarball(repaired.tarballPath)).resolves.toEqual([
+        "worker.mjs",
+        "workspace-rsync-receiver.mjs",
+      ]);
     });
   });
 
-  it.skipIf(process.platform === "win32")("rejects a symlinked deploy artifact", async () => {
-    await withTestDir({ prefix: "openclaw-worker-bundle-symlink-" }, async (root) => {
-      const packageRoot = path.join(root, "package");
-      await writeFixture(packageRoot);
-      const artifactPath = path.join(packageRoot, "dist", "worker", "worker.mjs");
-      await fs.rename(artifactPath, `${artifactPath}.target`);
-      await fs.symlink("worker.mjs.target", artifactPath);
+  it.skipIf(process.platform === "win32")("rejects symlinked deploy artifacts", async () => {
+    for (const artifactName of ["worker.mjs", "workspace-rsync-receiver.mjs"]) {
+      await withTestDir({ prefix: "openclaw-worker-bundle-symlink-" }, async (root) => {
+        const packageRoot = path.join(root, "package");
+        await writeFixture(packageRoot);
+        const artifactPath = path.join(packageRoot, "dist", "worker", artifactName);
+        await fs.rename(artifactPath, `${artifactPath}.target`);
+        await fs.symlink(`${artifactName}.target`, artifactPath);
 
-      await expect(
-        createWorkerBundleProducer({ packageRoot, cacheDir: path.join(root, "cache") }).prepare(),
-      ).rejects.toThrow("Unsafe worker deploy artifact");
-    });
+        await expect(
+          createWorkerBundleProducer({
+            packageRoot,
+            cacheDir: path.join(root, "cache"),
+          }).prepare(),
+        ).rejects.toThrow("Unsafe worker deploy artifact");
+      });
+    }
   });
 });
 

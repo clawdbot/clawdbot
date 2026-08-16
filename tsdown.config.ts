@@ -205,6 +205,26 @@ function workerDeployBuildConfig(): UserConfig {
   };
 }
 
+function workerRsyncReceiverBuildConfig(): UserConfig {
+  return {
+    name: TSDOWN_UNIFIED_CONFIG_GROUP,
+    entry: { "worker/workspace-rsync-receiver": "src/worker/workspace-rsync-receiver.ts" },
+    outDir: "dist",
+    dts: false,
+    env,
+    deps: {
+      alwaysBundle: (id) => !isBuiltin(id),
+      onlyBundle: false,
+    },
+    fixedExtension: false,
+    outExtensions: () => ({ js: ".mjs", dts: ".d.ts" }),
+    outputOptions: { codeSplitting: false },
+    shims: true,
+    sourcemap: OUTPUT_SOURCE_MAPS,
+    inputOptions: (options) => buildInputOptions(options, { bundleAllDependencies: true }),
+  };
+}
+
 function nodeWorkspacePackageBuildConfig(packageDir: string, config: UserConfig = {}): UserConfig {
   return {
     ...config,
@@ -352,7 +372,6 @@ function buildCoreDistEntries(): Record<string, string> {
     "server-close.runtime": "src/gateway/server-close.runtime.ts",
     "gateway/plugin-channel-reload-targets": "src/gateway/plugin-channel-reload-targets.ts",
     "gateway/worker-environments/runtime": "src/gateway/worker-environments/runtime.ts",
-    "worker/workspace-rsync-receiver": "src/worker/workspace-rsync-receiver.ts",
     "plugins/hook-runner-global": "src/plugins/hook-runner-global.ts",
     "plugins/memory-state": "src/plugins/memory-state.ts",
     "plugins/synthetic-auth.runtime": "src/plugins/synthetic-auth.runtime.ts",
@@ -725,6 +744,7 @@ const configs = [
     false,
   ),
   workerDeployBuildConfig(),
+  workerRsyncReceiverBuildConfig(),
   ...(TSDOWN_DECLARATIONS
     ? buildUnifiedDeclarationPartitions(unifiedDistEntries).map(({ name, sources }) =>
         nodeBuildConfig(
