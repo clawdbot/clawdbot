@@ -55,6 +55,7 @@ export async function syncPluginsForUpdateChannel(params: {
   config: OpenClawConfig;
   channel: UpdateChannel;
   coreVersion?: string;
+  requestedTag?: string;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   logger?: PluginUpdateLogger;
@@ -184,6 +185,7 @@ export async function syncPluginsForUpdateChannel(params: {
               updateChannel: params.channel,
               officialPackageName: resolveNpmSpecPackageName(npmSpec),
               coreVersion: params.coreVersion,
+              requestedTag: params.requestedTag,
             })
           : null;
       const effectiveNpmSpec = channelNpmSpecs?.installSpec ?? npmSpec;

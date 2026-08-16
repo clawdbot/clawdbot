@@ -41,6 +41,7 @@ export function resolveNpmInstallSpecsForUpdateChannel(params: {
   officialPackageName?: string;
   coreVersion?: string;
   versionBoundToCore?: boolean;
+  requestedTag?: string;
 }): ChannelInstallSpecs {
   if (
     params.updateChannel === "extended-stable" ||
@@ -79,7 +80,9 @@ export function resolveNpmInstallSpecsForUpdateChannel(params: {
       recordSpec: params.spec,
     };
   }
-  const betaSpec = `${betaTarget.name}@beta`;
+  // Use the explicitly requested tag if provided, otherwise default to @beta.
+  const requestedTag = params.requestedTag?.trim();
+  const betaSpec = requestedTag ? `${betaTarget.name}@${requestedTag}` : `${betaTarget.name}@beta`;
   return {
     installSpec: betaSpec,
     recordSpec: params.spec,

@@ -634,6 +634,7 @@ async function updateCommandInternal(
     installKindChanged: switchToGit || switchToPackage,
     configSnapshot: finalizationConfigSnapshot,
     requestedChannel,
+    requestedTag: tag,
     storedChannel,
     channel,
     downgradeRisk,
