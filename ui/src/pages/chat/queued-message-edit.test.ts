@@ -146,6 +146,27 @@ describe("queued message edit round-trip", () => {
     unsubscribe();
   });
 
+  it.each(["/stop", "/compact"])(
+    "keeps the source row and rejects a command-like inline edit: %s",
+    async (command) => {
+      const { host, unsubscribe } = queueHost([{}]);
+      expect(beginQueuedMessageEdit(host as never, "queued-1")).toBe("started");
+
+      await handleSendChat(host as never, command, {
+        attachmentsOverride: [],
+        resumeQueuedMessageEditId: "queued-1",
+      });
+
+      expect(storedOrder(host)).toEqual(["message 1"]);
+      expect(isQueuedMessageBeingEdited(host as never, "queued-1")).toBe(true);
+      expect(host.request?.mock.calls.some(([method]) => method === "chat.send") ?? false).toBe(
+        false,
+      );
+      expect(host.chatError).toContain("Queued-row edits cannot run slash commands");
+      unsubscribe();
+    },
+  );
+
   it("rejects a stale second-pane replacement after the source is retired", async () => {
     const paneA = makeChatHost({ sessionKey: SESSION_KEY, connected: false });
     const paneB = makeChatHost({ sessionKey: SESSION_KEY, connected: false });

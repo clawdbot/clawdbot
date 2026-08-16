@@ -217,6 +217,21 @@ export async function handleSendChat(
     return;
   }
 
+  const requestedEditId = opts?.resumeQueuedMessageEditId;
+  const inlineEdit = requestedEditId ? activeQueuedMessageEdit(host) : null;
+  if (requestedEditId != null && !inlineEdit) {
+    return;
+  }
+  const isInlineEditSubmission = requestedEditId != null && inlineEdit?.id === requestedEditId;
+  const parsedCommand = !skillWorkshopRevision ? parseSlashCommand(message) : null;
+  if (isInlineEditSubmission && parsedCommand) {
+    setChatError(
+      host,
+      "Queued-row edits cannot run slash commands. Cancel this edit and send the command from the composer.",
+    );
+    return;
+  }
+
   if (!skillWorkshopRevision) {
     // Natural stop aliases require a run; explicit /stop is always available.
     if (
@@ -235,7 +250,7 @@ export async function handleSendChat(
     }
 
     host.chatRunError = null;
-    const parsed = parseSlashCommand(message);
+    const parsed = parsedCommand;
     if (/^\/(?:btw|side)(?::|\s|$)/i.test(message)) {
       const question = extractCompanionCommandQuestion(message);
       if (!question) {
@@ -440,12 +455,6 @@ export async function handleSendChat(
     }
   }
 
-  const requestedEditId = opts?.resumeQueuedMessageEditId;
-  const inlineEdit = requestedEditId ? activeQueuedMessageEdit(host) : null;
-  if (requestedEditId != null && !inlineEdit) {
-    return;
-  }
-  const isInlineEditSubmission = requestedEditId != null && inlineEdit?.id === requestedEditId;
   const replyTarget = isInlineEditSubmission ? null : host.chatReplyTarget;
   // Persisted ids use replyToId; synthetic replies fall back to a quote.
   const replyToId = isInlineEditSubmission
