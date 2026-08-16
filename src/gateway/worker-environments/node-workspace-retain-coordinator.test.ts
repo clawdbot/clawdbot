@@ -6,13 +6,16 @@ import {
   NODE_WORKER_RETAIN_REQUEST_MAX_BYTES,
 } from "../../worker/node-workspace-retain-protocol.js";
 import type {
-  NodeWorkerBundleStatusObservation,
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
 import { createNodeWorkspaceRetainCoordinator } from "./node-workspace-retain-coordinator.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import type { WorkerEnvironmentService } from "./service.js";
+
+type NodeWorkerBundleStatusObservation = NonNullable<
+  ReturnType<NonNullable<NodeWorkerSupervisorTransport["getBundleStatus"]>>
+>;
 
 const node = {
   nodeId: "node-1",

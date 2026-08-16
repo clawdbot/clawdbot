@@ -145,8 +145,11 @@ function gatewaySnapshot(
   };
 }
 
-function gateway(client: GatewayBrowserClient | null): ApplicationContext["gateway"] {
-  const snapshot: ApplicationGatewaySnapshot = {
+function gateway(
+  client: GatewayBrowserClient | null,
+  snapshotOverride?: ApplicationGatewaySnapshot,
+): ApplicationContext["gateway"] {
+  const snapshot: ApplicationGatewaySnapshot = snapshotOverride ?? {
     client,
     phase: "stopped",
     offlineStable: false,
@@ -239,8 +242,7 @@ describe("DevicesPage gateway lifecycle", () => {
     );
     const client = { request } as unknown as GatewayBrowserClient;
     let onEvent: ((event: { event: string; payload?: unknown }) => void) | undefined;
-    const currentGateway = gateway(client);
-    currentGateway.snapshot = gatewaySnapshot(client, true);
+    const currentGateway = gateway(client, gatewaySnapshot(client, true));
     currentGateway.subscribeEvents = vi.fn((listener) => {
       onEvent = listener as typeof onEvent;
       return () => undefined;

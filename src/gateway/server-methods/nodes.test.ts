@@ -157,18 +157,20 @@ function createOptions(
 ): {
   context: ReturnType<typeof createContext>;
   opts: GatewayRequestHandlerOptions;
+  respond: ReturnType<typeof vi.fn>;
 } {
   const context = createContext();
+  const respond = vi.fn();
   const opts = {
     req: { type: "req", id: "req-1", method: "node.pair.remove", params },
     params,
     client: createClient(["operator.pairing", "operator.admin"]),
     isWebchatConnect: () => false,
-    respond: vi.fn(),
+    respond,
     context,
     ...overrides,
   } as unknown as GatewayRequestHandlerOptions;
-  return { context, opts };
+  return { context, opts, respond };
 }
 
 describe("nodeHandlers node.skills.update", () => {
@@ -330,7 +332,7 @@ describe("nodeHandlers node.describe", () => {
       'nodeHandlers["node.describe"] test invariant',
     )(describeCall.opts);
 
-    expect(listCall.opts.respond).toHaveBeenCalledWith(
+    expect(listCall.respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({
         nodes: expect.arrayContaining([
@@ -342,7 +344,7 @@ describe("nodeHandlers node.describe", () => {
       }),
       undefined,
     );
-    expect(describeCall.opts.respond).toHaveBeenCalledWith(
+    expect(describeCall.respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({
         nodeId,
@@ -351,8 +353,8 @@ describe("nodeHandlers node.describe", () => {
       }),
       undefined,
     );
-    expect(JSON.stringify(listCall.opts.respond.mock.calls)).not.toContain("bundleHash");
-    expect(JSON.stringify(describeCall.opts.respond.mock.calls)).not.toContain("bundleHash");
+    expect(JSON.stringify(listCall.respond.mock.calls)).not.toContain("bundleHash");
+    expect(JSON.stringify(describeCall.respond.mock.calls)).not.toContain("bundleHash");
     runtime.nodeRegistry.unregister(nodeClient.connId);
   });
 });

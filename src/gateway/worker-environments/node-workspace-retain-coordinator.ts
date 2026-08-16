@@ -235,17 +235,21 @@ export function createNodeWorkspaceRetainCoordinator(
       }
       if (!retained.applied || !retained.hasMore) {
         const bundleStatus = retained.bundleStatus;
-        const currentStatusTarget = input.bundleStatusHash
+        const requestedBundleHash = input.bundleStatusHash;
+        const currentStatusTarget = requestedBundleHash
           ? bundleStatusTargetForNode(options, node.nodeId)
           : undefined;
+        const statusTargetMatches =
+          currentStatusTarget != null &&
+          requestedBundleHash !== undefined &&
+          currentStatusTarget.bundleHash === requestedBundleHash;
         const statusMatches =
           retained.applied &&
-          input.bundleStatusHash !== undefined &&
-          currentStatusTarget?.bundleHash === input.bundleStatusHash &&
-          bundleStatus?.bundleHash === input.bundleStatusHash;
+          statusTargetMatches &&
+          bundleStatus?.bundleHash === requestedBundleHash;
         if (statusMatches && currentStatusTarget && bundleStatus) {
           currentTransport.acceptBundleStatus?.(node, {
-            bundleHash: input.bundleStatusHash,
+            bundleHash: currentStatusTarget.bundleHash,
             status:
               bundleStatus.status === "installed"
                 ? { status: "installed", version: currentStatusTarget.openclawVersion }

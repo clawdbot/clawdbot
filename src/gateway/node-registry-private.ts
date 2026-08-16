@@ -82,7 +82,7 @@ export type NodeWorkerSupervisorNodeProof = {
   commands: readonly string[];
 };
 
-export type NodeWorkerBundleStatusObservation = {
+type NodeWorkerBundleStatusObservation = {
   bundleHash: string;
   status: NodeWorkerBundleStatus;
 };

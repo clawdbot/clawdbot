@@ -55,7 +55,7 @@ export const RuntimeTargetIssueSchema = closedObject({
   headlessReconnectCommand: Type.Literal("openclaw node restart"),
 });
 
-export const NodeWorkerBundleStatusSchema = Type.Union([
+const NodeWorkerBundleStatusSchema = Type.Union([
   closedObject({ status: Type.Literal("installed"), version: NonEmptyString }),
   closedObject({ status: Type.Literal("missing") }),
 ]);
