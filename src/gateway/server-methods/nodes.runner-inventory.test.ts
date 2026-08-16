@@ -50,12 +50,12 @@ const runnerInventoryHandler = expectDefined(
 
 const availableHost = {
   protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-  workerHost: { enabled: true, capacity: "available" },
+  workerHost: { enabled: true, capacity: "available", bundlePrewarm: 1 },
 } as const;
 
 const fullHost = {
   protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-  workerHost: { enabled: true, capacity: "full" },
+  workerHost: { enabled: true, capacity: "full", bundlePrewarm: 1 },
 } as const;
 
 describe("nodeHandlers node.runnerInventory.update", () => {
@@ -83,7 +83,7 @@ describe("nodeHandlers node.runnerInventory.update", () => {
         nodeId: "node-1",
         connId: "conn-1",
         pairingGeneration: "generation-1",
-        workerHost: { enabled: true, capacity: "available" },
+        workerHost: { enabled: true, capacity: "available", bundlePrewarm: 1 },
       }),
     ]);
     runtime.nodeRegistry.unregister("conn-1");
@@ -110,7 +110,11 @@ describe("nodeHandlers node.runnerInventory.update", () => {
     await publish(fullHost);
 
     const [proof] = await runtime.nodeWorkerSupervisorTransport.listCurrentNodes();
-    expect(proof?.workerHost).toEqual({ enabled: true, capacity: "full" });
+    expect(proof?.workerHost).toEqual({
+      enabled: true,
+      capacity: "full",
+      bundlePrewarm: 1,
+    });
     expect(proof && runtime.nodeWorkerSupervisorTransport.isCurrent(proof)).toBe(true);
     expect(proof && runtime.nodeWorkerSupervisorTransport.isCurrent(proof, true)).toBe(false);
     runtime.nodeRegistry.unregister("conn-1");
@@ -171,7 +175,7 @@ describe("nodeHandlers node.runnerInventory.update", () => {
     await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([
       expect.objectContaining({
         pairingGeneration: "generation-1",
-        workerHost: { enabled: true, capacity: "full" },
+        workerHost: { enabled: true, capacity: "full", bundlePrewarm: 1 },
       }),
     ]);
     runtime.nodeRegistry.unregister("conn-1");
@@ -218,7 +222,7 @@ describe("nodeHandlers node.runnerInventory.update", () => {
       clientId: "node-host",
       clientMode: "node",
       protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-      workerHost: { enabled: true, capacity: "available" },
+      workerHost: { enabled: true, capacity: "available", bundlePrewarm: 1 },
       commands: ["system.run"],
     } as const;
     expect(runtime.nodeWorkerSupervisorTransport.isCurrent(forgedProof)).toBe(false);
@@ -251,7 +255,7 @@ describe("nodeHandlers node.runnerInventory.update", () => {
       expect.objectContaining({
         nodeId: "node-1",
         connId: "conn-v2",
-        workerHost: { enabled: true, capacity: "available" },
+        workerHost: { enabled: true, capacity: "available", bundlePrewarm: 1 },
       }),
     ]);
     runtime.nodeRegistry.unregister("conn-v2");
@@ -294,6 +298,13 @@ describe("nodeHandlers node.runnerInventory.update", () => {
       params: {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
         workerHost: { enabled: true },
+      },
+    },
+    {
+      name: "unsupported bundle prewarm version",
+      params: {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        workerHost: { enabled: true, capacity: "available", bundlePrewarm: 2 },
       },
     },
   ])("rejects $name without changing private eligibility", async ({ params }) => {
