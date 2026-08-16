@@ -37,6 +37,7 @@ import {
 import { listStoredChatOutboxes, storedChatOutboxScopeKey } from "./composer-persistence.ts";
 import { formatConnectError } from "./connect-error.ts";
 import {
+  isQueuedMessageBeingEdited,
   isQueuedMessageReorderBlocked,
   QUEUED_MESSAGE_REORDER_CONFLICT_ERROR,
 } from "./queued-message-edit.ts";
@@ -159,7 +160,10 @@ export function moveQueuedChatMessage(host: ChatHost, id: string, toIndex: numbe
   }
   const sessionKey = item.sessionKey ?? host.sessionKey;
   const scope = readChatQueueForScope(host, sessionKey, item.agentId);
-  const segment = chatQueueMovableSegments(scope).find((rows) => rows.some((row) => row.id === id));
+  const segment = chatQueueMovableSegments(
+    scope,
+    (row) => isMovableChatQueueItem(row) && !isQueuedMessageBeingEdited(host, row.id),
+  ).find((rows) => rows.some((row) => row.id === id));
   const moves = reorderChatQueueItems(segment ?? [], id, toIndex);
   if (moves.length === 0) {
     return;

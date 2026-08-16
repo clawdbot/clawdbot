@@ -78,6 +78,24 @@ describe("queued message reorder", () => {
     }
   });
 
+  it("treats a peer-owned edit as a barrier when moving a different row", () => {
+    const { host, unsubscribe } = queueHost([{}, {}, {}]);
+    const peer = makeChatHost({ sessionKey: SESSION_KEY, connected: false });
+    const stopPeer = subscribeChatOutboxProjection(peer as never);
+
+    try {
+      expect(beginQueuedMessageEdit(host as never, "queued-2")).toBe("started");
+
+      moveQueuedChatMessage(peer as never, "queued-1", 2);
+
+      expect(storedOrder(host)).toEqual(["queued-1", "queued-2", "queued-3"]);
+      expect(peer.lastError).toBeNull();
+    } finally {
+      stopPeer();
+      unsubscribe();
+    }
+  });
+
   it("rejects a replacement whose captured position went stale", () => {
     const { host, unsubscribe } = queueHost([{}, {}]);
     const expected = listStoredChatOutboxes(host as never)
