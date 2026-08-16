@@ -8,6 +8,7 @@ type CommanderHelpInternals = Command & {
 
 /* oxlint-disable eslint/no-underscore-dangle -- The identifier is Commander 15.0.0's own hook name; package.json pins that exact version. */
 /* oxlint-disable typescript/unbound-method -- Commander omits the hook from its types; the call site restores the receiver. */
+// SAFETY: Commander 15.0.0's runtime class defines this pinned private hook with the signature exposed above.
 const commanderOutputHelpIfRequested = (Command.prototype as CommanderHelpInternals)
   ._outputHelpIfRequested;
 /* oxlint-enable typescript/unbound-method */
