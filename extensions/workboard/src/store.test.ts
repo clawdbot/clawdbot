@@ -277,6 +277,56 @@ describe("WorkboardStore", () => {
     }
   });
 
+  it("keeps dispatch alive when a persisted notification exceeds its limit", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-notification-limit-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    let stores: ReturnType<typeof createWorkboardSqliteStores> | undefined;
+    try {
+      stores = createWorkboardSqliteStores({ dbPath });
+      const store = new WorkboardStore(stores.cards, {
+        boards: stores.boards,
+        subscriptions: stores.subscriptions,
+        attachments: stores.attachments,
+      });
+      const card = await store.create({
+        title: "Persisted notification",
+        status: "ready",
+        metadata: {
+          notifications: [
+            {
+              id: "notification-1",
+              kind: "completed",
+              createdAt: 1,
+              message: "Stored safely",
+            },
+          ],
+        },
+      });
+      stores.close();
+      stores = undefined;
+
+      const rawDb = new DatabaseSync(dbPath);
+      rawDb
+        .prepare("UPDATE workboard_card_notifications SET message = ? WHERE card_id = ?")
+        .run("x".repeat(300), card.id);
+      rawDb.close();
+
+      stores = createWorkboardSqliteStores({ dbPath });
+      const reopened = new WorkboardStore(stores.cards, {
+        boards: stores.boards,
+        subscriptions: stores.subscriptions,
+        attachments: stores.attachments,
+      });
+      await expect(reopened.dispatch()).resolves.toMatchObject({ count: 0 });
+      await expect(reopened.get(card.id)).resolves.toMatchObject({
+        metadata: { notifications: [{ message: expect.stringMatching(/^x+…$/) }] },
+      });
+    } finally {
+      stores?.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("lists sqlite board summaries without hydrating card child rows", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-summary-"));
     const dbPath = path.join(dir, "workboard.sqlite");
