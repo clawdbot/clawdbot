@@ -87,6 +87,8 @@ type MatrixExecApprovalConfig = {
   sessionFilter?: string[];
   /** Where approval prompts should go. Default: dm. */
   target?: MatrixExecApprovalTarget;
+  /** On TTL expiry, edit the prompt in-place instead of redacting it. Default: redact. */
+  onExpire?: "redact" | "edit";
 };
 
 export type MatrixStreamingMode = "partial" | "quiet" | "progress" | "off";

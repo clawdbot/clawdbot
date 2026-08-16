@@ -1,6 +1,7 @@
 // Matrix plugin module implements approval handler behavior.
 import type {
   ChannelApprovalCapabilityHandlerContext,
+  ExpiredApprovalView,
   PendingApprovalView,
   ResolvedApprovalView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
@@ -377,6 +378,18 @@ function buildMarkdownCodeBlock(text: string): string {
   return [fence, text, fence].join("\n");
 }
 
+function buildExpiredApprovalText(view: ExpiredApprovalView): string {
+  if (view.approvalKind === "plugin") {
+    return "Exec approval: Expired (no decision within the approval window)";
+  }
+  return [
+    "Exec approval: Expired (no decision within the approval window)",
+    "",
+    "Command",
+    buildMarkdownCodeBlock(view.commandText),
+  ].join("\n");
+}
+
 export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
   PendingApprovalContent,
   PreparedMatrixTarget,
@@ -419,7 +432,17 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
       kind: "update",
       payload: buildResolvedApprovalText(view),
     }),
-    buildExpiredResult: () => ({ kind: "delete" }),
+    buildExpiredResult: ({ cfg, accountId, context, view }) => {
+      const resolved = resolveHandlerContext({ cfg, accountId, context });
+      const onExpire = resolved
+        ? resolveMatrixAccount({ cfg: cfg as CoreConfig, accountId: resolved.accountId }).config
+            .execApprovals?.onExpire
+        : undefined;
+      if (onExpire === "edit") {
+        return { kind: "update", payload: buildExpiredApprovalText(view) };
+      }
+      return { kind: "delete" };
+    },
   },
   transport: {
     prepareTarget: ({ cfg, accountId, context, plannedTarget }) => {

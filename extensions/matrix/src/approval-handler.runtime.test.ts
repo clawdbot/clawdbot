@@ -600,4 +600,74 @@ describe("matrixApprovalNativeRuntime", () => {
       ].join("\n"),
     });
   });
+
+  it("redacts expired exec approvals by default (back-compat)", async () => {
+    const result = await matrixApprovalNativeRuntime.presentation.buildExpiredResult({
+      cfg: {} as never,
+      accountId: "default",
+      context: { client: {} as never },
+      request: {
+        id: "req-1",
+        request: { command: "echo hi" },
+        createdAtMs: 0,
+        expiresAtMs: 1_000,
+      },
+      view: {
+        approvalKind: "exec",
+        approvalId: "req-1",
+        phase: "expired",
+        title: "Exec Approval Required",
+        metadata: [],
+        commandText: "echo hi",
+      } as never,
+      entry: {} as never,
+    });
+
+    expect(result).toEqual({ kind: "delete" });
+  });
+
+  it("edits expired exec approvals in place when onExpire is 'edit'", async () => {
+    const result = await matrixApprovalNativeRuntime.presentation.buildExpiredResult({
+      cfg: {
+        channels: {
+          matrix: {
+            accounts: {
+              default: {
+                execApprovals: { onExpire: "edit" },
+              },
+            },
+          },
+        },
+      } as never,
+      accountId: "default",
+      context: { client: {} as never },
+      request: {
+        id: "req-1",
+        request: { command: "echo hi" },
+        createdAtMs: 0,
+        expiresAtMs: 1_000,
+      },
+      view: {
+        approvalKind: "exec",
+        approvalId: "req-1",
+        phase: "expired",
+        title: "Exec Approval Required",
+        metadata: [],
+        commandText: "echo hi",
+      } as never,
+      entry: {} as never,
+    });
+
+    expect(result).toEqual({
+      kind: "update",
+      payload: [
+        "Exec approval: Expired (no decision within the approval window)",
+        "",
+        "Command",
+        "```",
+        "echo hi",
+        "```",
+      ].join("\n"),
+    });
+  });
 });

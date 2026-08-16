@@ -43,6 +43,10 @@ const matrixExecApprovalsSchema = z
     agentFilter: z.array(z.string()).optional(),
     sessionFilter: z.array(z.string()).optional(),
     target: z.enum(["dm", "channel", "both"]).optional(),
+    // Default "redact" preserves existing behavior; "edit" rewrites the
+    // prompt in-place (matching the resolved-approval path) instead of
+    // leaving a delete tombstone once the approval TTL elapses.
+    onExpire: z.enum(["redact", "edit"]).optional(),
   })
   .optional();
 
