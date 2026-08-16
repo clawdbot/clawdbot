@@ -30,7 +30,8 @@ export type PluginBundleFormat = "agent" | "codex" | "claude" | "cursor";
 export type PluginDiagnosticCode =
   | "channel-setup-failure"
   | "dashboard-declaration-invalid"
-  | "plugin-verification";
+  | "plugin-verification"
+  | "workspace-scope-omitted";
 
 /** Diagnostic emitted while discovering or validating plugins. */
 export type PluginDiagnostic = {
@@ -449,7 +450,6 @@ export type PluginManifestContracts = {
    */
   externalAuthProviders?: string[];
   embeddingProviders?: string[];
-  memoryEmbeddingProviders?: string[];
   speechProviders?: string[];
   realtimeTranscriptionProviders?: string[];
   realtimeVoiceProviders?: string[];
@@ -527,6 +527,8 @@ export type PluginManifestToolMetadata = PluginManifestCapabilityProviderMetadat
   optional?: boolean;
   /** Tool execution is safe to repeat after an incomplete model turn. */
   replaySafe?: boolean;
+  /** Tool execution can change durable state and failed attempts must remain visible. */
+  sideEffecting?: boolean;
 };
 
 export type PluginManifestProviderAuthChoice = {

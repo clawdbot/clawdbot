@@ -60,6 +60,7 @@ import {
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
 import {
   isSessionAgentAttentionIconId,
+  normalizeSessionIconValue,
   resolveActiveSessionAgentStatus,
   sanitizeSessionAgentStatusNote,
   sessionAgentStatusExpiresAt,
@@ -238,7 +239,7 @@ export async function projectSessionsPatchEntry(params: {
   };
 
   const existing = params.existingEntry
-    ? projectCanonicalSessionEntryShape(params.existingEntry as unknown as Record<string, unknown>)
+    ? projectCanonicalSessionEntryShape({ ...params.existingEntry })
     : undefined;
   // Existing entries without session ids are placeholder aliases; assigning an id makes them real.
   const next: SessionEntry = existing?.sessionId
@@ -280,6 +281,19 @@ export async function projectSessionsPatchEntry(params: {
         return invalid(`label already in use: ${parsed.label}`);
       }
       next.label = parsed.label;
+    }
+  }
+
+  if ("icon" in patch) {
+    const raw = patch.icon;
+    if (raw === null || raw === "") {
+      delete next.icon;
+    } else if (raw !== undefined) {
+      const icon = normalizeSessionIconValue(raw);
+      if (!icon) {
+        return invalid("icon must be a single emoji");
+      }
+      next.icon = icon;
     }
   }
 
@@ -578,14 +592,20 @@ export async function projectSessionsPatchEntry(params: {
       if (!params.loadGatewayModelCatalog) {
         return {
           ok: false,
-          error: errorShape(ErrorCodes.UNAVAILABLE, "model catalog unavailable"),
+          error: errorShape(
+            ErrorCodes.UNAVAILABLE,
+            "model catalog is still loading; retry in a few seconds",
+          ),
         };
       }
       const catalog = await loadPreparedModelCatalogForPatch();
       if (!catalog) {
         return {
           ok: false,
-          error: errorShape(ErrorCodes.UNAVAILABLE, "model catalog unavailable"),
+          error: errorShape(
+            ErrorCodes.UNAVAILABLE,
+            "model catalog is still loading; retry in a few seconds",
+          ),
         };
       }
       const resolved = resolveSessionPatchModelSelection({

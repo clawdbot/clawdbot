@@ -229,6 +229,16 @@ function activeClawHubMutation(props: SkillsProps, ref: string): boolean {
   return props.operation?.kind === "clawhub" && props.operation.ref === ref;
 }
 
+function installedClawHubSearchResult(props: SkillsProps, result: ClawHubSearchResult): boolean {
+  if (result.installOnly !== true) {
+    return false;
+  }
+  const reference = clawHubSkillRef(result);
+  return (props.report?.skills ?? []).some(
+    (skill) => skill.clawhub?.valid === true && skill.clawhub.requestedReference === reference,
+  );
+}
+
 export function renderSkills(props: SkillsProps) {
   const skills = props.report?.skills ?? [];
 
@@ -456,36 +466,52 @@ function renderClawHubResults(props: SkillsProps) {
     ${results.map((r) => {
       const iconUrl = safeExternalHref(r.icon ?? undefined);
       // Same slug can appear once per publisher, so the reference is the only thing that tells
-      // otherwise identical rows apart — and it is what detail and install send back.
+      // otherwise identical rows apart — and it is what install sends back.
       const ref = clawHubSkillRef(r);
+      // Detail stays available unless the result is explicitly install-only, so results from a
+      // gateway that predates the flag keep the review-then-install flow.
+      const detailRef = r.installOnly ? undefined : ref;
+      const installed = installedClawHubSearchResult(props, r);
+      const trustSuffix = r.trustState ? ` · ${t("skillsPage.notScannedByClawHub")}` : "";
+      const rowCopy = html`
+        ${iconUrl
+          ? html`<img class="clawhub-skill-icon" src=${iconUrl} alt="" loading="lazy" />`
+          : nothing}
+        <span class="clawhub-skill-result__copy">
+          <span class="settings-row__title">${r.displayName}</span>
+          <span class="settings-row__desc">
+            ${r.summary ? `${clampText(r.summary, 100)} · ${ref}` : ref}${trustSuffix}
+          </span>
+        </span>
+      `;
       return html`
-        <div class="settings-row plugins-item plugins-item--clickable">
-          <button
-            type="button"
-            class="settings-row__text plugins-item__detail-button clawhub-skill-result__button"
-            aria-label=${t("skillsPage.openDetails", { name: ref })}
-            @click=${() => props.onClawHubDetailOpen(ref)}
-          >
-            ${iconUrl
-              ? html`<img class="clawhub-skill-icon" src=${iconUrl} alt="" loading="lazy" />`
-              : nothing}
-            <span class="clawhub-skill-result__copy">
-              <span class="settings-row__title">${r.displayName}</span>
-              <span class="settings-row__desc">
-                ${r.summary ? `${clampText(r.summary, 100)} · ${ref}` : ref}
-              </span>
-            </span>
-          </button>
+        <div class="settings-row plugins-item ${detailRef ? "plugins-item--clickable" : ""}">
+          ${detailRef
+            ? html`<button
+                type="button"
+                class="settings-row__text plugins-item__detail-button clawhub-skill-result__button"
+                aria-label=${t("skillsPage.openDetails", { name: detailRef })}
+                @click=${() => props.onClawHubDetailOpen(detailRef)}
+              >
+                ${rowCopy}
+              </button>`
+            : html`<div class="settings-row__text clawhub-skill-result__button">${rowCopy}</div>`}
           <div class="settings-row__control">
             ${r.version ? renderSettingsValue(`v${r.version}`) : nothing}
             <button
               class="btn btn--sm"
-              ?disabled=${skillInstallLocked(props)}
-              @click=${() => props.onClawHubInstall(ref)}
+              ?disabled=${installed || skillInstallLocked(props)}
+              @click=${() => {
+                if (!installed) {
+                  props.onClawHubInstall(ref);
+                }
+              }}
             >
-              ${activeClawHubMutation(props, ref)
-                ? t("skillsPage.installing")
-                : t("skillsPage.install")}
+              ${installed
+                ? t("skillsPage.installed")
+                : activeClawHubMutation(props, ref)
+                  ? t("skillsPage.installing")
+                  : t("skillsPage.install")}
             </button>
           </div>
         </div>

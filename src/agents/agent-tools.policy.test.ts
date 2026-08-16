@@ -86,10 +86,6 @@ describe("agent-tools.policy", () => {
   it("keeps apply_patch when write is allowlisted", () => {
     expect(isToolAllowedByPolicyName("apply_patch", { allow: ["write"] })).toBe(true);
   });
-
-  it("keeps apply_patch when write is denylisted", () => {
-    expect(isToolAllowedByPolicyName("apply_patch", { deny: ["write"] })).toBe(true);
-  });
 });
 
 describe("resolveGroupToolPolicy group context validation", () => {

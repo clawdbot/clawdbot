@@ -35,7 +35,7 @@ const OnePasswordToolSchema = {
       description: "Internal. Injected by the gateway policy layer; never set this manually.",
     },
   },
-} as unknown as AnyAgentTool["parameters"];
+} satisfies AnyAgentTool["parameters"];
 
 function errorResult(error: unknown) {
   const code =

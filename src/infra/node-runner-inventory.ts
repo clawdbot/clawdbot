@@ -5,10 +5,21 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 
 export const NODE_RUNNER_INVENTORY_UPDATE_METHOD = "node.runnerInventory.update";
-export const NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE = "node-worker-supervisor-v1";
+export const NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE = "node-worker-supervisor-v2";
+export const NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE = "node-worker-supervisor-v1";
+
+export const NODE_RUNNER_UPDATE_REQUIRED_ISSUE = {
+  code: "update-required",
+  action: "update-and-reconnect",
+  updateCommand: "openclaw update",
+  headlessReconnectCommand: "openclaw node restart",
+} as const;
+
+export type NodeRunnerInventoryIssue = typeof NODE_RUNNER_UPDATE_REQUIRED_ISSUE;
 
 type NodeWorkerSupervisorProtocolFeatures =
   | readonly []
+  | readonly [typeof NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE]
   | readonly [typeof NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE];
 
 export type NodeRunnerInventoryDeclaration = {
@@ -37,8 +48,11 @@ export function parseNodeRunnerInventoryDeclaration(
   let protocolFeatures: NodeWorkerSupervisorProtocolFeatures;
   if (value.protocolFeatures.length === 0) {
     protocolFeatures = [];
-  } else if (value.protocolFeatures[0] === NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE) {
-    protocolFeatures = [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE];
+  } else if (
+    value.protocolFeatures[0] === NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE ||
+    value.protocolFeatures[0] === NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE
+  ) {
+    protocolFeatures = [value.protocolFeatures[0]];
   } else {
     return null;
   }
@@ -50,4 +64,11 @@ export function parseNodeRunnerInventoryDeclaration(
     return { protocolFeatures, workerRuns: structuredClone(workerRuns) };
   }
   return { protocolFeatures };
+}
+
+export function formatNodeRunnerUpdateRequired(
+  nodeId: string,
+  issue: NodeRunnerInventoryIssue,
+): string {
+  return `device worker node ${nodeId} requires an update before it can host sessions; run ${issue.updateCommand}, then reconnect it (for a headless node, run ${issue.headlessReconnectCommand})`;
 }

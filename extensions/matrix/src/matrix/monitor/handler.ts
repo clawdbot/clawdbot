@@ -288,11 +288,13 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         botLoopProtection,
         effectiveGroupAllowFrom,
         effectiveRoomUsers,
+        resolveMessageIngress,
       } = resolvedIngressResult;
 
       // Keep the per-room ingress gate focused on ordering-sensitive state updates.
       // Prompt/session enrichment below can run concurrently after the history snapshot is fixed.
       const inboundContext = await resolveMatrixInboundContext({
+        resolveMessageIngress,
         client,
         core,
         cfg,

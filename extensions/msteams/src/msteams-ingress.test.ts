@@ -166,6 +166,7 @@ describe("Microsoft Teams durable ingress", () => {
 
   it("keeps a completion tombstone and rejects a post-completion duplicate", async () => {
     await withQueue(async (queue) => {
+      const enqueue = vi.spyOn(queue, "enqueue");
       const dispatch = vi.fn(async (_activity, lifecycle) => {
         await lifecycle.onAdopted();
       });
@@ -176,8 +177,9 @@ describe("Microsoft Teams durable ingress", () => {
         await ingress.accept(incoming);
         await waitForVerdict(queue, "activity-duplicate", "completed");
         await ingress.accept(incoming);
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 600);
+        await expect(enqueue.mock.results.at(-1)?.value).resolves.toMatchObject({
+          kind: "completed",
+          duplicate: true,
         });
         expect(dispatch).toHaveBeenCalledTimes(1);
       } finally {
@@ -188,6 +190,7 @@ describe("Microsoft Teams durable ingress", () => {
 
   it("deduplicates a concrete Bot Framework redelivery by activity.id", async () => {
     await withQueue(async (queue) => {
+      const enqueue = vi.spyOn(queue, "enqueue");
       const dispatch = vi.fn(async (_activity, lifecycle) => {
         await lifecycle.onAdopted();
       });
@@ -199,8 +202,9 @@ describe("Microsoft Teams durable ingress", () => {
         await ingress.accept(first);
         await waitForVerdict(queue, "bot-framework-redelivery", "completed");
         await ingress.accept(redelivery);
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 600);
+        await expect(enqueue.mock.results.at(-1)?.value).resolves.toMatchObject({
+          kind: "completed",
+          duplicate: true,
         });
         expect(dispatch).toHaveBeenCalledTimes(1);
         expect(dispatch.mock.calls[0]?.[0]).toMatchObject({ text: "original" });

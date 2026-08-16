@@ -324,6 +324,33 @@ CREATE TABLE IF NOT EXISTS transcript_events (
   FOREIGN KEY (session_id) REFERENCES "session_windows"(session_id) ON DELETE CASCADE
 ) STRICT;
 
+-- Canonical cold-tier owner for reclaimed transcript generations. The derived
+-- .deleted/.reset file may be recreated from this row after a crash.
+CREATE TABLE IF NOT EXISTS session_transcript_archives (
+  session_id TEXT NOT NULL,
+  generation TEXT NOT NULL,
+  session_key TEXT NOT NULL,
+  reason TEXT NOT NULL CHECK (reason IN ('deleted', 'reset')),
+  encoding TEXT NOT NULL CHECK (encoding IN ('identity', 'zstd')),
+  archive_blob BLOB NOT NULL,
+  archive_sha256 TEXT NOT NULL CHECK (length(archive_sha256) = 64),
+  archive_name TEXT NOT NULL UNIQUE,
+  created_at INTEGER NOT NULL,
+  published_at INTEGER,
+  publish_attempts INTEGER NOT NULL DEFAULT 0 CHECK (publish_attempts >= 0),
+  last_publish_attempt_at INTEGER,
+  last_publish_error TEXT,
+  PRIMARY KEY (session_id, generation),
+  CHECK (archive_name NOT LIKE '%/%' AND archive_name NOT LIKE '%\%')
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_transcript_archives_pending
+  ON session_transcript_archives(created_at, session_id, generation)
+  WHERE published_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_transcript_archives_retention
+  ON session_transcript_archives(created_at, session_id, generation);
+
 CREATE TABLE IF NOT EXISTS transcript_rewrite_watermarks (
   session_id TEXT NOT NULL PRIMARY KEY,
   generation TEXT NOT NULL,

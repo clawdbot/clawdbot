@@ -407,11 +407,9 @@ export async function readChatHistoryPage(params: {
           max,
           Math.max(readPage.messages.length, readPage.totalMessages > pageOffset ? 1 : 0),
         );
-    const rawMessages = localMessages;
-    const recencyFilteredMessages = dropPreSessionStartAnnouncePairs(
-      rawMessages,
-      typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
-    );
+    // localMessages is already announce-filtered above; the filter is
+    // single-pass complete, so no second pass is needed.
+    const recencyFilteredMessages = localMessages;
     const projected = isTailPage
       ? projectRecentChatDisplayMessages(recencyFilteredMessages, {
           maxChars: effectiveMaxChars,
@@ -539,15 +537,9 @@ export async function readChatHistoryPage(params: {
       },
     };
   }
-  const rawMessages = cliHistory.messages;
-  // Drop subagent_announce pairs (user inter-session announce + adjacent
-  // assistant) whose record timestamp predates the current session's
-  // sessionStartedAt. Run after CLI history imports too, because those
-  // timestamped messages share the same chat.history response surface.
-  const recencyFilteredMessages = dropPreSessionStartAnnouncePairs(
-    rawMessages,
-    typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
-  );
+  // The imported case returned above, so these are the already announce-filtered
+  // local messages; the filter is single-pass complete, so no second pass is needed.
+  const recencyFilteredMessages = cliHistory.messages;
   const displayMessages = projectRecentChatDisplayMessages(recencyFilteredMessages, {
     maxChars: effectiveMaxChars,
     maxMessages: max,

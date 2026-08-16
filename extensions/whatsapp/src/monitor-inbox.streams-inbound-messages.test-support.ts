@@ -82,14 +82,6 @@ export function inboundMessage(onMessage: ReturnType<typeof vi.fn>, index = 0): 
   return msg as WebInboundMessage;
 }
 
-export function expectDeprecatedAdmissionAliases(inbound: WebInboundMessage) {
-  expect(inbound.from).toBe(inbound.admission?.conversation.id);
-  expect(inbound.conversationId).toBe(inbound.admission?.conversation.id);
-  expect(inbound.accountId).toBe(inbound.admission?.accountId);
-  expect(inbound.chatType).toBe(inbound.admission?.conversation.kind);
-  expect(inbound.accessControlPassed).toBe(inbound.admission?.ingress.decision === "allow");
-}
-
 export async function expectSocketOperationTimeout(
   operation: "sendMessage" | "sendPresenceUpdate",
   promise: Promise<unknown>,

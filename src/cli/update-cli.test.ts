@@ -157,12 +157,9 @@ vi.mock("../config/config.js", () => ({
     }
   },
   ConfigMutationConflictError: class ConfigMutationConflictError extends Error {
-    readonly currentHash: string | null;
-
-    constructor(message: string, params: { currentHash: string | null }) {
+    constructor(message: string) {
       super(message);
       this.name = "ConfigMutationConflictError";
-      this.currentHash = params.currentHash;
     }
   },
   parseConfigJson5: (raw: string) => {

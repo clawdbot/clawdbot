@@ -60,6 +60,21 @@ describe("resolveNpmInstallSpecsForUpdateChannel", () => {
     ).toThrow("requires an exact core version");
   });
 
+  it("targets the exact core version for a stable version-bound plugin", () => {
+    expect(
+      resolveNpmInstallSpecsForUpdateChannel({
+        spec: "@openclaw/codex",
+        updateChannel: "stable",
+        officialPackageName: "@openclaw/codex",
+        coreVersion: "2026.8.1",
+        versionBoundToCore: true,
+      }),
+    ).toEqual({
+      installSpec: "@openclaw/codex@2026.8.1",
+      recordSpec: "@openclaw/codex",
+    });
+  });
+
   it("preserves beta behavior", () => {
     expect(
       resolveNpmInstallSpecsForUpdateChannel({

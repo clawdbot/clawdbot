@@ -232,6 +232,69 @@ describe("gateway tool runtime identity", () => {
     ).rejects.toThrow("terminal source reply requires trusted agent runtime identity");
   });
 
+  it("mints split-session message action identity and rejects policy-session substitution", async () => {
+    const policySessionKey = "agent:ops:telegram:default:direct:alice";
+    const runSessionKey = "agent:ops:main";
+    const operationalRunInstance = createOperationalRunInstanceRef("run-split-session");
+    const turnCapability = mintMessageActionTurnCapability({
+      agentId: "ops",
+      runId: operationalRunInstance.runId,
+      sessionKey: policySessionKey,
+      sourceReplySessionKey: runSessionKey,
+      sessionId: "session-split-session",
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "alice",
+        currentChatType: "direct",
+        currentSourceTurnId: "source-turn-split-session",
+      },
+    });
+    mintedTurnCapabilities.push(turnCapability);
+
+    await withActiveGatewayToolCallerIdentity(
+      {
+        agentId: "ops",
+        sessionKey: runSessionKey,
+        operationalRunInstance,
+      },
+      async () => {
+        await expect(
+          resolveMessageActionAgentRuntimeIdentityToken({
+            opts: {},
+            target: "local",
+            turnCapability,
+            turnCapabilitySessionKey: "agent:ops:telegram:default:direct:mallory",
+            runId: operationalRunInstance.runId,
+            sessionId: "session-split-session",
+            sourceReplyFinal: true,
+            sourceReplyToolCallId: "message-call-substituted-session",
+          }),
+        ).rejects.toThrow("terminal source reply requires an active turn capability");
+
+        const token = await resolveMessageActionAgentRuntimeIdentityToken({
+          opts: {},
+          target: "local",
+          turnCapability,
+          turnCapabilitySessionKey: policySessionKey,
+          runId: operationalRunInstance.runId,
+          sessionId: "session-split-session",
+          sourceReplyFinal: true,
+          sourceReplyToolCallId: "message-call-split-session",
+        });
+
+        await expect(verifyAgentRuntimeIdentityToken(token)).resolves.toMatchObject({
+          sessionKey: policySessionKey,
+          operationalRunInstance,
+          messageActionContext: {
+            sourceReplySessionKey: runSessionKey,
+            sourceReplyFinal: true,
+            sourceReplyToolCallId: "message-call-split-session",
+          },
+        });
+      },
+    );
+  });
+
   it.each([
     ["exec.approval.request", undefined, false],
     ["plugin.approval.request", "codex", false],

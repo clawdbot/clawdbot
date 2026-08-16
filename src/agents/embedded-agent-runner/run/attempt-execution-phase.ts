@@ -38,6 +38,7 @@ export async function runEmbeddedAttemptExecutionPhase(
       markSourceReplyDelivered,
       replaySafeToolNames,
       replaySafeTools,
+      sideEffectToolOwners,
       setActiveSessionSystemPrompt,
       settingsManager,
     },
@@ -56,7 +57,7 @@ export async function runEmbeddedAttemptExecutionPhase(
   const { runtimeChannel } = systemPrompt;
   const { toolSearchTargetTranscriptProjections } = toolBase;
   const hookAgentId = input.setup.sessionAgentId;
-  let repairedRejectedThinkingReplay = false;
+  let repairedRejectedProviderReplay = false;
   const mergeTerminal = (incoming: AgentRunAttemptTerminal) => {
     state.terminal = mergeAgentRunAttemptTerminal(state.terminal, incoming);
   };
@@ -80,8 +81,8 @@ export async function runEmbeddedAttemptExecutionPhase(
     providerTextTransforms,
     runTrace: input.diagnostics.runTrace,
     isYieldDetected: () => input.lifecycle.readYieldState().yieldDetected,
-    onRejectedThinkingReplayRepaired: () => {
-      repairedRejectedThinkingReplay = true;
+    onRejectedProviderReplayRepaired: () => {
+      repairedRejectedProviderReplay = true;
     },
     onIdleTimeout: (error) => idleTimeoutTriggerRef.current?.(error),
     abortSignal: input.runAbortController.signal,
@@ -193,6 +194,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     sandboxSessionKey: input.setup.sandboxSessionKey,
     builtinToolNames,
     replaySafeToolNames,
+    sideEffectToolOwners,
   });
   input.lifecycle.setToolSearchCatalogExecutor(preparedStream.toolSearchCatalogExecutor);
   input.externalAbortController.setCompactionState({
@@ -230,6 +232,6 @@ export async function runEmbeddedAttemptExecutionPhase(
   return await runEmbeddedAttemptSettledPhase({
     ...input,
     preparedStreamRuntime,
-    getRepairedRejectedThinkingReplay: () => repairedRejectedThinkingReplay,
+    getRepairedRejectedProviderReplay: () => repairedRejectedProviderReplay,
   });
 }

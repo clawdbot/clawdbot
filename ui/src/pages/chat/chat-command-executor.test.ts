@@ -347,7 +347,10 @@ describe("executeSlashCommand directives", () => {
       ].join("\n"),
     );
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
-    expect(request).toHaveBeenNthCalledWith(2, "models.list", { view: "configured" });
+    expect(request).toHaveBeenNthCalledWith(2, "models.list", {
+      agentId: "main",
+      view: "configured",
+    });
   });
 
   it("omits unavailable catalog entries from bare /model output", async () => {
@@ -406,6 +409,11 @@ describe("executeSlashCommand directives", () => {
           ],
         };
       }
+      if (method === "models.list") {
+        return {
+          models: [{ id: "work-model", name: "Work Model", provider: "openai" }],
+        };
+      }
       throw new Error(`unexpected method: ${method}`);
     });
 
@@ -416,9 +424,6 @@ describe("executeSlashCommand directives", () => {
       "",
       {
         agentId: "work",
-        chatModelCatalog: [
-          { id: "work-model", name: "Work Model", provider: "openai", available: true },
-        ],
       },
     );
 
@@ -426,6 +431,10 @@ describe("executeSlashCommand directives", () => {
       t("chat.commandResults.model.current", { model: "`work-model`" }),
     );
     expect(request).toHaveBeenCalledWith("sessions.list", { agentId: "work" });
+    expect(request).toHaveBeenCalledWith("models.list", {
+      agentId: "work",
+      view: "configured",
+    });
   });
 
   it("does not report global model defaults for an agent without a session row", async () => {

@@ -20,7 +20,7 @@ export type OpenClawExecApprovalFloorsForCodexAppServer = {
   ask?: OpenClawExecAsk;
 };
 export type OpenClawExecPolicyForCodexAppServer = {
-  mode?: OpenClawExecMode;
+  mode: OpenClawExecMode;
   security: OpenClawExecSecurity;
   ask: OpenClawExecAsk;
   touched: boolean;

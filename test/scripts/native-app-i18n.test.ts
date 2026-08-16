@@ -17,147 +17,72 @@ import {
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 type NativeTranslationArtifact = {
-  entries: Array<{ id: string; source: string; translated: string }>;
   glossaryHash: string;
   locale: string;
-  version: 1;
+  translations: Record<string, string>;
+  version: 2;
 };
 
-function artifactEntry(
-  artifact: NativeTranslationArtifact,
-  index: number,
-  context: string,
-): NativeTranslationArtifact["entries"][number] {
-  return expectDefined(artifact.entries[index], context);
+function testEntry(
+  id: string,
+  surface: "android" | "apple",
+  source: string,
+  sitePath = `apps/${surface}/Fixture.${surface === "apple" ? "swift" : "kt"}`,
+  kind = "ui-call",
+): NativeI18nEntry {
+  return { id, source, surface, sites: [{ kind, path: sitePath }] };
+}
+
+function hasSite(
+  entry: NativeI18nEntry,
+  predicate: (site: NativeI18nEntry["sites"][number]) => boolean,
+): boolean {
+  return entry.sites.some(predicate);
 }
 
 describe("native app i18n inventory", () => {
-  it("keeps IDs stable across extractor classification changes", () => {
-    const candidate = {
-      kind: "ui-call",
-      line: 10,
-      path: "apps/ios/example.swift",
-      source: "Gateway status",
-      surface: "apple" as const,
-    };
-    const initial = assignNativeI18nIds([candidate]);
-    const reclassified = { ...candidate, kind: "ui-call-multiline", line: 20 };
+  it("merges sites and hashes only surface plus source", () => {
+    const source = "Gateway status";
+    const entries = assignNativeI18nIds([
+      {
+        kind: "ui-modifier",
+        line: 20,
+        path: "apps/ios/Zeta.swift",
+        source,
+        surface: "apple",
+      },
+      {
+        kind: "ui-call",
+        line: 10,
+        path: "apps/ios/Alpha.swift",
+        source,
+        surface: "apple",
+      },
+    ]);
+    const expectedId = `native.apple.${createHash("sha256").update(`apple ${source}`).digest("hex").slice(0, 16)}`;
 
-    expect(assignNativeI18nIds([reclassified])[0]?.id).toBe(initial[0]?.id);
+    expect(entries).toEqual([
+      {
+        id: expectedId,
+        source,
+        surface: "apple",
+        sites: [
+          { kind: "ui-call", path: "apps/ios/Alpha.swift" },
+          { kind: "ui-modifier", path: "apps/ios/Zeta.swift" },
+        ],
+      },
+    ]);
     expect(
-      assignNativeI18nIds(
-        [reclassified],
-        [{ ...candidate, id: "native.apple.existing-translation" }],
-      )[0]?.id,
-    ).toBe("native.apple.existing-translation");
-  });
-
-  it("preserves registered IDs when Swift entries move between files", async () => {
-    const entries = await collectNativeI18nEntries();
-    const idsByLocation = new Map(
-      entries.map((entry) => [`${entry.path}\0${entry.source}`, entry.id]),
-    );
-    const onboardingPath = "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift";
-    const sendingPath =
-      "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+Sending.swift";
-    const movedEntries = [
-      { id: "native.apple.95e2c98254da2aba", path: onboardingPath, source: "Home Network" },
-      {
-        id: "native.apple.d9a6d673aa6693ee",
-        path: onboardingPath,
-        source: "LAN or Tailscale host",
-      },
-      { id: "native.apple.431d02f8b68a96cf", path: onboardingPath, source: "Remote Domain" },
-      { id: "native.apple.7021301971f631bf", path: onboardingPath, source: "VPS with domain" },
-      {
-        id: "native.apple.7451f8d052016642",
-        path: onboardingPath,
-        source: "Same Machine (Dev)",
-      },
-      {
-        id: "native.apple.22e740296a762256",
-        path: onboardingPath,
-        source: "For local iOS app development",
-      },
-      {
-        id: "native.apple.e1b1ccbfc9e73df8",
-        path: onboardingPath,
-        source: "Manual Connection",
-      },
-      { id: "native.apple.b7dc527c2a7e95cb", path: onboardingPath, source: "Continue" },
-      {
-        id: "native.apple.93d3e17fabd5e082",
-        path: onboardingPath,
-        source: "Developer mode",
-      },
-      {
-        id: "native.apple.e8b90e582100294d",
-        path: onboardingPath,
-        source: "Connection Failed",
-      },
-      {
-        id: "native.apple.9e208d090ce2e84f",
-        path: onboardingPath,
-        source: "Needs attention",
-      },
-      {
-        id: "native.apple.e71e20089bcc4cfb",
-        path: onboardingPath,
-        source: "Ready to Connect",
-      },
-      { id: "native.apple.cf616b515da5bc19", path: onboardingPath, source: "Security" },
-      {
-        id: "native.apple.4014217851d06190",
-        path: onboardingPath,
-        source: "Plaintext (local network)",
-      },
-      {
-        id: "native.apple.db7b52a1bbc6fac5",
-        path: onboardingPath,
-        source: "Use Manual Setup",
-      },
-      { id: "native.apple.7dbdf9a439f64f08", path: onboardingPath, source: "Setup Link" },
-      {
-        id: "native.apple.6bfb611862fb1687",
-        path: onboardingPath,
-        source:
-          "Plaintext may expose credentials. Continue only if you trust this local network and host.",
-      },
-      {
-        id: "native.apple.3329c7f367f10c78",
-        path: onboardingPath,
-        source: "Review this endpoint. Credentials are applied only after you tap Connect.",
-      },
-      {
-        id: "native.apple.2f00ef4bc35ecb8d",
-        path: onboardingPath,
-        source: "No gateways found yet.",
-      },
-      {
-        id: "native.apple.94c9697fb748d05d",
-        path: onboardingPath,
-        source: "Restart Discovery",
-      },
-      {
-        id: "native.apple.07ebd3b75969629f",
-        path: onboardingPath,
-        source: "Discovered Gateways",
-      },
-      {
-        id: "native.apple.2b45abdc56b2caed",
-        path: sendingPath,
-        source: "delivery unconfirmed",
-      },
-      {
-        id: "native.apple.722f1f90b97e8e45",
-        path: sendingPath,
-        source: "queued after route change",
-      },
-    ];
-
-    for (const entry of movedEntries) {
-      expect(idsByLocation.get(`${entry.path}\0${entry.source}`)).toBe(entry.id);
-    }
+      assignNativeI18nIds([
+        {
+          kind: "ui-call-multiline",
+          line: 99,
+          path: "apps/ios/Moved.swift",
+          source,
+          surface: "apple",
+        },
+      ])[0]?.id,
+    ).toBe(expectedId);
   });
 
   it("detects conditional branch identifiers without regex backtracking", () => {
@@ -324,56 +249,73 @@ describe("native app i18n inventory", () => {
     expect(entries.every((entry) => entry.id.startsWith(`native.${entry.surface}.`))).toBe(true);
     expect(new Set(entries.map((entry) => entry.id)).size).toBe(entries.length);
     expect(
-      entries.every(
-        (entry) => !/(?:\/|\\)(?:Tests?|UITests?|test|Preview(?:s)?)(?:\/|\\)/u.test(entry.path),
+      entries.every((entry) =>
+        entry.sites.every(
+          (site) => !/(?:\/|\\)(?:Tests?|UITests?|test|Preview(?:s)?)(?:\/|\\)/u.test(site.path),
+        ),
       ),
     ).toBe(true);
     expect(
-      entries.every(
-        (entry) => !/(?:Tests?|UITests?|Previews?|Testing)\.(?:swift|kt|kts)$/u.test(entry.path),
+      entries.every((entry) =>
+        entry.sites.every(
+          (site) => !/(?:Tests?|UITests?|Previews?|Testing)\.(?:swift|kt|kts)$/u.test(site.path),
+        ),
       ),
     ).toBe(true);
-    expect(entries.every((entry) => !entry.path.endsWith("/NativeStringResources.kt"))).toBe(true);
+    expect(
+      entries.every((entry) =>
+        entry.sites.every((site) => !site.path.endsWith("/NativeStringResources.kt")),
+      ),
+    ).toBe(true);
     expect(
       entries
         .filter((entry) => entry.surface === "apple")
         .every((entry) =>
-          /^(?:apps\/ios|apps\/macos\/Sources|apps\/shared\/OpenClawKit\/Sources)\//u.test(
-            entry.path,
+          entry.sites.every((site) =>
+            /^(?:apps\/ios|apps\/macos\/Sources|apps\/shared\/OpenClawKit\/Sources)\//u.test(
+              site.path,
+            ),
           ),
         ),
     ).toBe(true);
     expect(
       entries
         .filter((entry) => entry.surface === "android")
-        .every(
-          (entry) =>
-            entry.path.startsWith("apps/android/app/src/main/") ||
-            entry.path.startsWith("apps/android/app/src/play/") ||
-            entry.path.startsWith("apps/android/app/src/thirdParty/") ||
-            entry.path === "apps/android/wear/src/main/res/values/strings.xml",
+        .every((entry) =>
+          entry.sites.every(
+            (site) =>
+              site.path.startsWith("apps/android/app/src/main/") ||
+              site.path.startsWith("apps/android/app/src/play/") ||
+              site.path.startsWith("apps/android/app/src/thirdParty/") ||
+              site.path === "apps/android/wear/src/main/res/values/strings.xml",
+          ),
         ),
     ).toBe(true);
     expect(
       entries.some(
         (entry) =>
-          entry.path === "apps/android/wear/src/main/res/values/strings.xml" &&
-          entry.source === "Current session",
+          hasSite(
+            entry,
+            (site) => site.path === "apps/android/wear/src/main/res/values/strings.xml",
+          ) && entry.source === "Current session",
       ),
     ).toBe(true);
     expect(
       entries.some(
         (entry) =>
-          entry.path.endsWith(
-            "/thirdParty/java/ai/openclaw/app/ui/SensitivePhoneCapabilitiesSettings.kt",
+          hasSite(entry, (site) =>
+            site.path.endsWith(
+              "/thirdParty/java/ai/openclaw/app/ui/SensitivePhoneCapabilitiesSettings.kt",
+            ),
           ) && entry.source === "Control other apps",
       ),
     ).toBe(true);
     expect(
       entries.some(
         (entry) =>
-          entry.path.endsWith("/accessibility/AccessibilityDevActivity.kt") &&
-          entry.source === "Accessibility executor",
+          hasSite(entry, (site) =>
+            site.path.endsWith("/accessibility/AccessibilityDevActivity.kt"),
+          ) && entry.source === "Accessibility executor",
       ),
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "n${nodes.size}")).toBe(false);
@@ -430,18 +372,22 @@ describe("native app i18n inventory", () => {
     expect(
       entries.some(
         (entry) =>
-          entry.path.endsWith("/ChatMessageActions.kt") && entry.source === "Message actions",
-      ),
-    ).toBe(true);
-    expect(
-      entries.some(
-        (entry) => entry.path.endsWith("/ChatMessageActions.kt") && entry.source === "Reply",
+          hasSite(entry, (site) => site.path.endsWith("/ChatMessageActions.kt")) &&
+          entry.source === "Message actions",
       ),
     ).toBe(true);
     expect(
       entries.some(
         (entry) =>
-          entry.path.endsWith("/ChatMessageActions.kt") && entry.source === "Share message",
+          hasSite(entry, (site) => site.path.endsWith("/ChatMessageActions.kt")) &&
+          entry.source === "Reply",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          hasSite(entry, (site) => site.path.endsWith("/ChatMessageActions.kt")) &&
+          entry.source === "Share message",
       ),
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "What would you like to work on?")).toBe(true);
@@ -476,21 +422,27 @@ describe("native app i18n inventory", () => {
     expect(
       entries.some(
         (entry) =>
-          entry.path === "apps/ios/Sources/Design/TalkRuntimeIssueBanner.swift" &&
-          entry.source === "Details",
+          hasSite(
+            entry,
+            (site) => site.path === "apps/ios/Sources/Design/TalkRuntimeIssueBanner.swift",
+          ) && entry.source === "Details",
       ),
     ).toBe(true);
     expect(
       entries.some(
         (entry) =>
-          entry.path === "apps/ios/Sources/Design/TalkRuntimeIssueBanner.swift" &&
-          entry.source === "Open Settings",
+          hasSite(
+            entry,
+            (site) => site.path === "apps/ios/Sources/Design/TalkRuntimeIssueBanner.swift",
+          ) && entry.source === "Open Settings",
       ),
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "No threads yet")).toBe(true);
     expect(
       entries.some(
-        (entry) => entry.path.endsWith("/ChatSheets.swift") && entry.source === "Search threads",
+        (entry) =>
+          hasSite(entry, (site) => site.path.endsWith("/ChatSheets.swift")) &&
+          entry.source === "Search threads",
       ),
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "Don't show this again")).toBe(true);
@@ -572,8 +524,12 @@ describe("native app i18n inventory", () => {
     expect(
       entries.some(
         (entry) =>
-          entry.path === "apps/ios/Sources/Gateway/GatewayConnectionController.swift" &&
-          entry.kind === "ui-localized-call-multiline" &&
+          hasSite(
+            entry,
+            (site) =>
+              site.path === "apps/ios/Sources/Gateway/GatewayConnectionController.swift" &&
+              site.kind === "ui-localized-call-multiline",
+          ) &&
           entry.source ===
             "Enable Gateway TLS, or enter your Tailscale Serve HTTPS host in Manual Setup. Use Unencrypted only with a trusted private-LAN address.",
       ),
@@ -581,8 +537,12 @@ describe("native app i18n inventory", () => {
     expect(
       entries.some(
         (entry) =>
-          entry.path === "apps/ios/Sources/Gateway/GatewayConnectionController.swift" &&
-          entry.kind === "ui-localized-call-multiline" &&
+          hasSite(
+            entry,
+            (site) =>
+              site.path === "apps/ios/Sources/Gateway/GatewayConnectionController.swift" &&
+              site.kind === "ui-localized-call-multiline",
+          ) &&
           entry.source ===
             "Can't reach gateway at %1$@:%2$@. Verify Tailscale Serve is enabled and publishes this Gateway.",
       ),
@@ -644,354 +604,152 @@ describe("native app i18n inventory", () => {
           "The details are listed on each option above. You can fix the login and retry, or connect with an API key or token below.",
       ),
     ).toBe(true);
-    expect(entries.some((entry) => entry.path.endsWith("Info.plist"))).toBe(true);
+    expect(
+      entries.some((entry) => hasSite(entry, (site) => site.path.endsWith("Info.plist"))),
+    ).toBe(true);
     expect(NATIVE_I18N_LOCALES).toHaveLength(21);
     expect(NATIVE_I18N_LOCALES).toContain("sv");
   });
 
-  it("creates a first-run locale artifact and leaves a complete artifact unchanged", async () => {
+  it("migrates v1 translations deterministically and drops stale IDs after a source edit", async () => {
     const tempDirs: string[] = [];
     const translationsDir = makeTempDir(tempDirs, "openclaw-native-i18n-");
-    const entries: NativeI18nEntry[] = [
+    const entries = assignNativeI18nIds([
       {
-        id: "native.android.hello",
         kind: "ui-call",
         line: 1,
-        path: "apps/android/example.kt",
-        source: "Hello",
+        path: "apps/android/Open.kt",
+        source: "Open",
         surface: "android",
       },
       {
-        id: "native.apple.request",
         kind: "ui-call",
         line: 2,
-        path: "apps/ios/example.swift",
-        source: "Request ID: \\(requestId)",
+        path: "apps/ios/Open.swift",
+        source: "Open",
         surface: "apple",
       },
       {
-        id: "native.android.count",
         kind: "ui-call",
         line: 3,
-        path: "apps/android/example.kt",
-        source: "Showing ${visibleApps.size} of ${apps.size}",
-        surface: "android",
-      },
-      {
-        id: "native.apple.permissions",
-        kind: "ui-call",
-        line: 4,
-        path: "apps/ios/example.swift",
-        source: "\\(granted) of \\(total) permissions granted",
+        path: "apps/ios/New.swift",
+        source: "New string",
         surface: "apple",
       },
-    ];
+    ]);
+    const androidOpen = expectDefined(
+      entries.find((entry) => entry.surface === "android"),
+      "Android Open entry",
+    );
+    const appleOpen = expectDefined(
+      entries.find((entry) => entry.surface === "apple" && entry.source === "Open"),
+      "Apple Open entry",
+    );
+    const newString = expectDefined(
+      entries.find((entry) => entry.source === "New string"),
+      "new source-fallback entry",
+    );
 
     try {
-      const first = await syncNativeLocale("sv", entries, {
-        glossary: [],
-        translationsDir,
-        translate: async (pending) =>
-          new Map(
-            pending.map((entry) => {
-              const translated = {
-                "native.android.hello": "Hej",
-                "native.apple.request": "Begärans-ID: \\(requestId)",
-                "native.android.count": "${apps.size} totalt, ${visibleApps.size} visas",
-                "native.apple.permissions": "Av \\(total) behörigheter har \\(granted) beviljats",
-              }[entry.id];
-              return [entry.id, translated ?? entry.source];
-            }),
-          ),
-      });
-      expect(first).toEqual({ changed: true, translated: 4 });
-
       const artifactPath = path.join(translationsDir, "sv.json");
-      const firstContents = await readFile(artifactPath, "utf8");
-      const firstModifiedAt = (await stat(artifactPath)).mtimeMs;
-      const second = await syncNativeLocale("sv", entries, {
+      await writeFile(
+        artifactPath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            locale: "sv",
+            glossaryHash: "legacy",
+            entries: [
+              { id: "native.android.open-a", source: "Open", translated: "Öppna" },
+              { id: "native.android.open-b", source: "Open", translated: "Öppna" },
+              { id: "native.android.open-c", source: "Open", translated: "Öppen" },
+              { id: "native.android.open-d", source: "Open", translated: "Open" },
+              { id: "native.apple.open-a", source: "Open", translated: "Beta" },
+              { id: "native.apple.open-b", source: "Open", translated: "Alfa" },
+            ],
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      const migrated = await syncNativeLocale("sv", entries, {
         glossary: [],
         translationsDir,
         translate: async () => {
-          throw new Error("no-op refresh must not call the provider");
+          throw new Error("v1 migration must not call the translation provider");
         },
       });
+      expect(migrated).toEqual({ carried: 2, changed: true, fallback: 1, translated: 0 });
 
-      expect(second).toEqual({ changed: false, translated: 0 });
+      const artifact = JSON.parse(
+        await readFile(artifactPath, "utf8"),
+      ) as NativeTranslationArtifact;
+      expect(artifact).toMatchObject({ locale: "sv", version: 2 });
+      expect(artifact.translations).toEqual({
+        [androidOpen.id]: "Öppna",
+        [appleOpen.id]: "Alfa",
+        [newString.id]: "New string",
+      });
+
+      const firstContents = await readFile(artifactPath, "utf8");
+      const firstModifiedAt = (await stat(artifactPath)).mtimeMs;
+      await expect(
+        syncNativeLocale("sv", entries, {
+          glossary: [],
+          translationsDir,
+          translate: async () => {
+            throw new Error("no-op refresh must not call the provider");
+          },
+        }),
+      ).resolves.toEqual({ carried: 3, changed: false, fallback: 1, translated: 0 });
       expect(await readFile(artifactPath, "utf8")).toBe(firstContents);
       expect((await stat(artifactPath)).mtimeMs).toBe(firstModifiedAt);
 
-      const movedEntries = entries.map((entry, index) => ({
-        ...entry,
-        id: `${entry.id}.moved`,
-        line: index + 20,
-      }));
-      const moved = await syncNativeLocale("sv", movedEntries, {
+      const editedAndroid = expectDefined(
+        assignNativeI18nIds([
+          {
+            kind: "ui-call",
+            line: 10,
+            path: "apps/android/Moved.kt",
+            source: "Open now",
+            surface: "android",
+          },
+        ])[0],
+        "edited Android source entry",
+      );
+      await syncNativeLocale("sv", [editedAndroid, appleOpen, newString], {
         glossary: [],
         translationsDir,
-        translate: async (pending) =>
-          new Map(pending.map((entry) => [entry.id, `moved:${entry.source}`])),
+        translate: async (pending) => new Map(pending.map((entry) => [entry.id, entry.source])),
       });
-      expect(moved).toEqual({ changed: true, translated: 4 });
-      const movedArtifact = JSON.parse(await readFile(artifactPath, "utf8")) as {
-        entries: Array<{ id: string; source: string; translated: string }>;
-      };
-      expect(movedArtifact.entries.map((entry) => entry.id)).toEqual(
-        movedEntries.map((entry) => entry.id),
-      );
-      expect(movedArtifact.entries.map((entry) => entry.translated)).toEqual([
-        "moved:Hello",
-        "moved:Request ID: \\(requestId)",
-        "moved:Showing ${visibleApps.size} of ${apps.size}",
-        "moved:\\(granted) of \\(total) permissions granted",
-      ]);
-
-      const refreshed = await syncNativeLocale("sv", entries, {
-        glossary: [{ source: "Request", target: "Begäran" }],
-        translationsDir,
-        translate: async (pending) =>
-          new Map(pending.map((entry) => [entry.id, `refreshed:${entry.source}`])),
-      });
-
-      expect(refreshed).toEqual({ changed: true, translated: 4 });
-      const refreshedArtifact = JSON.parse(await readFile(artifactPath, "utf8")) as {
-        entries: Array<{ translated: string }>;
-        glossaryHash: string;
-      };
-      expect(refreshedArtifact.glossaryHash).toMatch(/^[a-f0-9]{64}$/u);
-      expect(
-        refreshedArtifact.entries.every((entry) => entry.translated.startsWith("refreshed:")),
-      ).toBe(true);
-
-      const fallbackEntries = [
-        {
-          id: "native.apple.fallback",
-          kind: "ui-call",
-          line: 1,
-          path: "apps/ios/example.swift",
-          source: "Try again",
-          surface: "apple",
-        },
-      ] satisfies NativeI18nEntry[];
-      await writeFile(
-        artifactPath,
-        `${JSON.stringify(
-          {
-            version: 1,
-            locale: "sv",
-            glossaryHash: refreshedArtifact.glossaryHash,
-            entries: [
-              {
-                id: "native.apple.fallback.previous",
-                source: fallbackEntries[0]!.source,
-                translated: fallbackEntries[0]!.source,
-              },
-            ],
-          },
-          null,
-          2,
-        )}\n`,
-      );
-      const retried = await syncNativeLocale("sv", fallbackEntries, {
-        glossary: [{ source: "Request", target: "Begäran" }],
-        translationsDir,
-        translate: async (pending) => new Map(pending.map((entry) => [entry.id, "Försök igen"])),
-      });
-      expect(retried).toEqual({ changed: true, translated: 1 });
-
-      const ambiguousEntries = [
-        {
-          id: "native.apple.ambiguous.current",
-          kind: "ui-call",
-          line: 1,
-          path: "apps/ios/example.swift",
-          source: "Open",
-          surface: "apple",
-        },
-      ] satisfies NativeI18nEntry[];
-      await writeFile(
-        artifactPath,
-        `${JSON.stringify(
-          {
-            version: 1,
-            locale: "sv",
-            glossaryHash: refreshedArtifact.glossaryHash,
-            entries: [
-              {
-                id: "native.apple.ambiguous.action",
-                source: "Open",
-                translated: "Öppna",
-              },
-              {
-                id: "native.apple.ambiguous.state",
-                source: "Open",
-                translated: "Öppen",
-              },
-            ],
-          },
-          null,
-          2,
-        )}\n`,
-      );
-      const ambiguous = await syncNativeLocale("sv", ambiguousEntries, {
-        glossary: [{ source: "Request", target: "Begäran" }],
-        translationsDir,
-        translate: async (pending) =>
-          new Map(pending.map((entry) => [entry.id, "Öppna i aktuell kontext"])),
-      });
-      expect(ambiguous).toEqual({ changed: true, translated: 1 });
-      const ambiguousArtifact = JSON.parse(await readFile(artifactPath, "utf8")) as {
-        entries: Array<{ translated: string }>;
-      };
-      expect(ambiguousArtifact.entries[0]?.translated).toBe("Öppna i aktuell kontext");
-
-      const partialChurnEntries = [
-        {
-          id: "native.apple.partial.action.current",
-          kind: "ui-call",
-          line: 1,
-          path: "apps/ios/action.swift",
-          source: "Open",
-          surface: "apple",
-        },
-        {
-          id: "native.apple.partial.state.current",
-          kind: "ui-call",
-          line: 2,
-          path: "apps/ios/state.swift",
-          source: "Open",
-          surface: "apple",
-        },
-      ] satisfies NativeI18nEntry[];
-      await writeFile(
-        artifactPath,
-        `${JSON.stringify(
-          {
-            version: 1,
-            locale: "sv",
-            glossaryHash: refreshedArtifact.glossaryHash,
-            entries: [
-              {
-                id: "native.apple.partial.action.previous",
-                source: "Open",
-                translated: "Öppna",
-              },
-              {
-                id: "native.apple.partial.state.previous",
-                source: "Open",
-                translated: "Open",
-              },
-            ],
-          },
-          null,
-          2,
-        )}\n`,
-      );
-      const partialChurn = await syncNativeLocale("sv", partialChurnEntries, {
-        glossary: [{ source: "Request", target: "Begäran" }],
-        translationsDir,
-        translate: async (pending) =>
-          new Map(pending.map((entry, index) => [entry.id, `Översatt ${index + 1}`])),
-      });
-      expect(partialChurn).toEqual({ changed: true, translated: 2 });
-      const partialChurnArtifact = JSON.parse(await readFile(artifactPath, "utf8")) as {
-        entries: Array<{ translated: string }>;
-      };
-      expect(partialChurnArtifact.entries.map((entry) => entry.translated)).toEqual([
-        "Översatt 1",
-        "Översatt 2",
-      ]);
-
-      const duplicateEntries = [
-        {
-          id: "native.apple.open.action",
-          kind: "ui-call",
-          line: 1,
-          path: "apps/ios/action.swift",
-          source: "Open",
-          surface: "apple",
-        },
-        {
-          id: "native.apple.open.state",
-          kind: "ui-call",
-          line: 2,
-          path: "apps/ios/state.swift",
-          source: "Open",
-          surface: "apple",
-        },
-      ] satisfies NativeI18nEntry[];
-      await writeFile(
-        artifactPath,
-        `${JSON.stringify(
-          {
-            version: 1,
-            locale: "sv",
-            glossaryHash: refreshedArtifact.glossaryHash,
-            entries: [
-              {
-                id: "native.apple.open.action",
-                source: "Open",
-                translated: "Öppna",
-              },
-            ],
-          },
-          null,
-          2,
-        )}\n`,
-      );
-      const duplicate = await syncNativeLocale("sv", duplicateEntries, {
-        glossary: [{ source: "Request", target: "Begäran" }],
-        translationsDir,
-        translate: async (pending) => new Map(pending.map((entry) => [entry.id, "Öppen"])),
-      });
-      expect(duplicate).toEqual({ changed: true, translated: 1 });
-      const duplicateArtifact = JSON.parse(await readFile(artifactPath, "utf8")) as {
-        entries: Array<{ id: string; translated: string }>;
-      };
-      expect(duplicateArtifact.entries).toEqual([
-        { id: "native.apple.open.action", source: "Open", translated: "Öppna" },
-        { id: "native.apple.open.state", source: "Open", translated: "Öppen" },
-      ]);
+      const editedArtifact = JSON.parse(
+        await readFile(artifactPath, "utf8"),
+      ) as NativeTranslationArtifact;
+      expect(editedArtifact.translations[androidOpen.id]).toBeUndefined();
+      expect(editedArtifact.translations[editedAndroid.id]).toBe("Open now");
+      expect(editedArtifact.translations[appleOpen.id]).toBe("Alfa");
     } finally {
       cleanupTempDirs(tempDirs);
     }
   });
-
   it("rejects native printf placeholder drift", async () => {
     const tempDirs: string[] = [];
     const translationsDir = makeTempDir(tempDirs, "openclaw-native-i18n-");
     const cases = [
       {
-        entry: {
-          id: "native.android.certificate",
-          kind: "ui-call",
-          line: 1,
-          path: "apps/android/example.kt",
-          source: "Old fingerprint: %1$s\nNew fingerprint: %2$s",
-          surface: "android",
-        },
+        entry: testEntry(
+          "native.android.certificate",
+          "android",
+          "Old fingerprint: %1$s\nNew fingerprint: %2$s",
+        ),
         translated: "Gammalt fingeravtryck: %1$s",
       },
       {
-        entry: {
-          id: "native.apple.failure",
-          kind: "ui-call",
-          line: 1,
-          path: "apps/ios/example.swift",
-          source: "Send failed: %@",
-          surface: "apple",
-        },
+        entry: testEntry("native.apple.failure", "apple", "Send failed: %@"),
         translated: "Sändningen misslyckades",
       },
       {
-        entry: {
-          id: "native.apple.percent",
-          kind: "ui-call",
-          line: 1,
-          path: "apps/ios/example.swift",
-          source: "Context %@%% used",
-          surface: "apple",
-        },
+        entry: testEntry("native.apple.percent", "apple", "Context %@%% used"),
         translated: "Kontext %@ används",
       },
     ] satisfies Array<{ entry: NativeI18nEntry; translated: string }>;
@@ -1013,52 +771,35 @@ describe("native app i18n inventory", () => {
     }
   });
 
-  it("rejects invalid locale artifact metadata, inventory, and translations", () => {
-    const inventory: NativeI18nEntry[] = [
-      {
-        id: "native.android.greeting",
-        kind: "ui-call",
-        line: 1,
-        path: "apps/android/Greeting.kt",
-        source: "Hello ${name}\nNext",
-        surface: "android",
-      },
-      {
-        id: "native.apple.other",
-        kind: "ui-call",
-        line: 1,
-        path: "apps/ios/Other.swift",
-        source: "Other",
-        surface: "apple",
-      },
+  it("rejects invalid v2 locale artifact structure and translations", () => {
+    const inventory = [
+      testEntry(
+        "native.android.greeting",
+        "android",
+        "Hello ${name}\nNext",
+        "apps/android/Greeting.kt",
+      ),
+      testEntry("native.apple.other", "apple", "Other", "apps/ios/Other.swift"),
     ];
     const greeting = expectDefined(inventory[0], "native greeting inventory entry");
     const other = expectDefined(inventory[1], "native other inventory entry");
     const emptyGlossaryHash = createHash("sha256").update(JSON.stringify([])).digest("hex");
     const createArtifact = (): NativeTranslationArtifact => ({
-      version: 1,
+      version: 2,
       locale: "sv",
       glossaryHash: emptyGlossaryHash,
-      entries: [
-        {
-          id: greeting.id,
-          source: greeting.source,
-          translated: "Hej ${name}\nNästa",
-        },
-        {
-          id: other.id,
-          source: other.source,
-          translated: "Annat",
-        },
-      ],
+      translations: {
+        [greeting.id]: "Hej ${name}\nNästa",
+        [other.id]: "Annat",
+      },
     });
     const cases: Array<{
       expected: string;
       mutate: (artifact: NativeTranslationArtifact) => unknown;
     }> = [
       {
-        expected: "version must be 1",
-        mutate: (artifact) => ({ ...artifact, version: 2 }),
+        expected: "version must be 2",
+        mutate: (artifact) => ({ ...artifact, version: 1 }),
       },
       {
         expected: 'locale must be "sv"',
@@ -1069,67 +810,42 @@ describe("native app i18n inventory", () => {
         mutate: (artifact) => ({ ...artifact, glossaryHash: "stale" }),
       },
       {
-        expected: "entry count must be 2, got 1",
-        mutate: (artifact) => ({ ...artifact, entries: artifact.entries.slice(0, 1) }),
+        expected: "translations must be a plain object",
+        mutate: (artifact) => ({ ...artifact, translations: [] }),
       },
       {
-        expected: 'entries[0].id must be "native.android.greeting"',
-        mutate: (artifact) => ({ ...artifact, entries: artifact.entries.toReversed() }),
+        expected: `missing translation for ${other.id}`,
+        mutate: (artifact) => {
+          const { [other.id]: _, ...translations } = artifact.translations;
+          return { ...artifact, translations };
+        },
       },
       {
-        expected: "entries[0].source does not match inventory",
+        expected: 'unknown translation id "native.apple.unknown"',
         mutate: (artifact) => ({
           ...artifact,
-          entries: [
-            { ...artifactEntry(artifact, 0, "first native translation entry"), source: "Changed" },
-            artifactEntry(artifact, 1, "second native translation entry"),
-          ],
+          translations: { ...artifact.translations, "native.apple.unknown": "Okänd" },
         }),
       },
       {
-        expected: 'duplicate id "native.android.greeting"',
+        expected: `translation must be nonempty for ${other.id}`,
         mutate: (artifact) => ({
           ...artifact,
-          entries: [
-            artifactEntry(artifact, 0, "first duplicate native translation entry"),
-            {
-              ...artifactEntry(artifact, 1, "second duplicate native translation entry"),
-              id: artifactEntry(artifact, 0, "duplicate native translation source entry").id,
-            },
-          ],
-        }),
-      },
-      {
-        expected: "entries[1].translated must be nonempty",
-        mutate: (artifact) => ({
-          ...artifact,
-          entries: [
-            artifactEntry(artifact, 0, "first nonempty native translation entry"),
-            {
-              ...artifactEntry(artifact, 1, "second nonempty native translation entry"),
-              translated: "  ",
-            },
-          ],
+          translations: { ...artifact.translations, [other.id]: "  " },
         }),
       },
       {
         expected: "translation changed structural tokens or line breaks",
         mutate: (artifact) => ({
           ...artifact,
-          entries: [{ ...artifact.entries[0], translated: "Hej\nNästa" }, artifact.entries[1]],
+          translations: { ...artifact.translations, [greeting.id]: "Hej\nNästa" },
         }),
       },
       {
         expected: "translation changed structural tokens or line breaks",
         mutate: (artifact) => ({
           ...artifact,
-          entries: [
-            {
-              ...artifactEntry(artifact, 0, "first structural native translation entry"),
-              translated: "Hej ${name} Nästa",
-            },
-            artifactEntry(artifact, 1, "second structural native translation entry"),
-          ],
+          translations: { ...artifact.translations, [greeting.id]: "Hej ${name} Nästa" },
         }),
       },
     ];
@@ -1144,69 +860,36 @@ describe("native app i18n inventory", () => {
 
   it("emits deterministic advisory translation-quality findings", () => {
     const inventory: NativeI18nEntry[] = [
-      {
-        id: "native.android.language-picker",
-        kind: "conditional-branch",
-        line: 89,
-        path: "apps/android/app/src/main/java/ai/openclaw/app/AppLanguage.kt",
-        source: "OpenClaw translations · $languageTag",
-        surface: "android",
-      },
-      {
-        id: "native.android.inspect",
-        kind: "ui-call",
-        line: 1,
-        path: "apps/android/Workshop.kt",
-        source: "Inspect",
-        surface: "android",
-      },
-      {
-        id: "native.apple.inspect",
-        kind: "ui-call",
-        line: 1,
-        path: "apps/ios/Workshop.swift",
-        source: "Inspect",
-        surface: "apple",
-      },
-      {
-        id: "native.android.voice-note",
-        kind: "ui-call",
-        line: 1,
-        path: "apps/android/Voice.kt",
-        source: "Record voice note",
-        surface: "android",
-      },
+      testEntry(
+        "native.android.language-picker",
+        "android",
+        "OpenClaw translations · $languageTag",
+        "apps/android/app/src/main/java/ai/openclaw/app/AppLanguage.kt",
+        "conditional-branch",
+      ),
+      testEntry("native.android.inspect", "android", "Inspect", "apps/android/Workshop.kt"),
+      testEntry("native.apple.inspect", "apple", "Inspect", "apps/ios/Workshop.swift"),
+      testEntry(
+        "native.android.voice-note",
+        "android",
+        "Record voice note",
+        "apps/android/Voice.kt",
+      ),
     ];
     const languagePicker = expectDefined(inventory[0], "native language picker inventory entry");
     const androidInspect = expectDefined(inventory[1], "native Android inspect inventory entry");
     const appleInspect = expectDefined(inventory[2], "native Apple inspect inventory entry");
     const voiceNote = expectDefined(inventory[3], "native voice note inventory entry");
     const artifact: NativeTranslationArtifact = {
-      version: 1,
+      version: 2,
       locale: "id",
       glossaryHash: createHash("sha256").update(JSON.stringify([])).digest("hex"),
-      entries: [
-        {
-          id: languagePicker.id,
-          source: languagePicker.source,
-          translated: languagePicker.source,
-        },
-        {
-          id: androidInspect.id,
-          source: androidInspect.source,
-          translated: androidInspect.source,
-        },
-        {
-          id: appleInspect.id,
-          source: appleInspect.source,
-          translated: "Periksa",
-        },
-        {
-          id: voiceNote.id,
-          source: voiceNote.source,
-          translated: "Ghi ghi chú thoại",
-        },
-      ],
+      translations: {
+        [languagePicker.id]: languagePicker.source,
+        [androidInspect.id]: androidInspect.source,
+        [appleInspect.id]: "Periksa",
+        [voiceNote.id]: "Ghi ghi chú thoại",
+      },
     };
 
     const findings = validateNativeLocaleArtifact("id", inventory, artifact);

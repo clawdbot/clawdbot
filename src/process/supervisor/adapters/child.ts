@@ -88,6 +88,7 @@ export async function createChildAdapter(params: {
   ownedWorker?: true;
   /** Preserve the supplied environment exactly by skipping environment-mutating spawn wrappers. */
   exactEnv?: true;
+  onWorkerMessage?: (message: unknown) => void;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   windowsVerbatimArguments?: boolean;
@@ -146,6 +147,15 @@ export async function createChildAdapter(params: {
   if (params.ownedWorker !== undefined && (!child.connected || !child.channel)) {
     spawned.child.kill("SIGKILL");
     throw new Error("worker lifecycle IPC channel was not created");
+  }
+  if (params.onWorkerMessage) {
+    child.on("message", (message) => {
+      try {
+        params.onWorkerMessage?.(message);
+      } catch {
+        // Worker diagnostics cannot change child supervision.
+      }
+    });
   }
   const disconnectWorkerIpc = () => {
     if (!child.connected) {

@@ -125,18 +125,9 @@ function captureGenerationFacts(deps: ChatMetadataRuntimeDeps): PreparedGenerati
   const config = deps.getConfig();
   const agents = listAgentIds(config).map((rawAgentId): PreparedAgentFacts => {
     const agentId = normalizeAgentId(rawAgentId);
-    const owner =
-      deps.getPreparedOwner({
-        agentId,
-        config,
-        readOnly: true,
-        allowGatewaySubagentBinding: true,
-      }) ??
-      deps.getPreparedOwner({
-        agentId,
-        config,
-        readOnly: true,
-      });
+    // Flagless resolution reaches the configured owner regardless of its
+    // publication-time gateway-binding capability.
+    const owner = deps.getPreparedOwner({ agentId, config, readOnly: true });
     if (!owner) {
       throw new ChatMetadataSnapshotUnavailableError(
         `prepared chat metadata owner is unavailable for agent "${agentId}"`,

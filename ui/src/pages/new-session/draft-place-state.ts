@@ -7,7 +7,7 @@ import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import * as catalog from "./catalog-target.ts";
 import type { DraftNode } from "./discovery.ts";
-import { readDraftNodes } from "./discovery.ts";
+import { isDraftNodeSessionEligible, readDraftNodes } from "./discovery.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import type { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftRepositoryController } from "./draft-repository-state.ts";
@@ -131,6 +131,22 @@ export class DraftPlaceState {
     return this.repositoryState.preferenceReady;
   }
 
+  canAdoptGroupDefaults(): boolean {
+    return (
+      !this.folderSelectedByUser &&
+      !this.whereSelectedByUser &&
+      !this.projectSelectedByUser &&
+      !this.repositoryState.hasUserSelection
+    );
+  }
+
+  adoptGroupDefaults() {
+    if (this.read().data?.groupStatus !== "resolved" || !this.canAdoptGroupDefaults()) {
+      return;
+    }
+    this.adoptAgentDefaults({ preserveSelectedAgent: true });
+  }
+
   setAgentsHydrated(value: boolean) {
     this.agentsHydratedValue = value;
   }
@@ -149,7 +165,7 @@ export class DraftPlaceState {
   }
 
   execNodes(): DraftNode[] {
-    return this.executionNodes().filter((node) => node.connected);
+    return this.executionNodes().filter(isDraftNodeSessionEligible);
   }
 
   execNodeReady(): boolean {
@@ -242,16 +258,30 @@ export class DraftPlaceState {
         storedFolder === preference?.workspace &&
         preference.workspace !== workspace;
       const storedFolderUsable = Boolean(storedFolder) && !storedWorkspaceMoved;
-      this.folderValue = storedFolderUsable ? storedFolder : workspace;
+      const groupTarget = Boolean(snapshot.data?.group);
+      const groupFolder = snapshot.data?.groupCwd ?? "";
+      const groupWorktree = snapshot.data?.groupWorktree === true;
+      this.folderValue = groupTarget
+        ? groupFolder || workspace
+        : storedFolderUsable
+          ? storedFolder
+          : workspace;
       this.folderGatewayApproved = false;
       this.folderSelectedByUser = false;
-      this.repositoryState.adoptPreference(preference);
-      const preferredWhere = preference?.where ?? { kind: "local" };
+      this.repositoryState.adoptPreference(groupTarget ? { worktree: groupWorktree } : preference);
+      if (groupTarget) {
+        // Group defaults own the initial local/worktree choice. Repository
+        // discovery still rejects worktrees when the selected folder is not Git.
+        this.repositoryState.forceWorktree(groupWorktree);
+      }
+      const preferredWhere = groupTarget
+        ? { kind: "local" as const }
+        : (preference?.where ?? { kind: "local" as const });
       this.preferredWhereRestore = preferredWhere.kind === "local" ? null : preferredWhere;
-      this.preferredProjectRestore = preference?.projectId ?? "";
+      this.preferredProjectRestore = groupTarget ? "" : (preference?.projectId ?? "");
       this.whereSelectedByUser = false;
       this.projectSelectedByUser = false;
-      if (storedWorkspaceMoved) {
+      if (storedWorkspaceMoved && !groupTarget) {
         this.persistPreference({ folder: workspace });
       }
     }
@@ -468,6 +498,12 @@ export class DraftPlaceState {
   selectExecNode(execNode: string) {
     const snapshot = this.read();
     if (snapshot.submitting || snapshot.pendingCloudSessionKey) {
+      return;
+    }
+    if (
+      execNode &&
+      !this.nodesValue.some((node) => node.nodeId === execNode && isDraftNodeSessionEligible(node))
+    ) {
       return;
     }
     if (execNode === this.execNodeValue && !this.cloudProfileIdValue) {
@@ -696,7 +732,9 @@ export class DraftPlaceState {
       this.nodesHydrated = true;
       if (
         this.execNodeValue &&
-        !nodes.some((node) => node.nodeId === this.execNodeValue && node.canExec)
+        !nodes.some(
+          (node) => node.nodeId === this.execNodeValue && isDraftNodeSessionEligible(node),
+        )
       ) {
         this.execNodeValue = "";
         this.folderValue = this.workspacePath();

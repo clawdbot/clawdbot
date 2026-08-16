@@ -1,4 +1,5 @@
 export * from "./clawhub-trust-error-details.js";
+export * from "./install-policy-warning-error-details.js";
 export * from "./system-agent-error-details.js";
 export {
   isMcpAppViewExpiredError,
@@ -107,6 +108,7 @@ export {
   WorkerTranscriptCommitResponseFrameSchema,
   WorkerTranscriptCommitResultSchema,
   WorkerTranscriptMessageSchema,
+  WORKER_BUNDLE_PREWARM_VERSION,
   WORKER_HEARTBEAT_INTERVAL_MS,
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
@@ -317,10 +319,15 @@ export {
   SessionsResetParamsSchema,
   SessionsDeleteParamsSchema,
   SessionGroupSchema,
+  SessionGroupDefaultsSchema,
   SessionsGroupsListParamsSchema,
   SessionsGroupsListResultSchema,
+  SessionsGroupsDefaultsParamsSchema,
+  SessionsGroupsDefaultsResultSchema,
   SessionsGroupsPutParamsSchema,
   SessionsGroupsRenameParamsSchema,
+  SessionsGroupsUpdateParamsSchema,
+  SessionsGroupsUpdateResultSchema,
   SessionsGroupsDeleteParamsSchema,
   SessionsGroupsMutationResultSchema,
   SessionsCompactParamsSchema,

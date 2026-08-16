@@ -361,8 +361,8 @@ function assertLocalFallbackMatchesGatewayRequest(
 function redactLocalPairedDevice(device: InfraPairedDevice): PairedDevice {
   const { tokens, ...rest } = device;
   return {
-    ...(rest as unknown as PairedDevice),
-    tokens: summarizeDeviceTokens(tokens) as DeviceTokenSummary[] | undefined,
+    ...rest,
+    tokens: summarizeDeviceTokens(tokens),
   };
 }
 

@@ -398,6 +398,7 @@ export function createTelegramBotCore(
     resolveTelegramGroupConfig,
     sendChatActionHandler,
     runtime,
+    buildContext: opts.buildContext,
     opts: runtimeOpts,
     telegramDeps,
   });

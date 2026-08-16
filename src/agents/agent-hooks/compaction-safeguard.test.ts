@@ -102,6 +102,8 @@ const {
   MAX_COMPACTION_SUMMARY_CHARS,
   MAX_FILE_OPS_SECTION_CHARS,
   SUMMARY_TRUNCATED_MARKER,
+  CONTEXT_TRUNCATED_MARKER,
+  MAX_SPLIT_TURN_CONTEXT_CHARS,
 } = testing;
 
 function auditSummaryQuality(
@@ -584,6 +586,19 @@ describe("compaction-safeguard summary budgets", () => {
     expect(capped).not.toContain("[Compaction summary truncated");
   });
 
+  it("uses truncation markers when the budget exactly fits only the marker", () => {
+    expect(capCompactionSummary("oversized".repeat(10), SUMMARY_TRUNCATED_MARKER.length)).toBe(
+      SUMMARY_TRUNCATED_MARKER,
+    );
+    expect(
+      capCompactionSummaryPreservingSuffix(
+        "",
+        "oversized suffix".repeat(10),
+        CONTEXT_TRUNCATED_MARKER.length,
+      ),
+    ).toBe(CONTEXT_TRUNCATED_MARKER);
+  });
+
   it("preserves tail sections when suffix exceeds cap (workspace rules, diagnostics over preserved turns)", () => {
     const criticalTail =
       "\n\n## Tool Failures\n- exec: failed\n\n<read-files>\nfoo.ts\n</read-files>\n\n" +
@@ -600,10 +615,6 @@ describe("compaction-safeguard summary budgets", () => {
     expect(capped).toContain("## Tool Failures");
     expect(capped).toContain("<read-files>");
     expect(capped).toContain("## Session Startup");
-  });
-
-  it("keeps an oversized preserved suffix UTF-16 safe at its leading edge", () => {
-    expect(capCompactionSummaryPreservingSuffix("body", "A🚀tail", 5)).toBe("tail");
   });
 });
 
@@ -956,6 +967,52 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(section).toContain("- User: recent ask");
   });
 
+  it("drops an oversized preserved tool interaction as one atomic group", () => {
+    const toolCalls = Array.from({ length: 30 }, (_, index) => ({
+      type: "toolCall",
+      id: `call_${index}`,
+      name: "read",
+      arguments: {},
+    }));
+    const split = splitPreservedRecentTurns({
+      messages: [
+        { role: "user", content: "recent ask", timestamp: 1 },
+        { role: "assistant", content: toolCalls, timestamp: 2 } as unknown as AgentMessage,
+        ...toolCalls.map(
+          (toolCall, index) =>
+            ({
+              role: "toolResult",
+              toolCallId: toolCall.id,
+              toolName: "read",
+              content: [
+                {
+                  type: "text",
+                  text: `paired-result-${String(index).padStart(2, "0")}-${"x".repeat(700)}`,
+                },
+              ],
+              timestamp: index + 3,
+            }) as unknown as AgentMessage,
+        ),
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "terminal answer survives" }],
+          timestamp: 33,
+        } as unknown as AgentMessage,
+      ],
+      recentTurnsPreserve: 1,
+    });
+
+    const section = formatPreservedTurnsSection(split.preservedMessages) as string;
+
+    expect(section.length).toBeLessThanOrEqual(MAX_SPLIT_TURN_CONTEXT_CHARS);
+    expect(section).toContain("[Earlier preserved messages truncated]");
+    expect(section).not.toContain("paired-result-00-");
+    expect(section).not.toContain("paired-result-29-");
+    expect(section).not.toContain("- Tool result (read):");
+    expect(section).toContain("- Assistant: terminal answer survives");
+    expect(section.split("\n").some((line) => line.startsWith("x"))).toBe(false);
+  });
+
   it("formats preserved non-text messages with placeholders", () => {
     const section = formatPreservedTurnsSection([
       {
@@ -1170,7 +1227,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
   it("filters ordinary short numbers and trims wrapped punctuation", () => {
     const identifiers = extractOpaqueIdentifiers(
-      "Year 2026 count 42 port 18789 ticket 123456 URL https://example.com/a, path /tmp/x.log, and tiny /a with prose on/off.",
+      "Year 2026 count 42 port 18789 ticket 123456 URL https://example.com/a, path /tmp/x.log, and tiny /a with prose on/off plus typecheck/lint/format.",
     );
 
     expect(identifiers).not.toContain("2026");
@@ -1178,6 +1235,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(identifiers).not.toContain("18789");
     expect(identifiers).not.toContain("/a");
     expect(identifiers).not.toContain("/off");
+    expect(identifiers).not.toContain("/lint/format");
     expect(identifiers).toContain("123456");
     expect(identifiers).toContain("https://example.com/a");
     expect(identifiers).toContain("/tmp/x.log");
@@ -1935,6 +1993,58 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
     expect(result.cancel).not.toBe(true);
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves an above-half built-in body byte-for-byte when it fits the final artifact", async () => {
+    const body = `BUILTIN-START${"b".repeat(4_480)}BUILTIN-MIDDLE${"b".repeat(4_480)}BUILTIN-END`;
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue(summaryResult(body));
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 0,
+    });
+    const event = createCompactionEvent({ messageText: "summarize me", tokensBefore: 1_500 });
+    (event.preparation as { settings?: { reserveTokens: number } }).settings = {
+      reserveTokens: 4_000,
+    };
+
+    const { result } = await runCompactionScenario({
+      sessionManager,
+      event,
+      apiKey: "test-key",
+    });
+
+    expect(expectCompactionResult(result).summary).toBe(body);
+    expect(compactionLogger.warn).not.toHaveBeenCalled();
+  });
+
+  it("marks a trimmed built-in body and emits one redacted tail-loss warning", async () => {
+    const sensitiveSentinel = "body-secret-never-log";
+    const body = `${sensitiveSentinel}-${"b".repeat(MAX_COMPACTION_SUMMARY_CHARS)}`;
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue(summaryResult(body));
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 0,
+    });
+    const event = createCompactionEvent({ messageText: "summarize me", tokensBefore: 1_500 });
+    (event.preparation as { settings?: { reserveTokens: number } }).settings = {
+      reserveTokens: 4_000,
+    };
+
+    const { result } = await runCompactionScenario({
+      sessionManager,
+      event,
+      apiKey: "test-key",
+    });
+
+    expect(expectCompactionResult(result).summary).toContain(SUMMARY_TRUNCATED_MARKER.trim());
+    expect(compactionLogger.warn).toHaveBeenCalledOnce();
+    const warning = compactionLogger.warn.mock.calls[0]?.join(" ") ?? "";
+    expect(warning).toBe("Compaction safeguard: finalized artifact truncated; loss=summary-tail");
+    expect(warning).not.toContain(sensitiveSentinel);
   });
 
   it("rejects a summary whose finalized bytes fail the quality audit", async () => {
@@ -2757,6 +2867,267 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(compaction.summary).toContain("## Recent turns preserved verbatim");
     expect(compaction.summary).toContain("latest ask status");
     expect(compaction.summary).toContain("latest assistant reply");
+  });
+
+  it("preserves an above-half provider body byte-for-byte when the joined artifact fits", async () => {
+    const providerBody = `BODY-START${"b".repeat(4_480)}BODY-MIDDLE${"b".repeat(4_480)}BODY-END`;
+    const providerSummarize = vi.fn().mockResolvedValue(providerBody);
+    registerCompactionProvider({
+      id: "within-budget-provider",
+      label: "Within Budget Provider",
+      summarize: providerSummarize,
+    });
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      provider: "within-budget-provider",
+      recentTurnsPreserve: 0,
+    });
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "summarize the active work", timestamp: 1 },
+        ] as AgentMessage[],
+        turnPrefixMessages: [
+          { role: "user", content: "small split-turn suffix", timestamp: 2 },
+        ] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4_000 },
+        isSplitTurn: true,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const { result } = await runCompactionScenario({ sessionManager, event, apiKey: null });
+
+    const summary = expectCompactionResult(result).summary;
+    expect(summary.startsWith(providerBody)).toBe(true);
+    expect(summary).toContain("small split-turn suffix");
+    expect(compactionLogger.warn).not.toHaveBeenCalled();
+  });
+
+  it("emits one redacted provider warning when the preserved-turn producer truncates", async () => {
+    const sensitiveSentinel = "preserved-secret-never-log";
+    const providerSummarize = vi.fn().mockResolvedValue("provider summary body");
+    registerCompactionProvider({
+      id: "preserved-overflow-provider",
+      label: "Preserved Overflow Provider",
+      summarize: providerSummarize,
+    });
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      provider: "preserved-overflow-provider",
+      recentTurnsPreserve: 12,
+    });
+    const messagesToSummarize = Array.from({ length: 24 }, (_, index) => ({
+      role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+      content: `preserved-${index}-${sensitiveSentinel}-${"p".repeat(700)}`,
+      timestamp: index + 1,
+    })) as AgentMessage[];
+    const event = {
+      preparation: {
+        messagesToSummarize,
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 20_000,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4_000 },
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const { result } = await runCompactionScenario({ sessionManager, event, apiKey: null });
+
+    const summary = expectCompactionResult(result).summary;
+    expect(summary).toContain("[Earlier preserved messages truncated]");
+    expect(summary.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(compactionLogger.warn).toHaveBeenCalledOnce();
+    const warning = compactionLogger.warn.mock.calls[0]?.join(" ") ?? "";
+    expect(warning).toBe(
+      "Compaction safeguard: finalized artifact truncated; loss=preserved-turn-head",
+    );
+    expect(warning).not.toContain(sensitiveSentinel);
+  });
+
+  it("retains provider body sentinels and emits one redacted warning when suffixes overflow", async () => {
+    const sensitiveSentinel = "credential-sentinel-never-log";
+    const providerBody = `BODY-START${"b".repeat(3_400)}BODY-MIDDLE${"b".repeat(3_400)}BODY-END`;
+    const providerSummarize = vi.fn().mockResolvedValue(providerBody);
+    registerCompactionProvider({
+      id: "overflow-provider",
+      label: "Overflow Provider",
+      summarize: providerSummarize,
+    });
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      provider: "overflow-provider",
+      recentTurnsPreserve: 12,
+    });
+    const messagesToSummarize = Array.from({ length: 24 }, (_, index) => ({
+      role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+      content: `preserved-${index}-${"p".repeat(700)}`,
+      timestamp: index + 1,
+    })) as AgentMessage[];
+    const turnPrefixMessages = Array.from({ length: 20 }, (_, index) => ({
+      role: "user" as const,
+      content: `raw-prefix-${index}-${sensitiveSentinel}-${"r".repeat(700)}`,
+      timestamp: index + 100,
+    }));
+    const event = {
+      preparation: {
+        messagesToSummarize,
+        turnPrefixMessages,
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 20_000,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4_000 },
+        isSplitTurn: true,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const { result } = await runCompactionScenario({ sessionManager, event, apiKey: null });
+
+    const summary = expectCompactionResult(result).summary;
+    expect(summary.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(summary).toContain("BODY-START");
+    expect(summary).toContain("BODY-MIDDLE");
+    expect(summary).toContain("BODY-END");
+    expect(summary).toContain(CONTEXT_TRUNCATED_MARKER.trim());
+    expect(compactionLogger.warn).toHaveBeenCalledOnce();
+    const warning = compactionLogger.warn.mock.calls[0]?.join(" ") ?? "";
+    expect(warning).toBe(
+      "Compaction safeguard: finalized artifact truncated; " +
+        "loss=split-turn-head,preserved-turn-head,suffix-head",
+    );
+    expect(warning).not.toContain(sensitiveSentinel);
+  });
+
+  it("starts a finally trimmed raw split-turn suffix at a complete message boundary", async () => {
+    const providerBody = `BODY-START${"b".repeat(6_760)}BODY-END`;
+    const providerSummarize = vi.fn().mockResolvedValue(providerBody);
+    registerCompactionProvider({
+      id: "boundary-provider",
+      label: "Boundary Provider",
+      summarize: providerSummarize,
+    });
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      provider: "boundary-provider",
+      recentTurnsPreserve: 3,
+    });
+    const messagesToSummarize = Array.from({ length: 6 }, (_, index) => ({
+      role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+      content: `preserved-${index}-${"p".repeat(700)}`,
+      timestamp: index + 1,
+    })) as AgentMessage[];
+    const turnPrefixMessages = Array.from({ length: 20 }, (_, index) => ({
+      role: "user" as const,
+      content: `raw-prefix-${String(index).padStart(2, "0")}-${"r".repeat(700)}`,
+      timestamp: index + 100,
+    }));
+    const event = {
+      preparation: {
+        messagesToSummarize,
+        turnPrefixMessages,
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 20_000,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4_000 },
+        isSplitTurn: true,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const { result } = await runCompactionScenario({ sessionManager, event, apiKey: null });
+
+    const summary = expectCompactionResult(result).summary;
+    const retainedSuffix = summary.split(CONTEXT_TRUNCATED_MARKER)[1] ?? "";
+    const firstRetainedLine = retainedSuffix.split("\n").find((line) => line.length > 0);
+    expect(firstRetainedLine).toMatch(/^- User: raw-prefix-\d{2}-/);
+    expect(summary).toContain("raw-prefix-19-");
+    expect(summary.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(summary).toContain("## Recent turns preserved verbatim");
+  });
+
+  it("finally trims a raw tool interaction only at its atomic boundary", async () => {
+    const providerSummarize = vi.fn().mockResolvedValue(`BODY-START${"b".repeat(9_000)}BODY-END`);
+    registerCompactionProvider({
+      id: "tool-boundary-provider",
+      label: "Tool Boundary Provider",
+      summarize: providerSummarize,
+    });
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      provider: "tool-boundary-provider",
+      recentTurnsPreserve: 3,
+    });
+    const messagesToSummarize = Array.from({ length: 6 }, (_, index) => ({
+      role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+      content: `preserved-${index}-${"p".repeat(600)}`,
+      timestamp: index + 1,
+    })) as AgentMessage[];
+    const toolCalls = Array.from({ length: 12 }, (_, index) => ({
+      type: "toolCall",
+      id: `finalizer_call_${index}`,
+      name: "read",
+      arguments: {},
+    }));
+    const turnPrefixMessages = [
+      { role: "user" as const, content: "raw tool request", timestamp: 100 },
+      {
+        role: "assistant" as const,
+        content: toolCalls,
+        timestamp: 101,
+      } as unknown as AgentMessage,
+      ...toolCalls.map(
+        (toolCall, index) =>
+          ({
+            role: "toolResult",
+            toolCallId: toolCall.id,
+            toolName: "read",
+            content: [
+              {
+                type: "text",
+                text: `finalizer-tool-output-${index}-${"r".repeat(600)}`,
+              },
+            ],
+            timestamp: index + 102,
+          }) as unknown as AgentMessage,
+      ),
+      {
+        role: "assistant" as const,
+        content: [{ type: "text", text: "raw terminal answer survives" }],
+        timestamp: 114,
+      } as unknown as AgentMessage,
+    ];
+    const event = {
+      preparation: {
+        messagesToSummarize,
+        turnPrefixMessages,
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 20_000,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4_000 },
+        isSplitTurn: true,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const { result } = await runCompactionScenario({ sessionManager, event, apiKey: null });
+
+    const summary = expectCompactionResult(result).summary;
+    expect(summary.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(summary).toContain("raw terminal answer survives");
+    expect(summary).not.toContain("finalizer-tool-output-");
+    expect(summary).not.toContain("- Tool result (read):");
+    expect(summary).toContain("## Recent turns preserved verbatim");
   });
 });
 

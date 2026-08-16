@@ -73,6 +73,11 @@ import type { TrustedSessionCreation } from "./session-creation-provenance.js";
  */
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
+/** Trusted in-process spawn control plane that already owns this run's task row.
+    Gateway CLI tracking only covers runs nobody else records, so a marked run
+    must never get a second row. */
+export type GatewayAgentRunTaskOwner = "plugin_subagent" | "native_subagent";
+
 /** Per-connection client metadata captured after the gateway handshake. */
 export type GatewayClient = {
   connect: ConnectParams;
@@ -113,7 +118,7 @@ export type GatewayClient = {
     cronRunContinuation?: boolean;
     agentRuntimeIdentity?: AgentRuntimeIdentity;
     pluginRuntimeOwnerId?: string;
-    agentRunTracking?: "plugin_subagent";
+    agentRunTracking?: GatewayAgentRunTaskOwner;
     /** Host-captured requester lineage for opt-in plugin subagent completion delivery. */
     pluginSubagentRequester?: PluginSubagentRequesterContext;
     /** Host-owned exact media set for a scoped automatic recovery delivery. */

@@ -1202,7 +1202,7 @@ async function resolveManagedOutgoingMediaArtifactDownloadForRecord(
     artifactId: buildManagedOutgoingArtifactId(record.attachmentId, kind),
     sessionKey: record.sessionKey,
     type: kind,
-    title: record.alt,
+    title: kind === "image" ? record.alt : (record.original.filename ?? record.alt),
     ...(record.original.contentType ? { mimeType: record.original.contentType } : {}),
     ...(record.original.sizeBytes != null ? { sizeBytes: record.original.sizeBytes } : {}),
     url: `${canonicalUrl}?${params.toString()}`,
@@ -1504,7 +1504,6 @@ export async function createManagedOutgoingMediaBlocks(params: {
               : attachmentMetadata?.name?.trim() || label,
         },
       };
-      insertManagedImageRecord(record, stateDir);
       let playback: "native" | "transcode" | undefined;
       if (mediaKind === "audio" || mediaKind === "video") {
         const opened = await openLocalFileSafely({ filePath: savedOriginal.path });
@@ -1522,6 +1521,7 @@ export async function createManagedOutgoingMediaBlocks(params: {
         }
       }
       const block = buildManagedMediaBlock(record, playback);
+      insertManagedImageRecord(record, stateDir);
       const durationMs = asNonNegativeFiniteNumber(attachmentMetadata?.durationMs);
       const width = asNonNegativeFiniteNumber(attachmentMetadata?.width);
       const height = asNonNegativeFiniteNumber(attachmentMetadata?.height);
@@ -1572,6 +1572,7 @@ export async function handleManagedOutgoingMediaHttpRequest(
   res: ServerResponse,
   opts: {
     auth: ResolvedGatewayAuth;
+    basePath?: string;
     trustedProxies?: string[];
     allowRealIpFallback?: boolean;
     rateLimiter?: AuthRateLimiter;
@@ -1579,7 +1580,11 @@ export async function handleManagedOutgoingMediaHttpRequest(
   },
 ): Promise<boolean> {
   const requestUrl = new URL(req.url ?? "/", "http://localhost");
-  const match = requestUrl.pathname.match(
+  const requestPath =
+    opts.basePath && requestUrl.pathname.startsWith(`${opts.basePath}/`)
+      ? requestUrl.pathname.slice(opts.basePath.length)
+      : requestUrl.pathname;
+  const match = requestPath.match(
     /^\/api\/chat\/media\/outgoing\/([^/]+)\/([^/]+)\/(full|thumbnail)$/,
   );
   if (!match) {

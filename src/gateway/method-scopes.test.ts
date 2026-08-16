@@ -82,8 +82,10 @@ describe("method scope resolution", () => {
     ["projects.add", ["operator.write"]],
     ["projects.searchRemote", ["operator.read"]],
     ["sessions.groups.list", ["operator.read"]],
+    ["sessions.groups.defaults", ["operator.write"]],
     ["sessions.groups.put", ["operator.write"]],
     ["sessions.groups.rename", ["operator.write"]],
+    ["sessions.groups.update", ["operator.write"]],
     ["sessions.groups.delete", ["operator.write"]],
     ["sessions.catalog.list", ["operator.read"]],
     ["sessions.catalog.read", ["operator.read"]],
@@ -618,6 +620,21 @@ describe("method scope resolution", () => {
         key: "agent:main:old",
         archivedOnly: true,
         expectedSessionId: "sess-1",
+      }),
+    ).toEqual({ allowed: true });
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.delete", {
+        key: "agent:main:old",
+        archivedOnly: true,
+        expectedSessionId: "sess-1",
+      }),
+    ).toEqual(["operator.write"]);
+    expect(
+      authorizeOperatorScopesForMethod("sessions.delete", ["operator.write"], {
+        key: "agent:main:old",
+        archivedOnly: true,
+        expectedSessionId: "sess-1",
+        futureField: true,
       }),
     ).toEqual({ allowed: false, missingScope: "operator.admin" });
     expect(

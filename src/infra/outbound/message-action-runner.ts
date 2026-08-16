@@ -117,6 +117,7 @@ async function handleBroadcastAction(
               cfg: input.cfg,
               channel: channelHint,
               fallbackChannel: input.toolContext?.currentChannelProvider,
+              agentId: input.agentId,
             })
           ).channel,
         ]
@@ -324,7 +325,7 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
     action,
   });
   if (action === "broadcast") {
-    return handleBroadcastAction(input, params);
+    return handleBroadcastAction({ ...input, agentId: resolvedAgentId }, params);
   }
   if (action === "send" && hasPollCreationParams(params)) {
     throw new Error('Poll fields require action "poll"; use action "poll" instead of "send".');

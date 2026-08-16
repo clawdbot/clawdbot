@@ -57,6 +57,7 @@ import { resolveMemoryFlushPlan, type MemoryFlushPlan } from "../../plugins/memo
 import { CommandLane } from "../../process/lanes.js";
 import { isIncognitoSessionKey, isUnscopedSessionKeySentinel } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { formatTokenCount } from "../../utils/token-format.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -681,7 +682,7 @@ export async function runPreflightCompactionIfNeeded(params: {
   storePath?: string;
   isHeartbeat: boolean;
   replyOperation: ReplyOperation;
-  onCompactionNotice?: (phase: CompactionNoticePhase) => Promise<void> | void;
+  onCompactionNotice?: (phase: CompactionNoticePhase, text?: string) => Promise<void> | void;
 }): Promise<SessionEntry | undefined> {
   const deps = {
     compactEmbeddedAgentSession: memoryDeps.compactEmbeddedAgentSession,
@@ -749,14 +750,14 @@ export async function runPreflightCompactionIfNeeded(params: {
   const promptTokenEstimate = estimatePromptTokensForMemoryFlush(
     params.promptForEstimate ?? params.followupRun.prompt,
   );
-  const serverCompactionThreshold = resolveResponsesServerCompactionThreshold({
+  const responsesServerCompactionThreshold = resolveResponsesServerCompactionThreshold({
     cfg: params.cfg,
     provider: params.followupRun.run.provider,
     modelId: params.followupRun.run.model ?? params.defaultModel,
   });
   const threshold = Math.max(
     contextWindowTokens - reserveTokensFloor - softThresholdTokens,
-    serverCompactionThreshold ?? 0,
+    responsesServerCompactionThreshold ?? 0,
   );
   const freshNeedsOutputRead =
     typeof freshPersistedTokens === "number" &&
@@ -836,7 +837,7 @@ export async function runPreflightCompactionIfNeeded(params: {
     `preflightCompaction check: sessionKey=${params.sessionKey} ` +
       `tokenCount=${tokenCountForCompaction ?? freshPersistedTokens ?? "undefined"} ` +
       `contextWindow=${contextWindowTokens} threshold=${threshold} ` +
-      `serverCompactionThreshold=${serverCompactionThreshold ?? "undefined"} ` +
+      `responsesServerCompactionThreshold=${responsesServerCompactionThreshold ?? "undefined"} ` +
       `isHeartbeat=${params.isHeartbeat} isCli=${isCli} ` +
       `persistedFresh=${entry?.totalTokensFresh === true} ` +
       `transcriptPromptTokens=${transcriptPromptTokens ?? "undefined"} ` +
@@ -852,7 +853,7 @@ export async function runPreflightCompactionIfNeeded(params: {
     contextWindowTokens,
     reserveTokensFloor,
     softThresholdTokens,
-    minimumThresholdTokens: serverCompactionThreshold,
+    minimumThresholdTokens: responsesServerCompactionThreshold,
   });
   const shouldCompact = shouldCompactByTokens || shouldCompactByTranscriptBytes;
   if (!shouldCompact) {
@@ -869,9 +870,13 @@ export async function runPreflightCompactionIfNeeded(params: {
   );
 
   params.replyOperation.setPhase("preflight_compacting");
-  const notifyCompaction = async (phase: CompactionNoticePhase) => {
+  const notifyCompaction = async (phase: CompactionNoticePhase, text?: string) => {
     try {
-      await params.onCompactionNotice?.(phase);
+      if (text) {
+        await params.onCompactionNotice?.(phase, text);
+      } else {
+        await params.onCompactionNotice?.(phase);
+      }
     } catch (err) {
       logVerbose(`preflightCompaction notice delivery failed: ${String(err)}`);
     }
@@ -882,9 +887,12 @@ export async function runPreflightCompactionIfNeeded(params: {
     startedCompactionNotice = true;
     await notifyCompaction("start");
   };
-  const notifyTerminalCompaction = async (phase: "end" | "incomplete" | "skipped") => {
+  const notifyTerminalCompaction = async (
+    phase: "end" | "incomplete" | "skipped",
+    text?: string,
+  ) => {
     terminalCompactionNoticeSent = true;
-    await notifyCompaction(phase);
+    await notifyCompaction(phase, text);
   };
   try {
     await notifyStartCompaction();
@@ -974,12 +982,19 @@ export async function runPreflightCompactionIfNeeded(params: {
       storePath: compactionStorePath,
       tokensAfter: result.result?.tokensAfter,
       newSessionId: result.result?.sessionId,
+      compactionKind: result.compactionKind,
     });
     await appendPostCompactionRefreshPrompt({
       cfg: params.cfg,
       followupRun: params.followupRun,
     });
-    await notifyTerminalCompaction("end");
+    const serverNotice =
+      result.compactionKind === "server-endpoint" &&
+      typeof result.result?.tokensBefore === "number" &&
+      typeof result.result.tokensAfter === "number"
+        ? `🧹 Server-side compaction complete (${formatTokenCount(result.result.tokensBefore)} → ${formatTokenCount(result.result.tokensAfter)})`
+        : undefined;
+    await notifyTerminalCompaction("end", serverNotice);
     entry = params.sessionStore?.[params.sessionKey] ?? entry;
     if (entry) {
       const previousSessionId = params.followupRun.run.sessionId;

@@ -216,7 +216,7 @@ export async function withMemoryCommand(params: {
   }
   return cfg;
 }
-export type MemorySourceName = "memory" | "sessions";
+type MemorySourceName = "memory" | "sessions";
 type SourceScan = {
   source: MemorySourceName;
   totalFiles: number | null;
@@ -343,7 +343,7 @@ async function scanMemoryFiles(
   }
   return { source: "memory", totalFiles, issues };
 }
-export async function scanMemorySources(params: {
+async function scanMemorySources(params: {
   workspaceDir: string;
   agentId: string;
   sources: MemorySourceName[];
@@ -366,4 +366,29 @@ export async function scanMemorySources(params: {
     ? null
     : numericTotals.reduce((sum, total) => sum + total, 0);
   return { sources: scans, totalFiles, issues };
+}
+
+export async function scanMemoryManagerSources(
+  status: ReturnType<MemoryManager["status"]>,
+  agentId: string,
+): Promise<MemorySourceScan | undefined> {
+  const workspaceDir = status.workspaceDir;
+  if (!workspaceDir) {
+    return undefined;
+  }
+  const sources = (status.sources?.length ? status.sources : ["memory"]) as MemorySourceName[];
+  return await scanMemorySources({ workspaceDir, agentId, sources, extraPaths: status.extraPaths });
+}
+
+export function formatMemoryIndexOutcome(
+  status: ReturnType<MemoryManager["status"]>,
+  scan: MemorySourceScan | undefined,
+  agentId: string,
+): string {
+  if (status.workspaceDir && scan?.totalFiles === 0) {
+    return `No memory files found in ${shortenHomePath(status.workspaceDir)}; nothing indexed (${agentId}).`;
+  }
+  const indexedFiles = status.files ?? 0;
+  const fileLabel = indexedFiles === 1 ? "file" : "files";
+  return `Memory index updated (${agentId}): ${indexedFiles} ${fileLabel} indexed.`;
 }

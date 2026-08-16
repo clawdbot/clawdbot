@@ -264,7 +264,7 @@ describe("resolveSkillReferenceInvocations", () => {
   it("ignores common shell variables, escaped references, and unknown names", () => {
     expect(
       resolveSkillReferenceInvocations({
-        text: String.raw`Keep $HOME and \$demo_skill literal; $unknown is not installed.`,
+        text: String.raw`Keep $PATH and \$demo_skill literal; $unknown is not installed.`,
         skillCommands,
       }),
     ).toEqual([]);
@@ -288,7 +288,7 @@ describe("resolveSkillReferenceInvocations", () => {
     ).toEqual(["demo_skill"]);
   });
 
-  it("excludes slash-only skills that are hidden from the model prompt", () => {
+  it("resolves explicitly referenced skills hidden from the model prompt", () => {
     expect(
       resolveSkillReferenceInvocations({
         text: "Use $hidden_skill.",
@@ -300,8 +300,8 @@ describe("resolveSkillReferenceInvocations", () => {
             modelVisible: false,
           },
         ],
-      }),
-    ).toEqual([]);
+      }).map((command) => command.name),
+    ).toEqual(["hidden_skill"]);
   });
 });
 

@@ -17,12 +17,13 @@ import {
 } from "./deliver.queue-integration.test-support.js";
 import { collectEntrySpoolPaths, stageQueuePayloadMedia } from "./delivery-queue-media-spool.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
+import { recoverPendingDeliveries, type DeliverFn } from "./delivery-queue-recovery.js";
 import {
   claimDeliveryPlatformSendAttempt,
   loadPendingDeliveries,
   reserveDeliveryAttempt,
 } from "./delivery-queue-storage.js";
-import { enqueueDeliveryOnce, recoverPendingDeliveries, type DeliverFn } from "./delivery-queue.js";
+import { enqueueDeliveryOnce } from "./delivery-queue-storage.js";
 import {
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,

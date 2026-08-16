@@ -118,6 +118,23 @@ When the macOS app uses a local Gateway, it can offer this import once and make 
 
 System-profile import is enabled by default. Set `browser.allowSystemProfileImport=false` to disable both CLI and agent-triggered imports. Import is host-local and cannot run through the browser node proxy.
 
+### Cookie sync to a remote Gateway
+
+`import-profile` targets a managed profile on the same host. When your OpenClaw Gateway and agent browser run on a separate computer, use `cookie-sync` to decrypt cookies on this Mac and push them into a managed profile on that remote Gateway over the operator connection:
+
+```bash
+openclaw browser cookie-sync --domains github.com,news.ycombinator.com --into work
+openclaw browser --url wss://gateway.example.com cookie-sync --domains github.com --into work --watch
+```
+
+- `--domains` is required. Cookie sync copies live session cookies, so it never sends an unrestricted cookie jar; a missing or empty allowlist is a hard error.
+- `--into` selects the target managed profile on the Gateway (default `imported`); `--gateway`/`--url` selects a remote Gateway (default is the configured/local one).
+- `--watch` keeps the command running and re-pushes when the source Cookies database changes. The macOS Keychain secret is read once per watch session, so you approve a single consent prompt rather than one per change.
+- Decryption is host-local (macOS only) and reuses the same allowlist and Keychain path as `import-profile`. Cookies are decrypted on this Mac and shipped over the existing TLS-pinned Gateway connection; no cookie values are printed.
+- Some Google sessions use device-bound session credentials (DBSC) that stay tied to this Mac and can still require re-authentication after sync. For those sites, prefer driving the browser on the Mac itself through the [browser node proxy](#remote-browser-control-node-host-proxy).
+
+The macOS app exposes the same capability under **Settings → General → Cookie sync**: an off-by-default toggle, an editable domain allowlist, and a target-profile field. When enabled in remote mode it supervises `cookie-sync --watch` for you against the connected Gateway and shows a live status row.
+
 ## Chrome extension relay
 
 ```bash

@@ -75,7 +75,7 @@ These run inside the agent loop or gateway pipeline:
 Hook decision rules for outbound/tool guards:
 
 - `before_tool_call`: `{ block: true }` is terminal and stops lower-priority handlers. `{ block: false }` is a no-op and does not clear a prior block.
-- `before_install`: same terminal/no-op semantics as above. Use `security.installPolicy`, not `before_install`, for operator-owned install allow/block decisions that must cover CLI install and update paths.
+- `before_install`: same terminal/no-op semantics as above. Use `security.installPolicy`, not `before_install`, for operator-owned install allow/warn/block decisions that must cover CLI install and update paths.
 - `message_sending`: `{ cancel: true }` is terminal and stops lower-priority handlers. `{ cancel: false }` is a no-op and does not clear a prior cancel.
 
 See [Plugin hooks](/plugins/hooks) for the hook API and registration details.

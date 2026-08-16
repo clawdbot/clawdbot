@@ -68,6 +68,7 @@ class WearProtocolTest {
     val methodNames =
       mapOf(
         WearRpcMethod.ProxyStatus to "proxy.status",
+        WearRpcMethod.AgentPulse to "agent.pulse",
         WearRpcMethod.SessionsList to "sessions.list",
         WearRpcMethod.AgentsList to "agents.list",
         WearRpcMethod.AgentsSelect to "agents.select",
@@ -143,6 +144,7 @@ class WearProtocolTest {
     assertEquals("gateway-controls", WearProxyCapability.GatewayControls.wireValue)
     assertEquals("model-controls", WearProxyCapability.ModelControls.wireValue)
     assertEquals("session-selection-lookup", WearProxyCapability.SessionSelectionLookup.wireValue)
+    assertEquals("agent-pulse", WearProxyCapability.AgentPulse.wireValue)
     assertEquals(
       "attempt-scoped-realtime-audio",
       WearProxyCapability.AttemptScopedRealtimeAudio.wireValue,

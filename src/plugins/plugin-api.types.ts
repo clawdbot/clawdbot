@@ -78,7 +78,6 @@ import type { ProviderPlugin } from "./provider-plugin.types.js";
 import type {
   ContextEngineFactory,
   MemoryCorpusSupplement,
-  MemoryEmbeddingProviderAdapter,
   MemoryPluginCapability,
   MemoryPromptSectionBuilder,
   MemoryPromptSectionParams,
@@ -441,13 +440,6 @@ export type OpenClawPluginApi = {
   ) => void;
   /** Register an additive memory-adjacent search/read corpus supplement (non-exclusive). */
   registerMemoryCorpusSupplement: (supplement: MemoryCorpusSupplement) => void;
-  /**
-   * Register a memory embedding provider adapter. Multiple adapters may coexist.
-   * @deprecated New embedding providers should use `registerEmbeddingProvider`
-   * and `contracts.embeddingProviders`. This memory-specific seam is retained
-   * while existing memory providers migrate.
-   */
-  registerMemoryEmbeddingProvider: (adapter: MemoryEmbeddingProviderAdapter) => void;
   resolvePath: (input: string) => string;
   /** Register a lifecycle hook handler */
   on: <K extends PluginHookName>(

@@ -215,7 +215,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
       hasStaticConfiguredMcp: bundleMcpThreadConfig.staticServerNames.length > 0,
     });
   preDynamicStartupStages.mark("bundle-mcp");
-  const sandboxExecServerEnabled = isCodexSandboxExecServerEnabled(pluginConfig);
+  const sandboxExecServerEnabled = isCodexSandboxExecServerEnabled(pluginConfig, sandbox);
   const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
     runtimeParams,
     sandbox,

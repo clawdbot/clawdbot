@@ -393,12 +393,17 @@ function syncConfigDraft(state: RuntimeConfigState, nextForm: Record<string, unk
 /**
  * Any mutation invalidates a lingering "Saved"/"Save failed" indicator: a
  * dirty edit is about to reschedule, and a clean revert makes the old
- * failure moot (its error is cleared too). Two states persist regardless:
- * "saving" reports the in-flight request, and "conflict" marks the snapshot
- * itself stale — only a reload clears it, no local edit can.
+ * failure moot (its error is cleared too). Three states persist regardless:
+ * "saving" reports the in-flight request, "conflict" marks the snapshot
+ * itself stale, and "paused" marks the reconnect latch — only an explicit
+ * Save/Apply or discard clears it, no local edit can.
  */
 function resetStaleAutoSaveStatus(state: RuntimeConfigState) {
-  if (state.configAutoSaveStatus === "saving" || state.configAutoSaveStatus === "conflict") {
+  if (
+    state.configAutoSaveStatus === "saving" ||
+    state.configAutoSaveStatus === "conflict" ||
+    state.configAutoSaveStatus === "paused"
+  ) {
     return;
   }
   if (!state.configFormDirty && state.configAutoSaveStatus === "error") {

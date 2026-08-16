@@ -1,6 +1,7 @@
 // Keep the runtime class on the public package specifier so OpenClaw and
 // external consumers share one constructor identity.
 import { EventStream as LlmEventStream } from "@openclaw/ai/event-stream";
+import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
@@ -114,7 +115,9 @@ function removeNonExecutableToolCalls(message: AssistantMessage): AssistantMessa
     return message;
   }
   const content = message.content.filter((item) => item.type !== "toolCall");
-  return content.length === message.content.length ? message : { ...message, content };
+  return content.length === message.content.length
+    ? message
+    : replaceCompactionReplayOwnerContent(message, content);
 }
 
 function ensureToolTurnIdentity(message: AssistantMessage): AssistantMessage {
@@ -1870,8 +1873,17 @@ type TurnTaintMetadata = {
 };
 
 function readTurnTaintMetadata(message: AgentMessage): TurnTaintMetadata | undefined {
-  const metadata = (message as unknown as Record<string, unknown>)["__openclaw"];
-  return asOptionalRecord(metadata) as TurnTaintMetadata | undefined;
+  const metadata = Reflect.get(message, "__openclaw");
+  const record = asOptionalRecord(metadata);
+  if (!record) {
+    return undefined;
+  }
+  return {
+    ...(record.resultContentSource === "network"
+      ? { resultContentSource: record.resultContentSource }
+      : {}),
+    ...(record.turnTainted === true ? { turnTainted: true } : {}),
+  };
 }
 
 function toolResultTaintsTurn(message: ToolResultMessage): boolean {
@@ -1895,10 +1907,11 @@ function withAssistantTurnTaint(message: AssistantMessage, tainted: boolean): As
   if (!tainted) {
     return message;
   }
-  return {
+  const taintedMessage = {
     ...message,
     __openclaw: { ...readTurnTaintMetadata(message), turnTainted: true },
-  } as unknown as AssistantMessage;
+  } satisfies AssistantMessage & { __openclaw: TurnTaintMetadata };
+  return taintedMessage;
 }
 
 function withToolResultContentSource(

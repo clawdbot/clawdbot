@@ -809,6 +809,39 @@ describe("scripts/changed-lanes", () => {
 
   it.each([
     {
+      name: "mixed UI TypeScript and CSS",
+      paths: ["ui/src/app-routes.ts", "ui/src/styles/base.css"],
+      oxlintTargets: ["ui/src/app-routes.ts"],
+      stylelintTargets: ["ui/src/app-routes.ts", "ui/src/styles/base.css"],
+    },
+    {
+      name: "UI CSS only",
+      paths: ["ui/src/styles/base.css"],
+      oxlintTargets: [],
+      stylelintTargets: ["ui/src/styles/base.css"],
+    },
+  ])("targets style lint for $name without broad core lint", (testCase) => {
+    const plan = createChangedCheckPlan(detectChangedLanes(testCase.paths), {
+      env: { PATH: "/usr/bin" },
+    });
+
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("lint:core");
+    const oxlint = plan.commands.find((command) => command.name.startsWith("lint core changed"));
+    if (testCase.oxlintTargets.length === 0) {
+      expect(oxlint).toBeUndefined();
+    } else {
+      expect(oxlint?.args.slice(3)).toEqual(testCase.oxlintTargets);
+    }
+    expect(
+      plan.commands.find((command) => command.name.startsWith("lint UI changed style")),
+    ).toMatchObject({
+      bin: "node",
+      args: ["--import", "tsx", "scripts/run-stylelint.mts", ...testCase.stylelintTargets],
+    });
+  });
+
+  it.each([
+    {
       owner: "core",
       paths: [
         "src/gateway/node-registry.ts",
@@ -869,7 +902,7 @@ describe("scripts/changed-lanes", () => {
     {
       name: "routes the UI production config to UI prod and core test lanes",
       path: "tsconfig.ui.json",
-      expected: { includes: ["tsgo:ui", "tsgo:core:test"], excludes: [] },
+      expected: { includes: ["tsgo:ui", "tsgo:core:test", "lint:core"], excludes: [] },
     },
   ])("$name", ({ path: changedPath, expected }) => {
     const result = detectChangedLanes([changedPath]);
@@ -884,6 +917,18 @@ describe("scripts/changed-lanes", () => {
     for (const command of expected.excludes) {
       expect(commands).not.toContain(command);
     }
+  });
+
+  it("falls back to core lint for a non-lintable core test asset", () => {
+    const result = detectChangedLanes([
+      "packages/ai/test/fixtures/provider-transport-parity/openai-success.snap.txt",
+    ]);
+    const commands = createChangedCheckPlan(result, {
+      env: { PATH: "/usr/bin" },
+    }).commands.map((command) => command.args[0]);
+
+    expectLanes(result.lanes, { coreTests: true });
+    expect(commands).toContain("lint:core");
   });
 
   it.each(["scripts/control-ui-i18n.ts", "scripts/lib/example.ts", "tsconfig.scripts.json"])(
@@ -1408,6 +1453,7 @@ describe("scripts/changed-lanes", () => {
       "conflict markers",
       "environment variable count ratchet",
       "max-lines suppression ratchet",
+      "assertion SAFETY comment ratchet",
       "changelog attributions",
       "doctor deprecation registry",
       "guarded extension wildcard re-exports",
@@ -1997,6 +2043,7 @@ describe("scripts/changed-lanes", () => {
 
   it("runs macOS CI tests for workspace rsync receiver owners", () => {
     for (const changedPath of [
+      "src/shared/worker-bundle-hash.ts",
       "src/worker/workspace-rsync-receiver.ts",
       "src/gateway/worker-environments/workspace-sync.ts",
       "src/gateway/worker-environments/workspace-sync-helpers.ts",
@@ -2047,11 +2094,13 @@ describe("scripts/changed-lanes", () => {
       "scripts/create-dmg.sh",
       "scripts/lib/plistbuddy.sh",
       "scripts/lib/swift-toolchain.sh",
+      "scripts/mac-elevation-host.sh",
       "scripts/notarize-mac-artifact.sh",
       "scripts/package-mac-app.sh",
       "scripts/package-mac-dist.sh",
       "test/scripts/codesign-mac-app.test.ts",
       "test/scripts/create-dmg.test.ts",
+      "test/scripts/mac-elevation-host.test.ts",
       "test/scripts/notarize-mac-artifact.test.ts",
       "test/scripts/package-mac-app.test.ts",
       "test/scripts/package-mac-dist.test.ts",
@@ -2267,6 +2316,15 @@ describe("scripts/changed-lanes", () => {
       expected: {
         worktree: ["check:env-var-count", "--base", "main"],
         staged: ["check:env-var-count", "--staged", "--base", "HEAD"],
+      },
+    },
+    {
+      name: "adds the assertion SAFETY comment ratchet for production source",
+      commandName: "assertion SAFETY comment ratchet",
+      worktreeOptions: { base: "main" },
+      expected: {
+        worktree: ["check:assertion-safety", "--base", "main"],
+        staged: ["check:assertion-safety", "--staged", "--base", "HEAD"],
       },
     },
   ])("$name", ({ commandName, worktreeOptions, expected }) => {

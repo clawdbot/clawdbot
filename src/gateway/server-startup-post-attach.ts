@@ -857,7 +857,12 @@ export async function startGatewaySidecars(params: {
                 defaultProvider: DEFAULT_PROVIDER,
                 defaultModel: DEFAULT_MODEL,
               });
-            const catalog = await loadPreparedModelCatalog({ config: params.cfg });
+            const catalog = await loadPreparedModelCatalog({
+              config: params.cfg,
+              readOnly: true,
+              providerDiscoveryProviderIds: [hooksModelRef.provider],
+              scopedLiveProviderDiscovery: true,
+            });
             const status = getModelRefStatus({
               cfg: params.cfg,
               catalog,

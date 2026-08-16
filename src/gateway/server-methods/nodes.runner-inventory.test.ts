@@ -1,7 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { WORKER_PROTOCOL_FEATURES } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
+import { NODE_WORKER_SUPERVISOR_STATUS_COMMAND } from "../../infra/node-commands.js";
+import {
+  NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
+  NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE,
+  NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+} from "../../infra/node-runner-inventory.js";
 import {
   createNodeRegistryRuntime,
   setNodeRunnerInventoryChangedListener,
@@ -168,6 +173,85 @@ describe("nodeHandlers node.runnerInventory.update", () => {
     runtime.nodeRegistry.unregister("conn-1");
   });
 
+  it("keeps exact v1 inventory diagnostic-only until disconnect and v2 reconnect", async () => {
+    const inventoryChanged = vi.fn();
+    const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
+    setNodeRunnerInventoryChangedListener(runtime.nodeRegistry, inventoryChanged);
+    const legacyClient = createWorkerSupervisorNodeClient("conn-v1", WORKER_RUNS);
+    runtime.nodeRegistry.register(legacyClient, {
+      pairingIdentity: "identity-1",
+      pairingGeneration: "generation-1",
+    });
+    const legacy = runnerInventoryOptions({
+      nodeRegistry: runtime.nodeRegistry,
+      client: legacyClient,
+      declaration: {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE],
+        workerRuns: WORKER_RUNS,
+      },
+    });
+
+    await runnerInventoryHandler(legacy);
+
+    expect(legacy.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("openclaw update"),
+      }),
+    );
+    expect(inventoryChanged).toHaveBeenLastCalledWith("node-1");
+    expect(runtime.nodeWorkerSupervisorTransport.getIssue?.("node-1")).toEqual(
+      NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
+    );
+    await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([]);
+    const forgedProof = {
+      nodeId: "node-1",
+      connId: "conn-v1",
+      pairingIdentity: "identity-1",
+      pairingGeneration: "generation-1",
+      clientId: "node-host",
+      clientMode: "node",
+      protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+      workerRuns: WORKER_RUNS,
+      commands: ["system.run"],
+    } as const;
+    expect(runtime.nodeWorkerSupervisorTransport.isCurrent(forgedProof)).toBe(false);
+    await expect(
+      runtime.nodeWorkerSupervisorTransport.invoke({
+        node: forgedProof,
+        command: NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
+        isDispatchAuthorized: () => true,
+      }),
+    ).resolves.toMatchObject({ ok: false, error: { code: "PRIVATE_DIALECT_UNAVAILABLE" } });
+
+    runtime.nodeRegistry.unregister("conn-v1");
+    expect(runtime.nodeWorkerSupervisorTransport.getIssue?.("node-1")).toBeUndefined();
+    expect(inventoryChanged).toHaveBeenCalledTimes(2);
+
+    const currentClient = createWorkerSupervisorNodeClient("conn-v2", WORKER_RUNS);
+    runtime.nodeRegistry.register(currentClient, {
+      pairingIdentity: "identity-1",
+      pairingGeneration: "generation-1",
+    });
+    await runnerInventoryHandler(
+      runnerInventoryOptions({
+        nodeRegistry: runtime.nodeRegistry,
+        client: currentClient,
+        declaration: {
+          protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+          workerRuns: WORKER_RUNS,
+        },
+      }),
+    );
+    expect(runtime.nodeWorkerSupervisorTransport.getIssue?.("node-1")).toBeUndefined();
+    await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([
+      expect.objectContaining({ nodeId: "node-1", connId: "conn-v2", workerRuns: WORKER_RUNS }),
+    ]);
+    runtime.nodeRegistry.unregister("conn-v2");
+  });
+
   it.each([
     { name: "missing list", params: {} },
     { name: "extra key", params: { protocolFeatures: [], extra: true } },
@@ -181,7 +265,7 @@ describe("nodeHandlers node.runnerInventory.update", () => {
         ],
       },
     },
-    { name: "wrong dialect", params: { protocolFeatures: ["node-worker-supervisor-v2"] } },
+    { name: "wrong dialect", params: { protocolFeatures: ["node-worker-supervisor-v0"] } },
     {
       name: "worker build without dialect",
       params: { protocolFeatures: [], workerRuns: WORKER_RUNS },

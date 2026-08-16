@@ -112,10 +112,6 @@ function classifyHeartbeatPendingFinalDelivery(text: string, ackMaxChars: number
   };
 }
 
-function resolveHeartbeatAckMaxChars(_cfg: OpenClawConfig, _agentId: string): number {
-  return DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
-}
-
 const sessionResetModelRuntimeLoader = createLazyImportLoader(
   () => import("./session-reset-model.runtime.js"),
 );
@@ -697,7 +693,7 @@ export async function getReplyFromConfig(
     if (opts?.isHeartbeat) {
       const heartbeatPending = classifyHeartbeatPendingFinalDelivery(
         text,
-        resolveHeartbeatAckMaxChars(cfg, agentId),
+        DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
       );
       if (heartbeatPending.shouldClear) {
         Object.assign(sessionEntry, PENDING_FINAL_DELIVERY_CLEAR_PATCH);
@@ -1110,6 +1106,7 @@ export async function getReplyFromConfig(
   await maybeEmitMissingResetHooks();
   directives = inlineActionResult.directives;
   cleanedBody = inlineActionResult.cleanedBody;
+  const explicitSkillSelections = inlineActionResult.explicitSkillSelections;
   abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
   const runAutoFallbackPrimaryProbe = directives.hasModelDirective
     ? undefined
@@ -1286,6 +1283,7 @@ export async function getReplyFromConfig(
       storePath,
       workspaceDir,
       abortedLastRun,
+      explicitSkillSelections,
       autoFallbackPrimaryProbe: runAutoFallbackPrimaryProbe,
     }),
   );

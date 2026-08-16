@@ -396,7 +396,6 @@ describe("worker inference provider runtime", () => {
     expect(runtime.acquireRuntimeLease).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "runtime-agent",
-        inheritedAuthDir: expect.any(String),
       }),
     );
     const [streamModel, streamContext, streamOptions] = runtime.stream.mock.calls[0] ?? [];

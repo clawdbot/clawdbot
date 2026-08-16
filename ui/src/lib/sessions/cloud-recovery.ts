@@ -30,6 +30,7 @@ export type CloudSessionRecovery = {
 // Keep the create -> dispatch -> first-send handoff recoverable across reloads,
 // while scoping it to this tab, Gateway, and authenticated credential.
 const CLOUD_CREATE_STRING_FIELDS = [
+  "category",
   "model",
   "thinkingLevel",
   "worktreeBaseRef",

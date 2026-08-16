@@ -23,6 +23,7 @@ type LoginFailureKind =
   | "pairing-required"
   | "insecure-context"
   | "origin-not-allowed"
+  | "build-mismatch"
   | "protocol-mismatch"
   | "network";
 
@@ -122,6 +123,18 @@ function resolveLoginFailureFeedback(
   const rawError = params.lastError;
   const lastErrorCode = params.lastErrorCode ?? null;
   const lower = normalizeLowercaseStringOrEmpty(rawError);
+
+  if (lastErrorCode === ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH) {
+    return buildFeedback({
+      kind: "build-mismatch",
+      rawError,
+      titleKey: "chat.sidebar.serverUpdatedTitle",
+      summaryKey: "chat.sidebar.serverUpdatedRefresh",
+      refreshAction: { label: t("login.failure.protocol.refresh") },
+      stepKeys: [],
+      docsHref: "https://docs.openclaw.ai/web/control-ui",
+    });
+  }
 
   const pairing = resolvePairingHint(false, rawError, lastErrorCode);
   if (pairing) {

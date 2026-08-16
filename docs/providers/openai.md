@@ -1449,18 +1449,23 @@ not declared Codex-compatible.
   </Accordion>
 
   <Accordion title="Server-side compaction (Responses API)">
-    For direct OpenAI Responses models (`openai/*` on `api.openai.com`), the
-    OpenAI plugin's OpenClaw stream wrapper auto-enables server-side
-    compaction:
+    For store-capable direct OpenAI Responses models (`openai/*` resolved to
+    `api.openai.com`), the OpenAI plugin's OpenClaw stream wrapper auto-enables
+    server-side compaction:
 
     - Forces `store: true` (unless model compat sets `supportsStore: false`)
     - Injects `context_management: [{ type: "compaction", compact_threshold: ... }]`
     - Default `compact_threshold`: 70% of `contextWindow` (or `80000` when
       unavailable)
 
-    This applies to the built-in OpenClaw runtime path and to OpenAI provider
-    hooks used by embedded runs. The native Codex app-server harness manages
-    its own context through Codex and is not affected by this setting.
+    The same resolved route and effective threshold gate the client preflight,
+    so OpenClaw does not delay local compaction unless the transport will inject
+    `context_management`. ChatGPT OAuth, custom proxies, and routes with
+    `compat.supportsStore: false` are not store-capable and therefore ignore
+    these server-compaction controls. This applies to the built-in OpenClaw
+    runtime path and to OpenAI provider hooks used by embedded runs. The native
+    Codex app-server harness manages its own context through Codex and is not
+    affected by this setting.
 
     OpenAI emits the compacted state as an encrypted `compaction` output item.
     Keep that item opaque. For stateless continuation, carry the newest item
@@ -1472,7 +1477,8 @@ not declared Codex-compatible.
 
     <Tabs>
       <Tab title="Enable explicitly">
-        Useful for compatible endpoints like Azure OpenAI Responses:
+        Useful for store-capable endpoints like Azure OpenAI Responses. Setting
+        this to `true` does not override endpoint or `supportsStore` capability:
 
         ```json5
         {

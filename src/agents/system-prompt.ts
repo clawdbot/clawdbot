@@ -22,6 +22,7 @@ import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.ty
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
+import { CHANNEL_IDS } from "../channels/ids.js";
 import {
   hasNativeApprovalPromptRuntimeCapability,
   isKnownNativeApprovalPromptChannel,
@@ -686,7 +687,10 @@ function buildCollapsibleDetailsSection(params: {
 }
 
 function buildMessageChannelOptions(runtimeChannel?: string): string | undefined {
-  const deliverableChannels: readonly string[] = listDeliverableMessageChannels();
+  const externalChannels = normalizePromptCapabilityIds(listDeliverableMessageChannels()).filter(
+    (channelId) => !CHANNEL_IDS.includes(channelId),
+  );
+  const deliverableChannels: readonly string[] = [...CHANNEL_IDS, ...externalChannels];
   if (deliverableChannels.length <= 1) {
     return undefined;
   }

@@ -267,11 +267,12 @@ async function executeModel(
   context: SlashCommandContext,
 ): Promise<SlashCommandResult> {
   const modelCatalog = context.chatModelCatalog ?? context.modelCatalog;
+  const agentId = resolveSelectedAgentId(sessionKey, context);
   if (!args) {
     try {
       const [sessions, models] = await Promise.all([
         listSessions(context, selectedAgentListScope(sessionKey, context)),
-        modelCatalog ? Promise.resolve(modelCatalog) : loadModelCatalog(client),
+        modelCatalog ? Promise.resolve(modelCatalog) : loadModelCatalog(client, agentId),
       ]);
       const { session, defaults } = resolveCommandSessionState(context, sessionKey, sessions);
       const model = session?.model || defaults?.model || "default";
@@ -306,7 +307,7 @@ async function executeModel(
     const requestedModel = args.trim();
     const resolvedModelCatalog = modelCatalog
       ? Promise.resolve(modelCatalog)
-      : loadModelCatalog(client, { allowFailure: true });
+      : loadModelCatalog(client, agentId, { allowFailure: true });
     let resolvedOverride: ChatModelOverride | null = null;
     await patchSession(
       context,
@@ -776,9 +777,10 @@ async function loadThinkingCommandState(
   sessionKey: string,
 ) {
   const modelCatalog = context.chatModelCatalog ?? context.modelCatalog;
+  const agentId = resolveSelectedAgentId(sessionKey, context);
   const [sessions, models] = await Promise.all([
     listSessions(context, selectedAgentListScope(sessionKey, context)),
-    modelCatalog ? Promise.resolve(modelCatalog) : loadModelCatalog(client),
+    modelCatalog ? Promise.resolve(modelCatalog) : loadModelCatalog(client, agentId),
   ]);
   const state = resolveCommandSessionState(context, sessionKey, sessions);
   return {
@@ -789,10 +791,15 @@ async function loadThinkingCommandState(
 
 async function loadModelCatalog(
   client: GatewayBrowserClient,
+  agentId: string | undefined,
   opts?: { allowFailure?: boolean },
 ): Promise<ModelCatalogEntry[]> {
+  if (!agentId) {
+    return [];
+  }
   try {
     const result = await client.request<{ models: ModelCatalogEntry[] }>("models.list", {
+      agentId,
       view: "configured",
     });
     return result?.models ?? [];

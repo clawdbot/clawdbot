@@ -52,12 +52,23 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
     vi.clearAllMocks();
   });
 
-  it("re-arms the scheduler when resolving the default reaper agent fails", async () => {
+  it("runs explicit-agent jobs when no default reaper agent exists", async () => {
     const store = await makeStorePath();
     const now = Date.parse("2026-02-10T10:00:00.000Z");
-    const job = createDueIsolatedJob({ id: "recover-default-agent", nowMs: now });
+    const job = {
+      ...createDueIsolatedJob({ id: "explicit-agent", nowMs: now }),
+      agentId: "worker",
+    };
     await saveCronStore(store.storePath, { version: 1, jobs: [job] });
-    let defaultAgentAvailable = false;
+    const sessionStorePath = path.join(path.dirname(store.storePath), "sessions", "sessions.json");
+    await replaceSessionEntry(
+      {
+        agentId: "worker",
+        storePath: sessionStorePath,
+        sessionKey: "agent:worker:cron:explicit-agent:run:expired",
+      },
+      { sessionId: "worker-expired", updatedAt: now - 25 * 3_600_000 },
+    );
     const runIsolatedAgentJob = vi.fn().mockResolvedValue({ status: "ok", summary: "done" });
     const state = createCronServiceState({
       storePath: store.storePath,
@@ -67,25 +78,20 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
-      resolveDefaultAgentId: () => {
-        if (!defaultAgentAvailable) {
-          throw new Error("default agent temporarily unavailable");
-        }
-        return "main";
-      },
-      sessionStorePath: path.join(path.dirname(store.storePath), "sessions", "sessions.json"),
+      resolveDefaultAgentId: () => undefined,
+      resolveSessionStoreAgentIds: () => ["worker"],
+      sessionStorePath,
     });
     state.store = { version: 1, jobs: [job] };
 
     await withCronServiceStateForTest(state, async () => {
-      await expect(onTimer(state)).rejects.toThrow("default agent temporarily unavailable");
-      expect(state.running).toBe(false);
-      expect(state.timer).not.toBeNull();
-
-      defaultAgentAvailable = true;
       await expect(onTimer(state)).resolves.toBeUndefined();
       expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
+      expect(
+        listSessionEntriesCore({ agentId: "worker", storePath: sessionStorePath }),
+      ).toStrictEqual([]);
       expect(state.running).toBe(false);
+      expect(state.timer).not.toBeNull();
     });
   });
 

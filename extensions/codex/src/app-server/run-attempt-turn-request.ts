@@ -8,6 +8,7 @@ import {
   utf8JsonByteLength,
 } from "./attempt-diagnostics.js";
 import { isCodexAppServerIndeterminateRequestCancellationError } from "./client.js";
+import { resolveCodexExplicitSkillInputs } from "./explicit-skill-input.js";
 import { assertCodexTurnStartResponse } from "./protocol-validators.js";
 import type { CodexTurnStartResponse } from "./protocol.js";
 import { readCodexRateLimitsRevision } from "./rate-limit-cache.js";
@@ -42,6 +43,12 @@ export async function prepareCodexAttemptTurnRequest(
     runAbortController,
   } = connection;
   const { state } = turnRuntime;
+  const explicitSkillInputs = await resolveCodexExplicitSkillInputs({
+    client: resourceState.client,
+    cwd: resourceState.codexExecutionCwd,
+    selections: runtimeParams.explicitSkillSelections,
+    signal: runAbortController.signal,
+  });
   const buildCodexModelInputMessages = () => [
     ...prompt.codexModelInputHistoryMessages,
     buildCodexUserPromptMessage({ ...runtimeParams, prompt: turnState.codexTurnPromptText }),
@@ -105,6 +112,7 @@ export async function prepareCodexAttemptTurnRequest(
       cwd: resourceState.codexExecutionCwd,
       appServer: turnAppServer,
       promptText: turnState.codexTurnPromptText,
+      explicitSkillInputs,
       sandboxPolicy: resourceState.codexSandboxPolicy,
       environmentSelection: resourceState.codexEnvironmentSelection,
       clearInheritedServiceTier: resourceState.thread.clearInheritedServiceTier,

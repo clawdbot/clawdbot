@@ -336,6 +336,22 @@ export function normalizeAgentLabel(
   );
 }
 
+export function normalizeAgentTargetLabel(
+  agent: AgentRosterEntry,
+  hydratedIdentity?: Pick<AgentIdentityResult, "name" | "nameSource"> | null,
+) {
+  const resolvedName =
+    hydratedIdentity?.nameSource && hydratedIdentity.nameSource !== "default"
+      ? normalizeOptionalString(hydratedIdentity.name)
+      : undefined;
+  return (
+    resolvedName ??
+    normalizeOptionalString(agent.name) ??
+    normalizeOptionalString(agent.identity?.name) ??
+    agent.id
+  );
+}
+
 export function resolveAgentTextAvatar(
   agent: { identity?: { emoji?: string; avatar?: string } },
   agentIdentity?: AgentIdentityResult | null,

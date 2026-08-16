@@ -53,7 +53,7 @@ function sanitizeCodexAgentEventValue(value: unknown, seen = new WeakSet<object>
     }
     seen.add(value);
     const out: Record<string, unknown> = {};
-    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    for (const [key, child] of Object.entries(value)) {
       out[key] =
         typeof child === "string"
           ? redactSensitiveFieldValue(key, child)
@@ -85,7 +85,7 @@ export function sanitizeCodexToolArguments(
 export function sanitizeCodexToolResponse(
   response: CodexDynamicToolCallResponse,
 ): Record<string, unknown> {
-  return sanitizeCodexAgentEventRecord(response as unknown as Record<string, unknown>);
+  return sanitizeCodexAgentEventRecord({ ...response });
 }
 
 /** Infers compact human-readable tool metadata from Codex dynamic-tool arguments. */

@@ -33,6 +33,35 @@ describe("resolveTurnRecap", () => {
     });
   });
 
+  it("does not show the previous turn's token count when the usage persist lags", () => {
+    // Terminal stamp and usage persist are separate writes: the fresh-endedAt
+    // row still carries the previous turn's outputTokens (10).
+    resolveTurnRecap(SESSION, true, doneRow(PREVIOUS_ENDED_AT, 51_000, 10));
+    expect(resolveTurnRecap(SESSION, false, doneRow(RUN_ENDED_AT, 14_000, 10))).toEqual({
+      runtimeMs: 14_000,
+      outputTokens: null,
+    });
+  });
+
+  it("falls back to the watched run's live usage counter for a lagging row", () => {
+    resolveTurnRecap(SESSION, true, doneRow(PREVIOUS_ENDED_AT, 51_000, 10), 120);
+    // Counter grows while the run streams; the watch keeps the max.
+    resolveTurnRecap(SESSION, true, doneRow(PREVIOUS_ENDED_AT, 51_000, 10), 695);
+    // Usage map entry died at lifecycle end: settle renders pass null.
+    expect(resolveTurnRecap(SESSION, false, doneRow(RUN_ENDED_AT, 14_000, 10), null)).toEqual({
+      runtimeMs: 14_000,
+      outputTokens: 695,
+    });
+  });
+
+  it("prefers the row's tokens once the usage persist has landed", () => {
+    resolveTurnRecap(SESSION, true, doneRow(PREVIOUS_ENDED_AT, 51_000, 10), 690);
+    expect(resolveTurnRecap(SESSION, false, doneRow(RUN_ENDED_AT, 14_000, 695))).toEqual({
+      runtimeMs: 14_000,
+      outputTokens: 695,
+    });
+  });
+
   it("rejects the previous turn's row even seconds after this run started", () => {
     resolveTurnRecap(SESSION, true, doneRow(PREVIOUS_ENDED_AT));
     // Rapid back-to-back turns: the old done row stays stale forever, and so

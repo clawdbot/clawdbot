@@ -1,4 +1,6 @@
 // Qa Channel plugin module implements gateway behavior.
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import { channelReadyPatch, channelStoppedPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { pollQaBus } from "./bus-client.js";
 import { handleQaInbound } from "./inbound.js";
@@ -11,6 +13,8 @@ export async function startQaGatewayAccount(
   ctx: ChannelGatewayContext<ResolvedQaChannelAccount>,
 ) {
   const account = ctx.account;
+  const channelRuntime = ctx.channelRuntime as PluginRuntime["channel"] | undefined;
+  const buildContext = channelRuntime?.inbound.buildContext ?? buildChannelInboundEventContext;
   if (!account.configured) {
     throw new Error(`QA channel is not configured for account "${account.accountId}"`);
   }
@@ -39,6 +43,7 @@ export async function startQaGatewayAccount(
       account,
       config: ctx.cfg as CoreConfig,
       message,
+      buildContext,
     });
   const captureInboundError = (error: unknown) => {
     inboundError ??= error instanceof Error ? error : new Error(String(error));

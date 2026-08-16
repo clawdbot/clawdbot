@@ -25,7 +25,7 @@
     <string name="native_003aaf9e0a0e6b9f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Микрофон выключен"</string>
     <string name="native_0060cbfdd3cf13ba" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Показывать оповещения OpenClaw"</string>
     <string name="native_0077032d7e9f9cbe" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Активность ветки"</string>
-    <string name="native_008dacb6d1e85bd8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Полная"</string>
+    <string name="native_008dacb6d1e85bd8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Полный"</string>
     <string name="native_009506aeb0484b2a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Одобрение разрешено и сохранено."</string>
     <string name="native_00d108e2e6466940" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Показывать историю недавних вызовов"</string>
     <string name="native_00e8aeba41d79ce3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"1 в ожидании"</string>
@@ -95,7 +95,7 @@
     <string name="native_0c77fe09ab336a3e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Клиент"</string>
     <string name="native_0c79a9c222840ed0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Применено"</string>
     <string name="native_0cab1c9617404faf" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"видео"</string>
-    <string name="native_0cf04463c4276a62" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Продвигаемые"</string>
+    <string name="native_0cf04463c4276a62" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Продвинуто"</string>
     <string name="native_0d21bd52022ca7f7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"В сети"</string>
     <string name="native_0d5644ff52ce2ba3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Области доступа"</string>
     <string name="native_0d5efd432e4fedf5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Провайдер голосовой связи в реальном времени не настроен."</string>
@@ -103,7 +103,7 @@
     <string name="native_0d8ca811c3744a6d" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s · %2$s"</string>
     <string name="native_0db10f2c2f332cd2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"kick"</string>
     <string name="native_0db184f967e05413" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway вернул недействительную автоматизацию."</string>
-    <string name="native_0dc49fb52ef24934" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ID экземпляра"</string>
+    <string name="native_0dc49fb52ef24934" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Идентификатор экземпляра"</string>
     <string name="native_0e21c3fd2dee2f6f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Требуется токен Gateway. Введите его снова или измените это подключение."</string>
     <string name="native_0e570ca6fabe24f9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Источник"</string>
     <string name="native_0e91610117029a62" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Обновить"</string>
@@ -113,7 +113,7 @@
     <string name="native_0f56cc286a4f23d8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Требуется проверка сертификата"</string>
     <string name="native_0f8fe3a9688138a1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Откройте текущую поверхность Canvas для просмотра или взаимодействия с ней."</string>
     <string name="native_0ff98f05be01ce5e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Автоматизация обновлена."</string>
-    <string name="native_100ac08064a6d586" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Нет недавних сеансов"</string>
+    <string name="native_100ac08064a6d586" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Нет недавних сессий"</string>
     <string name="native_102acc10e67a297d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Скрипт"</string>
     <string name="native_1039e92fa05c1279" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Статус Gateway, готовность телефонного узла и поток последних журналов."</string>
     <string name="native_106808530413298b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Открыть сведения об автоматизации"</string>
@@ -150,7 +150,7 @@
     <string name="native_155106be1173d757" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Имя устройства"</string>
     <string name="native_1553635e57f3f346" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s://%2$s:%3$s%4$s"</string>
     <string name="native_155f816c0407310c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Отправить"</string>
-    <string name="native_15b61974b2707a7b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Геопозиция"</string>
+    <string name="native_15b61974b2707a7b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Местоположение"</string>
     <string name="native_16196f98cecd6839" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"например America/New_York"</string>
     <string name="native_16524d7409d37507" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Целевая сессия"</string>
     <string name="native_1669ad8d6f188594" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Проверить навык ClawHub"</string>
@@ -169,7 +169,7 @@
     <string name="native_181553f2bfe78521" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Не удалось отправить: сбой чата до начала выполнения; попробуйте ещё раз."</string>
     <string name="native_186352a881d0550e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Микрофон"</string>
     <string name="native_187cb2576a1f78c4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Чат всё ещё проверяет состояние Gateway."</string>
-    <string name="native_18b4885826c1440a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Точная геопозиция"</string>
+    <string name="native_18b4885826c1440a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Точное местоположение"</string>
     <string name="native_18e34d7ead18aeca" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Разрешить один раз"</string>
     <string name="native_18e5a1a209b5873f" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"+%1$s еще"</string>
     <string name="native_18ebf1bbc5b1c317" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"thread create"</string>
@@ -182,12 +182,12 @@
     <string name="native_19fc7a47df16fb1f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Возможность не одобрена"</string>
     <string name="native_1a00f329f4ad8941" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Автоматизация и её расписание будут безвозвратно удалены из Gateway."</string>
     <string name="native_1a0c3289c8bd184b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Загрузка изображения…"</string>
-    <string name="native_1a2303ede07493ac" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Подключиться"</string>
+    <string name="native_1a2303ede07493ac" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Подключить"</string>
     <string name="native_1a3421ff23362bbc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Одобрить доступ узла"</string>
     <string name="native_1a6b66544dcfe305" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Добавить Gateway"</string>
     <string name="native_1a9e3989a89e862b" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Транскрибация недоступна: %1$s"</string>
     <string name="native_1aa4cb0bcca76e92" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Изображение"</string>
-    <string name="native_1afff5a07eab0e88" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Качаемся на волнах"</string>
+    <string name="native_1afff5a07eab0e88" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Плыву по течению"</string>
     <string name="native_1b9e1aa135771a2f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Закрыть предпросмотр изображения"</string>
     <string name="native_1bbd174404efbce9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"eval"</string>
     <string name="native_1c066091aa0c37ad" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Сжатая история"</string>
@@ -241,7 +241,7 @@
     <string name="native_22f19ab686639b9a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Текущая ветка"</string>
     <string name="native_23246d9852fed325" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Размышление %1$s"</string>
     <string name="native_2346f214ad56b180" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Без звука"</string>
-    <string name="native_2347fc06da5f60de" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw благодарит своих партнеров в сообществе open-source."</string>
+    <string name="native_2347fc06da5f60de" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw благодарит своих партнеров в сообществе открытого исходного кода."</string>
     <string name="native_2348f99874421257" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"открыто"</string>
     <string name="native_239c1ba0113cf462" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Подключение к Gateway"</string>
     <string name="native_23a91dbf4886c1f9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway может изменить этот путь, но не может удалить существующий путь."</string>
@@ -268,7 +268,7 @@
     <string name="native_2682bd813a3bccbc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Введите код настройки из openclaw qr."</string>
     <string name="native_268f14bbfe119c1e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Диагностика"</string>
     <string name="native_26c923382436328a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Другие приложения остаются нетронутыми."</string>
-    <string name="native_26cd8a19b9bb1ce9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Раскалываем"</string>
+    <string name="native_26cd8a19b9bb1ce9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Раскалываю"</string>
     <string name="native_26d00d15c465cd73" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Это навсегда удалит ветку и её историю."</string>
     <string name="native_26e47d73a55d7fa7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Устройство одобрено."</string>
     <string name="native_26f0dd993530eb2d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Автоматическая повторная попытка"</string>
@@ -323,7 +323,7 @@
     <string name="native_2ed4c16262ebec9a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ожидается повторное одобрение возможности"</string>
     <string name="native_2eed50c823a4024d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Проверьте выделенные элементы"</string>
     <string name="native_2efa9bd92658c88a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Прослушивание..."</string>
-    <string name="native_2f15d1b39446c681" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Введи меня в курс дела"</string>
+    <string name="native_2f15d1b39446c681" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Введите меня в курс дела"</string>
     <string name="native_2f77668a9dfbf8d5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Сообщение"</string>
     <string name="native_2f9c977d4df31bfa" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Чтение контактов"</string>
     <string name="native_300574ec69847390" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Хранилище офлайн-вложений заполнено; сначала удалите элементы из очереди."</string>
@@ -373,7 +373,7 @@
     <string name="native_35cb408d8973ebba" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Подключите Gateway, чтобы просмотреть провайдеров"</string>
     <string name="native_35e70a7ab8a0d399" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Следующий сигнал активности"</string>
     <string name="native_35f2ff4f129d2a63" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Сопряжение с Gateway выполнено. Ожидание одобрения возможностей узла."</string>
-    <string name="native_36409c59c2b80eff" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Засаливаем"</string>
+    <string name="native_36409c59c2b80eff" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Засаливаю"</string>
     <string name="native_3643db520673cdf0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Закрыть Canvas"</string>
     <string name="native_364802f3894668df" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Запись контактов"</string>
     <string name="native_367ccfda39b62aa7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Нет установленных навыков, соответствующих этому запросу."</string>
@@ -419,7 +419,7 @@
     <string name="native_3d434618889c0332" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Медиа недоступно"</string>
     <string name="native_3d61e9d54ffa2d93" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Подключитесь к своему Gateway, чтобы открыть оболочку в рабочей области агента."</string>
     <string name="native_3de3d401128d4395" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Не удалось загрузить сведения о подтверждении. Обновите данные и повторите попытку."</string>
-    <string name="native_3e258ff7801d9f13" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Я могу проверить состояние Gateway, восстановить конфигурацию, сменить модели или подключить каналы."</string>
+    <string name="native_3e258ff7801d9f13" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Я могу проверить статус Gateway, восстановить конфигурацию, изменить модели или подключить каналы."</string>
     <string name="native_3e398e6fb979557a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tool Call"</string>
     <string name="native_3e42e385075b9b56" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ветки"</string>
     <string name="native_3e93fc69520d2d1f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Субагент завершился с ошибкой"</string>
@@ -466,12 +466,12 @@
     <string name="native_4481c2190a1b4bca" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Cron-выражение, например 0 9 * * *"</string>
     <string name="native_4499e7b7e1c9ddbc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Вернуться к голосу"</string>
     <string name="native_449f5a775762cdc5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Говорить"</string>
-    <string name="native_45989de49fb7f66d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Сведения"</string>
+    <string name="native_45989de49fb7f66d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Подробности"</string>
     <string name="native_45a64dc17588f2ca" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"В сети: %1$s/%2$s"</string>
     <string name="native_45a8847c4a6b2c81" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Разрешена переадресация для %1$s приложений."</string>
     <string name="native_460b3a7da007b7af" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Чат"</string>
     <string name="native_4632a2cfafca4e0d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Требуется доступ к микрофону."</string>
-    <string name="native_4646155e9edc9859" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Семеним"</string>
+    <string name="native_4646155e9edc9859" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Семеню"</string>
     <string name="native_464c4ffd019e1e96" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Изменить"</string>
     <string name="native_46e406ca2f3277fb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Часы тишины"</string>
     <string name="native_46fa69e51b74768a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Копировать диагностику"</string>
@@ -577,7 +577,7 @@
     <string name="native_56c41c606c44f3fc" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"спросить OpenClaw %1$s"</string>
     <string name="native_56c4c3d30ceda56e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Wait for Agents"</string>
     <string name="native_56ef8f20955f2564" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Адрес"</string>
-    <string name="native_5702e1d243eeb4e9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Запланированные задачи, созданные на Gateway, появятся здесь."</string>
+    <string name="native_5702e1d243eeb4e9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Запланированные задачи, созданные на gateway, будут отображаться здесь."</string>
     <string name="native_572739b05d138f8a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Показан последний фрагмент журнала."</string>
     <string name="native_57666930af1af35e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Использовать код настройки"</string>
     <string name="native_57c4b13a4c7335e7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"sticker"</string>
@@ -615,7 +615,7 @@
     <string name="native_5c1acea9c9b0e704" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Web Fetch"</string>
     <string name="native_5c39123805ffb4e2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Запрос"</string>
     <string name="native_5c944156b5353428" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Одобрить устройство?"</string>
-    <string name="native_5d366a1eee742cee" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Подключитесь к Gateway, чтобы открыть панель управления этого сеанса."</string>
+    <string name="native_5d366a1eee742cee" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Подключитесь к своему Gateway, чтобы открыть панель управления этого сеанса."</string>
     <string name="native_5d410adb9576e266" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Удалить %1$s и сохранённые учётные данные с этого телефона?"</string>
     <string name="native_5d6c41a67139ee26" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"QR-код указывает на небезопасный удаленный Gateway. %1$s %2$s"</string>
     <string name="native_5d6cbac59f87e78d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Поверхность экрана готова"</string>
@@ -813,7 +813,7 @@
     <string name="native_788011833a5a0f22" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Уведомления"</string>
     <string name="native_78af93f13a7e5044" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Действия «Применить», «Отклонить» и «Карантин» требуют области operator.admin. Переподключитесь с общей авторизацией gateway или подтвердите повышение области устройства до operator.admin, чтобы включить действия жизненного цикла."</string>
     <string name="native_78f25f393aa9bcbf" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"sticker upload"</string>
-    <string name="native_7900450859bdb8c2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ловим омаров"</string>
+    <string name="native_7900450859bdb8c2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ловля омаров"</string>
     <string name="native_790d78931c21b895" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Messages to recover"</string>
     <string name="native_792175fb265c32bc" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"openclaw devices approve %1$s"</string>
     <string name="native_79a68a0d42388125" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Подробные данные журнала Gateway в удобочитаемом виде."</string>
@@ -825,7 +825,7 @@
     <string name="native_7a211017043ea5cb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Требуется аутентификация"</string>
     <string name="native_7a50b4ba32889b2e" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Не удалось загрузить сведения ClawHub для %1$s."</string>
     <string name="native_7ac362063b9f2046" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Узлы"</string>
-    <string name="native_7ace190202442cde" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Не выключать экран"</string>
+    <string name="native_7ace190202442cde" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Не отключать экран"</string>
     <string name="native_7adcb107d8b93c15" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw отвечает"</string>
     <string name="native_7af023c43013b9a5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Документация"</string>
     <string name="native_7b18312f3818b69c" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Готово: %1$s"</string>
@@ -849,7 +849,7 @@
     <string name="native_7e61a3570d66514a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Аутентификация Gateway требует проверки. Проверьте настройки gateway, затем повторите попытку."</string>
     <string name="native_7e6ec31086c4e10e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"QR-код использует идентификатор зоны IPv6. Используйте IPv6-адрес без области действия или имя хоста в LAN."</string>
     <string name="native_7e9e5ac30f2216fd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"add"</string>
-    <string name="native_7f0a603d5a401abe" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Криллим"</string>
+    <string name="native_7f0a603d5a401abe" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Крилю"</string>
     <string name="native_7f1e323b6272c620" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Исправно"</string>
     <string name="native_7f2c3cec9e26d5f6" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Готово за %1$s"</string>
     <string name="native_7f816072c1c6a23b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Аргументы"</string>
@@ -922,7 +922,7 @@
     <string name="native_8bf253a125f66985" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Отсканируйте или вставьте код настройки, чтобы добавить еще один gateway."</string>
     <string name="native_8c13f73ba145c626" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Рой"</string>
     <string name="native_8c4a3896e8f06d27" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Время ожидания TLS истекло"</string>
-    <string name="native_8c4f3d1307626381" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Недавние сеансы"</string>
+    <string name="native_8c4f3d1307626381" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Недавние сессии"</string>
     <string name="native_8c55387fb6c584c0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Сопряжённое устройство удалено."</string>
     <string name="native_8c93c68056cde54d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway сопряжён. Проверяется разрешение возможностей узла."</string>
     <string name="native_8ca344247c18317e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Движение"</string>
@@ -934,13 +934,13 @@
     <string name="native_8d20273207a2fe99" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"openclaw nodes approve %1$s"</string>
     <string name="native_8d57374bc09c8756" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Голосовое сообщение · %1$s"</string>
     <string name="native_8d59829c1e15afe1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Использование"</string>
-    <string name="native_8d6976fa1face9dd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Наутилусим"</string>
+    <string name="native_8d6976fa1face9dd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Наутилю"</string>
     <string name="native_8da844efc33c91b3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Расшифровывать голосовые запросы"</string>
     <string name="native_8dd6857baf026850" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Отключить микрофон"</string>
     <string name="native_8e19f962b0cd6587" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Начните новый разговор, и он появится здесь."</string>
     <string name="native_8e20431e6645ccdd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Проблема с подключением"</string>
     <string name="native_8e588cd187741f1c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Средний"</string>
-    <string name="native_8e5b1a73152cf01c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ответвить"</string>
+    <string name="native_8e5b1a73152cf01c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Создать ответвление"</string>
     <string name="native_8e6feeb36a83a707" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Включить динамик"</string>
     <string name="native_8e803d361324b459" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Текст системного события"</string>
     <string name="native_8eb626078c16c726" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Сортировка: %1$s"</string>
@@ -1035,7 +1035,7 @@
     <string name="native_9c05e80faaf8a6c1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Последний запуск"</string>
     <string name="native_9c1a4dd536c477b9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Для сканирования QR-кода настройки нужен доступ к камере."</string>
     <string name="native_9ca009adf23586a3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Не удалось обновить модель."</string>
-    <string name="native_9cb35bee8628332d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Пускаем пузыри"</string>
+    <string name="native_9cb35bee8628332d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Пускаю пузыри"</string>
     <string name="native_9cb615d253908670" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"thread reply"</string>
     <string name="native_9ce78fe395f3890f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Удалить…"</string>
     <string name="native_9d2242bb16d9f942" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Подключите Gateway, чтобы просмотреть автоматизации."</string>
@@ -1070,7 +1070,7 @@
     <string name="native_a190013f72efad35" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Выполняется одобрение Gateway. OpenClaw повторит попытку автоматически."</string>
     <string name="native_a1a5936d3b0f8a69" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Максимальный"</string>
     <string name="native_a1bca979bc69befb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Для изменения cron требуется доступ operator.admin."</string>
-    <string name="native_a20d12c5e9c428c3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Размышление"</string>
+    <string name="native_a20d12c5e9c428c3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Мышление"</string>
     <string name="native_a23967c129397864" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"screen snapshot"</string>
     <string name="native_a29d2779acbc81f2" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Обнаружено узлов: %1$s"</string>
     <string name="native_a2bbc7ffd69f9c49" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Действия не найдены"</string>
@@ -1097,7 +1097,7 @@
     <string name="native_a6bd489d95504499" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Забыть"</string>
     <string name="native_a6cda369816c943c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Нет сопряженных gateways."</string>
     <string name="native_a757bc0928d19377" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s · %2$s"</string>
-    <string name="native_a7779b096e663c47" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"&lt;секрет скрыт&gt;"</string>
+    <string name="native_a7779b096e663c47" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"&lt;redacted secret&gt;"</string>
     <string name="native_a79bcff159841b0f" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Проблем: %1$s"</string>
     <string name="native_a7b90ee8facf0aed" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw"</string>
     <string name="native_a89bac8b89022bde" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Идёт прослушивание · %1$s в очереди"</string>
@@ -1113,7 +1113,7 @@
     <string name="native_aa6e887501659d7c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Для изменения навыков требуется operator.admin. Переподключитесь с токеном Gateway, имеющим права администратора."</string>
     <string name="native_aa73b4d5ffec85f6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Подключите Gateway для просмотра навыков ClawHub."</string>
     <string name="native_aab53a916682c720" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Список приложений остается на этом телефоне."</string>
-    <string name="native_ab0171ca0494d441" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ожидание"</string>
+    <string name="native_ab0171ca0494d441" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Бездействует"</string>
     <string name="native_ab3b3d3706f7f158" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Отображается в настройках специальных возможностей Android."</string>
     <string name="native_ab3c45669917ec6f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Умная доставка"</string>
     <string name="native_ab604a360777735f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Отклонить"</string>
@@ -1129,7 +1129,7 @@
     <string name="native_ac1c17acbaa7cf14" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Подключите Gateway для установки навыков ClawHub."</string>
     <string name="native_ac2e8f4025b42994" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Поиск голоса"</string>
     <string name="native_ac3a53754a79a614" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">" · Микрофон: слушает"</string>
-    <string name="native_ac4ae1579a18e0bb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Переподключитесь с доступом operator.admin, чтобы просматривать и изменять настройки Gateway."</string>
+    <string name="native_ac4ae1579a18e0bb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Подключитесь повторно с доступом operator.admin, чтобы просмотреть и изменить настройки Gateway."</string>
     <string name="native_ac8991ef01019cf5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Загрузить еще"</string>
     <string name="native_acaeca7794e19199" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Наблюдать через 3 с"</string>
     <string name="native_acba25512100f80b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"run"</string>
@@ -1177,7 +1177,7 @@
     <string name="native_b51702b087112113" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Сообщение агента"</string>
     <string name="native_b538b9d40695a6fa" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway требует идентификацию этого устройства. Выполните повторную аутентификацию или сбросьте это подключение к gateway."</string>
     <string name="native_b53b35163f7588c4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Следующий сеанс"</string>
-    <string name="native_b55dae19fcb48a4d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Безопасность подключения"</string>
+    <string name="native_b55dae19fcb48a4d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Безопасность соединения"</string>
     <string name="native_b58eb52c8810b978" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Пропустить пока"</string>
     <string name="native_b5a229ac8becc603" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Веб-сайт"</string>
     <string name="native_b5af0517c02601fd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Подключите Gateway, чтобы загрузить запросы на подтверждение в приложении."</string>
@@ -1225,9 +1225,9 @@
     <string name="native_bf350e6a0ed60b7f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Эта автоматизация была изменена в Gateway. Перед повторным сохранением проверьте последнюю версию."</string>
     <string name="native_bf399ffa03617a96" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Остановить диктовку"</string>
     <string name="native_bf56ee2fe3345ce1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Удобочитаемый"</string>
-    <string name="native_bf69032f2b2b01a2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Написать в OpenClaw"</string>
+    <string name="native_bf69032f2b2b01a2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Сообщение OpenClaw"</string>
     <string name="native_bf7f8c7f88c30f4f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Пароль Gateway недействителен. Введите его повторно или сбросьте это подключение к gateway."</string>
-    <string name="native_bf8a9eab9e7e141b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Подключиться повторно"</string>
+    <string name="native_bf8a9eab9e7e141b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Переподключиться"</string>
     <string name="native_bf9056d99b800ad1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Время в формате ISO, например 2026-07-09T09:30:00Z"</string>
     <string name="native_bfa5272988932130" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s инструментов"</string>
     <string name="native_bfcef86c38cb24d4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Предыдущий ответ уже отклонил это одобрение."</string>
@@ -1271,7 +1271,7 @@
     <string name="native_c49eef4499c7913b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Локальный центр управления"</string>
     <string name="native_c4ad0ed067e5bcb2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"emoji upload"</string>
     <string name="native_c4cf2b2ccb5d8dec" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Загрузка предпросмотра…"</string>
-    <string name="native_c4ebc6d4a5832cd9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Высокий"</string>
+    <string name="native_c4ebc6d4a5832cd9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Высокая"</string>
     <string name="native_c51faa148557a08c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"focus"</string>
     <string name="native_c52028f34e378d1e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"describe"</string>
     <string name="native_c553dc8d97d06891" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"контекст %1$s"</string>
@@ -1297,7 +1297,7 @@
     <string name="native_c7b7b7f01360f6a5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Необязательное описание"</string>
     <string name="native_c7e1091492cdd0d9" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Открыть %1$s"</string>
     <string name="native_c81a0f64382da434" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Домашний холст"</string>
-    <string name="native_c82c37f336bc03f4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Сновидение"</string>
+    <string name="native_c82c37f336bc03f4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"В мечтах"</string>
     <string name="native_c83fa24c856f0b06" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"с %1$s до %2$s"</string>
     <string name="native_c8864e27d32de6c4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Поделиться файлом"</string>
     <string name="native_c8cdbd2d94cf9a22" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"В реальном времени"</string>
@@ -1351,7 +1351,7 @@
     <string name="native_d0329dd25d4401f9" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ещё %1$s воркеров"</string>
     <string name="native_d04fc7d7e19702f8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Web Search"</string>
     <string name="native_d053ba98d8bbcec1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Попробуйте Чат, Голос, Ветки, Провайдеры или Настройки."</string>
-    <string name="native_d056177742e27cf5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw активен"</string>
+    <string name="native_d056177742e27cf5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw: активные"</string>
     <string name="native_d0cda6559bb347db" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"navigate"</string>
     <string name="native_d0d0de0039c7990b" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"запрошено %1$s"</string>
     <string name="native_d0dacfaa36b019e1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Подключите Gateway, чтобы просмотреть историю запусков автоматизаций."</string>
@@ -1367,7 +1367,7 @@
     <string name="native_d2089be672953d11" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Токен"</string>
     <string name="native_d20f43f925e706ce" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Подключенный агент OpenClaw может использовать включенные вами возможности устройства. Продолжайте, только если вы доверяете Gateway и агенту, к которому подключаетесь."</string>
     <string name="native_d21467d22e4a3f94" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Открыть рабочий стол"</string>
-    <string name="native_d221e1221dce05f9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Обрастаем ракушками"</string>
+    <string name="native_d221e1221dce05f9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Обрастание ракушками"</string>
     <string name="native_d23d9ee57a18a989" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Предоставлен доступ к выбранным фотографиям или ко всей медиатеке."</string>
     <string name="native_d25ec2aa4dcc5d8f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Исполнитель специальных возможностей"</string>
     <string name="native_d2b0d89c925920b4" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Не хватает элементов: %1$s"</string>
@@ -1401,7 +1401,7 @@
     <string name="native_d70b9e24bca26b40" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Создано"</string>
     <string name="native_d729f71dabe85839" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s/%2$s активных токенов"</string>
     <string name="native_d7502bb4492cf924" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Нет результата действия"</string>
-    <string name="native_d77561a220212ca8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Щёлкаем"</string>
+    <string name="native_d77561a220212ca8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Щёлканье клешнями"</string>
     <string name="native_d7f4aa113e00ae3c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Открыть сведения о Skill"</string>
     <string name="native_d803ca340ecdfb72" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Не удалось воспроизвести речь: %1$s"</string>
     <string name="native_d82bd5d6c334fe2b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Начать разговор"</string>
@@ -1423,6 +1423,7 @@
     <string name="native_d9fafac29c590548" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Подключение всё ещё выполняется"</string>
     <string name="native_da0ebec9f64af585" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Через %1$s мин."</string>
     <string name="native_da23ce2ad9e797cf" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Чтение SMS"</string>
+    <string name="native_daf67d2113148c3c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ответвить от последнего завершённого сообщения"</string>
     <string name="native_dafd69eb801901c4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Подключите Gateway, чтобы загрузить данные об использовании."</string>
     <string name="native_db00d5649192e42d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Что ты можешь помочь мне сделать с этого телефона прямо сейчас?"</string>
     <string name="native_db0e960b68b57894" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Требуется одобрение"</string>
@@ -1437,7 +1438,7 @@
     <string name="native_dc758e44eed7b7c3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Микрофон выключен · отправка…"</string>
     <string name="native_dc937b59892604f5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Нет"</string>
     <string name="native_dcc839a4015c4b7d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Просмотр"</string>
-    <string name="native_dcd1d5223f73b3a9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Название"</string>
+    <string name="native_dcd1d5223f73b3a9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Имя"</string>
     <string name="native_dd167905de0defca" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Версия"</string>
     <string name="native_dd9d24965dbedc02" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Cron"</string>
     <string name="native_de0c1db9a7704ebf" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Подключите этот телефон к Gateway перед открытием OpenClaw."</string>
@@ -1468,7 +1469,7 @@
     <string name="native_e0d1b68224bf0b31" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Текущая"</string>
     <string name="native_e0eb2d0309a54f5b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Субагент работает"</string>
     <string name="native_e10435f6306b06d9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"1 аккаунт"</string>
-    <string name="native_e159b06187d369a0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Приостановлено"</string>
+    <string name="native_e159b06187d369a0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Приостановленные"</string>
     <string name="native_e18835ef2f6c8558" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Разрешить доступ к камере"</string>
     <string name="native_e1db8571dfe6dfcf" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Запросы на подтверждение выполнения будут отображаться здесь, пока этот телефон подключен."</string>
     <string name="native_e1f641311f07fe31" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">" · Микрофон: ожидает"</string>
@@ -1563,7 +1564,7 @@
     <string name="native_f15bf83677856dfa" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Чтение журнала вызовов"</string>
     <string name="native_f197b44d96f9315f" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s в очереди · ожидание Gateway"</string>
     <string name="native_f1c038660cfb46e0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Переместить в группу"</string>
-    <string name="native_f1c3989a92ef10d1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Отсканируйте QR-код для сопряжения"</string>
+    <string name="native_f1c3989a92ef10d1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Сканировать QR-код для сопряжения"</string>
     <string name="native_f2000dce9b5d40c8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Одобрение отклонено."</string>
     <string name="native_f200366d0c4352cb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Не удалось просмотреть предложение Skill Workshop."</string>
     <string name="native_f20c879465551f0d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Закреплено"</string>
@@ -1598,7 +1599,7 @@
     <string name="native_f616dfac9815faea" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Настройте %1$s на Gateway"</string>
     <string name="native_f61d0c645f00a4ed" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Отсканируйте QR-код или используйте код настройки из вашего OpenClaw Gateway."</string>
     <string name="native_f6323e4e7ef2eea2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Прототип дизайн-системы"</string>
-    <string name="native_f6b21a4dbcd8e593" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Просеиваем"</string>
+    <string name="native_f6b21a4dbcd8e593" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Просеиваю"</string>
     <string name="native_f6d2b1ae590eb212" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">" · Разговор: включён"</string>
     <string name="native_f6e82c3f136a6c5b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Данных об использовании пока нет."</string>
     <string name="native_f6e94ebc86517b65" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Сбой чата до начала выполнения; попробуйте ещё раз."</string>
@@ -1626,14 +1627,14 @@
     <string name="native_fa4f9ee12d15faec" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Сеанс Gateway восстанавливает подключение. Ярлыки агентов вскоре должны автоматически стабилизироваться."</string>
     <string name="native_fa664b09af472ec4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Попробуйте изменить поисковый запрос или очистить его."</string>
     <string name="native_fa8b0b30b80cd97e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Разрешить фоновое определение местоположения?"</string>
-    <string name="native_fa91fd53f004be47" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Всплываем"</string>
+    <string name="native_fa91fd53f004be47" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Всплытие"</string>
     <string name="native_faab0dc4735c1cfe" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Начальная настройка"</string>
     <string name="native_fad13bdbe9a8cd0f" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s · %2$s · %3$s"</string>
     <string name="native_fae8fa3bc050ab7e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Отменить голосовое сообщение"</string>
     <string name="native_fb2c3707ff8cfcd8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Прокрутить назад"</string>
     <string name="native_fb7ad4cc59155311" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"openclaw gateway"</string>
     <string name="native_fbba7592ca9da80e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway сопряжён"</string>
-    <string name="native_fbd2ae2ba1642ca5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Линяем"</string>
+    <string name="native_fbd2ae2ba1642ca5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Линяю"</string>
     <string name="native_fbf2d2bbaee06fed" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ожидание вашей следующей реплики."</string>
     <string name="native_fc0646722204f965" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw работает"</string>
     <string name="native_fc374cd61c135a9e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Запись журнала"</string>

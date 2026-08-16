@@ -551,6 +551,29 @@ describe("buildTailscaleHttpsUrl", () => {
 });
 
 describe("resolveSharedMemoryStatusSnapshot", () => {
+  it("skips agent-scoped memory when an explicit fleet has no selected owner", async () => {
+    const resolveMemoryConfig = vi.fn();
+    const getMemorySearchManager = vi.fn();
+
+    await expect(
+      resolveSharedMemoryStatusSnapshot({
+        cfg: {
+          agents: {
+            ownership: "explicit",
+            entries: { alpha: {}, beta: {} },
+          },
+        },
+        agentStatus: { defaultId: null },
+        memoryPlugin: { enabled: true, slot: "memory-core" },
+        resolveMemoryConfig,
+        getMemorySearchManager,
+      }),
+    ).resolves.toBeNull();
+
+    expect(resolveMemoryConfig).not.toHaveBeenCalled();
+    expect(getMemorySearchManager).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       name: "top-level defaults",

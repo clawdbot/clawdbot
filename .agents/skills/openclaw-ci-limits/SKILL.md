@@ -163,13 +163,14 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   same-repo pull requests, preflight owns the sole immutable semantic
   dependency-cache write of workspace `node_modules` plus the local pnpm store
   before fanout; all Blacksmith Node jobs are restore-only consumers and exact
-  misses fall back to the ordinary pnpm-store cache, while
-  hosted/fork/manual paths use only that store cache.
-- CI matrix caps: fast/check lanes at 12, Node test shards at 28, Windows and
-  Android at 2.
+  misses fall back to the ordinary pnpm-store cache, while hosted/fork/manual
+  paths use only that store cache.
+- CI matrix caps: fast/check lanes at 12, Node test shards at 28 on Blacksmith
+  and 96 with the GitHub or hybrid planner profile, Windows at 3, and Android
+  at 2.
 - Canonical PR Node tests use one precise changed-target job when possible;
-  broad, deleted, unknown, or planner-failed changes fall back to the 14-job
-  compact full-suite plan. Targeted plans retain the full built-artifact
+  broad, deleted, unknown, or planner-failed changes fall back to the compact
+  full-suite plan. Targeted plans retain the full built-artifact
   boundary gate. `main`, manual, and release runs stay full.
 - `build-artifacts` on `blacksmith-16vcpu-ubuntu-2404`.
 - lower-weight Node/check shards on `blacksmith-4vcpu-ubuntu-2404`.

@@ -24,7 +24,10 @@ import {
 } from "./history-merge.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { appendChatMessageToCache } from "./session-message-cache.ts";
-import { retireSteeredChipsForTerminalRun } from "./steer-lifecycle.ts";
+import {
+  retireSteeredChipsForRequestRun,
+  retireSteeredChipsForTerminalRun,
+} from "./steer-lifecycle.ts";
 import {
   appendTerminalAssistantMessage,
   clearToolStreamSegments,
@@ -346,7 +349,7 @@ function handleChatEvent(
     outcome: "done" | "interrupted",
     sessionStatus: "done" | "failed" | "killed" | "timeout",
   ) =>
-    reconcileChatRunLifecycle(state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
+    reconcileChatRunLifecycle(state, {
       outcome,
       sessionStatus,
       runId: terminalRunId,
@@ -408,17 +411,14 @@ function handleChatEvent(
       state.chatMessages = materializeVisibleStream();
     }
     if (payload.yielded === true && payload.stopReason === "end_turn") {
-      reconcileChatRunLifecycle(
-        state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
-        {
-          yielded: true,
-          runId: terminalRunId,
-          sessionKey: state.sessionKey,
-          sessionKeys: sessionMatches ? [state.sessionKey, payload.sessionKey] : [],
-          clearLocalRun: true,
-          clearChatStream: true,
-        },
-      );
+      reconcileChatRunLifecycle(state, {
+        yielded: true,
+        runId: terminalRunId,
+        sessionKey: state.sessionKey,
+        sessionKeys: sessionMatches ? [state.sessionKey, payload.sessionKey] : [],
+        clearLocalRun: true,
+        clearChatStream: true,
+      });
     } else {
       reconcileTerminalRun("done", "done");
     }
@@ -494,22 +494,37 @@ function handleChatEvent(
 export function handleChatGatewayEvent(state: ChatState, payload?: ChatEventPayload) {
   const activeRunIdBeforeEvent = state.chatRunId;
   let terminalKeyedStreamStartIndex: number | undefined;
-  if (
+  const terminalEventMatchesChat =
     isTerminalChatState(payload?.state) &&
     payload !== undefined &&
     // Unkeyed events must also carry a real run id: with no active run,
     // `undefined === undefined` would let sessionless internal-run terminals
     // (e.g. companion answers) materialize into the open main thread.
     (chatEventSessionMatches(state, payload) ||
-      (typeof payload.runId === "string" && payload.runId === activeRunIdBeforeEvent)) &&
-    !isEventForDifferentActiveRun(payload, activeRunIdBeforeEvent)
+      (typeof payload.runId === "string" && payload.runId === activeRunIdBeforeEvent));
+  const terminalOwnsActiveRun =
+    terminalEventMatchesChat && !isEventForDifferentActiveRun(payload, activeRunIdBeforeEvent);
+  const localOnlySteerBoundary = terminalOwnsActiveRun
+    ? streamReconciliationStartIndex(state.chatMessages)
+    : undefined;
+  // An accepted steer terminal is keyed by the steer request while the chip
+  // also tracks the active target run. Reconcile either identity before the
+  // generic different-run path ignores the terminal and leaves stale status.
+  let firstPersistedSteerIndex = terminalOwnsActiveRun
+    ? retireSteeredChipsForTerminalRun(state, payload?.runId)
+    : undefined;
+  const requestRunSteerIndex = terminalEventMatchesChat
+    ? retireSteeredChipsForRequestRun(state, payload?.runId)
+    : undefined;
+  if (
+    requestRunSteerIndex !== undefined &&
+    (firstPersistedSteerIndex === undefined || requestRunSteerIndex < firstPersistedSteerIndex)
   ) {
+    firstPersistedSteerIndex = requestRunSteerIndex;
+  }
+  if (terminalOwnsActiveRun) {
     // The active stream belongs to the user boundary that preceded any steer
     // chip retired below. Preserve that boundary through terminal materialization.
-    const localOnlySteerBoundary = streamReconciliationStartIndex(state.chatMessages);
-    // A steered chip can be the only local copy while transcript persistence lags.
-    // Materialize it before the terminal assistant so user/assistant order stays stable.
-    const firstPersistedSteerIndex = retireSteeredChipsForTerminalRun(state, payload?.runId);
     terminalKeyedStreamStartIndex =
       firstPersistedSteerIndex === undefined
         ? localOnlySteerBoundary

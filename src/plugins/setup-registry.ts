@@ -333,6 +333,18 @@ function ignoreAsyncSetupRegisterResult(result: void | Promise<void>): void {
   void Promise.resolve(result).catch(() => undefined);
 }
 
+function runSetupRegistration(
+  register: (api: ReturnType<typeof buildPluginApi>) => void | Promise<void>,
+  api: ReturnType<typeof buildPluginApi>,
+): boolean {
+  try {
+    ignoreAsyncSetupRegisterResult(register(api));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function matchesProvider(provider: ProviderPlugin, providerId: string): boolean {
   const normalized = normalizeProviderId(providerId);
   if (normalizeProviderId(provider.id) === normalized) {
@@ -609,8 +621,8 @@ export function resolvePluginSetupRegistry(params?: {
   const configMigrations: SetupConfigMigrationEntry[] = [];
   const autoEnableProbes: SetupAutoEnableProbeEntry[] = [];
   const diagnostics: PluginSetupRegistryDiagnostic[] = [];
-  const providerKeys = new Set<string>();
-  const cliBackendKeys = new Set<string>();
+  let providerKeys = new Set<string>();
+  let cliBackendKeys = new Set<string>();
 
   const manifestRegistry =
     params?.manifestRegistry ??
@@ -637,44 +649,53 @@ export function resolvePluginSetupRegistry(params?: {
       continue;
     }
 
-    const recordProviders: ProviderPlugin[] = [];
-    const recordCliBackends: CliBackendPlugin[] = [];
+    const recordProviders: SetupProviderEntry[] = [];
+    const recordCliBackends: SetupCliBackendEntry[] = [];
+    const recordConfigMigrations: SetupConfigMigrationEntry[] = [];
+    const recordAutoEnableProbes: SetupAutoEnableProbeEntry[] = [];
+    const recordProviderKeys = new Set(providerKeys);
+    const recordCliBackendKeys = new Set(cliBackendKeys);
+    let acceptingRegistrations = true;
     const api = buildSetupPluginApi({
       record,
       setupSource: setupRegistration.setupSource,
       handlers: {
         registerProvider(provider) {
           const key = `${record.id}:${normalizeProviderId(provider.id)}`;
-          if (providerKeys.has(key)) {
+          if (!acceptingRegistrations || recordProviderKeys.has(key)) {
             return;
           }
-          providerKeys.add(key);
-          providers.push({
+          recordProviderKeys.add(key);
+          recordProviders.push({
             pluginId: record.id,
             provider,
           });
-          recordProviders.push(provider);
         },
         registerCliBackend(backend) {
           const key = `${record.id}:${normalizeProviderId(backend.id)}`;
-          if (cliBackendKeys.has(key)) {
+          if (!acceptingRegistrations || recordCliBackendKeys.has(key)) {
             return;
           }
-          cliBackendKeys.add(key);
-          cliBackends.push({
+          recordCliBackendKeys.add(key);
+          recordCliBackends.push({
             pluginId: record.id,
             backend,
           });
-          recordCliBackends.push(backend);
         },
         registerConfigMigration(migrate) {
-          configMigrations.push({
+          if (!acceptingRegistrations) {
+            return;
+          }
+          recordConfigMigrations.push({
             pluginId: record.id,
             migrate,
           });
         },
         registerAutoEnableProbe(probe) {
-          autoEnableProbes.push({
+          if (!acceptingRegistrations) {
+            return;
+          }
+          recordAutoEnableProbes.push({
             pluginId: record.id,
             probe,
           });
@@ -682,19 +703,21 @@ export function resolvePluginSetupRegistry(params?: {
       },
     });
 
-    try {
-      const result = setupRegistration.register(api);
-      if (result && typeof result.then === "function") {
-        // Keep setup registration sync-only.
-        ignoreAsyncSetupRegisterResult(result);
-      }
-    } catch {
+    const registered = runSetupRegistration(setupRegistration.register, api);
+    acceptingRegistrations = false;
+    if (!registered) {
       continue;
     }
+    providers.push(...recordProviders);
+    cliBackends.push(...recordCliBackends);
+    configMigrations.push(...recordConfigMigrations);
+    autoEnableProbes.push(...recordAutoEnableProbes);
+    providerKeys = recordProviderKeys;
+    cliBackendKeys = recordCliBackendKeys;
     pushSetupDescriptorDriftDiagnostics({
       record,
-      providers: recordProviders,
-      cliBackends: recordCliBackends,
+      providers: recordProviders.map((entry) => entry.provider),
+      cliBackends: recordCliBackends.map((entry) => entry.backend),
       diagnostics,
     });
   }
@@ -763,13 +786,7 @@ export function resolvePluginSetupProviderCore(params: {
     },
   });
 
-  try {
-    const result = setupRegistration.register(api);
-    if (result && typeof result.then === "function") {
-      // Keep setup registration sync-only.
-      ignoreAsyncSetupRegisterResult(result);
-    }
-  } catch {
+  if (!runSetupRegistration(setupRegistration.register, api)) {
     return undefined;
   }
 
@@ -829,13 +846,7 @@ export function resolvePluginSetupCliBackend(params: {
     },
   });
 
-  try {
-    const result = setupRegistration.register(api);
-    if (result && typeof result.then === "function") {
-      // Keep setup registration sync-only.
-      ignoreAsyncSetupRegisterResult(result);
-    }
-  } catch {
+  if (!runSetupRegistration(setupRegistration.register, api)) {
     return undefined;
   }
 

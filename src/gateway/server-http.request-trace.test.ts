@@ -238,4 +238,39 @@ describe("gateway HTTP request error cleanup", () => {
       errorLog.mockRestore();
     }
   });
+
+  it("preserves plugin route ownership when plugin dispatch fails", async () => {
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    const handlePluginRequest = vi.fn(async () => {
+      throw new Error("plugin route dispatch failed");
+    });
+    const server = createGatewayHttpServer({
+      clients: new Set(),
+      controlUiEnabled: false,
+      controlUiBasePath: "",
+      openAiChatCompletionsEnabled: false,
+      openResponsesEnabled: false,
+      handleHooksRequest: async () => false,
+      handlePluginRequest,
+      resolvedAuth,
+      getRuntimeConfig: () => ({}),
+    });
+    const port = await listen(server);
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/plugin-failure`);
+
+      expect(response.status).toBe(500);
+      expect(await response.text()).toBe("Internal Server Error");
+      expect(handlePluginRequest).toHaveBeenCalledOnce();
+      expect(errorLog).toHaveBeenCalledWith(
+        "[gateway-http] unhandled error in request handler:",
+        expect.objectContaining({ message: "plugin route dispatch failed" }),
+      );
+    } finally {
+      server.closeAllConnections();
+      await closeServer(server);
+      errorLog.mockRestore();
+    }
+  });
 });

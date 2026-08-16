@@ -60,7 +60,7 @@ Use [`sessions_search`](/concepts/session-search) for exact full-text recall acr
 
 The owner-gated `sessions` tool exposes bounded self-service surfaces:
 
-- `action: "patch"` changes the current session by default, or another visible session selected by `sessionKey`. It can set the label, pin/archive state, model, and thinking level. Archiving or restoring another session requires its `sessions_list` `sessionId` as `expectedSessionId`.
+- `action: "patch"` changes the current session by default, or another visible session selected by `sessionKey`. It can set the label, persistent sidebar `icon`, pin/archive state, model, and thinking level. The icon must be one emoji grapheme; pass an empty string to clear it. Archiving or restoring another session requires its `sessions_list` `sessionId` as `expectedSessionId`.
 - `action: "reset"` resets another visible session selected by `sessionKey`.
 - `action: "delete"` first archives and then deletes the exact same generation of another visible session selected by `sessionKey`. By default its transcript is retained as a deleted archive; pass `deleteTranscript: false` to leave the transcript state untouched. Resetting or deleting the session currently running the tool is rejected.
 - `group_list`, `group_set`, `group_rename`, and `group_delete` manage the global ordered session-group catalog. `group_set` replaces the ordered name list rather than patching one entry.

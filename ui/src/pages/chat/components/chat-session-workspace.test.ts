@@ -4,7 +4,6 @@ import {
   createSessionWorkspaceProps,
   openSessionWorkspaceFile,
   renderSessionWorkspaceRail,
-  toggleSessionWorkspace,
   type SessionWorkspaceHost,
 } from "./chat-session-workspace.ts";
 
@@ -17,31 +16,7 @@ function gatewayHello(methods: string[], scopes = ["operator.admin"]) {
   };
 }
 
-describe("toggleSessionWorkspace", () => {
-  it("expands and collapses the session workspace rail", () => {
-    const requestUpdate = vi.fn();
-    const state = {
-      client: null,
-      connected: false,
-      handleOpenSidebar: vi.fn(),
-      hello: null,
-      requestUpdate,
-      sessionKey: "agent:main:current",
-      sessions: {},
-    } as unknown as SessionWorkspaceHost;
-
-    expect(createSessionWorkspaceProps(state).collapsed).toBe(true);
-
-    toggleSessionWorkspace(state);
-
-    expect(createSessionWorkspaceProps(state).collapsed).toBe(false);
-
-    toggleSessionWorkspace(state);
-
-    expect(createSessionWorkspaceProps(state).collapsed).toBe(true);
-    expect(requestUpdate).toHaveBeenCalledTimes(2);
-  });
-
+describe("session workspace state", () => {
   it("carries the saved bottom dock across session workspace state", () => {
     const state = {
       client: null,
@@ -262,16 +237,20 @@ describe("openSessionWorkspaceFile", () => {
         connected: true,
         handleOpenSidebar: vi.fn(),
         hello: gatewayHello([]),
+        agentsList: [],
         sessionKey: "agent:main:current",
         sessions: { getFile, listFiles },
       } as unknown as SessionWorkspaceHost;
 
-      toggleSessionWorkspace(state);
+      createSessionWorkspaceProps(state, { expanded: true });
       await vi.waitFor(() => expect(listFiles).toHaveBeenCalledOnce());
       await vi.waitFor(() => expect(createSessionWorkspaceProps(state).list).not.toBeNull());
 
       const container = document.createElement("div");
-      render(renderSessionWorkspaceRail(createSessionWorkspaceProps(state)), container);
+      render(
+        renderSessionWorkspaceRail(createSessionWorkspaceProps(state, { expanded: true })),
+        container,
+      );
       const row = container.querySelector<HTMLButtonElement>(
         ".chat-workspace-rail__list--browser .chat-workspace-rail__file-open",
       );

@@ -8,7 +8,7 @@ type AgentItemEventStatus = "running" | "completed" | "failed" | "blocked";
 type AgentItemEventKind = "tool" | "command" | "patch" | "search" | "analysis" | (string & {});
 
 /** Payload for a single item shown in the agent activity stream. */
-export type AgentItemEventData = {
+export type AgentItemEventData = Record<string, unknown> & {
   itemId: string;
   phase: AgentItemEventPhase;
   kind: AgentItemEventKind;
@@ -32,7 +32,7 @@ export type AgentItemEventData = {
 };
 
 /** Incremental command output payload associated with an item/tool call. */
-export type AgentCommandOutputEventData = {
+export type AgentCommandOutputEventData = Record<string, unknown> & {
   itemId: string;
   phase: "delta" | "end";
   title: string;
@@ -46,7 +46,7 @@ export type AgentCommandOutputEventData = {
 };
 
 /** Patch summary payload emitted after an agent applies file changes. */
-export type AgentPatchSummaryEventData = {
+export type AgentPatchSummaryEventData = Record<string, unknown> & {
   itemId: string;
   phase: "end";
   title: string;
@@ -60,7 +60,7 @@ export type AgentPatchSummaryEventData = {
 
 type AgentActivityEventDataByStream = {
   item: AgentItemEventData;
-  approval: AgentApprovalEventData;
+  approval: AgentApprovalEventData & Record<string, unknown>;
   command_output: AgentCommandOutputEventData;
   patch: AgentPatchSummaryEventData;
 };
@@ -79,7 +79,7 @@ export function emitAgentActivityEvent(params: AgentActivityEventParams): void {
   emitAgentEvent({
     runId: params.runId,
     stream: params.stream,
-    data: params.data as unknown as Record<string, unknown>,
+    data: params.data,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
   });
 }

@@ -3,6 +3,7 @@ import path from "node:path";
 import "./test-helpers/fast-coding-tools.js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
+import { resolveEmbeddedAuthCooldownProbePolicy as resolveEmbeddedAuthCooldownProbePolicyActual } from "./embedded-agent-runner/run/auth-controller.js";
 import {
   buildEmbeddedRunnerAssistant,
   cleanupEmbeddedAgentRunnerTestWorkspace,
@@ -158,6 +159,7 @@ const installRunEmbeddedMocks = () => {
       }),
       stopRuntimeAuthRefreshTimer: vi.fn(),
     }),
+    resolveEmbeddedAuthCooldownProbePolicy: resolveEmbeddedAuthCooldownProbePolicyActual,
   }));
   vi.doMock("./models-config.js", async () => {
     const mod = await vi.importActual<typeof import("./models-config.js")>("./models-config.js");
@@ -185,10 +187,14 @@ let sessionStorePath: string;
 let sessionCounter = 0;
 let runCounter = 0;
 
-const createEmbeddedAgentRunnerOpenAiConfig = (modelIds: string[]) => ({
-  ...createBaseEmbeddedAgentRunnerOpenAiConfig(modelIds),
-  session: { store: sessionStorePath },
-});
+const createEmbeddedAgentRunnerOpenAiConfig = (modelIds: string[]) => {
+  const config = createBaseEmbeddedAgentRunnerOpenAiConfig(modelIds);
+  const mainAgent = config.agents?.list?.find((entry) => entry.id === "main");
+  if (mainAgent) {
+    mainAgent.default = true;
+  }
+  return { ...config, session: { store: sessionStorePath } };
+};
 
 beforeAll(async () => {
   vi.useRealTimers();

@@ -57,6 +57,7 @@ export const BUNDLE_ARTIFACT: WorkerInstallationArtifact = {
   bundleHash: BUNDLE_HASH,
   openclawVersion: "2026.7.2",
   protocolFeatures: [],
+  tarballBytes: 1,
   tarballSha256: "b".repeat(64),
   tarballPath: "/gateway/cache/worker-bundle.tgz",
 };
@@ -161,11 +162,12 @@ export function createService(
       | "executeInference"
       | "providerCallTimeoutMs"
       | "resolveSshIdentity"
-      | "resolveNodeWorkerBuild"
+      | "ensureNodeWorkerBundle"
       | "resolveWorkerGateway"
       | "tunnelManager"
       | "generateWorkerCredential"
       | "liveEvents"
+      | "nodeTunnelManager"
       | "placementStore"
       | "workerCredentialTtlMs"
     >
@@ -175,7 +177,7 @@ export function createService(
     store: testState.store,
     getConfig: () => testState.config,
     resolveProvider: (providerId) =>
-      testState.providersEnabled && providerId === "fake" ? provider : undefined,
+      testState.providersEnabled && providerId === provider.id ? provider : undefined,
     prepareInstallation: testState.prepareInstallation,
     bootstrapWorker: testState.bootstrapWorker,
     resolveSshIdentity: async () => ({ kind: "path", path: "/keys/worker" }),

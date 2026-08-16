@@ -184,6 +184,7 @@ describe("registerTelegramNativeCommands", () => {
     const native = listNativeCommandSpecsForConfig(cfg, {
       skillCommands,
       provider: "telegram",
+      includeBundledChannelFallback: false,
     }).map((command) => ({
       command: normalizeTelegramCommandName(command.name),
       description: command.description,
@@ -239,7 +240,11 @@ describe("registerTelegramNativeCommands", () => {
       "Telegram menu pressure omitted per-skill commands; removing per-skill commands and keeping /skill.",
     );
     const expectedTotalCommands =
-      customCommands.length + listNativeCommandSpecsForConfig(cfg, { provider: "telegram" }).length;
+      customCommands.length +
+      listNativeCommandSpecsForConfig(cfg, {
+        provider: "telegram",
+        includeBundledChannelFallback: false,
+      }).length;
     expect(runtimeLog).toHaveBeenCalledWith(
       `Telegram limits bots to 100 commands. ${expectedTotalCommands} configured; registering first 100. Use channels.telegram.commands.native: false to disable, or reduce plugin/skill/custom commands.`,
     );

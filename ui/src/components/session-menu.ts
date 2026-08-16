@@ -17,6 +17,7 @@ type SessionMenuData = {
   unread: boolean;
   archived: boolean;
   category: string | null;
+  icon: string | null;
   categoryClearReturnsToGroups: boolean;
 };
 
@@ -37,6 +38,7 @@ export type SessionMenuAction =
   | { kind: "toggle-pin" }
   | { kind: "toggle-unread" }
   | { kind: "rename" }
+  | { kind: "set-icon"; icon: string | null }
   | { kind: "fork" }
   | { kind: "workboard" }
   | { kind: "move-to-group"; category: string | null }
@@ -53,8 +55,25 @@ const EMPTY_SESSION: SessionMenuData = {
   unread: false,
   archived: false,
   category: null,
+  icon: null,
   categoryClearReturnsToGroups: false,
 };
+
+const SESSION_ICON_CHOICES = [
+  "🦞",
+  "🚀",
+  "🐛",
+  "✅",
+  "🔥",
+  "📦",
+  "🧪",
+  "📝",
+  "🔍",
+  "⚡",
+  "🎯",
+  "⭐",
+] as const;
+const SESSION_ICON_GRID_COLUMNS = 6;
 
 class SessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) session: SessionMenuData = EMPTY_SESSION;
@@ -70,6 +89,7 @@ class SessionMenu extends OpenClawLightDomElement {
     Record<SessionMenuActionKind, string>
   > = {};
   @property({ attribute: false }) forkDisabled = false;
+  @property({ attribute: false }) forkFromLastCompleted = false;
   @property({ attribute: false }) archiveAllowed = false;
   @property({ attribute: false }) deleteAllowed = false;
   @property({ attribute: false }) cloudWorkerStopAllowed = false;
@@ -147,6 +167,14 @@ class SessionMenu extends OpenClawLightDomElement {
       this.runAction({
         kind: "move-to-group",
         category: encodedCategory ? decodeURIComponent(encodedCategory) : null,
+      });
+      return;
+    }
+    if (value.startsWith("set-icon:")) {
+      const encodedIcon = value.slice("set-icon:".length);
+      this.runAction({
+        kind: "set-icon",
+        icon: encodedIcon ? decodeURIComponent(encodedIcon) : null,
       });
     }
   };
@@ -258,6 +286,108 @@ class SessionMenu extends OpenClawLightDomElement {
     `;
   }
 
+  private renderIconSubmenu() {
+    const currentIcon = this.session.icon;
+    const tabStop =
+      SESSION_ICON_CHOICES.find((icon) => icon === currentIcon) ?? SESSION_ICON_CHOICES[0];
+    return html`
+      <div slot="submenu" class="session-menu__icon-picker">
+        <div
+          class="session-menu__icon-grid"
+          role="group"
+          aria-label=${t("sessionsView.setIconMenu")}
+          @keydown=${this.handleIconGridKeydown}
+        >
+          ${SESSION_ICON_CHOICES.map((icon) => {
+            const checked = currentIcon === icon;
+            return html`
+              <button
+                type="button"
+                class="session-menu__icon-choice"
+                aria-pressed=${String(checked)}
+                tabindex=${icon === tabStop ? "0" : "-1"}
+                ?disabled=${this.actionDisabled("set-icon")}
+                title=${this.actionTitle("set-icon")}
+                @click=${(event: MouseEvent) => this.selectIcon(event, icon)}
+              >
+                ${icon}
+              </button>
+            `;
+          })}
+        </div>
+        ${currentIcon
+          ? html`
+              <div class="session-menu__icon-separator" role="separator"></div>
+              <button
+                type="button"
+                class="session-menu__icon-remove"
+                ?disabled=${this.actionDisabled("set-icon")}
+                title=${this.actionTitle("set-icon")}
+                @click=${this.removeIcon}
+              >
+                ${t("sessionsView.removeIcon")}
+              </button>
+            `
+          : nothing}
+      </div>
+    `;
+  }
+
+  private readonly selectIcon = (event: MouseEvent, icon: string) => {
+    event.stopPropagation();
+    this.runAction({ kind: "set-icon", icon });
+  };
+
+  private readonly removeIcon = (event: MouseEvent) => {
+    event.stopPropagation();
+    this.runAction({ kind: "set-icon", icon: null });
+  };
+
+  private readonly handleIconGridKeydown = (event: KeyboardEvent) => {
+    const choice = event.target;
+    if (!(choice instanceof HTMLButtonElement)) {
+      return;
+    }
+    const offsets: Partial<Record<string, number>> = {
+      ArrowLeft: -1,
+      ArrowRight: 1,
+      ArrowUp: -SESSION_ICON_GRID_COLUMNS,
+      ArrowDown: SESSION_ICON_GRID_COLUMNS,
+    };
+    const offset = offsets[event.key];
+    if (offset === undefined) {
+      return;
+    }
+    const grid = event.currentTarget;
+    if (!(grid instanceof HTMLElement)) {
+      return;
+    }
+    const choices = Array.from(
+      grid.querySelectorAll<HTMLButtonElement>(".session-menu__icon-choice:not(:disabled)"),
+    );
+    const index = choices.indexOf(choice);
+    if (index < 0) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const nextIndex = (index + offset + choices.length) % choices.length;
+    choices.forEach((button, buttonIndex) => {
+      button.tabIndex = buttonIndex === nextIndex ? 0 : -1;
+    });
+    choices[nextIndex]?.focus();
+  };
+
+  private readonly focusIconGridOnOpen = (event: CustomEvent<{ item: HTMLElement }>) => {
+    const item = event.currentTarget;
+    if (!(item instanceof HTMLElement) || event.detail.item !== item) {
+      return;
+    }
+    requestAnimationFrame(() => {
+      item.querySelector<HTMLButtonElement>('.session-menu__icon-choice[tabindex="0"]')?.focus();
+    });
+  };
+
   override render() {
     const menuWidth = 240;
     const menuMaxHeight = 460;
@@ -355,6 +485,18 @@ class SessionMenu extends OpenClawLightDomElement {
               </wa-dropdown-item>
               <wa-dropdown-item
                 class="session-menu__item"
+                data-shortcut="i"
+                aria-keyshortcuts="I"
+                ?disabled=${this.actionDisabled("set-icon")}
+                title=${this.actionTitle("set-icon")}
+                @submenu-opening=${this.focusIconGridOnOpen}
+              >
+                <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.star}</span>
+                <span class="session-menu__text">${t("sessionsView.setIconMenu")}</span>
+                ${menuShortcutHint("i")} ${this.renderIconSubmenu()}
+              </wa-dropdown-item>
+              <wa-dropdown-item
+                class="session-menu__item"
                 value="fork"
                 data-shortcut="f"
                 aria-keyshortcuts="F"
@@ -362,7 +504,13 @@ class SessionMenu extends OpenClawLightDomElement {
                 title=${this.actionTitle("fork")}
               >
                 <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.copy}</span>
-                <span class="session-menu__text">${t("sessionsView.forkSession")}</span>
+                <span class="session-menu__text"
+                  >${t(
+                    this.forkFromLastCompleted
+                      ? "sessionsView.forkFromLastCompleted"
+                      : "sessionsView.forkSession",
+                  )}</span
+                >
                 ${menuShortcutHint("f")}
               </wa-dropdown-item>
             `}

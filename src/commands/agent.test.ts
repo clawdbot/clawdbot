@@ -1004,31 +1004,7 @@ describe("agentCommand", () => {
     });
   });
 
-  it("persists embedded-runner turns to the session transcript", async () => {
-    await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
-      mockConfig(home, store);
-      const base = createDefaultAgentResult({ payloads: [{ text: "assistant-visible" }] });
-      vi.mocked(runEmbeddedAgent).mockResolvedValueOnce({
-        ...base,
-        meta: {
-          ...base.meta,
-          executionTrace: { runner: "embedded" },
-        },
-      });
-
-      await agentCommand({ message: "hello from user", agentId: "main" }, runtime);
-
-      expect(vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript)).toHaveBeenCalledTimes(1);
-      const persistArgs = vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript).mock
-        .calls[0]?.[0];
-      expect(persistArgs?.embeddedAssistantGapFill).toBe(true);
-      expect(persistArgs?.body).toBe("hello from user");
-      expect(persistArgs?.result.meta?.executionTrace?.runner).toBe("embedded");
-    });
-  });
-
-  it("gap-fills Telegram-visible embedded replies without a runner trace", async () => {
+  it("delivers embedded replies without re-persisting them", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
       mockConfig(home, store);
@@ -1090,11 +1066,7 @@ describe("agentCommand", () => {
         accountId: undefined,
         verbose: false,
       });
-      expect(vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript)).toHaveBeenCalledTimes(1);
-      const persistArgs = vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript).mock
-        .calls[0]?.[0];
-      expect(persistArgs?.embeddedAssistantGapFill).toBe(true);
-      expect(persistArgs?.body).toBe("call a tool then answer");
+      expect(vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript)).not.toHaveBeenCalled();
     });
   });
 

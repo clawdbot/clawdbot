@@ -24,6 +24,7 @@ import {
 import {
   ensureExecApprovals,
   loadExecApprovals,
+  loadExecApprovalsReadOnly,
   readExecApprovalsSnapshot,
   restoreExecApprovalsSnapshot,
   restoreExecApprovalsSnapshotLocked,
@@ -104,6 +105,39 @@ afterEach(() => {
 });
 
 describe("exec approvals SQLite store", () => {
+  it("does not create shared state for a read-only load", () => {
+    const statePath = resolveOpenClawStateSqlitePath();
+    expect(fs.existsSync(statePath)).toBe(false);
+
+    expect(loadExecApprovalsReadOnly()).toMatchObject({
+      version: 1,
+      agents: {},
+    });
+    expect(fs.existsSync(statePath)).toBe(false);
+  });
+
+  it("does not migrate older shared state for a read-only load", () => {
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "allowlist" },
+      agents: {},
+    });
+    const statePath = resolveOpenClawStateSqlitePath();
+    closeOpenClawStateDatabaseForTest();
+    const older = new DatabaseSync(statePath);
+    older.exec(`
+      PRAGMA user_version = 7;
+      UPDATE schema_meta SET schema_version = 7 WHERE meta_key = 'primary';
+    `);
+    older.close();
+
+    expect(loadExecApprovalsReadOnly().defaults?.security).toBe("allowlist");
+
+    const after = new DatabaseSync(statePath, { readOnly: true });
+    expect(after.prepare("PRAGMA user_version").get()).toEqual({ user_version: 7 });
+    after.close();
+  });
+
   it("uses a permissive missing-row default without creating the row", () => {
     expect(loadExecApprovals()).toEqual({
       version: 1,

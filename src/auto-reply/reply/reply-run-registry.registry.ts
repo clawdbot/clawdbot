@@ -123,6 +123,9 @@ export const replyRunRegistry: ReplyRunRegistry = {
       identity: normalizeOptionalString(expectedRunId) ? "run" : "leaf",
       ...(resolved.backend.runId ? { runId: resolved.backend.runId } : {}),
       originatingLeafEntryId,
+      ...(operation?.toolAuthorityFingerprint
+        ? { toolAuthorityFingerprint: operation.toolAuthorityFingerprint }
+        : {}),
     };
     return target;
   },

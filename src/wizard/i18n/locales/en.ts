@@ -930,6 +930,13 @@ export const en = {
       outgoingWebhookPathKeep: "Outgoing webhook path set ({value}). Keep it?",
       outgoingWebhookPathPrompt: "Outgoing webhook path (optional)",
       outgoingWebhookPathTitle: "Synology Chat outgoing webhook path",
+      publicWebhookUrlHelp:
+        "Use the exact externally reachable HTTPS outgoing-webhook callback URL configured in Synology Chat.",
+      publicWebhookUrlKeep: "Public attachment webhook URL already configured. Keep it?",
+      publicWebhookUrlPrompt: "Public attachment webhook URL (optional)",
+      publicWebhookUrlScope:
+        "Expose only this webhook route; OpenClaw uses it for short-lived attachment downloads.",
+      publicWebhookUrlTitle: "Synology Chat public attachment route",
       setupTitle: "Synology Chat webhook setup",
       tokenEnvPrompt: "SYNOLOGY_CHAT_TOKEN detected. Use env var?",
       tokenInput: "Enter Synology Chat outgoing webhook token",

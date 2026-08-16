@@ -162,7 +162,12 @@ function createSessionsSpawnToolSchema(params: {
     thinking: Type.Optional(
       Type.String({ description: "Thinking override; unavailable with visible=true." }),
     ),
-    cwd: Type.Optional(Type.String()),
+    cwd: Type.Optional(
+      Type.String({
+        description:
+          "Working directory for the child. With visible=true, paths outside configured agent workspaces require operator.admin; omit to use the target agent workspace.",
+      }),
+    ),
     ...(params.threadAvailable
       ? {
           thread: Type.Optional(

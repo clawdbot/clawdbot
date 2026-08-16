@@ -162,7 +162,7 @@ function routerHistoryLocation(location: ReturnType<RouterHistory["location"]>, 
   };
 }
 
-function sameRouteLocation(left: RouteLocation, right: RouteLocation): boolean {
+export function sameRouteLocation(left: RouteLocation, right: RouteLocation): boolean {
   return (
     left.pathname === right.pathname && left.search === right.search && left.hash === right.hash
   );

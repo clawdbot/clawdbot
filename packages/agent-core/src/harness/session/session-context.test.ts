@@ -157,6 +157,10 @@ describe("buildSessionContext", () => {
 
   it("replays only the retained tail and newer entries after compaction", () => {
     const retainedCheckpoint = replayState("openai-responses-compaction", "retained-checkpoint");
+    const retainedAnthropicCheckpoint = replayState(
+      "anthropic-compaction",
+      "retained-anthropic-checkpoint",
+    );
     const retainedSuppression = replayState("openai-responses-compaction-suppression", "rejected");
     const postBoundaryCheckpoint = replayState(
       "openai-responses-compaction",
@@ -167,8 +171,14 @@ describe("buildSessionContext", () => {
       userEntry("kept", "old", "retained"),
       assistantEntry("retained-checkpoint", "kept", "retained checkpoint", retainedCheckpoint),
       assistantEntry(
-        "retained-suppression",
+        "retained-anthropic-checkpoint",
         "retained-checkpoint",
+        "retained Anthropic checkpoint",
+        retainedAnthropicCheckpoint,
+      ),
+      assistantEntry(
+        "retained-suppression",
+        "retained-anthropic-checkpoint",
         "retained suppression",
         retainedSuppression,
       ),
@@ -210,12 +220,14 @@ describe("buildSessionContext", () => {
       "assistant",
       "assistant",
       "assistant",
+      "assistant",
       "user",
     ]);
     expect(context.messages).toMatchObject([
       { summary: "older context" },
       { content: "retained" },
       { content: [{ text: "retained checkpoint" }] },
+      { content: [{ text: "retained Anthropic checkpoint" }] },
       { content: [{ text: "retained suppression" }] },
       { content: [{ text: "post-boundary checkpoint" }] },
       { content: "new turn" },
@@ -224,8 +236,9 @@ describe("buildSessionContext", () => {
       (message): message is AssistantMessage => message.role === "assistant",
     );
     expect(assistants[0]).not.toHaveProperty("providerReplay");
-    expect(assistants[1]?.providerReplay).toEqual(retainedSuppression);
-    expect(assistants[2]?.providerReplay).toEqual(postBoundaryCheckpoint);
+    expect(assistants[1]).not.toHaveProperty("providerReplay");
+    expect(assistants[2]?.providerReplay).toEqual(retainedSuppression);
+    expect(assistants[3]?.providerReplay).toEqual(postBoundaryCheckpoint);
   });
 
   it("treats the latest reset as a hard cut with a user/assistant-only kept tail", () => {

@@ -121,6 +121,36 @@ return {
 Use `openclaw/plugin-sdk/pair-loop-guard-runtime` directly only for custom
 two-party event loops that do not go through the shared inbound reply runner.
 
+## Plugin command runtime helpers
+
+Plugin command handlers receive request-bound capabilities through
+`ctx.runtimeContext`. When the command is bound to a current session,
+`ctx.runtimeContext.compactCurrent()` runs the same manual compaction
+pipeline as `/compact`, including native agent-harness completion and session
+token accounting:
+
+```typescript
+const compactCurrent = ctx.runtimeContext?.compactCurrent;
+if (!compactCurrent) {
+  return { text: "This command needs a bound session." };
+}
+
+const result = await compactCurrent();
+return {
+  text: result.compacted
+    ? `Compacted to ${result.tokensAfter ?? "an unknown number of"} tokens.`
+    : `Compaction did not complete: ${result.reason ?? "unknown reason"}.`,
+};
+```
+
+This general capability is available to every plugin command, not only Codex.
+The host gates it to the current invocation and exact bound session generation.
+The capability is absent when no current session is bound; a retained callback
+fails closed after the handler settles. Do not retain it or reconstruct
+compaction with session-store patches and harness calls. The result contains
+`compacted`, optional `reason`, and optional `tokensBefore` and `tokensAfter`
+snapshots; OpenClaw owns all persistence and lifecycle coordination.
+
 ## Runtime namespaces
 
 <AccordionGroup>
@@ -177,8 +207,6 @@ two-party event loops that do not go through the shared inbound reply runner.
     ```
 
     `runEmbeddedAgent(...)` is the neutral helper for starting a normal OpenClaw agent turn from plugin code. It uses the same provider/model resolution and agent-harness selection as channel-triggered replies.
-
-    `runEmbeddedPiAgent(...)` remains as a deprecated compatibility alias for existing plugins. New code should use `runEmbeddedAgent(...)`.
 
     `resolveCliBackendDispatchEligibility({ provider, model, agentId, authProfileId, config, agentDir, workspaceDir })` shares the embedded runner's CLI-backend dispatch decision (route, the backend's declared `subscriptionAuthDispatch` capability, stored credential mode — honoring an explicitly pinned `authProfileId`) with callers that opt embedded runs into `cliBackendDispatch: "subscription-auth"`. It returns `{ provider }` when the run would execute through the CLI backend and `undefined` when it stays on the direct passthrough, so callers can budget timeouts for the run that will actually execute.
 

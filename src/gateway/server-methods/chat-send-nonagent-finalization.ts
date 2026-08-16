@@ -242,14 +242,16 @@ export async function finalizeChatSendNonAgentReplies(params: {
     getAgentScopedMediaLocalRoots(cfg, transcriptAgentId),
     latestStorePath ? [latestStorePath] : undefined,
   );
+  let managedMediaPrepareFailed = false;
   const assistantContent = await buildAssistantDisplayContentFromReplyPayloads({
-    sessionKey,
-    agentId,
+    sessionKey: transcriptSessionKey,
+    agentId: transcriptAgentId,
     payloads: finalPayloads,
     managedMediaLocalRoots: mediaLocalRoots,
     includeSensitiveMedia: false,
     includeSensitiveDisplay: true,
     onManagedMediaPrepareError: (message) => {
+      managedMediaPrepareFailed = true;
       context.logGateway.warn(`webchat media embedding skipped attachment: ${message}`);
     },
     onSensitiveDisplayPrepareError: (message) => {
@@ -269,12 +271,13 @@ export async function finalizeChatSendNonAgentReplies(params: {
   const persistedAssistantContent = replaceAssistantContentTextBlocks(
     hasSensitiveMedia
       ? await buildAssistantDisplayContentFromReplyPayloads({
-          sessionKey,
-          agentId,
+          sessionKey: transcriptSessionKey,
+          agentId: transcriptAgentId,
           payloads: finalPayloads,
           managedMediaLocalRoots: mediaLocalRoots,
           includeSensitiveMedia: false,
           onManagedMediaPrepareError: (message) => {
+            managedMediaPrepareFailed = true;
             context.logGateway.warn(`webchat media embedding skipped attachment: ${message}`);
           },
         })
@@ -297,7 +300,9 @@ export async function finalizeChatSendNonAgentReplies(params: {
     : "";
   const transcriptReply =
     mediaMessage?.transcriptText ||
-    buildTranscriptReplyText(finalPayloads) ||
+    (managedMediaPrepareFailed
+      ? transcriptDisplayReply
+      : buildTranscriptReplyText(finalPayloads)) ||
     transcriptDisplayReply;
   let message: Record<string, unknown> | undefined;
   const shouldAppendAssistantTranscript = Boolean(

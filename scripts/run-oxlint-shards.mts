@@ -437,18 +437,26 @@ export function filterOxlintShards<T extends { name: string }>(shards: T[], only
   );
 }
 
-/** Select one deterministic, disjoint stripe of split core lint targets. */
-export function selectCoreOxlintStripe<T extends { name: string }>(
-  shards: T[],
-  stripe: CoreStripe | undefined,
-) {
+/** Aggregate one deterministic, disjoint stripe into a single core Program. */
+export function selectCoreOxlintStripe(shards: OxlintShard[], stripe: CoreStripe | undefined) {
   if (!stripe) {
     return shards;
   }
   if (shards.length === 0 || shards.some((shard) => !shard.name.startsWith("core:"))) {
     throw new Error("--core-stripe requires a non-empty core-only shard selection");
   }
-  return shards.filter((_, index) => index % stripe.total === stripe.index - 1);
+  const targets = shards
+    .filter((_, index) => index % stripe.total === stripe.index - 1)
+    .flatMap((shard) => shard.args.slice(2));
+  if (targets.length === 0) {
+    return [];
+  }
+  return [
+    {
+      name: `core:stripe:${stripe.index}`,
+      args: ["--tsconfig", CORE_TS_CONFIG, ...targets],
+    },
+  ];
 }
 
 export function shouldPrepareExtensionPackageBoundaryArtifactsForShards(

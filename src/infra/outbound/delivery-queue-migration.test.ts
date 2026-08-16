@@ -20,6 +20,7 @@ import {
   OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
 } from "./delivery-queue-media-staging.js";
 import { migrateLegacyPendingOutboundDeliveries } from "./delivery-queue-migration.js";
+import { recoverPendingDeliveries } from "./delivery-queue-recovery.js";
 import {
   enqueueDelivery,
   markDeliveryPlatformOutcomeUnknown,
@@ -28,7 +29,6 @@ import {
   type LegacyQueuedDeliveryPreparation,
   type QueuedDelivery,
 } from "./delivery-queue-storage.js";
-import { recoverPendingDeliveries } from "./delivery-queue.js";
 import {
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
@@ -246,6 +246,7 @@ describe("outbound prepared queue migration", () => {
       loadDeliveryQueueEntry(OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME, id, tmpDir()),
     ).toMatchObject({
       legacyPreparationState: "modifiers_started",
+      retainOnFailure: true,
       payloads: [{ text: "first" }],
     });
     releaseHook?.({ content: "first-prepared" });
@@ -306,6 +307,7 @@ describe("outbound prepared queue migration", () => {
     const interrupted = {
       ...legacyEntry(id, "must not be reconsidered"),
       legacyPreparationState: "modifiers_started",
+      retainOnFailure: true,
       deliveryCompletion: {
         kind: "conversation",
         agentId: "main",
@@ -337,14 +339,15 @@ describe("outbound prepared queue migration", () => {
     const failedFence = readQueueEntryJson(OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME, id, tmpDir());
     expect(failedFence).toBeDefined();
     expect(failedFence).not.toContain("must not be reconsidered");
-    expect(JSON.parse(failedFence ?? "{}")).toMatchObject({
+    const failedEntry = JSON.parse(failedFence ?? "{}") as Record<string, unknown>;
+    expect(failedEntry).toMatchObject({
       id,
-      enqueuedAt: 100,
+      enqueuedAt: expect.any(Number),
       retryCount: 0,
-      attemptCount: 0,
     });
-    expect(JSON.parse(failedFence ?? "{}")).not.toHaveProperty("payloads");
-    expect(JSON.parse(failedFence ?? "{}")).not.toHaveProperty("deliveryCompletion");
+    expect(failedEntry.enqueuedAt).toBe(failedEntry.failedAt);
+    expect(failedEntry).not.toHaveProperty("payloads");
+    expect(failedEntry).not.toHaveProperty("deliveryCompletion");
     expect(loadDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, tmpDir())).toBeNull();
   });
 
@@ -353,6 +356,7 @@ describe("outbound prepared queue migration", () => {
     const active = {
       ...legacyEntry(id, "active raw input"),
       legacyPreparationState: "modifiers_started",
+      retainOnFailure: true,
       legacyPreparationOwnerId: "other-process",
       legacyPreparationLeaseExpiresAt: Date.now() + 60_000,
       deliveryCompletion: {
@@ -406,7 +410,7 @@ describe("outbound prepared queue migration", () => {
     expect(hookMocks.runMessageSending).not.toHaveBeenCalled();
     expect(
       loadDeliveryQueueEntry(OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME, id, tmpDir()),
-    ).toMatchObject({ legacyPreparationState: "claimed" });
+    ).toMatchObject({ legacyPreparationState: "claimed", retainOnFailure: true });
 
     hookMocks.hasHooks.mockImplementation(
       (name?: string) => name === "message_sending" || name === "message_sent",

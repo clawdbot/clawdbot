@@ -43,6 +43,10 @@ let canvasEnabledKey = "openclaw.canvasEnabled"
 let quickChatEnabledKey = "openclaw.quickChatEnabled"
 let cameraEnabledKey = "openclaw.cameraEnabled"
 let computerControlEnabledKey = "openclaw.computerControlEnabled"
+let computerControlProviderKey = "openclaw.computerControlProvider"
+let cookieSyncEnabledKey = "openclaw.cookieSyncEnabled"
+let cookieSyncIntoProfileKey = "openclaw.cookieSyncIntoProfile"
+let cookieSyncDomainsKey = "openclaw.cookieSyncDomains"
 
 func isComputerControlEnabled(defaults: UserDefaults = AppDefaults.standard) -> Bool {
     // object(forKey:) preserves an explicit false; bool(forKey:) would conflate it with an unset default.

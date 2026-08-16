@@ -46,6 +46,7 @@ import {
 } from "./reply-run-registry.js";
 import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
 import { bindReplyOperationTyping } from "./reply-run-typing.js";
+import { resolveFollowupRunToolAuthorityFingerprint } from "./reply-tool-authority.js";
 import { consumeReplyUsageState } from "./reply-usage-state.js";
 import { buildChannelSourceTurnId, setChannelSourceTurnId } from "./source-turn-id.js";
 import { createMockTypingController } from "./test-helpers.js";
@@ -354,6 +355,7 @@ function createMinimalRun(params?: {
   sessionCtx?: Partial<TemplateContext>;
   sourceTurnId?: string;
   runOverrides?: Partial<FollowupRun["run"]>;
+  bindActiveAuthority?: boolean;
 }) {
   const typing = createMockTypingController();
   const opts = params?.opts;
@@ -408,6 +410,12 @@ function createMinimalRun(params?: {
       ...params?.runOverrides,
     },
   } as unknown as FollowupRun;
+  const activeOperation = replyRunRegistry.get(sessionKey);
+  if (activeOperation && params?.bindActiveAuthority !== false) {
+    activeOperation.bindToolAuthorityFingerprint(
+      resolveFollowupRunToolAuthorityFingerprint(followupRun),
+    );
+  }
 
   return {
     followupRun,
@@ -524,6 +532,107 @@ function requireBuiltChannelSourceTurnId(
 }
 
 describe("runReplyAgent active steering", () => {
+  it("queues instead of steering when privilege facts differ on the active route", async () => {
+    const activeRoute = { provider: "openai", model: "gpt-fallback" };
+    const { followupRun, run } = createMinimalRun({
+      isActive: true,
+      shouldSteer: true,
+      resolvedQueueMode: "steer",
+      bindActiveAuthority: false,
+    });
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    active.bindToolAuthorityRoute(activeRoute);
+    active.bindToolAuthorityFingerprint(
+      resolveFollowupRunToolAuthorityFingerprint(
+        {
+          ...followupRun,
+          run: {
+            ...followupRun.run,
+            runtimePluginToolGrant: {
+              pluginId: "workboard",
+              toolNames: ["workboard_complete"],
+            },
+          },
+        },
+        activeRoute,
+      ),
+    );
+    active.setPhase("running");
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
+    active.complete();
+  });
+
+  it("offers a route-only mismatch to the pending-input owner", async () => {
+    state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
+    const activeRoute = { provider: "openai", model: "gpt-fallback" };
+    const { followupRun, run } = createMinimalRun({
+      isActive: true,
+      shouldSteer: true,
+      resolvedQueueMode: "steer",
+      bindActiveAuthority: false,
+    });
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    active.bindToolAuthorityRoute(activeRoute);
+    active.bindToolAuthorityFingerprint(
+      resolveFollowupRunToolAuthorityFingerprint(followupRun, activeRoute),
+    );
+    active.setPhase("running");
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledWith(
+      "session",
+      "hello",
+      expect.objectContaining({
+        pendingInputAuthorityFingerprint: active.toolAuthorityFingerprint,
+      }),
+    );
+    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+    active.complete();
+  });
+
+  it("drains an authority-mismatched turn after its provided operation clears", async () => {
+    const provided = createReplyOperation({
+      sessionKey: "agent:main:telegram:slash:source",
+      sessionId: "provided-session",
+      resetTriggered: false,
+    });
+    provided.bindToolAuthorityFingerprint("different-authority");
+    provided.setPhase("running");
+    const { followupRun, run } = createMinimalRun({
+      isActive: true,
+      shouldSteer: true,
+      resolvedQueueMode: "steer",
+      replyOperation: provided,
+      bindActiveAuthority: false,
+    });
+    const image = { type: "image" as const, data: "queued", mimeType: "image/png" };
+    followupRun.images = [image];
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
+    expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
+    provided.complete();
+    expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledOnce();
+    await requireScheduledFollowupRunner()(followupRun);
+    expect(mockCallArgs(state.runEmbeddedAgentMock, "queued image drain")[0]).toMatchObject({
+      images: [image],
+    });
+  });
+
   it("keeps the continuing Telegram task's typing alive after an accepted steer", async () => {
     state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
     const active = createReplyOperation({
@@ -3664,6 +3773,22 @@ describe("runReplyAgent typing (heartbeat)", () => {
     );
   });
 
+  it("surfaces a marked fallback for an empty message-tool-only completion", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+    const { run } = createMinimalRun({
+      opts: { sourceReplyDeliveryMode: "message_tool_only" },
+    });
+
+    const result = await run();
+    const payload = Array.isArray(result) ? result[0] : result;
+
+    expect(payload).toMatchObject({
+      text: expect.stringContaining("did not produce a visible reply"),
+      isError: true,
+    });
+    expect(getReplyPayloadMetadata(payload ?? {})?.deliverDespiteSourceReplySuppression).toBe(true);
+  });
+
   it.each([
     { lane: "reasoning", payload: { text: "internal", isReasoning: true } },
     { lane: "commentary", payload: { text: "internal", isCommentary: true } },
@@ -4579,84 +4704,106 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
-  it("announces fallback-cleared once when runtime returns to selected model", async () => {
-    const sessionEntry = makeSessionEntry();
-    const sessionStore = { main: sessionEntry };
-    let callCount = 0;
+  it.each([
+    { label: "direct chats", chatType: "direct" as const, noticeVisible: true },
+    { label: "group chats", chatType: "group" as const, noticeVisible: false },
+    { label: "channels", chatType: "channel" as const, noticeVisible: false },
+  ])(
+    "controls fallback notices for $label without changing state or lifecycle",
+    async ({ chatType, noticeVisible }) => {
+      const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
+      let callCount = 0;
 
-    state.runEmbeddedAgentMock.mockResolvedValue({
-      payloads: [{ text: "final" }],
-      meta: {},
-    });
-    const fallbackSpy = vi
-      .spyOn(modelFallbackModule, "runWithModelFallback")
-      .mockImplementation(
-        async ({
-          provider,
-          model,
-          run,
-        }: {
-          provider: string;
-          model: string;
-          run: (provider: string, model: string) => Promise<unknown>;
-        }) => {
-          callCount += 1;
-          if (callCount === 1) {
-            return {
-              outcome: "completed" as const,
-              result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
-              provider: "deepinfra",
-              model: "moonshotai/Kimi-K2.5",
-              attempts: [
-                {
-                  provider: "fireworks",
-                  model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-                  error: "Provider fireworks is in cooldown (all profiles unavailable)",
-                  reason: "rate_limit",
-                },
-              ],
-            };
-          }
-          return {
-            outcome: "completed" as const,
-            result: await run(provider, model),
+      state.runEmbeddedAgentMock.mockResolvedValue({
+        payloads: [{ text: "final" }],
+        meta: {},
+      });
+      const fallbackSpy = vi
+        .spyOn(modelFallbackModule, "runWithModelFallback")
+        .mockImplementation(
+          async ({
             provider,
             model,
-            attempts: [],
-          };
-        },
-      );
-    try {
-      const { run } = createMinimalRun({
-        resolvedVerboseLevel: "on",
-        sessionEntry,
-        sessionStore,
-        sessionKey: "main",
-      });
-      const phases: string[] = [];
-      const off = onAgentEvent((evt) => {
-        const phase = typeof evt.data?.phase === "string" ? evt.data.phase : null;
-        if (evt.stream === "lifecycle" && phase) {
-          phases.push(phase);
-        }
-      });
-      const first = await run();
-      const second = await run();
-      const third = await run();
-      off();
+            run,
+          }: {
+            provider: string;
+            model: string;
+            run: (provider: string, model: string) => Promise<unknown>;
+          }) => {
+            callCount += 1;
+            if (callCount === 1) {
+              return {
+                outcome: "completed" as const,
+                result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
+                provider: "deepinfra",
+                model: "moonshotai/Kimi-K2.5",
+                attempts: [
+                  {
+                    provider: "fireworks",
+                    model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+                    error: "Provider fireworks is in cooldown (all profiles unavailable)",
+                    reason: "rate_limit",
+                  },
+                ],
+              };
+            }
+            return {
+              outcome: "completed" as const,
+              result: await run(provider, model),
+              provider,
+              model,
+              attempts: [],
+            };
+          },
+        );
+      try {
+        const { run } = createMinimalRun({
+          resolvedVerboseLevel: "on",
+          sessionEntry,
+          sessionStore,
+          sessionKey: "main",
+          storePath,
+          sessionCtx: { ChatType: chatType },
+        });
+        const phases: string[] = [];
+        const off = onAgentEvent((evt) => {
+          const phase = typeof evt.data?.phase === "string" ? evt.data.phase : null;
+          if (evt.stream === "lifecycle" && phase) {
+            phases.push(phase);
+          }
+        });
+        const first = await run();
+        const activeFallback = {
+          kind: "active" as const,
+          selectedModel: "anthropic/claude",
+          activeModel: "deepinfra/moonshotai/Kimi-K2.5",
+          reason: "rate limit",
+        };
+        expect(sessionEntry.fallbackNotice).toEqual(activeFallback);
+        expect(requireStoredSessionEntry(storePath).fallbackNotice).toEqual(activeFallback);
+        const second = await run();
+        const third = await run();
+        off();
 
-      const firstText = Array.isArray(first) ? first[0]?.text : first?.text;
-      const secondText = Array.isArray(second) ? second[0]?.text : second?.text;
-      const thirdText = Array.isArray(third) ? third[0]?.text : third?.text;
-      expect(firstText).toContain("Model Fallback:");
-      expect(secondText).toContain("Model Fallback cleared:");
-      expect(thirdText).not.toContain("Model Fallback cleared:");
-      expect(countMatching(phases, (phase) => phase === "fallback")).toBe(1);
-      expect(countMatching(phases, (phase) => phase === "fallback_cleared")).toBe(1);
-    } finally {
-      fallbackSpy.mockRestore();
-    }
-  });
+        const firstText = Array.isArray(first) ? first[0]?.text : first?.text;
+        const secondText = Array.isArray(second) ? second[0]?.text : second?.text;
+        const thirdText = Array.isArray(third) ? third[0]?.text : third?.text;
+        expect(firstText?.includes("Model Fallback:")).toBe(noticeVisible);
+        expect(secondText?.includes("Model Fallback cleared:")).toBe(noticeVisible);
+        expect(thirdText).not.toContain("Model Fallback cleared:");
+        if (!noticeVisible) {
+          expect(firstText).toBe("final");
+          expect(secondText).toBe("final");
+        }
+        expect(countMatching(phases, (phase) => phase === "fallback")).toBe(1);
+        expect(countMatching(phases, (phase) => phase === "fallback_cleared")).toBe(1);
+        expect(sessionEntry.fallbackNotice).toBeUndefined();
+        expect(requireStoredSessionEntry(storePath).fallbackNotice).toBeUndefined();
+      } finally {
+        fallbackSpy.mockRestore();
+      }
+    },
+  );
 
   it("announces fallback transitions and emits lifecycle events while verbose is off", async () => {
     const sessionEntry = makeSessionEntry();

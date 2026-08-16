@@ -210,7 +210,7 @@ class CronPage extends OpenClawLightDomElement {
       connected: cronState.connected,
       cronModelSuggestions: this.cronModelSuggestions,
     };
-    await loadCronModelSuggestions(suggestionState);
+    await loadCronModelSuggestions(suggestionState, this.context.agentSelection.state.selectedId);
     if (
       this.isConnected &&
       this.cron === cronState &&
@@ -269,7 +269,7 @@ class CronPage extends OpenClawLightDomElement {
     if (!this.canManageCron) {
       return;
     }
-    cancelCronEdit(this.cron);
+    cancelCronEdit(this.cron, this.context.agentSelection.state.selectedId);
     this.cron.cronCreateOpen = true;
     if (patch) {
       this.patchForm(patch);
@@ -334,7 +334,7 @@ class CronPage extends OpenClawLightDomElement {
   }
 
   private closePanel() {
-    cancelCronEdit(this.cron);
+    cancelCronEdit(this.cron, this.context.agentSelection.state.selectedId);
     this.cron.cronCreateOpen = false;
     this.requestCronUpdate();
     void this.runCronTask(async (cronState) => {

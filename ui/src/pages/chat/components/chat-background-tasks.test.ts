@@ -123,6 +123,16 @@ function renderStatusRow(overrides: Partial<BackgroundTasksProps>) {
   return container;
 }
 
+it("uses the shared surface empty state when no background tasks exist", async () => {
+  const container = renderTaskRail({ tasks: [] });
+  const empty = container.querySelector("openclaw-panel-empty-state");
+  await empty?.updateComplete;
+
+  expect(empty?.shadowRoot?.querySelector(".empty-state__title")?.textContent).toBe("Tasks");
+  expect(empty?.querySelector("svg")).not.toBeNull();
+  expect(container.querySelector(".chat-tasks-rail__scroll")?.hasAttribute("hidden")).toBe(true);
+});
+
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();

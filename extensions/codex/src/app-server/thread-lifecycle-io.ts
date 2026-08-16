@@ -78,6 +78,7 @@ type ThreadRequestContext = {
   environmentSelectionFingerprint?: string;
   hostSystemAgentActive: boolean;
   ringZeroActive: boolean;
+  restrictedToolSurface: boolean;
   restrictedToolSurfaceInheritedMcpServerNames: string[];
   nativeSkillIsolation?: CodexNativeSkillIsolation;
   lifecycleTiming: CodexThreadLifecycleTimingTracker;
@@ -140,6 +141,7 @@ export async function resumeExistingCodexThread(
     environmentSelectionFingerprint,
     hostSystemAgentActive,
     ringZeroActive,
+    restrictedToolSurface,
     restrictedToolSurfaceInheritedMcpServerNames,
     nativeSkillIsolation,
     lifecycleTiming,
@@ -275,6 +277,7 @@ export async function resumeExistingCodexThread(
       configuredMcpOwnershipVersion: params.configuredMcpOwnershipVersion,
       ringZeroConfigFingerprint,
       ringZeroClientInstanceId,
+      nativeToolPolicyRestricted: restrictedToolSurface ? true : undefined,
       networkProxyProfileName: params.appServer.networkProxy?.profileName,
       networkProxyConfigFingerprint,
       nativeHookRelayGeneration:
@@ -426,6 +429,7 @@ export async function startFreshCodexThread(
     environmentSelectionFingerprint,
     hostSystemAgentActive,
     ringZeroActive,
+    restrictedToolSurface,
     restrictedToolSurfaceInheritedMcpServerNames,
     nativeSkillIsolation,
     lifecycleTiming,
@@ -589,6 +593,7 @@ export async function startFreshCodexThread(
       configuredMcpOwnershipVersion: params.configuredMcpOwnershipVersion,
       ringZeroConfigFingerprint,
       ringZeroClientInstanceId,
+      nativeToolPolicyRestricted: restrictedToolSurface ? true : undefined,
       networkProxyProfileName: params.appServer.networkProxy?.profileName,
       networkProxyConfigFingerprint,
       nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
