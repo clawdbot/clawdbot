@@ -7,6 +7,7 @@ export const NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE = "node-worker-supervisor-v
 export const NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE = "node-worker-supervisor-v2";
 export const NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE = "node-worker-supervisor-v1";
 export const NODE_WORKER_BUNDLE_RETENTION_VERSION = 1;
+export const NODE_WORKER_BUNDLE_STATUS_VERSION = 1;
 
 export const NODE_RUNNER_UPDATE_REQUIRED_ISSUE = {
   code: "update-required",
@@ -24,6 +25,7 @@ export type NodeWorkerHostDeclaration =
       capacity: "available" | "full";
       bundlePrewarm?: typeof WORKER_BUNDLE_PREWARM_VERSION;
       bundleRetention?: typeof NODE_WORKER_BUNDLE_RETENTION_VERSION;
+      bundleStatus?: typeof NODE_WORKER_BUNDLE_STATUS_VERSION;
     };
 
 export type NodeRunnerInventoryDeclaration =
@@ -49,7 +51,7 @@ function parseWorkerHostDeclaration(value: unknown): NodeWorkerHostDeclaration |
   }
   if (
     keys.length < 2 ||
-    keys.length > 4 ||
+    keys.length > 5 ||
     !keys.includes("enabled") ||
     !keys.includes("capacity") ||
     keys.some(
@@ -57,12 +59,16 @@ function parseWorkerHostDeclaration(value: unknown): NodeWorkerHostDeclaration |
         key !== "enabled" &&
         key !== "capacity" &&
         key !== "bundlePrewarm" &&
-        key !== "bundleRetention",
+        key !== "bundleRetention" &&
+        key !== "bundleStatus",
     ) ||
     (value.capacity !== "available" && value.capacity !== "full") ||
     (value.bundlePrewarm !== undefined && value.bundlePrewarm !== WORKER_BUNDLE_PREWARM_VERSION) ||
     (value.bundleRetention !== undefined &&
-      value.bundleRetention !== NODE_WORKER_BUNDLE_RETENTION_VERSION)
+      value.bundleRetention !== NODE_WORKER_BUNDLE_RETENTION_VERSION) ||
+    (value.bundleStatus !== undefined &&
+      value.bundleStatus !== NODE_WORKER_BUNDLE_STATUS_VERSION) ||
+    (value.bundleStatus !== undefined && value.bundleRetention === undefined)
   ) {
     return null;
   }
@@ -74,6 +80,9 @@ function parseWorkerHostDeclaration(value: unknown): NodeWorkerHostDeclaration |
       : {}),
     ...(value.bundleRetention === NODE_WORKER_BUNDLE_RETENTION_VERSION
       ? { bundleRetention: NODE_WORKER_BUNDLE_RETENTION_VERSION }
+      : {}),
+    ...(value.bundleStatus === NODE_WORKER_BUNDLE_STATUS_VERSION
+      ? { bundleStatus: NODE_WORKER_BUNDLE_STATUS_VERSION }
       : {}),
   };
 }

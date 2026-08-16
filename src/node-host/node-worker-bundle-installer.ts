@@ -324,6 +324,25 @@ export class NodeWorkerBundleInstaller {
     });
   }
 
+  async inspect(params: {
+    gatewayNamespace: string;
+    bundleHash: string;
+  }): Promise<{ bundleHash: string; status: "installed" | "missing" }> {
+    return await this.#operations.enqueue(params.gatewayNamespace, async () => {
+      const bundleDir = path.join(
+        this.#root,
+        params.gatewayNamespace,
+        "bundles",
+        params.bundleHash,
+      );
+      const receipt = await readReceipt(bundleDir);
+      const installed =
+        receipt?.bundleHash === params.bundleHash &&
+        (await validateInstalledBundle(bundleDir, receipt));
+      return { bundleHash: params.bundleHash, status: installed ? "installed" : "missing" };
+    });
+  }
+
   async retain(params: {
     gatewayNamespace: string;
     bundleHashes: readonly string[];
@@ -388,4 +407,4 @@ export class NodeWorkerBundleInstaller {
 }
 
 export type NodeWorkerBundleInstallerControl = Pick<NodeWorkerBundleInstaller, "ensure"> &
-  Partial<Pick<NodeWorkerBundleInstaller, "retain">>;
+  Partial<Pick<NodeWorkerBundleInstaller, "inspect" | "retain">>;

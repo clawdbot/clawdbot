@@ -1942,6 +1942,7 @@ public struct EnvironmentSummary: Codable, Sendable {
     public let status: EnvironmentStatus
     public let platform: String?
     public let sessionhost: Bool?
+    public let workerbundle: AnyCodable?
     public let lastconnectedatms: Int?
     public let lastdisconnectedatms: Int?
     public let lastseenatms: Int?
@@ -1959,6 +1960,7 @@ public struct EnvironmentSummary: Codable, Sendable {
         status: EnvironmentStatus,
         platform: String? = nil,
         sessionhost: Bool? = nil,
+        workerbundle: AnyCodable? = nil,
         lastconnectedatms: Int? = nil,
         lastdisconnectedatms: Int? = nil,
         lastseenatms: Int? = nil,
@@ -1975,6 +1977,7 @@ public struct EnvironmentSummary: Codable, Sendable {
         self.status = status
         self.platform = platform
         self.sessionhost = sessionhost
+        self.workerbundle = workerbundle
         self.lastconnectedatms = lastconnectedatms
         self.lastdisconnectedatms = lastdisconnectedatms
         self.lastseenatms = lastseenatms
@@ -1993,6 +1996,7 @@ public struct EnvironmentSummary: Codable, Sendable {
         case status
         case platform
         case sessionhost = "sessionHost"
+        case workerbundle = "workerBundle"
         case lastconnectedatms = "lastConnectedAtMs"
         case lastdisconnectedatms = "lastDisconnectedAtMs"
         case lastseenatms = "lastSeenAtMs"
@@ -2030,6 +2034,7 @@ public struct EnvironmentsCreateResult: Codable, Sendable {
     public let status: EnvironmentStatus
     public let platform: String?
     public let sessionhost: Bool?
+    public let workerbundle: AnyCodable?
     public let lastconnectedatms: Int?
     public let lastdisconnectedatms: Int?
     public let lastseenatms: Int?
@@ -2047,6 +2052,7 @@ public struct EnvironmentsCreateResult: Codable, Sendable {
         status: EnvironmentStatus,
         platform: String? = nil,
         sessionhost: Bool? = nil,
+        workerbundle: AnyCodable? = nil,
         lastconnectedatms: Int? = nil,
         lastdisconnectedatms: Int? = nil,
         lastseenatms: Int? = nil,
@@ -2063,6 +2069,7 @@ public struct EnvironmentsCreateResult: Codable, Sendable {
         self.status = status
         self.platform = platform
         self.sessionhost = sessionhost
+        self.workerbundle = workerbundle
         self.lastconnectedatms = lastconnectedatms
         self.lastdisconnectedatms = lastdisconnectedatms
         self.lastseenatms = lastseenatms
@@ -2081,6 +2088,7 @@ public struct EnvironmentsCreateResult: Codable, Sendable {
         case status
         case platform
         case sessionhost = "sessionHost"
+        case workerbundle = "workerBundle"
         case lastconnectedatms = "lastConnectedAtMs"
         case lastdisconnectedatms = "lastDisconnectedAtMs"
         case lastseenatms = "lastSeenAtMs"
@@ -2118,6 +2126,7 @@ public struct EnvironmentsDestroyResult: Codable, Sendable {
     public let status: EnvironmentStatus
     public let platform: String?
     public let sessionhost: Bool?
+    public let workerbundle: AnyCodable?
     public let lastconnectedatms: Int?
     public let lastdisconnectedatms: Int?
     public let lastseenatms: Int?
@@ -2135,6 +2144,7 @@ public struct EnvironmentsDestroyResult: Codable, Sendable {
         status: EnvironmentStatus,
         platform: String? = nil,
         sessionhost: Bool? = nil,
+        workerbundle: AnyCodable? = nil,
         lastconnectedatms: Int? = nil,
         lastdisconnectedatms: Int? = nil,
         lastseenatms: Int? = nil,
@@ -2151,6 +2161,7 @@ public struct EnvironmentsDestroyResult: Codable, Sendable {
         self.status = status
         self.platform = platform
         self.sessionhost = sessionhost
+        self.workerbundle = workerbundle
         self.lastconnectedatms = lastconnectedatms
         self.lastdisconnectedatms = lastdisconnectedatms
         self.lastseenatms = lastseenatms
@@ -2169,6 +2180,7 @@ public struct EnvironmentsDestroyResult: Codable, Sendable {
         case status
         case platform
         case sessionhost = "sessionHost"
+        case workerbundle = "workerBundle"
         case lastconnectedatms = "lastConnectedAtMs"
         case lastdisconnectedatms = "lastDisconnectedAtMs"
         case lastseenatms = "lastSeenAtMs"
@@ -2222,6 +2234,7 @@ public struct EnvironmentsStatusResult: Codable, Sendable {
     public let status: EnvironmentStatus
     public let platform: String?
     public let sessionhost: Bool?
+    public let workerbundle: AnyCodable?
     public let lastconnectedatms: Int?
     public let lastdisconnectedatms: Int?
     public let lastseenatms: Int?
@@ -2239,6 +2252,7 @@ public struct EnvironmentsStatusResult: Codable, Sendable {
         status: EnvironmentStatus,
         platform: String? = nil,
         sessionhost: Bool? = nil,
+        workerbundle: AnyCodable? = nil,
         lastconnectedatms: Int? = nil,
         lastdisconnectedatms: Int? = nil,
         lastseenatms: Int? = nil,
@@ -2255,6 +2269,7 @@ public struct EnvironmentsStatusResult: Codable, Sendable {
         self.status = status
         self.platform = platform
         self.sessionhost = sessionhost
+        self.workerbundle = workerbundle
         self.lastconnectedatms = lastconnectedatms
         self.lastdisconnectedatms = lastdisconnectedatms
         self.lastseenatms = lastseenatms
@@ -2273,6 +2288,7 @@ public struct EnvironmentsStatusResult: Codable, Sendable {
         case status
         case platform
         case sessionhost = "sessionHost"
+        case workerbundle = "workerBundle"
         case lastconnectedatms = "lastConnectedAtMs"
         case lastdisconnectedatms = "lastDisconnectedAtMs"
         case lastseenatms = "lastSeenAtMs"

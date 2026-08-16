@@ -151,6 +151,40 @@ describe("node worker bundle installer", () => {
     ).resolves.toContain(fixture.input.build.bundleHash);
   });
 
+  it("reports installed only after full bundle validation", async () => {
+    const fixture = await bundleFixture();
+    const served = await serve(fixture.archive, fixture.input.archive.token);
+    const installer = new NodeWorkerBundleInstaller({ root });
+
+    await expect(
+      installer.inspect({
+        gatewayNamespace: fixture.input.gatewayNamespace,
+        bundleHash: fixture.input.build.bundleHash,
+      }),
+    ).resolves.toEqual({ bundleHash: fixture.input.build.bundleHash, status: "missing" });
+    await installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl });
+    await expect(
+      installer.inspect({
+        gatewayNamespace: fixture.input.gatewayNamespace,
+        bundleHash: fixture.input.build.bundleHash,
+      }),
+    ).resolves.toEqual({ bundleHash: fixture.input.build.bundleHash, status: "installed" });
+
+    const bundleDir = path.join(
+      root,
+      fixture.input.gatewayNamespace,
+      "bundles",
+      fixture.input.build.bundleHash,
+    );
+    await fs.writeFile(path.join(bundleDir, "worker.mjs"), "tampered\n");
+    await expect(
+      installer.inspect({
+        gatewayNamespace: fixture.input.gatewayNamespace,
+        bundleHash: fixture.input.build.bundleHash,
+      }),
+    ).resolves.toEqual({ bundleHash: fixture.input.build.bundleHash, status: "missing" });
+  });
+
   it("prunes superseded bundle artifacts in bounded passes while retaining the latest install", async () => {
     const fixture = await bundleFixture();
     const served = await serve(fixture.archive, fixture.input.archive.token);

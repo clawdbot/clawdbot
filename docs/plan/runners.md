@@ -233,9 +233,10 @@ bounded terminal receipts, and the Gateway launch replay/poll/cancel adapter.
 A node publishes one atomic, reconnect-scoped private runner inventory with the
 supervisor dialect, explicit local consent, and current capacity. Milestone 7
 removes the temporary local-package scanner and connect-time build claim; the
-durable Gateway bundle receipt is the sole execution authority. Public node and environment projections expose
-only `sessionHost`; a read-scoped topology invalidation makes clients refetch
-without exposing build identity. Status and cancellation reacquire the current
+durable Gateway bundle receipt is the sole execution authority. Public node and
+environment projections expose `sessionHost` plus a redacted installed/missing
+bundle status; a read-scoped topology invalidation makes clients refetch without
+exposing hashes, paths, or receipt details. Status and cancellation reacquire the current
 supervisor proof and use the durable launch identity so an upgrade cannot strand
 an existing worker. Node-local opt-in advertises capacity; default nodes remain
 non-hosts. The supervisor owns two atomic durable capacity slots, bounded
@@ -327,7 +328,9 @@ local-package execution. The cleanup that follows separates inventory consent an
 capacity from installed bundle state and deletes the obsolete local build scan.
 The retention slice (#124590) reuses the authoritative maintenance snapshot to
 prune superseded node bundles in bounded generation-acknowledged passes. The
-remaining functional slice exposes the validated installed version on Devices.
+installed-status slice validates one retained hash on the node, keeps that fact
+reconnect-scoped and proof-bound in the Gateway, and shows the Gateway-owned
+version quietly on Devices or a remediation warning when the bundle is missing.
 
 ### Projects read model (milestone 4 foundation)
 

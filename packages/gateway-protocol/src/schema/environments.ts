@@ -55,6 +55,11 @@ export const RuntimeTargetIssueSchema = closedObject({
   headlessReconnectCommand: Type.Literal("openclaw node restart"),
 });
 
+export const NodeWorkerBundleStatusSchema = Type.Union([
+  closedObject({ status: Type.Literal("installed"), version: NonEmptyString }),
+  closedObject({ status: Type.Literal("missing") }),
+]);
+
 /** Worker-only lifecycle metadata layered onto the existing environment projection. */
 export const WorkerEnvironmentMetadataSchema = closedObject({
   providerId: NonEmptyString,
@@ -79,6 +84,7 @@ function createEnvironmentSummarySchema() {
     status: EnvironmentStatusSchema,
     platform: Type.Optional(NonEmptyString),
     sessionHost: Type.Optional(Type.Boolean()),
+    workerBundle: Type.Optional(NodeWorkerBundleStatusSchema),
     lastConnectedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     lastDisconnectedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     lastSeenAtMs: Type.Optional(Type.Integer({ minimum: 0 })),

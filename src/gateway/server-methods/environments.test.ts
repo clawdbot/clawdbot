@@ -9,6 +9,7 @@ import { NODE_RUNNER_UPDATE_REQUIRED_ISSUE } from "../../infra/node-runner-inven
 import { NODE_DESKTOP_STREAM_COMMAND } from "../../shared/node-desktop-stream.js";
 import {
   collectNodeRunnerIssuesByNodeId,
+  collectNodeWorkerBundleStatusByNodeId,
   isNodeRunnerSessionHost,
 } from "../node-registry-private.js";
 import type { WorkerEnvironmentServiceRecord } from "../worker-environments/service-contract.js";
@@ -26,6 +27,7 @@ vi.mock("../../infra/device-pairing-node.js", () => ({
 
 vi.mock("../node-registry-private.js", () => ({
   collectNodeRunnerIssuesByNodeId: vi.fn(() => new Map()),
+  collectNodeWorkerBundleStatusByNodeId: vi.fn(() => new Map()),
   isNodeRunnerSessionHost: vi.fn(() => false),
 }));
 
@@ -202,6 +204,7 @@ beforeEach(() => {
   vi.spyOn(Date, "now").mockReturnValue(NOW);
   vi.mocked(isNodeRunnerSessionHost).mockReturnValue(false);
   vi.mocked(collectNodeRunnerIssuesByNodeId).mockReturnValue(new Map());
+  vi.mocked(collectNodeWorkerBundleStatusByNodeId).mockReturnValue(new Map());
   vi.mocked(listDevicePairing).mockResolvedValue({ paired: [] } as never);
   vi.mocked(listNodePairing).mockResolvedValue({
     paired: [
@@ -306,6 +309,26 @@ describe("environment gateway methods", () => {
       lastSeenAtMs: 3_000,
       lastSeenReason: "silent_push",
     });
+  });
+
+  it("projects the same redacted worker bundle status through list and status", async () => {
+    vi.mocked(collectNodeWorkerBundleStatusByNodeId).mockReturnValue(
+      new Map([["node-live", { status: "installed", version: "2026.8.9" }]]),
+    );
+
+    const [, listPayload] = await callEnvironmentMethod("environments.list", {});
+    const [, statusPayload] = await callEnvironmentMethod("environments.status", {
+      environmentId: "node:node-live",
+    });
+    const listed = (
+      listPayload as { environments: Array<{ id: string; workerBundle?: unknown }> }
+    ).environments.find((environment) => environment.id === "node:node-live");
+
+    expect(listed?.workerBundle).toEqual({ status: "installed", version: "2026.8.9" });
+    expect(statusPayload).toMatchObject({
+      workerBundle: { status: "installed", version: "2026.8.9" },
+    });
+    expect(JSON.stringify({ listed, statusPayload })).not.toContain("bundleHash");
   });
 
   it("projects the same current-node update issue through list and status", async () => {

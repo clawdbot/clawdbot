@@ -438,6 +438,12 @@ contains its complete JavaScript dependency closure; the node does not install
 packages or execute lifecycle scripts. Later turns reuse the immutable artifact
 while its receipt still matches the Gateway's current build.
 
+The Devices page shows the validated Gateway-owned worker version in the node's
+metadata. If the retained artifact is missing or fails validation, Devices shows
+a **worker missing** warning; start a new session on that device to reinstall the
+current bundle. This status is observational and reconnect-scoped: launch still
+requires the exact durable receipt and current node authority.
+
 Node hosts must support the current private worker-supervisor dialect before
 they can host sessions. An older connected host remains visible but disabled in
 the session picker. Update OpenClaw on that device and reconnect it; for a

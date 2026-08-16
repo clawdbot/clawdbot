@@ -16,6 +16,7 @@ import { getMachineDisplayName } from "../infra/machine-name.js";
 import {
   NODE_RUNNER_INVENTORY_UPDATE_METHOD,
   NODE_WORKER_BUNDLE_RETENTION_VERSION,
+  NODE_WORKER_BUNDLE_STATUS_VERSION,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
 } from "../infra/node-runner-inventory.js";
 import { VERSION } from "../version.js";
@@ -260,6 +261,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   let gatewayConnectionGeneration = 0;
   let connectedGatewayProtocol = 0;
   let gatewaySupportsBundleRetention = false;
+  let gatewaySupportsBundleStatus = false;
   let optionalPublicationStates = new Map<
     NodeOptionalPublicationMethod,
     NodeOptionalPublicationState
@@ -277,6 +279,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     gatewayHelloReceived = false;
     connectedGatewayProtocol = 0;
     gatewaySupportsBundleRetention = false;
+    gatewaySupportsBundleStatus = false;
     retireOptionalPublications();
   };
 
@@ -477,6 +480,9 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
               ...(gatewaySupportsBundleRetention
                 ? { bundleRetention: NODE_WORKER_BUNDLE_RETENTION_VERSION }
                 : {}),
+              ...(gatewaySupportsBundleRetention && gatewaySupportsBundleStatus
+                ? { bundleStatus: NODE_WORKER_BUNDLE_STATUS_VERSION }
+                : {}),
             }
           : { enabled: false },
       },
@@ -552,6 +558,9 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       connectedGatewayProtocol = hello.protocol;
       gatewaySupportsBundleRetention =
         hello.features?.capabilities?.includes(GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION) ===
+        true;
+      gatewaySupportsBundleStatus =
+        hello.features?.capabilities?.includes(GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS) ===
         true;
       retireOptionalPublications();
       optionalPublicationStates = new Map();

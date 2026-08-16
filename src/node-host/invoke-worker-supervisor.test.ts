@@ -276,8 +276,13 @@ describe("node-host worker supervisor commands", () => {
     const input = launchInput();
     const supervisor = supervisorWith(fullReceipt(input));
     const retainBundles = vi.fn(async () => ({ deleted: 2, hasMore: true, generation: 4 }));
+    const inspectBundle = vi.fn(async () => ({
+      bundleHash: "a".repeat(64),
+      status: "installed" as const,
+    }));
     const bundleInstaller = {
       ensure: vi.fn(),
+      inspect: inspectBundle,
       retain: retainBundles,
     } as unknown as NodeWorkerBundleInstallerControl;
     const retain = {
@@ -288,6 +293,7 @@ describe("node-host worker supervisor commands", () => {
       retain: [],
       bundleHashes: ["a".repeat(64)],
       acknowledgedBundleGeneration: 3,
+      bundleStatusHash: "a".repeat(64),
     } as const;
 
     const { result } = await invokePrivate({
@@ -302,12 +308,17 @@ describe("node-host worker supervisor commands", () => {
       bundleHashes: ["a".repeat(64)],
       acknowledgedGeneration: 3,
     });
+    expect(inspectBundle).toHaveBeenCalledWith({
+      gatewayNamespace: input.gatewayNamespace,
+      bundleHash: "a".repeat(64),
+    });
     expect(JSON.parse(result?.payloadJSON ?? "{}")).toEqual({
       applied: true,
       deleted: 0,
       hasMore: true,
       bundleDeleted: 2,
       bundleGeneration: 4,
+      bundleStatus: { bundleHash: "a".repeat(64), status: "installed" },
     });
   });
 
