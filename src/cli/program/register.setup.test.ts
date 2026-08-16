@@ -522,6 +522,30 @@ describe("registerSetupCommand", () => {
     expect(setupCommandMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["guided", ["--wizard"]],
+    ["classic", ["--classic"]],
+    ["non-interactive", ["--non-interactive", "--accept-risk"]],
+  ])("forwards --agent-name through %s setup", async (_mode, modeArgs) => {
+    await runCli([
+      "setup",
+      ...modeArgs,
+      "--agent-name",
+      "robby",
+      "--workspace",
+      "/tmp/robby",
+      "--skip-bootstrap",
+    ]);
+
+    expect(lastWizardOptions()).toMatchObject({
+      agentName: "robby",
+      workspace: "/tmp/robby",
+      skipBootstrap: true,
+    });
+    expect(setupCommandMock).not.toHaveBeenCalled();
+    expect(runSystemAgentMock).not.toHaveBeenCalled();
+  });
+
   it("runs setup wizard command for migration import flags", async () => {
     await runCli([
       "setup",
