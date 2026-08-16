@@ -42,6 +42,50 @@ describe("config form scalar integrity", () => {
     expect(input.getAttribute("aria-invalid")).toBe("false");
   });
 
+  it("keeps a focused in-flight edit through a snapshot identity refresh", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const renderValue = (value: string, sourceIdentity: unknown) => {
+      render(
+        renderTextInput({
+          schema: { type: "string" },
+          value,
+          path: ["laboratory", "endpoint"],
+          hints: {},
+          unsupported: new Set(),
+          disabled: false,
+          sourceIdentity,
+          inputType: "text",
+          onPatch: vi.fn(),
+        }),
+        container,
+      );
+    };
+    try {
+      renderValue("local-api", { snapshot: 1 });
+      const input = expectElement(
+        container.querySelector<HTMLInputElement>("input[type='text']"),
+        "endpoint input",
+      );
+
+      // Mid-typing window: the DOM holds text the model has not committed yet
+      // (no input event dispatched). A background config refresh that only
+      // changes the snapshot identity must not eat it while the field is
+      // focused.
+      input.focus();
+      input.value = "form-api";
+      renderValue("local-api", { snapshot: 2 });
+      expect(input.value).toBe("form-api");
+
+      // The blurred authoritative-reset contract stays intact.
+      input.blur();
+      renderValue("remote-api", { snapshot: 3 });
+      expect(input.value).toBe("remote-api");
+    } finally {
+      container.remove();
+    }
+  });
+
   it("allows required nullable enums to select their null member", () => {
     const container = document.createElement("div");
     const nullablePatch = vi.fn();
@@ -283,6 +327,52 @@ describe("config form scalar integrity", () => {
     ).toBe("Default: balanced");
   });
 
+  it("does not commit a clear while a number input holds partial numeric text", () => {
+    // Browsers report value === "" with validity.badInput while the user is
+    // mid-keystroke ("0." on the way to "0.5"). Committing undefined here
+    // deleted the stored value and wiped the input. jsdom never sets
+    // badInput, so simulate the browser tuple explicitly.
+    const container = document.createElement("div");
+    const onPatch = vi.fn();
+    render(
+      renderNumberInput({
+        schema: { type: "number" },
+        value: 0,
+        path: ["sampleRate"],
+        hints: {},
+        unsupported: new Set(),
+        disabled: false,
+        onPatch,
+      }),
+      container,
+    );
+    const input = expectElement(
+      container.querySelector<HTMLInputElement>("input[type='number']"),
+      "partial numeric input",
+    );
+    Object.defineProperty(input, "validity", {
+      value: { badInput: true },
+      configurable: true,
+    });
+    Object.defineProperty(input, "value", {
+      value: "",
+      configurable: true,
+      writable: true,
+    });
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+
+    expect(onPatch).not.toHaveBeenCalled();
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+
+    // A genuine clear (no badInput) still removes the optional override.
+    Object.defineProperty(input, "validity", {
+      value: { badInput: false },
+      configurable: true,
+    });
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenCalledWith(["sampleRate"], undefined);
+  });
+
   it("keeps restore disabled while a sensitive value is concealed", () => {
     const container = document.createElement("div");
 
@@ -308,5 +398,43 @@ describe("config form scalar integrity", () => {
     );
     expect(reset.disabled).toBe(true);
     expect(container.textContent).not.toContain("inherited");
+  });
+
+  it("never reveals a server-redacted sentinel and keeps the input readonly", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderTextInput({
+        schema: { type: "string" },
+        value: "__OPENCLAW_REDACTED__",
+        path: ["secret"],
+        hints: { secret: { sensitive: true } },
+        unsupported: new Set(),
+        disabled: false,
+        inputType: "text",
+        // Even with reveal forced on, the sentinel is not the stored value;
+        // showing it editable would let a stray edit overwrite the credential.
+        revealSensitive: true,
+        onToggleSensitivePath: vi.fn(),
+        onPatch: vi.fn(),
+        onRemove: vi.fn(),
+      }),
+      container,
+    );
+
+    const input = expectElement(
+      container.querySelector<HTMLInputElement>("input"),
+      "sentinel secret input",
+    );
+    expect(input.value).not.toContain("__OPENCLAW_REDACTED__");
+    expect(input.readOnly).toBe(true);
+    const eye = expectElement(
+      container.querySelector<HTMLButtonElement>(".settings-secret__toggle"),
+      "stored secret reveal toggle",
+    );
+    expect(eye.disabled).toBe(true);
+    expect(eye.getAttribute("aria-label")).toBe(
+      "Stored secrets are never sent to the browser; enter a new value to replace it",
+    );
   });
 });

@@ -256,26 +256,17 @@ export function registerNodesStatusCommands(nodes: Command) {
           const tableWidth = getTerminalTableWidth();
           const now = Date.now();
           const nodesLocal = parseNodeList(result);
-          const lastConnectedById =
-            sinceMs !== undefined
-              ? new Map(
-                  parsePairingList(
-                    await callNodesGatewayCli("node.pair.list", opts, {}),
-                  ).paired.map((entry) => [entry.nodeId, entry]),
-                )
-              : null;
           const filtered = nodesLocal.filter((n) => {
             if (connectedOnly && !n.connected) {
               return false;
             }
             if (sinceMs !== undefined) {
-              const paired = lastConnectedById?.get(n.nodeId);
-              const lastConnectedAtMs =
-                typeof paired?.lastConnectedAtMs === "number"
-                  ? paired.lastConnectedAtMs
-                  : typeof n.connectedAtMs === "number"
-                    ? n.connectedAtMs
-                    : undefined;
+              // The gateway records lastConnectedAtMs on every node.list row
+              // (max of stored pairing history and live connection); joining a
+              // second pairing-scoped RPC re-derived that fact and made
+              // --last-connected fail for read-scoped callers. connectedAtMs
+              // covers gateways predating the recorded field.
+              const lastConnectedAtMs = n.lastConnectedAtMs ?? n.connectedAtMs;
               if (typeof lastConnectedAtMs !== "number") {
                 return false;
               }
@@ -532,7 +523,9 @@ export function registerNodesStatusCommands(nodes: Command) {
           const tableWidth = getTerminalTableWidth();
           const now = Date.now();
           const hasFilters = connectedOnly || sinceMs !== undefined;
-          const pendingRows = hasFilters ? [] : pending;
+          // Pending requests carry no connection state to filter on; hiding
+          // them under --connected printed "Pending: 0" while requests waited.
+          const pendingRows = pending;
           const effectiveNodes = hasFilters
             ? parseNodeList(await callNodesGatewayCli("node.list", opts, {}))
             : await tryReadNodeList(opts);

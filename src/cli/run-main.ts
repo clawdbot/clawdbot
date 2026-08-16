@@ -22,6 +22,7 @@ import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import {
+  hasFlag,
   normalizeGeneratedHelpCommandArgv,
   normalizeRootHelpTargetArgv,
   normalizeRootLogLevelArgv,
@@ -1207,10 +1208,13 @@ async function runCliWithPreparedOutputMode(
     jsonOutputMode: options.builtInMachineOutput || hasJsonOutputFlag(normalizedArgv),
     env: process.env,
   }).skipConfigGuard;
+  const useSourceOnlyBestEffortConfig =
+    normalizedInvocation.primary === "update" ||
+    (normalizedInvocation.primary === "doctor" && hasFlag(normalizedArgv, "--lint"));
   const readBestEffortCliConfig = async (): Promise<OpenClawConfig> => {
     if (!bestEffortConfigPromise) {
       bestEffortConfigPromise = import("../config/io.js").then((configIo) =>
-        normalizedInvocation.primary === "update"
+        useSourceOnlyBestEffortConfig
           ? configIo.readSourceConfigBestEffort()
           : configIo.readBestEffortConfig({
               ...(isolateProxyConfigEnv ? { isolateEnv: true, observe: false } : {}),

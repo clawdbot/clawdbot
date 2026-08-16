@@ -177,6 +177,13 @@ function providerPluginStub(
 }
 const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
 const ensureWorkspaceAndSessions = vi.hoisted(() => vi.fn(async () => {}));
+const ensureOnboardingConfig = vi.hoisted(() =>
+  vi.fn(async ({ config }: { config: OpenClawConfig }) => ({
+    config,
+    agentId: "main",
+    bootstrapPending: true,
+  })),
+);
 const replaceConfigFile = vi.hoisted(() =>
   vi.fn(
     async (params: {
@@ -476,13 +483,10 @@ vi.mock("../config/config.js", async (importActual) => {
   };
 });
 vi.mock("../commands/onboard-agent.js", async () => {
-  const { resolveDefaultAgentId } = await import("../agents/agent-scope-config.js");
   return {
-    ensureOnboardingConfig: async (config: OpenClawConfig) => ({
-      config,
-      agentId: resolveDefaultAgentId(config),
-      bootstrapPending: true,
-    }),
+    ensureOnboardingAgent: ensureOnboardingConfig,
+    validateFirstOnboardingAgentName: (value: string | undefined) =>
+      value?.trim() ? undefined : "Agent name is required.",
   };
 });
 vi.mock("../commands/onboard-helpers.js", () => ({
@@ -689,6 +693,53 @@ describe("runSetupWizard", () => {
     });
     runSetupMemoryImportStep.mockReset();
     runSetupMemoryImportStep.mockResolvedValue(undefined);
+    ensureOnboardingConfig.mockClear();
+  });
+
+  it("prompts for and stages the named first agent on a fresh install", async () => {
+    const prompter = buildWizardPrompter({ text: vi.fn(async () => "robby") });
+    ensureOnboardingConfig.mockImplementationOnce(async ({ config }) => ({
+      config,
+      agentId: "robby",
+      bootstrapPending: true,
+      createdAgent: true,
+      sessionMigrationWarnings: ["Run `openclaw doctor --fix` and retry setup."],
+    }));
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "skip",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+        workspace: "/tmp/openclaw-workspace",
+      },
+      createRuntime(),
+      prompter,
+    );
+
+    expect(prompter.text).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "What should we call your first agent?",
+        initialValue: "main",
+      }),
+    );
+    expect(ensureOnboardingConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspace: "/tmp/openclaw-workspace",
+        preserveCandidateRoster: false,
+        firstAgent: { name: "robby" },
+      }),
+    );
+    expect(prompter.note).toHaveBeenCalledWith(
+      "Run `openclaw doctor --fix` and retry setup.",
+      "Session history migration",
+    );
   });
 
   it("exits successfully after the auto-launched TUI returns", async () => {
@@ -935,9 +986,7 @@ describe("runSetupWizard", () => {
       if (writeAttempts === 1) {
         diskConfig = { ...diskConfig, ui: { ...diskConfig.ui, seamColor: "green" } };
         diskHash = "external-edit";
-        throw new ConfigMutationConflictError("config changed since last load", {
-          currentHash: diskHash,
-        });
+        throw new ConfigMutationConflictError("config changed since last load");
       }
       diskConfig = structuredClone(params.nextConfig);
       diskHash = `committed-${writeAttempts}`;
@@ -1551,6 +1600,45 @@ describe("runSetupWizard", () => {
     expect(acknowledgePromotion).toHaveBeenCalledOnce();
   });
 
+  it("reports an explicit agent name that conflicts with an imported roster", async () => {
+    const importedConfig: OpenClawConfig = {
+      agents: { entries: { imported: { name: "Imported" } } },
+    };
+    readConfigFileSnapshot.mockResolvedValueOnce(configSnapshot({}, false)).mockResolvedValue({
+      ...configSnapshot(importedConfig),
+      sourceConfigBeforeMigrations: {},
+    });
+    const runtime = createRuntime();
+    const prompter = buildWizardPrompter();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        importFrom: "hermes",
+        agentName: "robby",
+        authChoice: "skip",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "--agent-name cannot be combined with an import that supplies an agent roster. Remove --agent-name or choose an import without agents.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(prompter.text).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: "What should we call your first agent?" }),
+    );
+    expect(ensureOnboardingConfig).not.toHaveBeenCalled();
+  });
+
   it("consumes a verified imported model without testing it twice", async () => {
     const workspaceDir = await makeCaseDir("verified-import-flow-");
     runSetupMigrationImport.mockResolvedValueOnce({
@@ -1804,9 +1892,7 @@ describe("runSetupWizard", () => {
       if (writeAttempts === 2) {
         diskConfig = { ...diskConfig, ui: { seamColor: "green" } };
         diskHash = "external-pending-edit";
-        throw new ConfigMutationConflictError("config changed since last load", {
-          currentHash: diskHash,
-        });
+        throw new ConfigMutationConflictError("config changed since last load");
       }
       diskConfig = structuredClone(params.nextConfig);
       diskHash = `pending-${writeAttempts + 1}`;

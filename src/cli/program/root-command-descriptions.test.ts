@@ -218,14 +218,6 @@ const JSON_NOT_APPLICABLE = {
   },
 } as const;
 
-// These subcommands intentionally consume --json from their parent and emit JSON.
-const JSON_OUTPUT_INHERITED_FROM_PARENT = new Set([
-  "skills curator status",
-  "skills curator pin",
-  "skills curator unpin",
-  "skills curator restore",
-]);
-
 // Route-first parsing accepts JSON before Commander registration is reached.
 const JSON_OUTPUT_ROUTE_FIRST = new Set(["agents"]);
 
@@ -247,26 +239,13 @@ function hasOwnJsonOption(command: Command): boolean {
   return command.options.some((option) => option.long === "--json");
 }
 
-function hasAncestorJsonOption(command: Command): boolean {
-  for (let parent = command.parent; parent; parent = parent.parent) {
-    if (hasOwnJsonOption(parent)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function supportsJsonOutput(path: string, command: Command): boolean {
   // `config set --json` is a legacy strict-input parser alias. Only its
   // `--dry-run --json` combination reports JSON, so the mutation stays N/A.
   if (path === "config set") {
     return false;
   }
-  return (
-    hasOwnJsonOption(command) ||
-    (JSON_OUTPUT_INHERITED_FROM_PARENT.has(path) && hasAncestorJsonOption(command)) ||
-    JSON_OUTPUT_ROUTE_FIRST.has(path)
-  );
+  return hasOwnJsonOption(command) || JSON_OUTPUT_ROUTE_FIRST.has(path);
 }
 
 function collectRegisteredCommandPaths(...programs: Command[]): Set<string> {
@@ -413,15 +392,6 @@ describe("root command descriptions", () => {
     expect(
       exceptionsThatNowSupportJson,
       "remove stale JSON N/A entries after adding output support",
-    ).toEqual([]);
-
-    const staleInheritedSupport = [...JSON_OUTPUT_INHERITED_FROM_PARENT].filter((path) => {
-      const command = registered.get(path);
-      return !command || hasOwnJsonOption(command) || !hasAncestorJsonOption(command);
-    });
-    expect(
-      staleInheritedSupport,
-      "inherited JSON entries must exist, lack their own flag, and inherit a parent flag",
     ).toEqual([]);
 
     const staleRouteFirstSupport = [...JSON_OUTPUT_ROUTE_FIRST].filter((path) => {

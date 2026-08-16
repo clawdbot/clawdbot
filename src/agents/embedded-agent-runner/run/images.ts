@@ -580,7 +580,7 @@ async function materializePromptMediaMessages(
       continue;
     }
     const runtimeMedia = readRuntimePromptMediaFacts(message);
-    const meta = (message as unknown as Record<string, unknown>)["__openclaw"];
+    const meta = Reflect.get(message, "__openclaw");
     const resolvedMedia = runtimeMedia ?? readPersistedMediaFacts(message) ?? [];
     const runtimeImageOrder = readRuntimePromptImageOrder(message);
     const mediaImageLayout = readPersistedMediaImageLayout(message);
@@ -637,9 +637,9 @@ async function materializePromptMediaMessages(
       content: projectedContent,
     } as AgentMessage;
     if (Object.keys(nextMeta).length > 0) {
-      (hydratedMessage as unknown as Record<string, unknown>)["__openclaw"] = nextMeta;
+      Reflect.set(hydratedMessage, "__openclaw", nextMeta);
     } else {
-      delete (hydratedMessage as unknown as Record<string, unknown>)["__openclaw"];
+      Reflect.deleteProperty(hydratedMessage, "__openclaw");
     }
     if (runtimeMedia) {
       attachRuntimePromptMediaFacts(hydratedMessage, runtimeMedia, runtimeImageOrder);

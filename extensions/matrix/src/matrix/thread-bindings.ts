@@ -25,7 +25,6 @@ import {
   getMatrixThreadBindingManagerEntry,
   listBindingsForAccount,
   removeBindingRecord,
-  resetMatrixThreadBindingsForTests,
   resolveBindingKey,
   resolveEffectiveBindingExpiry,
   setBindingRecord,
@@ -499,9 +498,10 @@ export async function createMatrixThreadBindingManager(params: {
       });
       if (getMatrixThreadBindingManagerEntry(params.accountId)?.manager === manager) {
         deleteMatrixThreadBindingManagerEntry(params.accountId);
-      }
-      for (const record of listBindingsForAccount(params.accountId)) {
-        removeBindingRecord(record);
+        // Live bindings belong to this manager generation; persisted rows reload on restart.
+        for (const record of listBindingsForAccount(params.accountId)) {
+          removeBindingRecord(record);
+        }
       }
     },
   };
@@ -708,4 +708,4 @@ export async function createMatrixThreadBindingManager(params: {
   });
   return manager;
 }
-export { getMatrixThreadBindingManager, resetMatrixThreadBindingsForTests };
+export { getMatrixThreadBindingManager };

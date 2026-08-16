@@ -143,7 +143,10 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
     if (this.options.reserveViewport === false) {
       return;
     }
-    const visible = !this.isFullscreen() && this.options.isAvailable() && this.open;
+    // Embedded docks live inside a parent layout that already owns their geometry.
+    // Reserving the viewport here would apply the standalone dock a second time.
+    const embedded = this.host instanceof HTMLElement && this.host.hasAttribute("embedded");
+    const visible = !embedded && !this.isFullscreen() && this.options.isAvailable() && this.open;
     const root = document.documentElement.style;
     root.setProperty(
       `--oc-${this.options.reservationPrefix}-reserve-bottom`,
@@ -243,6 +246,15 @@ export const dockPanelStyles = css`
     z-index: 60;
     color: var(--text, #d7dae0);
     font-family: var(--font-body);
+  }
+  :host([embedded]) {
+    position: static;
+    z-index: auto;
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    flex: 1 1 0;
   }
   :is(.bp, .tp) {
     position: fixed;

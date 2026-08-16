@@ -479,7 +479,7 @@ export async function finalizeCodexAttempt(
           }),
         },
   );
-  return {
+  const finalizedResult: EmbeddedRunAttemptResult = {
     ...result,
     terminal: attemptTerminal.normalize({
       timedOut: effectiveTimedOut,
@@ -494,9 +494,14 @@ export async function finalizeCodexAttempt(
     ...(terminalAnchor ? { contextEngineTerminalAnchor: terminalAnchor } : {}),
     ...(settledTurnFinalizationContext ? { settledTurnFinalizationContext } : {}),
     ...(resourceState.runtimeArtifact ? { runtimeArtifact: resourceState.runtimeArtifact } : {}),
+    ...(resourceState.runtimeContinuationStarted ? { runtimeContinuationStarted: true } : {}),
     ...(!finalAborted && !effectiveTimedOut && !finalPromptError && preparedAuthBinding
       ? { authBindingFingerprint: preparedAuthBinding.fingerprint }
       : {}),
     systemPromptReport,
   };
+  if (turnSucceeded && toolState.yieldDetected && !runAbortController.signal.aborted) {
+    resourceState.nativeHookRelay?.authorizeRetentionAfterSuccessfulYield();
+  }
+  return finalizedResult;
 }

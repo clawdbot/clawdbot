@@ -14,6 +14,7 @@ import { WORKER_PROTOCOL_FEATURES } from "../../../../packages/gateway-protocol/
 import type { DeviceIdentity } from "../../../../src/infra/device-identity.js";
 import { loadOrCreateDeviceIdentity } from "../../../../src/infra/device-identity.js";
 import {
+  NODE_WORKER_BUNDLE_INSTALL_COMMAND,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
   NODE_WORKER_WORKSPACE_EXEC_COMMAND,
@@ -23,12 +24,14 @@ import {
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
 } from "../../../../src/infra/node-runner-inventory.js";
 import { handleInvoke, type NodeInvokeRequestPayload } from "../../../../src/node-host/invoke.js";
-import {
-  resolveNodeWorkerBuild,
-  type NodeWorkerInstallation,
-} from "../../../../src/node-host/node-worker-build.js";
+import { resolveNodeWorkerInstallation } from "../../../../src/node-host/node-worker-build.js";
+import { NodeWorkerBundleInstaller } from "../../../../src/node-host/node-worker-bundle-installer.js";
 import { createNodeWorkerSupervisor } from "../../../../src/node-host/node-worker-supervisor.js";
 import { NodeWorkerWorkspaceRuntime } from "../../../../src/node-host/node-worker-workspace.js";
+import {
+  WORKER_BUNDLE_ENTRY_PATH,
+  WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
+} from "../../../../src/shared/worker-bundle-hash.js";
 import { VERSION } from "../../../../src/version.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import {
@@ -41,9 +44,10 @@ import {
 
 const execFileAsync = promisify(execFile);
 const SESSION_KEY = "agent:qa:node-worker-launch-wire";
-const NODE_DISPLAY_NAME = "QA local-install worker node";
+const NODE_DISPLAY_NAME = "QA Gateway-bundle worker node";
 const TEST_TIMEOUT_MS = PROOF_TIMEOUT_MS + 60_000;
 
+type NodeWorkerInstallation = Awaited<ReturnType<typeof resolveNodeWorkerInstallation>>;
 type Gateway = Awaited<ReturnType<typeof startQaGatewayChild>>;
 type GatewayEvent = { event: string; payload?: unknown };
 type NodeRead = {
@@ -79,7 +83,9 @@ async function createPublishedWorkspace(root: string) {
   await git(source, "init", "-b", "main");
   await git(source, "config", "user.name", "OpenClaw QA");
   await git(source, "config", "user.email", "openclaw-qa@example.invalid");
+  await fs.mkdir(path.join(source, "nested"));
   await fs.writeFile(path.join(source, "launch-wire.txt"), "local-install launch wire\n");
+  await fs.writeFile(path.join(source, "nested", "tracked.txt"), "nested tracked input\n");
   await git(source, "add", ".");
   await git(source, "commit", "-m", "initialize node worker launch wire workspace");
   await git(source, "remote", "add", "publish", bare);
@@ -131,27 +137,17 @@ async function createPublishedWorkspace(root: string) {
 async function createSourceWorkerInstallation(root: string): Promise<NodeWorkerInstallation> {
   const packageRoot = path.join(root, "local-install");
   const repoRoot = process.cwd();
-  await fs.mkdir(packageRoot, { recursive: true });
-  await Promise.all([
-    fs.copyFile(path.join(repoRoot, "openclaw.mjs"), path.join(packageRoot, "openclaw.mjs")),
-    fs.copyFile(path.join(repoRoot, "package.json"), path.join(packageRoot, "package.json")),
-    fs.cp(path.join(repoRoot, "dist"), path.join(packageRoot, "dist"), { recursive: true }),
-  ]);
-  await fs.chmod(path.join(packageRoot, "openclaw.mjs"), 0o700);
-  await fs.symlink(
-    path.join(repoRoot, "node_modules"),
-    path.join(packageRoot, "node_modules"),
-    process.platform === "win32" ? "junction" : "dir",
-  );
-  const canonicalRoot = await fs.realpath(packageRoot);
-  return {
-    packageRoot: canonicalRoot,
-    build: await resolveNodeWorkerBuild({
-      packageRoot: canonicalRoot,
-      openclawVersion: VERSION,
-      protocolFeatures: WORKER_PROTOCOL_FEATURES,
-    }),
-  };
+  await fs.mkdir(path.join(packageRoot, "dist", "worker"), { recursive: true });
+  for (const artifactPath of [WORKER_BUNDLE_ENTRY_PATH, WORKER_BUNDLE_RSYNC_RECEIVER_PATH]) {
+    const target = path.join(packageRoot, "dist", "worker", artifactPath);
+    await fs.copyFile(path.join(repoRoot, "dist", "worker", artifactPath), target);
+    await fs.chmod(target, 0o700);
+  }
+  return await resolveNodeWorkerInstallation({
+    packageRoot,
+    openclawVersion: VERSION,
+    protocolFeatures: WORKER_PROTOCOL_FEATURES,
+  });
 }
 
 async function connectClient(params: {
@@ -343,7 +339,7 @@ function messageText(message: unknown): string {
 
 describe("node worker launch wire", () => {
   it(
-    "hosts a device placement through node invoke after the launch acknowledgement reconnects",
+    "transfers and reconciles a gateway-push workspace through a device runner",
     { timeout: TEST_TIMEOUT_MS },
     async () => {
       const root = tempDirs.make("openclaw-node-worker-launch-wire-");
@@ -356,10 +352,8 @@ describe("node worker launch wire", () => {
         OPENCLAW_STATE_DIR: path.join(root, "node-state"),
       };
       await fs.mkdir(nodeEnv.HOME, { recursive: true });
-      const supervisor = createNodeWorkerSupervisor({
-        env: nodeEnv,
-        localInstallation: installation,
-      });
+      const supervisor = createNodeWorkerSupervisor({ env: nodeEnv });
+      const bundleInstaller = new NodeWorkerBundleInstaller({ env: nodeEnv });
       const workspace = new NodeWorkerWorkspaceRuntime({
         root: path.join(root, "node-workspaces"),
         env: nodeEnv,
@@ -407,6 +401,7 @@ describe("node worker launch wire", () => {
             launchId = (JSON.parse(frame.paramsJSON) as { launchId?: string }).launchId;
           }
           const task = handleInvoke(frame, receiver, { current: async () => [] }, undefined, {
+            workerBundleInstaller: bundleInstaller,
             workerSupervisor: supervisor,
             workerWorkspace: workspace,
             gatewayUrl: gateway!.wsUrl,
@@ -454,6 +449,15 @@ describe("node worker launch wire", () => {
           worktreeBaseRef: "main",
           cwd: published.source,
         });
+        const created = (await gateway.call("sessions.describe", { key: SESSION_KEY })) as {
+          session?: { execCwd?: string; spawnedCwd?: string };
+        };
+        const localWorkspaceDir = created.session?.execCwd ?? created.session?.spawnedCwd;
+        expect(localWorkspaceDir).toBeTruthy();
+        await fs.writeFile(
+          path.join(localWorkspaceDir!, "gateway-push.txt"),
+          "dirty gateway workspace\n",
+        );
         const dispatched = await gateway.call(
           "sessions.dispatch",
           { key: SESSION_KEY, deviceId: identity.deviceId },
@@ -466,6 +470,13 @@ describe("node worker launch wire", () => {
         });
         const remoteWorkspaceDir = String(placement?.remoteWorkspaceDir ?? "");
         const baseManifestRef = placement?.workspaceBaseManifestRef;
+        await expect(
+          fs.readFile(path.join(remoteWorkspaceDir, "gateway-push.txt"), "utf8"),
+        ).resolves.toBe("dirty gateway workspace\n");
+        await expect(
+          fs.readFile(path.join(remoteWorkspaceDir, "nested", "tracked.txt"), "utf8"),
+        ).resolves.toBe("nested tracked input\n");
+        await fs.writeFile(path.join(remoteWorkspaceDir, "node-result.txt"), "device result\n");
 
         const runId = `node-worker-launch-wire-${Date.now()}`;
         const started = await operator.request<{ runId?: string; status?: string }>("chat.send", {
@@ -488,6 +499,7 @@ describe("node worker launch wire", () => {
         await Promise.all([...invokeTasks]);
         expect(invokeErrors).toEqual([]);
         expect(reconnected).toBe(true);
+        expect(commands).toContain(NODE_WORKER_BUNDLE_INSTALL_COMMAND);
         expect(commands).toContain(NODE_WORKER_WORKSPACE_EXEC_COMMAND);
         expect(commands).toContain(NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND);
         expect(commands).toContain(NODE_WORKER_SUPERVISOR_STATUS_COMMAND);
@@ -506,17 +518,22 @@ describe("node worker launch wire", () => {
           ),
         ).toHaveLength(1);
         const described = (await gateway.call("sessions.describe", { key: SESSION_KEY })) as {
-          session?: { placement?: Record<string, unknown> };
+          session?: { execCwd?: string; spawnedCwd?: string; placement?: Record<string, unknown> };
         };
         expect(described.session?.placement).toMatchObject({
           state: "active",
-          workspaceBaseManifestRef: baseManifestRef,
           remoteWorkspaceDir,
         });
+        expect(described.session?.placement?.workspaceBaseManifestRef).not.toBe(baseManifestRef);
+        const reconciledLocalDir = described.session?.execCwd ?? described.session?.spawnedCwd;
+        expect(reconciledLocalDir).toBeTruthy();
+        await expect(
+          fs.readFile(path.join(reconciledLocalDir!, "node-result.txt"), "utf8"),
+        ).resolves.toBe("device result\n");
         expect(await git(remoteWorkspaceDir, "rev-parse", "HEAD")).toBe(published.commit);
-        expect(
-          await git(remoteWorkspaceDir, "status", "--porcelain=v1", "--untracked-files=all"),
-        ).toBe("");
+        expect(await fs.readFile(path.join(remoteWorkspaceDir, "node-result.txt"), "utf8")).toBe(
+          "device result\n",
+        );
       } finally {
         closing = true;
         const cleanup = await Promise.allSettled([

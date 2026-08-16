@@ -1,6 +1,7 @@
 /**
  * Normalizes OpenAI Responses reasoning/tool-call history for safe replay.
  */
+import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
 import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
 import type { AgentMessage } from "../runtime/index.js";
 
@@ -219,7 +220,7 @@ export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): A
         }
         assistantChanged = true;
         return {
-          ...(block as unknown as Record<string, unknown>),
+          ...block,
           id: nextId,
         } as typeof block;
       });
@@ -229,7 +230,7 @@ export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): A
         continue;
       }
       changed = true;
-      rewrittenMessages.push({ ...assistantMsg, content: nextContent } as AgentMessage);
+      rewrittenMessages.push(replaceCompactionReplayOwnerContent(assistantMsg, nextContent));
       continue;
     }
 
@@ -331,7 +332,7 @@ export function downgradeOpenAIFunctionCallReasoningPairs(
         assistantChanged = true;
         localRewrittenIds.set(toolCallBlock.id, pairing.callId);
         return {
-          ...(block as unknown as Record<string, unknown>),
+          ...block,
           id: pairing.callId,
         } as typeof block;
       });
@@ -342,7 +343,7 @@ export function downgradeOpenAIFunctionCallReasoningPairs(
         continue;
       }
       changed = true;
-      rewrittenMessages.push({ ...assistantMsg, content: nextContent } as AgentMessage);
+      rewrittenMessages.push(replaceCompactionReplayOwnerContent(assistantMsg, nextContent));
       continue;
     }
 
@@ -513,7 +514,7 @@ export function downgradeOpenAIReasoningBlocks(
         })
       : nextContent;
 
-    out.push({ ...assistantMsg, content: finalContent } as AgentMessage);
+    out.push(replaceCompactionReplayOwnerContent(assistantMsg, finalContent));
   }
 
   return anyChanged ? out : messages;

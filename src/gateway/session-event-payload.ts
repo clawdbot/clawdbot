@@ -75,6 +75,7 @@ export function buildGatewaySessionEventFields(params: {
     forkSource: sessionRow.forkSource,
     previousSessionId: sessionRow.previousSessionId,
     label: params.label ?? sessionRow.label ?? null,
+    icon: sessionRow.icon ?? null,
     // Explicit null so subscribed clients drop a cleared category during merge-reconcile.
     category: sessionRow.category ?? null,
     displayName: params.displayName ?? sessionRow.displayName ?? null,

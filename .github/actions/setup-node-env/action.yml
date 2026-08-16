@@ -43,6 +43,10 @@ inputs:
     description: Whether to persist Vitest's experimental filesystem module cache.
     required: false
     default: "false"
+  restore-test-caches:
+    description: Whether to restore the Vitest transform and test-scope Node compile caches together.
+    required: false
+    default: "false"
   node-compile-cache:
     description: Whether to persist Node's on-disk V8 compile cache.
     required: false
@@ -178,7 +182,7 @@ runs:
           ${{ github.repository }}-vitest-fs-v3-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**', 'src/state/*.sql', '!**/node_modules/**') }}-
 
     - name: Restore Vitest transform cache
-      if: inputs.vitest-fs-cache == 'true' && inputs.save-vitest-fs-cache != 'true' && runner.os != 'Windows'
+      if: (inputs.vitest-fs-cache == 'true' || inputs.restore-test-caches == 'true') && inputs.save-vitest-fs-cache != 'true' && runner.os != 'Windows'
       uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
       with:
         path: /var/tmp/openclaw-vitest-fs-cache
@@ -187,7 +191,7 @@ runs:
           ${{ github.repository }}-vitest-fs-v3-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**', 'src/state/*.sql', '!**/node_modules/**') }}-
 
     - name: Configure Vitest transform cache
-      if: inputs.vitest-fs-cache == 'true' && runner.os != 'Windows'
+      if: (inputs.vitest-fs-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
       env:
         CACHE_GENERATION: ${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**', 'src/state/*.sql', '!**/node_modules/**') }}
         CACHE_WRITER: ${{ inputs.save-vitest-fs-cache == 'true' && '1' || '0' }}
@@ -216,7 +220,7 @@ runs:
 
     - name: Select Node compile cache epoch
       id: node-compile-cache-epoch
-      if: inputs.node-compile-cache == 'true' && runner.os != 'Windows'
+      if: (inputs.node-compile-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
       shell: bash
       env:
         CACHE_SCOPE: ${{ inputs.node-compile-cache-scope }}
@@ -238,7 +242,7 @@ runs:
           ${{ github.repository }}-node-compile-v3-${{ inputs.node-compile-cache-scope }}-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-
 
     - name: Restore Node compile cache
-      if: inputs.node-compile-cache == 'true' && inputs.save-node-compile-cache != 'true' && runner.os != 'Windows'
+      if: (inputs.node-compile-cache == 'true' || inputs.restore-test-caches == 'true') && inputs.save-node-compile-cache != 'true' && runner.os != 'Windows'
       uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
       with:
         path: /var/tmp/openclaw-node-compile-cache
@@ -247,7 +251,7 @@ runs:
           ${{ github.repository }}-node-compile-v3-${{ inputs.node-compile-cache-scope }}-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-
 
     - name: Configure Node compile cache
-      if: inputs.node-compile-cache == 'true' && runner.os != 'Windows'
+      if: (inputs.node-compile-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
       env:
         CACHE_WRITER: ${{ inputs.save-node-compile-cache == 'true' && '1' || '0' }}
       shell: bash
@@ -420,6 +424,19 @@ runs:
         key: ${{ github.repository }}-build-all-v1-${{ inputs.build-all-cache-scope }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'tsconfig*.json', 'tsdown*.config.ts', 'scripts/build-all.mts', 'scripts/tsdown-build.mts', 'scripts/lib/tsdown-*.mts', 'scripts/lib/plugin-sdk-*', 'scripts/lib/bundled-plugin-*', 'scripts/lib/optional-bundled-clusters.mjs', 'src/**', 'packages/**', 'extensions/**') }}
         restore-keys: |
           ${{ github.repository }}-build-all-v1-${{ inputs.build-all-cache-scope }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-
+
+    # Prune before saving: prefix-key restores accrete every prior lockfile
+    # generation into the archive (measured 2.05 GiB, ~36s restore per job).
+    # Pruning collapses it to the current lockfile's closure; a dropped entry
+    # costs one registry refetch in a later job at worst.
+    - name: Prune pnpm store before save
+      if: ${{ inputs.install-deps == 'true' && inputs.use-actions-cache == 'true' && (inputs.dependency-cache != 'true' || steps.dependency-cache.outputs.cache-hit != 'true') && inputs.save-actions-cache == 'true' && runner.os != 'Windows' && steps.setup-pnpm.outputs.store-cache-hit != 'true' }}
+      shell: bash
+      working-directory: ${{ steps.package-manager.outputs.project-dir }}
+      run: |
+        du -sh "${{ steps.setup-pnpm.outputs.store-path }}" || true
+        pnpm store prune
+        du -sh "${{ steps.setup-pnpm.outputs.store-path }}" || true
 
     - name: Save pnpm store cache
       if: ${{ inputs.install-deps == 'true' && inputs.use-actions-cache == 'true' && (inputs.dependency-cache != 'true' || steps.dependency-cache.outputs.cache-hit != 'true') && inputs.save-actions-cache == 'true' && runner.os != 'Windows' && steps.setup-pnpm.outputs.store-cache-hit != 'true' }}

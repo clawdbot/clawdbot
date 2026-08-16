@@ -1,6 +1,11 @@
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
-import { required, type WorkerSessionPlacementRecord } from "./placement-record.js";
+import {
+  isCurrentPlacementTurnClaim,
+  required,
+  type WorkerSessionPlacementRecord,
+  type WorkerSessionTurnClaim,
+} from "./placement-record.js";
 import { getRequired, query, transitionValues } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import {
@@ -23,13 +28,32 @@ export function createPlacementPendingFailureOps(runtime: PlacementStoreRuntime)
       const outcome = write((db) => {
         const current = getRequired(db, sessionId);
         const persisted = current.turnClaim;
+        const releasedClaim: WorkerSessionTurnClaim | null = persisted
+          ? {
+              sessionId,
+              claimId: persisted.claimId,
+              runId: persisted.runId,
+              placementGeneration: persisted.generation,
+              owner:
+                persisted.owner === "worker"
+                  ? {
+                      kind: "worker",
+                      environmentId: pending.environmentId,
+                      ownerEpoch: persisted.ownerEpoch,
+                    }
+                  : {
+                      kind: "local",
+                      environmentId: pending.environmentId,
+                      ownerEpoch: pending.ownerEpoch,
+                    },
+            }
+          : null;
         const exactClaim =
-          persisted === null ||
-          (persisted.owner === "worker" &&
-            persisted.claimId === pending.claimId &&
-            persisted.runId === pending.runId &&
-            persisted.generation === pending.placementGeneration &&
-            persisted.ownerEpoch === pending.ownerEpoch);
+          releasedClaim === null ||
+          (releasedClaim.claimId === pending.claimId &&
+            releasedClaim.runId === pending.runId &&
+            releasedClaim.placementGeneration === pending.placementGeneration &&
+            isCurrentPlacementTurnClaim(current, releasedClaim));
         if (
           (current.state !== "active" && current.state !== "draining") ||
           current.environmentId !== pending.environmentId ||
@@ -143,20 +167,7 @@ export function createPlacementPendingFailureOps(runtime: PlacementStoreRuntime)
         }
         return {
           record: getRequired(db, sessionId),
-          releasedClaim:
-            persisted?.owner === "worker"
-              ? {
-                  sessionId,
-                  owner: {
-                    kind: "worker" as const,
-                    environmentId: pending.environmentId,
-                    ownerEpoch: pending.ownerEpoch,
-                  },
-                  claimId: pending.claimId,
-                  runId: pending.runId,
-                  placementGeneration: pending.placementGeneration,
-                }
-              : null,
+          releasedClaim,
         };
       });
       if (outcome.releasedClaim) {

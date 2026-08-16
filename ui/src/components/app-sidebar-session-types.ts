@@ -61,12 +61,20 @@ export type SidebarRecentSession = {
   createdActor?: SessionCreatedActor;
   archivedBy?: SessionCreatedActor;
   label: string;
+  /**
+   * Stored user label, undecorated. `label` above is the resolved display name
+   * and can carry a derived account or channel; rename edits this one so a
+   * derived string never lands back in persisted state.
+   */
+  userLabel?: string;
   /** Compact repo/branch/node line for work sessions. */
   subtitle?: string;
   href: string;
   active: boolean;
   visuallyActive: boolean;
   hasActiveRun: boolean;
+  /** Raw Gateway liveness used for operations even when display status is terminal. */
+  gatewayHasActiveRun?: boolean;
   activeRunIds?: readonly string[];
   modelSelectionLocked: boolean;
   kind?: string;
@@ -75,6 +83,7 @@ export type SidebarRecentSession = {
   visibility?: SessionVisibility;
   draftOwnedBySelf?: boolean;
   category?: string;
+  icon?: string;
   boardFace?: BoardFace;
   channel?: string;
   channelSession?: boolean;
@@ -180,6 +189,11 @@ export type SidebarSessionMutationScope = {
   sessions: SessionCapability;
   client: GatewayBrowserClient;
   selectedAgentId: string;
+  // Owner-scoped abort signal for this epoch's destructive confirmations. A
+  // retired epoch aborts it so any open dialog dismisses itself instead of
+  // surviving a reconnect; scopes built outside SessionDataController may
+  // leave this unset and keep their own stale-guard behavior.
+  signal?: AbortSignal;
 };
 
 export type SidebarSessionMutationResult = "completed" | "failed" | "stale";
@@ -189,6 +203,7 @@ export type SidebarSessionPatch = {
   pinned?: boolean;
   unread?: boolean;
   label?: string | null;
+  icon?: string | null;
   category?: string | null;
 };
 
@@ -209,6 +224,7 @@ const SIDEBAR_SESSION_CATALOG_GROUPING_STORAGE_KEY = "openclaw:sidebar:sessions:
 const SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY = "openclaw:sidebar:sessions:show-cron";
 const SIDEBAR_SESSION_SHOW_SYSTEM_STORAGE_KEY = "openclaw:sidebar:sessions:show-system";
 const SIDEBAR_SESSION_STATUS_FILTER_STORAGE_KEY = "openclaw:sidebar:sessions:status-filter";
+const SIDEBAR_SESSION_SORT_MODE_STORAGE_KEY = "openclaw:sidebar:sessions:sort-mode";
 const SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY =
   "openclaw:sidebar:sessions:collapsed-sections";
 const SIDEBAR_HIDDEN_SESSION_CATALOGS_STORAGE_KEY = "openclaw:sidebar:sessions:hidden-catalogs";
@@ -255,6 +271,13 @@ export function loadStoredSidebarSessionsShowSystem(): boolean {
 export function loadStoredSidebarSessionStatusFilter(): SidebarSessionStatusFilter {
   const stored = getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_STATUS_FILTER_STORAGE_KEY);
   return stored === "archived" || stored === "all" ? stored : "active";
+}
+
+export function loadStoredSidebarSessionSortMode(): SidebarSessionSortMode {
+  const stored = getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_SORT_MODE_STORAGE_KEY);
+  // "people" stays readable here even when the gateway later hides the
+  // capability; effectiveSessionSortMode() downgrades it at render time.
+  return stored === "updated" || stored === "people" ? stored : "created";
 }
 
 export function loadStoredCollapsedSessionSections(): ReadonlySet<string> {
@@ -309,6 +332,30 @@ export function storeSidebarSessionsShowSystem(show: boolean) {
 
 export function storeSidebarSessionStatusFilter(value: SidebarSessionStatusFilter) {
   getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_STATUS_FILTER_STORAGE_KEY, value);
+}
+
+/** People collapses to Created only where the gateway has authoritatively
+ *  denied the capability; an undefined capability (reconnect) keeps the mode. */
+export function resolveSidebarSessionSortMode(
+  mode: SidebarSessionSortMode,
+  keepPeople: boolean,
+): SidebarSessionSortMode {
+  return mode === "people" && !keepPeople ? "created" : mode;
+}
+
+/** Persists the resolved mode, never the rejected request, so a reload cannot
+ *  restore a People sort the gateway already refused. Returns what was stored. */
+export function storeSidebarSessionSortMode(
+  mode: SidebarSessionSortMode,
+  peopleCapability: boolean | undefined,
+): SidebarSessionSortMode {
+  const resolved = resolveSidebarSessionSortMode(mode, peopleCapability !== false);
+  try {
+    getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_SORT_MODE_STORAGE_KEY, resolved);
+  } catch {
+    // Keep the in-memory preference when storage is unavailable.
+  }
+  return resolved;
 }
 
 export function storeCollapsedSessionSections(sections: ReadonlySet<string>) {

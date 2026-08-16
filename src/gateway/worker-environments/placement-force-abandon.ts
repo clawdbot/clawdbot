@@ -155,11 +155,18 @@ export async function forceAbandonWorkerEnvironment(params: {
           claimId: current.turnClaim.claimId,
           runId: current.turnClaim.runId,
           placementGeneration: current.turnClaim.generation,
-          owner: {
-            kind: "worker",
-            environmentId: current.environmentId,
-            ownerEpoch: current.turnClaim.ownerEpoch,
-          },
+          owner:
+            current.turnClaim.owner === "worker"
+              ? {
+                  kind: "worker",
+                  environmentId: current.environmentId,
+                  ownerEpoch: current.turnClaim.ownerEpoch,
+                }
+              : {
+                  kind: "local",
+                  environmentId: current.environmentId,
+                  ownerEpoch: current.activeOwnerEpoch,
+                },
         });
       }
       current = placements.startReconcile({

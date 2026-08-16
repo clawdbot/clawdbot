@@ -8,6 +8,7 @@ import type {
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   isDeliverableMessageChannel,
+  isInternalNonDeliveryChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 import { applyTargetToParams } from "./channel-target.js";
@@ -25,6 +26,9 @@ export function resolveImplicitMessageActionTarget(
   for (const value of [toolContext?.currentChannelId, toolContext?.currentMessagingTarget]) {
     const target = normalizeOptionalString(value);
     if (!target) {
+      continue;
+    }
+    if (isInternalNonDeliveryChannel(target)) {
       continue;
     }
     // A session can arrive bare or wrapped as a channel target; neither is

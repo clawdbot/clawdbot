@@ -448,6 +448,22 @@ async function waitForPredicate(
   throw new Error(`Timed out waiting for ${description}`);
 }
 
+async function waitForFileTextCount(
+  filePath: string,
+  expectedText: string,
+  expectedCount: number,
+  timeoutMs: number,
+): Promise<void> {
+  await waitForPredicate(
+    async () => {
+      const text = await fs.readFile(filePath, "utf8").catch(() => "");
+      return text.split(expectedText).length - 1 >= expectedCount;
+    },
+    `${expectedCount} occurrences of ${expectedText} in ${filePath}`,
+    timeoutMs,
+  );
+}
+
 /** Waits for a replacement child to register a pid different from the one that died. */
 async function waitForChangedPid(
   pidPath: string,
@@ -1169,6 +1185,7 @@ describe("session MCP runtime", () => {
     const tempDir = tempDirTracker.make("bundle-mcp-catalog-retry-");
     const retryServerPath = path.join(tempDir, "retry-list-tools.mjs");
     const retryLogPath = path.join(tempDir, "retry-server.log");
+    const retryReleasePath = path.join(tempDir, "retry.release");
     const healthyServerPath = path.join(tempDir, "healthy-list-tools.mjs");
     const healthyLogPath = path.join(tempDir, "healthy-server.log");
     let nowMs = 10_000;
@@ -1237,7 +1254,7 @@ describe("session MCP runtime", () => {
       await writeListToolsMcpServer({
         filePath: retryServerPath,
         logPath: retryLogPath,
-        initializeDelayMs: 500,
+        listToolsReleasePath: retryReleasePath,
       });
       await expect(runtime.getCatalog()).resolves.toBe(failedCatalog);
 
@@ -1250,9 +1267,16 @@ describe("session MCP runtime", () => {
       );
       expect(staleCatalog).toBe(failedCatalog);
       expect(staleCatalog.diagnostics?.[0]?.serverName).toBe("retryServer");
+      await waitForFileTextCount(
+        retryLogPath,
+        "recv tools/list",
+        2,
+        LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+      );
       await expect(runtime.callTool("healthyServer", "healthy_tool", {})).resolves.toMatchObject({
         isError: false,
       });
+      await fs.writeFile(retryReleasePath, "release", "utf8");
 
       await waitForPredicate(
         () => staticRuntime.peekCatalog()?.servers.retryServer !== undefined,
@@ -1678,13 +1702,15 @@ process.on("SIGINT", shutdown);`,
     const serverPath = path.join(tempDir, "server.mjs");
     const logPath = path.join(tempDir, "server.log");
     const pidPath = path.join(tempDir, "server.pid");
+    const listToolsReleasePath = path.join(tempDir, "list-tools.release");
     const healthyServerPath = path.join(tempDir, "healthy.mjs");
     const healthyLogPath = path.join(tempDir, "healthy.log");
+    await fs.writeFile(listToolsReleasePath, "release", "utf8");
     await writeListToolsMcpServer({
       filePath: serverPath,
       logPath,
       pidPath,
-      initializeDelayMs: 750,
+      listToolsReleasePath,
     });
     await writeListToolsMcpServer({ filePath: healthyServerPath, logPath: healthyLogPath });
 
@@ -1708,6 +1734,7 @@ process.on("SIGINT", shutdown);`,
       });
       await waitForFileText(pidPath, "", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
       const pid = Number.parseInt((await fs.readFile(pidPath, "utf8")).trim(), 10);
+      await fs.rm(listToolsReleasePath, { force: true });
       // SIGKILL rather than the default SIGTERM: this test is about what happens once the
       // child is actually gone, so the kill must not race the assertions below.
       process.kill(pid, "SIGKILL");
@@ -1719,6 +1746,8 @@ process.on("SIGINT", shutdown);`,
         "closed transport to schedule a catalog retry",
         LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
       );
+      await expect(runtime.callTool("child", "slow_tool", {})).rejects.toThrow("is not connected");
+      await waitForFileTextCount(logPath, "recv tools/list", 2, LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
       await expect(
         withTestTimeout(
           runtime.callTool("healthy", "slow_tool", {}),
@@ -1726,6 +1755,7 @@ process.on("SIGINT", shutdown);`,
           "healthy sibling stalled during reconnect",
         ),
       ).resolves.toMatchObject({ isError: false });
+      await fs.writeFile(listToolsReleasePath, "release", "utf8");
       await waitForPredicate(
         async () => {
           try {

@@ -325,6 +325,7 @@ describe("worker session tool topology", () => {
       sessionId: CHILD.sessionId,
       sessionKey: childSessionKey,
       agentId: CHILD.agentId,
+      executionMode: "worker-turn",
       profileId: "cloud-profile",
       inheritedProfile: {
         providerId: "fake",

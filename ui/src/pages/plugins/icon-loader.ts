@@ -194,7 +194,7 @@ async function loadSvgImage(url: string): Promise<HTMLImageElement> {
   return image;
 }
 
-function parseSvgDimensions(root: SVGSVGElement): { width: number; height: number } | null {
+function parseSvgDimensions(root: Element): { width: number; height: number } | null {
   const viewBox = root.getAttribute("viewBox");
   if (viewBox) {
     const values = viewBox
@@ -278,7 +278,7 @@ async function sanitizeSvgForRasterization(
   if (pathCommands > PLUGIN_ICON_SVG_MAX_PATH_COMMANDS) {
     return null;
   }
-  const dimensions = parseSvgDimensions(root as unknown as SVGSVGElement);
+  const dimensions = parseSvgDimensions(root);
   if (!dimensions) {
     return null;
   }

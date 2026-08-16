@@ -24,7 +24,6 @@ import {
   configSelectionFromSearch,
   extractQuickSettingsSecurity,
 } from "./config-page.ts";
-import { configSectionKeysForPage } from "./config-sections.ts";
 import type { ConfigViewState } from "./view.ts";
 
 const switchActiveRealtimeTalkCameras =
@@ -75,14 +74,6 @@ describe("configSelectionFromSearch", () => {
   });
 
   it("keeps MCP separate from Infrastructure", () => {
-    expect(configSectionKeysForPage("mcp")).toEqual(["mcp"]);
-    expect(configSectionKeysForPage("infrastructure")).toEqual([
-      "gateway",
-      "browser",
-      "nodeHost",
-      "discovery",
-      "acp",
-    ]);
     expect(configSelectionFromSearch("mcp", "?section=browser")).toEqual({
       activeSection: "mcp",
       activeSubsection: null,
@@ -93,24 +84,11 @@ describe("configSelectionFromSearch", () => {
     });
   });
 
-  it("keeps Communications focused on messages and text-to-speech", () => {
-    expect(configSectionKeysForPage("communications")).toEqual(["messages", "tts"]);
-  });
-
-  it("gives Talk its own curated page", () => {
-    expect(configSectionKeysForPage("talk")).toEqual(["talk"]);
-  });
-
-  it("gives Updates ownership of the update config section", () => {
-    expect(configSectionKeysForPage("updates")).toEqual(["update"]);
+  it("keeps the Updates section off Advanced", () => {
     expect(configSelectionFromSearch("advanced", "?section=update")).toEqual({
       activeSection: null,
       activeSubsection: null,
     });
-  });
-
-  it("keeps provider models off Agent Defaults", () => {
-    expect(configSectionKeysForPage("ai-agents")).toEqual(["agents", "skills", "tools", "session"]);
   });
 });
 
@@ -443,19 +421,26 @@ describe("ConfigPage session observer models", () => {
       context: ApplicationContext;
       systemInfoGatewaySource: ApplicationGateway;
       sessionObserverModels: ModelCatalogEntry[];
+      sessionObserverModelsUnavailable: boolean;
       sessionObserverModelsClient: GatewayBrowserClient | null;
-      ensureSessionObserverModels: (client: GatewayBrowserClient) => Promise<void>;
+      ensureSessionObserverModels: (
+        client: GatewayBrowserClient,
+        agentId: string | null,
+      ) => Promise<void>;
     };
     Object.defineProperty(page, "isConnected", { configurable: true, value: true });
-    state.context = { gateway } as ApplicationContext;
+    state.context = {
+      gateway,
+      agentSelection: { state: { selectedId: "main" } },
+    } as ApplicationContext;
     state.systemInfoGatewaySource = gateway;
 
-    const firstLoad = state.ensureSessionObserverModels(firstClient);
+    const firstLoad = state.ensureSessionObserverModels(firstClient, "main");
     (gateway as { snapshot: ApplicationGatewaySnapshot }).snapshot = {
       client: secondClient,
       phase: "connected",
     } as ApplicationGatewaySnapshot;
-    const secondLoad = state.ensureSessionObserverModels(secondClient);
+    const secondLoad = state.ensureSessionObserverModels(secondClient, "main");
     const currentModels = [{ id: "small", name: "Small", provider: "openai" }];
     second.resolve(currentModels);
     await secondLoad;
@@ -466,8 +451,14 @@ describe("ConfigPage session observer models", () => {
     await firstLoad;
     expect(state.sessionObserverModels).toEqual(currentModels);
     expect(chatModels.loadModels).toHaveBeenCalledTimes(2);
-    expect(chatModels.loadModels).toHaveBeenNthCalledWith(1, firstClient, { preparedOnly: true });
-    expect(chatModels.loadModels).toHaveBeenNthCalledWith(2, secondClient, { preparedOnly: true });
+    expect(chatModels.loadModels).toHaveBeenNthCalledWith(1, firstClient, {
+      agentId: "main",
+      preparedOnly: true,
+    });
+    expect(chatModels.loadModels).toHaveBeenNthCalledWith(2, secondClient, {
+      agentId: "main",
+      preparedOnly: true,
+    });
   });
 
   it("retries a transient catalog failure on the next status refresh", async () => {
@@ -485,22 +476,86 @@ describe("ConfigPage session observer models", () => {
       systemInfoGatewaySource: ApplicationGateway;
       sessionObserverModels: ModelCatalogEntry[];
       sessionObserverModelsUnavailable: boolean;
-      ensureSessionObserverModels: (client: GatewayBrowserClient) => Promise<void>;
+      ensureSessionObserverModels: (
+        client: GatewayBrowserClient,
+        agentId: string | null,
+      ) => Promise<void>;
     };
     Object.defineProperty(page, "isConnected", { configurable: true, value: true });
-    state.context = { gateway } as ApplicationContext;
+    state.context = {
+      gateway,
+      agentSelection: { state: { selectedId: "main" } },
+    } as ApplicationContext;
     state.systemInfoGatewaySource = gateway;
 
-    await state.ensureSessionObserverModels(client);
+    await state.ensureSessionObserverModels(client, "main");
     expect(state.sessionObserverModels).toEqual([]);
     expect(state.sessionObserverModelsUnavailable).toBe(true);
 
-    await state.ensureSessionObserverModels(client);
+    await state.ensureSessionObserverModels(client, "main");
 
     expect(state.sessionObserverModels).toEqual(recoveredModels);
     expect(state.sessionObserverModelsUnavailable).toBe(false);
     expect(chatModels.loadModels).toHaveBeenCalledTimes(2);
-    expect(chatModels.loadModels).toHaveBeenLastCalledWith(client, { preparedOnly: true });
+    expect(chatModels.loadModels).toHaveBeenLastCalledWith(client, {
+      agentId: "main",
+      preparedOnly: true,
+    });
+  });
+
+  it("keeps a same-client agent switch from restoring stale observer models", async () => {
+    const main = deferred<ModelCatalogEntry[]>();
+    const writer = deferred<ModelCatalogEntry[]>();
+    vi.spyOn(chatModels, "loadModels").mockImplementation((_client, options) =>
+      options.agentId === "writer" ? writer.promise : main.promise,
+    );
+    const client = {} as GatewayBrowserClient;
+    const gateway = {
+      snapshot: { client, phase: "connected" },
+    } as unknown as ApplicationGateway;
+    const selectionState = { selectedId: "main" as string | null };
+    const page = new ConfigPage();
+    const state = page as unknown as {
+      context: ApplicationContext;
+      systemInfoGatewaySource: ApplicationGateway;
+      sessionObserverModels: ModelCatalogEntry[];
+      sessionObserverModelsUnavailable: boolean;
+      ensureSessionObserverModels: (
+        client: GatewayBrowserClient,
+        agentId: string | null,
+      ) => Promise<void>;
+    };
+    Object.defineProperty(page, "isConnected", { configurable: true, value: true });
+    state.context = {
+      gateway,
+      agentSelection: { state: selectionState },
+    } as ApplicationContext;
+    state.systemInfoGatewaySource = gateway;
+
+    const mainLoad = state.ensureSessionObserverModels(client, "main");
+    selectionState.selectedId = "writer";
+    const writerLoad = state.ensureSessionObserverModels(client, "writer");
+    const writerModels = [{ id: "writer-model", name: "Writer Model", provider: "openai" }];
+    writer.resolve(writerModels);
+    await writerLoad;
+    main.resolve([{ id: "main-model", name: "Main Model", provider: "openai" }]);
+    await mainLoad;
+
+    expect(state.sessionObserverModels).toEqual(writerModels);
+    expect(chatModels.loadModels).toHaveBeenNthCalledWith(1, client, {
+      agentId: "main",
+      preparedOnly: true,
+    });
+    expect(chatModels.loadModels).toHaveBeenNthCalledWith(2, client, {
+      agentId: "writer",
+      preparedOnly: true,
+    });
+
+    selectionState.selectedId = null;
+    await state.ensureSessionObserverModels(client, null);
+    expect(state.sessionObserverModels).toEqual([]);
+    expect(state.sessionObserverModelsUnavailable).toBe(true);
+    expect(chatModels.loadModels).toHaveBeenCalledTimes(2);
   });
 });
 

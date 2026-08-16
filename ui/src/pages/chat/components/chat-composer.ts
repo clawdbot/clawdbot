@@ -17,13 +17,13 @@ import {
   replaceComposerPopoverAnchor,
   restoreHistoryCaret,
   scheduleTextareaHeightAdjustment,
+  scrollActiveMenuOptionIntoView,
 } from "./chat-composer-dom.ts";
 import {
   getActiveSkillMenuOptionId,
   getActiveSkillMenuOptionLabel,
   isSkillMenuVisible,
   resetSkillMenuState,
-  scrollActiveSkillMenuOptionIntoView,
   selectSkillMention,
   updateSkillMenu,
 } from "./chat-composer-skill-menu.ts";
@@ -34,7 +34,6 @@ import {
   isSlashMenuVisible,
   paneDomId,
   resetSlashMenuState,
-  scrollActiveSlashMenuOptionIntoView,
   selectSlashArg,
   selectSlashCommand,
   tabCompleteSlashCommand,
@@ -232,7 +231,6 @@ export function renderChatComposer(props: ChatComposerProps) {
   };
   const questionPanelProps = gatewayQuestionPrompt
     ? createGatewayQuestionPanelProps(gatewayQuestionPrompt, {
-        nowMs: Date.now(),
         collapsed: state.gatewayQuestionCollapsed,
         onCollapsedChange: (collapsed) => {
           state.gatewayQuestionCollapsed = collapsed;
@@ -323,7 +321,8 @@ export function renderChatComposer(props: ChatComposerProps) {
           props.paneId,
           requestUpdate,
           (command) => selectSkillMention(command, props, requestUpdate),
-          scrollActiveSkillMenuOptionIntoView,
+          (menuState, paneId) =>
+            scrollActiveMenuOptionIntoView(getActiveSkillMenuOptionId(menuState, paneId)),
           "skill",
         )
       ) {
@@ -345,7 +344,8 @@ export function renderChatComposer(props: ChatComposerProps) {
           props.paneId,
           requestUpdate,
           (arg, submit) => selectSlashArg(arg, props, requestUpdate, submit),
-          scrollActiveSlashMenuOptionIntoView,
+          (menuState, paneId) =>
+            scrollActiveMenuOptionIntoView(getActiveSlashMenuOptionId(menuState, paneId)),
         )
       ) {
         return;
@@ -364,7 +364,8 @@ export function renderChatComposer(props: ChatComposerProps) {
             submit
               ? selectSlashCommand(command, props, requestUpdate)
               : tabCompleteSlashCommand(command, props, requestUpdate),
-          scrollActiveSlashMenuOptionIntoView,
+          (menuState, paneId) =>
+            scrollActiveMenuOptionIntoView(getActiveSlashMenuOptionId(menuState, paneId)),
         )
       ) {
         return;
@@ -480,6 +481,10 @@ export function renderChatComposer(props: ChatComposerProps) {
   };
   const handleBlur = (event: FocusEvent) => {
     const target = event.target as HTMLTextAreaElement;
+    // A dropped compositionend (detach/blur mid-IME) must not wedge the
+    // composing flag: it persists across renders and kills Enter-send,
+    // history keys, and command menus until the Send button resets it.
+    state.composerComposing = false;
     if (state.composingDraft?.key === draftKey) {
       state.composingDraft = null;
     }

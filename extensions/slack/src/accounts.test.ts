@@ -282,6 +282,36 @@ describe("resolveSlackAccount allowFrom precedence", () => {
     });
   });
 
+  it("inherits the top-level presence prompt when an account overrides only the mode", () => {
+    const resolved = resolveSlackAccount({
+      cfg: {
+        channels: {
+          slack: {
+            presenceEvents: {
+              mode: "auto",
+              prompt: "Use the account owner's workspace guidance.",
+            },
+            accounts: {
+              work: {
+                botToken: "xoxb-work",
+                appToken: "xapp-work",
+                presenceEvents: {
+                  mode: "on",
+                },
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(resolved.config.presenceEvents).toEqual({
+      mode: "on",
+      prompt: "Use the account owner's workspace guidance.",
+    });
+  });
+
   it("merges canonical account streaming over top-level defaults field-by-field", () => {
     const resolved = resolveSlackAccount({
       cfg: {

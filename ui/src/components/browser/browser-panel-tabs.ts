@@ -1,3 +1,4 @@
+import { nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import { renderPanelTabStrip, type PanelTabStripTab } from "../panel-tab-strip.ts";
 import type { BrowserPanelTab } from "./browser-client.ts";
@@ -19,6 +20,8 @@ export function renderBrowserPanelTabs(params: {
   onSelect: (targetId: string) => void;
   onClose: (targetId: string) => void | Promise<void>;
   onNew: () => void;
+  /** Embedded chrome hosts the new-tab action in its toolbar instead. */
+  hideNewControl?: boolean;
 }) {
   const tabs: PanelTabStripTab[] = params.tabs.map((tab) => {
     const label = tabLabel(tab);
@@ -38,5 +41,6 @@ export function renderBrowserPanelTabs(params: {
     onClose: params.onClose,
     onNew: params.onNew,
     newLabel: t("browser.newTab"),
+    ...(params.hideNewControl ? { newControl: nothing } : {}),
   });
 }

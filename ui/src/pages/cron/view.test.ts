@@ -249,9 +249,8 @@ describe("cron view list pane", () => {
 
   it("hides suggestions while any list filter is active", () => {
     expect(renderView({ jobsQuery: "x" }).querySelector(".cron-suggestion")).toBeNull();
-    expect(
-      renderView({ jobsEnabledFilter: "enabled" }).querySelector(".cron-suggestion"),
-    ).toBeNull();
+    const filtered = renderView({ jobsEnabledFilter: "enabled" });
+    expect(filtered.querySelector(".cron-suggestion")).toBeNull();
     expect(renderView().querySelector(".cron-suggestion")).not.toBeNull();
   });
 
@@ -552,14 +551,15 @@ describe("cron view editor", () => {
     ) as HTMLElement & {
       value: string;
     };
-    expect(
-      Array.from(channel.querySelectorAll("wa-option"), (option) => option.getAttribute("value")),
-    ).toContain("retired-channel");
+    const optionValues = Array.from(channel.querySelectorAll("wa-option"), (option) =>
+      option.getAttribute("value"),
+    );
+    expect(optionValues).toContain("retired-channel");
     expect(channel.querySelector('wa-option[value="telegram"] img')).not.toBeNull();
-    expect(
-      (channel.querySelector('wa-option[value="telegram"]') as HTMLElement & { label?: string })
-        ?.label,
-    ).toBe("Telegram fallback");
+    const telegramOption = channel.querySelector<HTMLElement & { label?: string }>(
+      'wa-option[value="telegram"]',
+    );
+    expect(telegramOption?.label).toBe("Telegram fallback");
     Object.defineProperty(channel, "value", { configurable: true, value: "telegram" });
     channel.dispatchEvent(new Event("change", { bubbles: true }));
     Reflect.deleteProperty(channel, "value");
@@ -624,9 +624,8 @@ describe("cron view editor", () => {
       createOpen: true,
       form: { ...DEFAULT_CRON_FORM, scheduleKind: "on-exit" },
     });
-    expect(
-      onExitContainer.querySelector('[data-test-id="cron-schedule-kind-on-exit"]'),
-    ).not.toBeNull();
+    const onExitKind = onExitContainer.querySelector('[data-test-id="cron-schedule-kind-on-exit"]');
+    expect(onExitKind).not.toBeNull();
     expect(findToggleByLabel(onExitContainer, "Delete after run")).not.toBeNull();
     expect(everyContainer.querySelector('[data-test-id="cron-schedule-kind-on-exit"]')).toBeNull();
     const onExitFormChange = vi.fn();
@@ -938,11 +937,8 @@ describe("cron view editor", () => {
     }
     expect(onRemove).toHaveBeenCalledWith(job);
 
-    expect(
-      container
-        .querySelector('[data-test-id="cron-detail-tab-settings"]')
-        ?.getAttribute("aria-selected"),
-    ).toBe("true");
+    const settingsTab = container.querySelector('[data-test-id="cron-detail-tab-settings"]');
+    expect(settingsTab?.getAttribute("aria-selected")).toBe("true");
     container
       .querySelector('[data-test-id="cron-detail-tab-history"]')
       ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
@@ -1026,9 +1022,8 @@ describe("cron view editor", () => {
     });
     expect(container.querySelector(".cron-run-entry")).not.toBeNull();
     expect(container.querySelector(".cron-editor")).toBeNull();
-    expect(
-      container.querySelector('[data-test-id="cron-detail-description"]')?.textContent,
-    ).toContain(job.description);
+    const description = container.querySelector('[data-test-id="cron-detail-description"]');
+    expect(description?.textContent).toContain(job.description);
   });
 
   it("shows the paused switch state for disabled jobs", () => {
@@ -1069,6 +1064,11 @@ describe("cron view editor", () => {
     expect(model.querySelector('wa-option[value="openai/gpt-5.2"]')).not.toBeNull();
     expect(model.querySelector('[data-provider-icon="codex"]')).not.toBeNull();
     expect(container.querySelector<HTMLInputElement>("#cron-payload-model")?.hidden).toBe(true);
+    // The inherit option must resolve to a real catalog string — a missing key
+    // renders the raw "common.default" literal to every locale.
+    const inheritText = model.querySelector('wa-option[value=""]')?.textContent ?? "";
+    expect(inheritText).toContain("Default");
+    expect(inheritText).not.toContain("common.default");
   });
 });
 

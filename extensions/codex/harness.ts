@@ -11,7 +11,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { completeWithPreparedSimpleCompletionModel } from "openclaw/plugin-sdk/simple-completion-runtime";
 import type { CodexAppServerBindingStore } from "./src/app-server/session-binding.js";
-import type { CodexSessionCatalogControl } from "./src/session-catalog-types.js";
+import type { CodexSessionCatalogControlFactory } from "./src/session-catalog-types.js";
 
 // `codex` is legacy input only until Part 2 doctor migration rewrites stored refs.
 // New runtime identity uses the `openai` provider.
@@ -48,6 +48,7 @@ const CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES = [
 ] as const satisfies readonly ContextEngineHostCapability[];
 
 type CodexAppServerAgentHarness = AgentHarnessV2 & {
+  cloudPlacement?: { mode: "remote-exec" };
   compactAfterContextEngine?(
     params: AgentHarnessCompactParams,
   ): Promise<AgentHarnessCompactResult | undefined>;
@@ -105,7 +106,7 @@ export function createCodexAppServerAgentHarness(options: {
   resolveConfig?: () => OpenClawConfig | undefined;
   runtime?: PluginRuntime;
   bindingStore: CodexAppServerBindingStore;
-  sessionCatalogControl?: CodexSessionCatalogControl;
+  sessionCatalogControlFactory?: CodexSessionCatalogControlFactory;
 }): AgentHarnessV2 {
   const harnessRuntimeId = options?.id ?? "codex";
   const normalizedHarnessRuntimeId = harnessRuntimeId.trim().toLowerCase();
@@ -114,12 +115,13 @@ export function createCodexAppServerAgentHarness(options: {
       id.trim().toLowerCase(),
     ),
   );
-  const sessionCatalogControl = options.sessionCatalogControl;
+  const sessionCatalogControlFactory = options.sessionCatalogControlFactory;
   const sessionRuntime = options.runtime;
   const harness: CodexAppServerAgentHarness = {
     id: harnessRuntimeId,
     label: options?.label ?? "Codex agent harness",
     autoSelection: { providerIds: [...providerIds] },
+    cloudPlacement: { mode: "remote-exec" },
     delegatedExecutionPluginIds: ["voice-call"],
     contextEngineHostCapabilities: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES,
     conversationToolPolicySupport: "exact",
@@ -128,7 +130,7 @@ export function createCodexAppServerAgentHarness(options: {
       visibleReplies: "message_tool",
     },
     authBootstrap: "harness",
-    ...(sessionCatalogControl && sessionRuntime
+    ...(sessionCatalogControlFactory && sessionRuntime
       ? {
           sessionFork: {
             upstreamKinds: ["codex-app-server"] as const,
@@ -137,7 +139,7 @@ export function createCodexAppServerAgentHarness(options: {
                 await import("./src/app-server/upstream-session-fork.js");
               return await forkCodexUpstreamSession(params, {
                 bindingStore: options.bindingStore,
-                control: sessionCatalogControl,
+                controlFactory: sessionCatalogControlFactory,
                 harnessRuntimeId,
                 resolveConfig: options.resolveConfig,
                 runtime: sessionRuntime,

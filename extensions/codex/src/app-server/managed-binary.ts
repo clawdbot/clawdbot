@@ -13,16 +13,12 @@ import { MANAGED_CODEX_APP_SERVER_PACKAGE } from "./version.js";
 
 const CODEX_APP_SERVER_MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const CODEX_PLUGIN_ROOT = resolveDefaultCodexPluginRoot(CODEX_APP_SERVER_MODULE_DIR);
+let registeredCodexPluginRoot: string | undefined;
 // ChatGPT.app is the current desktop owner; keep Codex.app as the legacy fallback.
 const MACOS_DESKTOP_CODEX_APP_SERVER_COMMANDS = [
   "/Applications/ChatGPT.app/Contents/Resources/codex",
   "/Applications/Codex.app/Contents/Resources/codex",
 ] as const;
-
-type ManagedCodexAppServerPaths = {
-  commandPath: string;
-  candidateCommandPaths: string[];
-};
 
 type ResolveManagedCodexAppServerOptions = {
   platform?: NodeJS.Platform;
@@ -37,6 +33,11 @@ type ResolveManagedCodexNativeCommandOptions = {
   resolvePackageJson?: (packageName: string, root: string) => string | undefined;
 };
 
+/** Records the process-stable plugin root prepared by OpenClaw's plugin loader. */
+export function setManagedCodexPluginRoot(pluginRoot: string | undefined): void {
+  registeredCodexPluginRoot = pluginRoot;
+}
+
 /** Rewrites managed stdio start options to point at an executable Codex binary path. */
 export async function resolveManagedCodexAppServerStartOptions(
   startOptions: CodexAppServerStartOptions,
@@ -47,14 +48,14 @@ export async function resolveManagedCodexAppServerStartOptions(
   }
 
   const platform = options.platform ?? process.platform;
-  const paths = resolveManagedCodexAppServerPaths({
+  const candidateCommandPaths = resolveManagedCodexAppServerCommandCandidates(
+    options.pluginRoot ?? registeredCodexPluginRoot ?? CODEX_PLUGIN_ROOT,
     platform,
-    pluginRoot: options.pluginRoot,
-    managedCommandOrder: startOptions.managedCommandOrder,
-  });
+    startOptions.managedCommandOrder ?? "package-first",
+  );
   const pathExists = options.pathExists ?? commandPathExists;
   const commandPaths = await findManagedCodexAppServerCommandPaths({
-    candidateCommandPaths: paths.candidateCommandPaths,
+    candidateCommandPaths,
     pathExists,
     platform,
   });
@@ -176,24 +177,6 @@ function resolvePackageJsonFromRoot(packageName: string, root: string): string |
   } catch {
     return undefined;
   }
-}
-
-/** Returns the preferred and fallback managed Codex binary paths for a plugin root. */
-function resolveManagedCodexAppServerPaths(params: {
-  platform?: NodeJS.Platform;
-  pluginRoot?: string;
-  managedCommandOrder?: CodexManagedCommandOrder;
-}): ManagedCodexAppServerPaths {
-  const platform = params.platform ?? process.platform;
-  const candidateCommandPaths = resolveManagedCodexAppServerCommandCandidates(
-    params.pluginRoot ?? CODEX_PLUGIN_ROOT,
-    platform,
-    params.managedCommandOrder ?? "package-first",
-  );
-  return {
-    commandPath: candidateCommandPaths[0] ?? "",
-    candidateCommandPaths,
-  };
 }
 
 function resolveManagedCodexAppServerCommandCandidates(

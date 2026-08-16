@@ -127,6 +127,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       settled = true;
     });
 
+    await vi.waitFor(() => expect(emit).toBeTypeOf("function"));
     emit({
       type: "message_start",
       message: queuedMessage,
@@ -173,6 +174,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     const rejection = expect(failedWait).rejects.toThrow("SQLite transcript append failed");
 
     try {
+      await vi.waitFor(() => expect(listeners).toHaveLength(2));
       reportSteeringMessagePersistenceFailure(
         failedMessage,
         new Error("SQLite transcript append failed"),
@@ -283,10 +285,11 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       "active session ended before queued steering message was committed to the transcript",
     );
 
-    emit({ type: "agent_end", messages: [] });
-    await vi.advanceTimersByTimeAsync(0);
-
     try {
+      await vi.waitFor(() => expect(emit).toBeTypeOf("function"));
+      emit({ type: "agent_end", messages: [] });
+      await vi.advanceTimersByTimeAsync(0);
+
       await rejection;
       expect(queueMessages).toEqual([keepMessage]);
       expect(retireDisplay).toHaveBeenCalledOnce();
@@ -329,11 +332,12 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       "active session ended before queued steering message was committed to the transcript",
     );
 
-    emit({ type: "agent_end", messages: [] });
-    await vi.advanceTimersByTimeAsync(0);
-    releasePreparation();
-
     try {
+      await vi.waitFor(() => expect(emit).toBeTypeOf("function"));
+      emit({ type: "agent_end", messages: [] });
+      await vi.advanceTimersByTimeAsync(0);
+      releasePreparation();
+
       await rejection;
       await vi.advanceTimersByTimeAsync(0);
       expect(enqueued).toBe(false);
@@ -370,6 +374,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       settled = true;
     });
 
+    await vi.waitFor(() => expect(emit).toBeTypeOf("function"));
     emit({ type: "message_end", message: second });
     await Promise.resolve();
     expect(settled).toBe(false);
@@ -518,6 +523,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
         waitForTranscriptCommit: true,
       });
 
+      await vi.waitFor(() => expect(emit).toBeTypeOf("function"));
       emit({ type: "agent_end", messages: [] });
       emit({ type: "auto_retry_start", attempt: 1, maxAttempts: 3, delayMs: 1_000 });
       await vi.advanceTimersByTimeAsync(0);
@@ -560,6 +566,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
 
       const wait = steerWithDeliveryWait(activeSession, "completion survives compaction");
 
+      await vi.waitFor(() => expect(emit).toBeTypeOf("function"));
       emit({ type: "agent_end", messages: [] });
       emit({ type: "compaction_start", reason: "threshold" });
       await vi.advanceTimersByTimeAsync(0);

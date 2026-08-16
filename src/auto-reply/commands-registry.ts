@@ -79,9 +79,13 @@ function resolveNativeName(
   );
 }
 
-function toNativeCommandSpec(command: ChatCommandDefinition, provider?: string): NativeCommandSpec {
+function toNativeCommandSpec(
+  command: ChatCommandDefinition,
+  provider?: string,
+  options?: NativeCommandProviderLookupOptions,
+): NativeCommandSpec {
   const spec: NativeCommandSpec = {
-    name: resolveNativeName(command, provider) ?? command.key,
+    name: resolveNativeName(command, provider, options) ?? command.key,
     description: command.description,
     acceptsArgs: Boolean(command.acceptsArgs),
     args: command.args,
@@ -92,8 +96,12 @@ function toNativeCommandSpec(command: ChatCommandDefinition, provider?: string):
   return spec;
 }
 
-function resolveNativeNames(command: ChatCommandDefinition, provider?: string): string[] {
-  const primary = resolveNativeName(command, provider);
+function resolveNativeNames(
+  command: ChatCommandDefinition,
+  provider?: string,
+  options?: NativeCommandProviderLookupOptions,
+): string[] {
+  const primary = resolveNativeName(command, provider, options);
   return [primary, ...(command.nativeAliases ?? [])].filter((name): name is string =>
     Boolean(name),
   );
@@ -115,6 +123,7 @@ function supportsNativeProvider(command: ChatCommandDefinition, provider?: strin
 function listNativeSpecsFromCommands(
   commands: ChatCommandDefinition[],
   provider?: string,
+  options?: NativeCommandProviderLookupOptions,
 ): NativeCommandSpec[] {
   return commands
     .filter(
@@ -122,8 +131,8 @@ function listNativeSpecsFromCommands(
         command.scope !== "text" && command.nativeName && supportsNativeProvider(command, provider),
     )
     .flatMap((command) => {
-      const spec = toNativeCommandSpec(command, provider);
-      return resolveNativeNames(command, provider).map((name, index) => {
+      const spec = toNativeCommandSpec(command, provider, options);
+      return resolveNativeNames(command, provider, options).map((name, index) => {
         const nativeSpec: NativeCommandSpec = {
           name,
           description: spec.description,
@@ -145,22 +154,32 @@ function listNativeSpecsFromCommands(
 }
 
 /** Lists native command specs registered for a provider, including skill commands. */
-export function listNativeCommandSpecs(params?: {
-  skillCommands?: SkillCommandSpec[];
-  provider?: string;
-}): NativeCommandSpec[] {
+export function listNativeCommandSpecs(
+  params?: {
+    skillCommands?: SkillCommandSpec[];
+    provider?: string;
+  } & NativeCommandProviderLookupOptions,
+): NativeCommandSpec[] {
   return listNativeSpecsFromCommands(
     listChatCommands({ skillCommands: params?.skillCommands }),
     params?.provider,
+    params,
   );
 }
 
 /** Lists native command specs that are enabled for the provided config. */
 export function listNativeCommandSpecsForConfig(
   cfg: OpenClawConfig,
-  params?: { skillCommands?: SkillCommandSpec[]; provider?: string },
+  params?: {
+    skillCommands?: SkillCommandSpec[];
+    provider?: string;
+  } & NativeCommandProviderLookupOptions,
 ): NativeCommandSpec[] {
-  return listNativeSpecsFromCommands(listChatCommandsForConfig(cfg, params), params?.provider);
+  return listNativeSpecsFromCommands(
+    listChatCommandsForConfig(cfg, params),
+    params?.provider,
+    params,
+  );
 }
 
 export function mergeNativeCommandSpecs(params: {

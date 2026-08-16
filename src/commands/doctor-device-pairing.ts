@@ -11,7 +11,7 @@ import { loadDeviceAuthTokens } from "../infra/device-auth-store.js";
 import { loadDeviceIdentityIfPresent } from "../infra/device-identity.js";
 import {
   listApprovedPairedDeviceRoles,
-  listDevicePairing,
+  listDevicePairingReadOnly,
   summarizeDeviceTokens,
   type DeviceAuthTokenSummary,
   type DevicePairingPendingRequest,
@@ -140,7 +140,7 @@ async function loadDoctorPairingSnapshot(params: {
   if (params.cfg.gateway?.mode === "remote") {
     return null;
   }
-  const local = await listDevicePairing();
+  const local = await listDevicePairingReadOnly();
   return {
     pending: local.pending,
     paired: local.paired.map((device) => normalizeLocalPairedDevice(device)),

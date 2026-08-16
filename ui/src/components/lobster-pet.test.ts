@@ -42,8 +42,8 @@ function createPet(seed: number, mode: LobsterPetMode = "idle"): LobsterPetEleme
 
 function poke(element: LobsterPetElement): void {
   const sprite = element.querySelector(".lobster-pet");
-  sprite?.dispatchEvent(new Event("pointerdown"));
-  sprite?.dispatchEvent(new Event("pointerup"));
+  sprite?.dispatchEvent(new MouseEvent("pointerdown", { button: 0 }));
+  sprite?.dispatchEvent(new MouseEvent("pointerup", { button: 0 }));
 }
 
 function spriteClasses(element: LobsterPetElement): string {
@@ -311,15 +311,51 @@ describe("lobster pet element", () => {
     expect(getLobsterdexEntries().get(look.palette.id)?.name).toBeTruthy();
   });
 
-  it("right-click shoos it away for the rest of the load", async () => {
+  it("anchors the dismiss menu at the raw pointer position with a top-start placement", async () => {
     vi.useFakeTimers();
     const element = createPet(42);
     await arrive(element);
 
-    const shoo = new Event("contextmenu", { cancelable: true });
-    element.querySelector(".lobster-pet")?.dispatchEvent(shoo);
+    // Coordinates deliberately exceed a guessed 264x80 pre-clamp: a
+    // reintroduced clamp would move the trigger away from these exact values.
+    const clientX = 1200;
+    const clientY = 850;
+    element
+      .querySelector(".lobster-pet")
+      ?.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX, clientY }),
+      );
+    await element.updateComplete;
+
+    const dropdown = element.querySelector(".lobster-pet-dismiss-menu");
+    expect(dropdown?.getAttribute("placement")).toBe("top-start");
+    const trigger = element.querySelector<HTMLElement>('[slot="trigger"]');
+    expect(trigger?.style.left).toBe(`${clientX}px`);
+    expect(trigger?.style.top).toBe(`${clientY}px`);
+  });
+
+  it("offers a temporary dismissal from the right-click menu", async () => {
+    vi.useFakeTimers();
+    const element = createPet(42);
+    await arrive(element);
+
+    const sprite = element.querySelector(".lobster-pet");
+    sprite?.dispatchEvent(new MouseEvent("pointerdown", { button: 2 }));
+    const shoo = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    sprite?.dispatchEvent(shoo);
+    sprite?.dispatchEvent(new MouseEvent("pointerup", { button: 2 }));
     await element.updateComplete;
     expect(shoo.defaultPrevented).toBe(true);
+    expect(spritePresent(element)).toBe(true);
+    expect(spriteClasses(element)).not.toContain("lobster-pet--act-startle");
+    expect(
+      [...element.querySelectorAll(".lobster-pet-dismiss-menu wa-dropdown-item")].map((item) =>
+        item.textContent?.trim(),
+      ),
+    ).toEqual(["Dismiss", "Dismiss and don't show again"]);
+
+    element.querySelector<HTMLElement>('wa-dropdown-item[value="dismiss"]')?.click();
+    await element.updateComplete;
 
     const gone = await advanceUntil(element, () => !spritePresent(element), 5_000);
     expect(gone).toBe(true);
@@ -330,6 +366,31 @@ describe("lobster pet element", () => {
     element.mode = "offline";
     await element.updateComplete;
     expect(spritePresent(element)).toBe(false);
+  });
+
+  it("persists permanent dismissal in browser storage", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("localStorage", window.localStorage);
+    const element = createPet(42);
+    await arrive(element);
+
+    element
+      .querySelector(".lobster-pet")
+      ?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    await element.updateComplete;
+    element.querySelector<HTMLElement>('wa-dropdown-item[value="dismiss-permanently"]')?.click();
+    await element.updateComplete;
+
+    const persistedSettings = Array.from({ length: localStorage.length }, (_, index) => {
+      const raw = localStorage.getItem(localStorage.key(index) ?? "");
+      try {
+        return raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+      } catch {
+        return {};
+      }
+    });
+    expect(persistedSettings).toContainEqual(expect.objectContaining({ lobsterPetVisits: false }));
+    expect(await advanceUntil(element, () => !spritePresent(element), 5_000)).toBe(true);
   });
 
   it("never shows when visits are disabled, offline included", async () => {
@@ -413,6 +474,8 @@ describe("lobster pet element", () => {
     element
       .querySelector(".lobster-pet:not(.lobster-pet--shell)")
       ?.dispatchEvent(new Event("contextmenu", { cancelable: true }));
+    await element.updateComplete;
+    element.querySelector<HTMLElement>('wa-dropdown-item[value="dismiss"]')?.click();
     await element.updateComplete;
     const raw = JSON.parse(
       localStorage.getItem("openclaw.control.lobsterpet.familiarity.v1") ?? "{}",

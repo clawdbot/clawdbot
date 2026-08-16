@@ -24,6 +24,9 @@ async function withIsolatedLifecycleState(
     vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
     resetConfigRuntimeState();
     await run({ agentDir });
+    await expect(fs.access(path.join(stateDir, "state", "openclaw.sqlite"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 }
 

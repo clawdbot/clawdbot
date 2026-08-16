@@ -220,7 +220,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
               : undefined,
           workspaceOnly: options.applyPatchWorkspaceOnly,
           memoryWriteProvenance: options.memoryWriteProvenance,
-        }) as unknown as AnyAgentTool,
+        }),
       );
     }
     shell.push(
@@ -244,7 +244,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
               finalizeExec: sandbox.backend?.finalizeExec?.bind(sandbox.backend),
             }
           : undefined,
-      }) as unknown as AnyAgentTool,
+      }),
       createLazyProcessTool(options.processDefaults),
     );
   }

@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
@@ -33,6 +34,44 @@ async function withNewSessionPage(run: (page: Page) => Promise<void>): Promise<v
 }
 
 suite.define(() => {
+  it("restores prompt text and files after navigating away and back", async () => {
+    await withNewSessionPage(async (page) => {
+      const sessionKey = "agent:main:existing-session";
+      await installMockGateway(page, {
+        methodResponses: {
+          "sessions.list": createdSessionListResult(sessionKey),
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const existingSession = page
+        .locator(".sidebar-recent-session")
+        .filter({ hasText: "Created session" });
+      await existingSession.waitFor();
+      await page.locator(".sidebar-brand__new-thread").click();
+      await page.waitForURL((url) => url.pathname.endsWith("/new") && url.search === "?agent=main");
+
+      const message = page.locator(".new-session-page__message");
+      await message.fill("keep this new session draft");
+      await page
+        .locator(".agent-chat__photo-input")
+        .setInputFiles(path.join(process.cwd(), "ui/public/favicon-32.png"));
+      await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
+      await captureUiProof(page, "new-session-draft-before-navigation.png");
+
+      await existingSession.click();
+      await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey));
+      await page.locator(".sidebar-brand__new-thread").click();
+      await page.waitForURL((url) => url.pathname.endsWith("/new") && url.search === "?agent=main");
+
+      await expect.poll(() => message.inputValue()).toBe("keep this new session draft");
+      await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(1);
+      await expect
+        .poll(() => page.locator(".chat-attachment-thumb img").getAttribute("src"))
+        .toMatch(/^(blob:|data:image\/png;base64,)/u);
+      await captureUiProof(page, "new-session-draft-restored.png");
+    });
+  });
+
   it("grows the first prompt downward without moving the identity, then caps at ten lines", async () => {
     await withNewSessionPage(async (page) => {
       const gateway = await installMockGateway(page);
@@ -69,6 +108,7 @@ suite.define(() => {
           padding: Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom),
           scrollbarWidth: style.scrollbarWidth,
           webkitScrollbarWidth: getComputedStyle(element, "::-webkit-scrollbar").width,
+          webkitThumbInset: getComputedStyle(element, "::-webkit-scrollbar-thumb").borderLeftWidth,
         };
       });
 
@@ -78,7 +118,14 @@ suite.define(() => {
       );
       expect(tenLines.overflowY).toBe("hidden");
       expect(tenLines.scrollbarWidth).toBe("thin");
-      expect(Number.parseFloat(tenLines.webkitScrollbarWidth)).toBeLessThanOrEqual(6);
+      // The composer used to buy thinness by shrinking its hit target to 6px.
+      // The canonical profile keeps the full 12px drag target and paints a 6px
+      // thumb inside it (transparent border + content-box clip), so this asserts
+      // the visible thumb stays as thin as before without a cramped grab area.
+      const composerScrollbar = Number.parseFloat(tenLines.webkitScrollbarWidth);
+      const composerThumbInset = Number.parseFloat(tenLines.webkitThumbInset);
+      expect(composerScrollbar).toBe(12);
+      expect(composerScrollbar - composerThumbInset * 2).toBe(6);
       await captureUiProof(page, "new-session-composer-ten-lines.png");
 
       const longPrompt = Array.from({ length: 14 }, (_, index) => `line ${index + 1}`).join("\n");
@@ -149,7 +196,7 @@ suite.define(() => {
     });
   });
 
-  it("previews and removes a picked image without object URL support", async () => {
+  it("enlarges and removes a picked image without object URL support", async () => {
     await withNewSessionPage(async (page) => {
       await page.addInitScript(() => {
         Object.defineProperty(URL, "createObjectURL", { configurable: true, value: undefined });
@@ -163,12 +210,46 @@ suite.define(() => {
 
       const attachment = page.locator(".chat-attachment-thumb");
       const preview = attachment.locator('img[alt="Attachment preview"]');
+      const previewButton = page.getByRole("button", { name: "Open image favicon-32.png" });
       await preview.waitFor({ state: "visible" });
       await expect.poll(() => preview.getAttribute("src")).toMatch(/^data:image\/png;base64,/u);
       await captureUiProof(page, "new-session-picked-image-preview.png");
+      await previewButton.click();
+      const lightbox = page.locator("openclaw-image-lightbox");
+      const dialog = page.getByRole("dialog", { name: "Image preview: favicon-32.png" });
+      await dialog.waitFor({ state: "visible" });
+      await expect(lightbox.getAttribute("title")).resolves.toBe("favicon-32.png");
+      await captureUiProof(page, "new-session-picked-image-lightbox.png");
+      await page.keyboard.press("Escape");
+      await lightbox.waitFor({ state: "detached" });
+      await previewButton.press("Enter");
+      await dialog.waitFor({ state: "visible" });
+      await page.keyboard.press("Escape");
       await page.getByRole("button", { name: "Remove attachment" }).click();
       await expect.poll(() => attachment.count()).toBe(0);
       await captureUiProof(page, "new-session-picked-image-removed.png");
+    });
+  });
+
+  it("keeps blob-backed SVG previews out of original-document navigation", async () => {
+    await withNewSessionPage(async (page) => {
+      await installMockGateway(page);
+      await page.goto(`${suite.server.baseUrl}new`);
+
+      await page.locator(".agent-chat__photo-input").setInputFiles({
+        name: "untrusted.svg",
+        mimeType: "image/svg+xml",
+        buffer: Buffer.from(
+          "<svg xmlns='http://www.w3.org/2000/svg'><rect width='1' height='1'/></svg>",
+        ),
+      });
+
+      const previewButton = page.getByRole("button", { name: "Open image untrusted.svg" });
+      await expect.poll(() => previewButton.locator("img").getAttribute("src")).toMatch(/^blob:/u);
+      await previewButton.click();
+      await page.getByRole("dialog", { name: "Image preview: untrusted.svg" }).waitFor();
+      await expect(page.getByRole("link", { name: "Open original" }).count()).resolves.toBe(0);
+      await captureUiProof(page, "new-session-svg-lightbox.png");
     });
   });
 
@@ -496,7 +577,7 @@ suite.define(() => {
     });
   });
 
-  it("releases pasted image previews after remove, reset, disconnect, and success", async () => {
+  it("releases pasted image previews after remove, reset, restored removal, and success", async () => {
     await withNewSessionPage(async (page) => {
       await page.addInitScript(() => {
         const createObjectURL = URL.createObjectURL.bind(URL);
@@ -588,10 +669,13 @@ suite.define(() => {
       await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
       await navigate("chat");
       await page.waitForURL((url) => url.pathname.endsWith("/chat"));
-      await expect.poll(async () => (await proof()).revoked).toBe(3);
+      await expect.poll(async () => (await proof()).revoked).toBe(2);
 
       await navigate("new-session");
       await composer.waitFor();
+      await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(1);
+      await page.getByRole("button", { name: "Remove attachment" }).click();
+      await expect.poll(async () => (await proof()).revoked).toBe(3);
       await pastePng(composer);
       await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
       await page.getByRole("button", { name: "Start session" }).click();

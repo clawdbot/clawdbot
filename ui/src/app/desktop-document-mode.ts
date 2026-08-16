@@ -4,8 +4,9 @@ const DESKTOP_DOCUMENT_PATH = "/desktop";
 
 type DesktopDocumentLocation = Pick<Location, "pathname" | "search">;
 
-type DesktopDocumentOptions = {
+export type DesktopDocumentOptions = {
   source: string | null;
+  session: string | null;
   control: boolean;
 };
 
@@ -33,6 +34,7 @@ export function desktopDocumentOptions(
   const search = new URLSearchParams(location?.search ?? "");
   return {
     source: search.get("source"),
+    session: search.get("session"),
     control: search.get("control") === "1",
   };
 }

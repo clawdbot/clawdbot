@@ -9,11 +9,10 @@ import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-
 import { createSessionCatalogRequestEntrySnapshot } from "./session-catalog-entry-snapshot.js";
 import type { GatewayClient } from "./types.js";
 
-type SessionCatalogVisibility = {
-  cacheKey: string;
-  profileId?: string;
-  restricted: boolean;
-};
+type SessionCatalogVisibility =
+  | { cacheKey: string; kind: "unrestricted" }
+  | { cacheKey: string; kind: "restricted-unprofiled" }
+  | { cacheKey: string; kind: "restricted-owner"; ownerProfileId: string };
 
 export function resolveSessionCatalogVisibility(
   client: GatewayClient | null,
@@ -22,26 +21,31 @@ export function resolveSessionCatalogVisibility(
   const admin = authorizeOperatorScopesForRequiredScope(ADMIN_SCOPE, scopes).allowed;
   const multipleIdentities = hasMultipleSessionSharingIdentities();
   const profileId = client?.authenticatedUserProfile?.profileId;
-  return {
-    cacheKey: JSON.stringify({ admin, multipleIdentities, profileId: profileId ?? null }),
-    ...(profileId ? { profileId } : {}),
-    restricted: multipleIdentities && !admin,
-  };
+  const cacheKey = JSON.stringify({ admin, multipleIdentities, profileId: profileId ?? null });
+  if (!multipleIdentities || admin) {
+    return { cacheKey, kind: "unrestricted" };
+  }
+  return profileId
+    ? { cacheKey, kind: "restricted-owner", ownerProfileId: profileId }
+    : { cacheKey, kind: "restricted-unprofiled" };
 }
 
 export function filterSessionCatalogHost(
   host: SessionCatalogHost,
   visibility: SessionCatalogVisibility,
 ): SessionCatalogHost {
-  if (!visibility.restricted) {
+  if (visibility.kind === "unrestricted") {
     return host;
+  }
+  if (visibility.kind === "restricted-unprofiled") {
+    return { ...host, sessions: [] };
   }
   return {
     ...host,
     sessions: host.sessions.filter((session) => {
       // No sessionKey means the provider cannot link this host-owned CLI row to an adopted
       // OpenClaw session. Keep it private from non-admin callers on multi-identity Gateways.
-      return session.createdActor?.id === visibility.profileId;
+      return session.createdActor?.id === visibility.ownerProfileId;
     }),
   };
 }
@@ -53,11 +57,15 @@ export async function isSessionCatalogThreadVisible(params: {
   hostId: string;
   list: SessionCatalogProvider["list"];
   listNodes: NonNullable<SessionCatalogListProviderParams["listNodes"]>;
+  sourceHomeId?: string;
   threadId: string;
   visibility: SessionCatalogVisibility;
 }): Promise<boolean> {
-  if (!params.visibility.restricted) {
+  if (params.visibility.kind === "unrestricted") {
     return true;
+  }
+  if (params.visibility.kind === "restricted-unprofiled") {
+    return false;
   }
   const requestEntries = createSessionCatalogRequestEntrySnapshot({
     cfg: params.config,
@@ -67,6 +75,7 @@ export async function isSessionCatalogThreadVisible(params: {
   let cursor: string | undefined;
   while (true) {
     const hosts = await params.list({
+      agentId: params.fallbackAgentId,
       allowProcessHomeFallback: params.allowProcessHomeFallback,
       hostIds: [params.hostId],
       ...(cursor ? { cursors: { [params.hostId]: cursor } } : {}),
@@ -78,9 +87,13 @@ export async function isSessionCatalogThreadVisible(params: {
       return false;
     }
     const projected = requestEntries.projectHostCreatedActors(host);
-    const session = projected.sessions.find((candidate) => candidate.threadId === params.threadId);
+    const session = projected.sessions.find(
+      (candidate) =>
+        candidate.threadId === params.threadId &&
+        (!params.sourceHomeId || candidate.sourceHomeId === params.sourceHomeId),
+    );
     if (session) {
-      return session.createdActor?.id === params.visibility.profileId;
+      return session.createdActor?.id === params.visibility.ownerProfileId;
     }
     const nextCursor = host.nextCursor;
     if (!nextCursor || seenCursors.has(nextCursor)) {

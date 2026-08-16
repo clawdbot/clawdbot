@@ -24,6 +24,14 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Maximum time in milliseconds allowed for shell environment resolution before fallback behavior applies. Use tighter timeouts for faster startup, or increase when shell initialization is heavy.",
   "env.vars":
     "Explicit key/value environment variable overrides merged into runtime process environment for OpenClaw. Use this for deterministic env configuration instead of relying only on shell profile side effects.",
+  secrets:
+    "Secret reference providers, shared-store behavior, and optional subprocess egress protection.",
+  "secrets.egressProxy":
+    "Gateway-owned loopback proxy that replaces shared-store secret sentinels only at outbound request time. Restart the Gateway after changing this startup-scoped section.",
+  "secrets.egressProxy.enabled":
+    "Enables secret egress substitution for Gateway-hosted agent subprocesses. Default: false.",
+  "secrets.egressProxy.bypassHosts":
+    "Exact hostnames that use authenticated blind CONNECT tunnels for certificate-pinned clients. Sentinels remain ciphertext and will fail vendor authentication instead of exposing plaintext.",
   wizard:
     "User-owned setup preferences. Machine-owned wizard history and acknowledgement state live in the shared state database.",
   "wizard.accessMode":
@@ -330,9 +338,9 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "agents.defaults.authInheritance.agentId":
     "Agent whose legacy credential store remains the inheritance source after default-marker retirement. Written automatically during upgrade when the former owner was not main.",
   "agents.defaults.sessionStore":
-    "Upgrade compatibility owner for a fixed legacy session store until its SQLite database records ownership.",
+    "Upgrade compatibility owner for retired main-agent rows and fixed legacy session stores.",
   "agents.defaults.sessionStore.agentId":
-    "Agent that owns unscoped rows in a fixed legacy session store after default-marker retirement. Written automatically during upgrade when the former owner was not main or the sole agent.",
+    "Agent that owns retired main-agent rows or unscoped rows in a fixed legacy session store after default-marker retirement. Written automatically during upgrade when the former owner was not main or the sole agent.",
   "talk.agentId":
     "Agent that owns Talk sessions created without an explicit agent-scoped session key.",
 };

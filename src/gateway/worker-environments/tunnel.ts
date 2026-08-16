@@ -79,7 +79,7 @@ directory=$2
 rm -f -- "$socket"
 rmdir -- "$directory" 2>/dev/null || true
 `;
-const WORKER_LAUNCH_SCRIPT = 'exec node "$HOME/.openclaw-worker/$1/openclaw.mjs" worker';
+const WORKER_LAUNCH_SCRIPT = 'exec node "$HOME/.openclaw-worker/$1/worker.mjs"';
 
 type WorkerTunnelStartRequest = WorkerTunnelRequest & {
   bundleHash: string;
@@ -258,6 +258,7 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
           ),
           timeoutMs: request.timeoutMs,
           signal: request.signal,
+          onDispatchReady: request.onDispatchReady,
         }),
       ...workspace,
       stop: () => stop(entry.environmentId, entry.ownerEpoch),

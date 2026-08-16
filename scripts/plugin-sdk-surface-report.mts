@@ -157,7 +157,12 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "channel-lifecycle": 23,
   // +1: shared ingress error factory projected through the deprecated message barrel.
   // +1: shared ingress retention defaults projected through the deprecated message barrel.
-  "channel-message": 131,
+  // +1: WhatsApp ack-policy bridge counted via channel-message's wildcard re-export.
+  "channel-message": 132,
+  // +2: Slack progress-draft render bridge (function + mode type).
+  "channel-outbound": 2,
+  // +2: WhatsApp ack-policy bridge (function + mode type).
+  "channel-feedback": 2,
   "channel-pairing": 0,
   "channel-policy": 7,
   "channel-send-result": 1,
@@ -189,7 +194,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: dependency-light channel streaming config readers for doctor closures
       //     (realtime-voice-activation is private-local and not counted here).
       // +1: registry-bound plugin command planning and exact selected execution.
-      144,
+      // +1: canonical Computer Use wire contract and node-host provider seam.
+      145,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -272,7 +278,14 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: normalized Gateway public origin resolver for plugin-generated links.
       // -2: retire the dead progress-draft render reader; it counted twice via
       // channel-outbound and channel-message's wildcard re-export of it.
-      4306,
+      // +11: Computer Use schemas/types plus parsers, compiler, and provider registration.
+      // +6: Computer Use v2 action, result, and capability contracts.
+      // +1: opaque channel participant evidence preservation without mint authority.
+      // +6: load-only bridges for published pre-split plugin artifacts
+      //     (voice-call/matrix runtime-doctor repair names, WhatsApp ack policy,
+      //     Slack progress-draft render) so installed plugins survive upgrade (#124041 class).
+      // -1: remove the orphan diagnostic traceparent propagation export.
+      4329,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -341,7 +354,12 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: normalized Gateway public origin resolver for plugin-generated links.
       // -2: retire the dead progress-draft render reader; it counted twice via
       // channel-outbound and channel-message's wildcard re-export of it.
-      2570,
+      // +4: Computer Use wire parsers, validator compiler, and provider registration.
+      // +3: load-only bridges for published pre-split plugin artifacts
+      //     (voice-call/matrix runtime-doctor repair names, WhatsApp ack policy,
+      //     Slack progress-draft render) so installed plugins survive upgrade (#124041 class).
+      // -1: remove the orphan diagnostic traceparent propagation export.
+      2576,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -357,7 +375,10 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +7: restore still-existing deprecated inbound-dispatch compatibility re-exports.
       // +6: source-compatible harness contracts retained during the V2 migration window.
       // +4: shipped default-agent resolver projections retained during explicit-owner migration.
-      1146,
+      // +5: load-only bridges for published pre-split plugin artifacts
+      //     (voice-call/matrix runtime-doctor repair names, WhatsApp ack policy,
+      //     Slack progress-draft render) so installed plugins survive upgrade (#124041 class).
+      1151,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

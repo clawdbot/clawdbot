@@ -10,7 +10,7 @@ type TestPluginRegistry = Omit<PluginRegistry, "sessionCatalogs"> & {
 type TestClient = {
   connect: { scopes: string[] };
   connId?: string;
-  authenticatedUserProfile: { profileId: string };
+  authenticatedUserProfile?: { profileId: string };
 };
 
 const hoisted = vi.hoisted(() => ({
@@ -40,6 +40,10 @@ const { sessionCatalogHandlers } = await import("./session-catalog.js");
 
 function client(profileId: string, scopes = ["operator.read", "operator.write"]): TestClient {
   return { connect: { scopes }, authenticatedUserProfile: { profileId } };
+}
+
+function unprofiledClient(scopes = ["operator.read", "operator.write"]): TestClient {
+  return { connect: { scopes } };
 }
 
 function session(threadId: string, sessionKey?: string) {
@@ -197,6 +201,57 @@ describe("session catalog caller visibility", () => {
     expect(archive).not.toHaveBeenCalled();
   });
 
+  it("hides every row from an unprofiled multi-identity caller", async () => {
+    hoisted.hasMultipleSessionSharingIdentities.mockReturnValue(true);
+    const listedHost = host([session("unadopted-thread")]);
+    hoisted.activeRegistry.sessionCatalogs = [
+      { provider: provider({ list: vi.fn(async () => [listedHost]) }) },
+    ];
+
+    const listed = await call("sessions.catalog.list", {}, unprofiledClient());
+
+    expect(listed).toHaveBeenCalledWith(true, {
+      catalogs: [
+        expect.objectContaining({
+          hosts: [expect.objectContaining({ sessions: [] })],
+        }),
+      ],
+    });
+  });
+
+  it("rejects reads for an unprofiled multi-identity caller", async () => {
+    hoisted.hasMultipleSessionSharingIdentities.mockReturnValue(true);
+    const read = vi.fn(async () => ({
+      hostId: "gateway:local",
+      threadId: "unadopted-thread",
+      items: [{ type: "userMessage" as const, text: "private host history" }],
+    }));
+    hoisted.activeRegistry.sessionCatalogs = [
+      {
+        provider: provider({
+          list: vi.fn(async () => [host([session("unadopted-thread")])]),
+          read,
+        }),
+      },
+    ];
+
+    const transcript = await call(
+      "sessions.catalog.read",
+      { catalogId: "codex", hostId: "gateway:local", threadId: "unadopted-thread" },
+      unprofiledClient(),
+    );
+
+    expect(transcript).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.FORBIDDEN,
+        message: "session catalog thread is not visible to this caller",
+      }),
+    );
+    expect(read).not.toHaveBeenCalled();
+  });
+
   it.each([
     { label: "admin", multiple: true, scopes: ["operator.admin"] },
     { label: "solo Gateway", multiple: false, scopes: ["operator.read"] },
@@ -314,12 +369,14 @@ describe("session catalog caller visibility", () => {
       host([
         session("alpha-thread", "agent:main:alpha"),
         session("beta-thread", "agent:main:beta"),
+        session("unadopted-thread"),
       ]),
     ]);
     hoisted.activeRegistry.sessionCatalogs = [{ provider: provider({ list }) }];
     const config = {};
 
     const alpha = await call("sessions.catalog.list", {}, client("profile-alpha"), config);
+    const unprofiled = await call("sessions.catalog.list", {}, unprofiledClient(), config);
     const beta = await call("sessions.catalog.list", {}, client("profile-beta"), config);
     const rows = (respond: ReturnType<typeof vi.fn>) =>
       respond.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions.map(
@@ -327,7 +384,8 @@ describe("session catalog caller visibility", () => {
       );
 
     expect(rows(alpha)).toEqual(["alpha-thread"]);
+    expect(rows(unprofiled)).toEqual([]);
     expect(rows(beta)).toEqual(["beta-thread"]);
-    expect(list).toHaveBeenCalledTimes(2);
+    expect(list).toHaveBeenCalledTimes(3);
   });
 });

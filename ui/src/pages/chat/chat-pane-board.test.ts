@@ -15,12 +15,7 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import "./chat-pane.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import {
-  detachPanelToColumn,
-  mergePanelIntoColumn,
-  openSlot,
-  type SidebarLayout,
-} from "./sidebar-layout.ts";
+import { activatePanel, openSlot } from "./sidebar-layout.ts";
 
 type TestChatPane = HTMLElement & {
   boardChatDockSize: { height: number };
@@ -43,12 +38,6 @@ type TestChatPane = HTMLElement & {
   handleBoardDockResize: (
     dock: "bottom" | "left" | "right",
     event: CustomEvent<{ splitRatio: number }>,
-  ) => void;
-  commitSidebarPanelMove: (
-    layout: SidebarLayout,
-    panelId: string,
-    targetSide: "left" | "right",
-    board: ResolvedBoardView,
   ) => void;
   syncChatSidebarForDock: (dock: "bottom" | "hidden" | "left" | "right") => boolean;
   persistBoardSessionView: (patch: { face?: "chat" | "dashboard"; activeTabId?: string }) => void;
@@ -329,53 +318,12 @@ describe("chat pane board shell", () => {
     });
   });
 
-  it("updates the board dock when chat is dragged across sides", () => {
-    const pane = createTestPane();
-    const provider = mockBoardProvider("agent:main:current");
-    pane.boardProvider = provider;
-    const renderedLayout = openSlot({ columns: [] }, "chat", "left");
-    pane.state.sidebarLayout = { columns: [] };
-    const chatPanel = renderedLayout.columns[0]!.panels[0]!;
-    const moved = detachPanelToColumn(renderedLayout, chatPanel.id, "right", 0);
-    const board = { ...pane.resolveBoardView(), dock: "left" as const };
-
-    pane.commitSidebarPanelMove(moved, chatPanel.id, "right", board);
-
-    expect(pane.state.sidebarLayout.columns[0]?.side).toBe("right");
-    expect(pane.resolveBoardView().dock).toBe("right");
-  });
-
-  it("persists the moved panel as the collapsed active panel", () => {
-    const pane = createTestPane();
-    const renderedLayout = openSlot(openSlot({ columns: [] }, "detail"), "discussion");
-    pane.state.sidebarLayout = renderedLayout;
-    const discussionPanel = renderedLayout.columns[1]!.panels[0]!;
-    const moved = mergePanelIntoColumn(
-      renderedLayout,
-      discussionPanel.id,
-      renderedLayout.columns[0]!.id,
-      0,
-    );
-
-    pane.commitSidebarPanelMove(moved, discussionPanel.id, "right", pane.resolveBoardView());
-
-    // The collapsed layout reads this separate selection, so a drag must update it
-    // or the narrow view foregrounds a stale panel after resizing.
-    expect(pane.state.sidebarFocusPanelId).toBe(discussionPanel.id);
-  });
-
   it("activates an existing tabbed chat panel when reopening a side dock", () => {
     const pane = createTestPane();
     const withChat = openSlot(openSlot({ columns: [] }, "chat"), "discussion");
     const chatPanel = withChat.columns[0]!.panels[0]!;
-    const discussionPanel = withChat.columns[1]!.panels[0]!;
-    pane.state.sidebarLayout = mergePanelIntoColumn(
-      withChat,
-      discussionPanel.id,
-      withChat.columns[0]!.id,
-      1,
-    );
-    pane.state.sidebarLayout.columns[0]!.activePanelId = discussionPanel.id;
+    const discussionPanel = withChat.columns[0]!.panels[1]!;
+    pane.state.sidebarLayout = activatePanel(withChat, discussionPanel.id);
 
     expect(pane.syncChatSidebarForDock("right")).toBe(true);
 

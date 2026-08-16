@@ -33,7 +33,9 @@ export type DevicesProps = {
   onDevicePairSetupOpen: () => void;
   onDeviceApprove: (requestId: string) => void;
   onDeviceReject: (requestId: string) => void;
-  onDeviceRotate: (deviceId: string, role: string, scopes?: string[]) => void;
+  /** Carries the row's resolved display name so the rotation outcome names the same
+   *  device the operator just clicked, without rederiving the label precedence. */
+  onDeviceRotate: (device: { id: string; name: string }, role: string, scopes?: string[]) => void;
   onDeviceRevoke: (deviceId: string, role: string) => void;
   onNodeApprove: (requestId: string) => void;
   onNodeReject: (requestId: string) => void;

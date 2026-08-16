@@ -185,6 +185,7 @@ shown:
       mode: "enforce", // "enforce" applies cleanup; "warn" only reports
       pruneAfter: "30d",
       maxEntries: 500,
+      preserveRecent: "7d", // optional; false or omitted disables
     },
   },
 }
@@ -196,12 +197,14 @@ Session store reads do not prune or cap entries during Gateway startup, so
 startup and isolated cron sessions do not pay for a full store cleanup.
 `openclaw sessions cleanup --enforce` applies the cap immediately.
 
-`maxEntries` counts only eviction-eligible session rows. Protected rows -
-archived or pinned sessions, active or admitted work, model-locked sessions,
-and durable external conversation pointers - stay outside that allowance, so
-the total stored row count can exceed `maxEntries`. Cleanup does not unprotect
-those rows; unarchive, unpin, or explicitly delete sessions you no longer want
-to retain.
+`maxEntries` counts every live session row. Archived or pinned sessions, active
+or admitted work, model-locked sessions, and durable external conversation
+pointers are protected from automatic eviction, but still consume the cap.
+Cleanup removes the oldest unprotected rows until it reaches `maxEntries` or
+runs out of eligible victims. The total can therefore remain above the cap when
+protected rows alone exceed it or active work temporarily blocks eviction.
+Cleanup does not unprotect those rows; unarchive, unpin, wait for active work to
+finish, or explicitly delete sessions you no longer want to retain.
 
 Gateway model-run probe sessions are short-lived by default. Rows matching
 `agent:*:explicit:model-run-<uuid>` use fixed `24h` retention, but cleanup is
@@ -213,6 +216,18 @@ ACP, and sub-agent sessions do not inherit this 24h retention.
 Maintenance preserves durable external conversation pointers, including group
 sessions and thread-scoped chat sessions, while still allowing synthetic cron,
 hook, heartbeat, ACP, and sub-agent entries to age out.
+
+Shared or high-volume installations can set `preserveRecent` to protect
+recently active interactive sessions and every SQLite history generation owned
+by those sessions. The option is disabled when omitted or set to `false`, so
+personal installations keep the normal oldest-first policy. Synthetic
+model-run, cron, hook, heartbeat, ACP, and sub-agent sessions remain eligible
+for bounded cleanup. Protection can temporarily keep the store above its entry
+or disk target; it expires after the configured inactivity window.
+
+Recent-session protection does not archive sessions or change managed-worktree
+garbage collection. Archiving remains an explicit user action for sessions that
+should stay on the permanent shelf.
 
 Archived and pinned sessions are user-protected and exempt from every automatic
 maintenance path, including age pruning, entry caps, model-run cleanup, and

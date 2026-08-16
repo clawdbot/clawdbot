@@ -19,13 +19,6 @@ import type { WorkerEnvironmentStore } from "./store.js";
 export type { WorkerConnectionIdentity } from "./connection-identity.js";
 export type { ExpectedWorkerBuild } from "../../worker/worker-build-identity.js";
 
-/** Local-install receipts pin the node's paired-machine claim instead of Gateway bundle bytes. */
-export function resolveLocalWorkerBuild(
-  receipt: (WorkerAdmissionHandshake & { installKind?: "bundle" | "local" }) | null | undefined,
-): ExpectedWorkerBuild | undefined {
-  return receipt?.installKind === "local" ? receipt : undefined;
-}
-
 /** True only for bundles that accept the exact admitted execution carrier. */
 export function supportsWorkerExecutionContextLaunch(
   handshake: Pick<WorkerAdmissionHandshake, "protocolFeatures"> | null | undefined,

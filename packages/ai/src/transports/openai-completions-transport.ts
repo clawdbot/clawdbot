@@ -34,6 +34,7 @@ import {
 import {
   failTransportStream,
   finalizeTransportStream,
+  type WritableTransportStream,
   withProviderResponseHook,
 } from "./transport-stream-shared.js";
 
@@ -173,7 +174,7 @@ function buildOpenAICompletionsClientConfig(
 export function createOpenAICompletionsTransportStreamFn(): StreamFn {
   return (model, context, options) => {
     const eventStream = createAssistantMessageEventStream();
-    const stream = eventStream as unknown as { push(event: unknown): void; end(): void };
+    const stream = eventStream as unknown as WritableTransportStream;
     void (async () => {
       const output: MutableAssistantOutput = {
         role: "assistant" as const,
@@ -293,6 +294,6 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
         firstEventAbort?.dispose();
       }
     })();
-    return eventStream as unknown as ReturnType<StreamFn>;
+    return eventStream;
   };
 }

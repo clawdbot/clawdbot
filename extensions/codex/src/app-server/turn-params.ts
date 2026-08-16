@@ -10,6 +10,7 @@ import type {
   CodexSandboxPolicy,
   CodexTurnEnvironmentParams,
   CodexTurnStartParams,
+  CodexUserInput,
 } from "./protocol.js";
 import { readCodexSupportedReasoningEfforts } from "./reasoning-effort.js";
 import {
@@ -57,6 +58,7 @@ export function buildTurnStartParams(
     cwd: string;
     appServer: CodexAppServerRuntimeOptions;
     promptText?: string;
+    explicitSkillInputs?: Array<Extract<CodexUserInput, { type: "skill" }>>;
     sandboxPolicy?: CodexSandboxPolicy;
     environmentSelection?: CodexTurnEnvironmentParams[];
     model?: string | null;
@@ -87,7 +89,13 @@ export function buildTurnStartParams(
     : undefined;
   return {
     threadId: options.threadId,
-    input: buildCodexUserInput(options.promptText ?? params.prompt, params.images),
+    // codex-rs/app-server-protocol/src/protocol/v2/turn.rs:292-324 at 91d6f48992ad defines
+    // UserInput::Skill; skills/src/selection.rs:60-92 blocks those names from duplicate text
+    // selection while leaving unmatched Codex-native-only names scannable.
+    input: [
+      ...buildCodexUserInput(options.promptText ?? params.prompt, params.images),
+      ...(options.explicitSkillInputs ?? []),
+    ],
     ...(additionalContext ? { additionalContext } : {}),
     cwd: options.cwd,
     approvalPolicy: options.appServer.approvalPolicy,

@@ -197,6 +197,29 @@ describe("terminal gateway policy", () => {
     expect(respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
   });
 
+  it("reports a missing explicit owner as invalid request", async () => {
+    const { opts, sessions, respond, resolveTerminalLaunchPolicy } = makeOpts(
+      { cols: 80, rows: 24 },
+      { enabled: true },
+    );
+    resolveTerminalLaunchPolicy.mockReturnValue({
+      ok: false,
+      block: { kind: "owner-required", message: "terminal requires an explicit owner" },
+    });
+
+    await expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
+
+    expect(sessions.open).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "terminal requires an explicit owner",
+      }),
+    );
+  });
+
   it("opens a provider-built local resume plan and returns its title", async () => {
     const openTerminal = vi.fn(async () => ({
       kind: "local" as const,
@@ -231,6 +254,7 @@ describe("terminal gateway policy", () => {
     await expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
 
     expect(openTerminal).toHaveBeenCalledWith({
+      agentId: "main",
       allowProcessHomeFallback: false,
       hostId: "gateway:local",
       threadId: "thread",

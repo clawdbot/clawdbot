@@ -16,6 +16,7 @@ export type BrowserDownloadCaptureOptions = {
   mode?: "passive" | "explicit";
   outputPath?: string;
   outputRoot?: string;
+  signal?: AbortSignal;
   timeoutMessage?: string;
 };
 
@@ -85,6 +86,7 @@ export function createDownloadCaptureForPage(
   let depthReleased = false;
   let timer: NodeJS.Timeout | undefined;
   let handler: ((download: unknown) => void) | undefined;
+  let abort = () => {};
 
   const cleanup = () => {
     if (!depthReleased) {
@@ -99,6 +101,7 @@ export function createDownloadCaptureForPage(
       page.off("download", handler as never);
       handler = undefined;
     }
+    opts.signal?.removeEventListener("abort", abort);
   };
 
   const promise = new Promise<BrowserDownloadResult>((resolve, reject) => {
@@ -123,6 +126,19 @@ export function createDownloadCaptureForPage(
       Math.max(1, timeoutMs),
     );
     timer.unref?.();
+    abort = () => {
+      if (done) {
+        return;
+      }
+      done = true;
+      cleanup();
+      const reason = opts.signal?.reason;
+      reject(reason instanceof Error ? reason : new Error("Download wait was cancelled"));
+    };
+    opts.signal?.addEventListener("abort", abort, { once: true });
+    if (opts.signal?.aborted) {
+      abort();
+    }
   });
 
   return {

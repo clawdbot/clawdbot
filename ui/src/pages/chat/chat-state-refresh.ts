@@ -3,13 +3,10 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
-import {
-  areUiSessionKeysEquivalent,
-  resolveUiDefaultAgentId,
-} from "../../lib/sessions/session-key.ts";
+import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { refreshChatAvatar, resolveAgentIdForSession } from "./chat-avatar.ts";
 import { applyRemoteSlashCommandsResult, refreshSlashCommands } from "./chat-commands.ts";
-import { loadChatHistory, type ChatMetadataResult, type ChatState } from "./chat-history.ts";
+import { loadChatHistory, type ChatMetadataResult } from "./chat-history.ts";
 import { flushChatQueueForEvent } from "./chat-send-actions.ts";
 import { flushChatQueueAfterIdleSessionReconciliation } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -181,11 +178,12 @@ async function refreshCompatibilityModelCatalog(
   request: ChatMetadataRequest,
   opts?: { refresh?: boolean },
 ) {
-  const agentId = canUseCompatibilityModelCatalog(request.host, request.agentId)
-    ? undefined
-    : request.agentId?.trim() || undefined;
+  const agentId = request.agentId?.trim();
+  if (!agentId) {
+    return;
+  }
   const models = await loadModels(request.client, {
-    ...(agentId ? { agentId } : {}),
+    agentId,
     ...(opts?.refresh ? { refresh: true } : { preparedOnly: true }),
   });
   if (ownsChatMetadataRequest(request)) {
@@ -200,13 +198,6 @@ async function refreshCompatibilityCommands(request: ChatMetadataRequest) {
     agentId: request.agentId,
     shouldApply: () => ownsChatMetadataRequest(request),
   });
-}
-
-function canUseCompatibilityModelCatalog(
-  host: ChatPageHost,
-  agentId: string | null | undefined,
-): boolean {
-  return agentId === resolveUiDefaultAgentId(host);
 }
 
 async function refreshMissingChatMetadata(
@@ -250,7 +241,7 @@ export async function refreshChatMetadata(
   const request = { host, client, agentId, version: requestVersion };
   host.chatModelsLoading = true;
   try {
-    if (isGatewayMethodAdvertised(host as unknown as ChatState, "chat.metadata") === false) {
+    if (isGatewayMethodAdvertised(host, "chat.metadata") === false) {
       await refreshMissingChatMetadata(request, EMPTY_CHAT_METADATA_APPLY_RESULT, opts);
       return EMPTY_CHAT_METADATA_APPLY_RESULT;
     }
@@ -318,7 +309,7 @@ export async function refreshChatModelCatalogOnDemand(host: ChatPageHost): Promi
   host.requestUpdate?.();
   try {
     const models = await loadModels(client, {
-      ...(agentId ? { agentId } : {}),
+      agentId,
       rejectOnFailure: true,
     });
     if (ownsRequest()) {
@@ -350,7 +341,7 @@ async function refreshChat(
   const refreshedAgentId = resolveAgentIdForSession(host);
   const requestUpdate = () => host.requestUpdate?.();
   const previousSessionsResult = host.sessionsResult;
-  const historyLoad = loadChatHistory(host as unknown as ChatState, {
+  const historyLoad = loadChatHistory(host, {
     deferBranches: opts?.deferBranches === true,
     startup: opts?.startup === true,
   });
@@ -451,7 +442,7 @@ export function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {
     opts?.startup &&
     host.client &&
     host.connected &&
-    isGatewayMethodAdvertised(host as unknown as ChatState, "chat.startup") !== false,
+    isGatewayMethodAdvertised(host, "chat.startup") !== false,
   );
   const startupMetadataRequestVersion = ownsStartupMetadata
     ? ++host.chatMetadataRequestVersion

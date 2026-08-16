@@ -19,6 +19,11 @@ import type { PairedDeviceNodeBinding } from "../infra/device-pairing-node-state
 import { NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
 import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
 import {
+  parseComputerUseCapabilityDescriptor,
+  type ComputerUseCapabilityDescriptor,
+} from "../plugins/computer-use-contract.js";
+import { resolveEffectiveComputerUseDescriptor } from "./node-computer-use-descriptor.js";
+import {
   createRegisteredNodePluginToolDescriptorMap,
   normalizeNodePluginToolDescriptors,
   type NormalizedNodePluginTool,
@@ -69,6 +74,8 @@ export type NodeSession = {
   declaredCommands: string[];
   sessionCommandsCeiling?: string[];
   commands: string[];
+  declaredComputerUse?: ComputerUseCapabilityDescriptor;
+  computerUse?: ComputerUseCapabilityDescriptor;
   /** Exact node-local build admitted for worker session hosting. */
   workerRuns?: WorkerAdmissionHandshake;
   declaredNodePluginTools: NodePluginToolDescriptor[];
@@ -458,6 +465,16 @@ export class NodeRegistry {
     )
       ? ((connect as { declaredCommands?: string[] }).declaredCommands ?? [])
       : commands;
+    const computerUse =
+      connect.computerUse === undefined
+        ? undefined
+        : parseComputerUseCapabilityDescriptor(connect.computerUse);
+    const declaredComputerUseValue = (connect as { declaredComputerUse?: unknown })
+      .declaredComputerUse;
+    const declaredComputerUse =
+      declaredComputerUseValue === undefined
+        ? computerUse
+        : parseComputerUseCapabilityDescriptor(declaredComputerUseValue);
     // Session ceilings preserve protocol compatibility across later pairing
     // approvals while declared* retains the durable approval surface.
     const sessionCapsCeiling = Array.isArray(
@@ -510,6 +527,8 @@ export class NodeRegistry {
       declaredCommands,
       sessionCommandsCeiling,
       commands,
+      ...(declaredComputerUse ? { declaredComputerUse } : {}),
+      ...(computerUse ? { computerUse } : {}),
       ...(workerRuns ? { workerRuns } : {}),
       declaredNodePluginTools,
       nodePluginTools,
@@ -994,6 +1013,12 @@ export class NodeRegistry {
     const nextCommands = surface.commands.filter((command) => sessionCommandsCeiling.has(command));
     node.commands = nextCommands;
     (node.client.connect as { commands?: string[] }).commands = nextCommands;
+    const nextComputerUse = resolveEffectiveComputerUseDescriptor({
+      commands: nextCommands,
+      declared: node.declaredComputerUse,
+    });
+    node.computerUse = nextComputerUse;
+    node.client.connect.computerUse = nextComputerUse;
     this.replaceEffectiveNodePluginTools(node);
 
     if ("caps" in surface) {
