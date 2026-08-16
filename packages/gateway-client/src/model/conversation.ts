@@ -467,12 +467,13 @@ function isFiniteJsonValue(value: unknown, seen = new WeakSet<object>(), depth =
     return false;
   }
   seen.add(value);
-  if (Array.isArray(value)) {
-    return value.every((entry) => isFiniteJsonValue(entry, seen, depth + 1));
-  }
-  return Object.values(value as Record<string, unknown>).every((entry) =>
-    isFiniteJsonValue(entry, seen, depth + 1),
-  );
+  const valid = Array.isArray(value)
+    ? value.every((entry) => isFiniteJsonValue(entry, seen, depth + 1))
+    : Object.values(value as Record<string, unknown>).every((entry) =>
+        isFiniteJsonValue(entry, seen, depth + 1),
+      );
+  seen.delete(value);
+  return valid;
 }
 
 function readStartupMetadata(
@@ -1685,7 +1686,7 @@ export class ControlModelConversation {
     const data = record(payload.data);
     const runId = text(payload.runId) ?? text(data?.runId);
     if (event === "agent") {
-      return Boolean(runId && this.#projection.runs[runId]);
+      return Boolean(runId && Object.hasOwn(this.#projection.runs, runId));
     }
     if (
       event === "question.resolved" &&
@@ -1694,7 +1695,7 @@ export class ControlModelConversation {
     ) {
       return true;
     }
-    return Boolean(runId && this.#projection.runs[runId]);
+    return Boolean(runId && Object.hasOwn(this.#projection.runs, runId));
   }
 
   #handleChat(payload: Record<string, unknown>): void {
@@ -1730,7 +1731,7 @@ export class ControlModelConversation {
     if (!runId) {
       return;
     }
-    if (!this.#eventSessionKey(payload) && !this.#projection.runs[runId]) {
+    if (!this.#eventSessionKey(payload) && !Object.hasOwn(this.#projection.runs, runId)) {
       return;
     }
     const toolCallId =

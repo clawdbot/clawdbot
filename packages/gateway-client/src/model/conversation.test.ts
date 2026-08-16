@@ -108,6 +108,33 @@ describe("Control Model conversations", () => {
     ).toBeLessThanOrEqual(64);
   });
 
+  it("accepts acyclic startup metadata with shared references", async () => {
+    const harness = createHarness({ status: "connected", epoch: 1 });
+    const shared = { model: "test" };
+    harness.queue("chat.startup", {
+      messages: [],
+      defaults: shared,
+      metadata: { shared },
+      completeSnapshot: true,
+    });
+    const model = createControlModel({
+      gateway: harness.gateway,
+      autoRefreshSessionCatalog: false,
+      autoLoadConversationHistory: false,
+    });
+    model.start();
+    const conversation = model.conversation("agent:main:one");
+
+    await conversation.refreshHistory(undefined, "chat.startup");
+
+    expect(conversation.getSnapshot().partialReasons).not.toContain("startup-metadata-malformed");
+    expect(conversation.getSnapshot().metadata).toMatchObject({
+      defaults: { model: "test" },
+      metadata: { shared: { model: "test" } },
+    });
+    model.dispose();
+  });
+
   it("refreshes returned metadata with ordinary history snapshots", async () => {
     const harness = createHarness({ status: "connected", epoch: 1 });
     harness.queue("chat.startup", {
@@ -183,6 +210,25 @@ describe("Control Model conversations", () => {
     await vi.waitFor(() =>
       expect(harness.callsFor("sessions.messages.unsubscribe")).toHaveLength(1),
     );
+  });
+
+  it("shares one replacement coordinator when multiple models reconnect", async () => {
+    const harness = createHarness({ status: "connected", epoch: 1 });
+    const firstModel = createControlModel({ gateway: harness.gateway });
+    const secondModel = createControlModel({ gateway: harness.gateway });
+    firstModel.start();
+    secondModel.start();
+    const firstConversation = firstModel.conversation("agent:main:first");
+    const secondConversation = secondModel.conversation("agent:main:second");
+
+    await vi.waitFor(() => expect(harness.callsFor("sessions.messages.subscribe")).toHaveLength(4));
+    harness.setConnection({ status: "connected", epoch: 2 });
+
+    await vi.waitFor(() => expect(harness.callsFor("sessions.messages.subscribe")).toHaveLength(8));
+    expect(firstConversation.getSnapshot().status).not.toBe("error");
+    expect(secondConversation.getSnapshot().status).not.toBe("error");
+    firstModel.dispose();
+    secondModel.dispose();
   });
 
   it("retries a failed observer activation within the same connection epoch", async () => {
@@ -563,6 +609,31 @@ describe("Control Model conversations", () => {
       },
     });
     expect(conversation.getSnapshot().tools).toHaveLength(1);
+    harness.emit({
+      event: "agent",
+      payload: {
+        runId: "constructor",
+        stream: "tool",
+        data: { phase: "start", name: "ignored", toolCallId: "prototype-key" },
+      },
+    });
+    harness.emit({
+      event: "session.approval",
+      payload: {
+        runId: "constructor",
+        approval: { id: "prototype-approval", status: "pending" },
+      },
+    });
+    harness.emit({
+      event: "question.requested",
+      payload: {
+        runId: "constructor",
+        question: { id: "prototype-question", status: "pending" },
+      },
+    });
+    expect(conversation.getSnapshot().tools).toHaveLength(1);
+    expect(conversation.getSnapshot().approvals).toEqual([]);
+    expect(conversation.getSnapshot().questions).toEqual([]);
     harness.emit({
       event: "agent",
       payload: {

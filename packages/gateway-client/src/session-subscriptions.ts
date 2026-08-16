@@ -377,8 +377,13 @@ export function getGatewaySessionMessageSubscriptionCoordinator(
 
 export function resetGatewaySessionMessageSubscriptionCoordinator(
   client: GatewaySessionMessageRequestClient,
+  expected?: GatewaySessionMessageSubscriptionCoordinator,
 ): void {
-  sessionMessageSubscriptionCoordinators.get(client)?.reset();
+  const existing = sessionMessageSubscriptionCoordinators.get(client);
+  if (expected && existing !== expected) {
+    return;
+  }
+  existing?.reset();
   sessionMessageSubscriptionCoordinators.delete(client);
 }
 

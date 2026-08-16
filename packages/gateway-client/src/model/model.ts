@@ -107,6 +107,9 @@ class ControlModelImpl implements ControlModel {
   readonly #onBackgroundError?: (error: unknown) => void;
   #unsubscribeConnection: (() => void) | null = null;
   #unsubscribeEvents: (() => void) | null = null;
+  #messageSubscriptionCoordinator: ReturnType<
+    typeof getGatewaySessionMessageSubscriptionCoordinator
+  > | null = null;
   #lastConnection: ControlModelConnectionSnapshot;
   #running = false;
   #disposed = false;
@@ -288,8 +291,7 @@ class ControlModelImpl implements ControlModel {
       autoLoadHistory: this.#autoLoadConversationHistory,
       getConnectionSnapshot: () => this.#gateway.getConnectionSnapshot(),
       isRunning: () => this.#running && !this.#disposed,
-      getMessageSubscriptionCoordinator: () =>
-        getGatewaySessionMessageSubscriptionCoordinator(this.#gateway),
+      getMessageSubscriptionCoordinator: () => this.#getMessageSubscriptionCoordinator(),
       onConversationReleased: async (conversation) => {
         for (const [id, value] of this.#conversations) {
           if (value === conversation) {
@@ -339,13 +341,16 @@ class ControlModelImpl implements ControlModel {
     const previous = this.#lastConnection;
     this.#lastConnection = connection;
     if (connection.epoch !== previous.epoch || connection.status !== "connected") {
-      resetGatewaySessionMessageSubscriptionCoordinator(this.#gateway);
+      if (this.#messageSubscriptionCoordinator) {
+        resetGatewaySessionMessageSubscriptionCoordinator(
+          this.#gateway,
+          this.#messageSubscriptionCoordinator,
+        );
+        this.#messageSubscriptionCoordinator = null;
+      }
       for (const conversation of this.#conversations.values()) {
         if (connection.status === "connected") {
-          conversation.onConnection(
-            connection,
-            getGatewaySessionMessageSubscriptionCoordinator(this.#gateway),
-          );
+          conversation.onConnection(connection, this.#getMessageSubscriptionCoordinator());
         } else {
           conversation.onDisconnected(connection);
         }
@@ -354,6 +359,13 @@ class ControlModelImpl implements ControlModel {
     if (connection.status === "connected") {
       this.#startConversations();
     }
+  }
+
+  #getMessageSubscriptionCoordinator() {
+    this.#messageSubscriptionCoordinator ??= getGatewaySessionMessageSubscriptionCoordinator(
+      this.#gateway,
+    );
+    return this.#messageSubscriptionCoordinator;
   }
 
   #startConversations(): void {
