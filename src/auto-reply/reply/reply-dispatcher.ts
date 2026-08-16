@@ -26,6 +26,12 @@ import {
   type NormalizeReplyOutcome,
   type NormalizeReplySkipReason,
 } from "./normalize-reply.js";
+import {
+  createReplyDispatchSettledCounts,
+  isExplicitlyNonVisibleDelivery,
+  isReplyDispatchProvenInvisible,
+  type ReplyDispatchDeliveryOutcome,
+} from "./reply-dispatch-outcome.js";
 import type {
   ReplyDispatchBeforeDeliver,
   ReplyDispatchBeforeDeliverOptions,
@@ -54,34 +60,7 @@ type ReplyDispatchCancelHandler = (
   info: ReplyDispatchRuntimeInfo,
 ) => Promise<void> | void;
 
-export type ReplyDispatchDeliveryOutcome =
-  | "delivered"
-  | "delivered-not-visible"
-  | "cancelled"
-  | "failed-before-deliver"
-  | "failed-deliver";
-
-export function isReplyDispatchProvenInvisible(outcome: ReplyDispatchDeliveryOutcome): boolean {
-  return (
-    outcome === "delivered-not-visible" ||
-    outcome === "cancelled" ||
-    outcome === "failed-before-deliver"
-  );
-}
-
-function isExplicitlyNonVisibleDelivery(result: unknown): boolean {
-  return isRecord(result) && result.visibleReplySent === false;
-}
-
-function createSettledCounts(): ReplyDispatchSettledCounts {
-  return {
-    delivered: 0,
-    deliveredNotVisible: 0,
-    cancelled: 0,
-    failedBeforeSend: 0,
-    failedAfterSend: 0,
-  };
-}
+export { isReplyDispatchProvenInvisible, type ReplyDispatchDeliveryOutcome };
 
 function isRetryableNoSendFailure(error: unknown): boolean {
   return (
@@ -436,9 +415,9 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     final: 0,
   };
   const settledCounts: Record<ReplyDispatchKind, ReplyDispatchSettledCounts> = {
-    tool: createSettledCounts(),
-    block: createSettledCounts(),
-    final: createSettledCounts(),
+    tool: createReplyDispatchSettledCounts(),
+    block: createReplyDispatchSettledCounts(),
+    final: createReplyDispatchSettledCounts(),
   };
 
   const buildReceipt = (): ReplyDispatchReceipt => ({
@@ -752,7 +731,7 @@ export async function waitForReplyDispatcherIdle(
     return (await dispatcher.waitForIdle()) || undefined;
   }
   if (abortSignal.aborted) {
-    return;
+    return undefined;
   }
   let removeAbortListener: (() => void) | undefined;
   const aborted = new Promise<undefined>((resolve) => {
