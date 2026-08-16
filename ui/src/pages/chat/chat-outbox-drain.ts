@@ -470,11 +470,17 @@ async function drainStoredChatOutbox(
           return "blocked";
         }
         if (dispatchResult === "failed") {
+          // A still-current scope already saw the dispatcher's inline error.
+          // After a route switch the dispatcher withholds it and the pane is
+          // gone, so the terminal failure must surface globally. A stale scope
+          // with the pane still visible (connection replaced) keeps the failed
+          // queue chip instead: the new connection owns the inline surface.
           const commandStillCurrent = commandScopeIsCurrent();
           const error =
             (commandStillCurrent ? host.lastError : null) ??
             `Command /${item.localCommandName} failed.`;
-          return failCommand(error);
+          const paneHidden = !visibleSessionMatches(host, outbox.sessionKey, outbox.agentId);
+          return failCommand(error, !commandStillCurrent && paneHidden);
         }
         if (dispatchResult === "uncertain") {
           const currentOutbox = readStoredChatOutbox(host, outbox);

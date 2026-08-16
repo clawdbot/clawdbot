@@ -8,6 +8,8 @@ import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
+  isUiGlobalSessionKey,
+  normalizeAgentId,
   uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
@@ -342,8 +344,15 @@ export function surfaceChatDeliveryFailure(
     host.chatError = error;
     return;
   }
-  const row = host.sessionsResult?.sessions.find((session) =>
-    areUiSessionKeysEquivalent(session.key, sessionKey),
+  // Global rows are agent-scoped while sharing one "global" key, so an
+  // agent-less equivalence match could borrow another agent's label.
+  const scopedAgentId = agentId ? normalizeAgentId(agentId) : undefined;
+  const row = host.sessionsResult?.sessions.find(
+    (session) =>
+      areUiSessionKeysEquivalent(session.key, sessionKey) &&
+      (!isUiGlobalSessionKey(sessionKey) ||
+        !scopedAgentId ||
+        (session.agentId !== undefined && normalizeAgentId(session.agentId) === scopedAgentId)),
   );
   showToast({ message: `${resolveSessionDisplayName(sessionKey, row)}: ${error}` });
 }
