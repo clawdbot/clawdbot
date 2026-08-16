@@ -3858,7 +3858,6 @@ src/snapshot/manifest.ts	1
 src/state/agent-deletion-journal.ts	15
 src/state/backup-run-records.ts	1
 src/state/config-machine-state.ts	2
-src/state/control-ui-device-auth-migration.ts	1
 src/state/local-onboarding-state.ts	1
 src/state/openclaw-agent-board-schema.ts	1
 src/state/openclaw-agent-db-migration-required.ts	1
@@ -4150,7 +4149,7 @@ ui/src/lib/cron/index.ts	16
 ui/src/lib/gateway-diagnostics.ts	3
 ui/src/lib/gateway-errors.ts	1
 ui/src/lib/keyboard-shortcuts.ts	1
-ui/src/lib/nodes/index.ts	4
+ui/src/lib/nodes/index.ts	3
 ui/src/lib/nodes/inventory.ts	1
 ui/src/lib/plugin-activation.ts	3
 ui/src/lib/session-pull-requests.ts	2

@@ -1036,6 +1036,22 @@ describe("sessions_send gating", () => {
     expect(requireGatewayRequest().method).toBe("sessions.resolve");
   });
 
+  it("rejects an unrepresentable agent id before resolving a main session", async () => {
+    const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-invalid-agent", {
+      agentId: "агент✨",
+      message: "hello",
+      timeoutSeconds: 5,
+    });
+
+    expect(requireDetails(result)).toMatchObject({
+      status: "error",
+      error: 'Agent "агент✨" not found. Run openclaw agents list to see configured agents.',
+    });
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it("conceals missing explicit keys denied by session visibility", async () => {
     callGatewayMock.mockRejectedValueOnce(new Error("No session found: agent:main:missing"));
     const tool = createSessionsSendTool({

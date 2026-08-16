@@ -3023,6 +3023,23 @@ describe("agents.delete", () => {
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
+  it("rejects an unrepresentable id before targeting the main agent", async () => {
+    mocks.sharedAuthStoreOwnership = { location: "state-db" };
+    mocks.loadConfigReturn = {
+      agents: { list: [{ id: "main" }, { id: "ops", default: true }] },
+    };
+
+    const { respond, promise } = makeCall("agents.delete", {
+      agentId: "агент✨",
+    });
+    await promise;
+
+    expectRespondErrorContaining(respond, 'agent "агент✨" not found');
+    expect(mocks.beginAgentDeletionCommit).not.toHaveBeenCalled();
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(mocks.movePathToTrash).not.toHaveBeenCalled();
+  });
+
   it("deletes main through the normal journal path after shared auth relocation", async () => {
     mocks.sharedAuthStoreOwnership = { location: "state-db" };
     mocks.loadConfigReturn = {

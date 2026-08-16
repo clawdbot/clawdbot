@@ -5,7 +5,11 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { checkAgentCreationGate, createAgent } from "../agents/agent-create.js";
+import {
+  checkAgentCreationGate,
+  createAgent,
+  validateAgentIdInput,
+} from "../agents/agent-create.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -37,7 +41,6 @@ import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
-import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
@@ -123,7 +126,17 @@ export async function agentsAddCommand(
       runtime.exit(1);
       return;
     }
-    const agentId = normalizeAgentId(nameInput);
+    const validation = validateAgentIdInput(nameInput);
+    if (!validation.ok) {
+      runtime.error(
+        validation.reason === "reserved-id"
+          ? `"${validation.agentId}" is reserved. Choose another name, or run ${formatCliCommand("openclaw agents list")} to inspect configured agents.`
+          : validation.message,
+      );
+      runtime.exit(1);
+      return;
+    }
+    const agentId = validation.agentId;
     if (agentId !== nameInput) {
       runtime.log(`Normalized agent id to "${agentId}".`);
     }
@@ -205,20 +218,27 @@ export async function agentsAddCommand(
           if (!value?.trim()) {
             return "Required";
           }
-          const normalized = normalizeAgentId(value);
-          if (isReservedSystemAgentId(normalized)) {
-            return `"${normalized}" is reserved. Choose another name.`;
+          const validation = validateAgentIdInput(value);
+          if (!validation.ok) {
+            return validation.reason === "reserved-id"
+              ? `"${validation.agentId}" is reserved. Choose another name.`
+              : validation.message;
           }
           return undefined;
         },
       }));
 
     const agentName = normalizeOptionalString(name) ?? "";
-    const agentId = normalizeAgentId(agentName);
-    if (isReservedSystemAgentId(agentId)) {
-      await prompter.outro(`"${agentId}" is reserved. Choose another name.`);
+    const validation = validateAgentIdInput(agentName);
+    if (!validation.ok) {
+      if (validation.reason === "reserved-id") {
+        await prompter.outro(`"${validation.agentId}" is reserved. Choose another name.`);
+        return;
+      }
+      await prompter.outro(validation.message);
       return;
     }
+    const agentId = validation.agentId;
     if (agentName !== agentId) {
       await prompter.note(`Normalized id to "${agentId}".`, "Agent id");
     }

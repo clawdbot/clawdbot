@@ -16,7 +16,7 @@ import { logConfigUpdated } from "../config/logging.js";
 import type { AgentConfig, IdentityConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
@@ -71,7 +71,6 @@ export async function agentsSetIdentityCommand(
   ).config as OpenClawConfig;
   const baseHash = configSnapshot.hash;
 
-  const agentRaw = normalizeOptionalString(opts.agent);
   const nameRaw = normalizeOptionalString(opts.name);
   const emojiRaw = normalizeOptionalString(opts.emoji);
   const themeRaw = normalizeOptionalString(opts.theme);
@@ -81,7 +80,13 @@ export async function agentsSetIdentityCommand(
   const identityFileRaw = normalizeOptionalString(opts.identityFile);
   const workspaceRaw = normalizeOptionalString(opts.workspace);
   const wantsIdentityFile = Boolean(opts.fromIdentity || identityFileRaw || !hasExplicitIdentity);
-  let agentId = agentRaw ? normalizeAgentId(agentRaw) : undefined;
+  const normalizedAgent = opts.agent === undefined ? null : normalizeAgentIdStrict(opts.agent);
+  if (normalizedAgent && !normalizedAgent.ok) {
+    runtime.error(`Agent "${opts.agent}" not found. Create it with \`openclaw agents add\`.`);
+    runtime.exit(1);
+    return;
+  }
+  let agentId = normalizedAgent?.value;
 
   let identityFilePath: string | undefined;
   let workspaceDir: string | undefined;

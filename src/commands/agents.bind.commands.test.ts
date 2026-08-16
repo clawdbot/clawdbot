@@ -203,6 +203,24 @@ describe("agents bind/unbind commands", () => {
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
+  it.each(["агент✨", "   "])(
+    "rejects an explicit unrepresentable agent %j instead of binding the default",
+    async (agent) => {
+      readConfigFileSnapshotMock.mockResolvedValue({
+        ...baseConfigSnapshot,
+        config: {},
+      });
+
+      await agentsBindCommand({ agent, bind: ["telegram"] }, runtime);
+
+      expect(runtime.error).toHaveBeenCalledWith(
+        `Agent "${agent}" not found. Run openclaw agents list to see configured agents.`,
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(writeConfigFileMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("uses a wildcard account binding for multi-account channels", async () => {
     readConfigFileSnapshotMock.mockResolvedValue({
       ...baseConfigSnapshot,
