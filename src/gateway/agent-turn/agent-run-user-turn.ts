@@ -178,6 +178,8 @@ export async function prepareAgentRunUserTurn(params: {
           if (loadedSessionId && loadedSessionId !== params.admittedSessionId) {
             return undefined;
           }
+          // Session creation is persisted before this phase. No matching entry
+          // means the admitted lifecycle instance changed and must fail closed.
           const latestEntry = loadedSessionId
             ? loaded.entry
             : params.sessionEntry?.sessionId?.trim() === params.admittedSessionId
