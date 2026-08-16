@@ -175,9 +175,12 @@ function resolveConfiguredRuntimeContextTokens(
     : undefined;
 }
 
-export function resolveExplicitContextTokensForModel(
-  params: Pick<ContextTokenResolutionParams, "cfg" | "model" | "modelProvider" | "provider">,
-): number | undefined {
+export function resolveExplicitContextTokenSourceForModel(
+  params: Pick<
+    ContextTokenResolutionParams,
+    "cfg" | "model" | "modelProvider" | "provider" | "sourceCfg"
+  >,
+): "contextTokens" | "contextWindow" | undefined {
   const ref = resolveProviderModelRef(params);
   if (!ref) {
     return undefined;
@@ -188,7 +191,16 @@ export function resolveExplicitContextTokensForModel(
     params.modelProvider,
     ref.model,
   );
-  return configured?.source === "contextTokens" ? configured.value : undefined;
+  if (configured?.source === "contextTokens") {
+    return configured.source;
+  }
+  const sourceConfigured = resolveConfiguredRuntimeContextTokens(
+    params.sourceCfg === undefined ? params.cfg : params.sourceCfg,
+    ref.provider,
+    params.modelProvider,
+    ref.model,
+  );
+  return sourceConfigured?.source === "contextWindow" ? sourceConfigured.source : undefined;
 }
 
 function resolveModelFamilyId(modelId: string): string {

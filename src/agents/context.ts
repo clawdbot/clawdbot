@@ -24,6 +24,7 @@ import {
   type ContextTokenResolutionParams,
   type ModelsConfig,
   resolveContextTokensForModelFromCache,
+  resolveExplicitContextTokenSourceForModel as resolveExplicitContextTokenSourceForModelFromConfig,
 } from "./context-resolution.js";
 import {
   beginContextWindowCacheRefresh,
@@ -38,7 +39,6 @@ export {
   ANTHROPIC_SONNET_5_CONTEXT_TOKENS,
   ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS,
 } from "./context-resolution.js";
-export { resolveExplicitContextTokensForModel } from "./context-resolution.js";
 export { resetContextWindowCacheForTest } from "./context-runtime-state.js";
 export {
   applyConfiguredContextWindows,
@@ -314,6 +314,16 @@ export function lookupContextTokens(
   );
 }
 
+function resolveContextSourceConfig(
+  params: Pick<ContextTokenResolutionParams, "cfg" | "sourceCfg">,
+): OpenClawConfig | null | undefined {
+  return params.sourceCfg !== undefined
+    ? params.sourceCfg
+    : params.cfg
+      ? projectConfigOntoRuntimeSourceSnapshot(params.cfg)
+      : undefined;
+}
+
 export function resolveContextTokensForModel(
   params: ContextTokenResolutionParams,
 ): number | undefined {
@@ -322,15 +332,20 @@ export function resolveContextTokensForModel(
     skipRuntimeConfigLoad: Boolean(params.cfg),
   };
   prepareContextWindowCache(lookupOptions);
-  const sourceCfg =
-    params.sourceCfg !== undefined
-      ? params.sourceCfg
-      : params.cfg
-        ? projectConfigOntoRuntimeSourceSnapshot(params.cfg)
-        : undefined;
+  const sourceCfg = resolveContextSourceConfig(params);
   return resolveContextTokensForModelFromCache(
     { ...params, sourceCfg },
     (modelId) => lookupCachedContextTokens(modelId),
     (modelId) => lookupCachedContextWindow(modelId),
   );
+}
+
+export function resolveExplicitContextTokenSourceForModel(
+  params: Pick<
+    ContextTokenResolutionParams,
+    "cfg" | "model" | "modelProvider" | "provider" | "sourceCfg"
+  >,
+): "contextTokens" | "contextWindow" | undefined {
+  const sourceCfg = resolveContextSourceConfig(params);
+  return resolveExplicitContextTokenSourceForModelFromConfig({ ...params, sourceCfg });
 }

@@ -1169,51 +1169,178 @@ describe("gateway session utils", () => {
     },
   );
 
-  test("projects a changed explicit cap for the same runtime and model", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.6-sol" },
-          models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
-        },
-      },
-      models: {
-        providers: {
-          openai: {
-            models: [{ id: "gpt-5.6-sol", contextTokens: 1_000_000 }],
+  test.each([true, false])(
+    "projects a changed explicit cap for the same runtime and model (lightweight=%s)",
+    (lightweightListRow) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.6-sol" },
+            models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
           },
         },
-      },
-    } as unknown as OpenClawConfig;
+        models: {
+          providers: {
+            openai: {
+              models: [{ id: "gpt-5.6-sol", contextTokens: 1_000_000 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
 
-    const row = buildGatewaySessionRow({
-      cfg,
-      storePath: "",
-      store: {},
-      key: "agent:main:main",
-      entry: {
-        sessionId: "stale-cap",
-        modelProvider: "openai",
-        model: "gpt-5.6-sol",
-        agentHarnessId: "codex",
-        contextTokens: 272_000,
-        contextTokensSource: "runtime",
-      } as SessionEntry,
-    });
+      const row = buildGatewaySessionRow({
+        cfg,
+        storePath: "",
+        store: {},
+        key: "agent:main:main",
+        entry: {
+          sessionId: "stale-cap",
+          modelProvider: "openai",
+          model: "gpt-5.6-sol",
+          agentHarnessId: "codex",
+          contextTokens: 272_000,
+          contextTokensSource: "runtime",
+        } as SessionEntry,
+        lightweightListRow,
+      });
 
-    expect(row.contextTokens).toBe(1_000_000);
-  });
+      expect(row.contextTokens).toBe(1_000_000);
+    },
+  );
+
+  test.each([true, false])(
+    "projects an authored contextWindow cap below matching runtime telemetry (lightweight=%s)",
+    (lightweightListRow) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.6-sol" },
+            models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              models: [{ id: "gpt-5.6-sol", contextWindow: 128_000 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const row = buildGatewaySessionRow({
+        cfg,
+        storePath: "",
+        store: {},
+        key: "agent:main:main",
+        entry: {
+          sessionId: "authored-window-cap",
+          modelProvider: "openai",
+          model: "gpt-5.6-sol",
+          agentHarnessId: "codex",
+          contextTokens: 272_000,
+          contextTokensSource: "runtime",
+        } as SessionEntry,
+        lightweightListRow,
+      });
+
+      expect(row.agentRuntime?.id).toBe("codex");
+      expect(row.contextTokens).toBe(128_000);
+    },
+  );
+
+  test.each([true, false])(
+    "preserves matching native Codex telemetry when only runtime config materializes a window (lightweight=%s)",
+    (lightweightListRow) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.6-sol" },
+            models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              models: [{ id: "gpt-5.6-sol", contextWindow: 200_000 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      const sourceCfg = {
+        ...cfg,
+        models: {
+          providers: {
+            openai: {
+              models: [{ id: "gpt-5.6-sol" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setRuntimeConfigSnapshot(cfg, sourceCfg);
+      onTestFinished(resetConfigRuntimeState);
+
+      const row = buildGatewaySessionRow({
+        cfg,
+        storePath: "",
+        store: {},
+        key: "agent:main:main",
+        entry: {
+          sessionId: "native-window",
+          modelProvider: "openai",
+          model: "gpt-5.6-sol",
+          agentHarnessId: "codex",
+          contextTokens: 1_000_000,
+          contextTokensSource: "runtime",
+        } as SessionEntry,
+        lightweightListRow,
+      });
+
+      expect(row.agentRuntime?.id).toBe("codex");
+      expect(row.contextTokens).toBe(1_000_000);
+    },
+  );
+
+  test.each([true, false])(
+    "keeps matching runtime telemetry below a higher authored contextWindow (lightweight=%s)",
+    (lightweightListRow) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.6-sol" },
+            models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              models: [{ id: "gpt-5.6-sol", contextWindow: 1_000_000 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const row = buildGatewaySessionRow({
+        cfg,
+        storePath: "",
+        store: {},
+        key: "agent:main:main",
+        entry: {
+          sessionId: "runtime-window-below-native-cap",
+          modelProvider: "openai",
+          model: "gpt-5.6-sol",
+          agentHarnessId: "codex",
+          contextTokens: 272_000,
+          contextTokensSource: "runtime",
+        } as SessionEntry,
+        lightweightListRow,
+      });
+
+      expect(row.agentRuntime?.id).toBe("codex");
+      expect(row.contextTokens).toBe(272_000);
+    },
+  );
 
   test.each([
-    {
-      name: "matching native Codex telemetry",
-      configuredRuntime: "codex",
-      entry: {
-        agentHarnessId: "codex",
-        contextTokens: 1_000_000,
-        contextTokensSource: "runtime",
-      },
-    },
     {
       name: "a locked Codex session under OpenClaw config",
       configuredRuntime: "openclaw",

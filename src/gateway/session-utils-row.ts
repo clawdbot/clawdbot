@@ -7,7 +7,7 @@ import type { SessionCreatedActor } from "../../packages/gateway-protocol/src/in
 import { resolveAgentConfig } from "../agents/agent-scope.js";
 import {
   resolveContextTokensForModel,
-  resolveExplicitContextTokensForModel,
+  resolveExplicitContextTokenSourceForModel,
 } from "../agents/context.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
@@ -366,15 +366,14 @@ export function buildGatewaySessionRow(params: {
   });
   const configuredAgentContextTokens =
     resolveAgentConfig(cfg, sessionAgentId)?.contextTokens ?? cfg.agents?.defaults?.contextTokens;
+  const explicitModelContextSource = resolveExplicitContextTokenSourceForModel({
+    cfg,
+    provider: rowModelProvider,
+    model: rowModel,
+  });
   const hasExplicitContextTokens =
     resolvePositiveNumber(configuredAgentContextTokens) !== undefined ||
-    resolvePositiveNumber(
-      resolveExplicitContextTokensForModel({
-        cfg,
-        provider: rowModelProvider,
-        model: rowModel,
-      }),
-    ) !== undefined;
+    explicitModelContextSource === "contextTokens";
   const resolvedCurrentContextTokens = resolvePositiveNumber(
     resolveContextTokensForModel({
       cfg,
@@ -399,9 +398,15 @@ export function buildGatewaySessionRow(params: {
     entry?.modelSelectionLocked === true || persistedContextMatchesCurrentSelection
       ? persistedContextTokens
       : undefined;
+  // contextTokens is an effective override; an authored contextWindow only
+  // caps matching runtime telemetry and must not inflate it to native capacity.
   const currentContextTokens = hasExplicitContextTokens
     ? resolvedCurrentContextTokens
-    : trustedPersistedContextTokens;
+    : explicitModelContextSource === "contextWindow"
+      ? resolvedCurrentContextTokens !== undefined && trustedPersistedContextTokens !== undefined
+        ? Math.min(resolvedCurrentContextTokens, trustedPersistedContextTokens)
+        : (resolvedCurrentContextTokens ?? trustedPersistedContextTokens)
+      : trustedPersistedContextTokens;
   const contextTokens =
     entry?.modelSelectionLocked === true
       ? (trustedPersistedContextTokens ?? currentContextTokens ?? resolvedCurrentContextTokens)
