@@ -79,6 +79,7 @@ function installRuntime(dispatches: { count: number }): void {
   setNextcloudTalkRuntime({
     channel: {
       inbound: {
+        buildContext: (payload: unknown) => payload,
         dispatch: async () => {
           dispatches.count += 1;
         },
@@ -140,6 +141,7 @@ function startSpool(params: {
   serverBaseUrl: string;
   runtime: RuntimeEnv;
   allowPrivateNetwork?: boolean;
+  config?: CoreConfig;
 }) {
   return createNextcloudTalkWebhookSpool({
     accountId: "proof",
@@ -148,7 +150,7 @@ function startSpool(params: {
       await handleNextcloudTalkInbound({
         message,
         account: createAccount(params.serverBaseUrl, params.allowPrivateNetwork ?? true),
-        config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
+        config: params.config ?? ({ channels: { "nextcloud-talk": {} } } as CoreConfig),
         runtime: params.runtime,
         turnAdoptionLifecycle: lifecycle,
       }),
@@ -235,6 +237,54 @@ describe("nextcloud-talk inbound room-kind lookup retry", () => {
         expect(await queue.listClaims()).toEqual([]);
         expect(logs).not.toContain(
           "nextcloud-talk: retry room room-policy-blocked after room lookup failure",
+        );
+      } finally {
+        await spool.stop();
+      }
+    });
+  });
+
+  it("keeps invalid room lookup URLs on the fallback path instead of durable retry", async () => {
+    const server = await startRoomInfoServer();
+    const dispatches = { count: 0 };
+    const logs: string[] = [];
+    installRuntime(dispatches);
+    const runtime: RuntimeEnv = {
+      error: (messageValue: unknown) => logs.push(String(messageValue)),
+      exit: () => {},
+      log: (messageValue: unknown) => logs.push(String(messageValue)),
+    };
+
+    await withTempDir("openclaw-nextcloud-talk-room-info-invalid-url-", async (stateDir) => {
+      const queue = createChannelIngressQueueForTests<NextcloudTalkIngressPayload>({
+        channelId: "nextcloud-talk",
+        accountId: "proof",
+        stateDir,
+      });
+      const spool = startSpool({
+        queue,
+        serverBaseUrl: "not-a-url",
+        runtime,
+        config: {
+          channels: {
+            "nextcloud-talk": {
+              rooms: {
+                "room-invalid-url": { requireMention: false },
+              },
+            },
+          },
+        } as CoreConfig,
+      });
+      try {
+        await spool.receive(createRawWebhookEvent({ roomToken: "room-invalid-url" }));
+        await spool.waitForIdle();
+
+        expect(dispatches.count).toBe(1);
+        expect(server.requests).toEqual([]);
+        expect(await queue.listPending({ limit: "all" })).toEqual([]);
+        expect(await queue.listClaims()).toEqual([]);
+        expect(logs).not.toContain(
+          "nextcloud-talk: retry room room-invalid-url after room lookup failure",
         );
       } finally {
         await spool.stop();

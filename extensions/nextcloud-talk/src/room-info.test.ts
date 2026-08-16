@@ -473,4 +473,37 @@ describe("nextcloud talk room info", () => {
 
     expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
   });
+
+  it.each(["not-a-url", "file:///tmp/nextcloud-talk"])(
+    "caches %s base URLs as permanent room-info fallback",
+    async (baseUrl) => {
+      const error = vi.fn();
+      const account = {
+        accountId: `acct-invalid-base-${baseUrl}`,
+        baseUrl,
+        config: {
+          apiUser: "bot",
+          apiPassword: "secret",
+        },
+      } as never;
+
+      await expect(
+        resolveNextcloudTalkRoomKindResult({
+          account,
+          roomToken: "room-invalid-base",
+          runtime: { error } as never,
+        }),
+      ).resolves.toEqual({ source: "unknown" });
+      await expect(
+        resolveNextcloudTalkRoomKindResult({
+          account,
+          roomToken: "room-invalid-base",
+          runtime: { error } as never,
+        }),
+      ).resolves.toEqual({ source: "unknown" });
+
+      expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
+      expect(error).toHaveBeenCalledTimes(1);
+    },
+  );
 });

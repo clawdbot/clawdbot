@@ -58,6 +58,15 @@ function isTransientRoomInfoStatus(status: number): boolean {
   return status === 408 || status === 429 || (status >= 500 && status <= 599);
 }
 
+function isSupportedRoomInfoBaseUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 export async function resolveNextcloudTalkRoomKindResult(params: {
   account: ResolvedNextcloudTalkAccount;
   roomToken: string;
@@ -90,6 +99,15 @@ export async function resolveNextcloudTalkRoomKindResult(params: {
   const baseUrl = account.baseUrl?.trim();
   if (!baseUrl) {
     return { source: "unconfigured" };
+  }
+
+  if (!isSupportedRoomInfoBaseUrl(baseUrl)) {
+    runtime?.error?.(`nextcloud-talk: room lookup skipped for invalid base URL`);
+    cacheRoomInfo(key, {
+      fetchedAt: Date.now(),
+      error: "invalid-base-url",
+    });
+    return { source: "unknown" };
   }
 
   const url = `${baseUrl}/ocs/v2.php/apps/spreed/api/v4/room/${roomToken}`;
