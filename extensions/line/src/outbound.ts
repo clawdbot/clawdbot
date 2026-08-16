@@ -2,19 +2,29 @@ import type { messagingApi } from "@line/bot-sdk";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 // Line plugin module implements outbound behavior.
 import {
+  createChannelMessageAdapterFromOutbound,
+  createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
   listMessageReceiptPlatformIds,
-  type ChannelMessageSendResult,
-  type MessageReceiptPartKind,
+  type ChannelMessageUnknownSendContext,
+  type ChannelMessageUnknownSendReconciliationResult,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createAttachedChannelResultAdapter,
   createEmptyChannelResult,
+  type OutboundDeliveryResult,
 } from "openclaw/plugin-sdk/channel-send-result";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import type { ChannelPlugin, ResolvedLineAccount } from "./channel-api.js";
+import {
+  clearLineDurableSendPlans,
+  createLineDurablePushRecorder,
+  LineDurableSendPlanError,
+  loadLineDurableSendPlans,
+} from "./durable-send-plan.js";
 import {
   buildLineMediaMessage,
   hasLineSpecificMediaOptions,
@@ -28,10 +38,26 @@ import {
   renderLinePresentation,
 } from "./rich-messages.js";
 import { getLineRuntime } from "./runtime.js";
-import { createLineSendReceipt } from "./send-receipt.js";
+import {
+  getLinePushHttpStatus,
+  isRetryableLinePushError,
+  LINE_RETRY_KEY_TTL_MS,
+} from "./send-retry.js";
 import type { LineChannelData, LineSendResult } from "./types.js";
 
 const loadLineOutboundRuntime = createLazyRuntimeModule(() => import("./outbound.runtime.js"));
+
+/** One payload crosses the platform boundary once, however many pushes it fans out into. */
+function createDispatchOnce(onPlatformSendDispatch?: () => Promise<void>): () => Promise<void> {
+  let dispatched = false;
+  return async () => {
+    if (dispatched) {
+      return;
+    }
+    await onPlatformSendDispatch?.();
+    dispatched = true;
+  };
+}
 
 export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>["outbound"]> = {
   deliveryMode: "direct",
@@ -40,8 +66,48 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
   sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
   presentationCapabilities: LINE_PRESENTATION_CAPABILITIES,
   renderPresentation: ({ payload, presentation }) => renderLinePresentation(payload, presentation),
-  sendPayload: async ({ to, payload, accountId, cfg, onDeliveryResult }) => {
+  sendPayload: async ({
+    to,
+    payload,
+    accountId,
+    cfg,
+    deliveryQueueId,
+    deliveryPartIndex,
+    deliveryPartCount,
+    onPlatformSendDispatch,
+    onDeliveryResult,
+  }) => {
     const runtime = getLineRuntime();
+    // Each platform send inside one durable delivery keeps a stable retry key, so a
+    // recovery replay is deduplicated by LINE push for push instead of resending.
+    // Core owns the part index; this payload owns the pushes it fans out into.
+    let durablePushIndex = 0;
+    const dispatchOnce = onPlatformSendDispatch
+      ? createDispatchOnce(onPlatformSendDispatch)
+      : undefined;
+    const recorder = deliveryQueueId
+      ? createLineDurablePushRecorder({
+          queueId: deliveryQueueId,
+          partIndex: deliveryPartIndex ?? 0,
+          partCount: deliveryPartCount ?? 1,
+          to,
+          ...(accountId ? { accountId } : {}),
+          payload,
+        })
+      : undefined;
+    const nextDurableSend = () => ({
+      ...(dispatchOnce ? { onPlatformSendDispatch: dispatchOnce } : {}),
+      ...(recorder ? { onDurablePush: recorder.recordPush } : {}),
+      ...(deliveryQueueId
+        ? {
+            durableSend: {
+              deliveryQueueId,
+              partIndex: deliveryPartIndex ?? 0,
+              pushIndex: durablePushIndex++,
+            },
+          }
+        : {}),
+    });
     const outboundRuntime = await loadLineOutboundRuntime();
     const rawLineData = (payload.channelData?.line as LineChannelData | undefined) ?? {};
     const lineData =
@@ -106,6 +172,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         await recordResult(
           sendBatch(to, batch, {
             verbose: false,
+            ...nextDurableSend(),
             cfg,
             accountId: accountId ?? undefined,
           }),
@@ -121,6 +188,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       await recordResult(
         sendQuickReplies(to, text, quickReplies, {
           verbose: false,
+          ...nextDurableSend(),
           cfg,
           accountId: accountId ?? undefined,
         }),
@@ -169,6 +237,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
           await recordResult(
             (lineRuntime?.sendMessageLine ?? outboundRuntime.sendMessageLine)(to, "", {
               verbose: false,
+              ...nextDurableSend(),
               mediaUrl: trimmed,
               cfg,
               accountId: accountId ?? undefined,
@@ -180,6 +249,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         await recordResult(
           (lineRuntime?.sendMessageLine ?? outboundRuntime.sendMessageLine)(to, "", {
             verbose: false,
+            ...nextDurableSend(),
             mediaUrl: resolved.mediaUrl,
             mediaKind: resolved.mediaKind,
             previewImageUrl: resolved.previewImageUrl,
@@ -198,6 +268,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         await recordResult(
           sendFlex(to, lineData.flexMessage.altText, flexContents, {
             verbose: false,
+            ...nextDurableSend(),
             cfg,
             accountId: accountId ?? undefined,
           }),
@@ -210,6 +281,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
           await recordResult(
             sendTemplate(to, template, {
               verbose: false,
+              ...nextDurableSend(),
               cfg,
               accountId: accountId ?? undefined,
             }),
@@ -221,6 +293,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         await recordResult(
           sendLocation(to, validLocation, {
             verbose: false,
+            ...nextDurableSend(),
             cfg,
             accountId: accountId ?? undefined,
           }),
@@ -232,6 +305,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
           await recordResult(
             sendFlex(to, flexMsg.altText, flexMsg.contents, {
               verbose: false,
+              ...nextDurableSend(),
               cfg,
               accountId: accountId ?? undefined,
             }),
@@ -255,6 +329,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
             await recordResult(
               sendFlex(to, message.altText, message.contents, {
                 verbose: false,
+                ...nextDurableSend(),
                 cfg,
                 accountId: accountId ?? undefined,
               }),
@@ -266,6 +341,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
           await recordResult(
             sendText(to, message.text, {
               verbose: false,
+              ...nextDurableSend(),
               cfg,
               accountId: accountId ?? undefined,
             }),
@@ -281,6 +357,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
           await recordResult(
             sendText(to, chunk, {
               verbose: false,
+              ...nextDurableSend(),
               cfg,
               accountId: accountId ?? undefined,
             }),
@@ -336,6 +413,9 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       await sendMediaMessages();
     }
 
+    // Checked before the emptiness guard so a replay that rendered fewer pushes
+    // than it recorded reports that, rather than an unrelated empty-payload error.
+    await recorder?.assertRecordFullyReplayed();
     const completedResult = lastResult as LineSendResult | null;
     if (!completedResult) {
       throw new Error("Message must be non-empty for LINE sends");
@@ -351,81 +431,138 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         ...ctx,
         payload: { text: ctx.text },
       }),
-    sendMedia: async ({ cfg, to, text, mediaUrl, accountId }) =>
-      await (
-        await loadLineOutboundRuntime()
-      ).sendMessageLine(to, text, {
-        verbose: false,
-        mediaUrl,
-        cfg,
-        accountId: accountId ?? undefined,
+    // Media rides the same payload owner as text: it is the only path that records
+    // every push of the fan-out, and splitting it would let the two routes drift.
+    sendMedia: async (ctx) =>
+      await lineOutboundAdapter.sendPayload!({
+        ...ctx,
+        payload: { text: ctx.text, mediaUrl: ctx.mediaUrl },
       }),
   }),
 };
 
-function toLineMessageSendResult(
-  result: Awaited<ReturnType<NonNullable<typeof lineOutboundAdapter.sendPayload>>>,
-  kind: MessageReceiptPartKind,
-): ChannelMessageSendResult {
-  const source = result as typeof result & { chatId?: string };
-  const receipt =
-    result.receipt ??
-    (result.messageId
-      ? createLineSendReceipt({
-          messageId: result.messageId,
-          chatId: source.chatId ?? "",
-          kind,
-        })
-      : undefined);
-  if (!receipt) {
-    throw new Error("LINE message adapter send did not return a receipt");
+/**
+ * LINE has no read-only "was this accepted?" endpoint, so reconciliation reissues
+ * the requests the interrupted send recorded, under the very keys it used: a push
+ * LINE already accepted answers 409 with its original receipt, and one that never
+ * landed is delivered now. Nothing is re-derived, because the live send and this
+ * replay would not enumerate the same pushes from the payload alone.
+ */
+async function reconcileLineUnknownSend(
+  ctx: ChannelMessageUnknownSendContext,
+): Promise<ChannelMessageUnknownSendReconciliationResult> {
+  const sendStartedAt = ctx.platformSendStartedAt ?? ctx.enqueuedAt;
+  if (Date.now() - sendStartedAt >= LINE_RETRY_KEY_TTL_MS) {
+    // LINE forgets a retry key after 24 hours, so a replay would deliver a second copy.
+    return {
+      status: "unresolved",
+      error: "LINE retry key expired before the queued send could be reconciled",
+      retryable: false,
+    };
   }
+  let plans: Awaited<ReturnType<typeof loadLineDurableSendPlans>>;
+  try {
+    plans = await loadLineDurableSendPlans(ctx.queueId);
+  } catch (error) {
+    // Incomplete evidence is fail-closed on purpose: replaying part of a record
+    // would either duplicate an accepted push or drop one LINE never received.
+    return {
+      status: "unresolved",
+      error: formatErrorMessage(error),
+      retryable: !(error instanceof LineDurableSendPlanError),
+    };
+  }
+  if (plans.length === 0) {
+    // No push was recorded, so none reached LINE and the queued delivery can be
+    // replayed from the start without duplicating anything.
+    return { status: "not_sent" };
+  }
+  // One payload can fan out into several platform sends, and the settled queue
+  // entry must carry the identity of every one of them. Collecting per push is
+  // what the live path does through this same observer; the payload's return
+  // value only carries its final send.
+  const results: OutboundDeliveryResult[] = [];
+  for (const plan of plans) {
+    try {
+      await lineOutboundAdapter.sendPayload!({
+        cfg: ctx.cfg,
+        to: plan.to,
+        text: plan.payload.text ?? "",
+        payload: plan.payload,
+        ...(plan.accountId === undefined ? {} : { accountId: plan.accountId }),
+        deliveryQueueId: ctx.queueId,
+        deliveryPartIndex: plan.partIndex,
+        deliveryPartCount: plan.partCount,
+        onDeliveryResult: (result) => {
+          results.push(result);
+        },
+      });
+    } catch (error) {
+      const status = getLinePushHttpStatus(error);
+      if (results.length === 0 && status !== undefined && status >= 400 && status < 500) {
+        // LINE rejects this exact request deterministically, so the first push
+        // could not have been accepted on the interrupted attempt either.
+        return { status: "not_sent" };
+      }
+      return {
+        status: "unresolved",
+        error: formatErrorMessage(error),
+        retryable: !(error instanceof LineDurableSendPlanError) && isRetryableLinePushError(error),
+      };
+    }
+  }
+  const receipt = createMessageReceiptFromOutboundResults({
+    results,
+    ...(ctx.threadId == null ? {} : { threadId: String(ctx.threadId) }),
+    ...(ctx.effectiveReplyToId ? { replyToId: ctx.effectiveReplyToId } : {}),
+  });
   return {
-    messageId: result.messageId || receipt.primaryPlatformMessageId,
+    status: "sent",
+    ...(receipt.primaryPlatformMessageId ? { messageId: receipt.primaryPlatformMessageId } : {}),
     receipt,
   };
 }
 
-export const lineMessageAdapter = defineChannelMessageAdapter({
+// The bridge forwards the send context verbatim. Rebuilding it by hand drops the
+// durable send seam core installed there, and an adapter that never reports its
+// platform dispatch cannot be reconciled after a crash.
+const lineMessageAdapterBase = createChannelMessageAdapterFromOutbound({
   id: "line",
-  durableFinal: {
-    capabilities: {
-      text: true,
-      media: true,
-      messageSendingHooks: true,
-    },
-  },
-  send: {
-    text: async ({ cfg, to, text, accountId, onDeliveryResult }) => {
-      const result = await lineOutboundAdapter.sendPayload!({
-        cfg,
-        to,
-        text,
-        accountId,
-        payload: { text },
-        onDeliveryResult: async (deliveryResult) => {
-          await onDeliveryResult?.(toLineMessageSendResult(deliveryResult, "text"));
-        },
-      });
-      return toLineMessageSendResult(result, "text");
-    },
-    media: async ({ cfg, to, text, mediaUrl, accountId, onDeliveryResult }) => {
-      const result = await lineOutboundAdapter.sendPayload!({
-        cfg,
-        to,
-        text,
-        mediaUrl,
-        accountId,
-        payload: { text, mediaUrl },
-        onDeliveryResult: async (deliveryResult) => {
-          await onDeliveryResult?.(toLineMessageSendResult(deliveryResult, "media"));
-        },
-      });
-      return toLineMessageSendResult(result, "media");
-    },
+  outbound: lineOutboundAdapter,
+  capabilities: {
+    text: true,
+    media: true,
+    payload: true,
+    messageSendingHooks: true,
+    reconcileUnknownSend: true,
   },
   receive: {
     defaultAckPolicy: "after_receive_record",
     supportedAckPolicies: ["after_receive_record"],
+  },
+});
+
+export const lineMessageAdapter = defineChannelMessageAdapter({
+  ...lineMessageAdapterBase,
+  durableFinal: {
+    ...lineMessageAdapterBase.durableFinal,
+    capabilities: { ...lineMessageAdapterBase.durableFinal?.capabilities, afterCommit: true },
+    // Every platform send inside one payload carries its own durable key, so a
+    // replay resolves each push independently instead of resending the batch.
+    reconcileUnknownSendKinds: { text: true, media: true, payload: true },
+    reconcileUnknownSend: reconcileLineUnknownSend,
+    afterUnknownSendTerminal: async (ctx) => await clearLineDurableSendPlans(ctx.queueId),
+  },
+  send: {
+    ...lineMessageAdapterBase.send,
+    lifecycle: {
+      // Recorded requests exist only to answer a replay. Once the delivery is
+      // committed no replay can need them, so the content does not linger.
+      afterCommit: async (ctx) => {
+        if (ctx.deliveryQueueId) {
+          await clearLineDurableSendPlans(ctx.deliveryQueueId);
+        }
+      },
+    },
   },
 });

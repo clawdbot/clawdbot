@@ -1,5 +1,4 @@
 // Line plugin module implements send behavior.
-import { randomUUID } from "node:crypto";
 import { HTTPFetchError, messagingApi } from "@line/bot-sdk";
 import lineBotSdkPackage from "@line/bot-sdk/package.json" with { type: "json" };
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
@@ -15,7 +14,7 @@ import { messageAction, normalizeLineMessageActions } from "./actions.js";
 import { resolveLineChannelAccessToken } from "./channel-access-token.js";
 import { validateLineMediaUrl } from "./outbound-media.js";
 import { createLineSendReceipt } from "./send-receipt.js";
-import { runLinePushWithRetries } from "./send-retry.js";
+import { resolveLinePushRetryKey, runLinePushWithRetries } from "./send-retry.js";
 import type { LineChannelData, LineOutboundMediaKind, LineSendResult } from "./types.js";
 
 type Message = messagingApi.Message;
@@ -67,10 +66,34 @@ interface LineSendOpts {
   durationMs?: number;
   trackingId?: string;
   replyToken?: string;
+  durableSend?: LineDurableSendRef;
+  /** Replays a recorded push under the key LINE already deduplicated it by. */
+  retryKey?: string;
+  onDurablePush?: (push: { retryKey: string; messages: Message[] }) => Promise<void>;
+  onPlatformSendDispatch?: () => Promise<void>;
 }
 
+/** Identifies one platform send inside a durable delivery so retries stay idempotent. */
+type LineDurableSendRef = {
+  deliveryQueueId?: string | null;
+  /** Index of the delivery part core planned, or 0 when the payload owns the fan-out. */
+  partIndex?: number;
+  /** Index of this push within the part it belongs to. */
+  pushIndex?: number;
+};
+
 type LineClientOpts = Pick<LineSendOpts, "cfg" | "channelAccessToken" | "accountId">;
-type LinePushOpts = Pick<LineSendOpts, "cfg" | "channelAccessToken" | "accountId" | "verbose">;
+type LinePushOpts = Pick<
+  LineSendOpts,
+  | "cfg"
+  | "channelAccessToken"
+  | "accountId"
+  | "verbose"
+  | "durableSend"
+  | "retryKey"
+  | "onDurablePush"
+  | "onPlatformSendDispatch"
+>;
 
 interface LinePushBehavior {
   errorContext?: string;
@@ -335,8 +358,17 @@ async function pushLineMessages(
   const { account, token, chatId } = createLinePushContext(to, opts);
   const normalizedMessages = messages.map(normalizeLineMessageActions);
   // One retry key per logical push: every attempt reuses it so LINE deduplicates
-  // an attempt that was accepted before its outcome reached us.
-  const retryKey = randomUUID();
+  // an attempt that was accepted before its outcome reached us. A durable intent
+  // id keeps that key stable across processes so recovery can replay this exact
+  // request instead of guessing whether it landed.
+  const retryKey = opts.retryKey ?? resolveLinePushRetryKey(opts.durableSend ?? {});
+
+  // Both records must land before the recipient can see anything. The plan is
+  // what recovery replays; the dispatch marker is what tells core a send began.
+  // A crash before either one looks like a send that never started, and one
+  // after both is reconciled instead of replayed blind.
+  await opts.onDurablePush?.({ retryKey, messages: normalizedMessages });
+  await opts.onPlatformSendDispatch?.();
 
   const response = await runLinePushWithRetries(async () => {
     try {
