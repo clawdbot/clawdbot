@@ -6,6 +6,7 @@ import { toErrorObject } from "../../infra/errors.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { onDecodedOutput } from "../decoded-output.js";
 import { addSecretInputStdio, writeSecretInputToChild } from "../spawn-secret-input.js";
+import { toStringEnv } from "./adapters/env.js";
 import {
   encodeServiceChildMessage,
   type ServiceChildAnchorMessage,
@@ -24,6 +25,16 @@ function runtimeArgv(url: URL): string[] {
   return url.pathname.endsWith(".ts")
     ? ["--import", "tsx", fileURLToPath(url)]
     : [fileURLToPath(url)];
+}
+
+function readAnchorMessage(line: string): ServiceChildAnchorMessage {
+  // SAFETY: the exact private anchor channel writes only encoded anchor protocol messages.
+  return JSON.parse(line) as ServiceChildAnchorMessage;
+}
+
+function readRelayMessage(raw: unknown): ServiceChildRelayMessage {
+  // SAFETY: the spawned relay is the sole sender on this exact private IPC channel.
+  return raw as ServiceChildRelayMessage;
 }
 
 function reserveStdioEntry(stdio: StdioEntry[], value: StdioEntry): number {
@@ -260,8 +271,7 @@ export async function createServiceChildRelayAdapter(params: {
       pending = pending.slice(newline + 1);
       let message: ServiceChildAnchorMessage;
       try {
-        // SAFETY: this private anchor channel only writes encoded anchor protocol messages.
-        message = JSON.parse(line) as ServiceChildAnchorMessage;
+        message = readAnchorMessage(line);
       } catch {
         loseIdentity("invalid anchor message");
         continue;
@@ -310,8 +320,7 @@ export async function createServiceChildRelayAdapter(params: {
   });
 
   relay.on("message", (raw: unknown) => {
-    // SAFETY: the spawned relay is the sole sender on this private IPC channel.
-    const message = raw as ServiceChildRelayMessage;
+    const message = readRelayMessage(raw);
     if (!message || typeof message !== "object" || message.generation !== generation) {
       return;
     }
@@ -337,8 +346,7 @@ export async function createServiceChildRelayAdapter(params: {
     command: params.command,
     args: params.args,
     cwd: params.cwd,
-    // SAFETY: createChildAdapter normalizes defined environment values before this boundary.
-    env: params.env as Record<string, string> | undefined,
+    env: params.env ? toStringEnv(params.env) : undefined,
     stdinMode: params.stdinMode,
     secretFd: params.secretInput?.fd,
     controlFd,
