@@ -453,12 +453,9 @@ export const PLUGIN_COMPAT_RECORDS = [
   },
   {
     code: "embedded-pi-agent-sdk-aliases",
-    status: "deprecated",
+    status: "removed",
     owner: "agent-runtime",
     introduced: "2026-05-21",
-    deprecated: "2026-05-21",
-    warningStarts: "2026-05-21",
-    removeAfter: "2026-08-21",
     replacement: "`runEmbeddedAgent` and `EmbeddedAgent*` SDK/runtime names",
     docsPath: "/plugins/sdk-runtime",
     surfaces: [
@@ -472,7 +469,7 @@ export const PLUGIN_COMPAT_RECORDS = [
       "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
     ],
     releaseNote:
-      "Legacy `runEmbeddedPiAgent` and `EmbeddedPi*` plugin aliases remain as deprecated SDK compatibility only.",
+      "The legacy `runEmbeddedPiAgent` and `EmbeddedPi*` plugin aliases were removed; plugins must use the neutral embedded-agent names.",
   },
   {
     code: "plugin-sdk-shipped-channel-setup-exports",

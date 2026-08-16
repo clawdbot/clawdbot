@@ -223,6 +223,18 @@ describe("plugin compatibility registry", () => {
     expect(record?.removeAfter).toBeUndefined();
   });
 
+  it("keeps the removed embedded Pi aliases as a migration tombstone", () => {
+    const record = listPluginCompatRecords().find(
+      (candidate) => candidate.code === "embedded-pi-agent-sdk-aliases",
+    );
+
+    expect(record).toMatchObject({
+      status: "removed",
+      replacement: "`runEmbeddedAgent` and `EmbeddedAgent*` SDK/runtime names",
+    });
+    expect(record?.removeAfter).toBeUndefined();
+  });
+
   it("keeps deprecated explicit target parser calls inside compatibility shims", () => {
     expect(deprecatedTargetParserOffenders).toEqual([]);
   });
