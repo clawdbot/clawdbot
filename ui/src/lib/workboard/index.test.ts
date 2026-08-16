@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { matchesAgentScope } from "../../pages/workboard/agent-filter.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   addWorkboardCardComment,
@@ -2914,10 +2915,109 @@ describe("workboard controller", () => {
       ].join("\n"),
       status: "review",
       priority: "normal",
-      agentId: "",
+      agentId: "main",
       sessionKey: sampleSession.key,
     });
     expect(getWorkboardState(host).cards[0]).toMatchObject({ sessionKey: sampleSession.key });
+  });
+
+  it("keeps captured worker sessions visible and executes them with their owning agent", async () => {
+    state.loaded = true;
+    const session = createGatewaySession({
+      key: "agent:writer:dashboard:captured",
+      label: "Writer follow-up",
+      status: "done",
+      hasActiveRun: false,
+    });
+    const runSessionKey = "agent:writer:subagent:workboard-default-writer-card";
+    let storedCard: WorkboardCard | undefined;
+    const client = createClient((method, params) => {
+      if (method === "chat.history") {
+        return { messages: [] };
+      }
+      if (method === "workboard.cards.create") {
+        const input = params as { agentId: string; sessionKey: string; title: string };
+        storedCard = createWorkboardCard({
+          id: "writer-card",
+          title: input.title,
+          status: "review",
+          sessionKey: input.sessionKey,
+          ...(input.agentId ? { agentId: input.agentId } : {}),
+        });
+        return { card: storedCard };
+      }
+      if (method === "workboard.cards.update") {
+        const input = params as { patch: Partial<WorkboardCard> };
+        storedCard = { ...storedCard!, ...input.patch };
+        return { card: storedCard };
+      }
+      if (method === "agent") {
+        return { sessionKey: runSessionKey, runId: "writer-run" };
+      }
+      if (method === "tasks.list") {
+        return {
+          tasks: [
+            createWorkboardTask({
+              id: "writer-task",
+              taskId: "writer-task",
+              agentId: "writer",
+              childSessionKey: runSessionKey,
+              runId: "writer-run",
+            }),
+          ],
+        };
+      }
+      return {};
+    });
+
+    const captured = await captureSessionToWorkboard({ host, client, session });
+
+    expect(client.request).toHaveBeenCalledWith(
+      "workboard.cards.create",
+      expect.objectContaining({ agentId: "writer", sessionKey: session.key }),
+    );
+    expect(captured).not.toBeNull();
+    expect(
+      matchesAgentScope(
+        captured!,
+        {
+          defaultId: "main",
+          mainKey: "main",
+          scope: "per-sender",
+          agents: [{ id: "main" }, { id: "writer" }],
+        },
+        "writer",
+      ),
+    ).toBe(true);
+
+    await expect(startWorkboardCard({ host, client, card: captured! })).resolves.toBe(
+      runSessionKey,
+    );
+    expect(client.request).toHaveBeenCalledWith(
+      "agent",
+      expect.objectContaining({ agentId: "writer", sessionKey: runSessionKey }),
+    );
+  });
+
+  it("keeps genuinely unscoped captured sessions assigned to the configured default", async () => {
+    state.loaded = true;
+    const session = createGatewaySession({ key: "legacy-dashboard-session" });
+    const client = createClient((method) => {
+      if (method === "chat.history") {
+        return { messages: [] };
+      }
+      if (method === "workboard.cards.create") {
+        return { card: createWorkboardCard({ sessionKey: session.key }) };
+      }
+      return {};
+    });
+
+    await captureSessionToWorkboard({ host, client, session });
+
+    expect(client.request).toHaveBeenCalledWith(
+      "workboard.cards.create",
+      expect.objectContaining({ agentId: "", sessionKey: session.key }),
+    );
   });
 
   it("captures a session on the selected named board", async () => {

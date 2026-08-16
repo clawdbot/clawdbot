@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { parseAgentSessionKey } from "../sessions/session-key.ts";
 import {
   isActiveWorkboardCard,
   isFailedSessionStatus,
@@ -221,7 +222,9 @@ export async function captureSessionToWorkboard(params: {
       }),
       status: sessionCaptureStatus(params.session),
       priority: "normal",
-      agentId: "",
+      // Preserve the source thread's owner; only genuinely unscoped legacy
+      // sessions stay unassigned and resolve through the configured default.
+      agentId: parseAgentSessionKey(params.session.key)?.agentId ?? "",
       sessionKey: params.session.key,
       ...selectedWorkboardBoardParams(state),
     });
