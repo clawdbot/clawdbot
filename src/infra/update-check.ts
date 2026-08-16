@@ -10,7 +10,7 @@ import {
 } from "./detect-package-manager.js";
 import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
 import { compareValidSemver, normalizeLegacyDotBetaVersion } from "./semver.js";
-import { channelToNpmTag, resolveDevUpstreamRef, type UpdateChannel } from "./update-channels.js";
+import { channelToNpmTag, DEV_BRANCH, type UpdateChannel } from "./update-channels.js";
 import {
   fetchNpmPackageTargetStatus,
   type NpmMetadataCommandRunner,
@@ -273,7 +273,12 @@ async function checkGitUpdateStatus(params: {
     return { ...base, error: branchRes?.stderr?.trim() || "git unavailable" };
   }
   const branch = branchRes.stdout.trim() || null;
-  const trackingRevision = resolveDevUpstreamRef(branch, params.useDetachedDevUpstream);
+  const trackingRevision =
+    branch === "HEAD"
+      ? params.useDetachedDevUpstream
+        ? `refs/remotes/origin/${DEV_BRANCH}`
+        : null
+      : "@{upstream}";
   const upstreamRes = trackingRevision
     ? await runCommandWithTimeout(
         ["git", "-C", root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", trackingRevision],
@@ -306,19 +311,23 @@ async function checkGitUpdateStatus(params: {
 
   const dirty = dirtyRes && dirtyRes.code === 0 ? dirtyRes.stdout.trim().length > 0 : null;
 
+  const fetchTarget =
+    branch === "HEAD" && upstreamSource === "tracking"
+      ? ["origin", `+refs/heads/${DEV_BRANCH}:refs/remotes/origin/${DEV_BRANCH}`]
+      : ["--prune"];
   const fetchOk = params.fetch
-    ? await runCommandWithTimeout(["git", "-C", root, "fetch", "--quiet", "--prune"], { timeoutMs })
+    ? await runCommandWithTimeout(["git", "-C", root, "fetch", "--quiet", ...fetchTarget], {
+        timeoutMs,
+      })
         .then((r) => r.code === 0)
         .catch(() => false)
     : null;
-
-  const canCompareUpstream = !params.fetch || fetchOk === true;
 
   // Freeze the post-fetch upstream for both graph queries. Active tracking wins;
   // a matching successful update receipt keeps intentional detached installs comparable.
   const upstreamRevision = `${upstreamSource === "tracking" ? trackingRevision : upstream}^{commit}`;
   const upstreamCommitRes =
-    canCompareUpstream && upstream && sha
+    (!params.fetch || fetchOk === true) && upstream && sha
       ? await runCommandWithTimeout(
           ["git", "-C", root, "rev-parse", "--verify", upstreamRevision],
           { timeoutMs },

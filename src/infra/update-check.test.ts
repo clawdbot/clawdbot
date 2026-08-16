@@ -627,7 +627,7 @@ describe("formatGitInstallLabel", () => {
 });
 
 describe("checkUpdateStatus", () => {
-  it("resolves detached dev tracking before matching update receipts", async () => {
+  it("resolves manager-style detached dev tracking before matching update receipts", async () => {
     await withTestDir({ prefix: "openclaw-update-check-receipt-fallback-" }, async (base) => {
       const sourceRoot = path.join(base, "source");
       const localRoot = path.join(base, "local");
@@ -641,24 +641,35 @@ describe("checkUpdateStatus", () => {
       const baseSha = await runGit(sourceRoot, "rev-parse", "HEAD");
       await commitGit(sourceRoot, "target");
       const targetSha = await runGit(sourceRoot, "rev-parse", "HEAD");
-      await runGit(base, "clone", "--quiet", sourceRoot, localRoot);
+      await runGit(base, "clone", "--quiet", "--no-checkout", sourceRoot, localRoot);
       await runGit(localRoot, "checkout", "--detach", targetSha);
+      await runGit(localRoot, "branch", "-D", "main");
+      expect(await runGit(localRoot, "branch", "--list", "main")).toBe("");
       const fallback = { currentSha: targetSha, upstreamRef: "origin/main" };
-      const readStatus = (params: { fetch?: boolean; fallback?: typeof fallback } = {}) =>
+      const readStatus = (
+        params: { fetch?: boolean; fallback?: typeof fallback; detached?: boolean } = {},
+      ) =>
         checkUpdateStatus({
           root: localRoot,
           includeRegistry: false,
           fetchGit: params.fetch ?? false,
           timeoutMs: 5000,
-          useDetachedDevUpstream: true,
+          useDetachedDevUpstream: params.detached ?? true,
           ...(params.fallback ? { gitUpstreamFallback: params.fallback } : {}),
         });
 
-      expect((await readStatus()).git?.upstream).toBe("origin/main");
-      await runGit(localRoot, "branch", "--unset-upstream", "main");
-      expect((await readStatus()).git?.upstream).toBeNull();
+      expect((await readStatus({ fetch: true })).git).toMatchObject({
+        branch: "HEAD",
+        sha: targetSha,
+        upstream: "origin/main",
+        upstreamSource: "tracking",
+        upstreamSha: targetSha,
+        ahead: 0,
+        behind: 0,
+        fetchOk: true,
+      });
 
-      const current = await readStatus({ fetch: true, fallback });
+      const current = await readStatus({ fetch: true, fallback, detached: false });
       expect(current.git).toMatchObject({
         branch: "HEAD",
         sha: targetSha,
@@ -671,7 +682,15 @@ describe("checkUpdateStatus", () => {
 
       await commitGit(sourceRoot, "newer");
       const newerSha = await runGit(sourceRoot, "rev-parse", "HEAD");
-      const behind = await readStatus({ fetch: true, fallback });
+      expect((await readStatus({ fetch: true })).git).toMatchObject({
+        upstream: "origin/main",
+        upstreamSource: "tracking",
+        upstreamSha: newerSha,
+        ahead: 0,
+        behind: 1,
+        fetchOk: true,
+      });
+      const behind = await readStatus({ fetch: true, fallback, detached: false });
       expect(behind.git).toMatchObject({
         upstreamSource: "receipt",
         upstreamSha: newerSha,
@@ -680,7 +699,7 @@ describe("checkUpdateStatus", () => {
       });
 
       for (const fallbackOverride of [undefined, { ...fallback, currentSha: baseSha }]) {
-        const unmanaged = await readStatus({ fallback: fallbackOverride });
+        const unmanaged = await readStatus({ fallback: fallbackOverride, detached: false });
         expect(unmanaged.git).toMatchObject({ branch: "HEAD", upstream: null });
         expect(unmanaged.git).not.toHaveProperty("upstreamSource");
       }

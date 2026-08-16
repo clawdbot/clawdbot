@@ -3725,6 +3725,9 @@ describe("update-cli", () => {
       },
       assert: () => {
         expect(getLogOutput()).toContain("OpenClaw update status");
+        expect(checkUpdateStatus).toHaveBeenCalledWith(
+          expect.objectContaining({ useDetachedDevUpstream: false }),
+        );
       },
     },
     {
@@ -3759,6 +3762,9 @@ describe("update-cli", () => {
     const channel = parsed.channel as { value?: unknown; config?: unknown };
     expect(channel.value).toBe("dev");
     expect(channel.config).toBe("dev");
+    expect(checkUpdateStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ useDetachedDevUpstream: true }),
+    );
   });
 
   it("parses update status --json as the subcommand option", async () => {
