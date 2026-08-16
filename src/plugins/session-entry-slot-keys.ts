@@ -32,6 +32,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "spawnedWorkspaceDir",
   "spawnedCwd",
   "sessionDiffBaseline",
+  "sessionDiffBaselineCapture",
   "worktree",
   "projectId",
   "parentSessionKey",

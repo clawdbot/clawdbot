@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
 import type { SessionResetBoundaryReason } from "./session-reset-boundary-event.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type SessionLifecycleArtifactCleanupParams = {
   agentId?: string;

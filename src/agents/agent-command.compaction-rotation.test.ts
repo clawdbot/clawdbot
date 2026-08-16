@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionEntry } from "../config/sessions.js";
+import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   appendTranscriptEvent,
@@ -12,6 +12,7 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/session-diff-baseline-capture.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { defaultRuntime } from "../runtime.js";
@@ -23,6 +24,8 @@ import { createAgentRunRestartAbortError } from "./run-termination.js";
 type ProviderModelNormalizationParams = { provider: string; context: { modelId: string } };
 type LoadManifestModelCatalogParams = Parameters<typeof loadManifestModelCatalog>[0];
 type RunAgentAttempt = typeof runAgentAttempt;
+type CaptureSessionDiffBaseline =
+  (typeof import("../sessions/session-diff.js"))["captureSessionDiffBaseline"];
 type CliCompactionParams = {
   sessionId: string;
   sessionEntry?: SessionEntry;
@@ -50,6 +53,13 @@ const state = vi.hoisted(() => ({
   deliverAgentCommandResultMock: vi.fn(),
   emitAgentEventMock: vi.fn(),
   deliveryFreshEntries: [] as Array<SessionEntry | undefined>,
+  captureSessionDiffBaselineMock: vi.fn<CaptureSessionDiffBaseline>(),
+}));
+
+vi.mock("../sessions/session-diff.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../sessions/session-diff.js")>()),
+  captureSessionDiffBaseline: (params: Parameters<CaptureSessionDiffBaseline>[0]) =>
+    state.captureSessionDiffBaselineMock(params),
 }));
 
 vi.mock("../config/io.js", () => ({
@@ -336,6 +346,33 @@ const COMPACTION_ERROR =
   "CLI transcript compaction failed for openai/gpt-5.5: Summarization failed: Connection error.";
 
 describe("agentCommand compaction transcript rotation", () => {
+  it("settles a precreated baseline claim before embedded execution", async () => {
+    const sessionId = "precreated-agent-command",
+      sessionKey = `agent:main:explicit:${sessionId}`;
+    await replaceSessionEntry({ sessionKey, storePath: requireStorePath() }, {
+      sessionId,
+      sessionDiffBaselineCapture: createSessionDiffBaselineCaptureClaim(),
+      updatedAt: Date.now(),
+    } as InternalSessionEntry);
+    state.captureSessionDiffBaselineMock.mockResolvedValueOnce({
+      version: 1,
+      sessionId,
+      root: "/workspace",
+      files: [],
+    });
+    state.runAgentAttemptMock.mockImplementationOnce(async () => {
+      expect(findStoredSessionEntry(sessionKey)?.sessionDiffBaseline).toMatchObject({
+        version: 1,
+        sessionId,
+      });
+      return makeResult({ sessionId, text: "captured before execution" });
+    });
+
+    await agentCommand({ message: "write after capture", sessionId, sessionKey });
+
+    expect(state.captureSessionDiffBaselineMock).toHaveBeenCalledOnce();
+  });
+
   it("does not re-normalize an exact configured custom provider through plugin runtime", async () => {
     state.normalizeProviderModelIdWithRuntimeMock.mockImplementation(
       ({ provider }: ProviderModelNormalizationParams) => {

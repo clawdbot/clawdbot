@@ -136,6 +136,23 @@ describe("loadSessionDiff", () => {
     expect(result.unavailableReason).toBe("not_git");
   });
 
+  it("shows the full diff without mutating a pending baseline claim", async () => {
+    initRepo(repoRoot);
+    fs.writeFileSync(path.join(repoRoot, "pending.txt"), "pending first turn\n");
+    mockSession(repoRoot, {
+      sessionDiffBaselineCapture: {
+        version: 1,
+        captureId: "pending-capture",
+        status: "pending",
+      },
+    });
+
+    const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+
+    expect(result.files.map((file) => file.path)).toEqual(["pending.txt"]);
+    expect(hoisted.patchSessionEntryCore).not.toHaveBeenCalled();
+  });
+
   it("uses the persisted fixed-store owner for a bare session checkout", async () => {
     initRepo(repoRoot);
     fs.writeFileSync(path.join(repoRoot, "owned.txt"), "ops\n");

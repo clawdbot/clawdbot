@@ -27,7 +27,7 @@ import {
   forkSessionFromParentWithDecision,
   MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE,
 } from "../auto-reply/reply/session-fork.js";
-import type { SessionEntry } from "../config/sessions.js";
+import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
@@ -35,6 +35,8 @@ import {
   listSessionEntriesReadOnly,
   resolveSessionEntryAccessTarget,
 } from "../config/sessions/session-accessor.js";
+import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/session-diff-baseline-capture.js";
+import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
 import {
   buildSessionCreationStamp,
   type SessionCreatedActor,
@@ -326,6 +328,8 @@ export async function createGatewaySession(params: {
   authorizedAgentHarnessId?: string;
   /** Exact plugin namespace authorized by the scoped plugin runtime. */
   authorizedPluginId?: string;
+  /** Arms local checkout attribution in the authoritative create/reset commit. */
+  armSessionDiffBaselineCapture?: boolean;
   afterCreate?: (created: CreatedGatewaySession) => Promise<void>;
   /** Synchronous caller-authority guard checked by each durable owner boundary. */
   commitGuard?: () => void;
@@ -713,6 +717,7 @@ export async function createGatewaySession(params: {
         ...(execCwd ? { execCwd } : {}),
         ...(params.clearExecBinding ? { clearExecBinding: true } : {}),
         ...(params.clearSpawnedCwd && !spawnedCwd ? { clearSpawnedCwd: true } : {}),
+        ...(params.armSessionDiffBaselineCapture ? { armSessionDiffBaselineCapture: true } : {}),
         ...(params.commitGuard ? { assertAuthorizedInstance: params.commitGuard } : {}),
       });
       if (!resetResult.ok) {
@@ -728,7 +733,7 @@ export async function createGatewaySession(params: {
         ok: true,
         key: resetResult.key,
         agentId: resetResult.agentId,
-        entry: resetResult.entry,
+        entry: projectPublicSessionEntry(resetResult.entry),
         resolved: resetResult.resolved,
         resetExisting: true,
       };
@@ -1059,7 +1064,7 @@ export async function createGatewaySession(params: {
         const catalogResolvedModel = params.catalogTarget
           ? resolveSessionModelRef(params.cfg, patched.entry, target.agentId)
           : undefined;
-        const initializedEntry: SessionEntry = {
+        const initializedEntry: InternalSessionEntry = {
           ...patched.entry,
           // New rows must expose the same canonical delivery shape to callbacks
           // that the SQLite writer persists, or guarded finalization sees its own write as drift.
@@ -1088,6 +1093,11 @@ export async function createGatewaySession(params: {
           ...(spawnedCwd ? { spawnedCwd } : {}),
           ...(preparedLifecycle?.worktree ? { worktree: preparedLifecycle.worktree } : {}),
           ...(execNode ? { execHost: "node", execNode, ...(execCwd ? { execCwd } : {}) } : {}),
+          ...(createdNewEntry && params.armSessionDiffBaselineCapture && !execNode
+            ? {
+                sessionDiffBaselineCapture: createSessionDiffBaselineCaptureClaim(),
+              }
+            : {}),
           ...(initialAgentHarnessId ? { agentHarnessId: initialAgentHarnessId } : {}),
           ...(createdNewEntry && params.authorizedPluginId && !params.catalogTarget
             ? { pluginOwnerId: params.authorizedPluginId }
@@ -1233,7 +1243,7 @@ export async function createGatewaySession(params: {
     createdContext = {
       key: target.canonicalKey,
       agentId: target.agentId,
-      entry: created.entry,
+      entry: projectPublicSessionEntry(created.entry),
       storePath: target.storePath,
     };
     lifecyclePreparationCommitted = true;
@@ -1283,7 +1293,7 @@ export async function createGatewaySession(params: {
       ok: true,
       key: target.canonicalKey,
       agentId: target.agentId,
-      entry: created.entry,
+      entry: projectPublicSessionEntry(created.entry),
       resolved: {
         modelProvider: selectedModel.provider,
         model: selectedModel.model,

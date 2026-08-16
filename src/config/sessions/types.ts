@@ -33,6 +33,7 @@ import type {
   SessionEntryProvenance,
 } from "./session-entry-provenance.js";
 import type { AgentPatchedSessionModelFallback } from "./session-model-fallback.js";
+export type { SessionDiffBaselineCapture } from "./session-diff-baseline-capture.js";
 
 export type SessionScope = "per-sender" | "global";
 export type SessionChatType = ChatType;
@@ -610,6 +611,8 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   lifecycleRunId?: string;
   /** Run admitted by the session lane; overwritten at admission and checked by transcript writes. */
   activeWriterRunId?: string;
+  /** Private per-generation ownership for the pre-runtime checkout baseline capture. */
+  sessionDiffBaselineCapture?: import("./session-diff-baseline-capture.js").SessionDiffBaselineCapture;
   mainRestartRecovery?: MainRestartRecoveryState;
 };
 

@@ -94,6 +94,8 @@ export async function resetReplyRunSession(params: {
     contextBudgetStatus: undefined,
     systemPromptReport: undefined,
     fallbackNotice: undefined,
+    sessionDiffBaseline: undefined,
+    sessionDiffBaselineCapture: undefined,
     compactionCount: 0,
     memoryFlush: undefined,
   };

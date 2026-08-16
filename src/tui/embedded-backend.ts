@@ -1,6 +1,6 @@
 // Implements the embedded backend used by local TUI sessions.
 import { randomUUID } from "node:crypto";
-import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
+import type { ErrorShape, SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { CHAT_HISTORY_MAX_ENTRIES } from "../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { agentCommandFromIngress } from "../agents/agent-command.js";
 import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
@@ -759,7 +759,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       agentId: opts.agentId,
       exactRead: true,
     });
-    const applied = await applySessionPatchProjection({
+    const applied = await applySessionPatchProjection<{ ok: false; error: ErrorShape }>({
       ...(opts.label === undefined ? { sessionKeys: target.storeKeys } : {}),
       storePath: target.storePath,
       resolveTarget: ({ store }) => {
@@ -815,6 +815,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       ...(opts?.agentId ? { agentId: opts.agentId } : {}),
       reason: reason === "new" ? "new" : "reset",
       commandSource: "tui:embedded",
+      armSessionDiffBaselineCapture: true,
     });
     if (!result.ok) {
       throw new Error(result.error.message);
@@ -832,6 +833,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       cfg,
       ...opts,
       creation: { via: "operator", actor: { type: "human" } },
+      armSessionDiffBaselineCapture: true,
       emitCommandHooks: Boolean(opts.parentSessionKey),
       commandSource: "tui:embedded",
       loadGatewayModelCatalog: () =>

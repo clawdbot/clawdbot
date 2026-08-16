@@ -180,6 +180,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       commandSource: "gateway:sessions.reset",
       creation: resolveOperatorSessionCreation(client),
       authorizedPluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
+      armSessionDiffBaselineCapture: true,
       workerPlacementContext: context,
       assertAuthorizedInstance: sessionMutationAuthorization?.assertCurrent,
     });

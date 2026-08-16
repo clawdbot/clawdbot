@@ -42,8 +42,8 @@ import type {
 import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
-  activeRecoveryFieldsForSameSession,
-  clearRecoveryStateForRotatedSessionPatch,
+  generationValidPrivateFieldsForSameSession,
+  clearGenerationPrivateFieldsForRotatedSessionPatch,
   projectPluginSessionEntry,
   projectPluginSessionEntryPatch,
   projectPluginSessionStore,
@@ -148,17 +148,17 @@ type SessionLifecycleArtifactsCleanupResult = {
   removedEntries: number;
 };
 
-function preserveCoreRecoveryState(
+function preserveGenerationPrivateFields(
   persistedEntry: InternalSessionEntry,
   publicPatch: Partial<SessionEntry>,
 ): Partial<InternalSessionEntry> {
   const nextSessionId = Object.hasOwn(publicPatch, "sessionId")
     ? publicPatch.sessionId
     : persistedEntry.sessionId;
-  const recoveryState = activeRecoveryFieldsForSameSession(persistedEntry, nextSessionId);
-  return recoveryState
-    ? { ...publicPatch, ...recoveryState }
-    : clearRecoveryStateForRotatedSessionPatch(persistedEntry, publicPatch);
+  const privateFields = generationValidPrivateFieldsForSameSession(persistedEntry, nextSessionId);
+  return privateFields
+    ? { ...publicPatch, ...privateFields }
+    : clearGenerationPrivateFieldsForRotatedSessionPatch(persistedEntry, publicPatch);
 }
 
 function resolveLegacySessionStoreTarget(storePath: string): {
@@ -445,7 +445,7 @@ export async function patchSessionEntry(
       if (!patch) {
         return null;
       }
-      return preserveCoreRecoveryState(persistedEntry, projectPluginSessionEntryPatch(patch));
+      return preserveGenerationPrivateFields(persistedEntry, projectPluginSessionEntryPatch(patch));
     },
     {
       fallbackEntry: params.fallbackEntry
@@ -490,7 +490,7 @@ export async function updateSessionStoreEntry(
         return null;
       }
       const persistedEntry = internalEntry as InternalSessionEntry;
-      return preserveCoreRecoveryState(persistedEntry, projectPluginSessionEntryPatch(patch));
+      return preserveGenerationPrivateFields(persistedEntry, projectPluginSessionEntryPatch(patch));
     },
     {
       skipMaintenance: params.skipMaintenance,
@@ -508,7 +508,7 @@ export async function upsertSessionEntry(params: UpsertSessionEntryParams): Prom
     toSessionAccessScope(params),
     (internalEntry) => {
       const persistedEntry = internalEntry as InternalSessionEntry;
-      return preserveCoreRecoveryState(persistedEntry, publicEntry);
+      return preserveGenerationPrivateFields(persistedEntry, publicEntry);
     },
     { fallbackEntry: publicEntry, replaceEntry: true },
   );
