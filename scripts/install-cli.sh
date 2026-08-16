@@ -1285,7 +1285,9 @@ install_openclaw() {
 
   if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@${resolved_requested}"; then
     log "npm install openclaw@${resolved_requested} failed; retrying once"
-    env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@${resolved_requested}"
+    if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@${resolved_requested}"; then
+      return 1
+    fi
   fi
 
   mkdir -p "${PREFIX}/bin"

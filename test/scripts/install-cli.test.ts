@@ -1656,7 +1656,11 @@ describe("install-cli.sh", () => {
             "npm_config_has_raw_key() { return 1; }",
             `PREFIX=${JSON.stringify(prefix)}`,
             `OPENCLAW_VERSION=${requested}`,
+            "JSON=1",
+            "set +e",
             "install_openclaw",
+            "status=$?",
+            'exit "$status"',
           ].join("\n"),
           {
             NPM_FAKE_CALLS: calls,
@@ -1671,6 +1675,8 @@ describe("install-cli.sh", () => {
         );
         if (status !== 0) {
           expect(result.stderr).toContain(`${error} (attempt 2)`);
+          expect(result.stdout).not.toContain('"status":"ok"');
+          expect(existsSync(join(prefix, "bin", "openclaw"))).toBe(false);
         }
         if (requested !== "next") {
           expect(`${result.stdout}\n${result.stderr}`).not.toContain("openclaw@next");
