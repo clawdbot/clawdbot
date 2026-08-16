@@ -6,6 +6,7 @@ import type {
   WorkerDispatchPlacementStore,
   WorkerDrainingDispatchPlacement,
 } from "./placement-dispatch-failure.js";
+import { placementTurnOwner } from "./placement-record.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import type { WorkerWorkspaceResultConflict } from "./workspace-conflicts.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
@@ -109,17 +110,19 @@ export async function recoverPendingWorkspaceResults(
       continue;
     }
     try {
-      const claim = placement?.turnClaim;
-      if (
+      const turnClaim =
         (placement?.state !== "active" && placement?.state !== "draining") ||
         placement.environmentId !== pending.environmentId ||
-        placement.activeOwnerEpoch !== pending.ownerEpoch ||
-        claim?.owner !== "worker" ||
-        claim.claimId !== pending.claimId ||
-        claim.runId !== pending.runId ||
-        claim.generation !== pending.placementGeneration ||
-        claim.ownerEpoch !== pending.ownerEpoch
-      ) {
+        placement.activeOwnerEpoch !== pending.ownerEpoch
+          ? undefined
+          : {
+              sessionId: placement.sessionId,
+              claimId: pending.claimId,
+              runId: pending.runId,
+              placementGeneration: pending.placementGeneration,
+              owner: placementTurnOwner(placement),
+            };
+      if (!turnClaim || !placements.validateWorkspaceResultClaim(turnClaim)) {
         if (pending.stagedResultRef && pending.workspaceAcceptedAtMs === null) {
           // A staged unaccepted result outlives stale placement ownership. Only
           // explicit operator abandonment may delete its durable Git ref.
@@ -150,29 +153,9 @@ export async function recoverPendingWorkspaceResults(
         }
         continue;
       }
-      const turnClaim = {
-        sessionId: placement.sessionId,
-        claimId: claim.claimId,
-        runId: claim.runId,
-        placementGeneration: claim.generation,
-        owner: {
-          kind: "worker" as const,
-          environmentId: placement.environmentId,
-          ownerEpoch: placement.activeOwnerEpoch,
-        },
-      };
-      const localPath = await deps.resolveWorkspacePath({
-        sessionId: placement.sessionId,
-        sessionKey: placement.sessionKey,
-        agentId: placement.agentId,
-      });
+      const localPath = await deps.resolveWorkspacePath(placement);
       const priorWorkspaceResultConflict =
-        placement.workspaceResultConflict ??
-        (await deps.resolveWorkspaceResultConflict({
-          sessionId: placement.sessionId,
-          sessionKey: placement.sessionKey,
-          agentId: placement.agentId,
-        }));
+        placement.workspaceResultConflict ?? (await deps.resolveWorkspaceResultConflict(placement));
       const canonicalStagedResultRef = workerWorkspaceResultRef(turnClaim.claimId);
       let stagedResultRef = pending.stagedResultRef;
       if (
@@ -225,7 +208,9 @@ export async function recoverPendingWorkspaceResults(
         }
         // Clean refs are deleted while their accepted fence still exists. A
         // crash after deletion resumes here and can safely finish ownership.
-        await placements.closeWorkerTurnToolState(turnClaim);
+        if (turnClaim.owner.kind === "worker") {
+          await placements.closeWorkerTurnToolState(turnClaim);
+        }
         if (
           environment &&
           environment.state !== "destroyed" &&
@@ -263,17 +248,7 @@ export async function recoverPendingWorkspaceResults(
           abort: () => placements.abortWorkspaceReconciliation(owner),
         };
         await deps.workspaceOperations.run(placement.environmentId, async () => {
-          const owned = placements.get(placement.sessionId);
-          const ownedClaim = owned?.turnClaim;
-          if (
-            (owned?.state !== "active" && owned?.state !== "draining") ||
-            owned.generation !== placement.generation ||
-            owned.environmentId !== placement.environmentId ||
-            owned.activeOwnerEpoch !== placement.activeOwnerEpoch ||
-            ownedClaim?.owner !== "worker" ||
-            ownedClaim.claimId !== claim.claimId ||
-            ownedClaim.runId !== claim.runId
-          ) {
+          if (!placements.validateWorkspaceResultClaim(turnClaim)) {
             throw new Error("Recovered workspace result lost its placement owner");
           }
           const interrupted = journal.load();
@@ -353,11 +328,9 @@ export async function recoverPendingWorkspaceResults(
           continue;
         }
         if (pending.workspaceAcceptedAtMs !== null && environment?.state === "destroyed") {
-          await placements.closeWorkerTurnToolState(turnClaim);
           placements.completeWorkspaceResultAndReleaseTurn(turnClaim, { reclaim: true });
           continue;
         }
-        await placements.closeWorkerTurnToolState(turnClaim);
         const failed = placements.failWorkspaceResultAndReleaseTurn(
           pending,
           pendingWorkerLossError(environment, pending.sessionId),
@@ -386,17 +359,7 @@ export async function recoverPendingWorkspaceResults(
         ownerEpoch: placement.activeOwnerEpoch,
       });
       await deps.workspaceOperations.run(placement.environmentId, async () => {
-        const owned = placements.get(placement.sessionId);
-        const ownedClaim = owned?.turnClaim;
-        if (
-          (owned?.state !== "active" && owned?.state !== "draining") ||
-          owned.generation !== placement.generation ||
-          owned.environmentId !== placement.environmentId ||
-          owned.activeOwnerEpoch !== placement.activeOwnerEpoch ||
-          ownedClaim?.owner !== "worker" ||
-          ownedClaim.claimId !== claim.claimId ||
-          ownedClaim.runId !== claim.runId
-        ) {
+        if (!placements.validateWorkspaceResultClaim(turnClaim)) {
           throw new Error("Recovered workspace result lost its placement owner");
         }
         const quiescence = await tunnel.quiesceWorkspace(placement.remoteWorkspaceDir);

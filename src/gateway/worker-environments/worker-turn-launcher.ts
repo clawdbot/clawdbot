@@ -15,6 +15,7 @@ import { redactSensitiveText } from "../../logging/redact.js";
 import { parseWorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
 import { supportsWorkerExecutionContextLaunch } from "./admission.js";
+import { placementTurnOwner } from "./placement-record.js";
 import { createRemoteExecPlacementSandbox } from "./placement-sandbox.js";
 import type {
   WorkerSessionPlacementRecord,
@@ -459,11 +460,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
           ...identity,
           claimId: randomUUID(),
           runId: claim.runId,
-          owner: {
-            kind: "local",
-            environmentId: placement.environmentId,
-            ownerEpoch: placement.activeOwnerEpoch,
-          },
+          owner: placementTurnOwner(placement),
         });
         const refreshed = options.placements.get(claim.sessionId);
         if (

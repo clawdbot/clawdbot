@@ -2,7 +2,10 @@ import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
+  isCurrentPlacementTurnClaim,
+  placementTurnOwner,
   resolvePlacementTurnEnvironment,
+  type WorkerSessionPlacementRecord,
   type WorkerSessionTurnClaim,
 } from "./placement-record.js";
 import { getRequired } from "./placement-row-codec.js";
@@ -28,6 +31,52 @@ export type WorkerWorkspacePendingResult = {
   workspaceAcceptedAtMs: number | null;
   stagedResultRef: string | null;
 };
+
+function matchesWorkspaceResultClaim(
+  placement: WorkerSessionPlacementRecord,
+  row: StateDatabase["worker_workspace_pending_results"],
+  claim: WorkerSessionTurnClaim,
+): boolean {
+  const recoveryOwner =
+    placement.state === "active" || placement.state === "draining"
+      ? placementTurnOwner(placement)
+      : undefined;
+  const recoveryGenerationMatches =
+    placement.state === "active"
+      ? placement.generation === claim.placementGeneration
+      : placement.state === "draining" && placement.generation === claim.placementGeneration + 1;
+  return (
+    row.session_id === claim.sessionId &&
+    row.environment_id === placement.environmentId &&
+    row.owner_epoch === placement.activeOwnerEpoch &&
+    row.placement_generation === claim.placementGeneration &&
+    row.claim_id === claim.claimId &&
+    row.run_id === claim.runId &&
+    (isCurrentPlacementTurnClaim(placement, claim) ||
+      // Restart revokes local authority; only the exact durable result may finish.
+      (recoveryGenerationMatches &&
+        placement.turnClaim === null &&
+        recoveryOwner?.kind === "local" &&
+        claim.owner.kind === "local" &&
+        claim.owner.environmentId === recoveryOwner.environmentId &&
+        claim.owner.ownerEpoch === recoveryOwner.ownerEpoch))
+  );
+}
+
+export function hasCurrentWorkspaceResultClaim(
+  db: DatabaseSync,
+  claim: WorkerSessionTurnClaim,
+): boolean {
+  const placement = getRequired(db, claim.sessionId);
+  const row = executeSqliteQuerySync(
+    db,
+    query(db)
+      .selectFrom("worker_workspace_pending_results")
+      .selectAll()
+      .where("session_id", "=", claim.sessionId),
+  ).rows[0];
+  return Boolean(row && matchesWorkspaceResultClaim(placement, row, claim));
+}
 
 export function clearWorkerWorkspacePendingResult(db: DatabaseSync, sessionId: string): void {
   executeSqliteQuerySync(
@@ -124,17 +173,19 @@ function markWorkerWorkspacePendingResultAccepted(
 ): void {
   const placement = getRequired(db, claim.sessionId);
   const environment = resolvePlacementTurnEnvironment(placement, claim);
-  if (!environment) {
+  if (!environment && !hasCurrentWorkspaceResultClaim(db, claim)) {
     throw new Error(`Cannot accept stale worker workspace result for ${claim.sessionId}`);
   }
+  const environmentId = environment?.environmentId ?? placement.environmentId!;
+  const ownerEpoch = environment?.ownerEpoch ?? placement.activeOwnerEpoch!;
   const result = executeSqliteQuerySync(
     db,
     query(db)
       .updateTable("worker_workspace_pending_results")
       .set({ workspace_accepted_at_ms: nowMs })
       .where("session_id", "=", claim.sessionId)
-      .where("environment_id", "=", environment.environmentId)
-      .where("owner_epoch", "=", environment.ownerEpoch)
+      .where("environment_id", "=", environmentId)
+      .where("owner_epoch", "=", ownerEpoch)
       .where("placement_generation", "=", claim.placementGeneration)
       .where("claim_id", "=", claim.claimId)
       .where("run_id", "=", claim.runId),
@@ -148,7 +199,6 @@ export function createPlacementWorkspaceResultOps(runtime: PlacementStoreRuntime
   const { instanceId, now, read, write } = runtime;
   const assertPendingClaim = (db: DatabaseSync, claim: WorkerSessionTurnClaim) => {
     const placement = getRequired(db, claim.sessionId);
-    const environment = resolvePlacementTurnEnvironment(placement, claim);
     const row = executeSqliteQuerySync(
       db,
       query(db)
@@ -156,15 +206,7 @@ export function createPlacementWorkspaceResultOps(runtime: PlacementStoreRuntime
         .selectAll()
         .where("session_id", "=", claim.sessionId),
     ).rows[0];
-    if (
-      !environment ||
-      !row ||
-      row.environment_id !== environment.environmentId ||
-      row.owner_epoch !== environment.ownerEpoch ||
-      row.placement_generation !== claim.placementGeneration ||
-      row.claim_id !== claim.claimId ||
-      row.run_id !== claim.runId
-    ) {
+    if (!row || !matchesWorkspaceResultClaim(placement, row, claim)) {
       throw new Error(`Cannot update stale worker workspace result for ${claim.sessionId}`);
     }
     return row;
@@ -172,6 +214,10 @@ export function createPlacementWorkspaceResultOps(runtime: PlacementStoreRuntime
   return {
     workspaceResultInstanceId(): string {
       return instanceId;
+    },
+
+    validateWorkspaceResultClaim(claim: WorkerSessionTurnClaim): boolean {
+      return hasCurrentWorkspaceResultClaim(read(), claim);
     },
 
     listPendingWorkspaceResults(): WorkerWorkspacePendingResult[] {
