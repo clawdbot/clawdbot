@@ -1,5 +1,4 @@
-const DEFAULT_DEBOUNCE_MS = 200;
-const DEFAULT_MAX_WAIT_MS = 1_000;
+import { CONTROL_MODEL_SESSION_REFRESH_DEFAULTS } from "./defaults.js";
 
 export type SessionEventRefreshCoordinatorOptions = Readonly<{
   canRefresh: () => boolean;
@@ -16,8 +15,8 @@ export type SessionEventRefreshCoordinatorOptions = Readonly<{
 export function createSessionEventRefreshCoordinator(
   options: SessionEventRefreshCoordinatorOptions,
 ) {
-  const debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
-  const maxWaitMs = options.maxWaitMs ?? DEFAULT_MAX_WAIT_MS;
+  const debounceMs = options.debounceMs ?? CONTROL_MODEL_SESSION_REFRESH_DEFAULTS.debounceMs;
+  const maxWaitMs = options.maxWaitMs ?? CONTROL_MODEL_SESSION_REFRESH_DEFAULTS.maxWaitMs;
   const now = options.now ?? Date.now;
   let timer: ReturnType<typeof globalThis.setTimeout> | null = null;
   let deadline: number | null = null;

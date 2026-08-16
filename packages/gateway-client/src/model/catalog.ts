@@ -1,4 +1,5 @@
 import type { SessionRow } from "@openclaw/gateway-protocol";
+import { CONTROL_MODEL_DEFAULT_BOUNDS } from "./defaults.js";
 import { createSessionEventRefreshCoordinator } from "./session-event-refresh.js";
 export { createSessionEventRefreshCoordinator } from "./session-event-refresh.js";
 
@@ -147,8 +148,6 @@ type SessionsListResponse = Readonly<{
   defaults?: unknown;
 }>;
 
-const DEFAULT_MAX_SESSIONS = 200;
-const DEFAULT_MAX_SUBSCRIBERS = 100;
 const MAX_CATALOG_QUERY_LIMIT = 1_000;
 const MAX_CATALOG_QUERY_OFFSET = 1_000_000;
 const MAX_CATALOG_QUERY_ACTIVE_MINUTES = 1_000_000;
@@ -336,8 +335,14 @@ export class ControlModelCatalogImpl implements ControlModelCatalog {
 
   constructor(options: ControlModelCatalogOptions) {
     this.#gateway = options.gateway;
-    this.#maxSessions = normalizeBound(options.bounds?.maxSessions, DEFAULT_MAX_SESSIONS);
-    this.#maxSubscribers = normalizeBound(options.bounds?.maxSubscribers, DEFAULT_MAX_SUBSCRIBERS);
+    this.#maxSessions = normalizeBound(
+      options.bounds?.maxSessions,
+      CONTROL_MODEL_DEFAULT_BOUNDS.maxSessions,
+    );
+    this.#maxSubscribers = normalizeBound(
+      options.bounds?.maxSubscribers,
+      CONTROL_MODEL_DEFAULT_BOUNDS.maxSubscribers,
+    );
     this.#agentId = options.agentId?.trim() || undefined;
     this.#autoRefreshSessionCatalog = options.autoRefreshSessionCatalog !== false;
     this.#now = options.now ?? Date.now;

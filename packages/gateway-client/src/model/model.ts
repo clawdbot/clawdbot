@@ -19,6 +19,7 @@ import {
   type ControlModelConversationBounds,
   type ControlModelConversationHost,
 } from "./conversation.js";
+import { CONTROL_MODEL_DEFAULT_BOUNDS } from "./defaults.js";
 
 export type {
   ControlModelCatalog,
@@ -87,8 +88,6 @@ export type ControlModel = Readonly<
   }
 >;
 
-const DEFAULT_MAX_INACTIVE_CONVERSATIONS = 32;
-
 function normalizeBound(value: number | undefined, fallback: number): number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : fallback;
 }
@@ -118,7 +117,7 @@ class ControlModelImpl implements ControlModel {
     this.#gateway = options.gateway;
     this.#maxInactiveConversations = normalizeBound(
       options.bounds?.maxInactiveConversations,
-      DEFAULT_MAX_INACTIVE_CONVERSATIONS,
+      CONTROL_MODEL_DEFAULT_BOUNDS.maxInactiveConversations,
     );
     this.#agentId = options.agentId?.trim() || undefined;
     this.#autoLoadConversationHistory = options.autoLoadConversationHistory !== false;
@@ -127,21 +126,66 @@ class ControlModelImpl implements ControlModel {
       ((prefix) =>
         `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`);
     this.#conversationBounds = {
-      maxSubscribers: normalizeBound(options.bounds?.maxSubscribers, 100),
-      maxMessages: normalizeBound(options.bounds?.maxConversationMessages, 200),
-      maxRuns: normalizeBound(options.bounds?.maxConversationRuns, 200),
-      maxTools: normalizeBound(options.bounds?.maxConversationTools, 100),
-      maxApprovals: normalizeBound(options.bounds?.maxConversationApprovals, 100),
-      maxQuestions: normalizeBound(options.bounds?.maxConversationQuestions, 100),
-      maxProgressUpdates: normalizeBound(options.bounds?.maxConversationProgressUpdates, 100),
-      maxProgressBytes: normalizeBound(options.bounds?.maxConversationProgressBytes, 64_000),
-      maxMetadataBytes: normalizeBound(options.bounds?.maxConversationStartupMetadataBytes, 64_000),
-      maxArtifacts: normalizeBound(options.bounds?.maxConversationArtifacts, 100),
-      maxArtifactBytes: normalizeBound(options.bounds?.maxArtifactBytes, 64_000),
-      maxArtifactDepth: normalizeBound(options.bounds?.maxArtifactDepth, 12),
-      maxArtifactCollectionItems: normalizeBound(options.bounds?.maxArtifactCollectionItems, 256),
-      maxArtifactStringBytes: normalizeBound(options.bounds?.maxArtifactStringBytes, 16_000),
-      maxArtifactViews: normalizeBound(options.bounds?.maxArtifactViews, 16),
+      maxSubscribers: normalizeBound(
+        options.bounds?.maxSubscribers,
+        CONTROL_MODEL_DEFAULT_BOUNDS.maxSubscribers,
+      ),
+      maxMessages: normalizeBound(
+        options.bounds?.maxConversationMessages,
+        CONTROL_MODEL_DEFAULT_BOUNDS.maxConversationMessages,
+      ),
+      maxRuns: normalizeBound(
+        options.bounds?.maxConversationRuns,
+        CONTROL_MODEL_DEFAULT_BOUNDS.maxConversationRuns,
+      ),
+      maxTools: normalizeBound(
+        options.bounds?.maxConversationTools,
+        CONTROL_MODEL_DEFAULT_BOUNDS.maxConversationTools,
+      ),
+      maxApprovals: normalizeBound(
+        options.bounds?.maxConversationApprovals,
+        CONTROL_MODEL_DEFAULT_BOUNDS.maxConversationApprovals,
+      ),
+      maxQuestions: normalizeBound(
+        options.bounds?.maxConversationQuestions,
+        CONTROL_MODEL_DEFAULT_BOUNDS.maxConversationQuestions,
+      ),
+      maxProgressUpdates: normalizeBound(
+        options.bounds?.maxConversationProgressUpdates,
+        CONTROL_MODEL_DEFAULT_BOUNDS.maxConversationProgressUpdates,
+      ),
+      maxProgressBytes: normalizeBound(
+        options.bounds?.maxConversationProgressBytes,
+        CONTROL_MODEL_DEFAULT_BOUNDS.maxConversationProgressBytes,
+      ),
+      maxMetadataBytes: normalizeBound(
+        options.bounds?.maxConversationStartupMetadataBytes,
+        CONTROL_MODEL_DEFAULT_BOUNDS.maxConversationStartupMetadataBytes,
+      ),
+      maxArtifacts: normalizeBound(
+        options.bounds?.maxConversationArtifacts,
+        CONTROL_MODEL_DEFAULT_BOUNDS.maxConversationArtifacts,
+      ),
+      maxArtifactBytes: normalizeBound(
+        options.bounds?.maxArtifactBytes,
+        CONTROL_MODEL_DEFAULT_BOUNDS.maxArtifactBytes,
+      ),
+      maxArtifactDepth: normalizeBound(
+        options.bounds?.maxArtifactDepth,
+        CONTROL_MODEL_DEFAULT_BOUNDS.maxArtifactDepth,
+      ),
+      maxArtifactCollectionItems: normalizeBound(
+        options.bounds?.maxArtifactCollectionItems,
+        CONTROL_MODEL_DEFAULT_BOUNDS.maxArtifactCollectionItems,
+      ),
+      maxArtifactStringBytes: normalizeBound(
+        options.bounds?.maxArtifactStringBytes,
+        CONTROL_MODEL_DEFAULT_BOUNDS.maxArtifactStringBytes,
+      ),
+      maxArtifactViews: normalizeBound(
+        options.bounds?.maxArtifactViews,
+        CONTROL_MODEL_DEFAULT_BOUNDS.maxArtifactViews,
+      ),
     };
     this.#now = options.now ?? Date.now;
     this.#onSubscriberError = options.onSubscriberError;

@@ -156,6 +156,24 @@ snapshots, OC2 conversation projections, and OC3 renderer-neutral UI artifact
 projections. They do not include renderer registries or framework adapters and
 ship on the Gateway Client release train.
 
+### Finite defaults
+
+The model applies finite positive defaults when a host does not override a
+bound:
+
+| State                                                                      |                Default |
+| -------------------------------------------------------------------------- | ---------------------: |
+| Sessions / conversation messages / conversation runs                       |               200 each |
+| Subscribers / tools / approvals / questions / progress updates / artifacts |               100 each |
+| Inactive conversations                                                     |                     32 |
+| Progress bytes / startup metadata bytes / artifact bytes                   |            64,000 each |
+| Artifact depth / collection items / string bytes / views                   | 12 / 256 / 16,000 / 16 |
+| Session invalidation debounce / maximum wait                               |      200 ms / 1,000 ms |
+
+Invalid positive integer overrides remain available through `bounds`. Invalid,
+zero, or negative values use these defaults rather than creating an unbounded
+model.
+
 ## Bind a Gateway client
 
 Hosts adapt their existing Gateway connection to `ControlModelGatewayBinding`:
