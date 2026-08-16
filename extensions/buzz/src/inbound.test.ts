@@ -10,6 +10,7 @@ import { handleBuzzInbound } from "./inbound.js";
 import {
   BUZZ_DIFF_MESSAGE_KIND,
   BUZZ_NORMAL_MESSAGE_KIND,
+  buildBuzzMessageTags,
   type BuzzInboundMessage,
 } from "./message-event.js";
 import { setBuzzRuntime } from "./runtime.js";
@@ -296,51 +297,71 @@ describe("handleBuzzInbound", () => {
     expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
   });
 
-  it("preserves Buzz thread and reply identifiers for agent replies", async () => {
-    const runtime = createPluginRuntimeMock();
-    setBuzzRuntime(runtime);
-    const bus = createBus();
+  it.each([
+    {
+      name: "thread-child",
+      message: { id: "event-reply", threadId: "event-root" },
+      context: {
+        MessageSid: "event-reply",
+        MessageThreadId: "event-root",
+        ReplyToId: "event-root",
+        ThreadParentId: ROOM_ID,
+      },
+    },
+    {
+      name: "top-level",
+      message: { id: "event-root" },
+      context: {
+        MessageSid: "event-root",
+        ReplyToId: "event-root",
+      },
+    },
+  ])(
+    "publishes $name ordinary replies directly to the Buzz conversation root",
+    async (testCase) => {
+      const runtime = createPluginRuntimeMock();
+      setBuzzRuntime(runtime);
+      const bus = createBus();
+      const publishedTags: string[][][] = [];
+      vi.mocked(bus.sendText).mockImplementation(async (params) => {
+        publishedTags.push(buildBuzzMessageTags(params));
+        return "reply-event-1";
+      });
 
-    await handleBuzzInbound({
-      account: createAccount(),
-      cfg: {} satisfies OpenClawConfig,
-      bus,
-      message: createMessage({
-        id: "event-reply",
+      await handleBuzzInbound({
+        account: createAccount(),
+        cfg: {} satisfies OpenClawConfig,
+        bus,
+        message: createMessage({
+          ...testCase.message,
+          mentionedPubkeys: [BOT_PUBLIC_KEY],
+        }),
+        signal: createSignal(),
+      });
+
+      const dispatch = firstDispatch(runtime);
+      expect(dispatch.ctxPayload).toMatchObject(testCase.context);
+
+      await dispatch.delivery.deliver({ text: "  " }, { kind: "final" });
+      expect(bus.sendText).not.toHaveBeenCalled();
+
+      await dispatch.delivery.deliver({ text: "reply to @Alice" }, { kind: "final" });
+      expect(publishedTags).toEqual([
+        [
+          ["h", ROOM_ID],
+          ["e", "event-root", "", "reply"],
+        ],
+      ]);
+
+      const typing = dispatch.replyPipeline?.typing;
+      expect(typing?.keepaliveIntervalMs).toBe(3_000);
+      await typing?.start();
+      expect(bus.sendTyping).toHaveBeenCalledWith({
+        channelId: ROOM_ID,
         threadId: "event-root",
-        mentionedPubkeys: [BOT_PUBLIC_KEY],
-      }),
-      signal: createSignal(),
-    });
-
-    const dispatch = firstDispatch(runtime);
-    expect(dispatch.ctxPayload).toMatchObject({
-      MessageSid: "event-reply",
-      MessageThreadId: "event-root",
-      ReplyToId: "event-reply",
-      ThreadParentId: ROOM_ID,
-    });
-
-    await dispatch.delivery.deliver({ text: "  " }, { kind: "final" });
-    expect(bus.sendText).not.toHaveBeenCalled();
-
-    await dispatch.delivery.deliver({ text: "threaded reply to @Alice" }, { kind: "final" });
-    expect(bus.sendText).toHaveBeenCalledWith({
-      channelId: ROOM_ID,
-      text: "threaded reply to @Alice",
-      threadId: "event-root",
-      replyToId: "event-reply",
-    });
-
-    const typing = dispatch.replyPipeline?.typing;
-    expect(typing?.keepaliveIntervalMs).toBe(3_000);
-    await typing?.start();
-    expect(bus.sendTyping).toHaveBeenCalledWith({
-      channelId: ROOM_ID,
-      threadId: "event-root",
-      replyToId: "event-reply",
-    });
-  });
+      });
+    },
+  );
 
   it("provides bounded structured diff context without treating diff content as commands", async () => {
     const runtime = createPluginRuntimeMock();

@@ -1,5 +1,24 @@
 import { describe, expect, it } from "vitest";
 import { buzzPlugin } from "./channel.js";
+import { buildBuzzMessageTags } from "./message-event.js";
+
+const ROOM_ID = "64f4debf-e7af-438c-8dcd-d6fbbe77405d";
+
+function requireBuzzToolContextBuilder() {
+  const buildToolContext = buzzPlugin.threading?.buildToolContext;
+  if (!buildToolContext) {
+    throw new Error("Buzz threading.buildToolContext unavailable");
+  }
+  return buildToolContext;
+}
+
+function requireBuzzToolContextTargetMatcher() {
+  const matchesToolContextTarget = buzzPlugin.threading?.matchesToolContextTarget;
+  if (!matchesToolContextTarget) {
+    throw new Error("Buzz threading.matchesToolContextTarget unavailable");
+  }
+  return matchesToolContextTarget;
+}
 
 describe("Buzz channel guidance", () => {
   it("advertises directory room targets and native mention syntax", () => {
@@ -15,19 +34,167 @@ describe("Buzz channel guidance", () => {
   });
 
   it("resolves Buzz reply sessions without treating the thread as part of the room UUID", () => {
-    const roomId = "64f4debf-e7af-438c-8dcd-d6fbbe77405d";
     const threadId = "584e8d00bab48310ea80ff5f62550f824242bbc333fc4c259d7ae80be025c8aa";
 
     expect(
       buzzPlugin.messaging?.resolveSessionConversation?.({
         kind: "group",
-        rawId: `buzz:${roomId}:thread:${threadId}`,
+        rawId: `buzz:${ROOM_ID}:thread:${threadId}`,
       }),
     ).toEqual({
-      id: roomId,
+      id: ROOM_ID,
       threadId,
-      baseConversationId: roomId,
-      parentConversationCandidates: [roomId],
+      baseConversationId: ROOM_ID,
+      parentConversationCandidates: [ROOM_ID],
     });
+  });
+
+  it("targets the Buzz root for an implicit message-tool reply from a child", () => {
+    const rootId = "root-event";
+    const toolContext = requireBuzzToolContextBuilder()({
+      cfg: {},
+      context: {
+        To: `buzz:${ROOM_ID}`,
+        CurrentMessageId: "child-event",
+        ReplyToId: rootId,
+        MessageThreadId: rootId,
+      },
+    });
+
+    expect(toolContext).toMatchObject({
+      currentChannelId: ROOM_ID,
+      currentMessagingTarget: `buzz:${ROOM_ID}`,
+      currentThreadTs: rootId,
+      currentMessageId: rootId,
+      replyToMode: "all",
+    });
+    expect(
+      buildBuzzMessageTags({
+        channelId: ROOM_ID,
+        threadId: String(toolContext?.currentThreadTs),
+        replyToId: String(toolContext?.currentMessageId),
+      }),
+    ).toEqual([
+      ["h", ROOM_ID],
+      ["e", rootId, "", "reply"],
+    ]);
+  });
+
+  it.each([ROOM_ID, `buzz:${ROOM_ID}`, `channel:${ROOM_ID}`, ROOM_ID.toUpperCase()])(
+    "matches the current Buzz room after target normalization: %s",
+    (target) => {
+      expect(
+        requireBuzzToolContextTargetMatcher()({
+          target,
+          toolContext: {
+            currentChannelId: ROOM_ID,
+            currentMessagingTarget: `buzz:${ROOM_ID}`,
+          },
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it("does not match a different Buzz room", () => {
+    expect(
+      requireBuzzToolContextTargetMatcher()({
+        target: "f7568b5f-9d25-4a4f-a38a-2c41440fc9cd",
+        toolContext: {
+          currentChannelId: ROOM_ID,
+          currentMessagingTarget: `buzz:${ROOM_ID}`,
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it("uses all-replies threading policy for Buzz message tools", () => {
+    expect(
+      buzzPlugin.threading?.resolveReplyToMode?.({
+        cfg: {},
+        accountId: "default",
+        chatType: "group",
+      }),
+    ).toBe("all");
+  });
+
+  it("preserves an explicit nested message-tool reply inside the Buzz root", () => {
+    const rootId = "root-event";
+    const childId = "child-event";
+    const toolContext = requireBuzzToolContextBuilder()({
+      cfg: {},
+      context: {
+        To: `buzz:${ROOM_ID}`,
+        CurrentMessageId: childId,
+        ReplyToId: rootId,
+        MessageThreadId: rootId,
+      },
+    });
+
+    expect(
+      buildBuzzMessageTags({
+        channelId: ROOM_ID,
+        threadId: String(toolContext?.currentThreadTs),
+        replyToId: childId,
+      }),
+    ).toEqual([
+      ["h", ROOM_ID],
+      ["e", rootId, "", "root"],
+      ["e", childId, "", "reply"],
+    ]);
+  });
+
+  it("keeps top-level Buzz tool context outside a thread", () => {
+    const rootId = "root-event";
+    const toolContext = requireBuzzToolContextBuilder()({
+      cfg: {},
+      context: {
+        To: `buzz:${ROOM_ID}`,
+        CurrentMessageId: rootId,
+        ReplyToId: rootId,
+      },
+    });
+
+    expect(toolContext).toMatchObject({
+      currentChannelId: ROOM_ID,
+      currentMessagingTarget: `buzz:${ROOM_ID}`,
+      currentMessageId: rootId,
+      currentThreadTs: undefined,
+      replyToMode: "all",
+    });
+    expect(
+      buildBuzzMessageTags({
+        channelId: ROOM_ID,
+        replyToId: String(toolContext?.currentMessageId),
+      }),
+    ).toEqual([
+      ["h", ROOM_ID],
+      ["e", rootId, "", "reply"],
+    ]);
+  });
+
+  it.each([
+    { name: "implicit root reply", replyToId: "root-event", threadId: "root-event" },
+    { name: "explicit nested reply", replyToId: "child-event", threadId: "root-event" },
+  ])("keeps the base room session for $name", async ({ replyToId, threadId }) => {
+    const resolveRoute = buzzPlugin.messaging?.resolveOutboundSessionRoute;
+    if (!resolveRoute) {
+      throw new Error("Buzz messaging.resolveOutboundSessionRoute unavailable");
+    }
+    const baseParams = {
+      cfg: {},
+      agentId: "main",
+      accountId: "default",
+      target: `buzz:${ROOM_ID}`,
+    };
+    const topLevelRoute = await resolveRoute(baseParams);
+    const replyRoute = await resolveRoute({
+      ...baseParams,
+      replyToId,
+      threadId,
+      currentSessionKey: topLevelRoute?.sessionKey,
+    });
+
+    expect(replyRoute).toEqual(topLevelRoute);
+    expect(replyRoute?.sessionKey).not.toContain(":thread:");
   });
 });

@@ -28,6 +28,7 @@ export async function handleBuzzInbound(params: {
   const runtime = getBuzzRuntime();
   const { account, cfg, bus, message, signal } = params;
   const channelId = parseBuzzTarget(message.channelId);
+  const replyRootId = message.threadId ?? message.id;
   const target = buildBuzzTarget(channelId);
   const textForAgent = formatBuzzMessageForAgent(message);
   const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
@@ -119,7 +120,7 @@ export async function handleBuzzInbound(params: {
     reply: {
       to: target,
       originatingTo: target,
-      replyToId: message.id,
+      replyToId: replyRootId,
       messageThreadId: message.threadId,
       threadParentId: message.threadId ? channelId : undefined,
     },
@@ -161,8 +162,7 @@ export async function handleBuzzInbound(params: {
         await bus.sendText({
           channelId,
           text,
-          threadId: message.threadId,
-          replyToId: message.id,
+          threadId: replyRootId,
         });
       },
       onError: (error) => {
@@ -177,8 +177,7 @@ export async function handleBuzzInbound(params: {
         start: async () => {
           await bus.sendTyping({
             channelId,
-            threadId: message.threadId,
-            replyToId: message.id,
+            threadId: replyRootId,
           });
         },
         keepaliveIntervalMs: 3_000,

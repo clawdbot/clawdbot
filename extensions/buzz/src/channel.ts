@@ -1,7 +1,6 @@
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import {
   buildChannelOutboundSessionRoute,
-  buildThreadAwareOutboundSessionRoute,
   createChatChannelPlugin,
 } from "openclaw/plugin-sdk/channel-core";
 import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-outbound";
@@ -11,6 +10,7 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { BuzzConfigSchema } from "./config-schema.js";
 import {
   listBuzzDirectoryGroupsFromConfig,
@@ -51,6 +51,17 @@ type BuzzProbeResult = {
   roomCount: number;
   rooms: Array<{ id: string; name: string }>;
 };
+
+function normalizeBuzzThreadingTarget(target: string | undefined): string | undefined {
+  if (!target) {
+    return undefined;
+  }
+  try {
+    return parseBuzzTarget(target);
+  } catch {
+    return undefined;
+  }
+}
 
 export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbeResult>({
   base: {
@@ -110,17 +121,9 @@ export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbe
         looksLikeId: looksLikeBuzzTarget,
         hint: "<room UUID|configured room name>",
       },
-      resolveOutboundSessionRoute: ({
-        cfg,
-        agentId,
-        accountId,
-        target,
-        replyToId,
-        threadId,
-        currentSessionKey,
-      }) => {
+      resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target }) => {
         const normalized = buildBuzzTarget(parseBuzzTarget(target));
-        const baseRoute = buildChannelOutboundSessionRoute({
+        return buildChannelOutboundSessionRoute({
           cfg,
           agentId,
           channel: "buzz",
@@ -130,13 +133,6 @@ export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbe
           chatType: "group",
           from: `buzz:${accountId ?? "default"}`,
           to: normalized,
-        });
-        return buildThreadAwareOutboundSessionRoute({
-          route: baseRoute,
-          replyToId,
-          threadId,
-          currentSessionKey,
-          canRecoverCurrentThread: () => true,
         });
       },
       resolveSessionConversation: ({ rawId }) => {
@@ -187,6 +183,33 @@ export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbe
     },
     heartbeat: {
       sendTyping: sendBuzzTyping,
+    },
+    threading: {
+      resolveReplyToMode: () => "all",
+      matchesToolContextTarget: ({ target, toolContext }) => {
+        const normalizedTarget = normalizeBuzzThreadingTarget(target);
+        return Boolean(
+          normalizedTarget &&
+          [toolContext.currentChannelId, toolContext.currentMessagingTarget].some(
+            (currentTarget) => normalizeBuzzThreadingTarget(currentTarget) === normalizedTarget,
+          ),
+        );
+      },
+      buildToolContext: ({ context, hasRepliedRef }) => {
+        const currentMessagingTarget = normalizeOptionalString(context.To);
+        const currentChannelId = normalizeBuzzThreadingTarget(
+          normalizeOptionalString(context.NativeChannelId) ?? currentMessagingTarget,
+        );
+        return {
+          currentChannelId,
+          currentMessagingTarget,
+          currentThreadTs:
+            context.MessageThreadId == null ? undefined : String(context.MessageThreadId),
+          currentMessageId: normalizeOptionalString(context.ReplyToId) ?? context.CurrentMessageId,
+          replyToMode: context.ReplyToMode ?? "all",
+          hasRepliedRef,
+        };
+      },
     },
     directory: createChannelDirectoryAdapter({
       self: getBuzzDirectorySelf,
