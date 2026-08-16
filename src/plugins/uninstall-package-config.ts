@@ -1,6 +1,7 @@
 import { realpathSync } from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { resetPluginSlotsToDefaults } from "./slots.js";
 
 export type PluginConfigUninstallActions = {
@@ -39,11 +40,10 @@ export function resolveComparableUninstallPathInternal(value: string): string {
 }
 
 export function isUninstallPathInsideOrEqualInternal(parent: string, child: string): boolean {
-  const relative = path.relative(
+  return isPathInside(
     resolveComparableUninstallPathInternal(parent),
     resolveComparableUninstallPathInternal(child),
   );
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 export function resolveUninstallChannelConfigKeysInternal(
