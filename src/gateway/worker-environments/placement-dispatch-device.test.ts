@@ -119,7 +119,7 @@ describe("device worker placement dispatch", () => {
   });
 
   it("adopts an offline paired-device placement without eagerly starting its tunnel", async () => {
-    const harness = createHarness(placementStore);
+    const harness = createHarness(placementStore, { providerInspection: "dormant" });
     await harness.environments.attachSession({
       environmentId: harness.ready.environmentId,
       ownerEpoch: harness.ready.ownerEpoch,

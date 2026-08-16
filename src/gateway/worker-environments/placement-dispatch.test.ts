@@ -1110,16 +1110,22 @@ describe("worker placement dispatch", () => {
     ]);
   });
 
-  it("leaves in-flight dispatch preparation untouched during runtime reconciliation", async () => {
+  it("resumes startup-deferred preparation during serialized runtime reconciliation", async () => {
     const harness = createHarness(placementStore);
     harness.placements.seedStarting();
     harness.log.length = 0;
 
     await harness.service.reconcileActive();
 
-    expect(harness.placements.current()).toMatchObject({ state: "starting" });
-    expect(harness.log).toEqual(["environment:reconcile"]);
-    expect(harness.environments.attachSession).not.toHaveBeenCalled();
+    expect(harness.placements.current()).toMatchObject({ state: "active" });
+    expect(harness.log).toEqual([
+      "environment:reconcile",
+      "attach",
+      "tunnel:attached",
+      "activation",
+      "placement:active",
+    ]);
+    expect(harness.environments.attachSession).toHaveBeenCalledOnce();
     expect(harness.environments.destroy).not.toHaveBeenCalled();
   });
 });

@@ -50,7 +50,7 @@ export function createHarness(
     terminalizeReclaimOnTunnelDrop?: boolean;
     terminalizedReclaimError?: Error;
     environmentGeneration?: number;
-    hostIsolationFresh?: boolean;
+    providerInspection?: "active" | "dormant" | "unavailable";
   } = {},
 ) {
   const reconciledManifestRef = MANIFEST_REF.replaceAll("b", "c");
@@ -375,14 +375,25 @@ export function createHarness(
     }),
     reconcileOnce: vi.fn(async () => {
       log.push("environment:reconcile");
-      return currentEnvironment
+      if (!currentEnvironment) {
+        return [];
+      }
+      const inspection = options.providerInspection ?? "active";
+      return inspection === "active"
         ? [
             {
               environmentId: currentEnvironment.environmentId,
-              hostIsolation: options.hostIsolationFresh === false ? "unavailable" : "fresh",
+              inspection,
+              hostIsolation: "fresh",
             } as const,
           ]
-        : [];
+        : [
+            {
+              environmentId: currentEnvironment.environmentId,
+              inspection,
+              hostIsolation: "unavailable",
+            } as const,
+          ];
     }),
   };
   const service = createWorkerPlacementDispatchService({

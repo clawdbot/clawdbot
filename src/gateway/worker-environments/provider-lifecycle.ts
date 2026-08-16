@@ -87,10 +87,9 @@ type WorkerProviderLifecycleOptions = {
 
 export type WorkerEnvironmentTeardownAuthorization = () => boolean;
 
-export type WorkerProviderFactReconciliation = {
-  environmentId: string;
-  hostIsolation: "fresh" | "unavailable";
-};
+export type WorkerProviderFactReconciliation =
+  | { environmentId: string; inspection: "active"; hostIsolation: "fresh" }
+  | { environmentId: string; inspection: "dormant" | "unavailable"; hostIsolation: "unavailable" };
 
 function requireProviderProvisionTimeoutMs(timeoutMs: number | undefined): number | undefined {
   if (timeoutMs === undefined) {
@@ -413,10 +412,9 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     return finishProvenDestroy(destroying);
   };
 
-  const recordStaleBuildDestroy = (record: WorkerEnvironmentRecord) => {
-    // Attached sessions need the build cause after teardown so placement reconciliation can
-    // persist an actionable terminal reason instead of inferring from destroyed environment state.
-    return record.state === "attached"
+  const recordStaleBuildDestroy = (record: WorkerEnvironmentRecord) =>
+    // Persist the stale-build cause so attached placements retain an actionable terminal reason.
+    record.state === "attached"
       ? store.requestDestroy({
           environmentId: record.environmentId,
           state: record.state,
@@ -424,11 +422,10 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
           lastError: STALE_WORKER_BUILD_REASON,
         })
       : record;
-  };
 
   const reconcileRecordState = async (
     initialRecord: WorkerEnvironmentRecord,
-    markHostIsolationFresh: () => void,
+    recordInspection: (inspection: "active" | "dormant") => void,
   ): Promise<void> => {
     let record = initialRecord;
     if (record.state === "requested" && record.destroyRequestedAtMs !== null) {
@@ -512,6 +509,8 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     if (status === "dormant") {
       if (teardownExpected) {
         await finishDestroy(record, provider).catch(() => undefined);
+      } else {
+        recordInspection("dormant");
       }
       // A paired device may be offline without losing its lease. Keep that authoritative
       // holding state out of the unknown/orphan path until pairing itself is removed.
@@ -529,7 +528,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       leaseId,
       sharedHost: inspectedSharedHost,
     });
-    markHostIsolationFresh();
+    recordInspection("active");
     if (record.destroyRequestedAtMs !== null) {
       await finishDestroy(record, provider).catch(() => undefined);
       return;
@@ -609,11 +608,17 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
   const reconcileRecord = async (
     initialRecord: WorkerEnvironmentRecord,
   ): Promise<WorkerProviderFactReconciliation> => {
-    let hostIsolation: WorkerProviderFactReconciliation["hostIsolation"] = "unavailable";
-    await reconcileRecordState(initialRecord, () => {
-      hostIsolation = "fresh";
+    let inspection: "active" | "dormant" | undefined;
+    await reconcileRecordState(initialRecord, (current) => {
+      inspection = current;
     });
-    return { environmentId: initialRecord.environmentId, hostIsolation };
+    return inspection === "active"
+      ? { environmentId: initialRecord.environmentId, inspection, hostIsolation: "fresh" }
+      : {
+          environmentId: initialRecord.environmentId,
+          inspection: inspection ?? "unavailable",
+          hostIsolation: "unavailable",
+        };
   };
 
   const createWithProfile = async (
@@ -705,8 +710,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       authorizeTeardown?: WorkerEnvironmentTeardownAuthorization;
     } = {},
   ) => {
-    const stopping = options.isStopping();
-    if (stopping) {
+    if (options.isStopping()) {
       throw serviceError("invalid_state", "Worker environment service is stopping");
     }
     return withLock(environmentId, async () => {

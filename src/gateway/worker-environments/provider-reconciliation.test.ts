@@ -737,7 +737,13 @@ describe("worker environment service", () => {
       { tunnelManager },
     );
 
-    await workerService.reconcileOnce();
+    await expect(workerService.reconcileOnce()).resolves.toEqual([
+      {
+        environmentId: "worker-dormant",
+        inspection: "dormant",
+        hostIsolation: "unavailable",
+      },
+    ]);
     await workerService.reconcileOnce();
 
     expect(support.testState.store.get("worker-dormant")).toMatchObject({ state: "ready" });

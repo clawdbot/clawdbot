@@ -64,9 +64,12 @@ export type WorkerTunnelRequest = {
   ownerEpoch: number;
 };
 
-export type WorkerRecoveryTunnelRequest = WorkerTunnelRequest & {
-  workerBuild: "current" | "installed";
-};
+export type WorkerRecoveryTunnelRequest =
+  | (WorkerTunnelRequest & { workerBuild: "current" })
+  | (WorkerTunnelRequest & {
+      workerBuild: "installed";
+      authorizePendingResult: () => boolean;
+    });
 
 export type WorkerWorkspaceCommand = {
   argv: readonly string[];

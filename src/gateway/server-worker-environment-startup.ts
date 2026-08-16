@@ -145,6 +145,18 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   params.startup.placementStore.recoverWorkerSessionToolOperationsAfterRestart();
   // A crashed gateway can leak local turn claims; drop them before workers re-admit turns.
   params.startup.placementStore.clearLocalTurnClaimsAfterRestart();
+  // SSH isolation is a provider observation scoped to one Gateway process. Invalidate it before
+  // creating tunnel managers; provider reconciliation must publish a fresh fact for this lease.
+  for (const record of params.startup.store.listForReconcile()) {
+    if (record.sshEndpoint && record.sharedHost !== null) {
+      params.startup.store.reconcileSharedHost({
+        environmentId: record.environmentId,
+        state: record.state,
+        leaseId: record.leaseId,
+        sharedHost: null,
+      });
+    }
+  }
   const placementGate = createWorkerSessionPlacementGate(params.startup.placementStore);
   const workerEnvironmentLog = params.log.child("worker-environments");
   const listRetainedBundleHashes = () =>

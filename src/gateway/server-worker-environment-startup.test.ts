@@ -23,6 +23,7 @@ import {
   seedActivePlacement,
 } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import { BOOTSTRAP_RECEIPT, SSH_ENDPOINT } from "./worker-environments/service.test-support.js";
 
 const DEVICE_ID = "revoked-device";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -111,6 +112,64 @@ describe("gateway worker environment startup", () => {
         await service.stop();
       }
       await expect(fs.stat(transferRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
+  it("invalidates persisted SSH host isolation before creating tunnel managers", async () => {
+    const stateDir = tempDirs.make("openclaw-worker-isolation-startup-");
+
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const startup = await loadGatewayWorkerEnvironmentStartupState();
+      const intent = startup.store.createIntent({
+        environmentId: "worker-isolation-startup",
+        providerId: "fake",
+        profileId: "development",
+        profileSnapshot: { settings: { region: "test" } },
+        provisionOperationId: "provision:worker-isolation-startup",
+      });
+      const provisioning = startup.store.transition({
+        environmentId: intent.environmentId,
+        from: intent.state,
+        to: "provisioning",
+      });
+      const bootstrapping = startup.store.transition({
+        environmentId: intent.environmentId,
+        from: provisioning.state,
+        to: "bootstrapping",
+        patch: { leaseId: "lease-isolation", sshEndpoint: SSH_ENDPOINT, sharedHost: false },
+      });
+      startup.store.transition({
+        environmentId: intent.environmentId,
+        from: bootstrapping.state,
+        to: "ready",
+        patch: {
+          bootstrapReceipt: BOOTSTRAP_RECEIPT,
+          credential: {
+            credentialHash: hashWorkerCredential("startup-isolation-credential"),
+            sessionId: null,
+            rpcSetVersion: 1,
+            expiresAtMs: Date.now() + 60_000,
+          },
+        },
+      });
+      expect(startup.store.get(intent.environmentId)?.sharedHost).toBe(false);
+
+      const runtime = await createGatewayWorkerEnvironmentRuntime({
+        getPluginRegistry: () => ({ workerProviders: new Map() }),
+        resolveWorkerGateway: () => undefined,
+        desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
+        startup,
+        log: { child: () => ({ warn: () => {} }) },
+      });
+      const service = runtime.workerEnvironmentService;
+      if (!service) {
+        throw new Error("worker environment service was not created");
+      }
+      try {
+        expect(startup.store.get(intent.environmentId)?.sharedHost).toBeNull();
+      } finally {
+        await service.stop();
+      }
     });
   });
 

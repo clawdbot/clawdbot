@@ -334,6 +334,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
 
   const unavailableProviderFacts = (environmentId: string): WorkerProviderFactReconciliation => ({
     environmentId,
+    inspection: "unavailable",
     hostIsolation: "unavailable",
   });
 

@@ -6,7 +6,7 @@ import {
 import { STALE_WORKER_BUILD_REASON } from "./admission.js";
 import * as support from "./service.test-support.js";
 import { createWorkerEnvironmentStore } from "./store.js";
-import type { WorkerTunnelManager } from "./tunnel.js";
+import type { WorkerTunnelHandle, WorkerTunnelManager } from "./tunnel.js";
 
 type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
 
@@ -147,10 +147,30 @@ describe("worker environment service", () => {
     ).rejects.toMatchObject({ code: "worker_build_mismatch" });
     expect(tunnelManager.start).not.toHaveBeenCalled();
 
+    const authorizePendingResult = vi.fn(() => false);
+    support.testState.nowMs += 10_001;
+    await expect(
+      workerService.startRecoveryTunnel({
+        environmentId,
+        ownerEpoch: 1,
+        workerBuild: "installed",
+        authorizePendingResult,
+      }),
+    ).rejects.toThrow("workspace recovery authority is not current");
+    expect(tunnelManager.start).not.toHaveBeenCalled();
+
+    authorizePendingResult.mockReturnValue(true);
+    support.testState.store.requestDestroy({
+      environmentId,
+      state: "ready",
+      terminalState: "failed",
+      lastError: "stale worker build",
+    });
     const recovery = await workerService.startRecoveryTunnel({
       environmentId,
       ownerEpoch: 1,
       workerBuild: "installed",
+      authorizePendingResult,
     });
 
     expect(tunnelManager.start).toHaveBeenCalledWith(
@@ -159,6 +179,64 @@ describe("worker environment service", () => {
     expect(prepareInstallation).toHaveBeenCalledTimes(prepareCallsBeforeRecovery + 1);
     expect(recovery).not.toHaveProperty("launchTurn");
     expect(launchTurn).not.toHaveBeenCalled();
+    expect(support.testState.store.get(environmentId)?.destroyRequestedAtMs).toBe(
+      support.testState.nowMs,
+    );
+  });
+
+  it("revalidates installed workspace recovery authority across SSH startup", async () => {
+    const environmentId = "worker-workspace-recovery-authority";
+    support.seedReady(environmentId, undefined, true);
+    let resolveStart!: (handle: WorkerTunnelHandle) => void;
+    const startPending = new Promise<WorkerTunnelHandle>((resolve) => {
+      resolveStart = resolve;
+    });
+    const stop = vi.fn(async () => {});
+    const tunnelManager = {
+      status: () => "connecting" as const,
+      start: vi.fn(() => startPending),
+      stop,
+      stopAll: vi.fn(async () => {}),
+    } as unknown as WorkerTunnelManager;
+    const workerService = support.createService(support.createProvider(), { tunnelManager });
+    let authorized = true;
+    const authorizePendingResult = vi.fn(() => authorized);
+
+    await expect(
+      workerService.startRecoveryTunnel({
+        environmentId,
+        ownerEpoch: 0,
+        workerBuild: "installed",
+        authorizePendingResult,
+      }),
+    ).rejects.toThrow("environment owner is not current");
+    expect(tunnelManager.start).not.toHaveBeenCalled();
+
+    const recovery = workerService.startRecoveryTunnel({
+      environmentId,
+      ownerEpoch: 1,
+      workerBuild: "installed",
+      authorizePendingResult,
+    });
+    const rejected = expect(recovery).rejects.toThrow(
+      "workspace recovery authority is not current",
+    );
+    await support.waitForFast(() => expect(tunnelManager.start).toHaveBeenCalledOnce());
+    authorized = false;
+    resolveStart({
+      environmentId,
+      ownerEpoch: 1,
+      launchTurn: vi.fn(),
+      quiesceWorkspace: vi.fn(),
+      reconcileWorkspace: vi.fn(),
+      runWorkspaceCommand: vi.fn(),
+      stop: vi.fn(async () => {}),
+      syncWorkspace: vi.fn(),
+    });
+
+    await rejected;
+    expect(stop).toHaveBeenCalledWith(environmentId, 1);
+    expect(authorizePendingResult).toHaveBeenCalledTimes(2);
   });
 
   it("starts a Gateway-bundle node tunnel without entering SSH", async () => {
@@ -242,6 +320,7 @@ describe("worker environment service", () => {
         environmentId: environment.environmentId,
         ownerEpoch: credential.ownerEpoch,
         workerBuild: "installed",
+        authorizePendingResult: () => true,
       }),
     ).rejects.toMatchObject({ code: "worker_build_mismatch" });
     expect(nodeTunnelManager.start).toHaveBeenCalledTimes(1);

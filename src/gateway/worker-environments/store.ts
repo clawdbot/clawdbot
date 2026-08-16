@@ -920,7 +920,7 @@ export function createWorkerEnvironmentStore(
       environmentId: string;
       state: WorkerEnvironmentState;
       leaseId: string;
-      sharedHost: boolean;
+      sharedHost: boolean | null;
     }): WorkerEnvironmentRecord {
       const environmentId = required(input.environmentId, "id");
       const leaseId = required(input.leaseId, "lease id");
@@ -932,10 +932,10 @@ export function createWorkerEnvironmentStore(
         if (current.sharedHost === input.sharedHost) {
           return current;
         }
-        // Provider inspection owns facts that may predate their durable column. Persist an
-        // explicit value before tunnel startup so upgraded leases cannot keep stale isolation.
+        // Provider inspection records exact isolation before tunnel startup. Gateway restart
+        // records null before creating tunnel managers so persisted scope cannot cross processes.
         return update(db, environmentId, current.state, {
-          shared_host: input.sharedHost ? 1 : 0,
+          shared_host: input.sharedHost === null ? null : input.sharedHost ? 1 : 0,
           updated_at_ms: now(),
         });
       });

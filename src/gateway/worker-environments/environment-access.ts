@@ -18,6 +18,10 @@ import { boundedWorkerError as boundedError } from "./worker-error.js";
 
 const TUNNEL_START_TIMEOUT_MS = 3 * 60_000;
 
+type WorkerTunnelAccess =
+  | { kind: "current-worker" }
+  | { kind: "workspace-recovery"; authorizePendingResult: () => boolean };
+
 type WorkerEnvironmentAccessOptions = {
   store: WorkerEnvironmentStore;
   getConfig: () => OpenClawConfig;
@@ -81,7 +85,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
 
   const startTunnelAccess = async (
     request: WorkerTunnelRequest,
-    access: "current-worker" | "workspace-recovery",
+    access: WorkerTunnelAccess,
   ): Promise<WorkerTunnelHandle> => {
     let stopping = options.isStopping();
     if (stopping) {
@@ -92,6 +96,15 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     }
     let startup: Promise<WorkerTunnelHandle> | undefined;
     let stopStartup: (() => Promise<void>) | undefined;
+    const hasWorkspaceRecoveryAuthority = (record: WorkerEnvironmentRecord | undefined): boolean =>
+      access.kind === "workspace-recovery" &&
+      Boolean(
+        record &&
+        inState(record, "ready", "idle", "attached") &&
+        record.leaseId &&
+        record.ownerEpoch === request.ownerEpoch &&
+        access.authorizePendingResult(),
+      );
     await withLock(request.environmentId, async () => {
       stopping = options.isStopping();
       if (stopping) {
@@ -104,9 +117,10 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
           `Unknown worker environment: ${request.environmentId}`,
         );
       }
+      const workspaceRecoveryAuthorized = hasWorkspaceRecoveryAuthority(record);
       if (
         !inState(record, "ready", "idle", "attached") ||
-        record.destroyRequestedAtMs !== null ||
+        (record.destroyRequestedAtMs !== null && !workspaceRecoveryAuthorized) ||
         !record.leaseId
       ) {
         throw serviceError("invalid_state", `Cannot start tunnel in state: ${record.state}`);
@@ -114,23 +128,31 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       if (!record.bootstrapReceipt) {
         throw serviceError("invalid_state", `Cannot start tunnel in state: ${record.state}`);
       }
+      if (record.ownerEpoch !== request.ownerEpoch) {
+        throw serviceError("invalid_state", "Worker tunnel environment owner is not current");
+      }
       if (record.sharedHost === null) {
         throw serviceError(
           "provider_failure",
           "Worker lease isolation is not reconciled; retry after provider inspection",
         );
       }
-      const credential = store.getCredential(request.environmentId);
-      if (
-        !credential ||
-        credential.ownerEpoch !== request.ownerEpoch ||
-        credential.expiresAtMs <= now()
-      ) {
-        throw serviceError("invalid_state", "Worker tunnel owner credential is not current");
+      if (access.kind === "current-worker") {
+        const credential = store.getCredential(request.environmentId);
+        if (
+          !credential ||
+          credential.ownerEpoch !== request.ownerEpoch ||
+          credential.expiresAtMs <= now()
+        ) {
+          throw serviceError("invalid_state", "Worker tunnel owner credential is not current");
+        }
+      } else if (!workspaceRecoveryAuthorized) {
+        throw serviceError("invalid_state", "Worker workspace recovery authority is not current");
       }
       let tunnelBundleHash = record.bootstrapReceipt.bundleHash;
       let currentBundle: ExpectedWorkerBuild | undefined;
-      const usesInstalledSshBundle = access === "workspace-recovery" && record.sshEndpoint !== null;
+      const usesInstalledSshBundle =
+        access.kind === "workspace-recovery" && record.sshEndpoint !== null;
       if (!usesInstalledSshBundle) {
         try {
           currentBundle = await options.prepareCurrentBundle();
@@ -204,9 +226,19 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       "Worker tunnel did not connect within 3 minutes; check worker SSH reachability and retry",
     );
     try {
-      return await withTimeout(startup, TUNNEL_START_TIMEOUT_MS, {
+      const tunnel = await withTimeout(startup, TUNNEL_START_TIMEOUT_MS, {
         createError: () => timeoutError,
       });
+      if (access.kind === "workspace-recovery") {
+        const recoveryAuthorized = await withLock(request.environmentId, async () =>
+          hasWorkspaceRecoveryAuthority(store.get(request.environmentId)),
+        );
+        if (!recoveryAuthorized) {
+          await stopStartup?.().catch(() => undefined);
+          throw serviceError("invalid_state", "Worker workspace recovery authority is not current");
+        }
+      }
+      return tunnel;
     } catch (error) {
       if (error !== timeoutError) {
         throw error;
@@ -220,16 +252,23 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
   };
 
   const startTunnel = async (request: WorkerTunnelRequest): Promise<WorkerTunnelHandle> =>
-    await startTunnelAccess(request, "current-worker");
+    await startTunnelAccess(request, { kind: "current-worker" });
 
   const startRecoveryTunnel = async (
     request: WorkerRecoveryTunnelRequest,
   ): Promise<WorkerWorkspaceRecoveryTunnelHandle> => {
-    const { workerBuild, ...tunnelRequest } = request;
-    const tunnel = await startTunnelAccess(
-      tunnelRequest,
-      workerBuild === "current" ? "current-worker" : "workspace-recovery",
-    );
+    const tunnelRequest = {
+      environmentId: request.environmentId,
+      ownerEpoch: request.ownerEpoch,
+    };
+    const access: WorkerTunnelAccess =
+      request.workerBuild === "current"
+        ? { kind: "current-worker" }
+        : {
+            kind: "workspace-recovery",
+            authorizePendingResult: request.authorizePendingResult,
+          };
+    const tunnel = await startTunnelAccess(tunnelRequest, access);
     return {
       environmentId: tunnel.environmentId,
       ownerEpoch: tunnel.ownerEpoch,

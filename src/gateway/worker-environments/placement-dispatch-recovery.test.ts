@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import { seedActivePlacement, seedStartingPlacement } from "./placement-dispatch-test-fixtures.js";
+import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
@@ -12,8 +14,13 @@ describe("worker placement restart recovery", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
   it.each(["active", "starting"] as const)(
-    "keeps a restarted %s placement fenced when host isolation inspection is unavailable",
+    "retries a restarted %s placement after host isolation inspection recovers",
     async (state) => {
+      const protocolFeatures = [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE];
+      support.testState.prepareInstallation = vi.fn(async (install) => ({
+        ...(install === "bundle" ? support.BUNDLE_ARTIFACT : support.NPM_ARTIFACT),
+        protocolFeatures,
+      }));
       let providerSharedHost = false;
       let recoveryStarted = false;
       const destroy = vi.fn(async () => {});
@@ -28,7 +35,16 @@ describe("worker placement restart recovery", () => {
       });
       const tunnelManager = {
         status: () => "stopped" as const,
-        start: vi.fn(),
+        start: vi.fn(async (request) => ({
+          environmentId: request.environmentId,
+          ownerEpoch: request.ownerEpoch,
+          launchTurn: vi.fn(),
+          quiesceWorkspace: vi.fn(),
+          reconcileWorkspace: vi.fn(),
+          runWorkspaceCommand: vi.fn(),
+          stop: vi.fn(async () => {}),
+          syncWorkspace: vi.fn(),
+        })),
         stop: vi.fn(async () => {}),
         stopAll: vi.fn(async () => {}),
       } as unknown as WorkerTunnelManager;
@@ -49,7 +65,16 @@ describe("worker placement restart recovery", () => {
         resolveWorkspaceResultConflict: async () => undefined,
       });
       const environmentId = `worker-stale-isolation-${state}`;
-      support.seedReady(environmentId, undefined, false);
+      const bootstrapping = support.seedBootstrapping(environmentId, undefined, false);
+      support.testState.store.transition({
+        environmentId,
+        from: bootstrapping.state,
+        to: "ready",
+        patch: support.readyPatch(environmentId, {
+          ...support.BOOTSTRAP_RECEIPT,
+          protocolFeatures,
+        }),
+      });
       if (state === "active") {
         const attached = await workerService.attachSession({
           environmentId,
@@ -61,17 +86,48 @@ describe("worker placement restart recovery", () => {
         seedStartingPlacement(placements, environmentId);
       }
       expect(workerService.get(environmentId)?.sharedHost).toBe(false);
+      const persisted = workerService.get(environmentId);
+      if (!persisted?.leaseId) {
+        throw new Error("worker recovery fixture has no provider lease");
+      }
+      support.testState.store.reconcileSharedHost({
+        environmentId,
+        state: persisted.state,
+        leaseId: persisted.leaseId,
+        sharedHost: null,
+      });
       providerSharedHost = true;
       recoveryStarted = true;
 
       await recovery.reconcile();
 
-      expect(placements.get("session-1")).toMatchObject({
-        state: "failed",
-        recoveryError: "Worker host isolation could not be verified after gateway restart",
-      });
+      expect(placements.get("session-1")).toMatchObject({ state });
+      expect(workerService.get(environmentId)?.sharedHost).toBeNull();
       expect(tunnelManager.start).not.toHaveBeenCalled();
-      expect(destroy).toHaveBeenCalledOnce();
+      expect(destroy).not.toHaveBeenCalled();
+      await expect(
+        workerService.startTunnel({
+          environmentId,
+          ownerEpoch: workerService.get(environmentId)!.ownerEpoch,
+        }),
+      ).rejects.toThrow("isolation is not reconciled");
+
+      recoveryStarted = false;
+      await recovery.reconcileActive();
+      if (state === "active") {
+        await workerService.startTunnel({
+          environmentId,
+          ownerEpoch: workerService.get(environmentId)!.ownerEpoch,
+        });
+      }
+
+      expect(placements.get("session-1")).toMatchObject({ state: "active" });
+      expect(workerService.get(environmentId)?.sharedHost).toBe(true);
+      expect(tunnelManager.start).toHaveBeenCalledOnce();
+      expect(tunnelManager.start).toHaveBeenCalledWith(
+        expect.objectContaining({ sharedHost: true }),
+      );
+      expect(destroy).not.toHaveBeenCalled();
     },
   );
 
@@ -212,6 +268,11 @@ describe("worker placement restart recovery", () => {
     placements.markWorkspaceResultPending(claim);
     placements.handoffWorkspaceResultRecovery(claim);
     currentBundle = { ...support.BUNDLE_ARTIFACT, bundleHash: "c".repeat(64) };
+    const expiredCredential = support.testState.store.getCredential(environmentId);
+    if (!expiredCredential) {
+      throw new Error("worker recovery fixture has no credential");
+    }
+    support.testState.nowMs = expiredCredential.expiresAtMs + 1;
 
     await recovery.reconcile();
 
@@ -223,10 +284,32 @@ describe("worker placement restart recovery", () => {
     expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
     expect(workerService.get(active.environmentId)).toMatchObject({
       state: "attached",
-      destroyRequestedAtMs: null,
+      destroyRequestedAtMs: support.testState.nowMs,
     });
+    expect(support.testState.store.getCredential(environmentId)?.expiresAtMs).toBe(
+      expiredCredential.expiresAtMs,
+    );
     expect(tunnelManager.start).toHaveBeenCalledWith(
       expect.objectContaining({ bundleHash: support.BUNDLE_HASH }),
     );
+  });
+
+  it("fails startup-deferred preparation after authoritative environment destruction", async () => {
+    const placements = createWorkerSessionPlacementStore({
+      database: support.testState.stateDb,
+      now: () => support.testState.nowMs,
+    });
+    const harness = createHarness(placements);
+    harness.placements.seedStarting();
+    harness.markEnvironmentDestroyed();
+
+    await harness.service.reconcileActive();
+
+    expect(harness.placements.current()).toMatchObject({
+      state: "failed",
+      recoveryError: "Interrupted worker dispatch cannot safely resume",
+    });
+    expect(harness.environments.attachSession).not.toHaveBeenCalled();
+    expect(harness.environments.destroy).toHaveBeenCalledOnce();
   });
 });

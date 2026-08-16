@@ -100,7 +100,7 @@ describe("staged worker placement result recovery", () => {
     const harness = createHarness(placementStore, {
       workspacePath,
       priorWorkspaceResultConflict: { paths: ["old.txt"], stagedResultRef: priorConflictRef },
-      hostIsolationFresh: false,
+      providerInspection: "unavailable",
     });
     const active = harness.placements.seedActive(2);
     harness.markEnvironmentOwnerEpoch(2);

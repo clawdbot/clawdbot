@@ -60,6 +60,7 @@ export type PlacementRecoveryDeps = {
 
 export type WorkerWorkspaceRecoveryTunnelStarter = (
   request: WorkerTunnelRequest,
+  authorizePendingResult: () => boolean,
 ) => Promise<WorkerWorkspaceRecoveryTunnelHandle>;
 
 export type WorkerWorkspaceRecoveryTunnelResolver = (
@@ -376,10 +377,13 @@ export async function recoverPendingWorkspaceResults(
           placements.updateWorkspaceBaseManifest({ claim: turnClaim, manifestRef }),
         abort: () => placements.abortWorkspaceReconciliation(owner),
       };
-      const tunnel = await startRecoveryTunnel({
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      });
+      const tunnel = await startRecoveryTunnel(
+        {
+          environmentId: active.environmentId,
+          ownerEpoch: active.activeOwnerEpoch,
+        },
+        () => placements.validateWorkspaceResultClaim(turnClaim),
+      );
       await deps.workspaceOperations.run(active.environmentId, async () => {
         if (!placements.validateWorkspaceResultClaim(turnClaim)) {
           throw new Error("Recovered workspace result lost its placement owner");

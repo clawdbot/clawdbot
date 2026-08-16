@@ -12,9 +12,16 @@ import {
   recoverPendingWorkspaceResults,
   type PlacementRecoveryDeps,
   type WorkerWorkspaceRecoveryTunnelResolver,
-  type WorkerWorkspaceRecoveryTunnelStarter,
 } from "./placement-dispatch-pending-results.js";
 import type { WorkerEnvironmentService } from "./service.js";
+import type {
+  WorkerTunnelRequest,
+  WorkerWorkspaceRecoveryTunnelHandle,
+} from "./tunnel-contract.js";
+
+type WorkerCurrentRecoveryTunnelStarter = (
+  request: WorkerTunnelRequest,
+) => Promise<WorkerWorkspaceRecoveryTunnelHandle>;
 
 function supportsCurrentWorkerLaunch(
   environment: ReturnType<WorkerEnvironmentService["get"]>,
@@ -94,19 +101,41 @@ function blockingWorkspaceJournalSessions(
 export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
   const { environments, failure, placements } = deps;
 
-  const recoveryTunnelResolver =
-    (
-      freshEnvironmentIds: ReadonlySet<string>,
-      workerBuild: "current" | "installed",
-    ): WorkerWorkspaceRecoveryTunnelResolver =>
-    (environmentId) =>
+  const recoveryTunnelResolvers = (
+    providerFacts: Awaited<ReturnType<WorkerEnvironmentService["reconcileOnce"]>>,
+  ) => {
+    const freshEnvironmentIds = new Set(
+      providerFacts
+        .filter((result) => result.hostIsolation === "fresh")
+        .map((result) => result.environmentId),
+    );
+    const dormantEnvironmentIds = new Set(
+      providerFacts
+        .filter((result) => result.inspection === "dormant")
+        .map((result) => result.environmentId),
+    );
+    const currentTunnelFor = (
+      environmentId: string,
+    ): WorkerCurrentRecoveryTunnelStarter | undefined =>
       freshEnvironmentIds.has(environmentId)
-        ? (request) => environments.startRecoveryTunnel({ ...request, workerBuild })
+        ? (request) => environments.startRecoveryTunnel({ ...request, workerBuild: "current" })
         : undefined;
+    const workspaceTunnelFor: WorkerWorkspaceRecoveryTunnelResolver = (environmentId) =>
+      freshEnvironmentIds.has(environmentId)
+        ? (request, authorizePendingResult) =>
+            environments.startRecoveryTunnel({
+              ...request,
+              workerBuild: "installed",
+              authorizePendingResult,
+            })
+        : undefined;
+    return { currentTunnelFor, dormantEnvironmentIds, workspaceTunnelFor };
+  };
 
   const adoptActive = async (
     placement: WorkerActiveDispatchPlacement,
-    startRecoveryTunnel: WorkerWorkspaceRecoveryTunnelStarter,
+    startRecoveryTunnel: WorkerCurrentRecoveryTunnelStarter | undefined,
+    dormantInspection: boolean,
   ): Promise<void> => {
     // Worker turns are one-shot SSH children owned by the previous gateway process. A durable
     // claim cannot prove that child remains live after restart, so fence the whole placement.
@@ -137,11 +166,21 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
       );
       return;
     }
+    if (environment.providerId === DEVICE_WORKER_PROVIDER_ID) {
+      if (!dormantInspection && !startRecoveryTunnel) {
+        return;
+      }
+    } else if (!startRecoveryTunnel) {
+      return;
+    }
     try {
       // Paired nodes are persistent runners, not one-shot SSH children. Their
       // dormant lease remains authoritative while offline; validate and create
       // the reconnect-scoped tunnel lazily when the next turn actually launches.
       if (environment.providerId !== DEVICE_WORKER_PROVIDER_ID) {
+        if (!startRecoveryTunnel) {
+          return;
+        }
         await startRecoveryTunnel({
           environmentId: environment.environmentId,
           ownerEpoch: environment.ownerEpoch,
@@ -160,7 +199,7 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
 
   const resumeStarting = async (
     placement: WorkerStartingDispatchPlacement,
-    startRecoveryTunnel: WorkerWorkspaceRecoveryTunnelStarter,
+    startRecoveryTunnel: WorkerCurrentRecoveryTunnelStarter | undefined,
   ): Promise<void> => {
     const environment = placement.environmentId
       ? environments.get(placement.environmentId)
@@ -169,12 +208,21 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
     const hasSyncedWorkspace = Boolean(
       placement.workspaceBaseManifestRef && placement.remoteWorkspaceDir,
     );
+    const hasResumableOwner = Boolean(
+      environment &&
+      ((environment.state === "attached" &&
+        environment.attachedSessionIds.length === 1 &&
+        environment.attachedSessionIds[0] === placement.sessionId) ||
+        environment.state === "ready" ||
+        environment.state === "idle"),
+    );
     const canResume =
       environment &&
       expectedBundle &&
       environment.bootstrapReceipt?.bundleHash === expectedBundle &&
       supportsCurrentWorkerLaunch(environment) &&
-      hasSyncedWorkspace;
+      hasSyncedWorkspace &&
+      hasResumableOwner;
     if (!canResume) {
       const error = new Error("Interrupted worker dispatch cannot safely resume");
       await failure.teardownEnvironment({
@@ -183,6 +231,9 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
         ownerEpoch: environment?.ownerEpoch ?? null,
         primaryError: error,
       });
+      return;
+    }
+    if (!startRecoveryTunnel) {
       return;
     }
     try {
@@ -237,24 +288,13 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
     // Provider inspection owns host-isolation facts. Refresh them before any
     // recovery tunnel snapshots shared-host versus dedicated-host behavior.
     const providerFacts = await environments.reconcileOnce();
-    const freshHostIsolationEnvironmentIds = new Set(
-      providerFacts
-        .filter((result) => result.hostIsolation === "fresh")
-        .map((result) => result.environmentId),
-    );
-    const workspaceRecoveryTunnelFor = recoveryTunnelResolver(
-      freshHostIsolationEnvironmentIds,
-      "installed",
-    );
-    const currentRecoveryTunnelFor = recoveryTunnelResolver(
-      freshHostIsolationEnvironmentIds,
-      "current",
-    );
+    const { currentTunnelFor, dormantEnvironmentIds, workspaceTunnelFor } =
+      recoveryTunnelResolvers(providerFacts);
     const pendingResultOwners = await recoverPendingWorkspaceResults(
       deps,
       true,
       undefined,
-      workspaceRecoveryTunnelFor,
+      workspaceTunnelFor,
     );
     const journalOwners = blockingWorkspaceJournalSessions(placements);
     for (const placement of placements.listForReconcile()) {
@@ -265,16 +305,11 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
         continue;
       }
       if (placement.state === "active") {
-        const startRecoveryTunnel = currentRecoveryTunnelFor(placement.environmentId);
-        if (startRecoveryTunnel) {
-          await adoptActive(placement, startRecoveryTunnel);
-        } else {
-          await failure.failActive(
-            placement,
-            new Error("Worker host isolation could not be verified after gateway restart"),
-            { forceClaimFence: placement.turnClaim !== null },
-          );
-        }
+        await adoptActive(
+          placement,
+          currentTunnelFor(placement.environmentId),
+          dormantEnvironmentIds.has(placement.environmentId),
+        );
         continue;
       }
       if (isFailedPlacement(placement)) {
@@ -283,20 +318,9 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
       }
       if (isStartingPlacement(placement)) {
         const startRecoveryTunnel = placement.environmentId
-          ? currentRecoveryTunnelFor(placement.environmentId)
+          ? currentTunnelFor(placement.environmentId)
           : undefined;
-        if (startRecoveryTunnel) {
-          await resumeStarting(placement, startRecoveryTunnel);
-        } else {
-          await failure.teardownEnvironment({
-            placement,
-            environmentId: placement.environmentId,
-            ownerEpoch: null,
-            primaryError: new Error(
-              "Worker host isolation could not be verified after gateway restart",
-            ),
-          });
-        }
+        await resumeStarting(placement, startRecoveryTunnel);
         continue;
       }
       const error = new Error(`Worker dispatch interrupted in ${placement.state}`);
@@ -313,24 +337,16 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
     }
   };
 
-  // Runtime sweeps must not classify a live dispatch preparation as a crash. They only repair
-  // durable active ownership and retry teardown already fenced by a previous failure.
+  // The coordinator runs runtime sweeps only after live dispatches are idle. They can therefore
+  // resume startup-deferred starting rows without classifying active preparation as a crash.
   const reconcileActive = async (environmentId?: string): Promise<void> => {
     const providerFacts = await environments.reconcileOnce();
-    const freshHostIsolationEnvironmentIds = new Set(
-      providerFacts
-        .filter((result) => result.hostIsolation === "fresh")
-        .map((result) => result.environmentId),
-    );
-    const workspaceRecoveryTunnelFor = recoveryTunnelResolver(
-      freshHostIsolationEnvironmentIds,
-      "installed",
-    );
+    const { currentTunnelFor, workspaceTunnelFor } = recoveryTunnelResolvers(providerFacts);
     const pendingResultOwners = await recoverPendingWorkspaceResults(
       deps,
       false,
       environmentId,
-      workspaceRecoveryTunnelFor,
+      workspaceTunnelFor,
     );
     const journalOwners = blockingWorkspaceJournalSessions(placements);
     for (const placement of placements.listForReconcile()) {
@@ -342,6 +358,13 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
       }
       if (isFailedPlacement(placement)) {
         await failure.retryFailedTeardown(placement);
+        continue;
+      }
+      if (isStartingPlacement(placement)) {
+        const startRecoveryTunnel = placement.environmentId
+          ? currentTunnelFor(placement.environmentId)
+          : undefined;
+        await resumeStarting(placement, startRecoveryTunnel);
         continue;
       }
       if (placement.state !== "active") {
