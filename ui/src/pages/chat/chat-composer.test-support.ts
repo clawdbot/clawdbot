@@ -3,7 +3,7 @@ import { expect, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.ts";
 
-export type ComposerProps = Parameters<typeof renderChatComposer>[0];
+type ComposerProps = Parameters<typeof renderChatComposer>[0];
 
 export function createComposerProps(overrides: Partial<ComposerProps> = {}): ComposerProps {
   return {
