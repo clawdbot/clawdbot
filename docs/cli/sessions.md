@@ -101,6 +101,23 @@ wait for the placement to settle, then retry. Agent main sessions remain
 protected. Already archived sessions are successful no-ops. Use `--dry-run` to
 validate every key and preview the result without changing session state.
 
+## Restore sessions
+
+Restore one or more archived sessions through the running Gateway:
+
+```bash
+openclaw sessions restore "agent:main:scratch-1"
+openclaw sessions restore "agent:main:scratch-1" "agent:main:scratch-2"
+openclaw sessions restore "agent:work:scratch-1" --agent work
+openclaw sessions restore "agent:main:scratch-1" --dry-run
+openclaw sessions restore "agent:main:scratch-1" --json
+```
+
+Restore uses the same `sessions.patch` lifecycle operation as the Control UI.
+It clears the archived marker without deleting or rewriting the transcript.
+Already active sessions are successful no-ops. Use `--dry-run` to validate
+every key and preview the result without changing session state.
+
 ## Delete sessions
 
 Delete one or more sessions through the running Gateway:
@@ -127,7 +144,7 @@ a verified `.jsonl.deleted.<timestamp>` archive; incognito transcripts are
 removed without an archive. If a managed worktree cannot be removed safely,
 the command reports the preserved branch and path for manual cleanup.
 
-Both lifecycle commands:
+All lifecycle commands:
 
 - accept multiple keys and report one ordered result per key;
 - use `--agent <id>` to select the owning agent, which is required for a
