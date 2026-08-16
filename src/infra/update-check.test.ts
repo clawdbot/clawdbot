@@ -1001,7 +1001,7 @@ describe("checkUpdateStatus", () => {
     },
   );
 
-  it("reports missing and stale dependency markers for package installs", async () => {
+  it("reports a missing dependency marker and accepts an older valid marker", async () => {
     await withTestDir({ prefix: "openclaw-update-check-deps-" }, async (root) => {
       await fs.writeFile(
         path.join(root, "package.json"),
@@ -1031,27 +1031,16 @@ describe("checkUpdateStatus", () => {
       await fs.utimes(markerPath, staleDate, staleDate);
       await fs.utimes(lockfilePath, freshDate, freshDate);
 
-      const stale = await checkUpdateStatus({
+      const installed = await checkUpdateStatus({
         root,
         includeRegistry: false,
         fetchGit: false,
         timeoutMs: 1000,
       });
-      expect(stale.deps).toMatchObject({
+      expect(installed.deps).toMatchObject({
         manager: "pnpm",
-        status: "stale",
-        reason: "lockfile newer than install marker",
+        status: "ok",
       });
-
-      const newerMarker = new Date(Date.now() + 2_000);
-      await fs.utimes(markerPath, newerMarker, newerMarker);
-      const ok = await checkUpdateStatus({
-        root,
-        includeRegistry: false,
-        fetchGit: false,
-        timeoutMs: 1000,
-      });
-      expect(ok.deps?.status).toBe("ok");
     });
   });
 

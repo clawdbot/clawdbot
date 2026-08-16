@@ -36,7 +36,7 @@ type GitUpdateStatus = {
 
 type DepsStatus = {
   manager: PackageManager;
-  status: "ok" | "missing" | "stale" | "unknown";
+  status: "ok" | "missing" | "unknown";
   lockfilePath: string | null;
   markerPath: string | null;
   reason?: string;
@@ -370,15 +370,6 @@ async function checkGitUpdateStatus(params: {
   };
 }
 
-async function statMtimeMs(p: string): Promise<number | null> {
-  try {
-    const st = await fs.stat(p);
-    return st.mtimeMs;
-  } catch {
-    return null;
-  }
-}
-
 async function resolveDepsMarker(params: { root: string; manager: PackageManager }): Promise<{
   lockfilePath: string | null;
   markerPath: string | null;
@@ -449,25 +440,6 @@ async function checkDepsStatus(params: {
     };
   }
 
-  const lockMtime = await statMtimeMs(lockfilePath);
-  const markerMtime = await statMtimeMs(markerPath);
-  if (!lockMtime || !markerMtime) {
-    return {
-      manager: params.manager,
-      status: "unknown",
-      lockfilePath,
-      markerPath,
-    };
-  }
-  if (lockMtime > markerMtime + 1000) {
-    return {
-      manager: params.manager,
-      status: "stale",
-      lockfilePath,
-      markerPath,
-      reason: "lockfile newer than install marker",
-    };
-  }
   return {
     manager: params.manager,
     status: "ok",
