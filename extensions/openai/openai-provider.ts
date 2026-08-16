@@ -1,6 +1,5 @@
 // Openai provider module implements model/runtime integration.
 import type {
-  ProviderAuthMethod,
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
@@ -893,8 +892,8 @@ function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelCont
 }
 
 export function buildOpenAIProvider(): ProviderPlugin {
-  const provider = createOpenAIProvider();
-  const apiKeyDefinition = provider.auth.find((method) => method.id === "api-key");
+  const providerDefinition = createOpenAIProvider();
+  const apiKeyDefinition = providerDefinition.auth.find((method) => method.id === "api-key");
   if (!apiKeyDefinition) {
     throw new Error("OpenAI provider contract is missing API-key auth");
   }
@@ -915,27 +914,24 @@ export function buildOpenAIProvider(): ProviderPlugin {
     applyConfig: (cfg) => applyOpenAIConfig(cfg),
     wizard: apiKeyDefinition.wizard,
   });
-  const auth = provider.auth.map((method): ProviderAuthMethod => {
+  for (const method of providerDefinition.auth) {
     if (method.id === "oauth" || method.id === "device-code") {
-      return { ...method, run: chatGPTAuthRuns[method.id] };
+      method.run = chatGPTAuthRuns[method.id];
+      continue;
     }
-    if (method.id === "api-key") {
-      return {
-        ...method,
-        starterModel: apiKeyRuntime.starterModel,
-        run: apiKeyRuntime.run,
-        runNonInteractive: apiKeyRuntime.runNonInteractive,
-        validateNonInteractive: apiKeyRuntime.validateNonInteractive,
-      };
+    if (method.id !== "api-key") {
+      throw new Error(`OpenAI provider contract has unknown auth method: ${method.id}`);
     }
-    throw new Error(`OpenAI provider contract has unknown auth method: ${method.id}`);
-  });
+    method.starterModel = apiKeyRuntime.starterModel;
+    method.run = apiKeyRuntime.run;
+    method.runNonInteractive = apiKeyRuntime.runNonInteractive;
+    method.validateNonInteractive = apiKeyRuntime.validateNonInteractive;
+  }
   const codexHooks = buildOpenAICodexProviderHooks();
   const nativeResponsesHooks = buildOpenAIResponsesProviderHooks();
   const responsesHooks = buildOpenAIResponsesProviderHooks({ transport: "sse" });
   return {
-    ...provider,
-    auth,
+    ...providerDefinition,
     catalog: {
       order: "simple",
       run: async (ctx) => {

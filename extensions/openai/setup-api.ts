@@ -18,13 +18,10 @@ async function runOpenAIProviderAuthMethod(
 
 export function buildOpenAISetupProvider(): ProviderPlugin {
   const provider = createOpenAIProvider();
-  return {
-    ...provider,
-    auth: provider.auth.map((method) => ({
-      ...method,
-      run: async (ctx) => runOpenAIProviderAuthMethod(method.id, ctx),
-    })),
-  };
+  for (const method of provider.auth) {
+    method.run = async (ctx) => runOpenAIProviderAuthMethod(method.id, ctx);
+  }
+  return provider;
 }
 
 export default definePluginEntry({
