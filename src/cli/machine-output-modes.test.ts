@@ -86,6 +86,12 @@ describe("built-in machine-output resolvers", () => {
 
   it("reserves raw cron scratch output", () => {
     expect(isCronMachineOutput(["node", "openclaw", "cron", "scratch", "job"])).toBe(true);
+    expect(
+      isCronMachineOutput(["node", "openclaw", "cron", "scratch", "job", "--set", "note"]),
+    ).toBe(false);
+    expect(isCronMachineOutput(["node", "openclaw", "cron", "scratch", "job", "--unset"])).toBe(
+      false,
+    );
   });
 
   it.each(["get", "file", "schema"])("reserves config %s machine output", (subcommand) => {

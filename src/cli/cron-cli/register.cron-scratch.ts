@@ -2,6 +2,7 @@ import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/numb
 // Cron scratch CLI: private per-job prompt context reads and compare-and-swap writes.
 import type { Command } from "commander";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
+import { createCronOutputCommand } from "./output-mode.js";
 import { handleCronCliError, printCronJson } from "./shared.js";
 import { readCronScratchContent } from "./trigger-options.js";
 
@@ -28,15 +29,13 @@ function parseExpectedRevision(value: string | undefined): number | undefined {
 
 export function registerCronScratchCommand(cron: Command) {
   addGatewayClientOptions(
-    cron
-      .command("scratch")
+    createCronOutputCommand(cron, "scratch")
       .description("Read or replace an automation's private scratch")
       .argument("<id>", "Job id")
       .option("--set <text>", "Replace scratch with exact text")
       .option("--file <path>", "Replace scratch from a file, or - for stdin")
       .option("--unset", "Remove the scratch row", false)
       .option("--expected-revision <n>", "Require the current scratch revision")
-      .option("--json", "Output JSON", false)
       .action(async (id, opts) => {
         try {
           const mutations = [
@@ -76,7 +75,14 @@ export function registerCronScratchCommand(cron: Command) {
               `cron scratch changed concurrently (current revision ${result.currentRevision})`,
             );
           }
-          printCronJson(result);
+          if (opts.json) {
+            printCronJson(result);
+          } else {
+            const action = content === null ? "Removed" : "Updated";
+            process.stdout.write(
+              `${action} scratch for ${String(id)} (revision ${result.currentRevision}).\n`,
+            );
+          }
         } catch (error) {
           handleCronCliError(error);
         }

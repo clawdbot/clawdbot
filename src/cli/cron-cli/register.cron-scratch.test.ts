@@ -1,6 +1,6 @@
 // Cron scratch register tests cover cron scratch command option validation.
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../../runtime.js";
 
 const callGatewayFromCli = vi.fn();
@@ -38,6 +38,39 @@ describe("cron scratch command", () => {
     });
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("prints a human confirmation for writes unless --json is requested", async () => {
+    const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+
+    await createCronProgram().parseAsync(["scratch", "job-1", "--set", "new note"], {
+      from: "user",
+    });
+
+    expect(stdoutWrite).toHaveBeenCalledWith("Updated scratch for job-1 (revision 3).\n");
+    expect(writeJson).not.toHaveBeenCalled();
+  });
+
+  it("prints the write result as JSON when --json is requested", async () => {
+    const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+
+    await createCronProgram().parseAsync(["scratch", "job-1", "--unset", "--json"], {
+      from: "user",
+    });
+
+    expect(writeJson).toHaveBeenCalledWith({
+      ok: true,
+      scratch: null,
+      currentRevision: 3,
+      maxBytes: 1024,
+    });
+    expect(stdoutWrite).not.toHaveBeenCalled();
+  });
+
   it.each(["0x2", "1e2", "2.5", "-1", "2a"])(
     "rejects non-decimal --expected-revision %j",
     async (revision) => {
@@ -72,6 +105,7 @@ describe("cron scratch command", () => {
   ])(
     "passes decimal --expected-revision %j through to the CAS write",
     async (revision, expectedRevision) => {
+      vi.spyOn(process.stdout, "write").mockImplementation(() => true);
       await createCronProgram().parseAsync(
         ["scratch", "job-1", "--set", "x", "--expected-revision", revision],
         { from: "user" },
