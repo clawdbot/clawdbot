@@ -397,6 +397,12 @@ openclaw mcp add memory \
   --approval approve
 ```
 
+For an existing saved server, update only its approval mode:
+
+```bash
+openclaw mcp configure memory --approval approve
+```
+
 The flag writes `codex.defaultToolsApprovalMode`, which accepts `auto`,
 `prompt`, or `approve`. `approve` bypasses per-call approval for every tool on
 that server, so use it only for trusted servers. `mcp probe` and `mcp doctor
@@ -438,7 +444,7 @@ Notes:
 - `probe` connects and reports tool counts, resources/prompts support, list-change support, and diagnostics.
 - `add` accepts stdio flags such as `--command`, `--arg`, `--env`, and `--cwd`, or HTTP flags such as `--url`, `--transport`, `--header`, `--auth oauth`, TLS, timeout, and tool-selection flags. Use `--approval auto|prompt|approve` to set the Codex tool approval mode.
 - `set` expects one JSON object value on the command line.
-- `configure` updates enablement, tool filters, timeouts, OAuth, TLS, and parallel-tool-call hints without replacing the whole server definition. Add `--probe` to verify the updated server before saving.
+- `configure` updates enablement, tool filters, timeouts, OAuth, TLS, Codex approval mode, and parallel-tool-call hints without replacing the whole server definition. Add `--probe` to verify the updated server before saving.
 - `tools` updates per-server tool filters. Include/exclude entries are MCP tool names and simple `*` globs.
 - `login` runs the OAuth flow for HTTP servers configured with `auth: "oauth"`. For a loopback redirect, OpenClaw listens for the browser callback and completes login automatically. The printed `--code` command remains the fallback for remote, headless, or unreachable callbacks.
 - `logout` clears stored OAuth credentials for the named server without removing the saved server definition.

@@ -1172,6 +1172,7 @@ export function registerMcpCli(program: Command) {
     .option("--clear-timeouts", "Clear request and connection timeout overrides", false)
     .option("--parallel", "Mark this server safe for concurrent tool calls")
     .option("--no-parallel", "Clear the concurrent tool-call marker")
+    .option("--approval <mode>", "Codex MCP tool approval mode: auto, prompt, or approve")
     .option("--auth <mode>", "HTTP auth mode: oauth")
     .option("--clear-auth", "Clear auth and OAuth metadata", false)
     .option("--oauth-scope <scope>", "OAuth scope")
@@ -1195,6 +1196,7 @@ export function registerMcpCli(program: Command) {
           connectTimeout?: string;
           clearTimeouts?: boolean;
           parallel?: boolean;
+          approval?: string;
           auth?: string;
           clearAuth?: boolean;
           oauthScope?: string;
@@ -1263,6 +1265,10 @@ export function registerMcpCli(program: Command) {
         } else if (opts.parallel === false) {
           delete next.supportsParallelToolCalls;
           delete next.supports_parallel_tool_calls;
+        }
+        const approvalMode = parseMcpApprovalModeOption(opts.approval);
+        if (approvalMode) {
+          next.codex = { ...next.codex, defaultToolsApprovalMode: approvalMode };
         }
         if (opts.clearAuth) {
           delete next.auth;

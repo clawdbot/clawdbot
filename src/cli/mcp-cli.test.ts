@@ -92,6 +92,31 @@ describe("mcp cli", () => {
     });
   });
 
+  it("updates approval mode without replacing saved Codex metadata", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+      await runMcpCommand([
+        "mcp",
+        "set",
+        "docs",
+        JSON.stringify({
+          command: process.execPath,
+          codex: { agents: ["docs-agent"], defaultToolsApprovalMode: "auto" },
+        }),
+      ]);
+
+      await runMcpCommand(["mcp", "configure", "docs", "--approval", "approve"]);
+
+      mockLog.mockClear();
+      await runMcpCommand(["mcp", "show", "docs", "--json"]);
+      expect(JSON.parse(lastLogLine())).toEqual({
+        command: process.execPath,
+        codex: { agents: ["docs-agent"], defaultToolsApprovalMode: "approve" },
+      });
+    });
+  });
+
   it("rejects hexadecimal MCP timeout options before writing configuration", async () => {
     await withTempHome("openclaw-cli-mcp-home-", async (home) => {
       const workspaceDir = await createWorkspace();
