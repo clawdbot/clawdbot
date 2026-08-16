@@ -77,6 +77,27 @@ describe("sessions.dispatch", () => {
     );
   });
 
+  it("rejects an unconfigured cloud worker profile before dispatch", async () => {
+    const dispatch = vi.fn();
+    const respond = await invoke(
+      makeContext({
+        workerPlacementDispatchService: { dispatch },
+        workerSessionPlacementService: { getMany: () => new Map() },
+      }),
+      { profileId: "missing" },
+    );
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "cloud worker profile is not configured: missing",
+      }),
+    );
+  });
+
   it("rejects sessions without their bound managed worktree", async () => {
     mocks.resolveTarget.mockReturnValue(targetWithEntry({ sessionId }));
     const dispatch = vi.fn();
