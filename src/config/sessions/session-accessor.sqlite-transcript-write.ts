@@ -177,6 +177,10 @@ export function replaceTranscriptEventsSync(
     ) {
       return;
     }
+    // Validate the transcript snapshot before replacing to prevent deleting
+    // concurrently committed rows from other writers.
+    const snapshotRows = readTranscriptEventRows(database, resolved.sessionId);
+    assertSqliteTranscriptSnapshotUnchanged(database, resolved.sessionId, snapshotRows);
     replaceSqliteTranscriptEventsInTransaction(database, resolved, events);
     replaced = true;
   }, toDatabaseOptions(resolved));
