@@ -507,6 +507,14 @@ function hasPolicyRefreshTargets(
   return policyPluginIds.every((pluginId) => pluginIds.has(pluginId));
 }
 
+function hasUnindexedInstalledPlugins(persisted: InstalledPluginIndex): boolean {
+  const pluginIds = new Set(persisted.plugins.map((plugin) => plugin.pluginId));
+  return Object.entries(persisted.installRecords).some(
+    ([pluginId, record]) =>
+      !pluginIds.has(pluginId) && (record.source === "path" || record.source === "npm"),
+  );
+}
+
 function canRefreshPersistedPolicyState(
   persisted: InstalledPluginIndex | null,
   params: RefreshInstalledPluginIndexParams & InstalledPluginIndexStoreOptions,
@@ -536,6 +544,9 @@ function canRefreshPersistedPolicyState(
     params.installRecords &&
     hashJson(params.installRecords) !== hashJson(persisted.installRecords ?? {})
   ) {
+    return false;
+  }
+  if (hasUnindexedInstalledPlugins(persisted)) {
     return false;
   }
   return hasPolicyRefreshTargets(persisted, params.policyPluginIds);

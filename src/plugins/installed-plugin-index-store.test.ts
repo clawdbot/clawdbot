@@ -932,6 +932,38 @@ describe("installed plugin index persistence", () => {
     expect(refreshed.plugins.map((plugin) => plugin.pluginId)).toContain("next-demo");
   });
 
+  it("rebuilds policy state when an installed plugin is missing from the persisted registry", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "plugins", "demo");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    const candidate = createCandidate(pluginDir);
+    const installRecords = {
+      demo: {
+        source: "path",
+        installPath: pluginDir,
+        sourcePath: pluginDir,
+      },
+    };
+
+    await writePersistedInstalledPluginIndex(createIndex({ installRecords, plugins: [] }), {
+      stateDir,
+    });
+
+    const refreshed = await refreshPersistedInstalledPluginIndex({
+      reason: "policy-changed",
+      stateDir,
+      candidates: [candidate],
+      installRecords,
+      env: {
+        OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+    });
+
+    expectPluginIds(refreshed, ["demo"]);
+  });
+
   it("preserves existing install records when refreshing the manifest cache", async () => {
     const stateDir = makeTempDir();
     await writePersistedInstalledPluginIndex(
