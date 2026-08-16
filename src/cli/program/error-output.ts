@@ -3,6 +3,7 @@ import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { getCommandPathWithRootOptions } from "../argv.js";
 import { formatCliCommand } from "../command-format.js";
+import { CliParseError } from "../failure-output.js";
 import { formatCliCommandSuggestions } from "./command-suggestions.js";
 
 type FormatCliParseErrorOptions = {
@@ -45,6 +46,63 @@ function formatDocsHint(): string {
   return `${theme.muted("Docs:")} ${formatDocsLink("/cli", "docs.openclaw.ai/cli")}`;
 }
 
+function formatUnknownCommandMessage(command: string, commandPath: readonly string[]): string {
+  return commandPath.length > 0
+    ? `OpenClaw ${commandPath.join(" ")} has no command ${quote(command)}.`
+    : `OpenClaw does not know the command ${quote(command)}.`;
+}
+
+function formatCliUnknownCommandOutput(
+  command: string,
+  options: FormatCliParseErrorOptions = {},
+): string {
+  const commandPath = options.commandPath ?? [];
+  const hasParentCommand = commandPath.length > 0;
+  return lines(
+    theme.error(formatUnknownCommandMessage(command, commandPath)),
+    formatCliCommandSuggestions(command, commandPath, options.commandNames),
+    formatHelpHint(options.argv, { commandPath }),
+    hasParentCommand
+      ? undefined
+      : `${theme.muted("Plugin command?")} ${theme.command(formatCliCommand("openclaw plugins list"))}`,
+    formatDocsHint(),
+  );
+}
+
+export function createCliParseError(
+  raw: string,
+  options: FormatCliParseErrorOptions = {},
+  errorOptions: { humanOutputWritten?: boolean } = {},
+): CliParseError {
+  const message = stripCommanderErrorPrefix(raw);
+  const unknownCommand = message.match(/^unknown command ['"`](.+?)['"`]/i);
+  if (unknownCommand) {
+    const command = unknownCommand[1] ?? "";
+    const commandPath = options.commandPath ?? [];
+    return new CliParseError({
+      message: formatUnknownCommandMessage(command, commandPath),
+      humanOutput: formatCliUnknownCommandOutput(command, options),
+      humanOutputWritten: errorOptions.humanOutputWritten,
+    });
+  }
+  return new CliParseError({
+    message,
+    humanOutput: formatCliParseErrorOutput(raw, options),
+    humanOutputWritten: errorOptions.humanOutputWritten,
+  });
+}
+
+export function createCliUnknownCommandError(
+  command: string,
+  options: FormatCliParseErrorOptions = {},
+): CliParseError {
+  const commandPath = options.commandPath ?? [];
+  return new CliParseError({
+    message: formatUnknownCommandMessage(command, commandPath),
+    humanOutput: formatCliUnknownCommandOutput(command, options),
+  });
+}
+
 /** Convert Commander parse errors into OpenClaw-specific help and docs guidance. */
 export function formatCliParseErrorOutput(
   raw: string,
@@ -53,22 +111,7 @@ export function formatCliParseErrorOutput(
   const message = stripCommanderErrorPrefix(raw);
   const unknownCommand = message.match(/^unknown command ['"`](.+?)['"`]/i);
   if (unknownCommand) {
-    const command = unknownCommand[1] ?? "";
-    const commandPath = options.commandPath ?? [];
-    const hasParentCommand = commandPath.length > 0;
-    return lines(
-      theme.error(
-        hasParentCommand
-          ? `OpenClaw ${commandPath.join(" ")} has no command ${quote(command)}.`
-          : `OpenClaw does not know the command ${quote(command)}.`,
-      ),
-      formatCliCommandSuggestions(command, commandPath, options.commandNames),
-      formatHelpHint(options.argv, { commandPath }),
-      hasParentCommand
-        ? undefined
-        : `${theme.muted("Plugin command?")} ${theme.command(formatCliCommand("openclaw plugins list"))}`,
-      formatDocsHint(),
-    );
+    return formatCliUnknownCommandOutput(unknownCommand[1] ?? "", options);
   }
 
   const unknownOption = message.match(/^unknown option ['"`](.+?)['"`]/i);

@@ -21,16 +21,32 @@ export type CliJsonFailure = {
   };
 };
 
+export class CliParseError extends Error {
+  readonly humanOutput: string;
+  readonly humanOutputWritten: boolean;
+
+  constructor(params: { message: string; humanOutput: string; humanOutputWritten?: boolean }) {
+    super(params.message);
+    this.name = "CliParseError";
+    this.humanOutput = params.humanOutput;
+    this.humanOutputWritten = params.humanOutputWritten ?? false;
+  }
+}
+
 /** Canonical machine-readable failure envelope for CLI-owned errors. */
 export function formatCliJsonFailure(
   error: unknown,
   options: CliFailureDebugOptions = {},
 ): CliJsonFailure {
+  const message =
+    error instanceof CliParseError
+      ? formatErrorMessage(error.humanOutput.trimEnd())
+      : formatCliOperatorError(error, options);
   return {
     ok: false,
     error: {
       type: "cli_error",
-      message: formatCliOperatorError(error, options),
+      message,
     },
   };
 }
@@ -74,6 +90,10 @@ function pushPrefixed(out: string[], value: string): void {
 }
 
 export function formatCliFailureLines(options: FormatCliFailureOptions): string[] {
+  if (options.error instanceof CliParseError) {
+    return options.error.humanOutputWritten ? [] : options.error.humanOutput.trimEnd().split("\n");
+  }
+
   // Default output stays terse; causes and stack traces require explicit debug intent.
   const env = options.env ?? process.env;
   const showDebugDetails = shouldShowDebugDetails(options.argv, env);

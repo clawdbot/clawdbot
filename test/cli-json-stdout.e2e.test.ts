@@ -307,16 +307,112 @@ describe("cli json stdout contract", () => {
         ]);
 
         expect(result.status).toBe(1);
-        expect(JSON.parse(result.stdout)).toMatchObject({
+        const payload = JSON.parse(result.stdout) as {
+          ok: boolean;
+          error: { type: string; message: string };
+        };
+        expect(payload).toMatchObject({
           ok: false,
           error: {
             type: "cli_error",
             message: expect.stringContaining("--not-a-real-option"),
           },
         });
+        expect(payload.error.message).not.toMatch(/^error:/i);
         expect(result.stderr).toContain("--not-a-real-option");
       },
       { prefix: "openclaw-json-parse-failure-e2e-" },
+    );
+  });
+
+  it.each([
+    {
+      name: "unknown root",
+      args: ["pairng"],
+      diagnostic: 'OpenClaw does not know the command "pairng".',
+      suggestion: "openclaw pairing",
+    },
+    {
+      name: "unknown nested command",
+      args: ["sessions", "lst"],
+      diagnostic: 'OpenClaw sessions has no command "lst".',
+      suggestion: "openclaw sessions list",
+    },
+    {
+      name: "unknown nested command with a later argument",
+      args: ["config", "gett", "gateway.port"],
+      diagnostic: 'OpenClaw config has no command "gett".',
+      suggestion: "openclaw config get",
+    },
+    {
+      name: "unknown root before help",
+      args: ["pairng", "--help"],
+      diagnostic: 'OpenClaw does not know the command "pairng".',
+      suggestion: "openclaw pairing",
+    },
+  ])("renders $name as actionable guidance", async (testCase) => {
+    await withTempHome(
+      async (tempHome) => {
+        const result = runSourceCli(tempHome, testCase.args);
+
+        expect(result.status).toBe(1);
+        expect(result.stdout).toBe("");
+        expect(result.stderr).toContain(testCase.diagnostic);
+        expect(result.stderr).toContain(`Did you mean this?\n  ${testCase.suggestion}`);
+        expect(result.stderr.split(testCase.diagnostic)).toHaveLength(2);
+        expect(result.stderr.split(testCase.suggestion)).toHaveLength(2);
+        expect(result.stderr).not.toContain("The CLI command failed.");
+        expect(result.stderr).not.toContain("Could not start the CLI.");
+        expect(result.stderr).not.toContain("OPENCLAW_DEBUG");
+        expect(result.stderr).not.toContain("openclaw doctor");
+        if (testCase.args.includes("--help")) {
+          expect(result.stdout).not.toContain("Usage: openclaw [options] [command]");
+        }
+      },
+      { prefix: "openclaw-unknown-command-e2e-" },
+    );
+  });
+
+  it.each([
+    {
+      name: "unknown root",
+      args: ["pairng", "--json"],
+      diagnostic: 'OpenClaw does not know the command "pairng".',
+      suggestion: "openclaw pairing",
+    },
+    {
+      name: "unknown nested command",
+      args: ["sessions", "lst", "--json"],
+      diagnostic: 'OpenClaw sessions has no command "lst".',
+      suggestion: "openclaw sessions list",
+    },
+  ])("reports $name once with structured JSON guidance", async (testCase) => {
+    await withTempHome(
+      async (tempHome) => {
+        const result = runSourceCli(tempHome, testCase.args);
+
+        expect(result.status).toBe(1);
+        const payload = JSON.parse(result.stdout) as {
+          ok: boolean;
+          error: { type: string; message: string };
+        };
+        expect(payload.ok).toBe(false);
+        expect(payload.error.type).toBe("cli_error");
+        expect(payload.error.message).toContain(testCase.diagnostic);
+        expect(payload.error.message).not.toMatch(/^error:/i);
+        expect(payload.error.message).toContain(`Did you mean this?\n  ${testCase.suggestion}`);
+        expect(payload.error.message).not.toContain("OPENCLAW_DEBUG");
+        expect(payload.error.message).not.toContain("openclaw doctor");
+        expect(result.stderr).toContain(testCase.diagnostic);
+        expect(result.stderr).toContain(`Did you mean this?\n  ${testCase.suggestion}`);
+        expect(result.stderr.split(testCase.diagnostic)).toHaveLength(2);
+        expect(result.stderr.split(testCase.suggestion)).toHaveLength(2);
+        expect(result.stderr).not.toContain("The CLI command failed.");
+        expect(result.stderr).not.toContain("Could not start the CLI.");
+        expect(result.stderr).not.toContain("OPENCLAW_DEBUG");
+        expect(result.stderr).not.toContain("openclaw doctor");
+      },
+      { prefix: "openclaw-unknown-command-json-e2e-" },
     );
   });
 

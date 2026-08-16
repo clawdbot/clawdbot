@@ -1,6 +1,6 @@
 // Failure output tests cover CLI error formatting and failure summaries.
 import { describe, expect, it } from "vitest";
-import { formatCliFailureLines, formatCliJsonFailure } from "./failure-output.js";
+import { CliParseError, formatCliFailureLines, formatCliJsonFailure } from "./failure-output.js";
 
 describe("formatCliJsonFailure", () => {
   it("uses the canonical typed envelope and redacts the message", () => {
@@ -16,7 +16,6 @@ describe("formatCliJsonFailure", () => {
     });
     expect(payload.error.message).not.toContain(token);
   });
-
   it("keeps nested causes behind the debug gate", () => {
     const error = new Error("Promotion is not available.", {
       cause: new Error("ClawHub /api/v1/promotions/nope failed (404)"),
@@ -29,9 +28,52 @@ describe("formatCliJsonFailure", () => {
       "Promotion is not available. | ClawHub /api/v1/promotions/nope failed (404)",
     );
   });
+
+  it.each([
+    { label: "default output", env: {} },
+    { label: "debug output", env: { OPENCLAW_DEBUG: "1" } },
+  ])("keeps the full parse guidance unchanged in $label", ({ env }) => {
+    const error = Object.assign(
+      new CliParseError({
+        message: 'OpenClaw sessions has no command "lst".',
+        humanOutput:
+          'OpenClaw sessions has no command "lst".\nDid you mean this?\n  openclaw sessions list\nTry: openclaw sessions --help\n',
+      }),
+      { cause: new Error("internal parse cause") },
+    );
+    const payload = formatCliJsonFailure(error, { env });
+
+    expect(payload).toEqual({
+      ok: false,
+      error: {
+        type: "cli_error",
+        message:
+          'OpenClaw sessions has no command "lst".\nDid you mean this?\n  openclaw sessions list\nTry: openclaw sessions --help',
+      },
+    });
+    expect(payload.error.message).not.toContain("internal parse cause");
+  });
 });
 
 describe("formatCliFailureLines", () => {
+  it.each([
+    { label: "default output", env: {} },
+    { label: "debug output", env: { OPENCLAW_DEBUG: "1" } },
+  ])("emits parse guidance only when not already written in $label", ({ env }) => {
+    const pending = new CliParseError({ message: "bad input", humanOutput: "first\nsecond\n" });
+    const written = new CliParseError({
+      message: "bad input",
+      humanOutput: "first\nsecond\n",
+      humanOutputWritten: true,
+    });
+
+    expect(formatCliFailureLines({ title: "ignored", error: pending, env })).toEqual([
+      "first",
+      "second",
+    ]);
+    expect(formatCliFailureLines({ title: "ignored", error: written, env })).toEqual([]);
+  });
+
   it("shows a concise reason and recovery commands by default", () => {
     const lines = formatCliFailureLines({
       title: "Could not start the CLI.",
