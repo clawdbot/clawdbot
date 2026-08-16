@@ -4,7 +4,6 @@ import { inspectPortUsage } from "../infra/ports-inspect.js";
 import { probePortUsage } from "../infra/ports-probe.js";
 import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
 import { sleep } from "../utils.js";
-import { NODE_SERVICE_KIND } from "./constants.js";
 import { isCurrentProcessLaunchdServiceLabel } from "./launchd-current-service.js";
 import {
   execLaunchctl,
@@ -12,6 +11,7 @@ import {
   isLaunchctlNotLoaded,
 } from "./launchd-exec.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
+import { shouldSkipGatewayPortOwnershipCheck } from "./launchd-node-gateway-guard.js";
 import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "./launchd-plist.js";
 import { scheduleDetachedLaunchdMaintenancePark } from "./launchd-restart-handoff.js";
 import {
@@ -62,7 +62,7 @@ async function assertGatewayPortReleasedAfterStop(env: GatewayServiceEnv): Promi
   // running the Gateway would otherwise make this assertion see the
   // co-located Gateway's own (legitimately still-open) port and report a
   // false-positive "still busy" failure. See openclaw/openclaw#124296.
-  if (env.OPENCLAW_SERVICE_KIND?.trim() === NODE_SERVICE_KIND) {
+  if (shouldSkipGatewayPortOwnershipCheck(env)) {
     return;
   }
   const { port, probeHosts } = await resolveLaunchAgentGatewayContext(env);

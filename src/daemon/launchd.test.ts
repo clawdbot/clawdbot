@@ -3681,6 +3681,41 @@ describe("launchd install", () => {
     },
   );
 
+  it("does not treat a co-located Gateway's own port as busy when restarting a node-host LaunchAgent", async () => {
+    // Regression test for https://github.com/openclaw/openclaw/issues/124296:
+    // `openclaw node restart` must not fail with a false-positive
+    // port-collision guard when the node-host and Gateway are co-located on
+    // the same host. The node-host only ever connects outward to the
+    // gateway port as a client and never binds it, so `restartLaunchAgent`
+    // must skip its independent busy-port ownership assertion entirely when
+    // restarting a service tagged with the node service kind (shared policy
+    // with the LaunchAgent stop path in launchd-stop.ts, via
+    // shouldSkipGatewayPortOwnershipCheck in launchd-node-gateway-guard.ts).
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_SERVICE_KIND: "node",
+      OPENCLAW_GATEWAY_PORT: "18789",
+    };
+    // Simulate the Gateway's own port still being (legitimately) busy and
+    // owned by an unrelated pid on the same host; this must not fail the
+    // node-host restart.
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 9999, address: "TCP 127.0.0.1:18789 (LISTEN)" }],
+      hints: [],
+    });
+
+    const result = await restartLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+    });
+
+    expect(result).toEqual({ outcome: "completed" });
+    expect(cleanStaleGatewayProcessesSync).not.toHaveBeenCalled();
+    expect(inspectPortUsage).not.toHaveBeenCalled();
+  });
+
   it("skips stale cleanup when no explicit launch agent port can be resolved", async () => {
     const env = createDefaultLaunchdEnv();
     state.files.clear();

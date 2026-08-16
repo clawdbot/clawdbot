@@ -10,6 +10,7 @@ import {
   isLaunchctlNotLoaded,
 } from "./launchd-exec.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
+import { shouldSkipGatewayPortOwnershipCheck } from "./launchd-node-gateway-guard.js";
 import { scheduleDetachedLaunchdRestartHandoff } from "./launchd-restart-handoff.js";
 import {
   bootstrapLaunchAgentOrThrow,
@@ -273,7 +274,11 @@ export async function restartLaunchAgent({
   }
 
   const { port: cleanupPort, probeHosts } = await resolveLaunchAgentGatewayContext(serviceEnv);
-  if (cleanupPort !== null) {
+  // Node-host services never bind the gateway's own port; skip the
+  // busy-port ownership assertion entirely for them (shared policy with
+  // the LaunchAgent stop path in launchd-stop.ts). See
+  // openclaw/openclaw#124296.
+  if (cleanupPort !== null && !shouldSkipGatewayPortOwnershipCheck(serviceEnv)) {
     cleanStaleGatewayProcessesSync(cleanupPort, {
       // Resolve after lsof captures its listener snapshot. A KeepAlive respawn
       // during enumeration must be protected before candidate filtering/signals.
