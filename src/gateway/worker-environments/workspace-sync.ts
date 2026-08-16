@@ -6,13 +6,13 @@ import { withTimeout } from "../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
 import { type PreparedWorkerSsh, runWorkerSshCandidates, workerSshCommandOptions } from "./ssh.js";
-import {
-  type WorkerTunnelHandle,
-  type WorkerWorkspaceCommand,
-  type WorkerWorkspaceReconcileRequest,
-  type WorkerWorkspaceReconcileResult,
-  type WorkerWorkspaceSyncRequest,
-  type WorkerWorkspaceSyncResult,
+import type {
+  WorkerTunnelHandle,
+  WorkerWorkspaceCommand,
+  WorkerWorkspaceReconcileRequest,
+  WorkerWorkspaceReconcileResult,
+  WorkerWorkspaceSyncRequest,
+  WorkerWorkspaceSyncResult,
 } from "./tunnel-contract.js";
 import {
   createAcceptedWorkspacePublisherFactory,
@@ -116,7 +116,11 @@ export function createWorkerWorkspaceActions(
         try {
           signal.throwIfAborted();
         } catch (error) {
-          reject(error);
+          reject(
+            error instanceof Error
+              ? error
+              : new Error("Worker workspace command aborted", { cause: error }),
+          );
         }
       };
       signal.addEventListener("abort", onAbort, { once: true });

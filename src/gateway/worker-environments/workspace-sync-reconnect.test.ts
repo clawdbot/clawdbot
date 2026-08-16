@@ -147,7 +147,9 @@ describe("worker workspace reconnect", () => {
       });
       const syncSettled = vi.fn();
       void syncing.then(syncSettled, syncSettled);
-      await new Promise<void>((resolve) => setTimeout(resolve, 100));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 100);
+      });
       expect(syncSettled).not.toHaveBeenCalled();
 
       releaseReconnect.resolve();
