@@ -162,7 +162,7 @@ describe("managed plugin install compensation", () => {
 
       expect(mocks.applyUninstall).toHaveBeenCalledWith({
         target: npmRoot,
-        cleanup: { kind: "npm", npmRoot, packageName },
+        cleanup: { kind: "npm", npmRoot, packageName, rootKind: "isolated-project" },
       });
       await expect(fs.access(npmRoot)).rejects.toMatchObject({ code: "ENOENT" });
     },

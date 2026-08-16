@@ -82,6 +82,7 @@ export type PluginUninstallDirectoryRemoval = {
         kind: "npm";
         npmRoot: string;
         packageName: string;
+        rootKind: "legacy-shared" | "isolated-project";
       }
     | {
         kind: "git";
@@ -164,7 +165,12 @@ function resolveUninstallDirectoryTarget(params: {
 function resolveNpmManagedInstall(params: {
   installRecord?: PluginInstallRecord;
   extensionsDir?: string;
-}): { installPath: string; npmRoot: string; packageName: string } | null {
+}): {
+  installPath: string;
+  npmRoot: string;
+  packageName: string;
+  rootKind: "legacy-shared" | "isolated-project";
+} | null {
   const installPath = params.installRecord?.installPath?.trim();
   if (params.installRecord?.source !== "npm" || !installPath) {
     return null;
@@ -184,7 +190,7 @@ function resolveNpmManagedInstall(params: {
         resolveComparableUninstallPath(installPath)
     ) {
       const packageName = resolveNpmPackageNameFromInstallPath({ installPath, nodeModulesRoot });
-      return packageName ? { installPath, npmRoot, packageName } : null;
+      return packageName ? { installPath, npmRoot, packageName, rootKind: "legacy-shared" } : null;
     }
     const projectMatch = resolveNpmManagedProjectInstall({
       installPath,
@@ -197,10 +203,12 @@ function resolveNpmManagedInstall(params: {
   return null;
 }
 
-function resolveNpmManagedProjectInstall(params: {
+function resolveNpmManagedProjectInstall(params: { installPath: string; projectsDir: string }): {
   installPath: string;
-  projectsDir: string;
-}): { installPath: string; npmRoot: string; packageName: string } | null {
+  npmRoot: string;
+  packageName: string;
+  rootKind: "isolated-project";
+} | null {
   if (
     !isUninstallPathInsideOrEqual(params.projectsDir, params.installPath) ||
     resolveComparableUninstallPath(params.projectsDir) ===
@@ -238,7 +246,12 @@ function resolveNpmManagedProjectInstall(params: {
     projectDir: npmRoot,
     npmDir,
   });
-  return { installPath: ownsProjectRoot ? npmRoot : params.installPath, npmRoot, packageName };
+  return {
+    installPath: ownsProjectRoot ? npmRoot : params.installPath,
+    npmRoot,
+    packageName,
+    rootKind: "isolated-project",
+  };
 }
 
 function resolveNpmPackageNameFromInstallPath(params: {
@@ -423,6 +436,7 @@ export function planPluginUninstall(params: UninstallPluginParams): PluginUninst
                   kind: "npm",
                   npmRoot: npmManagedInstall.npmRoot,
                   packageName: npmManagedInstall.packageName,
+                  rootKind: npmManagedInstall.rootKind,
                 },
               }
             : gitManagedInstall && deleteTarget === gitManagedInstall.installPath
@@ -453,7 +467,10 @@ function isOwnedNpmRemoval(removal: PluginUninstallDirectoryRemoval): boolean {
     return true;
   }
   const projectsDir = path.dirname(cleanup.npmRoot);
-  const projectRoot = path.basename(projectsDir) === "projects";
+  const projectRoot = cleanup.rootKind === "isolated-project";
+  if (projectRoot !== (path.basename(projectsDir) === "projects")) {
+    return false;
+  }
   const npmDir = projectRoot ? path.dirname(projectsDir) : cleanup.npmRoot;
   if (
     projectRoot
@@ -510,9 +527,8 @@ export async function applyPluginUninstallDirectoryRemoval(
     return { directoryRemoved: false, warnings };
   }
 
-  const removesNpmProject =
-    removal.cleanup?.kind === "npm" &&
-    path.resolve(removal.target) === path.resolve(removal.cleanup.npmRoot);
+  const usesLegacySharedNpmRoot =
+    removal.cleanup?.kind === "npm" && removal.cleanup.rootKind === "legacy-shared";
   const npmCleanupManifestPath =
     removal.cleanup?.kind === "npm" ? path.join(removal.cleanup.npmRoot, "package.json") : "";
   const npmCleanupManifestExists =
@@ -531,7 +547,7 @@ export async function applyPluginUninstallDirectoryRemoval(
   if (!isOwnedNpmRemoval(removal)) {
     return { directoryRemoved: false, warnings: [ownershipWarning] };
   }
-  if (removal.cleanup?.kind === "npm" && npmCleanupManifestExists && !removesNpmProject) {
+  if (removal.cleanup?.kind === "npm" && npmCleanupManifestExists && usesLegacySharedNpmRoot) {
     const uninstall = await runCommandWithTimeout(
       [
         "npm",

@@ -1230,6 +1230,7 @@ describe("uninstallPlugin", () => {
         kind: "npm",
         npmRoot,
         packageName: "@openclaw/kitchen-sink",
+        rootKind: "legacy-shared",
       },
     });
 
@@ -1309,6 +1310,7 @@ describe("uninstallPlugin", () => {
         kind: "npm",
         npmRoot,
         packageName: "@openclaw/kitchen-sink",
+        rootKind: "isolated-project",
       },
     });
 
@@ -1406,12 +1408,14 @@ describe("uninstallPlugin", () => {
         kind: "npm",
         npmRoot,
         packageName: "@openclaw/kitchen-sink",
+        rootKind: "isolated-project",
       },
     });
 
     const applied = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
 
     expect(applied).toEqual({ directoryRemoved: true, warnings: [] });
+    expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
     await expectPathAccessState(pluginDir, "missing");
     await expect(fs.readFile(siblingFile, "utf8")).resolves.toBe("preserve me");
   });
@@ -1736,6 +1740,7 @@ describe("uninstallPlugin", () => {
         kind: "npm",
         npmRoot,
         packageName: "removed-plugin",
+        rootKind: "legacy-shared",
       },
     });
 
@@ -1844,6 +1849,7 @@ describe("uninstallPlugin", () => {
         kind: "npm",
         npmRoot,
         packageName: "removed-plugin",
+        rootKind: "legacy-shared",
       },
     });
 
@@ -2095,6 +2101,7 @@ describe("uninstallPlugin", () => {
         kind: "npm",
         npmRoot,
         packageName: "missing-plugin",
+        rootKind: "legacy-shared",
       },
     });
 
