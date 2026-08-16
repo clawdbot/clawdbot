@@ -252,6 +252,41 @@ describe("AcpSessionNewOrdering", () => {
     expect(output).toEqual([created, other, afterClose]);
   });
 
+  it("retires an overflow slot on a failed creation instead of letting it claim a later response", async () => {
+    const ordering = new AcpSessionNewOrdering();
+    const steps: Step[] = [];
+    for (let id = 1; id <= 65; id += 1) {
+      steps.push({ inbound: newSessionRequest(id) });
+    }
+    const failed = { jsonrpc: "2.0", id: 65, error: { code: -32603, message: "no" } } as AnyMessage;
+    const victim = sessionUpdate("victim-session");
+    const unrelated = newSessionResponse(900, "victim-session");
+    steps.push({ outbound: failed }, { outbound: victim }, { outbound: unrelated });
+
+    const output = await runSteps(ordering, steps);
+
+    // Request 65 overflowed the correlation cap and then failed. Its fallback slot
+    // has to be retired by that error, otherwise the next result carrying a session
+    // ID is mistaken for it and flushes a session the protocol never introduced.
+    expect(output).toEqual([failed, unrelated]);
+  });
+
+  it("still establishes an overflow session that succeeds after an earlier one failed", async () => {
+    const ordering = new AcpSessionNewOrdering();
+    const steps: Step[] = [];
+    for (let id = 1; id <= 66; id += 1) {
+      steps.push({ inbound: newSessionRequest(id) });
+    }
+    const failed = { jsonrpc: "2.0", id: 65, error: { code: -32603, message: "no" } } as AnyMessage;
+    const update = sessionUpdate("overflow-session");
+    const created = newSessionResponse(66, "overflow-session");
+    steps.push({ outbound: failed }, { outbound: update }, { outbound: created });
+
+    // Two requests overflowed, so retiring the first slot on the error must leave
+    // the second able to establish its session.
+    await expect(runSteps(ordering, steps)).resolves.toEqual([failed, created, update]);
+  });
+
   it("stops buffering once established tracking is saturated", async () => {
     const ordering = new AcpSessionNewOrdering();
     const steps: Step[] = [];

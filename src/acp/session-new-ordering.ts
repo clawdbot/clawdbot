@@ -104,14 +104,17 @@ export class AcpSessionNewOrdering {
     if (responseId !== undefined) {
       const correlated = this.pendingNewSessionRequestIds.delete(responseId);
       const sessionIdFromResult = readSessionId(messageObject?.result);
-      // Past the correlation cap the request was never recorded, so a response that
-      // carries a session ID is matched by count instead of by ID.
-      const uncorrelatedNewSession =
-        !correlated && sessionIdFromResult !== undefined && this.untrackedNewSessionRequests > 0;
-      if (uncorrelatedNewSession) {
+      // Past the correlation cap the request was never recorded, so its response
+      // cannot be recognized by ID and is matched by count instead. The slot is
+      // retired by the first uncorrelated response either way: a creation that
+      // failed carries no session ID to establish, and leaving its slot behind
+      // would let some unrelated later response be mistaken for it.
+      let retiredUntrackedSlot = false;
+      if (!correlated && this.untrackedNewSessionRequests > 0) {
         this.untrackedNewSessionRequests -= 1;
+        retiredUntrackedSlot = true;
       }
-      if (correlated || uncorrelatedNewSession) {
+      if (correlated || (retiredUntrackedSlot && sessionIdFromResult !== undefined)) {
         // The response to `session/new` always goes out first; it is what introduces
         // the session ID to the client. A failed creation carries no ID to establish.
         controller.enqueue(message);
@@ -119,6 +122,13 @@ export class AcpSessionNewOrdering {
           this.establish(sessionIdFromResult);
           this.drainBufferedUpdates(sessionIdFromResult, controller);
         }
+        this.releaseUnreachableUpdates(controller);
+        return;
+      }
+      if (retiredUntrackedSlot) {
+        // Retiring the slot may have removed the last thing that could release a
+        // buffered update, so the reachability check has to run here too.
+        controller.enqueue(message);
         this.releaseUnreachableUpdates(controller);
         return;
       }
