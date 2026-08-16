@@ -75,14 +75,7 @@ export function registerCronScratchCommand(cron: Command) {
               `cron scratch changed concurrently (current revision ${result.currentRevision})`,
             );
           }
-          if (opts.json) {
-            printCronJson(result);
-          } else {
-            const action = content === null ? "Removed" : "Updated";
-            process.stdout.write(
-              `${action} scratch for ${String(id)} (revision ${result.currentRevision}).\n`,
-            );
-          }
+          printCronJson(result);
         } catch (error) {
           handleCronCliError(error);
         }

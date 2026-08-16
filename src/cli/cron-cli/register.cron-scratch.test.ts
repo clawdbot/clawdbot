@@ -42,25 +42,14 @@ describe("cron scratch command", () => {
     vi.restoreAllMocks();
   });
 
-  it("prints a human confirmation for writes unless --json is requested", async () => {
+  it.each([
+    ["without --json", ["--set", "new note"]],
+    ["with --json", ["--unset", "--json"]],
+  ])("prints the write result as JSON %s", async (_label, args) => {
     const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
 
-    await createCronProgram().parseAsync(["scratch", "job-1", "--set", "new note"], {
-      from: "user",
-    });
-
-    expect(stdoutWrite).toHaveBeenCalledWith("Updated scratch for job-1 (revision 3).\n");
-    expect(writeJson).not.toHaveBeenCalled();
-  });
-
-  it("prints the write result as JSON when --json is requested", async () => {
-    const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-
-    await createCronProgram().parseAsync(["scratch", "job-1", "--unset", "--json"], {
-      from: "user",
-    });
+    await createCronProgram().parseAsync(["scratch", "job-1", ...args], { from: "user" });
 
     expect(writeJson).toHaveBeenCalledWith({
       ok: true,
@@ -69,6 +58,16 @@ describe("cron scratch command", () => {
       maxBytes: 1024,
     });
     expect(stdoutWrite).not.toHaveBeenCalled();
+  });
+
+  it("documents the read/write JSON split", () => {
+    const scratch = createCronProgram().commands.find((command) => command.name() === "scratch");
+    const jsonOption = scratch?.options.find((option) => option.long === "--json");
+
+    expect(jsonOption?.description).toBe(
+      "Output scratch plus revision metadata as JSON; writes return JSON by default",
+    );
+    expect(jsonOption?.defaultValue).toBeUndefined();
   });
 
   it.each(["0x2", "1e2", "2.5", "-1", "2a"])(

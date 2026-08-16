@@ -1,9 +1,11 @@
 import type { Command } from "commander";
 import {
   getMachineOutputCommandPath,
-  hasMachineOutputOption,
   MACHINE_OUTPUT_JSON_OPTION_DESCRIPTION,
 } from "../machine-output-argv.js";
+
+const CRON_SCRATCH_JSON_OPTION_DESCRIPTION =
+  "Output scratch plus revision metadata as JSON; writes return JSON by default";
 
 type CronOutputCommandDefinition = {
   aliases: readonly string[];
@@ -24,11 +26,13 @@ const CRON_OUTPUT_COMMANDS = {
 } as const satisfies Record<string, CronOutputCommandDefinition>;
 
 type CronOutputCommandName = keyof typeof CRON_OUTPUT_COMMANDS;
-const MACHINE_OUTPUT_COMMANDS = new Map(
-  Object.entries(CRON_OUTPUT_COMMANDS).flatMap(([name, definition]) =>
-    [name, ...definition.aliases].map((alias) => [alias, definition.alwaysJson] as const),
-  ),
-);
+const MACHINE_OUTPUT_COMMANDS = new Set<string>();
+for (const [name, definition] of Object.entries(CRON_OUTPUT_COMMANDS)) {
+  MACHINE_OUTPUT_COMMANDS.add(name);
+  for (const alias of definition.aliases) {
+    MACHINE_OUTPUT_COMMANDS.add(alias);
+  }
+}
 
 export function createCronOutputCommand(parent: Command, name: CronOutputCommandName): Command {
   const definition = CRON_OUTPUT_COMMANDS[name];
@@ -38,7 +42,7 @@ export function createCronOutputCommand(parent: Command, name: CronOutputCommand
   }
   return definition.alwaysJson
     ? command.option("--json", MACHINE_OUTPUT_JSON_OPTION_DESCRIPTION)
-    : command.option("--json", "Output JSON", false);
+    : command.option("--json", CRON_SCRATCH_JSON_OPTION_DESCRIPTION);
 }
 
 export function isCronMachineOutput(argv: readonly string[]): boolean {
@@ -46,11 +50,5 @@ export function isCronMachineOutput(argv: readonly string[]): boolean {
   if (!command) {
     return false;
   }
-  const alwaysJson = MACHINE_OUTPUT_COMMANDS.get(command);
-  if (alwaysJson === undefined) {
-    return false;
-  }
-  return (
-    alwaysJson || !["--set", "--file", "--unset"].some((flag) => hasMachineOutputOption(argv, flag))
-  );
+  return MACHINE_OUTPUT_COMMANDS.has(command);
 }

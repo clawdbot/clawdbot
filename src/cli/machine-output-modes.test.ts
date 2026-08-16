@@ -88,9 +88,9 @@ describe("built-in machine-output resolvers", () => {
     expect(isCronMachineOutput(["node", "openclaw", "cron", "scratch", "job"])).toBe(true);
     expect(
       isCronMachineOutput(["node", "openclaw", "cron", "scratch", "job", "--set", "note"]),
-    ).toBe(false);
+    ).toBe(true);
     expect(isCronMachineOutput(["node", "openclaw", "cron", "scratch", "job", "--unset"])).toBe(
-      false,
+      true,
     );
   });
 
