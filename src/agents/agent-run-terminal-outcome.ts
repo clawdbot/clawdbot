@@ -454,6 +454,7 @@ type AgentRunLifecycleTerminalData = Omit<AgentRunTerminalWaitInput, "status"> &
   fallbackExhaustedFailure?: unknown;
   status?: unknown;
 };
+type AgentRunLifecycleInput = { phase?: unknown; data?: AgentRunLifecycleTerminalData };
 
 /** Shared grace window for terminal observations that may still be followed by a retry. */
 export const AGENT_RUN_TERMINAL_RETRY_GRACE_MS = 15_000;
@@ -621,8 +622,7 @@ export function buildAgentRunTerminalOutcomeFromLifecycleEvent(input: {
 }
 
 /** True for lifecycle events that cannot be followed by a same-run retry. */
-export function isDefinitiveRunLifecycle(input: { phase?: unknown; data?: unknown }) {
-  const data = input.data as AgentRunLifecycleTerminalData | undefined;
+export function isDefinitiveRunLifecycle(input: AgentRunLifecycleInput) {
   if (input.phase === "end") {
     return true;
   }
@@ -631,10 +631,10 @@ export function isDefinitiveRunLifecycle(input: { phase?: unknown; data?: unknow
   }
   const outcome = buildAgentRunTerminalOutcomeFromLifecycleEvent({
     phase: "error",
-    data,
+    data: input.data,
   });
   return (
-    data?.fallbackExhaustedFailure === true ||
+    input.data?.fallbackExhaustedFailure === true ||
     classifyAgentRunTerminalOutcome(outcome) !== "failure"
   );
 }
