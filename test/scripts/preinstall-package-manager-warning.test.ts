@@ -16,6 +16,7 @@ import {
   warnIfNonPnpmLifecycle,
 } from "../../scripts/preinstall-package-manager-warning.mjs";
 import { isSupportedNodeVersion } from "../../src/infra/runtime-guard.js";
+import { NODE_RELEASE_VERSION_CASES } from "../helpers/node-version-cases.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const EXPECTED_NODE_ENGINE_RANGE = ">=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0";
@@ -42,22 +43,7 @@ describe("install runtime enforcement", () => {
     expect(readPackageNodeEngine()).toBe(EXPECTED_NODE_ENGINE_RANGE);
   });
 
-  it.each([
-    "22.22.2",
-    "22.22.3",
-    "23.11.0",
-    "24.14.1",
-    "24.15.0",
-    "25.8.1",
-    "25.9.0",
-    "26.0.0",
-    "24.15.0+local.1",
-    "24.15.0-rc.1",
-    "25.9.1-nightly.20260714",
-    "24.15",
-    "garbage24.15.0suffix",
-    "24.15.0suffix",
-  ])("matches the CLI runtime guard for Node %s", (version) => {
+  it.each(NODE_RELEASE_VERSION_CASES)("matches the CLI runtime guard for Node %s", (version) => {
     expect(nodeVersionSatisfiesPackageEngine(version, EXPECTED_NODE_ENGINE_RANGE)).toBe(
       isSupportedNodeVersion(version),
     );

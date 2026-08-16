@@ -6,6 +6,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build as esbuild } from "esbuild";
 import { afterEach, describe, expect, it } from "vitest";
+import { isSupportedOpenClawNodeVersion } from "../node-version.mjs";
+import { NODE_RELEASE_VERSION_CASES } from "./helpers/node-version-cases.js";
 import { cleanupTempDirs, makeTempDir } from "./helpers/temp-dir.js";
 
 async function makeLauncherFixture(fixtureRoots: string[]): Promise<string> {
@@ -159,33 +161,13 @@ describe("openclaw launcher", () => {
       "utf8",
     );
 
-    const cases = [
-      { version: "22.22.2", supported: false },
-      { version: "22.22.3", supported: true },
-      { version: "23.11.0", supported: false },
-      { version: "24.14.1", supported: false },
-      { version: "24.15.0", supported: true },
-      { version: "25.8.1", supported: false },
-      { version: "25.9.0", supported: true },
-      { version: "26.0.0", supported: true },
-      { version: "24.15.0+local.1", supported: true },
-      { version: "24.15.0-rc.1", supported: false },
-      { version: "25.9.1-nightly.20260714", supported: false },
-      { version: "24.15", supported: false },
-      { version: "garbage24.15.0suffix", supported: false },
-      { version: "24.15.0suffix", supported: false },
-    ] as const;
-
-    for (const testCase of cases) {
-      const mockNodeVersionPath = path.join(
-        fixtureRoot,
-        `mock-node-version-${testCase.version}.mjs`,
-      );
+    for (const version of NODE_RELEASE_VERSION_CASES) {
+      const mockNodeVersionPath = path.join(fixtureRoot, `mock-node-version-${version}.mjs`);
       await fs.writeFile(
         mockNodeVersionPath,
         [
           "Object.defineProperty(process.versions, 'node', {",
-          `  value: ${JSON.stringify(testCase.version)},`,
+          `  value: ${JSON.stringify(version)},`,
           "});",
         ].join("\n"),
         "utf8",
@@ -206,13 +188,13 @@ describe("openclaw launcher", () => {
         },
       );
 
-      if (testCase.supported) {
-        expect(result.status, testCase.version).toBe(0);
-        expect(result.stdout, testCase.version).toContain("runtime-loaded");
+      if (isSupportedOpenClawNodeVersion(version)) {
+        expect(result.status, version).toBe(0);
+        expect(result.stdout, version).toContain("runtime-loaded");
       } else {
-        expect(result.status, testCase.version).toBe(1);
-        expect(result.stderr, testCase.version).toContain(
-          `openclaw: Node.js >=22.22.3 <23, >=24.15.0 <25, or >=25.9.0 is required (current: v${testCase.version}).`,
+        expect(result.status, version).toBe(1);
+        expect(result.stderr, version).toContain(
+          `openclaw: Node.js >=22.22.3 <23, >=24.15.0 <25, or >=25.9.0 is required (current: v${version}).`,
         );
       }
     }
