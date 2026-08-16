@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createNonExitingRuntime } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { runSearchSetupFlow } from "./search-setup.js";
@@ -164,6 +165,7 @@ vi.mock("../commands/onboarding-plugin-install.js", () => ({
 
 function latestPluginInstallRequest(): {
   autoConfirmSingleSource?: boolean;
+  beforePersistentEffect?: () => Promise<void>;
   entry?: {
     install?: { npmSpec?: string };
     label?: string;
@@ -174,6 +176,7 @@ function latestPluginInstallRequest(): {
   const [request] = ensureOnboardingPluginInstalled.mock.calls.at(-1) as unknown as [
     {
       autoConfirmSingleSource?: boolean;
+      beforePersistentEffect?: () => Promise<void>;
       entry?: {
         install?: { npmSpec?: string };
         label?: string;
@@ -192,6 +195,37 @@ describe("runSearchSetupFlow", () => {
     authMocks.hasAuthProfileForProvider.mockReturnValue(false);
     webSearchProviderMocks.resolvePluginWebSearchProviders.mockReset();
     webSearchProviderMocks.resolvePluginWebSearchProviders.mockReturnValue([mockGrokProvider]);
+  });
+
+  it("names no-provider and user-skip outcomes as kept-current", async () => {
+    webSearchProviderMocks.resolvePluginWebSearchProviders.mockReturnValue([]);
+    const original: OpenClawConfig = { gateway: { mode: "local" } };
+    const noProviderConfig: OpenClawConfig = {
+      ...original,
+      plugins: { enabled: false },
+    };
+    const noProviders = await runSearchSetupFlow(
+      noProviderConfig,
+      createNonExitingRuntime(),
+      createWizardPrompter(),
+    );
+    expect(noProviders).toEqual({
+      outcome: "kept-current",
+      config: noProviderConfig,
+      reason: "no-providers",
+    });
+
+    webSearchProviderMocks.resolvePluginWebSearchProviders.mockReturnValue([mockGrokProvider]);
+    const skipped = await runSearchSetupFlow(
+      original,
+      createNonExitingRuntime(),
+      createWizardPrompter({ select: vi.fn(async () => "__skip__") as never }),
+    );
+    expect(skipped).toEqual({
+      outcome: "kept-current",
+      config: original,
+      reason: "user-skipped",
+    });
   });
 
   it("localizes setup copy for web search provider selection", async () => {
@@ -236,11 +270,13 @@ describe("runSearchSetupFlow", () => {
       text: text as never,
     });
 
-    const next = await runSearchSetupFlow(
+    const { config: next, outcome } = await runSearchSetupFlow(
       { plugins: { allow: ["xai"] } },
       createNonExitingRuntime(),
       prompter,
     );
+
+    expect(outcome).toBe("completed");
 
     const xaiConfig = next.plugins?.entries?.xai?.config as
       | { webSearch?: { apiKey?: string }; xSearch?: { enabled?: boolean; model?: string } }
@@ -327,7 +363,7 @@ describe("runSearchSetupFlow", () => {
       text: text as never,
     });
 
-    const next = await runSearchSetupFlow(
+    const { config: next } = await runSearchSetupFlow(
       { plugins: { allow: ["xai"] } },
       createNonExitingRuntime(),
       prompter,
@@ -446,7 +482,7 @@ describe("runSearchSetupFlow", () => {
       select: select as never,
     });
 
-    const next = await runSearchSetupFlow(
+    const { config: next } = await runSearchSetupFlow(
       {
         plugins: {
           allow: ["xai"],
@@ -489,7 +525,7 @@ describe("runSearchSetupFlow", () => {
       select: select as never,
     });
 
-    const next = await runSearchSetupFlow(
+    const { config: next } = await runSearchSetupFlow(
       {
         plugins: {
           allow: ["xai"],
@@ -531,7 +567,13 @@ describe("runSearchSetupFlow", () => {
       text: text as never,
     });
 
-    const next = await runSearchSetupFlow({}, createNonExitingRuntime(), prompter);
+    const { config: next, outcome } = await runSearchSetupFlow(
+      {},
+      createNonExitingRuntime(),
+      prompter,
+    );
+
+    expect(outcome).toBe("completed");
 
     expect(ensureOnboardingPluginInstalled).toHaveBeenCalledTimes(1);
     const installRequest = latestPluginInstallRequest();
@@ -550,6 +592,47 @@ describe("runSearchSetupFlow", () => {
     expect(next.plugins?.installs?.brave?.spec).toBe("@openclaw/brave-plugin");
   });
 
+  it("forwards the persistent-effect guard to external provider installation", async () => {
+    const select = vi.fn().mockResolvedValueOnce("brave");
+    const text = vi.fn().mockResolvedValue("brave-test-key");
+    const beforePersistentEffect = vi.fn(async () => {});
+    const prompter = createWizardPrompter({
+      select: select as never,
+      text: text as never,
+    });
+
+    await runSearchSetupFlow({}, createNonExitingRuntime(), prompter, {
+      beforePersistentEffect,
+    });
+
+    expect(latestPluginInstallRequest().beforePersistentEffect).toBe(beforePersistentEffect);
+  });
+
+  it("returns an install-failed outcome without changing config", async () => {
+    ensureOnboardingPluginInstalled.mockResolvedValueOnce({
+      cfg: { plugins: { installs: {} } },
+      installed: false,
+      pluginId: "brave",
+      status: "failed",
+    });
+    const original: OpenClawConfig = { gateway: { mode: "local" } };
+    const select = vi.fn().mockResolvedValueOnce("brave");
+    const text = vi.fn().mockResolvedValue("brave-test-key");
+    const prompter = createWizardPrompter({
+      select: select as never,
+      text: text as never,
+    });
+
+    const result = await runSearchSetupFlow(original, createNonExitingRuntime(), prompter);
+
+    expect(result).toEqual({
+      outcome: "install-failed",
+      config: original,
+      providerId: "brave",
+      reason: "failed",
+    });
+  });
+
   it("installs an external catalog search provider when web search stays disabled", async () => {
     const select = vi.fn().mockResolvedValueOnce("brave");
     const text = vi.fn().mockResolvedValue("brave-disabled-key");
@@ -558,7 +641,7 @@ describe("runSearchSetupFlow", () => {
       text: text as never,
     });
 
-    const next = await runSearchSetupFlow(
+    const { config: next } = await runSearchSetupFlow(
       {
         tools: {
           web: {

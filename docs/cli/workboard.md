@@ -22,6 +22,7 @@ openclaw gateway restart
 openclaw workboard list [--board <id>] [--status <status>] [--include-archived] [--json]
 openclaw workboard create <title...> [--notes <text>] [--status <status>] [--priority <priority>] [--agent <id>] [--board <id>] [--labels <items>] [--json]
 openclaw workboard show <id> [--json]
+openclaw workboard move <id> --status <status> [--json]
 openclaw workboard dispatch [--board <id>] [--max-starts <count>] [--admin] [--url <url>] [--token <token>] [--timeout <ms>] [--json]
 ```
 
@@ -82,6 +83,19 @@ openclaw workboard show 7f4a2c10 --json
 
 Text output prints the compact card line and notes. JSON output returns the full card record, including execution metadata, attempts, comments, links, proof, artifacts, worker logs, protocol state, diagnostics, and automation metadata.
 
+Proof statuses in JSON are worker-reported outcomes. `passed` records the worker's
+self-assessment of the attached command or check; it is not an independent verification
+result.
+
+## `move`
+
+```bash
+openclaw workboard move 7f4a2c10 --status review
+openclaw workboard move 7f4a2c10 --status done --json
+```
+
+`move` changes the card's status using the same manual-operator path as dragging a card in the dashboard. It accepts a full card id or an unambiguous prefix. Active dependency and schedule holds still apply. Operators may move a claimed card without its agent claim token; claim tokens remain scoped to agent-tool mutations and are redacted from JSON output.
+
 ## `dispatch`
 
 ```bash
@@ -134,18 +148,19 @@ Command-capable channels can use the matching slash command:
 /workboard list
 /workboard show 7f4a2c10
 /workboard create Fix stale worker heartbeat
+/workboard move 7f4a2c10 --status review
 /workboard dispatch
 ```
 
 Slash command dispatch also uses the Gateway subagent runtime, so it follows the same claim, worker-start, and failure behavior as the dashboard and CLI Gateway path.
 
-`/workboard list` and `/workboard show` are read commands for authorized command senders. `/workboard create` and `/workboard dispatch` mutate board state and require owner status on chat surfaces or a Gateway client with `operator.write` or `operator.admin`.
+`/workboard list` and `/workboard show` are read commands for authorized command senders. `/workboard create`, `/workboard move`, and `/workboard dispatch` mutate board state and require owner status on chat surfaces or a Gateway client with `operator.write` or `operator.admin`.
 
 ## Permissions
 
 The CLI dispatch path normally requests Gateway `operator.write` and `operator.read` scopes. Workspace-bound cards run directly in an exact configured agent workspace; a worktree request is narrowed to that directory instead of letting the host materialize repository-controlled code. The selected worker must have writable, non-shared Docker sandbox access to that exact workspace, a live container hash matching the requested mounts and policy, and no host escape capability. Pass `--admin` to explicitly request `operator.admin`, allow another host checkout, and use normal managed-worktree setup; the connection fails if that scope is not approved for the client. A read-only Gateway token can inspect Workboard data through read methods, but it cannot create cards or dispatch workers. Workspace limits do not otherwise change manual card movement for callers with Workboard mutation permission.
 
-Local `list`, `create`, and `show` commands operate on the local OpenClaw state directory used by the current profile. Use `--dev` or `--profile <name>` on the top-level `openclaw` command when you need a different state root.
+Local `list`, `create`, `show`, and `move` commands operate on the local OpenClaw state directory used by the current profile. Use `--dev` or `--profile <name>` on the top-level `openclaw` command when you need a different state root.
 
 ## Troubleshooting
 

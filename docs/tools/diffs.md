@@ -289,11 +289,11 @@ Supported `defaults` keys: `fontFamily`, `fontSize`, `lineSpacing`, `layout`, `s
 
 ## Artifact lifecycle and storage
 
-- Artifacts live under `$TMPDIR/openclaw-diffs`.
-- Viewer metadata stores a random 20-hex-char artifact ID, a random 48-hex-char token, `createdAt`/`expiresAt`, and the stored `viewer.html` path.
+- Viewer HTML and metadata live in the shared `state/openclaw.sqlite` database under the Diffs plugin blob namespace. HTML is gzip-compressed; SQLite stores only a SHA-256 hash of the random URL token, not the token itself.
+- Rendered PNG/PDF files remain temporary materializations under `$TMPDIR/openclaw-diffs` because channel delivery requires a file path. SQLite owns their expiry metadata; no JSON sidecars are written.
 - Default artifact TTL: 30 minutes. Maximum accepted TTL: 6 hours.
-- Cleanup runs opportunistically after each artifact create call; expired artifacts are deleted.
-- Fallback sweep removes stale folders older than 24 hours when metadata is missing.
+- Cleanup runs opportunistically after each artifact create call. Expired SQLite rows are deleted first, followed by any corresponding PNG/PDF directory.
+- A fallback sweep removes rowless temporary folders older than 24 hours. Legacy `meta.json`, `file-meta.json`, and `viewer.html` caches are not imported or read.
 
 ## Viewer URL and network behavior
 
@@ -307,7 +307,7 @@ Viewer assets:
 
 The viewer document resolves these assets relative to the viewer URL, so an optional `baseUrl` path prefix carries through to asset requests too.
 
-URL resolution order: tool-call `baseUrl` (after strict validation) -> plugin `viewerBaseUrl` -> loopback `127.0.0.1` default. If gateway bind mode is `custom` and `gateway.customBindHost` is set, that host is used instead of loopback.
+URL resolution order: tool-call `baseUrl` (after strict validation) -> plugin `viewerBaseUrl` -> `gateway.publicOrigin` -> the existing bind-aware Gateway fallback.
 
 `baseUrl` rules: must be `http://` or `https://`; query and hash are rejected; origin plus optional base path is allowed.
 
@@ -365,7 +365,7 @@ Common failure text: `Diff PNG/PDF rendering requires a Chromium-compatible brow
   </Accordion>
   <Accordion title="Viewer accessibility">
     - Viewer URL resolves to `127.0.0.1` by default.
-    - For remote access, either set plugin `viewerBaseUrl`, pass `baseUrl` per call, or use `gateway.bind=custom` with `gateway.customBindHost`.
+    - For remote access, set `gateway.publicOrigin`, set plugin `viewerBaseUrl`, or pass `baseUrl` per call.
     - If `gateway.trustedProxies` includes loopback for a same-host proxy (for example Tailscale Serve), raw loopback viewer requests without forwarded client-IP headers fail closed by design.
     - For that proxy topology, prefer `mode: "file"`/`"both"` for an attachment, or intentionally enable `security.allowRemoteViewer` plus plugin `viewerBaseUrl`/a proxy `baseUrl` for a shareable viewer link.
     - Enable `security.allowRemoteViewer` only when external viewer access is intended.

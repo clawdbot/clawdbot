@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { type OpenClawConfig, DEFAULT_GATEWAY_PORT } from "../config/config.js";
 import {
   buildDefaultHookUrl,
+  buildGogWatchServeArgs,
   buildGogWatchServeLogArgs,
   buildTopicPath,
   parseTopicPath,
@@ -88,6 +89,10 @@ describe("gmail hook config", () => {
       return;
     }
 
+    const serveArgs = buildGogWatchServeArgs(result.value);
+    expect(serveArgs).toContain("--exclude-labels");
+    expect(serveArgs[serveArgs.indexOf("--exclude-labels") + 1]).toBe("SPAM,TRASH,DRAFT,SENT");
+
     const args = buildGogWatchServeLogArgs(result.value);
     expect(args).not.toContain("push-token");
     expect(args).not.toContain("hook-token");
@@ -107,6 +112,8 @@ describe("gmail hook config", () => {
       "--path",
       "/gmail-pubsub",
       "--include-body",
+      "--exclude-labels",
+      "SPAM,TRASH,DRAFT,SENT",
       "--max-bytes",
       "20000",
     ]);

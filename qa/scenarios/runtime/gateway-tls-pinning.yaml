@@ -1,0 +1,33 @@
+title: Gateway TLS certificate pinning
+
+scenario:
+  id: gateway-tls-pinning
+  surface: runtime
+  category: gateway.network-access-and-discovery
+  coverage:
+    primary:
+      - gateway.tls-pinning
+  objective: Verify the real Gateway TLS listener and public Node client enforce the advertised certificate fingerprint.
+  successCriteria:
+    - A real loopback Gateway starts with generated TLS certificate material.
+    - The Gateway-advertised SHA-256 fingerprint matches the certificate presented by the live listener.
+    - The public GatewayClient completes hello and a health request with the exact pin.
+    - A wrong pin fails before hello completes.
+    - Supplying a TLS pin to a plaintext Gateway URL fails with an explicit transport-policy error.
+  docsRefs:
+    - docs/gateway/index.md
+    - docs/gateway/discovery.md
+    - docs/gateway/protocol.md
+  codeRefs:
+    - src/infra/tls/gateway.ts
+    - src/gateway/server-runtime-state.ts
+    - packages/gateway-client/src/client.ts
+    - test/e2e/qa-lab/runtime/gateway-tls-pinning.ts
+  execution:
+    kind: script
+    parallelSafe: true
+    path: test/e2e/qa-lab/runtime/gateway-tls-pinning.ts
+    summary: Starts a real TLS Gateway and exercises exact-pin, wrong-pin, and plaintext mismatch behavior through the public GatewayClient.
+    args:
+      - --artifact-base
+      - ${outputDir}

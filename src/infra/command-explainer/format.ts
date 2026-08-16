@@ -4,12 +4,12 @@ import type { ExecApprovalCommandSpan } from "../exec-approvals.js";
 import { normalizeExecutableToken } from "../exec-wrapper-tokens.js";
 import {
   isShellWrapperExecutable,
-  POSIX_SHELL_WRAPPERS,
+  POSIX_PARSEABLE_SHELL_WRAPPERS,
   resolveShellWrapperTransportArgv,
 } from "../shell-wrapper-resolution.js";
 import type { CommandExplanation } from "./types.js";
 
-const POSIX_COMMAND_HIGHLIGHT_SHELLS: ReadonlySet<string> = POSIX_SHELL_WRAPPERS;
+const POSIX_COMMAND_HIGHLIGHT_SHELLS: ReadonlySet<string> = POSIX_PARSEABLE_SHELL_WRAPPERS;
 
 // Approval spans must be strict positive source ranges to avoid broken highlighting.
 function spanToCommandSpan(span: {

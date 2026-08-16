@@ -1,5 +1,6 @@
 // Tokenjuice tests cover index plugin behavior.
 import fs from "node:fs";
+import { createAgentToolResultMiddlewareRunner } from "openclaw/plugin-sdk/agent-harness";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -55,7 +56,7 @@ describe("tokenjuice plugin", () => {
     expect(registration?.[1]).toEqual({ runtimes: ["openclaw", "codex"] });
   });
 
-  it("synthesises exec fields when bash provides metadata-only details (no status)", async () => {
+  it("synthesises exec status when bash provides metadata-only details", async () => {
     let received:
       | {
           details: unknown;
@@ -89,14 +90,14 @@ describe("tokenjuice plugin", () => {
 
     expect(received?.details).toMatchObject({
       status: "completed",
-      aggregated: "file contents\n",
       exitCode: 0,
       truncation: { reason: "max_bytes" },
       fullOutputPath: "/tmp/out.txt",
     });
+    expect(received?.details).not.toHaveProperty("aggregated");
   });
 
-  it("passes through bash details that already have a status field unchanged", async () => {
+  it("passes through status metadata without duplicate aggregated output", async () => {
     let received:
       | {
           details: unknown;
@@ -132,7 +133,43 @@ describe("tokenjuice plugin", () => {
       { runtime: "openclaw" },
     );
 
-    expect(received?.details).toBe(existingDetails);
+    expect(received?.details).toEqual({
+      status: "completed",
+      exitCode: 0,
+      cwd: "/existing/cwd",
+    });
+    expect(received?.details).not.toBe(existingDetails);
+  });
+
+  it("keeps compacted exec results below the middleware details limit", async () => {
+    tokenjuiceFactory.mockImplementationOnce(
+      (api: { on: (event: string, handler: unknown) => void }) => {
+        api.on("tool_result", async (event: { details: Record<string, unknown> }) => ({
+          content: [{ type: "text", text: "compacted" }],
+          details: { ...event.details, tokenjuice: { compacted: true } },
+        }));
+      },
+    );
+
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
+      createTokenjuiceAgentToolResultMiddleware(),
+    ]);
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "tool-call-tokenjuice-large",
+      toolName: "exec",
+      args: { command: "seq 1 30000" },
+      result: {
+        content: [{ type: "text", text: "x".repeat(120_000) }],
+        details: undefined,
+      },
+    });
+
+    expect(result.content).toEqual([{ type: "text", text: "compacted" }]);
+    expect(result.details).toEqual({
+      status: "completed",
+      exitCode: 0,
+      tokenjuice: { compacted: true },
+    });
   });
 
   it.each([
@@ -216,10 +253,10 @@ describe("tokenjuice plugin", () => {
     expect(received?.toolName).toBe("bash");
     expect(received?.details).toMatchObject({
       status: "completed",
-      aggregated: "hello\n",
       exitCode: 0,
     });
     expect(received?.details).not.toHaveProperty("cwd");
+    expect(received?.details).not.toHaveProperty("aggregated");
     expect(result?.result.content).toEqual([{ type: "text", text: "compacted" }]);
   });
 });

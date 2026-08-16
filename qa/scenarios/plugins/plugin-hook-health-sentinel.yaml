@@ -3,13 +3,13 @@ title: Plugin hook health sentinel
 scenario:
   id: plugin-hook-health-sentinel
   surface: runtime
-  runtimeParityTier: live-only
+  runtimePairLane: core
   coverage:
     primary:
-      - runtime.gateway-log-sentinel.plugin-hooks
+      - plugins.activation-gateway-log-sentinel-plugin-hooks
     secondary:
-      - plugins.before-prompt-build
-      - plugins.before-tool-call
+      - plugins.tool-plugin-before-prompt-build
+      - plugins.tool-plugin-before-tool-call
   objective: Fail the live parity lane when plugin hook crashes appear in gateway logs during ordinary prompt and tool activity.
   successCriteria:
     - An ordinary live agent turn completes with the expected marker.
@@ -24,6 +24,7 @@ scenario:
     kind: flow
     summary: Mark the gateway log cursor, run a simple agent turn that may invoke session_status, and fail on plugin hook crash sentinels.
     config:
+      requiredProviderMode: live-frontier
       expectedMarker: PLUGIN-HOOK-OK
 
 flow:

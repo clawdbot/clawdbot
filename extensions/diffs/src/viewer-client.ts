@@ -1,11 +1,6 @@
 // Diffs plugin module implements viewer client behavior.
 import { FileDiff, preloadHighlighter } from "@pierre/diffs";
-import type {
-  FileContents,
-  FileDiffMetadata,
-  FileDiffOptions,
-  SupportedLanguages,
-} from "@pierre/diffs";
+import type { FileDiffOptions, SupportedLanguages } from "@pierre/diffs";
 import { normalizeDiffViewerPayloadLanguages } from "./language-hints.js";
 import type { DiffViewerPayload, DiffLayout, DiffTheme } from "./types.js";
 import { parseViewerPayloadJson } from "./viewer-payload.js";
@@ -13,8 +8,8 @@ import { parseViewerPayloadJson } from "./viewer-payload.js";
 // oxlint-disable-next-line eslint/no-underscore-dangle -- Bundled builds replace this compile-time define identifier.
 declare const __OPENCLAW_DIFFS_LANGUAGE_PACK__: boolean | undefined;
 
-// Build-time esbuild define; typeof guard keeps the module loadable where the
-// define is absent (vitest/node), matching the __OPENCLAW_VERSION__ pattern.
+// Build-time esbuild define; the typeof guard keeps the module loadable when
+// the define is absent under Vitest or direct Node execution.
 function readInjectedLanguagePackFlag(): boolean | undefined {
   return typeof __OPENCLAW_DIFFS_LANGUAGE_PACK__ === "boolean"
     ? __OPENCLAW_DIFFS_LANGUAGE_PACK__
@@ -72,35 +67,6 @@ function getCards(): Array<{ host: HTMLElement; payload: DiffViewerPayload }> {
     }
   }
   return cards;
-}
-
-function ensureShadowRoot(host: HTMLElement): void {
-  if (host.shadowRoot) {
-    return;
-  }
-  const template = host.querySelector<HTMLTemplateElement>(
-    ":scope > template[shadowrootmode='open']",
-  );
-  if (!template) {
-    return;
-  }
-  const shadowRoot = host.attachShadow({ mode: "open" });
-  shadowRoot.append(template.content.cloneNode(true));
-  template.remove();
-}
-
-function getHydrateProps(payload: DiffViewerPayload): {
-  fileDiff?: FileDiffMetadata;
-  oldFile?: FileContents;
-  newFile?: FileContents;
-} {
-  if (payload.fileDiff) {
-    return { fileDiff: payload.fileDiff };
-  }
-  return {
-    oldFile: payload.oldFile,
-    newFile: payload.newFile,
-  };
 }
 
 type ToolbarIconName =
@@ -346,12 +312,13 @@ export async function hydrateViewer(): Promise<void> {
 
   for (const { host, payload } of cards) {
     try {
-      ensureShadowRoot(host);
       const diff = new FileDiff(createRenderOptions(payload));
       diff.hydrate({
         fileContainer: host,
         prerenderedHTML: payload.prerenderedHTML,
-        ...getHydrateProps(payload),
+        fileDiff: payload.fileDiff,
+        oldFile: payload.oldFile,
+        newFile: payload.newFile,
       });
       const controller = { payload, diff };
       applyState(controller);

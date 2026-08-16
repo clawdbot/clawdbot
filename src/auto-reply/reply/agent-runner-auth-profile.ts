@@ -1,4 +1,5 @@
 // Resolves auth profile settings that agent runner forwards to providers.
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   resolveProviderIdForAuth,
   type ProviderAuthAliasLookupParams,
@@ -15,11 +16,13 @@ export function resolveProviderScopedAuthProfile(params: {
   workspaceDir?: ProviderAuthAliasLookupParams["workspaceDir"];
 }): { authProfileId?: string; authProfileIdSource?: "auto" | "user" } {
   const aliasParams = { config: params.config, workspaceDir: params.workspaceDir };
-  const authProfileId =
+  const providerId = normalizeProviderId(params.provider);
+  const primaryProviderId = normalizeProviderId(params.primaryProvider);
+  const sharesAuthScope =
+    (providerId !== "" && providerId === primaryProviderId) ||
     resolveProviderIdForAuth(params.provider, aliasParams) ===
-    resolveProviderIdForAuth(params.primaryProvider, aliasParams)
-      ? params.authProfileId
-      : undefined;
+      resolveProviderIdForAuth(params.primaryProvider, aliasParams);
+  const authProfileId = sharesAuthScope ? params.authProfileId : undefined;
   return {
     authProfileId,
     authProfileIdSource: authProfileId ? params.authProfileIdSource : undefined,
@@ -40,4 +43,34 @@ export function resolveRunAuthProfile(
     config: params?.config ?? run.config,
     workspaceDir: run.workspaceDir,
   });
+}
+
+/** Applies an auto-fallback probe's pinned auth to its fallback candidate. */
+export function resolveFallbackCandidateRun(
+  run: FollowupRun["run"],
+  provider: string,
+  model: string,
+): FollowupRun["run"] {
+  const probe = run.autoFallbackPrimaryProbe;
+  const isPrimaryProbeCandidate = probe && provider === probe.provider && model === probe.model;
+  if (
+    !probe ||
+    provider !== probe.fallbackProvider ||
+    isPrimaryProbeCandidate ||
+    !probe.fallbackAuthProfileId
+  ) {
+    return run;
+  }
+  const candidateRun: FollowupRun["run"] = {
+    ...run,
+    provider,
+    model,
+    authProfileId: probe.fallbackAuthProfileId,
+  };
+  if (probe.fallbackAuthProfileIdSource) {
+    candidateRun.authProfileIdSource = probe.fallbackAuthProfileIdSource;
+  } else {
+    delete candidateRun.authProfileIdSource;
+  }
+  return candidateRun;
 }

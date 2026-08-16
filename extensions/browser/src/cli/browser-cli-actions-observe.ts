@@ -3,21 +3,15 @@
  */
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { runCommandWithRuntime } from "../core-api.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
   parseBrowserPositiveIntegerOption,
+  printBrowserJsonResult,
+  runBrowserCliCommand as runBrowserObserve,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
-import { danger, defaultRuntime, shortenHomePath } from "./core-api.js";
-
-function runBrowserObserve(action: () => Promise<void>) {
-  return runCommandWithRuntime(defaultRuntime, action, (err) => {
-    defaultRuntime.error(danger(String(err)));
-    defaultRuntime.exit(1);
-  });
-}
+import { defaultRuntime, shortenHomePath } from "./core-api.js";
 
 /** Registers Browser commands that observe current page state without direct input. */
 export function registerBrowserActionObserveCommands(
@@ -46,8 +40,7 @@ export function registerBrowserActionObserveCommands(
           },
           { timeoutMs: 20000 },
         );
-        if (parent?.json) {
-          defaultRuntime.writeJson(result);
+        if (printBrowserJsonResult(parent, result)) {
           return;
         }
         defaultRuntime.writeJson(result.messages);
@@ -72,8 +65,7 @@ export function registerBrowserActionObserveCommands(
           },
           { timeoutMs: 20000 },
         );
-        if (parent?.json) {
-          defaultRuntime.writeJson(result);
+        if (printBrowserJsonResult(parent, result)) {
           return;
         }
         defaultRuntime.log(`PDF: ${shortenHomePath(result.path)}`);
@@ -114,8 +106,7 @@ export function registerBrowserActionObserveCommands(
           },
           { timeoutMs: timeoutMs ?? 20000 },
         );
-        if (parent?.json) {
-          defaultRuntime.writeJson(result);
+        if (printBrowserJsonResult(parent, result)) {
           return;
         }
         defaultRuntime.log(result.response.body);

@@ -1,15 +1,18 @@
 // Discord API module exposes the plugin public contract.
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
+  parseRetryAfterHeaderSeconds,
   resolveRetryConfig,
   retryAsync,
   type RetryConfig,
 } from "openclaw/plugin-sdk/retry-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { isDiscordHtmlResponseBody, summarizeDiscordResponseBody } from "./error-body.js";
-import { parseDiscordRetryAfterBodySeconds, parseRetryAfterHeaderSeconds } from "./retry-after.js";
+import { parseDiscordRetryAfterBodySeconds } from "./retry-after.js";
 
 const DISCORD_API_BASE = "https://discord.com/api/v10";
 const DISCORD_API_RETRY_DEFAULTS = {
@@ -67,7 +70,7 @@ function formatRetryAfterSeconds(value: number | undefined): string | undefined 
   return `${rounded}s`;
 }
 
-function formatDiscordApiErrorText(text: string, response: Response): string | undefined {
+function formatDiscordApiErrorTextUntrusted(text: string, response: Response): string | undefined {
   const trimmed = text.trim();
   if (!trimmed) {
     return undefined;
@@ -95,6 +98,13 @@ function formatDiscordApiErrorText(text: string, response: Response): string | u
     parseDiscordRetryAfterBodySeconds(payload.retry_after),
   );
   return retryAfter ? `${message} (retry after ${retryAfter})` : message;
+}
+
+function formatDiscordApiErrorText(text: string, response: Response): string | undefined {
+  const detail = formatDiscordApiErrorTextUntrusted(text, response);
+  // Keep the final error boundary shared by JSON and text responses redacted;
+  // upstreams can reflect the request Authorization value through either shape.
+  return detail ? redactToolPayloadText(detail) : detail;
 }
 
 export class DiscordApiError extends Error {
@@ -217,11 +227,11 @@ export async function requestDiscord<T>(
               ),
           },
         );
-        const text = new TextDecoder().decode(responseBody);
-        if (!text.trim()) {
-          return undefined as T;
-        }
         try {
+          const text = new TextDecoder("utf-8", { fatal: true }).decode(responseBody);
+          if (!text.trim()) {
+            return undefined as T;
+          }
           return JSON.parse(text) as T;
         } catch {
           throw new DiscordApiError(`Discord API ${path} returned malformed JSON`, 0);
@@ -235,6 +245,8 @@ export async function requestDiscord<T>(
       label: options?.label ?? path,
       shouldRetry: (err) => err instanceof DiscordApiError && err.status === 429,
       retryAfterMs: (err) => getDiscordApiRetryAfterMs(err, retryConfig),
+      // 429 backoffs can run for minutes; keep them abortable like the fetch itself.
+      sleep: (ms) => sleepWithAbort(ms, options?.signal),
     },
   );
 }

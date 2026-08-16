@@ -8,112 +8,6 @@
    chrome (tabs, actions, diff, raw editor) plus genuinely form-specific
    pieces layered on top of the settings primitives. */
 
-/* Layout Container */
-.config-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 0;
-  margin: 12px 0 0;
-  border-radius: var(--radius-xl);
-  border: 1px solid var(--border);
-  background: var(--panel);
-  overflow: hidden;
-  overflow: clip;
-}
-
-@media (max-width: 600px) {
-  .config-layout {
-    margin: 8px 0 0;
-  }
-}
-
-@media (max-width: 400px) {
-  .config-layout {
-    margin: 8px 0 0;
-  }
-}
-
-/* Search */
-.config-search {
-  display: grid;
-  gap: 5px;
-  padding: 10px 12px 8px;
-  border-bottom: 1px solid var(--border);
-}
-
-.config-search__input-row {
-  position: relative;
-}
-
-.config-search__icon {
-  position: absolute;
-  left: 14px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 16px;
-  height: 16px;
-  color: var(--muted);
-  pointer-events: none;
-}
-
-.config-search__input {
-  width: 100%;
-  padding: 8px 34px 8px 38px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
-  font-size: 12.5px;
-  outline: none;
-  transition:
-    border-color var(--duration-fast) ease,
-    box-shadow var(--duration-fast) ease,
-    background var(--duration-fast) ease;
-}
-
-.config-search__input::placeholder {
-  color: var(--muted);
-}
-
-.config-search__input:focus-visible {
-  border-color: var(--accent);
-  box-shadow: var(--focus-ring);
-  background: var(--bg-hover);
-}
-
-:root[data-theme-mode="light"] .config-search__input {
-  background: white;
-}
-
-:root[data-theme-mode="light"] .config-search__input:focus-visible {
-  background: white;
-}
-
-.config-search__clear {
-  position: absolute;
-  right: 8px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 24px;
-  height: 24px;
-  border: none;
-  border-radius: var(--radius-full);
-  background: var(--bg-hover);
-  color: var(--muted);
-  font-size: 14px;
-  line-height: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
-}
-
-.config-search__clear:hover {
-  background: var(--border-strong);
-  color: var(--text);
-}
-
 /* Mode Toggle */
 .config-mode-toggle {
   display: flex;
@@ -149,85 +43,49 @@
 }
 
 .config-mode-toggle__btn.active {
-  background: var(--accent);
-  color: white;
+  background: var(--primary);
+  color: var(--primary-foreground);
   box-shadow: 0 1px 3px var(--accent-subtle);
 }
 
 /* ===========================================
-   Main Content
+   Lead column (toolbar / banner / nav above the form)
    =========================================== */
 
-.config-main {
+/* Mirrors the .settings-page column so config chrome lines up with it. */
+.config-lead {
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: var(--space-3) var(--space-4) 0;
   display: flex;
   flex-direction: column;
-  min-height: 0;
-  min-width: 0;
-  background: var(--panel);
-  overflow: hidden;
-  /* fallback for older browsers */
-  overflow: clip;
+  gap: var(--space-3);
 }
 
-/* Actions Bar */
-.config-actions {
+/* Toolbar: mode toggle / section tabs */
+.config-toolbar {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 12px 18px;
-  padding: 14px 24px;
-  background: var(--bg-accent);
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-  position: relative;
-  z-index: 2;
+  gap: var(--space-2) var(--space-3);
 }
 
-:root[data-theme-mode="light"] .config-actions {
-  background: var(--bg-hover);
+.config-show-advanced.active {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: var(--accent-subtle);
 }
 
-.config-actions__left,
-.config-actions__right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.config-actions__left {
-  flex: 1 1 280px;
-  flex-wrap: wrap;
-}
-
-.config-actions__right {
-  flex: 999 1 420px;
-  align-items: flex-start;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: 8px 12px;
-}
-
-.config-actions__notice {
-  flex: 0 1 24rem;
-  max-width: 24rem;
-  line-height: 1.35;
-  text-align: right;
-}
-
-.config-actions__buttons {
+/* Raw mode file operations (open / discard / save) */
+.config-raw-actions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   flex-wrap: wrap;
-  gap: 8px;
-  min-width: 0;
-  margin-left: auto;
-}
-
-.config-actions__buttons .btn {
-  flex: 0 0 auto;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
 }
 
 .config-action-spinner {
@@ -248,94 +106,6 @@
   .config-action-spinner svg {
     animation: none;
   }
-}
-
-.config-changes-badge {
-  padding: 4px 10px;
-  border-radius: var(--radius-full);
-  background: var(--accent-subtle);
-  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
-  color: var(--accent);
-  font-size: 12px; /* was 11px */
-  font-weight: 600;
-}
-
-.config-status {
-  font-size: 12.5px;
-  color: var(--muted);
-  line-height: 1.35;
-}
-
-.config-top-tabs {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px 24px 12px;
-  background: var(--bg-accent);
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
-
-:root[data-theme-mode="light"] .config-top-tabs {
-  background: var(--bg-hover);
-}
-
-.config-search--top {
-  padding: 0;
-  border-bottom: none;
-  min-width: 200px;
-  max-width: 320px;
-  flex: 0 1 320px;
-}
-
-.config-top-tabs__scroller {
-  display: block;
-  min-width: 0;
-  flex: 1 1 auto;
-  --track-width: 0;
-}
-
-.config-top-tabs__scroller::part(tabs) {
-  gap: 8px;
-  border: 0;
-}
-
-.config-top-tabs__tab {
-  flex: 0 0 auto;
-  color: var(--muted);
-  font-size: 11.5px;
-  font-weight: 600;
-  white-space: nowrap;
-  transition:
-    border-color var(--duration-fast) ease,
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease,
-    box-shadow var(--duration-fast) ease;
-}
-
-.config-top-tabs__tab::part(base) {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  min-height: 36px;
-  padding: 8px 14px;
-  background: var(--bg-elevated);
-  color: inherit;
-}
-
-:root[data-theme-mode="light"] .config-top-tabs__tab::part(base) {
-  background: white;
-}
-
-.config-top-tabs__tab:hover::part(base) {
-  color: var(--text);
-  border-color: var(--border-strong);
-  background: var(--bg-hover);
-}
-
-.config-top-tabs__tab[active]::part(base) {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
-  background: var(--accent-subtle);
 }
 
 /* Diff Panel */
@@ -434,6 +204,37 @@
   scroll-behavior: smooth;
 }
 
+/* The schema form nests a full settings-page inside this scroller; both carry
+   top padding, which stacks into a dead band between the accordion nav and
+   the first section. Keep one spacing owner. */
+.config-lead + .config-content {
+  padding-top: 0;
+}
+
+.config-content > .settings-page {
+  padding-top: 0;
+}
+
+.config-content-callout {
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: var(--space-3) var(--space-4) 0;
+}
+
+.config-content-callout .callout {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.config-content-callout__text {
+  min-width: 0;
+  flex: 1 1 420px;
+}
+
 /* ===========================================
    Appearance custom pickers (theme + text scale)
    =========================================== */
@@ -495,7 +296,85 @@
 .settings-theme-card__label {
   font-size: 13px;
   font-weight: 600;
-  color: var(--accent);
+  color: var(--text);
+}
+
+.settings-theme-card--active .settings-theme-card__label {
+  color: var(--text-strong);
+}
+
+/* Real-palette preview chips. Colors mirror the :root[data-theme] blocks in
+   base.css (claw = the default :root palette); keep both in sync when
+   retuning a theme. The custom card reads the live variables instead — it is
+   only rendered with chips while the imported theme is active. */
+.settings-theme-card__palette {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.settings-theme-card__chip {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 18%, transparent);
+}
+
+.settings-theme-card__chip--bg {
+  background: var(--theme-chip-bg);
+}
+
+.settings-theme-card__chip--accent {
+  background: var(--theme-chip-accent);
+}
+
+.settings-theme-card__chip--accent-2 {
+  background: var(--theme-chip-accent-2);
+}
+
+/* Preview swatches are theme-invariant and must not inherit the active theme. */
+/* stylelint-disable color-no-hex */
+.settings-theme-card--claw {
+  --theme-chip-bg: #0e1015;
+  --theme-chip-accent: #ff5c5c;
+  --theme-chip-accent-2: #14b8a6;
+}
+
+.settings-theme-card--knot {
+  --theme-chip-bg: #080808;
+  --theme-chip-accent: #e5243b;
+  --theme-chip-accent-2: #8b1a2b;
+}
+
+.settings-theme-card--dash {
+  --theme-chip-bg: #1a1210;
+  --theme-chip-accent: #b47840;
+  --theme-chip-accent-2: #a88050;
+}
+
+:root[data-theme-mode="light"] .settings-theme-card--claw {
+  --theme-chip-bg: #faf9f7;
+  --theme-chip-accent: #bd4531;
+  --theme-chip-accent-2: #0d9488;
+}
+
+:root[data-theme-mode="light"] .settings-theme-card--knot {
+  --theme-chip-bg: #f9f9fb;
+  --theme-chip-accent: #c41e30;
+  --theme-chip-accent-2: #7a1420;
+}
+
+:root[data-theme-mode="light"] .settings-theme-card--dash {
+  --theme-chip-bg: #f7f2ec;
+  --theme-chip-accent: #6e4828;
+  --theme-chip-accent-2: #6a4e30;
+}
+/* stylelint-enable color-no-hex */
+
+.settings-theme-card--custom {
+  --theme-chip-bg: var(--bg);
+  --theme-chip-accent: var(--accent);
+  --theme-chip-accent-2: var(--accent-2);
 }
 
 .settings-theme-import {
@@ -738,6 +617,53 @@
   color: var(--danger);
 }
 
+.cfg-structured-draft {
+  display: contents;
+}
+
+.cfg-structured-draft__error .settings-row__control {
+  width: 100%;
+}
+
+.cfg-json-editor {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
+}
+
+.cfg-json-editor > .settings-input,
+.cfg-json-editor > .settings-secret {
+  width: 100%;
+}
+
+.cfg-array .settings-row--stacked .settings-row__control {
+  width: 100%;
+}
+
+.cfg-array .settings-row--stacked .settings-row__control > input[type="number"] {
+  flex: 1 1 auto;
+  width: auto;
+}
+
+.cfg-collection-draft__controls {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+}
+
+.cfg-collection-draft__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.config-content :is(input, textarea, select)[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
 /* Redacted click-to-reveal inputs/textareas. */
 .cfg-redacted {
   opacity: 0.7;
@@ -755,7 +681,7 @@
 
 /* Collapsible nested-object summary behaves like a nav row. */
 .cfg-object__summary {
-  cursor: pointer;
+  cursor: var(--cursor-action);
   list-style: none;
   transition: background var(--duration-fast) ease;
 }
@@ -796,7 +722,6 @@
 }
 
 @media (hover: none) and (pointer: coarse) {
-  .config-search__input,
   .settings-theme-import__input,
   .config-raw-field textarea {
     font-size: 16px;
@@ -808,6 +733,33 @@
   display: grid;
   gap: 14px;
   margin-top: 12px;
+}
+
+/* Memory */
+.memory-page {
+  display: grid;
+  gap: 0;
+}
+
+.memory-page__panel {
+  display: grid;
+  gap: 14px;
+}
+
+.shell--settings .content:has(.settings-page) .content-header.hub-page-header {
+  max-width: 1120px;
+}
+
+.memory-page__panel .settings-page,
+.memory-page__panel .config-lead,
+.memory-page__panel .config-content-callout {
+  margin-inline: 0;
+}
+
+.memory-page__link {
+  color: var(--accent);
+  font-size: 12.5px;
+  white-space: nowrap;
 }
 
 .mcp-command-card__grid {
@@ -834,9 +786,166 @@
   font-family: var(--mono);
 }
 
-@media (max-width: 820px) {
+/* Shared inline form stays in config.css because the app-wide stylesheet
+ * serves both the MCP settings page and the Plugins inventory. */
+.mcp-server-form {
+  display: grid;
+  grid-template-columns: minmax(140px, 220px) minmax(150px, 190px) minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  align-items: end;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.mcp-server-form label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.mcp-server-form label span {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 580;
+}
+
+.mcp-server-form__actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.mcp-server-message {
+  margin: var(--space-3) var(--space-4);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--ok-subtle);
+  color: var(--ok);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.mcp-server-message--error {
+  background: var(--danger-subtle);
+  color: var(--danger);
+}
+
+.mcp-server-loading {
+  padding: var(--space-4);
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+/* Advanced Settings accordion navigation, rendered by view.ts. */
+.config-accordion-nav {
+  margin-bottom: 20px;
+}
+
+.config-accordion-group {
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: var(--radius-md);
+  margin-bottom: 4px;
+  overflow: hidden;
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+.config-accordion-group:hover {
+  border-color: var(--border);
+}
+
+.config-accordion-group__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 16px;
+  font-size: 0.8125rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--text-strong);
+  background: color-mix(in srgb, var(--bg-elevated) 50%, var(--card) 50%);
+  border: none;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.config-accordion-group__header:hover,
+.config-accordion-group__header--active {
+  background: var(--bg-hover);
+}
+
+.config-accordion-group__icon {
+  display: flex;
+  align-items: center;
+  color: var(--accent);
+  opacity: 0.7;
+}
+
+.config-accordion-group__icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.config-accordion-group__chevron {
+  margin-left: auto;
+  opacity: 0.35;
+  transition: transform var(--duration-normal) var(--ease-out);
+}
+
+.config-accordion-group__chevron--open {
+  transform: rotate(180deg);
+}
+
+.config-accordion-group__items {
+  border-top: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+  padding: 4px 0;
+  background: var(--card);
+}
+
+.config-accordion-group__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 16px 9px 40px;
+  font-size: 0.8125rem;
+  font-weight: 450;
+  color: var(--muted);
+  background: none;
+  border: none;
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+
+.config-accordion-group__item:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.config-accordion-group__item--active {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.config-accordion-group__item-icon {
+  display: flex;
+  align-items: center;
+  opacity: 0.45;
+}
+
+.config-accordion-group__item-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+@media (max-width: 900px) {
   .mcp-command-card__grid {
     grid-template-columns: 1fr;
+  }
+
+  .mcp-server-form {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
   }
 }
 
@@ -845,72 +954,7 @@
    =========================================== */
 
 @media (max-width: 768px) {
-  .config-layout {
-    margin: 8px 0 0;
-    border-radius: var(--radius-md);
-  }
-
-  .config-actions {
-    flex-wrap: wrap;
-    padding: 14px 16px;
-  }
-
-  .config-actions__left,
-  .config-actions__right {
-    width: 100%;
-    justify-content: center;
-  }
-
-  .config-top-tabs {
-    flex-wrap: wrap;
-    padding: 12px 16px;
-  }
-
-  .config-search--top {
-    flex: 1 1 100%;
-    max-width: none;
-  }
-
-  .config-top-tabs__scroller {
-    flex: 1 1 auto;
-  }
-
-  .config-actions__left .config-mode-toggle__btn {
-    flex: 1 1 50%;
-  }
-
-  .config-content {
-    padding: 16px;
-  }
-
   .settings-theme-grid {
     grid-template-columns: 1fr;
-  }
-}
-
-@media (max-width: 900px) {
-  .config-actions {
-    padding: 12px 16px;
-  }
-
-  .config-actions__left,
-  .config-actions__right {
-    flex-basis: 100%;
-  }
-
-  .config-actions__right {
-    justify-content: flex-start;
-  }
-
-  .config-actions__notice {
-    flex-basis: 100%;
-    max-width: none;
-    text-align: left;
-  }
-
-  .config-actions__buttons {
-    width: 100%;
-    justify-content: flex-start;
-    margin-left: 0;
   }
 }

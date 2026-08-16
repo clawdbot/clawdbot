@@ -12,9 +12,12 @@ type SlackRuntime = PluginRuntime & {
   };
 };
 
-const { setRuntime: setSlackRuntime, tryGetRuntime: getOptionalSlackRuntime } =
-  createPluginRuntimeStore<SlackRuntime>({
-    pluginId: "slack",
-    errorMessage: "Slack runtime not initialized",
-  });
-export { getOptionalSlackRuntime, setSlackRuntime };
+const {
+  setRuntime: setSlackRuntime,
+  tryGetRuntime: getOptionalSlackRuntime,
+  getRuntime: getSlackRuntime,
+} = createPluginRuntimeStore<SlackRuntime>({
+  pluginId: "slack",
+  errorMessage: "Slack runtime not initialized",
+});
+export { getOptionalSlackRuntime, getSlackRuntime, setSlackRuntime };

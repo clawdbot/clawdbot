@@ -7,6 +7,8 @@
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { isInstalledPluginEnabled } from "../../plugins/installed-plugin-index.js";
 import { listKnownSecretEnvVarNames } from "../../secrets/provider-env-vars.js";
+import { SECRET_ENV_NAME_RE } from "../../secrets/secret-env-name.js";
+import { SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH } from "./config-hash.js";
 
 const BLOCKED_ENV_VAR_PATTERNS: ReadonlyArray<RegExp> = [
   /^ANTHROPIC_API_KEY$/i,
@@ -26,7 +28,7 @@ const BLOCKED_ENV_VAR_PATTERNS: ReadonlyArray<RegExp> = [
   /^(GH|GITHUB)_TOKEN$/i,
   /^(AZURE|AZURE_OPENAI|COHERE|AI_GATEWAY|OPENROUTER)_API_KEY$/i,
   /_ADMIN_KEY$/i,
-  /_?(API_KEY|TOKEN|PASSWORD|PRIVATE_KEY|SECRET)$/i,
+  SECRET_ENV_NAME_RE,
 ];
 
 const ALLOWED_ENV_VAR_PATTERNS: ReadonlyArray<RegExp> = [
@@ -47,18 +49,47 @@ type EnvVarSanitizationResult = {
   warnings: string[];
 };
 
-export type EnvSanitizationOptions = {
+type EnvSanitizationOptions = {
   strictMode?: boolean;
   customBlockedPatterns?: ReadonlyArray<RegExp>;
   customAllowedPatterns?: ReadonlyArray<RegExp>;
 };
+
+const MAX_ENV_VAR_VALUE_BYTES = 32768;
+
+function envRecordsEqual(left: Record<string, string>, right: Record<string, string>): boolean {
+  const leftEntries = Object.entries(left).toSorted(([leftKey], [rightKey]) =>
+    leftKey.localeCompare(rightKey),
+  );
+  const rightEntries = Object.entries(right).toSorted(([leftKey], [rightKey]) =>
+    leftKey.localeCompare(rightKey),
+  );
+  if (leftEntries.length !== rightEntries.length) {
+    return false;
+  }
+  return leftEntries.every(([key, value], index) => {
+    const rightEntry = rightEntries[index];
+    return rightEntry?.[0] === key && rightEntry[1] === value;
+  });
+}
+
+export function resolveDockerEnvPolicyEpoch(
+  env: Record<string, string | undefined> | undefined,
+): string | undefined {
+  const explicitEnv = env ?? {};
+  const previousAllowed = sanitizeEnvVars(explicitEnv).allowed;
+  const currentAllowed = sanitizeExplicitSandboxEnvVars(explicitEnv).allowed;
+  return envRecordsEqual(previousAllowed, currentAllowed)
+    ? undefined
+    : SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH;
+}
 
 /** Returns a warning or block reason for environment values that look unsafe to forward. */
 export function validateEnvVarValue(value: string): string | undefined {
   if (value.includes("\0")) {
     return "Contains null bytes";
   }
-  if (value.length > 32768) {
+  if (Buffer.byteLength(value, "utf8") > MAX_ENV_VAR_VALUE_BYTES) {
     return "Value exceeds maximum length";
   }
   if (/^[A-Za-z0-9+/=]{80,}$/.test(value)) {

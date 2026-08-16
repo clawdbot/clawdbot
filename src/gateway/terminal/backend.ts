@@ -9,6 +9,8 @@ export type TerminalBackendExit = {
 export interface TerminalBackend {
   write(data: string): void;
   resize(cols: number, rows: number): void;
+  pause(): void;
+  resume(): void;
   kill(): void;
   onData(callback: (data: string) => void): void;
   onExit(callback: (exit: TerminalBackendExit) => void): void;
@@ -24,6 +26,8 @@ export async function createLocalTerminalBackend(
   return {
     write: (data) => pty.write(data),
     resize: (cols, rows) => pty.resize(cols, rows),
+    pause: () => pty.pause(),
+    resume: () => pty.resume(),
     kill: () => pty.kill(),
     onData: (callback) => pty.onData(callback),
     onExit: (callback) => pty.onExit(callback),

@@ -1,25 +1,31 @@
 // Control UI tests cover workboard behavior.
 import { copyFile, mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import type { BrowserContext, Locator, Page } from "playwright";
+import { expect, it } from "vitest";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
+import { WORKBOARD_CHANGED_EVENT } from "../../../../packages/workboard-contract/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import type { WorkboardCard, WorkboardStatus } from "../../lib/workboard/index.ts";
+import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
+import type {
+  WorkboardBoardSummary,
+  WorkboardCard,
+  WorkboardStatus,
+} from "../../lib/workboard/index.ts";
 import {
-  canRunPlaywrightChromium,
+  controlUiE2eWaitTimeoutMs,
   installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
   type MockGatewayControls,
   type MockGatewayRequest,
 } from "../../test-helpers/control-ui-e2e.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "Control UI Workboard mocked Gateway E2E",
+  unavailableMessage: (executablePath) =>
+    `Playwright Chromium is not installed at ${executablePath}. Run \`pnpm --dir ui exec playwright install chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
+});
+
 const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/workboard");
 const viewport = { height: 1000, width: 2400 };
 const baseTime = Date.parse("2026-06-01T18:00:00.000Z");
@@ -37,10 +43,7 @@ const WORKBOARD_STATUSES: readonly WorkboardStatus[] = [
   "done",
 ];
 
-let server: ControlUiE2eServer;
-
 type RecordedPage = {
-  browser: Browser;
   context: BrowserContext;
   page: Page;
   rawVideoDir: string;
@@ -51,12 +54,7 @@ type ProofArtifacts = {
   videos: string[];
 };
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected object value");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-object-value");
 
 function requestParams(request: MockGatewayRequest): Record<string, unknown> {
   return requireRecord(request.params);
@@ -72,6 +70,35 @@ function workboardField(scope: Page | Locator, label: string) {
   });
 }
 
+type UpdatingElement = HTMLElement & {
+  requestUpdate?: () => void;
+  updateComplete: Promise<boolean>;
+};
+
+async function waitForWorkboardRender(page: Page, requestUpdate = false): Promise<void> {
+  await page.locator("openclaw-workboard-page").evaluate(async (element, shouldRequestUpdate) => {
+    const workboardPage = element as UpdatingElement;
+    if (shouldRequestUpdate) {
+      workboardPage.requestUpdate?.();
+    }
+    await workboardPage.updateComplete;
+  }, requestUpdate);
+}
+
+async function waitForWorkboardSelectValue(control: Locator, value: string): Promise<void> {
+  // Web Awesome updates `value` before its deferred `change` event. Wait for
+  // that event's update boundary and the parent render that consumes it.
+  await control.evaluate(async (element) => {
+    await (element as UpdatingElement).updateComplete;
+  });
+  await waitForWorkboardRender(control.page());
+  await expect
+    .poll(() =>
+      control.evaluate((select) => (select as HTMLElement & { value?: string }).value ?? ""),
+    )
+    .toBe(value);
+}
+
 async function chooseWorkboardSelectOption(
   scope: Page | Locator,
   label: string,
@@ -79,6 +106,14 @@ async function chooseWorkboardSelectOption(
 ): Promise<void> {
   const field = workboardField(scope, label);
   expect(await field.count()).toBe(1);
+  await chooseWorkboardSelectFieldOption(field, optionLabel);
+}
+
+async function chooseWorkboardSelectFieldOption(
+  field: Locator,
+  optionLabel: string,
+  control = field.locator("wa-select"),
+): Promise<void> {
   const optionValue = await field.locator("wa-option").evaluateAll((options, optionText) => {
     const option = options.find(
       (candidate) => (candidate as HTMLElement & { label?: string }).label === optionText,
@@ -86,10 +121,24 @@ async function chooseWorkboardSelectOption(
     return option?.getAttribute("value") ?? null;
   }, optionLabel);
   expect(optionValue).not.toBeNull();
-  await field.locator("wa-select").evaluate((select, value) => {
+  await control.evaluate((select, value) => {
     (select as HTMLElement & { value: string }).value = String(value);
     select.dispatchEvent(new Event("change", { bubbles: true }));
   }, optionValue);
+  await waitForWorkboardSelectValue(control, optionValue ?? "");
+}
+
+async function setWorkboardDraftField(
+  scope: Page | Locator,
+  label: string,
+  value: string,
+): Promise<void> {
+  const input = scope.getByLabel(label);
+  await input.fill(value);
+  // Prove the delegated input handler reached canonical draft state. A DOM-only
+  // value check can pass even when the next parent render would restore stale data.
+  await waitForWorkboardRender(input.page(), true);
+  await expect.poll(() => input.inputValue()).toBe(value);
 }
 
 async function waitForRequests(
@@ -104,7 +153,7 @@ async function waitForRequests(
       return requests;
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, 50);
+      setTimeout(resolve, 10);
     });
   }
   throw new Error(`Timed out waiting for ${count} ${method} requests`);
@@ -208,8 +257,14 @@ function card(
   };
 }
 
-function cardsListResponse(cards: WorkboardCard[]) {
+function cardsListResponse(
+  cards: WorkboardCard[],
+  boards: WorkboardBoardSummary[] = [
+    { id: "default", total: cards.length, active: cards.length, archived: 0, byStatus: {} },
+  ],
+) {
   return {
+    boards,
     cards,
     statuses: WORKBOARD_STATUSES,
   };
@@ -235,11 +290,10 @@ async function newRecordedPage(label: string): Promise<RecordedPage> {
   const rawVideoDir = path.join(artifactDir, `${label}-raw`);
   await rm(rawVideoDir, { force: true, recursive: true });
   await mkdir(rawVideoDir, { recursive: true });
-  const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
   let context: BrowserContext | undefined;
   let page: Page | undefined;
   try {
-    context = await browser.newContext({
+    context = await suite.browser.newContext({
       locale: "en-US",
       recordVideo: {
         dir: rawVideoDir,
@@ -249,12 +303,11 @@ async function newRecordedPage(label: string): Promise<RecordedPage> {
       viewport,
     });
     page = await context.newPage();
-    page.setDefaultTimeout(10_000);
-    return { browser, context, page, rawVideoDir };
+    page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
+    return { context, page, rawVideoDir };
   } catch (error) {
     await page?.close().catch(() => {});
     await context?.close().catch(() => {});
-    await browser.close().catch(() => {});
     await rm(rawVideoDir, { force: true, recursive: true });
     throw error;
   }
@@ -286,25 +339,11 @@ async function closeRecordedPage(
     await copyFile(rawVideoPath, videoPath);
     artifacts.videos.push(videoPath);
   } finally {
-    await recorded.browser.close().catch(() => {});
     await rm(recorded.rawVideoDir, { force: true, recursive: true });
   }
 }
 
-describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(
-        `Playwright Chromium is not installed at ${chromiumExecutablePath}. Run \`pnpm --dir ui exec playwright install chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
-      );
-    }
-    server = await startControlUiE2eServer();
-  });
-
-  afterAll(async () => {
-    await server?.close();
-  });
-
+suite.define(() => {
   it("persists Workboard create, edit, running move, lifecycle sync, reload, and read-only state", async () => {
     await rm(artifactDir, { force: true, recursive: true });
     const artifacts: ProofArtifacts = { screenshots: [], videos: [] };
@@ -343,8 +382,14 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       status: "review",
       updatedAt: baseTime + 4,
     });
+    const liveRefreshedCard = card({
+      ...reviewedCard,
+      notes: "Acceptance: live Gateway invalidation refreshed this card",
+      updatedAt: baseTime + 5,
+    });
 
     const writable = await newRecordedPage("workboard-writable");
+    await writable.page.clock.install();
     try {
       const writableGateway = await installMockGateway(writable.page, {
         methodResponses: {
@@ -354,7 +399,7 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
           "workboard.cards.list": cardsListResponse([]),
         },
       });
-      const response = await writable.page.goto(`${server.baseUrl}workboard`);
+      const response = await writable.page.goto(`${suite.server.baseUrl}workboard`);
       expect(response?.status()).toBe(200);
       await statusColumn(writable.page, "Todo").waitFor({ state: "visible" });
       await captureScreenshot(writable.page, artifacts, "01-empty-board");
@@ -369,38 +414,21 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
 
       await writable.page.keyboard.press("End");
       await writable.page.keyboard.press("Enter");
-      await expect
-        .poll(() =>
-          prioritySelect.evaluate(
-            (select) => (select as HTMLElement & { value?: string }).value ?? "",
-          ),
-        )
-        .toBe("urgent");
+      await waitForWorkboardSelectValue(prioritySelect, "urgent");
       await expect.poll(() => priorityCombobox.getAttribute("aria-expanded")).toBe("false");
 
       await priorityCombobox.focus();
       await writable.page.keyboard.press("ArrowDown");
       await writable.page.keyboard.press("ArrowUp");
       await writable.page.keyboard.press("Enter");
-      await expect
-        .poll(() =>
-          prioritySelect.evaluate(
-            (select) => (select as HTMLElement & { value?: string }).value ?? "",
-          ),
-        )
-        .toBe("high");
+      await waitForWorkboardSelectValue(prioritySelect, "high");
+      await expect.poll(() => priorityCombobox.getAttribute("aria-expanded")).toBe("false");
 
       await priorityCombobox.focus();
       await writable.page.keyboard.press("ArrowDown");
       await writable.page.keyboard.press("Home");
       await writable.page.keyboard.press("Enter");
-      await expect
-        .poll(() =>
-          prioritySelect.evaluate(
-            (select) => (select as HTMLElement & { value?: string }).value ?? "",
-          ),
-        )
-        .toBe("all");
+      await waitForWorkboardSelectValue(prioritySelect, "all");
       await expect.poll(() => priorityCombobox.getAttribute("aria-expanded")).toBe("false");
 
       await writableGateway.deferNext("workboard.cards.create");
@@ -411,10 +439,10 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       const createDialog = writable.page.getByRole("dialog", { name: "New card" });
       const createForm = writable.page.locator('openclaw-modal-dialog[label="New card"]');
       await expect.poll(() => createDialog.isVisible()).toBe(true);
-      await createForm.getByLabel("Title").fill(createdCard.title);
-      await createForm.getByLabel("Notes").fill(createdCard.notes ?? "");
+      await setWorkboardDraftField(createForm, "Title", createdCard.title);
+      await setWorkboardDraftField(createForm, "Notes", createdCard.notes ?? "");
       await chooseWorkboardSelectOption(createForm, "Session", linkedSessionName);
-      await createForm.getByLabel("Labels").fill("ui, proof");
+      await setWorkboardDraftField(createForm, "Labels", "ui, proof");
       await captureScreenshot(writable.page, artifacts, "02-create-dialog");
       const createBefore = (await writableGateway.getRequests("workboard.cards.create")).length;
       await createForm.getByRole("button", { name: /^Create$/u }).click();
@@ -439,7 +467,10 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
           .evaluateAll(
             (inputs) => inputs.filter((input) => (input as HTMLInputElement).disabled).length,
           ),
-      ).toBe(4);
+      ).toBe(3);
+      expect(
+        await createForm.locator(".workboard-agent-select .agent-select__trigger").isDisabled(),
+      ).toBe(true);
       const pendingCancelButtons = createForm.getByRole("button", {
         name: "Cancel",
         exact: true,
@@ -463,10 +494,10 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       const editDialog = writable.page.getByRole("dialog", { name: "Edit card" });
       const editForm = writable.page.locator('openclaw-modal-dialog[label="Edit card"]');
       await expect.poll(() => editDialog.isVisible()).toBe(true);
-      await editForm.getByLabel("Title").fill(editedCard.title);
-      await editForm.getByLabel("Notes").fill(editedCard.notes ?? "");
+      await setWorkboardDraftField(editForm, "Title", editedCard.title);
+      await setWorkboardDraftField(editForm, "Notes", editedCard.notes ?? "");
       await chooseWorkboardSelectOption(editForm, "Priority", "High");
-      await editForm.getByLabel("Labels").fill("ui, proof, e2e");
+      await setWorkboardDraftField(editForm, "Labels", "ui, proof, e2e");
       const updateBeforeEdit = (await writableGateway.getRequests("workboard.cards.update")).length;
       await editForm.getByRole("button", { name: /^Save$/u }).click();
       const editRequest = await waitForNextRequest(
@@ -502,8 +533,23 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       await details.locator('button[aria-label="Cancel"]').click();
 
       await writableGateway.deferNext("workboard.cards.move");
+      const dragSource = cardInColumn(writable.page, "Todo", editedCard.title);
+      await dragSource.dispatchEvent("dragstart");
+      await expect
+        .poll(() => dragSource.getAttribute("class"))
+        .toContain("workboard-card--dragging");
+      await expect
+        .poll(() => dragSource.evaluate((element) => window.getComputedStyle(element).opacity))
+        .toBe("0.45");
+      expect(await writable.page.locator(".workboard-column--drop").count()).toBe(9);
+      await captureScreenshot(writable.page, artifacts, "06-drag-feedback");
+      await dragSource.dispatchEvent("dragend");
+      await expect
+        .poll(() => dragSource.getAttribute("class"))
+        .not.toContain("workboard-card--dragging");
+
       const moveBefore = (await writableGateway.getRequests("workboard.cards.move")).length;
-      await cardInColumn(writable.page, "Todo", editedCard.title).dragTo(
+      await dragSource.dragTo(
         statusColumn(writable.page, "Running").locator(".workboard-column__cards"),
       );
       const moveRequest = await waitForNextRequest(
@@ -519,7 +565,7 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       await cardInColumn(writable.page, "Running", editedCard.title).waitFor({
         state: "visible",
       });
-      await captureScreenshot(writable.page, artifacts, "06-moved-running");
+      await captureScreenshot(writable.page, artifacts, "07-moved-running");
 
       await writableGateway.deferNext("workboard.cards.update");
       const syncBefore = (await writableGateway.getRequests("workboard.cards.update")).length;
@@ -559,9 +605,43 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       await writable.page.locator(".workboard-detail").getByText("Moved to Review").waitFor({
         state: "visible",
       });
-      await captureScreenshot(writable.page, artifacts, "07-lifecycle-review");
+      await captureScreenshot(writable.page, artifacts, "08-lifecycle-review");
       await details.locator('button[aria-label="Cancel"]').click();
       await details.waitFor({ state: "hidden" });
+
+      await cardInColumn(writable.page, "Review", editedCard.title)
+        .locator('button[aria-label="Edit card"]')
+        .click();
+      await expect.poll(() => editDialog.isVisible()).toBe(true);
+      const listBeforeLiveRefresh = (await writableGateway.getRequests("workboard.cards.list"))
+        .length;
+      await writableGateway.deferNext("workboard.cards.list");
+      await writableGateway.emitGatewayEvent(WORKBOARD_CHANGED_EVENT, {
+        epoch: "workboard-e2e",
+        revision: 1,
+      });
+      await writable.page.waitForTimeout(250);
+      expect(await writableGateway.getRequests("workboard.cards.list")).toHaveLength(
+        listBeforeLiveRefresh,
+      );
+      await editForm
+        .locator("form > .workboard-modal__actions")
+        .getByRole("button", { name: "Cancel", exact: true })
+        .click();
+      await waitForNextRequest(writableGateway, "workboard.cards.list", listBeforeLiveRefresh);
+      await writableGateway.resolveDeferred("workboard.cards.list", {
+        cards: [liveRefreshedCard],
+        statuses: WORKBOARD_STATUSES,
+      });
+      await writable.page
+        .getByText("Acceptance: live Gateway invalidation refreshed this card")
+        .waitFor({ state: "visible" });
+      const listAfterLiveRefresh = (await writableGateway.getRequests("workboard.cards.list"))
+        .length;
+      await writable.page.clock.fastForward(1_250);
+      expect(await writableGateway.getRequests("workboard.cards.list")).toHaveLength(
+        listAfterLiveRefresh,
+      );
 
       await writableGateway.deferNext("workboard.cards.list");
       const listBeforeReload = (await writableGateway.getRequests("workboard.cards.list")).length;
@@ -571,14 +651,14 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
         .click();
       await waitForNextRequest(writableGateway, "workboard.cards.list", listBeforeReload);
       await writableGateway.resolveDeferred("workboard.cards.list", {
-        cards: [reviewedCard],
+        cards: [liveRefreshedCard],
         statuses: WORKBOARD_STATUSES,
       });
       await cardInColumn(writable.page, "Review", editedCard.title).waitFor({ state: "visible" });
-      await writable.page.getByText("Acceptance: mocked Gateway browser proof").waitFor({
-        state: "visible",
-      });
-      await captureScreenshot(writable.page, artifacts, "08-reloaded-review");
+      await writable.page
+        .getByText("Acceptance: live Gateway invalidation refreshed this card")
+        .waitFor({ state: "visible" });
+      await captureScreenshot(writable.page, artifacts, "09-reloaded-review");
     } finally {
       await closeRecordedPage(writable, artifacts, "workboard-writable");
     }
@@ -596,7 +676,7 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
           "workboard.cards.list": cardsListResponse([runningCard]),
         },
       });
-      const response = await readOnly.page.goto(`${server.baseUrl}workboard`);
+      const response = await readOnly.page.goto(`${suite.server.baseUrl}workboard`);
       expect(response?.status()).toBe(200);
       await cardInColumn(readOnly.page, "Running", editedCard.title).waitFor({
         state: "visible",
@@ -663,7 +743,7 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       });
       // Constrain the height so the Todo column must overflow its visible area.
       await recorded.page.setViewportSize({ height: 720, width: 1400 });
-      const response = await recorded.page.goto(`${server.baseUrl}workboard`);
+      const response = await recorded.page.goto(`${suite.server.baseUrl}workboard`);
       expect(response?.status()).toBe(200);
       const column = statusColumn(recorded.page, "Todo");
       await column.waitFor({ state: "visible" });
@@ -685,6 +765,69 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       expect(columnScrolls).toBe(true);
     } finally {
       await closeRecordedPage(recorded, artifacts, "workboard-overflow");
+    }
+  });
+
+  it("filters persisted boards and keeps the selection in the URL", async () => {
+    const artifacts: ProofArtifacts = { screenshots: [], videos: [] };
+    const defaultCard = card({ id: "default-card", title: "Default board work" });
+    const opsCard = card({
+      id: "ops-card",
+      title: "Operations board work",
+      metadata: { automation: { boardId: "ops" } },
+    });
+    const boards: WorkboardBoardSummary[] = [
+      { id: "default", total: 1, active: 1, archived: 0, byStatus: { todo: 1 } },
+      {
+        id: "ops",
+        name: "Operations",
+        total: 1,
+        active: 1,
+        archived: 0,
+        byStatus: { todo: 1 },
+      },
+      {
+        id: "archive",
+        name: "Old work",
+        total: 0,
+        active: 0,
+        archived: 0,
+        byStatus: {},
+        archivedAt: baseTime,
+      },
+    ];
+    const recorded = await newRecordedPage("workboard-board-filter");
+    try {
+      await installMockGateway(recorded.page, {
+        methodResponses: {
+          "config.get": workboardConfigSnapshot(),
+          "sessions.list": sessionsListResponse([]),
+          "tasks.list": { nextCursor: null, tasks: [] },
+          "workboard.boards.list": { boards },
+          "workboard.cards.list": cardsListResponse([defaultCard, opsCard], boards),
+        },
+      });
+
+      const response = await recorded.page.goto(`${suite.server.baseUrl}workboard?board=ops`);
+      expect(response?.status()).toBe(200);
+      await cardInColumn(recorded.page, "Todo", opsCard.title).waitFor({ state: "visible" });
+      await expect.poll(() => new URL(recorded.page.url()).pathname).toBe("/workboard/ops");
+      await expect.poll(() => recorded.page.getByText(defaultCard.title).count()).toBe(0);
+      expect(new URL(recorded.page.url()).searchParams.has("board")).toBe(false);
+
+      const boardFilter = recorded.page.locator(".workboard-select--toolbar-board");
+      await chooseWorkboardSelectFieldOption(boardFilter, "All boards", boardFilter);
+      await cardInColumn(recorded.page, "Todo", defaultCard.title).waitFor({ state: "visible" });
+      await expect.poll(() => new URL(recorded.page.url()).pathname).toBe("/workboard");
+      expect(new URL(recorded.page.url()).searchParams.has("board")).toBe(false);
+
+      await chooseWorkboardSelectFieldOption(boardFilter, "Operations (ops)", boardFilter);
+      await expect.poll(() => new URL(recorded.page.url()).pathname).toBe("/workboard/ops");
+      expect(await recorded.page.getByText(defaultCard.title).count()).toBe(0);
+      expect(await recorded.page.getByText("Old work (archive)").count()).toBeGreaterThan(0);
+      await captureScreenshot(recorded.page, artifacts, "10-board-filter-ops");
+    } finally {
+      await closeRecordedPage(recorded, artifacts, "workboard-board-filter");
     }
   });
 });

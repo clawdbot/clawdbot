@@ -7,7 +7,6 @@ import {
   PIXVERSE_PROVIDER_ID,
 } from "./constants.js";
 import plugin from "./index.js";
-import { applyPixVerseConfig, applyPixVerseProviderConfig } from "./onboard.js";
 
 function registerPixVerseProvider() {
   const captured = capturePluginRegistration(plugin);
@@ -22,23 +21,26 @@ function registerPixVerseProvider() {
   return provider;
 }
 
-function createRuntimeContext(region: "international" | "cn") {
+function createRuntimeContext(
+  region: "international" | "cn",
+  config: Record<string, unknown> = {
+    models: {
+      providers: {
+        pixverse: {
+          baseUrl: "https://proxy.example/openapi/v2",
+          models: [],
+          params: { quality: "720p" },
+        },
+      },
+    },
+  },
+) {
   const select = vi.fn(async (params: { message: string }) => {
     expect(params.message).toBe("Select PixVerse API region");
     return region;
   });
   const ctx = {
-    config: {
-      models: {
-        providers: {
-          pixverse: {
-            baseUrl: "https://proxy.example/openapi/v2",
-            models: [],
-            params: { quality: "720p" },
-          },
-        },
-      },
-    },
+    config,
     env: {},
     prompter: {
       intro: vi.fn(),
@@ -139,13 +141,34 @@ describe("pixverse plugin", () => {
       region: "cn",
     });
     expect(result.defaultModel).toBeUndefined();
-    expect(result.configPatch?.agents?.defaults?.videoGenerationModel).toEqual({
+    expect(result.configPatch?.agents?.defaults?.mediaModels?.video).toEqual({
       primary: PIXVERSE_DEFAULT_VIDEO_MODEL_REF,
     });
     expect(result.notes).toEqual([`PixVerse endpoint: CN (${PIXVERSE_BASE_URL_BY_REGION.cn})`]);
   });
 
-  it("only resets custom baseUrl when a region is explicitly selected", () => {
+  it("preserves an existing video generation default through setup", async () => {
+    const provider = registerPixVerseProvider();
+    const auth = provider?.auth?.[0];
+    if (!auth) {
+      throw new Error("expected PixVerse auth method");
+    }
+    const { ctx } = createRuntimeContext("international", {
+      agents: { defaults: { mediaModels: { video: { primary: "openai/sora-2" } } } },
+    });
+
+    const result = await auth.run(ctx);
+
+    expect(result.configPatch?.agents?.defaults?.mediaModels?.video).toEqual({
+      primary: "openai/sora-2",
+    });
+  });
+
+  it("preserves a custom base URL during non-interactive setup without an explicit region", async () => {
+    const auth = registerPixVerseProvider().auth?.[0];
+    if (!auth?.runNonInteractive) {
+      throw new Error("expected PixVerse non-interactive auth method");
+    }
     const config = {
       models: {
         providers: {
@@ -158,40 +181,52 @@ describe("pixverse plugin", () => {
       },
     };
 
-    expect(
-      applyPixVerseProviderConfig(config, "international").models?.providers?.pixverse,
-    ).toEqual({
+    const result = await auth.runNonInteractive({
+      config,
+      opts: {},
+      env: {},
+      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
+      resolveApiKey: vi.fn(async () => ({ key: "fixture-value", source: "profile" })),
+      toApiKeyCredential: vi.fn(() => null),
+    } as never);
+
+    expect(result?.models?.providers?.pixverse).toMatchObject({
       baseUrl: "https://proxy.example/openapi/v2",
-      models: [],
       params: { quality: "720p" },
       region: "international",
     });
-    expect(
-      applyPixVerseProviderConfig(config, "cn", { resetBaseUrl: true }).models?.providers?.pixverse,
-    ).toEqual({
-      baseUrl: PIXVERSE_BASE_URL_BY_REGION.cn,
-      models: [],
-      params: { quality: "720p" },
-      region: "cn",
-    });
   });
 
-  it("preserves an existing video generation default", () => {
-    const result = applyPixVerseConfig(
-      {
-        agents: {
-          defaults: {
-            videoGenerationModel: {
-              primary: "openai/sora-2",
-            },
+  it("resets a custom base URL when non-interactive setup selects a region", async () => {
+    const auth = registerPixVerseProvider().auth?.[0];
+    if (!auth?.runNonInteractive) {
+      throw new Error("expected PixVerse non-interactive auth method");
+    }
+    const config = {
+      models: {
+        providers: {
+          pixverse: {
+            baseUrl: "https://proxy.example/openapi/v2",
+            models: [],
+            params: { quality: "720p" },
           },
         },
       },
-      "international",
-    );
+    };
 
-    expect(result.agents?.defaults?.videoGenerationModel).toEqual({
-      primary: "openai/sora-2",
+    const result = await auth.runNonInteractive({
+      config,
+      opts: { pixverseRegion: "cn" },
+      env: {},
+      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
+      resolveApiKey: vi.fn(async () => ({ key: "fixture-value", source: "profile" })),
+      toApiKeyCredential: vi.fn(() => null),
+    } as never);
+
+    expect(result?.models?.providers?.pixverse).toMatchObject({
+      baseUrl: PIXVERSE_BASE_URL_BY_REGION.cn,
+      params: { quality: "720p" },
+      region: "cn",
     });
   });
 });

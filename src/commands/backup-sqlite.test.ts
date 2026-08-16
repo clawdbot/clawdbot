@@ -7,10 +7,10 @@ import type { RuntimeEnv } from "../runtime.js";
 import { createLocalSqliteSnapshotProvider } from "../snapshot/local-repository.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.generated.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.generated.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import {
   backupSqliteCreateCommand,
   backupSqliteListCommand,
@@ -221,6 +221,26 @@ describe("SQLite backup commands", () => {
         repository: "/tmp/snapshots",
       }),
     ).rejects.toThrow("Choose exactly one SQLite snapshot source");
+  });
+
+  it("does not claim completion when a corrupt database also rejects outcome recording", async () => {
+    const tempDir = tempDirs.make("openclaw-backup-sqlite-corrupt-");
+    const stateDir = path.join(tempDir, "state");
+    const repositoryPath = path.join(tempDir, "snapshots");
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    const databasePath = resolveOpenClawStateSqlitePath();
+    await fs.mkdir(path.dirname(databasePath), { recursive: true });
+    await fs.writeFile(databasePath, Buffer.alloc(32));
+    const runtime = createRuntimeCapture();
+
+    await expect(
+      backupSqliteCreateCommand(runtime, { global: true, repository: repositoryPath }),
+    ).rejects.toThrow(/cannot be snapshotted safely/u);
+
+    expect(runtime.errors).toEqual([
+      "Warning: the backup outcome could not be recorded: file is not a database",
+    ]);
+    await expect(fs.readdir(repositoryPath)).resolves.toEqual([]);
   });
 
   it("requires repository, snapshot, and restore target paths", async () => {

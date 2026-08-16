@@ -1,0 +1,21 @@
+title: Slack native exec approval prompt resolves
+scenario:
+  id: slack-approval-exec-native
+  surface: channels
+  coverage:
+    primary:
+      - slack.native-approvals
+    secondary:
+      - channels.channel-native-approval-prompts
+  execution:
+    kind: flow
+    channel: slack
+    timeoutMs: 60000
+    retryCount: 1
+    suiteIsolation: isolated
+flow:
+  module: ./live-transports/slack/scenario-runtime.js
+  call: runSlackScenario
+  args:
+    - { expr: slackScenarioContext }
+    - { moduleExport: slackQaApprovalExecNativeScenario }

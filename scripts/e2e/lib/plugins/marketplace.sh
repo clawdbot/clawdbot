@@ -20,8 +20,8 @@ run_plugins_marketplace_scenario() {
 
   node scripts/e2e/lib/plugins/assertions.mjs marketplace-list
 
-  run_plugins_openclaw_logged install-marketplace-shortcut plugins install marketplace-shortcut@claude-fixtures
-  run_plugins_openclaw_logged install-marketplace-direct plugins install marketplace-direct --marketplace claude-fixtures
+  run_plugins_openclaw_logged install-marketplace-shortcut plugins install marketplace-shortcut@claude-fixtures --force
+  run_plugins_openclaw_logged install-marketplace-direct plugins install marketplace-direct --marketplace claude-fixtures --force
   run_plugins_openclaw_capture "$OPENCLAW_PLUGINS_TMP_DIR/plugins-marketplace.json" plugins list --json
   run_plugins_openclaw_capture "$OPENCLAW_PLUGINS_TMP_DIR/plugins-marketplace-shortcut-inspect.json" plugins inspect marketplace-shortcut --runtime --json
   run_plugins_openclaw_capture "$OPENCLAW_PLUGINS_TMP_DIR/plugins-marketplace-direct-inspect.json" plugins inspect marketplace-direct --runtime --json

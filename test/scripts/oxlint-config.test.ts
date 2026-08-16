@@ -5,7 +5,11 @@ import { describe, expect, it } from "vitest";
 
 type OxlintConfig = {
   ignorePatterns?: string[];
-  overrides?: Array<{ files?: string[]; rules?: Record<string, unknown> }>;
+  overrides?: Array<{
+    excludeFiles?: string[];
+    files?: string[];
+    rules?: Record<string, unknown>;
+  }>;
   rules?: Record<string, unknown>;
 };
 
@@ -141,6 +145,8 @@ describe("oxlint config", () => {
       "dist/",
       "dist-runtime/",
       "docs/_layouts/",
+      ".agents/skills/autoreview/tests/fixtures/**",
+      "test/fixtures/oxlint-boundary-guards/**",
       "**/a2ui.bundle.js",
       "extensions/diffs/assets/viewer-runtime.js",
       "extensions/diffs-language-pack/assets/viewer-runtime.js",
@@ -160,10 +166,19 @@ describe("oxlint config", () => {
     ]);
   });
 
-  it("keeps lint overrides limited to the indexed-access and test-file policies", () => {
+  it("allows ecosystem contract fields with leading underscores", () => {
     const config = readJson(".oxlintrc.json") as OxlintConfig;
 
-    expect(config.overrides).toEqual([
+    expect(config.rules?.["eslint/no-underscore-dangle"]).toEqual([
+      "error",
+      { allow: ["__typename", "_meta"] },
+    ]);
+  });
+
+  it("preserves the indexed-access and test-file policies", () => {
+    const config = readJson(".oxlintrc.json") as OxlintConfig;
+
+    expect(config.overrides?.slice(0, 3)).toEqual([
       {
         files: ["extensions/browser/src/browser/routes/*.ts"],
         rules: {
@@ -178,7 +193,6 @@ describe("oxlint config", () => {
           "packages/terminal-core/**/*.ts",
           "packages/normalization-core/**/*.ts",
           "packages/model-catalog-core/**/*.ts",
-          "packages/web-content-core/**/*.ts",
           "packages/agent-core/**/*.ts",
           "packages/acp-core/**/*.ts",
           "packages/ai/**/*.ts",
@@ -196,8 +210,8 @@ describe("oxlint config", () => {
       },
       {
         files: [
-          "**/*.test.ts",
-          "**/*.test.tsx",
+          "**/*.{test,suite}.ts",
+          "**/*.{test,suite}.tsx",
           "**/*.e2e.test.ts",
           "**/*.live.test.ts",
           "**/*test-harness.ts",
@@ -206,6 +220,54 @@ describe("oxlint config", () => {
         ],
         rules: {
           "typescript/no-explicit-any": "off",
+        },
+      },
+    ]);
+  });
+
+  it("enforces scoped max-lines budgets while excluding generated output", () => {
+    const config = readJson(".oxlintrc.json") as OxlintConfig;
+    const maxLinesOverrides = (config.overrides ?? []).filter(
+      (override) => override.rules?.["max-lines"],
+    );
+    const scopedBudgets = maxLinesOverrides.filter((override) => override.excludeFiles);
+    const exactExceptions = maxLinesOverrides.filter((override) => !override.excludeFiles);
+
+    expect(scopedBudgets).toHaveLength(4);
+    expect(scopedBudgets.map((override) => override.rules?.["max-lines"])).toEqual([
+      ["error", { max: 700, skipBlankLines: true, skipComments: true }],
+      ["error", { max: 700, skipBlankLines: true, skipComments: true }],
+      ["error", { max: 800, skipBlankLines: true, skipComments: true }],
+      ["error", { max: 1000, skipBlankLines: true, skipComments: true }],
+    ]);
+    for (const override of scopedBudgets) {
+      expect(override.excludeFiles).toContain("**/protocol-gen/**");
+      expect(override.excludeFiles).toContain("**/*.generated.*");
+      expect(override.excludeFiles).toContain("ui/src/i18n/locales/**");
+      expect(override.excludeFiles).toContain("src/wizard/i18n/locales/**");
+    }
+    for (const override of scopedBudgets.slice(0, 3)) {
+      expect(override.excludeFiles).toContain("**/*.{test,spec,suite}.*");
+    }
+    expect(scopedBudgets[3]?.files).toEqual(
+      expect.arrayContaining([
+        "src/**/*.{test,spec,suite}.*",
+        "ui/src/**/*.{test,spec,suite}.*",
+        "packages/**/*.{test,spec,suite}.*",
+        "extensions/**/*.{test,spec,suite}.*",
+      ]),
+    );
+    expect(exactExceptions).toEqual([
+      {
+        files: ["extensions/copilot/src/event-bridge.ts"],
+        rules: {
+          "max-lines": ["error", { max: 950, skipBlankLines: true, skipComments: true }],
+        },
+      },
+      {
+        files: ["extensions/copilot/src/attempt-transcript-journal.test.ts"],
+        rules: {
+          "max-lines": ["error", { max: 1200, skipBlankLines: true, skipComments: true }],
         },
       },
     ]);

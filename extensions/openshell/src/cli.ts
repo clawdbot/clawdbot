@@ -8,10 +8,8 @@ import {
 import type { ResolvedOpenShellPluginConfig } from "./config.js";
 
 export {
-  buildExecRemoteCommand,
   buildRemoteWorkdirValidationCommand,
   buildValidatedExecRemoteCommand,
-  shellEscape,
 } from "openclaw/plugin-sdk/sandbox";
 
 export type OpenShellExecContext = {
@@ -20,17 +18,16 @@ export type OpenShellExecContext = {
   timeoutMs?: number;
 };
 
-export function resolveOpenShellCommand(command: string): string {
-  return command;
-}
-
-export function buildOpenShellBaseArgv(config: ResolvedOpenShellPluginConfig): string[] {
-  const argv = [resolveOpenShellCommand(config.command)];
+function buildOpenShellBaseArgv(config: ResolvedOpenShellPluginConfig): string[] {
+  const argv = [config.command];
   if (config.gateway) {
     argv.push("--gateway", config.gateway);
   }
   if (config.gatewayEndpoint) {
     argv.push("--gateway-endpoint", config.gatewayEndpoint);
+  }
+  if (config.workspace) {
+    argv.push("--workspace", config.workspace);
   }
   return argv;
 }
@@ -39,7 +36,7 @@ export function buildRemoteCommand(argv: string[]): string {
   return argv.map((entry) => shellEscape(entry)).join(" ");
 }
 
-export function applyGatewayEndpointToSshConfig(params: {
+function applyGatewayEndpointToSshConfig(params: {
   configText: string;
   gatewayEndpoint?: string;
 }): string {

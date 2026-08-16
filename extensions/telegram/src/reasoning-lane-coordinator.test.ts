@@ -23,6 +23,10 @@ describe("splitTelegramReasoningText", () => {
     });
   });
 
+  it("suppresses internal reflection from explicitly typed reasoning", () => {
+    expect(splitTelegramReasoningText("<internal>private reflection</internal>", true)).toEqual({});
+  });
+
   it("ignores literal think tags inside inline code", () => {
     const text = "Use `<think>example</think>` literally.";
     expect(splitTelegramReasoningText(text)).toEqual({
@@ -39,6 +43,7 @@ describe("splitTelegramReasoningText", () => {
 
   it("does not emit partial reasoning tag prefixes", () => {
     expect(splitTelegramReasoningText("  <thi", true)).toStrictEqual({});
+    expect(splitTelegramReasoningText("  <int", true)).toStrictEqual({});
   });
 
   it("keeps visible Thinking-prefixed answers in the answer lane", () => {

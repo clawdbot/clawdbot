@@ -5,12 +5,26 @@ import {
   validateJsonSchemaValue,
 } from "openclaw/plugin-sdk/json-schema-runtime";
 import { describe, expect, it } from "vitest";
+import { normalizePluginConfig } from "./config.js";
 
 const manifest = JSON.parse(
   fs.readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf-8"),
 ) as { configSchema: JsonSchemaObject };
 
 describe("active-memory manifest config schema", () => {
+  it.each(["escalate", "always", "off"])("accepts mode=%s", (mode) => {
+    const result = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: `active-memory.manifest.mode.${mode}`,
+      value: { mode },
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("defaults runtime mode to escalate", () => {
+    expect(normalizePluginConfig({}).mode).toBe("escalate");
+  });
+
   it("accepts modelFallback for CLI and config.patch flows", () => {
     const result = validateJsonSchemaValue({
       schema: manifest.configSchema,
@@ -24,6 +38,34 @@ describe("active-memory manifest config schema", () => {
     });
 
     expect(result.ok).toBe(true);
+  });
+
+  it.each([true, false, "auto"])("accepts fastMode=%s", (fastMode) => {
+    const result = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: `active-memory.manifest.fast-mode.${String(fastMode)}`,
+      value: {
+        enabled: true,
+        agents: ["main"],
+        fastMode,
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects unsupported fastMode strings", () => {
+    const result = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "active-memory.manifest.fast-mode.invalid",
+      value: {
+        enabled: true,
+        agents: ["main"],
+        fastMode: "on",
+      },
+    });
+
+    expect(result.ok).toBe(false);
   });
 
   it("accepts custom toolsAllow entries", () => {
@@ -90,6 +132,20 @@ describe("active-memory manifest config schema", () => {
         enabled: true,
         agents: ["main"],
         allowedChatTypes: ["direct", "explicit"],
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts max thinking overrides", () => {
+    const result = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "active-memory.manifest.thinking.max",
+      value: {
+        enabled: true,
+        agents: ["main"],
+        thinking: "max",
       },
     });
 

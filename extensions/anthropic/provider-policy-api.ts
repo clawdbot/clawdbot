@@ -4,7 +4,6 @@
  */
 import {
   resolveClaudeModelIdentity,
-  resolveClaudeFable5ModelIdentity,
   resolveClaudeMythos5ModelIdentity,
   resolveClaudeThinkingProfile,
 } from "openclaw/plugin-sdk/provider-model-shared";
@@ -41,12 +40,11 @@ export function resolveThinkingProfile(params: {
         includeNativeMax: true,
       });
     case "claude-cli":
-      if (
-        resolveClaudeFable5ModelIdentity({ id: contractModelId }) ||
-        resolveClaudeMythos5ModelIdentity({ id: contractModelId })
-      ) {
+      if (resolveClaudeMythos5ModelIdentity({ id: contractModelId })) {
         return CLAUDE_CLI_OFF_THINKING_PROFILE;
       }
+      // Claude Code exposes Fable's native effort ladder. Keep subscription-
+      // backed and API-backed Fable routes on one model contract.
       return resolveClaudeThinkingProfile(contractModelId, undefined, {
         includeNativeMax: true,
       });

@@ -34,7 +34,7 @@
       },
       "path": {
         "type": "string",
-        "description": "Optional policy.jsonc path. Relative paths resolve from the active workspace."
+        "description": "Optional policy.jsonc path. Relative paths resolve from the selected agent workspace."
       }
     }
   }

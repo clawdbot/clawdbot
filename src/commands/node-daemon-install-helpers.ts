@@ -1,5 +1,4 @@
 /** Node-based daemon install plan builder for managed gateway services. */
-import { formatNodeServiceDescription } from "../daemon/constants.js";
 import { resolveNodeProgramArguments } from "../daemon/program-args.js";
 import { buildNodeServiceEnvironment } from "../daemon/service-env.js";
 import type { GatewayServiceEnvironmentValueSource } from "../daemon/service-types.js";
@@ -39,6 +38,7 @@ export async function buildNodeInstallPlan(params: {
   tlsFingerprint?: string;
   nodeId?: string;
   displayName?: string;
+  installedAppsSharing?: boolean;
   runtime: GatewayDaemonRuntime;
   devMode?: boolean;
   nodePath?: string;
@@ -58,8 +58,8 @@ export async function buildNodeInstallPlan(params: {
     tlsFingerprint: params.tlsFingerprint,
     nodeId: params.nodeId,
     displayName: params.displayName,
+    installedAppsSharing: params.installedAppsSharing,
     dev: devMode,
-    runtime: params.runtime,
     nodePath,
   });
 
@@ -77,15 +77,11 @@ export async function buildNodeInstallPlan(params: {
     // node toolchain on PATH for sibling binaries like npm/pnpm when needed.
     extraPathDirs: resolveDaemonNodeBinDir(nodePath),
   });
-  const description = formatNodeServiceDescription({
-    version: environment.OPENCLAW_SERVICE_VERSION,
-  });
-
   return {
     programArguments,
     workingDirectory,
     environment,
     environmentValueSources: buildNodeInstallEnvironmentValueSources(),
-    description,
+    description: "OpenClaw Node Host",
   };
 }

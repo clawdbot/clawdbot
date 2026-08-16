@@ -2,42 +2,64 @@
 // Wires reload, secrets, exec approval, and plugin approval RPC handlers.
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  type AgentRunDelegatedAuthority,
+  registerAgentRunDelegatedAuthorityClosedHandler,
+} from "../infra/agent-run-registry.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
 import {
+  type ExecApprovalDecision,
   resolveExecApprovalRequestAllowedDecisions,
   type ExecApprovalRequestPayload,
 } from "../infra/exec-approvals.js";
 import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../infra/plugin-approval-canonical-decisions.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import {
+  SYSTEM_AGENT_APPROVAL_DECISIONS,
+  type SystemAgentApprovalRequestPayload,
+} from "../infra/system-agent-approvals.js";
+import {
   resolveCommandSecretsFromActiveRuntimeSnapshot,
   type CommandSecretAssignment,
 } from "../secrets/runtime-command-secrets.js";
 import {
-  getActiveSecretsRuntimeSnapshot,
-  getActiveSecretsRuntimeSnapshotRevision,
+  getActiveSecretsRuntimeSnapshotState,
+  getActiveSecretsRuntimeSnapshotRevisionState,
   type PreparedSecretsRuntimeSnapshot,
 } from "../secrets/runtime-state.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
+import type { AgentRuntimeDelegatedAuthority } from "./agent-runtime-identity-token.js";
 import { resolveApprovalSessionAudienceWithFallback } from "./approval-session-audience.js";
+import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { diffConfigPaths } from "./config-diff.js";
 import {
   buildGatewayReloadPlan,
   type ChannelKind,
   type GatewayReloadPlan,
 } from "./config-reload-plan.js";
-import { createExecApprovalIosPushDelivery } from "./exec-approval-ios-push.js";
+import {
+  createExecApprovalIosPushDelivery,
+  createPluginApprovalIosPushDelivery,
+} from "./exec-approval-ios-push.js";
 import {
   ExecApprovalManager,
   type OperatorApprovalLifecycleEvent,
 } from "./exec-approval-manager.js";
+import { createLazyHandler } from "./lazy-handler.js";
 import {
   closeOrphanedOperatorApprovals,
   pruneTerminalOperatorApprovals,
 } from "./operator-approval-store.js";
+import { QuestionManager } from "./question-manager.js";
 import type { ChannelAutostartSuppression } from "./server-channels.js";
-import type { GatewayRequestHandler, GatewayRequestHandlers } from "./server-methods/types.js";
+import { publishAppliedApprovalResolution } from "./server-methods/approval-publication.js";
+import {
+  cancelAgentRuntimeBoundApprovals,
+  cancelUnboundRunApprovals,
+  cancelWorkerTurnClaimBoundApprovals,
+} from "./server-methods/approval-run-cancellation.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
   captureSharedGatewaySessionGenerationOwnership,
   claimSharedGatewaySessionGenerationIfOwned,
@@ -50,6 +72,7 @@ import {
   type SharedGatewaySessionGenerationState,
 } from "./server-shared-auth-generation.js";
 import type { ActivateRuntimeSecrets } from "./server-startup-config.js";
+import type { WorkerSessionTurnClaim } from "./worker-environments/placement-record.js";
 
 type GatewayAuxHandlerLogger = {
   warn?: (message: string) => void;
@@ -94,20 +117,6 @@ async function restoreSecretsRuntimeSnapshotIfCurrent(
   return runtime.getActiveSecretsRuntimeSnapshotRevision();
 }
 
-function createLazyHandler(
-  method: string,
-  loadHandlers: () => Promise<GatewayRequestHandlers>,
-): GatewayRequestHandler {
-  return async (opts) => {
-    const handlers = await loadHandlers();
-    const handler = handlers[method];
-    if (!handler) {
-      throw new Error(`lazy gateway handler not found: ${method}`);
-    }
-    await handler(opts);
-  };
-}
-
 /** Create auxiliary gateway handlers that are not part of the core descriptor set. */
 export function createGatewayAuxHandlers(params: {
   log: GatewayAuxHandlerLogger;
@@ -121,6 +130,12 @@ export function createGatewayAuxHandlers(params: {
   getChannelAutostartSuppression?: () => ChannelAutostartSuppression | null;
   logChannels: { info: (msg: string) => void };
   onApprovalLifecycle?: (event: OperatorApprovalLifecycleEvent) => void;
+  onAgentRunAuthorityClosed?: (authority: AgentRunDelegatedAuthority) => void;
+  validateAgentRuntimeDelegatedAuthority?: (authority: AgentRuntimeDelegatedAuthority) => boolean;
+  chatAbortControllers?: Map<string, ChatAbortControllerEntry>;
+  registerWorkerTurnClaimClosedHandler?: (
+    handler: (claim: WorkerSessionTurnClaim) => void,
+  ) => () => void;
 }) {
   // Both approval kinds share one durable first-answer-wins registry and
   // Gateway-lifetime epoch while retaining separate in-process waiter maps.
@@ -132,19 +147,36 @@ export function createGatewayAuxHandlers(params: {
     nowMs: approvalStartupNowMs,
   });
   pruneTerminalOperatorApprovals({ nowMs: approvalStartupNowMs });
-
-  const execApprovalManager = new ExecApprovalManager<ExecApprovalRequestPayload>({
-    approvalKind: "exec",
-    persistence: approvalPersistence,
-    resolveAudienceSessionKeys: resolveApprovalSessionAudienceWithFallback,
-    resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
-    onLifecycle: params.onApprovalLifecycle,
-    onError: (error, context) => {
-      params.log.error?.(
-        `${context.approvalKind} approval ${context.operation} failed for ${context.approvalId}: ${String(error)}`,
-      );
-    },
-  });
+  const createApprovalManager = <TPayload>(
+    approvalKind: "exec" | "plugin" | "system-agent",
+    resolveAllowedDecisions: (request: TPayload) => readonly ExecApprovalDecision[],
+  ) =>
+    new ExecApprovalManager<TPayload>({
+      approvalKind,
+      persistence: approvalPersistence,
+      resolveAudienceSessionKeys: resolveApprovalSessionAudienceWithFallback,
+      resolveAllowedDecisions,
+      onLifecycle: params.onApprovalLifecycle,
+      // Timeout expiry is gateway-clock truth: publish the terminal like a
+      // resolve so reviewer surfaces need not infer it from their own clocks.
+      // system-agent approvals have no forwarder/push route to notify.
+      onExpired: (record, liveRecord) => {
+        if (approvalKind === "system-agent") {
+          return;
+        }
+        const publication = { kind: approvalKind, record, liveRecord };
+        publishAuthorityClosure(publication as PendingAuthorityPublication);
+      },
+      validateAgentRuntimeDelegatedAuthority: params.validateAgentRuntimeDelegatedAuthority,
+      onError: (error, context) =>
+        params.log.error?.(
+          `${context.approvalKind} approval ${context.operation} failed for ${context.approvalId}: ${String(error)}`,
+        ),
+    });
+  const execApprovalManager = createApprovalManager<ExecApprovalRequestPayload>(
+    "exec",
+    resolveExecApprovalRequestAllowedDecisions,
+  );
   const execApprovalForwarder = createExecApprovalForwarder();
   const execApprovalIosPushDelivery = createExecApprovalIosPushDelivery({ log: params.log });
   const loadExecApprovalHandlers = createLazyPromise(
@@ -157,24 +189,142 @@ export function createGatewayAuxHandlers(params: {
       ),
     { cacheRejections: true },
   );
+  const questionManager = new QuestionManager();
+  const loadQuestionHandlers = createLazyPromise(
+    () =>
+      import("./server-methods/question.js").then(({ createQuestionHandlers }) =>
+        createQuestionHandlers(questionManager),
+      ),
+    { cacheRejections: true },
+  );
   const buildReloadPlan = params.buildReloadPlan ?? buildGatewayReloadPlan;
-  const pluginApprovalManager = new ExecApprovalManager<PluginApprovalRequestPayload>({
-    approvalKind: "plugin",
-    persistence: approvalPersistence,
-    resolveAudienceSessionKeys: resolveApprovalSessionAudienceWithFallback,
-    resolveAllowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions,
-    onLifecycle: params.onApprovalLifecycle,
-    onError: (error, context) => {
-      params.log.error?.(
-        `${context.approvalKind} approval ${context.operation} failed for ${context.approvalId}: ${String(error)}`,
+  const pluginApprovalManager = createApprovalManager<PluginApprovalRequestPayload>(
+    "plugin",
+    resolveCanonicalPluginApprovalRequestAllowedDecisions,
+  );
+  const pluginApprovalIosPushDelivery = createPluginApprovalIosPushDelivery({ log: params.log });
+  type PendingAuthorityPublication = {
+    kind: "exec" | "plugin";
+    record: Parameters<typeof publishAppliedApprovalResolution>[0]["record"];
+    liveRecord: Parameters<typeof publishAppliedApprovalResolution>[0]["liveRecord"];
+  };
+  let approvalPublicationContext: GatewayRequestContext | undefined;
+  const pendingAuthorityPublications: PendingAuthorityPublication[] = [];
+  const publishAuthorityClosure = (publication: PendingAuthorityPublication) => {
+    const context = approvalPublicationContext;
+    if (!context) {
+      pendingAuthorityPublications.push(publication);
+      return;
+    }
+    void publishAppliedApprovalResolution({
+      record: publication.record,
+      liveRecord: publication.liveRecord,
+      context,
+      forwarder: execApprovalForwarder,
+      ...(publication.kind === "exec"
+        ? { iosPushDelivery: execApprovalIosPushDelivery }
+        : { pluginIosPushDelivery: pluginApprovalIosPushDelivery }),
+    }).catch((error: unknown) => {
+      context.logGateway?.error?.(
+        `${publication.kind} approvals: authority-close publication failed: ${String(error)}`,
       );
+    });
+  };
+  const bindApprovalPublicationContext = (context: GatewayRequestContext) => {
+    approvalPublicationContext = context;
+    for (const publication of pendingAuthorityPublications.splice(0)) {
+      publishAuthorityClosure(publication);
+    }
+  };
+  const unregisterApprovalAuthorityClosedObserver = registerAgentRunDelegatedAuthorityClosedHandler(
+    (authority) => {
+      try {
+        cancelAgentRuntimeBoundApprovals({
+          authority,
+          manager: execApprovalManager,
+          publish: (record, liveRecord) =>
+            publishAuthorityClosure({ kind: "exec", record, liveRecord }),
+        });
+      } catch (error) {
+        params.log.error?.(`exec approvals: authority-close settlement failed: ${String(error)}`);
+      }
+      try {
+        cancelAgentRuntimeBoundApprovals({
+          authority,
+          manager: pluginApprovalManager,
+          publish: (record, liveRecord) =>
+            publishAuthorityClosure({ kind: "plugin", record, liveRecord }),
+        });
+      } catch (error) {
+        params.log.error?.(`plugin approvals: authority-close settlement failed: ${String(error)}`);
+      }
+      params.onAgentRunAuthorityClosed?.(authority);
     },
-  });
+  );
+  const unregisterWorkerTurnClaimClosedObserver = params.registerWorkerTurnClaimClosedHandler?.(
+    (claim) => {
+      try {
+        cancelWorkerTurnClaimBoundApprovals({
+          claim,
+          manager: execApprovalManager,
+          publish: (record, liveRecord) =>
+            publishAuthorityClosure({ kind: "exec", record, liveRecord }),
+        });
+      } catch (error) {
+        params.log.error?.(`exec approvals: worker-claim settlement failed: ${String(error)}`);
+      }
+      try {
+        cancelWorkerTurnClaimBoundApprovals({
+          claim,
+          manager: pluginApprovalManager,
+          publish: (record, liveRecord) =>
+            publishAuthorityClosure({ kind: "plugin", record, liveRecord }),
+        });
+      } catch (error) {
+        params.log.error?.(`plugin approvals: worker-claim settlement failed: ${String(error)}`);
+      }
+    },
+  );
+  const unregisterApprovalAuthorityObserver = () => {
+    unregisterWorkerTurnClaimClosedObserver?.();
+    unregisterApprovalAuthorityClosedObserver();
+  };
+  const cancelRunBoundApprovals = (runId: string, context: GatewayRequestContext): number => {
+    const publish = (
+      kind: "exec" | "plugin",
+      record: Parameters<typeof publishAppliedApprovalResolution>[0]["record"],
+      liveRecord: Parameters<typeof publishAppliedApprovalResolution>[0]["liveRecord"],
+    ) => {
+      void publishAppliedApprovalResolution({
+        record,
+        liveRecord,
+        context,
+        forwarder: execApprovalForwarder,
+        ...(kind === "exec"
+          ? { iosPushDelivery: execApprovalIosPushDelivery }
+          : { pluginIosPushDelivery: pluginApprovalIosPushDelivery }),
+      }).catch((error: unknown) => {
+        context.logGateway?.error?.(
+          `${kind} approvals: run-abort publication failed: ${String(error)}`,
+        );
+      });
+    };
+    return cancelUnboundRunApprovals({
+      runId,
+      manager: execApprovalManager,
+      publish: (record, liveRecord) => publish("exec", record, liveRecord),
+    });
+  };
+  const systemAgentApprovalManager = createApprovalManager<SystemAgentApprovalRequestPayload>(
+    "system-agent",
+    () => SYSTEM_AGENT_APPROVAL_DECISIONS,
+  );
   const loadPluginApprovalHandlers = createLazyPromise(
     () =>
       import("./server-methods/plugin-approval.js").then(({ createPluginApprovalHandlers }) =>
         createPluginApprovalHandlers(pluginApprovalManager, {
           forwarder: execApprovalForwarder,
+          iosPushDelivery: pluginApprovalIosPushDelivery,
         }),
       ),
     { cacheRejections: true },
@@ -185,8 +335,10 @@ export function createGatewayAuxHandlers(params: {
         createApprovalHandlers({
           execApprovalManager,
           pluginApprovalManager,
+          systemAgentApprovalManager,
           forwarder: execApprovalForwarder,
           iosPushDelivery: execApprovalIosPushDelivery,
+          pluginIosPushDelivery: pluginApprovalIosPushDelivery,
         }),
       ),
     { cacheRejections: true },
@@ -198,9 +350,14 @@ export function createGatewayAuxHandlers(params: {
   let reloadInFlight: Promise<ReloadSecretsResult> | null = null;
   const runExclusiveReload = (
     fn: () => Promise<ReloadSecretsResult>,
+    options: { joinInFlight?: boolean } = {},
   ): Promise<ReloadSecretsResult> => {
     if (reloadInFlight) {
-      return reloadInFlight;
+      if (options.joinInFlight !== false) {
+        return reloadInFlight;
+      }
+      const precedingReload = reloadInFlight;
+      return precedingReload.catch(() => undefined).then(() => runExclusiveReload(fn, options));
     }
     const run = (async () => {
       try {
@@ -216,7 +373,7 @@ export function createGatewayAuxHandlers(params: {
     () =>
       import("./server-methods/secrets.js").then(({ createSecretsHandlers }) =>
         createSecretsHandlers({
-          reloadSecrets: () =>
+          reloadSecrets: (reloadOptions) =>
             runExclusiveReload(async () => {
               let transaction:
                 | {
@@ -235,11 +392,11 @@ export function createGatewayAuxHandlers(params: {
               const restartedChannels = new Set<ChannelKind>();
               try {
                 for (;;) {
-                  const previousSnapshot = getActiveSecretsRuntimeSnapshot();
+                  const previousSnapshot = getActiveSecretsRuntimeSnapshotState();
                   if (!previousSnapshot) {
                     throw new Error("Secrets runtime snapshot is not active.");
                   }
-                  const previousSnapshotRevision = getActiveSecretsRuntimeSnapshotRevision();
+                  const previousSnapshotRevision = getActiveSecretsRuntimeSnapshotRevisionState();
                   const previousGenerationOwnership =
                     captureSharedGatewaySessionGenerationOwnership(
                       params.sharedGatewaySessionGenerationState,
@@ -255,6 +412,10 @@ export function createGatewayAuxHandlers(params: {
                     {
                       reason: "reload",
                       activate: false,
+                      publishFailureAsDegraded: true,
+                      forceColdRefKeys: reloadOptions?.forceColdRefKeys,
+                      canPublishFailureAsDegraded: () =>
+                        getActiveSecretsRuntimeSnapshotRevisionState() === previousSnapshotRevision,
                     },
                   );
                   const plan = buildReloadPlan(
@@ -275,7 +436,7 @@ export function createGatewayAuxHandlers(params: {
                         activate: true,
                       },
                       async () => {
-                        publishedSnapshotRevision = getActiveSecretsRuntimeSnapshotRevision();
+                        publishedSnapshotRevision = getActiveSecretsRuntimeSnapshotRevisionState();
                         generationOwnership = claimSharedGatewaySessionGenerationIfOwned(
                           params.sharedGatewaySessionGenerationState,
                           previousGenerationOwnership,
@@ -352,8 +513,15 @@ export function createGatewayAuxHandlers(params: {
                     expectedGeneration: nextSharedGatewaySessionGeneration,
                   });
                 }
-                if (plan.restartChannels.size > 0) {
-                  const restartChannels = [...plan.restartChannels];
+                // Account-scoped changes restart their whole channel here:
+                // secrets.reload has no per-account restart path, and a missed
+                // restart would leave rotated credentials unapplied.
+                const channelsToRestart = new Set<ChannelKind>([
+                  ...plan.restartChannels,
+                  ...(plan.restartChannelAccounts?.keys() ?? []),
+                ]);
+                if (channelsToRestart.size > 0) {
+                  const restartChannels = [...channelsToRestart];
                   if (
                     isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
                     isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS)
@@ -473,7 +641,7 @@ export function createGatewayAuxHandlers(params: {
                 }
                 throw err;
               }
-            }),
+            }, reloadOptions),
           log: params.log,
           resolveSecrets: async ({
             allowedPaths,
@@ -510,8 +678,14 @@ export function createGatewayAuxHandlers(params: {
 
   return {
     execApprovalManager,
+    cancelRunBoundApprovals,
     forwardPluginApprovalRequest: execApprovalForwarder.handlePluginApprovalRequested,
+    pluginApprovalIosPushDelivery,
     pluginApprovalManager,
+    systemAgentApprovalManager,
+    bindApprovalPublicationContext,
+    unregisterApprovalAuthorityObserver,
+    questionManager,
     extraHandlers: {
       "exec.approval.get": createLazyHandler("exec.approval.get", loadExecApprovalHandlers),
       "exec.approval.list": createLazyHandler("exec.approval.list", loadExecApprovalHandlers),
@@ -535,9 +709,18 @@ export function createGatewayAuxHandlers(params: {
         loadPluginApprovalHandlers,
       ),
       "approval.get": createLazyHandler("approval.get", loadApprovalHandlers),
+      "approval.history": createLazyHandler("approval.history", loadApprovalHandlers),
       "approval.resolve": createLazyHandler("approval.resolve", loadApprovalHandlers),
+      "question.request": createLazyHandler("question.request", loadQuestionHandlers),
+      "question.waitAnswer": createLazyHandler("question.waitAnswer", loadQuestionHandlers),
+      "question.resolve": createLazyHandler("question.resolve", loadQuestionHandlers),
+      "question.get": createLazyHandler("question.get", loadQuestionHandlers),
+      "question.list": createLazyHandler("question.list", loadQuestionHandlers),
       "secrets.reload": createLazyHandler("secrets.reload", loadSecretsHandlers),
       "secrets.resolve": createLazyHandler("secrets.resolve", loadSecretsHandlers),
+      "secrets.store.list": createLazyHandler("secrets.store.list", loadSecretsHandlers),
+      "secrets.store.set": createLazyHandler("secrets.store.set", loadSecretsHandlers),
+      "secrets.store.delete": createLazyHandler("secrets.store.delete", loadSecretsHandlers),
     },
   };
 }

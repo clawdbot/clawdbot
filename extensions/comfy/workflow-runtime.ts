@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { canResolveEnvSecretRefInReadOnlyPath } from "openclaw/plugin-sdk/extension-shared";
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
@@ -42,8 +43,6 @@ const DEFAULT_PROMPT_INPUT_NAME = "text";
 const DEFAULT_INPUT_IMAGE_INPUT_NAME = "image";
 const DEFAULT_POLL_INTERVAL_MS = 1_500;
 const DEFAULT_TIMEOUT_MS = 5 * 60_000;
-const DEFAULT_GENERATED_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
-const DEFAULT_GENERATED_MEDIA_MAX_BYTES = 16 * 1024 * 1024;
 
 export const DEFAULT_COMFY_MODEL = "workflow";
 
@@ -112,35 +111,12 @@ type ComfyWorkflowResult = {
   outputNodeIds: string[];
 };
 
-let comfyFetchGuard = fetchWithSsrFGuard;
-
-export function setComfyFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
-  comfyFetchGuard = impl ?? fetchWithSsrFGuard;
-}
-
-function resolveComfyGeneratedOutputMaxBytes(params: {
-  cfg: OpenClawConfig;
-  capability: ComfyCapability;
-}): number {
-  const configured = params.cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * 1024 * 1024);
-  }
-  return params.capability === "image"
-    ? DEFAULT_GENERATED_IMAGE_MAX_BYTES
-    : DEFAULT_GENERATED_MEDIA_MAX_BYTES;
-}
-
-function readConfigBoolean(config: ComfyProviderConfig, key: string): boolean | undefined {
-  return asBoolean(config[key]);
-}
-
 function readConfigInteger(config: ComfyProviderConfig, key: string): number | undefined {
   const value = config[key];
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
-export function getComfyConfig(cfg?: OpenClawConfig): ComfyProviderConfig {
+function getComfyConfig(cfg?: OpenClawConfig): ComfyProviderConfig {
   const pluginConfig = cfg?.plugins?.entries?.comfy?.config;
   if (isRecord(pluginConfig)) {
     return pluginConfig;
@@ -338,7 +314,7 @@ async function readJsonResponse<T>(params: {
   auditContext: string;
   errorPrefix: string;
 }): Promise<T> {
-  const { response, release } = await comfyFetchGuard({
+  const { response, release } = await fetchWithSsrFGuard({
     url: params.url,
     init: params.init,
     timeoutMs: params.timeoutMs,
@@ -353,9 +329,6 @@ async function readJsonResponse<T>(params: {
     await release();
   }
 }
-
-/** @internal Test-only export. */
-export const readJsonResponseForTest = readJsonResponse;
 
 function resolveFileExtension(params: { fileName?: string; mimeType?: string }): string {
   const extension = extensionForMime(params.mimeType);
@@ -534,6 +507,7 @@ function collectOutputFiles(params: {
   history: ComfyHistoryEntry;
   outputNodeId?: string;
   outputKinds: readonly ComfyOutputKind[];
+  capability: ComfyCapability;
 }): Array<{ nodeId: string; file: ComfyOutputFile }> {
   const outputs = params.history.outputs;
   if (!outputs) {
@@ -553,6 +527,15 @@ function collectOutputFiles(params: {
         continue;
       }
       for (const file of bucket) {
+        if (params.capability === "video" && kind === "images") {
+          // Comfy SaveVideo shares the images bucket with real image outputs.
+          // Filter before download so mixed workflows cannot return images as videos.
+          const fileName =
+            normalizeOptionalString(file.filename) || normalizeOptionalString(file.name);
+          if (!fileName || !/\.(?:mp4|webm)$/i.test(fileName)) {
+            continue;
+          }
+        }
         files.push({ nodeId, file });
       }
     }
@@ -585,7 +568,7 @@ async function downloadOutputFile(params: {
   const viewPath = params.mode === "cloud" ? "/api/view" : "/view";
   const auditContext = `comfy-${params.capability}-download`;
 
-  const firstResponse = await comfyFetchGuard({
+  const firstResponse = await fetchWithSsrFGuard({
     url: `${params.baseUrl}${viewPath}?${query.toString()}`,
     init: {
       method: "GET",
@@ -644,6 +627,7 @@ export function isComfyCapabilityConfigured(params: {
   }
   return isProviderApiKeyConfigured({
     provider: "comfy",
+    cfg: params.cfg,
     agentDir: params.agentDir,
   });
 }
@@ -709,8 +693,7 @@ export async function runComfyWorkflow(params: {
     throw new Error("Comfy Cloud API key missing");
   }
 
-  const explicitAllowPrivateNetwork =
-    readConfigBoolean(capabilityConfig, "allowPrivateNetwork") === true;
+  const explicitAllowPrivateNetwork = asBoolean(capabilityConfig.allowPrivateNetwork) === true;
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
     resolveProviderHttpRequestConfig({
       baseUrl: normalizeOptionalString(capabilityConfig.baseUrl),
@@ -834,16 +817,15 @@ export async function runComfyWorkflow(params: {
     history: historyEntry,
     outputNodeId,
     outputKinds: params.outputKinds,
+    capability: params.capability,
   });
   if (outputFiles.length === 0) {
     throw new Error(`Comfy workflow ${promptId} completed without ${params.capability} outputs`);
   }
 
   const assets: ComfyGeneratedAsset[] = [];
-  const maxOutputBytes = resolveComfyGeneratedOutputMaxBytes({
-    cfg: params.cfg,
-    capability: params.capability,
-  });
+  const outputKind = params.capability === "music" ? "audio" : params.capability;
+  const maxOutputBytes = resolveGeneratedMediaMaxBytes(params.cfg, outputKind);
   let assetIndex = 0;
   for (const output of outputFiles) {
     const downloaded = await downloadOutputFile({
@@ -877,3 +859,4 @@ export async function runComfyWorkflow(params: {
     outputNodeIds: uniqueStrings(outputFiles.map((entry) => entry.nodeId)),
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

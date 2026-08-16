@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { mergeProcessEnv } from "../infra/process-env.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
 import { spawnTerminalPty } from "../process/terminal-pty.js";
 
@@ -99,6 +100,8 @@ export async function runNodePtyCommand(
     file: string;
     args: string[];
     cwd?: string;
+    env?: Record<string, string>;
+    pathEnv?: string;
     cols: number;
     rows: number;
   },
@@ -108,13 +111,12 @@ export async function runNodePtyCommand(
   if (io.signal.aborted) {
     return { exitCode: 130 };
   }
-  const env = Object.fromEntries(
-    Object.entries(process.env).filter(
-      (entry): entry is [string, string] => entry[1] !== undefined,
-    ),
-  );
-  env.TERM ??= "xterm-256color";
-  env.OPENCLAW_TERMINAL = "1";
+  const env = mergeProcessEnv([
+    process.env,
+    params.env,
+    params.pathEnv ? { PATH: params.pathEnv } : undefined,
+    { OPENCLAW_TERMINAL: "1" },
+  ]);
   const pty = await spawn({
     file: params.file,
     args: params.args,
@@ -131,11 +133,18 @@ export async function runNodePtyCommand(
     kill();
   }
   io.onInput((payloadJSON) => {
+    if (settled || io.signal.aborted) {
+      return;
+    }
     const input = decodePtyInput(payloadJSON);
-    if (input?.kind === "data") {
-      pty.write(input.data);
-    } else if (input?.kind === "resize") {
-      pty.resize(input.cols, input.rows);
+    try {
+      if (input?.kind === "data") {
+        pty.write(input.data);
+      } else if (input?.kind === "resize") {
+        pty.resize(input.cols, input.rows);
+      }
+    } catch {
+      // Exit resolution owns teardown; input can race a dying native PTY.
     }
   });
   pty.onData((chunk) => {

@@ -16,7 +16,7 @@ OpenClaw Brave Search provider plugin for web search.
 
 ## Surface
 
-contracts: webSearchProviders
+contracts: `webSearchProviders`
 
 ## Related docs
 

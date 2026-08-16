@@ -4,15 +4,20 @@ import {
   asDateTimestampMs,
   asFiniteNumber,
   asFiniteNumberInRange,
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber,
   asSafeIntegerInRange,
   addTimerTimeoutGraceMs,
   clampPositiveTimerTimeoutMs,
   clampTimerTimeoutMs,
   finiteSecondsToTimerSafeMilliseconds,
   isFutureDateTimestampMs,
+  MAX_DATE_TIMESTAMP_MS,
   MAX_TIMER_TIMEOUT_MS,
   MAX_TIMER_TIMEOUT_SECONDS,
   nonNegativeSecondsToSafeMilliseconds,
+  parseDateFirstTimestampMs,
+  parseDateStringTimestampMs,
   parseFiniteNumber,
   positiveSecondsToSafeMilliseconds,
   resolveIntegerOption,
@@ -40,6 +45,15 @@ describe("number-coercion", () => {
     expect(asFiniteNumber("4")).toBeUndefined();
     expect(asFiniteNumber(Number.NaN)).toBeUndefined();
     expect(asFiniteNumber(Number.POSITIVE_INFINITY)).toBeUndefined();
+  });
+
+  test("signed finite helpers preserve finite fractional values", () => {
+    expect(asPositiveFiniteNumber(0.5)).toBe(0.5);
+    expect(asPositiveFiniteNumber(0)).toBeUndefined();
+    expect(asPositiveFiniteNumber(Number.POSITIVE_INFINITY)).toBeUndefined();
+    expect(asNonNegativeFiniteNumber(0)).toBe(0);
+    expect(asNonNegativeFiniteNumber(-0.5)).toBeUndefined();
+    expect(asNonNegativeFiniteNumber("1")).toBeUndefined();
   });
 
   test("asFiniteNumberInRange enforces inclusive and exclusive bounds", () => {
@@ -95,6 +109,7 @@ describe("number-coercion", () => {
     expect(finiteSecondsToTimerSafeMilliseconds(1.5)).toBe(1_500);
     expect(finiteSecondsToTimerSafeMilliseconds(1.5, { floorSeconds: true })).toBe(1_000);
     expect(finiteSecondsToTimerSafeMilliseconds(10_000_000)).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(finiteSecondsToTimerSafeMilliseconds(Number.MAX_VALUE)).toBe(MAX_TIMER_TIMEOUT_MS);
     expect(finiteSecondsToTimerSafeMilliseconds("10")).toBeUndefined();
     expect(finiteSecondsToTimerSafeMilliseconds(Number.POSITIVE_INFINITY)).toBeUndefined();
     expect(clampTimerTimeoutMs(0, 10)).toBe(10);
@@ -136,6 +151,29 @@ describe("number-coercion", () => {
     expect(timestampMsToIsoString(8_640_000_000_000_001)).toBeUndefined();
     expect(timestampMsToIsoString(Number.POSITIVE_INFINITY)).toBeUndefined();
     expect(timestampMsToIsoString("0")).toBeUndefined();
+  });
+
+  test.each([
+    { value: "0", expected: Date.parse("0") },
+    { value: "2026", expected: Date.parse("2026") },
+    { value: "2026-07-13T10:00:00.000Z", expected: 1_783_936_800_000 },
+    { value: 0, expected: undefined },
+    { value: "123ms", expected: undefined },
+    { value: "+275761-01-01T00:00:00.000Z", expected: undefined },
+  ])("parseDateStringTimestampMs parses $value", ({ value, expected }) => {
+    expect(parseDateStringTimestampMs(value)).toBe(expected);
+  });
+
+  test.each([
+    { value: 0, expected: 0 },
+    { value: 1_700_000_000_000, expected: 1_700_000_000_000 },
+    { value: "0", expected: Date.parse("0") },
+    { value: "2026", expected: Date.parse("2026") },
+    { value: Number.POSITIVE_INFINITY, expected: undefined },
+    { value: MAX_DATE_TIMESTAMP_MS + 1, expected: MAX_DATE_TIMESTAMP_MS + 1 },
+    { value: true, expected: undefined },
+  ])("parseDateFirstTimestampMs parses $value", ({ value, expected }) => {
+    expect(parseDateFirstTimestampMs(value)).toBe(expected);
   });
 
   test("future timestamp helper rejects invalid Date timestamps", () => {

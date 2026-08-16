@@ -156,6 +156,75 @@ describe("diagnostic memory", () => {
     expect(events.map((event) => event.type)).toEqual(["diagnostic.memory.pressure"]);
   });
 
+  it("scales default heap pressure thresholds with enlarged V8 limits", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onDiagnosticEvent((event) => events.push(event));
+    const gb = 1024 ** 3;
+
+    emitDiagnosticMemorySample({
+      now: 1000,
+      heapSizeLimitBytes: 8 * gb,
+      memoryUsage: memoryUsage({ heapUsed: 2.1 * gb }),
+    });
+    expect(events.filter((event) => event.type === "diagnostic.memory.pressure")).toEqual([]);
+
+    emitDiagnosticMemorySample({
+      now: 2000,
+      heapSizeLimitBytes: 8 * gb,
+      memoryUsage: memoryUsage({ heapUsed: 4.1 * gb }),
+    });
+    emitDiagnosticMemorySample({
+      now: 3000,
+      heapSizeLimitBytes: 8 * gb,
+      memoryUsage: memoryUsage({ heapUsed: 6.1 * gb }),
+    });
+    stop();
+
+    expect(
+      events
+        .filter((event) => event.type === "diagnostic.memory.pressure")
+        .map((event) => ({
+          level: event.level,
+          reason: event.reason,
+          threshold: event.thresholdBytes,
+        })),
+    ).toEqual([
+      { level: "warning", reason: "heap_threshold", threshold: 4 * gb },
+      { level: "critical", reason: "heap_threshold", threshold: 6 * gb },
+    ]);
+  });
+
+  it("scales default heap pressure thresholds down for constrained V8 limits", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onDiagnosticEvent((event) => events.push(event));
+    const mb = 1024 ** 2;
+
+    emitDiagnosticMemorySample({
+      now: 1000,
+      heapSizeLimitBytes: 1024 * mb,
+      memoryUsage: memoryUsage({ heapUsed: 600 * mb }),
+    });
+    emitDiagnosticMemorySample({
+      now: 2000,
+      heapSizeLimitBytes: 1024 * mb,
+      memoryUsage: memoryUsage({ heapUsed: 800 * mb }),
+    });
+    stop();
+
+    expect(
+      events
+        .filter((event) => event.type === "diagnostic.memory.pressure")
+        .map((event) => ({
+          level: event.level,
+          reason: event.reason,
+          threshold: event.thresholdBytes,
+        })),
+    ).toEqual([
+      { level: "warning", reason: "heap_threshold", threshold: 512 * mb },
+      { level: "critical", reason: "heap_threshold", threshold: 768 * mb },
+    ]);
+  });
+
   it("emits pressure when RSS grows quickly", () => {
     const events: DiagnosticEventPayload[] = [];
     const stop = onDiagnosticEvent((event) => events.push(event));
@@ -359,8 +428,7 @@ describe("diagnostic memory", () => {
         }),
         expect.objectContaining({
           level: "WARN",
-          message:
-            "critical memory pressure snapshot disabled: diagnostics.memoryPressureSnapshot=false",
+          message: "critical memory pressure snapshot disabled",
           attributes: expect.objectContaining({
             subsystem: "gateway/diagnostics/memory",
           }),

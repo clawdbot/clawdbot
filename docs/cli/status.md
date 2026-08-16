@@ -13,6 +13,7 @@ openclaw status
 openclaw status --all
 openclaw status --deep
 openclaw status --usage
+openclaw status --usage --agent work
 ```
 
 | Flag                    | Description                                                                                                     |
@@ -20,7 +21,9 @@ openclaw status --usage
 | `--all`                 | Full diagnosis (read-only, pasteable). Includes security audit, plugin compatibility, and memory-vector probes. |
 | `--deep`                | Runs live probes (WhatsApp Web + Telegram + Discord + Slack + Signal). Also enables the security audit.         |
 | `--usage`               | Prints normalized provider usage windows as `X% left`.                                                          |
+| `--agent <id>`          | Selects the agent auth/profile scope for `--usage`. Required when an explicit multi-agent fleet has no default. |
 | `--json`                | Machine-readable output.                                                                                        |
+| `--timeout <ms>`        | Probe timeout in milliseconds (default: `10000`).                                                               |
 | `--verbose` / `--debug` | Also print the raw Gateway target resolution before the report.                                                 |
 
 Plain `openclaw status` stays on the fast read-only path and marks memory as
@@ -58,6 +61,10 @@ and `openclaw memory status --deep`.
 ## Usage and quota
 
 - `--usage` prints normalized provider usage windows as `X% left`.
+- In an explicit multi-agent setup, `--usage` reads the auth profiles owned by
+  `agents.defaults.systemAgent.agentId` by default. Pass `--agent <id>` to
+  inspect another agent; without either owner, OpenClaw does not guess one
+  agent's credentials from an ambiguous roster.
 - MiniMax's raw `usage_percent` / `usagePercent` fields are remaining quota,
   so OpenClaw inverts them before display; count-based fields win when
   present. `model_remains` responses prefer the chat-model entry, derive the
@@ -73,9 +80,13 @@ and `openclaw memory status --deep`.
 - Overview includes update channel + git SHA (for source checkouts).
 - Update info surfaces in the Overview; if an update is available, status
   prints a hint to run `openclaw update` (see [Updating](/install/updating)).
+- `status --all` includes a **Telemetry exporters** diagnosis with the latest
+  trusted per-signal exporter state and transport. Endpoint values, headers,
+  certificates, payloads, and raw errors are not shown.
 
 ## Secrets
 
+- When the running Gateway has any isolated SecretRef owner from startup, reload, or a config write, status includes `degradedSecretOwners` in JSON and a **Degraded secrets** overview row in human output. Each entry names the owner, degradation state (`cold` or `stale`), config paths, and redacted reason. Cold owners are unavailable; stale owners continue with last-known-good values.
 - Read-only status surfaces (`status`, `status --json`, `status --all`)
   resolve supported SecretRefs for their targeted config paths when
   possible.
@@ -95,7 +106,7 @@ and `openclaw memory status --deep`.
 
 `status --json --all` reports memory details from the active memory plugin
 runtime selected by `plugins.slots.memory`. Custom memory plugins can leave
-built-in `agents.defaults.memorySearch.enabled` disabled and still report
+built-in `memory.search.enabled` disabled and still report
 their own files, chunks, vector, and FTS state.
 
 ## Related

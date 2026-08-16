@@ -1,4 +1,5 @@
 // Searxng tests cover searxng search provider plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveSearxngBaseUrl,
@@ -93,6 +94,28 @@ describe("searxng web search provider", () => {
     });
   });
 
+  it("forwards the execution abort signal to the SearXNG client", async () => {
+    const provider = createSearxngWebSearchProvider();
+    const tool = provider.createTool({
+      config: { test: true },
+    } as never);
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+    const controller = new AbortController();
+
+    await tool.execute({ query: "openclaw docs" }, { signal: controller.signal });
+
+    expect(runSearxngSearch).toHaveBeenCalledWith({
+      config: { test: true },
+      query: "openclaw docs",
+      count: undefined,
+      categories: undefined,
+      language: undefined,
+      signal: controller.signal,
+    });
+  });
+
   it("rejects fractional and out-of-range counts before searching", async () => {
     const provider = createSearxngWebSearchProvider();
     const tool = provider.createTool({
@@ -173,7 +196,7 @@ describe("searxng web search provider", () => {
 
   it("persists base URL to plugin config via setConfiguredCredentialValue", () => {
     const provider = createSearxngWebSearchProvider();
-    const config = {} as Record<string, unknown>;
+    const config: OpenClawConfig = {};
     const setConfiguredCredentialValue = provider.setConfiguredCredentialValue;
     if (!setConfiguredCredentialValue) {
       throw new Error("Expected SearXNG provider setConfiguredCredentialValue");
@@ -181,12 +204,6 @@ describe("searxng web search provider", () => {
 
     setConfiguredCredentialValue(config, "http://search.local:9000");
 
-    expect(
-      (
-        config as {
-          plugins?: { entries?: { searxng?: { config?: { webSearch?: { baseUrl?: string } } } } };
-        }
-      ).plugins?.entries?.searxng?.config?.webSearch?.baseUrl,
-    ).toBe("http://search.local:9000");
+    expect(resolveSearxngBaseUrl(config, {})).toBe("http://search.local:9000");
   });
 });

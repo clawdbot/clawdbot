@@ -1,7 +1,7 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
-import { upsertSessionEntry } from "../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
 import {
@@ -19,23 +19,27 @@ import {
   getSessionStateVersion,
   handleSessionStateSessionDeleted,
   handleSessionStateSessionReset,
+  listAmbientGroupWatchTargets,
   listSessionStateEventsSince,
-  pruneSessionStateEvents,
   recordSessionCompacted,
+  recordSessionCreated,
   recordSessionGoalChanged,
   recordSessionHumanDirectMessage,
   recordSessionStateEvent,
   recordSubagentSpawned,
   recordSubagentTerminalState,
+  registerMainSessionGroupWatch,
   registerSessionStateWatch,
-  sessionStateEventStoreLimits,
   sweepSessionStateWatchNotices,
 } from "./session-state-events.js";
 
+const SESSION_STATE_MAX_ROWS = 50_000;
+const SESSION_STATE_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const tempDirs: string[] = [];
 const watcher = "agent:main:main";
 const nestedWatcher = "agent:main:subagent:parent";
 const child = "agent:main:subagent:child";
+const group = "agent:main:telegram:group:room-1";
 const cfg = {} as OpenClawConfig;
 let disposeHeartbeatWakeHandler: (() => void) | undefined;
 
@@ -63,6 +67,7 @@ function eventInput(
 function readCursor(
   database: ReturnType<typeof createDatabaseOptions>,
   watcherSessionKey = watcher,
+  targetSessionKey = child,
 ) {
   return openOpenClawStateDatabase(database)
     .db.prepare(
@@ -70,7 +75,7 @@ function readCursor(
        FROM session_watch_cursors
        WHERE watcher_session_key = ? AND target_session_key = ?`,
     )
-    .get(watcherSessionKey, child) as
+    .get(watcherSessionKey, targetSessionKey) as
     | {
         last_seen_sequence: number;
         notified_sequence: number;
@@ -99,7 +104,7 @@ async function createWatcherSession(
   database: ReturnType<typeof createDatabaseOptions>,
   watcherSessionKey = watcher,
 ) {
-  await upsertSessionEntry(
+  await upsertSessionEntryCore(
     { sessionKey: watcherSessionKey, env: database.env },
     { sessionId: `session-${watcherSessionKey}`, updatedAt: Date.now() },
   );
@@ -125,9 +130,9 @@ describe("session state events", () => {
     const event = recordSessionStateEvent(eventInput(), { ...database, now });
     expect(getSessionStateVersion(child, "main", database)).toBe(event?.sequence);
 
-    pruneSessionStateEvents({
+    sweepSessionStateWatchNotices({
       ...database,
-      now: now + sessionStateEventStoreLimits.retentionMs + 1,
+      now: now + SESSION_STATE_RETENTION_MS + 1,
     });
 
     expect(listSessionStateEventsSince(child, "main", 0, 200, database).events).toEqual([]);
@@ -243,6 +248,20 @@ describe("session state events", () => {
     expect(peekSystemEventEntries(watcher)).toEqual([]);
   });
 
+  it("notifies watchers when an upstream session disappears", () => {
+    const database = createDatabaseOptions();
+    seedChild(database);
+    resetSystemEventsForTest();
+
+    const event = recordSessionStateEvent(
+      eventInput({ kind: "upstream_missing", actorType: "system" }),
+      database,
+    );
+
+    expect(event).toMatchObject({ kind: "upstream_missing", actorType: "system" });
+    expect(peekSystemEventEntries(watcher)).toHaveLength(1);
+  });
+
   it("returns the existing row for a duplicate dedupe key", () => {
     const database = createDatabaseOptions();
     const input = eventInput({
@@ -288,7 +307,7 @@ describe("session state events", () => {
     const { db } = openOpenClawStateDatabase(database);
     db.exec(`
       WITH RECURSIVE rows(value) AS (
-        SELECT 1 UNION ALL SELECT value + 1 FROM rows WHERE value <= ${sessionStateEventStoreLimits.maxRows}
+        SELECT 1 UNION ALL SELECT value + 1 FROM rows WHERE value <= ${SESSION_STATE_MAX_ROWS}
       )
       INSERT INTO session_state_events (
         session_key, agent_id, kind, actor_type, occurred_at, summary
@@ -299,11 +318,11 @@ describe("session state events", () => {
       .prepare("SELECT max(sequence) AS sequence FROM session_state_events")
       .get() as { sequence: number };
 
-    pruneSessionStateEvents({ ...database, now });
+    sweepSessionStateWatchNotices({ ...database, now });
     const count = db.prepare("SELECT count(*) AS count FROM session_state_events").get() as {
       count: number;
     };
-    expect(count.count).toBe(sessionStateEventStoreLimits.maxRows);
+    expect(count.count).toBe(SESSION_STATE_MAX_ROWS);
 
     const next = recordSessionStateEvent(eventInput(), { ...database, now: now + 1 })!;
     expect(next.sequence).toBeGreaterThan(before.sequence);
@@ -350,12 +369,12 @@ describe("session state events", () => {
     expect(old.sequence).toBeGreaterThan(1);
     expect(listSessionStateEventsSince(child, "main", 0, 200, database).historyGap).toBe(false);
 
-    const later = now + sessionStateEventStoreLimits.retentionMs + 1;
+    const later = now + SESSION_STATE_RETENTION_MS + 1;
     const fresh = recordSessionStateEvent(eventInput({ summary: "fresh" }), {
       ...database,
       now: later,
     })!;
-    pruneSessionStateEvents({ ...database, now: later });
+    sweepSessionStateWatchNotices({ ...database, now: later });
 
     const sincePruned = listSessionStateEventsSince(child, "main", 0, 200, database);
     expect(sincePruned.historyGap).toBe(true);
@@ -424,6 +443,7 @@ describe("session state events", () => {
 
     await drainFormattedSystemEvents({
       cfg,
+      agentId: "main",
       sessionKey: watcher,
       isMainSession: false,
       isNewSession: false,
@@ -435,6 +455,7 @@ describe("session state events", () => {
     enqueueSystemEvent("Exec completed", { sessionKey: watcher, contextKey: "exec:job-1" });
     await drainFormattedSystemEvents({
       cfg,
+      agentId: "main",
       sessionKey: watcher,
       isMainSession: false,
       isNewSession: false,
@@ -513,6 +534,222 @@ describe("session state events", () => {
     });
   });
 
+  it("registers the main watcher once only under dmScope main", () => {
+    const database = createDatabaseOptions();
+    expect(
+      registerMainSessionGroupWatch(
+        { sessionKey: group, agentId: "main", dmScope: "main" },
+        { ...database, now: 100 },
+      ),
+    ).toBe(true);
+    expect(
+      registerMainSessionGroupWatch(
+        { sessionKey: group, agentId: "main", dmScope: "main" },
+        { ...database, now: 200 },
+      ),
+    ).toBe(true);
+    expect(
+      registerMainSessionGroupWatch(
+        {
+          sessionKey: "agent:main:slack:channel:room-2",
+          agentId: "main",
+          dmScope: "per-channel-peer",
+        },
+        database,
+      ),
+    ).toBe(false);
+
+    const rows = openOpenClawStateDatabase(database)
+      .db.prepare(
+        `SELECT watcher_session_key, target_session_key, provenance, updated_at
+         FROM session_watch_cursors
+         WHERE watcher_session_key = ?`,
+      )
+      .all(watcher);
+    expect(rows).toEqual([
+      {
+        watcher_session_key: watcher,
+        target_session_key: group,
+        provenance: "ambient-group",
+        updated_at: 100,
+      },
+    ]);
+    expect(listAmbientGroupWatchTargets(watcher, database)).toEqual(new Set([group]));
+    openOpenClawStateDatabase(database)
+      .db.prepare(
+        `DELETE FROM session_watch_cursors
+         WHERE watcher_session_key = ? AND target_session_key = ?`,
+      )
+      .run(watcher, group);
+    expect(listAmbientGroupWatchTargets(watcher, database)).toEqual(new Set());
+  });
+
+  it("revokes ambient watches outside main scope but preserves explicit watches", () => {
+    const database = createDatabaseOptions();
+    registerMainSessionGroupWatch(
+      { sessionKey: group, agentId: "main", dmScope: "main" },
+      database,
+    );
+    expect(
+      registerMainSessionGroupWatch(
+        { sessionKey: group, agentId: "main", dmScope: "per-channel-peer" },
+        database,
+      ),
+    ).toBe(false);
+    expect(listAmbientGroupWatchTargets(watcher, database)).toEqual(new Set());
+    expect(readCursor(database, watcher, group)).toBeUndefined();
+
+    registerSessionStateWatch({ watcherSessionKey: watcher, targetSessionKey: group }, database);
+    expect(
+      registerMainSessionGroupWatch(
+        { sessionKey: group, agentId: "main", dmScope: "per-channel-peer" },
+        database,
+      ),
+    ).toBe(false);
+    expect(readCursor(database, watcher, group)).toBeDefined();
+  });
+
+  it("records and coalesces group activity without an immediate wake", async () => {
+    vi.useFakeTimers();
+    const wakes = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
+    disposeHeartbeatWakeHandler = setHeartbeatWakeHandler(wakes);
+    await vi.advanceTimersByTimeAsync(300);
+    wakes.mockClear();
+    const database = createDatabaseOptions();
+    registerMainSessionGroupWatch(
+      { sessionKey: group, agentId: "main", dmScope: "main" },
+      database,
+    );
+
+    for (const actorId of ["human-1", "human-2"]) {
+      recordSessionHumanDirectMessage(
+        {
+          sessionKey: group,
+          entry: { sessionId: "session-group", updatedAt: Date.now(), chatType: "group" },
+          agentId: "main",
+          actor: { actorType: "human", actorId },
+          channel: "telegram",
+        },
+        database,
+      );
+    }
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(listSessionStateEventsSince(group, "main", 0, 200, database).events).toHaveLength(2);
+    expect(peekSystemEventEntries(watcher)).toHaveLength(1);
+    const cursor = readCursor(database, watcher, group);
+    expect(cursor).toBeDefined();
+    expect(cursor!.material_sequence).toBeGreaterThan(cursor!.notified_sequence);
+    expect(wakes).not.toHaveBeenCalled();
+  });
+
+  it("prunes dormant ambient cursors while retaining active cursors", () => {
+    const database = createDatabaseOptions();
+    const dormantGroup = "agent:main:slack:channel:dormant";
+    const registeredAt = 100;
+    registerMainSessionGroupWatch(
+      { sessionKey: group, agentId: "main", dmScope: "main" },
+      { ...database, now: registeredAt },
+    );
+    registerMainSessionGroupWatch(
+      { sessionKey: dormantGroup, agentId: "main", dmScope: "main" },
+      { ...database, now: registeredAt },
+    );
+
+    const activeAt = registeredAt + SESSION_STATE_RETENTION_MS + 1;
+    recordSessionHumanDirectMessage(
+      {
+        sessionKey: group,
+        entry: { sessionId: "session-group", updatedAt: activeAt, chatType: "group" },
+        agentId: "main",
+        actor: { actorType: "human", actorId: "human-1" },
+        channel: "telegram",
+      },
+      { ...database, now: activeAt },
+    );
+    sweepSessionStateWatchNotices({ ...database, now: activeAt });
+
+    expect(listAmbientGroupWatchTargets(watcher, database)).toEqual(new Set([group]));
+    const cursors = openOpenClawStateDatabase(database)
+      .db.prepare("SELECT COUNT(*) AS count FROM session_watch_cursors")
+      .get() as { count: number };
+    expect(cursors.count).toBe(1);
+  });
+
+  it("keeps explicit A2A group watches on the immediate wake path", async () => {
+    vi.useFakeTimers();
+    const wakes = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
+    disposeHeartbeatWakeHandler = setHeartbeatWakeHandler(wakes);
+    await vi.advanceTimersByTimeAsync(300);
+    wakes.mockClear();
+    const database = createDatabaseOptions();
+    const coordinator = "agent:main:coordinator";
+    registerSessionStateWatch(
+      { watcherSessionKey: coordinator, targetSessionKey: group },
+      database,
+    );
+
+    recordSessionHumanDirectMessage(
+      {
+        sessionKey: group,
+        entry: { sessionId: "session-group", updatedAt: Date.now(), chatType: "group" },
+        agentId: "main",
+        actor: { actorType: "human", actorId: "human-1" },
+        channel: "telegram",
+      },
+      database,
+    );
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(peekSystemEventEntries(coordinator)).toHaveLength(1);
+    expect(wakes).toHaveBeenCalledTimes(1);
+  });
+
+  it("promotes an ambient main-to-group watch to explicit immediate delivery", async () => {
+    vi.useFakeTimers();
+    const wakes = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
+    disposeHeartbeatWakeHandler = setHeartbeatWakeHandler(wakes);
+    await vi.advanceTimersByTimeAsync(300);
+    wakes.mockClear();
+    const database = createDatabaseOptions();
+    registerMainSessionGroupWatch(
+      { sessionKey: group, agentId: "main", dmScope: "main" },
+      database,
+    );
+    expect(listAmbientGroupWatchTargets(watcher, database)).toEqual(new Set([group]));
+
+    registerSessionStateWatch({ watcherSessionKey: watcher, targetSessionKey: group }, database);
+    expect(listAmbientGroupWatchTargets(watcher, database)).toEqual(new Set());
+    expect(
+      openOpenClawStateDatabase(database)
+        .db.prepare(
+          `SELECT provenance FROM session_watch_cursors
+           WHERE watcher_session_key = ? AND target_session_key = ?`,
+        )
+        .get(watcher, group),
+    ).toEqual({ provenance: "explicit" });
+    // Later inbound group registration must not downgrade the explicit watch.
+    registerMainSessionGroupWatch(
+      { sessionKey: group, agentId: "main", dmScope: "main" },
+      database,
+    );
+
+    recordSessionHumanDirectMessage(
+      {
+        sessionKey: group,
+        entry: { sessionId: "session-group", updatedAt: Date.now(), chatType: "group" },
+        agentId: "main",
+        actor: { actorType: "human", actorId: "human-1" },
+        channel: "telegram",
+      },
+      database,
+    );
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(peekSystemEventEntries(watcher)).toHaveLength(1);
+    expect(wakes).toHaveBeenCalledTimes(1);
+  });
+
   it("gates unparented human turns on registered watchers", () => {
     const database = createDatabaseOptions();
     const entry = { sessionId: "session-child", updatedAt: Date.now() };
@@ -542,6 +779,17 @@ describe("session state events", () => {
 
   it("projects spawn, terminal, goal, and compaction producer helpers", () => {
     const database = createDatabaseOptions();
+    recordSessionCreated({
+      sessionKey: child,
+      agentId: "main",
+      entry: {
+        sessionId: "session-child",
+        updatedAt: Date.now(),
+        createdVia: "spawn",
+        createdActor: { type: "agent", id: watcher },
+        createdAt: Date.now(),
+      },
+    });
     recordSubagentSpawned({
       childSessionKey: child,
       childRunId: "run-child",
@@ -589,13 +837,19 @@ describe("session state events", () => {
 
     const events = listSessionStateEventsSince(child, "main", 0, 200, database).events;
     expect(events.map((event) => event.kind)).toEqual([
+      "created",
       "child_spawned",
       "run_completed",
       "run_failed",
       "goal_changed",
       "compacted",
     ]);
-    expect(events[2]).toMatchObject({
+    expect(events[0]).toMatchObject({
+      actorType: "agent",
+      actorId: watcher,
+      summary: "session created",
+    });
+    expect(events[3]).toMatchObject({
       runId: "run-child-cancelled",
       summary: "child run cancelled",
       payload: { outcome: "cancelled" },

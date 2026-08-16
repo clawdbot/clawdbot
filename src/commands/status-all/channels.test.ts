@@ -27,8 +27,9 @@ vi.mock("../../channels/account-inspection.js", () => ({
 }));
 
 vi.mock("../../channels/plugins/read-only.js", () => ({
-  resolveReadOnlyChannelPluginsForConfig: () => ({
-    plugins: mocks.listReadOnlyChannelPluginsForConfig(),
+  resolveReadOnlyChannelPluginsForConfig: (...args: unknown[]) => ({
+    plugins: mocks.listReadOnlyChannelPluginsForConfig(...args),
+    manifestRecords: [],
     configuredChannelIds: [],
     missingConfiguredChannelIds: [
       ...new Set([
@@ -41,19 +42,27 @@ vi.mock("../../channels/plugins/read-only.js", () => ({
 }));
 
 vi.mock("../../plugins/official-external-plugin-repair-hints.js", () => ({
-  resolveMissingOfficialExternalChannelPluginRepairHint: ({ channelId }: { channelId: string }) =>
-    mocks.missingOfficialExternalChannels.has(channelId)
-      ? {
-          pluginId: channelId,
-          channelId,
-          label: "Feishu",
-          installSpec: "@openclaw/feishu",
-          installCommand: "openclaw plugins install @openclaw/feishu",
-          doctorFixCommand: "openclaw doctor --fix",
-          repairHint:
-            "Install the official external plugin with: openclaw plugins install @openclaw/feishu, or run: openclaw doctor --fix.",
-        }
-      : null,
+  resolveMissingOfficialExternalChannelPluginRepairHints: ({
+    channelIds,
+  }: {
+    channelIds: string[];
+  }) =>
+    channelIds.flatMap((channelId) =>
+      mocks.missingOfficialExternalChannels.has(channelId)
+        ? [
+            {
+              pluginId: channelId,
+              channelId,
+              label: "Feishu",
+              installSpec: "@openclaw/feishu",
+              installCommand: "openclaw plugins install @openclaw/feishu",
+              doctorFixCommand: "openclaw doctor --fix",
+              repairHint:
+                "Install the official external plugin with: openclaw plugins install @openclaw/feishu, or run: openclaw doctor --fix.",
+            },
+          ]
+        : [],
+    ),
 }));
 
 describe("buildChannelsTable", () => {
@@ -100,6 +109,24 @@ describe("buildChannelsTable", () => {
     expect(detailRow?.Notes).toContain("credential available in gateway runtime");
   });
 
+  it("summarizes channels without selecting an owner from an explicit multi-agent roster", async () => {
+    const config = {
+      agents: {
+        ownership: "explicit" as const,
+        entries: { ops: {}, research: {} },
+      },
+      channels: { discord: { enabled: true } },
+    };
+
+    const table = await buildChannelsTable(config);
+
+    expect(table.rows).toContainEqual(expect.objectContaining({ id: "discord", state: "warn" }));
+    expect(mocks.listReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(config, {
+      activationSourceConfig: config,
+      includeSetupFallbackPlugins: true,
+    });
+  });
+
   it("warns when a configured token is unavailable and there is no live account proof", async () => {
     const table = await buildChannelsTable({ channels: { discord: { enabled: true } } });
 
@@ -120,6 +147,52 @@ describe("buildChannelsTable", () => {
     const detailRow = table.details[0]?.rows[0];
     expect(detailRow?.Status).toBe("UNKNOWN");
     expect(detailRow?.Notes).toContain("credential not checked");
+  });
+
+  it("formats human phone identity while preserving raw account ids", async () => {
+    const phonePlugin = {
+      id: "signal",
+      meta: { label: "Signal" },
+      config: {
+        listAccountIds: () => ["work"],
+        defaultAccountId: () => "work",
+        formatAllowFrom: ({ allowFrom }: { allowFrom: Array<string | number> }) =>
+          allowFrom.map((entry) => String(entry).replace(/^\+/u, "")),
+      },
+      configSchema: {
+        schema: { type: "object" },
+        uiHints: { allowFrom: { presentation: "phone-number" } },
+      },
+      status: {
+        buildChannelSummary: async () => ({
+          statusState: "linked",
+          self: { e164: "+15551234567" },
+        }),
+      },
+    };
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([phonePlugin]);
+    mocks.resolveInspectedChannelAccount.mockResolvedValue({
+      account: {
+        name: "+12133734253",
+        allowFrom: ["+442079460018", "bot-token"],
+      },
+      enabled: true,
+      configured: true,
+    });
+
+    const table = await buildChannelsTable({ channels: { signal: { enabled: true } } });
+
+    expect(table.rows).toContainEqual(
+      expect.objectContaining({
+        id: "signal",
+        detail: "linked · +1 555 123 4567 (id: +15551234567)",
+      }),
+    );
+    expect(table.details[0]?.rows[0]).toEqual({
+      Account: "work (+12133734253)",
+      Status: "OK",
+      Notes: "allow:+44 20 7946 0018 (id: 442079460018),bot-token",
+    });
   });
 
   it("shows configured official external channels when the plugin is missing", async () => {

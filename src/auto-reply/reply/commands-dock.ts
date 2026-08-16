@@ -5,9 +5,14 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { getActivePluginChannelRegistry } from "../../plugins/runtime.js";
+import {
+  normalizeSessionDeliveryState,
+  sessionDeliveryOrigin,
+} from "../../utils/delivery-context.shared.js";
 import { resolveTextCommand } from "../commands-registry.js";
 import { resolveCommandSurfaceChannel } from "./channel-context.js";
-import { persistSessionEntry } from "./commands-session-store.js";
+import { commandReply, defineAuthorizedTextCommand } from "./command-gates.js";
+import { persistCommandSession } from "./commands-session-store.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 
 const DOCK_KEY_PREFIX = "dock:";
@@ -113,81 +118,61 @@ function resolveLinkedDockTarget(params: {
   return null;
 }
 
-export const handleDockCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) {
-    return null;
-  }
-  const targetChannel = resolveDockCommandTarget(params);
-  if (!targetChannel) {
-    return null;
-  }
-  if (!params.command.isAuthorizedSender) {
-    return { shouldContinue: false };
-  }
+export const handleDockCommand: CommandHandler = defineAuthorizedTextCommand(
+  {
+    label: "/dock",
+    match: (_body, params) => resolveDockCommandTarget(params),
+    silentUnauthorized: true,
+  },
+  async (params, targetChannel) => {
+    const sourceChannel = resolveCommandSurfaceChannel(params);
+    if (sourceChannel === targetChannel) {
+      return commandReply(`Already docked to ${targetChannel}.`);
+    }
+    if (!isDirectDockSource(params)) {
+      return commandReply(
+        `Cannot dock to ${targetChannel}: docking is only available from direct chats.`,
+      );
+    }
 
-  const sourceChannel = resolveCommandSurfaceChannel(params);
-  if (sourceChannel === targetChannel) {
-    return {
-      shouldContinue: false,
-      reply: { text: `Already docked to ${targetChannel}.` },
-    };
-  }
-  if (!isDirectDockSource(params)) {
-    return {
-      shouldContinue: false,
-      reply: {
-        text: `Cannot dock to ${targetChannel}: docking is only available from direct chats.`,
+    const sourceCandidates = buildSourceIdentityCandidates(params, sourceChannel);
+    if (sourceCandidates.size === 0) {
+      return commandReply(`Cannot dock to ${targetChannel}: sender id is unavailable.`);
+    }
+
+    const target = resolveLinkedDockTarget({
+      identityLinks: params.cfg.session?.identityLinks,
+      sourceCandidates,
+      targetChannel,
+    });
+    if (!target?.peerId) {
+      return commandReply(
+        `Cannot dock to ${targetChannel}: add this sender and a ${targetChannel}:... peer to session.identityLinks.`,
+      );
+    }
+
+    const sessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+    if (!sessionEntry || !params.sessionStore || !params.sessionKey) {
+      return commandReply(`Cannot dock to ${targetChannel}: no active session entry was found.`);
+    }
+
+    sessionEntry.delivery = normalizeSessionDeliveryState({
+      context: {
+        channel: targetChannel,
+        to: target.peerId,
+        accountId: resolveTargetChannelAccountId(params, targetChannel),
       },
-    };
-  }
+      origin: sessionDeliveryOrigin(sessionEntry),
+    });
+    params.sessionEntry = sessionEntry;
+    const persisted = await persistCommandSession({
+      ...params,
+      touchedFields: ["delivery"],
+    });
+    if (!persisted) {
+      return commandReply(`Cannot dock to ${targetChannel}: session route could not be saved.`);
+    }
 
-  const sourceCandidates = buildSourceIdentityCandidates(params, sourceChannel);
-  if (sourceCandidates.size === 0) {
-    return {
-      shouldContinue: false,
-      reply: { text: `Cannot dock to ${targetChannel}: sender id is unavailable.` },
-    };
-  }
-
-  const target = resolveLinkedDockTarget({
-    identityLinks: params.cfg.session?.identityLinks,
-    sourceCandidates,
-    targetChannel,
-  });
-  if (!target?.peerId) {
-    return {
-      shouldContinue: false,
-      reply: {
-        text: `Cannot dock to ${targetChannel}: add this sender and a ${targetChannel}:... peer to session.identityLinks.`,
-      },
-    };
-  }
-
-  const sessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
-  if (!sessionEntry || !params.sessionStore || !params.sessionKey) {
-    return {
-      shouldContinue: false,
-      reply: { text: `Cannot dock to ${targetChannel}: no active session entry was found.` },
-    };
-  }
-
-  sessionEntry.lastChannel = targetChannel;
-  sessionEntry.lastTo = target.peerId;
-  sessionEntry.lastAccountId = resolveTargetChannelAccountId(params, targetChannel);
-  params.sessionEntry = sessionEntry;
-  const persisted = await persistSessionEntry({
-    ...params,
-    touchedFields: ["lastChannel", "lastTo", "lastAccountId"],
-  });
-  if (!persisted) {
-    return {
-      shouldContinue: false,
-      reply: { text: `Cannot dock to ${targetChannel}: session route could not be saved.` },
-    };
-  }
-
-  return {
-    shouldContinue: false,
-    reply: { text: `Docked replies to ${targetChannel}.` },
-  };
-};
+    return commandReply(`Docked replies to ${targetChannel}.`);
+  },
+);

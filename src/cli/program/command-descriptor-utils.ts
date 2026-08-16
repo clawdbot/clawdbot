@@ -4,7 +4,7 @@ import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
 
 /** Minimal descriptor shape used before a command is fully registered. */
-type CommandDescriptorLike = Pick<NamedCommandDescriptor, "name" | "description">;
+type CommandDescriptorLike = Pick<NamedCommandDescriptor, "name" | "description" | "hidden">;
 
 const SAFE_COMMAND_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
@@ -97,7 +97,9 @@ export function addCommandDescriptorsToProgram(
     if (existingCommands.has(name)) {
       continue;
     }
-    program.command(name).description(sanitizeCommandDescriptorDescription(descriptor.description));
+    program
+      .command(name, { hidden: descriptor.hidden })
+      .description(sanitizeCommandDescriptorDescription(descriptor.description));
     existingCommands.add(name);
   }
   return existingCommands;

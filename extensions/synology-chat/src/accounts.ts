@@ -3,15 +3,18 @@
  * merges per-account overrides, falls back to environment variables.
  */
 
+import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
 import {
   DEFAULT_ACCOUNT_ID,
-  listCombinedAccountIds,
-  resolveMergedAccountConfig,
+  hasConfiguredAccountValue,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
 import { resolveDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
-import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalString,
+  normalizeStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   SynologyChatChannelConfig,
   ResolvedSynologyChatAccount,
@@ -23,9 +26,20 @@ function getChannelConfig(cfg: OpenClawConfig): SynologyChatChannelConfig | unde
   return cfg?.channels?.["synology-chat"] as SynologyChatChannelConfig | undefined;
 }
 
-function resolveImplicitAccountId(channelCfg: SynologyChatChannelConfig): string | undefined {
-  return channelCfg.token || process.env.SYNOLOGY_CHAT_TOKEN ? DEFAULT_ACCOUNT_ID : undefined;
-}
+const { listAccountIds, resolveAccountConfig: resolveMergedSynologyChatAccountConfig } =
+  createAccountListHelpers<Record<string, unknown> & SynologyChatChannelConfig>("synology-chat", {
+    fallbackAccountIdWhenEmpty: false,
+    hasImplicitDefaultAccount: (cfg) => {
+      const channel = getChannelConfig(cfg);
+      return Boolean(
+        channel &&
+        (hasConfiguredAccountValue(channel.token) ||
+          hasConfiguredAccountValue(process.env.SYNOLOGY_CHAT_TOKEN)),
+      );
+    },
+  });
+
+export { listAccountIds };
 
 function getRawAccountConfig(
   channelCfg: SynologyChatChannelConfig,
@@ -86,22 +100,6 @@ function parseRateLimitPerMinute(raw: string | undefined): number {
 }
 
 /**
- * List all configured account IDs for this channel.
- * Returns ["default"] if there's a base config, plus any named accounts.
- */
-export function listAccountIds(cfg: OpenClawConfig): string[] {
-  const channelCfg = getChannelConfig(cfg);
-  if (!channelCfg) {
-    return [];
-  }
-
-  return listCombinedAccountIds({
-    configuredAccountIds: Object.keys(channelCfg.accounts ?? {}),
-    implicitAccountId: resolveImplicitAccountId(channelCfg),
-  });
-}
-
-/**
  * Resolve a specific account by ID with full defaults applied.
  * Falls back to env vars for the "default" account.
  */
@@ -114,21 +112,15 @@ export function resolveAccount(
   const accountOverrides =
     id === DEFAULT_ACCOUNT_ID ? undefined : (channelCfg.accounts?.[id] ?? undefined);
   const rawAccount = getRawAccountConfig(channelCfg, id);
-  const merged = resolveMergedAccountConfig<Record<string, unknown> & SynologyChatChannelConfig>({
-    channelConfig: channelCfg as Record<string, unknown> & SynologyChatChannelConfig,
-    accounts: channelCfg.accounts as
-      | Record<string, Partial<Record<string, unknown> & SynologyChatChannelConfig>>
-      | undefined,
-    accountId: id,
-  });
+  const merged = resolveMergedSynologyChatAccountConfig(cfg, id);
 
   // Env var fallbacks (primarily for the "default" account)
-  const envToken = process.env.SYNOLOGY_CHAT_TOKEN ?? "";
-  const envIncomingUrl = process.env.SYNOLOGY_CHAT_INCOMING_URL ?? "";
-  const envNasHost = process.env.SYNOLOGY_NAS_HOST ?? "localhost";
-  const envAllowedUserIds = process.env.SYNOLOGY_ALLOWED_USER_IDS ?? "";
+  const envToken = normalizeOptionalString(process.env.SYNOLOGY_CHAT_TOKEN) ?? "";
+  const envIncomingUrl = normalizeOptionalString(process.env.SYNOLOGY_CHAT_INCOMING_URL) ?? "";
+  const envNasHost = normalizeOptionalString(process.env.SYNOLOGY_NAS_HOST) ?? "localhost";
+  const envAllowedUserIds = normalizeOptionalString(process.env.SYNOLOGY_ALLOWED_USER_IDS) ?? "";
   const envRateLimitValue = parseRateLimitPerMinute(process.env.SYNOLOGY_RATE_LIMIT);
-  const envBotName = process.env.OPENCLAW_BOT_NAME ?? "OpenClaw";
+  const envBotName = normalizeOptionalString(process.env.OPENCLAW_BOT_NAME) ?? "OpenClaw";
   const webhookPathSource = resolveWebhookPathSource({ accountId: id, channelCfg, rawAccount });
   const dangerouslyAllowInheritedWebhookPath =
     rawAccount.dangerouslyAllowInheritedWebhookPath ??
@@ -141,6 +133,12 @@ export function resolveAccount(
     enabled: merged.enabled ?? true,
     token: merged.token ?? envToken,
     incomingUrl: merged.incomingUrl ?? envIncomingUrl,
+    // The public callback is an exact per-route mapping. A named account with
+    // its own webhookPath must not silently publish capabilities on the base route.
+    webhookUrl:
+      normalizeOptionalString(
+        id === DEFAULT_ACCOUNT_ID ? merged.webhookUrl : rawAccount.webhookUrl,
+      ) ?? "",
     nasHost: merged.nasHost ?? envNasHost,
     webhookPath: merged.webhookPath ?? "/webhook/synology",
     webhookPathSource,

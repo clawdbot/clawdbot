@@ -1,7 +1,10 @@
 // Line plugin module implements monitor behavior.
 import type { webhook } from "@line/bot-sdk";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { channelReadyPatch, channelStoppedPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
 import {
   danger,
@@ -10,6 +13,7 @@ import {
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
 import {
+  canonicalizeWebhookRouteKey,
   isRequestBodyLimitError,
   normalizePluginHttpPath,
   normalizeWebhookPath,
@@ -26,24 +30,21 @@ import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { createLineBot } from "./bot.js";
 import { processLineMessage } from "./markdown-to-line.js";
 import { resolveLineDurableReplyOptions } from "./monitor-durable.js";
-import { sendLineReplyChunks } from "./reply-chunks.js";
+import { buildLineMediaMessage } from "./outbound-media.js";
 import { getLineRuntime } from "./runtime.js";
 import {
   createFlexMessage,
-  createImageMessage,
   createLocationMessage,
   createQuickReplyItems,
-  createTextMessageWithQuickReplies,
   getUserDisplayName,
-  pushMessageLine,
   pushMessagesLine,
-  pushTextMessageWithQuickReplies,
   replyMessageLine,
   showLoadingAnimation,
 } from "./send.js";
 import { buildTemplateMessageFromPayload } from "./template-messages.js";
 import type { LineChannelData, ResolvedLineAccount } from "./types.js";
 import { createLineNodeWebhookHandler, readLineWebhookRequestBody } from "./webhook-node.js";
+import { LineWebhookTerminalDeliveryError } from "./webhook-spool.js";
 import { parseLineWebhookBody, validateLineSignature } from "./webhook-utils.js";
 
 interface MonitorLineProviderOptions {
@@ -52,28 +53,19 @@ interface MonitorLineProviderOptions {
   accountId?: string;
   config: OpenClawConfig;
   runtime: RuntimeEnv;
+  buildContext?: typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
   abortSignal?: AbortSignal;
   webhookUrl?: string;
   webhookPath?: string;
+  statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 }
 
 interface LineProviderMonitor {
   account: ResolvedLineAccount;
   handleWebhook: (body: webhook.CallbackRequest) => Promise<void>;
-  stop: () => void;
+  stop: () => Promise<void>;
 }
 
-const runtimeState = new Map<
-  string,
-  {
-    running: boolean;
-    lastStartAt: number | null;
-    lastStopAt: number | null;
-    lastError: string | null;
-    lastInboundAt?: number | null;
-    lastOutboundAt?: number | null;
-  }
->();
 const lineWebhookInFlightLimiter = createWebhookInFlightLimiter();
 const LINE_WEBHOOK_PREAUTH_MAX_BODY_BYTES = 64 * 1024;
 const LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS = 5_000;
@@ -86,37 +78,19 @@ type LineWebhookTarget = {
   runtime: RuntimeEnv;
 };
 
+async function registerLineWebhookTarget(
+  params: Parameters<typeof registerWebhookTargetWithPluginRoute<LineWebhookTarget>>[0],
+  bot: ReturnType<typeof createLineBot>,
+) {
+  try {
+    return registerWebhookTargetWithPluginRoute(params);
+  } catch (error) {
+    await Promise.allSettled([bot.stop()]);
+    throw error;
+  }
+}
+
 const lineWebhookTargets = new Map<string, LineWebhookTarget[]>();
-
-function recordChannelRuntimeState(params: {
-  channel: string;
-  accountId: string;
-  state: Partial<{
-    running: boolean;
-    lastStartAt: number | null;
-    lastStopAt: number | null;
-    lastError: string | null;
-    lastInboundAt: number | null;
-    lastOutboundAt: number | null;
-  }>;
-}): void {
-  const key = `${params.channel}:${params.accountId}`;
-  const existing = runtimeState.get(key) ?? {
-    running: false,
-    lastStartAt: null,
-    lastStopAt: null,
-    lastError: null,
-  };
-  runtimeState.set(key, { ...existing, ...params.state });
-}
-
-export function getLineRuntimeState(accountId: string) {
-  return runtimeState.get(`line:${accountId}`);
-}
-
-export function clearLineRuntimeStateForTests() {
-  runtimeState.clear();
-}
 
 function startLineLoadingKeepalive(params: {
   cfg: OpenClawConfig;
@@ -161,8 +135,10 @@ export async function monitorLineProvider(
     accountId,
     config,
     runtime,
+    buildContext,
     abortSignal,
     webhookPath,
+    statusSink,
   } = opts;
   const resolvedAccountId = accountId ?? resolveDefaultLineAccountId(config);
   const token = channelAccessToken.trim();
@@ -180,21 +156,14 @@ export async function monitorLineProvider(
     channelSecret: secret,
     accountId,
     runtime,
+    buildContext,
     config,
-    onMessage: async (ctx) => {
+    onMessage: async (ctx, deliveryControl) => {
       if (!ctx) {
         return;
       }
 
       const { ctxPayload, replyToken, route } = ctx;
-
-      recordChannelRuntimeState({
-        channel: "line",
-        accountId: resolvedAccountId,
-        state: {
-          lastInboundAt: Date.now(),
-        },
-      });
 
       const shouldShowLoading = Boolean(ctx.userId && !ctx.isGroup);
 
@@ -212,15 +181,25 @@ export async function monitorLineProvider(
 
       const displayName = await displayNamePromise;
       logVerbose(`line: received message from ${displayName} (${ctxPayload.From})`);
+      let replyTokenUsed = false;
+      let turnAdopted = false;
+      const ingressLifecycle = deliveryControl.turnAdoptionLifecycle;
 
       try {
         const textLimit = 5000;
-        let replyTokenUsed = false;
         const core = getLineRuntime();
         const turnResult = await core.channel.inbound.run({
           channel: "line",
           accountId: route.accountId,
           raw: ctx,
+          turnAdoptionLifecycle: {
+            ...ingressLifecycle,
+            admission: "exclusive",
+            onAdopted: async () => {
+              await ingressLifecycle?.onAdopted();
+              turnAdopted = true;
+            },
+          },
           adapter: {
             ingest: () => ({
               id: ctxPayload.MessageSid ?? `${ctxPayload.From}:${Date.now()}`,
@@ -230,15 +209,13 @@ export async function monitorLineProvider(
               cfg: config,
               channel: "line",
               accountId: route.accountId,
-              agentId: route.agentId,
-              routeSessionKey: route.sessionKey,
-              storePath: ctx.turn.storePath,
+              route: { agentId: route.agentId, sessionKey: route.sessionKey },
               ctxPayload,
-              recordInboundSession: core.channel.session.recordInboundSession,
-              dispatchReplyWithBufferedBlockDispatcher:
-                core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
               record: ctx.turn.record,
               replyPipeline: {},
+              ...(ingressLifecycle?.abortSignal
+                ? { replyOptions: { abortSignal: ingressLifecycle.abortSignal } }
+                : {}),
               delivery: {
                 durable: (payload, info) =>
                   resolveLineDurableReplyOptions({
@@ -271,15 +248,11 @@ export async function monitorLineProvider(
                       buildTemplateMessageFromPayload,
                       processLineMessage,
                       chunkMarkdownText,
-                      sendLineReplyChunks,
                       replyMessageLine,
-                      pushMessageLine,
-                      pushTextMessageWithQuickReplies,
                       createQuickReplyItems,
-                      createTextMessageWithQuickReplies,
                       pushMessagesLine,
                       createFlexMessage,
-                      createImageMessage,
+                      buildMediaMessage: buildLineMediaMessage,
                       createLocationMessage,
                       onReplyError: (replyErr) => {
                         logVerbose(
@@ -294,18 +267,11 @@ export async function monitorLineProvider(
                     // Text reached the user but a rich/media bubble did not.
                     // Surface the tagged partial failure after adopting the
                     // consumed reply-token state so later blocks in this turn
-                    // route correctly; recordChannelRuntimeState is skipped
-                    // because this delivery was not a clean success.
+                    // route correctly without retrying text the user already saw.
                     throw deliveryResult.error;
                   }
 
-                  recordChannelRuntimeState({
-                    channel: "line",
-                    accountId: resolvedAccountId,
-                    state: {
-                      lastOutboundAt: Date.now(),
-                    },
-                  });
+                  return { visibleReplySent: deliveryResult.visibleReplySent };
                 },
                 onError: (err, info) => {
                   runtime.error?.(danger(`line ${info.kind} reply failed: ${String(err)}`));
@@ -320,18 +286,13 @@ export async function monitorLineProvider(
         }
       } catch (err) {
         runtime.error?.(danger(`line: auto-reply failed: ${String(err)}`));
-
-        if (replyToken) {
-          try {
-            await replyMessageLine(
-              replyToken,
-              [{ type: "text", text: "Sorry, I encountered an error processing your message." }],
-              { cfg: config, accountId: ctx.accountId },
-            );
-          } catch (replyErr) {
-            runtime.error?.(danger(`line: error reply failed: ${String(replyErr)}`));
-          }
+        if (turnAdopted || replyTokenUsed) {
+          throw new LineWebhookTerminalDeliveryError(
+            "LINE delivery failed after consuming the event reply token.",
+            { cause: err },
+          );
         }
+        throw err;
       } finally {
         stopLoading?.();
       }
@@ -341,13 +302,16 @@ export async function monitorLineProvider(
   const normalizedPath = normalizeWebhookPath(
     normalizePluginHttpPath(webhookPath, "/line/webhook") ?? "/line/webhook",
   );
+  const webhookRouteKey = canonicalizeWebhookRouteKey(normalizedPath);
   const createScopedLineWebhookHandler = (target: LineWebhookTarget) =>
     createLineNodeWebhookHandler({
       channelSecret: target.channelSecret,
       bot: target.bot,
       runtime: target.runtime,
     });
-  const { unregister: unregisterHttp } = registerWebhookTargetWithPluginRoute({
+  const registrationParams: Parameters<
+    typeof registerWebhookTargetWithPluginRoute<LineWebhookTarget>
+  >[0] = {
     targetsByPath: lineWebhookTargets,
     target: {
       accountId: resolvedAccountId,
@@ -359,10 +323,12 @@ export async function monitorLineProvider(
     route: {
       auth: "plugin",
       pluginId: "line",
+      source: "line-webhook",
       accountId: resolvedAccountId,
       log: (msg) => logVerbose(msg),
+      throwOnFailure: true,
       handler: async (req, res) => {
-        const targets = lineWebhookTargets.get(normalizedPath) ?? [];
+        const targets = lineWebhookTargets.get(webhookRouteKey) ?? [];
         const firstTarget = targets[0];
         if (req.method !== "POST") {
           if (!firstTarget) {
@@ -378,7 +344,7 @@ export async function monitorLineProvider(
           req,
           res,
           inFlightLimiter: lineWebhookInFlightLimiter,
-          inFlightKey: `line:${normalizedPath}`,
+          inFlightKey: `line:${webhookRouteKey}`,
         });
         if (!requestLifecycle.ok) {
           return;
@@ -432,21 +398,15 @@ export async function monitorLineProvider(
             return;
           }
 
-          requestLifecycle.release();
+          if (body.events && body.events.length > 0) {
+            logVerbose(`line: received ${body.events.length} webhook events`);
+            await match.target.bot.handleWebhook(body);
+            // Only a committed event is adopted; signed LINE verification pings must stay unmarked.
+            res.setHeader("x-openclaw-delivery-accepted", "durable");
+          }
           res.statusCode = 200;
           res.setHeader("Content-Type", "application/json");
           res.end(JSON.stringify({ status: "ok" }));
-
-          if (body.events && body.events.length > 0) {
-            logVerbose(`line: received ${body.events.length} webhook events`);
-            void Promise.resolve()
-              .then(() => match.target.bot.handleWebhook(body))
-              .catch((err: unknown) => {
-                match.target.runtime.error?.(
-                  danger(`line webhook dispatch failed: ${String(err)}`),
-                );
-              });
-          }
         } catch (err) {
           if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
             res.statusCode = 413;
@@ -460,7 +420,7 @@ export async function monitorLineProvider(
             res.end(JSON.stringify({ error: requestBodyErrorToText("REQUEST_BODY_TIMEOUT") }));
             return;
           }
-          runtime.error?.(danger(`line webhook error: ${String(err)}`));
+          runtime.error?.(danger(`line webhook error: ${formatErrorMessage(err)}`));
           if (!res.headersSent) {
             res.statusCode = 500;
             res.setHeader("Content-Type", "application/json");
@@ -471,50 +431,45 @@ export async function monitorLineProvider(
         }
       },
     },
-  });
-
-  recordChannelRuntimeState({
-    channel: "line",
-    accountId: resolvedAccountId,
-    state: {
-      running: true,
-      lastStartAt: Date.now(),
-    },
-  });
+  };
+  const { unregister: unregisterHttp } = await registerLineWebhookTarget(registrationParams, bot);
 
   logVerbose(`line: registered webhook handler at ${normalizedPath}`);
+  statusSink?.(channelReadyPatch());
 
   let stopped = false;
-  const stopHandler = () => {
+  let stopPromise: Promise<void> | undefined;
+  const stopHandler = (): Promise<void> => {
+    if (stopPromise) {
+      return stopPromise;
+    }
     if (stopped) {
-      return;
+      return Promise.resolve();
     }
     stopped = true;
     logVerbose(`line: stopping provider for account ${resolvedAccountId}`);
     unregisterHttp();
-    recordChannelRuntimeState({
-      channel: "line",
-      accountId: resolvedAccountId,
-      state: {
-        running: false,
-        lastStopAt: Date.now(),
-      },
+    stopPromise = bot.stop().finally(() => {
+      statusSink?.(channelStoppedPatch());
     });
+    return stopPromise;
   };
+  const stopOnAbort = () => void stopHandler();
 
   if (abortSignal?.aborted) {
-    stopHandler();
+    await stopHandler();
   } else if (abortSignal) {
-    abortSignal.addEventListener("abort", stopHandler, { once: true });
+    abortSignal.addEventListener("abort", stopOnAbort, { once: true });
     await waitForAbortSignal(abortSignal);
+    await stopHandler();
   }
 
   return {
     account: bot.account,
     handleWebhook: bot.handleWebhook,
-    stop: () => {
-      stopHandler();
-      abortSignal?.removeEventListener("abort", stopHandler);
+    stop: async () => {
+      await stopHandler();
+      abortSignal?.removeEventListener("abort", stopOnAbort);
     },
   };
 }

@@ -9,7 +9,7 @@ title: "GMI Cloud"
 GMI Cloud is a hosted inference platform for frontier and open-weight models
 behind an OpenAI-compatible API. In OpenClaw it is an official external provider
 plugin: install it once, store credentials through normal model auth, and use
-model refs like `gmi/google/gemini-3.1-flash-lite`.
+model refs like `gmi/openai/gpt-5.6-sol`.
 
 Use GMI when you want one API key for several hosted model families, including
 Anthropic, DeepSeek, Google, Moonshot, OpenAI, and Z.AI routes exposed by GMI's
@@ -26,7 +26,7 @@ rate limits, and any provider-side routing policy.
 | Auth env var  | `GMI_API_KEY`                            |
 | API           | OpenAI-compatible (`openai-completions`) |
 | Base URL      | `https://api.gmi-serving.com/v1`         |
-| Default model | `gmi/google/gemini-3.1-flash-lite`       |
+| Default model | `gmi/openai/gpt-5.6-sol`                 |
 
 ## Setup
 
@@ -70,12 +70,11 @@ The plugin catalog seeds commonly available GMI Cloud route ids:
 
 | Model ref                          | Input        | Context   | Max output |
 | ---------------------------------- | ------------ | --------- | ---------- |
-| `gmi/anthropic/claude-sonnet-4.6`  | text + image | 200,000   | 64,000     |
-| `gmi/deepseek-ai/DeepSeek-V3.2`    | text         | 163,840   | 65,536     |
-| `gmi/google/gemini-3.1-flash-lite` | text + image | 1,048,576 | 65,536     |
-| `gmi/moonshotai/Kimi-K2.5`         | text + image | 262,144   | 65,536     |
-| `gmi/openai/gpt-5.4`               | text + image | 400,000   | 128,000    |
-| `gmi/zai-org/GLM-5.1-FP8`          | text         | 202,752   | 65,536     |
+| `gmi/anthropic/claude-sonnet-5`    | text + image | 409,600   | 128,000    |
+| `gmi/deepseek-ai/DeepSeek-V4-Pro`  | text         | 1,048,576 | 384,000    |
+| `gmi/google/gemini-3.5-flash-lite` | text + image | 1,048,576 | 65,536     |
+| `gmi/openai/gpt-5.6-sol`           | text + image | 1,050,000 | 128,000    |
+| `gmi/zai-org/GLM-5.2-FP8`          | text         | 1,048,576 | 128,000    |
 
 The catalog is a seed, not a promise that every account can call every model at
 all times. List what the configured provider reports in your environment:

@@ -11,7 +11,9 @@ function resolveConfiguredCommandOwners(cfg: OpenClawConfig): string[] {
   if (!Array.isArray(owners)) {
     return [];
   }
-  return normalizeStringEntries(owners.map((entry) => String(entry ?? "")));
+  return normalizeStringEntries(owners.map((entry) => String(entry ?? ""))).filter(
+    (entry) => entry !== "*" && !entry.endsWith(":*"),
+  );
 }
 
 /** Returns true when at least one owner sender id is configured. */
@@ -46,7 +48,7 @@ export function noteCommandOwnerHealth(cfg: OpenClawConfig): void {
   note(
     [
       "No command owner is configured.",
-      "A command owner is the human operator account allowed to run owner-only commands and approve dangerous actions, including /diagnostics, /export-trajectory, /config, and exec approvals.",
+      "A command owner is the human operator account allowed to run owner-only commands and approve dangerous actions, including /diagnostics, /export-session, /export-trajectory, /config, and exec approvals.",
       "DM pairing only lets someone talk to the bot; it does not make that sender the owner for privileged commands.",
       `Fix: set commands.ownerAllowFrom to your channel user id, for example ${formatCliCommand("openclaw config set commands.ownerAllowFrom '[\"telegram:123456789\"]'")}`,
       "Restart the gateway after changing this if it is already running.",

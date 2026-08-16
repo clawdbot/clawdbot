@@ -2,12 +2,12 @@
  * Shared assertions for provider onboarding config migration and fallback behavior.
  */
 import { expect } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../provider-onboard.js";
 import type { ModelApi } from "../provider-onboard.js";
-import type { OpenClawConfig } from "../testing.js";
 import {
   createConfigWithFallbacks,
   createLegacyProviderConfig,

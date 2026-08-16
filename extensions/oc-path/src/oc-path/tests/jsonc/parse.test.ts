@@ -1,6 +1,8 @@
 // OC Path tests cover parse plugin behavior.
 import { describe, expect, it } from "vitest";
-import { MAX_JSONC_INPUT_BYTES, parseJsonc } from "../../jsonc/parse.js";
+import { parseJsonc } from "../../jsonc/parse.js";
+
+const JSONC_INPUT_LIMIT_BYTES = 16 * 1024 * 1024;
 
 describe("parseJsonc — basic shapes", () => {
   it("parses an empty object", () => {
@@ -144,11 +146,7 @@ describe("parseJsonc — soft errors", () => {
   });
 
   it("rejects input larger than MAX_JSONC_INPUT_BYTES with a typed diagnostic", () => {
-    // Construct an input one byte over the cap. We don't allocate the
-    // full 16 MiB+ string in memory; `String#repeat` on a one-byte unit
-    // is enough to push past the threshold without exercising the
-    // expensive `parseTree` path (the cap fires before parse runs).
-    const oversized = "a".repeat(MAX_JSONC_INPUT_BYTES + 1);
+    const oversized = "a".repeat(JSONC_INPUT_LIMIT_BYTES + 1);
     const { ast, diagnostics } = parseJsonc(oversized);
     expect(diagnostics).toHaveLength(1);
     expect(diagnostics[0]?.severity).toBe("error");
@@ -156,10 +154,33 @@ describe("parseJsonc — soft errors", () => {
     expect(ast.root).toBeNull();
   });
 
-  it("accepts input up to the cap", () => {
-    // Reasonable-shape JSON well within the cap parses normally.
-    const { diagnostics, ast } = parseJsonc('{"key": "value"}');
+  it("accepts valid JSONC at the exact UTF-8 byte cap", () => {
+    const exactBoundary = `"${"a".repeat(JSONC_INPUT_LIMIT_BYTES - 2)}"`;
+    expect(Buffer.byteLength(exactBoundary, "utf8")).toBe(JSONC_INPUT_LIMIT_BYTES);
+
+    const { ast, diagnostics } = parseJsonc(exactBoundary);
     expect(diagnostics).toEqual([]);
-    expect(ast.root?.kind).toBe("object");
+    expect(ast.root?.kind).toBe("string");
+  });
+
+  it("measures the input cap in UTF-8 bytes", () => {
+    const oversized = `"${"\u754c".repeat(Math.floor(JSONC_INPUT_LIMIT_BYTES / 3) + 1)}"`;
+    expect(oversized.length).toBeLessThan(JSONC_INPUT_LIMIT_BYTES);
+
+    const { ast, diagnostics } = parseJsonc(oversized);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.message).toContain(`got ${Buffer.byteLength(oversized, "utf8")}`);
+    expect(diagnostics[0]?.code).toBe("OC_JSONC_INPUT_TOO_LARGE");
+    expect(ast.root).toBeNull();
+  });
+
+  it("counts a UTF-8 BOM toward the byte cap", () => {
+    const oversized = `\uFEFF"${"a".repeat(JSONC_INPUT_LIMIT_BYTES - 2)}"`;
+    expect(Buffer.byteLength(oversized, "utf8")).toBe(JSONC_INPUT_LIMIT_BYTES + 3);
+
+    const { ast, diagnostics } = parseJsonc(oversized);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.code).toBe("OC_JSONC_INPUT_TOO_LARGE");
+    expect(ast.root).toBeNull();
   });
 });

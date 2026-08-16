@@ -2,7 +2,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import {
   ChannelType,
   type Client,
@@ -469,7 +469,8 @@ async function handleDiscordReactionEvent(
         return reactionBase;
       }
       const emojiLabel = formatDiscordReactionEmoji(data.emoji);
-      const actorLabel = formatDiscordUserTag(user);
+      // Reaction removals do not include member/user details in Discord's gateway payload.
+      const actorLabel = formatDiscordUserTag(user) || user.id;
       const guildSlug =
         guildInfo?.slug ||
         (data.guild?.name
@@ -499,8 +500,7 @@ async function handleDiscordReactionEvent(
         },
         parentPeer: parentPeerId ? { kind: "channel", id: parentPeerId } : undefined,
       });
-      enqueueSystemEvent(text, {
-        sessionKey: route.sessionKey,
+      enqueueRoutedSystemEvent(text, route, {
         contextKey,
       });
     };

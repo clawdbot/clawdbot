@@ -1,252 +1,35 @@
 // Control UI tests cover realtime talk google live behavior.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
+import {
+  audioContexts,
+  beginTransport,
+  createClient,
+  createdSources,
+  createSession,
+  createTransport,
+  encodeJsonFrame,
+  flushMicrotasks,
+  getGoogleLiveToolOwnerState,
+  googleLiveTestFixture,
+  inputProcessors,
+  inputSinks,
+  installGoogleLiveTestFixture,
+  latestWebSocket,
+  pumpMicrophone,
+  requireFirstTalkEvent,
+  startTransport,
+  wsInstances,
+} from "./realtime-talk-google-live.test-support.ts";
 import { GoogleLiveRealtimeTalkTransport } from "./realtime-talk-google-live.ts";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
 } from "./realtime-talk-shared.ts";
-import type {
-  RealtimeTalkJsonPcmWebSocketSessionResult,
-  RealtimeTalkTransportContext,
-} from "./realtime-talk-shared.ts";
-
-type MockWebSocketEvent = {
-  data?: unknown;
-  code?: number;
-  reason?: string;
-};
-
-type MockWebSocketHandler = (event?: MockWebSocketEvent) => void;
-type MockWebSocketEventType = "close" | "error" | "message" | "open";
-
-const wsInstances: MockGoogleLiveWebSocket[] = [];
-const createdSources: MockAudioBufferSource[] = [];
-const inputProcessors: Array<{
-  connect: ReturnType<typeof vi.fn>;
-  disconnect: ReturnType<typeof vi.fn>;
-  onaudioprocess: ((event: { inputBuffer: { getChannelData: () => Float32Array } }) => void) | null;
-}> = [];
-const inputSinks: Array<{
-  connect: ReturnType<typeof vi.fn>;
-  disconnect: ReturnType<typeof vi.fn>;
-  gain: { value: number };
-}> = [];
-let getUserMedia: ReturnType<typeof vi.fn>;
-
-async function flushMicrotasks(): Promise<void> {
-  await Promise.resolve();
-  await Promise.resolve();
-}
-
-class MockGoogleLiveWebSocket {
-  static OPEN = 1;
-
-  readonly handlers: Record<MockWebSocketEventType, MockWebSocketHandler[]> = {
-    close: [],
-    error: [],
-    message: [],
-    open: [],
-  };
-  readonly sent: string[] = [];
-  binaryType: BinaryType = "blob";
-  readyState = MockGoogleLiveWebSocket.OPEN;
-
-  constructor(readonly url: string) {
-    wsInstances.push(this);
-  }
-
-  addEventListener(type: MockWebSocketEventType, handler: MockWebSocketHandler) {
-    this.handlers[type].push(handler);
-  }
-
-  send(data: string) {
-    this.sent.push(data);
-  }
-
-  close() {
-    this.readyState = 3;
-  }
-
-  emitOpen() {
-    for (const handler of this.handlers.open) {
-      handler();
-    }
-  }
-
-  emitMessage(data: unknown) {
-    for (const handler of this.handlers.message) {
-      handler({ data });
-    }
-  }
-}
-
-class MockAudioBufferSource {
-  buffer: unknown = null;
-  readonly addEventListener = vi.fn();
-  readonly connect = vi.fn();
-  readonly start = vi.fn();
-  readonly stop = vi.fn();
-}
-
-class MockAudioContext {
-  readonly currentTime = 0;
-  readonly destination = {};
-  readonly sampleRate: number;
-  readonly close = vi.fn(async () => undefined);
-
-  constructor(options?: { sampleRate?: number }) {
-    this.sampleRate = options?.sampleRate ?? 24000;
-  }
-
-  createMediaStreamSource() {
-    return {
-      connect: vi.fn(),
-      disconnect: vi.fn(),
-    };
-  }
-
-  createScriptProcessor() {
-    const processor = {
-      connect: vi.fn(),
-      disconnect: vi.fn(),
-      onaudioprocess: null,
-    };
-    inputProcessors.push(processor);
-    return processor;
-  }
-
-  createGain() {
-    const sink = {
-      connect: vi.fn(),
-      disconnect: vi.fn(),
-      gain: { value: 1 },
-    };
-    inputSinks.push(sink);
-    return sink;
-  }
-
-  createAnalyser() {
-    return {
-      fftSize: 0,
-      smoothingTimeConstant: 0,
-      disconnect: vi.fn(),
-      getFloatTimeDomainData: (samples: Float32Array) => samples.fill(0.25),
-    };
-  }
-
-  createBuffer(_channels: number, length: number, sampleRate: number) {
-    const channel = new Float32Array(length);
-    return {
-      duration: length / sampleRate,
-      getChannelData: () => channel,
-    };
-  }
-
-  createBufferSource() {
-    const source = new MockAudioBufferSource();
-    createdSources.push(source);
-    return source;
-  }
-}
-
-function createSession(
-  websocketUrl: string,
-  clientSecret = "auth_tokens/browser-session",
-): RealtimeTalkJsonPcmWebSocketSessionResult {
-  return {
-    provider: "google",
-    transport: "provider-websocket",
-    protocol: "google-live-bidi",
-    clientSecret,
-    websocketUrl,
-    audio: {
-      inputEncoding: "pcm16",
-      inputSampleRateHz: 16000,
-      outputEncoding: "pcm16",
-      outputSampleRateHz: 24000,
-    },
-  };
-}
-
-function createClient(): RealtimeTalkTransportContext["client"] {
-  const client = {
-    addEventListener: vi.fn(() => () => undefined),
-    request: vi.fn(),
-  } as unknown as RealtimeTalkTransportContext["client"];
-  return client;
-}
-
-function createTransport(
-  callbacks: RealtimeTalkTransportContext["callbacks"] = {},
-  client = createClient(),
-  inputDeviceId?: string,
-) {
-  return new GoogleLiveRealtimeTalkTransport(
-    createSession(
-      "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained",
-    ),
-    {
-      callbacks,
-      client,
-      sessionKey: "main",
-      inputDeviceId,
-    },
-  );
-}
-
-function encodeJsonFrame(value: unknown): ArrayBuffer {
-  return new TextEncoder().encode(JSON.stringify(value)).buffer;
-}
-
-function latestWebSocket(): MockGoogleLiveWebSocket {
-  const ws = wsInstances.at(-1);
-  if (!ws) {
-    throw new Error("missing WebSocket");
-  }
-  return ws;
-}
-
-function pumpMicrophone(samples: Float32Array): void {
-  const processor = inputProcessors.at(-1);
-  if (!processor) {
-    throw new Error("missing microphone processor");
-  }
-  processor.onaudioprocess?.({ inputBuffer: { getChannelData: () => samples } });
-}
-
-function requireFirstTalkEvent(onTalkEvent: ReturnType<typeof vi.fn>): Record<string, unknown> {
-  const [call] = onTalkEvent.mock.calls;
-  if (!call) {
-    throw new Error("expected talk event");
-  }
-  const [event] = call;
-  if (!event || typeof event !== "object" || Array.isArray(event)) {
-    throw new Error("expected talk event record");
-  }
-  return event as Record<string, unknown>;
-}
+import type { RealtimeTalkTransportContext } from "./realtime-talk-shared.ts";
 
 describe("GoogleLiveRealtimeTalkTransport", () => {
-  beforeEach(() => {
-    wsInstances.length = 0;
-    createdSources.length = 0;
-    inputProcessors.length = 0;
-    inputSinks.length = 0;
-    vi.stubGlobal("WebSocket", MockGoogleLiveWebSocket);
-    vi.stubGlobal("AudioContext", MockAudioContext);
-    getUserMedia = vi.fn(async () => ({
-      getTracks: () => [{ stop: vi.fn() }],
-    }));
-    vi.stubGlobal("navigator", {
-      mediaDevices: {
-        getUserMedia,
-      },
-    });
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
+  installGoogleLiveTestFixture();
 
   it("connects only to the allowlisted endpoint with the ephemeral token", async () => {
     const transport = new GoogleLiveRealtimeTalkTransport(
@@ -256,12 +39,13 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       { callbacks: {}, client: createClient(), sessionKey: "main" },
     );
 
-    await transport.start();
+    const { start } = await beginTransport(transport);
 
     expect(latestWebSocket().url).toBe(
       "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained?access_token=auth_tokens%2Fbrowser-session",
     );
     transport.stop();
+    await expect(start).resolves.toBe("cancelled");
   });
 
   it.each([
@@ -282,9 +66,9 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
   it("captures from the selected microphone with an exact constraint", async () => {
     const transport = createTransport({}, createClient(), "usb-mic");
 
-    await transport.start();
+    const { start } = await beginTransport(transport);
 
-    expect(getUserMedia).toHaveBeenCalledWith({
+    expect(googleLiveTestFixture.getUserMedia).toHaveBeenCalledWith({
       audio: {
         autoGainControl: true,
         echoCancellation: true,
@@ -293,13 +77,13 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       },
     });
     transport.stop();
+    await expect(start).resolves.toBe("cancelled");
   });
 
   it("keeps the microphone processor inaudible locally", async () => {
     const transport = createTransport();
 
-    await transport.start();
-    latestWebSocket().emitOpen();
+    await startTransport(transport);
 
     const processor = inputProcessors.at(-1);
     const sink = inputSinks.at(-1);
@@ -319,7 +103,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     const pendingMedia = new Promise<MediaStream>((resolve) => {
       resolveMedia = resolve;
     });
-    getUserMedia.mockReturnValue(pendingMedia);
+    googleLiveTestFixture.getUserMedia.mockReturnValue(pendingMedia);
     const stopTrack = vi.fn();
     const onInputLevel = vi.fn();
     const transport = createTransport({ onInputLevel });
@@ -327,7 +111,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     const start = transport.start();
     transport.stop();
     resolveMedia({ getTracks: () => [{ stop: stopTrack }] } as unknown as MediaStream);
-    await start;
+    await expect(start).resolves.toBe("cancelled");
 
     expect(stopTrack).toHaveBeenCalledOnce();
     expect(inputProcessors).toHaveLength(0);
@@ -340,24 +124,133 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     const onTalkEvent = vi.fn();
     const transport = createTransport({ onStatus, onTalkEvent });
 
-    await transport.start();
-    const ws = latestWebSocket();
+    const { start, ws } = await beginTransport(transport);
+    ws.emitOpen();
     ws.emitMessage(encodeJsonFrame({ setupComplete: {} }));
+    await expect(start).resolves.toBe("ready");
 
     expect(ws.binaryType).toBe("arraybuffer");
-    await vi.waitFor(() => expect(onStatus).toHaveBeenCalledWith("listening"));
+    expect(onStatus).not.toHaveBeenCalled();
+    expect(onTalkEvent).not.toHaveBeenCalled();
+    transport.activate();
+    transport.activate();
+    expect(onStatus).toHaveBeenCalledWith("listening");
+    expect(onStatus).toHaveBeenCalledOnce();
     const readyEvent = requireFirstTalkEvent(onTalkEvent);
     expect(readyEvent.type).toBe("session.ready");
     expect(readyEvent.sessionId).toBe("main:google:provider-websocket");
     expect(readyEvent.transport).toBe("provider-websocket");
   });
 
+  it("releases owned media when the live socket closes", async () => {
+    const onStatus = vi.fn();
+    const onTranscript = vi.fn();
+    const transport = createTransport({ onStatus, onTranscript });
+
+    const ws = await startTransport(transport);
+    pumpMicrophone(new Float32Array(4096));
+    ws.emitClose();
+
+    expect(onStatus).toHaveBeenCalledWith("error", "Realtime connection closed");
+    expect(googleLiveTestFixture.stopInputTrack).toHaveBeenCalledOnce();
+    expect(inputProcessors.at(-1)?.disconnect).toHaveBeenCalledOnce();
+    expect(audioContexts).toHaveLength(2);
+    for (const context of audioContexts) {
+      expect(context.close).toHaveBeenCalledOnce();
+    }
+
+    ws.emitMessage(
+      encodeJsonFrame({
+        serverContent: {
+          inputTranscription: { text: "too late", finished: true },
+        },
+      }),
+    );
+    await flushMicrotasks();
+    expect(onTranscript).not.toHaveBeenCalled();
+  });
+
+  it("preserves socket error precedence and ignores the later close", async () => {
+    const onStatus = vi.fn();
+    const onTranscript = vi.fn();
+    const transport = createTransport({ onStatus, onTranscript });
+
+    const ws = await startTransport(transport);
+    onStatus.mockClear();
+    ws.emitError();
+    ws.emitClose();
+
+    expect(onStatus).toHaveBeenCalledTimes(1);
+    expect(onStatus).toHaveBeenCalledWith("error", "Realtime connection failed");
+    expect(googleLiveTestFixture.stopInputTrack).toHaveBeenCalledOnce();
+    ws.emitMessage(
+      encodeJsonFrame({
+        serverContent: {
+          inputTranscription: { text: "too late", finished: true },
+        },
+      }),
+    );
+    await flushMicrotasks();
+    expect(onTranscript).not.toHaveBeenCalled();
+  });
+
+  it.each(["status", "talk event"] as const)(
+    "releases socket resources when the terminal %s callback throws",
+    async (callbackKind) => {
+      const transport = createTransport(
+        callbackKind === "status"
+          ? {
+              onStatus: vi.fn((status) => {
+                if (status === "error") {
+                  throw new Error("consumer failed");
+                }
+              }),
+            }
+          : {
+              onTalkEvent: vi.fn((event) => {
+                if (event.type === "session.closed") {
+                  throw new Error("consumer failed");
+                }
+              }),
+            },
+      );
+
+      const ws = await startTransport(transport);
+      expect(() => ws.emitError()).toThrow("consumer failed");
+
+      expect(googleLiveTestFixture.stopInputTrack).toHaveBeenCalledOnce();
+      expect(inputProcessors.at(-1)?.disconnect).toHaveBeenCalledOnce();
+      for (const context of audioContexts) {
+        expect(context.close).toHaveBeenCalledOnce();
+      }
+      ws.emitClose();
+    },
+  );
+
+  it("finishes cleanup when the input-level callback throws during activation", async () => {
+    const onInputLevel = vi.fn(() => {
+      throw new Error("meter callback failed");
+    });
+    const transport = createTransport({ onInputLevel });
+    const { start, ws } = await beginTransport(transport);
+    ws.emitOpen();
+    ws.emitMessage(encodeJsonFrame({ setupComplete: {} }));
+    await expect(start).resolves.toBe("ready");
+
+    expect(() => transport.activate()).toThrow("meter callback failed");
+    expect(googleLiveTestFixture.stopInputTrack).toHaveBeenCalledOnce();
+    expect(inputProcessors).toHaveLength(0);
+    expect(ws.readyState).toBe(3);
+    for (const context of audioContexts) {
+      expect(context.close).toHaveBeenCalledOnce();
+    }
+  });
+
   it("reports microphone activity and resets it when stopped", async () => {
     const onInputLevel = vi.fn();
     const transport = createTransport({ onInputLevel });
 
-    await transport.start();
-    latestWebSocket().emitOpen();
+    await startTransport(transport);
     pumpMicrophone(new Float32Array(4096));
     pumpMicrophone(new Float32Array(4096).fill(0.25));
     transport.stop();
@@ -370,17 +263,19 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     const onStatus = vi.fn();
     const transport = createTransport({ onStatus });
 
-    await transport.start();
-    latestWebSocket().emitMessage(new Blob([JSON.stringify({ setupComplete: {} })]));
+    const { start, ws } = await beginTransport(transport);
+    ws.emitOpen();
+    ws.emitMessage(new Blob([JSON.stringify({ setupComplete: {} })]));
+    await expect(start).resolves.toBe("ready");
+    transport.activate();
 
-    await vi.waitFor(() => expect(onStatus).toHaveBeenCalledWith("listening"));
+    await waitForFast(() => expect(onStatus).toHaveBeenCalledWith("listening"));
   });
 
   it("stops queued output when Google Live sends interruption", async () => {
     const onTalkEvent = vi.fn();
     const transport = createTransport({ onTalkEvent });
-    await transport.start();
-    const ws = latestWebSocket();
+    const ws = await startTransport(transport);
 
     ws.emitMessage(
       encodeJsonFrame({
@@ -391,12 +286,12 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
         },
       }),
     );
-    await vi.waitFor(() => expect(createdSources).toHaveLength(1));
+    await waitForFast(() => expect(createdSources).toHaveLength(1));
 
     const source = createdSources[0];
     ws.emitMessage(encodeJsonFrame({ serverContent: { interrupted: true } }));
 
-    await vi.waitFor(() => expect(source?.stop).toHaveBeenCalledTimes(1));
+    await waitForFast(() => expect(source?.stop).toHaveBeenCalledTimes(1));
     const cancelledEvent = onTalkEvent.mock.calls.find(
       ([event]) => event.type === "turn.cancelled",
     )?.[0];
@@ -404,13 +299,95 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     expect(cancelledEvent?.payload).toStrictEqual({ reason: "provider-interrupted" });
   });
 
+  it("closes an overflowing playback response and ignores late provider audio", async () => {
+    const onStatus = vi.fn();
+    const onTalkEvent = vi.fn();
+    const transport = createTransport({ onStatus, onTalkEvent });
+    const ws = await startTransport(transport);
+
+    ws.emitMessage(
+      encodeJsonFrame({
+        serverContent: {
+          modelTurn: {
+            parts: Array.from({ length: 321 }, () => ({
+              inlineData: { data: "AAAA", mimeType: "audio/pcm;rate=24000" },
+            })),
+          },
+        },
+      }),
+    );
+
+    await waitForFast(() =>
+      expect(onStatus).toHaveBeenCalledWith(
+        "error",
+        "Realtime Talk playback exceeded the browser audio buffer limit",
+      ),
+    );
+    expect(createdSources).toHaveLength(320);
+    expect(createdSources.every((source) => source.stop.mock.calls.length === 1)).toBe(true);
+    expect(ws.readyState).toBe(3);
+    expect(
+      onTalkEvent.mock.calls.some(
+        ([event]) =>
+          event.type === "turn.cancelled" &&
+          event.final === true &&
+          event.payload?.reason === "playback-overflow",
+      ),
+    ).toBe(true);
+
+    ws.emitMessage(
+      encodeJsonFrame({
+        serverContent: {
+          modelTurn: {
+            parts: [{ inlineData: { data: "AAAA", mimeType: "audio/pcm;rate=24000" } }],
+          },
+        },
+      }),
+    );
+    await flushMicrotasks();
+    expect(createdSources).toHaveLength(320);
+  });
+
+  it("rejects an oversized first frame before decoding provider audio", async () => {
+    const onStatus = vi.fn();
+    const transport = createTransport({ onStatus });
+    const ws = await startTransport(transport);
+
+    ws.emitMessage(
+      encodeJsonFrame({
+        serverContent: {
+          modelTurn: {
+            parts: [
+              {
+                inlineData: {
+                  data: "!".repeat(700_000),
+                  mimeType: "audio/pcm;rate=24000",
+                },
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    await waitForFast(() =>
+      expect(onStatus).toHaveBeenCalledWith(
+        "error",
+        "Realtime Talk playback exceeded the browser audio buffer limit",
+      ),
+    );
+    expect(createdSources).toHaveLength(0);
+    expect(ws.readyState).toBe(3);
+  });
+
   it("emits common Talk events for Google Live transcript and audio frames", async () => {
     const onTranscript = vi.fn();
     const onTalkEvent = vi.fn();
     const transport = createTransport({ onTalkEvent, onTranscript });
 
-    await transport.start();
-    latestWebSocket().emitMessage(
+    const ws = await startTransport(transport);
+    onTalkEvent.mockClear();
+    ws.emitMessage(
       encodeJsonFrame({
         serverContent: {
           inputTranscription: { text: "hello", finished: true },
@@ -426,7 +403,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       }),
     );
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(onTalkEvent.mock.calls.map(([event]) => event.type)).toEqual([
         "transcript.done",
         "output.text.delta",
@@ -450,13 +427,47 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     expect(audioEvent?.transport).toBe("provider-websocket");
   });
 
+  it("stops processing the current provider message when a transcript callback closes it", async () => {
+    const onTalkEvent = vi.fn();
+    const onTranscript = vi.fn(() => transport.stop());
+    const transport = createTransport({ onTalkEvent, onTranscript });
+
+    const ws = await startTransport(transport);
+    onTalkEvent.mockClear();
+    ws.emitMessage(
+      encodeJsonFrame({
+        serverContent: {
+          inputTranscription: { text: "overflow", finished: true },
+          outputTranscription: { text: "too late", finished: true },
+          turnComplete: true,
+        },
+      }),
+    );
+    await flushMicrotasks();
+
+    expect(onTranscript).toHaveBeenCalledOnce();
+    expect(onTalkEvent.mock.calls.map(([event]) => event.type)).toEqual(["session.closed"]);
+  });
+
+  it("silently disposes a provisional Google Live transport", async () => {
+    const onTalkEvent = vi.fn();
+    const transport = createTransport({ onTalkEvent });
+    const { start, ws } = await beginTransport(transport);
+
+    transport.stop({ emitClosed: false });
+    await expect(start).resolves.toBe("cancelled");
+
+    expect(onTalkEvent).not.toHaveBeenCalled();
+    expect(ws.readyState).toBe(3);
+  });
+
   it("ignores late WebSocket events after stop", async () => {
     const onStatus = vi.fn();
     const transport = createTransport({ onStatus });
-    await transport.start();
-    const ws = latestWebSocket();
+    const { start, ws } = await beginTransport(transport);
 
     transport.stop();
+    await expect(start).resolves.toBe("cancelled");
     ws.emitOpen();
     ws.emitMessage(new Blob([JSON.stringify({ setupComplete: {} })]));
 
@@ -486,9 +497,10 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       }),
     } as unknown as RealtimeTalkTransportContext["client"];
     const transport = createTransport({ onStatus }, client);
-    await transport.start();
+    const ws = await startTransport(transport);
+    onStatus.mockClear();
 
-    latestWebSocket().emitMessage(
+    ws.emitMessage(
       encodeJsonFrame({
         toolCall: {
           functionCalls: [
@@ -501,15 +513,15 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
         },
       }),
     );
-    await vi.waitFor(() => expect(onStatus).toHaveBeenCalledWith("thinking", undefined));
-    await vi.waitFor(() => expect(listeners.size).toBe(1));
+    await waitForFast(() => expect(onStatus).toHaveBeenCalledWith("thinking", undefined));
+    await waitForFast(() => expect(listeners.size).toBe(1));
 
     transport.stop();
     for (const listener of listeners) {
       listener({ event: "chat", payload: { runId, state: "final", message: { text: "done" } } });
     }
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(client["request"]).toHaveBeenCalledWith("chat.abort", { sessionKey: "main", runId });
     });
     expect(onStatus).not.toHaveBeenCalledWith("listening");
@@ -528,8 +540,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       }),
     } as unknown as RealtimeTalkTransportContext["client"];
     const transport = createTransport({}, client);
-    await transport.start();
-    const ws = latestWebSocket();
+    const ws = await startTransport(transport);
 
     ws.emitMessage(
       encodeJsonFrame({
@@ -544,7 +555,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
         },
       }),
     );
-    await vi.waitFor(() => expect(listeners.size).toBe(1));
+    await waitForFast(() => expect(listeners.size).toBe(1));
     for (const listener of listeners) {
       listener({
         event: "chat",
@@ -552,7 +563,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       });
     }
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(ws.sent.map((payload) => JSON.parse(payload))).toContainEqual({
         toolResponse: {
           functionResponses: [
@@ -568,29 +579,268 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     transport.stop();
   });
 
-  it("surfaces Google Live tool-result send failures without an unhandled rejection", async () => {
-    const onStatus = vi.fn();
-    const onTalkEvent = vi.fn();
+  it("does not retain browser tool arguments while a consult is pending", async () => {
     const client = createClient();
-    vi.mocked(client["request"]).mockImplementation(async (method) => {
-      if (method === "talk.client.steer") {
-        return {
-          ok: true,
-          mode: "status",
-          sessionKey: "main",
-          active: true,
-          message: "Still working.",
-        };
-      }
-      throw new Error(`unexpected request: ${method}`);
-    });
-    const transport = createTransport({ onStatus, onTalkEvent }, client);
+    vi.mocked(client["request"]).mockResolvedValue({ runId: "run-1" });
+    const transport = createTransport({}, client);
+    const ws = await startTransport(transport);
 
-    await transport.start();
-    const ws = latestWebSocket();
-    vi.spyOn(ws, "send").mockImplementation(() => {
-      throw new Error("Google Live socket rejected the tool result");
+    ws.emitMessage(
+      encodeJsonFrame({
+        toolCall: {
+          functionCalls: [
+            {
+              id: "call-1",
+              name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+              args: { prompt: "x".repeat(64 * 1024) },
+            },
+          ],
+        },
+      }),
+    );
+
+    await waitForFast(() =>
+      expect(getGoogleLiveToolOwnerState(transport).pendingCalls.get("call-1")).toStrictEqual({
+        name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+        cancelled: false,
+      }),
+    );
+    transport.stop();
+  });
+
+  it("answers unsupported browser tools once without retaining them", async () => {
+    const onTalkEvent = vi.fn();
+    const transport = createTransport({ onTalkEvent });
+    const ws = await startTransport(transport);
+
+    ws.emitMessage(
+      encodeJsonFrame({
+        toolCall: {
+          functionCalls: [{ id: "call-unknown", name: "unknown_tool", args: { value: 1 } }],
+        },
+      }),
+    );
+
+    await waitForFast(() =>
+      expect(ws.sent.map((payload) => JSON.parse(payload))).toContainEqual({
+        toolResponse: {
+          functionResponses: [
+            {
+              id: "call-unknown",
+              name: "unknown_tool",
+              response: { error: 'Tool "unknown_tool" is not available in browser Talk' },
+            },
+          ],
+        },
+      }),
+    );
+    expect(getGoogleLiveToolOwnerState(transport).pendingCalls.size).toBe(0);
+    expect(onTalkEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "tool.error",
+        callId: "call-unknown",
+        final: true,
+      }),
+    );
+    ws.emitMessage(
+      encodeJsonFrame({
+        toolCall: {
+          functionCalls: [{ id: "call-unknown", name: "unknown_tool", args: { value: 2 } }],
+        },
+      }),
+    );
+    await flushMicrotasks();
+    expect(
+      ws.sent
+        .map((payload) => JSON.parse(payload))
+        .filter((payload) => payload.toolResponse?.functionResponses?.[0]?.id === "call-unknown"),
+    ).toHaveLength(1);
+    transport.stop();
+  });
+
+  it("fails closed when an unsupported browser tool response cannot be sent", async () => {
+    const onStatus = vi.fn();
+    const transport = createTransport({ onStatus });
+    const ws = await startTransport(transport);
+    vi.spyOn(ws, "send").mockImplementationOnce(() => {
+      throw new Error("Google Live socket rejected the unsupported tool result");
     });
+
+    ws.emitMessage(
+      encodeJsonFrame({
+        toolCall: {
+          functionCalls: [{ id: "call-unknown", name: "unknown_tool", args: { value: 1 } }],
+        },
+      }),
+    );
+
+    await waitForFast(() =>
+      expect(onStatus).toHaveBeenCalledWith(
+        "error",
+        "Google Live socket rejected the unsupported tool result",
+      ),
+    );
+    expect(getGoogleLiveToolOwnerState(transport).pendingCalls.has("call-unknown")).toBe(false);
+    expect(ws.readyState).toBe(3);
+  });
+
+  it("aborts only the browser consult cancelled by Google", async () => {
+    const listeners = new Set<(event: { event: string; payload?: unknown }) => void>();
+    const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
+      if (method === "chat.abort") {
+        return { ok: true, aborted: true };
+      }
+      expect(method).toBe("talk.client.toolCall");
+      return { runId: `run-${String(params.callId)}` };
+    });
+    const client = {
+      addEventListener: vi.fn((listener: (event: { event: string; payload?: unknown }) => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      }),
+      request,
+    } as unknown as RealtimeTalkTransportContext["client"];
+    const onStatus = vi.fn();
+    const transport = createTransport({ onStatus }, client);
+    const ws = await startTransport(transport);
+
+    ws.emitMessage(
+      encodeJsonFrame({
+        toolCall: {
+          functionCalls: [
+            {
+              id: "call-1",
+              name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+              args: { question: "first" },
+            },
+            {
+              id: "call-2",
+              name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+              args: { question: "second" },
+            },
+          ],
+        },
+      }),
+    );
+    await waitForFast(() => expect(listeners.size).toBe(2));
+    onStatus.mockClear();
+
+    ws.emitMessage(
+      encodeJsonFrame({
+        toolCallCancellation: { ids: ["call-1"] },
+      }),
+    );
+
+    await waitForFast(() =>
+      expect(client["request"]).toHaveBeenCalledWith("chat.abort", {
+        sessionKey: "main",
+        runId: "run-call-1",
+      }),
+    );
+    expect(client["request"]).not.toHaveBeenCalledWith("chat.abort", {
+      sessionKey: "main",
+      runId: "run-call-2",
+    });
+    await waitForFast(() =>
+      expect(getGoogleLiveToolOwnerState(transport).pendingCalls.has("call-1")).toBe(false),
+    );
+    expect(onStatus).not.toHaveBeenCalledWith("listening");
+    expect(
+      ws.sent
+        .map((payload) => JSON.parse(payload))
+        .some((payload) => payload.toolResponse?.functionResponses?.[0]?.id === "call-1"),
+    ).toBe(false);
+    expect(onStatus).not.toHaveBeenCalledWith("error", expect.anything());
+
+    ws.emitMessage(
+      encodeJsonFrame({
+        toolCallCancellation: { ids: ["call-2"] },
+      }),
+    );
+    await waitForFast(() =>
+      expect(client["request"]).toHaveBeenCalledWith("chat.abort", {
+        sessionKey: "main",
+        runId: "run-call-2",
+      }),
+    );
+    await waitForFast(() => expect(onStatus).toHaveBeenCalledWith("listening"));
+    transport.stop();
+  });
+
+  it("aborts an initial consult request and ignores a replay of its cancelled call id", async () => {
+    let resolveToolCall: (value: { runId: string }) => void = () => undefined;
+    const pendingToolCall = new Promise<{ runId: string }>((resolve) => {
+      resolveToolCall = resolve;
+    });
+    const request = vi.fn((method: string): Promise<unknown> => {
+      if (method === "talk.client.toolCall") {
+        return pendingToolCall;
+      }
+      expect(method).toBe("chat.abort");
+      return Promise.resolve({ ok: true, aborted: true });
+    });
+    const client = {
+      addEventListener: vi.fn(() => () => undefined),
+      request,
+    } as unknown as RealtimeTalkTransportContext["client"];
+    const transport = createTransport({}, client);
+    const ws = await startTransport(transport);
+    const toolCall = {
+      id: "call-1",
+      name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+      args: { question: "check the session" },
+    };
+
+    ws.emitMessage(encodeJsonFrame({ toolCall: { functionCalls: [toolCall] } }));
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+
+    ws.emitMessage(encodeJsonFrame({ toolCallCancellation: { ids: ["call-1"] } }));
+    await waitForFast(() =>
+      expect(getGoogleLiveToolOwnerState(transport).pendingCalls.get("call-1")?.cancelled).toBe(
+        true,
+      ),
+    );
+    resolveToolCall({ runId: "run-1" });
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith("chat.abort", {
+        sessionKey: "main",
+        runId: "run-1",
+      }),
+    );
+    await waitForFast(() =>
+      expect(getGoogleLiveToolOwnerState(transport).pendingCalls.has("call-1")).toBe(false),
+    );
+
+    ws.emitMessage(encodeJsonFrame({ toolCall: { functionCalls: [toolCall] } }));
+    await flushMicrotasks();
+    expect(request.mock.calls.filter(([method]) => method === "talk.client.toolCall")).toHaveLength(
+      1,
+    );
+    expect(
+      ws.sent
+        .map((payload) => JSON.parse(payload))
+        .some((payload) => payload.toolResponse?.functionResponses?.[0]?.id === "call-1"),
+    ).toBe(false);
+    transport.stop();
+  });
+
+  it("aborts browser control requests without emitting a false terminal outcome", async () => {
+    let resolveControl: (value: { ok: boolean; mode: string }) => void = () => undefined;
+    const pendingControl = new Promise<{ ok: boolean; mode: string }>((resolve) => {
+      resolveControl = resolve;
+    });
+    const request = vi.fn((method: string): Promise<unknown> => {
+      expect(method).toBe("talk.client.steer");
+      return pendingControl;
+    });
+    const client = {
+      addEventListener: vi.fn(() => () => undefined),
+      request,
+    } as unknown as RealtimeTalkTransportContext["client"];
+    const onTalkEvent = vi.fn();
+    const transport = createTransport({ onTalkEvent }, client);
+    const ws = await startTransport(transport);
+
     ws.emitMessage(
       encodeJsonFrame({
         toolCall: {
@@ -604,244 +854,100 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
         },
       }),
     );
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
 
-    await vi.waitFor(() =>
-      expect(onStatus).toHaveBeenCalledWith("error", "Google Live socket rejected the tool result"),
+    ws.emitMessage(encodeJsonFrame({ toolCallCancellation: { ids: ["call-control"] } }));
+    await waitForFast(() =>
+      expect(
+        getGoogleLiveToolOwnerState(transport).pendingCalls.get("call-control")?.cancelled,
+      ).toBe(true),
     );
+    resolveControl({ ok: true, mode: "status" });
+    await waitForFast(() =>
+      expect(getGoogleLiveToolOwnerState(transport).pendingCalls.has("call-control")).toBe(false),
+    );
+
     expect(
       onTalkEvent.mock.calls.some(
-        ([event]) =>
-          (event.type === "tool.progress" || event.type === "tool.error") && event.final === true,
+        ([event]) => event.type === "tool.progress" || event.type === "tool.error",
       ),
     ).toBe(false);
     expect(
-      (
-        transport as unknown as {
-          pendingCalls: Map<string, unknown>;
-        }
-      ).pendingCalls.has("call-control"),
-    ).toBe(true);
-    expect(() =>
-      (
-        transport as unknown as {
-          submitToolResult: (callId: string, result: unknown) => void;
-        }
-      ).submitToolResult("missing-call", { ok: true }),
-    ).toThrow("Google Live has no pending tool call for missing-call");
+      ws.sent
+        .map((payload) => JSON.parse(payload))
+        .some((payload) => payload.toolResponse?.functionResponses?.[0]?.id === "call-control"),
+    ).toBe(false);
     transport.stop();
   });
 
-  it("sends spoken active-control acknowledgements through Google Live", async () => {
-    const client = createClient();
-    vi.mocked(client["request"]).mockImplementation(async (method) => {
-      if (method === "talk.client.toolCall") {
-        return { runId: "run-1" };
-      }
-      if (method === "talk.client.steer") {
-        return {
-          ok: true,
-          mode: "status",
-          sessionKey: "main",
-          active: true,
-          message: "OpenClaw is working in read (running).",
-          speak: true,
-          show: true,
-          suppress: false,
-        };
-      }
-      throw new Error(`unexpected request: ${method}`);
-    });
-    const transport = createTransport({}, client);
-    await transport.start();
-    const ws = latestWebSocket();
-    ws.emitOpen();
-    ws.emitMessage(
-      encodeJsonFrame({
-        serverContent: {
-          modelTurn: {
-            parts: [{ inlineData: { data: "AAAAAA==", mimeType: "audio/pcm;rate=24000" } }],
-          },
-        },
-      }),
-    );
-    await vi.waitFor(() => expect(createdSources).toHaveLength(1));
+  it("fails closed when browser Google exceeds the pending tool-call limit", async () => {
+    const onStatus = vi.fn();
+    const request = vi.fn();
+    const client = {
+      addEventListener: vi.fn(() => () => undefined),
+      request,
+    } as unknown as RealtimeTalkTransportContext["client"];
+    const transport = createTransport({ onStatus }, client);
+    const ws = await startTransport(transport);
+    const { pendingCalls } = getGoogleLiveToolOwnerState(transport);
+    for (let index = 0; index < 1_024; index += 1) {
+      pendingCalls.set(`existing-${index}`, { name: "lookup", cancelled: false });
+    }
+
     ws.emitMessage(
       encodeJsonFrame({
         toolCall: {
           functionCalls: [
             {
-              id: "call-1",
-              name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-              args: { question: "status?" },
+              id: "overflow",
+              name: REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
+              args: {},
+            },
+            {
+              id: "after-overflow",
+              name: REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
+              args: { text: "must not run", mode: "status" },
             },
           ],
         },
       }),
     );
-    await vi.waitFor(() =>
-      expect(client["request"]).toHaveBeenCalledWith("talk.client.toolCall", expect.any(Object)),
-    );
 
-    ws.emitMessage(
-      encodeJsonFrame({
-        serverContent: {
-          inputTranscription: { text: "status", finished: true },
-        },
-      }),
+    await waitForFast(() =>
+      expect(onStatus).toHaveBeenCalledWith(
+        "error",
+        "Google Live pending tool-call limit exceeded",
+      ),
     );
-
-    await vi.waitFor(() =>
-      expect(client["request"]).toHaveBeenCalledWith("talk.client.steer", expect.any(Object)),
-    );
-    expect(createdSources[0]?.stop).toHaveBeenCalledTimes(1);
-    const sent = ws.sent.map((payload) => JSON.parse(payload));
-    expect(sent).toContainEqual({
-      realtimeInput: {
-        text: expect.stringContaining('Status: "OpenClaw is working in read (running)."'),
-      },
-    });
-    transport.stop();
+    expect(ws.readyState).toBe(3);
+    expect(pendingCalls.size).toBe(0);
+    expect(request).not.toHaveBeenCalled();
   });
 
-  it("replaces queued output with a spoken active-control steering acknowledgement in Google Live", async () => {
-    const client = createClient();
-    vi.mocked(client["request"]).mockImplementation(async (method) => {
-      if (method === "talk.client.toolCall") {
-        return { runId: "run-1" };
-      }
-      if (method === "talk.client.steer") {
-        return {
-          ok: true,
-          mode: "steer",
-          sessionKey: "main",
-          active: true,
-          queued: true,
-          message: "Got it. I steered the active run.",
-          speak: true,
-          show: true,
-          suppress: false,
-        };
-      }
-      throw new Error(`unexpected request: ${method}`);
-    });
-    const transport = createTransport({}, client);
-    await transport.start();
-    const ws = latestWebSocket();
-    ws.emitOpen();
-    ws.emitMessage(
-      encodeJsonFrame({
-        serverContent: {
-          modelTurn: {
-            parts: [{ inlineData: { data: "AAAAAA==", mimeType: "audio/pcm;rate=24000" } }],
-          },
-        },
-      }),
-    );
-    await vi.waitFor(() => expect(createdSources).toHaveLength(1));
+  it("fails closed before evicting seen browser tool-call ids", async () => {
+    const onStatus = vi.fn();
+    const transport = createTransport({ onStatus });
+    const ws = await startTransport(transport);
+    const internal = getGoogleLiveToolOwnerState(transport);
+
+    for (let index = 0; index < 1_024; index += 1) {
+      internal.seenCallIds.add(`call-${index}`);
+    }
     ws.emitMessage(
       encodeJsonFrame({
         toolCall: {
-          functionCalls: [
-            {
-              id: "call-1",
-              name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-              args: { question: "status?" },
-            },
-          ],
-        },
-      }),
-    );
-    await vi.waitFor(() =>
-      expect(client["request"]).toHaveBeenCalledWith("talk.client.toolCall", expect.any(Object)),
-    );
-
-    ws.emitMessage(
-      encodeJsonFrame({
-        serverContent: {
-          inputTranscription: { text: "actually focus on WebUI", finished: true },
+          functionCalls: [{ id: "overflow", name: "unknown_tool", args: {} }],
         },
       }),
     );
 
-    await vi.waitFor(() =>
-      expect(client["request"]).toHaveBeenCalledWith("talk.client.steer", expect.any(Object)),
+    await waitForFast(() =>
+      expect(onStatus).toHaveBeenCalledWith(
+        "error",
+        "Google Live tool-call session limit exceeded",
+      ),
     );
-    expect(createdSources[0]?.stop).toHaveBeenCalledTimes(1);
-    const sent = ws.sent.map((payload) => JSON.parse(payload));
-    expect(sent).toContainEqual({
-      realtimeInput: {
-        text: expect.stringContaining('Status: "Got it. I steered the active run."'),
-      },
-    });
-    transport.stop();
-  });
-
-  it("interrupts queued output when active-control cancel is suppressed in Google Live", async () => {
-    const client = createClient();
-    vi.mocked(client["request"]).mockImplementation(async (method) => {
-      if (method === "talk.client.toolCall") {
-        return { runId: "run-1" };
-      }
-      if (method === "talk.client.steer") {
-        return {
-          ok: true,
-          mode: "cancel",
-          sessionKey: "main",
-          active: true,
-          aborted: true,
-          message: "Cancelled the active OpenClaw run.",
-          speak: true,
-          show: true,
-          suppress: false,
-        };
-      }
-      throw new Error(`unexpected request: ${method}`);
-    });
-    const transport = createTransport({}, client);
-    await transport.start();
-    const ws = latestWebSocket();
-    ws.emitOpen();
-    ws.emitMessage(
-      encodeJsonFrame({
-        serverContent: {
-          modelTurn: {
-            parts: [{ inlineData: { data: "AAAAAA==", mimeType: "audio/pcm;rate=24000" } }],
-          },
-        },
-      }),
-    );
-    await vi.waitFor(() => expect(createdSources).toHaveLength(1));
-    ws.emitMessage(
-      encodeJsonFrame({
-        toolCall: {
-          functionCalls: [
-            {
-              id: "call-1",
-              name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-              args: { question: "status?" },
-            },
-          ],
-        },
-      }),
-    );
-    await vi.waitFor(() =>
-      expect(client["request"]).toHaveBeenCalledWith("talk.client.toolCall", expect.any(Object)),
-    );
-
-    ws.emitMessage(
-      encodeJsonFrame({
-        serverContent: {
-          inputTranscription: { text: "cancel that", finished: true },
-        },
-      }),
-    );
-
-    await vi.waitFor(() =>
-      expect(client["request"]).toHaveBeenCalledWith("talk.client.steer", expect.any(Object)),
-    );
-    expect(createdSources[0]?.stop).toHaveBeenCalledTimes(1);
-    const sent = ws.sent.map((payload) => JSON.parse(payload));
-    expect(sent.some((event) => event.clientContent)).toBe(false);
-    transport.stop();
+    expect(ws.readyState).toBe(3);
+    expect(internal.seenCallIds.size).toBe(0);
   });
 });

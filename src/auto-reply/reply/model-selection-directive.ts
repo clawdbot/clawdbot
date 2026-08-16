@@ -6,8 +6,10 @@ import { modelKey } from "../../agents/model-ref-shared.js";
 import {
   isModelKeyAllowedBySet,
   type ModelAliasIndex,
+  resolveConfiguredModelPolicyAllow,
   resolveModelRefFromString,
 } from "../../agents/model-selection-shared.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 export { modelKey };
 export type { ModelAliasIndex };
 
@@ -19,12 +21,9 @@ export type ModelDirectiveSelection = {
   alias?: string;
 };
 
-function formatAddModelCommand(modelRef: string): string {
-  return `openclaw config set agents.defaults.models '${JSON.stringify({ [modelRef]: {} })}' --strict-json --merge`;
-}
-
 function formatNotAllowedError(params: {
   modelRef: string;
+  policyPath: string;
   rawRuntime?: string | undefined;
 }): string {
   const rawRuntime = params.rawRuntime?.trim();
@@ -33,7 +32,7 @@ function formatNotAllowedError(params: {
     : `/model ${params.modelRef}`;
   const lines = [
     `Model "${params.modelRef}" is not allowed. Use /models to list providers, or /models <provider> to list models.`,
-    `Add it with: ${formatAddModelCommand(params.modelRef)}`,
+    `Add "${params.modelRef}" or its provider wildcard to ${params.policyPath}.`,
     `Then retry: ${retryCommand}`,
   ];
   if (rawRuntime && normalizeProviderId(rawRuntime) === "codex") {
@@ -232,6 +231,8 @@ export function resolveModelDirectiveSelection(params: {
   defaultModel: string;
   aliasIndex: ModelAliasIndex;
   allowedModelKeys: Set<string>;
+  cfg?: OpenClawConfig;
+  agentId?: string;
   rawRuntime?: string | undefined;
 }): { selection?: ModelDirectiveSelection; error?: string } {
   const { raw, defaultProvider, defaultModel, aliasIndex, allowedModelKeys } = params;
@@ -404,6 +405,8 @@ export function resolveModelDirectiveSelection(params: {
   return {
     error: formatNotAllowedError({
       modelRef: `${resolved.ref.provider}/${resolved.ref.model}`,
+      policyPath: resolveConfiguredModelPolicyAllow({ cfg: params.cfg, agentId: params.agentId })
+        .repairConfigPath,
       rawRuntime: params.rawRuntime,
     }),
   };

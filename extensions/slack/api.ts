@@ -46,13 +46,8 @@ export {
   buildSlackPresentationBlocks,
   type SlackBlock,
 } from "./src/blocks-render.js";
+export { resolveSlackChannelType } from "./src/channel-type.js";
 export {
-  resetSlackChannelTypeCacheForTest as __resetSlackChannelTypeCacheForTest,
-  resetSlackChannelTypeCacheForTest,
-  resolveSlackChannelType,
-} from "./src/channel-type.js";
-export {
-  clearSlackWriteClientCacheForTest,
   createSlackTokenCacheKey,
   createSlackWebClient,
   createSlackWriteClient,
@@ -76,11 +71,6 @@ export type {
   SlackInteractiveHandlerContext,
   SlackInteractiveHandlerRegistration,
 } from "./src/interactive-dispatch.js";
-export {
-  compileSlackInteractiveReplies,
-  isSlackInteractiveRepliesEnabled,
-  parseSlackOptionsLine,
-} from "./src/interactive-replies.js";
 export { extractSlackToolSend, listSlackMessageActions } from "./src/message-actions.js";
 export {
   resolveSlackGroupRequireMention,

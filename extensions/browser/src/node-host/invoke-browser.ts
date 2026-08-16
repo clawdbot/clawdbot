@@ -5,6 +5,7 @@
 import fsPromises from "node:fs/promises";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { BROWSER_PROXY_COMMAND, BROWSER_PROXY_UPLOAD_COMMAND } from "../browser-node-commands.js";
 import {
   assertBrowserProxyFileCountWithinLimit,
   assertBrowserProxyFileBytesWithinLimits,
@@ -12,8 +13,14 @@ import {
   createBrowserProxyFailure,
   type BrowserProxyEnvelope,
   type BrowserProxyFile,
+  type BrowserProxyUploadV1,
   visitBrowserProxyFilePaths,
 } from "../browser-proxy-envelope.js";
+import {
+  discardStagedBrowserProxyUpload,
+  ensureBrowserProxyUploadCleanup,
+  stageBrowserProxyUploadRequest,
+} from "../browser-proxy-upload.js";
 import { redactCdpUrl } from "../browser/cdp.helpers.js";
 import { loadBrowserConfigForRuntimeRefresh } from "../browser/config-refresh-source.js";
 import { resolveBrowserConfig } from "../browser/config.js";
@@ -39,6 +46,7 @@ type BrowserProxyParams = {
   timeoutMs?: number;
   profile?: string;
   errorEnvelope?: unknown;
+  upload?: BrowserProxyUploadV1;
 };
 
 const DEFAULT_BROWSER_PROXY_TIMEOUT_MS = 20_000;
@@ -64,7 +72,7 @@ async function ensureBrowserControlService(): Promise<void> {
   if (browserControlReady) {
     return browserControlReady;
   }
-  browserControlReady = (async () => {
+  const startup = (async () => {
     const cfg = loadBrowserConfigForRuntimeRefresh();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
     if (!resolved.enabled) {
@@ -75,7 +83,15 @@ async function ensureBrowserControlService(): Promise<void> {
       throw new Error("browser control disabled");
     }
   })();
-  return browserControlReady;
+  const sharedStartup = startup.catch((error: unknown) => {
+    // A failed attempt must not poison later calls or clear a newer shared startup.
+    if (browserControlReady === sharedStartup) {
+      browserControlReady = null;
+    }
+    throw error;
+  });
+  browserControlReady = sharedStartup;
+  return sharedStartup;
 }
 
 function isProfileAllowed(params: { allowProfiles: string[]; profile?: string | null }) {
@@ -137,6 +153,16 @@ function resolveBrowserProxyTimeout(timeoutMs?: number): number {
 
 function isBrowserProxyTimeoutError(err: unknown): boolean {
   return String(err).includes("browser proxy request timed out");
+}
+
+function combineBrowserProxySignals(
+  timeoutSignal: AbortSignal | undefined,
+  invocationSignal: AbortSignal | undefined,
+): AbortSignal | undefined {
+  if (timeoutSignal && invocationSignal) {
+    return AbortSignal.any([timeoutSignal, invocationSignal]);
+  }
+  return timeoutSignal ?? invocationSignal;
 }
 
 function isWsBackedBrowserProxyPath(path: string): boolean {
@@ -217,8 +243,23 @@ function formatBrowserProxyTimeoutMessage(params: {
 }
 
 /** Executes a serialized browser.proxy command and returns a serialized result payload. */
-export async function runBrowserProxyCommand(paramsJSON?: string | null): Promise<string> {
+export async function runBrowserProxyCommand(
+  paramsJSON?: string | null,
+  command = BROWSER_PROXY_COMMAND,
+  invocationSignal?: AbortSignal,
+): Promise<string> {
+  invocationSignal?.throwIfAborted();
+  void ensureBrowserProxyUploadCleanup();
   const params = decodeParams<BrowserProxyParams>(paramsJSON);
+  if (command === BROWSER_PROXY_COMMAND && params.upload !== undefined) {
+    throw new Error("INVALID_REQUEST: browser.proxy does not accept upload envelopes");
+  }
+  if (command === BROWSER_PROXY_UPLOAD_COMMAND && !params.upload) {
+    throw new Error("INVALID_REQUEST: browser.proxy.upload.v1 requires an upload envelope");
+  }
+  if (command !== BROWSER_PROXY_COMMAND && command !== BROWSER_PROXY_UPLOAD_COMMAND) {
+    throw new Error(`INVALID_REQUEST: unsupported browser proxy command: ${command}`);
+  }
   const pathValue = typeof params.path === "string" ? params.path.trim() : "";
   if (!pathValue) {
     throw new Error("INVALID_REQUEST: path required");
@@ -229,11 +270,12 @@ export async function runBrowserProxyCommand(paramsJSON?: string | null): Promis
   }
 
   await ensureBrowserControlService();
+  invocationSignal?.throwIfAborted();
   const cfg = loadBrowserConfigForRuntimeRefresh();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   const method = typeof params.method === "string" ? params.method.toUpperCase() : "GET";
   const path = normalizeBrowserRequestPath(pathValue);
-  const body = params.body;
+  let body = params.body;
   const requestedProfile =
     resolveRequestedBrowserProfile({
       query: params.query,
@@ -264,6 +306,7 @@ export async function runBrowserProxyCommand(paramsJSON?: string | null): Promis
   }
 
   const timeoutMs = resolveBrowserProxyTimeout(params.timeoutMs);
+  const deadlineAt = Date.now() + timeoutMs;
   const query: Record<string, unknown> = {};
   const rawQuery = params.query ?? {};
   for (const [key, value] of Object.entries(rawQuery)) {
@@ -277,18 +320,63 @@ export async function runBrowserProxyCommand(paramsJSON?: string | null): Promis
   }
 
   const dispatcher = createBrowserRouteDispatcher(createBrowserControlContext());
+  let stagedUpload;
+  try {
+    stagedUpload = await withTimeout(
+      (timeoutSignal) =>
+        stageBrowserProxyUploadRequest({
+          method,
+          path,
+          body,
+          upload: params.upload,
+          signal: combineBrowserProxySignals(timeoutSignal, invocationSignal),
+        }),
+      timeoutMs,
+      "browser proxy request",
+    );
+  } catch (err) {
+    if (!isBrowserProxyTimeoutError(err)) {
+      throw err;
+    }
+    throw new Error(
+      formatBrowserProxyTimeoutMessage({
+        method,
+        path,
+        profile: requestedProfile || resolved.defaultProfile || undefined,
+        timeoutMs,
+        wsBacked: isWsBackedBrowserProxyPath(path),
+        status: null,
+      }),
+      { cause: err },
+    );
+  }
+  body = stagedUpload.body;
+  const remainingTimeoutMs = deadlineAt - Date.now();
+  if (remainingTimeoutMs <= 0) {
+    await discardStagedBrowserProxyUpload(stagedUpload);
+    throw new Error(
+      formatBrowserProxyTimeoutMessage({
+        method,
+        path,
+        profile: requestedProfile || resolved.defaultProfile || undefined,
+        timeoutMs,
+        wsBacked: isWsBackedBrowserProxyPath(path),
+        status: null,
+      }),
+    );
+  }
   let response;
   try {
     response = await withTimeout(
-      (signal) =>
+      (timeoutSignal) =>
         dispatcher.dispatch({
           method: method === "DELETE" ? "DELETE" : method === "POST" ? "POST" : "GET",
           path,
           query,
           body,
-          signal,
+          signal: combineBrowserProxySignals(timeoutSignal, invocationSignal),
         }),
-      timeoutMs,
+      remainingTimeoutMs,
       "browser proxy request",
     );
   } catch (err) {
@@ -311,6 +399,9 @@ export async function runBrowserProxyCommand(paramsJSON?: string | null): Promis
       }),
       { cause: err },
     );
+  }
+  if (response.status >= 400) {
+    await discardStagedBrowserProxyUpload(stagedUpload);
   }
   if (response.status >= 400) {
     if (params.errorEnvelope === BROWSER_PROXY_ERROR_ENVELOPE) {

@@ -26,15 +26,7 @@ export {
   resolveSignalSender,
   type SignalSender,
 } from "./src/identity.js";
-export {
-  extractSignalCliArchive,
-  installSignalCli,
-  looksLikeArchive,
-  type NamedAsset,
-  pickAsset,
-  type ReleaseAsset,
-  type SignalInstallResult,
-} from "./src/install-signal-cli.js";
+export { installSignalCli, type SignalInstallResult } from "./src/install-signal-cli.js";
 export { signalMessageActions } from "./src/message-actions.js";
 export { type MonitorSignalOpts, monitorSignalProvider } from "./src/monitor.js";
 export { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./src/normalize.js";
@@ -64,3 +56,11 @@ export {
   type SignalSendResult,
 } from "./src/send.js";
 export { normalizeSignalAccountInput } from "./src/setup-core.js";
+export {
+  detectSignalTransport,
+  prepareSignalManagedNativeTransport,
+  probeSignalTransport,
+  type SignalManagedNativeTransport,
+  type SignalTransportProbeResult,
+  writeSignalAccountTransport,
+} from "./src/setup-transport.js";

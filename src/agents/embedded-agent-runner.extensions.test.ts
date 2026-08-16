@@ -14,6 +14,10 @@ import {
   SessionManager,
 } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+  AgentToolResultMiddlewareContext,
+  AgentToolResultMiddlewareEvent,
+} from "../plugins/agent-tool-result-middleware-types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
@@ -33,6 +37,99 @@ afterEach(() => {
 });
 
 describe("buildEmbeddedExtensionFactories", () => {
+  it.each([
+    {
+      label: "normal embedded run",
+      identity: {
+        agentId: "main",
+        sessionId: "session-normal",
+        sessionKey: "agent:main:discord:channel:normal",
+        runId: "run-normal",
+      },
+    },
+    {
+      label: "embedded compaction run",
+      identity: {
+        agentId: "compactor",
+        sessionId: "session-compaction",
+        sessionKey: "agent:compactor:discord:channel:compaction",
+        runId: "run-compaction",
+      },
+    },
+  ])("passes the prepared $label identity to installed result middleware", async ({ identity }) => {
+    const middleware = vi.fn(
+      (event: AgentToolResultMiddlewareEvent, _context: AgentToolResultMiddlewareContext) => ({
+        result: {
+          content: [{ type: "text" as const, text: "middleware-observed" }],
+          details: { observedTool: event.toolName },
+        },
+      }),
+    );
+    const registry = createEmptyPluginRegistry();
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "identity-proof",
+      pluginName: "identity-proof",
+      rawHandler: middleware,
+      handler: middleware,
+      runtimes: ["openclaw"],
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+
+    const sessionManager = SessionManager.inMemory();
+    const factories = buildEmbeddedExtensionFactories({
+      cfg: undefined,
+      sessionManager,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      model: undefined,
+      ...identity,
+    });
+    const factory = factories[0];
+    expect(factory).toBeDefined();
+    if (!factory) {
+      throw new Error("Expected embedded tool-result extension factory");
+    }
+
+    const runtime = createExtensionRuntime();
+    const extension = await loadExtensionFromFactory(
+      factory,
+      "/tmp",
+      createEventBus(),
+      runtime,
+      "<middleware-identity-test>",
+    );
+    const runner = new ExtensionRunner(
+      [extension],
+      runtime,
+      "/tmp",
+      sessionManager,
+      ModelRegistry.inMemory(AuthStorage.inMemory()),
+    );
+    const result = await runner.emitToolResult({
+      type: "tool_result",
+      toolName: "read",
+      toolCallId: `${identity.runId}-read`,
+      input: { path: "README.md" },
+      content: [{ type: "text", text: "original tool output" }],
+      details: {},
+      isError: false,
+    });
+
+    expect(middleware).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        toolName: "read",
+        toolCallId: `${identity.runId}-read`,
+        args: { path: "README.md" },
+      }),
+      { runtime: "openclaw", ...identity },
+    );
+    expect(result).toMatchObject({
+      content: [{ type: "text", text: "middleware-observed" }],
+      details: { observedTool: "read" },
+    });
+  });
+
   it("bridges middleware mutations with unique fallback tool call ids", async () => {
     // Middleware invoked from app-server style tool_result events may not have a
     // call id; synthesize stable unique ids for downstream audit/mutation hooks.

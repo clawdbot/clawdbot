@@ -23,7 +23,7 @@ export type AcceptedInboundAccessControlResult = {
   admission: WhatsAppInboundAdmission;
 };
 
-export type InboundAccessControlResult =
+type InboundAccessControlResult =
   | BlockedInboundAccessControlResult
   | AcceptedInboundAccessControlResult;
 
@@ -95,14 +95,18 @@ export async function checkInboundAccessControl(params: {
   const admissionSenderId = params.group
     ? (params.senderE164 ?? params.senderJid ?? params.from)
     : params.from;
-  const access = await resolveWhatsAppIngressAccess({
-    cfg: params.cfg,
-    policy,
-    isGroup: params.group,
-    conversationId,
-    senderId: accessSenderId,
-    dmSenderId: params.from,
-  });
+  const resolveChannelIngress = async (
+    contextBinding?: import("openclaw/plugin-sdk/channel-ingress-runtime").ChannelIngressContextBinding,
+  ) =>
+    await resolveWhatsAppIngressAccess({
+      cfg: params.cfg,
+      policy,
+      isGroup: params.group,
+      conversationId,
+      senderId: accessSenderId,
+      contextBinding,
+    });
+  const access = await resolveChannelIngress();
   const { senderAccess } = access;
   if (params.group && senderAccess.decision !== "allow") {
     if (senderAccess.reasonCode === "group_policy_disabled") {
@@ -123,7 +127,10 @@ export async function checkInboundAccessControl(params: {
 
   // DM access control (secure defaults): "pairing" (default) / "allowlist" / "open" / "disabled".
   if (!params.group) {
-    if (params.isFromMe && !policy.isSamePhone(params.from)) {
+    if (
+      params.isFromMe &&
+      (policy.account.selfChatMode === false || !policy.isSamePhone(params.from))
+    ) {
       logWhatsAppVerbose(params.verbose, "Skipping outbound DM (fromMe); no pairing reply needed.");
       return blockedInboundAccess(policy);
     }
@@ -189,14 +196,11 @@ export async function checkInboundAccessControl(params: {
     admission: buildWhatsAppInboundAdmission({
       policy,
       access,
+      channelIngress: access,
+      resolveChannelIngress,
       isGroup: params.group,
       conversationId,
       senderId: admissionSenderId,
     }),
   };
 }
-
-export const testing = {
-  resolveWhatsAppInboundPolicy,
-};
-export { testing as __testing };

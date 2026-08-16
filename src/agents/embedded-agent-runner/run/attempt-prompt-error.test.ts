@@ -6,15 +6,13 @@ const hoisted = vi.hoisted(() => ({
   isSessionsYieldAbortError: vi.fn(() => false),
   markYieldAborted: vi.fn(),
   persistSessionsYieldContextMessage: vi.fn(async () => undefined),
-  releaseHeldLockForAbort: vi.fn(async () => undefined),
   releaseLeasedSteering: vi.fn(),
   stripSessionsYieldArtifacts: vi.fn(),
-  waitForSessionEvents: vi.fn(async () => undefined),
   waitForSessionsYieldAbortSettle: vi.fn(async () => undefined),
-  withOwnedSessionWriteLock: vi.fn(async (operation: () => unknown) => await operation()),
+  withOwnedTranscriptWrite: vi.fn(async (operation: () => unknown) => await operation()),
 }));
 
-vi.mock("./attempt.sessions-yield.js", () => ({
+vi.mock("./attempt-sessions-yield.js", () => ({
   isSessionsYieldAbortError: hoisted.isSessionsYieldAbortError,
   persistSessionsYieldContextMessage: hoisted.persistSessionsYieldContextMessage,
   stripSessionsYieldArtifacts: hoisted.stripSessionsYieldArtifacts,
@@ -24,7 +22,7 @@ vi.mock("./midturn-precheck.js", () => ({
   isMidTurnPrecheckSignal: hoisted.isMidTurnPrecheckSignal,
 }));
 
-import { handleEmbeddedAttemptPromptError } from "./attempt-prompt-error.js";
+import { handleEmbeddedAttemptPromptError } from "./attempt-prompt-submit.js";
 
 type PromptErrorInput = Parameters<typeof handleEmbeddedAttemptPromptError>[0];
 
@@ -36,11 +34,7 @@ function createInput(overrides: Partial<PromptErrorInput> = {}): PromptErrorInpu
     handleMidTurnPrecheckRequest: hoisted.handleMidTurnPrecheckRequest,
     markYieldAborted: hoisted.markYieldAborted,
     releaseLeasedSteering: hoisted.releaseLeasedSteering,
-    sessionLockController: {
-      releaseHeldLockForAbort: hoisted.releaseHeldLockForAbort,
-      waitForSessionEvents: hoisted.waitForSessionEvents,
-    },
-    withOwnedSessionWriteLock: hoisted.withOwnedSessionWriteLock,
+    withOwnedTranscriptWrite: hoisted.withOwnedTranscriptWrite,
     yieldAbortSettled: null,
     yieldDetected: false,
     yieldMessage: null,
@@ -63,10 +57,9 @@ describe("handleEmbeddedAttemptPromptError", () => {
     });
 
     expect(hoisted.releaseLeasedSteering).toHaveBeenCalledWith(error);
-    expect(hoisted.waitForSessionEvents).not.toHaveBeenCalled();
   });
 
-  it("routes mid-turn prechecks under the owned session lock", async () => {
+  it("routes mid-turn prechecks under the owned transcript context", async () => {
     const request = {
       route: "compact_only",
       estimatedPromptTokens: 12,
@@ -80,8 +73,7 @@ describe("handleEmbeddedAttemptPromptError", () => {
 
     await expect(handleEmbeddedAttemptPromptError(createInput({ error }))).resolves.toEqual({});
 
-    expect(hoisted.waitForSessionEvents).toHaveBeenCalledOnce();
-    expect(hoisted.withOwnedSessionWriteLock).toHaveBeenCalledOnce();
+    expect(hoisted.withOwnedTranscriptWrite).toHaveBeenCalledOnce();
     expect(hoisted.handleMidTurnPrecheckRequest).toHaveBeenCalledWith(request);
   });
 
@@ -104,8 +96,6 @@ describe("handleEmbeddedAttemptPromptError", () => {
       runId: "run-1",
       sessionId: "session-1",
     });
-    expect(hoisted.releaseHeldLockForAbort).toHaveBeenCalledOnce();
-    expect(hoisted.waitForSessionEvents).toHaveBeenCalledWith(input.activeSession);
     expect(hoisted.stripSessionsYieldArtifacts).toHaveBeenCalledWith(input.activeSession);
     expect(hoisted.persistSessionsYieldContextMessage).toHaveBeenCalledWith(
       input.activeSession,

@@ -1,33 +1,8 @@
-/**
- * Convert markdown bold/italic/underline/strikethrough markers in agent text
- * into typed-run formatting ranges that the imsg bridge's `sendMessage`
- * action understands. Returns the marker-stripped text plus an array of
- * ranges keyed by their start in the OUTPUT string.
- *
- * macOS 15+ recipients render typed runs natively; macOS 14 falls back to
- * client-side markdown rendering, so passing both raw markdown and ranges
- * would double up — callers should send the stripped `text` only.
- *
- * Supported markers:
- *  - `**bold**`
- *  - `*italic*` / `_italic_` (single-underscore enforces word boundaries)
- *  - `__underline__` (double-underscore also enforces word boundaries so
- *    Python identifiers like `__init__` are not mangled)
- *  - `~~strikethrough~~`
- *
- * Nesting:
- *  - `***bold-italic***` is parsed as `**` containing `*italic*`, yielding
- *    two ranges over the same span (one bold, one italic).
- *  - Other nested combinations (`**bold _underline_**`, etc.) are
- *    similarly parsed by recursing into the inner text of every marker
- *    pair we consume.
- *
- * Out of scope: escaped markers (`\*literal\*`), code spans (` `code` `),
- * and combining-character edge cases. The receiver's iMessage style
- * vocabulary covers only bold/italic/underline/strikethrough — there is
- * nowhere to render anything fancier, and over-eager parsing would mangle
- * plain-text emoji/punctuation that happens to look like markdown.
- */
+import {
+  FormatCapabilityProfile,
+  markdownToIR,
+  renderMarkdownWithAttributedRanges,
+} from "openclaw/plugin-sdk/text-chunking";
 
 type IMessageFormatStyle = "bold" | "italic" | "underline" | "strikethrough";
 
@@ -37,118 +12,178 @@ type IMessageFormatRange = {
   styles: IMessageFormatStyle[];
 };
 
-type Marker = {
-  marker: string;
-  styles: IMessageFormatStyle[];
-  /**
-   * When true, the marker only counts when both ends sit on a word
-   * boundary. Single-underscore italics need this so `snake_case_var` is
-   * left literal, and double-underscore underline needs it so Python
-   * dunder names like `__init__` are not turned into underline.
-   */
-  requireWordBoundary: boolean;
-};
+const IMESSAGE_FORMAT_PROFILE = FormatCapabilityProfile.define({
+  mechanism: "ranges",
+  constructs: {
+    spoiler: "strip",
+    codeInline: "fallback",
+    codeBlock: "fallback",
+    codeLanguage: "strip",
+    linkLabel: "fallback",
+    heading: "fallback",
+    bulletList: "fallback",
+    orderedList: "fallback",
+    taskList: "fallback",
+    table: "fallback",
+    blockquote: "fallback",
+    image: "fallback",
+    mention: "strip",
+  },
+  chunk: { limit: 4_000, unit: "utf16" },
+});
 
-// Order matters: longer/compound markers are tried first.
-//  - `***...***` is bold+italic over the inner span.
-//  - `___...___` is underline+italic.
-//  - `~~`, `**`, `__` cover their own styles.
-//  - `*` / `_` italic match last (with `_` enforcing word boundaries).
-const MARKERS: readonly Marker[] = [
-  { marker: "***", styles: ["bold", "italic"], requireWordBoundary: false },
-  { marker: "___", styles: ["underline", "italic"], requireWordBoundary: true },
-  { marker: "~~", styles: ["strikethrough"], requireWordBoundary: false },
-  { marker: "**", styles: ["bold"], requireWordBoundary: false },
-  { marker: "__", styles: ["underline"], requireWordBoundary: true },
-  { marker: "*", styles: ["italic"], requireWordBoundary: false },
-  { marker: "_", styles: ["italic"], requireWordBoundary: true },
-];
+const IMESSAGE_CODE_PROFILE = FormatCapabilityProfile.define({
+  ...IMESSAGE_FORMAT_PROFILE,
+  constructs: { ...IMESSAGE_FORMAT_PROFILE.constructs, codeInline: "native" },
+});
 
-function tryConsumeMarker(
-  input: string,
-  i: number,
-  m: Marker,
-): { close: number; inner: string } | null {
-  if (!input.startsWith(m.marker, i)) {
-    return null;
-  }
-  // For single-char markers, reject when the next char is the same so we
-  // don't consume the leading half of a longer marker (e.g. `*` matching
-  // the first asterisk of `**bold**`).
-  if (m.marker.length === 1 && input[i + 1] === m.marker) {
-    return null;
-  }
-  // For 2-char markers, reject when there's a third repeat — that's the
-  // longer compound marker (`***`, `___`) which should match first.
-  if (m.marker.length === 2 && input[i + 2] === m.marker[0]) {
-    return null;
-  }
-  // For underscore markers we use a stricter rule than CommonMark: the
-  // OUTSIDE of each marker must be whitespace, start-of-string, or
-  // end-of-string. That keeps `def __init__(self)` literal (`(` after the
-  // close is neither whitespace nor end-of-string) while `__under__ and`
-  // still parses cleanly. Asterisk markers don't need this because they
-  // don't appear inside identifiers.
-  const isAtBoundary = (ch: string | undefined): boolean => ch === undefined || /\s/.test(ch);
-  if (m.requireWordBoundary && i > 0 && !isAtBoundary(input[i - 1])) {
-    return null;
-  }
-  const startInner = i + m.marker.length;
-  const close = input.indexOf(m.marker, startInner);
-  if (close === -1 || close === startInner) {
-    return null;
-  }
-  if (m.requireWordBoundary && !isAtBoundary(input[close + m.marker.length])) {
-    return null;
-  }
-  const inner = input.slice(startInner, close);
-  if (!inner.trim()) {
-    return null;
-  }
-  return { close, inner };
+const IMESSAGE_STYLE_MAP = {
+  bold: "bold",
+  italic: "italic",
+  underline: "underline",
+  strikethrough: "strikethrough",
+} as const;
+
+function codeDelimiter(content: string): string {
+  const longestRun = Math.max(0, ...[...content.matchAll(/`+/gu)].map((match) => match[0].length));
+  return "`".repeat(longestRun + 1);
 }
 
-function parseInternal(input: string, baseOffset: number, sink: IMessageFormatRange[]): string {
-  let out = "";
-  let i = 0;
-  while (i < input.length) {
-    let consumed = false;
-    for (const m of MARKERS) {
-      const hit = tryConsumeMarker(input, i, m);
-      if (!hit) {
-        continue;
-      }
-      // Recurse on the inner span so nested markers compose. The inner
-      // ranges are emitted with offsets relative to the new base.
-      const innerOffset = baseOffset + out.length;
-      const innerStripped = parseInternal(hit.inner, innerOffset, sink);
-      // Compound markers (`***`, `___`) emit multiple styles over the same
-      // span — push them in order so callers see e.g. italic before bold.
-      for (const style of m.styles) {
-        sink.push({
-          start: innerOffset,
-          length: innerStripped.length,
-          styles: [style],
-        });
-      }
-      out += innerStripped;
-      i = hit.close + m.marker.length;
-      consumed = true;
-      break;
+type TextEdit = { start: number; end: number; text: string };
+type DunderProtection = { token: string; identifier: string };
+
+function protectDunderIdentifiers(input: string): {
+  markdown: string;
+  protections: DunderProtection[];
+} {
+  const protections: DunderProtection[] = [];
+  let markdown = "";
+  let cursor = 0;
+  for (const match of input.matchAll(/__[\p{L}_][\p{L}\p{N}_]*__/gu)) {
+    const identifier = match[0];
+    const start = match.index ?? 0;
+    const end = start + identifier.length;
+    const before = input[start - 1];
+    const beforeBefore = input[start - 2];
+    const after = input[end];
+    const member = before === ".";
+    const call = after === "(";
+    const functionArgument = before === "(" && /[\p{L}\p{N}_]/u.test(beforeBefore ?? "");
+    const index = after === "[";
+    if (!member && !call && !functionArgument && !index) {
+      continue;
     }
-    if (!consumed) {
-      out += input[i];
-      i += 1;
+    let token = `OCdunder${protections.length}token`;
+    while (input.includes(token)) {
+      token += "x";
     }
+    markdown += input.slice(cursor, start) + token;
+    protections.push({ token, identifier });
+    cursor = end;
   }
-  return out;
+  return { markdown: markdown + input.slice(cursor), protections };
+}
+
+function applyTextEdits(text: string, edits: TextEdit[]) {
+  const ordered = edits.toSorted((left, right) => left.start - right.start);
+  let rendered = "";
+  let cursor = 0;
+  for (const edit of ordered) {
+    rendered += text.slice(cursor, edit.start) + edit.text;
+    cursor = edit.end;
+  }
+  rendered += text.slice(cursor);
+  return {
+    text: rendered,
+    mapOffset: (offset: number) =>
+      offset +
+      ordered.reduce(
+        (delta, edit) =>
+          delta + (edit.end <= offset ? edit.text.length - edit.end + edit.start : 0),
+        0,
+      ),
+  };
+}
+
+function restoreDunderIdentifiers(
+  text: string,
+  ranges: IMessageFormatRange[],
+  codeRanges: Array<{ start: number; length: number }>,
+  protections: DunderProtection[],
+) {
+  const edits = protections.flatMap((protection) => {
+    const start = text.indexOf(protection.token);
+    return start === -1
+      ? []
+      : [{ start, end: start + protection.token.length, text: protection.identifier }];
+  });
+  const edited = applyTextEdits(text, edits);
+  const mapRange = <T extends { start: number; length: number }>(range: T): T => ({
+    ...range,
+    start: edited.mapOffset(range.start),
+    length: edited.mapOffset(range.start + range.length) - edited.mapOffset(range.start),
+  });
+  return {
+    text: edited.text,
+    ranges: ranges.map(mapRange),
+    codeRanges: codeRanges.map(mapRange),
+  };
+}
+
+function restoreCodeMarkers(
+  text: string,
+  ranges: Array<{ start: number; length: number; styles: IMessageFormatStyle[] }>,
+  codeRanges: Array<{ start: number; length: number }>,
+): { text: string; ranges: IMessageFormatRange[] } {
+  const edits = codeRanges.map((range) => {
+    const end = range.start + range.length;
+    const content = text.slice(range.start, end);
+    const marker = codeDelimiter(content);
+    const padding = content.startsWith("`") || content.endsWith("`") ? " " : "";
+    return { start: range.start, end, text: `${marker}${padding}${content}${padding}${marker}` };
+  });
+  const edited = applyTextEdits(text, edits);
+  return {
+    text: edited.text,
+    ranges: ranges.map((range) => ({
+      ...range,
+      start: edited.mapOffset(range.start),
+      length: edited.mapOffset(range.start + range.length) - edited.mapOffset(range.start),
+    })),
+  };
 }
 
 export function extractMarkdownFormatRuns(input: string): {
   text: string;
   ranges: IMessageFormatRange[];
 } {
-  const ranges: IMessageFormatRange[] = [];
-  const text = parseInternal(input, 0, ranges);
-  return { text, ranges };
+  const protectedDunders = protectDunderIdentifiers(input);
+  const ir = markdownToIR(protectedDunders.markdown, {
+    autolink: false,
+    enableHtmlUnderline: true,
+    headingStyle: "rich",
+    linkify: false,
+    preserveSourceBlockSpacing: true,
+  });
+  const rendered = renderMarkdownWithAttributedRanges(
+    ir,
+    { styleMap: IMESSAGE_STYLE_MAP },
+    IMESSAGE_FORMAT_PROFILE,
+  );
+  const code = renderMarkdownWithAttributedRanges(
+    ir,
+    { styleMap: { code: "code" } },
+    IMESSAGE_CODE_PROFILE,
+  );
+  const dunders = restoreDunderIdentifiers(
+    rendered.text,
+    rendered.ranges.map(({ start, length, style }) => ({
+      start,
+      length,
+      styles: [style],
+    })),
+    code.ranges,
+    protectedDunders.protections,
+  );
+  return restoreCodeMarkers(dunders.text, dunders.ranges, dunders.codeRanges);
 }

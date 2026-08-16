@@ -5,6 +5,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { stripAnsiSequences } from "../../../../packages/terminal-core/src/ansi.js";
+import { coerceErrorMessage as formatErrorMessage } from "../../../../scripts/lib/error-format.mts";
 import { createQaScriptEvidenceWriter } from "../runtime/script-evidence.js";
 
 const SCENARIO_ID = "cli-channel-picker";
@@ -17,10 +18,6 @@ type ProducerOptions = {
   repoRoot: string;
   timeoutMs: number;
 };
-
-function formatErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function sanitizePickerTranscript(transcript: string) {
   return stripAnsiSequences(transcript).replaceAll(
@@ -60,11 +57,15 @@ function parseOptions(args: string[]): ProducerOptions {
 }
 
 function buildCliStartup(repoRoot: string) {
-  const result = spawnSync(process.execPath, ["scripts/build-all.mjs", "cliStartup"], {
-    cwd: repoRoot,
-    env: process.env,
-    stdio: "inherit",
-  });
+  const result = spawnSync(
+    process.execPath,
+    ["--import", "tsx", "scripts/build-all.mts", "cliStartup"],
+    {
+      cwd: repoRoot,
+      env: process.env,
+      stdio: "inherit",
+    },
+  );
   if (result.error) {
     throw result.error;
   }
@@ -166,7 +167,10 @@ async function runRealPicker(options: ProducerOptions, openclawHome: string) {
     await sendAndWait("\r", /Configure DM access policies now\?/u);
     await sendAndWait("\r", /Configuration updated\./u);
 
-    while (!exit) {
+    for (;;) {
+      if (exit) {
+        break;
+      }
       if (remainingMs() === 0) {
         throw new Error(`picker timed out after ${options.timeoutMs}ms`);
       }
@@ -182,7 +186,10 @@ async function runRealPicker(options: ProducerOptions, openclawHome: string) {
     if (!exit) {
       child.kill("SIGTERM");
       const cleanupDeadline = Date.now() + 5_000;
-      while (!exit && Date.now() < cleanupDeadline) {
+      while (Date.now() < cleanupDeadline) {
+        if (exit) {
+          break;
+        }
         await delay(25);
       }
     }
@@ -237,7 +244,6 @@ function createEvidenceWriter(options: ProducerOptions) {
       id: SCENARIO_ID,
       title: "CLI channel picker",
       sourcePath: SOURCE_PATH,
-      primaryCoverageIds: ["cli.channel-picker"],
       docsRefs: ["docs/channels/telegram.md", "docs/help/testing.md"],
       codeRefs: [SOURCE_PATH, "scripts/e2e/lib/run-with-pty.mjs", "src/flows/channel-setup.ts"],
     },

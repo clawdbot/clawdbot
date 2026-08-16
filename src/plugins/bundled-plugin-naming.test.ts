@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { describe, expect, it } from "vitest";
 import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../test-utils/repo-files.js";
@@ -36,7 +37,7 @@ const DIR_ID_EXCEPTIONS = new Map<string, string>([
   // Historical directory name kept until a wider repo cleanup is worth the churn.
   ["kimi-coding", "kimi"],
 ]);
-const NON_PACKAGED_BUNDLED_PLUGIN_DIRS = new Set(["qa-channel", "qa-lab", "qa-matrix"]);
+const NON_PACKAGED_BUNDLED_PLUGIN_DIRS = new Set(["qa-channel", "qa-lab"]);
 const ALLOWED_PACKAGE_SUFFIXES = [
   "",
   "-provider",
@@ -48,14 +49,6 @@ const ALLOWED_PACKAGE_SUFFIXES = [
 
 function readJsonFile(filePath: string): unknown {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
-}
-
-function normalizeText(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
 }
 
 function listBundledPluginDirs(): string[] {
@@ -146,8 +139,8 @@ function readBundledPluginRecords(): BundledPluginRecord[] {
 
     const manifest = readJsonFile(manifestPath) as PluginManifestShape;
     const pkg = readJsonFile(packagePath) as OpenClawPackageShape;
-    const manifestId = normalizeText(manifest.id);
-    const packageName = normalizeText(pkg.name);
+    const manifestId = normalizeOptionalString(manifest.id);
+    const packageName = normalizeOptionalString(pkg.name);
     if (!manifestId || !packageName) {
       return [];
     }
@@ -157,8 +150,8 @@ function readBundledPluginRecords(): BundledPluginRecord[] {
         dirName,
         packageName,
         manifestId,
-        installNpmSpec: normalizeText(pkg.openclaw?.install?.npmSpec),
-        channelId: normalizeText(pkg.openclaw?.channel?.id),
+        installNpmSpec: normalizeOptionalString(pkg.openclaw?.install?.npmSpec),
+        channelId: normalizeOptionalString(pkg.openclaw?.channel?.id),
       },
     ];
   });

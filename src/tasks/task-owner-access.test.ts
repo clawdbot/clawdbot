@@ -8,11 +8,9 @@ import {
   getTaskByIdForOwner,
   resolveTaskForLookupTokenForOwner,
 } from "./task-owner-access.js";
-import {
-  createTaskRecord as createTaskRecordOrNull,
-  resetTaskRegistryForTests,
-} from "./task-registry.js";
+import { createTaskRecord as createTaskRecordOrNull } from "./task-registry.js";
 import type { TaskRecord } from "./task-registry.types.js";
+import { resetTaskRegistryForTests } from "./task-runtime.test-helpers.js";
 
 const ORIGINAL_ENV = captureEnv(["OPENCLAW_STATE_DIR"]);
 
@@ -124,6 +122,34 @@ describe("task owner access", () => {
           callerOwnerKey: "agent:main:mixedcase",
         }),
       ).toBeUndefined();
+    });
+  });
+
+  it("rejects an agentless caller for a bare owner key", async () => {
+    await withTaskRegistryTempDir(() => {
+      const task = createTaskRecord({
+        runtime: "acp",
+        ownerKey: "global",
+        scopeKind: "session",
+        requesterAgentId: "ops",
+        runId: "bare-owner-run",
+        task: "Agent-owned global task",
+        status: "queued",
+      });
+
+      expect(
+        getTaskByIdForOwner({
+          taskId: task.taskId,
+          callerOwnerKey: "global",
+        }),
+      ).toBeUndefined();
+      expect(
+        getTaskByIdForOwner({
+          taskId: task.taskId,
+          callerOwnerKey: "global",
+          callerAgentId: "ops",
+        })?.taskId,
+      ).toBe(task.taskId);
     });
   });
 

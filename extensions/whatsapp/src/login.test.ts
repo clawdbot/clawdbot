@@ -2,7 +2,6 @@
 import { EventEmitter } from "node:events";
 import { resetLogger, setLoggerOverride, success } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderQrPngBase64 } from "./qr-image.js";
 
 vi.mock("./session.js", async () => {
   const actual = await vi.importActual<typeof import("./session.js")>("./session.js");
@@ -140,13 +139,5 @@ describe("web login", () => {
 
     releaseKeyWrite();
     await expect(pendingLogin).resolves.toBeUndefined();
-  });
-});
-
-describe("renderQrPngBase64", () => {
-  it("renders a PNG data payload", async () => {
-    const b64 = await renderQrPngBase64("openclaw");
-    const buf = Buffer.from(b64, "base64");
-    expect(buf.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
   });
 });

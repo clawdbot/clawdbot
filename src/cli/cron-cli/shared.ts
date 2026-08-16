@@ -3,6 +3,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
   timestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateToVisibleWidth, visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
@@ -12,6 +13,7 @@ import { parseAbsoluteTimeMs } from "../../cron/parse.js";
 import { resolveCronStaggerMs } from "../../cron/stagger.js";
 import type { CronDeliveryPreview, CronJob, CronSchedule } from "../../cron/types.js";
 import { danger } from "../../globals.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { formatDurationHuman } from "../../infra/format-time/format-duration.ts";
 import {
   isOffsetlessIsoDateTime,
@@ -23,7 +25,7 @@ import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
 import { parseDurationMs as parseSharedDurationMs } from "../parse-duration.js";
 
-export function parseCronCommandArgv(value: unknown): string[] | undefined {
+function parseCronArgv(value: unknown, flag: string): string[] | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
@@ -31,16 +33,24 @@ export function parseCronCommandArgv(value: unknown): string[] | undefined {
   try {
     parsed = JSON.parse(value);
   } catch {
-    throw new Error("--command-argv must be a JSON array of strings");
+    throw new Error(`${flag} must be a JSON array of strings`);
   }
   if (
     !Array.isArray(parsed) ||
     parsed.length === 0 ||
     parsed.some((entry) => typeof entry !== "string" || entry.length === 0)
   ) {
-    throw new Error("--command-argv must be a non-empty JSON array of non-empty strings");
+    throw new Error(`${flag} must be a non-empty JSON array of non-empty strings`);
   }
   return parsed;
+}
+
+export function parseCronCommandArgv(value: unknown): string[] | undefined {
+  return parseCronArgv(value, "--command-argv");
+}
+
+export function parseCronStreamCommandArgv(value: unknown): string[] | undefined {
+  return parseCronArgv(value, "--stream-command");
 }
 
 export function parseCronCommandEnv(values: unknown): Record<string, string> | undefined {
@@ -139,7 +149,7 @@ export function enrichCronJsonWithStatus(value: unknown): unknown {
 
   // Single job object (has 'state' and 'enabled')
   if ("state" in obj && "enabled" in obj) {
-    return { ...obj, status: computeStatus(obj as unknown as CronJob) };
+    return { ...obj, status: computeStatus(obj) };
   }
 
   // List response (has 'jobs' array)
@@ -154,20 +164,23 @@ export function enrichCronJsonWithStatus(value: unknown): unknown {
   return value;
 }
 
-function computeStatus(job: CronJob): string {
+function computeStatus(job: { enabled?: unknown; state?: unknown }): string {
   if (!job.enabled) {
     return "disabled";
   }
-  const state = job.state ?? {};
+  const state = asOptionalRecord(job.state) ?? {};
   if (state.runningAtMs) {
     return "running";
   }
-  return state.lastRunStatus ?? state.lastStatus ?? "idle";
+  return typeof state.lastRunStatus === "string"
+    ? state.lastRunStatus
+    : typeof state.lastStatus === "string"
+      ? state.lastStatus
+      : "idle";
 }
 
 // Human-facing decoration only: enrichCronJsonWithStatus() emits computeStatus()
-// verbatim as the --json `status` field, so the failure count must stay out of it.
-// consecutiveErrors resets to 0 on the next successful run, so the count is live.
+// verbatim as the --json `status` field, so failure and disable detail stays out of it.
 function decorateStatusWithFailures(status: string, consecutiveErrors: number | undefined): string {
   const failures = consecutiveErrors ?? 0;
   if (status !== "error" || failures <= 1) {
@@ -180,11 +193,16 @@ function decorateStatusWithFailures(status: string, consecutiveErrors: number | 
 
 function formatCronStatusForDisplay(job: CronJob): string {
   const state = job.state ?? {};
+  if (computeStatus(job) === "disabled" && state.autoDisabled) {
+    return state.autoDisabled.reason === "schedule-errors"
+      ? "disabled (schedule)"
+      : `disabled (${state.autoDisabled.consecutiveErrors}x)`;
+  }
   return decorateStatusWithFailures(computeStatus(job), state.consecutiveErrors);
 }
 
 export function handleCronCliError(err: unknown) {
-  defaultRuntime.error(danger(String(err)));
+  defaultRuntime.error(danger(formatErrorMessage(err)));
   defaultRuntime.exit(1);
 }
 
@@ -197,7 +215,7 @@ export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
       storage?: string;
       sqlitePath?: string;
     };
-    if (res?.enabled === true) {
+    if (res?.enabled !== false) {
       return;
     }
     const store =
@@ -208,7 +226,7 @@ export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
           : "";
     defaultRuntime.error(
       [
-        "warning: cron scheduler is disabled in the Gateway; jobs are saved but will not run automatically.",
+        "warning: the automations scheduler is disabled in the Gateway; jobs are saved but will not run automatically.",
         "Re-enable with `cron.enabled: true` (or remove `cron.enabled: false`) and restart the Gateway.",
         store ? `store: ${store}` : "",
       ]
@@ -315,7 +333,7 @@ const CRON_NAME_PAD = 24;
 const CRON_SCHEDULE_PAD = 32;
 const CRON_NEXT_PAD = 10;
 const CRON_LAST_PAD = 10;
-const CRON_STATUS_PAD = 12;
+const CRON_STATUS_PAD = 19;
 const CRON_TARGET_PAD = 9;
 const CRON_DELIVERY_PAD = 64;
 const CRON_AGENT_PAD = 10;
@@ -355,18 +373,7 @@ const formatIsoMinute = (iso: string) => {
   return `${isoStr.slice(0, 10)} ${isoStr.slice(11, 16)}Z`;
 };
 
-const formatSpan = (ms: number) => {
-  if (ms < 60_000) {
-    return "<1m";
-  }
-  if (ms < 3_600_000) {
-    return `${Math.round(ms / 60_000)}m`;
-  }
-  if (ms < 86_400_000) {
-    return `${Math.round(ms / 3_600_000)}h`;
-  }
-  return `${Math.round(ms / 86_400_000)}d`;
-};
+const formatSpan = (ms: number) => (ms < 60_000 ? "<1m" : formatDurationHuman(ms));
 
 const formatRelative = (ms: number | null | undefined, nowMs: number) => {
   if (!ms) {
@@ -388,6 +395,10 @@ const formatSchedule = (schedule: CronSchedule | undefined, hasTrigger = false) 
   if (schedule?.kind === "on-exit") {
     const cwd = schedule.cwd ? ` @ ${schedule.cwd}` : "";
     return `on-exit ${schedule.command}${cwd}`;
+  }
+  if (schedule?.kind === "stream") {
+    const cwd = schedule.cwd ? ` @ ${schedule.cwd}` : "";
+    return `stream ${schedule.command.join(" ")}${cwd}`;
   }
   if (schedule?.kind !== "cron") {
     return "-";
@@ -430,7 +441,7 @@ export function printCronList(
   opts?: { deliveryPreviews?: Map<string, CronDeliveryPreview> },
 ) {
   if (jobs.length === 0) {
-    runtime.log("No cron jobs.");
+    runtime.log("No automations.");
     return;
   }
 
@@ -535,28 +546,31 @@ export function printCronShow(
   opts?: { deliveryPreview?: CronDeliveryPreview },
 ) {
   const preview = opts?.deliveryPreview ?? { label: "-", detail: "unavailable" };
-  runtime.log(`id: ${job.id}`);
-  runtime.log(`declaration: ${job.declarationKey ?? "-"}`);
-  runtime.log(`name: ${job.name}`);
-  runtime.log(`display name: ${job.displayName ?? "-"}`);
-  runtime.log(`owner agent: ${job.owner?.agentId ?? "-"}`);
-  runtime.log(`owner session: ${job.owner?.sessionKey ?? "-"}`);
+  const showValue = (value: unknown) => sanitizeTerminalText(stringifyCell(value));
+  runtime.log(`id: ${showValue(job.id)}`);
+  runtime.log(`declaration: ${showValue(job.declarationKey)}`);
+  runtime.log(`name: ${showValue(job.name)}`);
+  runtime.log(`display name: ${showValue(job.displayName)}`);
+  runtime.log(`owner agent: ${showValue(job.owner?.agentId)}`);
+  runtime.log(`owner session: ${showValue(job.owner?.sessionKey)}`);
   runtime.log(`enabled: ${job.enabled ? "yes" : "no"}`);
-  runtime.log(`schedule: ${formatSchedule(job.schedule, job.trigger !== undefined)}`);
+  runtime.log(`schedule: ${showValue(formatSchedule(job.schedule, job.trigger !== undefined))}`);
   runtime.log(
     `trigger: ${job.trigger ? `once=${job.trigger.once === true ? "yes" : "no"}; evals=${job.state.triggerEvalCount ?? 0}; last eval=${formatRelative(job.state.lastTriggerEvalAtMs, Date.now())}; last fire=${formatRelative(job.state.lastTriggerFireAtMs, Date.now())}` : "-"}`,
   );
-  runtime.log(`session: ${job.sessionTarget ?? "-"}`);
-  runtime.log(`agent: ${job.agentId ?? "-"}`);
-  runtime.log(`model: ${job.payload.kind === "agentTurn" ? (job.payload.model ?? "-") : "-"}`);
-  runtime.log(`delivery: ${preview.label} (${preview.detail})`);
+  runtime.log(`session: ${showValue(job.sessionTarget)}`);
+  runtime.log(`agent: ${showValue(job.agentId)}`);
+  runtime.log(
+    `model: ${showValue(job.payload.kind === "agentTurn" ? job.payload.model : undefined)}`,
+  );
+  runtime.log(`delivery: ${showValue(preview.label)} (${showValue(preview.detail)})`);
   runtime.log(`next: ${formatRelative(job.state.nextRunAtMs, Date.now())}`);
   runtime.log(`last: ${formatRelative(job.state.lastRunAtMs, Date.now())}`);
-  runtime.log(`status: ${formatCronStatusForDisplay(job)}`);
+  runtime.log(`status: ${showValue(formatCronStatusForDisplay(job))}`);
   // lastError is the run/schedule failure message; the diagnostic line below is
   // the run-diagnostics summary and can be empty when only lastError is set.
-  runtime.log(`last error: ${job.state.lastError ?? "-"}`);
-  runtime.log(`last delivery: ${job.state.lastDeliveryStatus ?? "-"}`);
-  runtime.log(`last delivery error: ${job.state.lastDeliveryError ?? "-"}`);
-  runtime.log(`diagnostic: ${job.state.lastDiagnosticSummary ?? "-"}`);
+  runtime.log(`last error: ${showValue(job.state.lastError)}`);
+  runtime.log(`last delivery: ${showValue(job.state.lastDeliveryStatus)}`);
+  runtime.log(`last delivery error: ${showValue(job.state.lastDeliveryError)}`);
+  runtime.log(`diagnostic: ${showValue(job.state.lastDiagnosticSummary)}`);
 }

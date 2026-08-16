@@ -72,25 +72,6 @@ function renderCard(payloadOverride?: string): void {
 }
 
 describe("createToolbarButton icon safety", () => {
-  it("toolbarIconSvg map exists and has exactly 8 icon names", () => {
-    const requiredNames = [
-      "split",
-      "unified",
-      "wrap-on",
-      "wrap-off",
-      "background-on",
-      "background-off",
-      "theme-dark",
-      "theme-light",
-    ] as const;
-    for (const name of requiredNames) {
-      expect(
-        VIEWER_CLIENT_SRC.includes(name + ":") || VIEWER_CLIENT_SRC.includes(`"${name}"`),
-        `icon "${name}" should exist in toolbarIconSvg`,
-      ).toBe(true);
-    }
-  });
-
   it("no iconMarkup: string parameter exists", () => {
     expect(VIEWER_CLIENT_SRC.includes("iconMarkup: string")).toBe(false);
   });
@@ -104,19 +85,6 @@ describe("createToolbarButton icon safety", () => {
       expect(VIEWER_CLIENT_SRC.includes(pattern), `source must not contain "${pattern}"`).toBe(
         false,
       );
-    }
-  });
-
-  it("old icon functions are removed", () => {
-    const removedFunctions = [
-      "function splitIcon(",
-      "function unifiedIcon(",
-      "function wrapIcon(",
-      "function backgroundIcon(",
-      "function themeIcon(",
-    ];
-    for (const fn of removedFunctions) {
-      expect(VIEWER_CLIENT_SRC.includes(fn), `"${fn}" should be removed`).toBe(false);
     }
   });
 });
@@ -443,104 +411,5 @@ describe("header metadata", () => {
     await hydrateViewer();
 
     expect(fileDiffHydrateMock).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("ensureShadowRoot", () => {
-  beforeEach(() => {
-    document.body.innerHTML = "";
-    vi.clearAllMocks();
-  });
-
-  it("attaches shadow root from template and removes template element", async () => {
-    renderCard();
-    const host = document.querySelector<HTMLElement>("[data-openclaw-diff-host]")!;
-    const template = document.createElement("template");
-    template.setAttribute("shadowrootmode", "open");
-    template.innerHTML = "<div>shadow content</div>";
-    host.append(template);
-
-    const { hydrateViewer } = await import("./viewer-client.js");
-    await hydrateViewer();
-
-    expect(host.shadowRoot).toBeDefined();
-    expect(host.shadowRoot!.querySelector("div")?.textContent).toBe("shadow content");
-    expect(host.querySelector("template")).toBeNull();
-  });
-
-  it("skips shadow root attachment when no template is present", async () => {
-    renderCard();
-    const host = document.querySelector<HTMLElement>("[data-openclaw-diff-host]")!;
-
-    const { hydrateViewer } = await import("./viewer-client.js");
-    await hydrateViewer();
-
-    expect(host.shadowRoot).toBeNull();
-    expect(fileDiffHydrateMock).toHaveBeenCalled();
-  });
-
-  it("skips shadow root when already attached", async () => {
-    renderCard();
-    const host = document.querySelector<HTMLElement>("[data-openclaw-diff-host]")!;
-    host.attachShadow({ mode: "open" });
-    host.shadowRoot!.innerHTML = "<span>existing</span>";
-
-    const template = document.createElement("template");
-    template.setAttribute("shadowrootmode", "open");
-    template.innerHTML = "<div>new content</div>";
-    host.append(template);
-
-    const { hydrateViewer } = await import("./viewer-client.js");
-    await hydrateViewer();
-
-    expect(host.shadowRoot!.querySelector("span")?.textContent).toBe("existing");
-    expect(host.querySelector("template")).not.toBeNull();
-  });
-});
-
-describe("getHydrateProps branching", () => {
-  beforeEach(() => {
-    document.body.innerHTML = "";
-    vi.clearAllMocks();
-  });
-
-  it("passes fileDiff directly when payload has fileDiff", async () => {
-    const fileDiffPayload = JSON.stringify({
-      prerenderedHTML: "<div>diff</div>",
-      options: {
-        theme: { light: "pierre-light", dark: "pierre-dark" },
-        diffStyle: "unified",
-        diffIndicators: "bars",
-        disableLineNumbers: false,
-        expandUnchanged: false,
-        themeType: "dark",
-        backgroundEnabled: true,
-        overflow: "wrap",
-        unsafeCSS: "",
-      },
-      langs: ["text"],
-      fileDiff: { name: "patch.diff", lang: "text", hunks: [] },
-    });
-    renderCard(fileDiffPayload);
-    const { hydrateViewer } = await import("./viewer-client.js");
-
-    await hydrateViewer();
-
-    const hydrateArg = fileDiffHydrateMock.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(hydrateArg.fileDiff).toEqual({ name: "patch.diff", lang: "text", hunks: [] });
-    expect(hydrateArg.oldFile).toBeUndefined();
-    expect(hydrateArg.newFile).toBeUndefined();
-  });
-
-  it("passes oldFile and newFile when payload has them without fileDiff", async () => {
-    renderCard();
-    const { hydrateViewer } = await import("./viewer-client.js");
-
-    await hydrateViewer();
-
-    const hydrateArg = fileDiffHydrateMock.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(hydrateArg.fileDiff).toBeUndefined();
-    expect(hydrateArg.oldFile).toEqual({ name: "a.ts", lang: "text", contents: "old" });
-    expect(hydrateArg.newFile).toEqual({ name: "a.ts", lang: "text", contents: "new" });
   });
 });

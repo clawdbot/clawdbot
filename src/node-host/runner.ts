@@ -1,4 +1,5 @@
 /** CLI runner for node-host stdin/stdout command dispatch. */
+import { isDeepStrictEqual } from "node:util";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -6,38 +7,43 @@ import {
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
-import {
-  GatewayClient,
-  GatewayClientRequestError,
-  type GatewayReconnectPausedInfo,
-} from "../gateway/client.js";
-import { resolveGatewayConnectionAuth } from "../gateway/connection-auth.js";
+import { GatewayClientRequestError, type GatewayReconnectPausedInfo } from "../gateway/client.js";
+import { resolveGatewayCredentialsWithSecretInputs } from "../gateway/credentials-secret-inputs.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
+import {
+  NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+  NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+} from "../infra/node-runner-inventory.js";
 import { VERSION } from "../version.js";
-import { ensureNodeHostConfig, saveNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
+import { configureNodeHost, type NodeHostGatewayConfig } from "./config.js";
+import { createNodeHostGatewayCandidateConnection } from "./gateway-candidate-connection.js";
 import {
   coerceNodeInvokeCancelPayload,
   coerceNodeInvokeInputPayload,
   coerceNodeInvokePayload,
 } from "./invoke-payload.js";
-import { buildNodeInvokeResultParams } from "./invoke.js";
 import { prepareNodeHostRuntime, type NodeHostInventory } from "./runtime.js";
-
-export { buildNodeInvokeResultParams };
+import { runStartupMigrations } from "./startup-state-migrations.js";
 
 type NodeHostRunOptions = {
   gatewayHost: string;
   gatewayPort: number;
   gatewayTls?: boolean;
   gatewayTlsFingerprint?: string;
+  gatewayCandidates?: NodeHostGatewayConfig[];
+  gatewayBootstrapToken?: string;
+  preferGatewayBootstrapToken?: boolean;
+  /** Stop cleanly after the first authenticated hello (used before service install). */
+  stopAfterFirstConnect?: boolean;
   /** Optional WebSocket context path (e.g. "/openclaw-gw"). */
   gatewayContextPath?: string;
   nodeId?: string;
   displayName?: string;
+  installedAppsSharing?: boolean;
 };
 
-export function resolveNodeHostGatewayPlatform(platform: NodeJS.Platform): string {
+function resolveNodeHostGatewayPlatform(platform: NodeJS.Platform): string {
   switch (platform) {
     case "darwin":
       return "macos";
@@ -50,7 +56,7 @@ export function resolveNodeHostGatewayPlatform(platform: NodeJS.Platform): strin
   }
 }
 
-export function resolveNodeHostGatewayDeviceFamily(platform: NodeJS.Platform): string | undefined {
+function resolveNodeHostGatewayDeviceFamily(platform: NodeJS.Platform): string | undefined {
   switch (platform) {
     case "darwin":
       return "Mac";
@@ -81,7 +87,7 @@ type NodeHostReconnectPausedDeps = {
   exit?: (code: number) => void;
 };
 
-export function shouldExitNodeHostOnReconnectPaused(detailCode: string | null): boolean {
+function shouldExitNodeHostOnReconnectPaused(detailCode: string | null): boolean {
   return detailCode !== null && NODE_HOST_EXIT_ON_RECONNECT_PAUSE_CODES.has(detailCode);
 }
 
@@ -95,7 +101,7 @@ function formatNodeHostReconnectPausedMessage(
   return `node host gateway reconnect paused after close (${info.code}): ${reason}${detail}; ${action}`;
 }
 
-export function handleNodeHostReconnectPaused(
+function handleNodeHostReconnectPaused(
   info: GatewayReconnectPausedInfo,
   deps: NodeHostReconnectPausedDeps = {},
 ): void {
@@ -109,59 +115,84 @@ export function handleNodeHostReconnectPaused(
   exit(1);
 }
 
-function isUnsupportedNodePluginToolsUpdateError(error: unknown): boolean {
+const NODE_PLUGIN_TOOLS_UPDATE_METHOD = "node.pluginTools.update";
+const NODE_SKILLS_UPDATE_METHOD = "node.skills.update";
+const NODE_OPTIONAL_PUBLICATION_RETRY_INITIAL_MS = 250;
+const NODE_OPTIONAL_PUBLICATION_RETRY_MAX_MS = 5_000;
+
+function isExactUnknownMethodError(error: unknown, method: string): boolean {
   return (
     error instanceof GatewayClientRequestError &&
     error.gatewayCode === "INVALID_REQUEST" &&
-    error.message.includes("unknown method: node.pluginTools.update")
+    error.message === `unknown method: ${method}`
   );
 }
 
-function isUnsupportedNodeSkillsUpdateError(error: unknown): boolean {
+function isExactLegacyNodeAuthorizationError(
+  error: unknown,
+  method: string,
+  gatewayProtocol: number,
+): boolean {
+  const legacyUnknownMethodShape =
+    gatewayProtocol === 3 ||
+    (gatewayProtocol === 4 && method === NODE_RUNNER_INVENTORY_UPDATE_METHOD);
   return (
+    legacyUnknownMethodShape &&
     error instanceof GatewayClientRequestError &&
     error.gatewayCode === "INVALID_REQUEST" &&
-    error.message.includes("unknown method: node.skills.update")
+    error.message === "unauthorized role: node"
   );
 }
 
-async function publishNodePluginTools(client: GatewayClient, tools: unknown[]): Promise<void> {
-  if (tools.length === 0) {
-    return;
+function classifyNodeMethodFailure(
+  error: unknown,
+  method: string,
+  gatewayProtocol: number,
+): "legacy-unsupported" | "rejected" | "transient" {
+  if (
+    isExactUnknownMethodError(error, method) ||
+    isExactLegacyNodeAuthorizationError(error, method, gatewayProtocol)
+  ) {
+    return "legacy-unsupported";
   }
-  try {
-    await client.request("node.pluginTools.update", { tools });
-  } catch (error) {
-    if (isUnsupportedNodePluginToolsUpdateError(error)) {
-      return;
-    }
-    writeStderrLine(`node host plugin tool publish failed: ${String(error)}`);
+  if (error instanceof GatewayClientRequestError && error.gatewayCode === "INVALID_REQUEST") {
+    return "rejected";
   }
+  return "transient";
 }
 
-async function publishNodeSkills(client: GatewayClient, skills: unknown[]): Promise<void> {
-  try {
-    await client.request("node.skills.update", { skills });
-  } catch (error) {
-    if (isUnsupportedNodeSkillsUpdateError(error)) {
-      return;
-    }
-    writeStderrLine(`node host skill publish failed: ${String(error)}`);
-  }
-}
+type NodeOptionalPublicationMethod =
+  | typeof NODE_RUNNER_INVENTORY_UPDATE_METHOD
+  | typeof NODE_PLUGIN_TOOLS_UPDATE_METHOD
+  | typeof NODE_SKILLS_UPDATE_METHOD;
 
-export async function resolveNodeHostGatewayCredentials(params: {
+type NodeOptionalPublicationState = {
+  status: "unknown" | "supported" | "unsupported";
+  hasPending: boolean;
+  pendingParams?: unknown;
+  hasPublishedParams: boolean;
+  publishedParams?: unknown;
+  hasRejectedParams: boolean;
+  rejectedParams?: unknown;
+  retryDelayMs: number;
+  retryPending: boolean;
+  retryTimer?: NodeJS.Timeout;
+  hasInFlightParams: boolean;
+  inFlightParams?: unknown;
+  inFlight?: Promise<void>;
+};
+
+async function resolveNodeHostGatewayCredentials(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ token?: string; password?: string }> {
   const mode = params.config.gateway?.mode === "remote" ? "remote" : "local";
   const configForResolution =
     mode === "local" ? buildNodeHostLocalAuthConfig(params.config) : params.config;
-  return await resolveGatewayConnectionAuth({
+  return await resolveGatewayCredentialsWithSecretInputs({
     config: configForResolution,
     env: params.env,
-    localTokenPrecedence: "env-first",
-    localPasswordPrecedence: "env-first", // pragma: allowlist secret
+    localPrecedence: "env-first",
     remoteTokenPrecedence: "env-first",
     remotePasswordPrecedence: "env-first", // pragma: allowlist secret
   });
@@ -182,80 +213,305 @@ function buildNodeHostLocalAuthConfig(config: OpenClawConfig): OpenClawConfig {
 }
 
 export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
-  const config = await ensureNodeHostConfig();
-  const nodeId = opts.nodeId?.trim() || config.nodeId;
-  if (nodeId !== config.nodeId) {
-    config.nodeId = nodeId;
-  }
-  const displayName =
-    opts.displayName?.trim() || config.displayName || (await getMachineDisplayName());
-  config.displayName = displayName;
-
-  const gateway: NodeHostGatewayConfig = {
+  // Operator-approved startup is a second authorized entry point for Doctor-owned
+  // state migrators. Runtime invokes those owners here and never migrates inline.
+  await runStartupMigrations({ log: { info: writeStderrLine, warn: writeStderrLine } });
+  const plannedGateway: NodeHostGatewayConfig = {
     host: opts.gatewayHost,
     port: opts.gatewayPort,
     tls: opts.gatewayTls ?? getRuntimeConfig().gateway?.tls?.enabled ?? false,
     tlsFingerprint: opts.gatewayTlsFingerprint,
     contextPath: opts.gatewayContextPath,
   };
-  config.gateway = gateway;
-  await saveNodeHostConfig(config);
+  const fallbackDisplayName = await getMachineDisplayName();
+  const config = await configureNodeHost({
+    nodeId: opts.nodeId,
+    displayName: opts.displayName,
+    fallbackDisplayName,
+    gateway: plannedGateway,
+    installedAppsSharing: opts.installedAppsSharing,
+  });
+  const nodeId = config.nodeId;
+  const displayName = config.displayName ?? fallbackDisplayName;
+  const gateway = config.gateway ?? plannedGateway;
+  const gatewayCandidates = opts.gatewayCandidates?.length ? opts.gatewayCandidates : [gateway];
 
   const cfg = getRuntimeConfig();
   const preparedRuntime = await prepareNodeHostRuntime({
     config: cfg,
     env: process.env,
     enableAgentRuns: true,
+    enableWorkerRuns: true,
+    installedAppsSharingEnabled: config.installedAppsSharing,
   });
-  const { token, password } = await resolveNodeHostGatewayCredentials({
-    config: cfg,
-    env: process.env,
-  });
+  const { token, password } = opts.preferGatewayBootstrapToken
+    ? {}
+    : await resolveNodeHostGatewayCredentials({
+        config: cfg,
+        env: process.env,
+      });
 
-  const host = gateway.host ?? "127.0.0.1";
-  const port = gateway.port ?? 18789;
-  const scheme = gateway.tls ? "wss" : "ws";
-  const contextPath = gateway.contextPath
-    ? gateway.contextPath.startsWith("/")
-      ? gateway.contextPath
-      : `/${gateway.contextPath}`
-    : "";
-  const url = `${scheme}://${host}:${port}${contextPath}`;
   let inventory: NodeHostInventory = preparedRuntime.initialInventory;
+  let workerRunsAvailable = false;
   let gatewayHelloReceived = false;
+  let gatewayConnectionGeneration = 0;
+  let connectedGatewayProtocol = 0;
+  let optionalPublicationStates = new Map<
+    NodeOptionalPublicationMethod,
+    NodeOptionalPublicationState
+  >();
+  const retireOptionalPublications = () => {
+    for (const state of optionalPublicationStates.values()) {
+      if (state.retryTimer) {
+        clearTimeout(state.retryTimer);
+      }
+    }
+    optionalPublicationStates.clear();
+  };
+  const retireGatewayConnection = () => {
+    gatewayConnectionGeneration += 1;
+    gatewayHelloReceived = false;
+    connectedGatewayProtocol = 0;
+    retireOptionalPublications();
+  };
+
+  const queueOptionalPublication = (
+    method: NodeOptionalPublicationMethod,
+    params: unknown,
+    label: string,
+    isRetry = false,
+  ): void => {
+    if (!gatewayHelloReceived) {
+      return;
+    }
+    const connectionGeneration = gatewayConnectionGeneration;
+    const gatewayProtocol = connectedGatewayProtocol;
+    const connectionIsCurrent = () => connectionGeneration === gatewayConnectionGeneration;
+    let state = optionalPublicationStates.get(method);
+    if (!state) {
+      state = {
+        status: "unknown",
+        hasPending: false,
+        hasPublishedParams: false,
+        hasRejectedParams: false,
+        retryDelayMs: NODE_OPTIONAL_PUBLICATION_RETRY_INITIAL_MS,
+        retryPending: false,
+        hasInFlightParams: false,
+      };
+      optionalPublicationStates.set(method, state);
+    }
+    if (state.hasInFlightParams && isDeepStrictEqual(state.inFlightParams, params)) {
+      // The latest desired value remains authoritative even when it matches the
+      // active request. Replace a newer pending value so A -> B -> A cannot publish B.
+      if (state.hasPending) {
+        state.pendingParams = params;
+      }
+      return;
+    }
+    if (
+      state.status === "unsupported" ||
+      (state.hasRejectedParams && isDeepStrictEqual(state.rejectedParams, params)) ||
+      (state.hasPending && isDeepStrictEqual(state.pendingParams, params)) ||
+      (!state.inFlight &&
+        state.hasPublishedParams &&
+        isDeepStrictEqual(state.publishedParams, params))
+    ) {
+      return;
+    }
+    if (state.retryTimer) {
+      clearTimeout(state.retryTimer);
+      state.retryTimer = undefined;
+    }
+    if (!isRetry) {
+      state.retryDelayMs = NODE_OPTIONAL_PUBLICATION_RETRY_INITIAL_MS;
+    }
+    state.hasRejectedParams = false;
+    state.rejectedParams = undefined;
+    state.pendingParams = params;
+    state.hasPending = true;
+    if (state.inFlight) {
+      return;
+    }
+    const publish = async () => {
+      while (state.hasPending && state.status !== "unsupported") {
+        if (!connectionIsCurrent()) {
+          return;
+        }
+        const nextParams = state.pendingParams;
+        state.pendingParams = undefined;
+        state.hasPending = false;
+        if (state.hasPublishedParams && isDeepStrictEqual(state.publishedParams, nextParams)) {
+          continue;
+        }
+        if (state.hasRejectedParams && !isDeepStrictEqual(state.rejectedParams, nextParams)) {
+          // A different value reopens publication. Keeping the old rejection
+          // would drop a later return to that value while this request is in flight.
+          state.hasRejectedParams = false;
+          state.rejectedParams = undefined;
+        }
+        state.inFlightParams = nextParams;
+        state.hasInFlightParams = true;
+        try {
+          await client.request(method, nextParams);
+          // Request settlement races reconnect teardown. Stale completions must
+          // not mutate or report against the retired connection.
+          if (!connectionIsCurrent()) {
+            return;
+          }
+          state.status = "supported";
+          state.publishedParams = nextParams;
+          state.hasPublishedParams = true;
+          state.hasRejectedParams = false;
+          state.rejectedParams = undefined;
+          state.retryDelayMs = NODE_OPTIONAL_PUBLICATION_RETRY_INITIAL_MS;
+          state.retryPending = false;
+        } catch (error) {
+          if (!connectionIsCurrent()) {
+            return;
+          }
+          const failure = classifyNodeMethodFailure(error, method, gatewayProtocol);
+          if (failure === "legacy-unsupported") {
+            state.status = "unsupported";
+            state.pendingParams = undefined;
+            state.hasPending = false;
+            state.retryPending = false;
+          } else {
+            writeStderrLine(`node host ${label} publish failed: ${String(error)}`);
+            if (failure === "rejected") {
+              state.hasRejectedParams = true;
+              state.rejectedParams = nextParams;
+              state.retryPending = false;
+              if (state.hasPending && isDeepStrictEqual(state.pendingParams, nextParams)) {
+                state.pendingParams = undefined;
+                state.hasPending = false;
+              }
+            } else {
+              // A timeout or transport failure can occur after the Gateway applied
+              // the update. Forget the acknowledged baseline so the next desired
+              // value is never skipped against an uncertain remote state.
+              state.hasPublishedParams = false;
+              state.publishedParams = undefined;
+              if (!state.hasPending || isDeepStrictEqual(state.pendingParams, nextParams)) {
+                state.pendingParams = nextParams;
+                state.hasPending = true;
+                state.retryPending = true;
+                break;
+              }
+            }
+          }
+        } finally {
+          state.inFlightParams = undefined;
+          state.hasInFlightParams = false;
+        }
+      }
+    };
+    const inFlight = publish().finally(() => {
+      if (state.inFlight === inFlight) {
+        state.inFlight = undefined;
+        if (
+          state.hasPending &&
+          state.status !== "unsupported" &&
+          gatewayHelloReceived &&
+          connectionIsCurrent()
+        ) {
+          const pendingParams = state.pendingParams;
+          const retryPending = state.retryPending;
+          state.retryPending = false;
+          if (retryPending) {
+            const retryDelayMs = state.retryDelayMs;
+            state.retryDelayMs = Math.min(retryDelayMs * 2, NODE_OPTIONAL_PUBLICATION_RETRY_MAX_MS);
+            state.retryTimer = setTimeout(() => {
+              state.retryTimer = undefined;
+              if (
+                state.hasPending &&
+                isDeepStrictEqual(state.pendingParams, pendingParams) &&
+                gatewayHelloReceived &&
+                connectionIsCurrent()
+              ) {
+                state.pendingParams = undefined;
+                state.hasPending = false;
+                queueOptionalPublication(method, pendingParams, label, true);
+              }
+            }, retryDelayMs);
+            state.retryTimer.unref?.();
+          } else {
+            state.pendingParams = undefined;
+            state.hasPending = false;
+            queueOptionalPublication(method, pendingParams, label);
+          }
+        }
+      }
+    });
+    state.inFlight = inFlight;
+  };
 
   const publishInventory = () => {
     if (!gatewayHelloReceived) {
       return;
     }
     if (inventory.skills) {
-      void publishNodeSkills(client, inventory.skills);
+      queueOptionalPublication(NODE_SKILLS_UPDATE_METHOD, { skills: inventory.skills }, "skill");
     }
-    void publishNodePluginTools(client, inventory.pluginTools);
+    queueOptionalPublication(
+      NODE_PLUGIN_TOOLS_UPDATE_METHOD,
+      { tools: inventory.pluginTools },
+      "plugin tool",
+    );
   };
 
-  const client = new GatewayClient({
-    url,
-    token: token || undefined,
-    password: password || undefined,
-    preauthHandshakeTimeoutMs: cfg.gateway?.handshakeTimeoutMs,
-    instanceId: nodeId,
-    clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
-    clientDisplayName: displayName,
-    clientVersion: VERSION,
-    platform: resolveNodeHostGatewayPlatform(process.platform),
-    deviceFamily: resolveNodeHostGatewayDeviceFamily(process.platform),
-    mode: GATEWAY_CLIENT_MODES.NODE,
-    role: "node",
-    scopes: [],
-    // Pair the built-in MCP command family up front. Server inventory is
-    // restart-scoped availability, not a capability upgrade requiring re-pairing.
-    caps: preparedRuntime.manifest.caps,
-    commands: preparedRuntime.manifest.commands,
-    pathEnv: preparedRuntime.manifest.pathEnv,
-    permissions: undefined,
-    deviceIdentity: loadOrCreateDeviceIdentity(),
-    tlsFingerprint: gateway.tlsFingerprint,
+  const publishRunnerInventory = () => {
+    // The handshake keeps the immutable build ceiling. Live inventory withdraws
+    // only new-launch eligibility while full, leaving status/cancel negotiated.
+    queueOptionalPublication(
+      NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+      {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        ...(workerRunsAvailable && preparedRuntime.manifest.workerRuns
+          ? { workerRuns: preparedRuntime.manifest.workerRuns }
+          : {}),
+      },
+      "runner inventory",
+    );
+  };
+
+  const persistWinningGateway = (winningGateway: NodeHostGatewayConfig) => {
+    void configureNodeHost({
+      nodeId,
+      displayName,
+      fallbackDisplayName,
+      gateway: winningGateway,
+      installedAppsSharing: config.installedAppsSharing,
+    }).catch((error: unknown) => {
+      writeStderrLine(`node host gateway endpoint persistence failed: ${String(error)}`);
+    });
+  };
+
+  const client = createNodeHostGatewayCandidateConnection({
+    candidates: gatewayCandidates,
+    clientOptions: {
+      token: token || undefined,
+      bootstrapToken: opts.gatewayBootstrapToken,
+      preferBootstrapToken: opts.preferGatewayBootstrapToken,
+      password: password || undefined,
+      instanceId: nodeId,
+      clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+      clientDisplayName: displayName,
+      clientVersion: VERSION,
+      platform: resolveNodeHostGatewayPlatform(process.platform),
+      deviceFamily: resolveNodeHostGatewayDeviceFamily(process.platform),
+      mode: GATEWAY_CLIENT_MODES.NODE,
+      role: "node",
+      scopes: [],
+      // Pair the built-in MCP command family up front. Server inventory is
+      // restart-scoped availability, not a capability upgrade requiring re-pairing.
+      caps: preparedRuntime.manifest.caps,
+      commands: preparedRuntime.manifest.commands,
+      computerUse: preparedRuntime.manifest.computerUse,
+      workerRuns: preparedRuntime.manifest.workerRuns,
+      pathEnv: preparedRuntime.manifest.pathEnv,
+      permissions: undefined,
+      deviceIdentity: loadOrCreateDeviceIdentity(),
+    },
     onEvent: (evt) => {
       if (evt.event === "node.invoke.cancel") {
         const payload = coerceNodeInvokeCancelPayload(evt.payload);
@@ -275,19 +531,28 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
         return;
       }
       const payload = coerceNodeInvokePayload(evt.payload);
-      if (!payload) {
+      if (payload) {
+        void activeRuntime.invoke(payload);
+      }
+    },
+    onHelloOk: (hello, url, tlsFingerprint) => {
+      writeStderrLine(`node host gateway connected: ${url}`);
+      activeRuntime.updateGatewayConnection({ url, ...(tlsFingerprint ? { tlsFingerprint } : {}) });
+      gatewayConnectionGeneration += 1;
+      gatewayHelloReceived = true;
+      connectedGatewayProtocol = hello.protocol;
+      retireOptionalPublications();
+      optionalPublicationStates = new Map();
+      if (opts.stopAfterFirstConnect) {
+        void finish(0);
         return;
       }
-      void activeRuntime.invoke(payload);
-    },
-    onHelloOk: () => {
-      writeStderrLine(`node host gateway connected: ${url}`);
-      gatewayHelloReceived = true;
+      publishRunnerInventory();
       publishInventory();
     },
-    onConnectError: (err) => {
+    onConnectError: (error) => {
       // keep retrying (handled by GatewayClient)
-      writeStderrLine(`node host gateway connect failed: ${err.message}`);
+      writeStderrLine(`node host gateway connect failed: ${error.message}`);
     },
     onReconnectPaused: (info) => {
       handleNodeHostReconnectPaused(info, {
@@ -300,15 +565,28 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       });
     },
     onClose: (code, reason) => {
+      retireGatewayConnection();
+      activeRuntime.updateGatewayConnection();
       activeRuntime.cancelAll();
       writeStderrLine(`node host gateway closed (${code}): ${reason}`);
     },
+    onWinningCandidate: persistWinningGateway,
   });
   const activeRuntime = preparedRuntime.start({
     client,
     onInventoryChanged: (nextInventory) => {
       inventory = nextInventory;
       publishInventory();
+    },
+    onRunnerAvailabilityChanged: (available) => {
+      workerRunsAvailable = available;
+      publishRunnerInventory();
+    },
+    onManifestChanged: (manifest) => {
+      // Manifest changes force a reconnect. Retire the current publication queue
+      // now so it cannot drain against the closing connection.
+      retireGatewayConnection();
+      client.updateNodeManifest(manifest);
     },
   });
 
@@ -325,6 +603,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     process.off("SIGTERM", onSigterm);
   };
   const stopClientAndMcp = async () => {
+    retireGatewayConnection();
     client.stop();
     try {
       await activeRuntime.close();
@@ -350,9 +629,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   process.once("SIGINT", onSigint);
   process.once("SIGTERM", onSigterm);
 
-  const readinessPromise = startGatewayClientWhenEventLoopReady(client, {
-    clientOptions: { preauthHandshakeTimeoutMs: cfg.gateway?.handshakeTimeoutMs },
-  });
+  const readinessPromise = startGatewayClientWhenEventLoopReady(client);
   let readiness;
   try {
     readiness = await readinessPromise;

@@ -205,13 +205,6 @@ function resolveManifestProviderAuthEnvVarCandidatesFromSnapshot(
     if (!shouldUsePluginProviderEnvVars(plugin, params)) {
       continue;
     }
-    if (plugin.providerAuthEnvVars) {
-      for (const [providerId, keys] of Object.entries(plugin.providerAuthEnvVars).toSorted(
-        ([left], [right]) => left.localeCompare(right),
-      )) {
-        appendUniqueEnvVarCandidates(candidates, providerId, keys);
-      }
-    }
     for (const provider of plugin.setup?.providers ?? []) {
       appendUniqueEnvVarCandidates(candidates, provider.id, provider.envVars ?? []);
     }
@@ -225,17 +218,6 @@ function resolveManifestProviderAuthEnvVarCandidatesFromSnapshot(
     }
   }
   return candidates;
-}
-
-function resolveManifestProviderAuthEvidence(
-  params?: ProviderEnvVarLookupParams,
-): Record<string, ProviderAuthEvidence[]> {
-  const snapshot = resolveProviderMetadataSnapshot(params);
-  const aliases = resolveProviderAuthAliasMap({
-    ...params,
-    metadataSnapshot: snapshot,
-  });
-  return resolveManifestProviderAuthEvidenceFromSnapshot(params, snapshot, aliases);
 }
 
 function resolveManifestProviderAuthEvidenceFromSnapshot(
@@ -312,13 +294,6 @@ export function resolveProviderAuthEnvVarCandidates(
   };
 }
 
-/** Resolves non-env evidence that provider auth may already be configured. */
-export function resolveProviderAuthEvidence(
-  params?: ProviderEnvVarLookupParams,
-): Record<string, readonly ProviderAuthEvidence[]> {
-  return resolveManifestProviderAuthEvidence(params);
-}
-
 /** Resolves all provider auth lookup maps from a single metadata snapshot. */
 export function resolveProviderAuthLookupMaps(
   params?: ProviderEnvVarLookupParams,
@@ -354,15 +329,10 @@ function resolveProviderEnvVars(
   };
 }
 
-const lazyRecordCacheResetters = new Set<() => void>();
-
 function createLazyReadonlyRecord(
   resolve: () => Record<string, readonly string[]>,
 ): Record<string, readonly string[]> {
   let cached: Record<string, readonly string[]> | undefined;
-  lazyRecordCacheResetters.add(() => {
-    cached = undefined;
-  });
   const getResolved = (): Record<string, readonly string[]> => {
     cached ??= resolve();
     return cached;
@@ -400,17 +370,6 @@ function createLazyReadonlyRecord(
 }
 
 /**
- * Provider auth env candidates used by generic auth resolution.
- *
- * Order matters: the first non-empty value wins for helpers such as
- * `resolveEnvApiKey()`. Bundled providers source this from plugin manifest
- * metadata so auth probes do not need to load plugin runtime.
- */
-export const PROVIDER_AUTH_ENV_VAR_CANDIDATES = createLazyReadonlyRecord(() =>
-  resolveProviderAuthEnvVarCandidates(),
-);
-
-/**
  * Provider env vars used for setup/default secret refs and broad secret
  * scrubbing. This can include non-model providers and may intentionally choose
  * a different preferred first env var than auth resolution.
@@ -419,15 +378,7 @@ export const PROVIDER_AUTH_ENV_VAR_CANDIDATES = createLazyReadonlyRecord(() =>
  * is only for true core/non-plugin providers and a few setup-specific ordering
  * overrides where generic onboarding wants a different preferred env var.
  */
-export const PROVIDER_ENV_VARS = createLazyReadonlyRecord(() => resolveProviderEnvVars());
-
-export const testing = {
-  resetProviderEnvVarCachesForTests(): void {
-    for (const reset of lazyRecordCacheResetters) {
-      reset();
-    }
-  },
-};
+const PROVIDER_ENV_VARS = createLazyReadonlyRecord(() => resolveProviderEnvVars());
 
 /** Returns known env var candidates for a provider id or alias. */
 export function getProviderEnvVars(

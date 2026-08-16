@@ -34,7 +34,7 @@ export function resolveSessionEntryProvenanceRow<T extends SessionProvenanceRow>
   const existingRoot = executeSqliteQueryTakeFirstSync(
     params.database.db,
     db
-      .selectFrom("sessions")
+      .selectFrom("session_windows")
       .select([
         "session_entry_provenance",
         "acp_owned",

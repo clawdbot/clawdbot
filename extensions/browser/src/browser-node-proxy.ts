@@ -1,5 +1,15 @@
 import crypto from "node:crypto";
+import {
+  addTimerTimeoutGraceMs,
+  MAX_TIMER_TIMEOUT_MS,
+  resolveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import {
+  BROWSER_PROXY_COMMAND,
+  BROWSER_PROXY_UPLOAD_COMMAND,
+  browserProxyUploadUnavailableMessage,
+} from "./browser-node-commands.js";
 import { isBrowserControlHostUnavailableError } from "./browser-node-fallback.js";
 import {
   BROWSER_PROXY_ERROR_ENVELOPE,
@@ -7,6 +17,10 @@ import {
   type BrowserProxyEnvelope,
   type BrowserProxySuccess,
 } from "./browser-proxy-envelope.js";
+import {
+  isBrowserProxyUploadRequest,
+  prepareBrowserProxyUploadRequest,
+} from "./browser-proxy-upload.js";
 import {
   applyBrowserProxyPaths,
   callGatewayTool,
@@ -19,10 +33,10 @@ const logger = createSubsystemLogger("browser");
 const DEFAULT_BROWSER_PROXY_TIMEOUT_MS = 20_000;
 const BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS = 5_000;
 
-class BrowserNodeControlHostUnavailableError extends Error {
-  constructor(cause: unknown) {
-    super("auto-selected browser node control host unavailable", { cause });
-    this.name = "BrowserNodeControlHostUnavailableError";
+class BrowserNodeSafeFallbackError extends Error {
+  constructor(message: string, cause?: unknown) {
+    super(message, cause === undefined ? undefined : { cause });
+    this.name = "BrowserNodeSafeFallbackError";
   }
 }
 
@@ -33,6 +47,7 @@ type BrowserProxyRequest = ((params: {
   body?: unknown;
   timeoutMs?: number;
   profile?: string;
+  signal?: AbortSignal;
 }) => Promise<unknown>) & {
   isHostFallbackActive: () => boolean;
 };
@@ -55,19 +70,44 @@ function unwrapBrowserProxyPayload(
 
 async function callBrowserProxy(params: {
   nodeId: string;
-  markControlHostUnavailable: boolean;
+  declaredCommands: readonly string[];
+  pendingDeclaredCommands: readonly string[];
+  allowAutomaticHostFallback: boolean;
   method: string;
   path: string;
   query?: Record<string, string | number | boolean | undefined>;
   body?: unknown;
   timeoutMs?: number;
   profile?: string;
+  signal?: AbortSignal;
 }): Promise<BrowserProxySuccess> {
-  const proxyTimeoutMs =
-    typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
-      ? Math.max(1, Math.floor(params.timeoutMs))
-      : DEFAULT_BROWSER_PROXY_TIMEOUT_MS;
-  const gatewayTimeoutMs = proxyTimeoutMs + BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS;
+  // Reserve both watchdog windows before clamping so timer saturation cannot
+  // make an outer watchdog expire alongside the browser action.
+  const proxyTimeoutMs = Math.min(
+    resolveTimerTimeoutMs(params.timeoutMs, DEFAULT_BROWSER_PROXY_TIMEOUT_MS),
+    MAX_TIMER_TIMEOUT_MS - 2 * BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS,
+  );
+  const nodeInvokeTimeoutMs =
+    addTimerTimeoutGraceMs(proxyTimeoutMs, BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS) ??
+    proxyTimeoutMs;
+  const gatewayTimeoutMs =
+    addTimerTimeoutGraceMs(nodeInvokeTimeoutMs, BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS) ??
+    nodeInvokeTimeoutMs;
+  if (
+    isBrowserProxyUploadRequest(params) &&
+    !params.declaredCommands.includes(BROWSER_PROXY_UPLOAD_COMMAND)
+  ) {
+    throw new BrowserNodeSafeFallbackError(
+      browserProxyUploadUnavailableMessage(params.pendingDeclaredCommands),
+    );
+  }
+  const preparedUpload = await prepareBrowserProxyUploadRequest({
+    method: params.method,
+    path: params.path,
+    body: params.body,
+    signal: params.signal,
+  });
+  const command = preparedUpload.upload ? BROWSER_PROXY_UPLOAD_COMMAND : BROWSER_PROXY_COMMAND;
   let payload: { payload?: unknown; payloadJSON?: unknown } | null;
   try {
     payload = await callGatewayTool<{ payload?: unknown; payloadJSON?: unknown }>(
@@ -75,26 +115,30 @@ async function callBrowserProxy(params: {
       { timeoutMs: gatewayTimeoutMs },
       {
         nodeId: params.nodeId,
-        command: "browser.proxy",
-        // node.invoke owns a separate watchdog from browser.proxy. Keep both
-        // bounded, with enough outer slack for the proxy result to cross back.
-        timeoutMs: gatewayTimeoutMs,
+        command,
+        // Keep the browser action, node watchdog, and Gateway RPC on distinct
+        // budgets so a detailed node timeout can cross both outer boundaries.
+        timeoutMs: nodeInvokeTimeoutMs,
         params: {
           method: params.method,
           path: params.path,
           query: params.query,
-          body: params.body,
+          body: preparedUpload.body,
+          upload: preparedUpload.upload,
           timeoutMs: proxyTimeoutMs,
           profile: params.profile,
           errorEnvelope: BROWSER_PROXY_ERROR_ENVELOPE,
         },
         idempotencyKey: crypto.randomUUID(),
       },
-      { scopes: ["operator.admin"] },
+      {
+        scopes: ["operator.admin"],
+        ...(params.signal ? { signal: params.signal } : {}),
+      },
     );
   } catch (error) {
-    if (params.markControlHostUnavailable && isBrowserControlHostUnavailableError(error)) {
-      throw new BrowserNodeControlHostUnavailableError(error);
+    if (params.allowAutomaticHostFallback && isBrowserControlHostUnavailableError(error)) {
+      throw new BrowserNodeSafeFallbackError("browser node control host unavailable", error);
     }
     throw error;
   }
@@ -124,41 +168,53 @@ async function callLocalBrowserControl(params: Parameters<BrowserProxyRequest>[0
     method: params.method,
     body: params.body === undefined ? undefined : JSON.stringify(params.body),
     timeoutMs: params.timeoutMs,
+    signal: params.signal,
   });
 }
 
 export function createBrowserNodeProxyRequest(params: {
-  nodeTarget: { nodeId: string; label?: string };
+  nodeTarget: {
+    nodeId: string;
+    label?: string;
+    commands?: string[];
+    pendingDeclaredCommands?: string[];
+  };
   allowAutomaticHostFallback: boolean;
+  signal?: AbortSignal;
 }): BrowserProxyRequest {
   let hostFallbackActive = false;
   const dispatch = async (request: Parameters<BrowserProxyRequest>[0]) => {
+    // Bind cancellation once so every node action and its safe host fallback
+    // inherit their execution signal without overriding an explicit request.
+    const requestWithSignal =
+      request.signal || params.signal
+        ? { ...request, signal: request.signal ?? params.signal }
+        : request;
     if (hostFallbackActive) {
-      return await callLocalBrowserControl(request);
+      return await callLocalBrowserControl(requestWithSignal);
     }
     try {
       const proxy = await callBrowserProxy({
         nodeId: params.nodeTarget.nodeId,
-        markControlHostUnavailable: params.allowAutomaticHostFallback,
-        ...request,
+        declaredCommands: params.nodeTarget.commands ?? [],
+        pendingDeclaredCommands: params.nodeTarget.pendingDeclaredCommands ?? [],
+        allowAutomaticHostFallback: params.allowAutomaticHostFallback,
+        ...requestWithSignal,
       });
       const mapping = await persistBrowserProxyFiles(proxy.files);
       applyBrowserProxyPaths(proxy.result, mapping);
       return proxy.result;
     } catch (error) {
-      if (
-        !params.allowAutomaticHostFallback ||
-        !(error instanceof BrowserNodeControlHostUnavailableError)
-      ) {
+      if (!params.allowAutomaticHostFallback || !(error instanceof BrowserNodeSafeFallbackError)) {
         throw error;
       }
-      // This exact node-host failure occurs before any browser action. Retrying
-      // other failures could duplicate a mutating operation.
+      // These failures are detected before route dispatch. Retrying any later
+      // failure could duplicate a mutating browser action.
       hostFallbackActive = true;
       logger.warn(
-        `browser node ${params.nodeTarget.label ?? params.nodeTarget.nodeId} control host unavailable; falling back to Gateway host`,
+        `browser node ${params.nodeTarget.label ?? params.nodeTarget.nodeId} unavailable before dispatch (${error.message}); falling back to Gateway host`,
       );
-      return await callLocalBrowserControl(request);
+      return await callLocalBrowserControl(requestWithSignal);
     }
   };
   return Object.assign(dispatch, {

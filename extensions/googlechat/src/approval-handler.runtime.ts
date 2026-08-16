@@ -77,7 +77,11 @@ function resolveHandlerAccount(
       cfg: params.cfg,
       accountId: params.accountId,
     });
-  if (!account.enabled || account.credentialSource === "none") {
+  if (
+    !account.enabled ||
+    account.credentialSource === "none" ||
+    account.tokenStatus === "configured_unavailable"
+  ) {
     return null;
   }
   return account;

@@ -179,13 +179,25 @@ export async function discoverHermesSource(
   };
 }
 
-export async function resolveImplicitHermesRoot(
+async function resolveImplicitHermesRoot(
   env: NodeJS.ProcessEnv,
   platform: NodeJS.Platform,
 ): Promise<string> {
+  // Hermes pins the reserved supervised default slot to the root profile and
+  // never follows active_profile there (hermes_cli/main.py:487). Mirror that so
+  // a migration launched from that process keeps the default profile.
+  const supervisedChild = Boolean(env.HERMES_S6_SUPERVISED_CHILD?.trim());
   const configuredHome = env.HERMES_HOME?.trim();
   if (configuredHome) {
-    return resolveHomePath(configuredHome);
+    const configuredRoot = resolveHomePath(configuredHome);
+    // Mirror Hermes itself (hermes-agent hermes_cli/main.py:461-473, issue #22502):
+    // trust HERMES_HOME verbatim only when it already names a profile dir
+    // (parent basename `profiles`); when it names the root (e.g. a hardcoded
+    // HERMES_HOME=~/.hermes) still honor active_profile.
+    if (supervisedChild || path.basename(path.dirname(configuredRoot)) === "profiles") {
+      return configuredRoot;
+    }
+    return await resolveActiveHermesProfile(configuredRoot);
   }
   const userHome =
     (platform === "win32" ? env.USERPROFILE?.trim() : env.HOME?.trim()) || resolveHomePath("~");
@@ -203,6 +215,10 @@ export async function resolveImplicitHermesRoot(
   } else {
     root = path.resolve(userHome, ".hermes");
   }
+  return supervisedChild ? root : await resolveActiveHermesProfile(root);
+}
+
+async function resolveActiveHermesProfile(root: string): Promise<string> {
   const activeProfile = (await readText(path.join(root, "active_profile")))?.trim();
   if (!activeProfile || activeProfile === "default" || !HERMES_PROFILE_RE.test(activeProfile)) {
     return root;

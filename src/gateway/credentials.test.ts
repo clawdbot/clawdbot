@@ -188,15 +188,15 @@ describe("resolveGatewayCredentialsFromConfig", () => {
     expectEnvGatewayCredentials(resolved);
   });
 
-  it("uses local-mode environment values before local config", () => {
+  it("uses local config before local-mode environment values", () => {
     const resolved = resolveGatewayCredentialsFor({
       mode: "local",
       auth: DEFAULT_GATEWAY_AUTH,
     });
-    expectEnvGatewayCredentials(resolved);
+    expect(resolved).toEqual(DEFAULT_GATEWAY_AUTH);
   });
 
-  it("uses config-first local token precedence inside gateway service runtime", () => {
+  it("does not let the gateway service marker change local credential precedence", () => {
     const resolved = resolveGatewayCredentialsFromConfig({
       cfg: cfg({
         gateway: {
@@ -212,8 +212,17 @@ describe("resolveGatewayCredentialsFromConfig", () => {
     });
     expect(resolved).toEqual({
       token: "config-token",
-      password: "env-password", // pragma: allowlist secret
+      password: "config-password", // pragma: allowlist secret
     });
+  });
+
+  it("keeps env ahead of remote fallback when local auth is missing", () => {
+    const resolved = resolveGatewayCredentialsFor({
+      mode: "local",
+      auth: {},
+      remote: DEFAULT_REMOTE_AUTH,
+    });
+    expectEnvGatewayCredentials(resolved);
   });
 
   it("falls back to remote credentials in local mode when local auth is missing", () => {
@@ -250,26 +259,23 @@ describe("resolveGatewayCredentialsFromConfig", () => {
     });
   });
 
-  it("treats env-template local tokens as SecretRefs instead of plaintext", () => {
-    const resolved = resolveGatewayCredentialsFromConfig({
-      cfg: cfg({
-        gateway: {
-          mode: "local",
-          auth: {
-            mode: "token",
-            token: "${OPENCLAW_GATEWAY_TOKEN}",
+  it("fails closed on env-template local tokens in the synchronous resolver", () => {
+    expect(() =>
+      resolveGatewayCredentialsFromConfig({
+        cfg: cfg({
+          gateway: {
+            mode: "local",
+            auth: {
+              mode: "token",
+              token: "${OPENCLAW_GATEWAY_TOKEN}",
+            },
           },
-        },
+        }),
+        env: {
+          OPENCLAW_GATEWAY_TOKEN: "env-token",
+        } as NodeJS.ProcessEnv,
       }),
-      env: {
-        OPENCLAW_GATEWAY_TOKEN: "env-token",
-      } as NodeJS.ProcessEnv,
-    });
-
-    expect(resolved).toEqual({
-      token: "env-token",
-      password: undefined,
-    });
+    ).toThrow("gateway.auth.token");
   });
 
   it("throws when env-template local token SecretRef is unresolved in token mode", () => {

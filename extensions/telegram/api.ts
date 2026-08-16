@@ -51,11 +51,9 @@ export {
   isBinaryContent,
   normalizeForwardedContext,
   resetTelegramForumFlagCacheForTest,
-  resolveTelegramDirectPeerId,
   resolveTelegramForumFlag,
   resolveTelegramForumThreadId,
   resolveTelegramGroupAllowFromContext,
-  resolveTelegramMediaPlaceholder,
   resolveTelegramReplyId,
   resolveTelegramStreamMode,
   resolveTelegramThreadSpec,
@@ -65,6 +63,7 @@ export {
   type TelegramThreadSpec,
   withResolvedTelegramForumFlag,
 } from "./src/bot/helpers.js";
+export { resolveTelegramDirectPeerId } from "./src/dm-session-key.js";
 export {
   normalizeTelegramCommandDescription,
   normalizeTelegramCommandName,
@@ -140,12 +139,7 @@ export {
   parseTelegramReplyToMessageId,
   parseTelegramThreadId,
 } from "./src/outbound-params.js";
-export {
-  probeTelegram,
-  resetTelegramProbeFetcherCacheForTests,
-  type TelegramProbe,
-  type TelegramProbeOptions,
-} from "./src/probe.js";
+export { probeTelegram, type TelegramProbe, type TelegramProbeOptions } from "./src/probe.js";
 export {
   type ResolvedReactionLevel,
   resolveTelegramReactionLevel,

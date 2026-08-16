@@ -106,20 +106,16 @@ jobs:
               gh "${args[@]}"
               ;;
             telegram-desktop-proof)
-              baseline_ref="$BASELINE_REF"
-              if [[ -z "$baseline_ref" || "$baseline_ref" == "0bf06e953fdda290799fc9fb9244a8f67fdae593" ]]; then
-                baseline_ref="main"
+              if [[ -z "${PR_NUMBER:-}" ]]; then
+                echo "telegram-desktop-proof requires pr_number." >&2
+                exit 1
               fi
               args=(
                 workflow run mantis-telegram-desktop-proof.yml
                 --repo "$GITHUB_REPOSITORY"
                 --ref main
-                -f "baseline_ref=${baseline_ref}"
-                -f "candidate_ref=${CANDIDATE_REF}"
+                -f "pr_number=${PR_NUMBER}"
               )
-              if [[ -n "${PR_NUMBER:-}" ]]; then
-                args+=(-f "pr_number=${PR_NUMBER}")
-              fi
               gh "${args[@]}"
               ;;
             web-ui-chat-proof)

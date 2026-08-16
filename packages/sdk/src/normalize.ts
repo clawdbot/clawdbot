@@ -1,21 +1,11 @@
 // OpenClaw SDK helper module supports normalize behavior.
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonEmptyStringPreservingWhitespace as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayEvent, JsonObject, OpenClawEvent, OpenClawEventType } from "./types.js";
 
-// Normalize raw Gateway events into stable SDK event types and common metadata.
-function asRecord(value: unknown): JsonObject {
-  return typeof value === "object" && value !== null ? (value as JsonObject) : {};
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-function readNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
 function readLowerString(value: unknown): string | undefined {
-  return readString(value)?.toLowerCase();
+  return readNonEmptyString(value)?.toLowerCase();
 }
 
 function hasHardTimeoutMetadata(data: JsonObject, statusAlreadyTimeoutAttributed = false): boolean {
@@ -75,10 +65,10 @@ function normalizeLifecycleEndEventType(data: JsonObject): OpenClawEventType {
 }
 
 function normalizeAgentEventType(payload: JsonObject): OpenClawEventType {
-  const stream = readString(payload.stream);
+  const stream = readNonEmptyString(payload.stream);
   const data = asRecord(payload.data);
-  const phase = readString(data.phase);
-  const status = readString(data.status);
+  const phase = readNonEmptyString(data.phase);
+  const status = readNonEmptyString(data.status);
 
   if (stream === "assistant") {
     return data.delta === true || typeof data.delta === "string"
@@ -141,7 +131,7 @@ function normalizeNamedEventType(event: GatewayEvent): OpenClawEventType {
     case "agent":
       return normalizeAgentEventType(payload);
     case "sessions.changed": {
-      const reason = readString(payload.reason);
+      const reason = readNonEmptyString(payload.reason);
       if (reason === "create") {
         return "session.created";
       }
@@ -171,13 +161,15 @@ function normalizeNamedEventType(event: GatewayEvent): OpenClawEventType {
 /** Normalize a raw Gateway event into the public SDK event shape. */
 export function normalizeGatewayEvent(event: GatewayEvent): OpenClawEvent {
   const payload = asRecord(event.payload);
-  const runId = readString(payload.runId);
-  const sessionId = readString(payload.sessionId);
-  const sessionKey = readString(payload.sessionKey);
-  const taskId = readString(payload.taskId);
-  const agentId = readString(payload.agentId);
-  const ts = readNumber(payload.ts) ?? Date.now();
-  const idParts = [event.seq ?? "local", event.event, runId, sessionKey, ts].filter(Boolean);
+  const runId = readNonEmptyString(payload.runId);
+  const sessionId = readNonEmptyString(payload.sessionId);
+  const sessionKey = readNonEmptyString(payload.sessionKey);
+  const taskId = readNonEmptyString(payload.taskId);
+  const agentId = readNonEmptyString(payload.agentId);
+  const ts = asFiniteNumber(payload.ts) ?? Date.now();
+  const idParts = [event.seq ?? "local", event.event, runId, sessionKey, ts].filter(
+    (part) => part !== undefined,
+  );
 
   return {
     version: 1,

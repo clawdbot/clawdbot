@@ -1,8 +1,13 @@
 // Memory Wiki helper module supports config behavior.
 import os from "node:os";
 import path from "node:path";
+// agent-scope-runtime exports the same resolvers without memory-host-core's
+// event-store/kysely graph, which doctor enumeration must not cold-load.
+import {
+  resolveDefaultAgentId,
+  resolveSessionAgentId,
+} from "openclaw/plugin-sdk/agent-scope-runtime";
 import { mapPluginConfigIssues } from "openclaw/plugin-sdk/extension-shared";
-import { resolveDefaultAgentId, resolveSessionAgentId } from "openclaw/plugin-sdk/memory-host-core";
 import { buildPluginConfigSchema, z, type OpenClawPluginConfigSchema } from "../api.js";
 import type { OpenClawConfig } from "../api.js";
 
@@ -296,9 +301,11 @@ export function resolveMemoryWikiConfig(
 export function resolveMemoryWikiConfiguredAgentIds(
   appConfig: OpenClawConfig | undefined,
 ): string[] {
-  const configured = appConfig?.agents?.list ?? [];
-  const ids = configured.flatMap((entry) => {
-    const rawId = entry?.id?.trim();
+  const configuredIds = appConfig?.agents?.entries
+    ? Object.keys(appConfig.agents.entries)
+    : (appConfig?.agents?.list ?? []).map((entry) => entry.id);
+  const ids = configuredIds.flatMap((entryId) => {
+    const rawId = entryId.trim();
     if (!rawId) {
       return [];
     }

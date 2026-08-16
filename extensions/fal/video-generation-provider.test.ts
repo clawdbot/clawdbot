@@ -4,17 +4,21 @@ import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  setFalVideoFetchGuardForTesting,
-  buildFalVideoGenerationProvider,
-} from "./video-generation-provider.js";
+import { buildFalVideoGenerationProvider } from "./video-generation-provider.js";
+
+const { fetchGuardMock } = vi.hoisted(() => ({
+  fetchGuardMock: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
+  fetchWithSsrFGuard: fetchGuardMock,
+}));
 
 function createMockRequestConfig() {
   return {} as ReturnType<typeof providerHttp.resolveProviderHttpRequestConfig>["requestConfig"];
 }
 describe("fal video generation provider", () => {
-  const fetchGuardMock = vi.fn();
-
   function mockFalProviderRuntime() {
     vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "fal-key",
@@ -32,7 +36,6 @@ describe("fal video generation provider", () => {
       requestConfig: createMockRequestConfig(),
     });
     vi.spyOn(providerHttp, "assertOkOrThrowHttpError").mockResolvedValue(undefined);
-    setFalVideoFetchGuardForTesting(fetchGuardMock as never);
   }
 
   function releasedJson(value: unknown) {
@@ -111,7 +114,6 @@ describe("fal video generation provider", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     fetchGuardMock.mockReset();
-    setFalVideoFetchGuardForTesting(null);
   });
 
   it("declares explicit mode capabilities", () => {

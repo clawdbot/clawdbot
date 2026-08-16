@@ -1,5 +1,4 @@
 // Memory Lancedb helper module supports config behavior.
-import fs from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
@@ -28,34 +27,7 @@ export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
 const DEFAULT_MODEL = "text-embedding-3-small";
 export const DEFAULT_CAPTURE_MAX_CHARS = 500;
 export const DEFAULT_RECALL_MAX_CHARS = 1000;
-const LEGACY_STATE_DIRS: string[] = [];
-
-function resolveDefaultDbPath(): string {
-  const home = homedir();
-  const preferred = join(home, ".openclaw", "memory", "lancedb");
-  try {
-    if (fs.existsSync(preferred)) {
-      return preferred;
-    }
-  } catch {
-    // best-effort
-  }
-
-  for (const legacy of LEGACY_STATE_DIRS) {
-    const candidate = join(home, legacy, "memory", "lancedb");
-    try {
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
-    } catch {
-      // best-effort
-    }
-  }
-
-  return preferred;
-}
-
-const DEFAULT_DB_PATH = resolveDefaultDbPath();
+const DEFAULT_DB_PATH = join(homedir(), ".openclaw", "memory", "lancedb");
 
 const EMBEDDING_DIMENSIONS: Record<string, number> = {
   "text-embedding-3-small": 1536,
@@ -253,72 +225,5 @@ export const memoryConfigSchema = {
       recallMaxChars,
       ...(storageOptions ? { storageOptions } : {}),
     };
-  },
-  uiHints: {
-    "embedding.provider": {
-      label: "Embedding Provider",
-      placeholder: "openai",
-      help: "Memory embedding provider adapter to use (for example openai, github-copilot, ollama)",
-    },
-    "embedding.apiKey": {
-      label: "OpenAI API Key",
-      sensitive: true,
-      placeholder: "sk-proj-...",
-      help: "Optional API key override for OpenAI-compatible embeddings; omit to use configured provider auth",
-    },
-    "embedding.baseUrl": {
-      label: "Base URL",
-      placeholder: "https://api.openai.com/v1",
-      help: "Optional provider or OpenAI-compatible embedding endpoint base URL",
-      advanced: true,
-    },
-    "embedding.dimensions": {
-      label: "Dimensions",
-      placeholder: "1536",
-      help: "Vector dimensions for custom models (required for non-standard models)",
-      advanced: true,
-    },
-    "embedding.model": {
-      label: "Embedding Model",
-      placeholder: DEFAULT_MODEL,
-      help: "OpenAI embedding model to use",
-    },
-    dbPath: {
-      label: "Database Path",
-      placeholder: "~/.openclaw/memory/lancedb",
-      advanced: true,
-      help: "Local filesystem path or cloud storage URI (s3://, gs://) for LanceDB database",
-    },
-    autoCapture: {
-      label: "Auto-Capture",
-      help: "Automatically capture important information from conversations",
-    },
-    autoRecall: {
-      label: "Auto-Recall",
-      help: "Automatically inject relevant memories into context",
-    },
-    captureMaxChars: {
-      label: "Capture Max Chars",
-      help: "Maximum message length eligible for auto-capture",
-      advanced: true,
-      placeholder: String(DEFAULT_CAPTURE_MAX_CHARS),
-    },
-    customTriggers: {
-      label: "Custom Triggers",
-      help: "Literal phrases that should make auto-capture consider a message memory-worthy",
-      advanced: true,
-    },
-    recallMaxChars: {
-      label: "Recall Query Max Chars",
-      help: "Maximum prompt/query length embedded for memory recall. Lower for small local embedding models.",
-      advanced: true,
-      placeholder: String(DEFAULT_RECALL_MAX_CHARS),
-    },
-    storageOptions: {
-      label: "Storage Options",
-      sensitive: true,
-      advanced: true,
-      help: "Storage configuration options (access_key, secret_key, endpoint, etc.); supports ${ENV_VAR} values",
-    },
   },
 };

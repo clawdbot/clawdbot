@@ -4,14 +4,15 @@ import {
   resolveExpiresAtMsFromEpochSeconds,
   parseStrictNonNegativeInteger,
 } from "../../packages/normalization-core/src/number-coercion.js";
-import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { externalCliDiscoveryForProviderAuth } from "../agents/auth-profiles/external-cli-discovery.js";
 import { resolveApiKeyForProfile } from "../agents/auth-profiles/oauth.js";
 import { resolveAuthProfileOrder } from "../agents/auth-profiles/order.js";
 import { listProfilesForProvider } from "../agents/auth-profiles/profiles.js";
+import { resolveStoredCredentialReadOnlyAvailability } from "../agents/auth-profiles/read-only-availability.js";
 import {
   ensureAuthProfileStore,
+  findPersistedAuthProfileCredential,
   loadAuthProfileStoreForSecretsRuntime,
   loadAuthProfileStoreWithoutExternalProfiles,
 } from "../agents/auth-profiles/store.js";
@@ -22,17 +23,30 @@ import {
   buildCopilotIdeHeaders,
 } from "../agents/copilot-dynamic-headers.js";
 import { resolveEnvApiKey } from "../agents/model-auth-env.js";
+import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
+import {
+  profileTypeToAuthMode,
+  resolveDirectProviderCredentialMode,
+  resolveProviderConfig,
+  resolveProviderEntryApiKeyProfileReference,
+  resolveUsableCustomProviderApiKey,
+} from "../agents/model-auth-provider-config.js";
+import { resolveManagedSecretRefRuntimeProviderAuth } from "../agents/model-auth-runtime-config.js";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { cancelUnreadResponseBody } from "../infra/http-body.js";
 import { logWarn } from "../logger.js";
 import {
   DEFAULT_GITHUB_COPILOT_DOMAIN,
+  normalizeGithubCopilotDomain,
+} from "./github-copilot-domain.js";
+import { resolveGithubCopilotTokenEndpoint } from "./github-copilot-token-endpoint.js";
+import {
   fingerprintCopilotSourceCredential,
   isCopilotTokenUsable,
   resolveCopilotTokenCache,
   type CachedCopilotToken,
 } from "./provider-auth-copilot-cache.js";
-import { resolveProviderEndpoint } from "./provider-model-shared.js";
 
 export type { OpenClawConfig } from "../config/config.js";
 export type { CachedCopilotToken } from "./provider-auth-copilot-cache.js";
@@ -42,6 +56,7 @@ export type { ProviderAuthResult } from "../plugins/types.js";
 export type { ProviderAuthContext } from "../plugins/types.js";
 export type { AuthProfileStore, OAuthCredential } from "../agents/auth-profiles/types.js";
 
+export { normalizeGithubCopilotDomain };
 export { CLAUDE_CLI_PROFILE_ID, CODEX_CLI_PROFILE_ID } from "../agents/auth-profiles/constants.js";
 export {
   ensureAuthProfileStore,
@@ -95,9 +110,8 @@ export {
 } from "../plugins/provider-auth-helpers.js";
 export { createProviderApiKeyAuthMethod } from "../plugins/provider-api-key-auth.js";
 export { coerceSecretRef, hasConfiguredSecretInput } from "../config/types.secrets.js";
-export { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
+export { resolveDefaultSecretProviderAlias } from "./secret-provider-alias.js";
 export { resolveRequiredHomeDir } from "../infra/home-dir.js";
-export { resolveOpenClawAgentDir } from "./agent-dir-compat.js";
 export {
   normalizeOptionalSecretInput,
   normalizeSecretInput,
@@ -148,40 +162,6 @@ export const DEFAULT_COPILOT_API_BASE_URL = "https://api.individual.githubcopilo
 const COPILOT_PROVIDER_ID = "github-copilot";
 
 const COPILOT_TOKEN_EXCHANGE_TIMEOUT_MS = 30_000;
-
-// Matches a data-residency GHE tenant root (`<tenant>.ghe.com`, single label).
-// GitHub defines a GHE.com enterprise as a dedicated `SUBDOMAIN.ghe.com` domain;
-// nested hosts (`api.<tenant>.ghe.com`, `copilot-api.<tenant>.ghe.com`) are
-// derived service endpoints, not tenants — accepting one would template broken
-// hosts like `api.api.<tenant>.ghe.com` for the token exchange. Bare `ghe.com`
-// is likewise excluded: it is not a tenant and hosts no Copilot endpoint.
-const GHE_DATA_RESIDENCY_HOST = /^[a-z0-9-]+\.ghe\.com$/;
-
-/**
- * Coerce a user/config-supplied GitHub host to a safe bare lowercase hostname.
- *
- * Fails closed to public `github.com`: only the public host and data-residency
- * GHE tenants (`*.ghe.com`) are trusted. Any other value falls back to the
- * default rather than being used verbatim, because the resolved host becomes the
- * `api.<host>` endpoint that receives the GitHub OAuth token during exchange — a
- * typo or injected value like `evil.com` must never redirect that token.
- * (Classic self-hosted GHE Server uses arbitrary hostnames but does not host
- * Copilot, so it is deliberately out of scope.)
- */
-export function normalizeGithubCopilotDomain(raw: string | undefined | null): string {
-  const trimmed = (raw ?? "").trim().toLowerCase();
-  if (!trimmed) {
-    return DEFAULT_GITHUB_COPILOT_DOMAIN;
-  }
-  // Reject scheme/path/credentials so template URL construction cannot be hijacked.
-  if (!/^[a-z0-9.-]+$/.test(trimmed)) {
-    return DEFAULT_GITHUB_COPILOT_DOMAIN;
-  }
-  if (trimmed === DEFAULT_GITHUB_COPILOT_DOMAIN || GHE_DATA_RESIDENCY_HOST.test(trimmed)) {
-    return trimmed;
-  }
-  return DEFAULT_GITHUB_COPILOT_DOMAIN;
-}
 
 function readGithubCopilotDomainFromConfig(config?: OpenClawConfig): string | undefined {
   const params = config?.models?.providers?.[COPILOT_PROVIDER_ID]?.params;
@@ -294,54 +274,12 @@ function parseCopilotTokenResponse(value: unknown): {
   return { token, expiresAt: expiresAtMs };
 }
 
-async function cancelUnreadResponseBody(response: Response): Promise<void> {
-  if (!response.bodyUsed) {
-    await response.body?.cancel().catch(() => undefined);
-  }
-}
-
-function resolveCopilotProxyHost(proxyEp: string): string | null {
-  const trimmed = proxyEp.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  const urlText = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
-  try {
-    const url = new URL(urlText);
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      return null;
-    }
-    return normalizeLowercaseStringOrEmpty(url.hostname);
-  } catch {
-    return null;
-  }
-}
-
 /** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
 export function deriveCopilotApiBaseUrlFromToken(
   /** Copilot API token text that may contain a `proxy-ep` attribute. */
   token: string,
 ): string | null {
-  const trimmed = token.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  const match = trimmed.match(/(?:^|;)\s*proxy-ep=([^;\s]+)/i);
-  const proxyEp = match?.[1]?.trim();
-  if (!proxyEp) {
-    return null;
-  }
-
-  const proxyHost = resolveCopilotProxyHost(proxyEp);
-  if (!proxyHost) {
-    return null;
-  }
-  const host = proxyHost.replace(/^proxy\./i, "api.");
-
-  const baseUrl = `https://${host}`;
-  return resolveProviderEndpoint(baseUrl).endpointClass === "invalid" ? null : baseUrl;
+  return resolveGithubCopilotTokenEndpoint(token).baseUrl;
 }
 
 /**
@@ -466,20 +404,122 @@ export async function resolveCopilotApiToken(params: {
 }
 
 /**
- * Checks whether a provider has either env auth or matching local auth profiles configured.
+ * Checks whether a provider has usable config/env auth or matching local auth profiles.
  */
 export function isProviderApiKeyConfigured(params: {
-  /** Provider id to check for env auth or local auth profiles. */
+  /** Provider id to check for config/env auth or local auth profiles. */
   provider: string;
+  /** Optional runtime config used to resolve provider-owned API-key credentials. */
+  cfg?: OpenClawConfig;
   /** Agent directory containing auth profiles. */
   agentDir?: string;
   /** Optional allowed profile credential types. */
   profileTypes?: readonly AuthProfileCredential["type"][];
+  /** Optional provider-owned acceptance predicate for a known selected credential. */
+  acceptsApiKey?: (apiKey: string) => boolean;
 }): boolean {
+  const agentDir = params.agentDir?.trim();
+  if (params.acceptsApiKey) {
+    const { acceptsApiKey, ...availability } = params;
+    if (!isProviderApiKeyConfigured(availability)) {
+      return false;
+    }
+
+    const providerConfig = resolveProviderConfig(params.cfg, params.provider);
+    const authoredApiKey = providerConfig?.apiKey;
+    const store = agentDir
+      ? ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false })
+      : undefined;
+    let profile =
+      typeof authoredApiKey === "string" ? store?.profiles[authoredApiKey.trim()] : undefined;
+    if (!profile && store && providerConfig?.auth !== "api-key") {
+      const [profileId] = listUsableProviderAuthProfileIds(availability).profileIds;
+      profile = profileId ? store.profiles[profileId] : undefined;
+    }
+    if (profile) {
+      const credential =
+        profile.type === "oauth"
+          ? profile.access
+          : profile.type === "token"
+            ? (profile.token ??
+              (profile.tokenRef?.source === "env" ? process.env[profile.tokenRef.id] : undefined))
+            : (profile.key ??
+              (profile.keyRef?.source === "env" ? process.env[profile.keyRef.id] : undefined));
+      // Opaque managed profile refs are validated after canonical async auth resolution.
+      return credential === undefined || acceptsApiKey(credential);
+    }
+
+    const configParams = { cfg: params.cfg, provider: params.provider };
+    const configKey =
+      resolveManagedSecretRefRuntimeProviderAuth(configParams)?.apiKey ??
+      resolveUsableCustomProviderApiKey(configParams)?.apiKey;
+    const selectedKey =
+      providerConfig?.auth === "api-key" && authoredApiKey !== undefined
+        ? configKey
+        : (resolveEnvApiKey(params.provider, process.env, { config: params.cfg })?.apiKey ??
+          configKey);
+    return selectedKey === undefined || acceptsApiKey(selectedKey);
+  }
+
+  if (params.cfg) {
+    // Capability discovery must reject synthetic auth markers and unresolved
+    // SecretRefs that the provider's runtime cannot actually authenticate with.
+    const allowsCredentialMode = (mode: ReturnType<typeof profileTypeToAuthMode>) =>
+      !params.profileTypes?.length ||
+      params.profileTypes.some((profileType) => profileTypeToAuthMode(profileType) === mode);
+    const authoredApiKey = resolveProviderConfig(params.cfg, params.provider)?.apiKey;
+    const profileId = typeof authoredApiKey === "string" ? authoredApiKey.trim() : undefined;
+    if (agentDir && profileId) {
+      const credential = findPersistedAuthProfileCredential({ agentDir, profileId });
+      if (credential) {
+        const binding = resolveProviderEntryApiKeyProfileReference({
+          cfg: params.cfg,
+          provider: params.provider,
+          store: { version: 1, profiles: { [profileId]: credential } },
+        });
+        if (binding.kind === "profile-incompatible") {
+          return false;
+        }
+        if (binding.kind === "profile") {
+          return (
+            allowsCredentialMode(binding.mode) &&
+            resolveStoredCredentialReadOnlyAvailability({
+              credential: binding.credential,
+              cfg: params.cfg,
+              env: process.env,
+            }) === true
+          );
+        }
+      }
+    }
+    const configured = resolveUsableCustomProviderApiKey({
+      cfg: params.cfg,
+      provider: params.provider,
+    });
+    if (
+      configured?.apiKey &&
+      !isNonSecretApiKeyMarker(configured.apiKey) &&
+      allowsCredentialMode(
+        resolveDirectProviderCredentialMode({
+          cfg: params.cfg,
+          provider: params.provider,
+          inferredMode: "api-key",
+        }),
+      )
+    ) {
+      return true;
+    }
+    const managed = resolveManagedSecretRefRuntimeProviderAuth({
+      cfg: params.cfg,
+      provider: params.provider,
+    });
+    if (managed?.apiKey && allowsCredentialMode(managed.mode)) {
+      return true;
+    }
+  }
   if (resolveEnvApiKey(params.provider)?.apiKey) {
     return true;
   }
-  const agentDir = params.agentDir?.trim();
   if (!agentDir) {
     return false;
   }

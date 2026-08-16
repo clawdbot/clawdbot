@@ -11,32 +11,40 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 
 type NodeCatalogTerminalPlan = Extract<SessionCatalogTerminalPlan, { kind: "node" }>;
 
-export function authorizeCatalogTerminalNode(
+export function authorizeTerminalNodeCommand(
   context: GatewayRequestHandlerOptions["context"],
-  plan: NodeCatalogTerminalPlan,
+  nodeId: string,
+  command: string,
 ):
   | { ok: true; node: NonNullable<ReturnType<typeof context.nodeRegistry.get>> }
   | {
       ok: false;
       message: string;
     } {
-  const node = context.nodeRegistry.get(plan.nodeId);
+  const node = context.nodeRegistry.get(nodeId);
   if (!node) {
-    return { ok: false, message: "catalog terminal node is not connected" };
+    return { ok: false, message: "terminal node is not connected" };
   }
-  if (!node.commands.includes(plan.command)) {
-    return { ok: false, message: "catalog terminal command is not available" };
+  if (!node.commands.includes(command)) {
+    return { ok: false, message: "terminal node command is not available" };
   }
   const allowlist = resolveNodeCommandAllowlist(context.getRuntimeConfig(), {
     ...node,
     approvedCommands: node.commands,
   });
   const allowed = isNodeCommandAllowed({
-    command: plan.command,
+    command,
     declaredCommands: node.commands,
     allowlist,
   });
   return allowed.ok ? { ok: true, node } : { ok: false, message: allowed.reason };
+}
+
+export function authorizeCatalogTerminalNode(
+  context: GatewayRequestHandlerOptions["context"],
+  plan: NodeCatalogTerminalPlan,
+) {
+  return authorizeTerminalNodeCommand(context, plan.nodeId, plan.command);
 }
 
 export function resolveTerminalOpenSpawnPlan(
@@ -47,6 +55,8 @@ export function resolveTerminalOpenSpawnPlan(
     return resolveTerminalSpawnPlan(launchPlan);
   }
   if (catalogPlan.kind === "local") {
+    // Keep catalog commands behind the policy-selected login shell. Its profile restores
+    // CLI dependencies omitted from a sparse Gateway daemon PATH before the shebang runs.
     return resolveTerminalSpawnPlan({
       ...launchPlan,
       initialCommand: catalogPlan.argv,

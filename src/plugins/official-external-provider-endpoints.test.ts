@@ -133,6 +133,8 @@ describe("official external provider endpoint catalog mirror", () => {
     expect(endpointClasses).toContain("modelstudio-native");
     expect(endpointClasses).toContain("moonshot-native");
     expect(endpointClasses).toContain("meta-native");
+    expect(endpointClasses).toContain("novita-native");
+    expect(endpointClasses).toContain("xiaomi-native");
     expect(endpointClasses).toContain("zai-native");
   });
 });

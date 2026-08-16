@@ -1,3 +1,5 @@
+import { IDBDatabase as FakeIndexedDbDatabase } from "fake-indexeddb";
+
 // Matrix SDK helper mitigates fake-indexeddb finished-transaction retention.
 const MATRIX_CRYPTO_DATABASE_SUFFIXES = [
   "::matrix-sdk-crypto",
@@ -5,67 +7,35 @@ const MATRIX_CRYPTO_DATABASE_SUFFIXES = [
 ] as const;
 const PRUNER_INSTALLED = Symbol.for("openclaw.matrix.fakeIndexedDbTransactionPruner");
 
-type FakeIndexedDbTransaction = {
-  _state?: string;
-  addEventListener?: (type: "complete" | "abort", listener: () => void) => void;
-  db?: FakeIndexedDbDatabaseConnection;
+type FakeIndexedDbTransaction = IDBTransaction & {
+  _state: string;
 };
 
 type FakeIndexedDbRawDatabase = {
-  name?: string;
-  transactions?: FakeIndexedDbTransaction[];
+  name: string;
+  transactions: FakeIndexedDbTransaction[];
 };
 
-type FakeIndexedDbDatabaseConnection = {
-  _rawDatabase?: FakeIndexedDbRawDatabase;
+type FakeIndexedDbDatabaseConnection = IDBDatabase & {
+  _rawDatabase: FakeIndexedDbRawDatabase;
 };
 
-type FakeIndexedDbDatabasePrototype = FakeIndexedDbDatabaseConnection & {
-  transaction?: IDBDatabase["transaction"];
+type FakeIndexedDbDatabasePrototype = IDBDatabase & {
   [PRUNER_INSTALLED]?: true;
 };
 
-type GlobalWithFakeIndexedDb = typeof globalThis & {
-  IDBDatabase?: {
-    prototype?: FakeIndexedDbDatabasePrototype;
-  };
-};
-
-function getRawDatabase(value: unknown): FakeIndexedDbRawDatabase | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const rawDatabase = (value as FakeIndexedDbDatabaseConnection)["_rawDatabase"];
-  if (!rawDatabase || typeof rawDatabase !== "object") {
-    return undefined;
-  }
-  return rawDatabase;
+function isMatrixCryptoDatabase(rawDatabase: FakeIndexedDbRawDatabase): boolean {
+  return MATRIX_CRYPTO_DATABASE_SUFFIXES.some((suffix) => rawDatabase.name.endsWith(suffix));
 }
 
-function isMatrixCryptoDatabase(
-  rawDatabase: FakeIndexedDbRawDatabase | undefined,
-): rawDatabase is FakeIndexedDbRawDatabase & {
-  transactions: FakeIndexedDbTransaction[];
-} {
-  if (!rawDatabase || !Array.isArray(rawDatabase.transactions)) {
-    return false;
-  }
-  const databaseName = rawDatabase.name;
-  return (
-    typeof databaseName === "string" &&
-    MATRIX_CRYPTO_DATABASE_SUFFIXES.some((suffix) => databaseName.endsWith(suffix))
-  );
-}
-
-function pruneFinishedFakeIndexedDbTransactions(rawDatabase: unknown): number {
-  const matrixRawDatabase = rawDatabase as FakeIndexedDbRawDatabase | undefined;
-  if (!isMatrixCryptoDatabase(matrixRawDatabase)) {
+function pruneFinishedFakeIndexedDbTransactions(rawDatabase: FakeIndexedDbRawDatabase): number {
+  if (!isMatrixCryptoDatabase(rawDatabase)) {
     return 0;
   }
 
-  const transactions = matrixRawDatabase.transactions;
+  const transactions = rawDatabase.transactions;
   const activeTransactions = transactions.filter(
-    (transaction) => transaction?.["_state"] !== "finished",
+    (transaction) => transaction["_state"] !== "finished",
   );
   const removed = transactions.length - activeTransactions.length;
   if (removed > 0) {
@@ -75,14 +45,8 @@ function pruneFinishedFakeIndexedDbTransactions(rawDatabase: unknown): number {
 }
 
 export function installFakeIndexedDbTransactionPruner(): void {
-  const globalObject = globalThis as GlobalWithFakeIndexedDb;
-  const databasePrototype = globalObject.IDBDatabase?.prototype;
-  const originalTransaction = databasePrototype?.transaction;
-  if (
-    !databasePrototype ||
-    typeof originalTransaction !== "function" ||
-    databasePrototype[PRUNER_INSTALLED]
-  ) {
+  const databasePrototype = FakeIndexedDbDatabase.prototype as FakeIndexedDbDatabasePrototype;
+  if (databasePrototype[PRUNER_INSTALLED]) {
     return;
   }
 
@@ -92,19 +56,17 @@ export function installFakeIndexedDbTransactionPruner(): void {
     value: true,
   });
 
-  const patchedTransaction = function patchedMatrixFakeIndexedDbTransaction(
-    this: IDBDatabase & FakeIndexedDbDatabaseConnection,
+  const originalTransaction = Object.getOwnPropertyDescriptor(databasePrototype, "transaction")
+    ?.value as IDBDatabase["transaction"];
+  databasePrototype.transaction = function patchedMatrixFakeIndexedDbTransaction(
+    this: FakeIndexedDbDatabaseConnection,
     ...args: Parameters<IDBDatabase["transaction"]>
   ): ReturnType<IDBDatabase["transaction"]> {
-    pruneFinishedFakeIndexedDbTransactions(getRawDatabase(this));
+    const rawDatabase = this["_rawDatabase"];
+    pruneFinishedFakeIndexedDbTransactions(rawDatabase);
 
-    const transaction = originalTransaction.apply(this, args) as IDBTransaction &
-      FakeIndexedDbTransaction;
-    const rawDatabase = getRawDatabase(transaction?.db) ?? getRawDatabase(this);
-    if (
-      isMatrixCryptoDatabase(rawDatabase) &&
-      typeof transaction?.addEventListener === "function"
-    ) {
+    const transaction = originalTransaction.apply(this, args) as FakeIndexedDbTransaction;
+    if (isMatrixCryptoDatabase(rawDatabase)) {
       const prune = (): void => {
         pruneFinishedFakeIndexedDbTransactions(rawDatabase);
       };
@@ -114,6 +76,4 @@ export function installFakeIndexedDbTransactionPruner(): void {
 
     return transaction;
   } as IDBDatabase["transaction"];
-
-  databasePrototype.transaction = patchedTransaction;
 }

@@ -2,9 +2,10 @@
 import {
   callGatewayTool,
   embeddedAgentLog,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { codexTestTurnIds } from "./codex-app-server.test-fixtures.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => ({
@@ -13,6 +14,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => (
 }));
 
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
+type AgentHarnessHostCapabilities = EmbeddedRunAttemptParams["hostCapabilities"];
 
 function mockCall(mock: { mock: { calls: unknown[][] } }, index = 0) {
   return mock.mock.calls.at(index);
@@ -31,6 +33,33 @@ function gatewayToolArg(index = 0, argIndex = 0) {
 }
 
 function createParams(): EmbeddedRunAttemptParams {
+  const hostCapabilities: AgentHarnessHostCapabilities = {
+    kind: "agent-harness-host-capability",
+    version: 1,
+    assertActive: () => {},
+    bindToolSurface: (tools) => tools,
+    runBeforeToolCall: async ({ params }) => ({ blocked: false, params }),
+    requestApproval: async (request) =>
+      (await callGatewayTool(
+        "plugin.approval.request",
+        { timeoutMs: request.transportTimeoutMs ?? request.timeoutMs },
+        {
+          pluginId: "codex",
+          ...request,
+          timeoutMs: request.timeoutMs,
+          twoPhase: true,
+        },
+        { expectFinal: false },
+      )) as Awaited<ReturnType<AgentHarnessHostCapabilities["requestApproval"]>>,
+    waitForApproval: async (request) => {
+      const result = (await callGatewayTool(
+        "plugin.approval.waitDecision",
+        { timeoutMs: request.transportTimeoutMs ?? request.timeoutMs },
+        { id: request.approvalId },
+      )) as { id?: string; decision?: "allow-once" | "allow-always" | "deny" | null };
+      return result?.id === request.approvalId ? result.decision : undefined;
+    },
+  };
   return {
     sessionKey: "agent:main:session-1",
     agentId: "main",
@@ -38,13 +67,13 @@ function createParams(): EmbeddedRunAttemptParams {
     currentChannelId: "chat-1",
     agentAccountId: "default",
     currentThreadTs: "thread-ts",
+    hostCapabilities,
   } as unknown as EmbeddedRunAttemptParams;
 }
 
 function buildApprovalElicitation() {
   return {
-    threadId: "thread-1",
-    turnId: "turn-1",
+    ...codexTestTurnIds(),
     serverName: "codex_apps__github",
     mode: "form",
     message: "Approve app tool call?",
@@ -92,8 +121,7 @@ function buildCurrentCodexApprovalElicitation() {
 
 function buildComputerUseApprovalElicitation(overrides: Record<string, unknown> = {}) {
   return {
-    threadId: "thread-1",
-    turnId: "turn-1",
+    ...codexTestTurnIds(),
     serverName: "computer-use",
     mode: "form",
     message: "Allow Codex to use Notes?",
@@ -110,8 +138,7 @@ function buildComputerUseApprovalElicitation(overrides: Record<string, unknown> 
 
 function buildPluginApprovalElicitation(overrides: Record<string, unknown> = {}) {
   return {
-    threadId: "thread-1",
-    turnId: "turn-1",
+    ...codexTestTurnIds(),
     serverName: "google-calendar-mcp",
     mode: "form",
     message: "Approve app action?",
@@ -134,8 +161,7 @@ function buildPluginApprovalElicitation(overrides: Record<string, unknown> = {})
 
 function buildConnectorPluginApprovalElicitation(overrides: Record<string, unknown> = {}) {
   return {
-    threadId: "thread-1",
-    turnId: "turn-1",
+    ...codexTestTurnIds(),
     serverName: "codex_apps",
     mode: "form",
     message: "Allow Google Calendar to create an event?",
@@ -230,6 +256,56 @@ describe("Codex app-server elicitation bridge", () => {
     vi.restoreAllMocks();
   });
 
+  it("declines app elicitations for scheduled app authority", async () => {
+    const params = {
+      ...createParams(),
+      trigger: "cron",
+      scheduledRuntimeAuthority: {
+        version: 1,
+        runtimeId: "codex",
+        namespace: "codex.apps",
+        payload: { version: 1 },
+      },
+    } as EmbeddedRunAttemptParams;
+
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildPluginApprovalElicitation(),
+      paramsForRun: params,
+      ...codexTestTurnIds(),
+      pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions: true }),
+    });
+
+    expect(result).toEqual({ action: "decline", content: null, _meta: null });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("keeps unrelated Computer Use elicitation policy unchanged", async () => {
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-computer-use", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-computer-use", decision: "allow-once" });
+    const params = {
+      ...createParams(),
+      trigger: "cron",
+      scheduledRuntimeAuthority: {
+        version: 1,
+        runtimeId: "codex",
+        namespace: "codex.apps",
+        payload: { version: 1 },
+      },
+    } as EmbeddedRunAttemptParams;
+
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildComputerUseApprovalElicitation(),
+      paramsForRun: params,
+      ...codexTestTurnIds(),
+      pluginAppPolicyContext: createPluginAppPolicyContext({ apps: [] }),
+      computerUseMcpServerName: "computer-use",
+    });
+
+    expect(result).toEqual({ action: "accept", content: null, _meta: null });
+    expect(mockCallGatewayTool).toHaveBeenCalledTimes(2);
+  });
+
   it("routes MCP tool approval elicitations through plugin approvals", async () => {
     mockCallGatewayTool
       .mockResolvedValueOnce({ id: "plugin:approval-1", status: "accepted" })
@@ -238,8 +314,7 @@ describe("Codex app-server elicitation bridge", () => {
     const result = await handleCodexAppServerElicitationRequest({
       requestParams: buildApprovalElicitation(),
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({
@@ -267,8 +342,7 @@ describe("Codex app-server elicitation bridge", () => {
     const result = await handleCodexAppServerElicitationRequest({
       requestParams: buildApprovalElicitation(),
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({ action: "decline", content: null, _meta: null });
@@ -290,8 +364,7 @@ describe("Codex app-server elicitation bridge", () => {
     const result = await handleCodexAppServerElicitationRequest({
       requestParams: buildApprovalElicitation(),
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({
@@ -315,8 +388,7 @@ describe("Codex app-server elicitation bridge", () => {
     const result = await handleCodexAppServerElicitationRequest({
       requestParams: buildCurrentCodexApprovalElicitation(),
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({
@@ -344,8 +416,7 @@ describe("Codex app-server elicitation bridge", () => {
     const result = await handleCodexAppServerElicitationRequest({
       requestParams: buildComputerUseApprovalElicitation(),
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       pluginAppPolicyContext: createPluginAppPolicyContext({ apps: [] }),
       computerUseMcpServerName: "computer-use",
     });
@@ -372,8 +443,7 @@ describe("Codex app-server elicitation bridge", () => {
     const result = await handleCodexAppServerElicitationRequest({
       requestParams: buildComputerUseApprovalElicitation(),
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       pluginAppPolicyContext: createPluginAppPolicyContext({ apps: [] }),
       computerUseMcpServerName: "computer-use",
     });
@@ -391,8 +461,7 @@ describe("Codex app-server elicitation bridge", () => {
     const result = await handleCodexAppServerElicitationRequest({
       requestParams: buildComputerUseApprovalElicitation({ serverName: "desktop-control" }),
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       pluginAppPolicyContext: createPluginAppPolicyContext({ apps: [] }),
       computerUseMcpServerName: "computer-use",
     });
@@ -412,8 +481,7 @@ describe("Codex app-server elicitation bridge", () => {
     const result = await handleCodexAppServerElicitationRequest({
       requestParams: buildComputerUseApprovalElicitation({ serverName: "desktop-control" }),
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       pluginAppPolicyContext: createPluginAppPolicyContext({ apps: [] }),
       computerUseMcpServerName: "desktop-control",
     });
@@ -447,8 +515,7 @@ describe("Codex app-server elicitation bridge", () => {
         },
       }),
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       pluginAppPolicyContext: createPluginAppPolicyContext({ apps: [] }),
       computerUseMcpServerName: "computer-use",
     });
@@ -480,8 +547,7 @@ describe("Codex app-server elicitation bridge", () => {
         requestedSchema: "not-a-schema",
       }),
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       pluginAppPolicyContext: createPluginAppPolicyContext({ apps: [] }),
       computerUseMcpServerName: "computer-use",
     });
@@ -499,8 +565,7 @@ describe("Codex app-server elicitation bridge", () => {
         mode: "notification",
       }),
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       pluginAppPolicyContext: createPluginAppPolicyContext({ apps: [] }),
       computerUseMcpServerName: "computer-use",
     });
@@ -521,8 +586,7 @@ describe("Codex app-server elicitation bridge", () => {
         _meta: null,
       }),
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       pluginAppPolicyContext: createPluginAppPolicyContext({ apps: [] }),
       computerUseMcpServerName: "computer-use\u009b31m",
     });
@@ -577,8 +641,7 @@ describe("Codex app-server elicitation bridge", () => {
         },
       },
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     const approvalRequest = gatewayToolArg(0, 2) as {
@@ -632,8 +695,7 @@ describe("Codex app-server elicitation bridge", () => {
         },
       },
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     const approvalRequest = gatewayToolArg(0, 2) as {
@@ -690,8 +752,7 @@ describe("Codex app-server elicitation bridge", () => {
         },
       },
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     const approvalRequest = gatewayToolArg(0, 2) as {
@@ -734,8 +795,7 @@ describe("Codex app-server elicitation bridge", () => {
         },
       },
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     const approvalRequest = gatewayToolArg(0, 2) as {
@@ -767,8 +827,7 @@ describe("Codex app-server elicitation bridge", () => {
         },
       },
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     const approvalRequest = gatewayToolArg(0, 2) as {
@@ -791,8 +850,7 @@ describe("Codex app-server elicitation bridge", () => {
         turnId: null,
       },
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({
@@ -806,8 +864,7 @@ describe("Codex app-server elicitation bridge", () => {
     const result = await handleCodexAppServerElicitationRequest({
       requestParams: buildPluginApprovalElicitation(),
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions: false }),
     });
 
@@ -819,8 +876,7 @@ describe("Codex app-server elicitation bridge", () => {
     const result = await handleCodexAppServerElicitationRequest({
       requestParams: buildPluginApprovalElicitation(),
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions: true }),
     });
 
@@ -836,8 +892,7 @@ describe("Codex app-server elicitation bridge", () => {
     const result = await handleCodexAppServerElicitationRequest({
       requestParams: buildConnectorPluginApprovalElicitation(),
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       pluginAppPolicyContext: createPluginAppPolicyContext({
         allowDestructiveActions: true,
         apps: [
@@ -875,8 +930,7 @@ describe("Codex app-server elicitation bridge", () => {
         },
       }),
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       pluginAppPolicyContext: createAccountAppPolicyContext({
         appId: "chatgpt_meetings",
         appName: "ChatGPT Meetings",
@@ -899,8 +953,7 @@ describe("Codex app-server elicitation bridge", () => {
         _meta: { app_id: "chatgpt_meetings" },
       }),
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       pluginAppPolicyContext: createAccountAppPolicyContext({
         appId: "chatgpt_meetings",
         appName: "ChatGPT Meetings",
@@ -927,8 +980,7 @@ describe("Codex app-server elicitation bridge", () => {
       const result = await handleCodexAppServerElicitationRequest({
         requestParams: buildConnectorPluginApprovalElicitation({ requestedSchema }),
         paramsForRun: createParams(),
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         pluginAppPolicyContext: createPluginAppPolicyContext({
           allowDestructiveActions: true,
           apps: [
@@ -954,8 +1006,7 @@ describe("Codex app-server elicitation bridge", () => {
     const result = await handleCodexAppServerElicitationRequest({
       requestParams: buildConnectorPluginApprovalElicitation(),
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       pluginAppPolicyContext: createPluginAppPolicyContext({
         allowDestructiveActions: true,
         destructiveApprovalMode: "auto",
@@ -1006,8 +1057,7 @@ describe("Codex app-server elicitation bridge", () => {
         },
       }),
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       pluginAppPolicyContext: createPluginAppPolicyContext({
         allowDestructiveActions: true,
         destructiveApprovalMode: "auto",
@@ -1068,8 +1118,7 @@ describe("Codex app-server elicitation bridge", () => {
         },
       }),
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       pluginAppPolicyContext: createPluginAppPolicyContext({
         allowDestructiveActions: true,
         destructiveApprovalMode: "auto",
@@ -1115,8 +1164,7 @@ describe("Codex app-server elicitation bridge", () => {
         },
       }),
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       pluginAppPolicyContext: createPluginAppPolicyContext({
         allowDestructiveActions: true,
         destructiveApprovalMode: "ask",
@@ -1163,8 +1211,7 @@ describe("Codex app-server elicitation bridge", () => {
         },
       }),
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       pluginAppPolicyContext: createPluginAppPolicyContext({
         allowDestructiveActions: true,
         destructiveApprovalMode: "ask",
@@ -1193,8 +1240,7 @@ describe("Codex app-server elicitation bridge", () => {
     const result = await handleCodexAppServerElicitationRequest({
       requestParams: buildConnectorPluginApprovalElicitation(),
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       pluginAppPolicyContext: createPluginAppPolicyContext({
         allowDestructiveActions: true,
         destructiveApprovalMode: "auto",
@@ -1220,8 +1266,7 @@ describe("Codex app-server elicitation bridge", () => {
     const result = await handleCodexAppServerElicitationRequest({
       requestParams: buildConnectorPluginApprovalElicitation(),
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       pluginAppPolicyContext: createPluginAppPolicyContext({
         allowDestructiveActions: true,
         destructiveApprovalMode: "auto",
@@ -1253,8 +1298,7 @@ describe("Codex app-server elicitation bridge", () => {
     const result = await handleCodexAppServerElicitationRequest({
       requestParams: buildConnectorPluginApprovalElicitation(),
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       pluginAppPolicyContext: createPluginAppPolicyContext({
         allowDestructiveActions: true,
         destructiveApprovalMode: "auto",
@@ -1276,8 +1320,7 @@ describe("Codex app-server elicitation bridge", () => {
     const result = await handleCodexAppServerElicitationRequest({
       requestParams: buildConnectorPluginApprovalElicitation(),
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       pluginAppPolicyContext: createPluginAppPolicyContext({
         allowDestructiveActions: false,
         apps: [
@@ -1305,8 +1348,7 @@ describe("Codex app-server elicitation bridge", () => {
         },
       }),
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       pluginAppPolicyContext: createPluginAppPolicyContext({
         allowDestructiveActions: true,
         apps: [
@@ -1336,8 +1378,7 @@ describe("Codex app-server elicitation bridge", () => {
         },
       }),
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       pluginAppPolicyContext: createPluginAppPolicyContext({
         allowDestructiveActions: true,
         apps: [
@@ -1358,8 +1399,7 @@ describe("Codex app-server elicitation bridge", () => {
     const result = await handleCodexAppServerElicitationRequest({
       requestParams: buildPluginApprovalElicitation({ turnId: null }),
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions: true }),
     });
 
@@ -1371,8 +1411,7 @@ describe("Codex app-server elicitation bridge", () => {
     const result = await handleCodexAppServerElicitationRequest({
       requestParams: buildPluginApprovalElicitation({ turnId: "turn-2" }),
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions: true }),
     });
 
@@ -1387,8 +1426,7 @@ describe("Codex app-server elicitation bridge", () => {
         _meta: {},
       }),
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       pluginAppPolicyContext: createPluginAppPolicyContext({
         allowDestructiveActions: true,
         apps: [
@@ -1419,8 +1457,7 @@ describe("Codex app-server elicitation bridge", () => {
         },
       }),
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions: true }),
     });
 
@@ -1432,8 +1469,7 @@ describe("Codex app-server elicitation bridge", () => {
     const result = await handleCodexAppServerElicitationRequest({
       requestParams: buildPluginApprovalElicitation(),
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({ action: "decline", content: null, _meta: null });
@@ -1455,8 +1491,7 @@ describe("Codex app-server elicitation bridge", () => {
         },
       }),
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions: true }),
     });
 
@@ -1472,8 +1507,7 @@ describe("Codex app-server elicitation bridge", () => {
     const result = await handleCodexAppServerElicitationRequest({
       requestParams: buildCurrentCodexApprovalElicitation(),
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions: true }),
     });
 
@@ -1494,8 +1528,7 @@ describe("Codex app-server elicitation bridge", () => {
     const result = await handleCodexAppServerElicitationRequest({
       requestParams: { turnId, serverName, mode, message, _meta, requestedSchema },
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toBeUndefined();
@@ -1510,8 +1543,7 @@ describe("Codex app-server elicitation bridge", () => {
     const result = await handleCodexAppServerElicitationRequest({
       requestParams: buildApprovalElicitation(),
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({
@@ -1534,8 +1566,7 @@ describe("Codex app-server elicitation bridge", () => {
     const result = await handleCodexAppServerElicitationRequest({
       requestParams: buildCurrentCodexApprovalElicitation(),
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({
@@ -1573,8 +1604,7 @@ describe("Codex app-server elicitation bridge", () => {
         },
       },
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({
@@ -1608,8 +1638,7 @@ describe("Codex app-server elicitation bridge", () => {
         },
       },
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({
@@ -1639,8 +1668,7 @@ describe("Codex app-server elicitation bridge", () => {
     const result = await handleCodexAppServerElicitationRequest({
       requestParams: buildApprovalElicitation(),
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({
@@ -1653,8 +1681,7 @@ describe("Codex app-server elicitation bridge", () => {
   it("ignores non-approval elicitation requests", async () => {
     const result = await handleCodexAppServerElicitationRequest({
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         serverName: "codex_apps__github",
         mode: "form",
         message: "Choose a template",
@@ -1671,8 +1698,7 @@ describe("Codex app-server elicitation bridge", () => {
         },
       },
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toBeUndefined();
@@ -1701,8 +1727,7 @@ describe("Codex app-server elicitation bridge", () => {
         },
       },
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({
@@ -1740,8 +1765,7 @@ describe("Codex app-server elicitation bridge", () => {
         },
       },
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     const approvalCallParams = gatewayToolArg(0, 2) as { title?: string; description?: string };
@@ -1760,8 +1784,7 @@ describe("Codex app-server elicitation bridge", () => {
         message: `${"\u0000".repeat(4095)}😀tail`,
       },
       paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     const approvalCallParams = gatewayToolArg(0, 2) as { title?: string; description?: string };
@@ -1770,3 +1793,4 @@ describe("Codex app-server elicitation bridge", () => {
     expect(() => encodeURIComponent(approvalCallParams.description ?? "")).not.toThrow();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

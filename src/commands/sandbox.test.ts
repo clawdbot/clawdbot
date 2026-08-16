@@ -106,6 +106,7 @@ describe("sandboxListCommand", () => {
       const container2 = createContainer({
         containerName: "container-2",
         imageMatch: false,
+        running: false,
       });
       mocks.listSandboxContainers.mockResolvedValue([container1, container2]);
 
@@ -114,6 +115,10 @@ describe("sandboxListCommand", () => {
       expectLogContains(runtime, "📦 Sandbox Runtimes");
       expectLogContains(runtime, container1.containerName);
       expectLogContains(runtime, container2.containerName);
+      expect(runtime.log).toHaveBeenCalledWith("    Status:  🟢 running");
+      expect(runtime.log).toHaveBeenCalledWith("    Image:   openclaw/sandbox:latest ✓");
+      expect(runtime.log).toHaveBeenCalledWith("    Status:  ⚫ stopped");
+      expect(runtime.log).toHaveBeenCalledWith("    Image:   openclaw/sandbox:latest ⚠️  mismatch");
       expectLogContains(runtime, "Total");
     });
 
@@ -242,11 +247,16 @@ describe("sandboxRecreateCommand", () => {
     });
 
     it("should remove all when --all flag set", async () => {
-      const containers = [createContainer(), createContainer()];
+      const containers = [
+        createContainer({ containerName: "running-container" }),
+        createContainer({ containerName: "stopped-container", running: false }),
+      ];
       mocks.listSandboxContainers.mockResolvedValue(containers);
 
       await sandboxRecreateCommand({ all: true, browser: false, force: true }, runtime as never);
 
+      expect(runtime.log).toHaveBeenCalledWith("  - running-container [docker] (running)");
+      expect(runtime.log).toHaveBeenCalledWith("  - stopped-container [docker] (stopped)");
       expect(mocks.removeSandboxContainer).toHaveBeenCalledTimes(2);
     });
 
@@ -287,7 +297,7 @@ describe("sandboxRecreateCommand", () => {
     });
 
     it("should cancel on clack cancel symbol", async () => {
-      await runCancelledConfirmation(Symbol.for("clack:cancel"));
+      await runCancelledConfirmation(Symbol("clack:cancel"));
 
       expect(runtime.log).toHaveBeenCalledWith("Cancelled.");
       expect(mocks.removeSandboxContainer).not.toHaveBeenCalled();

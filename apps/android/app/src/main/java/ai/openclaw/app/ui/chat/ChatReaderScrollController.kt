@@ -208,16 +208,19 @@ internal fun ChatReaderState.onTimelineChanged(
   val hasNewUserTurn =
     timeline.latestUserMessageVersion != null && timeline.latestUserMessageVersion != latestUserMessageVersion
   if (hasNewUserTurn) {
+    // A live turn follows the bottom so the reply streams into view (parity with the
+    // iOS reader, #108692/#108693). ReadAnchor remains the session-restore bookmark only;
+    // re-pinning the prompt here would hide the reply below the fold behind a jump pill.
     return ChatReaderTransition(
       state =
         copy(
-          followTarget = ChatScrollFollowTarget.ReadAnchor,
+          followTarget = ChatScrollFollowTarget.LatestContent,
           hasNewerContent = false,
           latestUserMessageId = timeline.latestUserMessageId,
           latestUserMessageVersion = timeline.latestUserMessageVersion,
           latestContentVersion = timeline.latestContentVersion,
         ),
-      scrollIndex = timeline.readAnchorIndex ?: timeline.latestContentIndex,
+      scrollIndex = timeline.latestContentIndex ?: timeline.readAnchorIndex,
       animated = true,
     )
   }

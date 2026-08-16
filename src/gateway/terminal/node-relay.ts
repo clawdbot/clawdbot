@@ -1,8 +1,11 @@
 import { NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS } from "../../infra/node-commands.js";
+import { BoundedBuffer } from "../../shared/bounded-buffer.js";
 import type { NodeRegistry, NodeInvokeResult } from "../node-registry.js";
 import type { TerminalBackend, TerminalBackendExit } from "./backend.js";
+import { surrogateSafeTail } from "./output-ring.js";
 
 const DATA_INPUT_CHUNK_BYTES = 2 * 1024;
+const MAX_PENDING_DATA_CHARS = 512 * 1024;
 
 function parseExit(result: NodeInvokeResult): TerminalBackendExit {
   if (!result.ok) {
@@ -61,26 +64,37 @@ function splitInput(data: string): string[] {
 export async function createNodeRelayBackend(params: {
   registry: NodeRegistry;
   nodeId: string;
+  expectedConnId: string;
+  expectedPairingGeneration?: string;
   command: string;
   params: Record<string, unknown>;
 }): Promise<TerminalBackend> {
-  let invokeId: string | undefined;
+  let resolveDispatchReady!: (invokeId: string) => void;
+  const dispatchReady = new Promise<string>((resolve) => {
+    resolveDispatchReady = resolve;
+  });
   let dataCallback: ((data: string) => void) | undefined;
   let exitCallback: ((exit: TerminalBackendExit) => void) | undefined;
-  const pendingData: string[] = [];
+  const pendingData = new BoundedBuffer<string>(
+    MAX_PENDING_DATA_CHARS,
+    { mode: "drop-oldest", fit: surrogateSafeTail },
+    (chunk) => chunk.length,
+  );
   let pendingExit: TerminalBackendExit | undefined;
   const abort = new AbortController();
   const result = params.registry
     .invoke({
       nodeId: params.nodeId,
+      expectedConnId: params.expectedConnId,
+      ...(params.expectedPairingGeneration
+        ? { expectedPairingGeneration: params.expectedPairingGeneration }
+        : {}),
       command: params.command,
       params: params.params,
       timeoutMs: 0,
       idleTimeoutMs: NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS,
       signal: abort.signal,
-      onInvokeId: (id) => {
-        invokeId = id;
-      },
+      onDispatchReady: resolveDispatchReady,
       onProgress: (chunk) => {
         if (!chunk) {
           return;
@@ -88,6 +102,7 @@ export async function createNodeRelayBackend(params: {
         if (dataCallback) {
           dataCallback(chunk);
         } else {
+          // Registration should be immediate, but bound this gap; repaint recovers after drops.
           pendingData.push(chunk);
         }
       },
@@ -106,14 +121,14 @@ export async function createNodeRelayBackend(params: {
       }
       return exit;
     });
-  // NodeRegistry invokes onInvokeId synchronously after a successful send, before its first await.
-  // Failure paths resolve the result instead; keeping that callback synchronous is load-bearing.
-  await Promise.resolve();
-  if (!invokeId) {
-    const exit = await result;
-    throw new Error(exit.error ?? "failed to start node terminal invoke");
-  }
-  const activeInvokeId = invokeId;
+  // Pairing-generation validation is asynchronous. Open only after the exact
+  // admitted connection is dispatch-ready; a pre-dispatch failure wins instead.
+  const activeInvokeId = await Promise.race([
+    dispatchReady,
+    result.then((exit) => {
+      throw new Error(exit.error ?? "failed to start node terminal invoke");
+    }),
+  ]);
   const send = (payload: unknown) => params.registry.sendInvokeInput(activeInvokeId, payload);
   return {
     write(data) {
@@ -124,12 +139,16 @@ export async function createNodeRelayBackend(params: {
     resize(cols, rows) {
       send({ kind: "resize", cols, rows });
     },
+    // Node host pauses its PTY around each awaited progress write; this relay
+    // has no local PTY or transport-level pause operation to control.
+    pause() {},
+    resume() {},
     kill() {
       abort.abort();
     },
     onData(callback) {
       dataCallback = callback;
-      for (const chunk of pendingData.splice(0)) {
+      for (const chunk of pendingData.drain()) {
         callback(chunk);
       }
     },

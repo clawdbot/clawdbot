@@ -1,3 +1,8 @@
+import {
+  WORKBOARD_STATUSES,
+  type WorkboardCard,
+  type WorkboardStatus,
+} from "@openclaw/workboard-contract";
 // Workboard plugin module implements command behavior.
 import type { OpenClawPluginApi } from "../api.js";
 import { resolveWorkboardCardByIdOrPrefix } from "./card-lookup.js";
@@ -7,7 +12,6 @@ import {
   type WorkboardWorktreeRuntime,
 } from "./dispatcher.js";
 import type { WorkboardStore } from "./store.js";
-import type { WorkboardCard } from "./types.js";
 import {
   canonicalizeWorkboardWorkspaceAccess,
   resolveAgentWorkboardWorkspaceRuntime,
@@ -54,6 +58,9 @@ function formatCardDetails(card: WorkboardCard): string {
   if (card.runId) {
     lines.push(`run: ${card.runId}`);
   }
+  if (card.metadata?.archivedAt) {
+    lines.push("archived: yes (excluded from dispatch)");
+  }
   if (card.notes) {
     lines.push("", card.notes);
   }
@@ -62,6 +69,10 @@ function formatCardDetails(card: WorkboardCard): string {
 
 function normalizeTitle(tokens: string[]): string {
   return tokens.join(" ").trim();
+}
+
+function isWorkboardStatus(value: string): value is WorkboardStatus {
+  return (WORKBOARD_STATUSES as readonly string[]).includes(value);
 }
 
 function canMutateWorkboard(params: {
@@ -88,7 +99,7 @@ function requireWriteAccess(params: {
   };
 }
 
-export async function handleWorkboardCommand(params: {
+async function handleWorkboardCommand(params: {
   api: WorkboardCommandApi;
   store: WorkboardStore;
   args?: string;
@@ -111,6 +122,7 @@ export async function handleWorkboardCommand(params: {
         "/workboard list",
         "/workboard show <card-id>",
         "/workboard create <title>",
+        "/workboard move <card-id> --status <status>",
         "/workboard dispatch",
       ].join("\n"),
     };
@@ -143,6 +155,33 @@ export async function handleWorkboardCommand(params: {
     );
     const card = await params.store.create({ title, workspaceAccess });
     return { text: `Created ${card.id.slice(0, 8)} ${card.title}` };
+  }
+  if (action === "move") {
+    const accessError = requireWriteAccess(params);
+    if (accessError) {
+      return accessError;
+    }
+    const id = rest[0];
+    const statusIndex = rest.indexOf("--status");
+    const status = statusIndex >= 0 ? rest[statusIndex + 1] : undefined;
+    if (!id || !status) {
+      return {
+        text: "Usage: /workboard move <card-id> --status <status>",
+        isError: true,
+      };
+    }
+    if (!isWorkboardStatus(status)) {
+      return {
+        text: `status must be one of: ${WORKBOARD_STATUSES.join(", ")}.`,
+        isError: true,
+      };
+    }
+    const cards = await params.store.list();
+    const { card, error } = resolveWorkboardCardByIdOrPrefix(cards, id);
+    if (!card) {
+      return { text: error, isError: true };
+    }
+    return { text: formatCardLine(await params.store.move(card.id, status, undefined)) };
   }
   if (action === "dispatch") {
     const accessError = requireWriteAccess(params);

@@ -2,7 +2,7 @@
 import {
   resolveConfiguredBindingRecord,
   resolveConfiguredBindingRecordBySessionKey,
-} from "../channels/plugins/binding-registry.js";
+} from "../channels/plugins/configured-binding-registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveConfiguredAcpBindingSpecFromRecord,

@@ -5,13 +5,13 @@ import {
   createRunningTaskRun,
 } from "../../../tasks/detached-task-runtime.js";
 import type { TaskRecord } from "../../../tasks/runtime-internal.js";
-import { resetTaskRegistryForTests } from "../../../tasks/task-registry.js";
+import { resetTaskRegistryForTests } from "../../../tasks/task-runtime.test-helpers.js";
 import {
   requiresCompletionRequiredAsyncTaskWait,
   shouldWaitForCompletionRequiredAsyncTasks,
   waitForCompletionRequiredAsyncTasks,
   type AsyncStartedToolMeta,
-} from "./attempt.async-tasks.js";
+} from "./attempt-async-tasks.js";
 
 function requireCreatedTask(task: TaskRecord | null): TaskRecord {
   // Task registry creation returns null for invalid task shapes; tests require

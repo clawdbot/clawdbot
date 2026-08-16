@@ -2,22 +2,22 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  loadNodeHostConfig: vi.fn(),
+  loadNodeHostConfigReadOnly: vi.fn(),
 }));
 
 vi.mock("../node-host/config.js", () => ({
-  loadNodeHostConfig: mocks.loadNodeHostConfig,
+  loadNodeHostConfigReadOnly: mocks.loadNodeHostConfigReadOnly,
 }));
 
 import { resolveNodeOnlyGatewayInfo } from "./status.node-mode.js";
 
 describe("resolveNodeOnlyGatewayInfo", () => {
   beforeEach(() => {
-    mocks.loadNodeHostConfig.mockReset();
+    mocks.loadNodeHostConfigReadOnly.mockReset();
   });
 
   it("returns node-only gateway details when no local gateway is installed", async () => {
-    mocks.loadNodeHostConfig.mockResolvedValueOnce({
+    mocks.loadNodeHostConfigReadOnly.mockResolvedValueOnce({
       version: 1,
       nodeId: "node-1",
       gateway: { host: "gateway.example.com", port: 19000 },
@@ -30,7 +30,7 @@ describe("resolveNodeOnlyGatewayInfo", () => {
           installed: true,
           loaded: true,
           externallyManaged: false,
-          runtimeShort: "running (pid 4321)",
+          runtime: { status: "running", pid: 4321 },
         },
       }),
     ).resolves.toEqual({
@@ -46,7 +46,7 @@ describe("resolveNodeOnlyGatewayInfo", () => {
   });
 
   it("does not claim node-only mode when the node service is installed but inactive", async () => {
-    mocks.loadNodeHostConfig.mockResolvedValueOnce({
+    mocks.loadNodeHostConfigReadOnly.mockResolvedValueOnce({
       version: 1,
       nodeId: "node-1",
       gateway: { host: "gateway.example.com", port: 19000 },
@@ -60,14 +60,13 @@ describe("resolveNodeOnlyGatewayInfo", () => {
           loaded: false,
           externallyManaged: false,
           runtime: { status: "stopped" },
-          runtimeShort: "stopped",
         },
       }),
     ).resolves.toBeNull();
   });
 
   it("falls back to an unknown gateway target when node-only config is missing", async () => {
-    mocks.loadNodeHostConfig.mockResolvedValueOnce(null);
+    mocks.loadNodeHostConfigReadOnly.mockResolvedValueOnce(null);
 
     await expect(
       resolveNodeOnlyGatewayInfo({
@@ -76,7 +75,6 @@ describe("resolveNodeOnlyGatewayInfo", () => {
           installed: true,
           loaded: true,
           externallyManaged: false,
-          runtimeShort: "running (pid 4321)",
         },
       }),
     ).resolves.toEqual({

@@ -1,11 +1,12 @@
-// File Transfer tests cover node invoke policy plugin behavior.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import { gzipSync } from "node:zlib";
 import type { OpenClawPluginNodeInvokePolicyContext } from "openclaw/plugin-sdk/plugin-entry";
+// File Transfer tests cover node invoke policy plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { appendFileTransferAudit } from "./audit.js";
-import { createFileTransferNodeInvokePolicy, testing } from "./node-invoke-policy.js";
+import { createFileTransferNodeInvokePolicy } from "./node-invoke-policy.js";
 
 vi.mock("./audit.js", () => ({
   appendFileTransferAudit: vi.fn(async () => undefined),
@@ -128,12 +129,7 @@ function createCtx(overrides: {
   };
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`${label} was not an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "label-not-object");
 
 function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
   for (const [key, value] of Object.entries(fields)) {
@@ -155,13 +151,6 @@ function requireInvokeParams(
 }
 
 describe("file-transfer node invoke policy", () => {
-  it("maps only transfer payload sizes into audit records", () => {
-    expect(testing.readAuditSizeBytes("file.fetch", { size: 3 })).toBe(3);
-    expect(testing.readAuditSizeBytes("file.write", { size: 4 })).toBe(4);
-    expect(testing.readAuditSizeBytes("dir.fetch", { tarBytes: 999 }, 5)).toBe(5);
-    expect(testing.readAuditSizeBytes("dir.list", { size: 6 })).toBeUndefined();
-  });
-
   it("injects policy-owned limits before invoking the node", async () => {
     const policy = createFileTransferNodeInvokePolicy();
     const { ctx, invokeNode } = createCtx({

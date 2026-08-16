@@ -1,5 +1,9 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { truncateUtf16Safe } from "../../../packages/normalization-core/src/utf16-slice.ts";
+import { toErrorObject as toLintErrorObject } from "../error-format.mts";
+
+export { toLintErrorObject };
 
 export function resolveCommandPath(command: string) {
   const pathValue = process.env.PATH ?? "";
@@ -28,7 +32,7 @@ export function trimForSummary(value: string) {
   if (trimmed.length <= 600) {
     return trimmed;
   }
-  return `${trimmed.slice(0, 600)}...`;
+  return `${truncateUtf16Safe(trimmed, 600)}...`;
 }
 
 export function formatError(error: unknown) {
@@ -42,18 +46,4 @@ export function sleep(ms: number) {
   return new Promise<void>((resolvePromise) => {
     setTimeout(resolvePromise, ms);
   });
-}
-
-export function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

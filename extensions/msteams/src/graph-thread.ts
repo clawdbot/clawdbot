@@ -1,4 +1,5 @@
 // Msteams plugin module implements graph thread behavior.
+import { decodeHtmlEntities } from "openclaw/plugin-sdk/html-entity-runtime";
 import { fetchGraphJson, type GraphResponse } from "./graph.js";
 import type { MSTeamsRequestDeadline } from "./request-timeout.js";
 
@@ -21,16 +22,8 @@ export function stripHtmlFromTeamsMessage(html: string): string {
   let text = html.replace(/<at[^>]*>(.*?)<\/at>/gi, "@$1");
   // Strip remaining HTML tags.
   text = text.replace(/<[^>]*>/g, " ");
-  // Decode common HTML entities. &amp; must be decoded LAST to prevent
-  // double-decoding (e.g. &amp;lt; → &lt; not <), matching decodeHtmlEntities
-  // in inbound.ts.
-  text = text
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&");
+  // Single-pass decoding preserves literally typed entity text such as "&lt;".
+  text = decodeHtmlEntities(text).replaceAll("\u00a0", " ");
   // Normalize whitespace.
   return text.replace(/\s+/g, " ").trim();
 }

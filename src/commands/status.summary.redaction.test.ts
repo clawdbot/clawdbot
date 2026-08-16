@@ -1,7 +1,7 @@
 // Status summary redaction tests cover sensitive field removal from summarized runtime state.
 import { describe, expect, it } from "vitest";
-import { redactSensitiveStatusSummary } from "./status.summary.js";
-import type { SessionStatus, StatusSummary } from "./status.types.js";
+import { redactSensitiveStatusSummary } from "../status/summary.js";
+import type { SessionStatus, StatusSummary } from "../status/types.js";
 
 function createRecentSessionRow(): SessionStatus {
   return {

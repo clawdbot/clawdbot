@@ -7,9 +7,6 @@ import {
   type FileStoreSync,
 } from "@openclaw/fs-safe/store";
 
-// Private stores create owner-only files under a caller-provided root.
-export type PrivateFileStore = FileStore;
-
 /** Create an async private file store rooted at `rootDir`. */
 export function privateFileStore(rootDir: string): FileStore {
   return fileStore({ rootDir, private: true });

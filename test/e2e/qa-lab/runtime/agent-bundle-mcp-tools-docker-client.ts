@@ -10,10 +10,8 @@ import {
   disposeAllSessionMcpRuntimes,
   getOrCreateSessionMcpRuntime,
 } from "../../../../dist/agents/agent-bundle-mcp-runtime.js";
-import {
-  applyFinalEffectiveToolPolicy,
-  resolveConversationCapabilityProfile,
-} from "../../../../dist/agents/embedded-agent-runner/effective-tool-policy.js";
+import { resolveConversationCapabilityProfile } from "../../../../dist/agents/conversation-capability-profile.js";
+import { applyFinalEffectiveToolPolicy } from "../../../../dist/agents/embedded-agent-runner/effective-tool-policy.js";
 import { splitSdkTools } from "../../../../dist/agents/embedded-agent-runner/tool-split.js";
 import type { OpenClawConfig } from "../../../../dist/config/types.openclaw.js";
 import { getPluginToolMeta } from "../../../../dist/plugins/tools.js";

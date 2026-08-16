@@ -1,8 +1,11 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
+  SessionsCatalogHostEventSchema,
   SessionsCatalogListParamsSchema,
   SessionsCatalogListResultSchema,
+  SessionsCatalogStartTerminalParamsSchema,
+  SessionsCatalogStartTerminalResultSchema,
 } from "./sessions-catalog.js";
 
 describe("SessionsCatalogListResultSchema", () => {
@@ -16,7 +19,10 @@ describe("SessionsCatalogListResultSchema", () => {
             capabilities: {
               continueSession: true,
               archive: false,
-              createSession: { model: "anthropic/claude-opus-4-8" },
+              createSession: {
+                model: "anthropic/claude-opus-4-8",
+                startTerminal: true,
+              },
               openTerminal: true,
             },
             hosts: [
@@ -30,6 +36,7 @@ describe("SessionsCatalogListResultSchema", () => {
                     threadId: "thread-1",
                     status: "idle",
                     archived: false,
+                    createdActor: { type: "human", id: "profile-ada", label: "Ada" },
                     canContinue: true,
                     canArchive: false,
                     canOpenTerminal: true,
@@ -44,7 +51,45 @@ describe("SessionsCatalogListResultSchema", () => {
   });
 });
 
+describe("SessionsCatalogStartTerminal schemas", () => {
+  it("accepts the terminal start contract and rejects unknown fields", () => {
+    const params = {
+      catalogId: "codex",
+      hostId: "gateway:local",
+      agentId: "main",
+      cwd: "/tmp/worktree",
+      initialMessage: "Inspect the failing test",
+    };
+    const result = {
+      sessionId: "terminal-1",
+      agentId: "main",
+      shell: "/bin/zsh",
+      cwd: "/tmp/worktree",
+      confined: false,
+      title: "Codex",
+    };
+
+    expect(Value.Check(SessionsCatalogStartTerminalParamsSchema, params)).toBe(true);
+    expect(
+      Value.Check(SessionsCatalogStartTerminalParamsSchema, { ...params, unexpected: true }),
+    ).toBe(false);
+    expect(Value.Check(SessionsCatalogStartTerminalResultSchema, result)).toBe(true);
+    expect(
+      Value.Check(SessionsCatalogStartTerminalResultSchema, { ...result, unexpected: true }),
+    ).toBe(false);
+  });
+});
+
 describe("SessionsCatalogListParamsSchema", () => {
+  it("accepts an optional progressive stream id without a catalog selector", () => {
+    expect(
+      Value.Check(SessionsCatalogListParamsSchema, {
+        agentId: "main",
+        progressId: "progress-1",
+      }),
+    ).toBe(true);
+  });
+
   it("accepts an optional agent scope", () => {
     expect(
       Value.Check(SessionsCatalogListParamsSchema, {
@@ -54,15 +99,53 @@ describe("SessionsCatalogListParamsSchema", () => {
     ).toBe(true);
   });
 
-  it("requires a catalog selector for host cursors", () => {
+  it("accepts flat optional catalog cursor fields", () => {
     expect(
       Value.Check(SessionsCatalogListParamsSchema, { cursors: { "gateway:local": "1" } }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       Value.Check(SessionsCatalogListParamsSchema, {
         catalogId: "claude",
         cursors: { "gateway:local": "1" },
       }),
     ).toBe(true);
+  });
+});
+
+describe("SessionsCatalogHostEventSchema", () => {
+  it("accepts one completed host and rejects unknown fields", () => {
+    const event = {
+      progressId: "progress-1",
+      agentId: "main",
+      catalog: {
+        id: "codex",
+        label: "Codex",
+        capabilities: { continueSession: true, archive: true },
+        hosts: [
+          {
+            hostId: "gateway:local",
+            label: "Local Codex",
+            kind: "gateway",
+            connected: true,
+            sessions: [],
+          },
+        ],
+      },
+    };
+
+    expect(Value.Check(SessionsCatalogHostEventSchema, event)).toBe(true);
+    expect(Value.Check(SessionsCatalogHostEventSchema, { ...event, unexpected: true })).toBe(false);
+    expect(
+      Value.Check(SessionsCatalogHostEventSchema, {
+        ...event,
+        catalog: { ...event.catalog, hosts: [] },
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(SessionsCatalogHostEventSchema, {
+        ...event,
+        catalog: { ...event.catalog, hosts: [event.catalog.hosts[0], event.catalog.hosts[0]] },
+      }),
+    ).toBe(false);
   });
 });

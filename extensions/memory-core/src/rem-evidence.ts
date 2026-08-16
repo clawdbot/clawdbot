@@ -380,7 +380,7 @@ function summarizeSection(
 
 function compactCandidateTitle(title: string): string {
   let compact = sanitizeSectionTitle(title)
-    .replace(/\s*\((?:via:|from qmd \+ memory|this session)[^)]+\)\s*/gi, " ")
+    .replace(/\s*\((?:via:|this session)[^)]+\)\s*/gi, " ")
     .replace(
       /\s*[—-]\s*(?:research results.*|in progress.*|working.*|installed.*|booked.*|proposed.*|clarified.*|candidate.*|fixes.*|updates?.*)$/i,
       "",
@@ -1098,3 +1098,4 @@ export async function previewGroundedRemMarkdown(params: {
     files: previews,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

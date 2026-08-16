@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   beginGatewayRestartSignalAdmission,
+  beginGatewayRootWorkAdmissionWhenOpen,
   GatewayDrainingError,
   getActiveGatewayRootWorkCount,
   isGatewaySubordinateWorkAdmissionClosed,
@@ -9,7 +10,10 @@ import {
   markGatewayRestartDraining,
   retainGatewayRootWorkAdmissionContinuation,
   resetGatewayWorkAdmission,
+  rollbackGatewayRestartSignalFence,
   runWithGatewayIndependentRootWorkContinuation,
+  runOutsideGatewayRootWorkAdmission,
+  tryBeginGatewayPreparedRestartRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
   waitForActiveGatewayRootWork,
@@ -62,6 +66,34 @@ it("rolls back or releases a generation-bound suspension without resetting roots
   expect(prepared?.release()).toBe(false);
   expect(invalidated).not.toHaveBeenCalled();
   expect(isGatewayWorkAdmissionClosed()).toBe(false);
+});
+
+it("admits a targeted restart root only from prepared suspension", () => {
+  expect(tryBeginGatewayPreparedRestartRootWorkAdmission()).toBeNull();
+
+  const suspension = tryBeginGatewaySuspendAdmission(() => {});
+  expect(suspension).not.toBeNull();
+  expect(tryBeginGatewayPreparedRestartRootWorkAdmission()).toBeNull();
+  expect(suspension?.commit()).toBe(true);
+
+  const restartRoot = tryBeginGatewayPreparedRestartRootWorkAdmission();
+  expect(restartRoot?.ownsRoot).toBe(true);
+  expect(getActiveGatewayRootWorkCount()).toBe(1);
+  expect(tryBeginGatewayPreparedRestartRootWorkAdmission()).toBeNull();
+  restartRoot?.release();
+  expect(getActiveGatewayRootWorkCount()).toBe(0);
+  expect(suspension?.release()).toBe(true);
+
+  const prepared = tryBeginGatewaySuspendAdmission(() => {});
+  expect(prepared?.commit()).toBe(true);
+  const pendingSignal = beginGatewayRestartSignalAdmission();
+  expect(pendingSignal).not.toBeNull();
+  expect(tryBeginGatewayPreparedRestartRootWorkAdmission()).toBeNull();
+  expect(pendingSignal?.rollback()).toBe(true);
+  expect(prepared?.release()).toBe(true);
+
+  markGatewayRestartDraining();
+  expect(tryBeginGatewayPreparedRestartRootWorkAdmission()).toBeNull();
 });
 
 it("lets an admitted root cross only the reversible suspension fence", async () => {
@@ -134,6 +166,24 @@ it("retains an admitted request root across its handler return", async () => {
   expect(getActiveGatewayRootWorkCount()).toBe(0);
 });
 
+it("does not retire process-lifetime work with the request that started it", async () => {
+  let releaseChild = () => {};
+  const childGate = new Promise<void>((resolve) => {
+    releaseChild = resolve;
+  });
+  let child: Promise<boolean> | undefined;
+
+  await runWithGatewayRootWorkAdmissionForTest(async () => {
+    child = runOutsideGatewayRootWorkAdmission(async () => {
+      await childGate;
+      return isGatewaySubordinateWorkAdmissionClosed();
+    });
+  });
+
+  releaseChild();
+  await expect(child).resolves.toBe(false);
+});
+
 it("runs an admitted continuation when restart drain wins the handoff race", async () => {
   const root = tryBeginGatewayRootWorkAdmission();
   expect(root).not.toBeNull();
@@ -162,6 +212,32 @@ it("does not admit an unrelated continuation through restart drain", async () =>
   expect(ran).not.toHaveBeenCalled();
 });
 
+it("real restart drain blocks a reserved continuation before provider execution and releases it", async () => {
+  let releaseContinuation = () => {};
+  const continuationGate = new Promise<void>((resolve) => {
+    releaseContinuation = resolve;
+  });
+  const providerStarted = vi.fn();
+  let continuation: Promise<void> | undefined;
+
+  await runWithGatewayRootWorkAdmissionForTest(async () => {
+    continuation = runWithGatewayIndependentRootWorkContinuation(async () => {
+      await continuationGate;
+      if (isGatewaySubordinateWorkAdmissionClosed()) {
+        throw new GatewayDrainingError();
+      }
+      providerStarted();
+    });
+  });
+
+  expect(getActiveGatewayRootWorkCount()).toBe(1);
+  markGatewayRestartDraining();
+  releaseContinuation();
+  await expect(continuation).rejects.toThrow(GatewayDrainingError);
+  expect(providerStarted).not.toHaveBeenCalled();
+  expect(getActiveGatewayRootWorkCount()).toBe(0);
+});
+
 it("does not let a stale suspension release clear restart drain", () => {
   const invalidated = vi.fn();
   const suspension = tryBeginGatewaySuspendAdmission(invalidated);
@@ -176,23 +252,60 @@ it("does not let a stale suspension release clear restart drain", () => {
 
 it("blocks suspension while restart signal handling is pending", () => {
   const pendingSignal = beginGatewayRestartSignalAdmission();
+  expect(pendingSignal).not.toBeNull();
 
   expect(isGatewayWorkAdmissionClosed()).toBe(true);
   expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
   expect(tryBeginGatewaySuspendAdmission(() => {})).toBeNull();
-  expect(pendingSignal.rollback()).toBe(true);
+  expect(beginGatewayRestartSignalAdmission()).toBeNull();
+  expect(pendingSignal?.rollback()).toBe(true);
   expect(isGatewayWorkAdmissionClosed()).toBe(false);
   expect(tryBeginGatewaySuspendAdmission(() => {})?.rollback()).toBe(true);
 });
 
 it("promotes a pending restart signal to one-way drain", () => {
   const pendingSignal = beginGatewayRestartSignalAdmission();
+  expect(pendingSignal).not.toBeNull();
 
   markGatewayRestartDraining();
 
-  expect(pendingSignal.rollback()).toBe(false);
+  expect(pendingSignal?.rollback()).toBe(false);
   expect(isGatewayWorkAdmissionClosed()).toBe(true);
   expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
+});
+
+it("force-rolls back an orphan restart-signal fence without a live lease", () => {
+  const pendingSignal = beginGatewayRestartSignalAdmission();
+  expect(pendingSignal).not.toBeNull();
+  expect(isGatewayWorkAdmissionClosed()).toBe(true);
+
+  // Drop the lease the way a concurrent emission overwrite used to: the fence
+  // stays closed with no handle that can reopen it.
+  expect(rollbackGatewayRestartSignalFence()).toBe(true);
+  expect(pendingSignal?.rollback()).toBe(false);
+  expect(isGatewayWorkAdmissionClosed()).toBe(false);
+  const root = tryBeginGatewayRootWorkAdmission();
+  expect(root).not.toBeNull();
+  root?.release();
+});
+
+it("wakes beginGatewayRootWorkAdmissionWhenOpen waiters when the signal fence rolls back", async () => {
+  const pendingSignal = beginGatewayRestartSignalAdmission();
+  expect(pendingSignal).not.toBeNull();
+
+  const waiting = beginGatewayRootWorkAdmissionWhenOpen();
+  let resolved = false;
+  void waiting.then(() => {
+    resolved = true;
+  });
+  await Promise.resolve();
+  expect(resolved).toBe(false);
+
+  expect(pendingSignal?.rollback()).toBe(true);
+  const admission = await waiting;
+  expect(resolved).toBe(true);
+  expect(admission.ownsRoot).toBe(true);
+  admission.release();
 });
 
 it("defers required internal root work until suspension reopens", async () => {

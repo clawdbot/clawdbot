@@ -43,7 +43,9 @@ type ApprovalRequestOriginTargetResolver<TTarget> = {
   resolveFallbackTarget?: (request: ApprovalRequestLike) => TTarget | null;
 };
 
-function normalizeOptionalThreadValue(value?: string | number | null): string | number | undefined {
+function normalizeExecApprovalThreadValue(
+  value?: string | number | null,
+): string | number | undefined {
   if (typeof value === "number") {
     return Number.isFinite(value) ? value : undefined;
   }
@@ -140,7 +142,7 @@ export function resolveExecApprovalSessionTarget(params: {
     turnSourceChannel: normalizeOptionalString(params.turnSourceChannel),
     turnSourceTo: normalizeOptionalString(params.turnSourceTo),
     turnSourceAccountId: normalizeOptionalString(params.turnSourceAccountId),
-    turnSourceThreadId: normalizeOptionalThreadValue(params.turnSourceThreadId),
+    turnSourceThreadId: normalizeExecApprovalThreadValue(params.turnSourceThreadId),
   });
   if (!target.to) {
     return null;
@@ -150,7 +152,7 @@ export function resolveExecApprovalSessionTarget(params: {
     channel: normalizeOptionalString(target.channel),
     to: target.to,
     accountId: normalizeOptionalString(target.accountId),
-    threadId: normalizeOptionalThreadValue(target.threadId),
+    threadId: normalizeExecApprovalThreadValue(target.threadId),
   };
 }
 

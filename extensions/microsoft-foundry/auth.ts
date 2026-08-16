@@ -35,7 +35,7 @@ import {
   resolveFoundryApi,
 } from "./shared.js";
 
-export function shouldTestFoundryTextConnection(params: {
+function shouldTestFoundryTextConnection(params: {
   modelId: string;
   modelNameHint?: string | null;
 }): boolean {

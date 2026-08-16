@@ -27,6 +27,7 @@ import {
   applyAgentDefaultModelPrimary,
   resolveAgentModelPrimaryValue,
 } from "openclaw/plugin-sdk/provider-onboard";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   applyAuthProfileConfigWithConflictCheck,
   hasAuthProfileConfigConflict,
@@ -38,7 +39,7 @@ import {
   readHermesCodexAuthCandidates,
   type HermesCodexAuthCandidate,
 } from "./auth-source.js";
-import { isRecord, readString, readText } from "./helpers.js";
+import { readText } from "./helpers.js";
 import {
   HERMES_REASON_AUTH_PROFILE_EXISTS,
   HERMES_REASON_AUTH_PROFILE_WRITE_FAILED,
@@ -101,9 +102,9 @@ async function readOpenCodeOpenAICandidates(
     return [];
   }
   const openai = isRecord(parsed.openai) ? parsed.openai : undefined;
-  const access = readString(openai?.access);
-  const accountId = readString(openai?.accountId);
-  const refresh = readString(openai?.refresh);
+  const access = normalizeOptionalString(openai?.access);
+  const accountId = normalizeOptionalString(openai?.accountId);
+  const refresh = normalizeOptionalString(openai?.refresh);
   if (!access || !refresh) {
     return [];
   }
@@ -147,7 +148,7 @@ function readProviderAuthModelConfigs(result: ProviderAuthResult): AgentDefaultM
   if (isRecord(models)) {
     return { ...models };
   }
-  const defaultModel = readString(result.defaultModel) ?? OPENAI_CODEX_DEFAULT_MODEL;
+  const defaultModel = normalizeOptionalString(result.defaultModel) ?? OPENAI_CODEX_DEFAULT_MODEL;
   return { [defaultModel]: {} };
 }
 
@@ -444,6 +445,7 @@ export async function applyAuthItem(
   }
   const store = await updateAuthProfileStoreWithLock({
     agentDir: targets.agentDir,
+    stateDir: ctx.stateDir,
     updater: (freshStore) => {
       const existing = freshStore.profiles[profileId];
       if (!ctx.overwrite && existing) {

@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 
 const currentFile = fileURLToPath(import.meta.url);
 const currentDir = dirname(currentFile);
+declare const WORKER_DEPLOY_VERSION: string | undefined;
 
 /**
  * Detect if we're running as a Bun compiled binary.
@@ -63,25 +64,6 @@ function getPackageDir(): string {
   return currentDir;
 }
 
-function getPackageSourceOrDistDir(): string {
-  const packageDir = getPackageDir();
-  const srcOrDist = existsSync(join(packageDir, "src")) ? "src" : "dist";
-  return join(packageDir, srcOrDist);
-}
-
-/**
- * Get path to built-in themes directory (shipped with package)
- * - For Bun binary: theme/ next to executable
- * - For Node.js (dist/): dist/agents/modes/interactive/theme/
- * - For tsx (src/): src/agents/modes/interactive/theme/
- */
-export function getThemesDir(): string {
-  if (isBunBinary) {
-    return join(getPackageDir(), "theme");
-  }
-  return join(getPackageSourceOrDistDir(), "agents", "modes", "interactive", "theme");
-}
-
 /** Get path to package.json */
 function getPackageJsonPath(): string {
   return join(getPackageDir(), "package.json");
@@ -115,12 +97,15 @@ interface PackageJson {
   };
 }
 
-const pkg = JSON.parse(readFileSync(getPackageJsonPath(), "utf-8")) as PackageJson;
+const workerVersion = typeof WORKER_DEPLOY_VERSION === "string" ? WORKER_DEPLOY_VERSION : undefined;
+const pkg: PackageJson = workerVersion
+  ? { name: "openclaw", version: workerVersion }
+  : (JSON.parse(readFileSync(getPackageJsonPath(), "utf-8")) as PackageJson);
 
 const openClawConfigName: string | undefined = pkg.openclawConfig?.name;
 export const APP_NAME: string = openClawConfigName || "openclaw";
 export const CONFIG_DIR_NAME: string = pkg.openclawConfig?.configDir || ".openclaw";
-export const VERSION: string = pkg.version || "0.0.0";
+export const PACKAGE_MANIFEST_VERSION: string = pkg.version || "0.0.0";
 
 const ENV_AGENT_DIR = `${APP_NAME.toUpperCase()}_AGENT_DIR`;
 
@@ -147,17 +132,7 @@ export function getAgentDir(): string {
   return join(homedir(), CONFIG_DIR_NAME, "agent");
 }
 
-/** Get path to user's custom themes directory */
-export function getCustomThemesDir(): string {
-  return join(getAgentDir(), "themes");
-}
-
 /** Get path to managed binaries directory (fd, rg) */
 export function getBinDir(): string {
   return join(getAgentDir(), "bin");
-}
-
-/** Get path to sessions directory */
-export function getSessionsDir(): string {
-  return join(getAgentDir(), "sessions");
 }

@@ -97,16 +97,15 @@ vi.mock("./embedded-agent-runner/model.js", () => ({
     agentDir: unknown,
     cfg: unknown,
     options: unknown,
-  ) =>
-    ({
-      model: effectiveInventoryState.dynamicModelMock({
-        provider,
-        modelId,
-        agentDir,
-        cfg,
-        options,
-      }),
-    }) as unknown,
+  ) => ({
+    model: effectiveInventoryState.dynamicModelMock({
+      provider,
+      modelId,
+      agentDir,
+      cfg,
+      options,
+    }),
+  }),
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => ({
@@ -966,7 +965,7 @@ describe("resolveEffectiveToolInventory", () => {
         id: "browser-filtered-by-profile",
         severity: "info",
         message:
-          'Browser is configured, but the current tool profile does not include the browser tool. Add tools.alsoAllow: ["browser"] or agents.list[].tools.alsoAllow: ["browser"]; tools.subagents.tools.allow alone cannot add it back after profile filtering.',
+          'Browser is configured, but the current tool profile does not include the browser tool. Add tools.alsoAllow: ["browser"] or agents.entries.*.tools.alsoAllow: ["browser"]; tools.subagents.tools.allow alone cannot add it back after profile filtering.',
       },
     ]);
   });
@@ -1018,7 +1017,7 @@ describe("resolveEffectiveToolInventory", () => {
                   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                   contextWindow: 128_000,
                   maxTokens: 8_192,
-                  compat: { supportsTools: true, nativeWebSearchTool: true },
+                  compat: { supportsTools: true },
                 },
               ],
             },
@@ -1033,10 +1032,7 @@ describe("resolveEffectiveToolInventory", () => {
     expect(createToolsMock).toHaveBeenCalledTimes(1);
     const createToolsOptions = createToolsMock.mock.calls.at(0)?.[0];
     expect(createToolsOptions?.allowGatewaySubagentBinding).toBe(true);
-    expect(createToolsOptions?.modelCompat).toEqual({
-      supportsTools: true,
-      nativeWebSearchTool: true,
-    });
+    expect(createToolsOptions?.modelCompat).toEqual({ supportsTools: true });
     expect(createToolsOptions?.modelApi).toBe("openai-completions");
   });
 });

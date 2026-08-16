@@ -37,7 +37,6 @@ async function runPromptWithKeys(params: {
       { value: MIGRATION_SELECTION_TOGGLE_ALL_OFF, label: "Toggle all off" },
     ],
     initialValues: params.initialValues,
-    required: false,
     cursorAt: params.cursorAt,
     selectableValues: ["skill:alpha", "skill:beta"],
     input,

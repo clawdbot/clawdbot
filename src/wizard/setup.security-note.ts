@@ -15,7 +15,7 @@ export function getSecurityConfirmMessage(): string {
 
 export function getSecurityNoteMessage(): string {
   return [
-    t("wizard.security.beta"),
+    t("wizard.security.attribution"),
     t("wizard.security.personalAgent"),
     t("wizard.security.toolAccess"),
     t("wizard.security.promptRisk"),
@@ -38,7 +38,6 @@ export function getSecurityNoteMessage(): string {
     formatCliCommand("openclaw security audit --deep"),
     formatCliCommand("openclaw security audit --fix"),
     "",
-    heading(t("wizard.security.learnMore")),
-    "- https://docs.openclaw.ai/gateway/security",
+    `${t("wizard.security.learnMore")} https://docs.openclaw.ai/gateway/security`,
   ].join("\n");
 }

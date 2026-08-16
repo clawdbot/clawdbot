@@ -10,6 +10,7 @@ const RECORD_BASE = {
   sessionId: "session-1",
   agentId: "main",
   sessionKey: "agent:main:session-1",
+  executionMode: "worker-turn" as const,
   generation: 4,
   workspaceBaseManifestRef: null,
   remoteWorkspaceDir: null,
@@ -17,6 +18,8 @@ const RECORD_BASE = {
   lastTranscriptAckCursor: null,
   lastLiveEventAckCursor: null,
   recoveryError: null,
+  terminalReason: null,
+  terminalAtMs: null,
   turnClaim: null,
   createdAtMs: 100,
   updatedAtMs: 200,
@@ -24,6 +27,27 @@ const RECORD_BASE = {
 };
 
 describe("worker placement projection", () => {
+  it("adds an exact active disk-space sample only when supplied", () => {
+    const active = {
+      ...RECORD_BASE,
+      state: "active",
+      environmentId: "environment-1",
+      activeOwnerEpoch: 7,
+      workspaceBaseManifestRef: "manifest-1",
+      remoteWorkspaceDir: "/workspace",
+      workerBundleHash: BUNDLE_HASH,
+    } satisfies WorkerSessionPlacementRecord;
+    const diskSpace = {
+      status: "critical" as const,
+      availableBytes: 50,
+      totalBytes: 1_000,
+      observedAtMs: 250,
+    };
+
+    expect(projectWorkerSessionPlacement(active, diskSpace)).toMatchObject({ diskSpace });
+    expect(projectWorkerSessionPlacement(active)).not.toHaveProperty("diskSpace");
+  });
+
   it("emits only fields valid for each placement discriminator", () => {
     const records = [
       {
@@ -41,11 +65,16 @@ describe("worker placement projection", () => {
       {
         ...RECORD_BASE,
         state: "reclaimed",
+        terminalAtMs: 250,
         environmentId: "environment-1",
         activeOwnerEpoch: 7,
         workspaceBaseManifestRef: "manifest-1",
         remoteWorkspaceDir: "/workspace",
         workerBundleHash: BUNDLE_HASH,
+        workspaceResultConflict: {
+          paths: ["src/local.ts"],
+          stagedResultRef: "refs/openclaw/worker-results/claim-1",
+        },
       },
       {
         ...RECORD_BASE,
@@ -53,10 +82,12 @@ describe("worker placement projection", () => {
         environmentId: "environment-1",
         activeOwnerEpoch: 7,
         recoveryError: "worker unavailable",
+        terminalReason: "worker unavailable",
+        terminalAtMs: 260,
       },
     ] satisfies WorkerSessionPlacementRecord[];
 
-    const projected = records.map(projectWorkerSessionPlacement);
+    const projected = records.map((record) => projectWorkerSessionPlacement(record));
 
     expect(projected).toEqual([
       {
@@ -85,6 +116,11 @@ describe("worker placement projection", () => {
         workspaceBaseManifestRef: "manifest-1",
         remoteWorkspaceDir: "/workspace",
         workerBundleHash: BUNDLE_HASH,
+        workspaceResultConflict: {
+          paths: ["src/local.ts"],
+          stagedResultRef: "refs/openclaw/worker-results/claim-1",
+        },
+        terminalAtMs: 250,
       },
       {
         state: "failed",
@@ -95,6 +131,8 @@ describe("worker placement projection", () => {
         environmentId: "environment-1",
         activeOwnerEpoch: 7,
         recoveryError: "worker unavailable",
+        terminalReason: "worker unavailable",
+        terminalAtMs: 260,
       },
     ]);
     for (const placement of projected) {

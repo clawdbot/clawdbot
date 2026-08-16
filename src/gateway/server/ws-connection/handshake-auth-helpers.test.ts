@@ -43,6 +43,7 @@ function createRateLimiter(): AuthRateLimiter {
     check: () => ({ allowed: true, remaining: 1, retryAfterMs: 0 }),
     reset: () => {},
     recordFailure: () => {},
+    recordFailureAndDelay: async () => {},
     size: () => 0,
     prune: () => {},
     dispose: () => {},
@@ -234,6 +235,48 @@ describe("handshake auth helpers", () => {
       }),
     ).toBe(false);
   });
+
+  it.each(["not-paired", "role-upgrade", "scope-upgrade"] as const)(
+    "requires explicit local approval for %s when autoApproveLocal is false",
+    (reason) => {
+      for (const locality of [
+        "direct_local",
+        "cli_container_local",
+        "browser_container_local",
+        "shared_secret_loopback_local",
+      ] as const) {
+        expect(
+          allowSilentLocalPairing({
+            autoApproveLocal: false,
+            locality,
+            hasBrowserOriginHeader: locality === "browser_container_local",
+            isControlUi: locality === "browser_container_local",
+            isWebchat: locality === "browser_container_local",
+            reason,
+          }),
+        ).toBe(false);
+      }
+    },
+  );
+
+  it("keeps metadata refresh behavior unchanged when autoApproveLocal is false", () => {
+    expect(
+      allowSilentLocalPairing({
+        autoApproveLocal: false,
+        locality: "shared_secret_loopback_local",
+        reason: "metadata-upgrade",
+      }),
+    ).toBe(true);
+  });
+
+  it.each([undefined, true])(
+    "preserves existing local approval behavior when autoApproveLocal is %s",
+    (autoApproveLocal) => {
+      for (const reason of ["not-paired", "role-upgrade", "scope-upgrade"] as const) {
+        expect(allowSilentLocalPairing({ autoApproveLocal, reason })).toBe(true);
+      }
+    },
+  );
 
   it("allows Control UI or WebChat browser-origin pairing but keeps other browser-origin clients explicit", () => {
     expect(

@@ -17,6 +17,7 @@ import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import type { TerminationReason } from "../process/supervisor/types.js";
+import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import type { EmbeddedFullAccessBlockedReason } from "./embedded-agent-runner/types.js";
 import type { ExecReviewerConfig } from "./exec-auto-reviewer.js";
@@ -54,6 +55,12 @@ export type ExecToolDefaults = {
   allowBackground?: boolean;
   scopeKey?: string;
   sessionKey?: string;
+  /** Stable agent run that owns any approval created by this tool. */
+  runId?: string;
+  /** Exact admitted execution instance that owns secret-egress proxy access. */
+  operationalRunInstance?: OperationalRunInstanceRef;
+  /** Durable session that receives detached exec completion events and approval followups. */
+  notifySessionKey?: string;
   /** Ephemeral session UUID active when this exec tool was built. Regenerated
    *  on `/new` and `/reset`, so it pins exec-approval followups to the original
    *  session instance and lets stale followups drop after a session rebind. */
@@ -79,6 +86,8 @@ export type ExecToolDefaults = {
   channelContext?: PluginHookChannelContext;
   accountId?: string;
   approvalReviewerDeviceId?: string;
+  /** Deny approval-requiring commands without creating operator approval events. */
+  nonInteractiveApproval?: boolean;
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   cwd?: string;
@@ -88,6 +97,7 @@ export type ExecToolDefaults = {
 export type ExecApprovalFollowupOutcome = {
   status: "completed" | "failed";
   exitCode: number | null;
+  exitReason?: TerminationReason;
   timedOut: boolean;
   aggregated: string;
   reason?: string;
@@ -129,6 +139,13 @@ export type ExecToolDetails =
       exitCode: number | null;
       exitSignal?: NodeJS.Signals | number | null;
       failureKind?: string;
+      reason?: "not-dispatched" | "outcome-unknown";
+      nodeInvokeFailure?: {
+        failureCode?: string;
+        message: string;
+        nodeCommandDispatched?: boolean;
+        requestSent?: boolean;
+      };
       exitReason?: TerminationReason;
       durationMs: number;
       aggregated: string;

@@ -2,6 +2,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   finalizeRuntimeSnapshotWrite,
+  getRuntimeConfigAppliedHash,
+  hashRuntimeConfigValue,
   hasManagedRuntimeConfigWriteOwner,
   getRuntimeConfigSnapshotMetadata,
   getRuntimeConfigSourceSnapshot,
@@ -15,6 +17,7 @@ import {
   resolveRuntimeConfigCacheKey,
   selectApplicableRuntimeConfig,
   setRuntimeConfigSnapshot,
+  setRuntimeConfigAppliedHash,
   setRuntimeConfigSnapshotRefreshHandler,
 } from "./runtime-snapshot.js";
 import type { OpenClawConfig } from "./types.js";
@@ -97,6 +100,25 @@ describe("runtime snapshot state", () => {
     );
   });
 
+  it("tracks the applied source revision independently from runtime fingerprints", () => {
+    expect(getRuntimeConfigAppliedHash()).toBeNull();
+
+    setRuntimeConfigAppliedHash("disk-hash-1");
+    setRuntimeConfigSnapshot({ gateway: { port: 18789 } });
+    expect(getRuntimeConfigAppliedHash()).toBe("disk-hash-1");
+
+    resetConfigRuntimeState();
+    expect(getRuntimeConfigAppliedHash()).toBeNull();
+  });
+
+  it("hashes resolved source content independently from root-file revision metadata", () => {
+    const first = hashRuntimeConfigValue({ logging: { level: "info" } });
+    const second = hashRuntimeConfigValue({ logging: { level: "debug" } });
+
+    expect(first).not.toBe(second);
+    expect(hashRuntimeConfigValue({ logging: { level: "info" } })).toBe(first);
+  });
+
   it("selects runtime config only when input still matches the runtime source", () => {
     const sourceConfig: OpenClawConfig = {
       models: {
@@ -123,9 +145,7 @@ describe("runtime snapshot state", () => {
     const scopedResolvedConfig: OpenClawConfig = {
       ...runtimeConfig,
       tools: {
-        experimental: {
-          planTool: true,
-        },
+        updatePlan: true,
       },
     };
 

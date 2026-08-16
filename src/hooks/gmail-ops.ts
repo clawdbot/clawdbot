@@ -321,10 +321,21 @@ export async function runGmailService(opts: GmailRunOptions) {
   let child = spawnGogServe(runtimeConfig);
 
   const renewMs = runtimeConfig.renewEveryMinutes * 60_000;
+  let renewalInFlight: Promise<void> | null = null;
   const renewTimer = setInterval(() => {
-    void startGmailWatch(runtimeConfig).catch((err: unknown) => {
-      defaultRuntime.error(`gmail watch renew failed: ${String(err)}`);
-    });
+    if (shuttingDown || renewalInFlight) {
+      return;
+    }
+    const renewal = startGmailWatch(runtimeConfig)
+      .catch((err: unknown) => {
+        defaultRuntime.error(`gmail watch renew failed: ${String(err)}`);
+      })
+      .finally(() => {
+        if (renewalInFlight === renewal) {
+          renewalInFlight = null;
+        }
+      });
+    renewalInFlight = renewal;
   }, renewMs);
 
   const detachSignals = () => {

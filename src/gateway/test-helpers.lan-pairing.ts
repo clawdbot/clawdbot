@@ -3,6 +3,7 @@
 // address so the server observes a direct non-loopback client IP. Skips
 // silently on hosts without a usable LAN interface.
 import net from "node:net";
+import { afterAll, beforeAll, describe } from "vitest";
 import { WebSocket } from "ws";
 import { getPairedDevice, removePairedDevice } from "../infra/device-pairing.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -10,7 +11,7 @@ import { loadDeviceIdentity } from "./device-authz.test-helpers.js";
 import { pickPrimaryLanIPv4 } from "./net.js";
 import { connectReq, startServer, trackConnectChallengeNonce } from "./test-helpers.js";
 
-export const LAN_NODE_PAIRING_TOKEN = "secret";
+const LAN_NODE_PAIRING_TOKEN = "secret";
 
 const NODE_CLIENT = {
   id: GATEWAY_CLIENT_NAMES.NODE_HOST,
@@ -81,57 +82,83 @@ async function canUseLanSelfConnect(host: string): Promise<boolean> {
   });
 }
 
-export type LanNodePairingContext = {
+type LanNodePairingContext = {
   lanIp: string;
   loaded: ReturnType<typeof loadDeviceIdentity>;
   /** Open a fresh LAN WebSocket, run the node connect handshake, close it. */
   connectNode: () => Promise<Awaited<ReturnType<typeof connectReq>>>;
 };
 
-export async function withLanNodePairingAttempt(params: {
+type LanNodePairingAttempt = (params: {
   identityName: string;
-  beforeStart?: (lanIp: string) => Promise<void>;
+  configure?: (lanIp: string) => Promise<void>;
   run: (ctx: LanNodePairingContext) => Promise<void>;
-}): Promise<void> {
-  const lanIp = pickPrimaryLanIPv4();
-  if (!lanIp || !(await canUseLanSelfConnect(lanIp))) {
-    return;
-  }
-  await params.beforeStart?.(lanIp);
-  const started = await startServer(LAN_NODE_PAIRING_TOKEN, {
-    bind: "lan",
-    controlUiEnabled: false,
-  });
-  const openSockets: WebSocket[] = [];
-  try {
-    const loaded = loadDeviceIdentity(params.identityName);
-    // The suite shares one state home under --isolate=false; drop any paired
-    // record for this identity so a sibling suite's row cannot mask a fresh
-    // pairing (a stale approvedVia would survive a re-approve by design).
-    if (await getPairedDevice(loaded.identity.deviceId)) {
-      await removePairedDevice(loaded.identity.deviceId);
-    }
-    const connectNode = async () => {
-      const ws = await openLanGatewayWs({ host: lanIp, port: started.port });
-      openSockets.push(ws);
-      try {
-        return await connectReq(ws, {
-          token: LAN_NODE_PAIRING_TOKEN,
-          role: "node",
-          scopes: [],
-          client: NODE_CLIENT,
-          deviceIdentityPath: loaded.identityPath,
-        });
-      } finally {
-        ws.close();
+}) => Promise<void>;
+
+// Pairing config is read when each WebSocket handler attaches. Reuse the real
+// Gateway while suite-scoped hooks reset mutable runtime state between cases.
+export function describeWithLanNodePairingServer(
+  name: string,
+  defineTests: (attempt: LanNodePairingAttempt) => void,
+): void {
+  describe(name, () => {
+    let lanIp: string | undefined;
+    let started: Awaited<ReturnType<typeof startServer>> | undefined;
+    const openSockets = new Set<WebSocket>();
+
+    beforeAll(async () => {
+      const candidate = pickPrimaryLanIPv4();
+      if (!candidate || !(await canUseLanSelfConnect(candidate))) {
+        return;
       }
-    };
-    await params.run({ lanIp, loaded, connectNode });
-  } finally {
-    for (const ws of openSockets) {
-      ws.close();
-    }
-    await started.server.close();
-    started.envSnapshot.restore();
-  }
+      lanIp = candidate;
+      started = await startServer(LAN_NODE_PAIRING_TOKEN, {
+        bind: "lan",
+        controlUiEnabled: false,
+      });
+    });
+
+    afterAll(async () => {
+      for (const ws of openSockets) {
+        ws.terminate();
+      }
+      await started?.server.close();
+      started?.envSnapshot.restore();
+    });
+
+    defineTests(async (params) => {
+      const activeServer = started;
+      const host = lanIp;
+      if (!activeServer || !host) {
+        return;
+      }
+      await params.configure?.(host);
+      const loaded = loadDeviceIdentity(params.identityName);
+      // The suite shares one state home under --isolate=false; drop any paired
+      // record for this identity so a sibling suite's row cannot mask a fresh
+      // pairing (a stale approvedVia would survive a re-approve by design).
+      if (await getPairedDevice(loaded.identity.deviceId)) {
+        await removePairedDevice(loaded.identity.deviceId);
+      }
+      const connectNode = async () => {
+        const ws = await openLanGatewayWs({ host, port: activeServer.port });
+        openSockets.add(ws);
+        try {
+          return await connectReq(ws, {
+            token: LAN_NODE_PAIRING_TOKEN,
+            role: "node",
+            scopes: [],
+            client: NODE_CLIENT,
+            deviceIdentityPath: loaded.identityPath,
+          });
+        } finally {
+          // These tests cover pairing, not the WebSocket close handshake. Terminate so
+          // gateway cleanup never waits on a client that has already returned its result.
+          openSockets.delete(ws);
+          ws.terminate();
+        }
+      };
+      await params.run({ lanIp: host, loaded, connectNode });
+    });
+  });
 }

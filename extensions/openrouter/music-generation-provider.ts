@@ -1,6 +1,7 @@
 // Openrouter provider module implements model/runtime integration.
 import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
-import { maxBytesForKind } from "openclaw/plugin-sdk/media-runtime";
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
+import { canonicalizeBase64, estimateBase64DecodedBytes } from "openclaw/plugin-sdk/media-runtime";
 import type {
   MusicGenerationProvider,
   MusicGenerationRequest,
@@ -15,6 +16,7 @@ import {
   postJsonRequest,
   resolveProviderHttpRequestConfig,
   resolveProviderOperationTimeoutMs,
+  sanitizeConfiguredModelProviderRequest,
   type ProviderOperationDeadline,
 } from "openclaw/plugin-sdk/provider-http";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -23,7 +25,6 @@ import { OPENROUTER_BASE_URL } from "./provider-catalog.js";
 const DEFAULT_OPENROUTER_MUSIC_MODEL = "google/lyria-3-pro-preview";
 const OPENROUTER_CLIP_MUSIC_MODEL = "google/lyria-3-clip-preview";
 const DEFAULT_TIMEOUT_MS = 180_000;
-const MB = 1024 * 1024;
 const OPENROUTER_SSE_ENVELOPE_OVERHEAD_BYTES = 64 * 1024;
 const OPENROUTER_MUSIC_MODELS = [
   DEFAULT_OPENROUTER_MUSIC_MODEL,
@@ -124,14 +125,6 @@ function readDeltaAudio(part: unknown): { data?: string; transcript?: string } |
   };
 }
 
-function resolveGeneratedMusicMaxBytes(req: MusicGenerationRequest): number {
-  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * MB);
-  }
-  return maxBytesForKind("audio");
-}
-
 function resolveOpenRouterSseEventMaxBytes(maxBytes: number): number {
   const maxBase64Bytes = Math.ceil(maxBytes / 3) * 4;
   return maxBase64Bytes + maxBytes + OPENROUTER_SSE_ENVELOPE_OVERHEAD_BYTES;
@@ -148,11 +141,19 @@ function appendDecodedOpenRouterMusicAudio(
   if (!base64) {
     return;
   }
-  const decodedBytes = Buffer.byteLength(base64, "base64");
-  if (decodedBytes > result.maxBytes - result.audioBytes) {
+  const remainingBytes = result.maxBytes - result.audioBytes;
+  if (estimateBase64DecodedBytes(base64) > remainingBytes) {
     throw createOpenRouterMusicTooLargeError("audio", result.maxBytes);
   }
-  const buffer = Buffer.from(base64, "base64");
+  const canonicalAudio = canonicalizeBase64(base64);
+  if (!canonicalAudio) {
+    throw new Error("OpenRouter music generation returned malformed base64 audio data");
+  }
+  const decodedBytes = Buffer.byteLength(canonicalAudio, "base64");
+  if (decodedBytes > remainingBytes) {
+    throw createOpenRouterMusicTooLargeError("audio", result.maxBytes);
+  }
+  const buffer = Buffer.from(canonicalAudio, "base64");
   const nextBytes = result.audioBytes + buffer.byteLength;
   if (nextBytes > result.maxBytes) {
     throw createOpenRouterMusicTooLargeError("audio", result.maxBytes);
@@ -294,7 +295,9 @@ async function readOpenRouterAudioStream(
       for (const line of lines) {
         if (processOpenRouterSseLine(line.trim(), result)) {
           flushOpenRouterMusicAudio(result);
-          await reader.cancel();
+          // Once [DONE] is observed, the generated result is authoritative.
+          // Cancellation is cleanup and must not replace it with a transport error.
+          await reader.cancel().catch(() => {});
           return {
             audioBuffer: Buffer.concat(result.audioBuffers, result.audioBytes),
             transcript: result.transcriptChunks.join(""),
@@ -341,11 +344,7 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
     label: "OpenRouter",
     defaultModel: DEFAULT_OPENROUTER_MUSIC_MODEL,
     models: [...OPENROUTER_MUSIC_MODELS],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: "openrouter",
-        agentDir,
-      }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "openrouter", ...ctx }),
     capabilities: {
       generate: {
         maxTracks: 1,
@@ -393,6 +392,9 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
             "HTTP-Referer": "https://openclaw.ai",
             "X-OpenRouter-Title": "OpenClaw",
           },
+          request: sanitizeConfiguredModelProviderRequest(
+            req.cfg?.models?.providers?.openrouter?.request,
+          ),
           provider: "openrouter",
           capability: "audio",
           transport: "http",
@@ -426,7 +428,7 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
         const streamResult = await readOpenRouterAudioStream(
           response,
           streamDeadline,
-          resolveGeneratedMusicMaxBytes(req),
+          resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
         );
         if (streamResult.audioBuffer.byteLength === 0) {
           throw new Error("OpenRouter music generation response missing audio data");

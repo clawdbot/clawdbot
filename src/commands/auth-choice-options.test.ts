@@ -4,7 +4,6 @@ import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
 import {
   buildAuthChoiceGroups,
-  buildAuthChoiceOptions,
   formatAuthChoiceChoicesForCli,
   isFeaturedAuthChoiceGroup,
 } from "./auth-choice-options.js";
@@ -94,10 +93,12 @@ vi.mock("../flows/provider-flow.js", () => ({
 const EMPTY_STORE: AuthProfileStore = { version: 1, profiles: {} };
 
 function getOptions(includeSkip = false) {
-  return buildAuthChoiceOptions({
+  const { groups, skipOption } = buildAuthChoiceGroups({
     store: EMPTY_STORE,
     includeSkip,
+    assistantVisibleOnly: false,
   });
+  return [...groups.flatMap((group) => group.options), ...(skipOption ? [skipOption] : [])];
 }
 
 function requireChoiceGroup(
@@ -544,10 +545,10 @@ describe("buildAuthChoiceOptions", () => {
 
     expect(groups.map((group) => group.label)).toEqual([
       "OpenAI",
-      "Anthropic",
+      "OpenRouter",
       "xAI (Grok)",
       "Google",
-      "OpenRouter",
+      "Anthropic",
       "BytePlus",
       "Custom Provider",
       "LiteLLM",
@@ -555,10 +556,10 @@ describe("buildAuthChoiceOptions", () => {
     ]);
     expect(groups.filter(isFeaturedAuthChoiceGroup).map((group) => group.label)).toEqual([
       "OpenAI",
-      "Anthropic",
+      "OpenRouter",
       "xAI (Grok)",
       "Google",
-      "OpenRouter",
+      "Anthropic",
     ]);
   });
 

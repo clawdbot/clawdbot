@@ -1,12 +1,13 @@
 // Copilot tests cover BYOK provider mapping behavior.
 import { describe, expect, it } from "vitest";
-import {
-  COPILOT_BYOK_PROVIDER_ERROR,
-  COPILOT_BYOK_ENDPOINT_POLICY_ERROR,
-  COPILOT_BYOK_TRANSPORT_POLICY_ERROR,
-  resolveCopilotProvider,
-  supportsCopilotByokProviderShape,
-} from "./provider-bridge.js";
+import { resolveCopilotProvider, supportsCopilotByokProviderShape } from "./provider-bridge.js";
+
+const COPILOT_BYOK_PROVIDER_ERROR =
+  "[copilot-attempt] BYOK requires an OpenAI-compatible or Anthropic model api and a non-empty baseUrl";
+const COPILOT_BYOK_TRANSPORT_POLICY_ERROR =
+  "[copilot-attempt] BYOK does not support OpenClaw provider request proxy, TLS, or private-network policy overrides";
+const COPILOT_BYOK_ENDPOINT_POLICY_ERROR =
+  "[copilot-attempt] BYOK endpoint is blocked by OpenClaw SSRF policy";
 
 describe("resolveCopilotProvider", () => {
   it("keeps the subscription provider on the native Copilot auth path", () => {

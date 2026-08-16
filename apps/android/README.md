@@ -24,10 +24,23 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 - [x] Skills settings can search installed skills, enable or disable them, and install Gateway-verified ClawHub releases
 - [x] Per-app language selection for translated resources follows Android system settings and persistence
 - [x] Cron job settings support details, run history, run now, edits, enable/disable, and deletion with admin-scoped Gateway access
+- [x] Wear OS companion proxies sessions, transcripts, replies, aborts, and realtime Talk through the paired phone without storing Gateway credentials on the watch
 
 ## Open in Android Studio
 
+- Run `pnpm install` from the repository root so native Canvas resources can be generated.
 - Open the folder `apps/android`.
+
+## Wear OS companion
+
+The `wear` app is a paired-phone companion with the same application ID and signing identity as the phone app. The watch discovers the phone through Wear OS Data Layer, then uses the phone's existing authenticated operator session. It never receives or stores Gateway tokens, passwords, TLS pins, or device-signing identity.
+
+The watch supports agent and session selection, bounded text-only transcript history, streaming reply state, text and voice replies, abort, realtime Talk within the selected session, paired-phone Gateway controls, local reply notifications, theme and automatic-speech settings, and a launch Tile. Realtime Talk streams watch microphone and playback audio over a temporary Wear OS Data Layer channel; it still uses the phone's authenticated Gateway session and closes when the selected phone or Gateway connection changes. A missing Data Layer event sequence or changed phone-process epoch triggers a fresh history request instead of applying uncertain deltas. Agent and Gateway controls are capability-negotiated so an older paired phone remains usable during staggered updates.
+
+```bash
+cd apps/android
+./gradlew :wear:testDebugUnitTest :wear:assembleDebug :wear:lintDebug :wear:ktlintCheck
+```
 
 ## Build / Run
 
@@ -75,23 +88,25 @@ MATCH_PASSWORD=<signing repo password> pnpm android:release:signing:check
 The signing sync pulls encrypted Android upload-key assets from the shared `apps-signing` repo and materializes decrypted files under `apps/android/build/release-signing/`.
 Standalone release APK verification also requires that key's public certificate SHA-256 fingerprint to match `Config/ReleaseSigning.json`.
 
-Generate raw Google Play screenshots:
+Generate phone and Wear OS Google Play screenshots:
 
 ```bash
 pnpm android:screenshots
 ```
 
-The screenshot script defaults to a retained `OpenClaw_Screenshots_API36` AVD
-created from Android's no-cutout Pixel 2 profile. It creates the AVD when
-missing, boots it headlessly, waits for Android to finish booting, disables
+The screenshot script captures both form factors with retained
+`OpenClaw_Screenshots_API36` (Pixel 2) and
+`OpenClaw_Wear_Screenshots_API34` (Wear OS Large Round) AVDs. It creates a
+missing AVD, boots it headlessly, waits for Android to finish booting, disables
 animations, captures the screenshots, then shuts down the emulator it started.
-The API 36 Google APIs system image must be installed in the local Android SDK.
-Use `ANDROID_SCREENSHOT_AVD` or `--avd` to select another AVD, or `--device` to
-explicitly use a connected emulator.
+Install the API 36 Google APIs and API 34 Wear OS system images in the local
+Android SDK. Use `--form-factor phone|wear` with `--avd` or `--device` to
+explicitly capture one form factor from another emulator.
 
 `pnpm android:release:archive` builds signed release artifacts into `apps/android/build/release-artifacts/` and writes `.sha256` checksum files:
 
 - Play build: `openclaw-<version>-play-release.aab`
+- Wear build: `openclaw-<version>-wear-release.aab`
 - Third-party build: `openclaw-<version>-third-party-release.apk`
 
 `pnpm android:bundle:release` is an alias for the same Fastlane archive lane.
@@ -109,6 +124,11 @@ metadata, signing, validation, archive, or upload step before trying again. Do
 not upload archived artifacts through direct Fastlane lanes, Gradle artifacts,
 Google Play API commands, or Play Console mutation commands.
 
+The release lane uploads the phone and Wear bundles in one atomic Google Play
+edit. It publishes the phone bundle to `GOOGLE_PLAY_TRACK` and maps the Wear
+bundle to the corresponding form-factor track (`wear:<track>`), so the default
+internal channel publishes to `internal` and `wear:internal`.
+
 See `apps/android/VERSIONING.md` and `apps/android/fastlane/SETUP.md` for the release workflow.
 
 Prefer `pnpm android:release:archive`, which stamps and validates the full Git commit and one UTC build timestamp before signing. Flavor-specific direct Gradle release tasks must pass the same metadata explicitly:
@@ -118,6 +138,7 @@ cd apps/android
 commit="$(git -C ../.. rev-parse HEAD)"
 built_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ./gradlew -PopenclawBuildCommit="$commit" -PopenclawBuildTimestamp="$built_at" :app:bundlePlayRelease
+./gradlew -PopenclawBuildCommit="$commit" -PopenclawBuildTimestamp="$built_at" :wear:bundleRelease
 ./gradlew -PopenclawBuildCommit="$commit" -PopenclawBuildTimestamp="$built_at" :app:bundleThirdPartyRelease
 ```
 
@@ -138,9 +159,9 @@ Direct Gradle tasks:
 
 ```bash
 cd apps/android
-./gradlew :app:ktlintCheck :benchmark:ktlintCheck
-./gradlew :app:ktlintFormat :benchmark:ktlintFormat
-./gradlew :app:lintPlayDebug :app:lintThirdPartyDebug
+./gradlew :app:ktlintCheck :benchmark:ktlintCheck :wear:ktlintCheck :wear-shared:ktlintCheck
+./gradlew :app:ktlintFormat :benchmark:ktlintFormat :wear:ktlintFormat :wear-shared:ktlintFormat
+./gradlew :app:lintPlayDebug :app:lintThirdPartyDebug :wear:lintDebug :wear-shared:lintDebug
 ```
 
 `gradlew` auto-detects the Android SDK at `~/Library/Android/sdk` (macOS default) if `ANDROID_SDK_ROOT` / `ANDROID_HOME` are unset.
@@ -347,7 +368,9 @@ What it does:
 
 - Reads `node.describe` command list from the selected Android node.
 - Invokes advertised non-interactive commands.
-- Skips `screen.record` in this suite (Android requires interactive per-invocation screen-capture consent).
+- Skips `screen.record` and `talk.ptt.*` in this suite because they require
+  interactive capture. Use `apps/android/scripts/voice-e2e.sh` for microphone
+  and voice-path proof.
 - Asserts command contracts (success or expected deterministic error for safe-invalid calls like `sms.send` and `notifications.actions`).
 
 Common failure quick-fixes:

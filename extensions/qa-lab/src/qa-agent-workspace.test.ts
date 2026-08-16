@@ -1,8 +1,8 @@
 // Qa Lab tests cover qa agent workspace plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { __testing, seedQaAgentWorkspace } from "./qa-agent-workspace.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const { cleanup, makeTempDir } = createTempDirHarness();
@@ -10,10 +10,23 @@ const { cleanup, makeTempDir } = createTempDirHarness();
 afterEach(cleanup);
 
 describe("seedQaAgentWorkspace", () => {
-  it("uses Windows junctions for the repo link", () => {
-    expect(__testing.resolveQaAgentWorkspaceRepoLinkType("win32")).toBe("junction");
-    expect(__testing.resolveQaAgentWorkspaceRepoLinkType("linux")).toBe("dir");
-    expect(__testing.resolveQaAgentWorkspaceRepoLinkType("darwin")).toBe("dir");
+  it.each([
+    ["win32", "junction"],
+    ["linux", "dir"],
+    ["darwin", "dir"],
+  ] as const)("uses the expected repo link type on %s", async (platform, linkType) => {
+    const workspaceDir = await makeTempDir("qa-workspace-link-type-");
+    const repoRoot = await makeTempDir("qa-repo-link-type-");
+    const originalPlatform = process.platform;
+    const symlink = vi.spyOn(fs, "symlink").mockResolvedValue(undefined);
+    Object.defineProperty(process, "platform", { value: platform });
+    try {
+      await seedQaAgentWorkspace({ workspaceDir, repoRoot });
+      expect(symlink).toHaveBeenCalledWith(repoRoot, path.join(workspaceDir, "repo"), linkType);
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+      symlink.mockRestore();
+    }
   });
 
   it("creates a repo symlink when a repo root is provided", async () => {

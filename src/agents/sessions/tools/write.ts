@@ -11,13 +11,17 @@ import {
 } from "node:fs/promises";
 import { dirname } from "node:path";
 import { Container, Text } from "@earendil-works/pi-tui";
+import { structuredPatch } from "diff";
 import { Type } from "typebox";
+import { isMissingPathError } from "../../../infra/errors.js";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { getLanguageFromPath, highlightCode } from "../../modes/interactive/theme/theme.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { textResult } from "../../tools/common.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
+import { generateDiffString, generateUnifiedPatch } from "./edit-diff.js";
 import { withFileMutationQueue } from "./file-mutation-queue.js";
+import { type PersistedFileStat, verifyPersistedUtf8File } from "./file-write-verification.js";
 import { resolveToCwd } from "./path-utils.js";
 import {
   invalidArgText,
@@ -26,6 +30,7 @@ import {
   shortenPath,
   str,
 } from "./render-utils.js";
+import type { WriteToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 
 const writeSchema = Type.Object({
@@ -34,6 +39,34 @@ const writeSchema = Type.Object({
   }),
   content: Type.String({ description: "File content." }),
 });
+
+const WriteToolOutputSchema = Type.Union([
+  Type.Object({ changed: Type.Literal(false) }, { additionalProperties: false }),
+  Type.Object(
+    {
+      changed: Type.Literal(true),
+      created: Type.Literal(true),
+      diff: Type.String(),
+      patch: Type.String(),
+      firstChangedLine: Type.Optional(Type.Integer({ minimum: 1 })),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      changed: Type.Literal(true),
+      created: Type.Literal(false),
+      diff: Type.String(),
+      patch: Type.String(),
+      firstChangedLine: Type.Optional(Type.Integer({ minimum: 1 })),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    { changed: Type.Literal(true), created: Type.Optional(Type.Boolean()) },
+    { additionalProperties: false },
+  ),
+]);
 /**
  * Pluggable operations for the write tool.
  * Override these to delegate file writing to remote systems (for example SSH).
@@ -43,10 +76,10 @@ export interface WriteOperations {
   writeFile: (absolutePath: string, content: string) => Promise<void>;
   /** Create directory recursively */
   mkdir: (dir: string) => Promise<void>;
-  /** Optional readback used to recover when a write succeeded but the tool aborted before returning */
-  readFile?: (absolutePath: string) => Promise<Buffer | string>;
-  /** Optional stat used to avoid reporting success for files that already matched before execution */
-  statFile?: (absolutePath: string) => Promise<WriteToolFileStat | null>;
+  /** Read persisted content before reporting success */
+  readFile: (absolutePath: string) => Promise<Buffer | string>;
+  /** Stat the target for prechecks and persisted-file verification */
+  statFile: (absolutePath: string) => Promise<PersistedFileStat | null>;
 }
 
 const defaultWriteOperations: WriteOperations = {
@@ -62,12 +95,7 @@ const defaultWriteOperations: WriteOperations = {
         mtimeMs: stat.mtimeMs,
       } as const;
     } catch (error) {
-      if (
-        error &&
-        typeof error === "object" &&
-        "code" in error &&
-        (error as { code?: unknown }).code === "ENOENT"
-      ) {
+      if (isMissingPathError(error)) {
         return null;
       }
       throw error;
@@ -80,18 +108,34 @@ export interface WriteToolOptions {
   operations?: WriteOperations;
 }
 
-type WriteToolFileStat = {
-  type: "file" | "directory" | "other";
-  size: number;
-  mtimeMs?: number;
-};
-
 type WriteToolPrecheck = {
   state: "different" | "same" | "unknown";
-  beforeStat?: WriteToolFileStat | null;
+  beforeStat?: PersistedFileStat | null;
+  beforeText?: string;
+  readAttempted?: boolean;
 };
 
 const WRITE_PRECHECK_READ_LIMIT_BYTES = 1024 * 1024;
+const WRITE_DIFF_MAX_COMBINED_LINES = 20_000;
+const WRITE_DIFF_MAX_EDIT_LENGTH = 2_000;
+
+// Myers cost is quadratic in edit distance, not input size; probe with the
+// library's bounded abort before committing to synchronous diff generation.
+function withinWriteDiffBudget(oldContent: string, newContent: string): boolean {
+  const probe = structuredPatch("", "", oldContent, newContent, undefined, undefined, {
+    context: 0,
+    maxEditLength: WRITE_DIFF_MAX_EDIT_LENGTH,
+  });
+  return probe !== undefined;
+}
+
+function countNewlines(text: string): number {
+  let count = 0;
+  for (let index = text.indexOf("\n"); index !== -1; index = text.indexOf("\n", index + 1)) {
+    count += 1;
+  }
+  return count;
+}
 
 type WriteHighlightCache = {
   rawPath: string | null;
@@ -210,7 +254,7 @@ function trimTrailingEmptyLines(lines: string[]): string[] {
 function formatWriteCall(
   args: { path?: string; file_path?: string; content?: string } | undefined,
   options: ToolRenderResultOptions,
-  theme: typeof import("../../modes/interactive/theme/theme.js").theme,
+  theme: typeof import("../../modes/interactive/theme/theme.js").interactiveAgentTheme,
   cache: WriteHighlightCache | undefined,
 ): string {
   const rawPath = str(args?.file_path ?? args?.path);
@@ -251,7 +295,7 @@ function formatWriteResult(
     }>;
     isError?: boolean;
   },
-  theme: typeof import("../../modes/interactive/theme/theme.js").theme,
+  theme: typeof import("../../modes/interactive/theme/theme.js").interactiveAgentTheme,
 ): string | undefined {
   if (!result.isError) {
     return undefined;
@@ -267,12 +311,10 @@ function formatWriteResult(
 }
 
 function isMissingFileError(error: unknown): boolean {
-  if (!error || typeof error !== "object") {
-    return false;
-  }
-  if ("code" in error && (error as { code?: unknown }).code === "ENOENT") {
+  if (isMissingPathError(error)) {
     return true;
   }
+  // Injected write operations may preserve only their legacy human-readable error.
   return error instanceof Error && error.message.includes("No such file or directory");
 }
 
@@ -284,11 +326,13 @@ async function readOriginalWriteState(
   if (!ops.statFile) {
     return { state: "unknown" };
   }
-  let stat: WriteToolFileStat | null;
+  let stat: PersistedFileStat | null;
   try {
     stat = await ops.statFile(absolutePath);
   } catch (error) {
-    return { state: isMissingFileError(error) ? "different" : "unknown" };
+    return isMissingFileError(error)
+      ? { state: "different", beforeStat: null }
+      : { state: "unknown" };
   }
   if (!stat) {
     return { state: "different", beforeStat: stat };
@@ -308,18 +352,109 @@ async function readOriginalWriteState(
     const originalText = Buffer.isBuffer(originalContent)
       ? originalContent.toString("utf8")
       : originalContent;
+    if (Buffer.byteLength(originalText, "utf8") > WRITE_PRECHECK_READ_LIMIT_BYTES) {
+      return { state: "unknown", beforeStat: stat, readAttempted: true };
+    }
     return {
       state: originalText === content ? "same" : "different",
       beforeStat: stat,
+      beforeText: originalText,
+      readAttempted: true,
     };
   } catch {
-    return { state: "unknown", beforeStat: stat };
+    return { state: "unknown", beforeStat: stat, readAttempted: true };
   }
+}
+
+async function resolveWriteDetails(params: {
+  absolutePath: string;
+  content: string;
+  ops: WriteOperations;
+  path: string;
+  precheck: WriteToolPrecheck;
+}): Promise<WriteToolDetails> {
+  if (Buffer.byteLength(params.content, "utf8") > WRITE_PRECHECK_READ_LIMIT_BYTES) {
+    // Keep diff work bounded; a partial patch would misrepresent the write.
+    if (params.precheck.beforeStat === null) {
+      return { changed: true, created: true };
+    }
+    return params.precheck.beforeStat ? { changed: true, created: false } : { changed: true };
+  }
+  if (params.precheck.beforeStat === null) {
+    // Same line budget as overwrites: a created file's numbered diff is pure
+    // duplication of the content and must not balloon the result payload.
+    if (countNewlines(params.content) > WRITE_DIFF_MAX_COMBINED_LINES) {
+      return { changed: true, created: true };
+    }
+    const diffResult = generateDiffString("", params.content);
+    return {
+      changed: true,
+      created: true,
+      diff: diffResult.diff,
+      patch: generateUnifiedPatch(params.path, "", params.content),
+      ...(diffResult.firstChangedLine === undefined
+        ? {}
+        : { firstChangedLine: diffResult.firstChangedLine }),
+    };
+  }
+
+  const beforeStat = params.precheck.beforeStat;
+  let beforeText = params.precheck.beforeText;
+  if (
+    beforeText === undefined &&
+    !params.precheck.readAttempted &&
+    beforeStat?.type === "file" &&
+    beforeStat.size <= WRITE_PRECHECK_READ_LIMIT_BYTES &&
+    params.ops.readFile
+  ) {
+    const originalContent = await params.ops.readFile(params.absolutePath).catch(() => undefined);
+    const candidate = Buffer.isBuffer(originalContent)
+      ? originalContent.toString("utf8")
+      : originalContent;
+    if (
+      candidate !== undefined &&
+      Buffer.byteLength(candidate, "utf8") <= WRITE_PRECHECK_READ_LIMIT_BYTES
+    ) {
+      beforeText = candidate;
+    }
+  }
+  // Lossy UTF-8 decoding would publish garbage as authoritative removals.
+  if (beforeText !== undefined && (beforeText.includes("\uFFFD") || beforeText.includes("\0"))) {
+    beforeText = undefined;
+  }
+  // Bound Myers-diff work: cost scales with line tokens and edit distance, so
+  // cap combined bytes AND lines before running the synchronous generator.
+  if (
+    beforeText !== undefined &&
+    (Buffer.byteLength(beforeText, "utf8") + Buffer.byteLength(params.content, "utf8") >
+      WRITE_PRECHECK_READ_LIMIT_BYTES ||
+      countNewlines(beforeText) + countNewlines(params.content) > WRITE_DIFF_MAX_COMBINED_LINES)
+  ) {
+    beforeText = undefined;
+  }
+  if (beforeText !== undefined && !withinWriteDiffBudget(beforeText, params.content)) {
+    beforeText = undefined;
+  }
+  if (beforeText !== undefined) {
+    const diffResult = generateDiffString(beforeText, params.content);
+    return {
+      changed: true,
+      created: false,
+      diff: diffResult.diff,
+      patch: generateUnifiedPatch(params.path, beforeText, params.content),
+      ...(diffResult.firstChangedLine === undefined
+        ? {}
+        : { firstChangedLine: diffResult.firstChangedLine }),
+    };
+  }
+
+  // Without confirmed existence, neither removals nor overwrite status can be asserted.
+  return beforeStat ? { changed: true, created: false } : { changed: true };
 }
 
 async function didWriteMetadataChange(
   absolutePath: string,
-  beforeStat: WriteToolFileStat | null | undefined,
+  beforeStat: PersistedFileStat | null | undefined,
   ops: WriteOperations,
 ): Promise<boolean> {
   if (!beforeStat || !ops.statFile) {
@@ -348,10 +483,10 @@ function isWriteRecoveryCandidate(error: unknown, signal: AbortSignal | undefine
   );
 }
 
-function successfulWriteResult(path: string, content: string) {
+function successfulWriteResult(path: string, content: string, details: WriteToolDetails) {
   return textResult(
     `Successfully wrote ${Buffer.byteLength(content, "utf8")} bytes to ${path}`,
-    undefined,
+    details,
   );
 }
 
@@ -362,27 +497,27 @@ async function recoverSuccessfulWrite(params: {
   ops: WriteOperations;
   path: string;
   precheck: WriteToolPrecheck;
+  details: WriteToolDetails;
   signal?: AbortSignal;
 }) {
-  if (!params.ops.readFile || !isWriteRecoveryCandidate(params.error, params.signal)) {
+  if (!isWriteRecoveryCandidate(params.error, params.signal)) {
     return null;
   }
-  const readback = await params.ops.readFile(params.absolutePath).catch(() => undefined);
-  const currentContent = Buffer.isBuffer(readback) ? readback.toString("utf8") : readback;
+  const verified = await verifyPersistedUtf8File(params.absolutePath, params.content, params.ops);
   const changed =
     params.precheck.state === "different" ||
     (params.precheck.state === "unknown" &&
       (await didWriteMetadataChange(params.absolutePath, params.precheck.beforeStat, params.ops)));
-  if (currentContent !== params.content || !changed) {
+  if (!verified || !changed) {
     return null;
   }
-  return successfulWriteResult(params.path, params.content);
+  return successfulWriteResult(params.path, params.content, params.details);
 }
 
 export function createWriteToolDefinition(
   cwd: string,
   options?: WriteToolOptions,
-): ToolDefinition<typeof writeSchema, undefined> {
+): ToolDefinition<typeof writeSchema, WriteToolDetails> {
   const ops = options?.operations ?? defaultWriteOperations;
   return {
     name: "write",
@@ -391,6 +526,7 @@ export function createWriteToolDefinition(
     promptSnippet: "Create/overwrite files",
     promptGuidelines: ["Use only new files/complete rewrites."],
     parameters: writeSchema,
+    outputSchema: WriteToolOutputSchema,
     async execute(
       toolCallId,
       { path, content }: { path: string; content: string },
@@ -411,13 +547,13 @@ export function createWriteToolDefinition(
         // Terminal no-op: file already has identical content.
         if (precheck.state === "same") {
           return {
-            ...textResult(
-              `No changes made to ${path}. The file already has identical content.`,
-              undefined,
-            ),
+            ...textResult(`No changes made to ${path}. The file already has identical content.`, {
+              changed: false,
+            } satisfies WriteToolDetails),
             terminate: true,
           };
         }
+        const details = await resolveWriteDetails({ absolutePath, content, ops, path, precheck });
         try {
           await ops.mkdir(dir);
           if (signal?.aborted) {
@@ -427,7 +563,12 @@ export function createWriteToolDefinition(
           if (signal?.aborted) {
             throw new Error("Operation aborted");
           }
-          return successfulWriteResult(path, content);
+          if (!(await verifyPersistedUtf8File(absolutePath, content, ops))) {
+            throw new Error(
+              `Write verification failed for ${path}: the persisted regular file does not match the requested content. Inspect the target and retry.`,
+            );
+          }
+          return successfulWriteResult(path, content, details);
         } catch (error: unknown) {
           const recovered = await recoverSuccessfulWrite({
             absolutePath,
@@ -436,6 +577,7 @@ export function createWriteToolDefinition(
             ops,
             path,
             precheck,
+            details,
             signal,
           });
           if (recovered) {

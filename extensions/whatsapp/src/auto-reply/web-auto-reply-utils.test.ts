@@ -6,24 +6,21 @@ import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
 import {
   evaluateSessionFreshness,
   getSessionEntry,
+  normalizeSessionDeliveryState,
   resolveChannelResetConfig,
   resolveSessionKey,
   resolveSessionResetPolicy,
   resolveSessionResetType,
   resolveStorePath,
   resolveThreadFlag,
+  sessionDeliveryChannel,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import { createTestWebInboundMessage } from "../inbound/test-message.test-helper.js";
 import type { AdmittedWebInboundMessage } from "../inbound/types.js";
-import {
-  debugMention,
-  isBotMentionedFromTargets,
-  resolveMentionTargets,
-  resolveOwnerList,
-} from "./mentions.js";
+import { debugMention, resolveOwnerList } from "./mentions.js";
 import { elide, isLikelyWhatsAppCryptoError } from "./util.js";
 
 type TestMessageOverrides = {
@@ -112,7 +109,7 @@ function getSessionSnapshotForTest(
     resetType,
     resetOverride: resolveChannelResetConfig({
       sessionCfg,
-      channel: entry?.lastChannel ?? entry?.channel,
+      channel: sessionDeliveryChannel(entry),
     }),
   });
   const freshness = entry
@@ -138,13 +135,38 @@ describe("isBotMentionedFromTargets", () => {
     cfg: { mentionRegexes: RegExp[]; allowFrom?: Array<string | number>; isSelfChat?: boolean },
     expected: boolean,
   ) {
-    const targets = resolveMentionTargets(msg);
-    expect(isBotMentionedFromTargets(msg, cfg, targets)).toBe(expected);
+    expect(debugMention(msg, cfg).wasMentioned).toBe(expected);
   }
 
-  it("ignores regex matches when other mentions are present", () => {
+  it("honors configured mention patterns when only other members are @-mentioned (#109488)", () => {
+    // Previously a native @-mention of a non-bot member short-circuited the
+    // gate to false before mentionPatterns were evaluated, silently dropping
+    // messages like "marlow, look at @SomeoneElse's message".
     const msg = makeMsg({
       body: "@OpenClaw please help",
+      mentionedJids: ["19998887777@s.whatsapp.net"],
+      selfE164: "+15551234567",
+      selfJid: "15551234567@s.whatsapp.net",
+    });
+    expectMentioned(msg, mentionCfg, true);
+  });
+
+  it("still rejects third-party mentions when no configured pattern matches", () => {
+    const msg = makeMsg({
+      body: "look at @SomeoneElse's message",
+      mentionedJids: ["19998887777@s.whatsapp.net"],
+      selfE164: "+15551234567",
+      selfJid: "15551234567@s.whatsapp.net",
+    });
+    expectMentioned(msg, mentionCfg, false);
+  });
+
+  it("keeps the self-number digit fallback suppressed when other members are @-mentioned", () => {
+    // An @-tag of another member injects that member's number into the body,
+    // so loose digit matching stays disabled in this shape — only explicit
+    // mentionPatterns can rescue the message (#109488).
+    const msg = makeMsg({
+      body: "call me at +15551234567 and ask @SomeoneElse",
       mentionedJids: ["19998887777@s.whatsapp.net"],
       selfE164: "+15551234567",
       selfJid: "15551234567@s.whatsapp.net",
@@ -256,31 +278,27 @@ describe("resolveMentionTargets with @lid mapping", () => {
         JSON.stringify("+1777"),
       );
 
-      const mentionTargets = resolveMentionTargets(
+      const mentionDetails = debugMention(
         makeMsg({
           body: "ping",
           mentionedJids: ["777@lid"],
           selfE164: "+15551234567",
           selfJid: "15551234567@s.whatsapp.net",
         }),
+        { mentionRegexes: [] },
         authDir,
-      );
-      expect(mentionTargets.normalizedMentions).toEqual([
-        {
-          jid: null,
-          lid: "777@lid",
-          e164: "+1777",
-        },
-      ]);
+      ).details;
+      expect(mentionDetails.normalizedMentionedJids).toEqual([["+1777", "777@lid"]]);
 
-      const selfTargets = resolveMentionTargets(
+      const selfDetails = debugMention(
         makeMsg({
           body: "ping",
           selfJid: "777@lid",
         }),
+        { mentionRegexes: [] },
         authDir,
-      );
-      expect(selfTargets.self).toEqual({
+      ).details;
+      expect(selfDetails.resolvedSelf).toEqual({
         jid: null,
         lid: "777@lid",
         e164: "+1777",
@@ -304,7 +322,7 @@ describe("getSessionSnapshot", () => {
           entry: {
             sessionId: "snapshot-session",
             updatedAt: new Date(2026, 0, 18, 3, 30, 0).getTime(),
-            lastChannel: "whatsapp",
+            delivery: normalizeSessionDeliveryState({ context: { channel: "whatsapp" } }),
           },
         });
 

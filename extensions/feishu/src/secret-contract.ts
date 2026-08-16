@@ -1,12 +1,11 @@
 // Feishu plugin module implements secret contract behavior.
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   collectConditionalChannelFieldAssignments,
-  collectSecretInputAssignment,
   createChannelSecretTargetRegistryEntries,
   getChannelSurface,
   hasConfiguredSecretInputValue,
   hasOwnProperty,
-  isBaseFieldActiveForChannelSurface,
   normalizeSecretStringValue,
   type ResolverContext,
   type SecretDefaults,
@@ -37,39 +36,27 @@ export function collectRuntimeConfigAssignments(params: {
     surface.channelEnabled &&
     hasConfiguredSecretInputValue(feishu.appId, params.defaults) &&
     hasConfiguredSecretInputValue(feishu.appSecret, params.defaults);
-  const topLevelAppSecretActive =
-    hasImplicitDefaultAccount || isBaseFieldActiveForChannelSurface(surface, "appSecret");
-  collectSecretInputAssignment({
-    value: feishu.appSecret,
-    path: "channels.feishu.appSecret",
-    expected: "string",
+  if (
+    hasImplicitDefaultAccount &&
+    surface.hasExplicitAccounts &&
+    !surface.accounts.some(({ accountId }) => normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID)
+  ) {
+    surface.accounts.push({ accountId: "default", account: {}, enabled: true });
+  }
+  collectConditionalChannelFieldAssignments({
+    channelKey: "feishu",
+    field: "appSecret",
+    channel: feishu,
+    surface,
     defaults: params.defaults,
     context: params.context,
-    active: topLevelAppSecretActive,
-    inactiveReason: "no enabled account inherits this top-level Feishu appSecret.",
-    apply: (value) => {
-      feishu.appSecret = value;
-    },
+    topLevelActiveWithoutAccounts: surface.channelEnabled,
+    topLevelInheritedAccountActive: ({ account, enabled }) =>
+      enabled && !hasOwnProperty(account, "appSecret"),
+    accountActive: ({ enabled }) => enabled,
+    topInactiveReason: "no enabled account inherits this top-level Feishu appSecret.",
+    accountInactiveReason: "Feishu account is disabled.",
   });
-  if (surface.hasExplicitAccounts) {
-    for (const { accountId, account, enabled } of surface.accounts) {
-      if (!hasOwnProperty(account, "appSecret")) {
-        continue;
-      }
-      collectSecretInputAssignment({
-        value: account.appSecret,
-        path: `channels.feishu.accounts.${accountId}.appSecret`,
-        expected: "string",
-        defaults: params.defaults,
-        context: params.context,
-        active: enabled,
-        inactiveReason: "Feishu account is disabled.",
-        apply: (value) => {
-          account.appSecret = value;
-        },
-      });
-    }
-  }
   const baseConnectionMode =
     normalizeSecretStringValue(feishu.connectionMode) === "webhook" ? "webhook" : "websocket";
   const resolveAccountMode = (account: Record<string, unknown>) =>

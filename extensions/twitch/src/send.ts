@@ -19,7 +19,7 @@ import { generateMessageId, normalizeTwitchChannel } from "./utils/twitch.js";
 /**
  * Result from sending a message to Twitch.
  */
-export interface SendMessageResult {
+interface SendMessageResult {
   /** Whether the send was successful */
   ok: boolean;
   /** The message ID (generated for tracking) */

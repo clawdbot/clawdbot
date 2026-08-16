@@ -1,9 +1,21 @@
 import { randomUUID } from "node:crypto";
 import type {
+  WorkboardBoardMetadata,
+  WorkboardChange,
+  WorkboardCard,
+  WorkboardLink,
+  WorkboardMetadata,
+  WorkboardStatus,
+} from "@openclaw/workboard-contract";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isWorkboardCardStore } from "./persistence-types.js";
+import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
   PersistedWorkboardCard,
   PersistedWorkboardNotificationSubscription,
+  WorkboardBoardCardAggregate,
+  WorkboardCardStore,
   WorkboardKeyedStore,
 } from "./persistence-types.js";
 import { normalizeAutomationPatch, normalizeCardAutomation } from "./store-automation.js";
@@ -21,6 +33,7 @@ import {
   updateEvent,
   appendEvent,
 } from "./store-card-helpers.js";
+import { WorkboardChangeTracker } from "./store-change-tracker.js";
 import { MAX_CARD_COMMENTS, MAX_CARD_WORKER_LOGS, POSITION_STEP } from "./store-constants.js";
 import type {
   WorkboardBoardInput,
@@ -46,7 +59,6 @@ import {
   normalizeLinkType,
   normalizeMetadata,
   normalizeNotes,
-  normalizeOptionalString,
   normalizePosition,
   normalizePriority,
   normalizeStatus,
@@ -57,31 +69,36 @@ import {
   syncExecutionSessionKey,
   trimMetadataToBudget,
 } from "./store-normalizers.js";
-import type {
-  WorkboardBoardMetadata,
-  WorkboardCard,
-  WorkboardLink,
-  WorkboardMetadata,
-  WorkboardStatus,
-} from "./types.js";
 
 export class WorkboardCoreStore {
   private mutationQueue: Promise<unknown> = Promise.resolve();
   private lastNotificationSequence = 0;
+  private readonly changes: WorkboardChangeTracker;
+  private readonly cardStore?: WorkboardCardStore;
+  protected readonly store: WorkboardKeyedStore;
   protected readonly boardStore: WorkboardKeyedStore<PersistedWorkboardBoard>;
   protected readonly subscriptionStore: WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>;
   protected readonly attachmentStore: WorkboardKeyedStore<PersistedWorkboardAttachment>;
 
   constructor(
-    protected readonly store: WorkboardKeyedStore,
+    store: WorkboardKeyedStore,
     stores: {
       boards?: WorkboardKeyedStore<PersistedWorkboardBoard>;
       subscriptions?: WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>;
       attachments?: WorkboardKeyedStore<PersistedWorkboardAttachment>;
+      dataVersion?: () => number;
     } = {},
   ) {
-    this.boardStore =
-      stores.boards ?? (store as unknown as WorkboardKeyedStore<PersistedWorkboardBoard>);
+    this.changes = new WorkboardChangeTracker(stores.dataVersion);
+    if (isWorkboardCardStore(store)) {
+      this.cardStore = this.changes.trackCardStore(store);
+      this.store = this.cardStore;
+    } else {
+      this.store = this.changes.track(store);
+    }
+    this.boardStore = this.changes.track(
+      stores.boards ?? (store as unknown as WorkboardKeyedStore<PersistedWorkboardBoard>),
+    );
     this.subscriptionStore =
       stores.subscriptions ??
       (store as unknown as WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>);
@@ -89,8 +106,21 @@ export class WorkboardCoreStore {
       stores.attachments ?? (store as unknown as WorkboardKeyedStore<PersistedWorkboardAttachment>);
   }
 
+  subscribeChanges(listener: (change: WorkboardChange) => void): () => void {
+    return this.changes.subscribe(listener);
+  }
+
+  announceChangeEpoch(): void {
+    this.changes.announceEpoch();
+  }
+
+  reconcileExternalChanges(): boolean {
+    return this.changes.reconcileExternalChanges();
+  }
+
   protected async enqueueMutation<T>(run: () => Promise<T>): Promise<T> {
-    const result = this.mutationQueue.then(run, run);
+    const runAndNotify = async () => await this.changes.runMutation(run);
+    const result = this.mutationQueue.then(runAndNotify, runAndNotify);
     this.mutationQueue = result.then(
       () => undefined,
       () => undefined,
@@ -101,13 +131,14 @@ export class WorkboardCoreStore {
   protected async updateMetadata(
     id: string,
     mutate: (existing: WorkboardCard) => WorkboardMetadata,
+    options: { preserveProofId?: string } = {},
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
       const existing = await this.get(id);
       if (!existing) {
         throw new Error(`card not found: ${id}`);
       }
-      return await this.updateCard(id, { metadata: mutate(existing) });
+      return await this.updateCard(id, { metadata: mutate(existing) }, options);
     });
   }
 
@@ -174,8 +205,17 @@ export class WorkboardCoreStore {
         byStatus: {},
       });
     }
-    for (const card of await this.list()) {
-      const boardId = cardBoardId(card);
+    const cardAggregates: WorkboardBoardCardAggregate[] = this.cardStore
+      ? await this.cardStore.listBoardAggregates()
+      : (await this.list()).map((card) => ({
+          boardId: cardBoardId(card),
+          status: card.status,
+          total: 1,
+          archived: card.metadata?.archivedAt ? 1 : 0,
+          updatedAt: card.updatedAt,
+        }));
+    for (const aggregate of cardAggregates) {
+      const boardId = aggregate.boardId;
       const summary =
         boards.get(boardId) ??
         ({
@@ -185,14 +225,12 @@ export class WorkboardCoreStore {
           archived: 0,
           byStatus: {},
         } satisfies WorkboardBoardSummary);
-      summary.total += 1;
-      if (card.metadata?.archivedAt) {
-        summary.archived += 1;
-      } else {
-        summary.active += 1;
-      }
-      summary.byStatus[card.status] = (summary.byStatus[card.status] ?? 0) + 1;
-      summary.updatedAt = Math.max(summary.updatedAt ?? 0, card.updatedAt);
+      summary.total += aggregate.total;
+      summary.archived += aggregate.archived;
+      summary.active += aggregate.total - aggregate.archived;
+      summary.byStatus[aggregate.status] =
+        (summary.byStatus[aggregate.status] ?? 0) + aggregate.total;
+      summary.updatedAt = Math.max(summary.updatedAt ?? 0, aggregate.updatedAt);
       boards.set(boardId, summary);
     }
     return {
@@ -248,7 +286,7 @@ export class WorkboardCoreStore {
       if (card.metadata?.archivedAt) {
         archived += 1;
       }
-      if (card.status === "ready") {
+      if (card.status === "ready" && !card.metadata?.archivedAt) {
         oldestReadyAt = Math.min(oldestReadyAt ?? card.updatedAt, card.updatedAt);
       }
       updatedAt = Math.max(updatedAt ?? 0, card.updatedAt);
@@ -367,7 +405,7 @@ export class WorkboardCoreStore {
         templateId: normalizeTemplateId(input.templateId),
         ...(childAutomation ? { automation: childAutomation } : {}),
       },
-      { allowDependencyLinks: false },
+      { allowDependencyLinks: false, allowArchivedAt: false },
     );
     const syncedMetadata = trimMetadataToBudget(
       syncExecutionAttemptMetadata(metadata, execution, now),
@@ -440,7 +478,11 @@ export class WorkboardCoreStore {
   protected async updateCard(
     id: string,
     patch: WorkboardCardPatch,
-    options: { allowMetadataDependencyLinks?: boolean; enforceStatusHolds?: boolean } = {},
+    options: {
+      allowMetadataDependencyLinks?: boolean;
+      enforceStatusHolds?: boolean;
+      preserveProofId?: string;
+    } = {},
   ): Promise<WorkboardCard> {
     const existing = await this.get(id);
     if (!existing) {
@@ -498,6 +540,7 @@ export class WorkboardCoreStore {
         : normalizeExecution(effectivePatch.execution);
     let metadata = normalizeMetadata(effectivePatch.metadata, existing.metadata, {
       allowDependencyLinks: options.allowMetadataDependencyLinks !== false,
+      preserveProofId: options.preserveProofId,
     });
     if (status !== existing.status && !hasFreshLifecycleStatusSource) {
       // Status patches often spread existing metadata. Only a newly supplied
@@ -522,10 +565,13 @@ export class WorkboardCoreStore {
       }
     }
     if (Object.keys(automationPatch).length > 0) {
-      metadata = trimMetadataToBudget({
-        ...metadata,
-        automation: normalizeAutomationPatch(automationPatch, metadata.automation),
-      });
+      metadata = trimMetadataToBudget(
+        {
+          ...metadata,
+          automation: normalizeAutomationPatch(automationPatch, metadata.automation),
+        },
+        options,
+      );
     }
     const next = removeUndefinedCardFields({
       ...existing,
@@ -574,6 +620,7 @@ export class WorkboardCoreStore {
     });
     next.metadata = trimMetadataToBudget(
       syncExecutionAttemptMetadata(next.metadata ?? {}, execution, now),
+      options,
     );
     next.events = appendEvent(next, updateEvent(existing, next), now);
     if (options.enforceStatusHolds && effectivePatch.status !== undefined) {
@@ -625,13 +672,6 @@ export class WorkboardCoreStore {
     if ((scheduledAt && scheduledAt > now) || (existing.status === "scheduled" && !scheduledAt)) {
       throw new Error("card is scheduled for later.");
     }
-  }
-
-  async move(id: string, status: unknown, position: unknown): Promise<WorkboardCard> {
-    return await this.update(id, {
-      status,
-      position,
-    });
   }
 
   async delete(id: string): Promise<{ deleted: boolean }> {
@@ -888,22 +928,13 @@ export class WorkboardCoreStore {
     return next;
   }
 
-  protected async shouldAutoOrchestrate(card: WorkboardCard): Promise<boolean> {
-    if (
-      card.status !== "triage" ||
-      card.metadata?.archivedAt ||
-      card.metadata?.workerProtocol?.state === "idle"
-    ) {
-      return false;
-    }
-    const board = await this.boardStore.lookup(cardBoardId(card));
-    return board?.version === 1 && board.board.orchestration?.autoDecompose === true;
-  }
-
   protected async promoteDependencyReady(id: string, now = Date.now()): Promise<WorkboardCard> {
     const card = await this.get(id);
     if (!card) {
       throw new Error(`card not found: ${id}`);
+    }
+    if (card.metadata?.archivedAt) {
+      return card;
     }
     const target = await this.dependencyTargetStatus(card, now);
     if (target === card.status) {
@@ -911,17 +942,5 @@ export class WorkboardCoreStore {
     }
     return await this.updateCard(card.id, { status: target });
   }
-
-  async promoteReady(now = Date.now()): Promise<{ cards: WorkboardCard[]; count: number }> {
-    return await this.enqueueMutation(async () => {
-      const promoted: WorkboardCard[] = [];
-      for (const card of await this.list()) {
-        const next = await this.promoteDependencyReady(card.id, now);
-        if (next.status !== card.status) {
-          promoted.push(next);
-        }
-      }
-      return { cards: promoted, count: promoted.length };
-    });
-  }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

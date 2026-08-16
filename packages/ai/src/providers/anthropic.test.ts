@@ -6,12 +6,14 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-bound
 
 const anthropicMockState = vi.hoisted(() => ({
   configs: [] as unknown[],
+  requestOptions: [] as unknown[],
 }));
 
 vi.mock("@anthropic-ai/sdk", () => ({
   default: class MockAnthropic {
     messages = {
-      create: vi.fn(() => {
+      create: vi.fn((_payload: unknown, requestOptions: unknown) => {
+        anthropicMockState.requestOptions.push(requestOptions);
         throw new Error("stop after constructor");
       }),
     };
@@ -34,6 +36,16 @@ function createSseResponse(events: Record<string, unknown>[] = []): Response {
   });
 }
 
+function createAnthropicSseClient(events: Record<string, unknown>[]) {
+  return {
+    messages: {
+      create: vi.fn(() => ({
+        asResponse: () => Promise.resolve(createSseResponse(events)),
+      })),
+    },
+  };
+}
+
 function makeAnthropicModel(overrides: Partial<Model<"anthropic-messages">> = {}) {
   return {
     id: "claude-sonnet-4-6",
@@ -48,6 +60,57 @@ function makeAnthropicModel(overrides: Partial<Model<"anthropic-messages">> = {}
     maxTokens: 4096,
     ...overrides,
   } satisfies Model<"anthropic-messages">;
+}
+
+type SimpleAnthropicTestOptions = Omit<
+  NonNullable<Parameters<typeof streamSimpleAnthropic>[2]>,
+  "onPayload"
+> & {
+  injectPayload?: Record<string, unknown>;
+  stopBeforeNetwork?: boolean;
+};
+
+type AnthropicAuthenticationTestCase = {
+  name: string;
+  model: Partial<Model<"anthropic-messages">>;
+  key: string;
+  expected: { apiKey: string | null; authToken: string | null };
+  headers?: Record<string, string>;
+  absent?: string[];
+  useHostFetch?: boolean;
+  resolveSentinel?: boolean;
+};
+
+type AnthropicAdaptiveThinkingTestCase = {
+  name: string;
+  model: Partial<Model<"anthropic-messages">>;
+  options: SimpleAnthropicTestOptions;
+  context?: Context;
+  expected: Record<string, unknown>;
+  absent?: string[];
+};
+
+async function captureSimpleAnthropicPayload(
+  model: Partial<Model<"anthropic-messages">>,
+  options: SimpleAnthropicTestOptions = {},
+  context: Context = { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+) {
+  const { injectPayload, stopBeforeNetwork, ...streamOptions } = options;
+  let capturedPayload: unknown;
+  const result = await streamSimpleAnthropic(makeAnthropicModel(model), context, {
+    apiKey: "sk-ant-provider",
+    ...streamOptions,
+    onPayload: (payload) => {
+      capturedPayload = injectPayload
+        ? { ...(payload as Record<string, unknown>), ...injectPayload }
+        : payload;
+      if (stopBeforeNetwork) {
+        throw new Error("stop before network");
+      }
+      return capturedPayload;
+    },
+  }).result();
+  return { payload: capturedPayload as Record<string, unknown>, result };
 }
 
 function makeSonnet5PrefillContext(): Context {
@@ -76,34 +139,100 @@ function makeSonnet5PrefillContext(): Context {
   };
 }
 
+function tinyJpegBase64(): string {
+  return Buffer.from([
+    0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01,
+  ]).toString("base64");
+}
+
+function configureTestAnthropicImageNormalizer(): void {
+  configureAiTransportHost({
+    normalizeAnthropicInlineContentBlocks: async (content) =>
+      content.map((block) =>
+        block.type === "image" ? { ...block, mimeType: "image/jpeg" } : block,
+      ),
+  });
+}
+
 describe("Anthropic provider", () => {
   beforeEach(() => {
     anthropicMockState.configs = [];
+    anthropicMockState.requestOptions = [];
   });
 
   afterEach(() => {
     configureAiTransportHost({});
   });
 
-  it("keeps Cloudflare AI Gateway upstream provider auth on the Anthropic API key", async () => {
-    // Prove the Cloudflare client receives the host-built model fetch.
-    const hostFetch: typeof fetch = async () => new Response(null, { status: 500 });
-    configureAiTransportHost({ buildModelFetch: () => hostFetch });
-    const model = makeAnthropicModel({
-      provider: "cloudflare-ai-gateway",
-      baseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway/anthropic/v1/messages",
-      headers: {
-        "cf-aig-authorization": "Bearer gateway-token",
+  const foundrySentinel = "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end";
+
+  const authenticationCases: AnthropicAuthenticationTestCase[] = [
+    {
+      name: "keeps Cloudflare AI Gateway upstream provider auth on the Anthropic API key",
+      model: {
+        provider: "cloudflare-ai-gateway",
+        baseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway/anthropic/v1/messages",
+        headers: { "cf-aig-authorization": "Bearer gateway-token" },
       },
-    });
-    const context = {
-      messages: [{ role: "user", content: "hello", timestamp: 1 }],
-    } satisfies Context;
+      key: "sk-ant-provider",
+      expected: { apiKey: "sk-ant-provider", authToken: null },
+      headers: { "cf-aig-authorization": "Bearer gateway-token" },
+      absent: ["x-api-key"],
+      useHostFetch: true,
+    },
+    {
+      name: "uses bearer auth for Microsoft Foundry Anthropic requests",
+      model: {
+        provider: "microsoft-foundry",
+        baseUrl: "https://example.services.ai.azure.com/anthropic",
+        authHeader: true,
+        headers: { "api-key": "stale-foundry-key", "x-api-key": "stale-resource-key" },
+      },
+      key: "entra-access-token",
+      expected: { apiKey: null, authToken: "entra-access-token" },
+      absent: ["Authorization", "api-key", "x-api-key"],
+    },
+    {
+      name: "keeps sentinel-backed Foundry Authorization headers on bearer routing",
+      model: {
+        provider: "microsoft-foundry",
+        baseUrl: "https://example.services.ai.azure.com/anthropic",
+        headers: { Authorization: foundrySentinel },
+      },
+      key: foundrySentinel,
+      expected: { apiKey: null, authToken: foundrySentinel },
+      resolveSentinel: true,
+    },
+    {
+      name: "keeps Microsoft Foundry API-key profiles on Anthropic API key auth",
+      model: {
+        provider: "microsoft-foundry",
+        baseUrl: "https://example.services.ai.azure.com/anthropic",
+        headers: { "api-key": "foundry-resource-key" },
+      },
+      key: "foundry-resource-key",
+      expected: { apiKey: "foundry-resource-key", authToken: null },
+    },
+  ];
 
-    streamAnthropic(model, context, {
-      apiKey: "sk-ant-provider",
-    });
-
+  it.each(authenticationCases)("$name", async (testCase) => {
+    const hostFetch: typeof fetch = async () => new Response(null, { status: 500 });
+    if (testCase.useHostFetch || testCase.resolveSentinel) {
+      configureAiTransportHost({
+        buildModelFetch: () => hostFetch,
+        ...(testCase.resolveSentinel
+          ? {
+              resolveSecretSentinel: (value: string) =>
+                value.replaceAll(foundrySentinel, "Bearer entra-access-token"),
+            }
+          : {}),
+      });
+    }
+    streamAnthropic(
+      makeAnthropicModel(testCase.model),
+      { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+      { apiKey: testCase.key },
+    );
     await vi.waitFor(() => expect(anthropicMockState.configs).toHaveLength(1));
     const config = anthropicMockState.configs[0] as {
       apiKey?: string | null;
@@ -111,97 +240,16 @@ describe("Anthropic provider", () => {
       defaultHeaders?: Record<string, string | null>;
       fetch?: unknown;
     };
-
-    expect(config.apiKey).toBe("sk-ant-provider");
-    expect(config.authToken).toBeNull();
-    expect(config.defaultHeaders?.["x-api-key"]).toBeUndefined();
-    expect(config.defaultHeaders?.["cf-aig-authorization"]).toBe("Bearer gateway-token");
-    expect(config.fetch).toBe(hostFetch);
-  });
-
-  it("uses bearer auth for Microsoft Foundry Anthropic requests", async () => {
-    const model = makeAnthropicModel({
-      provider: "microsoft-foundry",
-      baseUrl: "https://example.services.ai.azure.com/anthropic",
-      authHeader: true,
-      headers: {
-        "api-key": "stale-foundry-key",
-        "x-api-key": "stale-resource-key",
-      },
-    });
-    const context = {
-      messages: [{ role: "user", content: "hello", timestamp: 1 }],
-    } satisfies Context;
-
-    streamAnthropic(model, context, {
-      apiKey: "entra-access-token",
-    });
-
-    await vi.waitFor(() => expect(anthropicMockState.configs).toHaveLength(1));
-    const config = anthropicMockState.configs[0] as {
-      apiKey?: string | null;
-      authToken?: string | null;
-      defaultHeaders?: Record<string, string | null>;
-    };
-
-    expect(config.apiKey).toBeNull();
-    expect(config.authToken).toBe("entra-access-token");
-    expect(config.defaultHeaders?.Authorization).toBeUndefined();
-    expect(config.defaultHeaders?.["api-key"]).toBeUndefined();
-    expect(config.defaultHeaders?.["x-api-key"]).toBeUndefined();
-  });
-
-  it("keeps sentinel-backed Foundry Authorization headers on bearer routing", async () => {
-    const sentinel = "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end";
-    configureAiTransportHost({
-      buildModelFetch: () => async () => new Response(null, { status: 500 }),
-      resolveSecretSentinel: (value) => value.replaceAll(sentinel, "Bearer entra-access-token"),
-    });
-    const model = makeAnthropicModel({
-      provider: "microsoft-foundry",
-      baseUrl: "https://example.services.ai.azure.com/anthropic",
-      headers: { Authorization: sentinel },
-    });
-
-    streamAnthropic(
-      model,
-      { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
-      {
-        apiKey: sentinel,
-      },
-    );
-
-    await vi.waitFor(() => expect(anthropicMockState.configs).toHaveLength(1));
-    const config = anthropicMockState.configs[0] as {
-      apiKey?: string | null;
-      authToken?: string | null;
-    };
-    expect(config.apiKey).toBeNull();
-    expect(config.authToken).toBe(sentinel);
-  });
-
-  it("keeps Microsoft Foundry API-key profiles on Anthropic API key auth", async () => {
-    const model = makeAnthropicModel({
-      provider: "microsoft-foundry",
-      baseUrl: "https://example.services.ai.azure.com/anthropic",
-      headers: { "api-key": "foundry-resource-key" },
-    });
-    const context = {
-      messages: [{ role: "user", content: "hello", timestamp: 1 }],
-    } satisfies Context;
-
-    streamAnthropic(model, context, {
-      apiKey: "foundry-resource-key",
-    });
-
-    await vi.waitFor(() => expect(anthropicMockState.configs).toHaveLength(1));
-    const config = anthropicMockState.configs[0] as {
-      apiKey?: string | null;
-      authToken?: string | null;
-    };
-
-    expect(config.apiKey).toBe("foundry-resource-key");
-    expect(config.authToken).toBeNull();
+    expect(config).toMatchObject(testCase.expected);
+    for (const [key, value] of Object.entries(testCase.headers ?? {})) {
+      expect(config.defaultHeaders?.[key]).toBe(value);
+    }
+    for (const key of testCase.absent ?? []) {
+      expect(config.defaultHeaders?.[key]).toBeUndefined();
+    }
+    if (testCase.useHostFetch) {
+      expect(config.fetch).toBe(hostFetch);
+    }
   });
 
   it("puts Claude subscription billing identity first for OAuth requests", async () => {
@@ -235,368 +283,477 @@ describe("Anthropic provider", () => {
     ]);
   });
 
-  it("keeps aggregate cache billing buckets out of the context total", async () => {
-    const client = {
-      messages: {
-        create: vi.fn(() => ({
-          asResponse: () =>
-            Promise.resolve(
-              createSseResponse([
-                {
-                  type: "message_start",
-                  message: {
-                    id: "msg_usage",
-                    model: "claude-fable-5",
-                    usage: {
-                      input_tokens: 12,
-                      output_tokens: 0,
-                      cache_read_input_tokens: 120_000,
-                      cache_creation_input_tokens: null,
-                    },
-                  },
-                },
-                {
-                  type: "content_block_start",
-                  index: 0,
-                  content_block: { type: "text", text: "" },
-                },
-                {
-                  type: "content_block_delta",
-                  index: 0,
-                  delta: { type: "text_delta", text: "Done." },
-                },
-                { type: "content_block_stop", index: 0 },
-                {
-                  type: "message_delta",
-                  delta: { stop_reason: "end_turn" },
-                  usage: {
-                    input_tokens: 12,
-                    output_tokens: 15_104,
-                    cache_read_input_tokens: 819_661,
-                    cache_creation_input_tokens: 93_130,
-                    iterations: [
-                      {
-                        type: "compaction",
-                        input_tokens: 12,
-                        output_tokens: 1_000,
-                        cache_read_input_tokens: 819_661,
-                        cache_creation_input_tokens: 93_130,
-                      },
-                      {
-                        type: "message",
-                        input_tokens: 12,
-                        output_tokens: 15_104,
-                        cache_read_input_tokens: 148_862,
-                        cache_creation_input_tokens: 0,
-                      },
-                    ],
-                  },
-                },
-                { type: "message_stop" },
-              ]),
-            ),
-        })),
+  it("includes compaction iterations in billed usage while keeping final context usage", async () => {
+    const client = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: {
+          id: "msg_usage",
+          model: "claude-fable-5",
+          usage: {
+            input_tokens: 12,
+            output_tokens: 0,
+            cache_read_input_tokens: 120_000,
+            cache_creation_input_tokens: null,
+          },
+        },
       },
-    };
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "text", text: "" },
+      },
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "Done." },
+      },
+      { type: "content_block_stop", index: 0 },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "end_turn" },
+        usage: {
+          input_tokens: 12,
+          output_tokens: 15_104,
+          cache_read_input_tokens: 819_661,
+          cache_creation_input_tokens: 93_130,
+          iterations: [
+            {
+              type: "compaction",
+              input_tokens: 12,
+              output_tokens: 1_000,
+              cache_read_input_tokens: 819_661,
+              cache_creation_input_tokens: 93_130,
+            },
+            {
+              type: "message",
+              input_tokens: 12,
+              output_tokens: 15_104,
+              cache_read_input_tokens: 148_862,
+              cache_creation_input_tokens: 0,
+            },
+          ],
+        },
+      },
+      { type: "message_stop" },
+    ]);
 
     const result = await streamAnthropic(
-      makeAnthropicModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
+      makeAnthropicModel({
+        id: "claude-fable-5",
+        name: "Claude Fable 5",
+        cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+      }),
       { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
       { apiKey: "sk-ant-provider", client: client as never },
     ).result();
 
     expect(result.usage).toMatchObject({
-      input: 12,
-      output: 15_104,
-      cacheRead: 819_661,
+      input: 24,
+      output: 16_104,
+      cacheRead: 968_523,
       cacheWrite: 93_130,
       contextUsage: {
         state: "available",
         promptTokens: 148_874,
         totalTokens: 163_978,
       },
-      totalTokens: 927_907,
+      totalTokens: 1_077_781,
     });
+    expect(result.usage.cost.total).toBeCloseTo(1.469044, 6);
   });
 
-  it("does not fall back to aggregate usage when the final iteration is malformed", async () => {
-    const client = {
-      messages: {
-        create: vi.fn(() => ({
-          asResponse: () =>
-            Promise.resolve(
-              createSseResponse([
-                {
-                  type: "message_start",
-                  message: {
-                    id: "msg_invalid_iteration",
-                    model: "claude-fable-5",
-                    usage: {
-                      input_tokens: 12,
-                      output_tokens: 0,
-                      cache_read_input_tokens: 120_000,
-                      cache_creation_input_tokens: 0,
-                    },
-                  },
-                },
-                {
-                  type: "message_delta",
-                  delta: { stop_reason: "end_turn" },
-                  usage: {
-                    input_tokens: 12,
-                    output_tokens: 15_104,
-                    cache_read_input_tokens: 819_661,
-                    cache_creation_input_tokens: 93_130,
-                    iterations: [
-                      {
-                        type: "message",
-                        input_tokens: "malformed",
-                        output_tokens: 15_104,
-                        cache_read_input_tokens: 148_862,
-                        cache_creation_input_tokens: 0,
-                      },
-                    ],
-                  },
-                },
-                { type: "message_stop" },
-              ]),
-            ),
-        })),
+  it("captures and replays streamed Anthropic compaction blocks", async () => {
+    const firstClient = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: {
+          id: "msg_compaction",
+          model: "claude-sonnet-4-6",
+          usage: { input_tokens: 50_001, output_tokens: 0 },
+        },
       },
-    };
-
-    const result = await streamAnthropic(
-      makeAnthropicModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
-      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
-      { apiKey: "sk-ant-provider", client: client as never },
-    ).result();
-
-    expect(result.usage.totalTokens).toBe(927_907);
-    expect(result.usage.contextUsage).toEqual({ state: "unavailable" });
-  });
-
-  it("uses complete final usage when message-start prompt buckets are zero placeholders", async () => {
-    const client = {
-      messages: {
-        create: vi.fn(() => ({
-          asResponse: () =>
-            Promise.resolve(
-              createSseResponse([
-                {
-                  type: "message_start",
-                  message: {
-                    id: "msg_zero_start",
-                    model: "claude-fable-5",
-                    usage: {
-                      input_tokens: 0,
-                      output_tokens: 0,
-                      cache_read_input_tokens: 0,
-                      cache_creation_input_tokens: 0,
-                    },
-                  },
-                },
-                {
-                  type: "message_delta",
-                  delta: { stop_reason: "end_turn" },
-                  usage: {
-                    input_tokens: 12,
-                    output_tokens: 15_104,
-                    cache_read_input_tokens: 148_862,
-                    cache_creation_input_tokens: 0,
-                  },
-                },
-                { type: "message_stop" },
-              ]),
-            ),
-        })),
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "compaction", content: null },
       },
-    };
-
-    const result = await streamAnthropic(
-      makeAnthropicModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
-      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
-      { apiKey: "sk-ant-provider", client: client as never },
-    ).result();
-
-    expect(result.usage.contextUsage).toEqual({
-      state: "available",
-      promptTokens: 148_874,
-      totalTokens: 163_978,
-    });
-  });
-
-  it("does not treat zero start placeholders as complete final prompt usage", async () => {
-    const client = {
-      messages: {
-        create: vi.fn(() => ({
-          asResponse: () =>
-            Promise.resolve(
-              createSseResponse([
-                {
-                  type: "message_start",
-                  message: {
-                    id: "msg_zero_start_partial_delta",
-                    model: "claude-fable-5",
-                    usage: {
-                      input_tokens: 0,
-                      output_tokens: 0,
-                      cache_read_input_tokens: 0,
-                      cache_creation_input_tokens: 0,
-                    },
-                  },
-                },
-                {
-                  type: "message_delta",
-                  delta: { stop_reason: "end_turn" },
-                  usage: { output_tokens: 15_104 },
-                },
-                { type: "message_stop" },
-              ]),
-            ),
-        })),
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "compaction_delta", content: "summary checkpoint" },
       },
-    };
-
-    const result = await streamAnthropic(
-      makeAnthropicModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
-      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
-      { apiKey: "sk-ant-provider", client: client as never },
-    ).result();
-
-    expect(result.usage.contextUsage).toEqual({ state: "unavailable" });
-  });
-
-  it("uses accumulated prompt buckets when the final usage update is partial", async () => {
-    const client = {
-      messages: {
-        create: vi.fn(() => ({
-          asResponse: () =>
-            Promise.resolve(
-              createSseResponse([
-                {
-                  type: "message_start",
-                  message: {
-                    id: "msg_partial_final_usage",
-                    model: "claude-sonnet-4-6",
-                    usage: {
-                      input_tokens: 12,
-                      output_tokens: 0,
-                      cache_read_input_tokens: 120_000,
-                      cache_creation_input_tokens: 500,
-                    },
-                  },
-                },
-                {
-                  type: "message_delta",
-                  delta: { stop_reason: "end_turn" },
-                  usage: {
-                    input_tokens: 12,
-                    output_tokens: 15_104,
-                    cache_read_input_tokens: 148_862,
-                    cache_creation_input_tokens: null,
-                  },
-                },
-                { type: "message_stop" },
-              ]),
-            ),
-        })),
+      { type: "content_block_stop", index: 0 },
+      {
+        type: "content_block_start",
+        index: 1,
+        content_block: { type: "text", text: "" },
       },
-    };
-
-    const result = await streamAnthropic(
+      {
+        type: "content_block_delta",
+        index: 1,
+        delta: { type: "text_delta", text: "Done." },
+      },
+      { type: "content_block_stop", index: 1 },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "compaction" },
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+      { type: "message_stop" },
+    ]);
+    const replayOptions = {
+      anthropicServerCompaction: true,
+      authProfileId: "anthropic:work",
+      sessionId: "session-1",
+    } as const;
+    const firstUser = { role: "user" as const, content: "old question", timestamp: 0 };
+    const first = await streamAnthropic(
       makeAnthropicModel(),
-      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
-      { apiKey: "sk-ant-provider", client: client as never },
+      { messages: [firstUser] },
+      {
+        apiKey: "sk-ant-provider",
+        client: firstClient as never,
+        ...replayOptions,
+      },
     ).result();
 
-    expect(result.usage.contextUsage).toEqual({
-      state: "available",
-      promptTokens: 149_374,
-      totalTokens: 164_478,
+    expect(first.stopReason).toBe("stop");
+    expect(first.providerReplay).toMatchObject({
+      type: "anthropic-compaction",
+      data: "summary checkpoint",
+      replayIndex: 0,
     });
+
+    let replayPayload: Record<string, unknown> | undefined;
+    const secondClient = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: {
+          id: "msg_replay",
+          model: "claude-sonnet-4-6",
+          usage: { input_tokens: 1 },
+        },
+      },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "end_turn" },
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+      { type: "message_stop" },
+    ]);
+    await streamAnthropic(
+      makeAnthropicModel(),
+      {
+        messages: [firstUser, first, { role: "user", content: "new question", timestamp: 2 }],
+      },
+      {
+        apiKey: "sk-ant-provider",
+        client: secondClient as never,
+        ...replayOptions,
+        onPayload: (payload) => {
+          replayPayload = payload as Record<string, unknown>;
+        },
+      },
+    ).result();
+
+    const replayMessages = replayPayload?.messages as Array<Record<string, unknown>>;
+    expect(replayMessages.map((message) => message.role)).toEqual(["assistant", "user"]);
+    expect(replayMessages[0]?.content).toEqual([
+      { type: "compaction", content: "summary checkpoint" },
+      { type: "text", text: "Done." },
+    ]);
   });
 
-  it("preserves valid message-start billing buckets when a sibling is malformed", async () => {
-    const client = {
-      messages: {
-        create: vi.fn(() => ({
-          asResponse: () =>
-            Promise.resolve(
-              createSseResponse([
-                {
-                  type: "message_start",
-                  message: {
-                    id: "msg_malformed_usage",
-                    model: "claude-sonnet-4-6",
-                    usage: {
-                      input_tokens: 12,
-                      output_tokens: 0,
-                      cache_read_input_tokens: "malformed",
-                      cache_creation_input_tokens: 500,
-                    },
-                  },
-                },
-                {
-                  type: "message_delta",
-                  delta: { stop_reason: "end_turn" },
-                  usage: {
-                    input_tokens: 12,
-                    output_tokens: 15_104,
-                    cache_creation_input_tokens: null,
-                  },
-                },
-                { type: "message_stop" },
-              ]),
-            ),
-        })),
+  it("ignores a message_delta whose usage object is omitted", async () => {
+    const client = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: {
+          id: "msg_no_delta_usage",
+          model: "claude-sonnet-4-6",
+          usage: {
+            input_tokens: 12,
+            output_tokens: 0,
+            cache_read_input_tokens: 3,
+            cache_creation_input_tokens: 4,
+          },
+        },
       },
-    };
+      { type: "message_delta", delta: { stop_reason: "end_turn" } },
+      { type: "message_stop" },
+    ]);
 
     const result = await streamAnthropic(
-      makeAnthropicModel(),
+      makeAnthropicModel({
+        cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+      }),
       { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
-      { apiKey: "sk-ant-provider", client: client as never },
+      { client: client as never },
+    ).result();
+
+    expect(result.stopReason).toBe("stop");
+    expect(result.usage).toMatchObject({
+      input: 12,
+      output: 0,
+      cacheRead: 3,
+      cacheWrite: 4,
+      totalTokens: 19,
+    });
+    expect(result.usage.cost.input).toBeCloseTo(0.00006, 10);
+    expect(result.usage.cost.total).toBeGreaterThan(0);
+  });
+
+  it("prices reported 1-hour cache writes at twice the input rate", async () => {
+    const client = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: {
+          id: "msg_cache_ttl_usage",
+          model: "claude-sonnet-4-6",
+          usage: {
+            input_tokens: 100,
+            output_tokens: 0,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 1_000_000,
+            cache_creation: {
+              ephemeral_5m_input_tokens: 600_000,
+              ephemeral_1h_input_tokens: 400_000,
+            },
+          },
+        },
+      },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "end_turn" },
+        usage: { output_tokens: 5 },
+      },
+      { type: "message_stop" },
+    ]);
+
+    const result = await streamAnthropic(
+      makeAnthropicModel({
+        cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+      }),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      { client: client as never },
     ).result();
 
     expect(result.usage).toMatchObject({
-      input: 12,
-      output: 15_104,
-      cacheRead: 0,
-      cacheWrite: 500,
-      totalTokens: 15_616,
+      cacheWrite: 1_000_000,
+      cacheWrite1h: 400_000,
     });
-    expect(result.usage.contextUsage).toEqual({ state: "unavailable" });
+    expect(result.usage.cost.cacheWrite).toBeCloseTo(7.75, 10);
+  });
+
+  it.each([
+    [undefined, 0],
+    [2, 2],
+  ])("uses Anthropic SDK maxRetries=%s", async (maxRetries, expected) => {
+    const model = makeAnthropicModel();
+    await streamAnthropic(
+      model,
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      { maxRetries },
+    ).result();
+
+    expect(anthropicMockState.requestOptions).toEqual([
+      expect.objectContaining({ maxRetries: expected }),
+    ]);
+  });
+
+  it.each([
+    { allowEmptySignature: undefined, expectedType: "text", expectedSignature: undefined },
+    { allowEmptySignature: true, expectedType: "thinking", expectedSignature: "" },
+  ])(
+    "replays empty thinking signatures as $expectedType when allowEmptySignature=$allowEmptySignature",
+    async ({ allowEmptySignature, expectedType, expectedSignature }) => {
+      let capturedPayload: unknown;
+      const model = makeAnthropicModel(
+        allowEmptySignature === undefined ? {} : { compat: { allowEmptySignature } },
+      );
+      const assistantMessage = {
+        role: "assistant" as const,
+        provider: "anthropic",
+        api: "anthropic-messages" as const,
+        model: model.id,
+        stopReason: "stop" as const,
+        timestamp: 0,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        content: [
+          { type: "thinking" as const, thinking: "private analysis", thinkingSignature: " " },
+        ],
+      };
+
+      await streamAnthropic(
+        model,
+        {
+          messages: [
+            { role: "user", content: "first", timestamp: 0 },
+            assistantMessage,
+            { role: "user", content: "second", timestamp: 0 },
+          ],
+        },
+        {
+          thinkingEnabled: true,
+          onPayload: (payload) => {
+            capturedPayload = payload;
+          },
+        },
+      ).result();
+
+      const messages = (capturedPayload as { messages: Array<{ role: string; content: unknown }> })
+        .messages;
+      const assistant = messages.find((message) => message.role === "assistant") as {
+        content: Array<{ type: string; signature?: string }>;
+      };
+      expect(assistant.content[0]).toMatchObject({ type: expectedType });
+      expect(assistant.content[0]?.signature).toBe(expectedSignature);
+    },
+  );
+
+  it.each([
+    {
+      name: "does not fall back to aggregate usage when the final iteration is malformed",
+      id: "msg_invalid_iteration",
+      model: "claude-fable-5",
+      initial: {
+        input_tokens: 12,
+        output_tokens: 0,
+        cache_read_input_tokens: 120_000,
+        cache_creation_input_tokens: 0,
+      },
+      final: {
+        input_tokens: 12,
+        output_tokens: 15_104,
+        cache_read_input_tokens: 819_661,
+        cache_creation_input_tokens: 93_130,
+        iterations: [
+          {
+            type: "message",
+            input_tokens: "malformed",
+            output_tokens: 15_104,
+            cache_read_input_tokens: 148_862,
+            cache_creation_input_tokens: 0,
+          },
+        ],
+      },
+      expected: { totalTokens: 927_907 },
+      context: { state: "unavailable" },
+    },
+    {
+      name: "uses complete final usage when message-start prompt buckets are zero placeholders",
+      id: "msg_zero_start",
+      model: "claude-fable-5",
+      initial: {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+      },
+      final: {
+        input_tokens: 12,
+        output_tokens: 15_104,
+        cache_read_input_tokens: 148_862,
+        cache_creation_input_tokens: 0,
+      },
+      context: { state: "available", promptTokens: 148_874, totalTokens: 163_978 },
+    },
+    {
+      name: "does not treat zero start placeholders as complete final prompt usage",
+      id: "msg_zero_start_partial_delta",
+      model: "claude-fable-5",
+      initial: {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+      },
+      final: { output_tokens: 15_104 },
+      context: { state: "unavailable" },
+    },
+    {
+      name: "uses accumulated prompt buckets when the final usage update is partial",
+      id: "msg_partial_final_usage",
+      model: "claude-sonnet-4-6",
+      initial: {
+        input_tokens: 12,
+        output_tokens: 0,
+        cache_read_input_tokens: 120_000,
+        cache_creation_input_tokens: 500,
+      },
+      final: {
+        input_tokens: 12,
+        output_tokens: 15_104,
+        cache_read_input_tokens: 148_862,
+        cache_creation_input_tokens: null,
+      },
+      context: { state: "available", promptTokens: 149_374, totalTokens: 164_478 },
+    },
+    {
+      name: "preserves valid message-start billing buckets when a sibling is malformed",
+      id: "msg_malformed_usage",
+      model: "claude-sonnet-4-6",
+      initial: {
+        input_tokens: 12,
+        output_tokens: 0,
+        cache_read_input_tokens: "malformed",
+        cache_creation_input_tokens: 500,
+      },
+      final: { input_tokens: 12, output_tokens: 15_104, cache_creation_input_tokens: null },
+      expected: { input: 12, output: 15_104, cacheRead: 0, cacheWrite: 500, totalTokens: 15_616 },
+      context: { state: "unavailable" },
+    },
+  ])("$name", async (testCase) => {
+    const client = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: { id: testCase.id, model: testCase.model, usage: testCase.initial },
+      },
+      { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: testCase.final },
+      { type: "message_stop" },
+    ]);
+    const result = await streamAnthropic(
+      makeAnthropicModel({
+        id: testCase.model,
+        name: testCase.model === "claude-fable-5" ? "Claude Fable 5" : "Claude Sonnet 4.6",
+      }),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      { apiKey: "sk-ant-provider", client: client as never },
+    ).result();
+    if (testCase.expected) {
+      expect(result.usage).toMatchObject(testCase.expected);
+    }
+    expect(result.usage.contextUsage).toEqual(testCase.context);
   });
 
   it("preserves provider-signed Anthropic thinking and drops reasoning_content placeholders", async () => {
     const highSurrogate = String.fromCharCode(0xd83d);
     const signedThinking = `keep${highSurrogate}signed`;
     let capturedPayload: unknown;
-    const client = {
-      messages: {
-        create: vi.fn(() => ({
-          asResponse: () =>
-            Promise.resolve(
-              createSseResponse([
-                {
-                  type: "message_start",
-                  message: {
-                    id: "msg_1",
-                    model: "claude-fable-5",
-                    usage: { input_tokens: 1, output_tokens: 0 },
-                  },
-                },
-                {
-                  type: "message_delta",
-                  delta: { stop_reason: "end_turn" },
-                  usage: { input_tokens: 1, output_tokens: 1 },
-                },
-                { type: "message_stop" },
-              ]),
-            ),
-        })),
+    const client = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: {
+          id: "msg_1",
+          model: "claude-fable-5",
+          usage: { input_tokens: 1, output_tokens: 0 },
+        },
       },
-    };
+      {
+        type: "message_delta",
+        delta: { stop_reason: "end_turn" },
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+      { type: "message_stop" },
+    ]);
 
     const stream = streamAnthropic(
       makeAnthropicModel({
@@ -813,6 +970,181 @@ describe("Anthropic provider", () => {
     ]);
   });
 
+  it("does not infer prompt tokens when clamping the output limit", async () => {
+    let capturedPayload: unknown;
+    const model = makeAnthropicModel({
+      id: "claude-haiku-4-5",
+      name: "Claude Haiku 4.5",
+      contextWindow: 4_000,
+      maxTokens: 512,
+    });
+    const stream = streamSimpleAnthropic(
+      model,
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: model.id,
+            stopReason: "stop",
+            timestamp: 0,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            content: [
+              {
+                type: "thinking",
+                thinking: "private reasoning ".repeat(1_000),
+                thinkingSignature: "sig_old",
+              },
+              { type: "text", text: "Visible answer." },
+            ],
+          },
+          { role: "user", content: "again", timestamp: 0 },
+        ],
+      },
+      {
+        apiKey: "test-api-key",
+        maxTokens: model.maxTokens,
+        reasoning: "off",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    await stream.result();
+
+    expect((capturedPayload as { max_tokens?: number }).max_tokens).toBe(model.maxTokens);
+  });
+
+  it("clamps an excessive output request to the model limit", async () => {
+    let capturedPayload: unknown;
+    const model = makeAnthropicModel({
+      id: "claude-opus-4-5",
+      name: "Claude Opus 4.5",
+      contextWindow: 4_000,
+      maxTokens: 512,
+    });
+    const stream = streamSimpleAnthropic(
+      model,
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: model.id,
+            stopReason: "stop",
+            timestamp: 0,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            content: [
+              {
+                type: "thinking",
+                thinking: "private reasoning ".repeat(1_000),
+                thinkingSignature: "sig_old",
+              },
+              { type: "text", text: "Visible answer." },
+            ],
+          },
+          { role: "user", content: "again", timestamp: 0 },
+        ],
+      },
+      {
+        apiKey: "test-api-key",
+        maxTokens: 5_000,
+        reasoning: "off",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    await stream.result();
+
+    expect((capturedPayload as { max_tokens?: number }).max_tokens).toBe(model.maxTokens);
+  });
+
+  it("restores the caller output cap when thinking cannot fit", async () => {
+    let capturedPayload: unknown;
+    const model = makeAnthropicModel({
+      id: "claude-haiku-4-5",
+      name: "Claude Haiku 4.5",
+      contextWindow: 4_000,
+      maxTokens: 500,
+    });
+    const stream = streamSimpleAnthropic(
+      model,
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: model.id,
+            stopReason: "toolUse",
+            timestamp: 0,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            content: [
+              {
+                type: "thinking",
+                thinking: "private reasoning ".repeat(1_000),
+                thinkingSignature: "sig_tool",
+              },
+              { type: "toolCall", id: "call_1", name: "lookup", arguments: {} },
+            ],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "lookup",
+            content: [{ type: "text", text: "42" }],
+            isError: false,
+            timestamp: 0,
+          },
+        ],
+      },
+      {
+        apiKey: "test-api-key",
+        maxTokens: 32,
+        reasoning: "low",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    await stream.result();
+
+    expect(capturedPayload as { max_tokens?: number; thinking?: unknown }).toMatchObject({
+      max_tokens: 32,
+    });
+    expect((capturedPayload as { thinking?: unknown }).thinking).toEqual({ type: "disabled" });
+  });
+
   it("preserves mixed text and image tool-result order", async () => {
     let capturedPayload: unknown;
     const imageData = Buffer.from("image").toString("base64");
@@ -889,6 +1221,193 @@ describe("Anthropic provider", () => {
     ]);
   });
 
+  it("normalizes unsupported user image blocks before Anthropic payloads", async () => {
+    configureTestAnthropicImageNormalizer();
+    let capturedPayload: unknown;
+    const imageData = tinyJpegBase64();
+    const stream = streamAnthropic(
+      makeAnthropicModel({ input: ["text", "image"] }),
+      {
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "look" },
+              { type: "image", mimeType: "image/heic", data: imageData },
+            ],
+            timestamp: 0,
+          },
+        ],
+      },
+      {
+        apiKey: "test-api-key",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+    expect(result.stopReason).toBe("error");
+    const [userMessage] = (capturedPayload as { messages: [Record<string, unknown>] }).messages;
+    const imageBlock = (userMessage.content as Array<Record<string, unknown>>)[1];
+    expect(imageBlock).toMatchObject({
+      type: "image",
+      source: { type: "base64", media_type: "image/jpeg", data: imageData },
+    });
+  });
+
+  it("keeps non-vision image downgrade behavior without invoking normalization", async () => {
+    configureAiTransportHost({
+      normalizeAnthropicInlineContentBlocks: async () => {
+        throw new Error("non-vision images should be downgraded before normalization");
+      },
+    });
+    let capturedPayload: unknown;
+    const stream = streamAnthropic(
+      makeAnthropicModel({ input: ["text"] }),
+      {
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "look" },
+              { type: "image", mimeType: "image/heic", data: "not-base64" },
+            ],
+            timestamp: 0,
+          },
+        ],
+      },
+      {
+        apiKey: "test-api-key",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+    expect(result.stopReason).toBe("error");
+    const [userMessage] = (capturedPayload as { messages: [Record<string, unknown>] }).messages;
+    expect(userMessage.content).toMatchObject([
+      { type: "text", text: "look" },
+      { type: "text", text: "(image omitted: model does not support images)" },
+    ]);
+  });
+
+  it("normalizes unsupported tool result image blocks before Anthropic payloads", async () => {
+    configureTestAnthropicImageNormalizer();
+    let capturedPayload: unknown;
+    const imageData = tinyJpegBase64();
+    const stream = streamAnthropic(
+      makeAnthropicModel({ input: ["text", "image"] }),
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            stopReason: "toolUse",
+            timestamp: 0,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            content: [{ type: "toolCall", id: "tool_1", name: "screenshot", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "tool_1",
+            toolName: "screenshot",
+            content: [{ type: "image", data: imageData, mimeType: "image/tiff" }],
+            isError: false,
+            timestamp: 0,
+          },
+        ],
+      } as unknown as Context,
+      {
+        apiKey: "test-api-key",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+    expect(result.stopReason).toBe("error");
+    const [, userMessage] = (
+      capturedPayload as { messages: [Record<string, unknown>, Record<string, unknown>] }
+    ).messages;
+    const [toolResult] = userMessage.content as [Record<string, unknown>];
+    const imageBlock = (toolResult.content as Array<Record<string, unknown>>)[1];
+    expect(imageBlock).toMatchObject({
+      type: "image",
+      source: { type: "base64", media_type: "image/jpeg", data: imageData },
+    });
+  });
+
+  it("does not emit Anthropic image blocks or placeholders for payload-less tool media", async () => {
+    let capturedPayload: unknown;
+    const stream = streamAnthropic(
+      makeAnthropicModel({ input: ["text", "image"] }),
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            stopReason: "toolUse",
+            timestamp: 0,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            content: [{ type: "toolCall", id: "call_husk", name: "screenshot", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_husk",
+            toolName: "screenshot",
+            content: [{ type: "image", data: "", mimeType: "image/png" }],
+            isError: false,
+            timestamp: 0,
+          },
+        ],
+      },
+      {
+        apiKey: "fixture",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    await stream.result();
+
+    const payload = capturedPayload as {
+      messages: Array<{ role: string; content: Array<Record<string, unknown>> }>;
+    };
+    const userMessage = payload.messages.find((message) => message.role === "user");
+    const toolResult = userMessage?.content.find((entry) => entry.type === "tool_result");
+    expect(toolResult?.content).toBe("");
+    expect(JSON.stringify(toolResult)).not.toContain('"source"');
+    expect(JSON.stringify(toolResult)).not.toContain("see attached image");
+  });
+
   it.each([
     ["empty", ""],
     ["whitespace-only", " \n\t "],
@@ -952,48 +1471,41 @@ describe("Anthropic provider", () => {
     ["claude-fable-5", "Claude Fable 5", "anthropic", "sk-ant-provider"],
     ["claude-mythos-5", "Claude Mythos 5", "anthropic", "sk-ant-provider"],
     ["claude-mythos-5", "Claude Mythos 5", "anthropic-vertex", "vertex-token"],
+    ["claude-opus-5", "Claude Opus 5", "anthropic", "sk-ant-provider"],
+    ["claude-opus-5", "Claude Opus 5", "anthropic-vertex", "vertex-token"],
     ["claude-sonnet-5", "Claude Sonnet 5", "anthropic", "sk-ant-provider"],
     ["claude-sonnet-5", "Claude Sonnet 5", "anthropic-vertex", "vertex-token"],
   ])("surfaces structured %s streaming refusals for %s", async (id, name, provider, apiKey) => {
-    const client = {
-      messages: {
-        create: vi.fn(() => ({
-          asResponse: () =>
-            Promise.resolve(
-              createSseResponse([
-                {
-                  type: "message_start",
-                  message: { id: "msg_refusal", usage: { input_tokens: 3, output_tokens: 0 } },
-                },
-                {
-                  type: "content_block_start",
-                  index: 0,
-                  content_block: { type: "text", text: "" },
-                },
-                {
-                  type: "content_block_delta",
-                  index: 0,
-                  delta: { type: "text_delta", text: "discard this partial output" },
-                },
-                { type: "content_block_stop", index: 0 },
-                {
-                  type: "message_delta",
-                  delta: {
-                    stop_reason: "refusal",
-                    stop_details: {
-                      type: "refusal",
-                      category: "cyber",
-                      explanation: "This request is not allowed.",
-                    },
-                  },
-                  usage: { input_tokens: 3, output_tokens: 2 },
-                },
-                { type: "message_stop" },
-              ]),
-            ),
-        })),
+    const client = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: { id: "msg_refusal", usage: { input_tokens: 3, output_tokens: 0 } },
       },
-    };
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "text", text: "" },
+      },
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "discard this partial output" },
+      },
+      { type: "content_block_stop", index: 0 },
+      {
+        type: "message_delta",
+        delta: {
+          stop_reason: "refusal",
+          stop_details: {
+            type: "refusal",
+            category: "cyber",
+            explanation: "This request is not allowed.",
+          },
+        },
+        usage: { input_tokens: 3, output_tokens: 2 },
+      },
+      { type: "message_stop" },
+    ]);
 
     const stream = streamAnthropic(
       makeAnthropicModel({
@@ -1029,30 +1541,36 @@ describe("Anthropic provider", () => {
     ]);
   });
 
-  it("sends server-side fallback params for direct Fable API-key requests", async () => {
-    let capturedPayload: unknown;
-    const stream = streamAnthropic(
-      makeAnthropicModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
-      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
-      {
-        apiKey: "sk-ant-provider",
-        onPayload: (payload) => {
-          capturedPayload = payload;
-          throw new Error("stop before network");
+  it.each([
+    { id: "claude-fable-5", name: "Claude Fable 5" },
+    { id: "claude-opus-5", name: "Claude Opus 5" },
+  ])(
+    "sends default server-side fallback params for direct $name API-key requests",
+    async (model) => {
+      let capturedPayload: unknown;
+      const stream = streamAnthropic(
+        makeAnthropicModel(model),
+        { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+        {
+          apiKey: "sk-ant-provider",
+          onPayload: (payload) => {
+            capturedPayload = payload;
+            throw new Error("stop before network");
+          },
         },
-      },
-    );
-    await stream.result();
+      );
+      await stream.result();
 
-    expect((capturedPayload as { fallbacks?: unknown }).fallbacks).toEqual([
-      { model: "claude-opus-4-8" },
-    ]);
-    await vi.waitFor(() => expect(anthropicMockState.configs).toHaveLength(1));
-    const config = anthropicMockState.configs[0] as {
-      defaultHeaders?: Record<string, string>;
-    };
-    expect(config.defaultHeaders?.["anthropic-beta"]).toContain("server-side-fallback-2026-06-01");
-  });
+      expect((capturedPayload as { fallbacks?: unknown }).fallbacks).toBe("default");
+      await vi.waitFor(() => expect(anthropicMockState.configs).toHaveLength(1));
+      const config = anthropicMockState.configs[0] as {
+        defaultHeaders?: Record<string, string>;
+      };
+      expect(config.defaultHeaders?.["anthropic-beta"]).toContain(
+        "server-side-fallback-2026-07-01",
+      );
+    },
+  );
 
   it.each([
     { label: "OAuth tokens", overrides: {}, apiKey: "sk-ant-oat01-token" },
@@ -1067,8 +1585,8 @@ describe("Anthropic provider", () => {
       apiKey: "vertex-token",
     },
     {
-      label: "non-Fable models",
-      overrides: { id: "claude-opus-4-8", name: "Claude Opus 4.8" },
+      label: "unsupported models",
+      overrides: { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
       apiKey: "sk-ant-provider",
     },
   ])("omits server-side fallback params for $label", async ({ overrides, apiKey }) => {
@@ -1090,80 +1608,71 @@ describe("Anthropic provider", () => {
   });
 
   it("rebuilds Fable output at a mid-stream server-side fallback boundary", async () => {
-    const client = {
-      messages: {
-        create: vi.fn(() => ({
-          asResponse: () =>
-            Promise.resolve(
-              createSseResponse([
-                {
-                  type: "message_start",
-                  message: {
-                    id: "msg_fallback",
-                    model: "claude-fable-5",
-                    usage: { input_tokens: 5, output_tokens: 0 },
-                  },
-                },
-                {
-                  type: "content_block_start",
-                  index: 0,
-                  content_block: { type: "thinking", thinking: "" },
-                },
-                {
-                  type: "content_block_delta",
-                  index: 0,
-                  delta: { type: "thinking_delta", thinking: "pre-boundary reasoning" },
-                },
-                { type: "content_block_stop", index: 0 },
-                {
-                  type: "content_block_start",
-                  index: 1,
-                  content_block: { type: "text", text: "" },
-                },
-                {
-                  type: "content_block_delta",
-                  index: 1,
-                  delta: { type: "text_delta", text: "partial " },
-                },
-                { type: "content_block_stop", index: 1 },
-                {
-                  type: "content_block_start",
-                  index: 2,
-                  content_block: { type: "tool_use", id: "call_1", name: "lookup", input: {} },
-                },
-                { type: "content_block_stop", index: 2 },
-                {
-                  type: "content_block_start",
-                  index: 3,
-                  content_block: {
-                    type: "fallback",
-                    from: { model: "claude-fable-5" },
-                    to: { model: "claude-opus-4-8" },
-                  },
-                },
-                { type: "content_block_stop", index: 3 },
-                {
-                  type: "content_block_start",
-                  index: 4,
-                  content_block: { type: "text", text: "" },
-                },
-                {
-                  type: "content_block_delta",
-                  index: 4,
-                  delta: { type: "text_delta", text: "continued" },
-                },
-                { type: "content_block_stop", index: 4 },
-                {
-                  type: "message_delta",
-                  delta: { stop_reason: "end_turn" },
-                  usage: { input_tokens: 5, output_tokens: 9 },
-                },
-                { type: "message_stop" },
-              ]),
-            ),
-        })),
+    const client = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: {
+          id: "msg_fallback",
+          model: "claude-fable-5",
+          usage: { input_tokens: 5, output_tokens: 0 },
+        },
       },
-    };
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "thinking", thinking: "" },
+      },
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "thinking_delta", thinking: "pre-boundary reasoning" },
+      },
+      { type: "content_block_stop", index: 0 },
+      {
+        type: "content_block_start",
+        index: 1,
+        content_block: { type: "text", text: "" },
+      },
+      {
+        type: "content_block_delta",
+        index: 1,
+        delta: { type: "text_delta", text: "partial " },
+      },
+      { type: "content_block_stop", index: 1 },
+      {
+        type: "content_block_start",
+        index: 2,
+        content_block: { type: "tool_use", id: "call_1", name: "lookup", input: {} },
+      },
+      { type: "content_block_stop", index: 2 },
+      {
+        type: "content_block_start",
+        index: 3,
+        content_block: {
+          type: "fallback",
+          from: { model: "claude-fable-5" },
+          to: { model: "claude-opus-4-8" },
+        },
+      },
+      { type: "content_block_stop", index: 3 },
+      {
+        type: "content_block_start",
+        index: 4,
+        content_block: { type: "text", text: "" },
+      },
+      {
+        type: "content_block_delta",
+        index: 4,
+        delta: { type: "text_delta", text: "continued" },
+      },
+      { type: "content_block_stop", index: 4 },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "end_turn" },
+        usage: { input_tokens: 5, output_tokens: 9 },
+      },
+      { type: "message_stop" },
+    ]);
 
     const stream = streamAnthropic(
       makeAnthropicModel({
@@ -1209,53 +1718,43 @@ describe("Anthropic provider", () => {
   });
 
   it("records a pre-output server-side fallback and keeps the continuation", async () => {
-    const client = {
-      messages: {
-        create: vi.fn(() => ({
-          asResponse: () =>
-            Promise.resolve(
-              createSseResponse([
-                {
-                  type: "message_start",
-                  message: {
-                    id: "msg_fallback",
-                    // Pre-output declines: message_start names the fallback model.
-                    model: "claude-opus-4-8",
-                    usage: { input_tokens: 5, output_tokens: 0 },
-                  },
-                },
-                {
-                  type: "content_block_start",
-                  index: 0,
-                  content_block: {
-                    type: "fallback",
-                    from: { model: "claude-fable-5" },
-                    to: { model: "claude-opus-4-8" },
-                  },
-                },
-                { type: "content_block_stop", index: 0 },
-                {
-                  type: "content_block_start",
-                  index: 1,
-                  content_block: { type: "text", text: "" },
-                },
-                {
-                  type: "content_block_delta",
-                  index: 1,
-                  delta: { type: "text_delta", text: "Hi!" },
-                },
-                { type: "content_block_stop", index: 1 },
-                {
-                  type: "message_delta",
-                  delta: { stop_reason: "end_turn" },
-                  usage: { input_tokens: 5, output_tokens: 2 },
-                },
-                { type: "message_stop" },
-              ]),
-            ),
-        })),
+    const client = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: {
+          id: "msg_fallback",
+          model: "claude-fable-5",
+          usage: { input_tokens: 5, output_tokens: 0 },
+        },
       },
-    };
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: {
+          type: "fallback",
+          from: { model: "claude-fable-5" },
+          to: { model: "claude-opus-4-8" },
+        },
+      },
+      { type: "content_block_stop", index: 0 },
+      {
+        type: "content_block_start",
+        index: 1,
+        content_block: { type: "text", text: "" },
+      },
+      {
+        type: "content_block_delta",
+        index: 1,
+        delta: { type: "text_delta", text: "Hi!" },
+      },
+      { type: "content_block_stop", index: 1 },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "end_turn" },
+        usage: { input_tokens: 5, output_tokens: 2 },
+      },
+      { type: "message_stop" },
+    ]);
 
     const stream = streamAnthropic(
       makeAnthropicModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
@@ -1267,53 +1766,54 @@ describe("Anthropic provider", () => {
     expect(result.stopReason).toBe("stop");
     expect(result.content).toEqual([{ type: "text", text: "Hi!" }]);
     expect(result.responseModel).toBe("claude-opus-4-8");
-    expect(result.diagnostics).toEqual([expect.objectContaining({ type: "provider_fallback" })]);
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        type: "provider_fallback",
+        details: {
+          provider: "anthropic",
+          fromModel: "claude-fable-5",
+          toModel: "claude-opus-4-8",
+        },
+      }),
+    ]);
+    expect(result.usage.cost.total).toBeCloseTo(0.000075, 10);
   });
 
   it("routes interleaved active content blocks by their event indexes", async () => {
-    const client = {
-      messages: {
-        create: vi.fn(() => ({
-          asResponse: () =>
-            Promise.resolve(
-              createSseResponse([
-                {
-                  type: "message_start",
-                  message: { id: "msg_interleaved", usage: { input_tokens: 1, output_tokens: 0 } },
-                },
-                {
-                  type: "content_block_start",
-                  index: 0,
-                  content_block: { type: "text" },
-                },
-                {
-                  type: "content_block_start",
-                  index: 1,
-                  content_block: { type: "text" },
-                },
-                {
-                  type: "content_block_delta",
-                  index: 1,
-                  delta: { type: "text_delta", text: "second" },
-                },
-                {
-                  type: "content_block_delta",
-                  index: 0,
-                  delta: { type: "text_delta", text: "first" },
-                },
-                { type: "content_block_stop", index: 1 },
-                { type: "content_block_stop", index: 0 },
-                {
-                  type: "message_delta",
-                  delta: { stop_reason: "end_turn" },
-                  usage: { input_tokens: 1, output_tokens: 2 },
-                },
-                { type: "message_stop" },
-              ]),
-            ),
-        })),
+    const client = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: { id: "msg_interleaved", usage: { input_tokens: 1, output_tokens: 0 } },
       },
-    };
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "text" },
+      },
+      {
+        type: "content_block_start",
+        index: 1,
+        content_block: { type: "text" },
+      },
+      {
+        type: "content_block_delta",
+        index: 1,
+        delta: { type: "text_delta", text: "second" },
+      },
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "first" },
+      },
+      { type: "content_block_stop", index: 1 },
+      { type: "content_block_stop", index: 0 },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "end_turn" },
+        usage: { input_tokens: 1, output_tokens: 2 },
+      },
+      { type: "message_stop" },
+    ]);
 
     const result = await streamAnthropic(
       makeAnthropicModel(),
@@ -1328,27 +1828,18 @@ describe("Anthropic provider", () => {
   });
 
   it("discards buffered Fable output when the stream fails before terminal status", async () => {
-    const client = {
-      messages: {
-        create: vi.fn(() => ({
-          asResponse: () =>
-            Promise.resolve(
-              createSseResponse([
-                {
-                  type: "content_block_start",
-                  index: 0,
-                  content_block: { type: "text", text: "" },
-                },
-                {
-                  type: "content_block_delta",
-                  index: 0,
-                  delta: { type: "text_delta", text: "unsafe partial output" },
-                },
-              ]),
-            ),
-        })),
+    const client = createAnthropicSseClient([
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "text", text: "" },
       },
-    };
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "unsafe partial output" },
+      },
+    ]);
     const stream = streamAnthropic(
       makeAnthropicModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
       { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
@@ -1364,6 +1855,109 @@ describe("Anthropic provider", () => {
     expect(result.stopReason).toBe("error");
     expect(result.content).toEqual([]);
     expect(result.errorMessage).toContain("ended before message_stop");
+  });
+
+  it("terminates the stream when the thrown error is a circular structure", async () => {
+    // Socket/HTTP layers raise self-referential error objects; a bare
+    // JSON.stringify in stream teardown throws and strands the run (#106568).
+    const circular: Record<string, unknown> = { code: "ECONNRESET" };
+    circular.self = circular;
+    // Transport layers reject with plain objects, not Error instances, which is
+    // what sends the formatter down the JSON.stringify branch.
+    const asResponse = vi.fn().mockRejectedValue(circular);
+    const client = {
+      messages: {
+        create: vi.fn(() => ({ asResponse })),
+      },
+    };
+    const stream = streamAnthropic(
+      makeAnthropicModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      { apiKey: "sk-ant-provider", client: client as never },
+    );
+    const eventTypes: string[] = [];
+    for await (const event of stream) {
+      eventTypes.push(event.type);
+    }
+    const result = await stream.result();
+
+    expect(eventTypes).toEqual(["error"]);
+    expect(result.stopReason).toBe("error");
+    // Keep salient transport fields while replacing the cycle, so the terminal
+    // diagnostic remains actionable without stranding the stream.
+    expect(result.errorMessage).toBeTruthy();
+    expect(result.errorMessage).toBe('{"code":"ECONNRESET","self":"[Circular]"}');
+  });
+
+  it("terminates the stream when provider terminal accessors throw", async () => {
+    const hostile = Object.create(null) as Record<string, unknown>;
+    Object.defineProperties(hostile, {
+      code: { enumerable: true, value: "ECONNRESET" },
+      safe: { enumerable: true, value: "socket failed" },
+      status: {
+        enumerable: true,
+        get: () => {
+          throw new Error("status getter");
+        },
+      },
+      body: {
+        enumerable: true,
+        get: () => {
+          throw new Error("body getter");
+        },
+      },
+      message: {
+        enumerable: true,
+        get: () => {
+          throw new Error("message getter");
+        },
+      },
+    });
+    const asResponse = vi.fn().mockRejectedValue(hostile);
+    const client = { messages: { create: vi.fn(() => ({ asResponse })) } };
+    const stream = streamAnthropic(
+      makeAnthropicModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      { apiKey: "sk-ant-provider", client: client as never },
+    );
+    const eventTypes: string[] = [];
+    for await (const event of stream) {
+      eventTypes.push(event.type);
+    }
+    const result = await stream.result();
+
+    expect(eventTypes).toEqual(["error"]);
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorCode: "ECONNRESET",
+    });
+    expect(result.errorMessage).toContain("socket failed");
+  });
+
+  it("keeps the message for Anthropic errors that carry no HTTP body", async () => {
+    // Ordinary Error rejections with no body must still surface error.message;
+    // retry classification in src/llm/utils/retry.ts parses this string.
+    const asResponse = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error("Overloaded"), { status: 529 }));
+    const client = {
+      messages: {
+        create: vi.fn(() => ({ asResponse })),
+      },
+    };
+    const stream = streamAnthropic(
+      makeAnthropicModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      { apiKey: "sk-ant-provider", client: client as never },
+    );
+    const eventTypes: string[] = [];
+    for await (const event of stream) {
+      eventTypes.push(event.type);
+    }
+    const result = await stream.result();
+
+    expect(eventTypes).toEqual(["error"]);
+    expect(result.errorMessage).toBe("529: Overloaded");
   });
 
   it("strips Fable thinking when replay targets Anthropic Vertex", async () => {
@@ -1416,29 +2010,11 @@ describe("Anthropic provider", () => {
     { reasoning: "xhigh", expectedEffort: "high" },
     { reasoning: "max", expectedEffort: "max" },
   ] as const)("maps Claude 4.6 $reasoning effort", async ({ reasoning, expectedEffort }) => {
-    let capturedPayload: unknown;
-    const stream = streamSimpleAnthropic(
-      makeAnthropicModel({
-        id: "claude-sonnet-4-6",
-        name: "Claude Sonnet 4.6",
-      }),
-      {
-        messages: [{ role: "user", content: "hello", timestamp: 0 }],
-      },
-      {
-        apiKey: "sk-ant-provider",
-        reasoning,
-        onPayload: (payload) => {
-          capturedPayload = payload;
-        },
-      },
+    const { payload } = await captureSimpleAnthropicPayload(
+      { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+      { reasoning },
     );
-
-    await stream.result();
-
-    expect((capturedPayload as { output_config?: unknown }).output_config).toEqual({
-      effort: expectedEffort,
-    });
+    expect(payload.output_config).toEqual({ effort: expectedEffort });
   });
 
   it.each([
@@ -1457,67 +2033,60 @@ describe("Anthropic provider", () => {
   ] as const)(
     "honors proxy effort restrictions for $id",
     async ({ id, reasoning, thinkingLevelMap, expectedEffort }) => {
-      let capturedPayload: unknown;
-      const stream = streamSimpleAnthropic(
-        makeAnthropicModel({
-          id,
-          provider: "github-copilot",
-          thinkingLevelMap,
-        }),
-        { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
-        {
-          apiKey: "copilot-token",
-          reasoning,
-          onPayload: (payload) => {
-            capturedPayload = payload;
-          },
-        },
+      const { payload } = await captureSimpleAnthropicPayload(
+        { id, provider: "github-copilot", thinkingLevelMap },
+        { apiKey: "copilot-token", reasoning },
       );
-
-      await stream.result();
-
-      expect((capturedPayload as { output_config?: unknown }).output_config).toEqual({
-        effort: expectedEffort,
-      });
+      expect(payload.output_config).toEqual({ effort: expectedEffort });
     },
   );
 
-  it("uses always-on adaptive thinking for Claude Fable 5", async () => {
-    let capturedPayload: unknown;
-    const stream = streamSimpleAnthropic(
-      makeAnthropicModel({
+  const adaptiveThinkingCases: AnthropicAdaptiveThinkingTestCase[] = [
+    {
+      name: "uses the Claude Opus 5 adaptive-thinking request contract",
+      model: {
+        id: "prod-opus",
+        name: "Production Claude",
+        provider: "microsoft-foundry",
+        params: { canonicalModelId: "claude-opus-5" },
+        reasoning: false,
+        baseUrl: "https://example.services.ai.azure.com/anthropic",
+        maxTokens: 128_000,
+      },
+      options: { temperature: 0.2, injectPayload: { service_tier: "auto", top_p: 0.9, top_k: 40 } },
+      context: {
+        messages: [
+          { role: "user", content: "hello", timestamp: 0 },
+          { role: "assistant", content: [{ type: "text", text: "prefill" }], timestamp: 0 },
+        ],
+      } as unknown as Context,
+      expected: {
+        messages: [{ role: "user" }],
+        thinking: { type: "adaptive", display: "summarized" },
+        output_config: { effort: "high" },
+      },
+      absent: ["temperature", "top_p", "top_k", "service_tier"],
+    },
+    {
+      name: "uses always-on adaptive thinking for Claude Fable 5",
+      model: {
         id: "prod-primary",
         name: "Production Claude",
         provider: "microsoft-foundry",
         params: { canonicalModelId: "claude-fable-5" },
         reasoning: false,
         baseUrl: "https://example.services.ai.azure.com/anthropic",
-      }),
-      {
-        messages: [{ role: "user", content: "hello", timestamp: 0 }],
       },
-      {
-        apiKey: "sk-ant-provider",
-        temperature: 0.2,
-        onPayload: (payload) => {
-          capturedPayload = payload;
-        },
+      options: { temperature: 0.2 },
+      expected: {
+        thinking: { type: "adaptive", display: "summarized" },
+        output_config: { effort: "high" },
       },
-    );
-
-    await stream.result();
-
-    expect(capturedPayload).toMatchObject({
-      thinking: { type: "adaptive", display: "summarized" },
-      output_config: { effort: "high" },
-    });
-    expect(capturedPayload).not.toHaveProperty("temperature");
-  });
-
-  it("uses mandatory adaptive thinking and default sampling for Claude Mythos 5", async () => {
-    let capturedPayload: unknown;
-    const stream = streamSimpleAnthropic(
-      makeAnthropicModel({
+      absent: ["temperature"],
+    },
+    {
+      name: "uses mandatory adaptive thinking and default sampling for Claude Mythos 5",
+      model: {
         id: "prod-mythos",
         name: "Production Claude",
         provider: "microsoft-foundry",
@@ -1525,206 +2094,87 @@ describe("Anthropic provider", () => {
         reasoning: false,
         baseUrl: "https://example.services.ai.azure.com/anthropic",
         maxTokens: 128_000,
-      }),
-      {
-        messages: [{ role: "user", content: "hello", timestamp: 0 }],
       },
-      {
-        apiKey: "sk-ant-provider",
-        reasoning: "off",
-        temperature: 0.2,
-        onPayload: (payload) => {
-          capturedPayload = {
-            ...(payload as Record<string, unknown>),
-            top_p: 0.9,
-            top_k: 40,
-          };
-          return capturedPayload;
-        },
+      options: { reasoning: "off", temperature: 0.2, injectPayload: { top_p: 0.9, top_k: 40 } },
+      expected: {
+        thinking: { type: "adaptive", display: "summarized" },
+        output_config: { effort: "low" },
       },
-    );
-
-    await stream.result();
-
-    expect(capturedPayload).toMatchObject({
-      thinking: { type: "adaptive", display: "summarized" },
-      output_config: { effort: "low" },
-    });
-    expect(capturedPayload).not.toHaveProperty("temperature");
-    expect(capturedPayload).not.toHaveProperty("top_p");
-    expect(capturedPayload).not.toHaveProperty("top_k");
-  });
-
-  it("preserves native max effort for Claude Mythos Preview", async () => {
-    let capturedPayload: unknown;
-    const stream = streamSimpleAnthropic(
-      makeAnthropicModel({
+      absent: ["temperature", "top_p", "top_k"],
+    },
+    {
+      name: "preserves native max effort for Claude Mythos Preview",
+      model: {
         id: "claude-mythos-preview",
         name: "Claude Mythos Preview",
         reasoning: true,
         maxTokens: 128_000,
         thinkingLevelMap: { max: "max" },
-      }),
-      {
-        messages: [{ role: "user", content: "hello", timestamp: 0 }],
       },
-      {
-        apiKey: "sk-ant-provider",
-        reasoning: "max",
-        onPayload: (payload) => {
-          capturedPayload = payload;
-          throw new Error("stop before network");
-        },
-      },
-    );
-
-    await stream.result();
-
-    expect((capturedPayload as { output_config?: unknown }).output_config).toEqual({
-      effort: "max",
-    });
-  });
-
-  it("uses mandatory adaptive thinking for Foundry Mythos Preview", async () => {
-    let capturedPayload: unknown;
-    const stream = streamSimpleAnthropic(
-      makeAnthropicModel({
+      options: { reasoning: "max", stopBeforeNetwork: true },
+      expected: { output_config: { effort: "max" } },
+    },
+    {
+      name: "uses mandatory adaptive thinking for Foundry Mythos Preview",
+      model: {
         id: "prod-mythos-preview",
         name: "Production Claude",
         provider: "microsoft-foundry",
         params: { canonicalModelId: "claude-mythos-preview" },
         reasoning: false,
-      }),
-      {
-        messages: [{ role: "user", content: "hello", timestamp: 0 }],
       },
-      {
-        apiKey: "sk-ant-provider",
-        onPayload: (payload) => {
-          capturedPayload = payload;
-          throw new Error("stop before network");
-        },
-      },
-    );
-
-    await stream.result();
-
-    expect(capturedPayload).toMatchObject({
-      thinking: { type: "adaptive" },
-      output_config: { effort: "high" },
-    });
-  });
-
-  it("uses adaptive high effort for Foundry Mythos Preview without native max metadata", async () => {
-    let capturedPayload: unknown;
-    const stream = streamSimpleAnthropic(
-      makeAnthropicModel({
+      options: { stopBeforeNetwork: true },
+      expected: { thinking: { type: "adaptive" }, output_config: { effort: "high" } },
+    },
+    {
+      name: "uses adaptive high effort for Foundry Mythos Preview without native max metadata",
+      model: {
         id: "prod-mythos-preview",
         name: "Production Claude",
         provider: "microsoft-foundry",
         params: { canonicalModelId: "claude-mythos-preview" },
         reasoning: true,
-      }),
-      {
-        messages: [{ role: "user", content: "hello", timestamp: 0 }],
       },
-      {
-        apiKey: "sk-ant-provider",
-        reasoning: "max",
-        onPayload: (payload) => {
-          capturedPayload = payload;
-          throw new Error("stop before network");
-        },
-      },
-    );
-
-    await stream.result();
-
-    expect(capturedPayload).toMatchObject({
-      thinking: { type: "adaptive" },
-      output_config: { effort: "high" },
-    });
-  });
-
-  it("does not infer adaptive thinking from forward-compatible effort maps", async () => {
-    let capturedPayload: unknown;
-    const stream = streamSimpleAnthropic(
-      makeAnthropicModel({
+      options: { reasoning: "max", stopBeforeNetwork: true },
+      expected: { thinking: { type: "adaptive" }, output_config: { effort: "high" } },
+    },
+    {
+      name: "does not infer adaptive thinking from forward-compatible effort maps",
+      model: {
         id: "claude-future",
         name: "Future Claude",
         provider: "github-copilot",
         reasoning: true,
         thinkingLevelMap: { xhigh: null, max: "max" },
-      }),
-      {
-        messages: [{ role: "user", content: "hello", timestamp: 0 }],
       },
-      {
-        apiKey: "copilot-token",
-        reasoning: "max",
-        onPayload: (payload) => {
-          capturedPayload = payload;
-          throw new Error("stop before network");
-        },
-      },
+      options: { apiKey: "copilot-token", reasoning: "max", stopBeforeNetwork: true },
+      expected: { thinking: { type: "enabled" } },
+      absent: ["output_config"],
+    },
+    {
+      name: "resolves thinking as disabled when the legacy budget collapses below 1024",
+      model: { id: "claude-haiku-4-5", name: "Claude Haiku 4.5", reasoning: true, maxTokens: 1024 },
+      options: { reasoning: "minimal", stopBeforeNetwork: true },
+      expected: { thinking: { type: "disabled" } },
+    },
+    {
+      name: "resolves thinking as disabled when the legacy budget is positive but sub-minimum",
+      model: { id: "claude-haiku-4-5", name: "Claude Haiku 4.5", reasoning: true, maxTokens: 1500 },
+      options: { reasoning: "low", stopBeforeNetwork: true },
+      expected: { thinking: { type: "disabled" } },
+    },
+  ];
+
+  it.each(adaptiveThinkingCases)("$name", async (testCase) => {
+    const { payload } = await captureSimpleAnthropicPayload(
+      testCase.model,
+      testCase.options,
+      testCase.context,
     );
-
-    await stream.result();
-
-    expect(capturedPayload).toMatchObject({
-      thinking: { type: "enabled" },
-    });
-    expect((capturedPayload as { output_config?: unknown }).output_config).toBeUndefined();
-  });
-
-  it("resolves thinking as disabled when the legacy budget collapses below 1024", async () => {
-    // reasoning:true so the builder enters the thinking block, but an id that
-    // does not match the adaptive-thinking regex so the budget-based path is used.
-    const model = makeAnthropicModel({
-      id: "claude-haiku-4-5",
-      name: "Claude Haiku 4.5",
-      reasoning: true,
-      maxTokens: 1024,
-    });
-    let capturedPayload: unknown;
-    const stream = streamSimpleAnthropic(
-      model,
-      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
-      {
-        apiKey: "sk-ant-provider",
-        reasoning: "minimal",
-        onPayload: (payload) => {
-          capturedPayload = payload;
-          throw new Error("stop before network");
-        },
-      },
-    );
-    await stream.result();
-    expect((capturedPayload as { thinking?: unknown }).thinking).toEqual({ type: "disabled" });
-  });
-
-  it("resolves thinking as disabled when the legacy budget is positive but sub-minimum", async () => {
-    const model = makeAnthropicModel({
-      id: "claude-haiku-4-5",
-      name: "Claude Haiku 4.5",
-      reasoning: true,
-      maxTokens: 1500,
-    });
-    let capturedPayload: unknown;
-    const stream = streamSimpleAnthropic(
-      model,
-      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
-      {
-        apiKey: "sk-ant-provider",
-        reasoning: "low",
-        onPayload: (payload) => {
-          capturedPayload = payload;
-          throw new Error("stop before network");
-        },
-      },
-    );
-    await stream.result();
-    expect((capturedPayload as { thinking?: unknown }).thinking).toEqual({ type: "disabled" });
+    expect(payload).toMatchObject(testCase.expected);
+    for (const property of testCase.absent ?? []) {
+      expect(payload).not.toHaveProperty(property);
+    }
   });
 
   it.each([
@@ -1769,7 +2219,7 @@ describe("Anthropic provider", () => {
     },
   );
 
-  it.each(["claude-opus-4-8", "claude-mythos-preview"])(
+  it.each(["claude-opus-5", "claude-opus-4-8", "claude-mythos-preview"])(
     "restores default sampling for %s after payload hooks",
     async (modelId) => {
       let capturedPayload: unknown;
@@ -1834,63 +2284,41 @@ describe("Anthropic provider", () => {
   });
 
   it("uses canonical Claude policy for deployment aliases", async () => {
-    let capturedPayload: unknown;
-    const stream = streamSimpleAnthropic(
-      makeAnthropicModel({
+    const { payload } = await captureSimpleAnthropicPayload(
+      {
         id: "production-claude",
         name: "Production Claude",
         params: { canonicalModelId: "claude-opus-4-8" },
         reasoning: false,
         thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-      }),
-      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
-      {
-        apiKey: "sk-ant-provider",
-        reasoning: "xhigh",
-        temperature: 0.2,
-        onPayload: (payload) => {
-          capturedPayload = payload;
-        },
       },
+      { reasoning: "xhigh", temperature: 0.2 },
     );
-
-    await stream.result();
-
-    expect(capturedPayload).toMatchObject({
+    expect(payload).toMatchObject({
       model: "production-claude",
       thinking: { type: "adaptive" },
       output_config: { effort: "xhigh" },
     });
-    expect(capturedPayload).not.toHaveProperty("temperature");
+    expect(payload).not.toHaveProperty("temperature");
   });
 
   it.each([
+    { canonicalModelId: "claude-opus-5", expectedTemperature: undefined },
     { canonicalModelId: "claude-opus-4-8", expectedTemperature: undefined },
     { canonicalModelId: "claude-opus-4-6", expectedTemperature: 0.2 },
   ] as const)(
     "normalizes temperature for canonical $canonicalModelId aliases when thinking is off",
     async ({ canonicalModelId, expectedTemperature }) => {
-      let capturedPayload: unknown;
-      const stream = streamSimpleAnthropic(
-        makeAnthropicModel({
+      const { payload } = await captureSimpleAnthropicPayload(
+        {
           id: "production-claude",
           params: { canonicalModelId },
           reasoning: false,
           thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-        }),
-        { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
-        {
-          apiKey: "sk-ant-provider",
-          temperature: 0.2,
-          onPayload: (payload) => {
-            capturedPayload = payload;
-          },
         },
+        { temperature: 0.2 },
       );
-
-      await stream.result();
-
-      expect((capturedPayload as { temperature?: number }).temperature).toBe(expectedTemperature);
+      expect(payload.temperature).toBe(expectedTemperature);
     },
   );
 
@@ -1959,82 +2387,40 @@ describe("Anthropic provider", () => {
   });
 
   it("honors provider effort restrictions for Claude Fable 5", async () => {
-    let capturedPayload: unknown;
-    const stream = streamSimpleAnthropic(
-      makeAnthropicModel({
+    const { payload } = await captureSimpleAnthropicPayload(
+      {
         id: "claude-fable-5",
         name: "Claude Fable 5",
         provider: "github-copilot",
         reasoning: false,
         thinkingLevelMap: { xhigh: null, max: null },
-      }),
-      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
-      {
-        apiKey: "copilot-token",
-        reasoning: "xhigh",
-        onPayload: (payload) => {
-          capturedPayload = payload;
-        },
       },
+      { apiKey: "copilot-token", reasoning: "xhigh" },
     );
-
-    await stream.result();
-
-    expect(capturedPayload).toMatchObject({
+    expect(payload).toMatchObject({
       thinking: { type: "adaptive", display: "summarized" },
       output_config: { effort: "high" },
     });
   });
 
   it("uses the Claude Fable 5 contract on Anthropic Vertex", async () => {
-    let capturedPayload: unknown;
-    const stream = streamSimpleAnthropic(
-      makeAnthropicModel({
-        id: "claude-fable-5",
-        name: "Claude Fable 5",
-        provider: "anthropic-vertex",
-      }),
-      {
-        messages: [{ role: "user", content: "hello", timestamp: 0 }],
-      },
-      {
-        apiKey: "vertex-token",
-        reasoning: "high",
-        onPayload: (payload) => {
-          capturedPayload = payload;
-        },
-      },
+    const { payload } = await captureSimpleAnthropicPayload(
+      { id: "claude-fable-5", name: "Claude Fable 5", provider: "anthropic-vertex" },
+      { apiKey: "vertex-token", reasoning: "high" },
     );
-
-    await stream.result();
-
-    expect(capturedPayload).toMatchObject({
+    expect(payload).toMatchObject({
       thinking: { type: "adaptive", display: "summarized" },
       output_config: { effort: "high" },
     });
   });
 
   it("forwards simple stop sequences to Anthropic stop_sequences", async () => {
-    let capturedPayload: unknown;
-    const stream = streamSimpleAnthropic(
-      makeAnthropicModel(),
-      {
-        messages: [{ role: "user", content: "hello", timestamp: 0 }],
-      },
-      {
-        apiKey: "sk-ant-provider",
-        stop: ["STOP"],
-        onPayload: (payload) => {
-          capturedPayload = payload;
-          throw new Error("stop before network");
-        },
-      },
+    const { payload, result } = await captureSimpleAnthropicPayload(
+      {},
+      { stop: ["STOP"], stopBeforeNetwork: true },
     );
-
-    const result = await stream.result();
-
     expect(result.stopReason).toBe("error");
-    expect((capturedPayload as { stop_sequences?: unknown }).stop_sequences).toEqual(["STOP"]);
+    expect(payload.stop_sequences).toEqual(["STOP"]);
   });
 
   it("skips unreadable Anthropic provider tools while preserving healthy siblings", async () => {
@@ -2130,6 +2516,54 @@ describe("Anthropic provider", () => {
       'Anthropic tool_choice requested unavailable tool "unreadable_plugin_tool"',
     );
     expect(onPayload).not.toHaveBeenCalled();
+  });
+
+  it("keeps Anthropic wire tool bytes and their cache breakpoint stable across discovery orders", async () => {
+    const tools = [
+      {
+        name: "zeta_lookup",
+        description: "Look up the last value",
+        parameters: { type: "object", properties: { value: { type: "string" } } },
+      },
+      {
+        name: "alpha_lookup",
+        description: "Look up the first value",
+        parameters: { type: "object", properties: { query: { type: "string" } } },
+      },
+    ] as Tool[];
+    const captureTools = async (orderedTools: Tool[]) => {
+      let capturedPayload: unknown;
+      const stream = streamSimpleAnthropic(
+        makeAnthropicModel(),
+        {
+          systemPrompt: "stable system",
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+          tools: orderedTools,
+        },
+        {
+          apiKey: "sk-ant-provider",
+          onPayload: (payload) => {
+            capturedPayload = payload;
+            throw new Error("stop before network");
+          },
+        },
+      );
+      await stream.result();
+      return (capturedPayload as { tools: unknown[] }).tools;
+    };
+
+    const first = await captureTools(tools);
+    const reversed = await captureTools(tools.toReversed());
+
+    expect(reversed).toEqual(first);
+    expect(first).toEqual([
+      expect.objectContaining({ name: "alpha_lookup" }),
+      expect.objectContaining({
+        name: "zeta_lookup",
+        cache_control: { type: "ephemeral" },
+      }),
+    ]);
+    expect(first[0]).not.toHaveProperty("cache_control");
   });
 
   it("splits the system prompt cache boundary into cached and uncached Anthropic blocks", async () => {
@@ -2373,3 +2807,4 @@ describe("Anthropic provider", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

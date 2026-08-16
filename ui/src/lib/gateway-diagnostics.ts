@@ -10,12 +10,17 @@ type GatewayDiagnosticsSnapshot = {
 
 export async function loadGatewayDiagnostics(
   client: GatewayBrowserClient,
+  agentId: string | null,
+  signal?: AbortSignal,
 ): Promise<GatewayDiagnosticsSnapshot> {
+  const modelsRequest = agentId
+    ? client.request("models.list", { agentId, preparedOnly: true }, { signal })
+    : Promise.resolve({ models: [] });
   const [status, health, models, heartbeat] = await Promise.all([
-    client.request("status", {}),
-    client.request("health", {}),
-    client.request("models.list", {}),
-    client.request("last-heartbeat", {}),
+    client.request("status", {}, { signal }),
+    client.request("health", {}, { signal }),
+    modelsRequest,
+    client.request("last-heartbeat", {}, { signal }),
   ]);
   const modelPayload = models as { models?: unknown[] } | undefined;
   return {

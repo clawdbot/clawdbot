@@ -5,10 +5,12 @@ import type {
   SkillWorkshopProposal,
   SkillWorkshopStatusFilter,
 } from "../../lib/skill-workshop/index.ts";
+import type { SkillWorkshopAccess } from "./access.ts";
 import type { SkillWorkshopSelfLearning } from "./self-learning.ts";
 import type { SkillWorkshopHistoryScanState } from "./state.ts";
 
 export type SkillWorkshopProps = {
+  access: SkillWorkshopAccess;
   loading: boolean;
   error: string | null;
   inspectingKey: string | null;
@@ -39,6 +41,7 @@ export type SkillWorkshopProps = {
   onPrev: () => void;
   onNext: () => void;
   onApply: (key: string) => void;
+  onEvaluate: (key: string) => void;
   onRevise: (key: string) => void;
   onReject: (key: string) => void;
   onRevisionDraftChange: (draft: string) => void;

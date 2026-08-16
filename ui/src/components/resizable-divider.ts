@@ -1,6 +1,7 @@
 // Control UI component implements the resizable divider element.
 import { css, nothing } from "lit";
 import { property } from "lit/decorators.js";
+import { t } from "../i18n/index.ts";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 
 /**
@@ -11,8 +12,10 @@ class ResizableDivider extends OpenClawLitElement {
   @property({ type: Number }) splitRatio = 0.6;
   @property({ type: Number }) minRatio = 0.4;
   @property({ type: Number }) maxRatio = 0.7;
-  @property({ type: String }) label = "Resize split view";
+  @property({ type: String }) label = "";
   @property({ type: String, reflect: true }) orientation: "vertical" | "horizontal" = "vertical";
+  @property({ attribute: false }) measureRatio?: () => number;
+  @property({ attribute: false }) measureSize?: () => number;
 
   private isDragging = false;
   private startPosition = 0;
@@ -21,7 +24,7 @@ class ResizableDivider extends OpenClawLitElement {
 
   static override styles = css`
     :host {
-      width: 4px;
+      width: var(--rail-resizer-size, 4px);
       cursor: col-resize;
       flex-shrink: 0;
       position: relative;
@@ -45,9 +48,9 @@ class ResizableDivider extends OpenClawLitElement {
       top: 0;
       bottom: 0;
       left: 50%;
-      width: 1px;
+      width: var(--rail-divider-size, 1px);
       transform: translateX(-50%);
-      background: var(--border, #333);
+      background: var(--rail-divider-color, var(--border, #1e2028));
       transition:
         background 150ms ease-out,
         width 150ms ease-out;
@@ -55,16 +58,16 @@ class ResizableDivider extends OpenClawLitElement {
     :host(:hover)::after,
     :host(.dragging)::after,
     :host(:focus-visible)::after {
-      width: 2px;
-      background: var(--accent, #007bff);
+      width: var(--rail-divider-active-size, 2px);
+      background: var(--accent, #ff5c5c);
     }
     :host(:focus-visible) {
-      outline: 2px solid var(--accent, #007bff);
+      outline: 2px solid var(--accent, #ff5c5c);
       outline-offset: 2px;
     }
     :host([orientation="horizontal"]) {
       width: auto;
-      height: 4px;
+      height: var(--rail-resizer-size, 4px);
       cursor: row-resize;
     }
     :host([orientation="horizontal"])::before {
@@ -79,7 +82,7 @@ class ResizableDivider extends OpenClawLitElement {
       left: 0;
       right: 0;
       width: auto;
-      height: 1px;
+      height: var(--rail-divider-size, 1px);
       transform: translateY(-50%);
       transition:
         background 150ms ease-out,
@@ -89,7 +92,7 @@ class ResizableDivider extends OpenClawLitElement {
     :host([orientation="horizontal"].dragging)::after,
     :host([orientation="horizontal"]:focus-visible)::after {
       width: auto;
-      height: 2px;
+      height: var(--rail-divider-active-size, 2px);
     }
   `;
 
@@ -115,11 +118,7 @@ class ResizableDivider extends OpenClawLitElement {
     this.setAttribute("aria-valuemin", String(this.toAriaValue(this.minRatio)));
     this.setAttribute("aria-valuemax", String(this.toAriaValue(this.maxRatio)));
     this.setAttribute("aria-valuenow", String(this.toAriaValue(this.splitRatio)));
-    if (this.label) {
-      this.setAttribute("aria-label", this.label);
-    } else {
-      this.removeAttribute("aria-label");
-    }
+    this.setAttribute("aria-label", this.label || t("common.resizeSplitView"));
     this.setAttribute("aria-orientation", this.orientation);
   }
 
@@ -129,7 +128,7 @@ class ResizableDivider extends OpenClawLitElement {
     }
     this.isDragging = true;
     this.startPosition = this.orientation === "horizontal" ? e.clientY : e.clientX;
-    this.startRatio = this.splitRatio;
+    this.startRatio = this.currentRatio();
     this.classList.add("dragging");
     this.focus();
     this.capturePointer(e.pointerId);
@@ -158,10 +157,19 @@ class ResizableDivider extends OpenClawLitElement {
     const previousBounds = this.previousElementSibling?.getBoundingClientRect();
     const nextBounds = this.nextElementSibling?.getBoundingClientRect();
     const containerBounds = container.getBoundingClientRect();
-    const containerSize =
+    const measuredSize = this.measureSize?.() ?? 0;
+    const siblingSize =
       this.orientation === "horizontal"
-        ? (previousBounds?.height ?? 0) + (nextBounds?.height ?? 0) || containerBounds.height
-        : (previousBounds?.width ?? 0) + (nextBounds?.width ?? 0) || containerBounds.width;
+        ? (previousBounds?.height ?? 0) + (nextBounds?.height ?? 0)
+        : (previousBounds?.width ?? 0) + (nextBounds?.width ?? 0);
+    const containerSize =
+      measuredSize > 0
+        ? measuredSize
+        : siblingSize ||
+          (this.orientation === "horizontal" ? containerBounds.height : containerBounds.width);
+    if (containerSize <= 0) {
+      return;
+    }
     const position = this.orientation === "horizontal" ? e.clientY : e.clientX;
     const deltaRatio = (position - this.startPosition) / containerSize;
 
@@ -174,14 +182,15 @@ class ResizableDivider extends OpenClawLitElement {
 
   private handleKeyDown = (e: KeyboardEvent) => {
     const step = e.shiftKey ? 0.05 : 0.02;
+    const currentRatio = this.currentRatio();
     let nextRatio: number | null = null;
 
     const decreaseKey = this.orientation === "horizontal" ? "ArrowUp" : "ArrowLeft";
     const increaseKey = this.orientation === "horizontal" ? "ArrowDown" : "ArrowRight";
     if (e.key === decreaseKey) {
-      nextRatio = this.splitRatio - step;
+      nextRatio = currentRatio - step;
     } else if (e.key === increaseKey) {
-      nextRatio = this.splitRatio + step;
+      nextRatio = currentRatio + step;
     } else if (e.key === "Home") {
       nextRatio = this.minRatio;
     } else if (e.key === "End") {
@@ -222,6 +231,13 @@ class ResizableDivider extends OpenClawLitElement {
 
   private clampRatio(value: number) {
     return Math.max(this.minRatio, Math.min(this.maxRatio, value));
+  }
+
+  private currentRatio() {
+    const measuredRatio = this.measureRatio?.();
+    return measuredRatio !== undefined && Number.isFinite(measuredRatio)
+      ? this.clampRatio(measuredRatio)
+      : this.splitRatio;
   }
 
   private toAriaValue(value: number) {

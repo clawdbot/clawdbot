@@ -1,18 +1,16 @@
 // Tasks JSON tests cover structured task command output and managed task flow state.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
-import {
-  createManagedTaskFlow as createManagedTaskFlowOrNull,
-  resetTaskFlowRegistryForTests,
-} from "../tasks/task-flow-registry.js";
-import { configureTaskFlowRegistryRuntime } from "../tasks/task-flow-registry.store.js";
+import { createManagedTaskFlow as createManagedTaskFlowOrNull } from "../tasks/task-flow-registry.js";
 import type { TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
+import { createTaskRecord as createTaskRecordOrNull } from "../tasks/task-registry.js";
+import type { TaskRecord } from "../tasks/task-registry.types.js";
 import {
-  createTaskRecord as createTaskRecordOrNull,
+  configureTaskFlowRegistryRuntime,
+  resetTaskFlowRegistryForTests,
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
-} from "../tasks/task-registry.js";
-import type { TaskRecord } from "../tasks/task-registry.types.js";
+} from "../tasks/task-runtime.test-helpers.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { tasksAuditJsonCommand, tasksListJsonCommand } from "./tasks-json.js";
 

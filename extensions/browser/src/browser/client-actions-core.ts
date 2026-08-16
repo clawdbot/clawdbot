@@ -12,11 +12,14 @@ import {
 import {
   BROWSER_ACTION_TRANSPORT_SLACK_MS,
   resolveBrowserActRequestTimeoutMs,
+  resolveBrowserNavigationTimeoutMs,
 } from "./act-policy.js";
 import type {
   BrowserActionOk,
   BrowserActionPathResult,
   BrowserActionTabResult,
+  BrowserBatchAbort,
+  BrowserBatchActionResult,
 } from "./client-actions-types.js";
 import { buildProfileQuery, withBaseUrl } from "./client-actions-url.js";
 import type { BrowserActRequest } from "./client-actions.types.js";
@@ -34,7 +37,8 @@ type BrowserActResponse = {
   targetId: string;
   url?: string;
   result?: unknown;
-  results?: Array<{ ok: boolean; error?: string }>;
+  results?: BrowserBatchActionResult[];
+  aborted?: BrowserBatchAbort;
   blockedByDialog?: boolean;
   browserState?: unknown;
   /** Download info when a click/batch/evaluate action triggers a browser download. */
@@ -60,6 +64,7 @@ async function postDownloadRequest(
   body: Record<string, unknown>,
   profile?: string,
   timeoutMs?: number,
+  signal?: AbortSignal,
 ): Promise<BrowserDownloadActionResult> {
   const q = buildProfileQuery(profile);
   return await fetchBrowserJson<BrowserDownloadActionResult>(withBaseUrl(baseUrl, `${route}${q}`), {
@@ -67,6 +72,7 @@ async function postDownloadRequest(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
     timeoutMs: resolveBrowserOperationRequestTimeoutMs(timeoutMs),
+    signal,
   });
 }
 
@@ -76,15 +82,19 @@ export async function browserNavigate(
   opts: {
     url: string;
     targetId?: string;
+    timeoutMs?: number;
     profile?: string;
   },
 ): Promise<BrowserActionTabResult> {
   const q = buildProfileQuery(opts.profile);
+  const timeoutMs =
+    opts.timeoutMs === undefined ? undefined : resolveBrowserNavigationTimeoutMs(opts.timeoutMs);
   return await fetchBrowserJson<BrowserActionTabResult>(withBaseUrl(baseUrl, `/navigate${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url: opts.url, targetId: opts.targetId }),
-    timeoutMs: 20000,
+    body: JSON.stringify({ url: opts.url, targetId: opts.targetId, timeoutMs }),
+    timeoutMs:
+      timeoutMs === undefined ? 20_000 : resolveBrowserOperationRequestTimeoutMs(timeoutMs),
   });
 }
 
@@ -152,6 +162,7 @@ export async function browserWaitForDownload(
     targetId?: string;
     timeoutMs?: number;
     profile?: string;
+    signal?: AbortSignal;
   },
 ): Promise<BrowserDownloadActionResult> {
   return await postDownloadRequest(
@@ -164,6 +175,7 @@ export async function browserWaitForDownload(
     },
     opts.profile,
     opts.timeoutMs,
+    opts.signal,
   );
 }
 
@@ -176,6 +188,7 @@ export async function browserDownload(
     targetId?: string;
     timeoutMs?: number;
     profile?: string;
+    signal?: AbortSignal;
   },
 ): Promise<BrowserDownloadActionResult> {
   return await postDownloadRequest(
@@ -189,6 +202,7 @@ export async function browserDownload(
     },
     opts.profile,
     opts.timeoutMs,
+    opts.signal,
   );
 }
 

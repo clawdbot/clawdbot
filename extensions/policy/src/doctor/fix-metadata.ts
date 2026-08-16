@@ -1,7 +1,8 @@
 // Policy doctor fix metadata classifies findings before patch builders exist.
+import { EXEC_APPROVALS_POLICY_DOCUMENT_NAME } from "../exec-approvals-uri.js";
 import { CHECK_IDS, POLICY_CHECK_IDS } from "./check-ids.js";
 
-type PolicyFixClass = "automatic" | "reviewRequired" | "manual" | "validateOnly" | "unsupported";
+type PolicyFixClass = "automatic" | "reviewRequired" | "manual" | "unsupported";
 
 type PolicyFixMetadata = {
   readonly checkId: (typeof POLICY_CHECK_IDS)[number];
@@ -26,6 +27,12 @@ const m = (
 const POLICY_FIX_METADATA = [
   m(CHECK_IDS.policyMissingFile, "manual", "Restore or author the approved policy artifact."),
   m(CHECK_IDS.policyInvalidFile, "manual", "Repair the policy JSONC syntax or schema."),
+  m(
+    CHECK_IDS.policyUnmigratedToolsFile,
+    "manual",
+    "Run openclaw doctor --fix to migrate governed tool declarations into AGENTS.md.",
+    { policyPath: ["tools", "requireMetadata"] },
+  ),
   m(
     CHECK_IDS.policyHashMismatch,
     "manual",
@@ -71,6 +78,33 @@ const POLICY_FIX_METADATA = [
     "reviewRequired",
     "Disable the concrete private-network access opt-in.",
     { policyPath: ["network", "privateNetwork", "allow"], configTargets: ["network"] },
+  ),
+  m(
+    CHECK_IDS.policyRoutingBindingsRequired,
+    "reviewRequired",
+    "Add an intentional channel route binding or revise the policy after review.",
+    { policyPath: ["routing", "requireBindings"], configTargets: ["bindings"] },
+  ),
+  m(
+    CHECK_IDS.policyRoutingBindingChannelUnconfigured,
+    "reviewRequired",
+    "Correct the binding channel or configure the intended channel after review.",
+    {
+      policyPath: ["routing", "requireConfiguredChannels"],
+      configTargets: ["bindings", "channels"],
+    },
+  ),
+  m(
+    CHECK_IDS.policyRoutingAgentMismatch,
+    "reviewRequired",
+    "Review binding precedence and the expected agent before changing message delivery.",
+    { policyPath: ["routing", "probes"], configTargets: ["bindings"] },
+  ),
+  m(
+    CHECK_IDS.policyRoutingMatchKindMismatch,
+    "reviewRequired",
+    "Restore the intended binding specificity or approve the new match kind.",
+    { policyPath: ["routing", "probes"], configTargets: ["bindings"] },
   ),
   m(
     CHECK_IDS.policyIngressDmPolicyUnapproved,
@@ -156,7 +190,7 @@ const POLICY_FIX_METADATA = [
     "Add the command to gateway node denyCommands or update policy after review.",
     {
       policyPath: ["gateway", "nodes", "denyCommands"],
-      configTargets: ["gateway.nodes.denyCommands"],
+      configTargets: ["gateway.nodes.commands.deny"],
     },
   ),
   m(
@@ -301,15 +335,6 @@ const POLICY_FIX_METADATA = [
     },
   ),
   m(
-    CHECK_IDS.policyDataHandlingRedactionDisabled,
-    "automatic",
-    "Set sensitive logging to a redacting mode.",
-    {
-      policyPath: ["dataHandling", "sensitiveLogging", "requireRedaction"],
-      configTargets: ["logging.redactSensitive"],
-    },
-  ),
-  m(
     CHECK_IDS.policyDataHandlingTelemetryContentCapture,
     "automatic",
     "Disable telemetry content capture.",
@@ -370,7 +395,10 @@ const POLICY_FIX_METADATA = [
     CHECK_IDS.policyExecApprovalsMissing,
     "manual",
     "Restore an attributable exec-approvals evidence file.",
-    { policyPath: ["execApprovals", "requireFile"], configTargets: ["exec-approvals.json"] },
+    {
+      policyPath: ["execApprovals", "requireFile"],
+      configTargets: [EXEC_APPROVALS_POLICY_DOCUMENT_NAME],
+    },
   ),
   m(CHECK_IDS.policyExecApprovalsInvalid, "manual", "Repair the exec approvals evidence artifact."),
   m(
@@ -379,7 +407,7 @@ const POLICY_FIX_METADATA = [
     "Update reviewed default approval evidence or policy.",
     {
       policyPath: ["execApprovals", "defaults", "allowSecurity"],
-      configTargets: ["exec-approvals.json"],
+      configTargets: [EXEC_APPROVALS_POLICY_DOCUMENT_NAME],
     },
   ),
   m(
@@ -388,7 +416,7 @@ const POLICY_FIX_METADATA = [
     "Update reviewed agent approval evidence or policy.",
     {
       policyPath: ["execApprovals", "agents", "allowSecurity"],
-      configTargets: ["exec-approvals.json"],
+      configTargets: [EXEC_APPROVALS_POLICY_DOCUMENT_NAME],
     },
   ),
   m(
@@ -397,7 +425,7 @@ const POLICY_FIX_METADATA = [
     "Disable auto-allow skills in the approval owner surface.",
     {
       policyPath: ["execApprovals", "agents", "allowAutoAllowSkills"],
-      configTargets: ["exec-approvals.json"],
+      configTargets: [EXEC_APPROVALS_POLICY_DOCUMENT_NAME],
     },
   ),
   m(
@@ -406,7 +434,7 @@ const POLICY_FIX_METADATA = [
     "Add expected approval patterns through approval review.",
     {
       policyPath: ["execApprovals", "agents", "allowlist", "expected"],
-      configTargets: ["exec-approvals.json"],
+      configTargets: [EXEC_APPROVALS_POLICY_DOCUMENT_NAME],
     },
   ),
   m(
@@ -415,7 +443,7 @@ const POLICY_FIX_METADATA = [
     "Remove unexpected approval patterns through approval review.",
     {
       policyPath: ["execApprovals", "agents", "allowlist", "expected"],
-      configTargets: ["exec-approvals.json"],
+      configTargets: [EXEC_APPROVALS_POLICY_DOCUMENT_NAME],
     },
   ),
   m(

@@ -201,6 +201,40 @@ describe("evaluateFilePolicy — denyPaths always wins", () => {
     );
   });
 
+  it.each([
+    {
+      label: "the bare denied directory",
+      requestedPath: path.join(os.homedir(), ".ssh"),
+      expected: { ok: false, code: "POLICY_DENIED", askable: false },
+    },
+    {
+      label: "the denied directory with a trailing separator",
+      requestedPath: `${path.join(os.homedir(), ".ssh")}/`,
+      expected: { ok: false, code: "POLICY_DENIED", askable: false },
+    },
+    {
+      label: "the bare denied directory on Windows",
+      requestedPath: "C:\\Users\\me\\.ssh",
+      expected: { ok: false, code: "POLICY_DENIED", askable: false },
+    },
+    {
+      label: "a sibling sharing only the denied directory prefix",
+      requestedPath: path.join(os.homedir(), ".sshrc"),
+      expected: { ok: true },
+    },
+  ])("handles $label", ({ requestedPath, expected }) => {
+    withConfig({
+      n1: {
+        allowReadPaths: ["/**"],
+        denyPaths: ["**/.ssh/**"],
+      },
+    });
+    expectResultFields(
+      evaluateFilePolicy({ nodeId: "n1", kind: "read", path: requestedPath }),
+      expected,
+    );
+  });
+
   it("denies even with ask=always (denyPaths is hard)", () => {
     withConfig({
       n1: {

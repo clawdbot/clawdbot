@@ -54,10 +54,15 @@ describe("resolveGatewayStartupPluginActivationConfig", () => {
       env: {} as NodeJS.ProcessEnv,
       manifestRegistry,
       discovery,
+      ambientEnvTriggers: "suppress",
     });
 
     expect(applyPluginAutoEnableMock).toHaveBeenCalledWith(
-      expect.objectContaining({ manifestRegistry, discovery }),
+      expect.objectContaining({
+        manifestRegistry,
+        discovery,
+        ambientEnvTriggers: "suppress",
+      }),
     );
   });
 });

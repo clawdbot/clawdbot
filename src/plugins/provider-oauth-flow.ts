@@ -16,6 +16,7 @@ export function createVpsAwareOAuthHandlers(params: {
   openUrl: (url: string) => Promise<unknown>;
   localBrowserMessage: string;
   manualPromptMessage?: string;
+  manualPromptSignal?: AbortSignal;
 }): {
   onAuth: (event: { url: string }) => Promise<void>;
   onPrompt: (prompt: OAuthPrompt) => Promise<string>;
@@ -36,6 +37,7 @@ export function createVpsAwareOAuthHandlers(params: {
         );
         manualCodePromise = params.prompter.text({
           message: manualPromptMessage,
+          signal: params.manualPromptSignal,
           validate: validateRequiredInput,
         });
         return;
@@ -52,6 +54,7 @@ export function createVpsAwareOAuthHandlers(params: {
       const code = await params.prompter.text({
         message: prompt.message,
         placeholder: prompt.placeholder,
+        signal: params.manualPromptSignal,
         validate: validateRequiredInput,
       });
       return code;

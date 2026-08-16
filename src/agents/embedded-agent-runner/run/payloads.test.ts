@@ -2,6 +2,8 @@
 // message-tool source replies, media directives, and tool-error warning policy.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
+import { resolveHeartbeatReplyPayload } from "../../../auto-reply/heartbeat-reply-payload.js";
+import { resolveHeartbeatToolResponseFromReplyResult } from "../../../auto-reply/heartbeat-tool-response.js";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import type { InteractiveReply, MessagePresentation } from "../../../interactive/payload.js";
 import {
@@ -74,12 +76,17 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
   it("keeps media directives while sanitizing streamed assistant text", () => {
     const payloads = buildPayloads({
       assistantTexts: ["</mm:think>MEDIA:/tmp/reply-image.png\nAttached image"],
+      assistantMessageIndex: 1,
     });
 
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.text).toBe("Attached image");
     expect(payloads[0]?.mediaUrl).toBe("/tmp/reply-image.png");
     expect(payloads[0]?.mediaUrls).toEqual(["/tmp/reply-image.png"]);
+    expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
+      assistantMessageIndex: 1,
+      assistantTranscriptMediaUrls: ["/tmp/reply-image.png"],
+    });
   });
 
   it("falls back to final-answer assistant text when streamed text is unavailable", () => {
@@ -117,11 +124,13 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     const payloads = buildPayloads({
       assistantTexts: ["Already persisted."],
       assistantTranscriptOwned: true,
+      assistantTranscriptIdempotencyKey: "runtime-owned-assistant",
     });
 
     expect(payloads).toHaveLength(1);
     expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
       assistantTranscriptOwned: true,
+      assistantTranscriptIdempotencyKey: "runtime-owned-assistant",
     });
   });
 
@@ -587,13 +596,13 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
-  it("surfaces exec tool errors for cron sessions even when verbose mode is off", () => {
+  it("keeps timed-out cron exec failures compact when verbose mode is off", () => {
     const payloads = buildPayloads({
       lastToolError: {
         toolName: "exec",
         timedOut: true,
         error:
-          "Command timed out after 1800 seconds. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300).",
+          "Command timed out after 1800 seconds. The command was terminated, but external side effects may already have completed. Verify the resulting state before retrying. Do not automatically rerun non-idempotent commands. Use a higher timeout only when the command is known to be safe to retry.",
       },
       sessionKey: "agent:main:cron:job-1",
       verboseLevel: "off",
@@ -601,12 +610,12 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
 
     expectSingleToolErrorPayload(payloads, {
       title: "Exec",
-      detail:
-        "Command timed out after 1800 seconds. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300).",
+      absentDetail:
+        "Command timed out after 1800 seconds. The command was terminated, but external side effects may already have completed. Verify the resulting state before retrying. Do not automatically rerun non-idempotent commands. Use a higher timeout only when the command is known to be safe to retry.",
     });
   });
 
-  it("surfaces timed-out exec tool errors for cron-triggered custom session keys", () => {
+  it("keeps timed-out cron-trigger exec failures compact", () => {
     const payloads = buildPayloads({
       lastToolError: {
         toolName: "exec",
@@ -620,11 +629,11 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
 
     expectSingleToolErrorPayload(payloads, {
       title: "Exec",
-      detail: "Command timed out after 1800 seconds.",
+      absentDetail: "Command timed out after 1800 seconds.",
     });
   });
 
-  it("surfaces heartbeat exec tool output details when the task run fails", () => {
+  it("keeps heartbeat exec commands and paths private without full verbosity", () => {
     const payloads = buildPayloads({
       lastToolError: {
         toolName: "exec",
@@ -637,9 +646,193 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
 
     expectSingleToolErrorPayload(payloads, {
-      title: "show last 20 lines",
-      detail: "No such file or directory",
+      title: "Exec",
+      absentDetail: "/home/user/.openclaw/workspace/memory/2026-06-04.md",
     });
+  });
+
+  it("keeps a quiet heartbeat response behind an unresolved mutating failure", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Everything is fine."],
+      heartbeatToolResponse: {
+        outcome: "no_change",
+        notify: false,
+        summary: "Nothing needs attention.",
+      },
+      isHeartbeatTrigger: true,
+      lastToolError: {
+        toolName: "message",
+        error: "cross-context messaging denied",
+        mutatingAction: true,
+      },
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]?.text).toBe("HEARTBEAT_OK");
+    expect(payloads[1]).toMatchObject({
+      isError: true,
+      text: expect.stringContaining("Message failed"),
+    });
+    expect(resolveHeartbeatToolResponseFromReplyResult(payloads)).toEqual({
+      outcome: "no_change",
+      notify: false,
+      summary: "Nothing needs attention.",
+    });
+    for (const payload of payloads) {
+      expect(getReplyPayloadMetadata(payload)?.heartbeatTerminalToolFailure).toEqual({
+        toolName: "message",
+      });
+    }
+  });
+
+  it("marks plain-text heartbeat replies with unresolved mutating failures", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["The heartbeat check completed."],
+      isHeartbeatTrigger: true,
+      lastToolError: {
+        toolName: "message",
+        error: "cross-context messaging denied",
+        mutatingAction: true,
+      },
+    });
+
+    expect(payloads.at(-1)).toMatchObject({
+      isError: true,
+      text: expect.stringContaining("Message failed"),
+    });
+    for (const payload of payloads) {
+      expect(getReplyPayloadMetadata(payload)?.heartbeatTerminalToolFailure).toEqual({
+        toolName: "message",
+      });
+    }
+  });
+
+  it("retains terminal heartbeat state when all failure copy is suppressed", () => {
+    const payloads = buildPayloads({
+      isHeartbeatTrigger: true,
+      lastToolError: {
+        toolName: "message",
+        error: "cross-context messaging denied",
+        mutatingAction: true,
+      },
+      suppressToolErrorWarnings: true,
+    });
+
+    expectSinglePayloadText(payloads, "HEARTBEAT_OK");
+    expect(getReplyPayloadMetadata(payloads[0] as object)?.heartbeatTerminalToolFailure).toEqual({
+      toolName: "message",
+    });
+  });
+
+  it("adds an outbound terminal marker when suppressed failure copy leaves only reasoning", () => {
+    const payloads = buildPayloads({
+      isHeartbeatTrigger: true,
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "thinking", thinking: "Private reasoning only." }],
+      } as AssistantMessage,
+      lastToolError: {
+        toolName: "message",
+        error: "cross-context messaging denied",
+        mutatingAction: true,
+      },
+      reasoningLevel: "on",
+      thinkingLevel: "high",
+      suppressToolErrorWarnings: true,
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]).toMatchObject({ text: "Private reasoning only.", isReasoning: true });
+    expect(resolveHeartbeatReplyPayload(payloads)?.text).toBe("HEARTBEAT_OK");
+    for (const payload of payloads) {
+      expect(getReplyPayloadMetadata(payload)?.heartbeatTerminalToolFailure).toEqual({
+        toolName: "message",
+      });
+    }
+  });
+
+  it("does not duplicate a visible heartbeat acknowledgement of a mutating failure", () => {
+    const notificationText = "Message send failed because cross-context messaging was denied.";
+    const payloads = buildPayloads({
+      heartbeatToolResponse: {
+        outcome: "blocked",
+        notify: true,
+        summary: "Message delivery was blocked.",
+        notificationText,
+      },
+      isHeartbeatTrigger: true,
+      lastToolError: {
+        toolName: "message",
+        error: "cross-context messaging denied",
+        mutatingAction: true,
+      },
+    });
+
+    expectSinglePayloadText(payloads, notificationText);
+    expect(getReplyPayloadMetadata(payloads[0] as object)?.heartbeatTerminalToolFailure).toEqual({
+      toolName: "message",
+    });
+  });
+
+  it("uses a structured blocked heartbeat response as the failure acknowledgement", () => {
+    const payloads = buildPayloads({
+      heartbeatToolResponse: {
+        outcome: "blocked",
+        notify: true,
+        summary: "Message delivery was blocked.",
+      },
+      isHeartbeatTrigger: true,
+      lastToolError: {
+        toolName: "message",
+        error: "cross-context messaging denied",
+        mutatingAction: true,
+      },
+    });
+
+    expectSinglePayloadText(payloads, "Message delivery was blocked.");
+  });
+
+  it("suppresses heartbeat failure copy without suppressing terminal failure state", () => {
+    const payloads = buildPayloads({
+      heartbeatToolResponse: {
+        outcome: "no_change",
+        notify: false,
+        summary: "Nothing needs attention.",
+      },
+      isHeartbeatTrigger: true,
+      lastToolError: {
+        toolName: "message",
+        error: "cross-context messaging denied",
+        mutatingAction: true,
+      },
+      suppressToolErrorWarnings: true,
+    });
+
+    expectSinglePayloadText(payloads, "HEARTBEAT_OK");
+    expect(getReplyPayloadMetadata(payloads[0] as object)?.heartbeatTerminalToolFailure).toEqual({
+      toolName: "message",
+    });
+  });
+
+  it("does not infer a terminal mutation from a mixed-action tool name", () => {
+    const payloads = buildPayloads({
+      heartbeatToolResponse: {
+        outcome: "no_change",
+        notify: false,
+        summary: "Nothing needs attention.",
+      },
+      isHeartbeatTrigger: true,
+      lastToolError: {
+        toolName: "message",
+        error: "message search failed",
+      },
+    });
+
+    expectSinglePayloadText(payloads, "HEARTBEAT_OK");
+    expect(
+      getReplyPayloadMetadata(payloads[0] as object)?.heartbeatTerminalToolFailure,
+    ).toBeUndefined();
   });
 
   it("surfaces non-timeout exec tool errors for cron sessions without raw details", () => {

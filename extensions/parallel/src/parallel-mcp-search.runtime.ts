@@ -72,7 +72,7 @@ function mcpHeaders(params: {
  * responses into a JSON array, so arrays are flattened. Unparseable chunks and
  * non-`data` SSE fields (`event:`/`id:`/comments) are skipped.
  */
-export function iterMcpMessages(text: string): JsonRpcMessage[] {
+function iterMcpMessages(text: string): JsonRpcMessage[] {
   const out: JsonRpcMessage[] = [];
   const emit = (payload: unknown): void => {
     if (Array.isArray(payload)) {
@@ -132,7 +132,7 @@ export function iterMcpMessages(text: string): JsonRpcMessage[] {
  * `id` matches. Falls back to the last result/error-bearing message if no id
  * matches; `{}` if none is present.
  */
-export function selectMcpEnvelope(text: string, requestId: string): JsonRpcMessage {
+function selectMcpEnvelope(text: string, requestId: string): JsonRpcMessage {
   let fallback: JsonRpcMessage = {};
   for (const msg of iterMcpMessages(text)) {
     if (!("result" in msg || "error" in msg)) {
@@ -153,7 +153,7 @@ export function selectMcpEnvelope(text: string, requestId: string): JsonRpcMessa
  * scans text blocks for the first JSON-parseable one. Throws on a JSON-RPC
  * error or a tool-level `isError`.
  */
-export function extractMcpToolPayload(envelope: JsonRpcMessage): McpToolPayload {
+function extractMcpToolPayload(envelope: JsonRpcMessage): McpToolPayload {
   if ("error" in envelope) {
     throw new Error(
       `Parallel MCP error: ${truncateUtf16Safe(JSON.stringify(envelope.error), 500)}`,

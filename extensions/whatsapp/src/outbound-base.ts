@@ -14,7 +14,10 @@ import {
   normalizeWhatsAppPayloadText,
 } from "./outbound-media-contract.js";
 import { WHATSAPP_LEGACY_OUTBOUND_SEND_DEP_KEYS } from "./outbound-send-deps.js";
-import { lookupInboundMessageMetaForTarget } from "./quoted-message.js";
+import {
+  lookupInboundMessageMetaForTarget,
+  type WhatsAppQuotedMessageKey,
+} from "./quoted-message.js";
 import { toWhatsappJid } from "./text-runtime.js";
 
 type WhatsAppChunker = NonNullable<ChannelOutboundAdapter["chunker"]>;
@@ -32,13 +35,7 @@ type WhatsAppSendTextOptions = {
   audioAsVoice?: boolean;
   forceDocument?: boolean;
   accountId?: string;
-  quotedMessageKey?: {
-    id: string;
-    remoteJid: string;
-    fromMe: boolean;
-    participant?: string;
-    messageText?: string;
-  };
+  quotedMessageKey?: WhatsAppQuotedMessageKey;
   preserveLeadingWhitespace?: boolean;
   /** Report each accepted internal platform send before the next fallible send. */
   onDeliveryResult?: (result: { messageId: string; toJid: string }) => Promise<void> | void;
@@ -126,7 +123,9 @@ export function createWhatsAppOutboundBase({
       remoteJid: cachedMeta?.remoteJid ?? targetJid,
       fromMe: cachedMeta?.fromMe ?? false,
       participant: cachedMeta?.participant,
+      ...(cachedMeta && cachedMeta.remoteJid !== targetJid ? { lookupTargetJid: targetJid } : {}),
       messageText: cachedMeta?.body,
+      media: cachedMeta?.media,
     };
   };
 

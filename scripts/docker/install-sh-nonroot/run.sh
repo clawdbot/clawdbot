@@ -62,7 +62,12 @@ node -e '
 command -v npm >/dev/null
 
 echo "==> Run installer (non-root user)"
-curl -fsSL "$INSTALL_URL" | bash
+# This non-root harness downloads first; public smoke and CLI lanes intentionally
+# retain their streaming installer contract.
+installer="$(mktemp)"
+trap 'rm -f "$installer"' EXIT
+curl -fsSL --connect-timeout 30 --max-time 300 -o "$installer" -- "$INSTALL_URL"
+bash "$installer"
 
 # Ensure PATH picks up user npm prefix
 export PATH="$HOME/.npm-global/bin:$PATH"

@@ -91,8 +91,7 @@ describe("slack exec approvals", () => {
     const cfg = buildConfig(
       { enabled: true },
       {
-        allowFrom: ["slack:U123"],
-        dm: { allowFrom: ["<@U456>"] },
+        allowFrom: ["slack:U123", "<@U456>"],
         defaultTo: "user:U789",
       },
     );

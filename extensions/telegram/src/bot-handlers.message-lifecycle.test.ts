@@ -1,0 +1,57 @@
+import type { Message } from "grammy/types";
+import { describe, expect, it } from "vitest";
+import {
+  buildSyntheticTextMessage,
+  formatTelegramAmbientTranscriptBody,
+} from "./bot-handlers.message-context.js";
+
+function message(fields: Record<string, unknown>): Message {
+  return {
+    message_id: 1,
+    date: 1_700_000_000,
+    chat: { id: 42, type: "private", first_name: "Ada" },
+    from: { id: 42, is_bot: false, first_name: "Ada" },
+    ...fields,
+  } as unknown as Message;
+}
+
+describe("Telegram ambient transcript media text", () => {
+  it("renders native media kinds for captionless transcript lines", () => {
+    const body = formatTelegramAmbientTranscriptBody([
+      message({
+        message_id: 7,
+        photo: [{ file_id: "photo-1", file_unique_id: "photo-u1", width: 1, height: 1 }],
+      }),
+    ]);
+
+    expect(body).toBe("#7 Ada: <media:image>");
+  });
+
+  it("preserves captions instead of appending media text", () => {
+    const body = formatTelegramAmbientTranscriptBody([
+      message({ message_id: 8, caption: "diagram", document: { file_id: "doc-1" } }),
+    ]);
+
+    expect(body).toBe("#8 Ada: diagram");
+  });
+
+  it("uses the formatter attachment fallback for media-less empty messages", () => {
+    const body = formatTelegramAmbientTranscriptBody([message({ message_id: 9 })]);
+
+    expect(body).toBe("#9 Ada: <media:attachment>");
+  });
+
+  it("preserves combined formatting entities when building synthetic text messages", () => {
+    const entities = [{ type: "bold" as const, offset: 3, length: 4 }];
+    const synthetic = buildSyntheticTextMessage({
+      base: message({ caption: "old caption", caption_entities: entities }),
+      text: "😀 bold",
+      entities,
+    });
+
+    expect(synthetic.text).toBe("😀 bold");
+    expect(synthetic.entities).toEqual(entities);
+    expect(synthetic.caption).toBeUndefined();
+    expect(synthetic.caption_entities).toBeUndefined();
+  });
+});

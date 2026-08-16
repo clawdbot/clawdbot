@@ -44,6 +44,38 @@ describe("sessions_yield tool", () => {
     expect(onYield).toHaveBeenCalledWith("Waiting for fact-checker");
   });
 
+  it("persists yield intent before aborting the requester run", async () => {
+    const order: string[] = [];
+    const tool = createSessionsYieldTool({
+      sessionId: "test-session",
+      onBeforeYield: () => {
+        order.push("persist");
+      },
+      onYield: () => {
+        order.push("abort");
+      },
+    });
+
+    await tool.execute("call-1", {});
+
+    expect(order).toEqual(["persist", "abort"]);
+  });
+
+  it("does not abort the requester when yield intent cannot persist", async () => {
+    const failure = new Error("sqlite unavailable");
+    const onYield = vi.fn();
+    const tool = createSessionsYieldTool({
+      sessionId: "test-session",
+      onBeforeYield: () => {
+        throw failure;
+      },
+      onYield,
+    });
+
+    await expect(tool.execute("call-1", {})).rejects.toThrow(failure);
+    expect(onYield).not.toHaveBeenCalled();
+  });
+
   it("returns error without onYield callback", async () => {
     const tool = createSessionsYieldTool({ sessionId: "test-session" });
     const result = await tool.execute("call-1", {});

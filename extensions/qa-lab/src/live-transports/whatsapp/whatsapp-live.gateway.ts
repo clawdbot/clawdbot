@@ -7,10 +7,9 @@ import type {
   WhatsAppQaGatewayCallContext,
   WhatsAppQaGatewayRuntime,
   WhatsAppQaMessageScenarioContext,
-  WhatsAppQaScenarioId,
 } from "./whatsapp-live.contracts.js";
 
-function buildWhatsAppQaIdempotencyKey(scenarioId: WhatsAppQaScenarioId, label: string) {
+function buildWhatsAppQaIdempotencyKey(scenarioId: string, label: string) {
   return `${scenarioId}:${label}:${randomUUID()}`;
 }
 
@@ -145,6 +144,7 @@ export async function callWhatsAppGatewayMessageAction(
       accountId: context.sutAccountId,
       action: params.action,
       channel: "whatsapp",
+      conversationReadOrigin: "direct-operator",
       idempotencyKey: buildWhatsAppQaIdempotencyKey(context.scenarioId, params.label),
       params: {
         ...params.params,

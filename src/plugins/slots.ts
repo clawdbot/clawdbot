@@ -1,4 +1,8 @@
 /** Applies mutually exclusive plugin slot selection for memory and context-engine plugins. */
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginSlotsConfig } from "../config/types.plugins.js";
 import type { PluginKind } from "./plugin-kind.types.js";
@@ -19,6 +23,8 @@ const DEFAULT_SLOT_BY_KEY: Record<PluginSlotKey, string> = {
   memory: "memory-core",
   contextEngine: "legacy",
 };
+
+const PLUGIN_SLOT_KEYS = Object.keys(DEFAULT_SLOT_BY_KEY) as PluginSlotKey[];
 
 /** Normalize a kind field to an array for uniform iteration. */
 function normalizeKinds(kind?: PluginKind | PluginKind[]): PluginKind[] {
@@ -56,6 +62,56 @@ function slotKeysForPluginKind(kind?: PluginKind | PluginKind[]): PluginSlotKey[
 /** Returns the implicit plugin id that owns a slot before config overrides it. */
 export function defaultSlotIdForKey(slotKey: PluginSlotKey): string {
   return DEFAULT_SLOT_BY_KEY[slotKey];
+}
+
+/** Raw `plugins.slots[key]`: `none` turns the slot off, blank leaves it unset. */
+export function normalizeSlotValue(value: unknown): string | null | undefined {
+  const trimmed = normalizeOptionalString(value);
+  if (!trimmed) {
+    return undefined;
+  }
+  if (normalizeOptionalLowercaseString(trimmed) === "none") {
+    return null;
+  }
+  return trimmed;
+}
+
+/**
+ * How a configured slot reads. The single owner of the rule: an unset slot is
+ * the implicit default owner, never "whichever plugin happens to be enabled".
+ * Config normalization and the Control UI both resolve slots through this.
+ */
+type SlotSelection =
+  | { kind: "default"; pluginId: string }
+  | { kind: "off" }
+  | { kind: "pinned"; pluginId: string };
+
+export function resolveSlotSelection(slotKey: PluginSlotKey, value: unknown): SlotSelection {
+  const normalized = normalizeSlotValue(value);
+  if (normalized === undefined) {
+    return { kind: "default", pluginId: defaultSlotIdForKey(slotKey) };
+  }
+  return normalized === null ? { kind: "off" } : { kind: "pinned", pluginId: normalized };
+}
+
+/** Resets every slot currently owned by a plugin to that slot's implicit default. */
+export function resetPluginSlotsToDefaults(
+  slots: PluginSlotsConfig | undefined,
+  pluginId: string,
+): PluginSlotsConfig | undefined {
+  if (!slots) {
+    return slots;
+  }
+  const next = { ...slots };
+  let changed = false;
+  for (const slotKey of PLUGIN_SLOT_KEYS) {
+    if (slots[slotKey] !== pluginId) {
+      continue;
+    }
+    next[slotKey] = defaultSlotIdForKey(slotKey);
+    changed = true;
+  }
+  return changed ? next : slots;
 }
 
 type SlotSelectionResult = {

@@ -225,7 +225,7 @@ describe("proxy cli runtime", () => {
         "Problems\n" +
         "  - proxy validation requires proxy.enabled to be true for configured proxy URLs\n\n" +
         "Next steps\n" +
-        "  Enable proxy.enabled with proxy.proxyUrl or OPENCLAW_PROXY_URL, or pass --proxy-url for an explicit one-off validation.\n",
+        "  Fix proxy.proxyUrl, OPENCLAW_PROXY_URL, or --proxy-url so it uses a reachable http:// or https:// proxy.\n",
     );
   });
 
@@ -253,7 +253,7 @@ describe("proxy cli runtime", () => {
         "Problems\n" +
         "  - proxy validation requires proxy.enabled=true with proxy.proxyUrl or OPENCLAW_PROXY_URL, or --proxy-url\n\n" +
         "Next steps\n" +
-        "  Enable proxy.enabled with proxy.proxyUrl or OPENCLAW_PROXY_URL, or pass --proxy-url for an explicit one-off validation.\n",
+        "  Fix proxy.proxyUrl, OPENCLAW_PROXY_URL, or --proxy-url so it uses a reachable http:// or https:// proxy.\n",
     );
     expect(process.exitCode).toBe(1);
   });
@@ -481,6 +481,83 @@ describe("proxy cli runtime", () => {
     );
     expect(process.exitCode).toBe(1);
   });
+
+  it.each([
+    {
+      name: "coverage",
+      run: async (runtime: typeof import("./proxy-cli.runtime.js")) =>
+        await runtime.runDebugProxyCoverageCommand(),
+      assertShape: (value: unknown) =>
+        expect(value).toEqual({
+          summary: expect.objectContaining({ total: expect.any(Number) }),
+          entries: expect.any(Array),
+        }),
+    },
+    {
+      name: "sessions",
+      run: async (runtime: typeof import("./proxy-cli.runtime.js")) =>
+        await runtime.runDebugProxySessionsCommand({ json: true }),
+      assertShape: (value: unknown) => expect(value).toEqual({ sessions: [] }),
+    },
+    {
+      name: "query",
+      run: async (runtime: typeof import("./proxy-cli.runtime.js")) =>
+        await runtime.runDebugProxyQueryCommand({ json: true, preset: "double-sends" }),
+      assertShape: (value: unknown) => expect(value).toEqual({ rows: [] }),
+    },
+  ])("prints one undecorated JSON object for proxy $name --json", async ({ run, assertShape }) => {
+    const runtime = await import("./proxy-cli.runtime.js");
+
+    await run(runtime);
+
+    expect(process.stdout["write"]).toHaveBeenCalledOnce();
+    const output = String(vi.mocked(process.stdout["write"]).mock.calls[0]?.[0] ?? "");
+    const parsed = JSON.parse(output) as unknown;
+    assertShape(parsed);
+  });
+
+  it.each([
+    {
+      name: "sessions",
+      run: async (runtime: typeof import("./proxy-cli.runtime.js")) =>
+        await runtime.runDebugProxySessionsCommand({}),
+    },
+    {
+      name: "query",
+      run: async (runtime: typeof import("./proxy-cli.runtime.js")) =>
+        await runtime.runDebugProxyQueryCommand({ preset: "double-sends" }),
+    },
+  ])("preserves the legacy bare-array proxy $name output without --json", async ({ run }) => {
+    const runtime = await import("./proxy-cli.runtime.js");
+
+    await run(runtime);
+
+    const output = String(vi.mocked(process.stdout["write"]).mock.calls[0]?.[0] ?? "");
+    expect(JSON.parse(output)).toEqual([]);
+  });
+
+  it.each([
+    { signal: "SIGINT" as const, exitCode: 130 },
+    { signal: "SIGTERM" as const, exitCode: 143 },
+  ])(
+    "preserves exit code $exitCode when the proxied child exits from $signal",
+    async (testCase) => {
+      spawnMock.mockImplementation(() => {
+        const child = new EventEmitter();
+        queueMicrotask(() => {
+          child.emit("exit", null, testCase.signal);
+        });
+        return child;
+      });
+
+      const { runDebugProxyRunCommand } = await import("./proxy-cli.runtime.js");
+
+      await runDebugProxyRunCommand({ commandArgs: ["example-command"] });
+
+      expect(process.exitCode).toBe(testCase.exitCode);
+      expect(serverStopSpy).toHaveBeenCalledOnce();
+    },
+  );
 
   it("stops the proxy server and ends the session when child spawn fails", async () => {
     spawnMock.mockImplementation(() => {

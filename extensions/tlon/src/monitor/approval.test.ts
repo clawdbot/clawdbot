@@ -9,26 +9,25 @@ vi.mock("node:crypto", () => ({
   randomBytes: cryptoMocks.randomBytes,
 }));
 
-let generateApprovalId: typeof import("./approval.js").generateApprovalId;
 let createPendingApproval: typeof import("./approval.js").createPendingApproval;
 let formatApprovalRequest: typeof import("./approval.js").formatApprovalRequest;
 
 beforeAll(async () => {
-  ({ generateApprovalId, createPendingApproval, formatApprovalRequest } =
-    await import("./approval.js"));
+  ({ createPendingApproval, formatApprovalRequest } = await import("./approval.js"));
 });
 
 beforeEach(() => {
   cryptoMocks.randomBytes.mockReset();
 });
 
-describe("generateApprovalId", () => {
+describe("createPendingApproval ID", () => {
   it("uses secure hex entropy while preserving the ID format", () => {
     cryptoMocks.randomBytes.mockReturnValueOnce(Buffer.from("a1b2c3", "hex"));
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_717_171_717_171);
 
     try {
-      expect(generateApprovalId("dm")).toBe("dm-1717171717171-a1b2c3");
+      const approval = createPendingApproval({ type: "dm", requestingShip: "~sampel-palnet" });
+      expect(approval.id).toBe("dm-1717171717171-a1b2c3");
       expect(cryptoMocks.randomBytes).toHaveBeenCalledWith(3);
     } finally {
       nowSpy.mockRestore();

@@ -11,6 +11,8 @@
 import { lookup } from "node:dns/promises";
 import { isPrivateIpAddress } from "openclaw/plugin-sdk/ssrf-policy";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { fetchWithTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
+import { resolveMSTeamsSharePointUploadTimeoutMs } from "./request-timeout.js";
 import { buildUserAgent } from "./user-agent.js";
 
 /**
@@ -198,6 +200,7 @@ export async function uploadToConsentUrl(params: {
   buffer: Buffer;
   contentType?: string;
   fetchFn?: typeof fetch;
+  timeoutMs?: number;
   /** Override for testing — custom allowlist and DNS resolver */
   validationOpts?: {
     allowlist?: readonly string[];
@@ -207,16 +210,24 @@ export async function uploadToConsentUrl(params: {
   await validateConsentUploadUrl(params.url, params.validationOpts);
 
   const fetchFn = params.fetchFn ?? fetch;
-  const res = await fetchFn(params.url, {
-    method: "PUT",
-    headers: {
-      "User-Agent": buildUserAgent(),
-      "Content-Type": params.contentType ?? "application/octet-stream",
-      "Content-Range": `bytes 0-${params.buffer.length - 1}/${params.buffer.length}`,
+  const res = await fetchWithTimeout(
+    params.url,
+    {
+      method: "PUT",
+      headers: {
+        "User-Agent": buildUserAgent(),
+        "Content-Type": params.contentType ?? "application/octet-stream",
+        "Content-Range": `bytes 0-${params.buffer.length - 1}/${params.buffer.length}`,
+      },
+      body: new Uint8Array(params.buffer),
     },
-    body: new Uint8Array(params.buffer),
-  });
+    params.timeoutMs ?? resolveMSTeamsSharePointUploadTimeoutMs(params.buffer.length),
+    fetchFn,
+  );
 
+  // Consent uploads never consume the response payload. Cancel it on every
+  // status so the fetch implementation can release the underlying connection.
+  await res.body?.cancel().catch(() => undefined);
   if (!res.ok) {
     throw new Error(`File upload to consent URL failed: ${res.status} ${res.statusText}`);
   }

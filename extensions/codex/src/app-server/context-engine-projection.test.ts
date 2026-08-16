@@ -5,7 +5,6 @@ import {
   fitCodexProjectedContextForTurnStart,
   projectContextEngineAssemblyForCodex,
   resolveCodexContextEngineProjectionMaxChars,
-  resolveCodexContextEngineProjectionReserveTokens,
 } from "./context-engine-projection.js";
 
 const CODEX_TURN_START_TEXT_INPUT_MAX_CHARS = 1 << 20;
@@ -70,6 +69,26 @@ describe("projectContextEngineAssemblyForCodex", () => {
     });
     expect(ordered.promptText).toContain("[user]\none\n\n[assistant]\ntwo\n\n[toolResult]\nthree");
     expect(ordered.prePromptMessageCount).toBe(1);
+  });
+
+  it("neutralizes explicit mention sigils in projected history but not the current request", () => {
+    const result = projectContextEngineAssemblyForCodex({
+      assembledMessages: [
+        textMessage("assistant", "The user did not invoke $example-manual."),
+        textMessage("user", "see [$other-skill](skill://other) and [@pkg](plugin://pkg@mp)"),
+      ],
+      originalHistoryMessages: [],
+      prompt: "run $current-skill now",
+    });
+
+    const context = result.promptText.slice(0, result.promptContextRange?.end);
+    // Codex byte-scans the whole turn text for `$name`; historical tokens must
+    // not survive in scannable form (codex-rs/skills/src/mentions.rs).
+    expect(context).not.toContain("$example-manual");
+    expect(context).toContain("＄example-manual");
+    expect(context).toContain("[＄other-skill](skill://other)");
+    expect(context).toContain("[＠pkg](plugin://pkg@mp)");
+    expect(result.promptText).toContain("Current user request:\nrun $current-skill now");
   });
 
   it("frames projected history as reference data and omits tool payloads", () => {
@@ -393,30 +412,17 @@ describe("projectContextEngineAssemblyForCodex", () => {
     );
   });
 
-  it("maps OpenClaw compaction reserve config onto Codex projection reserves", () => {
-    expect(
-      resolveCodexContextEngineProjectionReserveTokens({
-        config: { agents: { defaults: { compaction: { reserveTokens: 12_000 } } } },
-      }),
-    ).toBe(20_000);
-    expect(
-      resolveCodexContextEngineProjectionReserveTokens({
-        config: {
-          agents: { defaults: { compaction: { reserveTokens: 12_000, reserveTokensFloor: 0 } } },
-        },
-      }),
-    ).toBe(12_000);
-    expect(
-      resolveCodexContextEngineProjectionReserveTokens({
-        config: { agents: { defaults: { compaction: { reserveTokens: 48_000 } } } },
-      }),
-    ).toBe(48_000);
-    expect(
-      resolveCodexContextEngineProjectionReserveTokens({
-        config: { agents: { defaults: { compaction: { reserveTokensFloor: 0 } } } },
-      }),
-    ).toBe(0);
-  });
+  it.each([
+    { contextTokenBudget: 4_000, maxRenderedContextChars: 8_000 },
+    { contextTokenBudget: 8_000, maxRenderedContextChars: 16_000 },
+  ])(
+    "keeps a $contextTokenBudget-token model within its reserved prompt budget",
+    ({ contextTokenBudget, maxRenderedContextChars }) => {
+      expect(resolveCodexContextEngineProjectionMaxChars({ contextTokenBudget })).toBe(
+        maxRenderedContextChars,
+      );
+    },
+  );
 
   it("applies configured reserve tokens to the scaled projection cap", () => {
     expect(

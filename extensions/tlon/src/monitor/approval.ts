@@ -35,7 +35,7 @@ type CreateApprovalParams = {
 /**
  * Generate a unique approval ID in the format: {type}-{timestamp}-{shortHash}
  */
-export function generateApprovalId(type: ApprovalType): string {
+function generateApprovalId(type: ApprovalType): string {
   const timestamp = Date.now();
   const randomPart = randomBytes(3).toString("hex");
   return `${type}-${timestamp}-${randomPart}`;

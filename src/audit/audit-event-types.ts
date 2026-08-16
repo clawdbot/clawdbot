@@ -26,6 +26,7 @@ export const AUDIT_INBOUND_MESSAGE_COMPLETED_REASONS = [
   "before_dispatch_handled",
   "acp_dispatch_completed",
   "acp_dispatch_empty",
+  "active_run_injected",
 ] as const;
 
 export type AuditInboundMessageCompletedReasonCode =
@@ -81,7 +82,7 @@ type AgentRunAuditLifecycle =
   | { action: "agent.run.started"; status: "started"; errorCode?: never }
   | ({ action: "agent.run.finished" } & AgentRunFinishedAuditTerminal);
 
-export type AgentRunAuditEventInput = AuditEventInputBase &
+type AgentRunAuditEventInput = AuditEventInputBase &
   AgentAuditAttribution &
   AgentRunAuditLifecycle & { kind: "agent_run" };
 
@@ -153,7 +154,7 @@ export type InboundMessageAuditTerminal =
       reasonCode?: AuditInboundMessageFailureReasonCode;
     };
 
-export type OutboundMessageAuditTerminal =
+type OutboundMessageAuditTerminal =
   | {
       status: "succeeded";
       outcome: "sent";
@@ -188,7 +189,7 @@ export type OutboundMessageAuditTerminal =
     };
 
 /** Raw identifiers exist only on the trusted producer-to-writer boundary. */
-export type InboundMessageAuditEventInput = MessageAuditEventInputBase &
+type InboundMessageAuditEventInput = MessageAuditEventInputBase &
   InboundMessageAuditAttribution &
   InboundMessageAuditTerminal & {
     action: "message.inbound.processed";
@@ -198,7 +199,7 @@ export type InboundMessageAuditEventInput = MessageAuditEventInputBase &
   };
 
 /** Raw identifiers exist only on the trusted producer-to-writer boundary. */
-export type OutboundMessageAuditEventInput = MessageAuditEventInputBase &
+type OutboundMessageAuditEventInput = MessageAuditEventInputBase &
   OutboundMessageAuditAttribution &
   OutboundMessageAuditTerminal & {
     action: "message.outbound.finished";

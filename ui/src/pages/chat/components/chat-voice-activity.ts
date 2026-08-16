@@ -84,12 +84,12 @@ export function voiceStatusLabel(
     return explicitDetail;
   }
   if (status === "thinking") {
-    return "Asking OpenClaw...";
+    return t("chat.voice.asking");
   }
   if (status === "connecting") {
-    return "Connecting voice input...";
+    return t("chat.voice.connecting");
   }
-  return "Listening...";
+  return t("chat.voice.listening");
 }
 
 type MicrophoneActivityProps = {

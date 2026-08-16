@@ -3,6 +3,17 @@ import fs from "node:fs";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  inspectPersistedAuthProfileStateRaw,
+  inspectPersistedAuthProfileStoreRaw,
+  resolveAuthProfileDatabasePath,
+  runAuthProfileWriteTransaction,
+  writePersistedAuthProfileStateRaw,
+  writePersistedAuthProfileStoreRaw,
+} from "../src/agents/auth-profiles/sqlite.js";
+import { closeOpenClawAgentDatabaseByPath } from "../src/state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../src/state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../src/state/openclaw-state-db.paths.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../src/test-utils/env.js";
 import { cleanupTempDirs, makeTempDir } from "./helpers/temp-dir.js";
 import { installTestEnv } from "./test-env.js";
@@ -73,10 +84,11 @@ afterEach(() => {
 describe("installTestEnv", () => {
   it("keeps live tests on a temp HOME while copying config and auth state", () => {
     const realHome = createTempHome();
+    const openClawHome = createTempHome();
     const priorIsolatedHome = createTempHome();
     writeFile(path.join(realHome, ".profile"), "export TEST_PROFILE_ONLY=from-profile\n");
     writeFile(
-      path.join(realHome, "custom-openclaw.json5"),
+      path.join(openClawHome, "custom-openclaw.json5"),
       `{
         // Preserve provider config, strip host-bound paths.
         agents: {
@@ -115,15 +127,48 @@ describe("installTestEnv", () => {
         },
       }`,
     );
-    writeFile(path.join(realHome, ".openclaw", "credentials", "token.txt"), "secret\n");
+    writeFile(path.join(openClawHome, ".openclaw", "credentials", "token.txt"), "secret\n");
     writeFile(
-      path.join(realHome, ".openclaw", "external-plugins", "glueclaw", "openclaw.plugin.json"),
+      path.join(openClawHome, ".openclaw", "external-plugins", "glueclaw", "openclaw.plugin.json"),
       '{"id":"glueclaw"}\n',
     );
-    writeFile(
-      path.join(realHome, ".openclaw", "agents", "main", "agent", "auth-profiles.json"),
-      JSON.stringify({ version: 1, profiles: { default: { provider: "openai" } } }, null, 2),
+    const realStateDir = path.join(openClawHome, ".openclaw");
+    const realAgentDir = path.join(realStateDir, "agents", "main", "agent");
+    const liveAuthStore = {
+      version: 1,
+      profiles: {
+        "openai:api-key": {
+          type: "api_key",
+          provider: "openai",
+          keyRef: {
+            source: "env",
+            provider: "default",
+            id: "OPENCLAW_LIVE_OPENAI_KEY",
+          },
+        },
+      },
+    };
+    const liveAuthState = {
+      version: 1,
+      order: { openai: ["openai:api-key"] },
+    };
+    runAuthProfileWriteTransaction(
+      realAgentDir,
+      (database) => {
+        writePersistedAuthProfileStoreRaw(liveAuthStore, realAgentDir, database);
+        writePersistedAuthProfileStateRaw(liveAuthState, realAgentDir, database);
+      },
+      { stateDir: realStateDir },
     );
+    cleanupFns.push(() => {
+      closeOpenClawAgentDatabaseByPath(resolveAuthProfileDatabasePath(realAgentDir));
+      closeOpenClawStateDatabaseByPath(
+        resolveOpenClawStateSqlitePath({
+          ...process.env,
+          OPENCLAW_STATE_DIR: realStateDir,
+        }),
+      );
+    });
     writeFile(path.join(realHome, ".claude", ".credentials.json"), '{"accessToken":"token"}\n');
     writeFile(path.join(realHome, ".claude", "projects", "old-session.jsonl"), "session\n");
     fs.mkdirSync(path.join(realHome, ".claude", "settings.local.json"), { recursive: true });
@@ -165,6 +210,7 @@ describe("installTestEnv", () => {
 
     setTestEnvValue("HOME", realHome);
     setTestEnvValue("USERPROFILE", realHome);
+    setTestEnvValue("OPENCLAW_HOME", openClawHome);
     setTestEnvValue("OPENCLAW_LIVE_TEST", "1");
     setTestEnvValue("OPENCLAW_LIVE_TEST_QUIET", "1");
     setTestEnvValue("OPENCLAW_CONFIG_PATH", "~/custom-openclaw.json5");
@@ -176,6 +222,7 @@ describe("installTestEnv", () => {
 
     expect(testEnv.tempHome).not.toBe(realHome);
     expect(process.env.HOME).toBe(testEnv.tempHome);
+    expect(process.env.OPENCLAW_HOME).toBeUndefined();
     expect(process.env.OPENCLAW_TEST_HOME).toBe(testEnv.tempHome);
     expect(process.env.TEST_PROFILE_ONLY).toBe("from-profile");
 
@@ -229,11 +276,16 @@ describe("installTestEnv", () => {
         ),
       ),
     ).toBe(true);
-    expect(
-      fs.existsSync(
-        path.join(testEnv.tempHome, ".openclaw", "agents", "main", "agent", "auth-profiles.json"),
-      ),
-    ).toBe(true);
+    const stagedAgentDir = path.join(testEnv.tempHome, ".openclaw", "agents", "main", "agent");
+    expect(inspectPersistedAuthProfileStoreRaw(stagedAgentDir)).toEqual({
+      status: "readable",
+      raw: liveAuthStore,
+    });
+    expect(inspectPersistedAuthProfileStateRaw(stagedAgentDir)).toEqual({
+      status: "readable",
+      raw: liveAuthState,
+    });
+    expect(fs.existsSync(path.join(stagedAgentDir, "auth-profiles.json"))).toBe(false);
     expect(fs.existsSync(path.join(testEnv.tempHome, ".claude", ".credentials.json"))).toBe(true);
     expect(fs.existsSync(path.join(testEnv.tempHome, ".claude", "projects"))).toBe(false);
     expect(fs.existsSync(path.join(testEnv.tempHome, ".claude", "settings.local.json"))).toBe(
@@ -319,6 +371,22 @@ describe("installTestEnv", () => {
     expect(
       fs.existsSync(path.join(testEnv.tempHome, ".openclaw", "credentials", "token.txt")),
     ).toBe(false);
+  });
+
+  it("clears and restores OPENCLAW_HOME for normal isolated test runs", () => {
+    const realHome = createTempHome();
+    const configuredOpenClawHome = path.join(realHome, "custom-openclaw-home");
+    setTestEnvValue("HOME", realHome);
+    setTestEnvValue("USERPROFILE", realHome);
+    setTestEnvValue("OPENCLAW_HOME", configuredOpenClawHome);
+
+    const testEnv = installTestEnv();
+
+    expect(testEnv.tempHome).not.toBe(realHome);
+    expect(process.env.OPENCLAW_HOME).toBeUndefined();
+
+    testEnv.cleanup();
+    expect(process.env.OPENCLAW_HOME).toBe(configuredOpenClawHome);
   });
 
   it("does not load ~/.profile for normal isolated test runs", () => {

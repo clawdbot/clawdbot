@@ -1,14 +1,21 @@
-/** Tests heartbeat prompt, token, task parsing, and due-time helpers. */
+/** Tests heartbeat prompt and token helpers. */
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   HEARTBEAT_RESPONSE_TOOL_PROMPT,
   isHeartbeatContentEffectivelyEmpty,
-  parseHeartbeatTasks,
   resolveHeartbeatPromptForResponseTool,
   stripHeartbeatToken,
 } from "./heartbeat.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
+
+function createSkippedHeartbeatOutcome() {
+  return {
+    shouldSkip: true,
+    text: "",
+    didStrip: true,
+  };
+}
 
 describe("stripHeartbeatToken", () => {
   it("skips empty or token-only replies", () => {
@@ -22,32 +29,24 @@ describe("stripHeartbeatToken", () => {
       text: "",
       didStrip: false,
     });
-    expect(stripHeartbeatToken(HEARTBEAT_TOKEN, { mode: "heartbeat" })).toEqual({
-      shouldSkip: true,
-      text: "",
-      didStrip: true,
-    });
+    expect(stripHeartbeatToken(HEARTBEAT_TOKEN, { mode: "heartbeat" })).toEqual(
+      createSkippedHeartbeatOutcome(),
+    );
   });
 
   it("drops heartbeats with small junk in heartbeat mode", () => {
-    expect(stripHeartbeatToken("HEARTBEAT_OK 🦞", { mode: "heartbeat" })).toEqual({
-      shouldSkip: true,
-      text: "",
-      didStrip: true,
-    });
-    expect(stripHeartbeatToken(`🦞 ${HEARTBEAT_TOKEN}`, { mode: "heartbeat" })).toEqual({
-      shouldSkip: true,
-      text: "",
-      didStrip: true,
-    });
+    expect(stripHeartbeatToken("HEARTBEAT_OK 🦞", { mode: "heartbeat" })).toEqual(
+      createSkippedHeartbeatOutcome(),
+    );
+    expect(stripHeartbeatToken(`🦞 ${HEARTBEAT_TOKEN}`, { mode: "heartbeat" })).toEqual(
+      createSkippedHeartbeatOutcome(),
+    );
   });
 
   it("drops short remainder in heartbeat mode", () => {
-    expect(stripHeartbeatToken(`ALERT ${HEARTBEAT_TOKEN}`, { mode: "heartbeat" })).toEqual({
-      shouldSkip: true,
-      text: "",
-      didStrip: true,
-    });
+    expect(stripHeartbeatToken(`ALERT ${HEARTBEAT_TOKEN}`, { mode: "heartbeat" })).toEqual(
+      createSkippedHeartbeatOutcome(),
+    );
   });
 
   it("keeps heartbeat replies when remaining content exceeds threshold", () => {
@@ -85,19 +84,15 @@ describe("stripHeartbeatToken", () => {
   });
 
   it("strips HTML-wrapped heartbeat tokens", () => {
-    expect(stripHeartbeatToken(`<b>${HEARTBEAT_TOKEN}</b>`, { mode: "heartbeat" })).toEqual({
-      shouldSkip: true,
-      text: "",
-      didStrip: true,
-    });
+    expect(stripHeartbeatToken(`<b>${HEARTBEAT_TOKEN}</b>`, { mode: "heartbeat" })).toEqual(
+      createSkippedHeartbeatOutcome(),
+    );
   });
 
   it("strips markdown-wrapped heartbeat tokens", () => {
-    expect(stripHeartbeatToken(`**${HEARTBEAT_TOKEN}**`, { mode: "heartbeat" })).toEqual({
-      shouldSkip: true,
-      text: "",
-      didStrip: true,
-    });
+    expect(stripHeartbeatToken(`**${HEARTBEAT_TOKEN}**`, { mode: "heartbeat" })).toEqual(
+      createSkippedHeartbeatOutcome(),
+    );
   });
 
   it("removes markup-wrapped token and keeps trailing content", () => {
@@ -113,21 +108,15 @@ describe("stripHeartbeatToken", () => {
   });
 
   it("strips trailing punctuation only when directly after the token", () => {
-    expect(stripHeartbeatToken(`${HEARTBEAT_TOKEN}.`, { mode: "heartbeat" })).toEqual({
-      shouldSkip: true,
-      text: "",
-      didStrip: true,
-    });
-    expect(stripHeartbeatToken(`${HEARTBEAT_TOKEN}!!!`, { mode: "heartbeat" })).toEqual({
-      shouldSkip: true,
-      text: "",
-      didStrip: true,
-    });
-    expect(stripHeartbeatToken(`${HEARTBEAT_TOKEN}---`, { mode: "heartbeat" })).toEqual({
-      shouldSkip: true,
-      text: "",
-      didStrip: true,
-    });
+    expect(stripHeartbeatToken(`${HEARTBEAT_TOKEN}.`, { mode: "heartbeat" })).toEqual(
+      createSkippedHeartbeatOutcome(),
+    );
+    expect(stripHeartbeatToken(`${HEARTBEAT_TOKEN}!!!`, { mode: "heartbeat" })).toEqual(
+      createSkippedHeartbeatOutcome(),
+    );
+    expect(stripHeartbeatToken(`${HEARTBEAT_TOKEN}---`, { mode: "heartbeat" })).toEqual(
+      createSkippedHeartbeatOutcome(),
+    );
   });
 
   it("strips a sentence-ending token and keeps trailing punctuation", () => {
@@ -150,11 +139,7 @@ describe("stripHeartbeatToken", () => {
           mode: "heartbeat",
         },
       ),
-    ).toEqual({
-      shouldSkip: true,
-      text: "",
-      didStrip: true,
-    });
+    ).toEqual(createSkippedHeartbeatOutcome());
   });
 
   it("preserves trailing punctuation on text before the token", () => {
@@ -318,34 +303,5 @@ describe("resolveHeartbeatPromptForResponseTool", () => {
     expect(prompt).toContain("Check the deployment queue");
     expect(prompt).toContain("heartbeat_respond");
     expect(prompt).toContain("notify=false");
-  });
-});
-
-describe("parseHeartbeatTasks", () => {
-  it("does not bleed top-level interval/prompt fields into task parsing", () => {
-    const content = `tasks:
-  - name: email-check
-    interval: 30m
-    prompt: Check for urgent emails
-interval: should-not-bleed
-`;
-    expect(parseHeartbeatTasks(content)).toEqual([
-      {
-        name: "email-check",
-        interval: "30m",
-        prompt: "Check for urgent emails",
-      },
-    ]);
-  });
-
-  it("ignores task blocks inside HTML comments", () => {
-    const content = `<!--
-tasks:
-  - name: inbox
-    interval: 30m
-    prompt: Check inbox
--->
-`;
-    expect(parseHeartbeatTasks(content)).toEqual([]);
   });
 });

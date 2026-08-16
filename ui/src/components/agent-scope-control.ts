@@ -1,20 +1,36 @@
-import { html } from "lit";
+import { html, nothing } from "lit";
 import type { GatewayAgentRow } from "../api/types.ts";
 import type { AgentSelectionCapability } from "../app/agent-selection.ts";
 import { t } from "../i18n/index.ts";
-import { normalizeAgentLabel } from "../lib/agents/display.ts";
+import { listSelectableAgents, normalizeAgentLabel } from "../lib/agents/display.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
+import type { AgentSelectOption } from "./agent-select.ts";
+import "./agent-select-registration.ts";
+import { icons } from "./icons.ts";
 
 type AgentScopeControlParams = {
   agents: readonly GatewayAgentRow[];
   additionalAgentIds?: readonly string[];
   selection: AgentSelectionCapability;
+  allowAll?: boolean;
+  selectedId?: string | null;
 };
 
 export function renderAgentScopeControl(params: AgentScopeControlParams) {
-  const selected = params.selection.state.scopeId ?? "";
+  const requestedSelected = params.selectedId ?? params.selection.state.scopeId ?? "";
+  const selectedId = requestedSelected ? normalizeAgentId(requestedSelected) : "";
+  const allowAll = params.allowAll !== false;
+  // Do not let historical or selected IDs reintroduce a typed system row.
+  const isSystemAgentId = (agentId: string) =>
+    params.agents.some(
+      (agent) => agent.kind === "system" && normalizeAgentId(agent.id) === agentId,
+    );
+  const selectableAgents = listSelectableAgents(params.agents);
+  if (selectableAgents.length <= 1) {
+    return nothing;
+  }
   const agentsById = new Map(
-    params.agents.map((agent) => {
+    selectableAgents.map((agent) => {
       const agentId = normalizeAgentId(agent.id);
       return [agentId, agentId === agent.id ? agent : { ...agent, id: agentId }] as const;
     }),
@@ -24,32 +40,41 @@ export function renderAgentScopeControl(params: AgentScopeControlParams) {
       continue;
     }
     const agentId = normalizeAgentId(value);
-    if (!agentsById.has(agentId)) {
+    if (!isSystemAgentId(agentId) && !agentsById.has(agentId)) {
       agentsById.set(agentId, { id: agentId });
     }
+  }
+  if (selectedId && !isSystemAgentId(selectedId) && !agentsById.has(selectedId)) {
+    agentsById.set(selectedId, { id: selectedId });
   }
   const agents = [...agentsById.values()].toSorted((left, right) =>
     normalizeAgentLabel(left).localeCompare(normalizeAgentLabel(right)),
   );
-  const selectedAgentMissing = selected && !agents.some((agent) => agent.id === selected);
+  const selected = isSystemAgentId(selectedId)
+    ? allowAll
+      ? ""
+      : (agents[0]?.id ?? "")
+    : selectedId;
+  const options: AgentSelectOption[] = [
+    ...(allowAll ? [{ value: "", label: t("agentScope.allAgents"), icon: icons.users }] : []),
+    ...agents.map((agent) => ({
+      value: agent.id,
+      label: normalizeAgentLabel(agent),
+      agent,
+    })),
+  ];
+  // The picker already labels its own trigger. A wrapping native label would
+  // forward an option click to that trigger and reopen the closed dropdown.
   return html`
-    <label class="agent-scope-control">
+    <div class="agent-scope-control">
       <span class="agent-scope-control__label">${t("agentScope.label")}</span>
-      <select
-        class="agent-scope-control__select"
-        aria-label=${t("agentScope.label")}
+      <openclaw-agent-select
+        .options=${options}
         .value=${selected}
-        @change=${(event: Event) => {
-          const value = (event.currentTarget as HTMLSelectElement).value;
-          params.selection.setScope(value || null);
-        }}
-      >
-        <option value="">${t("agentScope.allAgents")}</option>
-        ${selectedAgentMissing ? html`<option value=${selected}>${selected}</option>` : null}
-        ${agents.map(
-          (agent) => html`<option value=${agent.id}>${normalizeAgentLabel(agent)}</option>`,
-        )}
-      </select>
-    </label>
+        .accessibleLabel=${t("agentScope.label")}
+        .onSelect=${(value: string) =>
+          allowAll ? params.selection.setScope(value || null) : params.selection.set(value || null)}
+      ></openclaw-agent-select>
+    </div>
   `;
 }

@@ -1,6 +1,6 @@
+import { sanitizeResponsesImagePayload } from "@openclaw/ai/transports";
 // Verifies Responses image payloads are canonicalized or replaced before send.
 import { describe, expect, it } from "vitest";
-import { sanitizeResponsesImagePayload } from "./responses-image-payload-sanitizer.js";
 
 const PNG_1X1 =
   // Valid JPEG-labeled data is sniffed as PNG and normalized to the real MIME type.

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatSessionArchiveTimestamp,
   isCompactionCheckpointTranscriptFileName,
+  isMigrationArchiveArtifactName,
   isPrimarySessionTranscriptFileName,
   isSessionArchiveArtifactName,
   isSessionStoreTempArtifactName,
@@ -15,11 +16,22 @@ import {
 describe("session artifact helpers", () => {
   it("classifies archived artifact file names", () => {
     expect(isSessionArchiveArtifactName("abc.jsonl.deleted.2026-01-01T00-00-00.000Z")).toBe(true);
+    expect(
+      isSessionArchiveArtifactName(`abc.jsonl.deleted.2026-01-01T00-00-00.000Z.${"a".repeat(32)}`),
+    ).toBe(true);
     expect(isSessionArchiveArtifactName("abc.jsonl.reset.2026-01-01T00-00-00.000Z")).toBe(true);
     expect(isSessionArchiveArtifactName("abc.jsonl.bak.2026-01-01T00-00-00.000Z")).toBe(true);
     expect(isSessionArchiveArtifactName("sessions.json.bak.1737420882")).toBe(true);
     expect(isSessionArchiveArtifactName("keep.deleted.keep.jsonl")).toBe(false);
     expect(isSessionArchiveArtifactName("abc.jsonl")).toBe(false);
+  });
+
+  it("classifies migration archive file names", () => {
+    expect(isMigrationArchiveArtifactName("abc.jsonl.migrated")).toBe(true);
+    expect(isMigrationArchiveArtifactName("sessions.json.migrated.2")).toBe(true);
+    expect(isMigrationArchiveArtifactName("abc.jsonl.migrated.tmp")).toBe(false);
+    expect(isMigrationArchiveArtifactName("abc.migrated.jsonl")).toBe(false);
+    expect(isMigrationArchiveArtifactName("abc.jsonl.MIGRATED")).toBe(false);
   });
 
   it("classifies orphaned session store atomic-write temp files", () => {
@@ -84,6 +96,11 @@ describe("session artifact helpers", () => {
     expect(
       isUsageCountedSessionTranscriptFileName("abc.jsonl.deleted.2026-01-01T00-00-00.000Z"),
     ).toBe(true);
+    expect(
+      isUsageCountedSessionTranscriptFileName(
+        `abc.jsonl.deleted.2026-01-01T00-00-00.000Z.${"a".repeat(32)}`,
+      ),
+    ).toBe(true);
     expect(isUsageCountedSessionTranscriptFileName("abc.jsonl.bak.2026-01-01T00-00-00.000Z")).toBe(
       false,
     );
@@ -103,6 +120,11 @@ describe("session artifact helpers", () => {
     expect(
       parseUsageCountedSessionIdFromFileName("abc.jsonl.deleted.2026-01-01T00-00-00.000Z"),
     ).toBe("abc");
+    expect(
+      parseUsageCountedSessionIdFromFileName(
+        `abc.jsonl.deleted.2026-01-01T00-00-00.000Z.${"a".repeat(32)}`,
+      ),
+    ).toBe("abc");
     expect(parseUsageCountedSessionIdFromFileName("abc.jsonl.bak.2026-01-01T00-00-00.000Z")).toBe(
       null,
     );
@@ -121,6 +143,7 @@ describe("session artifact helpers", () => {
 
     const file = `abc.jsonl.deleted.${stamp}`;
     expect(parseSessionArchiveTimestamp(file, "deleted")).toBe(now);
+    expect(parseSessionArchiveTimestamp(`${file}.${"a".repeat(32)}`, "deleted")).toBe(now);
     expect(parseSessionArchiveTimestamp(file, "reset")).toBeNull();
     expect(parseSessionArchiveTimestamp("keep.deleted.keep.jsonl", "deleted")).toBeNull();
   });

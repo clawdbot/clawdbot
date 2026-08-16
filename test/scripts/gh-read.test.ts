@@ -1,5 +1,8 @@
 // Gh Read tests cover gh read script behavior.
 import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildReadPermissions,
@@ -7,6 +10,7 @@ import {
   normalizeRepo,
   parsePermissionKeys,
   parseRepoArg,
+  readGitHubAppPrivateKey,
   readBoundedGitHubErrorText,
   readBoundedGitHubJson,
   resolveGitHubFetchTimeoutMs,
@@ -42,8 +46,10 @@ describe("gh-read helpers", () => {
   it("normalizes repo strings from common git formats", () => {
     expect(normalizeRepo("openclaw/openclaw")).toBe("openclaw/openclaw");
     expect(normalizeRepo("github.com/openclaw/openclaw")).toBe("openclaw/openclaw");
+    expect(normalizeRepo("github:openclaw/openclaw")).toBe("openclaw/openclaw");
     expect(normalizeRepo("https://github.com/openclaw/openclaw.git")).toBe("openclaw/openclaw");
     expect(normalizeRepo("git@github.com:openclaw/openclaw.git")).toBe("openclaw/openclaw");
+    expect(normalizeRepo("https://gitlab.com/openclaw/openclaw.git")).toBeNull();
     expect(normalizeRepo("invalid")).toBeNull();
   });
 
@@ -74,6 +80,30 @@ describe("gh-read helpers", () => {
       "contents",
       "issues",
     ]);
+  });
+
+  it("bounds GitHub App private key files", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-gh-read-key-"));
+    const privateKeyPath = path.join(tempDir, "app.pem");
+    try {
+      writeFileSync(privateKeyPath, "x".repeat(64 * 1024));
+      expect(readGitHubAppPrivateKey(privateKeyPath)).toHaveLength(64 * 1024);
+
+      writeFileSync(privateKeyPath, "x".repeat(64 * 1024 + 1));
+      let readError: unknown;
+      try {
+        readGitHubAppPrivateKey(privateKeyPath);
+      } catch (error) {
+        readError = error;
+      }
+      expect(readError).toMatchObject({
+        name: "FsSafeError",
+        code: "too-large",
+        message: `GitHub App private key file at ${privateKeyPath} exceeds 65536 bytes.`,
+      });
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("aborts stalled GitHub API fetches at the request timeout", async () => {
@@ -142,6 +172,26 @@ describe("gh-read helpers", () => {
     expect(text).not.toContain(tail);
     expect(text.length).toBeLessThan(4200);
   });
+
+  it.each([
+    {
+      caseName: "drops a split surrogate pair",
+      responseBody: `abc\u{1f600}tail`,
+      expectedText: "abc\n[truncated]",
+    },
+    {
+      caseName: "preserves a complete surrogate pair",
+      responseBody: `ab\u{1f600}tail`,
+      expectedText: `ab\u{1f600}\n[truncated]`,
+    },
+  ])(
+    "keeps GitHub API error truncation UTF-16 safe: $caseName",
+    async ({ responseBody, expectedText }) => {
+      const response = new Response(responseBody, { status: 500 });
+
+      await expect(readBoundedGitHubErrorText(response, 4)).resolves.toBe(expectedText);
+    },
+  );
 
   it("reads bounded GitHub API JSON responses", async () => {
     await expect(readBoundedGitHubJson(new Response('{"id":123}'), 1024)).resolves.toEqual({

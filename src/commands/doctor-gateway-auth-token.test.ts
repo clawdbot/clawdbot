@@ -6,13 +6,17 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withTempHome, writeStateDirDotEnv } from "../config/test-helpers.js";
 import { shouldRequireGatewayTokenForInstall } from "../gateway/auth-install-policy.js";
+import { withSecureTestNodeCommand } from "../secrets/test-node-command.test-support.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveGatewayAuthTokenForService } from "./doctor-gateway-auth-token.js";
 import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 
 const envVar = (...parts: string[]) => parts.join("_");
 
-function createExecGatewayTokenConfig(markerPath: string): OpenClawConfig {
+function createExecGatewayTokenConfig(
+  markerPath: string,
+  command = process.execPath,
+): OpenClawConfig {
   return {
     gateway: {
       auth: {
@@ -27,7 +31,7 @@ function createExecGatewayTokenConfig(markerPath: string): OpenClawConfig {
       providers: {
         execmain: {
           source: "exec",
-          command: process.execPath,
+          command,
           allowInsecurePath: true,
           args: [
             "-e",
@@ -127,14 +131,16 @@ describe("resolveGatewayAuthTokenForService", () => {
     const tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-service-token-exec-ref-"));
     const markerPath = join(tmp, "exec-ran");
     try {
-      const resolved = await resolveGatewayAuthTokenForService(
-        createExecGatewayTokenConfig(markerPath),
-        {} as NodeJS.ProcessEnv,
-        { allowExecSecretRefs: true },
-      );
+      await withSecureTestNodeCommand(async (command) => {
+        const resolved = await resolveGatewayAuthTokenForService(
+          createExecGatewayTokenConfig(markerPath, command),
+          {} as NodeJS.ProcessEnv,
+          { allowExecSecretRefs: true },
+        );
 
-      expect(resolved).toEqual({ token: "exec-token" });
-      await expect(fs.readFile(markerPath, "utf8")).resolves.toBe("executed");
+        expect(resolved).toEqual({ token: "exec-token" });
+        await expect(fs.readFile(markerPath, "utf8")).resolves.toBe("executed");
+      });
     } finally {
       await fs.rm(tmp, { recursive: true, force: true });
     }

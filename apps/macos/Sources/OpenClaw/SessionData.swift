@@ -298,9 +298,9 @@ enum SessionLoader {
     }
 }
 
-func relativeAge(from date: Date?) -> String {
+func relativeAge(from date: Date?, now: Date = Date()) -> String {
     guard let date else { return "unknown" }
-    let delta = Date().timeIntervalSince(date)
+    let delta = now.timeIntervalSince(date)
     if delta < 60 { return "just now" }
     let minutes = Int(round(delta / 60))
     if minutes < 60 { return "\(minutes)m ago" }

@@ -1,8 +1,5 @@
 // Inspects installed package metadata for update/install verification.
-import fsSync from "node:fs";
-import path from "node:path";
 import { readRootJsonObjectSync } from "@openclaw/fs-safe/json";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 // Package update utilities inspect installed package metadata without trusting
 // paths outside the provided package root.
@@ -29,7 +26,7 @@ export function expectedIntegrityForUpdate(
   return integrity;
 }
 
-function readInstalledPackageManifest(dir: string): Record<string, unknown> | undefined {
+export function readInstalledPackageManifest(dir: string): Record<string, unknown> | undefined {
   const result = readRootJsonObjectSync({
     rootDir: dir,
     relativePath: "package.json",
@@ -42,32 +39,4 @@ function readInstalledPackageManifest(dir: string): Record<string, unknown> | un
 export async function readInstalledPackageVersion(dir: string): Promise<string | undefined> {
   const manifest = readInstalledPackageManifest(dir);
   return typeof manifest?.version === "string" ? manifest.version : undefined;
-}
-
-/** Read string-valued peer dependencies from an installed package. */
-export function readInstalledPackagePeerDependencies(dir: string): Record<string, string> {
-  const manifest = readInstalledPackageManifest(dir);
-  const peerDependencies = isRecord(manifest?.peerDependencies) ? manifest.peerDependencies : {};
-  return Object.fromEntries(
-    Object.entries(peerDependencies).filter((entry): entry is [string, string] => {
-      const [, value] = entry;
-      return typeof value === "string";
-    }),
-  );
-}
-
-/** Return true when an installed package needs an openclaw peer link repair. */
-export function installedPackageNeedsOpenClawPeerLinkRepair(dir: string): boolean {
-  const peerDependencies = readInstalledPackagePeerDependencies(dir);
-  if (!Object.hasOwn(peerDependencies, "openclaw")) {
-    return false;
-  }
-
-  try {
-    fsSync.statSync(path.join(dir, "node_modules", "openclaw"));
-    return false;
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException | undefined)?.code;
-    return code === "ENOENT" || code === "ENOTDIR";
-  }
 }

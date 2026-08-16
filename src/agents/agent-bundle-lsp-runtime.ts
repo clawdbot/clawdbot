@@ -1,22 +1,19 @@
 /** Session-scoped embedded LSP runtime and tool materialization for agent bundles. */
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError } from "../infra/abort-signal.js";
-import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import { logDebug, logWarn } from "../logger.js";
-import {
-  materializeWindowsSpawnProgram,
-  resolveWindowsSpawnProgram,
-} from "../plugin-sdk/windows-spawn.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
-import { killProcessTree } from "../process/kill-tree.js";
-import { loadEmbeddedAgentLspConfig } from "./embedded-agent-lsp.js";
+import { createPendingRequestRegistry } from "../shared/pending-request-registry.js";
+import {
+  defaultBundleLspRuntimeDependencies,
+  type BundleLspRuntimeDependencies,
+} from "./agent-bundle-lsp-dependencies.js";
 import {
   resolveStdioMcpServerLaunchConfig,
   describeStdioMcpServerLaunchConfig,
-  type StdioMcpServerLaunchConfig,
 } from "./mcp-stdio.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -27,21 +24,16 @@ type LspSession = {
   serverName: string;
   process: ChildProcess;
   requestId: number;
-  pendingRequests: Map<number, PendingLspRequest>;
+  pendingRequests: ReturnType<typeof createPendingRequestRegistry<number, unknown, undefined>>;
   buffer: Buffer;
   initialized: boolean;
   capabilities: LspServerCapabilities;
   disposed: boolean;
+  // Cleanup must use the same process owner that spawned this session.
+  killProcessTree: BundleLspRuntimeDependencies["killProcessTree"];
   // Preserve a terminal process/transport failure so later requests reject immediately
   // instead of waiting for the per-request timeout.
   failure?: Error;
-};
-
-type PendingLspRequest = {
-  resolve: (v: unknown) => void;
-  reject: (e: Error) => void;
-  timeout: ReturnType<typeof setTimeout>;
-  dispose: () => void;
 };
 
 type LspServerCapabilities = {
@@ -77,35 +69,21 @@ function delay(ms: number): Promise<void> {
   });
 }
 
-/** Spawns one LSP server process using sanitized host env and Windows shim handling. */
-export function spawnLspServerProcess(config: StdioMcpServerLaunchConfig): ChildProcess {
-  const mergedEnv = sanitizeHostExecEnv({ baseEnv: process.env, overrides: config.env ?? null });
-  const program = resolveWindowsSpawnProgram({
-    command: config.command,
-    env: mergedEnv,
-    allowShellFallback: true,
-  });
-  const invocation = materializeWindowsSpawnProgram(program, config.args ?? []);
-  return spawn(invocation.command, invocation.argv, {
-    stdio: ["pipe", "pipe", "pipe"],
-    env: mergedEnv,
-    cwd: config.cwd,
-    detached: process.platform !== "win32",
-    windowsHide: invocation.windowsHide ?? process.platform === "win32",
-    shell: invocation.shell,
-  });
-}
-
-function createLspSession(serverName: string, child: ChildProcess): LspSession {
+function createLspSession(
+  serverName: string,
+  child: ChildProcess,
+  killProcessTree: BundleLspRuntimeDependencies["killProcessTree"],
+): LspSession {
   return {
     serverName,
     process: child,
     requestId: 0,
-    pendingRequests: new Map(),
+    pendingRequests: createPendingRequestRegistry<number, unknown, undefined>(),
     buffer: Buffer.alloc(0),
     initialized: false,
     capabilities: {},
     disposed: false,
+    killProcessTree,
   };
 }
 
@@ -117,22 +95,9 @@ function rememberLspFailure(session: LspSession, error: Error): void {
   session.failure ??= error;
 }
 
-function takePendingLspRequest(session: LspSession, id: number): PendingLspRequest | undefined {
-  const pending = session.pendingRequests.get(id);
-  if (!pending) {
-    return undefined;
-  }
-  session.pendingRequests.delete(id);
-  clearTimeout(pending.timeout);
-  pending.dispose();
-  return pending;
-}
-
 function failLspSession(session: LspSession, error: Error): void {
   rememberLspFailure(session, error);
-  for (const [id] of session.pendingRequests) {
-    takePendingLspRequest(session, id)?.reject(session.failure ?? error);
-  }
+  session.pendingRequests.rejectAll(session.failure ?? error);
 }
 
 function lspProcessExitError(
@@ -182,6 +147,7 @@ function encodeLspMessage(body: unknown): string {
 const LSP_HEADER_SEPARATOR = Buffer.from("\r\n\r\n", "ascii");
 const MAX_LSP_HEADER_BYTES = 8 * 1024;
 const MAX_LSP_BODY_BYTES = 64 * 1024 * 1024;
+const LSP_BODY_DECODER = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 class LspFramingError extends Error {
   override readonly name = "LspFramingError";
@@ -257,7 +223,12 @@ function parseLspMessages(buffer: Buffer): LspParseResult {
       return { ok: true, messages, remaining };
     }
 
-    const body = remaining.subarray(bodyStart, bodyEnd).toString("utf8");
+    let body: string;
+    try {
+      body = LSP_BODY_DECODER.decode(remaining.subarray(bodyStart, bodyEnd));
+    } catch {
+      return framingError(messages, "body is not valid UTF-8");
+    }
     try {
       messages.push(JSON.parse(body));
     } catch (error) {
@@ -289,34 +260,41 @@ function sendRequest(
     return Promise.reject(lspAbortError(signal));
   }
   const id = ++session.requestId;
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      takePendingLspRequest(session, id)?.reject(new Error(`LSP request ${method} timed out`));
-    }, 10_000);
-    timeout.unref?.();
-    const onAbort = () => {
-      const pending = takePendingLspRequest(session, id);
-      if (!pending) {
-        return;
-      }
-      // Bundle tools share the server process, so cancel only this request.
-      try {
-        session.process.stdin?.write(
-          encodeLspMessage({ jsonrpc: "2.0", method: "$/cancelRequest", params: { id } }),
-          "utf-8",
-        );
-      } catch {
-        // Best-effort notification; the local tool promise must still settle.
-      }
-      pending.reject(lspAbortError(signal));
-    };
-    const dispose = () => signal?.removeEventListener("abort", onAbort);
-    session.pendingRequests.set(id, { resolve, reject, timeout, dispose });
-    signal?.addEventListener("abort", onAbort, { once: true });
-    const message = { jsonrpc: "2.0", id, method, params };
+  const onAbort = () => {
+    const aborted = session.pendingRequests.take(id);
+    if (!aborted) {
+      return;
+    }
+    // Bundle tools share the server process, so cancel only this request.
+    try {
+      session.process.stdin?.write(
+        encodeLspMessage({ jsonrpc: "2.0", method: "$/cancelRequest", params: { id } }),
+        "utf-8",
+      );
+    } catch {
+      // Best-effort notification; the local tool promise must still settle.
+    }
+    aborted.reject(lspAbortError(signal));
+  };
+  const pending = session.pendingRequests.add(id, {
+    value: undefined,
+    timeoutMs: 10_000,
+    timeoutError: () => new Error(`LSP request ${method} timed out`),
+    dispose: () => signal?.removeEventListener("abort", onAbort),
+  });
+  if (!pending) {
+    return Promise.reject(new Error(`LSP request id collision: ${id}`));
+  }
+  signal?.addEventListener("abort", onAbort, { once: true });
+  const message = { jsonrpc: "2.0", id, method, params };
+  try {
     const encoded = encodeLspMessage(message);
     session.process.stdin?.write(encoded, "utf-8");
-  });
+  } catch (error) {
+    // Preserve Promise-executor behavior for synchronous stream failures; timeout owns cleanup.
+    pending.reject(error);
+  }
+  return pending.promise;
 }
 
 function handleIncomingData(session: LspSession, chunk: Buffer | string) {
@@ -338,7 +316,7 @@ function handleIncomingData(session: LspSession, chunk: Buffer | string) {
     const record = msg as Record<string, unknown>;
 
     if ("id" in record && typeof record.id === "number") {
-      const pending = takePendingLspRequest(session, record.id);
+      const pending = session.pendingRequests.take(record.id);
       if (pending) {
         if ("error" in record) {
           pending.reject(new Error(JSON.stringify(record.error)));
@@ -389,7 +367,7 @@ function hasLspProcessExited(child: ChildProcess): boolean {
 function terminateLspProcessTree(session: LspSession): void {
   const pid = session.process.pid;
   if (pid && !hasLspProcessExited(session.process)) {
-    killProcessTree(pid, { graceMs: LSP_PROCESS_TREE_KILL_GRACE_MS });
+    session.killProcessTree(pid, { graceMs: LSP_PROCESS_TREE_KILL_GRACE_MS, detached: true });
     return;
   }
   if (!hasLspProcessExited(session.process)) {
@@ -416,9 +394,7 @@ async function disposeSession(session: LspSession) {
       // best-effort
     }
   }
-  for (const [id] of session.pendingRequests) {
-    takePendingLspRequest(session, id)?.reject(new Error("LSP session disposed"));
-  }
+  session.pendingRequests.rejectAll(new Error("LSP session disposed"));
   terminateLspProcessTree(session);
 }
 
@@ -557,8 +533,10 @@ export async function createBundleLspToolRuntime(params: {
   cfg?: OpenClawConfig;
   reservedToolNames?: Iterable<string>;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+  dependencies?: BundleLspRuntimeDependencies;
 }): Promise<BundleLspToolRuntime> {
-  const loaded = loadEmbeddedAgentLspConfig({
+  const dependencies = params.dependencies ?? defaultBundleLspRuntimeDependencies;
+  const loaded = dependencies.loadLspConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
     manifestRegistry: params.manifestRegistry,
@@ -590,7 +568,11 @@ export async function createBundleLspToolRuntime(params: {
       let session: LspSession | undefined;
 
       try {
-        session = createLspSession(serverName, spawnLspServerProcess(launchConfig));
+        session = createLspSession(
+          serverName,
+          dependencies.spawnServerProcess(launchConfig),
+          dependencies.killProcessTree,
+        );
         registerActiveLspSession(session);
         attachLspProcessHandlers(session);
 

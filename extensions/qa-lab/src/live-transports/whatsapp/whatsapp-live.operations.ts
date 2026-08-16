@@ -1,12 +1,9 @@
 // QA Lab WhatsApp live-operation module boundaries.
 export {
-  WHATSAPP_QA_DRIVER_RECONNECT_DELAY_MS,
   WHATSAPP_QA_TRANSIENT_DRIVER_ATTEMPTS,
-  findUnexpectedWhatsAppNoReplyMessage,
   isTransientWhatsAppQaDriverError,
   resolveWhatsAppQaNoReplyTarget,
   restartWhatsAppQaDriverSession,
-  startWhatsAppQaDriverSessionWithRetry,
   waitForDistinctWhatsAppSutMessages,
   waitForNoWhatsAppReply,
   waitForWhatsAppScenarioSutMessage,
@@ -33,10 +30,7 @@ export {
   assertWhatsAppMessagesFromSutPhone,
   assertWhatsAppScenarioMessageBatch,
   buildWhatsAppQuotedMessageKeyFromObservedMessage,
-  dedupeWhatsAppMessagesById,
   formatDiagnosticId,
-  formatWhatsAppBatchMessageDiagnostics,
-  formatWhatsAppScenarioWaitDiagnostics,
   matchesWhatsAppSutReactionToTrigger,
   messageMatches,
   requireWhatsAppTriggerMessageId,

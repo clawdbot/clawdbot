@@ -23,6 +23,7 @@ data class GatewayRequestFrame(
   val id: String,
   val method: String,
   val params: JsonElement? = null,
+  val traceparent: String? = null,
 )
 
 @Serializable
@@ -74,6 +75,105 @@ data class GatewayNodeInvokeRequest(
 )
 
 @Serializable
+data class QuestionOption(
+  val label: String,
+  val description: String? = null,
+)
+
+@Serializable
+data class Question(
+  val questionId: String,
+  val header: String,
+  val question: String,
+  val options: List<QuestionOption>,
+  val multiSelect: Boolean? = null,
+  val isOther: Boolean? = null,
+  val isSecret: Boolean? = null,
+)
+
+@Serializable
+data class QuestionAnswers(
+  val answers: Map<String, List<String>>,
+)
+
+@Serializable
+data class QuestionRecord(
+  val id: String,
+  val questions: List<Question>,
+  val agentId: String? = null,
+  val sessionKey: String? = null,
+  val runId: String? = null,
+  val createdAtMs: Long,
+  val expiresAtMs: Long,
+  val status: String,
+  val answers: QuestionAnswers? = null,
+  val resolvedBy: String? = null,
+)
+
+@Serializable
+data class QuestionGetResult(
+  val question: QuestionRecord,
+)
+
+@Serializable
+data class QuestionListResult(
+  val questions: List<QuestionRecord>,
+)
+
+@Serializable
+data class SessionObserverPlanProgress(
+  val completed: Long,
+  val total: Long,
+)
+
+@Serializable
+data class SessionObserverDigest(
+  val sessionKey: String,
+  val agentId: String? = null,
+  val runId: String? = null,
+  val revision: Long,
+  val updatedAt: Long,
+  val headline: String,
+  val assessment: String? = null,
+  val health: String,
+  val planProgress: SessionObserverPlanProgress? = null,
+)
+
+@Serializable
+data class WorkerDesktopObserveParams(
+  val environmentId: String,
+  val control: Boolean? = null,
+)
+
+@Serializable
+data class WorkerDesktopObserveResult(
+  val transport: String = "rfb",
+  val wsPath: String,
+  val expiresAtMs: Long,
+  val control: Boolean,
+  val vncPassword: String? = null,
+)
+
+@Serializable
+data class WorkerDesktopLaunchParams(
+  val environmentId: String,
+  val app: String,
+)
+
+@Serializable
+data class WorkerDesktopLaunchResult(
+  val app: String,
+  val status: String = "ready",
+)
+
+@Serializable
+data class ProjectsListResult(
+  val projects: List<ProjectsListResultProjectsItem>,
+  val recents: List<JsonElement>? = null,
+  val observedProjects: List<ProjectsListResultObservedProjectsItem>? = null,
+)
+
+@Serializable
 data class GatewayEventFrameStateVersion(
   val presence: Long,
   val health: Long,
@@ -83,6 +183,30 @@ data class GatewayEventFrameStateVersion(
 data class GatewayNodeInvokeResultParamsError(
   val code: String? = null,
   val message: String? = null,
+)
+
+@Serializable
+data class ProjectsListResultProjectsItem(
+  val id: String,
+  val displayName: String,
+  val repoRoot: String? = null,
+  val originUrl: String? = null,
+  val source: String,
+  val agentId: String? = null,
+)
+
+@Serializable
+data class ProjectsListResultObservedProjectsItem(
+  val name: String,
+  val originUrl: String? = null,
+  val checkouts: List<ProjectsListResultObservedProjectsItemCheckoutsItem>,
+  val lastUsedAt: Double,
+)
+
+@Serializable
+data class ProjectsListResultObservedProjectsItemCheckoutsItem(
+  val runnerId: String,
+  val path: String,
 )
 
 enum class GatewayMethod(
@@ -97,7 +221,6 @@ enum class GatewayMethod(
   DoctorMemoryResetGroundedShortTerm("doctor.memory.resetGroundedShortTerm"),
   DoctorMemoryRepairDreamingArtifacts("doctor.memory.repairDreamingArtifacts"),
   DoctorMemoryDedupeDreamDiary("doctor.memory.dedupeDreamDiary"),
-  DoctorMemoryRemHarness("doctor.memory.remHarness"),
   LogsTail("logs.tail"),
   ChannelsStatus("channels.status"),
   ChannelsStart("channels.start"),
@@ -129,16 +252,25 @@ enum class GatewayMethod(
   ExecApprovalRequest("exec.approval.request"),
   ExecApprovalWaitDecision("exec.approval.waitDecision"),
   ExecApprovalResolve("exec.approval.resolve"),
+  QuestionRequest("question.request"),
+  QuestionWaitAnswer("question.waitAnswer"),
+  QuestionResolve("question.resolve"),
+  QuestionGet("question.get"),
+  QuestionList("question.list"),
   PluginApprovalList("plugin.approval.list"),
   PluginApprovalRequest("plugin.approval.request"),
   PluginApprovalWaitDecision("plugin.approval.waitDecision"),
   PluginApprovalResolve("plugin.approval.resolve"),
   PluginsUiDescriptors("plugins.uiDescriptors"),
   PluginsSessionAction("plugins.sessionAction"),
-  CrestodianChat("crestodian.chat"),
-  CrestodianSetupDetect("crestodian.setup.detect"),
-  CrestodianSetupActivate("crestodian.setup.activate"),
-  CrestodianSetupAuthStart("crestodian.setup.auth.start"),
+  OpenclawChat("openclaw.chat"),
+  OpenclawChatHistory("openclaw.chat.history"),
+  OpenclawChangesList("openclaw.changes.list"),
+  OpenclawApprovalList("openclaw.approval.list"),
+  OpenclawSetupDetect("openclaw.setup.detect"),
+  OpenclawSetupActivate("openclaw.setup.activate"),
+  OpenclawSetupAuthStart("openclaw.setup.auth.start"),
+  OpenclawSetupPrepareStart("openclaw.setup.prepare.start"),
   WizardStart("wizard.start"),
   WizardNext("wizard.next"),
   WizardCancel("wizard.cancel"),
@@ -146,14 +278,12 @@ enum class GatewayMethod(
   TalkCatalog("talk.catalog"),
   TalkConfig("talk.config"),
   TalkClientCreate("talk.client.create"),
+  TalkClientTranscript("talk.client.transcript"),
+  TalkClientClose("talk.client.close"),
   TalkClientToolCall("talk.client.toolCall"),
   TalkClientSteer("talk.client.steer"),
   TalkSessionCreate("talk.session.create"),
-  TalkSessionJoin("talk.session.join"),
   TalkSessionAppendAudio("talk.session.appendAudio"),
-  TalkSessionStartTurn("talk.session.startTurn"),
-  TalkSessionEndTurn("talk.session.endTurn"),
-  TalkSessionCancelTurn("talk.session.cancelTurn"),
   TalkSessionCancelOutput("talk.session.cancelOutput"),
   TalkSessionAcknowledgeMark("talk.session.acknowledgeMark"),
   TalkSessionSubmitToolResult("talk.session.submitToolResult"),
@@ -174,8 +304,20 @@ enum class GatewayMethod(
   McpAppListResourceTemplates("mcp.app.listResourceTemplates"),
   McpAppReadResource("mcp.app.readResource"),
   McpAppCallTool("mcp.app.callTool"),
+  McpAppUpdateModelContext("mcp.app.updateModelContext"),
+  BoardGet("board.get"),
+  BoardUpdate("board.update"),
+  BoardWidgetPut("board.widget.put"),
+  BoardWidgetGrant("board.widget.grant"),
+  BoardWidgetAppView("board.widget.appView"),
+  BoardEvent("board.event"),
   AuditList("audit.list"),
   AuditActivityList("audit.activity.list"),
+  UsersList("users.list"),
+  UsersSelf("users.self"),
+  UsersLinkEmail("users.linkEmail"),
+  UsersSetDisplayName("users.setDisplayName"),
+  UsersSetAvatar("users.setAvatar"),
   TasksList("tasks.list"),
   TasksGet("tasks.get"),
   TasksCancel("tasks.cancel"),
@@ -202,6 +344,7 @@ enum class GatewayMethod(
   SessionsFilesList("sessions.files.list"),
   SessionsFilesGet("sessions.files.get"),
   SessionsFilesSet("sessions.files.set"),
+  SessionsFilesReveal("sessions.files.reveal"),
   ArtifactsList("artifacts.list"),
   ArtifactsGet("artifacts.get"),
   ArtifactsDownload("artifacts.download"),
@@ -238,19 +381,22 @@ enum class GatewayMethod(
   SecretsReload("secrets.reload"),
   SecretsResolve("secrets.resolve"),
   VoicewakeRoutingGet("voicewake.routing.get"),
-  VoicewakeRoutingSet("voicewake.routing.set"),
   SessionsList("sessions.list"),
   SessionsSubscribe("sessions.subscribe"),
-  SessionsUnsubscribe("sessions.unsubscribe"),
   SessionsMessagesSubscribe("sessions.messages.subscribe"),
   SessionsMessagesUnsubscribe("sessions.messages.unsubscribe"),
+  SessionsViewersSet("sessions.viewers.set"),
   SessionsPreview("sessions.preview"),
   SessionsDescribe("sessions.describe"),
   SessionsCompactionList("sessions.compaction.list"),
-  SessionsCompactionGet("sessions.compaction.get"),
   SessionsCompactionBranch("sessions.compaction.branch"),
   SessionsCompactionRestore("sessions.compaction.restore"),
+  SessionsBranchesList("sessions.branches.list"),
+  SessionsBranchesSwitch("sessions.branches.switch"),
+  SessionsRewind("sessions.rewind"),
+  SessionsFork("sessions.fork"),
   SessionsCreate("sessions.create"),
+  SessionsRecover("sessions.recover"),
   SessionsSend("sessions.send"),
   SessionsAbort("sessions.abort"),
   SessionsPatch("sessions.patch"),
@@ -260,8 +406,10 @@ enum class GatewayMethod(
   SessionsDelete("sessions.delete"),
   SessionsCompact("sessions.compact"),
   SessionsGroupsList("sessions.groups.list"),
+  SessionsGroupsDefaults("sessions.groups.defaults"),
   SessionsGroupsPut("sessions.groups.put"),
   SessionsGroupsRename("sessions.groups.rename"),
+  SessionsGroupsUpdate("sessions.groups.update"),
   SessionsGroupsDelete("sessions.groups.delete"),
   LastHeartbeat("last-heartbeat"),
   SetHeartbeats("set-heartbeats"),
@@ -278,12 +426,14 @@ enum class GatewayMethod(
   DeviceTokenRotate("device.token.rotate"),
   DeviceTokenRevoke("device.token.revoke"),
   DevicePairSetupCode("device.pair.setupCode"),
+  DevicePairSetupStatus("device.pair.setupStatus"),
   NodeRename("node.rename"),
   NodeList("node.list"),
   NodeDescribe("node.describe"),
   NodePluginSurfaceRefresh("node.pluginSurface.refresh"),
   NodePluginToolsUpdate("node.pluginTools.update"),
   NodeSkillsUpdate("node.skills.update"),
+  NodeRunnerInventoryUpdate("node.runnerInventory.update"),
   NodePendingDrain("node.pending.drain"),
   NodePendingEnqueue("node.pending.enqueue"),
   NodeInvoke("node.invoke"),
@@ -295,6 +445,8 @@ enum class GatewayMethod(
   CronGet("cron.get"),
   CronList("cron.list"),
   CronStatus("cron.status"),
+  CronScratchGet("cron.scratch.get"),
+  CronScratchSet("cron.scratch.set"),
   CronAdd("cron.add"),
   CronUpdate("cron.update"),
   CronRemove("cron.remove"),
@@ -306,6 +458,9 @@ enum class GatewayMethod(
   SystemPresence("system-presence"),
   SystemEvent("system-event"),
   MessageAction("message.action"),
+  ConversationsSend("conversations.send"),
+  ConversationsTurn("conversations.turn"),
+  ConversationsTurnCancel("conversations.turn.cancel"),
   Send("send"),
   Agent("agent"),
   AgentIdentityGet("agent.identity.get"),
@@ -320,6 +475,9 @@ enum class GatewayMethod(
   TerminalInput("terminal.input"),
   TerminalResize("terminal.resize"),
   TerminalClose("terminal.close"),
+  ChannelsPairingList("channels.pairing.list"),
+  ChannelsPairingApprove("channels.pairing.approve"),
+  ChannelsPairingDismiss("channels.pairing.dismiss"),
   AssistantMediaGet("assistant.media.get"),
   SessionsGet("sessions.get"),
   SessionsResolve("sessions.resolve"),
@@ -343,7 +501,6 @@ enum class GatewayMethod(
   WebLoginWait("web.login.wait"),
   TerminalAttach("terminal.attach"),
   TerminalList("terminal.list"),
-  TerminalText("terminal.text"),
   ControlUiGithubPreview("controlUi.githubPreview"),
   SystemInfo("system.info"),
   AgentsWorkspaceList("agents.workspace.list"),
@@ -354,26 +511,79 @@ enum class GatewayMethod(
   PluginsInstall("plugins.install"),
   PluginsSetEnabled("plugins.setEnabled"),
   PluginsUninstall("plugins.uninstall"),
-  ControlUiSessionPullRequests("controlUi.sessionPullRequests"),
+  PluginsRefresh("plugins.refresh"),
+  ControlUiSessionPullRequestsSubscribe("controlUi.sessionPullRequests.subscribe"),
   GatewaySuspendPrepare("gateway.suspend.prepare"),
   GatewaySuspendStatus("gateway.suspend.status"),
   GatewaySuspendResume("gateway.suspend.resume"),
   ChatToolTitles("chat.toolTitles"),
   SessionsDiff("sessions.diff"),
-  CrestodianSetupVerify("crestodian.setup.verify"),
+  OpenclawSetupVerify("openclaw.setup.verify"),
   EnvironmentsCreate("environments.create"),
   EnvironmentsDestroy("environments.destroy"),
   SessionsCatalogList("sessions.catalog.list"),
   SessionsCatalogRead("sessions.catalog.read"),
+  TerminalUpload("terminal.upload"),
   SessionsCatalogContinue("sessions.catalog.continue"),
   SessionsCatalogArchive("sessions.catalog.archive"),
   ApprovalGet("approval.get"),
   ApprovalResolve("approval.resolve"),
   SessionsSearch("sessions.search"),
   SessionsDispatch("sessions.dispatch"),
+  SessionsReclaim("sessions.reclaim"),
   ModelsProbe("models.probe"),
   MigrationsMemoryPlan("migrations.memory.plan"),
   MigrationsMemoryApply("migrations.memory.apply"),
+  UiCommand("ui.command"),
+  ApprovalHistory("approval.history"),
+  PluginSurfaceRefresh("plugin.surface.refresh"),
+  ConversationsList("conversations.list"),
+  SessionDiscussionInfo("session.discussion.info"),
+  SessionDiscussionOpen("session.discussion.open"),
+  BoardPromptAuthorize("board.prompt.authorize"),
+  BoardDataRead("board.data.read"),
+  BoardAction("board.action"),
+  SessionsObserverVisibility("sessions.observer.visibility"),
+  SessionVisibilitySet("session.visibility.set"),
+  SessionMembersList("session.members.list"),
+  SessionMembersAdd("session.members.add"),
+  SessionMembersRemove("session.members.remove"),
+  SessionSuggestionsAdd("session.suggestions.add"),
+  SessionSuggestionsList("session.suggestions.list"),
+  SessionSuggestionsResolve("session.suggestions.resolve"),
+  SessionTyping("session.typing"),
+  SessionsCompanionAsk("sessions.companion.ask"),
+  SessionsCompanionState("sessions.companion.state"),
+  SessionsCompanionReset("sessions.companion.reset"),
+  MemorySearch("memory.search"),
+  SkillsProposalsEventsList("skills.proposals.events.list"),
+  SkillsProposalsEvaluate("skills.proposals.evaluate"),
+  HooksStatus("hooks.status"),
+  TasksRetry("tasks.retry"),
+  TasksDismiss("tasks.dismiss"),
+  AuditRunInspect("audit.run.inspect"),
+  SessionsPatchMany("sessions.patchMany"),
+  UpdateHold("update.hold"),
+  SessionsCatalogStartTerminal("sessions.catalog.startTerminal"),
+  WorkerDesktopObserve("worker.desktop.observe"),
+  ProjectsList("projects.list"),
+  ProjectsRegister("projects.register"),
+  ProjectsRemove("projects.remove"),
+  WorkerDesktopLaunch("worker.desktop.launch"),
+  SecretsStoreList("secrets.store.list"),
+  SecretsStoreSet("secrets.store.set"),
+  SecretsStoreDelete("secrets.store.delete"),
+  UsersPrefsGet("users.prefs.get"),
+  UsersPrefsSet("users.prefs.set"),
+  ProjectsAdd("projects.add"),
+  ProjectsSearchRemote("projects.searchRemote"),
+  DesktopObserve("desktop.observe"),
+  DesktopLaunch("desktop.launch"),
+  DeviceScopesRequestUpgrade("device.scopes.requestUpgrade"),
+  DeviceScopesWaitUpgrade("device.scopes.waitUpgrade"),
+  PortalList("portal.list"),
+  PortalOpen("portal.open"),
+  PortalClose("portal.close"),
 }
 
 enum class GatewayEvent(
@@ -382,11 +592,17 @@ enum class GatewayEvent(
   ConnectChallenge("connect.challenge"),
   Agent("agent"),
   Chat("chat"),
+  UiCommand("ui.command"),
   SessionApproval("session.approval"),
   SessionMessage("session.message"),
+  SessionObserver("session.observer"),
   SessionOperation("session.operation"),
+  SessionSharing("session.sharing"),
+  SessionSuggestion("session.suggestion"),
+  SessionTyping("session.typing"),
   SessionTool("session.tool"),
   SessionsChanged("sessions.changed"),
+  ControlUiSessionPullRequestsChanged("controlUi.sessionPullRequests.changed"),
   Presence("presence"),
   Tick("tick"),
   TalkMode("talk.mode"),
@@ -400,17 +616,27 @@ enum class GatewayEvent(
   NodePairRequested("node.pair.requested"),
   NodePairResolved("node.pair.resolved"),
   NodePresence("node.presence"),
+  NodeRunnerInventoryChanged("node.runnerInventory.changed"),
   NodeInvokeCancel("node.invoke.cancel"),
+  NodeInvokeInput("node.invoke.input"),
   NodeInvokeRequest("node.invoke.request"),
   DevicePairRequested("device.pair.requested"),
   DevicePairResolved("device.pair.resolved"),
+  DevicePairSetupCompleted("device.pair.setup.completed"),
+  DevicePairSetupDeliveryUncertain("device.pair.setup.deliveryUncertain"),
+  SkillsChanged("skills.changed"),
   VoicewakeChanged("voicewake.changed"),
   VoicewakeRoutingChanged("voicewake.routing.changed"),
   ExecApprovalRequested("exec.approval.requested"),
   ExecApprovalResolved("exec.approval.resolved"),
+  QuestionRequested("question.requested"),
+  QuestionResolved("question.resolved"),
   PluginApprovalRequested("plugin.approval.requested"),
   PluginApprovalResolved("plugin.approval.resolved"),
+  OpenclawApprovalRequested("openclaw.approval.requested"),
+  OpenclawApprovalResolved("openclaw.approval.resolved"),
   TerminalData("terminal.data"),
   TerminalExit("terminal.exit"),
   UpdateAvailable("update.available"),
+  PortalChanged("portal.changed"),
 }

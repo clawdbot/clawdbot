@@ -1,7 +1,9 @@
 // Codex tests cover index plugin behavior.
 import fs from "node:fs";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
+import openAIPlugin from "../openai/index.js";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import plugin from "./index.js";
 import {
@@ -16,6 +18,12 @@ import { CODEX_SUPERVISION_COMPAT_TOOL_NAMES } from "./src/supervision-tools.js"
 
 const runCodexAppServerAttemptMock = vi.hoisted(() => vi.fn());
 const runCodexAppServerSideQuestionMock = vi.hoisted(() => vi.fn());
+const explicitAgentConfig = {
+  agents: {
+    ownership: "explicit",
+    entries: { main: {}, clawblocker: {}, blockdigest: {} },
+  },
+} as OpenClawConfig;
 
 function createCodexTestRuntime(
   current?: () => unknown,
@@ -45,15 +53,116 @@ function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex
 }
 
 describe("codex plugin", () => {
-  it("is opt-in by default", () => {
+  it("is opt-in and does not advertise a text provider", () => {
     const manifest = JSON.parse(
       fs.readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
-    ) as { enabledByDefault?: unknown };
+    ) as { enabledByDefault?: unknown; providers?: unknown };
 
     expect(manifest.enabledByDefault).toBeUndefined();
+    expect(manifest.providers).toBeUndefined();
   });
 
-  it("registers the codex provider, agent harness, native thread tool, and hosted web search", () => {
+  it("does not select an agent or open plugin state while registering", () => {
+    const openSyncKeyedStore = vi.fn(() => {
+      throw new Error("openSyncKeyedStore is only available through the plugin runtime proxy");
+    });
+
+    expect(() =>
+      plugin.register(
+        createTestPluginApi({
+          id: "codex",
+          name: "Codex",
+          source: "test",
+          config: explicitAgentConfig,
+          pluginConfig: {},
+          runtime: { state: { openSyncKeyedStore } } as never,
+        }),
+      ),
+    ).not.toThrow();
+    expect(openSyncKeyedStore).not.toHaveBeenCalled();
+  });
+
+  it("registers request-scoped surfaces with explicit multi-agent ownership", () => {
+    const registerAgentHarness = vi.fn();
+    const registerNodeHostCommand = vi.fn();
+    const registerSessionCatalog = vi.fn();
+
+    expect(() =>
+      plugin.register(
+        createTestPluginApi({
+          id: "codex",
+          name: "Codex",
+          source: "test",
+          config: explicitAgentConfig,
+          pluginConfig: {},
+          runtime: createCodexTestRuntime(() => explicitAgentConfig),
+          registerAgentHarness,
+          registerNodeHostCommand,
+          registerSessionCatalog,
+        }),
+      ),
+    ).not.toThrow();
+
+    expect(registerAgentHarness).toHaveBeenCalledOnce();
+    expect(registerSessionCatalog).toHaveBeenCalledOnce();
+    expect(registerNodeHostCommand.mock.calls.map(([command]) => command.command)).toEqual(
+      expect.arrayContaining([
+        "codex.appServer.threads.list.v1",
+        "codex.appServer.thread.turns.list.v1",
+        "codex.terminal.resume.v1",
+      ]),
+    );
+  });
+
+  it("proactively monitors an explicitly configured remote websocket app-server", () => {
+    const registerService = vi.fn();
+
+    plugin.register(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: {
+          appServer: {
+            transport: "websocket",
+            url: "ws://127.0.0.1:39175",
+          },
+        },
+        runtime: createCodexTestRuntime(),
+        registerService,
+      }),
+    );
+
+    expect(registerService).toHaveBeenCalledOnce();
+    expect(mockCallArg(registerService)).toMatchObject({
+      id: "codex-app-server-connection-health",
+      start: expect.any(Function),
+      stop: expect.any(Function),
+    });
+  });
+
+  it("does not start remote connection monitoring for local Codex transports", () => {
+    for (const appServer of [undefined, { transport: "stdio" }, { transport: "unix" }]) {
+      const registerService = vi.fn();
+
+      plugin.register(
+        createTestPluginApi({
+          id: "codex",
+          name: "Codex",
+          source: "test",
+          config: {},
+          pluginConfig: appServer ? { appServer } : {},
+          runtime: createCodexTestRuntime(),
+          registerService,
+        }),
+      );
+
+      expect(registerService).not.toHaveBeenCalled();
+    }
+  });
+
+  it("registers the agent harness, native thread tool, and hosted web search", () => {
     const registerAgentHarness = vi.fn();
     const registerCommand = vi.fn();
     const registerMediaUnderstandingProvider = vi.fn();
@@ -86,7 +195,6 @@ describe("codex plugin", () => {
       }),
     );
 
-    const providerRegistration = mockCallArg(registerProvider) as Record<string, unknown>;
     const agentHarnessRegistration = mockCallArg(registerAgentHarness) as Record<string, unknown>;
     const mediaProviderRegistration = mockCallArg(registerMediaUnderstandingProvider) as
       | Record<string, unknown>
@@ -96,14 +204,15 @@ describe("codex plugin", () => {
       | [unknown]
       | undefined;
 
-    expect(providerRegistration.id).toBe("codex");
-    expect(providerRegistration.label).toBe("Codex");
+    expect(registerProvider).not.toHaveBeenCalled();
     expect(agentHarnessRegistration.id).toBe("codex");
     expect(agentHarnessRegistration.label).toBe("Codex agent harness");
     expect(agentHarnessRegistration.deliveryDefaults).toEqual({
-      sourceVisibleReplies: "message_tool",
+      visibleReplies: "message_tool",
     });
     expect(typeof agentHarnessRegistration.dispose).toBe("function");
+    expect(typeof agentHarnessRegistration.fetchUsageSnapshot).toBe("function");
+    expect(typeof agentHarnessRegistration.loadMcpToolCatalog).toBe("function");
     expect(mediaProviderRegistration?.id).toBe("codex");
     expect(mediaProviderRegistration?.capabilities).toEqual(["image"]);
     expect(mediaProviderRegistration?.defaultModels).toEqual({ image: "gpt-5.6-sol" });
@@ -127,15 +236,83 @@ describe("codex plugin", () => {
     expect(migrationRegistration?.id).toBe("codex");
     expect(migrationRegistration?.label).toBe("Codex");
     expect(registerTool).toHaveBeenCalledWith(expect.any(Function), { name: "codex_threads" });
+    expect(registerTool).toHaveBeenCalledWith(expect.any(Function), { name: "codex_plugins" });
     expect(registerTool).not.toHaveBeenCalledWith(expect.any(Function), {
       names: [...CODEX_SUPERVISION_COMPAT_TOOL_NAMES],
     });
     expect(registerToolMetadata).toHaveBeenCalledWith(
       expect.objectContaining({ toolName: "codex_threads", risk: "high" }),
     );
+    expect(registerToolMetadata).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: "codex_plugins", risk: "low" }),
+    );
     expect(inboundClaimRegistration?.[0]).toBe("inbound_claim");
     expect(typeof inboundClaimRegistration?.[1]).toBe("function");
     expect(typeof bindingResolvedRegistration?.[0]).toBe("function");
+  });
+
+  it("lets native session discovery be disabled without disabling the Codex plugin", () => {
+    const registerAgentHarness = vi.fn();
+    const registerNodeHostCommand = vi.fn();
+    const registerProvider = vi.fn();
+    const registerSessionCatalog = vi.fn();
+    plugin.register(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: explicitAgentConfig,
+        pluginConfig: { sessionCatalog: { enabled: false } },
+        runtime: createCodexTestRuntime(),
+        registerAgentHarness,
+        registerCommand: vi.fn(),
+        registerMediaUnderstandingProvider: vi.fn(),
+        registerMigrationProvider: vi.fn(),
+        registerNodeHostCommand,
+        registerProvider,
+        registerSessionCatalog,
+        registerTool: vi.fn(),
+        on: vi.fn(),
+      }),
+    );
+
+    expect(registerAgentHarness).toHaveBeenCalledOnce();
+    expect(registerProvider).not.toHaveBeenCalled();
+    const nodeCommands = registerNodeHostCommand.mock.calls.map(
+      ([command]) => (command as { command: string }).command,
+    );
+    expect(nodeCommands).toEqual(["codex.cli.sessions.list", "codex.cli.session.resume"]);
+    expect(nodeCommands).not.toContain("codex.appServer.threads.list.v1");
+    expect(nodeCommands).not.toContain("codex.appServer.thread.turns.list.v1");
+    expect(registerSessionCatalog).not.toHaveBeenCalled();
+  });
+
+  it("leaves OpenAI as the only text provider when both plugins register", () => {
+    const providers: Array<{ id: string }> = [];
+    const registerProvider = (provider: { id: string }) => providers.push(provider);
+    openAIPlugin.register(
+      createTestPluginApi({
+        id: "openai",
+        name: "OpenAI Provider",
+        source: "test",
+        config: {},
+        runtime: {} as never,
+        registerProvider,
+      }),
+    );
+    plugin.register(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: {},
+        runtime: createCodexTestRuntime(),
+        registerProvider,
+      }),
+    );
+
+    expect(providers.map((provider) => provider.id)).toEqual(["openai"]);
   });
 
   it("registers the five shipped supervision tools only when supervision is enabled", () => {
@@ -169,6 +346,93 @@ describe("codex plugin", () => {
     ]);
     expect(registration?.[0]({ senderIsOwner: false })).toEqual([]);
     expect(registration?.[0]({})).toEqual([]);
+  });
+
+  it.each([
+    ["supervision is absent", undefined],
+    ["supervision is disabled", { enabled: false }],
+    ["supervision is enabled", { enabled: true }],
+  ] as const)(
+    "keeps live user-home appServer config for an auto-enabled Codex entry when %s",
+    (_label, supervision) => {
+      const registerTool = vi.fn();
+      plugin.register(
+        createTestPluginApi({
+          id: "codex",
+          name: "Codex",
+          source: "test",
+          config: {},
+          pluginConfig: {},
+          // No explicit plugins.entries.codex.enabled: core auto-enables the
+          // plugin from this config block, so the harness must keep honoring it.
+          runtime: createCodexTestRuntime(() => ({
+            plugins: {
+              entries: {
+                codex: {
+                  config: {
+                    appServer: { homeScope: "user" },
+                    ...(supervision ? { supervision } : {}),
+                  },
+                },
+              },
+            },
+          })),
+          registerAgentHarness: vi.fn(),
+          registerCommand: vi.fn(),
+          registerMediaUnderstandingProvider: vi.fn(),
+          registerMigrationProvider: vi.fn(),
+          registerProvider: vi.fn(),
+          registerTool,
+          on: vi.fn(),
+        }),
+      );
+
+      const registration = registerTool.mock.calls.find(
+        ([, options]) => options?.name === "codex_threads",
+      ) as
+        | [(context: { senderIsOwner?: boolean }) => { name: string } | null, { name: string }]
+        | undefined;
+      // codex_threads exists only while user-home scope or supervision is live,
+      // so it proves the plugin config survived the enable-state resolution.
+      expect(registration?.[0]({ senderIsOwner: true })?.name).toBe("codex_threads");
+    },
+  );
+
+  it("drops live plugin config when the Codex entry is explicitly disabled", () => {
+    const registerTool = vi.fn();
+    plugin.register(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: {},
+        runtime: createCodexTestRuntime(() => ({
+          plugins: {
+            entries: {
+              codex: {
+                enabled: false,
+                config: { appServer: { homeScope: "user" } },
+              },
+            },
+          },
+        })),
+        registerAgentHarness: vi.fn(),
+        registerCommand: vi.fn(),
+        registerMediaUnderstandingProvider: vi.fn(),
+        registerMigrationProvider: vi.fn(),
+        registerProvider: vi.fn(),
+        registerTool,
+        on: vi.fn(),
+      }),
+    );
+
+    const registration = registerTool.mock.calls.find(
+      ([, options]) => options?.name === "codex_threads",
+    ) as
+      | [(context: { senderIsOwner?: boolean }) => { name: string } | null, { name: string }]
+      | undefined;
+    expect(registration?.[0]({ senderIsOwner: true })).toBeNull();
   });
 
   it("activates from live supervision config through a normalized Codex entry id", () => {
@@ -326,8 +590,7 @@ describe("codex plugin", () => {
     delete (api as { onConversationBindingResolved?: unknown }).onConversationBindingResolved;
 
     plugin.register(api);
-    expect(registerProvider).toHaveBeenCalledTimes(1);
-    expect((mockCallArg(registerProvider) as { id?: string } | undefined)?.id).toBe("codex");
+    expect(registerProvider).not.toHaveBeenCalled();
   });
 
   it("claims the Codex routing providers by default", () => {
@@ -335,7 +598,7 @@ describe("codex plugin", () => {
       bindingStore: testCodexAppServerBindingStore,
     });
 
-    expect(harness.deliveryDefaults?.sourceVisibleReplies).toBe("message_tool");
+    expect(harness.deliveryDefaults?.visibleReplies).toBe("message_tool");
     expect(
       harness.supports({ provider: "codex", modelId: "gpt-5.4", requestedRuntime: "auto" })
         .supported,
@@ -376,7 +639,13 @@ describe("codex plugin", () => {
     );
     const sessionEnd = on.mock.calls.find(([name]) => name === "session_end")?.[1] as
       | ((
-          event: { sessionId: string; sessionKey?: string; reason?: string },
+          event: {
+            sessionId: string;
+            sessionKey?: string;
+            reason?: string;
+            nextSessionId?: string;
+            nextSessionKey?: string;
+          },
           ctx: { agentId?: string; sessionId: string; sessionKey?: string },
         ) => Promise<void>)
       | undefined;
@@ -410,6 +679,86 @@ describe("codex plugin", () => {
       );
       await expect(bindingStore.read(identity)).resolves.toBeUndefined();
     }
+
+    // Cross-key handoff (e.g. dashboard "New Chat"/fork): the parent's still-live
+    // binding must survive because the successor lives under a different key and
+    // owns its own Codex thread. Use a fresh parent key (session-1 above is now
+    // permanently retired). See #106778.
+    const parent = sessionBindingIdentity({
+      agentId: "worker",
+      sessionId: "parent-1",
+      sessionKey: "agent:worker:parent-1",
+    });
+    await bindingStore.mutate(parent, {
+      kind: "set",
+      binding: { threadId: "thread-parent", cwd: "/repo" },
+    });
+    await sessionEnd(
+      {
+        sessionId: "parent-1",
+        sessionKey: "agent:worker:parent-1",
+        reason: "new",
+        nextSessionId: "child-1",
+        nextSessionKey: "agent:worker:dashboard:child-1",
+      },
+      { agentId: "worker", sessionId: "parent-1" },
+    );
+    await expect(bindingStore.read(parent)).resolves.toMatchObject({ threadId: "thread-parent" });
+
+    // In-place reset cleanup is awaited before the replacement starts. Its
+    // delayed session_end event must not retire that same-id replacement.
+    const inPlace = sessionBindingIdentity({
+      agentId: "worker",
+      sessionId: "in-place-1",
+      sessionKey: "agent:worker:in-place",
+    });
+    await bindingStore.mutate(inPlace, {
+      kind: "set",
+      binding: { threadId: "thread-in-place-replacement", cwd: "/repo" },
+    });
+    await sessionEnd(
+      {
+        sessionId: "in-place-1",
+        sessionKey: "agent:worker:in-place",
+        reason: "reset",
+        nextSessionId: "in-place-1",
+      },
+      { agentId: "worker", sessionId: "in-place-1" },
+    );
+    await expect(bindingStore.read(inPlace)).resolves.toMatchObject({
+      threadId: "thread-in-place-replacement",
+    });
+
+    // A same-key replacement that still names the successor id (physical rollover)
+    // has no distinct nextSessionKey, so it retires as before.
+    await sessionEnd(
+      {
+        sessionId: "parent-1",
+        sessionKey: "agent:worker:parent-1",
+        reason: "new",
+        nextSessionId: "parent-2",
+      },
+      { agentId: "worker", sessionId: "parent-1" },
+    );
+    await expect(bindingStore.read(parent)).resolves.toBeUndefined();
+
+    // Unknown current key: a handoff cannot be proven, so a successor key alone
+    // must not skip cleanup — the conservative path retires as before #106778.
+    const keyless = sessionBindingIdentity({ agentId: "worker", sessionId: "keyless-1" });
+    await bindingStore.mutate(keyless, {
+      kind: "set",
+      binding: { threadId: "thread-keyless", cwd: "/repo" },
+    });
+    await sessionEnd(
+      {
+        sessionId: "keyless-1",
+        reason: "new",
+        nextSessionId: "child-2",
+        nextSessionKey: "agent:worker:dashboard:child-2",
+      },
+      { agentId: "worker", sessionId: "keyless-1" },
+    );
+    await expect(bindingStore.read(keyless)).resolves.toBeUndefined();
   });
 
   it("adopts compaction successors before delayed lifecycle cleanup", async () => {

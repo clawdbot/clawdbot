@@ -1,7 +1,7 @@
 // Diffs plugin module implements render behavior.
 import type { FileContents, FileDiffMetadata, SupportedLanguages } from "@pierre/diffs";
 import { parsePatchFiles } from "@pierre/diffs";
-import { preloadFileDiff, preloadMultiFileDiff } from "@pierre/diffs/ssr";
+import { preloadDiffHTML, type PreloadDiffOptions } from "@pierre/diffs/ssr";
 import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeDiffFontSize, normalizeDiffLineSpacing } from "./config.js";
 import {
@@ -559,21 +559,18 @@ async function renderBeforeAfterDiff(
   if (!preloadOptions) {
     throw new Error(`Unsupported diff render target: ${target}`);
   }
-  const preloadResult = await preloadMultiFileDiffWithFallback({
+  const prerenderedHTML = await preloadDiffHTMLWithFallback({
     oldFile,
     newFile,
     options: preloadOptions,
   });
   const normalizedPayload = await normalizeDiffViewerPayloadLanguages(
     {
-      prerenderedHTML: preloadResult.prerenderedHTML,
-      oldFile: preloadResult.oldFile,
-      newFile: preloadResult.newFile,
+      prerenderedHTML,
+      oldFile,
+      newFile,
       options: preloadOptions,
-      langs: collectDiffPayloadLanguageHints({
-        oldFile: preloadResult.oldFile,
-        newFile: preloadResult.newFile,
-      }),
+      langs: collectDiffPayloadLanguageHints({ oldFile, newFile }),
     },
     { languagePackAvailable },
   );
@@ -640,16 +637,16 @@ async function renderPatchDiff(
   }));
   const sections = await Promise.all(
     files.map(async (fileDiff, index) => {
-      const preloadResult = await preloadFileDiffWithFallback({
+      const prerenderedHTML = await preloadDiffHTMLWithFallback({
         fileDiff,
         options: preloadOptions,
       });
       const normalizedPayload = await normalizeDiffViewerPayloadLanguages(
         {
-          prerenderedHTML: preloadResult.prerenderedHTML,
-          fileDiff: preloadResult.fileDiff,
+          prerenderedHTML,
+          fileDiff,
           options: preloadOptions,
-          langs: collectDiffPayloadLanguageHints({ fileDiff: preloadResult.fileDiff }),
+          langs: collectDiffPayloadLanguageHints({ fileDiff }),
         },
         { languagePackAvailable },
       );
@@ -738,9 +735,6 @@ export async function renderDiffDocument(
   };
 }
 
-type PreloadedFileDiffResult = Awaited<ReturnType<typeof preloadFileDiff>>;
-type PreloadedMultiFileDiffResult = Awaited<ReturnType<typeof preloadMultiFileDiff>>;
-
 function shouldFallbackToClientHydration(error: unknown): boolean {
   return (
     error instanceof TypeError &&
@@ -748,38 +742,13 @@ function shouldFallbackToClientHydration(error: unknown): boolean {
   );
 }
 
-async function preloadFileDiffWithFallback(params: {
-  fileDiff: FileDiffMetadata;
-  options: DiffViewerOptions;
-}): Promise<PreloadedFileDiffResult> {
+async function preloadDiffHTMLWithFallback(params: PreloadDiffOptions<undefined>): Promise<string> {
   try {
-    return await preloadFileDiff(params);
+    return await preloadDiffHTML(params);
   } catch (error) {
     if (!shouldFallbackToClientHydration(error)) {
       throw error;
     }
-    return {
-      fileDiff: params.fileDiff,
-      prerenderedHTML: "",
-    };
-  }
-}
-
-async function preloadMultiFileDiffWithFallback(params: {
-  oldFile: FileContents;
-  newFile: FileContents;
-  options: DiffViewerOptions;
-}): Promise<PreloadedMultiFileDiffResult> {
-  try {
-    return await preloadMultiFileDiff(params);
-  } catch (error) {
-    if (!shouldFallbackToClientHydration(error)) {
-      throw error;
-    }
-    return {
-      oldFile: params.oldFile,
-      newFile: params.newFile,
-      prerenderedHTML: "",
-    };
+    return "";
   }
 }

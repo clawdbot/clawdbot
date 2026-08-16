@@ -22,6 +22,7 @@ const CLEARED_EXEC_FIELDS = {
 export function clearInlineDirectives(cleaned: string): InlineDirectives {
   return {
     cleaned,
+    nativeCommand: undefined,
     hasThinkDirective: false,
     thinkLevel: undefined,
     rawThinkLevel: undefined,
@@ -46,6 +47,10 @@ export function clearInlineDirectives(cleaned: string): InlineDirectives {
     hasStatusDirective: false,
     hasModelDirective: false,
     rawModelDirective: undefined,
+    rawModelProfile: undefined,
+    rawModelRuntime: undefined,
+    modelDirectiveSource: undefined,
+    modelSessionOnly: false,
     hasQueueDirective: false,
     queueMode: undefined,
     queueReset: false,

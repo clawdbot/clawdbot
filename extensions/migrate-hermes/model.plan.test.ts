@@ -1,10 +1,17 @@
 // Migrate Hermes tests cover model.plan plugin behavior.
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
-import { afterEach, describe, expect, it } from "vitest";
+import {
+  resolvePreferredOpenClawTmpDir,
+  tempWorkspace,
+  type TempWorkspace,
+} from "openclaw/plugin-sdk/temp-path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { HERMES_REASON_DEFAULT_MODEL_CONFIGURED } from "./items.js";
 import { buildHermesMigrationProvider } from "./provider.js";
-import { cleanupTempRoots, makeContext, makeTempRoot, writeFile } from "./test/provider-helpers.js";
+import { makeContext, writeFile } from "./test/provider-helpers.js";
+
+let testWorkspace: TempWorkspace;
 
 function expectedHermesModelPlanItems(params: {
   modelStatus: "planned" | "conflict";
@@ -26,12 +33,19 @@ function expectedHermesModelPlanItems(params: {
 }
 
 describe("Hermes migration model planning", () => {
+  beforeEach(async () => {
+    testWorkspace = await tempWorkspace({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "openclaw-migrate-hermes-",
+    });
+  });
+
   afterEach(async () => {
-    await cleanupTempRoots();
+    await testWorkspace.cleanup();
   });
 
   it("preserves the provider for top-level string model refs", async () => {
-    const root = await makeTempRoot();
+    const root = testWorkspace.dir;
     const source = path.join(root, "hermes");
     const workspaceDir = path.join(root, "workspace");
     const stateDir = path.join(root, "state");
@@ -44,7 +58,7 @@ describe("Hermes migration model planning", () => {
   });
 
   it("preserves provider routing for vendor-qualified models and normalizes aliases", async () => {
-    const root = await makeTempRoot();
+    const root = testWorkspace.dir;
     const workspaceDir = path.join(root, "workspace");
     const stateDir = path.join(root, "state");
     const provider = buildHermesMigrationProvider();
@@ -69,7 +83,9 @@ describe("Hermes migration model planning", () => {
       ["minimax-cn", "MiniMax-M2.7", "minimax/MiniMax-M2.7"],
       ["opencode-zen", "gpt-5.4", "opencode/gpt-5.4"],
       ["auto", "anthropic/claude-opus-4.6", "anthropic/claude-opus-4.6"],
-      ["qwen-cli", "qwen3.5-plus", "qwen-oauth/qwen3.5-plus"],
+      ["qwen-cli", "qwen3.5-plus", "qwen/qwen3.5-plus"],
+      ["qwen-oauth", "qwen3.5-plus", "qwen/qwen3.5-plus"],
+      ["qwen-portal", "qwen3.5-plus", "qwen/qwen3.5-plus"],
       ["vertex", "gemini-3.1-pro", "google-vertex/gemini-3.1-pro"],
       ["custom:My Local LLM", "local-model", "my-local-llm/local-model"],
     ] as const;
@@ -84,21 +100,39 @@ describe("Hermes migration model planning", () => {
       expect(plan.items.some((item) => item.id.startsWith("config:model-provider:"))).toBe(
         ["alibaba", "dashscope", "minimax-cn"].includes(hermesProvider),
       );
-      if (hermesProvider === "qwen-cli") {
-        expect(
-          plan.items.some(
-            (item) => item.kind === "manual" && item.message?.includes("Qwen OAuth") === true,
-          ),
-        ).toBe(true);
+      if (["qwen-cli", "qwen-oauth", "qwen-portal"].includes(hermesProvider)) {
+        const reauthItem = plan.items.find((item) => item.id === "manual:auth-reauthenticate:qwen");
+        expect(reauthItem?.reason).toBe(
+          "Authenticate qwen with an API key after migration: openclaw onboard --auth-choice qwen-api-key.",
+        );
       }
     }
+  });
+
+  it("rewrites a provider-qualified retired Qwen model without a separate provider field", async () => {
+    const root = testWorkspace.dir;
+    const source = path.join(root, "hermes");
+    await writeFile(path.join(source, "config.yaml"), "model: qwen-oauth/qwen3.5-plus\n");
+
+    const plan = await buildHermesMigrationProvider().plan(
+      makeContext({
+        source,
+        stateDir: path.join(root, "state"),
+        workspaceDir: path.join(root, "workspace"),
+      }),
+    );
+
+    expect(plan.items[0]?.details?.model).toBe("qwen/qwen3.5-plus");
+    expect(plan.items.find((item) => item.id === "manual:auth-reauthenticate:qwen")?.reason).toBe(
+      "Authenticate qwen with an API key after migration: openclaw onboard --auth-choice qwen-api-key.",
+    );
   });
 
   it.each([
     ["sk-kimi-placeholder", "kimi/kimi-k2.5"],
     ["legacy-moonshot-placeholder", "moonshot/kimi-k2.5"],
   ])("routes kimi-coding from the effective key contract", async (apiKey, expectedModel) => {
-    const root = await makeTempRoot();
+    const root = testWorkspace.dir;
     const source = path.join(root, expectedModel.split("/")[0]!);
     await writeFile(
       path.join(source, "config.yaml"),
@@ -117,7 +151,7 @@ describe("Hermes migration model planning", () => {
   });
 
   it("routes a model-scoped custom endpoint without an explicit provider", async () => {
-    const root = await makeTempRoot();
+    const root = testWorkspace.dir;
     const source = path.join(root, "hermes");
     await writeFile(
       path.join(source, "config.yaml"),
@@ -138,7 +172,7 @@ describe("Hermes migration model planning", () => {
   });
 
   it("treats existing object-form default model primaries as conflicts", async () => {
-    const root = await makeTempRoot();
+    const root = testWorkspace.dir;
     const source = path.join(root, "hermes");
     const workspaceDir = path.join(root, "workspace");
     const stateDir = path.join(root, "state");
@@ -169,7 +203,7 @@ describe("Hermes migration model planning", () => {
   });
 
   it("treats default-agent model overrides as conflicts", async () => {
-    const root = await makeTempRoot();
+    const root = testWorkspace.dir;
     const source = path.join(root, "hermes");
     const workspaceDir = path.join(root, "workspace");
     const stateDir = path.join(root, "state");

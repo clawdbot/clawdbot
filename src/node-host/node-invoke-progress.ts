@@ -8,7 +8,7 @@ const MAX_HEARTBEAT_INTERVAL_MS = 5_000;
 
 type Pausable = { pause(): void; resume(): void };
 
-export function resolveNodeInvokeHeartbeatInterval(idleTimeoutMs: number): number {
+function resolveNodeInvokeHeartbeatInterval(idleTimeoutMs: number): number {
   return Math.max(
     MIN_HEARTBEAT_INTERVAL_MS,
     Math.min(MAX_HEARTBEAT_INTERVAL_MS, Math.floor(idleTimeoutMs / 2)),

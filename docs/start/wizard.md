@@ -1,5 +1,5 @@
 ---
-summary: "CLI onboarding: verify inference, then hand remaining setup to Crestodian"
+summary: "CLI onboarding: verify inference, then hand remaining setup to OpenClaw"
 read_when:
   - Running or configuring CLI onboarding
   - Setting up a new machine
@@ -13,23 +13,37 @@ openclaw onboard
 
 CLI onboarding is the recommended terminal setup path on macOS, Linux, and
 Windows (native or WSL2). By default it detects AI access already available on
-the machine, verifies it with a real completion, and starts Crestodian to
+the machine, verifies it with a real completion, and starts OpenClaw to
 configure the workspace, Gateway, and optional features. `openclaw setup` runs the same flow ([Setup](/cli/setup) covers
 the `--baseline` config-only variant). Windows desktop users can also start
 from [Windows Hub](/platforms/windows).
 
 Guided onboarding establishes inference first. It detects available AI access,
-requires a real completion, and only then starts [Crestodian](/cli/crestodian)
+requires a real completion, and only then starts [OpenClaw](/cli/openclaw)
 to configure the rest of OpenClaw. Choosing **Skip for now** exits onboarding
-without starting Crestodian.
+without starting OpenClaw.
 
 The classic wizard remains available for custom providers, remote Gateway
 setup, channel pairing, daemon controls, skills, and imports. Run it explicitly
 with `openclaw onboard --classic`; the guided inference picker does not delegate
-into it. After inference passes, Crestodian can use `open channel wizard for
+into it. After inference passes, OpenClaw can use `open channel wizard for
 <channel>` to hand channel setup that needs secrets to a masked terminal wizard.
-To change the model provider or its authentication, exit Crestodian and run
-`openclaw onboard`; Crestodian does not open guided or classic provider flows.
+Workspace skills and web search are configured the same conversational way:
+`configure skills` and `configure web search` host those setup flows in the
+chat, and `open search wizard` hands credential entry to the masked terminal
+wizard.
+For a local Gateway, `configure gateway` guides port, bind, auth, and Tailscale
+settings but saves config without restarting; say `restart gateway` afterward,
+or use `open gateway wizard` for masked terminal credential entry and then run
+`openclaw gateway restart`. Remote Gateway mode remains an onboarding or
+`openclaw configure` choice rather than a hosted chat wizard.
+
+After onboarding has created the default agent workspace, `import memory` can
+copy detected local memory into it. This conversational import does not change
+config or import credentials or skills, needs no Gateway restart, and reports
+per-source partial or failed copies honestly.
+To change the model provider or its authentication, exit OpenClaw and run
+`openclaw onboard`; OpenClaw does not open guided or classic provider flows.
 
 <Info>
 Fastest first chat: finish guided setup, run `openclaw dashboard`, and chat in
@@ -38,12 +52,13 @@ the browser through the Control UI. Docs: [Dashboard](/web/dashboard).
 
 ## Locale
 
-The wizard localizes fixed onboarding copy. Resolve order: `OPENCLAW_LOCALE`,
-`LC_ALL`, `LC_MESSAGES`, `LANG`, then English. Supported locales: `en`,
-`zh-CN`, `zh-TW`.
+The wizard localizes fixed onboarding copy. It uses the first nonblank value from
+`OPENCLAW_LOCALE`, `LC_ALL`, `LC_MESSAGES`, and `LANG`, in that order, then
+falls back to English. Supported locales: `en`, `zh-CN`, `zh-TW`.
 
 ```bash
 OPENCLAW_LOCALE=zh-CN openclaw onboard
+OPENCLAW_LOCALE=en openclaw onboard # Explicit English override
 ```
 
 Product names, commands, config keys, URLs, provider IDs, model IDs, and
@@ -64,8 +79,9 @@ openclaw agents add <name>
 The classic wizard includes a web search step where you can pick a provider: Brave,
 DuckDuckGo, Exa, Firecrawl, Gemini, Grok, Kimi, MiniMax Search, Ollama Web
 Search, Perplexity, SearXNG, or Tavily. Some need an API key; others are
-key-free. Configure this later with `openclaw configure --section web`. Docs:
-[Web tools](/tools/web).
+key-free. Configure this later with `openclaw configure --section web`, or say
+`configure web search` in the OpenClaw chat to run the same provider setup
+conversationally. Docs: [Web tools](/tools/web).
 </Tip>
 
 ## Guided default
@@ -73,18 +89,22 @@ key-free. Configure this later with `openclaw configure --section web`. Docs:
 Plain `openclaw onboard` follows this path:
 
 1. Accept the security notice.
-2. Detect configured models, API-key environment variables, and supported local
-   AI CLIs.
+2. Detect configured models, API-key environment variables, supported local AI
+   CLIs, and already installed tool-capable models from reachable Ollama or LM
+   Studio servers on the Gateway host. This read-only pass never downloads a
+   model. Pi and OpenCode installs may also be reported for context when they
+   cannot serve as the reusable inference route. Gemini CLI and Antigravity are
+   not offered as detected setup routes.
 3. Test the first detected candidate with a real completion. On failure, show the
    reason and continue to the next usable candidate.
 4. If detection is exhausted, choose OpenAI, Anthropic, xAI (Grok), Google, or
    OpenRouter, or choose **More…** for the remaining providers. Each provider's
    regions, plans, and supported browser, device, API-key, or token methods
    appear in a second menu and are tested with the same real completion.
-   Choose **Skip for now** to exit without starting Crestodian.
+   Choose **Skip for now** to exit without starting OpenClaw.
 5. Persist only the verified model route and any credential/plugin state it
    requires. Workspace and Gateway settings remain untouched.
-6. Start Crestodian with the verified model so it can configure the workspace,
+6. Start OpenClaw with the verified model so it can configure the workspace,
    Gateway, channels, agents, plugins, and the remaining optional setup.
 
 Re-running the command on a configured installation tests the current default
@@ -108,7 +128,7 @@ flow and skip that prompt.
     - Gateway port **18789**
     - Gateway auth **Token** (auto-generated, even on loopback)
     - Tool policy: `tools.profile: "coding"` for new setups (an existing explicit profile is preserved)
-    - DM isolation: `session.dmScope: "per-channel-peer"` for new setups. Details: [CLI setup reference](/start/wizard-cli-reference#outputs-and-internals)
+    - DM sessions: onboarding preserves an explicit `session.dmScope` and otherwise leaves it unset, so the `"main"` default keeps all direct messages across channels in the agent's rolling main session—the personal-agent default. For shared or multi-user inboxes, use `"per-channel-peer"`; `openclaw security audit` recommends isolation when it detects multi-user DM traffic. Details: [CLI setup reference](/start/wizard-cli-reference#outputs-and-internals)
     - Tailscale exposure **Off**
     - Telegram and WhatsApp DMs default to **allowlist**: Telegram asks for a numeric Telegram user ID, WhatsApp asks for a phone number
 
@@ -131,22 +151,25 @@ Local mode (default) walks through these steps:
    provider-specific manual auth), including Custom Provider
    (OpenAI-compatible, OpenAI Responses-compatible, Anthropic-compatible, or
    Unknown auto-detect). Pick a default model.
-   Fresh OpenAI API-key setup defaults to `openai/gpt-5.6` (the bare direct-API
-   id resolves to Sol); fresh ChatGPT/Codex setup defaults to
-   `openai/gpt-5.6-sol`. Re-running setup preserves an existing explicit model,
-   including `openai/gpt-5.5`. Select `openai/gpt-5.5` explicitly if the
+   Fresh OpenAI API-key and ChatGPT/Codex setup default to
+   `openai/gpt-5.6-sol`. The bare direct-API `openai/gpt-5.6` alias remains
+   supported and resolves to Sol. Re-running setup preserves an existing
+   explicit model, including `openai/gpt-5.5`. Select `openai/gpt-5.5` explicitly if the
    account does not expose GPT-5.6.
    Security note: if this agent will run tools or process webhook/hook
    content, prefer the strongest latest-generation model available and keep
    tool policy strict - weaker or older tiers are easier to prompt-inject.
-   For non-interactive runs, `--secret-input-mode ref` stores env-backed refs
-   instead of plaintext API key values; the referenced env var must already
-   be set, or onboarding fails fast. Interactive secret reference mode can
+   For non-interactive runs, `--secret-input-mode ref` stores new credentials
+   as env-backed refs; set the provider env var when adding a credential.
+   Existing resolvable named profiles and their `env`, `file`, `exec`, or `store` refs
+   are reused unchanged without a new credential write or additional provider
+   env var. Previously stored plaintext is not migrated; see
+   [Secrets management](/gateway/secrets). Interactive secret reference mode can
    point at an environment variable or a configured provider ref (`file` or
    `exec`), with a fast preflight check before saving. After model/auth setup,
    the wizard offers an optional live completion test; a failure can return to
    model/auth setup once or be ignored without blocking the rest of the
-   classic wizard. Ignoring it does not unlock Crestodian; conversational setup
+   classic wizard. Ignoring it does not unlock OpenClaw; conversational setup
    still requires a passing inference check.
 2. **Workspace** - directory for agent files (default `~/.openclaw/workspace`). Seeds bootstrap files.
 3. **Gateway** - port, bind address, auth mode, Tailscale exposure. In
@@ -178,8 +201,8 @@ config is invalid or contains legacy keys, onboarding asks you to run
 `--flow import` runs a detected migration flow (for example Hermes) in the
 classic wizard instead of fresh setup; see [Migrate](/cli/migrate) and the migration guides under
 [Install](/install/migrating-hermes). `openclaw onboard --modern` is a
-compatibility alias for [Crestodian](/cli/crestodian). It uses the same
-inference gate as `openclaw crestodian`: verified inference starts the
+compatibility alias for [OpenClaw](/cli/openclaw). It uses the same
+inference gate as `openclaw setup`: verified inference starts the
 assistant, while an interactive failure returns to guided inference setup.
 
 ## Add another agent
@@ -191,9 +214,9 @@ not the full `openclaw onboard` wizard.
 
 What it sets:
 
-- `agents.list[].name`
-- `agents.list[].workspace`
-- `agents.list[].agentDir`
+- `agents.entries.*.name`
+- `agents.entries.*.workspace`
+- `agents.entries.*.agentDir`
 
 Notes:
 

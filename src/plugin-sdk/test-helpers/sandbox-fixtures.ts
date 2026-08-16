@@ -19,7 +19,7 @@ export function createSandboxBrowserConfig(
     vncPort: 5900,
     noVncPort: 6080,
     headless: true,
-    enableNoVnc: false,
+    noVncEnabled: false,
     allowHostControl: false,
     autoStart: false,
     autoStartTimeoutMs: 1000,

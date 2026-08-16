@@ -1,7 +1,9 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 // Defines shared TUI state, backend, and event types.
+import type { SessionProjectionState } from "../../packages/gateway-client/src/session-projection.js";
 import type { SessionGoal } from "../config/sessions/types.js";
 import type { GatewayAgentRuntime } from "../shared/session-types.js";
+import type { TuiPendingSubmit } from "./tui-submit-state.js";
 
 export type TuiOptions = {
   local?: boolean;
@@ -22,11 +24,11 @@ export type TuiOptions = {
   forceProcessExitOnReturn?: boolean;
 };
 
-type TuiExitReason = "exit" | "return-to-crestodian";
+type TuiExitReason = "exit" | "return-to-system-agent";
 
 export type TuiResult = {
   exitReason: TuiExitReason;
-  crestodianMessage?: string;
+  systemAgentMessage?: string;
 };
 
 export type TuiHistoryLoadResult =
@@ -37,6 +39,7 @@ export type ChatEvent = {
   runId: string;
   sessionKey: string;
   agentId?: string;
+  seq?: number;
   state: "delta" | "final" | "aborted" | "error";
   message?: unknown;
   errorMessage?: string;
@@ -60,8 +63,20 @@ export type SessionChangedEvent = {
   reason?: string;
   phase?: string;
   runId?: string;
+  clientRunId?: string;
   sessionId?: string;
   updatedAt?: number | null;
+};
+
+export type SessionMessageEvent = {
+  sessionKey?: string;
+  agentId?: string;
+  sessionId?: string;
+  updatedAt?: number | null;
+  clientRunId?: string;
+  message?: unknown;
+  messageId?: string;
+  messageSeq?: number;
 };
 
 export type AgentEvent = {
@@ -109,6 +124,7 @@ export type SessionScope = "per-sender" | "global";
 
 export type AgentSummary = {
   id: string;
+  kind?: "agent" | "system";
   name?: string;
 };
 
@@ -167,10 +183,10 @@ export type TuiStateAccess = {
   currentAgentId: string;
   currentSessionKey: string;
   currentSessionId: string | null;
+  sessionGeneration?: number;
+  sessionProjection?: SessionProjectionState;
   activeChatRunId: string | null;
-  pendingOptimisticUserMessage?: boolean;
-  pendingChatRunId?: string | null;
-  pendingSubmitDraft?: { runId: string; text: string } | null;
+  pendingSubmit: TuiPendingSubmit | null;
   queuedMessages?: QueuedMessage[];
   historyLoaded: boolean;
   sessionInfo: SessionInfo;

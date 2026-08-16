@@ -96,10 +96,10 @@ const TEST_EXEC_DEFAULTS = {
   ask: "off" as const,
 };
 
-let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
+let createExecTool: typeof import("./bash-tools.exec-run.js").createExecTool;
 let getFinishedSession: typeof import("./bash-process-registry.js").getFinishedSession;
 let getSession: typeof import("./bash-process-registry.js").getSession;
-let resetProcessRegistryForTests: typeof import("./bash-process-registry.js").resetProcessRegistryForTests;
+let resetProcessRegistryForTests: typeof import("./bash-process-registry.test-support.js").resetProcessRegistryForTests;
 type ExecToolExecuteParams = Parameters<ReturnType<typeof createExecTool>["execute"]>[1];
 
 const createTestExecTool = (
@@ -107,9 +107,9 @@ const createTestExecTool = (
 ): ReturnType<typeof createExecTool> => createExecTool({ ...TEST_EXEC_DEFAULTS, ...defaults });
 
 beforeAll(async () => {
-  ({ createExecTool } = await import("./bash-tools.exec.js"));
-  ({ getFinishedSession, getSession, resetProcessRegistryForTests } =
-    await import("./bash-process-registry.js"));
+  ({ createExecTool } = await import("./bash-tools.exec-run.js"));
+  ({ getFinishedSession, getSession } = await import("./bash-process-registry.js"));
+  ({ resetProcessRegistryForTests } = await import("./bash-process-registry.test-support.js"));
 });
 
 beforeEach(() => {
@@ -232,7 +232,7 @@ test("background exec still times out after tool signal abort", async () => {
     executeParams: {
       command: BACKGROUND_HOLD_CMD,
       background: true,
-      timeout: BACKGROUND_TIMEOUT_SEC,
+      timeoutSeconds: BACKGROUND_TIMEOUT_SEC,
     },
     abortAfterStart: true,
     expectedTimeoutSec: BACKGROUND_TIMEOUT_SEC,
@@ -261,7 +261,7 @@ test("background exec with timeout zero bypasses default timeout", async () => {
   const result = await tool.execute("toolcall", {
     command: BACKGROUND_HOLD_CMD,
     background: true,
-    timeout: 0,
+    timeoutSeconds: 0,
   });
   expect(result.details.status).toBe("running");
   const sessionId = (result.details as { sessionId: string }).sessionId;
@@ -279,7 +279,7 @@ test("yielded background exec still times out", async () => {
     executeParams: {
       command: BACKGROUND_HOLD_CMD,
       yieldMs: 5,
-      timeout: YIELDED_BACKGROUND_TIMEOUT_SEC,
+      timeoutSeconds: YIELDED_BACKGROUND_TIMEOUT_SEC,
     },
     expectedTimeoutSec: YIELDED_BACKGROUND_TIMEOUT_SEC,
   });

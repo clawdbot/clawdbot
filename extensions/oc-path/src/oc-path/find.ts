@@ -827,3 +827,4 @@ function jsoncChildFieldText(node: JsoncValue, key: string): string | null {
   }
   return null;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

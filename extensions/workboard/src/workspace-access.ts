@@ -1,3 +1,4 @@
+import type { WorkboardWorkspace, WorkboardWorkspaceAccess } from "@openclaw/workboard-contract";
 // Workboard workspace access follows the caller's canonical filesystem boundary.
 import {
   listAgentIds,
@@ -14,9 +15,9 @@ import {
   canonicalPathFromExistingAncestor,
   isPathInside,
 } from "openclaw/plugin-sdk/security-runtime";
-import type { WorkboardWorkspace, WorkboardWorkspaceAccess } from "./types.js";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export type { WorkboardWorkspaceAccess } from "./types.js";
+export type { WorkboardWorkspaceAccess } from "@openclaw/workboard-contract";
 
 type WorkboardConfig = NonNullable<OpenClawPluginToolContext["config"]>;
 type ResolveSandboxWorkspaceAuthority =
@@ -59,9 +60,10 @@ export const WORKBOARD_TOOL_NAMES = [
   "workboard_worker_log",
   "workboard_protocol_violation",
   "workboard_unblock",
+  "workboard_move",
 ] as const;
 
-const WORKBOARD_REQUIRED_WORKER_TOOLS = [
+export const WORKBOARD_REQUIRED_WORKER_TOOLS = [
   "workboard_heartbeat",
   "workboard_complete",
   "workboard_block",
@@ -301,14 +303,8 @@ async function assertWorkspaceAllowed(
   return undefined;
 }
 
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 export function containsWorkboardWorkspaceMutation(value: unknown): boolean {
-  const record = readRecord(value);
+  const record = asOptionalRecord(value);
   if (!record) {
     return false;
   }
@@ -317,7 +313,7 @@ export function containsWorkboardWorkspaceMutation(value: unknown): boolean {
   }
   return (
     containsWorkboardWorkspaceMutation(record.patch) ||
-    containsWorkboardWorkspaceMutation(readRecord(record.metadata)?.automation) ||
+    containsWorkboardWorkspaceMutation(asOptionalRecord(record.metadata)?.automation) ||
     (Array.isArray(record.children) &&
       record.children.some((child) => containsWorkboardWorkspaceMutation(child)))
   );
@@ -331,7 +327,7 @@ export function withWorkboardWorkspaceAccess(
 }
 
 export function withoutWorkboardWorkspaceAccess(value: unknown): Record<string, unknown> {
-  const record = readRecord(value) ?? {};
+  const record = asOptionalRecord(value) ?? {};
   const { workspaceAccess: _untrustedWorkspaceAccess, ...rest } = record;
   return rest;
 }
@@ -358,7 +354,7 @@ export async function assertWorkboardWorkspaceMutationAccess(
   if (access.unrestricted) {
     return;
   }
-  const record = readRecord(value);
+  const record = asOptionalRecord(value);
   if (!record) {
     return;
   }
@@ -367,12 +363,12 @@ export async function assertWorkboardWorkspaceMutationAccess(
   await assertWorkspaceAllowed(record.workspace, access);
   await assertWorkspaceAllowed(record.defaultWorkspace, access);
 
-  const patch = readRecord(record.patch);
+  const patch = asOptionalRecord(record.patch);
   if (patch) {
     await assertWorkboardWorkspaceMutationAccess(patch, access);
   }
-  const metadata = readRecord(record.metadata);
-  const automation = readRecord(metadata?.automation);
+  const metadata = asOptionalRecord(record.metadata);
+  const automation = asOptionalRecord(metadata?.automation);
   if (automation) {
     await assertWorkboardWorkspaceMutationAccess(automation, access);
   }

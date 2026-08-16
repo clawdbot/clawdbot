@@ -5,9 +5,9 @@ scenario:
   surface: config
   coverage:
     primary:
-      - config.hot-apply
+      - gateway.config-reload-hot-apply
     secondary:
-      - plugins.skills
+      - plugins.activation-skills
   objective: Verify config.patch can disable a workspace skill and the restarted gateway exposes the new disabled state cleanly.
   successCriteria:
     - config.patch succeeds for the skill toggle change.

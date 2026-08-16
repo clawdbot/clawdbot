@@ -1,33 +1,24 @@
-// Bounded terminal scrollback storage shared by session lifecycle operations.
+import { BoundedBuffer } from "../../shared/bounded-buffer.js";
+
 /**
- * Raw output, not a screen snapshot: head truncation can start replay mid-escape,
- * and the emulator recovers on its next full repaint.
+ * Last `cap` chars of `chunk`, nudged forward one unit when the cut would land
+ * mid-surrogate-pair: a replayed lone surrogate is permanent mojibake, unlike a
+ * mid-escape cut the emulator repaints over.
  */
-export class TerminalOutputRing {
-  private chunks: string[] = [];
-  private total = 0;
+export function surrogateSafeTail(chunk: string, cap: number): string {
+  const start = chunk.length - cap;
+  const splitsPair =
+    start > 0 && /[\uD800-\uDBFF][\uDC00-\uDFFF]/.test(chunk.slice(start - 1, start + 1));
+  return chunk.slice(splitsPair ? start + 1 : start);
+}
 
-  constructor(private readonly cap: number) {}
-
-  push(chunk: string): void {
-    if (chunk.length >= this.cap) {
-      this.chunks = [chunk.slice(chunk.length - this.cap)];
-      this.total = this.cap;
-      return;
-    }
-    this.chunks.push(chunk);
-    this.total += chunk.length;
-    // Evict whole PTY writes so surviving data keeps its original boundaries.
-    while (this.total > this.cap && this.chunks.length > 1) {
-      const head = this.chunks.shift();
-      if (!head) {
-        break;
-      }
-      this.total -= head.length;
-    }
+/** Raw output may start mid-escape after whole-write eviction; repaint recovers. */
+export class TerminalOutputRing extends BoundedBuffer<string> {
+  constructor(cap: number) {
+    super(cap, { mode: "drop-oldest", fit: surrogateSafeTail }, (chunk) => chunk.length);
   }
 
   snapshot(): string {
-    return this.chunks.join("");
+    return this.values.join("");
   }
 }

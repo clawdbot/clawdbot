@@ -1,10 +1,12 @@
 // File lock helpers serialize plugin writes that share a filesystem-backed state file.
 import "../infra/fs-safe-defaults.js";
+import fs from "node:fs/promises";
 import {
   acquireFileLock as acquireFsSafeFileLock,
   drainFileLockManagerForTest,
   resetFileLockManagerForTest,
 } from "@openclaw/fs-safe/file-lock";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   isLockOwnerDefinitelyStale,
   shouldRemoveDeadOwnerOrExpiredLock,
@@ -13,7 +15,7 @@ import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 
 /** Retry and stale-recovery policy for acquiring a filesystem lock. */
 export type FileLockOptions = {
-  /** Retry policy used while waiting for another process or re-entrant holder to release. */
+  /** Retry policy used while waiting for another process or logical holder to release. */
   retries: {
     retries: number;
     factor: number;
@@ -25,6 +27,11 @@ export type FileLockOptions = {
   stale: number;
   /** Fail closed for security-sensitive state; generic locks retain shipped stale recovery. */
   staleRecovery?: "fail-closed" | "remove-if-unchanged";
+  /**
+   * Logical operation identity for intentional nested acquisition.
+   * Reuse one key only within that call chain; omit it for ordinary contention.
+   */
+  reentrantOwner?: string;
 };
 
 /** Live file-lock handle returned after successful acquisition. */
@@ -57,6 +64,7 @@ export type FileLockStaleError = Error & {
 };
 
 const FILE_LOCK_MANAGER_KEY = "openclaw.plugin-sdk.file-lock";
+const STALE_FILE_LOCK_RECLAIM_MANAGER_KEY = "openclaw.plugin-sdk.stale-file-lock-reclaim";
 let currentProcessStartTime: number | null | undefined;
 
 function getCurrentProcessStartTime(): number | null {
@@ -64,6 +72,55 @@ function getCurrentProcessStartTime(): number | null {
     currentProcessStartTime = getFileLockProcessStartTime(process.pid);
   }
   return currentProcessStartTime;
+}
+
+function createCurrentProcessLockPayload(): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    pid: process.pid,
+    createdAt: new Date().toISOString(),
+  };
+  const starttime = getCurrentProcessStartTime();
+  if (starttime !== null) {
+    payload.starttime = starttime;
+  }
+  return payload;
+}
+
+function asLockPayload(payload: unknown): Record<string, unknown> | null {
+  return asNullableRecord(payload);
+}
+
+function sameStatValue(left: number | bigint, right: number | bigint): boolean {
+  return typeof left === typeof right ? left === right : BigInt(left) === BigInt(right);
+}
+
+function sameFileIdentity(
+  left: { dev: number | bigint; ino: number | bigint },
+  right: { dev: number | bigint; ino: number | bigint },
+): boolean {
+  if (!sameStatValue(left.ino, right.ino)) {
+    return false;
+  }
+  if (sameStatValue(left.dev, right.dev)) {
+    return true;
+  }
+  // Windows path stats may report dev=0 while fd stats know the volume id.
+  return (
+    process.platform === "win32" &&
+    (left.dev === 0 || left.dev === 0n || right.dev === 0 || right.dev === 0n)
+  );
+}
+
+async function isSameRegularFile(
+  filePath: string,
+  observed: { dev: number | bigint; ino: number | bigint },
+): Promise<boolean> {
+  try {
+    const current = await fs.lstat(filePath, { bigint: true });
+    return current.isFile() && sameFileIdentity(current, observed);
+  } catch {
+    return false;
+  }
 }
 
 function normalizeLockError(err: unknown): never {
@@ -92,7 +149,7 @@ export async function drainFileLockStateForTest(): Promise<void> {
   await drainFileLockManagerForTest(FILE_LOCK_MANAGER_KEY, FILE_LOCK_MANAGER_KEY);
 }
 
-/** Acquire a re-entrant process-local file lock backed by a `.lock` sidecar file. */
+/** Acquire an owner-scoped process-local file lock backed by a `.lock` sidecar file. */
 export async function acquireFileLock(
   filePath: string,
   options: FileLockOptions,
@@ -104,31 +161,21 @@ export async function acquireFileLock(
       staleMs: options.stale,
       retry: options.retries,
       staleRecovery,
-      allowReentrant: true,
-      payload: () => {
-        const payload: Record<string, unknown> = {
-          pid: process.pid,
-          createdAt: new Date().toISOString(),
-        };
-        const starttime = getCurrentProcessStartTime();
-        if (starttime !== null) {
-          payload.starttime = starttime;
-        }
-        return payload;
-      },
+      reentrantOwner: options.reentrantOwner,
+      payload: createCurrentProcessLockPayload,
       shouldReclaim: (params) =>
         staleRecovery === "fail-closed"
-          ? isLockOwnerDefinitelyStale({ payload: params.payload })
+          ? isLockOwnerDefinitelyStale({ payload: asLockPayload(params.payload) })
           : shouldRemoveDeadOwnerOrExpiredLock({
-              payload: params.payload,
+              payload: asLockPayload(params.payload),
               staleMs: params.staleMs,
               nowMs: params.nowMs,
             }),
       ...(staleRecovery === "remove-if-unchanged"
         ? {
-            shouldRemoveStaleLock: (snapshot: { payload: Record<string, unknown> | null }) =>
+            shouldRemoveStaleLock: (snapshot: { payload: unknown }) =>
               shouldRemoveDeadOwnerOrExpiredLock({
-                payload: snapshot.payload,
+                payload: asLockPayload(snapshot.payload),
                 staleMs: options.stale,
               }),
           }
@@ -137,6 +184,54 @@ export async function acquireFileLock(
     return { lockPath: lock.lockPath, release: lock.release };
   } catch (err) {
     return normalizeLockError(err);
+  }
+}
+
+/** Result of a doctor-owned attempt to remove one retired file-lock sidecar. */
+export type StaleFileLockReclaimResult = "missing" | "removed" | "retained";
+
+/** Remove one definitely stale, unchanged regular lock sidecar; retain every ambiguous owner. */
+export async function reclaimDefinitelyStaleFileLock(
+  lockPath: string,
+): Promise<StaleFileLockReclaimResult> {
+  let observed: { dev: number | bigint; ino: number | bigint; isFile: () => boolean };
+  try {
+    observed = await fs.lstat(lockPath, { bigint: true });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return "missing";
+    }
+    throw err;
+  }
+  if (!observed.isFile()) {
+    return "retained";
+  }
+
+  // Pin approval to the regular-file identity first observed. fs-safe then
+  // rechecks that identity and raw payload immediately before path removal.
+  const ownerIsDefinitelyStale = async (payload: unknown) =>
+    (await isSameRegularFile(lockPath, observed)) &&
+    isLockOwnerDefinitelyStale({ payload: asLockPayload(payload) });
+  const targetPath = lockPath.endsWith(".lock") ? lockPath.slice(0, -".lock".length) : lockPath;
+  try {
+    const reclaimed = await acquireFsSafeFileLock(targetPath, {
+      managerKey: STALE_FILE_LOCK_RECLAIM_MANAGER_KEY,
+      lockPath,
+      staleMs: 0,
+      retry: { retries: 0 },
+      staleRecovery: "remove-if-unchanged",
+      payload: createCurrentProcessLockPayload,
+      shouldReclaim: ({ payload }) => ownerIsDefinitelyStale(payload),
+      shouldRemoveStaleLock: ({ payload }) => ownerIsDefinitelyStale(payload),
+    });
+    await reclaimed.release();
+    return "removed";
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === FILE_LOCK_TIMEOUT_ERROR_CODE || code === FILE_LOCK_STALE_ERROR_CODE) {
+      return "retained";
+    }
+    throw err;
   }
 }
 

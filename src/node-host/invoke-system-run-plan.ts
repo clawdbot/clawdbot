@@ -15,11 +15,13 @@ import { resolveCommandResolutionFromArgv } from "../infra/exec-command-resoluti
 import { isInterpreterLikeSafeBin } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   isBlockedShellWrapperCommand,
+  POSIX_PARSEABLE_SHELL_WRAPPERS,
   POSIX_SHELL_WRAPPERS,
   normalizeExecutableToken,
   unwrapKnownDispatchWrapperInvocation,
   unwrapKnownShellMultiplexerInvocation,
 } from "../infra/exec-wrapper-resolution.js";
+import { readFileWindowFullySync } from "../infra/file-read.js";
 import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
 import { parseInlineOptionToken } from "../infra/inline-option-token.js";
 import {
@@ -175,7 +177,17 @@ const POSIX_SHELL_OPTIONS_WITH_VALUE = new Set([
   "+o",
 ]);
 
-const POSIX_SHELLS_WITH_PLUS_OPTIONS = new Set(["ash", "bash", "dash", "ksh", "sh", "zsh"]);
+const POSIX_SHELLS_WITH_PLUS_OPTIONS = new Set([
+  "ash",
+  "bash",
+  "dash",
+  "ksh",
+  "mksh",
+  "osh",
+  "sh",
+  "yash",
+  "zsh",
+]);
 
 function isPosixShellOptionToken(token: string, supportsPlusOptions: boolean): boolean {
   return token.startsWith("-") || (supportsPlusOptions && token.startsWith("+"));
@@ -337,7 +349,7 @@ function isLikelyScriptLikePathSync(targetPath: string): boolean {
     const fd = fs.openSync(targetPath, "r");
     try {
       header = Buffer.alloc(1024);
-      const bytesRead = fs.readSync(fd, header, 0, header.length, 0);
+      const bytesRead = readFileWindowFullySync(fd, header, 0);
       header = header.subarray(0, bytesRead);
     } finally {
       fs.closeSync(fd);
@@ -683,6 +695,9 @@ function resolveMutableFileOperandIndex(argv: string[], cwd: string | undefined)
     return null;
   }
   if ((POSIX_SHELL_WRAPPERS as ReadonlySet<string>).has(executable)) {
+    if (!(POSIX_PARSEABLE_SHELL_WRAPPERS as ReadonlySet<string>).has(executable)) {
+      return null;
+    }
     const shellIndex = resolvePosixShellScriptOperandIndex(unwrapped.argv, executable);
     return shellIndex === null ? null : unwrapped.baseIndex + shellIndex;
   }
@@ -1174,3 +1189,4 @@ export function buildSystemRunApprovalPlan(params: {
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

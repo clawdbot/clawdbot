@@ -53,6 +53,7 @@ export interface HealthCheckContext {
   readonly mode: HealthCheckMode;
   readonly runtime: RuntimeEnv;
   readonly cfg: OpenClawConfig;
+  readonly env?: NodeJS.ProcessEnv;
   readonly cwd?: string;
   readonly configPath?: string;
   readonly allowExecSecretRefs?: boolean;

@@ -3,8 +3,10 @@ import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { formatConsoleDiagnosticLine } from "../logging/json-console-line.js";
 import { readPersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
-import type { PackageManifest } from "../plugins/manifest.js";
+import { resolvePackageExtensionEntries, type PackageManifest } from "../plugins/manifest.js";
 import { validatePackageExtensionEntriesForInstall } from "../plugins/package-entry-resolution.js";
 import {
   POST_UPGRADE_PROBE_CODES,
@@ -122,7 +124,11 @@ async function readInstalledPackageJson(
 ): Promise<PackageManifest> {
   const absPath = path.join(rootDir, packageJsonRelPath);
   const raw = await fs.readFile(absPath, "utf-8");
-  return JSON.parse(raw) as PackageManifest;
+  const parsed: unknown = JSON.parse(raw);
+  if (!isRecord(parsed)) {
+    throw new Error("package.json must contain a JSON object");
+  }
+  return parsed as PackageManifest;
 }
 
 async function resolvePackageJsonRelPath(
@@ -175,13 +181,31 @@ export async function runPostUpgradeProbes(params: {
       try {
         pkg = await readInstalledPackageJson(record.rootDir, pkgRelPath);
       } catch (err) {
-        process.stderr.write(
-          `[doctor-post-upgrade] could not read package.json for ${record.pluginId} at ${record.rootDir}: ${err instanceof Error ? err.message : String(err)}\n`,
-        );
+        const reason = err instanceof Error ? err.message : String(err);
+        const message = `[doctor-post-upgrade] could not read package.json for ${record.pluginId} at ${record.rootDir}: ${reason}`;
+        process.stderr.write(`${formatConsoleDiagnosticLine({ level: "warn", message })}\n`);
+        // A declared package is required to validate its runtime entry; logging
+        // alone otherwise makes a broken enabled plugin exit as healthy.
+        findings.push({
+          level: "error",
+          code: "plugin.entry_unresolved",
+          message: `Plugin ${record.pluginId}: could not read package.json (${pkgRelPath}): ${reason}. Reinstall the plugin or run \`openclaw plugins registry --refresh\`.`,
+          plugin: record.pluginId,
+          entry: pkgRelPath,
+        });
         continue;
       }
-      const entries = pkg.openclaw?.extensions ?? [];
-      if (entries.length > 0) {
+      const resolvedEntries = resolvePackageExtensionEntries(pkg);
+      if (resolvedEntries.status === "invalid") {
+        findings.push({
+          level: "error",
+          code: "plugin.entry_unresolved",
+          message: `Plugin ${record.pluginId}: ${resolvedEntries.error}. Reinstall the plugin or run \`openclaw plugins registry --refresh\`.`,
+          plugin: record.pluginId,
+          entry: pkgRelPath,
+        });
+      } else if (resolvedEntries.status === "ok") {
+        const entries = resolvedEntries.entries;
         // Delegate to the install-time resolver so the probe enforces the same
         // contract as plugin install/discovery: runtimeExtensions shape, plugin-root
         // boundary, and inferred-built-output / TypeScript-source-only handling.
