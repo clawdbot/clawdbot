@@ -3,7 +3,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { parseArgs as parseNodeArgs } from "node:util";
 import { z } from "zod";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
-import { execGhJson } from "./lib/plain-gh.mjs";
+import { execGhJson, workflowRunsApiArgs } from "./lib/plain-gh.mjs";
 
 const USAGE =
   "Usage: node scripts/watch-pr-ci.mjs <pr-number> <head-sha> [--repo owner/repo] [--after run-id] [--attach-timeout 900] [--timeout 3600] [--interval 120] [--completion rollup|ci-run]";
@@ -66,8 +66,11 @@ const RollupResponseSchema = z.object({
     repository: z.object({ pullRequest: RollupPageSchema.nullish() }).nullish(),
   }),
 });
-const RunListItemSchema = z.object({ databaseId: z.number(), createdAt: z.string() });
-const RunListSchema = validArray(RunListItemSchema).catch([]);
+const RunListItemSchema = z.object({ id: z.number(), created_at: z.string() });
+const RunListSchema = z
+  .object({ workflow_runs: validArray(RunListItemSchema) })
+  .transform((response) => response.workflow_runs)
+  .catch([]);
 const RunStatusSchema = z
   .object({ status: optionalString, conclusion: optionalNullable(z.string()) })
   .catch({});
@@ -298,24 +301,10 @@ const readPr = (pr: number, repo: string) =>
       GH_READ_OPTIONS,
     ),
   );
-export const buildFindRunArgs = (repo: string, sha: string) => [
-  "run",
-  "list",
-  "--repo",
-  repo,
-  "--commit",
-  sha,
-  "--workflow",
-  "ci.yml",
-  "--event",
-  "pull_request",
-  "--limit",
-  "1",
-  "--json",
-  "createdAt,databaseId",
-];
+export const buildFindRunArgs = (repo: string, sha: string) =>
+  workflowRunsApiArgs(repo, sha, "pull_request", 1);
 export const selectRunAfter = (runs: RunListItem[], after?: number) =>
-  runs.find((run) => after === undefined || run.databaseId > after);
+  runs.find((run) => after === undefined || run.id > after);
 const findRun = (repo: string, sha: string, after?: number) =>
   selectRunAfter(
     RunListSchema.parse(execGhJson(buildFindRunArgs(repo, sha), GH_READ_OPTIONS)),
@@ -492,15 +481,15 @@ async function main(argv = process.argv.slice(2)) {
         const candidate = findRun(args.repo, args.headSha, args.after);
         if (candidate) {
           const classification = classifyRunAttachment(
-            candidate.databaseId,
-            readRun(args.repo, candidate.databaseId),
+            candidate.id,
+            readRun(args.repo, candidate.id),
             args.after,
           );
           if (classification.attach) {
             if (classification.warning) {
               console.log(classification.warning);
             }
-            return { runId: candidate.databaseId };
+            return { runId: candidate.id };
           }
         }
       } catch (error) {

@@ -23,14 +23,14 @@ function createFakeGh() {
 set -euo pipefail
 printf '%s\\t%s\\n' "$(basename "$0")" "$*" >> "$OPENCLAW_TEST_GH_CALLS"
 case "$1 $2" in
-  "run list")
+  "api --method")
     if [ "\${OPENCLAW_TEST_GH_MODE:-}" = "pending-head-change" ]; then
-      printf '[]\\n'
+      printf '{"workflow_runs":[]}\\n'
     elif [ -e "$OPENCLAW_TEST_GH_SEEN_RUN_LIST" ]; then
-      printf '[{"databaseId":99,"url":"https://github.com/openclaw/openclaw/actions/runs/99","headSha":"%s","createdAt":"2026-01-01T00:00:00Z","status":"queued"}]\\n' "$OPENCLAW_TEST_HEAD_SHA"
+      printf '{"workflow_runs":[{"id":99,"html_url":"https://github.com/openclaw/openclaw/actions/runs/99","head_sha":"%s","created_at":"2026-01-01T00:00:00Z","status":"queued"}]}\\n' "$OPENCLAW_TEST_HEAD_SHA"
     else
       : > "$OPENCLAW_TEST_GH_SEEN_RUN_LIST"
-      printf '[]\\n'
+      printf '{"workflow_runs":[]}\\n'
     fi
     ;;
   "pr view")
@@ -128,9 +128,11 @@ describePosix("scripts/pr ci-dispatch", () => {
     expect(callLines).toContain(
       `real-gh\tworkflow run ci.yml --ref contributor/fix-hosted-gates -f target_ref=${sha} -f release_gate=true -f pull_request_number=12345`,
     );
-    expect(callLines.some((call) => call.startsWith(`gh\trun list --commit ${sha}`))).toBe(true);
+    expect(callLines).toContain(
+      `gh\tapi --method GET repos/openclaw/openclaw/actions/workflows/ci.yml/runs -f event=workflow_dispatch -f head_sha=${sha} -f per_page=20`,
+    );
     expect(callLines.some((call) => call.startsWith("gh\tpr view 12345"))).toBe(true);
-    expect(callLines.some((call) => /^real-gh\t(?:run list|pr view)/u.test(call))).toBe(false);
+    expect(callLines.some((call) => /^real-gh\t(?:api|pr view)/u.test(call))).toBe(false);
   });
 
   it("refuses a fork-local branch name before invoking GitHub", () => {

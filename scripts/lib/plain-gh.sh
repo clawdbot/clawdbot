@@ -73,8 +73,22 @@ plain_gh_search_path() {
   printf '%s\n' "$output"
 }
 
+bridge_plain_gh_auth() {
+  if [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; then
+    return 0
+  fi
+
+  local gh_path
+  local token
+  gh_path=$(type -P gh 2>/dev/null) || return 0
+  if token=$(plain_gh_env "$gh_path" auth token 2>/dev/null) && [ -n "$token" ]; then
+    export GH_TOKEN="$token"
+  fi
+}
+
 gh_plain() {
   local gh_bin
   gh_bin=$(resolve_plain_gh_bin) || return 1
+  bridge_plain_gh_auth
   plain_gh_env "$gh_bin" "$@"
 }

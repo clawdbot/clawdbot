@@ -187,6 +187,28 @@ export function execGhJson(args, options = {}, params = {}) {
 }
 
 /**
+ * @param {string} repo
+ * @param {string} sha
+ * @param {string} event
+ * @param {number} perPage
+ * @returns {string[]}
+ */
+export function workflowRunsApiArgs(repo, sha, event, perPage) {
+  return [
+    "api",
+    "--method",
+    "GET",
+    `repos/${repo}/actions/workflows/ci.yml/runs`,
+    "-f",
+    `event=${event}`,
+    "-f",
+    `head_sha=${sha}`,
+    "-f",
+    `per_page=${perPage}`,
+  ];
+}
+
+/**
  * @overload
  * @param {string} endpoint
  * @param {ExecFileSyncOptionsWithStringEncoding} options
