@@ -13,7 +13,6 @@ import { compareValidSemver, normalizeLegacyDotBetaVersion } from "./semver.js";
 import {
   channelToNpmTag,
   DEV_BRANCH,
-  resolveDevUpstreamFetchArgs,
   resolveDevUpstreamRefs,
   type UpdateChannel,
 } from "./update-channels.js";
@@ -38,6 +37,12 @@ type GitUpdateStatus = {
   behind: number | null;
   fetchOk: boolean | null;
   error?: string;
+};
+
+type GitTrackingTarget = {
+  revision: string;
+  display: string;
+  fetch: "prune" | { remote: string; mergeRef: string };
 };
 
 type DepsStatus = {
@@ -242,6 +247,10 @@ async function checkGitUpdateStatus(params: {
   const root = path.resolve(params.root);
   const runGit = (...args: string[]) =>
     runCommandWithTimeout(["git", "-C", root, ...args], { timeoutMs }).catch(() => null);
+  const readGit = async (...args: string[]) => {
+    const result = await runGit(...args);
+    return result?.code === 0 ? result.stdout.trim() || null : null;
+  };
 
   const base: GitUpdateStatus = {
     root,
@@ -257,11 +266,11 @@ async function checkGitUpdateStatus(params: {
     fetchOk: null,
   };
 
-  const [branchRes, shaRes, commitAtRes, tagRes, dirtyRes] = await Promise.all([
+  const [branchRes, sha, commitAtRaw, tag, dirtyRes] = await Promise.all([
     runGit("rev-parse", "--abbrev-ref", "HEAD"),
-    runGit("rev-parse", "HEAD"),
-    runGit("show", "-s", "--format=%ct", "HEAD"),
-    runGit("describe", "--tags", "--exact-match"),
+    readGit("rev-parse", "HEAD"),
+    readGit("show", "-s", "--format=%ct", "HEAD"),
+    readGit("describe", "--tags", "--exact-match"),
     runGit("status", "--porcelain", "--", ":!dist/control-ui/"),
   ]);
   if (!branchRes || branchRes.code !== 0) {
@@ -274,34 +283,43 @@ async function checkGitUpdateStatus(params: {
         ? resolveDevUpstreamRefs(true, [`refs/remotes/origin/${DEV_BRANCH}`])
         : []
       : resolveDevUpstreamRefs(false);
-  let trackingRevision: string | null = null;
-  let trackingUpstream: string | null = null;
+  let tracking: GitTrackingTarget | null = null;
   for (const revision of trackingRevisions) {
-    const result = await runGit("rev-parse", "--abbrev-ref", "--symbolic-full-name", revision);
-    const resolved = result?.code === 0 ? result.stdout.trim() || null : null;
-    if (resolved) {
-      trackingRevision = revision;
-      trackingUpstream = resolved;
-      break;
+    const display = await readGit("rev-parse", "--abbrev-ref", "--symbolic-full-name", revision);
+    if (!display) {
+      continue;
     }
+    let fetch: GitTrackingTarget["fetch"] = "prune";
+    if (branch === "HEAD") {
+      if (revision === `${DEV_BRANCH}@{upstream}`) {
+        const [remote, mergeRef] = await Promise.all([
+          readGit("config", "--get", `branch.${DEV_BRANCH}.remote`),
+          readGit("config", "--get", `branch.${DEV_BRANCH}.merge`),
+        ]);
+        if (!remote || !mergeRef) {
+          continue;
+        }
+        fetch = { remote, mergeRef };
+      } else {
+        fetch = { remote: "origin", mergeRef: `refs/heads/${DEV_BRANCH}` };
+      }
+    }
+    tracking = { revision, display, fetch };
+    break;
   }
 
-  const sha = shaRes && shaRes.code === 0 ? shaRes.stdout.trim() : null;
-  const commitAtSeconds =
-    commitAtRes?.code === 0 ? Number.parseInt(commitAtRes.stdout.trim(), 10) : Number.NaN;
+  const commitAtSeconds = Number.parseInt(commitAtRaw ?? "", 10);
   const commitAtMs = Number.isSafeInteger(commitAtSeconds) ? commitAtSeconds * 1000 : null;
 
-  const tag = tagRes && tagRes.code === 0 ? tagRes.stdout.trim() : null;
-
   const receiptUpstream =
-    !trackingUpstream &&
+    !tracking &&
     branch === "HEAD" &&
     sha &&
     params.upstreamFallback?.currentSha.trim().toLowerCase() === sha.toLowerCase()
       ? params.upstreamFallback.upstreamRef.trim() || null
       : null;
-  const upstream = trackingUpstream ?? receiptUpstream;
-  const upstreamSource = trackingUpstream
+  const upstream = tracking?.display ?? receiptUpstream;
+  const upstreamSource = tracking
     ? ("tracking" as const)
     : receiptUpstream
       ? ("receipt" as const)
@@ -310,8 +328,12 @@ async function checkGitUpdateStatus(params: {
   const dirty = dirtyRes && dirtyRes.code === 0 ? dirtyRes.stdout.trim().length > 0 : null;
 
   const fetchTarget =
-    branch === "HEAD" && trackingUpstream
-      ? resolveDevUpstreamFetchArgs(trackingUpstream)
+    tracking?.fetch && tracking.fetch !== "prune"
+      ? [
+          "--",
+          tracking.fetch.remote,
+          `+${tracking.fetch.mergeRef}:refs/remotes/${tracking.display}`,
+        ]
       : ["--prune"];
   const fetchOk = params.fetch
     ? (await runGit("fetch", "--quiet", ...fetchTarget))?.code === 0
@@ -319,32 +341,18 @@ async function checkGitUpdateStatus(params: {
 
   // Freeze the post-fetch upstream for both graph queries. Active tracking wins;
   // a matching successful update receipt keeps intentional detached installs comparable.
-  const upstreamRevision = `${upstreamSource === "tracking" ? trackingRevision : upstream}^{commit}`;
-  const upstreamCommitRes =
-    (!params.fetch || fetchOk === true) && upstream && sha
-      ? await runGit("rev-parse", "--verify", upstreamRevision)
-      : null;
+  const upstreamRevision = `${upstreamSource === "tracking" ? tracking?.revision : upstream}^{commit}`;
   const upstreamCommit =
-    upstreamCommitRes?.code === 0 ? upstreamCommitRes.stdout.trim() || null : null;
-  const mergeBase = sha && upstreamCommit ? await runGit("merge-base", sha, upstreamCommit) : null;
+    (!params.fetch || fetchOk === true) && upstream && sha
+      ? await readGit("rev-parse", "--verify", upstreamRevision)
+      : null;
+  const mergeBase = sha && upstreamCommit ? await readGit("merge-base", sha, upstreamCommit) : null;
   const counts =
-    sha && upstreamCommit && mergeBase?.code === 0 && mergeBase.stdout.trim().length > 0
-      ? await runGit("rev-list", "--left-right", "--count", `${sha}...${upstreamCommit}`)
+    sha && upstreamCommit && mergeBase
+      ? await readGit("rev-list", "--left-right", "--count", `${sha}...${upstreamCommit}`)
       : null;
 
-  const parseCounts = (raw: string): { ahead: number; behind: number } | null => {
-    const parts = raw.trim().split(/\s+/);
-    if (parts.length < 2) {
-      return null;
-    }
-    const ahead = Number.parseInt(parts[0] ?? "", 10);
-    const behind = Number.parseInt(parts[1] ?? "", 10);
-    if (!Number.isFinite(ahead) || !Number.isFinite(behind)) {
-      return null;
-    }
-    return { ahead, behind };
-  };
-  const parsed = counts && counts.code === 0 ? parseCounts(counts.stdout) : null;
+  const parsed = counts?.match(/^(\d+)\s+(\d+)$/u);
 
   return {
     root,
@@ -356,8 +364,8 @@ async function checkGitUpdateStatus(params: {
     upstreamSha: upstreamCommit,
     commitAtMs,
     dirty,
-    ahead: parsed?.ahead ?? null,
-    behind: parsed?.behind ?? null,
+    ahead: parsed ? Number(parsed[1]) : null,
+    behind: parsed ? Number(parsed[2]) : null,
     fetchOk,
   };
 }

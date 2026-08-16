@@ -33,16 +33,6 @@ export function resolveDevUpstreamRefs(
   return detached ? [`${DEV_BRANCH}@{upstream}`, ...fallbacks] : ["@{upstream}"];
 }
 
-/** Builds an exact fetch from Git's normalized `<remote>/<branch>` tracking name. */
-export function resolveDevUpstreamFetchArgs(upstream: string): string[] {
-  const separator = upstream.indexOf("/");
-  return [
-    "--",
-    upstream.slice(0, separator),
-    `+refs/heads/${upstream.slice(separator + 1)}:refs/remotes/${upstream}`,
-  ];
-}
-
 /** Normalizes config or CLI channel input to a supported update channel. */
 export function normalizeUpdateChannel(value?: string | null): UpdateChannel | null {
   const normalized = normalizeOptionalLowercaseString(value);

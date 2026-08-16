@@ -32,6 +32,43 @@ afterEach(() => {
 });
 
 describe("checkUpdateStatus", () => {
+  it("fetches a retained main upstream whose remote nickname contains a slash", async () => {
+    await withTestDir({ prefix: "openclaw-update-check-slash-remote-" }, async (base) => {
+      const sourceRoot = path.join(base, "source");
+      const localRoot = path.join(base, "local");
+      await initGitRepo(sourceRoot);
+      await commitGit(sourceRoot, "base");
+      await runGit(base, "clone", "--quiet", sourceRoot, localRoot);
+      const detachedSha = await runGit(localRoot, "rev-parse", "HEAD");
+      await runGit(localRoot, "remote", "add", "foo/bar", sourceRoot);
+      await runGit(localRoot, "fetch", "foo/bar", "+refs/heads/main:refs/remotes/foo/bar/main");
+      await runGit(localRoot, "branch", "--set-upstream-to=foo/bar/main", "main");
+      await runGit(localRoot, "checkout", "--detach", detachedSha);
+      await runGit(localRoot, "remote", "set-url", "origin", path.join(base, "missing"));
+      await commitGit(sourceRoot, "newer");
+      const upstreamSha = await runGit(sourceRoot, "rev-parse", "HEAD");
+
+      const status = await checkUpdateStatus({
+        root: localRoot,
+        includeRegistry: false,
+        fetchGit: true,
+        timeoutMs: 5000,
+        useDetachedDevUpstream: true,
+      });
+
+      expect(status.git).toMatchObject({
+        branch: "HEAD",
+        sha: detachedSha,
+        upstream: "foo/bar/main",
+        upstreamSource: "tracking",
+        upstreamSha,
+        ahead: 0,
+        behind: 1,
+        fetchOk: true,
+      });
+    });
+  });
+
   it("prefers a retained main branch's configured non-origin upstream", async () => {
     await withTestDir({ prefix: "openclaw-update-check-configured-upstream-" }, async (base) => {
       const sourceRoot = path.join(base, "source");
