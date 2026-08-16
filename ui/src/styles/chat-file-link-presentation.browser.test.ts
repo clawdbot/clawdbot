@@ -87,6 +87,22 @@ const SEPARATION_CASES = [
     line: undefined,
   },
   { filePath: LONG_CHIP_PATH, id: "sep-path-with-line", label: LONG_CHIP_PATH, line: 182 },
+  // Far wider than any column below, so the label must wrap several times: the
+  // first cut has to land inside the label, never between glyph and first char.
+  {
+    filePath: `${"abcdefghij".repeat(24)}.ts`,
+    id: "sep-enormous",
+    label: `${"abcdefghij".repeat(24)}.ts`,
+    line: 7,
+  },
+  // Non-ASCII labels reach the chip through host-local hrefs, so the glyph has
+  // to stay attached to a first character the shortener never produced.
+  {
+    filePath: "~/repo/docs/spec.md",
+    id: "sep-cjk",
+    label: "文档/会话传输封装规范化适配器/协议架构第十七版/规范化器.ts",
+    line: 88,
+  },
 ] as const;
 
 function wrapFixtureDocument(themeMode: "dark" | "light"): string {
