@@ -21,11 +21,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
 import { getActiveCronJobCount } from "../cron/active-jobs.js";
 import {
-  listDevicePairing,
-  resolveEffectiveOperatorDeviceIdentity,
-  type EffectiveOperatorDeviceIdentity,
-} from "../infra/device-pairing.js";
-import {
   isDiagnosticsEnabled,
   setDiagnosticsEnabledForProcess,
 } from "../infra/diagnostic-events.js";
@@ -42,7 +37,6 @@ import { completePluginMetadataSnapshot } from "../plugins/plugin-metadata-snaps
 import { getTotalQueueSize } from "../process/command-queue.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
@@ -244,64 +238,6 @@ export async function prepareGatewayServerBootstrap(input: {
   );
   const cfgAtStart = authBootstrap.cfg;
   startupTrace.setConfig(cfgAtStart);
-  const {
-    claimControlUiDeviceAuthMigration,
-    completeControlUiDeviceAuthMigration,
-    importPendingControlUiDeviceAuthMigration,
-    isLegacyControlUiDeviceAuthMigrationInput,
-    readControlUiDeviceAuthMigrationState,
-    recoverControlUiDeviceAuthMigrationClaim,
-    releaseControlUiDeviceAuthMigrationClaim,
-  } = await import("../state/control-ui-device-auth-migration.js");
-  const legacyControlUiDeviceAuthBypass = isLegacyControlUiDeviceAuthMigrationInput({
-    disabledDeviceAuth: cfgAtStart.gateway?.controlUi?.dangerouslyDisableDeviceAuth === true,
-    lastTouchedVersion: cfgAtStart.meta?.lastTouchedVersion,
-  });
-  let controlUiDeviceAuthMigrationState = legacyControlUiDeviceAuthBypass
-    ? importPendingControlUiDeviceAuthMigration({ env: process.env })
-    : readControlUiDeviceAuthMigrationState({ env: process.env });
-  if (
-    controlUiDeviceAuthMigrationState?.status === "pending" &&
-    controlUiDeviceAuthMigrationState.claimedDeviceId
-  ) {
-    // A process crash between claim and approval must not strand the upgrade.
-    controlUiDeviceAuthMigrationState = recoverControlUiDeviceAuthMigrationClaim({
-      env: process.env,
-    });
-  }
-  if (controlUiDeviceAuthMigrationState?.status === "pending") {
-    const existingOperator = (await listDevicePairing()).paired
-      .map(resolveEffectiveOperatorDeviceIdentity)
-      .find(
-        (device): device is EffectiveOperatorDeviceIdentity =>
-          device !== null &&
-          roleScopesAllow({
-            role: "operator",
-            requestedScopes: ["operator.pairing"],
-            allowedScopes: device.scopes,
-          }),
-      );
-    if (existingOperator) {
-      try {
-        controlUiDeviceAuthMigrationState = completeControlUiDeviceAuthMigration(
-          existingOperator.deviceId,
-          { env: process.env },
-        );
-      } catch (error) {
-        log.warn(
-          `failed to reconcile Control UI device-auth migration with existing operator: ${String(error)}`,
-        );
-      }
-    }
-  }
-  const controlUiDeviceAuthMigration = {
-    pending: controlUiDeviceAuthMigrationState?.status === "pending",
-  };
-  if (controlUiDeviceAuthMigration.pending) {
-    log.warn(
-      "Retired gateway.controlUi.dangerouslyDisableDeviceAuth config detected. Authenticated Control UI access remains available for pairing-only remediation; reopen the Control UI over HTTPS or localhost, then click Secure this browser.",
-    );
-  }
   if (authBootstrap.generatedToken) {
     log.warn(formatRuntimeGatewayAuthTokenWarning());
   }
@@ -567,10 +503,6 @@ export async function prepareGatewayServerBootstrap(input: {
     startupRuntimeConfig,
     cfgAtStart,
     generatedStartupAuthToken: authBootstrap.generatedToken !== undefined,
-    claimControlUiDeviceAuthMigration,
-    completeControlUiDeviceAuthMigration,
-    releaseControlUiDeviceAuthMigrationClaim,
-    controlUiDeviceAuthMigration,
     resolvedStartupAuthOverride,
     startupTailscaleOverride,
     diagnosticsEnabled,

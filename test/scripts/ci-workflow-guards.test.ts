@@ -83,6 +83,9 @@ function readCiWorkflow() {
 function evaluateWorkflowExpression(
   expression: unknown,
   context: {
+    // Runner routing keys off contributor trust, so pull-request cases default
+    // to CONTRIBUTOR: same-repo PRs always come from someone with write access.
+    authorAssociation?: string;
     eventName: "pull_request" | "push" | "workflow_dispatch";
     headRepository?: string;
     matrix?: Record<string, unknown>;
@@ -103,17 +106,25 @@ function evaluateWorkflowExpression(
     throw new Error(`workflow expression has no body: ${expression}`);
   }
   return runInNewContext(source, {
+    // GitHub expression builtins the runner-routing clauses use.
+    contains: (haystack: unknown, needle: unknown) =>
+      Array.isArray(haystack)
+        ? haystack.includes(needle)
+        : String(haystack).includes(String(needle)),
+    fromJSON: (value: string) => JSON.parse(value) as unknown,
     github: {
       event_name: context.eventName,
       repository: context.repository,
       run_attempt: context.runAttempt,
-      event: context.headRepository
-        ? {
-            pull_request: {
-              head: { repo: { full_name: context.headRepository } },
-            },
-          }
-        : {},
+      event:
+        context.headRepository || context.eventName === "pull_request"
+          ? {
+              pull_request: {
+                author_association: context.authorAssociation ?? "CONTRIBUTOR",
+                head: { repo: { full_name: context.headRepository ?? context.repository } },
+              },
+            }
+          : {},
     },
     matrix: context.matrix ?? {},
     vars: {
@@ -2956,7 +2967,7 @@ NODE
     expect(source).toContain('task: useCompatibleAndroidCi ? "build-play-compat" : "build-play"');
     expect(androidJob.name).toBe("${{ matrix.check_name }}");
     expect(androidJob["runs-on"]).toBe(
-      "${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}",
+      "${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\",\"CONTRIBUTOR\"]'), github.event.pull_request.author_association)) && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}",
     );
     expect(runStep.env.CI_RUNNER_BACKEND).toContain(
       "vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1",
@@ -3121,14 +3132,29 @@ NODE
         }),
         jobName,
       ).toBe(evaluateWorkflowExpression(expression, canonicalPullRequest));
+      // Authors with no landed commit stay on free hosted infrastructure, so an
+      // unreviewed PR cannot spend Blacksmith capacity.
       expect(
         evaluateWorkflowExpression(expression, {
           ...canonicalPullRequest,
+          authorAssociation: "NONE",
           headRepository: "contributor/openclaw",
           runnerBackend: "hybrid",
         }),
-        jobName,
+        `${jobName}: untrusted fork`,
       ).toBe(hostedRunner);
+      // A fork PR from someone who already landed a commit routes exactly like a
+      // maintainer PR. Maintainers report CONTRIBUTOR here too (org membership is
+      // concealed), so this case also protects their own routing.
+      expect(
+        evaluateWorkflowExpression(expression, {
+          ...canonicalPullRequest,
+          authorAssociation: "CONTRIBUTOR",
+          headRepository: "contributor/openclaw",
+          runnerBackend: "hybrid",
+        }),
+        `${jobName}: returning-contributor fork`,
+      ).toBe(expectedHybridFirstAttemptRunners[jobName as keyof typeof expectedHostedRunners]);
     }
 
     const widenedHybridMatrixRows = [
@@ -3212,11 +3238,12 @@ NODE
       expect(
         evaluateWorkflowExpression(expression, {
           ...canonicalPullRequest,
+          authorAssociation: "NONE",
           headRepository: "contributor/openclaw",
           matrix,
           runnerBackend: "hybrid",
         }),
-        `${jobName}: fork pull request`,
+        `${jobName}: untrusted fork pull request`,
       ).toBe("ubuntu-24.04");
       expect(
         evaluateWorkflowExpression(expression, {
@@ -5920,50 +5947,30 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       }),
     );
 
-    const push = runCiManifestFixture({
-      bundledPlanner: true,
-      eventName: "push",
-    });
-    expect(push.status, push.output).toBe(0);
-    expect(
-      JSON.parse(
-        expectDefined(
-          push.outputs.checks_node_core_nondist_matrix,
-          "push node core nondist matrix output",
-        ),
-      ).include,
-    ).toContainEqual(
-      expect.objectContaining({
-        check_name: "bundled-node-plan",
-        env: {
-          OPENCLAW_CI_TEST_COMPACT_MODE: "push",
-          OPENCLAW_CI_TEST_RUNNER_BACKEND: "",
-        },
-      }),
-    );
-
-    const githubPush = runCiManifestFixture({
-      bundledPlanner: true,
-      eventName: "push",
-      runnerBackend: "github",
-    });
-    expect(githubPush.status, githubPush.output).toBe(0);
-    expect(
-      JSON.parse(
-        expectDefined(
-          githubPush.outputs.checks_node_core_nondist_matrix,
-          "GitHub-hosted push node core nondist matrix output",
-        ),
-      ).include,
-    ).toContainEqual(
-      expect.objectContaining({
-        check_name: "bundled-node-plan",
-        env: {
-          OPENCLAW_CI_TEST_COMPACT_MODE: "push",
-          OPENCLAW_CI_TEST_RUNNER_BACKEND: "github",
-        },
-      }),
-    );
+    for (const runnerBackend of [undefined, "github", "hybrid"] as const) {
+      const push = runCiManifestFixture({
+        bundledPlanner: true,
+        eventName: "push",
+        runnerBackend,
+      });
+      expect(push.status, push.output).toBe(0);
+      expect(
+        JSON.parse(
+          expectDefined(
+            push.outputs.checks_node_core_nondist_matrix,
+            `${runnerBackend ?? "default"} push node core nondist matrix output`,
+          ),
+        ).include,
+      ).toContainEqual(
+        expect.objectContaining({
+          check_name: "bundled-node-plan",
+          env: {
+            OPENCLAW_CI_TEST_COMPACT_MODE: "push",
+            OPENCLAW_CI_TEST_RUNNER_BACKEND: runnerBackend ?? "",
+          },
+        }),
+      );
+    }
 
     const changedPullRequest = runCiManifestFixture({
       bundledPlanner: true,
@@ -6414,7 +6421,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         setup: uiE2eSetup,
         blacksmithRunner: "blacksmith-8vcpu-ubuntu-2404",
         runsOn:
-          "${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}",
+          "${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\",\"CONTRIBUTOR\"]'), github.event.pull_request.author_association)) && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}",
       },
       {
         job: uiE2eRealGateway,
@@ -6423,7 +6430,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         setup: realGatewaySetup,
         blacksmithRunner: "blacksmith-16vcpu-ubuntu-2404",
         runsOn:
-          "${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}",
+          "${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\",\"CONTRIBUTOR\"]'), github.event.pull_request.author_association)) && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}",
       },
     ] as const;
     const routingScenarios = [
@@ -6470,8 +6477,22 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         expected: { blacksmith: false, dependencyCache: "false", useActionsCache: "true" },
       },
       {
-        name: "fork pull request",
+        // Runner routing follows contributor trust; the exact dependency cache
+        // stays fork-gated either way, so a fork never writes what main reads.
+        name: "fork pull request from returning contributor",
         context: {
+          authorAssociation: "CONTRIBUTOR",
+          eventName: "pull_request",
+          headRepository: "contributor/openclaw",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+        },
+        expected: { blacksmith: true, dependencyCache: "false", useActionsCache: "true" },
+      },
+      {
+        name: "fork pull request from unknown author",
+        context: {
+          authorAssociation: "NONE",
           eventName: "pull_request",
           headRepository: "contributor/openclaw",
           repository: "openclaw/openclaw",
@@ -6607,6 +6628,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(realGatewayRuns).toEqual([
       "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/mcp-app-conformance.e2e.test.ts",
       "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/control-ui-auth-transports.e2e.test.ts",
+      "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/logs-lifecycle.e2e.test.ts",
     ]);
     const realGatewayRunContract = realGatewayRuns.join("\n");
     expect(realGatewayRunContract).not.toContain("--retry");
@@ -6719,12 +6741,19 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(parityStep.run).not.toContain("pnpm apple:i18n:check");
   });
 
-  it("verifies built runtime artifacts with hosted-serial and Blacksmith-parallel modes", () => {
+  it("runs built runtime verifiers inside the artifact-check wave", () => {
     const workflow = readCiWorkflow();
-    const verifierStep = workflow.jobs["build-artifacts"].steps.find(
-      (step: WorkflowStep) => step.name === "Verify built runtime artifacts",
+    const steps = workflow.jobs["build-artifacts"].steps;
+    const verifierStep = steps.find(
+      (step: WorkflowStep) => step.name === "Run built artifact checks",
     );
 
+    // The verifiers always run, so the shared step cannot be gated on the
+    // selected checks; each check keeps its own RUN_* gate inside the body.
+    expect(verifierStep.if).toBeUndefined();
+    expect(steps.some((step: WorkflowStep) => step.name === "Verify built runtime artifacts")).toBe(
+      false,
+    );
     // The hosted RSS allowance and the serial fallback keep the startup-memory
     // measurement unperturbed on 4-core hosted runners.
     expect(verifierStep.env.OPENCLAW_STARTUP_MEMORY_PLUGINS_LIST_MB).toBe(
@@ -6742,12 +6771,20 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(verifierStep.run).toContain("--config test/vitest/vitest.e2e.config.ts");
     expect(verifierStep.run).toContain("Selected target predates");
     expect(verifierStep.run).toContain("pnpm test:build:singleton");
-    // The parallel branch must complete any startup asset rebuild before
-    // forking so concurrent verifiers never read dist mid-write.
+    // The startup asset rebuild must complete before any verifier forks so
+    // concurrent readers never observe dist mid-write.
     expect(verifierStep.run).toContain("scripts/ensure-cli-startup-build.mts");
     expect(verifierStep.run).toContain("scripts/check-cli-startup-memory.mjs");
-    expect(verifierStep.run).toContain("pnpm test:startup:memory");
     expect(verifierStep.run).toContain(".artifacts/startup-memory/summary.md");
+    // Every verifier reports through the shared results map so a failure can
+    // never be swallowed by the wave.
+    for (const name of ["doctor-plugin-index", "plugin-singleton", "startup-memory"]) {
+      expect(verifierStep.run).toContain(`run_verifier "${name}"`);
+      expect(verifierStep.run).toContain(`["${name}"]="skipped"`);
+    }
+    expect(verifierStep.run).toContain(
+      "for name in channels core-support-boundary doctor-plugin-index gateway-watch plugin-singleton startup-memory tui-pty; do",
+    );
   });
 
   it("runs the scoped SQLite lifecycle proof against the exact built artifact", () => {
@@ -6888,7 +6925,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "launches openclaw (chat as local mode|tui against a real Gateway) through a real PTY",
     );
     expect(run).toContain("wait_checks()");
-    expect(run.match(/wait_checks$/gmu)).toHaveLength(3);
+    // Three wave barriers plus the one inside run_verifier, which serializes
+    // the built-runtime verifiers on hosted runners only.
+    expect(run.match(/wait_checks$/gmu)).toHaveLength(4);
   });
 
   it("keeps docs i18n CI on the workflow-owned patched Go toolchain", () => {
@@ -7036,9 +7075,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(workflow.on.pull_request).not.toHaveProperty("paths-ignore");
     expect(gate.name).toBe("openclaw/ci-gate");
     expect(gate.needs).toEqual([...requiredJobs, ...selectedJobs]);
+    // Every job in the file is gated; a new lane cannot slip in ungated.
     expect(gate.needs.toSorted()).toEqual(
       Object.keys(workflow.jobs)
-        .filter((job) => job !== "ci-gate" && job !== "ci-timings-summary")
+        .filter((job) => job !== "ci-gate")
         .toSorted(),
     );
     expect(gate.if).toBe(

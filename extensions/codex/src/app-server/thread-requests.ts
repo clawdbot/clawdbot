@@ -426,6 +426,9 @@ export function buildCodexRuntimeThreadConfigForRun(
     mergeCodexThreadConfigs(
       baseConfig,
       options.appServer?.networkProxy?.configPatch,
+      params.pluginHarnessToolPolicySafeDeniedTools?.includes("image_generate")
+        ? { "features.image_generation": false }
+        : undefined,
       shouldDisableCodexToolSearchForModel(params.modelId)
         ? CODEX_TOOL_SEARCH_UNSUPPORTED_THREAD_CONFIG
         : undefined,
@@ -524,8 +527,12 @@ export async function readCodexInheritedMcpServerNames(
   return Object.keys(configuredServers).toSorted();
 }
 
-export async function assertCodexRestrictedToolSurfaceHasNoManagedHooks(
+export async function assertCodexManagedRequirementsDoNotOverrideToolPolicy(
   client: Pick<CodexAppServerClient, "request">,
+  options: {
+    restrictedToolSurface: boolean;
+    additionalDeniedFeatures?: readonly string[];
+  },
   signal?: AbortSignal,
 ): Promise<void> {
   const response: CodexConfigRequirementsReadResponse = await client.request(
@@ -542,18 +549,21 @@ export async function assertCodexRestrictedToolSurfaceHasNoManagedHooks(
   if (!isJsonObject(response.requirements)) {
     throw new Error("Codex configRequirements/read returned invalid requirements");
   }
-  for (const key of ["hooks", "managedHooks", "managed_hooks"] as const) {
-    const hooks = response.requirements[key];
-    if (hooks === undefined || hooks === null) {
-      continue;
-    }
-    if (!isJsonObject(hooks)) {
-      throw new Error("Codex configRequirements/read returned invalid managed hooks");
-    }
-    if (hasNonEmptyJsonValue(hooks)) {
-      throw new Error("Codex restricted tool surface cannot override managed hooks");
+  if (options.restrictedToolSurface) {
+    for (const key of ["hooks", "managedHooks", "managed_hooks"] as const) {
+      const hooks = response.requirements[key];
+      if (hooks === undefined || hooks === null) {
+        continue;
+      }
+      if (!isJsonObject(hooks)) {
+        throw new Error("Codex configRequirements/read returned invalid managed hooks");
+      }
+      if (hasNonEmptyJsonValue(hooks)) {
+        throw new Error("Codex restricted tool surface cannot override managed hooks");
+      }
     }
   }
+  const additionalDeniedFeatures = new Set(options.additionalDeniedFeatures);
   for (const key of ["featureRequirements", "feature_requirements"] as const) {
     const requirements = response.requirements[key];
     if (requirements === undefined || requirements === null) {
@@ -567,10 +577,12 @@ export async function assertCodexRestrictedToolSurfaceHasNoManagedHooks(
         throw new Error("Codex configRequirements/read returned invalid feature requirements");
       }
       const canonicalFeature = CODEX_RING_ZERO_RESTRICTED_FEATURE_ALIASES.get(feature) ?? feature;
-      if (enabled && CODEX_RING_ZERO_RESTRICTED_FEATURES.has(canonicalFeature)) {
-        throw new Error(
-          `Codex restricted tool surface cannot override required feature ${feature}`,
-        );
+      const deniedByToolPolicy =
+        (options.restrictedToolSurface &&
+          CODEX_RING_ZERO_RESTRICTED_FEATURES.has(canonicalFeature)) ||
+        additionalDeniedFeatures.has(canonicalFeature);
+      if (enabled && deniedByToolPolicy) {
+        throw new Error(`Codex tool policy cannot override required feature ${feature}`);
       }
     }
   }

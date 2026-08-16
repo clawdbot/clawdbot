@@ -58,6 +58,15 @@ describe("browser action observe commands", () => {
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
   });
 
+  it("rejects unknown console levels before dispatch", async () => {
+    const program = createActionObserveProgram();
+
+    await expect(
+      program.parseAsync(["browser", "console", "--level", "bogus"], { from: "user" }),
+    ).rejects.toThrow(/error.*warn.*info/u);
+    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+  });
+
   it("passes responsebody limits through to the request and outer timeout", async () => {
     const program = createActionObserveProgram();
 

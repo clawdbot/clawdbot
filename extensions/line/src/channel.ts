@@ -38,6 +38,7 @@ const lineSecurityAdapter = createRestrictSendersChannelSecurity<ResolvedLineAcc
   groupPolicyPath: "channels.line.groupPolicy",
   groupAllowFromPath: "channels.line.groupAllowFrom",
   mentionGated: false,
+  findingTitle: "LINE security warning",
   policyPathSuffix: "dmPolicy",
   approveHint: "openclaw pairing approve line <code>",
   normalizeDmEntry: (raw) => raw.replace(/^line:(?:user:)?/i, ""),

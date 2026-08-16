@@ -11,6 +11,7 @@ import { property } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
+import { scrollbarShadowStyles } from "../../lit/scrollbar-styles.ts";
 import { DockLayoutController, dockPanelStyles } from "../dock-layout-controller.ts";
 import { createDockPanelLayout } from "../dock-panel-layout.ts";
 import { panelTabStripStyles } from "../panel-tab-strip.ts";
@@ -48,6 +49,8 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
   @property({ attribute: false }) basePath = "";
   /** Bearer credential for the assistant-media screenshot fetch. */
   @property({ attribute: false }) authToken: string | null = null;
+  /** Hosted by the chat side panel, which owns visibility and geometry. */
+  @property({ type: Boolean }) embedded = false;
 
   private readonly browserPanelController = new BrowserPanelController(this);
   private readonly dockLayout = new DockLayoutController(this, {
@@ -56,6 +59,7 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
     isAvailable: () => this.available,
   });
   private readonly onToggleRequest = (event: Event) => this.handleToggleRequest(event);
+  private embeddedRefreshTimer: number | null = null;
   private readonly viewportResizeObserver = new ResizeObserver((entries) => {
     const entry = entries[0];
     if (entry) {
@@ -67,11 +71,18 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
   });
   private observedViewportElement: Element | null = null;
 
-  static override styles = [panelTabStripStyles, dockPanelStyles, browserPanelStyles];
+  static override styles = [
+    panelTabStripStyles,
+    dockPanelStyles,
+    browserPanelStyles,
+    scrollbarShadowStyles,
+  ];
 
   override connectedCallback(): void {
     super.connectedCallback();
-    window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+    if (!this.embedded) {
+      window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+    }
     // A settings takeover can already own the viewport when the panel mounts.
     // Suppress before the restored open state refreshes a dock nobody can see.
     this.dockLayout.setSuppressed(this.suppressed);
@@ -81,6 +92,7 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
   }
 
   override disconnectedCallback(): void {
+    this.clearEmbeddedRefresh();
     super.disconnectedCallback();
     window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
     this.viewportResizeObserver.disconnect();
@@ -88,11 +100,25 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
   }
 
   override updated(changed: Map<string, unknown>): void {
+    if (changed.has("embedded")) {
+      if (this.embedded) {
+        window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+      } else {
+        window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+      }
+    }
     if (changed.has("suppressed") && this.dockLayout.setSuppressed(this.suppressed)) {
       void this.browserPanelController.refreshAll();
     }
-    this.browserPanelController.synchronizeHostProperties(changed);
-    if (changed.has("client") || changed.has("available")) {
+    const refreshedForClientChange = this.browserPanelController.synchronizeHostProperties(changed);
+    if (
+      this.embedded &&
+      this.available &&
+      !refreshedForClientChange &&
+      (changed.has("embedded") || changed.has("client") || changed.has("available"))
+    ) {
+      this.scheduleEmbeddedRefresh();
+    } else if (changed.has("client") || changed.has("available")) {
       if (!this.available && this.dockLayout.open) {
         // Surface disappeared (disconnect/scope loss): hide without persisting
         // so the open preference survives a reconnect.
@@ -118,7 +144,27 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
   }
 
   browserPanelIsOpen(): boolean {
-    return this.dockLayout.open;
+    return this.embedded || this.dockLayout.open;
+  }
+
+  private scheduleEmbeddedRefresh(): void {
+    if (this.embeddedRefreshTimer !== null) {
+      return;
+    }
+    this.embeddedRefreshTimer = window.setTimeout(() => {
+      this.embeddedRefreshTimer = null;
+      if (this.isConnected && this.embedded && this.available) {
+        void this.browserPanelController.refreshAll();
+      }
+    }, 0);
+  }
+
+  private clearEmbeddedRefresh(): void {
+    if (this.embeddedRefreshTimer === null) {
+      return;
+    }
+    window.clearTimeout(this.embeddedRefreshTimer);
+    this.embeddedRefreshTimer = null;
   }
 
   toggle(): void {
@@ -134,10 +180,26 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
   }
 
   handleToggleRequest(event: Event): void {
+    this.clearEmbeddedRefresh();
     const detail =
       event instanceof CustomEvent && typeof event.detail === "object" && event.detail !== null
         ? (event.detail as BrowserPanelToggleDetail)
         : null;
+    if (this.embedded) {
+      if (detail?.open === false || !this.available) {
+        return;
+      }
+      const normalizedRequestedUrl =
+        typeof detail?.url === "string" ? normalizeBrowserUrlDraft(detail.url) : null;
+      if (normalizedRequestedUrl) {
+        void this.browserPanelController.openUrl(normalizedRequestedUrl, { newTab: true });
+      } else if (detail?.newTab === true) {
+        this.browserPanelController.beginNewTab();
+      } else {
+        void this.browserPanelController.refreshAll();
+      }
+      return;
+    }
     if (detail?.dock === "right" || detail?.dock === "bottom") {
       this.dockLayout.setDock(detail.dock, false);
     }
@@ -155,6 +217,8 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
       this.dockLayout.setOpen(true);
       if (normalizedRequestedUrl) {
         void this.browserPanelController.openUrl(normalizedRequestedUrl, { newTab: true });
+      } else if (detail?.newTab === true) {
+        this.browserPanelController.beginNewTab();
       } else if (!wasOpen) {
         void this.browserPanelController.refreshAll();
       }
@@ -172,7 +236,7 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
   }
 
   override render() {
-    if (!this.available || !this.dockLayout.open) {
+    if (!this.available || (!this.embedded && !this.dockLayout.open)) {
       return nothing;
     }
     return renderBrowserPanelChrome(
@@ -183,6 +247,7 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
       (dock) => this.setDock(dock),
       () => this.closePanel(),
       this.dockLayout.renderResizer("bp", t("browser.resize")),
+      this.embedded,
     );
   }
 }

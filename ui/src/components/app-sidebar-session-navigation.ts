@@ -53,10 +53,13 @@ import { SessionPullRequestIndicatorsController } from "./app-sidebar-session-pr
 import { projectSessionTree } from "./app-sidebar-session-tree.ts";
 import { loadStoredHiddenSessionCatalogIds } from "./app-sidebar-session-types.ts";
 import {
+  loadStoredSidebarSessionSortMode,
   loadStoredSidebarSessionStatusFilter,
   loadStoredSidebarSessionsGrouping,
   loadStoredSidebarSessionsShowCron,
   loadStoredSidebarSessionsShowSystem,
+  resolveSidebarSessionSortMode,
+  storeSidebarSessionSortMode,
   type SidebarRecentSession,
   type SidebarSessionSortMode,
   type SidebarSessionStatusFilter,
@@ -69,7 +72,7 @@ import type { SidebarMenusController } from "./sidebar-menus-controller.ts";
 
 /** Session-row projection, selection, sorting, and agent scope navigation. */
 export class AppSidebarSessionNavigationElement extends AppSidebarBase {
-  @state() sessionSortMode: SidebarSessionSortMode = "created";
+  @state() sessionSortMode: SidebarSessionSortMode = loadStoredSidebarSessionSortMode();
 
   readonly sessionData = new SessionDataController(this);
   private readonly sessionPullRequestIndicators = new SessionPullRequestIndicatorsController(this, {
@@ -109,14 +112,11 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   effectiveSessionSortMode(): SidebarSessionSortMode {
     // A reconnect can temporarily hide the capability. Render Created without
     // discarding People until an authoritative single-identity hello arrives.
-    return this.sessionSortMode === "people" && !this.sessionPeopleSortAvailable()
-      ? "created"
-      : this.sessionSortMode;
+    return resolveSidebarSessionSortMode(this.sessionSortMode, this.sessionPeopleSortAvailable());
   }
 
   setSessionSortMode(mode: SidebarSessionSortMode) {
-    this.sessionSortMode =
-      mode === "people" && this.sessionPeopleSortCapability() === false ? "created" : mode;
+    this.sessionSortMode = storeSidebarSessionSortMode(mode, this.sessionPeopleSortCapability());
   }
 
   @state() sessionCreatorFilterId: string | null = null;

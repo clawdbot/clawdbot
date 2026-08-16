@@ -38,6 +38,7 @@ import { resolveGatewayAuthToken } from "../gateway/auth-token-resolution.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import { getSkippedExecRefStaticError } from "../secrets/exec-resolution-policy.js";
+import type { SecurityAuditFinding } from "../security/audit.types.js";
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
 import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
 import { detectSkillWorkshopToolPolicyDiagnostic } from "../skills/workshop/tool-policy-diagnostic.js";
@@ -74,7 +75,9 @@ const loadDoctorWorkspaceModule = async () => await import("../commands/doctor-w
 
 export type CoreHealthCheckDeps = {
   readonly detectUnavailableSkills: typeof detectUnavailableSkillsWithRuntime;
-  readonly collectSecurityWarnings: (cfg: OpenClawConfig) => Promise<readonly string[]>;
+  readonly collectSecurityWarnings: (
+    cfg: OpenClawConfig,
+  ) => Promise<readonly SecurityAuditFinding[]>;
   readonly collectWorkspaceSuggestionNotes: (workspaceDir: string) => Promise<readonly string[]>;
   readonly collectRuntimeToolSchemaFindings: (
     ctx: HealthCheckContext,
@@ -99,7 +102,9 @@ async function detectUnavailableSkillsWithRuntime(
   return ctx.cwd ? runtime.detectUnavailableSkills(ctx.cfg, ctx.cwd) : [];
 }
 
-async function collectSecurityWarningsWithRuntime(cfg: OpenClawConfig): Promise<readonly string[]> {
+async function collectSecurityWarningsWithRuntime(
+  cfg: OpenClawConfig,
+): Promise<readonly SecurityAuditFinding[]> {
   const { collectSecurityWarnings } = await import("../commands/doctor-security.js");
   return collectSecurityWarnings(cfg);
 }
@@ -764,15 +769,22 @@ function createSecurityCheck(deps: CoreHealthCheckDeps): HealthCheck {
     description: "Security posture checks produce structured findings.",
     source: "doctor",
     async detect(ctx) {
-      const warnings = await deps.collectSecurityWarnings(ctx.cfg);
-      return warnings.map((warning) =>
-        noteTextToFinding({
-          checkId: "core/doctor/security",
-          severity: warning.includes("CRITICAL") ? "error" : "warning",
-          text: warning,
-        }),
-      );
+      const findings = await deps.collectSecurityWarnings(ctx.cfg);
+      return findings.map(securityAuditFindingToHealthFinding);
     },
+  };
+}
+
+function securityAuditFindingToHealthFinding(finding: SecurityAuditFinding): HealthFinding {
+  const detailLines = finding.detail.split("\n");
+  const firstDetail = detailLines.shift() ?? "";
+  const fixHint = [...detailLines, ...(finding.remediation?.split("\n") ?? [])].join("\n");
+  return {
+    checkId: "core/doctor/security",
+    severity:
+      finding.severity === "critical" ? "error" : finding.severity === "warn" ? "warning" : "info",
+    message: `${finding.title}${firstDetail ? `: ${firstDetail}` : ""}`,
+    ...(fixHint ? { fixHint } : {}),
   };
 }
 

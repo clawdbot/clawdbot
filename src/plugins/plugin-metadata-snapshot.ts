@@ -334,6 +334,37 @@ export function completePluginMetadataSnapshot(params: {
   });
 }
 
+/** Reuses process-stable plugin facts for a workspace proven to have no plugin root. */
+export function projectPluginMetadataSnapshotWorkspace(params: {
+  snapshot: PluginMetadataSnapshot;
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  workspaceDir: string;
+}): PluginMetadataSnapshot {
+  if (params.snapshot.workspaceDir === params.workspaceDir) {
+    return params.snapshot;
+  }
+  if (params.snapshot.index.plugins.some((plugin) => plugin.origin === "workspace")) {
+    throw new Error("Workspace plugin metadata cannot be projected to another workspace");
+  }
+  const index = Object.freeze({
+    ...params.snapshot.index,
+    workspaceDir: params.workspaceDir,
+  });
+  return Object.freeze({
+    ...params.snapshot,
+    configFingerprint: resolvePluginControlPlaneFingerprint({
+      config: params.config,
+      env: params.env,
+      index,
+      policyHash: params.snapshot.policyHash,
+      workspaceDir: params.workspaceDir,
+    }),
+    index,
+    workspaceDir: params.workspaceDir,
+  });
+}
+
 export function resolvePluginMetadataSnapshot(
   params: ResolvePluginMetadataSnapshotParams,
 ): PluginMetadataSnapshot {
@@ -374,20 +405,10 @@ export function resolvePluginMetadataSnapshot(
         !hasWorkspacePlugin &&
         params.workspacePluginRootPresent === false
       ) {
-        const index = Object.freeze({
-          ...lifecycleSnapshot.index,
-          workspaceDir: targetWorkspace,
-        });
-        return Object.freeze({
-          ...lifecycleSnapshot,
-          configFingerprint: resolvePluginControlPlaneFingerprint({
-            config: params.config,
-            env: params.env,
-            index,
-            policyHash: lifecycleSnapshot.policyHash,
-            workspaceDir: targetWorkspace,
-          }),
-          index,
+        return projectPluginMetadataSnapshotWorkspace({
+          snapshot: lifecycleSnapshot,
+          config: params.config ?? {},
+          env: params.env,
           workspaceDir: targetWorkspace,
         });
       }

@@ -54,7 +54,6 @@ export const SETTINGS_SEARCH_TARGETS = {
     searchKeys: [
       "quickSettings.security.gatewayAuth",
       "quickSettings.security.execPolicy",
-      "quickSettings.security.deviceAuth",
       "quickSettings.security.browserEnabled",
       "quickSettings.security.toolProfile",
     ],

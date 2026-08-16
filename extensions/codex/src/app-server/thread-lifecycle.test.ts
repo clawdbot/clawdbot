@@ -237,6 +237,36 @@ describe("Codex delegation capability", () => {
     }
   });
 
+  it("disables only native image generation for an audited image_generate deny", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    params.pluginHarnessToolPolicySafeDeniedTools = ["image_generate"];
+    const appServer = createAppServerOptions() as never;
+    const config = {
+      "features.image_generation": true,
+      "features.multi_agent": true,
+      "features.multi_agent_v2": true,
+    };
+    const start = buildThreadStartParams(params, {
+      appServer,
+      cwd: "/repo",
+      dynamicTools: [],
+      config,
+    });
+    const resume = buildThreadResumeParams(params, {
+      appServer,
+      dynamicTools: [],
+      threadId: "thread-1",
+      config,
+    });
+
+    for (const request of [start, resume]) {
+      expect(request.config?.["features.image_generation"]).toBe(false);
+      expect(request.config?.["features.multi_agent"]).toBe(true);
+      expect(request.config?.["features.multi_agent_v2"]).toBe(true);
+      expect(request.config?.["agents.enabled"]).toBeUndefined();
+    }
+  });
+
   it("keeps message-only completion threads and prompts free of native delegation", () => {
     const params = createAttemptParams({ provider: "openai" });
     params.toolsAllow = ["message"];

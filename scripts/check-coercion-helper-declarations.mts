@@ -33,7 +33,7 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
   {
     file: "packages/normalization-core/src/agent-id.ts",
     kind: "function",
-    names: ["isValidAgentId", "normalizeAgentId"],
+    names: ["isValidAgentId", "normalizeAgentId", "normalizeAgentIdStrict"],
   },
   {
     file: "packages/normalization-core/src/string-coerce.ts",

@@ -28,6 +28,7 @@ const logger = createSubsystemLogger("discord/voice");
 
 export async function processDiscordVoiceSegment(params: {
   entry: VoiceSessionEntry;
+  accountId: string;
   wavPath: string;
   userId: string;
   durationSeconds: number;
@@ -122,6 +123,7 @@ export async function processDiscordVoiceSegment(params: {
     const prompt = formatVoiceIngressPrompt(transcript, ingress.speakerLabel);
     const turn = await runDiscordVoiceAgentTurn({
       entry,
+      accountId: params.accountId,
       userId,
       message: prompt,
       cfg: params.cfg,

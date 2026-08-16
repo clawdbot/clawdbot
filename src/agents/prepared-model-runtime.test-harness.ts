@@ -85,6 +85,13 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
 vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   isPluginMetadataSnapshotCompatible: () => true,
   loadPluginMetadataSnapshot: () => preparedModelRuntimeMocks.pluginMetadataSnapshot,
+  projectPluginMetadataSnapshotWorkspace: ({
+    snapshot,
+    workspaceDir,
+  }: {
+    snapshot: typeof preparedModelRuntimeMocks.pluginMetadataSnapshot & { workspaceDir?: string };
+    workspaceDir: string;
+  }) => ({ ...snapshot, index: { ...snapshot.index, workspaceDir }, workspaceDir }),
   resolvePluginMetadataSnapshot: () => preparedModelRuntimeMocks.pluginMetadataSnapshot,
 }));
 

@@ -7,6 +7,7 @@ import type {
   ToolsCatalogResult,
   ToolsEffectiveResult,
 } from "../../api/types.ts";
+import { formatUiError } from "../format-error.ts";
 import {
   createGatewayConnectionLifecycle,
   type GatewayConnectionSnapshot,
@@ -117,7 +118,7 @@ function resolveToolsErrorMessage(
 ): string {
   return isMissingOperatorReadScopeError(err)
     ? formatMissingOperatorReadScopeMessage(target)
-    : String(err);
+    : formatUiError(err);
 }
 
 export async function loadToolsCatalog(state: AgentToolsState, agentId: string) {
@@ -304,7 +305,7 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
         if (lifecycle.isCurrent(scope) && state.listRevision === revision) {
           state.agentsError = isMissingOperatorReadScopeError(err)
             ? formatMissingOperatorReadScopeMessage("agent list")
-            : String(err);
+            : formatUiError(err);
         }
         return null;
       })
@@ -342,7 +343,7 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
     status.loading = true;
     status.error = null;
     publish();
-    const owner = Symbol();
+    const owner = Symbol("agent-files-request-owner");
     fileRequestOwners.set(agentId, owner);
     const request = loadAgentFilesList(scope.client, agentId)
       .then((result) => {
@@ -355,7 +356,7 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
       })
       .catch((err: unknown) => {
         if (lifecycle.isCurrent(scope) && fileRequestOwners.get(agentId) === owner) {
-          status.error = String(err);
+          status.error = formatUiError(err);
         }
         return null;
       })

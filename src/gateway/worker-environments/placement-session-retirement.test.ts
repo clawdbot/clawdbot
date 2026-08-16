@@ -1,7 +1,17 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import { createPlacementSessionRetirement } from "./placement-session-retirement.js";
-import type { WorkerSessionPlacementRetirement } from "./placement-store.js";
+import {
+  createWorkerSessionPlacementStore,
+  type WorkerSessionPlacementRetirement,
+} from "./placement-store.js";
 
 function localPlacement(
   sessionId: string,
@@ -82,6 +92,10 @@ function createHarness(records: WorkerSessionPlacementRecord[]) {
     ),
   );
   const retired: WorkerSessionPlacementRetirement[] = [];
+  const resolveSessionEvidence = vi.fn(
+    async (_placement: WorkerSessionPlacementRecord) => "absent" as const,
+  );
+  const createSessionEvidenceResolver = vi.fn(async () => resolveSessionEvidence);
   const forceDestroyEnvironment = vi.fn(async (environmentId: string) => {
     environments.set(environmentId, {
       environmentId,
@@ -115,10 +129,17 @@ function createHarness(records: WorkerSessionPlacementRecord[]) {
       get: (environmentId) => environments.get(environmentId) as never,
     },
     forceDestroyEnvironment,
-    resolveSessionEvidence: async () => "absent",
+    createSessionEvidenceResolver,
     warn: vi.fn(),
   });
-  return { forceDestroyEnvironment, placements, retired, retirement };
+  return {
+    createSessionEvidenceResolver,
+    forceDestroyEnvironment,
+    placements,
+    resolveSessionEvidence,
+    retired,
+    retirement,
+  };
 }
 
 describe("placement session retirement", () => {
@@ -135,6 +156,49 @@ describe("placement session retirement", () => {
       },
     ]);
     expect(harness.forceDestroyEnvironment).not.toHaveBeenCalled();
+  });
+
+  it("retires an exact ownerless requested placement after its session disappears", async () => {
+    const root = await fs.mkdtemp(
+      path.join(await fs.realpath(os.tmpdir()), "openclaw-placement-retirement-"),
+    );
+    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    const placements = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
+    const requested = placements.startDispatch({
+      sessionId: "session-requested",
+      sessionKey: "agent:main:session-requested",
+      agentId: "main",
+    });
+    const retireSessionPlacement = vi.fn((input: WorkerSessionPlacementRetirement) =>
+      placements.retireSessionPlacement(input),
+    );
+    const forceDestroyEnvironment = vi.fn();
+    const retirement = createPlacementSessionRetirement({
+      placements: {
+        get: (sessionId) => placements.get(sessionId),
+        list: () => placements.list(),
+        retireSessionPlacement,
+      },
+      environments: { get: () => undefined },
+      forceDestroyEnvironment,
+      createSessionEvidenceResolver: async () => async () => "absent",
+      warn: vi.fn(),
+    });
+
+    try {
+      await retirement.reconcile();
+
+      expect(retireSessionPlacement).toHaveBeenCalledWith({
+        sessionId: requested.sessionId,
+        expectedState: "requested",
+        expectedGeneration: requested.generation,
+      });
+      expect(placements.get(requested.sessionId)).toBeUndefined();
+      expect(forceDestroyEnvironment).not.toHaveBeenCalled();
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("fences a live environment before retiring its failed placement", async () => {
@@ -171,7 +235,7 @@ describe("placement session retirement", () => {
       forceDestroyEnvironment: async () => {
         throw new Error("must not destroy");
       },
-      resolveSessionEvidence: async (placement) =>
+      createSessionEvidenceResolver: async () => async (placement) =>
         placement.sessionId === current.sessionId ? "current" : "unknown",
       warn: vi.fn(),
     });
@@ -179,5 +243,18 @@ describe("placement session retirement", () => {
     await retirement.reconcile();
 
     expect(harness.placements.size).toBe(2);
+  });
+
+  it("creates one evidence resolver for the reconcile snapshot", async () => {
+    const placements = [localPlacement("session-one"), localPlacement("session-two")];
+    const harness = createHarness(placements);
+
+    await harness.retirement.reconcile();
+
+    expect(harness.createSessionEvidenceResolver).toHaveBeenCalledOnce();
+    expect(harness.createSessionEvidenceResolver).toHaveBeenCalledWith(placements);
+    expect(harness.resolveSessionEvidence.mock.calls.map(([placement]) => placement)).toEqual(
+      placements,
+    );
   });
 });

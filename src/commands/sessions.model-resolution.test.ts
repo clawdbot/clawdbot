@@ -107,7 +107,6 @@ describe("sessionsCommand model resolution", () => {
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
-          contextTokens: 200_000,
         },
       },
     }));
@@ -143,7 +142,6 @@ describe("sessionsCommand model resolution", () => {
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
-          contextTokens: 200_000,
         },
       },
     }));
@@ -175,7 +173,6 @@ describe("sessionsCommand model resolution", () => {
           models: {
             "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
           },
-          contextTokens: 200_000,
         },
       },
     }));

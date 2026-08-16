@@ -1144,6 +1144,37 @@ describe("resolveModel", () => {
     expect(discoverModels).not.toHaveBeenCalled();
   });
 
+  it("keeps a bundled static catalog window for a transport-only configured model", () => {
+    resolveBundledStaticCatalogModelMock.mockReturnValue({
+      provider: "openai",
+      id: "gpt-5.3-codex",
+      name: "GPT-5.3 Codex",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
+      contextWindow: 400_000,
+      maxTokens: 128_000,
+    });
+    const cfg = makeProviderConfig("openai", {
+      api: "openai-responses",
+      baseUrl: "https://proxy.example.com/v1",
+      models: [{ id: "gpt-5.3-codex", name: "GPT-5.3 Codex" }],
+    });
+
+    const result = resolveModelForTest("openai", "gpt-5.3-codex", "/tmp/agent", cfg);
+
+    expectRecordFields(expectResolvedModel(result), {
+      provider: "openai",
+      id: "gpt-5.3-codex",
+      api: "openai-responses",
+      baseUrl: "https://proxy.example.com/v1",
+      contextWindow: 400_000,
+      maxTokens: 128_000,
+    });
+  });
+
   it("resolves a deferred Fireworks manifest id from the bundled static catalog", async () => {
     resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
       provider: "fireworks",
@@ -1672,7 +1703,7 @@ describe("resolveModel", () => {
     expect(model.baseUrl).toBe("https://aiplatform.googleapis.com");
   });
 
-  it("clamps inherited fallback maxTokens to the configured context window", () => {
+  it("clamps per-model maxTokens to the per-model context window", () => {
     resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
       provider: "xiaomi-token-plan",
       id: "mimo-v2.5-pro",
@@ -1688,7 +1719,14 @@ describe("resolveModel", () => {
     const cfg = makeProviderConfig("xiaomi-token-plan", {
       baseUrl: "https://token-plan-sgp.xiaomimimo.com/v1",
       api: "openai-completions",
-      contextWindow: 16_000,
+      models: [
+        {
+          id: "mimo-v2.5-pro",
+          name: "Xiaomi MiMo V2.5 Pro",
+          contextWindow: 16_000,
+          maxTokens: 32_000,
+        },
+      ],
     });
 
     const result = resolveModelForTest("xiaomi-token-plan", "mimo-v2.5-pro", "/tmp/agent", cfg);
@@ -1698,7 +1736,7 @@ describe("resolveModel", () => {
     expect(model.baseUrl).toBe("https://token-plan-sgp.xiaomimimo.com/v1");
     expect(model.contextWindow).toBe(16_000);
     expect(model.maxTokens).toBe(16_000);
-    expectRecordFields(model, { maxTokensSource: "discovered" });
+    expectRecordFields(model, { maxTokensSource: "configured" });
     expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith({
       provider: "xiaomi-token-plan",
       modelId: "mimo-v2.5-pro",
@@ -1962,7 +2000,7 @@ describe("resolveModel", () => {
     expect(model.thinkingLevelMap).toEqual({ off: null });
   });
 
-  it("keeps provider token overrides ahead of bundled static fallback metadata", () => {
+  it("keeps per-model token overrides ahead of bundled static fallback metadata", () => {
     resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
       provider: "xiaomi-token-plan",
       id: "mimo-v2.5-pro",
@@ -1979,9 +2017,15 @@ describe("resolveModel", () => {
     const cfg = makeProviderConfig("xiaomi-token-plan", {
       baseUrl: "https://token-plan-sgp.xiaomimimo.com/v1",
       api: "openai-completions",
-      contextWindow: 100_000,
-      contextTokens: 90_000,
       maxTokens: 512,
+      models: [
+        {
+          id: "mimo-v2.5-pro",
+          name: "Xiaomi MiMo V2.5 Pro",
+          contextWindow: 100_000,
+          contextTokens: 90_000,
+        },
+      ],
     });
 
     const result = resolveModelForTest("xiaomi-token-plan", "mimo-v2.5-pro", "/tmp/agent", cfg);
@@ -2518,7 +2562,7 @@ describe("resolveModel", () => {
     );
   });
 
-  it("uses provider-level context defaults over discovered metadata", () => {
+  it("uses per-model context config over discovered metadata", () => {
     mockMinimalModelDiscovery("ollama", "qwen3.5:9b", {
       contextWindow: 216_000,
       contextTokens: 216_000,
@@ -2526,9 +2570,9 @@ describe("resolveModel", () => {
     });
     const cfg = makeProviderConfig("ollama", {
       baseUrl: "http://localhost:11434",
-      contextWindow: 8_192,
-      contextTokens: 8_000,
-      models: [{ id: "qwen3.5:9b", name: "qwen3.5:9b" }],
+      models: [
+        { id: "qwen3.5:9b", name: "qwen3.5:9b", contextWindow: 8_192, contextTokens: 8_000 },
+      ],
     });
 
     const result = resolveModelForTest("ollama", "qwen3.5:9b", "/tmp/agent", cfg);
@@ -2539,14 +2583,13 @@ describe("resolveModel", () => {
     expect(result.model?.maxTokens).toBe(8_192);
   });
 
-  it("keeps per-model context values above provider-level defaults", () => {
+  it("keeps per-model context values with a provider output-token default", () => {
     mockMinimalModelDiscovery("ollama", "qwen3.5:9b", {
       contextWindow: 216_000,
       maxTokens: 65_536,
     });
     const cfg = makeProviderConfig("ollama", {
       baseUrl: "http://localhost:11434",
-      contextWindow: 8_192,
       maxTokens: 4_096,
       models: [
         {

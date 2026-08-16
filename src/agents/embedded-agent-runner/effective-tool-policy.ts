@@ -38,7 +38,6 @@ type FinalEffectiveToolPolicyParams = {
   metadataSnapshot?: PluginMetadataSnapshot;
   conversationCapabilityProfile: ResolvedConversationCapabilityProfile;
   warn: (message: string) => void;
-  toolPolicyAuditLogLevel?: "info" | "debug";
   onFilter?: (event: ToolPolicyFilterEvent) => void;
 };
 
@@ -78,7 +77,6 @@ export function applyFinalEffectiveToolPolicy(
     toolMeta: (tool) => getPluginToolMeta(tool),
     warn: params.warn,
     steps: pipelineSteps,
-    auditLogLevel: params.toolPolicyAuditLogLevel,
     onFilter: params.onFilter,
     declaredToolAllowlist: buildDeclaredToolAllowlistContext({
       config: params.config,

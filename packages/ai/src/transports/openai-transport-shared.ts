@@ -1,4 +1,12 @@
-import type { Api, Model, OpenAICompletionsCompat, Usage } from "@openclaw/llm-core";
+import type {
+  AssistantMessage,
+  Model,
+  OpenAICompletionsCompat,
+  TextContent,
+  ThinkingContent,
+  ToolCall,
+  Usage,
+} from "@openclaw/llm-core";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { getAiTransportHost } from "../host.js";
 import { applyProviderReportedUsageCost, calculateCost } from "../model-utils.js";
@@ -45,28 +53,13 @@ export type OpenAIModeModel = Omit<Model, "compat"> & {
   compat?: OpenAIModeCompatInput | null;
 };
 
-export type MutableAssistantOutput = {
-  role: "assistant";
-  content: Array<Record<string, unknown>>;
-  api: Api;
-  provider: string;
-  model: string;
-  usage: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
+type MutableToolCall = ToolCall & { partialArgs?: string };
+
+export type MutableAssistantOutput = Omit<AssistantMessage, "content" | "usage"> & {
+  content: Array<TextContent | ThinkingContent | MutableToolCall>;
+  usage: Usage & {
     reasoningTokens?: number;
-    totalTokens: number;
-    cost: Usage["cost"];
   };
-  stopReason: string;
-  timestamp: number;
-  responseId?: string;
-  errorMessage?: string;
-  errorCode?: string;
-  errorType?: string;
-  errorBody?: string;
 };
 
 export function parseOpenAICompletionsUsage(

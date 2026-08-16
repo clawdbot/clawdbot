@@ -10,6 +10,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listHostDirectories } from "../../infra/host-directory-listing.js";
 import { NODE_FS_LIST_DIR_COMMAND } from "../../infra/node-commands.js";
+import { errorShapeFromError } from "../error-shape.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -118,7 +119,7 @@ export const fsHandlers: GatewayRequestHandlers = {
       }
       respond(true, listing, undefined);
     } catch (error) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(error)));
+      respond(false, undefined, errorShapeFromError(ErrorCodes.INVALID_REQUEST, error));
     }
   },
 };

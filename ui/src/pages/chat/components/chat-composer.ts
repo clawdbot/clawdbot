@@ -17,13 +17,13 @@ import {
   replaceComposerPopoverAnchor,
   restoreHistoryCaret,
   scheduleTextareaHeightAdjustment,
+  scrollActiveMenuOptionIntoView,
 } from "./chat-composer-dom.ts";
 import {
   getActiveSkillMenuOptionId,
   getActiveSkillMenuOptionLabel,
   isSkillMenuVisible,
   resetSkillMenuState,
-  scrollActiveSkillMenuOptionIntoView,
   selectSkillMention,
   updateSkillMenu,
 } from "./chat-composer-skill-menu.ts";
@@ -34,7 +34,6 @@ import {
   isSlashMenuVisible,
   paneDomId,
   resetSlashMenuState,
-  scrollActiveSlashMenuOptionIntoView,
   selectSlashArg,
   selectSlashCommand,
   tabCompleteSlashCommand,
@@ -322,7 +321,8 @@ export function renderChatComposer(props: ChatComposerProps) {
           props.paneId,
           requestUpdate,
           (command) => selectSkillMention(command, props, requestUpdate),
-          scrollActiveSkillMenuOptionIntoView,
+          (menuState, paneId) =>
+            scrollActiveMenuOptionIntoView(getActiveSkillMenuOptionId(menuState, paneId)),
           "skill",
         )
       ) {
@@ -344,7 +344,8 @@ export function renderChatComposer(props: ChatComposerProps) {
           props.paneId,
           requestUpdate,
           (arg, submit) => selectSlashArg(arg, props, requestUpdate, submit),
-          scrollActiveSlashMenuOptionIntoView,
+          (menuState, paneId) =>
+            scrollActiveMenuOptionIntoView(getActiveSlashMenuOptionId(menuState, paneId)),
         )
       ) {
         return;
@@ -363,7 +364,8 @@ export function renderChatComposer(props: ChatComposerProps) {
             submit
               ? selectSlashCommand(command, props, requestUpdate)
               : tabCompleteSlashCommand(command, props, requestUpdate),
-          scrollActiveSlashMenuOptionIntoView,
+          (menuState, paneId) =>
+            scrollActiveMenuOptionIntoView(getActiveSlashMenuOptionId(menuState, paneId)),
         )
       ) {
         return;

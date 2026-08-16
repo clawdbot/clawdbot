@@ -32,6 +32,19 @@ const mocks = vi.hoisted(() => {
     plugins: [],
     diagnostics: [],
   };
+  const knownModelProviderOwners = new Map(
+    [
+      "anthropic",
+      "azure-openai-responses",
+      "codex",
+      "google",
+      "moonshot",
+      "openai",
+      "opencode-go",
+      "xiaomi",
+      "z.ai",
+    ].map((providerId) => [providerId, ["test-provider-plugin"]]),
+  );
   const emptyPluginMetadataSnapshot = {
     policyHash: "models-list-command-forward-compat-test",
     configFingerprint: "models-list-command-forward-compat-test",
@@ -45,7 +58,7 @@ const mocks = vi.hoisted(() => {
     owners: {
       channels: new Map(),
       channelConfigs: new Map(),
-      providers: new Map(),
+      providers: knownModelProviderOwners,
       modelCatalogProviders: new Map(),
       cliBackends: new Map(),
       setupProviders: new Map(),
@@ -150,7 +163,7 @@ function resetMocks() {
 }
 
 function createRuntime() {
-  return { log: vi.fn(), error: vi.fn() };
+  return { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 }
 
 function primeModelRegistry(
@@ -416,6 +429,31 @@ describe("modelsListCommand forward-compat", () => {
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/openclaw-agent-research");
   });
 
+  it("rejects unknown provider filters before loading the model registry", async () => {
+    const runtime = createRuntime();
+    const previousExitCode = process.exitCode;
+    process.exitCode = undefined;
+    let observedExitCode: number | undefined;
+
+    try {
+      await modelsListCommand(
+        { provider: "autoqa-no-such-provider", json: true },
+        runtime as never,
+      );
+      observedExitCode = process.exitCode;
+    } finally {
+      process.exitCode = previousExitCode;
+    }
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining('Unknown provider filter "autoqa-no-such-provider"'),
+    );
+    expect(observedExitCode).toBe(1);
+    expect(mocks.loadModelRegistry).not.toHaveBeenCalled();
+    expect(mocks.loadModelCatalog).not.toHaveBeenCalled();
+    expect(mocks.printModelTable).not.toHaveBeenCalled();
+  });
+
   describe("empty model lists", () => {
     it.each([
       { name: "JSON", options: { json: true } },
@@ -423,7 +461,7 @@ describe("modelsListCommand forward-compat", () => {
     ])("renders empty $name output through the canonical model table", async ({ options }) => {
       mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
       const runtime = createRuntime();
-      const opts = { ...options, provider: "autoqa-no-such-provider" };
+      const opts = { ...options, provider: "openai" };
 
       await modelsListCommand(opts, runtime as never);
 
@@ -438,7 +476,7 @@ describe("modelsListCommand forward-compat", () => {
       mocks.startPromotionsFeedRefresh.mockReturnValueOnce(refreshToken);
       const runtime = createRuntime();
 
-      await modelsListCommand({ provider: "autoqa-no-such-provider" }, runtime as never);
+      await modelsListCommand({ provider: "openai" }, runtime as never);
 
       expect(runtime.log).toHaveBeenCalledWith("No models found.");
       expect(mocks.printModelTable).not.toHaveBeenCalled();

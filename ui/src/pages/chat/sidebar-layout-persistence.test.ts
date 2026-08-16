@@ -7,7 +7,13 @@ import {
   updateSidebarSessionActivePanel,
   updateSidebarSessionLayout,
 } from "./sidebar-layout-persistence.ts";
-import { openSlot } from "./sidebar-layout.ts";
+import {
+  activatePanel,
+  openSlot,
+  resizeSidebarPanel,
+  setSidebarExpanded,
+  setSidebarOpen,
+} from "./sidebar-layout.ts";
 
 describe("sidebar session layout settings", () => {
   it("uses one persistence key for configured main-session aliases", () => {
@@ -35,9 +41,27 @@ describe("sidebar session layout settings", () => {
         "": openSlot({ columns: [] }, "discussion"),
       }),
     ).toEqual({
-      main: openSlot({ columns: [] }, "detail"),
-      broken: { columns: [] },
+      main: { ...openSlot({ columns: [] }, "detail"), dock: "right", expanded: false },
+      broken: { columns: [], open: false, expanded: false },
     });
+  });
+
+  it("persists tab order, active tab, width, visibility, and expanded state per session", () => {
+    let layout = openSlot(openSlot({ columns: [] }, "workspace"), "terminal");
+    layout = activatePanel(layout, layout.columns[0]!.panels[0]!.id);
+    layout = resizeSidebarPanel(layout, layout.columns[0]!.id, 512);
+    layout = setSidebarExpanded(layout, true);
+    layout = setSidebarOpen(layout, false);
+
+    const persisted = updateSidebarSessionLayout({}, "main", layout).main;
+    expect(persisted).toEqual({ ...layout, dock: "right" });
+    expect(persisted?.columns[0]?.panels.map((panel) => panel.slot)).toEqual([
+      "workspace",
+      "terminal",
+    ]);
+    expect(persisted?.columns[0]?.activePanelId).toBe("workspace");
+    expect(persisted?.columns[0]?.width).toBe(512);
+    expect(persisted).toMatchObject({ open: false, expanded: true });
   });
 
   it("caps the newest session layouts", () => {

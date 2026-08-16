@@ -13,7 +13,6 @@ import type {
   NodePluginToolDescriptor,
   NodeSkillDescriptor,
 } from "../../packages/gateway-protocol/src/schema/nodes.js";
-import type { WorkerAdmissionHandshake } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { setActiveNodeContext } from "../infra/active-node-context.js";
 import type { PairedDeviceNodeBinding } from "../infra/device-pairing-node-state.js";
 import { NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
@@ -76,8 +75,6 @@ export type NodeSession = {
   commands: string[];
   declaredComputerUse?: ComputerUseCapabilityDescriptor;
   computerUse?: ComputerUseCapabilityDescriptor;
-  /** Exact node-local build admitted for worker session hosting. */
-  workerRuns?: WorkerAdmissionHandshake;
   declaredNodePluginTools: NodePluginToolDescriptor[];
   nodePluginTools: NodePluginToolDescriptor[];
   nodeSkills: NodeSkillDescriptor[];
@@ -501,7 +498,6 @@ export class NodeRegistry {
       typeof (connect as { pathEnv?: string }).pathEnv === "string"
         ? (connect as { pathEnv?: string }).pathEnv
         : undefined;
-    const workerRuns = connect.workerRuns ? structuredClone(connect.workerRuns) : undefined;
     const declaredNodePluginTools: NodePluginToolDescriptor[] = [];
     const nodePluginTools: NodePluginToolDescriptor[] = [];
     const nodeSkills: NodeSkillDescriptor[] = [];
@@ -529,7 +525,6 @@ export class NodeRegistry {
       commands,
       ...(declaredComputerUse ? { declaredComputerUse } : {}),
       ...(computerUse ? { computerUse } : {}),
-      ...(workerRuns ? { workerRuns } : {}),
       declaredNodePluginTools,
       nodePluginTools,
       nodeSkills,

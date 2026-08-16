@@ -18,7 +18,7 @@ import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.j
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { FsSafeError, root } from "../infra/fs-safe.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { resolveUserPath } from "../utils.js";
@@ -99,11 +99,6 @@ function createError(
   return { status: "error", reason, message, ...(agentId ? { agentId } : {}) };
 }
 
-/** True when raw user input contains a character that can survive agent-id normalization. */
-function hasValidRawAgentIdCharacters(value: string): boolean {
-  return /[a-z0-9]/iu.test(value);
-}
-
 export function validateAgentIdInput(
   rawId: string,
   options: { displayName?: string } = {},
@@ -111,14 +106,15 @@ export function validateAgentIdInput(
   | { ok: true; agentId: string }
   | { ok: false; reason: "invalid-name" | "reserved-id"; message: string; agentId?: string } {
   const displayName = options.displayName ?? rawId;
-  if (!hasValidRawAgentIdCharacters(rawId)) {
+  const normalized = normalizeAgentIdStrict(rawId);
+  if (!normalized.ok) {
     return {
       ok: false,
       reason: "invalid-name",
-      message: `agent name "${displayName}" has no valid id characters`,
+      message: `Agent name "${displayName}" has no valid id characters. Use at least one letter a-z or digit.`,
     };
   }
-  const agentId = normalizeAgentId(rawId);
+  const agentId = normalized.value;
   if (isReservedSystemAgentId(agentId)) {
     return { ok: false, reason: "reserved-id", message: `"${agentId}" is reserved`, agentId };
   }

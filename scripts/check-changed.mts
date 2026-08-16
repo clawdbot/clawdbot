@@ -62,6 +62,9 @@ type ChangedCheckDelegateOptions = {
   cwd?: string;
   result?: ChangedLaneResult;
   diffRefsReady?: boolean;
+  interactive?: boolean;
+  platform?: NodeJS.Platform;
+  virtualized?: boolean;
 };
 
 type ChangedCheckRunOptions = ChangedCheckPlanOptions & {
@@ -132,7 +135,7 @@ const ANDROID_VERSION_SYNC_PATHS = new Set([
   "apps/android/version.json",
 ]);
 const MACOS_APP_CI_PATH_RE =
-  /^(?:apps\/(?:macos|macos-mlx-tts|shared|swabble)\/|Swabble\/|src\/(?:worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$|scripts\/(?:codesign-mac-app|create-dmg|mac-elevation-host|notarize-mac-artifact|package-mac-app|package-mac-dist|stage-cua-driver-macos)\.sh$|scripts\/lib\/(?:plistbuddy|swift-toolchain)\.sh$|test\/scripts\/(?:codesign-mac-app|create-dmg|mac-elevation-host|notarize-mac-artifact|package-mac-app|package-mac-dist)\.test\.ts$)/u;
+  /^(?:apps\/(?:macos|macos-mlx-tts|shared|swabble)\/|Swabble\/|src\/(?:shared\/worker-bundle-hash\.ts|worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$|scripts\/(?:codesign-mac-app|create-dmg|mac-elevation-host|notarize-mac-artifact|package-mac-app|package-mac-dist|stage-cua-driver-macos)\.sh$|scripts\/lib\/(?:plistbuddy|swift-toolchain)\.sh$|test\/scripts\/(?:codesign-mac-app|create-dmg|mac-elevation-host|notarize-mac-artifact|package-mac-app|package-mac-dist)\.test\.ts$)/u;
 let corepackPnpmShimDir: string | undefined;
 let corepackPnpmShimCleanupRegistered = false;
 let cachedGeneratedExtensionAssetPaths: Set<string> | undefined;
@@ -222,6 +225,37 @@ export function changedCheckRequiresRemote(result?: ChangedLaneResult) {
   );
 }
 
+function isDedicatedLinuxWorker(
+  env: NodeJS.ProcessEnv,
+  options: Pick<ChangedCheckDelegateOptions, "interactive" | "platform" | "virtualized">,
+) {
+  if ((options.platform ?? process.platform) !== "linux") {
+    return false;
+  }
+  const role = env.AGENT_HOST_ROLE?.trim().toLowerCase();
+  if (role === "worker") {
+    return true;
+  }
+  if (role === "workstation") {
+    return false;
+  }
+  if (env.DISPLAY || env.WAYLAND_DISPLAY || env.SSH_TTY) {
+    return false;
+  }
+  if (options.interactive ?? process.stdin.isTTY) {
+    return false;
+  }
+  if (options.virtualized !== undefined) {
+    return options.virtualized;
+  }
+  try {
+    execFileSync("systemd-detect-virt", ["--quiet"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function shouldDelegateChangedCheckToCrabbox(
   argv: string[] = [],
   env: NodeJS.ProcessEnv = process.env,
@@ -245,6 +279,9 @@ export function shouldDelegateChangedCheckToCrabbox(
   }
   if (isOpenEndedTruthyValue(env.OPENCLAW_TESTBOX)) {
     return true;
+  }
+  if (isDedicatedLinuxWorker(env, options)) {
+    return !changedCheckLocalDependenciesReady(options.cwd ?? process.cwd());
   }
   // Release metadata plans diff the supplied commits after classification. A missing
   // ref needs the hydrated remote checkout even when the explicit path itself is cheap.
@@ -598,6 +635,20 @@ export function createChangedCheckPlan(
   ) {
     add("max-lines suppression ratchet", [
       "check:max-lines-ratchet",
+      ...(options.staged ? ["--staged"] : []),
+      "--base",
+      options.staged ? "HEAD" : (options.base ?? "origin/main"),
+    ]);
+  }
+  if (
+    result.paths.some((filePath) =>
+      /^(?:src\/|ui\/src\/|packages\/|extensions\/|config\/assertion-safety-baseline\.txt$|scripts\/check-assertion-safety-ratchet\.mts$|scripts\/lib\/type-assertion-guard-scope\.mjs$|scripts\/oxlint-boundary-guards\.mjs$)/u.test(
+        filePath,
+      ),
+    )
+  ) {
+    add("assertion SAFETY comment ratchet", [
+      "check:assertion-safety",
       ...(options.staged ? ["--staged"] : []),
       "--base",
       options.staged ? "HEAD" : (options.base ?? "origin/main"),

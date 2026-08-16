@@ -91,7 +91,10 @@ vi.mock("../config/config.js", async () => ({
   replaceConfigFile: replaceConfigFileMock,
 }));
 
-vi.mock("../agents/agent-create.js", () => ({
+vi.mock("../agents/agent-create.js", async () => ({
+  ...(await vi.importActual<typeof import("../agents/agent-create.js")>(
+    "../agents/agent-create.js",
+  )),
   checkAgentCreationGate: checkAgentCreationGateMock,
   createAgent: createAgentMock,
 }));
@@ -248,6 +251,33 @@ describe("agents add command", () => {
       expect(writeConfigFileMock).not.toHaveBeenCalled();
     },
   );
+
+  it("rejects an unrepresentable positional name before targeting an existing agent", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: { agents: { entries: { main: {} } } },
+      sourceConfig: { agents: { entries: { main: {} } } },
+    });
+    const prompter = {
+      intro: vi.fn(),
+      text: vi.fn(),
+      confirm: vi.fn(),
+      note: vi.fn(),
+      outro: vi.fn(),
+    };
+    wizardMocks.createClackPrompter.mockReturnValue(prompter);
+
+    await agentsAddCommand({ name: "агент✨" }, runtime);
+
+    expect(prompter.outro).toHaveBeenCalledWith(
+      'Agent name "агент✨" has no valid id characters. Use at least one letter a-z or digit.',
+    );
+    expect(prompter.confirm).not.toHaveBeenCalled();
+    expect(prompter.note).not.toHaveBeenCalled();
+    expect(checkAgentCreationGateMock).not.toHaveBeenCalled();
+    expect(createAgentMock).not.toHaveBeenCalled();
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+  });
 
   it.each(RESERVED_SYSTEM_AGENT_IDS_FOR_TEST)(
     "rejects reserved system-agent id %s from an interactive positional argument",

@@ -234,6 +234,18 @@
   --radius-full: 9999px;
   --radius: 10px;
 
+  /* One profile for every scroll surface: 12px hit target, 6px visible thumb
+     (transparent border + content-box clip). Derived from --muted so every
+     theme family and both modes follow with no override. scrollbar-color is a
+     real property, not a token, but it lives here (not a second :root block)
+     to satisfy no-duplicate-selectors; it also inherits into shadow roots,
+     which is what gives Web Awesome ::part() surfaces their thumb tint. */
+  --scrollbar-size: 12px;
+  --scrollbar-thumb-inset: 3px;
+  --scrollbar-thumb: color-mix(in srgb, var(--muted) 32%, transparent);
+  --scrollbar-thumb-hover: color-mix(in srgb, var(--muted) 64%, transparent);
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+
   /* Corner-scale signal: whatever the @supports block below sets this to,
      tests and other introspection can read it to learn the active multiplier
      without duplicating the @supports check. It is intentionally not part of
@@ -551,17 +563,6 @@
   color-scheme: light;
 }
 
-/* Scrollbar - visible on light backgrounds */
-:root[data-theme-mode="light"]::-webkit-scrollbar-thumb,
-:root[data-theme-mode="light"] ::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.15);
-}
-
-:root[data-theme-mode="light"]::-webkit-scrollbar-thumb:hover,
-:root[data-theme-mode="light"] ::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.25);
-}
-
 /* Theme families override accent tokens while keeping shared surfaces/layout. */
 :root[data-theme="openknot"] {
   /*
@@ -848,6 +849,9 @@
 
 * {
   box-sizing: border-box;
+  /* scrollbar-width doesn't inherit (unlike scrollbar-color above), so every
+     element needs its own declaration to stay off the wider UA default. */
+  scrollbar-width: thin;
 }
 
 .sr-only {
@@ -1102,24 +1106,50 @@ textarea,
   color: var(--selection-fg);
 }
 
-/* Main/document surfaces keep a normal scrollbar hit target. Dense sidebars
-   override this inherited size locally so their row actions retain room. */
-::-webkit-scrollbar {
-  width: var(--scrollbar-size, 12px);
-  height: var(--scrollbar-size, 12px);
+/* Canonical scrollbar for every scroll surface. scrollbar-color (:root above)
+   inherits, including into shadow roots; scrollbar-width (* above) does not.
+   Web Awesome shadow-DOM menus/listboxes are reachable via ::part(); no document
+   rule crosses that boundary on its own, so every rule below repeats the same
+   generic host group used for the shared corner treatment above. Enumerating
+   feature classes instead would leave every unlisted dropdown, listbox, and
+   popover on the raw platform scrollbar the moment one is added. */
+::-webkit-scrollbar,
+wa-dropdown::part(menu)::-webkit-scrollbar,
+wa-select::part(listbox)::-webkit-scrollbar,
+wa-popover::part(body)::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
 }
 
-::-webkit-scrollbar-track {
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner,
+wa-dropdown::part(menu)::-webkit-scrollbar-track,
+wa-select::part(listbox)::-webkit-scrollbar-track,
+wa-popover::part(body)::-webkit-scrollbar-track {
   background: transparent;
 }
 
-::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.08);
+::-webkit-scrollbar-thumb,
+wa-dropdown::part(menu)::-webkit-scrollbar-thumb,
+wa-select::part(listbox)::-webkit-scrollbar-thumb,
+wa-popover::part(body)::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  background-clip: content-box;
+  border: var(--scrollbar-thumb-inset) solid transparent;
   border-radius: var(--radius-full);
 }
 
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.14);
+/* :hover::-webkit-scrollbar-thumb (container hover) is safe here because html,
+   body set overflow: clip above, so the document itself never scrolls and the
+   always-true html:hover/body:hover can't hover a document scrollbar. ::part()
+   surfaces get thumb-only hover; container hover can't chain through shadow. */
+::-webkit-scrollbar-thumb:hover,
+:hover::-webkit-scrollbar-thumb,
+wa-dropdown::part(menu)::-webkit-scrollbar-thumb:hover,
+wa-select::part(listbox)::-webkit-scrollbar-thumb:hover,
+wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+  background-clip: content-box;
 }
 
 /* Animations - Polished with spring feel */

@@ -2447,6 +2447,17 @@ describe("runCli exit behavior", () => {
     expect(startProxyMock).toHaveBeenCalledWith(undefined);
   });
 
+  it("reads source-only proxy config before doctor lint owns plugin-aware validation", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(true);
+    readSourceConfigBestEffortMock.mockResolvedValueOnce({ proxy: { selected: "doctor-lint" } });
+
+    await runCli(["node", "openclaw", "doctor", "--lint", "--json"]);
+
+    expect(readSourceConfigBestEffortMock).toHaveBeenCalledOnce();
+    expect(loadConfigMock).not.toHaveBeenCalled();
+    expect(startProxyMock).toHaveBeenCalledWith({ selected: "doctor-lint" });
+  });
+
   it.each([
     {
       name: "version-pinned skill install",

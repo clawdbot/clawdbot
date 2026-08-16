@@ -3,11 +3,13 @@
  *
  * Identifies mutating tool calls and file targets so retry/recovery logic can reason about side effects.
  */
+import { stableStringify } from "@openclaw/normalization-core";
 import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
+import { sha256Hex } from "../infra/crypto-digest.js";
 import { isLikelyMutatingToolName } from "./tool-mutation-names.js";
 import { isAutomationsToolName } from "./tools/automations-tool-name.js";
 
@@ -130,6 +132,7 @@ export type FileTarget = {
 type ToolMutationState = {
   mutatingAction: boolean;
   replaySafe: boolean;
+  ownerKey?: string;
   actionFingerprint?: string;
   fileTarget?: FileTarget;
 };
@@ -522,12 +525,19 @@ export function buildToolMutationState(
   toolName: string,
   args: unknown,
   meta?: string,
+  options?: { ownerKey?: string },
 ): ToolMutationState {
-  const actionFingerprint = buildToolActionFingerprint(toolName, args, meta);
+  const ownerKey = options?.ownerKey;
+  // Bind recovery to both the concrete plugin owner and exact call arguments.
+  // A different plugin or fact must never clear an unresolved durable-state failure.
+  const actionFingerprint = ownerKey
+    ? `owner=${ownerKey}|args=${sha256Hex(stableStringify(args))}`
+    : buildToolActionFingerprint(toolName, args, meta);
   const fileTarget = extractFileTarget(toolName, args);
   return {
     mutatingAction: actionFingerprint != null,
-    replaySafe: isReplaySafeToolCall(toolName, args),
+    replaySafe: ownerKey ? false : isReplaySafeToolCall(toolName, args),
+    ...(ownerKey ? { ownerKey } : {}),
     actionFingerprint,
     ...(fileTarget !== undefined ? { fileTarget } : {}),
   };

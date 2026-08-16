@@ -104,7 +104,6 @@ export function createPluginApiFactory(
     registerMemoryPromptSupplement,
     registerMemoryPromptPreparation,
     registerMemoryCorpusSupplement,
-    registerMemoryEmbeddingProvider,
     registerCli,
     registerChannel,
   } = registrars;
@@ -189,7 +188,8 @@ export function createPluginApiFactory(
               registerModelCatalogProvider: (provider) =>
                 registerModelCatalogProvider(record, provider),
               registerEmbeddingProvider: (provider) => registerEmbeddingProvider(record, provider),
-              registerAgentHarness: (harness) => registerAgentHarness(record, harness),
+              registerAgentHarness: (harness, options) =>
+                registerAgentHarness(record, harness, options),
               registerDetachedTaskRuntime: (runtime) =>
                 registerDetachedTaskRuntime(record, runtime),
               registerSpeechProvider: (provider) => registerSpeechProvider(record, provider),
@@ -368,8 +368,6 @@ export function createPluginApiFactory(
                 registerMemoryPromptPreparation(record, prepare),
               registerMemoryCorpusSupplement: (supplement) =>
                 registerMemoryCorpusSupplement(record, supplement),
-              registerMemoryEmbeddingProvider: (adapter) =>
-                registerMemoryEmbeddingProvider(record, adapter),
               on: (hookName, handler, opts) =>
                 registerTypedHook(record, hookName, handler, opts, params.hookPolicy),
             }

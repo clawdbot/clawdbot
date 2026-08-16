@@ -51,6 +51,7 @@ export type ToolCallSummary = {
   instanceReplaySafe: boolean;
   replaySafe: boolean;
   mutatingAction: boolean;
+  ownerKey?: string;
   actionFingerprint?: string;
   fileTarget?: import("./tool-mutation.js").FileTarget;
 };
@@ -331,6 +332,7 @@ type ToolHandlerParams = Pick<
   | "sessionId"
   | "agentId"
   | "replaySafeToolNames"
+  | "sideEffectToolOwners"
   | "toolResultFormat"
   | "toolProgressDetail"
   | "sourceReplyDeliveryMode"

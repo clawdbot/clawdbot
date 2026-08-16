@@ -835,6 +835,24 @@ describe("setup-registry module loader", () => {
     });
   });
 
+  it("records a diagnostic when the setup entry fails to load", () => {
+    const brokenRoot = makeTempDir();
+    writeSetupApiStub(brokenRoot);
+    mockSinglePlugin({ id: "broken-entry", rootDir: brokenRoot });
+    mocks.createJiti.mockImplementation(() => () => {
+      throw new Error("module parse failed");
+    });
+
+    const registry = resolvePluginSetupRegistry({ env: {} });
+
+    // A broken setup entry removes the plugin from onboarding; the reason must
+    // be recorded instead of vanishing.
+    expect(registry.providers).toStrictEqual([]);
+    expect(registry.diagnostics).toMatchObject([
+      { pluginId: "broken-entry", code: "setup-entry-load-failed" },
+    ]);
+  });
+
   it("publishes each plugin setup registration atomically on synchronous success", () => {
     const throwingRoot = makeTempDir();
     const healthyRoot = makeTempDir();
@@ -905,7 +923,10 @@ describe("setup-registry module loader", () => {
       expect(registry.configMigrations[0]?.migrate({} as never)?.changes).toEqual(["healthy"]);
       expect(registry.autoEnableProbes).toHaveLength(1);
       expect(registry.autoEnableProbes[0]?.probe({ config: {}, env: {} } as never)).toBe("healthy");
-      expect(registry.diagnostics).toStrictEqual([]);
+      // The throwing registration is recorded, not silently dropped.
+      expect(registry.diagnostics).toMatchObject([
+        { pluginId: "shared-plugin", code: "setup-registration-failed" },
+      ]);
     }
     expect(second).not.toBe(first);
     expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledTimes(1);

@@ -8,6 +8,7 @@ import type { GatewaySessionRow } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
@@ -101,7 +102,7 @@ function catalogErrorMessages(catalog: SessionCatalog): string[] {
   const messages = new Set<string>();
   const add = (error: SessionCatalog["error"]) => {
     if (error) {
-      messages.add(`[${error.code}] ${error.message}`);
+      messages.add(formatUiError(`[${error.code}] ${error.message}`));
     }
   };
   add(catalog.error);
@@ -296,7 +297,9 @@ function renderCatalogHostGroup(
   liveRowsByKey: ReadonlyMap<string, GatewaySessionRow>,
   params: SessionCatalogGroupsParams,
 ) {
-  const errorHelp = host.error ? `[${host.error.code}] ${host.error.message}` : undefined;
+  const errorHelp = host.error
+    ? formatUiError(`[${host.error.code}] ${host.error.message}`)
+    : undefined;
   const projectGroups =
     params.projectGrouping === "project"
       ? groupCatalogSessionsByProject(host.sessions)

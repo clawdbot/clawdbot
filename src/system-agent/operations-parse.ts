@@ -3,7 +3,7 @@ import { parseConfigSetPath } from "../cli/config-cli-path.js";
 import type { ConfigSetOptions } from "../cli/config-set-input.js";
 import type { DoctorOptions } from "../commands/doctor.types.js";
 import { DEFAULT_SECRET_PROVIDER_ALIAS } from "../config/types.secrets.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentIdStrict } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
 import type { TuiResult } from "../tui/tui-types.js";
@@ -138,6 +138,12 @@ const OPEN_GATEWAY_SETUP_RE = /^open\s+gateway\s+wizard$/i;
 
 const NO_MATCH_MESSAGE =
   "I can run doctor/status/health, check or restart Gateway, configure gateway settings, list agents/models, configure skills or web search, import memory, set default model, connect channels (`connect telegram`), show `channel info <channel>`, open the setup wizard, show audit, or switch to your agent TUI.";
+
+function normalizeExplicitSystemAgentId(agentId: string): string {
+  const normalized = normalizeAgentIdStrict(agentId);
+  // Preserve an unrepresentable input so the execution owner rejects it instead of targeting main.
+  return normalized.ok ? normalized.value : agentId;
+}
 
 function parseConfigSetCommand(
   input: string,
@@ -443,7 +449,7 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
     const model = createMatch.groups.model;
     return {
       kind: "create-agent",
-      agentId: normalizeAgentId(createMatch.groups.agent),
+      agentId: normalizeExplicitSystemAgentId(createMatch.groups.agent),
       ...(workspace ? { workspace } : {}),
       ...(model ? { model } : {}),
     };
@@ -463,7 +469,7 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
     return {
       kind: "set-default-model",
       model: setModelMatch.groups.model,
-      ...(agent ? { agentId: normalizeAgentId(agent) } : {}),
+      ...(agent ? { agentId: normalizeExplicitSystemAgentId(agent) } : {}),
     };
   }
   return { kind: "none", message: NO_MATCH_MESSAGE };

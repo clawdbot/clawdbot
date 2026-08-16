@@ -73,7 +73,10 @@ import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js
 import { createOpenClawTools, filterToolsByClientCaps } from "./openclaw-tools.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
 import type { SandboxContext } from "./sandbox.js";
-import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
+import {
+  resolveScheduledToolCallerContext,
+  type ScheduledToolPolicyContext,
+} from "./scheduled-tool-policy.js";
 import {
   createCodingTools,
   createEditTool,
@@ -346,8 +349,6 @@ type OpenClawCodingToolsOptions = {
   onYield?: (message: string) => Promise<void> | void;
   /** Optional instrumentation callback for tool preparation stage timing. */
   recordToolPrepStage?: (name: string) => void;
-  /** Lower routine policy-removal audits for diagnostic-only tool probes. */
-  toolPolicyAuditLogLevel?: "info" | "debug";
   /** Live observer called after wrapped tool outcomes are recorded. */
   onToolOutcome?: ToolOutcomeObserver;
   /** Reads the sticky untrusted-content flag for the current user turn. */
@@ -653,8 +654,11 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     toolPolicyInheritanceSources.some(hasRestrictiveAllowPolicy);
   const cronCreatorToolAllowlist = options?.cronCreatorToolAllowlistRef ?? [];
   const cronCreatorToolAllowlistCaptureRef = options?.cronCreatorToolAllowlistCaptureRef;
-  const gatewayCallerAccountId =
-    options?.scheduledToolPolicy?.ownerAccountId ?? options?.agentAccountId;
+  const gatewayCaller = resolveScheduledToolCallerContext({
+    scheduledToolPolicy: options?.scheduledToolPolicy,
+    accountId: options?.agentAccountId,
+    channel: resolveGatewayMessageChannel(options?.messageChannel ?? options?.messageProvider),
+  });
   // Plugin-only plans bypass createOpenClawTools, so the capability gate must
   // apply here too or narrow allowlists leak gated tools onto capless surfaces.
   const pluginToolCallerIdentity =
@@ -667,7 +671,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
           ),
           turnSourceTo:
             options.currentMessagingTarget ?? options.currentChannelId ?? options.messageTo,
-          turnSourceAccountId: gatewayCallerAccountId,
+          turnSourceAccountId: gatewayCaller.accountId,
           turnSourceThreadId: options.currentThreadTs ?? options.messageThreadId,
         }
       : undefined;
@@ -751,7 +755,10 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
               options?.messageChannel ?? options?.messageProvider,
             ),
             agentAccountId: options?.agentAccountId,
-            gatewayCallerAccountId,
+            gatewayCallerAccountId: gatewayCaller.accountId,
+            gatewayCallerChannel: gatewayCaller.channel,
+            gatewayCallerLocal: gatewayCaller.local,
+            gatewayCallerScheduled: gatewayCaller.scheduled,
             agentTo: options?.messageTo,
             agentThreadId: options?.messageThreadId,
             nativeChannelId: options?.nativeChannelId,
@@ -898,7 +905,6 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       includeRuntimeToolPolicy: true,
       unavailableCoreToolReason,
     }),
-    auditLogLevel: options?.toolPolicyAuditLogLevel,
     declaredToolAllowlist: buildDeclaredToolAllowlistContext({
       config: options?.config,
       metadataSnapshot: options?.preparedModelRuntime?.metadataSnapshot,

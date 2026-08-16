@@ -263,6 +263,27 @@ describe("Code Mode catalog and model-visible surface", () => {
     expect(parameters.properties).not.toHaveProperty("command");
   });
 
+  it("drops the nodes namespace hint when the run catalog cannot resolve it", () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    const compacted = applyCodeModeCatalog({
+      tools: [...tools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    // The compacted catalog is known and holds no openclaw:core:nodes entry
+    // (owner-only surfaces filter it); advertising the namespace anyway sends
+    // the model into guaranteed unknown-tool failures.
+    const execTool = expectDefined(compacted.tools[0], "exec tool test invariant");
+    expect(catalogRef.current?.entries.some((entry) => entry.id === "openclaw:core:nodes")).toBe(
+      false,
+    );
+    expect(execTool.description).not.toContain("paired Gateway nodes");
+  });
+
   it("keeps code-mode exec guidance compact without advertising unavailable namespaces", () => {
     const { config, catalogRef, tools } = createCodeModeHarness();
     const compacted = applyCodeModeCatalog({

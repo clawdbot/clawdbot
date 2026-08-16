@@ -77,6 +77,7 @@ type PluginToolMeta = {
   pluginId: string;
   optional: boolean;
   replaySafe?: boolean;
+  sideEffecting?: boolean;
   trustedLocalMedia?: boolean;
   mcp?: PluginToolMcpMeta;
 };
@@ -318,6 +319,15 @@ export function buildPluginToolMetadataKey(pluginId: string, toolName: string): 
   return JSON.stringify([pluginId, toolName]);
 }
 
+/** Binds a side-effect declaration to the concrete plugin tool that owns it. */
+export function getPluginToolSideEffectOwnerKey(tool: AnyAgentTool): string | undefined {
+  const meta = getPluginToolMeta(tool);
+  const toolName = normalizeToolPolicyName(tool.name);
+  return meta?.sideEffecting && toolName
+    ? buildPluginToolMetadataKey(meta.pluginId, toolName)
+    : undefined;
+}
+
 function normalizeAllowlist(list?: string[]) {
   return new Set(normalizeUniqueStringEntries((list ?? []).map(normalizeToolPolicyName)));
 }
@@ -379,6 +389,13 @@ function isManifestToolReplaySafe(params: {
   toolName: string;
 }): boolean {
   return params.manifestPlugin?.toolMetadata?.[params.toolName]?.replaySafe === true;
+}
+
+function isManifestToolSideEffecting(params: {
+  manifestPlugin: PluginManifestRecord | undefined;
+  toolName: string;
+}): boolean {
+  return params.manifestPlugin?.toolMetadata?.[params.toolName]?.sideEffecting === true;
 }
 
 function isTrustedManifestLocalMediaTool(params: {
@@ -908,6 +925,10 @@ function createCachedDescriptorPluginTool(params: {
     pluginId,
     optional: params.descriptor.optional,
     replaySafe: isManifestToolReplaySafe({
+      manifestPlugin: params.plugin,
+      toolName,
+    }),
+    sideEffecting: isManifestToolSideEffecting({
       manifestPlugin: params.plugin,
       toolName,
     }),
@@ -1557,6 +1578,10 @@ export function resolvePluginTools(params: {
         pluginId: entry.pluginId,
         optional,
         replaySafe: isManifestToolReplaySafe({
+          manifestPlugin,
+          toolName: tool.name,
+        }),
+        sideEffecting: isManifestToolSideEffecting({
           manifestPlugin,
           toolName: tool.name,
         }),

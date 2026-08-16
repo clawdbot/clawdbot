@@ -3,6 +3,7 @@ import { t } from "../../i18n/index.ts";
 import type { BoardTab } from "../../lib/board/types.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import type { BoardGrantDecision } from "../../lib/board/view-types.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { renderBoardPendingCapabilities } from "./board-widget-capabilities.ts";
 
 export const BOARD_SIZE_PRESETS = {
@@ -131,7 +132,7 @@ export function renderBoardDisabledPlugin(options: {
 }
 
 export function renderBoardWidgetError(error: unknown, onRetry?: () => void): TemplateResult {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = formatUiError(error);
   return html`
     <div class="board-widget__error" role="alert" data-test-id="board-widget-error">
       <strong>${t("board.widget.errorTitle")}</strong>

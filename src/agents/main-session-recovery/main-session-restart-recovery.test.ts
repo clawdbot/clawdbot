@@ -20,6 +20,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { callGateway } from "../../gateway/call.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
+import * as gatewaySessionUtils from "../../gateway/session-utils.js";
 import {
   getAgentEventLifecycleGeneration,
   resetAgentEventsForTest,
@@ -904,6 +905,37 @@ describe("main-session-restart-recovery", () => {
     expect(result).toEqual({ marked: 1, skipped: 0 });
     expect(defaultStore["agent:main:issue-82433"]?.abortedLastRun).toBeUndefined();
     expect(customStore["agent:main:issue-82433"]?.abortedLastRun).toBe(true);
+  });
+
+  it("does not resolve session keys when session ids are authoritative", async () => {
+    const candidates = Array.from({ length: 24 }, (_, index) => ({
+      sessionId: `active-session-${index}`,
+      sessionKey: `agent:main:active-${index}`,
+    }));
+    const storePath = path.join(tmpDir, "custom-many-active", "sessions.json");
+    await writeStorePath(
+      storePath,
+      Object.fromEntries(
+        candidates.map(({ sessionId, sessionKey }) => [sessionKey, runningSessionEntry(sessionId)]),
+      ),
+    );
+    const resolveTarget = vi.spyOn(gatewaySessionUtils, "resolveGatewaySessionStoreTarget");
+
+    try {
+      const result = await markRestartAbortedMainSessions({
+        cfg: { session: { store: storePath } },
+        stateDir: tmpDir,
+        sessionIds: candidates.map(({ sessionId }) => sessionId),
+        sessionKeys: candidates.map(({ sessionKey }) => sessionKey),
+      });
+
+      const store = readStore(storePath);
+      expect(result).toEqual({ marked: candidates.length, skipped: 0 });
+      expect(candidates.every(({ sessionKey }) => store[sessionKey]?.abortedLastRun)).toBe(true);
+      expect(resolveTarget).not.toHaveBeenCalled();
+    } finally {
+      resolveTarget.mockRestore();
+    }
   });
 
   it("marks custom-store sessions by session id when no session key is available", async () => {

@@ -30,6 +30,7 @@ import {
 } from "../../auto-reply/reply/source-turn-id.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
@@ -414,6 +415,7 @@ export function startAgentRunExecution(params: {
             ? resolveScheduledToolPolicyContext({
                 toolsAllow: params.restoredCronContinuation.toolsAllow,
                 scheduledToolPolicy: params.restoredCronContinuation.scheduledToolPolicy,
+                callerOrigin: params.restoredCronContinuation.scheduledToolCallerOrigin,
               })
             : undefined,
           requireExplicitMessageTarget:
@@ -521,11 +523,12 @@ export function startAgentRunExecution(params: {
         claimId: execApprovalFollowupHandoffClaimId,
       });
     } catch (err) {
-      const error = errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err));
+      const renderedErr = formatErrorMessageWithCode(err);
+      const error = errorShape(ErrorCodes.UNAVAILABLE, renderedErr);
       const payload = {
         runId: params.runId,
         status: "error" as const,
-        summary: formatForLog(err),
+        summary: renderedErr,
       };
       setGatewayDedupeEntries({
         dedupe: params.context.dedupe,
@@ -534,7 +537,7 @@ export function startAgentRunExecution(params: {
       });
       params.io.emitFinal([false, payload, error], {
         runId: params.runId,
-        error: formatForLog(err),
+        error: renderedErr,
       });
     } finally {
       if (!dispatched) {

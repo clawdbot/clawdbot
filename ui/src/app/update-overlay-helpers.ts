@@ -1,6 +1,7 @@
 import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
+import { formatUiExternalText } from "../lib/format-error.ts";
 import { formatCountdown } from "../lib/format.ts";
 import { readUpdateAvailableValue, readUpdateScheduleValue } from "./update-schedule-dto.ts";
 
@@ -98,7 +99,7 @@ function readUpdateFailureCause(
     : undefined;
   const detail = lastLogLine(failed?.log?.stderrTail) ?? lastLogLine(failed?.log?.stdoutTail);
   const step = failed?.name?.trim();
-  return step && detail ? { step, detail } : null;
+  return step && detail ? { step, detail: formatUiExternalText(detail) } : null;
 }
 
 export type UpdateRunResponse = {

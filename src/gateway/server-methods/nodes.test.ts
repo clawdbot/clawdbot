@@ -4,7 +4,6 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import { WORKER_PROTOCOL_FEATURES } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   captureNodePairingGeneration,
   captureNodePairingState,
@@ -49,12 +48,6 @@ import { bindDeviceWorkerReconciliation } from "../worker-environments/device-pr
 import { nodeHandlers } from "./nodes.js";
 import { createWorkerSupervisorNodeClient } from "./nodes.runner-inventory.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
-
-const WORKER_RUNS = {
-  bundleHash: "a".repeat(64),
-  openclawVersion: "2026.8.1",
-  protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
-};
 
 const createdStates: OpenClawTestState[] = [];
 const pairingGenerationHooks = vi.hoisted(() => ({
@@ -164,18 +157,20 @@ function createOptions(
 ): {
   context: ReturnType<typeof createContext>;
   opts: GatewayRequestHandlerOptions;
+  respond: ReturnType<typeof vi.fn>;
 } {
   const context = createContext();
+  const respond = vi.fn();
   const opts = {
     req: { type: "req", id: "req-1", method: "node.pair.remove", params },
     params,
     client: createClient(["operator.pairing", "operator.admin"]),
     isWebchatConnect: () => false,
-    respond: vi.fn(),
+    respond,
     context,
     ...overrides,
   } as unknown as GatewayRequestHandlerOptions;
-  return { context, opts };
+  return { context, opts, respond };
 }
 
 describe("nodeHandlers node.skills.update", () => {
@@ -283,7 +278,7 @@ async function approveNodeSurface(stateDir: string, nodeId: string): Promise<voi
 }
 
 describe("nodeHandlers node.describe", () => {
-  it("projects the current exact worker build as a safe session-host boolean", async () => {
+  it("projects current runner availability as a safe session-host boolean", async () => {
     const state = await createState("node-describe-session-host");
     const nodeId = "node-1";
     await pairAndroidNodeDevice(state.stateDir, nodeId);
@@ -292,7 +287,7 @@ describe("nodeHandlers node.describe", () => {
     expect(pairingState?.generation).not.toBeNull();
 
     const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
-    const nodeClient = createWorkerSupervisorNodeClient("conn-1", WORKER_RUNS);
+    const nodeClient = createWorkerSupervisorNodeClient("conn-1");
     runtime.nodeRegistry.register(nodeClient, {
       pairingIdentity: pairingState?.identity.key ?? "",
       pairingGeneration: pairingState?.generation?.key,
@@ -300,7 +295,12 @@ describe("nodeHandlers node.describe", () => {
     const publication = createOptions(
       {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerRuns: WORKER_RUNS,
+        workerHost: {
+          enabled: true,
+          capacity: "available",
+          bundleRetention: 1,
+          bundleStatus: 1,
+        },
       },
       { client: nodeClient as never },
     );
@@ -309,7 +309,22 @@ describe("nodeHandlers node.describe", () => {
       nodeHandlers["node.runnerInventory.update"],
       'nodeHandlers["node.runnerInventory.update"] test invariant',
     )(publication.opts);
+    const [proof] = await runtime.nodeWorkerSupervisorTransport.listCurrentNodes();
+    expect(proof).toBeDefined();
+    expect(
+      proof &&
+        runtime.nodeWorkerSupervisorTransport.acceptBundleStatus?.(proof, {
+          bundleHash: "a".repeat(64),
+          status: { status: "installed", version: "2026.8.9" },
+        }),
+    ).toBe(true);
 
+    const listCall = createOptions({});
+    Object.assign(listCall.context, { nodeRegistry: runtime.nodeRegistry });
+    await expectDefined(
+      nodeHandlers["node.list"],
+      'nodeHandlers["node.list"] test invariant',
+    )(listCall.opts);
     const describeCall = createOptions({ nodeId });
     Object.assign(describeCall.context, { nodeRegistry: runtime.nodeRegistry });
     await expectDefined(
@@ -317,11 +332,29 @@ describe("nodeHandlers node.describe", () => {
       'nodeHandlers["node.describe"] test invariant',
     )(describeCall.opts);
 
-    expect(describeCall.opts.respond).toHaveBeenCalledWith(
+    expect(listCall.respond).toHaveBeenCalledWith(
       true,
-      expect.objectContaining({ nodeId, sessionHost: true }),
+      expect.objectContaining({
+        nodes: expect.arrayContaining([
+          expect.objectContaining({
+            nodeId,
+            workerBundle: { status: "installed", version: "2026.8.9" },
+          }),
+        ]),
+      }),
       undefined,
     );
+    expect(describeCall.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        nodeId,
+        sessionHost: true,
+        workerBundle: { status: "installed", version: "2026.8.9" },
+      }),
+      undefined,
+    );
+    expect(JSON.stringify(listCall.respond.mock.calls)).not.toContain("bundleHash");
+    expect(JSON.stringify(describeCall.respond.mock.calls)).not.toContain("bundleHash");
     runtime.nodeRegistry.unregister(nodeClient.connId);
   });
 });
@@ -456,7 +489,10 @@ describe("nodeHandlers node.pair.approve", () => {
       pairingGeneration: previousState?.generation?.key,
     });
     const publication = createOptions(
-      { protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE] },
+      {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        workerHost: { enabled: true, capacity: "available" },
+      },
       { client: client as never },
     );
     Object.assign(publication.context, { nodeRegistry: runtime.nodeRegistry });
