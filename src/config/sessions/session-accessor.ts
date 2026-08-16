@@ -243,6 +243,7 @@ export {
   readLatestTranscriptAssistantText,
   readTranscriptEventAtSeqSync,
   readTranscriptRawDelta,
+  readTranscriptSnapshotSync,
   readTranscriptStatsSync,
   replaceTranscriptEvents,
   replaceTranscriptEventsSync,

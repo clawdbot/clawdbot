@@ -1,8 +1,11 @@
 import {
   loadTranscriptEventsSync,
+  readTranscriptSnapshotSync,
   replaceTranscriptEventsSync,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
+import type { SqliteTranscriptSnapshotRow } from "../../config/sessions/session-accessor.sqlite-read.js";
+import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import {
@@ -42,6 +45,11 @@ export class SessionManagerCore {
   protected pendingDeliberateAppend = false;
   protected persistenceTarget: SessionManagerPersistenceTarget | undefined;
   protected persistenceHeaderPending = false;
+  // The transcript row snapshot last known to be durable, taken right after our own
+  // last commit (load or append). replacePersistedTranscript revalidates against this
+  // immediately before rewriting, so a foreign process's append landing in the gap
+  // between our last commit and the rewrite is detected instead of silently deleted.
+  private transcriptSnapshot: SqliteTranscriptSnapshotRow[] | undefined;
 
   constructor(
     cwd: string,
@@ -79,6 +87,7 @@ export class SessionManagerCore {
       this.persistenceTarget = target ? { ...target } : undefined;
       this.initializeSession({ id: target?.sessionId });
       this.persistenceHeaderPending = target !== undefined;
+      this.refreshTranscriptSnapshot();
       return;
     }
     const header = partitioned.fileEntries.find((entry) => entry.type === "session");
@@ -97,6 +106,14 @@ export class SessionManagerCore {
       partitioned.fileEntriesByOriginalIndex,
     );
     this.buildIndex();
+    this.refreshTranscriptSnapshot();
+  }
+
+  /** Refreshes the last-known-durable transcript row snapshot from storage. */
+  protected refreshTranscriptSnapshot(): void {
+    this.transcriptSnapshot = this.persistenceTarget
+      ? readTranscriptSnapshotSync(this.persistenceTarget)
+      : undefined;
   }
 
   reloadPersistedTranscript(): void {
@@ -520,10 +537,23 @@ export class SessionManagerCore {
     }
     const leafAppendParentId =
       options?.leafAppendParentId === undefined ? this.appendParentId : options.leafAppendParentId;
-    replaceTranscriptEventsSync(
-      this.persistenceTarget,
-      this.getPersistedFileEntries(leafAppendParentId, options?.leafAppendMode ?? this.appendMode),
-    );
+    try {
+      replaceTranscriptEventsSync(
+        this.persistenceTarget,
+        this.getPersistedFileEntries(leafAppendParentId, options?.leafAppendMode ?? this.appendMode),
+        { expectedSnapshot: this.transcriptSnapshot },
+      );
+    } catch (error) {
+      if (error instanceof SqliteTranscriptMutationConflictError) {
+        // A foreign process committed a transcript row after our last known-good
+        // state and before this rewrite. The write was refused, so reload durable
+        // state to resync in-memory entries with the foreign row instead of
+        // silently discarding it, then surface the failure to the caller.
+        this.reloadPersistedTranscript();
+      }
+      throw error;
+    }
+    this.refreshTranscriptSnapshot();
     this.persistenceHeaderPending = false;
   }
 

@@ -10,6 +10,7 @@ import {
   appendTranscriptMessage,
   loadSessionEntry,
   loadTranscriptEvents,
+  replaceTranscriptEventsSync,
   updateSessionEntry,
   upsertSessionEntryCore,
   withTranscriptWriteLock,
@@ -59,6 +60,11 @@ type ConcurrencyWorkerRequest =
       rewriteMode: "read-then-replace" | "replace-twice";
       sessionId: string;
       storePath: string;
+    }
+  | {
+      kind: "sync-transcript-rewrite";
+      sessionId: string;
+      storePath: string;
     };
 
 type ConcurrencyWorkerReady<TRequest extends ConcurrencyWorkerRequest> = TRequest extends {
@@ -96,6 +102,9 @@ function createConcurrencyWorkerScript(sessionAccessorUrl: string): string {
 const {
   commitReplySessionInitialization,
   loadReplySessionInitializationSnapshot,
+  loadTranscriptEventsSync,
+  readTranscriptSnapshotSync,
+  replaceTranscriptEventsSync,
   withTranscriptWriteLock,
 } = await import(${JSON.stringify(sessionAccessorUrl)});
 
@@ -222,6 +231,46 @@ async function runTranscriptRewrite(request) {
   return result;
 }
 
+async function runSyncTranscriptRewrite(request) {
+  let result;
+  try {
+    const scope = {
+      agentId: AGENT_ID,
+      sessionId: request.sessionId,
+      sessionKey: SESSION_KEY,
+      storePath: request.storePath,
+    };
+    // Capture the "last known good" snapshot the same way a real SessionManager
+    // does right after its own last commit, before the foreign process gets a
+    // chance to append.
+    const expectedSnapshot = readTranscriptSnapshotSync(scope);
+    const events = loadTranscriptEventsSync(scope);
+    const proceed = waitForProceed(request.requestId);
+    send({
+      phase: "ready",
+      requestId: request.requestId,
+      value: { eventCount: events.length },
+    });
+    await proceed;
+    const rewrittenEvents = events.filter(
+      (event) =>
+        typeof event !== "object" ||
+        event === null ||
+        Array.isArray(event) ||
+        event.id !== "rewrite-target",
+    );
+    replaceTranscriptEventsSync(scope, rewrittenEvents, { expectedSnapshot });
+    result = { ok: true };
+  } catch (error) {
+    result = {
+      ok: false,
+      name: error instanceof Error ? error.name : typeof error,
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+  return result;
+}
+
 process.on("message", (request) => {
   if (!request || typeof request !== "object") {
     return;
@@ -242,7 +291,9 @@ process.on("message", (request) => {
     const value =
       request.kind === "reply-init"
         ? await runReplyInit(request)
-        : await runTranscriptRewrite(request);
+        : request.kind === "sync-transcript-rewrite"
+          ? await runSyncTranscriptRewrite(request)
+          : await runTranscriptRewrite(request);
     send({ phase: "result", requestId: request.requestId, value });
   })().catch((error) => {
     send({
@@ -562,6 +613,76 @@ describe("session accessor cross-process concurrency", () => {
         name: "SqliteTranscriptMutationConflictError",
         message: `SQLite transcript changed while preparing rewrite for ${sessionId}`,
       });
+      await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+        { type: "session", version: 3, id: sessionId },
+        {
+          type: "message",
+          id: "rewrite-target",
+          parentId: null,
+          message: { role: "assistant", content: "original content" },
+        },
+        expect.objectContaining({
+          type: "message",
+          message: expect.objectContaining({
+            role: "user",
+            content: "committed concurrent append",
+          }),
+        }),
+      ]);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it("rejects a sync transcript rewrite after another process commits an append", async () => {
+    const tempDir = tempDirs.make("openclaw-sync-transcript-rewrite-");
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionId = "sync-cross-process-transcript";
+    const scope = {
+      agentId: AGENT_ID,
+      sessionId,
+      sessionKey: SESSION_KEY,
+      storePath,
+    };
+    try {
+      await upsertSessionEntryCore(scope, {
+        sessionId,
+        updatedAt: Date.now(),
+      });
+      replaceTranscriptEventsSync(scope, [
+        { type: "session", version: 3, id: sessionId },
+        {
+          type: "message",
+          id: "rewrite-target",
+          parentId: null,
+          message: { role: "assistant", content: "original content" },
+        },
+      ]);
+
+      const result = await runConcurrencyScenario(
+        {
+          kind: "sync-transcript-rewrite",
+          sessionId,
+          storePath,
+        },
+        async (ready) => {
+          expect(ready).toEqual({ eventCount: 2 });
+          await appendTranscriptMessage(scope, {
+            cwd: tempDir,
+            message: {
+              role: "user",
+              content: "committed concurrent append",
+              timestamp: Date.now(),
+            },
+          });
+        },
+      );
+      expect(result).toMatchObject({
+        ok: false,
+        name: "SqliteTranscriptMutationConflictError",
+        message: `SQLite transcript changed while preparing rewrite for ${sessionId}`,
+      });
+      // The concurrently committed row must survive the refused rewrite.
       await expect(loadTranscriptEvents(scope)).resolves.toEqual([
         { type: "session", version: 3, id: sessionId },
         {

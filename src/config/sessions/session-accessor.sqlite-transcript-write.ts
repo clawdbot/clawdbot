@@ -71,7 +71,7 @@ import { mergeSessionEntry } from "./types.js";
 
 // Transcript write owner. Queue coordination surrounds synchronous SQLite commit sections.
 
-class SqliteTranscriptMutationConflictError extends Error {
+export class SqliteTranscriptMutationConflictError extends Error {
   constructor(sessionId: string) {
     super(`SQLite transcript changed while preparing rewrite for ${sessionId}`);
     this.name = "SqliteTranscriptMutationConflictError";
@@ -153,14 +153,42 @@ export async function rewriteTranscriptEventRowsExact(
   });
 }
 
-/** Fully replaces rows for one transcript synchronously for sync session runtimes. */
+/**
+ * Reads the current transcript rows outside any write transaction, for a caller to
+ * hold as its authoritative "last known good" snapshot between a commit it made or
+ * observed and a later call to {@link replaceTranscriptEventsSync}.
+ */
+export function readTranscriptSnapshotSync(
+  scope: SessionTranscriptAccessScope,
+): SqliteTranscriptSnapshotRow[] {
+  const resolved = resolveSqliteTranscriptScope(scope);
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  return readTranscriptEventRows(database, resolved.sessionId);
+}
+
+/**
+ * Fully replaces rows for one transcript synchronously for sync session runtimes.
+ *
+ * `expectedSnapshot`, when provided, must be the transcript row snapshot the caller
+ * last knew to be durable (from {@link readTranscriptSnapshotSync} or an earlier
+ * append) *before* it built `events`. The session-entry checks below only cover the
+ * entry row; they do not observe a foreign process's transcript-row append. Reading
+ * a fresh snapshot inside this function would not help: a foreign append that landed
+ * before this call was even made would already be included in that fresh read, so it
+ * would validate cleanly while the rewrite still silently drops it. Revalidating
+ * against the caller's earlier snapshot is what actually detects that case, mirroring
+ * the async `withTranscriptWriteLock().replaceEvents` sibling, whose `expectedSnapshot`
+ * is likewise captured by the caller's prior `readEvents()`/`appendMessage()` call.
+ */
 export function replaceTranscriptEventsSync(
   scope: SessionTranscriptWriteScope,
   events: TranscriptEvent[],
+  options: { expectedSnapshot?: readonly SqliteTranscriptSnapshotRow[] } = {},
 ): boolean {
   // Every sync replacement inherits and enforces the admitted writer claim.
   const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
   const resolved = resolveSqliteTranscriptScope(fencedScope);
+  const expectedSnapshot = options.expectedSnapshot;
   let replaced = false;
   runOpenClawAgentWriteTransaction((database) => {
     const fresh = readSessionEntryRow(database, resolved.sessionKey);
@@ -173,6 +201,11 @@ export function replaceTranscriptEventsSync(
         (fresh.entry as InternalSessionEntry).activeWriterRunId !== fencedScope.expectedWriterRunId)
     ) {
       return;
+    }
+    if (expectedSnapshot !== undefined) {
+      // Revalidate the caller's snapshot after BEGIN IMMEDIATE so a transcript row
+      // committed by another process cannot be silently deleted by the rewrite.
+      assertSqliteTranscriptSnapshotUnchanged(database, resolved.sessionId, expectedSnapshot);
     }
     replaceSqliteTranscriptEventsInTransaction(database, resolved, events);
     replaced = true;

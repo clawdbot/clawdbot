@@ -859,6 +859,66 @@ describe("SessionManager.open", () => {
     ]);
   });
 
+  it("rejects removeTrailingEntries after a foreign process commits an append, and self-heals", async () => {
+    const dir = tempDirs.make("openclaw-session-manager-");
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "sync-transcript-rewrite-conflict";
+    const sessionKey = "agent:main:dashboard:sync-transcript-rewrite-conflict";
+    const marker = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId,
+      storePath,
+    });
+    const scope = { agentId: "main", sessionId, sessionKey, storePath };
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey, storePath },
+      { sessionFile: marker, sessionId, updatedAt: 10 },
+    );
+
+    const sessionManager = openMarker(marker, sessionKey, dir);
+    sessionManager.appendMessage({ role: "user", content: "question", timestamp: 1 });
+    sessionManager.appendMessage(buildAssistantMessage("mid-turn precheck error"));
+
+    // A foreign process (e.g. a channel mirror append) commits a row this
+    // SessionManager never observed.
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "foreign-mirror-row",
+      message: { role: "user", content: "foreign mirror row" },
+    });
+
+    expect(() =>
+      sessionManager.removeTrailingEntries(
+        (entry) => entry.type === "message" && entry.message.role === "assistant",
+      ),
+    ).toThrow("SQLite transcript changed while preparing rewrite");
+
+    // The foreign row must survive: it was neither deleted nor silently reported
+    // as a successful removal.
+    await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+      expect.objectContaining({ type: "session" }),
+      expect.objectContaining({
+        message: expect.objectContaining({ content: "question", role: "user" }),
+      }),
+      expect.objectContaining({
+        message: expect.objectContaining({ role: "assistant" }),
+      }),
+      expect.objectContaining({
+        message: expect.objectContaining({ content: "foreign mirror row", role: "user" }),
+      }),
+    ]);
+
+    // SessionManager must have reloaded durable state rather than keeping its
+    // stale in-memory removal.
+    expect(sessionManager.getEntries()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          message: expect.objectContaining({ content: "foreign mirror row", role: "user" }),
+        }),
+      ]),
+    );
+  });
+
   it("creates SQLite-backed branch sessions without rewriting the source transcript", async () => {
     const dir = tempDirs.make("openclaw-session-manager-");
     const storePath = path.join(dir, "sessions.json");

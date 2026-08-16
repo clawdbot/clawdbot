@@ -143,7 +143,13 @@ export class SessionManagerPersistence extends SessionManagerCore {
 
   protected persistRecord(entry: unknown, options?: AppendPersistenceOptions): PersistRecordResult {
     if (this.persistenceTarget) {
-      return this.persistSqliteRecord(entry, options);
+      const result = this.persistSqliteRecord(entry, options);
+      // Every branch of persistSqliteRecord commits its own append transaction
+      // before returning (or throws without committing). Refresh the tracked
+      // snapshot here so replacePersistedTranscript's later conflict check
+      // revalidates against our own latest commit, not a stale one.
+      this.refreshTranscriptSnapshot();
+      return result;
     }
     return undefined;
   }
