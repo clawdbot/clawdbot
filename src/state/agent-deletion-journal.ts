@@ -16,7 +16,10 @@ import type {
 import { ensureAgentDeletionJournalSchema } from "./openclaw-state-db-schema-additive.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import {
+  resolveOpenClawRegisteredAgentDatabasePath,
+  resolveOpenClawStateSqlitePath,
+} from "./openclaw-state-db.paths.js";
 
 type AgentDeletionDatabase = Pick<
   OpenClawStateKyselyDatabase,
@@ -379,7 +382,11 @@ export function beginAgentDeletionJournal(
     const registeredDatabasePaths = executeSqliteQuerySync(
       database.db,
       db.selectFrom("agent_databases").select("path").where("agent_id", "=", normalized.agentId),
-    ).rows.flatMap((row) => resolveSqliteDatabaseFilePaths(row.path));
+    ).rows.flatMap((row) =>
+      resolveSqliteDatabaseFilePaths(
+        resolveOpenClawRegisteredAgentDatabasePath(database.path, row.path),
+      ),
+    );
     const databasePaths = [
       ...new Set(
         [

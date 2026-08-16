@@ -25,6 +25,7 @@ import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import { loadTaskRegistryStateFromSqlite } from "../tasks/task-registry.store.sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { VERSION } from "../version.js";
+import { listOpenClawRegisteredAgentDatabases } from "./openclaw-agent-db-registry.js";
 import { FIRST_USE_STATE_TABLES } from "./openclaw-state-db-contract.js";
 import {
   findOpenClawStateDatabaseSchemaMigrationRequiredError,
@@ -1559,7 +1560,9 @@ describe("openclaw state database", () => {
         });
       }
       const migrated = openOpenClawStateDatabase(options);
-      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(8);
+      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(
+        OPENCLAW_STATE_SCHEMA_VERSION,
+      );
       expect(
         migrated.db
           .prepare(
@@ -1573,6 +1576,57 @@ describe("openclaw state database", () => {
       });
     },
   );
+
+  it("migrates v8 agent database registrations to state-relative paths", () => {
+    const stateDir = createTempStateDir();
+    const foreignStateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+    const inRootPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    const foreignDefaultPath = path.join(
+      foreignStateDir,
+      "agents",
+      "foreign",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+    const externalPath = path.join(foreignStateDir, "explicit", "external.sqlite");
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacy = new DatabaseSync(databasePath);
+    const insert = legacy.prepare(
+      `INSERT INTO agent_databases (
+         agent_id, path, schema_version, last_seen_at, size_bytes
+       ) VALUES (?, ?, 17, 1, NULL)`,
+    );
+    insert.run("main", inRootPath);
+    insert.run("foreign", foreignDefaultPath);
+    insert.run("external", externalPath);
+    legacy.exec(`
+      PRAGMA user_version = 8;
+      UPDATE schema_meta SET schema_version = 8 WHERE meta_key = 'primary';
+    `);
+    legacy.close();
+
+    expect(detectOpenClawStateDatabaseSchemaMigrations({ env })).toContainEqual({
+      kind: "agent-databases-relative-paths-v9",
+      path: databasePath,
+    });
+    const migrated = openOpenClawStateDatabase({ env });
+    expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(9);
+    expect(
+      migrated.db.prepare("SELECT agent_id, path FROM agent_databases ORDER BY agent_id").all(),
+    ).toEqual([
+      { agent_id: "external", path: externalPath },
+      {
+        agent_id: "main",
+        path: path.join("agents", "main", "agent", "openclaw-agent.sqlite"),
+      },
+    ]);
+    expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([
+      expect.objectContaining({ agentId: "external", path: externalPath }),
+      expect.objectContaining({ agentId: "main", path: inRootPath }),
+    ]);
+  });
 
   it.each(["runtime open", "doctor repair"] as const)(
     "retires v6 commitments through %s while preserving shared leases",

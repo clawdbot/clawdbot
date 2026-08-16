@@ -45,3 +45,26 @@ export function resolveOpenClawStateDirForDatabasePath(databasePath: string): st
   const databaseDir = path.dirname(path.resolve(databasePath));
   return path.basename(databaseDir) === "state" ? path.dirname(databaseDir) : databaseDir;
 }
+
+/** Resolve the durable registry form for one agent database path. */
+export function resolveOpenClawAgentDatabaseStoredPath(
+  registryDatabasePath: string,
+  agentDatabasePath: string,
+): string {
+  const stateDir = resolveOpenClawStateDirForDatabasePath(registryDatabasePath);
+  const absolutePath = path.resolve(agentDatabasePath);
+  const relativePath = path.relative(stateDir, absolutePath);
+  return relativePath.startsWith("..") || path.isAbsolute(relativePath)
+    ? absolutePath
+    : relativePath;
+}
+
+/** Resolve one stored agent database registry path for runtime consumers. */
+export function resolveOpenClawRegisteredAgentDatabasePath(
+  registryDatabasePath: string,
+  storedPath: string,
+): string {
+  return path.isAbsolute(storedPath)
+    ? storedPath
+    : path.resolve(resolveOpenClawStateDirForDatabasePath(registryDatabasePath), storedPath);
+}

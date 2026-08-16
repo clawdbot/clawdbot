@@ -86,6 +86,12 @@ Version 3 was an unshipped development step folded into version 4.
 | 5       | Durable cloud-worker result references on pending workspace fences ([`7a7d6bb`](https://github.com/openclaw/openclaw/commit/7a7d6bb51f42bd896de2b8a4df2ee66f3dce0a21), [#110952](https://github.com/openclaw/openclaw/pull/110952))              | `v2026.7.2-beta.4`  |
 | 6       | Every committed shared-state table becomes part of the canonical runtime schema ([`509a5f0`](https://github.com/openclaw/openclaw/commit/509a5f03737642fec4a940e6d605887f7957ddc8), [#113473](https://github.com/openclaw/openclaw/pull/113473)) | `v2026.7.2-beta.5`  |
 | 7       | Retired inferred-commitment storage removed                                                                                                                                                                                                      | Unreleased          |
+| 8       | Cloud-worker placement execution modes and mode-aware turn claims                                                                                                                                                                                | Unreleased          |
+| 9       | In-root agent database registry paths stored relative to the state directory                                                                                                                                                                     | Unreleased          |
+
+### State schema 9
+
+Schema 9 stores an `agent_databases.path` value relative to the state directory when the registered agent database is inside that directory. Explicit external database paths remain absolute. This keeps a copied state directory self-contained: its registry resolves agent databases beneath the copied root instead of continuing to discover files beneath the source root.
 
 ## Integrity checks
 
@@ -137,6 +143,12 @@ The general procedure is:
 2. In one transaction, drop every table, index, trigger, and column introduced after the target version.
 3. Set `PRAGMA user_version` and `schema_meta.schema_version` to the target version.
 4. Run the target release's full database verification before starting the Gateway.
+
+### Example: state schema 9 to 8
+
+Schema 8 expects every `agent_databases.path` value to be absolute. Before lowering `user_version`, inspect each registry row on the same platform that wrote it. Leave absolute external paths unchanged; replace every relative path with its platform-native absolute form by resolving it against the state directory that owns `state/openclaw.sqlite`. Then set both `PRAGMA user_version` and `schema_meta.schema_version` to 8 in the same transaction.
+
+Do not lower the version while relative registry rows remain. A schema 8 build interprets them relative to its process working directory rather than the copied state directory.
 
 ### Example: state schema 7 to 6
 

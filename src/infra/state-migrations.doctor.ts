@@ -194,6 +194,8 @@ function describeStateSchemaMigration(migration: OpenClawStateDatabaseSchemaMigr
       return "retired commitments storage → removed table and indexes";
     case "worker-placement-execution-mode-v8":
       return "cloud worker placements → execution-mode claims";
+    case "agent-databases-relative-paths-v9":
+      return "agent database registry paths → state-relative storage";
     case "operator-approvals-system-agent":
       return "operator approvals → OpenClaw system changes";
     case "session-watch-cursor-provenance-v4":

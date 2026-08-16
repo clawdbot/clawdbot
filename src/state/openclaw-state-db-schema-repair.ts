@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
@@ -29,6 +30,7 @@ import {
 } from "./openclaw-state-db-schema-helpers.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
 import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
+import { resolveOpenClawAgentDatabaseStoredPath } from "./openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 export function dropLegacyStateTables(db: DatabaseSync): void {
@@ -449,6 +451,57 @@ export function migrateWorkerPlacementExecutionModeSchema(
   return true;
 }
 
+function isDefaultAgentDatabasePath(pathname: string, agentId: string): boolean {
+  const agentDir = path.dirname(pathname);
+  const agentIdDir = path.dirname(agentDir);
+  return (
+    path.basename(pathname) === "openclaw-agent.sqlite" &&
+    path.basename(agentDir) === "agent" &&
+    path.basename(agentIdDir) === agentId &&
+    path.basename(path.dirname(agentIdDir)) === "agents"
+  );
+}
+
+export function migrateAgentDatabaseRelativePaths(
+  db: DatabaseSync,
+  previousVersion: number,
+  databasePath: string,
+): boolean {
+  if (previousVersion >= 9 || !tableExists(db, "agent_databases")) {
+    return false;
+  }
+  const rows = db.prepare("SELECT agent_id, path FROM agent_databases").all();
+  const updatePath = db.prepare(
+    "UPDATE agent_databases SET path = ? WHERE agent_id = ? AND path = ?",
+  );
+  const deletePath = db.prepare("DELETE FROM agent_databases WHERE agent_id = ? AND path = ?");
+  let changed = false;
+  for (const row of rows) {
+    const agentId = row.agent_id;
+    const registeredPath = row.path;
+    if (typeof agentId !== "string" || typeof registeredPath !== "string") {
+      throw new Error("OpenClaw v8 agent database registry paths are not canonical");
+    }
+    if (!path.isAbsolute(registeredPath)) {
+      continue;
+    }
+    const absolutePath = path.resolve(registeredPath);
+    const storedPath = resolveOpenClawAgentDatabaseStoredPath(databasePath, absolutePath);
+    if (!path.isAbsolute(storedPath)) {
+      updatePath.run(storedPath, agentId, registeredPath);
+      changed = true;
+      continue;
+    }
+    if (isDefaultAgentDatabasePath(absolutePath, agentId)) {
+      // Copied registries can retain another state root's default-layout rows.
+      // They are discovery metadata and self-heal when that agent database next opens.
+      deletePath.run(agentId, registeredPath);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 function hasCanonicalAgentDatabasesPrimaryKey(db: DatabaseSync): boolean {
   if (!tableExists(db, "agent_databases")) {
     return true;
@@ -622,6 +675,9 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
   }
   if (userVersion === 7 && tableExists(db, "worker_session_placements")) {
     migrations.push({ kind: "worker-placement-execution-mode-v8", path: pathname });
+  }
+  if (userVersion === 8 && tableExists(db, "agent_databases")) {
+    migrations.push({ kind: "agent-databases-relative-paths-v9", path: pathname });
   }
   if (!hasCanonicalAgentDatabasesPrimaryKey(db)) {
     migrations.push({ kind: "agent-databases-composite-primary-key", path: pathname });
