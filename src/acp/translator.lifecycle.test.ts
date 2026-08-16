@@ -15,6 +15,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 import type { GatewaySessionRow } from "../gateway/session-utils.js";
 import { AcpGatewayAgent } from "./translator.js";
+import { acpGatewayDefaultResponse } from "./translator.test-helpers.js";
 import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
 
 vi.mock("./commands.js", () => ({
@@ -179,17 +180,19 @@ describe("acp translator stable lifecycle handlers", () => {
       createSessionRow({ key: "agent:main:b1", cwd: "/work/b", title: "B1" }),
       createSessionRow({ key: "agent:main:a4", cwd: "/work/a", title: "A4" }),
     ];
-    const request = vi.fn(async (method: string, params?: { limit?: number }) => {
-      if (method === "sessions.list") {
-        const limit = params?.limit ?? allRows.length;
-        return {
-          ...createGatewaySessions(allRows.slice(0, limit)),
-          totalCount: allRows.length,
-          hasMore: limit < allRows.length,
-        };
-      }
-      return { ok: true };
-    }) as GatewayClient["request"];
+    const request = vi.fn(
+      async (method: string, params?: { limit?: number } & Record<string, unknown>) => {
+        if (method === "sessions.list") {
+          const limit = params?.limit ?? allRows.length;
+          return {
+            ...createGatewaySessions(allRows.slice(0, limit)),
+            totalCount: allRows.length,
+            hasMore: limit < allRows.length,
+          };
+        }
+        return acpGatewayDefaultResponse(method, params);
+      },
+    ) as GatewayClient["request"];
     const sessionStore = createInMemorySessionStore();
     const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
       sessionStore,
@@ -234,11 +237,11 @@ describe("acp translator stable lifecycle handlers", () => {
       createSessionRow({ key: "agent:main:a1", cwd: "/work/a", title: "A1" }),
       createSessionRow({ key: "agent:main:b1", cwd: "/work/b", title: "B1" }),
     ];
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
       if (method === "sessions.list") {
         return createGatewaySessions(allRows);
       }
-      return { ok: true };
+      return acpGatewayDefaultResponse(method, params);
     }) as GatewayClient["request"];
     const sessionStore = createInMemorySessionStore();
     const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
@@ -252,7 +255,7 @@ describe("acp translator stable lifecycle handlers", () => {
   });
 
   it("lists Gateway sessions with invalid updated timestamps", async () => {
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
       if (method === "sessions.list") {
         return createGatewaySessions([
           createSessionRow({
@@ -263,7 +266,7 @@ describe("acp translator stable lifecycle handlers", () => {
           }),
         ]);
       }
-      return { ok: true };
+      return acpGatewayDefaultResponse(method, params);
     }) as GatewayClient["request"];
     const sessionStore = createInMemorySessionStore();
     const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
@@ -282,17 +285,19 @@ describe("acp translator stable lifecycle handlers", () => {
       createSessionRow({ key: "agent:main:a2", cwd: "/work/a", title: "A2" }),
       createSessionRow({ key: "agent:main:b1", cwd: "/work/b", title: "B1" }),
     ];
-    const request = vi.fn(async (method: string, params?: { limit?: number }) => {
-      if (method === "sessions.list") {
-        const limit = params?.limit ?? allRows.length;
-        return {
-          ...createGatewaySessions(allRows.slice(0, limit)),
-          totalCount: allRows.length,
-          hasMore: limit < allRows.length,
-        };
-      }
-      return { ok: true };
-    }) as GatewayClient["request"];
+    const request = vi.fn(
+      async (method: string, params?: { limit?: number } & Record<string, unknown>) => {
+        if (method === "sessions.list") {
+          const limit = params?.limit ?? allRows.length;
+          return {
+            ...createGatewaySessions(allRows.slice(0, limit)),
+            totalCount: allRows.length,
+            hasMore: limit < allRows.length,
+          };
+        }
+        return acpGatewayDefaultResponse(method, params);
+      },
+    ) as GatewayClient["request"];
     const sessionStore = createInMemorySessionStore();
     const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
       sessionStore,
@@ -331,7 +336,7 @@ describe("acp translator stable lifecycle handlers", () => {
   it("resumes an existing Gateway session without replaying transcript history", async () => {
     const connection = createAcpConnection();
     const sessionUpdate = connection["__sessionUpdateMock"];
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
       if (method === "sessions.list") {
         return createGatewaySessions([
           createSessionRow({
@@ -344,7 +349,7 @@ describe("acp translator stable lifecycle handlers", () => {
       if (method === "sessions.get") {
         throw new Error("resume must not load transcript history");
       }
-      return { ok: true };
+      return acpGatewayDefaultResponse(method, params);
     }) as GatewayClient["request"];
     const sessionStore = createInMemorySessionStore();
     const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
@@ -378,11 +383,11 @@ describe("acp translator stable lifecycle handlers", () => {
   });
 
   it("rejects resume for a missing Gateway session without creating bridge state", async () => {
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
       if (method === "sessions.list") {
         return createGatewaySessions([]);
       }
-      return { ok: true };
+      return acpGatewayDefaultResponse(method, params);
     }) as GatewayClient["request"];
     const sessionStore = createInMemorySessionStore();
     const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
@@ -404,7 +409,7 @@ describe("acp translator stable lifecycle handlers", () => {
       if (method === "sessions.list") {
         return createGatewaySessions([createSessionRow({ key: "agent:main:work" })]);
       }
-      return { ok: true };
+      return acpGatewayDefaultResponse(method, params);
     }) as GatewayClient["request"];
     const sessionStore = createInMemorySessionStore();
     sessionStore.createSession({
@@ -428,7 +433,7 @@ describe("acp translator stable lifecycle handlers", () => {
       if (method === "chat.send") {
         return { runId: params?.idempotencyKey, status: "error" };
       }
-      return { ok: true };
+      return acpGatewayDefaultResponse(method, params);
     }) as GatewayClient["request"];
     const sessionStore = createInMemorySessionStore();
     sessionStore.createSession({
@@ -450,7 +455,7 @@ describe("acp translator stable lifecycle handlers", () => {
       if (method === "chat.send") {
         return { runId: params?.idempotencyKey, status: "ok" };
       }
-      return { ok: true };
+      return acpGatewayDefaultResponse(method, params);
     });
     const request = requestMock as GatewayClient["request"];
     const sessionStore = createInMemorySessionStore();
@@ -481,7 +486,7 @@ describe("acp translator stable lifecycle handlers", () => {
         }
         return new Promise<never>(() => {});
       }
-      return { ok: true };
+      return acpGatewayDefaultResponse(method, params);
     }) as GatewayClient["request"];
     const sessionStore = createInMemorySessionStore();
     sessionStore.createSession({
@@ -519,13 +524,13 @@ describe("acp translator stable lifecycle handlers", () => {
       if (method === "sessions.list") {
         return createGatewaySessions([]);
       }
-      return { ok: true };
+      return acpGatewayDefaultResponse(method, params);
     });
-    const requestB = vi.fn(async (method: string) => {
+    const requestB = vi.fn(async (method: string, params?: Record<string, unknown>) => {
       if (method === "sessions.list") {
         return createGatewaySessions([]);
       }
-      return { ok: true };
+      return acpGatewayDefaultResponse(method, params);
     });
     const agentA = new AcpGatewayAgent(
       createAcpConnection(),
