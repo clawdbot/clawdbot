@@ -112,7 +112,7 @@ describe("qa-bus server", () => {
     await Promise.all(stops.splice(0).map((stop) => stop()));
   });
 
-  it("wakes matching long polls and settles late polls during shutdown", async () => {
+  it("wakes matching polls and fences late polls and writes during shutdown", async () => {
     const state = createQaBusState();
     const bus = await startQaBusServer({ state });
     let stopped = false;
@@ -145,16 +145,22 @@ describe("qa-bus server", () => {
     });
 
     const waitForCursorAdvance = state.waitForCursorAdvance.bind(state);
-    let lateWaiterStarted = false;
-    let lateWaiterSettled = false;
+    let pollWaitersStarted = 0;
+    let pollWaitersSettled = 0;
     state.waitForCursorAdvance = async (...args) => {
-      lateWaiterStarted = true;
+      pollWaitersStarted += 1;
       try {
         return await waitForCursorAdvance(...args);
       } finally {
-        lateWaiterSettled = true;
+        pollWaitersSettled += 1;
       }
     };
+    const activePoll = fetch(`${bus.baseUrl}/v1/poll`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ accountId: "active", cursor: 1, timeoutMs: 30_000 }),
+    }).catch(() => undefined);
+    await vi.waitFor(() => expect(pollWaitersStarted).toBe(1));
     const body = JSON.stringify({ accountId: "late-body", cursor: 0, timeoutMs: 30_000 });
     const slowPoll = request({
       host: "127.0.0.1",
@@ -166,17 +172,40 @@ describe("qa-bus server", () => {
     slowPoll.on("response", (response) => response.resume());
     slowPoll.on("error", () => undefined);
     slowPoll.write(body.slice(0, 1));
+    const inboundBody = JSON.stringify({
+      conversation: { id: "late-room", kind: "direct" },
+      senderId: "late-sender",
+      text: "must not survive shutdown",
+    });
+    const slowInbound = request({
+      host: "127.0.0.1",
+      port: bus.port,
+      path: "/v1/inbound/message",
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "content-length": Buffer.byteLength(inboundBody),
+      },
+    });
+    slowInbound.on("response", (response) => response.resume());
+    slowInbound.on("error", () => undefined);
+    slowInbound.write(inboundBody.slice(0, 1));
     await sleep(10);
 
     stopped = true;
     const startedAt = Date.now();
     const stopping = bus.stop();
-    setTimeout(() => slowPoll.end(body.slice(1)), 50);
+    setTimeout(() => {
+      slowPoll.end(body.slice(1));
+      slowInbound.end(inboundBody.slice(1));
+    }, 50);
     await stopping;
+    await activePoll;
 
     expect(Date.now() - startedAt).toBeLessThan(1_000);
-    expect(lateWaiterStarted).toBe(true);
-    expect(lateWaiterSettled).toBe(true);
+    expect(pollWaitersStarted).toBe(1);
+    expect(pollWaitersSettled).toBe(1);
+    expect(state.getSnapshot()).toMatchObject({ events: [], messages: [] });
   });
 
   it("resumes an account after its last acknowledged cursor when the client restarts", async () => {

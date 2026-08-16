@@ -10,7 +10,7 @@ import type {
 
 export const DEFAULT_WAIT_TIMEOUT_MS = 5_000;
 
-function throwQaBusClosed(): never {
+export function throwQaBusClosed(): never {
   throw new Error("qa-bus closed");
 }
 
