@@ -124,21 +124,32 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
         key: "agent:main:archived",
         deleteTranscript: true,
         archivedOnly: true,
+        expectedSessionId: "session-1",
       }),
     ).toBe("operator.write");
-    expect(
-      resolveDynamicSessionMutationRequiredScope("sessions.delete", {
-        key: "agent:main:active",
-        deleteTranscript: true,
-      }),
-    ).toBe("operator.admin");
-    expect(
-      resolveDynamicSessionMutationRequiredScope("sessions.delete", {
+    for (const params of [
+      undefined,
+      null,
+      [],
+      { key: "agent:main:active", deleteTranscript: true },
+      { key: "agent:main:archived", archivedOnly: "yes" },
+      {
         key: "agent:main:archived",
         archivedOnly: true,
+        expectedSessionId: "session-1",
         emitLifecycleHooks: false,
-      }),
-    ).toBe("operator.admin");
+      },
+      {
+        key: "agent:main:archived",
+        archivedOnly: true,
+        expectedSessionId: "session-1",
+        futureField: true,
+      },
+    ]) {
+      expect(resolveDynamicSessionMutationRequiredScope("sessions.delete", params)).toBe(
+        "operator.admin",
+      );
+    }
   });
 
   it("does not duplicate static method policy from the core descriptor table", () => {

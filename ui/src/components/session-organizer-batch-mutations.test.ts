@@ -10,6 +10,7 @@ import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { loadSettings, patchSettings } from "../app/settings.ts";
 import { t } from "../i18n/index.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
+import type { SessionDeleteBatchResult } from "../lib/sessions/session-capability.ts";
 import { showToast } from "../lib/toast.ts";
 import {
   answerConfirmDialog,
@@ -95,7 +96,13 @@ function createHarness(
   } as ApplicationGatewaySnapshot;
   const refreshReplacement = vi.fn(async () => undefined);
   const refreshTheme = vi.fn();
-  const deleteMany = vi.fn(async () => ({ deleted: [], errors: [], preservedWorktrees: [] }));
+  const deleteMany = vi.fn(
+    async (): Promise<SessionDeleteBatchResult> => ({
+      deleted: [],
+      errors: [],
+      preservedWorktrees: [],
+    }),
+  );
   const deleteOne = vi.fn(async () => ({ deleted: true }));
   const groupsDelete = vi.fn(async () => "completed" as const);
   const scope = {
@@ -472,6 +479,12 @@ describe("session organizer destructive confirmations", () => {
   it("renders the localized batch-delete copy in-app and deletes once accepted", async () => {
     const harness = createHarness(destructiveHarness);
     const rows = [sessionRow(0), sessionRow(1)];
+    const retryError = `Session ${rows[0]!.key} changed before deletion. Retry.`;
+    harness.deleteMany.mockResolvedValueOnce({
+      deleted: [rows[1]!.key],
+      errors: [retryError],
+      preservedWorktrees: [],
+    });
 
     const pending = deleteSessionsBatch(harness.host, rows, harness.scope);
     const actions = await waitForConfirmDialogActions();
@@ -495,6 +508,8 @@ describe("session organizer destructive confirmations", () => {
         expectedSessionId: rows[1]!.sessionId,
       },
     ]);
+    expect(harness.publishSessionMutationError).toHaveBeenCalledWith(harness.scope, retryError);
+    expect(retryError).not.toContain("GatewayRequestError");
   });
 
   it.each(destructiveOperations)("sends no $name request when cancelled", async (operation) => {

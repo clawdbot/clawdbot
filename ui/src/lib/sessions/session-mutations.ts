@@ -3,6 +3,7 @@ import type {
   SessionsListResult,
   SessionsPatchResult,
 } from "../../api/types.ts";
+import { formatUiError } from "../format-error.ts";
 import {
   requestSessionCreate,
   resolveSessionCreateParams,
@@ -421,7 +422,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       if (!host.connection.isCurrent(scope)) {
         return { deleted: false };
       }
-      host.publish({ ...host.readState(), error: String(error) }, "operation");
+      host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
       throw error;
     }
   };
@@ -452,7 +453,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
           }
         }
       } catch (error) {
-        errors.push(String(error));
+        errors.push(formatUiError(error));
       }
     }
     if (deleted.length > 0 && host.connection.isCurrent(scope)) {

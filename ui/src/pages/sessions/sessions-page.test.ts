@@ -720,10 +720,11 @@ describe("sessions page lifecycle", () => {
     const activeKey = "agent:main:active";
     const archivedKey = "agent:main:archived";
     const unknownKey = "agent:main:unknown";
+    const retryError = `Session ${archivedKey} changed before deletion. Retry.`;
     const sessions = createSessions({
       deleteMany: vi.fn(async () => ({
         deleted: [archivedKey],
-        errors: ["active denied", "unknown denied"],
+        errors: [retryError],
         preservedWorktrees: [],
       })),
     });
@@ -751,7 +752,8 @@ describe("sessions page lifecycle", () => {
       sessions: [{ key: activeKey, archived: false }],
     });
     expect(page.selectedKeys).toEqual(new Set([activeKey, unknownKey]));
-    expect(page.error).toBe("active denied; unknown denied");
+    expect(page.error).toBe(retryError);
+    expect(page.error).not.toContain("GatewayRequestError");
   });
 
   it("stops an active cloud worker and refreshes the session roster", async () => {
