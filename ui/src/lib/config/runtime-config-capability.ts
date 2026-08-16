@@ -146,7 +146,7 @@ export function createRuntimeConfigCapability(
   const refreshConnectionState = () => {
     const config = run(() => loadConfig(state));
     void trackLoad("config", config);
-    if (state.configSchemaVersion !== null) {
+    if (state.configSchemaVersion !== null && canCallConfigMethod("config.schema")) {
       void trackLoad(
         "schema",
         run(() => loadConfigSchema(state)),

@@ -87,7 +87,12 @@ export type RuntimeConfigDispatchOptions = {
   canDispatch?: () => boolean;
 };
 
-export type ConfigMethod = "config.set" | "config.apply" | "config.patch" | "config.openFile";
+export type ConfigMethod =
+  | "config.set"
+  | "config.apply"
+  | "config.patch"
+  | "config.openFile"
+  | "config.schema";
 
 export type ConfigWriteCoordinator = {
   prepareDiscard: () => Promise<void>;
