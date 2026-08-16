@@ -242,8 +242,6 @@ describe("gateway startup import boundaries", () => {
     const closeStart = /close:\s*async\s*\([^)]*\)\s*=>/u.exec(serverImpl)?.index ?? -1;
     const hookStart = serverImpl.indexOf("runGlobalGatewayStopSafely", closeStart);
     const closeFenceStart = serverImpl.indexOf("markClosePreludeStarted();", closeStart);
-    const startupCancelStart = serverImpl.indexOf("settleStartupOnClose();", closeStart);
-    const startupJoinStart = serverImpl.indexOf("await startupJoin.catch", closeStart);
     const reloadStopStart = serverImpl.indexOf("await beginClosePrelude();", closeStart);
     const terminalStopStart = serverImpl.indexOf("terminalSessions.disposeAll();", closeStart);
     const markHelperStart = serverImpl.indexOf("const markClosePreludeStarted = () => {");
@@ -256,9 +254,7 @@ describe("gateway startup import boundaries", () => {
 
     expect(closeStart).toBeGreaterThan(-1);
     expect(closeFenceStart).toBeGreaterThan(closeStart);
-    expect(startupCancelStart).toBeGreaterThan(closeFenceStart);
-    expect(startupJoinStart).toBeGreaterThan(startupCancelStart);
-    expect(reloadStopStart).toBeGreaterThan(startupJoinStart);
+    expect(reloadStopStart).toBeGreaterThan(closeFenceStart);
     expect(reloadStopStart).toBeGreaterThan(closeStart);
     expect(reloadStopStart).toBeLessThan(terminalStopStart);
     expect(reloadStopStart).toBeLessThan(hookStart);

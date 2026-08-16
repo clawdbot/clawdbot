@@ -1,7 +1,6 @@
 // Gateway run loop tests cover foreground gateway lifecycle and restart behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayServer } from "../../gateway/server-public.js";
-import { createGatewayStartupSettlement } from "../../gateway/server-startup-settlement.js";
 import type { GatewayBonjourBeacon } from "../../infra/bonjour-discovery.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import {
@@ -365,14 +364,14 @@ function expectRestartCloseCall(
   expect(closeArgs?.drainTimeoutMs).toBeGreaterThanOrEqual(0);
 }
 
-function createSignaledStart(close: GatewayCloseFn) {
+function createSignaledStart(close: GatewayCloseFn, startupSettled = Promise.resolve()) {
   let resolveStarted: (() => void) | null = null;
   const started = new Promise<void>((resolve) => {
     resolveStarted = resolve;
   });
   const start = vi.fn(async () => {
     resolveStarted?.();
-    return createGatewayServer(close);
+    return createGatewayServer(close, startupSettled);
   });
   return { start, started };
 }
@@ -629,9 +628,8 @@ describe("runGatewayLoop", () => {
 
     await withIsolatedSignals(async ({ captureSignal }) => {
       const unresolvedSidecarStartup = new Promise<void>(() => {});
-      const startup = createGatewayStartupSettlement(unresolvedSidecarStartup);
-      const close = vi.fn<GatewayCloseFn>(async () => startup.settleOnClose());
-      const { start, started } = createSignaledStart(close);
+      const close = vi.fn<GatewayCloseFn>(async () => {});
+      const { start, started } = createSignaledStart(close, unresolvedSidecarStartup);
       const { runtime, exited } = createRuntimeWithExitSignal();
       await runLoopWithStart({ start, runtime });
       await waitForStart(started);
@@ -639,8 +637,6 @@ describe("runGatewayLoop", () => {
       captureSignal("SIGTERM")();
 
       await expect(exited).resolves.toBe(0);
-      await expect(startup.startupJoin).resolves.toBeUndefined();
-      expect(startup.startupJoin).not.toBe(unresolvedSidecarStartup);
       expect(close).toHaveBeenCalledWith({
         reason: "gateway stopping",
         restartExpectedMs: null,

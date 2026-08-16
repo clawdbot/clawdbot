@@ -2783,21 +2783,38 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(workerSidecar.stop).toHaveBeenCalledTimes(1);
   });
 
-  it("publishes deferred sidecar failure to the gateway lifecycle owner", async () => {
+  it("keeps ignored deferred sidecar failure handled for direct callers", async () => {
     const startupError = new Error("deferred sidecar startup failed");
-    const runtime = await startGatewayPostAttachRuntime(
-      {
-        ...createPostAttachParams(),
-        sidecarStartup: "defer",
-      },
-      createPostAttachRuntimeDeps({
-        startGatewaySidecars: vi.fn(async () => {
-          throw startupError;
-        }),
-      }),
-    );
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandledRejections.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandledRejection);
 
-    await expect(runtime.startupSettled).rejects.toBe(startupError);
+    try {
+      const params = createPostAttachParams({ sidecarStartup: "defer" });
+      const runtime = await startGatewayPostAttachRuntime(
+        params,
+        createPostAttachRuntimeDeps({
+          startGatewaySidecars: vi.fn(async () => {
+            throw startupError;
+          }),
+        }),
+      );
+
+      await waitForGatewayTestState(() => {
+        expect(params.log.warn).toHaveBeenCalledWith(
+          `gateway sidecars failed to start: ${String(startupError)}`,
+        );
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(unhandledRejections).toStrictEqual([]);
+      await expect(runtime.startupSettled).rejects.toBe(startupError);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+    }
   });
 
   it("fences plugin publication when close begins during deferred plugin loading", async () => {

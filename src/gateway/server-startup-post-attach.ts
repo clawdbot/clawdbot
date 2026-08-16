@@ -1557,12 +1557,16 @@ export async function startGatewayPostAttachRuntime(
 
   const tailscaleCleanup = await tailscaleCleanupPromise;
   updateCheckResident.start();
+  const startupSettled = sidecarsPromise.then(() => undefined);
+  // Direct callers may ignore this handle; only the managed run loop observes it.
+  // Pre-handle so an ignored deferred sidecar failure never becomes an unhandled rejection.
+  void startupSettled.catch(() => {});
 
   return {
     stopGatewayUpdateCheck: updateCheckResident.stop,
     tailscaleCleanup,
     pluginServices: reportedPluginServices,
-    startupSettled: sidecarsPromise.then(() => undefined),
+    startupSettled,
   };
 }
 
