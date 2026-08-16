@@ -898,6 +898,7 @@ describe("grouped chat rendering", () => {
       codeBlockChrome: "none",
       fileLinks: true,
       interactiveImages: false,
+      sessionLinks: true,
     });
   });
 
@@ -1016,6 +1017,7 @@ describe("grouped chat rendering", () => {
       codeBlockChrome: "copy",
       fileLinks: true,
       interactiveImages: false,
+      sessionLinks: true,
     });
   });
 
@@ -1558,6 +1560,7 @@ describe("grouped chat rendering", () => {
       codeBlockChrome: "copy",
       fileLinks: true,
       interactiveImages: false,
+      sessionLinks: true,
     });
     const text = container.querySelector(".streaming-markdown");
     expect(text?.textContent).toBe("**live**\nreply");

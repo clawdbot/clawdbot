@@ -50,6 +50,7 @@ export function renderChatDetailSlot(params: {
     .allowExternalEmbedUrls=${host.allowExternalEmbedUrls}
     .onOpenWorkspaceFile=${(target: { path: string; line?: number | null }) =>
       openSessionWorkspaceFile(host, target)}
+    .onOpenSessionLink=${params.chat.onOpenSessionLink}
     .onRevealInWorkspace=${(path: string) => {
       revealSessionWorkspaceFile(host, path);
       host.updateSidebarLayout(openSlot(host.sidebarLayout, "workspace"));

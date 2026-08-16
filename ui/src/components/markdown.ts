@@ -75,6 +75,7 @@ const allowedAttrs = [
   "data-file-kind",
   "data-file-line",
   "data-file-path",
+  "data-session-key",
   "type",
   "aria-label",
   "role",
@@ -459,6 +460,11 @@ function installHooks() {
         node.removeAttribute("href");
         return;
       }
+      if (url.origin === window.location.origin && isControlUiRoutePath(url.pathname)) {
+        node.removeAttribute("rel");
+        node.removeAttribute("target");
+        return;
+      }
     } catch {
       // Relative URLs are fine; malformed absolute URLs with dangerous schemes
       // will fail to parse and keep their href — but DOMPurify already strips
@@ -538,7 +544,7 @@ export function toSanitizedMarkdownHtml(
   }
   const renderInput = isMarkdownBlockArtText(rawInput) ? rawInput : input;
   const cacheable = input.length <= MARKDOWN_CACHE_MAX_CHARS;
-  const cacheKey = `${i18n.getLocale()}\0${renderOptions.assistantTranscriptRoleHeaders}\0${renderOptions.codeBlockChrome}\0${renderOptions.fileLinks}\0${renderOptions.interactiveImages}\0${renderOptions.mode}\0${renderInput}`;
+  const cacheKey = `${i18n.getLocale()}\0${renderOptions.assistantTranscriptRoleHeaders}\0${renderOptions.codeBlockChrome}\0${renderOptions.fileLinks}\0${renderOptions.interactiveImages}\0${renderOptions.mode}\0${renderOptions.sessionLinks}\0${renderInput}`;
   if (cacheable) {
     const cached = getCachedMarkdown(cacheKey);
     if (cached !== null) {

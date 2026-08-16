@@ -9,6 +9,11 @@ import {
   markdownFileLinkFromEvent,
   markdownFileLinkFromKeyboardEvent,
 } from "../../../components/markdown-file-links.ts";
+import {
+  markdownSessionLinkFromEvent,
+  markdownSessionLinkFromKeyboardEvent,
+  type SessionLinkTarget,
+} from "../../../components/markdown-session-links.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
@@ -521,6 +526,7 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
       ? toSanitizedMarkdownHtml(content.content, {
           fileLinks: true,
           interactiveImages: props.onOpenImage !== undefined,
+          sessionLinks: true,
         })
       : "";
   const canvasSandbox =
@@ -699,6 +705,8 @@ class ChatDetailPanel extends OpenClawLightDomElement {
   @property({ attribute: false }) onOpenWorkspaceFile?:
     | ((target: { path: string; line?: number | null }) => void)
     | null = null;
+  @property({ attribute: false }) onOpenSessionLink?: ((target: SessionLinkTarget) => void) | null =
+    null;
   @property({ attribute: false }) onRevealInWorkspace?: ((path: string) => void) | null = null;
   @property({ attribute: false }) onOpenImage?: ((item: ImageLightboxItem) => void) | null = null;
 
@@ -1305,6 +1313,11 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     const target = markdownFileLinkFromEvent(event);
     if (target) {
       this.onOpenWorkspaceFile?.(target);
+      return;
+    }
+    const sessionTarget = markdownSessionLinkFromEvent(event);
+    if (sessionTarget) {
+      this.onOpenSessionLink?.(sessionTarget);
     }
   };
 
@@ -1312,6 +1325,11 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     const target = markdownFileLinkFromKeyboardEvent(event);
     if (target) {
       this.onOpenWorkspaceFile?.(target);
+      return;
+    }
+    const sessionTarget = markdownSessionLinkFromKeyboardEvent(event);
+    if (sessionTarget) {
+      this.onOpenSessionLink?.(sessionTarget);
     }
   };
 

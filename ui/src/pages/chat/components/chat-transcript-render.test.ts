@@ -342,4 +342,41 @@ describe("chat transcript rendering", () => {
     expect(onHistoryIntent).not.toHaveBeenCalled();
     transcript.hostDisconnected();
   });
+
+  it.each(["click", "Enter", " "])("opens transcript session links with %j", async (action) => {
+    const transcript = createTestTranscript();
+    const onOpenSessionLink = vi.fn();
+    const onHistoryIntent = vi.fn();
+    const sessionKey = "agent:roboclaw:dashboard:2139bddb-3211-4641-b993-10f619f124e6";
+    const container = document.body.appendChild(document.createElement("div"));
+    const props = {
+      ...threadProps("pane-session-link", "agent:main:main", [
+        { role: "assistant", content: `Open \`${sessionKey}\``, timestamp: 1_000 },
+      ]),
+      onOpenSessionLink,
+      onHistoryIntent,
+    };
+    render(renderChatThread(props, transcript), container);
+    transcript.hostConnected();
+    transcript.hostUpdated();
+    await flushDeferredRowPrune();
+
+    const link = container.querySelector<HTMLAnchorElement>("a.markdown-session-link");
+    if (action === "click") {
+      link?.click();
+    } else {
+      link?.focus();
+      const event = new KeyboardEvent("keydown", {
+        key: action,
+        bubbles: true,
+        cancelable: true,
+      });
+      link?.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(true);
+      expect(onHistoryIntent).not.toHaveBeenCalled();
+    }
+
+    expect(onOpenSessionLink).toHaveBeenCalledWith({ sessionKey, agentId: "roboclaw" });
+    transcript.hostDisconnected();
+  });
 });

@@ -110,6 +110,40 @@ describe("markdown sidebar", () => {
     panel.remove();
   });
 
+  it.each(["click", "Enter", " "])(
+    "opens markdown preview session links with %j",
+    async (action) => {
+      const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+        content: unknown;
+        onOpenSessionLink?: (target: { sessionKey: string; agentId: string }) => void;
+        updateComplete?: Promise<unknown>;
+      };
+      const onOpenSessionLink = vi.fn();
+      const sessionKey = "agent:roboclaw:dashboard:2139bddb-3211-4641-b993-10f619f124e6";
+      panel.content = { kind: "markdown", content: `Open \`${sessionKey}\`` };
+      panel.onOpenSessionLink = onOpenSessionLink;
+      document.body.append(panel);
+      await panel.updateComplete;
+
+      const link = panel.querySelector<HTMLAnchorElement>("a.markdown-session-link");
+      if (action === "click") {
+        link?.click();
+      } else {
+        link?.focus();
+        const event = new KeyboardEvent("keydown", {
+          key: action,
+          bubbles: true,
+          cancelable: true,
+        });
+        link?.dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(true);
+      }
+
+      expect(onOpenSessionLink).toHaveBeenCalledWith({ sessionKey, agentId: "roboclaw" });
+      panel.remove();
+    },
+  );
+
   it("activates Markdown images only when a chat owner opts in", async () => {
     const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
       content: unknown;

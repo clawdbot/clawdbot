@@ -5,6 +5,10 @@ import {
   markdownFileLinkFromEvent,
   markdownFileLinkFromKeyboardEvent,
 } from "../../../components/markdown-file-links.ts";
+import {
+  markdownSessionLinkFromEvent,
+  markdownSessionLinkFromKeyboardEvent,
+} from "../../../components/markdown-session-links.ts";
 import { t } from "../../../i18n/index.ts";
 import {
   handleTranscriptContextMenu,
@@ -118,6 +122,11 @@ function renderTranscriptShell(
           props.onOpenWorkspaceFile?.(target);
           return;
         }
+        const sessionTarget = markdownSessionLinkFromKeyboardEvent(event);
+        if (sessionTarget) {
+          props.onOpenSessionLink?.(sessionTarget);
+          return;
+        }
         props.onHistoryIntent?.(event);
       }}
       @touchstart=${props.onHistoryIntent
@@ -133,6 +142,11 @@ function renderTranscriptShell(
         const target = markdownFileLinkFromEvent(event);
         if (target) {
           props.onOpenWorkspaceFile?.(target);
+          return;
+        }
+        const sessionTarget = markdownSessionLinkFromEvent(event);
+        if (sessionTarget) {
+          props.onOpenSessionLink?.(sessionTarget);
         }
       }}
       @contextmenu=${(event: MouseEvent) => handleTranscriptContextMenu(event, props)}
