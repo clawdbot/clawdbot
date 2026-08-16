@@ -288,23 +288,29 @@ describe("graph upload helpers", () => {
     ).rejects.toThrow("SharePoint upload response missing required fields");
   });
 
-  it("rejects a primitive string upload response body", async () => {
-    const fetchFn = vi.fn(async () => jsonResponse("not-an-object"));
+  it("rejects empty-string required fields in upload response", async () => {
+    // Regression: empty strings pass the typeof === "string" check on base
+    // but the new !field guard rejects them, preventing broken file cards.
+    const fetchFn = vi.fn(async () =>
+      jsonResponse({ id: "", webUrl: "https://example.com", name: "file.txt" }),
+    );
 
     await expect(
       uploadToSharePoint({
-        filename: "primitive.txt",
+        filename: "empty-id.txt",
         fetchFn: withFetchPreconnect(fetchFn),
       }),
     ).rejects.toThrow("SharePoint upload response missing required fields");
   });
 
-  it("rejects a numeric upload response body", async () => {
-    const fetchFn = vi.fn(async () => jsonResponse(42));
+  it("rejects all-empty-string required fields in upload response", async () => {
+    const fetchFn = vi.fn(async () =>
+      jsonResponse({ id: "", webUrl: "", name: "" }),
+    );
 
     await expect(
       uploadToSharePoint({
-        filename: "numeric.txt",
+        filename: "all-empty.txt",
         fetchFn: withFetchPreconnect(fetchFn),
       }),
     ).rejects.toThrow("SharePoint upload response missing required fields");
