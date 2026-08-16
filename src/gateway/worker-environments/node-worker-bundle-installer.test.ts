@@ -30,21 +30,16 @@ const artifact = {
   tarballPath: "/gateway/bundle.tgz",
 };
 
-function nodeProof(nodeId: string, bundlePrewarm?: number): NodeWorkerSupervisorNodeProof {
+function nodeProof(nodeId: string, bundlePrewarm?: 1): NodeWorkerSupervisorNodeProof {
   return {
     ...node,
     nodeId,
     connId: `conn-${nodeId}`,
-    ...(bundlePrewarm === undefined
-      ? {}
-      : {
-          workerRuns: {
-            bundleHash: artifact.bundleHash,
-            openclawVersion: artifact.openclawVersion,
-            protocolFeatures: artifact.protocolFeatures,
-            bundlePrewarm,
-          },
-        }),
+    workerHost: {
+      enabled: true,
+      capacity: "available",
+      ...(bundlePrewarm === undefined ? {} : { bundlePrewarm: 1 }),
+    },
   };
 }
 
@@ -120,7 +115,7 @@ describe("Gateway node worker bundle installer", () => {
     const transfer = createNodeWorkerBundleTransferService({
       generateToken: () => String.fromCharCode(65 + invoke.mock.calls.length).repeat(43),
     });
-    const advertising = nodeProof("advertising", 7);
+    const advertising = nodeProof("advertising", 1);
     const legacy = nodeProof("legacy");
     const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => ({
       ok: true,

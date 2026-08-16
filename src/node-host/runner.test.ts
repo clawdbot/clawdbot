@@ -692,7 +692,7 @@ describe("runNodeHost", () => {
 
     expect(client?.request).toHaveBeenCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
       protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-      workerHost: { enabled: true, capacity: "available" },
+      workerHost: { enabled: true, capacity: "available", bundlePrewarm: 1 },
     });
   });
 
@@ -714,7 +714,7 @@ describe("runNodeHost", () => {
     await vi.waitFor(() => {
       expect(client?.request).toHaveBeenCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost: { enabled: true, capacity: "available" },
+        workerHost: { enabled: true, capacity: "available", bundlePrewarm: 1 },
       });
     });
 
@@ -722,7 +722,7 @@ describe("runNodeHost", () => {
     await vi.waitFor(() => {
       expect(client?.request).toHaveBeenLastCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost: { enabled: true, capacity: "full" },
+        workerHost: { enabled: true, capacity: "full", bundlePrewarm: 1 },
       });
     });
 
@@ -730,7 +730,7 @@ describe("runNodeHost", () => {
     await vi.waitFor(() => {
       expect(client?.request).toHaveBeenLastCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost: { enabled: true, capacity: "available" },
+        workerHost: { enabled: true, capacity: "available", bundlePrewarm: 1 },
       });
     });
     expect(client?.updateNodeManifest).not.toHaveBeenCalled();

@@ -5,6 +5,7 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { WORKER_BUNDLE_PREWARM_VERSION } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 import { GatewayClientRequestError, type GatewayReconnectPausedInfo } from "../gateway/client.js";
@@ -465,7 +466,11 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
         workerHost: preparedRuntime.workerHostingEnabled
-          ? { enabled: true, capacity: workerRunsAvailable ? "available" : "full" }
+          ? {
+              enabled: true,
+              capacity: workerRunsAvailable ? "available" : "full",
+              bundlePrewarm: WORKER_BUNDLE_PREWARM_VERSION,
+            }
           : { enabled: false },
       },
       "runner inventory",

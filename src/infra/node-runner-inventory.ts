@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { validateWorkerAdmissionHandshake } from "../../packages/gateway-protocol/src/index.js";
+import { WORKER_BUNDLE_PREWARM_VERSION } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 
 export const NODE_RUNNER_INVENTORY_UPDATE_METHOD = "node.runnerInventory.update";
 export const NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE = "node-worker-supervisor-v2";
@@ -16,7 +17,11 @@ export type NodeRunnerInventoryIssue = typeof NODE_RUNNER_UPDATE_REQUIRED_ISSUE;
 
 export type NodeWorkerHostDeclaration =
   | { enabled: false }
-  | { enabled: true; capacity: "available" | "full" };
+  | {
+      enabled: true;
+      capacity: "available" | "full";
+      bundlePrewarm?: typeof WORKER_BUNDLE_PREWARM_VERSION;
+    };
 
 export type NodeRunnerInventoryDeclaration =
   | { protocolFeatures: readonly [] }
@@ -34,12 +39,24 @@ function parseWorkerHostDeclaration(value: unknown): NodeWorkerHostDeclaration |
   if (!value.enabled) {
     return keys.length === 1 && keys[0] === "enabled" ? { enabled: false } : null;
   }
-  return keys.length === 2 &&
-    keys.includes("enabled") &&
-    keys.includes("capacity") &&
-    (value.capacity === "available" || value.capacity === "full")
-    ? { enabled: true, capacity: value.capacity }
-    : null;
+  if (
+    keys.length < 2 ||
+    keys.length > 3 ||
+    !keys.includes("enabled") ||
+    !keys.includes("capacity") ||
+    keys.some((key) => key !== "enabled" && key !== "capacity" && key !== "bundlePrewarm") ||
+    (value.capacity !== "available" && value.capacity !== "full") ||
+    (value.bundlePrewarm !== undefined && value.bundlePrewarm !== WORKER_BUNDLE_PREWARM_VERSION)
+  ) {
+    return null;
+  }
+  return {
+    enabled: true,
+    capacity: value.capacity,
+    ...(value.bundlePrewarm === WORKER_BUNDLE_PREWARM_VERSION
+      ? { bundlePrewarm: WORKER_BUNDLE_PREWARM_VERSION }
+      : {}),
+  };
 }
 
 /** Parses the closed reconnect-scoped node-host runner declaration. */

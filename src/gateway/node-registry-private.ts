@@ -199,7 +199,10 @@ function sameWorkerHostDeclaration(
 ): boolean {
   return (
     left?.enabled === right?.enabled &&
-    (left?.enabled !== true || (right?.enabled === true && left.capacity === right.capacity))
+    (left?.enabled !== true ||
+      (right?.enabled === true &&
+        left.capacity === right.capacity &&
+        left.bundlePrewarm === right.bundlePrewarm))
   );
 }
 

@@ -629,20 +629,19 @@ describe("gateway/node-registry", () => {
     expect(frames).toEqual([]);
   });
 
-  it("promotes post-hello worker capabilities without changing build identity", async () => {
+  it("promotes bundle prewarm without changing runner authority", async () => {
     const { nodeRegistry, nodeWorkerSupervisorTransport } = createPrivateNodeRegistryRuntime();
     registerNodeSession(
       nodeRegistry,
       makeClient("conn-1", "node-1", [], {
         clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
         commands: ["system.run"],
-        workerRuns: WORKER_RUNS,
       }),
       { pairingIdentity: "identity-a", pairingGeneration: "generation-a" },
     );
     const declaration = {
       protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE] as const,
-      workerRuns: WORKER_RUNS,
+      workerHost: { enabled: true, capacity: "available" as const },
     };
     expect(
       updateNodeRunnerInventory({
@@ -652,7 +651,7 @@ describe("gateway/node-registry", () => {
         declaration,
       }),
     ).toEqual({ changed: true });
-    const [legacyProof] = await nodeWorkerSupervisorTransport.listCurrentNodes();
+    const [priorProof] = await nodeWorkerSupervisorTransport.listCurrentNodes();
 
     expect(
       updateNodeRunnerInventory({
@@ -661,17 +660,18 @@ describe("gateway/node-registry", () => {
         connId: "conn-1",
         declaration: {
           ...declaration,
-          workerRuns: { ...WORKER_RUNS, bundlePrewarm: 1 },
+          workerHost: { ...declaration.workerHost, bundlePrewarm: 1 },
         },
       }),
     ).toEqual({ changed: true });
     const [negotiatedProof] = await nodeWorkerSupervisorTransport.listCurrentNodes();
 
-    expect(legacyProof && nodeWorkerSupervisorTransport.isCurrent(legacyProof, true)).toBe(false);
-    expect(negotiatedProof?.workerRuns).toEqual({ ...WORKER_RUNS, bundlePrewarm: 1 });
-    expect(negotiatedProof && nodeWorkerSupervisorTransport.isCurrent(negotiatedProof, true)).toBe(
-      true,
-    );
+    expect(priorProof && nodeWorkerSupervisorTransport.isCurrent(priorProof, true)).toBe(true);
+    expect(negotiatedProof?.workerHost).toEqual({
+      enabled: true,
+      capacity: "available",
+      bundlePrewarm: 1,
+    });
   });
 
   it("rejects generation-mismatched lookup and dispatch without invalidating the session", async () => {

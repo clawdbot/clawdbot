@@ -29,7 +29,7 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
     const artifact = await options.prepareBundle();
     const isAuthorized = () => transport.isCurrent(node);
     const bundlePrewarm =
-      (node.workerRuns?.bundlePrewarm ?? 0) >= WORKER_BUNDLE_PREWARM_VERSION
+      (node.workerHost.bundlePrewarm ?? 0) >= WORKER_BUNDLE_PREWARM_VERSION
         ? WORKER_BUNDLE_PREWARM_VERSION
         : undefined;
     const prepared = options.transfer.prepare({

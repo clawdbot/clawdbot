@@ -128,14 +128,15 @@ function holdInvoke() {
 }
 
 describe("node-host worker manifest", () => {
-  it("advertises the supported bundle prewarm form from the node build", async () => {
+  it("keeps local consent separate from connection metadata", async () => {
     const prepared = await prepareNodeHostRuntime({
       config: { nodeHost: { skills: { enabled: false }, workerRuns: { enabled: true } } },
       env: { PATH: "/usr/bin" },
       enableWorkerRuns: true,
     });
 
-    expect(prepared.manifest.workerRuns).toMatchObject({ bundlePrewarm: 1 });
+    expect(prepared.workerHostingEnabled).toBe(true);
+    expect(prepared.manifest).not.toHaveProperty("workerRuns");
   });
 });
 
