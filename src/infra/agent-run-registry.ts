@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import * as cronReceiptValues from "./agent-run-registry-claim-values.js";
 import { clearAgentRunUsage, resetAgentRunUsageForTest } from "./agent-run-usage.js";
 
 /** Per-run metadata used to stamp events and gate Control UI visibility. */
@@ -39,22 +40,9 @@ export type AgentRunDelegatedAuthority = Readonly<{
   claimId: string;
 }>;
 
-type AgentRunContextOwnership = {
-  lifecycleGeneration: string;
-  claimIds: Set<string>;
-  /** Detached task ids exist only for the exact execution claims that own them. */
-  taskRunIds?: Map<string, string>;
-  /** Live execution claims are lifecycle-owned and must not be expired by the projection sweeper. */
-  sweepProtectedClaimIds: Set<string>;
-  preserveAfterRelease: boolean;
-  clearRequested: boolean;
-  exclusiveClaimId?: string;
-  clearListeners?: Map<string, (claimId: string) => void>;
-};
-
 type AgentRunRegistryState = {
   contexts: Map<string, AgentRunContext>;
-  owners: Map<string, AgentRunContextOwnership>;
+  owners: Map<string, cronReceiptValues.AgentRunClaimOwnership>;
   queuedRunContextLeases?: WeakMap<AgentRunContext, number>;
   lifecycleGeneration: string;
   sequenceResetHandler?: (runId: string) => void;
@@ -67,7 +55,7 @@ const AGENT_RUN_REGISTRY_STATE_KEY = Symbol.for("openclaw.agentRunRegistry.state
 function getAgentRunRegistryState(): AgentRunRegistryState {
   return resolveGlobalSingleton<AgentRunRegistryState>(AGENT_RUN_REGISTRY_STATE_KEY, () => ({
     contexts: new Map<string, AgentRunContext>(),
-    owners: new Map<string, AgentRunContextOwnership>(),
+    owners: new Map<string, cronReceiptValues.AgentRunClaimOwnership>(),
     lifecycleGeneration: randomUUID(),
     version: 0,
   }));
@@ -265,6 +253,7 @@ export function claimAgentRunContext(
         currentOwners.clearListeners.set(claimId, options.onClearRequested);
       }
     } else {
+      cronReceiptValues.clearAgentRunCronReceiptValues(runId);
       state.owners.set(runId, {
         lifecycleGeneration,
         claimIds: new Set([claimId]),
@@ -282,6 +271,7 @@ export function claimAgentRunContext(
     // Same-generation untracked claims refresh metadata inside the tracked
     // execution. A new lifecycle replaces that ownership outright.
     state.owners.delete(runId);
+    cronReceiptValues.clearAgentRunCronReceiptValues(runId);
   }
   if (existing?.lifecycleGeneration === lifecycleGeneration) {
     const versionBeforeRegister = readAgentRunIndexVersion();
@@ -332,6 +322,26 @@ export function getAgentRunTaskRunId(runId: string): string | undefined {
   return taskRunIds.size === 1 ? taskRunIds.values().next().value : undefined;
 }
 
+export function bindAgentRunCronReceipt(
+  runId: string,
+  claimId: string,
+  receipt: cronReceiptValues.AgentRunCronReceipt,
+): boolean {
+  return cronReceiptValues.bindAgentRunCronReceiptValue(
+    runId,
+    claimId,
+    receipt,
+    getAgentRunRegistryState().owners.get(runId)?.claimIds,
+  );
+}
+
+export function getAgentRunCronReceipt(runId: string) {
+  return cronReceiptValues.getAgentRunCronReceiptValue(
+    runId,
+    getAgentRunRegistryState().owners.get(runId)?.claimIds,
+  );
+}
+
 /** Holds an existing run context only while its current execution awaits lane admission. */
 export function retainQueuedAgentRunContext(
   runId: string,
@@ -375,7 +385,7 @@ export function retainQueuedAgentRunContext(
   };
 }
 
-export function getAgentRunContextOwnership(runId: string): AgentRunContextOwnership | undefined {
+export function getAgentRunContextOwnership(runId: string) {
   return getAgentRunRegistryState().owners.get(runId);
 }
 
@@ -695,6 +705,7 @@ export function releaseAgentRunContext(runId: string, claimId: string | undefine
   owners.sweepProtectedClaimIds.delete(claimId);
   const versionBeforeRelease = readAgentRunIndexVersion();
   owners.taskRunIds?.delete(claimId);
+  cronReceiptValues.releaseAgentRunCronReceiptValue(runId, claimId);
   owners.clearListeners?.delete(claimId);
   if (owners.exclusiveClaimId === claimId) {
     owners.exclusiveClaimId = undefined;
@@ -741,6 +752,7 @@ export function sweepStaleRunContexts(maxAgeMs = 30 * 60 * 1000): number {
       state.sequenceResetHandler?.(runId);
       clearAgentRunUsage(runId, context.lifecycleGeneration);
       state.owners.delete(runId);
+      cronReceiptValues.clearAgentRunCronReceiptValues(runId);
       swept += 1;
     }
   }
@@ -754,6 +766,7 @@ export function resetAgentRunRegistryForTest(): void {
   const state = getAgentRunRegistryState();
   const hadRunContexts = state.contexts.size > 0;
   resetAgentRunUsageForTest();
+  cronReceiptValues.resetAgentRunCronReceiptValuesForTest();
   state.contexts.clear();
   state.owners.clear();
   state.queuedRunContextLeases = undefined;

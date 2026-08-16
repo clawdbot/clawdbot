@@ -32,6 +32,7 @@ import {
 import { runCronCommandJob } from "../cron/command-runner.js";
 import { resolveCronStoredDeliveryContext } from "../cron/delivery-context.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
+import { registerDetachedMediaCronFailureRecorder } from "../cron/detached-media-failure-recorder.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
 import { toPublicCronJob } from "../cron/public-job.js";
@@ -47,6 +48,7 @@ import {
   resolveCronSessionTargetSessionKey,
 } from "../cron/session-target.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
+import { cronStoreKey } from "../cron/store/key.js";
 import { cronStreamScheduleKey } from "../cron/stream-schedule.js";
 import { createCronScriptRuntime } from "../cron/trigger-script.js";
 import type {
@@ -1387,6 +1389,17 @@ export function buildGatewayCronService(params: {
     getDefaultAgentId: () => cron.getDefaultAgentId(),
   };
   const automationEpoch = claimSessionAutomationEpoch();
+  const cronFailureRecorderStoreKey = cronStoreKey(storePath);
+  let unregisterDetachedMediaCronFailureRecorder: (() => void) | undefined;
+  const registerDetachedMediaFailureRecorder = () => {
+    unregisterDetachedMediaCronFailureRecorder?.();
+    unregisterDetachedMediaCronFailureRecorder = registerDetachedMediaCronFailureRecorder(
+      cronFailureRecorderStoreKey,
+      async (request) => {
+        await cron.recordDetachedMediaFailure(request);
+      },
+    );
+  };
   const stopCron = cron.stop.bind(cron);
   cron.stop = () => {
     try {
@@ -1400,6 +1413,10 @@ export function buildGatewayCronService(params: {
         );
       });
     } finally {
+      // In-flight detached tasks retain this store writer until settlement;
+      // otherwise stopping the owner removes it immediately.
+      unregisterDetachedMediaCronFailureRecorder?.();
+      unregisterDetachedMediaCronFailureRecorder = undefined;
       // Session rows must stop reporting automation from a stopped scheduler,
       // but a reload's replacement service may already own the registration.
       unregisterSessionAutomationSource(automationSource);
@@ -1473,6 +1490,7 @@ export function buildGatewayCronService(params: {
     if (generation !== streamWatcherGeneration) {
       return;
     }
+    registerDetachedMediaFailureRecorder();
     exitWatchersStopped = false;
     streamWatchersStopped = false;
     // A reload restart owns a fresh watcher lifecycle; the next stop must run.

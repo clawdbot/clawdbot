@@ -6,6 +6,10 @@ import {
   withOwnedSessionTranscriptWrites,
 } from "../../config/sessions/transcript-write-context.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import {
+  getDetachedMediaCronFailureRecorder,
+  registerDetachedMediaCronFailureRecorder,
+} from "../../cron/detached-media-failure-recorder.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { hasPendingGeneratedMediaTaskForSessionKey } from "../../tasks/task-status-access.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
@@ -36,6 +40,10 @@ const cronContinuationCleanupMocks = vi.hoisted(() => ({
 const sessionMocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn<() => SessionEntry | undefined>(() => undefined),
 }));
+const agentRunRegistryMocks = vi.hoisted(() => ({
+  getAgentRunTaskRunId: vi.fn<(runId: string) => string | undefined>(() => undefined),
+  getAgentRunCronReceipt: vi.fn<(runId: string) => object | undefined>(() => undefined),
+}));
 
 vi.mock("../subagents/announce/subagent-announce-delivery.js", () => subagentAnnounceDeliveryMocks);
 vi.mock("../../config/sessions/session-accessor.js", async () => ({
@@ -48,6 +56,13 @@ vi.mock("../../config/sessions/session-accessor.js", async () => ({
 vi.mock("../../tasks/detached-task-runtime.js", () => detachedTaskRuntimeMocks);
 vi.mock("../../tasks/task-registry-delivery-runtime.js", () => taskRegistryDeliveryRuntimeMocks);
 vi.mock("../../tasks/cron-run-continuation-cleanup.js", () => cronContinuationCleanupMocks);
+vi.mock("../../infra/agent-run-registry.js", async () => ({
+  ...(await vi.importActual<typeof import("../../infra/agent-run-registry.js")>(
+    "../../infra/agent-run-registry.js",
+  )),
+  getAgentRunTaskRunId: agentRunRegistryMocks.getAgentRunTaskRunId,
+  getAgentRunCronReceipt: agentRunRegistryMocks.getAgentRunCronReceipt,
+}));
 
 import {
   createMediaGenerationTaskLifecycle,
@@ -67,6 +82,8 @@ beforeEach(() => {
   taskRegistryDeliveryRuntimeMocks.sendMessage.mockReset();
   cronContinuationCleanupMocks.removeCronRunContinuationSessionIfIdle.mockClear();
   sessionMocks.loadSessionEntry.mockReset().mockReturnValue(undefined);
+  agentRunRegistryMocks.getAgentRunTaskRunId.mockReset().mockReturnValue(undefined);
+  agentRunRegistryMocks.getAgentRunCronReceipt.mockReset().mockReturnValue(undefined);
 });
 
 function createImageMediaLifecycle() {
@@ -821,12 +838,16 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
     expect(lifecycle.failTaskRun).not.toHaveBeenCalled();
   });
 
-  it("fails the media task when generation itself fails", async () => {
+  it("records the originating cron failure before a pending requester wake", async () => {
     const scheduled: Array<() => Promise<void>> = [];
     const generationError = new Error("provider returned no images");
+    const order: string[] = [];
     let releaseWake: (() => void) | undefined;
     const wakePending = new Promise<void>((resolve) => {
       releaseWake = resolve;
+    });
+    const recordCronFailure = vi.fn(async () => {
+      order.push("record-cron-failure");
     });
     const lifecycle = {
       createTaskRun: vi.fn(),
@@ -834,36 +855,68 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
       completeTaskRun: vi.fn(),
       failTaskRun: vi.fn(),
       wakeTaskCompletion: vi.fn(async () => {
+        order.push("wake");
+        expect(recordCronFailure).toHaveBeenCalledOnce();
         await wakePending;
         return { status: "delivered" as const };
       }),
     };
+    const unregisterCronFailureRecorder = registerDetachedMediaCronFailureRecorder(
+      "store-1",
+      recordCronFailure,
+    );
+    const replacementCronFailure = vi.fn(async () => {});
+    let unregisterReplacementCronFailureRecorder: (() => void) | undefined;
 
-    scheduleMediaGenerationTaskCompletion({
-      lifecycle,
-      handle: {
-        taskId: "task-image-generation-error",
-        runId: "tool:image_generate:generation-error",
-        requesterSessionKey: "agent:main:discord:channel:123",
-        taskLabel: "proof image",
-      },
-      scheduleBackgroundWork: (work) => {
-        scheduled.push(work);
-      },
-      progressSummary: "Generating image",
-      toolName: "Image generation",
-      onWakeFailure: vi.fn(),
-      run: async () => {
-        throw generationError;
-      },
-    });
+    try {
+      scheduleMediaGenerationTaskCompletion({
+        lifecycle,
+        handle: {
+          taskId: "task-image-generation-error",
+          runId: "tool:image_generate:generation-error",
+          requesterSessionKey:
+            "agent:main:cron:daily-media:run:550e8400-e29b-41d4-a716-446655440003",
+          originatingCronTaskRunId: "cron-task-run-1",
+          originatingCronRunReceipt: {
+            receiptId: "receipt-1",
+            storeKey: "store-1",
+            jobId: "daily-media",
+            configRevision: "revision-1",
+            agentId: "main",
+            ownerPid: 123,
+            ownerStartTime: 456,
+            startedAtMs: 789,
+          },
+          taskLabel: "proof image",
+        },
+        scheduleBackgroundWork: (work) => {
+          scheduled.push(work);
+        },
+        progressSummary: "Generating image",
+        toolName: "Image generation",
+        onWakeFailure: vi.fn(),
+        run: async () => {
+          throw generationError;
+        },
+      });
 
-    const backgroundWork = scheduled[0]?.();
-    await vi.waitFor(() => expect(lifecycle.wakeTaskCompletion).toHaveBeenCalled());
-    expect(lifecycle.failTaskRun).not.toHaveBeenCalled();
-    releaseWake?.();
-    await backgroundWork;
+      const backgroundWork = scheduled[0]?.();
+      await vi.waitFor(() => expect(lifecycle.wakeTaskCompletion).toHaveBeenCalled());
+      expect(order).toEqual(["record-cron-failure", "wake"]);
+      expect(lifecycle.failTaskRun).not.toHaveBeenCalled();
+      unregisterCronFailureRecorder();
+      unregisterReplacementCronFailureRecorder = registerDetachedMediaCronFailureRecorder(
+        "store-1",
+        replacementCronFailure,
+      );
+      releaseWake?.();
+      await backgroundWork;
+    } finally {
+      unregisterCronFailureRecorder();
+      unregisterReplacementCronFailureRecorder?.();
+    }
 
+    expect(getDetachedMediaCronFailureRecorder("store-1")).toBeUndefined();
     expect(lifecycle.failTaskRun).toHaveBeenCalledWith(
       expect.objectContaining({
         error: generationError,
@@ -876,10 +929,47 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
       }),
     );
     expect(lifecycle.completeTaskRun).not.toHaveBeenCalled();
+    expect(recordCronFailure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cronTaskRunId: "cron-task-run-1",
+        taskId: "task-image-generation-error",
+        error: "Detached Image generation failed: provider returned no images",
+      }),
+    );
+    expect(replacementCronFailure).not.toHaveBeenCalled();
   });
 });
 
 describe("createMediaGenerationTaskLifecycle", () => {
+  it("pins the owner-issued cron task run id when detached media starts", () => {
+    const receipt = {
+      receiptId: "receipt-exact",
+      storeKey: "store-exact",
+      jobId: "daily-media",
+      configRevision: "revision-exact",
+      agentId: "main",
+      ownerPid: 123,
+      ownerStartTime: 456,
+      startedAtMs: 789,
+    };
+    agentRunRegistryMocks.getAgentRunTaskRunId.mockReturnValue("cron-task-run-exact");
+    agentRunRegistryMocks.getAgentRunCronReceipt.mockReturnValue(receipt);
+    const lifecycle = createImageMediaLifecycle();
+
+    const handle = lifecycle.createTaskRun({
+      sessionKey: "agent:main:cron:daily-media:run:cron-session-123",
+      prompt: "proof image",
+    });
+
+    expect(agentRunRegistryMocks.getAgentRunTaskRunId).toHaveBeenCalledWith("cron-session-123");
+    expect(agentRunRegistryMocks.getAgentRunCronReceipt).toHaveBeenCalledWith("cron-session-123");
+    expect(handle).toMatchObject({
+      requesterSessionKey: "agent:main:cron:daily-media:run:cron-session-123",
+      originatingCronTaskRunId: "cron-task-run-exact",
+      originatingCronRunReceipt: receipt,
+    });
+  });
+
   it("tracks pending media when the detached runtime does not mirror core tasks", () => {
     const sessionKey = "agent:main:cron:daily-media:run:run-123";
     const lifecycle = createImageMediaLifecycle();

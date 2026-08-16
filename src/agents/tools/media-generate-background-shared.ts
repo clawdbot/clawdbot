@@ -8,7 +8,14 @@ import { getCliSessionBinding } from "../../config/sessions/cli-session-binding.
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
+import { getDetachedMediaCronFailureRecorder } from "../../cron/detached-media-failure-recorder.js";
+import type { AgentRunCronReceipt } from "../../infra/agent-run-registry-claim-values.js";
+import {
+  clearAgentRunContext,
+  getAgentRunCronReceipt,
+  getAgentRunTaskRunId,
+  registerAgentRunContext,
+} from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
@@ -40,17 +47,22 @@ import {
   loadRequesterSessionEntry,
 } from "../subagents/announce/subagent-announce-delivery.js";
 import { resolveAnnounceOrigin } from "../subagents/announce/subagent-announce-origin.js";
+import {
+  type MediaGenerationCompletionWakeOutcome,
+  wakeMediaGenerationTaskCompletionWithRetry,
+} from "./media-generate-completion-retry.js";
+import { markOriginatingCronRunFailedFromMediaGeneration } from "./media-generate-cron-failure-state.js";
 
 const log = createSubsystemLogger("agents/tools/media-generate-background-shared");
 const MEDIA_GENERATION_TASK_KEEPALIVE_INTERVAL_MS = 60_000;
-const MEDIA_GENERATION_COMPLETION_HANDOFF_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000] as const;
-const MEDIA_GENERATION_COMPLETION_HANDOFF_TIMEOUT_MS = 120_000;
 
 /** Handle for a detached media generation task registered in the task ledger. */
 export type MediaGenerationTaskHandle = {
   taskId: string;
   runId: string;
   requesterSessionKey: string;
+  originatingCronTaskRunId?: string;
+  originatingCronRunReceipt?: AgentRunCronReceipt;
   requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
   taskLabel: string;
@@ -147,11 +159,6 @@ type WakeMediaGenerationTaskCompletionParams = {
   statsLine?: string;
 };
 
-type MediaGenerationCompletionWakeOutcome =
-  | { status: "delivered" }
-  | { status: "pending" }
-  | { status: "permanent_failure" };
-
 type MediaGenerationTaskLifecycle = {
   createTaskRun: (params: CreateMediaGenerationTaskRunParams) => MediaGenerationTaskHandle | null;
   recordTaskProgress: (params: RecordMediaGenerationTaskProgressParams) => void;
@@ -161,39 +168,6 @@ type MediaGenerationTaskLifecycle = {
     params: WakeMediaGenerationTaskCompletionParams,
   ) => Promise<MediaGenerationCompletionWakeOutcome>;
 };
-
-function waitForMediaGenerationCompletionHandoffRetry(delayMs: number): Promise<void> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, delayMs);
-    timer.unref?.();
-  });
-}
-
-async function wakeMediaGenerationTaskCompletionWithRetry(params: {
-  wake: () => Promise<MediaGenerationCompletionWakeOutcome>;
-  beforeRetry?: () => void;
-}): Promise<MediaGenerationCompletionWakeOutcome> {
-  const deadline = Date.now() + MEDIA_GENERATION_COMPLETION_HANDOFF_TIMEOUT_MS;
-  let outcome = await params.wake();
-  let retryIndex = 0;
-  while (outcome.status === "pending") {
-    const remainingMs = deadline - Date.now();
-    if (remainingMs <= 0) {
-      throw new Error("cron continuation did not become ready before the handoff deadline");
-    }
-    // Pending means the original cron run still owns the continuation. Keep the
-    // task live and cap backoff until delivery, unavailability, or the deadline.
-    const delayMs =
-      MEDIA_GENERATION_COMPLETION_HANDOFF_RETRY_DELAYS_MS[
-        Math.min(retryIndex, MEDIA_GENERATION_COMPLETION_HANDOFF_RETRY_DELAYS_MS.length - 1)
-      ] ?? 2_000;
-    await waitForMediaGenerationCompletionHandoffRetry(Math.min(delayMs, remainingMs));
-    params.beforeRetry?.();
-    outcome = await params.wake();
-    retryIndex += 1;
-  }
-  return outcome;
-}
 
 function touchMediaGenerationTaskRunContext(handle: MediaGenerationTaskHandle) {
   registerGeneratedMediaTaskActivity(handle.runId, handle.requesterSessionKey);
@@ -219,6 +193,9 @@ function createMediaGenerationTaskRun(params: {
   if (!sessionKey) {
     return null;
   }
+  const cronRunId = parseCronRunScopeSuffix(sessionKey).runId;
+  const originatingCronTaskRunId = cronRunId ? getAgentRunTaskRunId(cronRunId) : undefined;
+  const originatingCronRunReceipt = cronRunId ? getAgentRunCronReceipt(cronRunId) : undefined;
   const runId = `tool:${params.toolName}:${crypto.randomUUID()}`;
   try {
     // Pin the complete requester route when detached work starts. Completion-time
@@ -253,6 +230,8 @@ function createMediaGenerationTaskRun(params: {
       taskId: task.taskId,
       runId,
       requesterSessionKey: sessionKey,
+      ...(originatingCronTaskRunId ? { originatingCronTaskRunId } : {}),
+      ...(originatingCronRunReceipt ? { originatingCronRunReceipt } : {}),
       requesterAgentId: params.requesterAgentId,
       requesterOrigin,
       taskLabel: params.prompt,
@@ -495,6 +474,12 @@ export function scheduleMediaGenerationTaskCompletion<
   run: () => Promise<T>;
   onWakeFailure: (message: string, meta?: Record<string, unknown>) => void;
 }) {
+  const receipt = params.handle?.originatingCronRunReceipt;
+  // Pin the originating writer before work detaches so a config reload cannot
+  // reroute its late failure to a replacement cron store.
+  const cronFailureRecorder = receipt
+    ? getDetachedMediaCronFailureRecorder(receipt.storeKey)
+    : undefined;
   const runBackgroundWork = async () => {
     let executed: T;
     try {
@@ -504,6 +489,15 @@ export function scheduleMediaGenerationTaskCompletion<
         run: params.run,
       });
     } catch (error) {
+      // Persist the originating cron failure before requester delivery can
+      // retry. A later cron run may start while that wake is pending, and the
+      // old receipt must never be applied across that newer run.
+      await markOriginatingCronRunFailedFromMediaGeneration({
+        handle: params.handle,
+        error,
+        toolName: params.toolName,
+        recorder: cronFailureRecorder,
+      });
       try {
         const wakeOutcome = await wakeMediaGenerationTaskCompletionWithRetry({
           wake: async () =>

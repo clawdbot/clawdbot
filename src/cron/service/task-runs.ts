@@ -32,6 +32,7 @@ import type { JsonValue, TaskRecord, TaskStatus } from "../../tasks/task-registr
 import { createCronExecutionId } from "../run-id.js";
 import type { CronRunLogEntry } from "../run-log-types.js";
 import { cronStoreKey } from "../store/key.js";
+import type { CronRunReceiptHandle } from "../store/run-receipt-store.js";
 import {
   cronRunLogEntryToTaskDetail,
   cronRunStatusToTaskStatus,
@@ -49,6 +50,7 @@ import type { CronEvent, CronServiceState } from "./state.js";
 import { CRON_TASK_RUNNING_PROGRESS_SUMMARY } from "./task-ledger.js";
 
 const activeCronTaskRunId = new AsyncLocalStorage<string>();
+const activeCronRunReceipt = new AsyncLocalStorage<CronRunReceiptHandle>();
 
 /** Keeps the detached task id on the async execution that owns it. */
 export function withCronTaskRunId<T>(taskRunId: string | undefined, run: () => T): T {
@@ -58,6 +60,15 @@ export function withCronTaskRunId<T>(taskRunId: string | undefined, run: () => T
 
 export function getActiveCronTaskRunId(): string | undefined {
   return activeCronTaskRunId.getStore();
+}
+
+/** Keeps the scheduler-issued receipt on the async execution that owns it. */
+export function withCronRunReceipt<T>(receipt: CronRunReceiptHandle | undefined, run: () => T): T {
+  return receipt ? activeCronRunReceipt.run(receipt, run) : run();
+}
+
+export function getActiveCronRunReceipt(): CronRunReceiptHandle | undefined {
+  return activeCronRunReceipt.getStore();
 }
 
 /** Converts cron ids into bounded session-key path segments with a fallback for empty input. */

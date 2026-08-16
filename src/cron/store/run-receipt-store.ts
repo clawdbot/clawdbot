@@ -683,6 +683,67 @@ export function releaseLocalCronRunReceiptOwnership(handle: CronRunReceiptHandle
   locallyOwnedReceipts.delete(handle.receiptId);
 }
 
+function rowMatchesCronRunReceiptHandle(
+  row: CronRunReceiptRow,
+  handle: CronRunReceiptHandle,
+): boolean {
+  return (
+    row.receipt_id === handle.receiptId &&
+    row.store_key === handle.storeKey &&
+    row.job_id === handle.jobId &&
+    row.config_revision === handle.configRevision &&
+    row.agent_id === handle.agentId &&
+    row.owner_pid === handle.ownerPid &&
+    row.owner_start_time === handle.ownerStartTime &&
+    row.started_at_ms === handle.startedAtMs
+  );
+}
+
+/** Checks whether the exact originating receipt can still accept a detached failure. */
+export function canRecordDetachedFailureForCronRunReceiptInDatabase(params: {
+  database: DatabaseSync;
+  handle: CronRunReceiptHandle;
+}): boolean {
+  const row = executeSqliteQueryTakeFirstSync(
+    params.database,
+    query(params.database)
+      .selectFrom("cron_run_receipts")
+      .selectAll()
+      .where("receipt_id", "=", params.handle.receiptId),
+  );
+  return Boolean(
+    row &&
+    rowMatchesCronRunReceiptHandle(row, params.handle) &&
+    (row.status === "running" || row.status === "ok"),
+  );
+}
+
+/** Reclassifies only the exact originating receipt after its detached work fails. */
+export function recordDetachedFailureForCronRunReceiptInDatabase(params: {
+  database: DatabaseSync;
+  handle: CronRunReceiptHandle;
+  finishedAtMs: number;
+  error: string;
+}): void {
+  if (!canRecordDetachedFailureForCronRunReceiptInDatabase(params)) {
+    throw new CronRunReceiptRevisionError(
+      params.handle.receiptId,
+      "cron run receipt no longer accepts detached failure state",
+    );
+  }
+  const result = executeSqliteQuerySync(
+    params.database,
+    query(params.database)
+      .updateTable("cron_run_receipts")
+      .set({ status: "error", finished_at_ms: params.finishedAtMs, error_text: params.error })
+      .where("receipt_id", "=", params.handle.receiptId)
+      .where("status", "in", ["running", "ok"]),
+  );
+  if (result.numAffectedRows !== 1n) {
+    throw new CronRunReceiptRevisionError(params.handle.receiptId, "receipt already failed");
+  }
+}
+
 /** Completes the exact active receipt inside its caller's cron-state transaction. */
 export function finishCronRunReceiptInDatabase(params: {
   database: DatabaseSync;

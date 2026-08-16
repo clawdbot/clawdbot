@@ -10,6 +10,9 @@ import { AgentDeletionCommitUncertainError } from "../agents/agent-lifecycle-reg
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import { getDetachedMediaCronFailureRecorder } from "../cron/detached-media-failure-recorder.js";
+import { cronStoreKey } from "../cron/store/key.js";
+import { inspectActiveCronRunReceipt } from "../cron/store/run-receipt-store.js";
 import { resolveSystemEventOptionsOwnerAgentId } from "../infra/system-event-ownership.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -628,6 +631,98 @@ describe("buildGatewayCronService", () => {
       await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(2));
     } finally {
       state.cron.stop();
+    }
+  });
+
+  it("routes a detached-media failure to its original store across cron reload", async () => {
+    const cfg = createCronConfig("server-cron-restart-detached-media-recorder");
+    const replacementCfg = createCronConfig(
+      "server-cron-restart-detached-media-recorder-replacement",
+    );
+    const runDone = createDeferred<{ status: "ok"; summary: string }>();
+    runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => await runDone.promise);
+    loadConfigMock.mockReturnValue(cfg);
+    const initial = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    let replacement: ReturnType<typeof buildGatewayCronService> | undefined;
+
+    try {
+      expect(getDetachedMediaCronFailureRecorder(cronStoreKey(initial.storePath))).toBeUndefined();
+      await initial.cron.start();
+      const job = await initial.cron.add({
+        id: "job-during-restart",
+        name: "detached media across store reload",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 3_600_000 },
+        payload: { kind: "agentTurn", message: "generate music" },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+      });
+      const runPromise = initial.cron.run(job.id, "force");
+      let receipt = inspectActiveCronRunReceipt({
+        storePath: initial.storePath,
+        jobId: job.id,
+      });
+      await vi.waitFor(() => {
+        receipt = inspectActiveCronRunReceipt({
+          storePath: initial.storePath,
+          jobId: job.id,
+        });
+        expect(receipt).toBeDefined();
+      });
+      runDone.resolve({ status: "ok", summary: "generation started" });
+      await runPromise;
+      if (!receipt) {
+        throw new Error("expected detached-media cron receipt");
+      }
+      expect(initial.cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");
+      const recorderForTask = getDetachedMediaCronFailureRecorder(receipt.storeKey);
+      expect(recorderForTask).toBeTypeOf("function");
+      if (!recorderForTask) {
+        throw new Error("expected originating detached-media recorder");
+      }
+
+      initial.cron.stop();
+      loadConfigMock.mockReturnValue(replacementCfg);
+      replacement = buildGatewayCronService({
+        cfg: replacementCfg,
+        deps: {} as CliDeps,
+        broadcast: () => {},
+      });
+      await replacement.cron.start();
+      expect(getDetachedMediaCronFailureRecorder(receipt.storeKey)).toBeUndefined();
+      expect(getDetachedMediaCronFailureRecorder(cronStoreKey(replacement.storePath))).toBeTypeOf(
+        "function",
+      );
+      await expect(
+        recorderForTask({
+          cronRunReceipt: receipt,
+          requesterSessionKey: "agent:main:cron:job-during-restart:run:1",
+          taskId: "media-task-during-restart",
+          runId: "tool:music_generate:during-restart",
+          toolName: "music_generate",
+          error: "Detached music_generate failed during restart",
+        }),
+      ).resolves.toBeUndefined();
+      expect(initial.cron.getJob(job.id)?.state).toMatchObject({
+        lastRunAtMs: receipt.startedAtMs,
+        lastRunStatus: "error",
+        lastError: "Detached music_generate failed during restart",
+      });
+      expect(replacement.cron.getJob(job.id)).toBeUndefined();
+    } finally {
+      runDone.resolve({ status: "ok", summary: "generation started" });
+      initial.cron.stop();
+      replacement?.cron.stop();
+      expect(getDetachedMediaCronFailureRecorder(cronStoreKey(initial.storePath))).toBeUndefined();
+      if (replacement) {
+        expect(
+          getDetachedMediaCronFailureRecorder(cronStoreKey(replacement.storePath)),
+        ).toBeUndefined();
+      }
     }
   });
 
