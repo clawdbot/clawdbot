@@ -20,14 +20,8 @@ function readScript(path: string): string {
   return readFileSync(path, "utf8");
 }
 
-const canonicalMismatchMessage = (repo: string) =>
-  [
-    "scripts/pr implementation differs between this worktree and the canonical checkout, and does not match origin/main.",
-    "differing wrapper components vs origin/main: scripts/pr-lib",
-    `Refusing to silently substitute canonical wrapper code from: ${repo}`,
-    "Run scripts/pr from a checkout whose wrapper matches the canonical checkout or a fetched origin/main.",
-    "",
-  ].join("\n");
+const anchorSubstitutionNotice = (repo: string) =>
+  `scripts/pr wrapper in this worktree differs from origin/main; running the canonical checkout's wrapper (matches the origin/main trust anchor): ${repo}`;
 const itPosix = process.platform === "win32" ? it.skip : it;
 
 function makeMismatchedWrapperRepo() {
@@ -45,6 +39,14 @@ function makeMismatchedWrapperRepo() {
     writeFileSync(commandPath, "#!/bin/sh\nexit 0\n");
     chmodSync(commandPath, 0o755);
   }
+  // Deterministic gh stub: main-only subcommands fail fast on the base-branch
+  // gate instead of reaching the network, proving which wrapper actually ran.
+  const ghStub = join(bin, "gh");
+  writeFileSync(
+    ghStub,
+    '#!/bin/sh\nif [ "$1" = "pr" ] && [ "$2" = "view" ]; then\n  echo not-main\n  exit 0\nfi\nexit 0\n',
+  );
+  chmodSync(ghStub, 0o755);
 
   const fixtureEnv = {
     ...process.env,
@@ -81,6 +83,12 @@ function makeMismatchedWrapperRepo() {
     join(canonical, "scripts", "lib", "plain-gh.sh"),
     "resolve_plain_gh_bin() { printf '/usr/bin/true\\n'; }\ngh_plain() { :; }\n",
   );
+  // Marker stub committed to main (the origin/main anchor), so tests can tell
+  // an anchor-substituted canonical run apart from a local wrapper run.
+  writeFileSync(
+    join(canonical, "scripts", "pr-lib", "gates.sh"),
+    'ci_dispatch() { echo "canonical wrapper executed"; }\n',
+  );
   chmodSync(join(canonical, "scripts", "pr"), 0o755);
 
   git(canonical, ["config", "user.name", "OpenClaw Test"]);
@@ -114,8 +122,10 @@ function makeMismatchedWrapperRepo() {
     canonical,
     cleanup: () => rmSync(root, { recursive: true, force: true }),
     env: fixtureEnv,
+    git,
     linked,
     localRevision,
+    root,
   };
 }
 
@@ -290,7 +300,7 @@ describe("scripts/pr wrappers", () => {
     }
   });
 
-  it("keeps the existing mismatch refusal for advisory commands without opt-in", () => {
+  it("substitutes the anchor-matching canonical wrapper for a mismatched worktree without opt-in", () => {
     const fixture = makeMismatchedWrapperRepo();
     try {
       const result = spawnSync(join(fixture.linked, "scripts", "pr"), ["ci-dispatch", "123"], {
@@ -298,14 +308,17 @@ describe("scripts/pr wrappers", () => {
         encoding: "utf8",
         env: fixture.env,
       });
-      expect(result.status).toBe(1);
-      expect(result.stderr).toBe(canonicalMismatchMessage(fixture.canonical));
+      expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+      expect(result.stdout).toContain("canonical wrapper executed");
+      expect(result.stdout).not.toContain("local wrapper executed");
+      expect(result.stderr).toContain(anchorSubstitutionNotice(fixture.canonical));
+      expect(result.stderr).not.toContain("Refusing to silently substitute");
     } finally {
       fixture.cleanup();
     }
   });
 
-  it("refuses developer opt-in for a mismatched landing command", () => {
+  it("routes a mismatched landing command to the anchor-matching canonical wrapper despite opt-in", () => {
     const fixture = makeMismatchedWrapperRepo();
     try {
       const result = spawnSync(
@@ -317,8 +330,44 @@ describe("scripts/pr wrappers", () => {
       expect(result.stderr).toContain(
         "subcommand 'prepare-run' is classified landing; dev-wrapper opt-in is unavailable.",
       );
-      expect(result.stderr).toContain(canonicalMismatchMessage(fixture.canonical).trim());
+      expect(result.stderr).toContain(anchorSubstitutionNotice(fixture.canonical));
+      // The stubbed gh reports a non-main base: reaching this gate proves the
+      // canonical wrapper ran instead of the mismatched local one.
+      expect(result.stderr).toContain(
+        "scripts/pr prepare and merge commands only support PRs targeting main; PR #123 targets not-main.",
+      );
       expect(result.stdout).not.toContain("local wrapper executed");
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("substitutes the canonical wrapper for a stale-base worktree once main moves the wrapper", () => {
+    const fixture = makeMismatchedWrapperRepo();
+    try {
+      // Stale worktree: created at the pushed main base, no local wrapper edits.
+      const stale = join(fixture.root, "stale");
+      const baseline = fixture.git(fixture.canonical, ["rev-parse", "main"]).stdout.trim();
+      fixture.git(fixture.canonical, ["worktree", "add", "-b", "stale-feature", stale, baseline]);
+
+      // main's wrapper then advances and the canonical checkout tracks it.
+      writeFileSync(
+        join(fixture.canonical, "scripts", "pr-lib", "gates.sh"),
+        'ci_dispatch() { echo "canonical v2 executed"; }\n',
+      );
+      fixture.git(fixture.canonical, ["add", "scripts/pr-lib/gates.sh"]);
+      fixture.git(fixture.canonical, ["commit", "-m", "test: wrapper v2"]);
+      fixture.git(fixture.canonical, ["push", "origin", "main"]);
+
+      const result = spawnSync(join(stale, "scripts", "pr"), ["ci-dispatch", "123"], {
+        cwd: stale,
+        encoding: "utf8",
+        env: fixture.env,
+      });
+      expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+      expect(result.stdout).toContain("canonical v2 executed");
+      expect(result.stderr).toContain(anchorSubstitutionNotice(fixture.canonical));
+      expect(result.stderr).not.toContain("Refusing to silently substitute");
     } finally {
       fixture.cleanup();
     }
