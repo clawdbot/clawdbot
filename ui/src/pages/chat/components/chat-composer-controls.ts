@@ -1,5 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
+import type { ChatSendShortcut } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
 import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
@@ -22,6 +23,7 @@ export type ChatRunControlsProps = {
   hasAttachments?: boolean;
   isBusy: boolean;
   followUpMode?: ControlUiFollowUpMode;
+  sendShortcut: ChatSendShortcut;
   suggestionComposer?: boolean;
   sending: boolean;
   voiceActive?: boolean;
@@ -218,6 +220,15 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
         : interruptsActiveRun
           ? t("chat.runControls.sendMessage")
           : t("chat.runControls.queueMessage");
+  const queueSteerShortcutAvailable =
+    props.canAbort &&
+    props.canSend &&
+    hasComposedContent &&
+    props.followUpMode === "queue" &&
+    props.sendShortcut === "enter";
+  const activeRunActionTooltip = queueSteerShortcutAvailable
+    ? `${activeRunActionLabel} ⏎ · ${t("chat.queue.steer")} ${t("chat.sendShortcutModifierEnter")}`
+    : activeRunActionLabel;
   const storeDraftAndSend = () => {
     if (props.draft.trim()) {
       props.onStoreDraft(props.draft);
@@ -247,7 +258,7 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
   const voiceErrored = props.voiceStatus === "error";
   const voiceButton = renderComposerVoiceButton(props);
   const sendAction = html`
-    <openclaw-tooltip .content=${activeRunActionLabel}>
+    <openclaw-tooltip .content=${activeRunActionTooltip}>
       <button
         class="chat-send-btn"
         @pointerdown=${props.onPrimaryActionPointerDown}

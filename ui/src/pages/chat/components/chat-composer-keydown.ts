@@ -209,7 +209,8 @@ export function createComposerKeyDownHandler({
     const sendShortcutMatches = sendShortcut === "enter" || event.metaKey || event.ctrlKey;
     if (event.key === "Enter" && !event.shiftKey && sendShortcutMatches) {
       const attachments = props.getAttachments?.() ?? props.attachments ?? [];
-      if (!target.value.trim() && attachments.length === 0) {
+      const hasComposedContent = Boolean(target.value.trim() || attachments.length);
+      if (!hasComposedContent) {
         // Mirror the queue chip's Steer availability exactly (visible surface,
         // connected + composable gate), or offline Enter would swallow the key
         // and invoke a lifecycle that returns with no visible outcome.
@@ -232,7 +233,19 @@ export function createComposerKeyDownHandler({
       }
       event.preventDefault();
       commitDraft(target.value);
-      props.onSend();
+      const steerImmediately =
+        sendShortcut === "enter" &&
+        showAbortableUi &&
+        props.followUpMode === "queue" &&
+        (event.metaKey || event.ctrlKey) &&
+        !event.altKey &&
+        !event.shiftKey &&
+        hasComposedContent;
+      if (steerImmediately) {
+        props.onSend({ followUpMode: "steer" });
+      } else {
+        props.onSend();
+      }
       syncDraftAfterSend(target);
     }
   };

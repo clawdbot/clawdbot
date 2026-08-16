@@ -13,6 +13,24 @@ afterEach(async () => {
   await resetComposerFixture();
 });
 
+function pressComposerEnter(
+  container: Element,
+  modifiers: Pick<KeyboardEventInit, "altKey" | "ctrlKey" | "metaKey" | "shiftKey"> = {},
+) {
+  const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+  if (!textarea) {
+    throw new Error("expected composer textarea");
+  }
+  const event = new KeyboardEvent("keydown", {
+    bubbles: true,
+    cancelable: true,
+    key: "Enter",
+    ...modifiers,
+  });
+  textarea.dispatchEvent(event);
+  return event;
+}
+
 describe("renderChatComposer controls", () => {
   it.each([
     {
@@ -233,6 +251,137 @@ describe("renderChatComposer controls", () => {
     ).not.toThrow();
     expect(onQueueSteer).not.toHaveBeenCalled();
     expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["Meta", { metaKey: true }],
+    ["Control", { ctrlKey: true }],
+  ] as const)("uses %s+Enter to steer an active queued follow-up", (_name, modifiers) => {
+    const onSend = vi.fn();
+    const { container } = renderComposer({
+      canAbort: true,
+      draft: "Steer this now",
+      followUpMode: "queue",
+      onAbort: vi.fn(),
+      onSend,
+      sendShortcut: "enter",
+    });
+
+    pressComposerEnter(container, modifiers);
+
+    expect(onSend).toHaveBeenCalledOnce();
+    expect(onSend).toHaveBeenCalledWith({ followUpMode: "steer" });
+  });
+
+  it.each([
+    ["modifier-enter", true, "queue", false],
+    ["enter", false, "queue", false],
+    ["enter", true, "steer", false],
+    ["enter", true, "queue", true],
+  ] as const)(
+    "keeps ordinary send semantics for shortcut=%s active=%s mode=%s alt=%s",
+    (sendShortcut, active, followUpMode, altKey) => {
+      const onSend = vi.fn();
+      const { container } = renderComposer({
+        canAbort: active,
+        draft: "Keep the ordinary send path",
+        followUpMode,
+        onAbort: active ? vi.fn() : undefined,
+        onSend,
+        sendShortcut,
+      });
+
+      pressComposerEnter(container, { altKey, ctrlKey: true });
+
+      expect(onSend.mock.calls).toEqual([[]]);
+    },
+  );
+
+  it("keeps empty modified Enter on the existing empty-draft path", () => {
+    const onSend = vi.fn();
+    const { container } = renderComposer({
+      canAbort: true,
+      draft: "",
+      followUpMode: "queue",
+      onAbort: vi.fn(),
+      onSend,
+      sendShortcut: "enter",
+    });
+
+    pressComposerEnter(container, { ctrlKey: true });
+
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("keeps Shift+modified Enter as a newline", () => {
+    const onSend = vi.fn();
+    const { container } = renderComposer({
+      canAbort: true,
+      draft: "Keep editing",
+      followUpMode: "queue",
+      onAbort: vi.fn(),
+      onSend,
+      sendShortcut: "enter",
+    });
+
+    const event = pressComposerEnter(container, { ctrlKey: true, shiftKey: true });
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("teaches the steer shortcut only when the force-steer action is available", () => {
+    const available = renderComposer({
+      canAbort: true,
+      draft: "Follow up now",
+      followUpMode: "queue",
+      onAbort: vi.fn(),
+      sendShortcut: "enter",
+    });
+    const availablePrimary = primaryButton(available.container);
+    const availableTooltip = availablePrimary.closest("openclaw-tooltip") as
+      | (HTMLElement & { content?: string })
+      | null;
+    expect(availablePrimary.getAttribute("aria-label")).toBe(t("chat.runControls.queueMessage"));
+    expect(availableTooltip?.content).toBe("Queue ⏎ · Steer ⌘/Ctrl+Enter");
+
+    const unavailable = [
+      {
+        overrides: {
+          canAbort: true,
+          draft: "Follow up later",
+          followUpMode: "queue" as const,
+          onAbort: vi.fn(),
+          sendShortcut: "modifier-enter" as const,
+        },
+        tooltip: t("chat.runControls.queue"),
+      },
+      {
+        overrides: {
+          draft: "Send without an active run",
+          followUpMode: "queue" as const,
+          sendShortcut: "enter" as const,
+        },
+        tooltip: t("chat.runControls.send"),
+      },
+      {
+        overrides: {
+          canAbort: true,
+          draft: "Already steering",
+          followUpMode: "steer" as const,
+          onAbort: vi.fn(),
+          sendShortcut: "enter" as const,
+        },
+        tooltip: t("chat.queue.steer"),
+      },
+    ];
+    for (const testCase of unavailable) {
+      const view = renderComposer(testCase.overrides);
+      const tooltip = primaryButton(view.container).closest("openclaw-tooltip") as
+        | (HTMLElement & { content?: string })
+        | null;
+      expect(tooltip?.content).toBe(testCase.tooltip);
+    }
   });
 
   it("stops an abortable run with Escape unless reply or menu precedence owns it", () => {
