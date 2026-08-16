@@ -711,7 +711,8 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     },
     {
       name: "preserves Bedrock inference-profile ARNs",
-      model: "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-5",
+      model:
+        "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-5",
       expectedModel:
         "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-5",
     },
