@@ -524,6 +524,7 @@ describe("memory wiki source sync legacy key migration", () => {
     const raw = openKeyedStoreForEnv(env)<{
       syncKey: string;
       vaultRootKey: string;
+      renderFingerprint: string;
     }>({
       namespace: MEMORY_WIKI_SOURCE_SYNC_STATE_NAMESPACE,
       maxEntries: MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES,

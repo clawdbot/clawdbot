@@ -22,8 +22,10 @@ export type PluginStateKeyedStore<T> = {
    * Atomically moves an entry to a new key and replaces its value in one
    * transaction, preserving the row's creation time and TTL. Slot-neutral:
    * namespace capacity limits do not apply because the row count is unchanged.
-   * Returns "conflict" (and changes nothing) when a live entry already holds
-   * `nextKey`, and "missing" when no live entry holds `key`.
+   * Returns "rekeyed" when the row was moved — and also when `key` already
+   * vanished but a live row at `nextKey` makes the rekey's end state
+   * idempotently true. Returns "conflict" (and changes nothing) when both
+   * keys hold live entries, and "missing" when neither key holds one.
    */
   rekey?: (key: string, nextKey: string, value: T) => Promise<"rekeyed" | "missing" | "conflict">;
   lookup(key: string): Promise<T | undefined>;
@@ -48,8 +50,10 @@ export type PluginStateSyncKeyedStore<T> = {
    * Atomically moves an entry to a new key and replaces its value in one
    * transaction, preserving the row's creation time and TTL. Slot-neutral:
    * namespace capacity limits do not apply because the row count is unchanged.
-   * Returns "conflict" (and changes nothing) when a live entry already holds
-   * `nextKey`, and "missing" when no live entry holds `key`.
+   * Returns "rekeyed" when the row was moved — and also when `key` already
+   * vanished but a live row at `nextKey` makes the rekey's end state
+   * idempotently true. Returns "conflict" (and changes nothing) when both
+   * keys hold live entries, and "missing" when neither key holds one.
    */
   rekey?: (key: string, nextKey: string, value: T) => "rekeyed" | "missing" | "conflict";
   lookup(key: string): T | undefined;
