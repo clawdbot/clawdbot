@@ -586,6 +586,7 @@ function expectHydratedWindowsShell(run: ParsedWrapperRun, command: string): voi
   expect(run.remoteCommand).toContain(
     "$env:CRABBOX_PNPM_MODULES_DIR) { $env:CRABBOX_PNPM_MODULES_DIR } else { $env:PNPM_CONFIG_MODULES_DIR }",
   );
+  expect(run.remoteCommand).toContain("hydrated pnpm modules directory does not exist");
   expect(run.remoteCommand).toContain('mklink /J "$openclawSelfModules" "$openclawModulesDir"');
   expect(run.remoteCommand).toContain(
     'mklink /J "$openclawWorkspaceModules" "$openclawModulesDir"',

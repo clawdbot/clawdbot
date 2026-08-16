@@ -2645,7 +2645,7 @@ function remoteWindowsHydratedNodeModulesBootstrap() {
   return [
     "$openclawModulesDir = if ($env:CRABBOX_PNPM_MODULES_DIR) { $env:CRABBOX_PNPM_MODULES_DIR } else { $env:PNPM_CONFIG_MODULES_DIR }",
     "if ($openclawModulesDir) {",
-    'if (-not (Test-Path $openclawModulesDir)) { throw "PNPM_CONFIG_MODULES_DIR does not exist: $openclawModulesDir" }',
+    'if (-not (Test-Path $openclawModulesDir)) { throw "hydrated pnpm modules directory does not exist: $openclawModulesDir" }',
     '$openclawWorkspaceModules = Join-Path (Get-Location).Path "node_modules"',
     '$openclawSelfModules = Join-Path $openclawModulesDir "node_modules"',
     'if (-not (Test-Path $openclawSelfModules)) { cmd /c mklink /J "$openclawSelfModules" "$openclawModulesDir" | Out-Host; if ($LASTEXITCODE -ne 0) { throw "failed to link hydrated pnpm node_modules" } }',
