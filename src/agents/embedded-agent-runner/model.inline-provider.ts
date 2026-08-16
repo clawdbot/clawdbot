@@ -6,6 +6,7 @@ import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/ty
 import { normalizeGoogleApiBaseUrl } from "../../infra/google-api-base-url.js";
 import type { Api } from "../../llm/types.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { isSecretRefHeaderValueMarker } from "../model-auth-markers.js";
 import { attachModelProviderLocalService } from "../provider-local-service.js";
 import {
@@ -29,8 +30,6 @@ export type InlineProviderConfig = {
   baseUrl?: string;
   api?: ModelDefinitionConfig["api"];
   models?: ModelDefinitionConfig[];
-  contextWindow?: ModelProviderConfig["contextWindow"];
-  contextTokens?: ModelProviderConfig["contextTokens"];
   maxTokens?: ModelProviderConfig["maxTokens"];
   params?: ModelProviderConfig["params"];
   headers?: unknown;
@@ -140,7 +139,7 @@ function resolveInlineProviderTransport(params: { api?: Api | null; baseUrl?: st
   };
 }
 
-/** Builds runtime model records from inline provider config, inheriting provider-level defaults. */
+/** Builds runtime model records from inline provider config. */
 export function buildInlineProviderModels(
   providers: Record<string, InlineProviderConfig>,
   options: { providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps } = {},
@@ -181,8 +180,7 @@ export function buildInlineProviderModels(
           attachModelProviderRequestTransport(
             {
               ...model,
-              contextWindow: model.contextWindow ?? entry?.contextWindow,
-              contextTokens: model.contextTokens ?? entry?.contextTokens,
+              contextWindow: model.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
               maxTokens: model.maxTokens ?? entry?.maxTokens,
               input: resolveProviderModelInput({
                 provider: trimmed,

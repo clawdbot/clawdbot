@@ -598,7 +598,7 @@ describe("createModelSelectionState catalog loading", () => {
 
     const state = await createModelSelectionState({
       cfg: {} as OpenClawConfig,
-      agentCfg: { contextTokens: 1_000_000 },
+      agentCfg: {},
       defaultProvider: "openai",
       defaultModel: "gpt-5.5",
       provider: "openai",
@@ -609,7 +609,6 @@ describe("createModelSelectionState catalog loading", () => {
     expect(
       resolveContextTokens({
         cfg: {} as OpenClawConfig,
-        agentCfg: { contextTokens: 1_000_000 },
         provider: state.provider,
         model: state.model,
         modelContextWindow: state.modelContextWindow,
@@ -752,7 +751,6 @@ describe("createModelSelectionState catalog loading", () => {
           },
         },
       } as OpenClawConfig,
-      agentCfg: undefined,
       defaultProvider: "openai",
       defaultModel: "gpt-5.5",
       provider: "openai",
@@ -778,44 +776,11 @@ describe("resolveContextTokens", () => {
 
     const result = resolveContextTokens({
       cfg: {} as OpenClawConfig,
-      agentCfg: undefined,
       provider: "google-gemini-cli",
       model: "gemini-3.1-pro-preview",
     });
 
     expect(result).toBe(1_000_000);
-  });
-
-  it("treats agent contextTokens as a cap, not an expansion beyond the model window", () => {
-    getContextWindowCaches().discoveredTokenCache.set(
-      providerContextTokenCacheKey("openai", "gpt-5.5"),
-      272_000,
-    );
-
-    const result = resolveContextTokens({
-      cfg: {} as OpenClawConfig,
-      agentCfg: { contextTokens: 1_000_000 },
-      provider: "openai",
-      model: "gpt-5.5",
-    });
-
-    expect(result).toBe(272_000);
-  });
-
-  it("allows agent contextTokens to lower a larger model window", () => {
-    getContextWindowCaches().discoveredTokenCache.set(
-      providerContextTokenCacheKey("qwen", "qwen3.6-plus"),
-      1_000_000,
-    );
-
-    const result = resolveContextTokens({
-      cfg: {} as OpenClawConfig,
-      agentCfg: { contextTokens: 180_000 },
-      provider: "qwen",
-      model: "qwen3.6-plus",
-    });
-
-    expect(result).toBe(180_000);
   });
 });
 

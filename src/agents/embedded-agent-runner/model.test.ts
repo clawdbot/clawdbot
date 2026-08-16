@@ -2518,7 +2518,7 @@ describe("resolveModel", () => {
     );
   });
 
-  it("uses provider-level context defaults over discovered metadata", () => {
+  it("uses per-model context config over discovered metadata", () => {
     mockMinimalModelDiscovery("ollama", "qwen3.5:9b", {
       contextWindow: 216_000,
       contextTokens: 216_000,
@@ -2526,9 +2526,9 @@ describe("resolveModel", () => {
     });
     const cfg = makeProviderConfig("ollama", {
       baseUrl: "http://localhost:11434",
-      contextWindow: 8_192,
-      contextTokens: 8_000,
-      models: [{ id: "qwen3.5:9b", name: "qwen3.5:9b" }],
+      models: [
+        { id: "qwen3.5:9b", name: "qwen3.5:9b", contextWindow: 8_192, contextTokens: 8_000 },
+      ],
     });
 
     const result = resolveModelForTest("ollama", "qwen3.5:9b", "/tmp/agent", cfg);
@@ -2539,14 +2539,13 @@ describe("resolveModel", () => {
     expect(result.model?.maxTokens).toBe(8_192);
   });
 
-  it("keeps per-model context values above provider-level defaults", () => {
+  it("keeps per-model context values with a provider output-token default", () => {
     mockMinimalModelDiscovery("ollama", "qwen3.5:9b", {
       contextWindow: 216_000,
       maxTokens: 65_536,
     });
     const cfg = makeProviderConfig("ollama", {
       baseUrl: "http://localhost:11434",
-      contextWindow: 8_192,
       maxTokens: 4_096,
       models: [
         {

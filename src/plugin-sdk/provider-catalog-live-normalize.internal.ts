@@ -247,7 +247,6 @@ function buildOpenAICompatibleLiveModel(
         "maxInputTokens",
       ],
     ) ??
-    fallback.contextWindow ??
     template?.contextWindow ??
     128_000;
   const maxTokens =

@@ -49,7 +49,6 @@ export type FollowupRunnerParams = {
   sessionKey?: string;
   storePath?: string;
   defaultModel: string;
-  agentCfgContextTokens?: number;
   toolProgressDetail?: "explain" | "raw";
 };
 
@@ -381,7 +380,6 @@ export async function admitFollowupTurn(params: {
         followupRun: turn.queued,
         promptForEstimate: turn.queued.prompt,
         defaultModel: params.defaults.defaultModel,
-        agentCfgContextTokens: params.defaults.agentCfgContextTokens,
         sessionEntry: activeEntry,
         sessionStore,
         sessionKey: replySessionKey,

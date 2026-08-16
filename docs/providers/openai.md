@@ -487,9 +487,8 @@ for the full example.
     Direct API-key GPT-5.5 and GPT-5.6 models also default to `272000`
     `contextTokens`, even though the Platform API exposes a larger native
     window. This keeps the normal latency, quality, and cost profile consistent
-    across auth modes. A configured `agents.defaults.contextTokens` value can
-    lower that budget further, but it cannot raise a model above its configured
-    `contextTokens` cap.
+    across auth modes. Override a direct model's active-input budget with
+    `models.providers.openai.models[].contextTokens` on that exact model entry.
 
     For direct API-key GPT-5.5 and GPT-5.6, OpenAI documents a `1050000`
     token provider window and `128000` maximum output tokens. Reserving the

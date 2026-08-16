@@ -304,8 +304,6 @@ export const TARGET_KEYS = [
   "models.providers.*.baseUrl",
   "models.providers.*.apiKey",
   "models.providers.*.api",
-  "models.providers.*.contextWindow",
-  "models.providers.*.contextTokens",
   "models.providers.*.maxTokens",
   "models.providers.*.region",
   "models.providers.*.headers",

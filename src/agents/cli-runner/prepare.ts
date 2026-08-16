@@ -51,7 +51,7 @@ import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolvePreparedRunAdmission } from "../admitted-run-context.js";
 import { hasAgentRosterProperty, resolveAgentWorkspaceDir } from "../agent-scope-config.js";
-import { resolveAgentConfig, resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
+import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { hasUsableOAuthCredential } from "../auth-profiles/credential-state.js";
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
 import {
@@ -571,7 +571,6 @@ export async function prepareCliRunContext(
     config: params.config,
     agentId: sessionOwner,
   });
-  const agentContextTokens = resolveAgentConfig(params.config ?? {}, sessionAgentId)?.contextTokens;
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
   const requestedAuthProfileId = params.authProfileId?.trim() || undefined;
   let effectiveAuthProfileId =
@@ -855,7 +854,6 @@ export async function prepareCliRunContext(
     provider: params.provider,
     modelId,
     modelContextTokens,
-    agentContextTokens,
     defaultTokens: DEFAULT_CONTEXT_TOKENS,
   });
   // The generic guard rechecks the requested id in config. An alias target may

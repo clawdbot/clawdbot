@@ -5,7 +5,7 @@ import { normalizeLowercaseStringOrEmpty as normalizeStatusModelPart } from "@op
 import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
-import { getRuntimeConfig, projectConfigOntoRuntimeSourceSnapshot } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { resolveSystemMainSessionKey } from "../config/sessions/main-session.js";
 import {
   hasSessionActiveAutoModelFallback,
@@ -280,10 +280,6 @@ export async function getStatusSummary(
   } = await loadStatusSummaryRuntimeModule();
   const cfg = options.config ?? getRuntimeConfig();
   await waitForContextWindowCacheLoad();
-  const contextSourceConfig =
-    options.sourceConfig !== undefined
-      ? options.sourceConfig
-      : projectConfigOntoRuntimeSourceSnapshot(cfg);
   const { resolveManifestModel, createProviderContextResolver } =
     await loadStaticModelCatalogResolvers();
   const resolveProviderContext = createProviderContextResolver({ cfg });
@@ -403,11 +399,9 @@ export async function getStatusSummary(
   const configContextTokens =
     resolveContextTokensForModel({
       cfg,
-      sourceCfg: contextSourceConfig,
       provider: resolved.provider ?? DEFAULT_PROVIDER,
       model: configModel,
       ...configModelContext,
-      contextTokensOverride: cfg.agents?.defaults?.contextTokens,
       fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
       // Keep `status`/`status --json` startup read-only. These summary lookups
       // use offline static catalogs but never start live provider discovery.
@@ -478,21 +472,25 @@ export async function getStatusSummary(
           (hasUserPinnedModelSelection(entry) || hasSessionActiveAutoModelFallback(entry));
         // Session rows show the live selected model and warn for user-pinned
         // differences as well as runtime fallback selections (#96126).
+        const resolvedContextTokens = resolveContextTokensForModel({
+          cfg,
+          provider: lookupModel.provider,
+          model: lookupModelId,
+          ...modelContext,
+          fallbackContextTokens: configContextTokens ?? undefined,
+          allowAsyncLoad: false,
+        });
+        const trustedSessionContextTokens = resolveTrustedSessionContextTokens({
+          entry,
+          provider: lookupModel.provider,
+          model: lookupModelId,
+        });
         const contextTokens =
-          resolveContextTokensForModel({
-            cfg,
-            sourceCfg: contextSourceConfig,
-            provider: lookupModel.provider,
-            model: lookupModelId,
-            ...modelContext,
-            contextTokensOverride: resolveTrustedSessionContextTokens({
-              entry,
-              provider: lookupModel.provider,
-              model: lookupModelId,
-            }),
-            fallbackContextTokens: configContextTokens ?? undefined,
-            allowAsyncLoad: false,
-          }) ?? null;
+          trustedSessionContextTokens === undefined
+            ? (resolvedContextTokens ?? null)
+            : resolvedContextTokens === undefined
+              ? trustedSessionContextTokens
+              : Math.min(trustedSessionContextTokens, resolvedContextTokens);
         const total = resolveSessionTotalTokens(entry);
         const freshTotal = resolveFreshSessionTotalTokens(entry);
         const totalTokensFresh = freshTotal !== undefined;

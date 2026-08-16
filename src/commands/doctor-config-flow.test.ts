@@ -1697,6 +1697,70 @@ describe("doctor config flow", () => {
     );
   });
 
+  it("previews and persists pre-parse context-budget cleanup with every path reported", async () => {
+    const canonical = {
+      models: {
+        providers: {
+          openai: {
+            models: [
+              {
+                id: "gpt-5.4",
+                name: "GPT-5.4",
+                contextTokens: 64_000,
+                contextWindow: 128_000,
+              },
+            ],
+          },
+        },
+      },
+      agents: { defaults: {}, entries: { ops: {} } },
+    };
+    const legacy = {
+      models: {
+        providers: {
+          openai: {
+            contextTokens: 64_000,
+            contextWindow: 128_000,
+            models: [{ id: "gpt-5.4", name: "GPT-5.4" }],
+          },
+        },
+      },
+      agents: { defaults: { contextTokens: 48_000 }, entries: { ops: { contextTokens: 32_000 } } },
+    };
+
+    await runDoctorConfigWithInput({
+      config: canonical,
+      parsedConfig: legacy,
+      sourceConfigBeforeMigrations: legacy,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+    const previewText = terminalNoteMock.mock.calls.map(([message]) => message).join("\n");
+    expect(previewText).toContain(
+      "models.providers.openai.contextTokens → models.providers.openai.models[0].contextTokens",
+    );
+    expect(previewText).toContain("Removed agents.defaults.contextTokens");
+    expect(previewText).toContain("Removed agents.entries.ops.contextTokens");
+    expect(previewText).toContain("models.providers.<provider>.models[].contextTokens");
+
+    terminalNoteMock.mockClear();
+    const repaired = await runDoctorConfigWithInput({
+      config: canonical,
+      parsedConfig: legacy,
+      sourceConfigBeforeMigrations: legacy,
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(repaired.shouldWriteConfig).toBe(true);
+    expect(repaired.cfg).toMatchObject(canonical);
+    expect(repaired.pendingChangePanels?.join("\n")).toContain(
+      "Removed models.providers.openai.contextWindow after baking it into explicit model entries.",
+    );
+    expect(terminalNoteMock.mock.calls.map(([message]) => message).join("\n")).toContain(
+      "agents.entries.ops.contextTokens cannot be represented per model",
+    );
+  });
+
   it("drops roster write intent when a preview repair is declined", async () => {
     const result = await runDoctorConfigWithInput({
       config: { agents: { entries: { main: { default: true } } } },

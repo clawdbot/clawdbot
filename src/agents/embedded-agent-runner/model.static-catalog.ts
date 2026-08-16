@@ -116,13 +116,8 @@ function modelFromProviderStaticCatalog(params: {
     reasoning: model?.reasoning ?? params.model.reasoning ?? false,
     input: normalizeStaticCatalogInput(model?.input ?? params.model.input),
     cost: model?.cost ?? normalizeStaticCatalogCost(params.model.cost),
-    contextWindow:
-      model?.contextWindow ??
-      params.model.contextWindow ??
-      params.providerConfig.contextWindow ??
-      DEFAULT_CONTEXT_TOKENS,
-    contextTokens:
-      model?.contextTokens ?? params.model.contextTokens ?? params.providerConfig.contextTokens,
+    contextWindow: model?.contextWindow ?? params.model.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
+    contextTokens: model?.contextTokens ?? params.model.contextTokens,
     maxTokens:
       model?.maxTokens ??
       params.model.maxTokens ??

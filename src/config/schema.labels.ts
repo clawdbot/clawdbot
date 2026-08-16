@@ -505,8 +505,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "models.providers.*.apiKey": "Model Provider API Key", // pragma: allowlist secret
   "models.providers.*.auth": "Model Provider Auth Mode",
   "models.providers.*.api": "Model Provider API Adapter",
-  "models.providers.*.contextWindow": "Model Provider Context Window",
-  "models.providers.*.contextTokens": "Model Provider Context Tokens",
   "models.providers.*.maxTokens": "Model Provider Max Tokens",
   "models.providers.*.timeoutSeconds": "Model Provider Request Timeout",
   "models.providers.*.region": "Model Provider Region",

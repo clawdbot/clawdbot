@@ -254,88 +254,67 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
     expect(getReplyPayloadMetadata(result.reply)?.deliverDespiteSourceReplySuppression).toBe(true);
   });
 
-  it.each([
-    { configuredCap: undefined, agentCap: undefined, expectedContextTokens: 1_000_000 },
-    { configuredCap: 372_000, agentCap: undefined, expectedContextTokens: 372_000 },
-    { configuredCap: 372_000, agentCap: 120_000, expectedContextTokens: 372_000 },
-  ])(
-    "resolves the selected model while preserving explicit context cap $configuredCap (#117470)",
-    async ({ configuredCap, agentCap, expectedContextTokens }) => {
-      handleCommandsMock.mockResolvedValueOnce({
-        shouldContinue: false,
-        reply: { text: "⚙️ Compacted" },
-      });
+  it("resolves the selected model context for native compact", async () => {
+    handleCommandsMock.mockResolvedValueOnce({
+      shouldContinue: false,
+      reply: { text: "⚙️ Compacted" },
+    });
 
-      const storePath = path.join(tempDirs.make("openclaw-native-override-"), "sessions.json");
-      await replaceSessionEntry(
-        { agentId: "main", sessionKey: "agent:main:main", storePath },
-        {
-          sessionId: "fable-session",
-          updatedAt: Date.now(),
-          providerOverride: "anthropic",
-          modelOverride: "claude-fable-5",
-          modelOverrideSource: "user",
-          contextTokens: 1_000_000,
-          agentRuntimeOverride: "claude-cli",
-          thinkingLevel: "off",
+    const storePath = path.join(tempDirs.make("openclaw-native-override-"), "sessions.json");
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: "agent:main:main", storePath },
+      {
+        sessionId: "fable-session",
+        updatedAt: Date.now(),
+        providerOverride: "anthropic",
+        modelOverride: "claude-fable-5",
+        modelOverrideSource: "user",
+        contextTokens: 1_000_000,
+        agentRuntimeOverride: "claude-cli",
+        thinkingLevel: "off",
+      },
+    );
+
+    const typing = createTypingController();
+    const result = await runTestNativeSlashFastReply({
+      ctx: buildTestCtx({
+        Body: "/compact",
+        CommandBody: "/compact",
+        CommandSource: "native",
+        CommandAuthorized: true,
+        SessionKey: "telegram:slash:123",
+        CommandTargetSessionKey: "agent:main:main",
+        CommandTurn: {
+          kind: "native",
+          source: "native",
+          authorized: true,
+          commandName: "compact",
+          body: "/compact",
         },
-      );
+      }),
+      cfg: markCompleteReplyConfig(
+        {
+          session: { store: storePath },
+        } as OpenClawConfig,
+        { runtimeMode: "full" },
+      ),
+      agentId: "main",
+      agentCfg: undefined,
+      commandAuthorized: true,
+      typing,
+    });
 
-      const typing = createTypingController();
-      const result = await runTestNativeSlashFastReply({
-        ctx: buildTestCtx({
-          Body: "/compact",
-          CommandBody: "/compact",
-          CommandSource: "native",
-          CommandAuthorized: true,
-          SessionKey: "telegram:slash:123",
-          CommandTargetSessionKey: "agent:main:main",
-          CommandTurn: {
-            kind: "native",
-            source: "native",
-            authorized: true,
-            commandName: "compact",
-            body: "/compact",
-          },
-        }),
-        cfg: markCompleteReplyConfig(
-          {
-            session: { store: storePath },
-            ...(configuredCap !== undefined || agentCap !== undefined
-              ? {
-                  agents: {
-                    ...(configuredCap !== undefined
-                      ? { defaults: { contextTokens: configuredCap } }
-                      : {}),
-                    ...(agentCap !== undefined
-                      ? { list: [{ id: "main", contextTokens: agentCap }] }
-                      : {}),
-                  },
-                }
-              : {}),
-          } as OpenClawConfig,
-          { runtimeMode: "full" },
-        ),
-        agentId: "main",
-        agentCfg: configuredCap !== undefined ? { contextTokens: configuredCap } : undefined,
-        commandAuthorized: true,
-        typing,
-      });
-
-      expect(result.handled).toBe(true);
-      expect(handleCommandsMock).toHaveBeenCalledOnce();
-      const call = handleCommandsMock.mock.calls[0]?.[0] as
-        | { provider?: string; model?: string; contextTokens?: number }
-        | undefined;
-      // The native slash fast path must forward the persisted session override —
-      // not the configured default — into command handling so /compact selects the
-      // claude-cli harness and the 1M context budget (issue #117470).
-      expect(call?.provider).toBe("anthropic");
-      expect(call?.model).toMatch(/claude-fable-5/);
-      expect(call?.contextTokens).toBe(expectedContextTokens);
-      expect(typing.cleanup).toHaveBeenCalledTimes(1);
-    },
-  );
+    expect(result.handled).toBe(true);
+    expect(handleCommandsMock).toHaveBeenCalledOnce();
+    const call = handleCommandsMock.mock.calls[0]?.[0] as
+      | { provider?: string; model?: string; contextTokens?: number }
+      | undefined;
+    // The selected model owns the context budget forwarded into command handling.
+    expect(call?.provider).toBe("anthropic");
+    expect(call?.model).toMatch(/claude-fable-5/);
+    expect(call?.contextTokens).toBe(1_000_000);
+    expect(typing.cleanup).toHaveBeenCalledTimes(1);
+  });
 
   it.each([
     { source: "auto" as const, locked: false, expectedProvider: "openai" },
