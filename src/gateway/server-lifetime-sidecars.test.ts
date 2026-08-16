@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
-import { publishGatewayLifetimeSidecars } from "./server-lifetime-sidecars.js";
+import { mergeGatewaySidecarOwners } from "./server-sidecar-owners.js";
 
 describe("gateway lifetime sidecars", () => {
   test("keeps pre-published sidecars reachable by shutdown", async () => {
@@ -7,11 +7,9 @@ describe("gateway lifetime sidecars", () => {
     const sessionChange = { stop: vi.fn(async () => {}) };
     const worker = { stop: vi.fn(async () => {}) };
 
-    const sidecars = publishGatewayLifetimeSidecars({
+    const sidecars = mergeGatewaySidecarOwners({
       registered: [metadataListener, sessionChange],
       published: [worker, metadataListener],
-      closeStarted: false,
-      stopAfterCloseStarted: vi.fn(),
     });
     expect(sidecars).toEqual([metadataListener, sessionChange, worker]);
 

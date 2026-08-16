@@ -13,9 +13,9 @@ import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission
 import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { collectGatewayProcessMemoryUsageMb, finishGatewayRestartTrace } from "./restart-trace.js";
 import type { GatewayKernelRuntime } from "./server-kernel-request-runtime.js";
-import { publishGatewayLifetimeSidecars } from "./server-lifetime-sidecars.js";
 import { GATEWAY_EVENTS } from "./server-methods-list.js";
 import { getRequiredSharedGatewaySessionGeneration } from "./server-shared-auth-generation.js";
+import { mergeGatewaySidecarOwners } from "./server-sidecar-owners.js";
 import type { GatewayHttpTransport } from "./server-transport-bridge.js";
 
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
@@ -123,6 +123,7 @@ export async function finishGatewayStartup(params: {
     activateRuntimeSecrets,
     applyFixedGatewayOverlays,
     resolveSharedGatewaySessionGenerationForConfig,
+    stopRegisteredGatewayLifetimeSidecars,
     stopRegisteredPostReadySidecars,
     chatMetadataLifecycle,
     gatewayRequestContext,
@@ -233,152 +234,143 @@ export async function finishGatewayStartup(params: {
   const activateScheduledServicesWhenReady = scheduledServicesResident.start;
   const { createGatewayServerActiveWorkInspectors } = await import("./server-active-work.js");
   const postAttachHandles = await startupTrace.measure("runtime.post-attach", () =>
-    loadGatewayStartupPostAttachModule().then(
-      ({ startGatewayPostAttachRuntime, stopPostReadySidecarsAfterCloseStarted }) =>
-        startGatewayPostAttachRuntime({
-          minimalTestGateway,
-          cfgAtStart,
+    loadGatewayStartupPostAttachModule().then(({ startGatewayPostAttachRuntime }) =>
+      startGatewayPostAttachRuntime({
+        minimalTestGateway,
+        cfgAtStart,
+        getConfig: getRuntimeConfig,
+        bindHost,
+        bindHosts: httpBindHosts,
+        port,
+        tlsEnabled: gatewayTls.enabled,
+        log,
+        isNixMode,
+        startupStartedAt: opts.startupStartedAt,
+        broadcastToConnIds,
+        getClientConnIds: gatewayRequestContext.getClientConnIds!,
+        broadcastPluginEvent,
+        tailscaleMode,
+        resetOnExit: tailscaleConfig.resetOnExit ?? false,
+        serviceName: tailscaleConfig.serviceName,
+        preserveFunnel: tailscaleConfig.preserveFunnel ?? false,
+        controlUiBasePath,
+        controlUiRootLifecycle,
+        logTailscale,
+        gatewayPluginConfigAtStart,
+        activationSourceConfig: startupActivationSourceConfig,
+        pluginManifestRecords,
+        ambientEnvTriggers,
+        pluginRegistry: pluginRuntime.registry,
+        defaultWorkspaceDir,
+        deps,
+        startChannels,
+        recoveryRuntime: gatewayInstanceRuntime.recovery,
+        logHooks,
+        logChannels,
+        unlockStartupMethods: kernel.unlockStartupMethods,
+        refreshChatMetadata: chatMetadataLifecycle.refresh,
+        loadStartupPlugins: async () => {
+          const { loadGatewayStartupPluginRuntime } = await loadStartupPluginsModule();
+          return loadGatewayStartupPluginRuntime({
+            cfg: gatewayPluginConfigAtStart,
+            activationSourceConfig: startupActivationSourceConfig,
+            workspaceDir: runtime.pluginWorkspaceDir,
+            log,
+            baseMethods,
+            coreGatewayMethodNames,
+            hostServices: pluginHostServices,
+            startupPluginIds,
+            pluginLookUpTable,
+            startupTrace,
+            ambientEnvTriggers,
+          });
+        },
+        onStartupPluginsLoading: () => {
+          startupState.pendingReason = "startup-sidecars";
+        },
+        onStartupPluginsLoaded: async (loaded) => {
+          replaceAttachedPluginRuntime(loaded);
+          startupState.pendingReason = "startup-sidecars";
+          await refreshAttachedGatewayDiscovery(loaded.pluginRegistry);
+        },
+        getCronService: () =>
+          runtimeState?.cronState.cron as PluginHookGatewayCronService | undefined,
+        onChannelsStarted: () => {
+          releaseStartupAccountStarts();
+        },
+        onPluginServices: (pluginServices) => {
+          kernel.setPluginServices(pluginServices);
+        },
+        onPostReadySidecars: (postReadySidecars) => {
+          kernel.setPostReadySidecars(
+            mergeGatewaySidecarOwners({
+              registered: runtimeState.postReadySidecars,
+              published: postReadySidecars,
+            }),
+          );
+          if (lifecycle.closePreludeStarted) {
+            void stopRegisteredPostReadySidecars().catch((error) => {
+              log.warn(`post-ready sidecar stop after close failed: ${String(error)}`);
+            });
+          }
+        },
+        onGatewayLifetimeSidecars: (gatewayLifetimeSidecars) => {
+          kernel.setGatewayLifetimeSidecars(
+            mergeGatewaySidecarOwners({
+              registered: runtimeState.gatewayLifetimeSidecars,
+              published: gatewayLifetimeSidecars,
+            }),
+          );
+          if (lifecycle.closePreludeStarted) {
+            void stopRegisteredGatewayLifetimeSidecars().catch((error) => {
+              log.warn(`gateway lifetime sidecar stop after close failed: ${String(error)}`);
+            });
+          }
+        },
+        registerGatewayLifetimeSidecar: async (sidecar) => {
+          if (lifecycle.closePreludeStarted) {
+            await sidecar.stop();
+            return null;
+          }
+          kernel.addGatewayLifetimeSidecar(sidecar);
+          return {
+            release: () => {
+              kernel.setGatewayLifetimeSidecars(
+                runtimeState.gatewayLifetimeSidecars.filter((registered) => registered !== sidecar),
+              );
+            },
+          };
+        },
+        ...(workerPlacementRuntime
+          ? {
+              startWorkerEnvironmentRuntime: async () => {
+                if (lifecycle.closePreludeStarted) {
+                  return null;
+                }
+                return await workerPlacementRuntime.startRuntime({
+                  isClosePreludeStarted: () => lifecycle.closePreludeStarted,
+                  // Close must see the drain handle before reconciliation can yield.
+                  registerSidecar: (sidecar) => {
+                    kernel.addGatewayLifetimeSidecar(sidecar);
+                  },
+                });
+              },
+            }
+          : {}),
+        onSidecarsReady: () => {
+          kernel.markSidecarsReady();
+          activateScheduledServicesWhenReady();
+        },
+        isClosing: () => lifecycle.closePreludeStarted,
+        startupTrace,
+        sidecarStartup,
+        waitForPostReadyWork: params.waitForPostReadyWork,
+        activeWorkInspectors: createGatewayServerActiveWorkInspectors(gatewayRequestContext),
+        residentRegistry,
+        providerAuthPrewarm: {
           getConfig: getRuntimeConfig,
-          bindHost,
-          bindHosts: httpBindHosts,
-          port,
-          tlsEnabled: gatewayTls.enabled,
-          log,
-          isNixMode,
-          startupStartedAt: opts.startupStartedAt,
-          broadcastToConnIds,
-          getClientConnIds: gatewayRequestContext.getClientConnIds!,
-          broadcastPluginEvent,
-          tailscaleMode,
-          resetOnExit: tailscaleConfig.resetOnExit ?? false,
-          serviceName: tailscaleConfig.serviceName,
-          preserveFunnel: tailscaleConfig.preserveFunnel ?? false,
-          controlUiBasePath,
-          controlUiRootLifecycle,
-          logTailscale,
-          gatewayPluginConfigAtStart,
-          activationSourceConfig: startupActivationSourceConfig,
-          pluginManifestRecords,
-          ambientEnvTriggers,
-          pluginRegistry: pluginRuntime.registry,
-          defaultWorkspaceDir,
-          deps,
-          startChannels,
-          recoveryRuntime: gatewayInstanceRuntime.recovery,
-          logHooks,
-          logChannels,
-          unlockStartupMethods: kernel.unlockStartupMethods,
-          refreshChatMetadata: chatMetadataLifecycle.refresh,
-          loadStartupPlugins: async () => {
-            const { loadGatewayStartupPluginRuntime } = await loadStartupPluginsModule();
-            return loadGatewayStartupPluginRuntime({
-              cfg: gatewayPluginConfigAtStart,
-              activationSourceConfig: startupActivationSourceConfig,
-              workspaceDir: runtime.pluginWorkspaceDir,
-              log,
-              baseMethods,
-              coreGatewayMethodNames,
-              hostServices: pluginHostServices,
-              startupPluginIds,
-              pluginLookUpTable,
-              startupTrace,
-              ambientEnvTriggers,
-            });
-          },
-          onStartupPluginsLoading: () => {
-            startupState.pendingReason = "startup-sidecars";
-          },
-          onStartupPluginsLoaded: async (loaded) => {
-            replaceAttachedPluginRuntime(loaded);
-            startupState.pendingReason = "startup-sidecars";
-            await refreshAttachedGatewayDiscovery(loaded.pluginRegistry);
-          },
-          getCronService: () =>
-            runtimeState?.cronState.cron as PluginHookGatewayCronService | undefined,
-          onChannelsStarted: () => {
-            releaseStartupAccountStarts();
-          },
-          onPluginServices: (pluginServices) => {
-            kernel.setPluginServices(pluginServices);
-          },
-          onPostReadySidecars: (postReadySidecars) => {
-            kernel.setPostReadySidecars(postReadySidecars);
-            stopPostReadySidecarsAfterCloseStarted({
-              postReadySidecars,
-              closeStarted: lifecycle.closePreludeStarted,
-              onError: (error) => {
-                log.warn(`post-ready sidecar stop after close failed: ${String(error)}`);
-              },
-            });
-            if (lifecycle.closePreludeStarted) {
-              kernel.setPostReadySidecars([]);
-            }
-          },
-          onGatewayLifetimeSidecars: (gatewayLifetimeSidecars) => {
-            kernel.setGatewayLifetimeSidecars(
-              publishGatewayLifetimeSidecars({
-                registered: runtimeState.gatewayLifetimeSidecars,
-                published: gatewayLifetimeSidecars,
-                closeStarted: lifecycle.closePreludeStarted,
-                stopAfterCloseStarted: (stopParams) => {
-                  stopPostReadySidecarsAfterCloseStarted({
-                    ...stopParams,
-                    onError: (error) => {
-                      log.warn(
-                        `gateway lifetime sidecar stop after close failed: ${String(error)}`,
-                      );
-                    },
-                  });
-                },
-              }),
-            );
-          },
-          registerGatewayLifetimeSidecar: async (sidecar) => {
-            if (lifecycle.closePreludeStarted) {
-              await sidecar.stop();
-              return null;
-            }
-            kernel.addGatewayLifetimeSidecar(sidecar);
-            return {
-              release: () => {
-                kernel.setGatewayLifetimeSidecars(
-                  runtimeState.gatewayLifetimeSidecars.filter(
-                    (registered) => registered !== sidecar,
-                  ),
-                );
-              },
-            };
-          },
-          ...(workerPlacementRuntime
-            ? {
-                startWorkerEnvironmentRuntime: async () => {
-                  if (lifecycle.closePreludeStarted) {
-                    return null;
-                  }
-                  return await workerPlacementRuntime.startRuntime({
-                    isClosePreludeStarted: () => lifecycle.closePreludeStarted,
-                    // Close must see the drain handle before reconciliation can yield.
-                    registerSidecar: (sidecar) => {
-                      kernel.addGatewayLifetimeSidecar(sidecar);
-                    },
-                  });
-                },
-              }
-            : {}),
-          onSidecarsReady: () => {
-            kernel.markSidecarsReady();
-            activateScheduledServicesWhenReady();
-          },
-          isClosing: () => lifecycle.closePreludeStarted,
-          startupTrace,
-          sidecarStartup,
-          waitForPostReadyWork: params.waitForPostReadyWork,
-          activeWorkInspectors: createGatewayServerActiveWorkInspectors(gatewayRequestContext),
-          residentRegistry,
-          providerAuthPrewarm: {
-            getConfig: getRuntimeConfig,
-          },
-        }),
+        },
+      }),
     ),
   );
   kernel.setPostAttachHandles(postAttachHandles);

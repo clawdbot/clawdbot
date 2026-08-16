@@ -76,21 +76,6 @@ const loadGatewayRestartSentinelModule = createLazyRuntimeModule(
 
 export type GatewayPostReadySidecarHandle = { stop: () => Awaitable<void> };
 
-/** Stop sidecars immediately when shutdown has already started before they are reported. */
-export function stopPostReadySidecarsAfterCloseStarted(params: {
-  postReadySidecars: readonly GatewayPostReadySidecarHandle[];
-  closeStarted: boolean;
-  onError: (error: unknown) => void;
-}): void {
-  if (!params.closeStarted) {
-    return;
-  }
-  for (const postReadySidecar of params.postReadySidecars) {
-    // Preserve best-effort teardown across both synchronous throws and asynchronous rejections.
-    void (async () => await postReadySidecar.stop())().catch(params.onError);
-  }
-}
-
 /** Measure provider-auth warming without letting event-loop stalls hide in wall time. */
 async function measureProviderAuthWarm(run: () => Promise<void>): Promise<{
   elapsedMs: number;
@@ -1643,6 +1628,5 @@ export const testing = {
   scheduleProviderAuthStatePrewarm,
   scheduleRestartSentinelWakeAfterReady,
   shouldSkipStartupModelPrewarm,
-  stopPostReadySidecarsAfterCloseStarted,
 };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

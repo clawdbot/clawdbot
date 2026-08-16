@@ -38,7 +38,6 @@ import {
 } from "./server-chat-state.js";
 import type { MediaCleanupStopResult } from "./server-media-cleanup-lifecycle.js";
 import { clearSessionTypingState } from "./server-methods/session-typing-state.js";
-import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
 
 const shutdownLog = createSubsystemLogger("gateway/shutdown");
 const GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS = 5_000;
@@ -667,7 +666,6 @@ export function createGatewayCloseHandler(
     channelIds?: readonly ChannelId[];
     stopChannel: (name: ChannelId, accountId?: string) => Promise<void>;
     pluginServices: PluginServicesHandle | null;
-    postReadySidecars?: readonly GatewayPostReadySidecarHandle[];
     disposeSessionMcpRuntimes?: () => Promise<void>;
     disposeBundleLspRuntimes?: () => Promise<void>;
     disposeAllBundleLspRuntimes: () => Promise<void>;
@@ -838,13 +836,6 @@ export function createGatewayCloseHandler(
       }
       if (params.tailscaleCleanup) {
         await shutdownStep("tailscale", () => params.tailscaleCleanup!(), warnings);
-      }
-      if (params.postReadySidecars?.length) {
-        await measureCloseStep("post-ready-sidecars", async () => {
-          for (const [index, sidecar] of params.postReadySidecars!.entries()) {
-            await shutdownStep(`post-ready-sidecar/${index}`, () => sidecar.stop(), warnings);
-          }
-        });
       }
       // ACPX owns agent-process cleanup, so plugin teardown must not overtake
       // the manager drain even when cancellation and handle close are slow.

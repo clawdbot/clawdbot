@@ -340,11 +340,6 @@ describe("createGatewayCloseHandler", () => {
         events.push("reload:stopped");
       }),
     };
-    const postReadySidecar = {
-      stop: vi.fn(async () => {
-        events.push("sidecar:stopped");
-      }),
-    };
     const pluginServices = {
       stop: vi.fn(async () => {
         events.push("plugins:stopped");
@@ -357,7 +352,6 @@ describe("createGatewayCloseHandler", () => {
       createGatewayCloseTestDeps({
         channelIds: ["discord"],
         configReloader,
-        postReadySidecars: [postReadySidecar],
         pluginServices: pluginServices as never,
         stopChannel,
       }),
@@ -367,7 +361,6 @@ describe("createGatewayCloseHandler", () => {
     await vi.waitFor(() => {
       expect(events).toEqual(["session-suspension-timers", "reload:stopping"]);
     });
-    expect(postReadySidecar.stop).not.toHaveBeenCalled();
     expect(pluginServices.stop).not.toHaveBeenCalled();
     expect(stopChannel).not.toHaveBeenCalled();
 
@@ -378,7 +371,6 @@ describe("createGatewayCloseHandler", () => {
       "session-suspension-timers",
       "reload:stopping",
       "reload:stopped",
-      "sidecar:stopped",
       "plugins:stopped",
       "channel:stopped",
     ]);
@@ -496,58 +488,12 @@ describe("createGatewayCloseHandler", () => {
     expect(result.warnings).toContain("channel/telegram");
   });
 
-  it("awaits post-ready sidecars before plugin services and channels", async () => {
-    const events: string[] = [];
-    let releaseSidecar!: () => void;
-    const sidecarReleased = new Promise<void>((resolve) => {
-      releaseSidecar = resolve;
-    });
-    const postReadySidecar = {
-      stop: vi.fn(async () => {
-        events.push("sidecar:start");
-        await sidecarReleased;
-        events.push("sidecar:end");
-      }),
-    };
-    const pluginServices = {
-      stop: vi.fn(async () => {
-        events.push("plugin-services");
-      }),
-    };
-    const stopChannel = vi.fn(async (channelId: string) => {
-      events.push(`channel:${channelId}`);
-    });
-    const close = createGatewayCloseHandler(
-      createGatewayCloseTestDeps({
-        channelIds: ["discord"],
-        postReadySidecars: [postReadySidecar],
-        pluginServices: pluginServices as never,
-        stopChannel,
-      }),
-    );
-
-    const closePromise = close({ reason: "test" });
-    await vi.waitFor(() => {
-      expect(events).toEqual(["sidecar:start"]);
-    });
-    releaseSidecar();
-    await closePromise;
-
-    expect(events).toEqual(["sidecar:start", "sidecar:end", "plugin-services", "channel:discord"]);
-    expect(postReadySidecar.stop).toHaveBeenCalledTimes(1);
-  });
-
-  it("clears session suspension timers before sidecars, plugin services, and channels stop", async () => {
+  it("clears session suspension timers before plugin services and channels stop", async () => {
     const events: string[] = [];
     mocks.fenceSessionSuspensionWritesForGatewayShutdown.mockImplementation(() => {
       events.push("session-suspension-timers");
       return 1;
     });
-    const postReadySidecar = {
-      stop: vi.fn(async () => {
-        events.push("sidecar");
-      }),
-    };
     const pluginServices = {
       stop: vi.fn(async () => {
         events.push("plugin-services");
@@ -559,7 +505,6 @@ describe("createGatewayCloseHandler", () => {
     const close = createGatewayCloseHandler(
       createGatewayCloseTestDeps({
         channelIds: ["discord"],
-        postReadySidecars: [postReadySidecar],
         pluginServices: pluginServices as never,
         stopChannel,
       }),
@@ -568,12 +513,7 @@ describe("createGatewayCloseHandler", () => {
     await close({ reason: "test shutdown" });
 
     expect(mocks.fenceSessionSuspensionWritesForGatewayShutdown).toHaveBeenCalledOnce();
-    expect(events).toEqual([
-      "session-suspension-timers",
-      "sidecar",
-      "plugin-services",
-      "channel:discord",
-    ]);
+    expect(events).toEqual(["session-suspension-timers", "plugin-services", "channel:discord"]);
   });
 
   it("emits gateway shutdown and pre-restart hooks", async () => {

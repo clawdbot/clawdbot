@@ -267,8 +267,6 @@ const {
 } = await import("./server-startup-post-attach.js");
 const { scheduleContextCachePrewarm } = await import("./server-startup-context-cache-prewarm.js");
 const { STARTUP_UNAVAILABLE_GATEWAY_METHODS } = await import("./methods/core-descriptors.js");
-const { createGatewayCloseHandler } = await import("./server-close.js");
-const { createChatRunState } = await import("./server-chat-state.js");
 
 type PostAttachParams = Parameters<typeof startGatewayPostAttachRuntimeImpl>[0];
 type PostAttachRuntimeDeps = NonNullable<Parameters<typeof startGatewayPostAttachRuntimeImpl>[1]>;
@@ -319,17 +317,6 @@ function transferBeforeStop(sidecar: SidecarHandle): void {
 async function stopTrackedSidecar(sidecar: SidecarHandle): Promise<void> {
   transferBeforeStop(sidecar);
   await sidecar.stop();
-}
-
-function stopTrackedPostReadySidecarsAfterCloseStarted(
-  params: Parameters<typeof testing.stopPostReadySidecarsAfterCloseStarted>[0],
-): void {
-  if (params.closeStarted) {
-    for (const sidecar of params.postReadySidecars) {
-      transferBeforeStop(sidecar);
-    }
-  }
-  testing.stopPostReadySidecarsAfterCloseStarted(params);
 }
 
 async function cleanupGatewayTestState(): Promise<void> {
@@ -2451,63 +2438,6 @@ describe("startGatewayPostAttachRuntime", () => {
     });
   });
 
-  it("stops post-ready sidecars registered after close started", () => {
-    const postReadySidecar = { stop: vi.fn() };
-    adoptSidecars(publishedPostReadySidecars, [postReadySidecar]);
-
-    stopTrackedPostReadySidecarsAfterCloseStarted({
-      postReadySidecars: [postReadySidecar],
-      closeStarted: true,
-      onError: vi.fn(),
-    });
-
-    expect(postReadySidecar.stop).toHaveBeenCalledTimes(1);
-    expect(publishedPostReadySidecars).not.toContain(postReadySidecar);
-  });
-
-  it("keeps post-ready sidecars running when close has not started", () => {
-    const postReadySidecar = { stop: vi.fn() };
-    adoptSidecars(publishedPostReadySidecars, [postReadySidecar]);
-
-    stopTrackedPostReadySidecarsAfterCloseStarted({
-      postReadySidecars: [postReadySidecar],
-      closeStarted: false,
-      onError: vi.fn(),
-    });
-
-    expect(postReadySidecar.stop).not.toHaveBeenCalled();
-    expect(publishedPostReadySidecars).toContain(postReadySidecar);
-  });
-
-  it("reports every post-ready sidecar stop failure after close started", async () => {
-    const synchronousFailure = new Error("synchronous stop failure");
-    const asynchronousFailure = new Error("asynchronous stop failure");
-    const postReadySidecars = [
-      {
-        stop: vi.fn(() => {
-          throw synchronousFailure;
-        }),
-      },
-      { stop: vi.fn().mockRejectedValue(asynchronousFailure) },
-    ];
-    const onError = vi.fn();
-    adoptSidecars(publishedPostReadySidecars, postReadySidecars);
-
-    stopTrackedPostReadySidecarsAfterCloseStarted({
-      postReadySidecars,
-      closeStarted: true,
-      onError,
-    });
-
-    await vi.waitFor(() => {
-      expect(onError).toHaveBeenCalledTimes(2);
-    });
-    expect(onError).toHaveBeenCalledWith(synchronousFailure);
-    expect(onError).toHaveBeenCalledWith(asynchronousFailure);
-    expect(postReadySidecars[0]?.stop).toHaveBeenCalledTimes(1);
-    expect(postReadySidecars[1]?.stop).toHaveBeenCalledTimes(1);
-  });
-
   it("runs Gmail watcher after sidecars are ready", async () => {
     let resolveWatcher: (() => void) | undefined;
     let watcherSignal: AbortSignal | undefined;
@@ -2680,55 +2610,6 @@ describe("startGatewayPostAttachRuntime", () => {
       vi.doUnmock("../hooks/gmail-watcher-lifecycle.js");
       vi.resetModules();
     }
-  });
-
-  it("stops already-started Gmail watcher cleanup on close", async () => {
-    const postReadySidecars = [{ stop: vi.fn() }];
-    const stopChannel = vi.fn(async () => {});
-    const pluginServices = { stop: vi.fn(async () => {}) };
-    const close = createGatewayCloseHandler({
-      bonjourStop: null,
-      tailscaleCleanup: null,
-      channelIds: [],
-      stopChannel,
-      pluginServices,
-      postReadySidecars,
-      disposeAllBundleLspRuntimes: vi.fn(async () => {}),
-      drainRetainedOpenAiEmbeddingProviders: vi.fn(async () => {}),
-      stopGmailWatcher: vi.fn(async () => {}),
-      disposeAllCodeModeRuns: vi.fn(async () => {}),
-      closeProviderTransportDispatcherPool: vi.fn(async () => {}),
-      cron: { stop: vi.fn() },
-      heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() },
-      nodePresenceTimers: new Map(),
-      broadcast: vi.fn(),
-      tickInterval: setInterval(() => {}, 1 << 30),
-      healthInterval: setInterval(() => {}, 1 << 30),
-      dedupeCleanup: setInterval(() => {}, 1 << 30),
-      stopMediaCleanup: vi.fn(async () => "drained" as const),
-      worktreeCleanup: null,
-      skillCuratorCleanup: vi.fn(),
-      agentUnsub: null,
-      taskUnsub: null,
-      heartbeatUnsub: null,
-      transcriptUnsub: null,
-      lifecycleUnsub: null,
-      chatRunState: createChatRunState(),
-      chatAbortControllers: new Map(),
-      chatQueuedTurns: new Map(),
-      removeChatRun: vi.fn(),
-      agentRunSeq: new Map(),
-      nodeSendToSession: vi.fn(),
-      clients: new Set(),
-      configReloader: { stop: vi.fn(async () => {}) },
-      wss: { close: vi.fn((callback: () => void) => callback()) } as never,
-      httpServer: { close: vi.fn((callback: () => void) => callback()) } as never,
-    });
-
-    await close();
-
-    expect(postReadySidecars[0]?.stop).toHaveBeenCalledTimes(1);
-    expect(pluginServices.stop).toHaveBeenCalledTimes(1);
   });
 
   it("runs Gmail model validation after sidecars are ready", async () => {
@@ -3279,11 +3160,9 @@ describe("startGatewayPostAttachRuntime", () => {
     });
 
     expect(result.postReadySidecars).toHaveLength(2);
-    stopTrackedPostReadySidecarsAfterCloseStarted({
-      postReadySidecars: result.postReadySidecars,
-      closeStarted: true,
-      onError: vi.fn(),
-    });
+    for (const sidecar of result.postReadySidecars) {
+      await stopTrackedSidecar(sidecar);
+    }
     releasePostReadyWork();
     await vi.advanceTimersByTimeAsync(1_000);
 
