@@ -21,6 +21,7 @@ import {
   redactChromeMcpProfileLabelForDiagnostic,
 } from "./chrome-mcp-diagnostics.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
+import { ROLE_SNAPSHOT_MAX_DEPTH } from "./snapshot-depth-limit.js";
 
 function asPages(value: unknown): ChromeMcpStructuredPage[] {
   if (!Array.isArray(value)) {
@@ -78,13 +79,39 @@ export function extractStructuredPages(result: ChromeMcpToolResult): ChromeMcpSt
   return structured.length > 0 ? structured : extractTextPages(result);
 }
 
+function normalizeSnapshotNode(value: unknown, depth = 0): ChromeMcpSnapshotNode | null {
+  const record = asNullableRecord(value);
+  if (!record || depth > ROLE_SNAPSHOT_MAX_DEPTH) {
+    return null;
+  }
+  const snapshotValue = record.value;
+  const children = Array.isArray(record.children)
+    ? record.children.flatMap((child) => {
+        const normalized = normalizeSnapshotNode(child, depth + 1);
+        return normalized ? [normalized] : [];
+      })
+    : undefined;
+  return {
+    id: readStringValue(record.id),
+    role: readStringValue(record.role),
+    name: readStringValue(record.name),
+    ...(typeof snapshotValue === "string" ||
+    typeof snapshotValue === "number" ||
+    typeof snapshotValue === "boolean"
+      ? { value: snapshotValue }
+      : {}),
+    description: readStringValue(record.description),
+    ...(children ? { children } : {}),
+  };
+}
+
 export function extractSnapshot(result: ChromeMcpToolResult): ChromeMcpSnapshotNode {
   const structured = extractStructuredContent(result);
-  const snapshot = asNullableRecord(structured.snapshot);
+  const snapshot = normalizeSnapshotNode(structured.snapshot);
   if (!snapshot) {
     throw new Error("Chrome MCP snapshot response was missing structured snapshot data.");
   }
-  return snapshot as unknown as ChromeMcpSnapshotNode;
+  return snapshot;
 }
 
 function extractJsonBlock(text: string): unknown {
