@@ -1246,7 +1246,7 @@ describe("native hook relay registry", () => {
     expect(relay.shouldRelayEvent("permission_request")).toBe(true);
     expect(relay.commandForEvent("pre_tool_use")).toBe(
       `${NATIVE_HOOK_RELAY_EXEC_PREFIX}/usr/local/bin/node '/opt/Open Claw/openclaw.mjs' hooks relay --provider codex --relay-id ` +
-        `${relay.relayId} ${nativeHookRelayStateDbArgForTests()} --generation ${relay.generation} --event pre_tool_use --pre-tool-use-unavailable noop --timeout 1234`,
+        `${relay.relayId} ${nativeHookRelayStateDbArgForTests()} --generation ${relay.generation} --event pre_tool_use --timeout 1234`,
     );
   });
 
@@ -1304,6 +1304,7 @@ describe("native hook relay registry", () => {
       preToolUseLoopDetection: false,
     });
 
+    expect(relay.shouldRelayEvent("pre_tool_use")).toBe(true);
     expect(relay.toolMatcherForEvent("pre_tool_use")).toEqual(["apply_patch", "exec"]);
   });
 
@@ -1324,12 +1325,24 @@ describe("native hook relay registry", () => {
     expect(relay.toolMatcherForEvent("pre_tool_use")).toEqual(["spawn_agent"]);
   });
 
-  it("keeps pre-tool relays active when native loop detection is not disabled", () => {
+  it("omits loop-detection-only pre-tool relays by default", () => {
     const relay = registerNativeHookRelay({
       provider: "codex",
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       runId: "run-1",
+    });
+
+    expect(relay.shouldRelayEvent("pre_tool_use")).toBe(false);
+  });
+
+  it("installs pre-tool relays when loop detection is explicitly enabled", () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+      config: { tools: { loopDetection: { enabled: true } } } as never,
       command: {
         executable: "/opt/Open Claw/openclaw.mjs",
         nodeExecutable: "/usr/local/bin/node",
