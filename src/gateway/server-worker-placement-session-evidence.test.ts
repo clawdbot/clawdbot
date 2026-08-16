@@ -7,6 +7,7 @@ import * as sessionTargetsReadAvailability from "../config/sessions/targets-read
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
+  resolveIncognitoOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createWorkerPlacementSessionEvidenceResolver } from "./server-worker-placement-session-evidence.js";
@@ -60,17 +61,55 @@ async function resolvePlacementEvidence(placement: WorkerSessionPlacementRecord)
 }
 
 describe("worker placement session evidence", () => {
-  it("keeps a placement when target discovery cannot read its database", async () => {
+  it("keeps ordinary discovery failures independent from incognito evidence", async () => {
     const stateDir = tempDirs.make("openclaw-placement-session-read-failed-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      const placement = localPlacement("session-read-failed", "agent:main:read-failed");
+      const ordinary = localPlacement("session-read-failed", "agent:main:read-failed");
+      const currentIncognito = localPlacement(
+        "session-incognito-current",
+        "agent:main:dashboard:incognito-current",
+      );
+      const deletedIncognito = localPlacement(
+        "session-incognito-deleted",
+        "agent:main:dashboard:incognito-deleted",
+      );
+      await sessionAccessor.upsertSessionEntryCore(
+        { agentId: "main", sessionKey: currentIncognito.sessionKey },
+        { sessionId: currentIncognito.sessionId, updatedAt: 1 },
+      );
       resolveTargetsReadOnlySpy.mockReturnValueOnce({
         available: false,
         reason: "read-failed",
       });
 
-      await expect(resolvePlacementEvidence(placement)).resolves.toBe("unknown");
-      expect(readIdentityEvidenceBatchSpy).not.toHaveBeenCalled();
+      const placements = [ordinary, currentIncognito, deletedIncognito];
+      const resolve = await createWorkerPlacementSessionEvidenceResolver(placements);
+
+      await expect(Promise.all(placements.map(resolve))).resolves.toEqual([
+        "unknown",
+        "current",
+        "absent",
+      ]);
+      expect(resolveTargetsReadOnlySpy).toHaveBeenCalledOnce();
+      expect(resolveTargetsReadOnlySpy).toHaveBeenCalledWith(expect.anything(), "main", {
+        cache: expect.any(Map),
+      });
+      const incognitoStorePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
+      expect(readIdentityEvidenceBatchSpy).toHaveBeenCalledOnce();
+      expect(readIdentityEvidenceBatchSpy).toHaveBeenCalledWith([
+        {
+          agentId: "main",
+          sessionId: currentIncognito.sessionId,
+          sessionKey: currentIncognito.sessionKey,
+          storePath: incognitoStorePath,
+        },
+        {
+          agentId: "main",
+          sessionId: deletedIncognito.sessionId,
+          sessionKey: deletedIncognito.sessionKey,
+          storePath: incognitoStorePath,
+        },
+      ]);
     });
   });
 

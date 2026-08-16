@@ -1,7 +1,12 @@
 import { getRuntimeConfig } from "../config/config.js";
 import type { SessionStoreTargetsReadCache } from "../config/sessions/targets-read-availability.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import {
+  isIncognitoSessionKey,
+  normalizeAgentId,
+  resolveAgentIdFromSessionKey,
+} from "../routing/session-key.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
 import type {
   PlacementSessionEvidence,
@@ -28,7 +33,13 @@ export async function createWorkerPlacementSessionEvidenceResolver(
     const runtime = await loadPlacementSessionEvidenceRuntime();
     const targetsReadCache: SessionStoreTargetsReadCache = new Map();
     const targetResultsByAgentId = new Map(
-      [...new Set(placements.map((placement) => normalizeAgentId(placement.agentId)))].map(
+      [
+        ...new Set(
+          placements
+            .filter((placement) => !isIncognitoSessionKey(placement.sessionKey))
+            .map((placement) => normalizeAgentId(placement.agentId)),
+        ),
+      ].map(
         (agentId) =>
           [
             agentId,
@@ -39,6 +50,18 @@ export async function createWorkerPlacementSessionEvidenceResolver(
       ),
     );
     const prepared = placements.flatMap((placement) => {
+      if (isIncognitoSessionKey(placement.sessionKey)) {
+        const agentId = resolveAgentIdFromSessionKey(placement.sessionKey);
+        return [
+          {
+            placement,
+            target: {
+              agentId,
+              storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId }),
+            },
+          },
+        ];
+      }
       const targetResult = targetResultsByAgentId.get(normalizeAgentId(placement.agentId));
       return targetResult?.available
         ? targetResult.targets.map((target) => ({
@@ -59,6 +82,9 @@ export async function createWorkerPlacementSessionEvidenceResolver(
       : [];
     const evidenceByPlacement = new Map<WorkerSessionPlacementRecord, PlacementSessionEvidence>(
       placements.map((placement) => {
+        if (isIncognitoSessionKey(placement.sessionKey)) {
+          return [placement, "absent"];
+        }
         const targetResult = targetResultsByAgentId.get(normalizeAgentId(placement.agentId));
         const initialEvidence =
           targetResult?.available || targetResult?.reason === "database-missing"
