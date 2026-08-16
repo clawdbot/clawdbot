@@ -20,61 +20,30 @@ The examples below cover three binaries only, alphabetically:
 - `goplaces` for Google Places
 - `wacli` for WhatsApp
 
-These are examples, not a complete list. Install as many binaries as your
-skills need using the same pattern. When you add a skill that needs a new
-binary later:
+These are examples, not a complete list. Docker Compose builds the repo-root
+`Dockerfile`, so extend that file rather than creating a standalone example or
+replacing its contents. The repository Dockerfile has required
+`workspace-deps`, build, runtime-assets, and final runtime stages. Its manifest
+extraction covers the `packages/*` and selected `extensions/*` workspaces before
+`pnpm install --frozen-lockfile`.
 
-1. Update the Dockerfile.
-2. Rebuild the image.
-3. Restart the containers.
+For Debian packages, prefer the existing build argument:
 
-**Example Dockerfile**
-
-```dockerfile
-FROM node:24-bookworm
-
-RUN apt-get update && apt-get install -y socat && rm -rf /var/lib/apt/lists/*
-
-# Example binary 1: Gmail CLI (gogcli — installs as `gog`)
-# Copy the current Linux asset URL from https://github.com/steipete/gogcli/releases
-RUN curl -L https://github.com/steipete/gogcli/releases/latest/download/gogcli_linux_amd64.tar.gz \
-  | tar -xzO gog > /usr/local/bin/gog; \
-  chmod +x /usr/local/bin/gog
-
-# Example binary 2: Google Places CLI
-# Copy the current Linux asset URL from https://github.com/steipete/goplaces/releases
-RUN curl -L https://github.com/steipete/goplaces/releases/latest/download/goplaces_linux_amd64.tar.gz \
-  | tar -xzO goplaces > /usr/local/bin/goplaces; \
-  chmod +x /usr/local/bin/goplaces
-
-# Example binary 3: WhatsApp CLI
-# Copy the current Linux asset URL from https://github.com/steipete/wacli/releases
-RUN curl -L https://github.com/steipete/wacli/releases/latest/download/wacli-linux-amd64.tar.gz \
-  | tar -xzO wacli > /usr/local/bin/wacli; \
-  chmod +x /usr/local/bin/wacli
-
-# Add more binaries below using the same pattern
-
-WORKDIR /app
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
-COPY ui/package.json ./ui/package.json
-COPY scripts ./scripts
-
-RUN corepack enable
-RUN pnpm install --frozen-lockfile
-
-COPY . .
-RUN pnpm build
-RUN pnpm ui:install
-RUN pnpm ui:build
-
-ENV NODE_ENV=production
-
-CMD ["node","dist/index.js"]
+```bash
+export OPENCLAW_IMAGE_APT_PACKAGES="socat"
 ```
 
+For downloaded release binaries such as `gog`, `goplaces`, or `wacli`, add the
+download and install commands to the repo-root `Dockerfile` final runtime stage,
+after its package-install blocks and before `USER node`. Preserve the existing
+non-root uid 1000 setup, `tini` entrypoint, health check, and `openclaw` symlink.
+Then rebuild and restart the containers.
+
 <Note>
-The URLs above are examples. For ARM-based VMs, choose the `arm64` assets. For reproducible builds, pin versioned release URLs.
+The repository Dockerfile digest-pins its Node and Bun base images. Keep those
+reviewed pins instead of changing them to floating `FROM node:24-bookworm`
+references. For ARM-based VMs, choose `arm64` release assets for extra binaries;
+for reproducible builds, use versioned asset URLs and verify their checksums.
 </Note>
 
 ## Build and launch
@@ -130,6 +99,40 @@ OpenClaw runs in Docker, but Docker is not the source of truth. All long-lived s
 | Node runtime           | Container filesystem                                   | Docker image           | Rebuilt every image build                                                                                           |
 | OS packages            | Container filesystem                                   | Docker image           | Do not install at runtime                                                                                           |
 | Docker container       | Ephemeral                                              | Restartable            | Safe to destroy                                                                                                     |
+
+## Common pitfall: never file-bind `openclaw.json`
+
+Mount the gateway config **as a directory**, never as a single file. The repo
+`docker-compose.yml` mounts the whole state directory, which is the supported
+setup:
+
+```yaml
+# Correct: whole state directory mount.
+- "${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}:/home/node/.openclaw"
+```
+
+```yaml
+# Broken: single-file bind — do not use this.
+# - "./openclaw.json:/home/node/.openclaw/openclaw.json:ro"
+```
+
+A single-file bind breaks in two ways:
+
+- **Stale inode**: Docker binds a single file by its inode. OpenClaw persists
+  `openclaw.json` by writing a temp file and renaming it into place (atomic
+  replace), which swaps the inode every time. The container then keeps reading
+  the *old* inode while the host path points to the new file, so config edits
+  appear to do nothing.
+- **EBUSY / EACCES**: atomic rename over a bind-mounted file is refused with
+  `EBUSY` (and `EACCES` once `:ro` is added), so OpenClaw cannot persist its
+  config at all.
+
+Symptoms: `docker exec openclaw-gateway cat /home/node/.openclaw/openclaw.json`
+differs from the host file after an edit; gateway logs show `EBUSY`/`EACCES`
+when saving config; `openclaw doctor` reports config drift.
+
+Fix: edit `openclaw.json` on the host inside the mounted directory; the
+container picks it up on its next read.
 
 ## Updates
 
