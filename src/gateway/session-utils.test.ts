@@ -1360,7 +1360,7 @@ describe("gateway session utils", () => {
         modelSelectionLocked: true,
       },
     },
-  ])("preserves $name", ({ configuredRuntime, entry, expectedRuntime = "codex" }) => {
+  ])("preserves $name", ({ configuredRuntime, entry, expectedRuntime }) => {
     const cfg = {
       agents: {
         defaults: {
