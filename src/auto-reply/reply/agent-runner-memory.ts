@@ -1,6 +1,5 @@
 /** Preflight compaction and memory flush helpers for agent runner sessions. */
 import crypto from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -14,6 +13,12 @@ import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { isBenignCompactionSkipResult } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
+import { attachMemoryFlushAppendBudget } from "../../agents/embedded-agent-runner/run/memory-flush-budget.js";
+import {
+  DAILY_MEMORY_FLUSH_MAX_EXISTING_FILE_BYTES,
+  memoryFlushAppendRejected,
+  type MemoryFlushAppendBudget,
+} from "../../agents/memory-flush-append.js";
 import { isCliRuntimeAliasForProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
@@ -53,6 +58,7 @@ import { logVerbose } from "../../globals.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { root as fsRoot, FsSafeError } from "../../infra/fs-safe.js";
 import { resolveMemoryFlushPlan, type MemoryFlushPlan } from "../../plugins/memory-state.js";
 import { CommandLane } from "../../process/lanes.js";
 import { isIncognitoSessionKey, isUnscopedSessionKeySentinel } from "../../routing/session-key.js";
@@ -154,9 +160,34 @@ async function ensureMemoryFlushTargetFile(params: {
   ) {
     throw new Error("Memory flush target path must stay inside the workspace");
   }
-  await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
-  const handle = await fs.promises.open(targetPath, "a");
-  await handle.close();
+  const root = await fsRoot(workspaceRoot);
+  await root.append(targetRelativePath, "", { mkdir: true });
+}
+
+async function readMemoryFlushTargetFile(params: {
+  workspaceDir: string;
+  relativePath: string;
+}): Promise<string> {
+  const root = await fsRoot(params.workspaceDir);
+  try {
+    const existing = await root.read(params.relativePath, {
+      hardlinks: "reject",
+      maxBytes: DAILY_MEMORY_FLUSH_MAX_EXISTING_FILE_BYTES,
+      nonBlockingRead: true,
+      symlinks: "reject",
+    });
+    return existing.buffer.toString("utf8");
+  } catch (error) {
+    if (error instanceof FsSafeError && error.code === "not-found") {
+      return "";
+    }
+    if (error instanceof FsSafeError && error.code === "too-large") {
+      throw memoryFlushAppendRejected(
+        `existing daily memory file exceeds ${DAILY_MEMORY_FLUSH_MAX_EXISTING_FILE_BYTES} bytes; compact it before appending more memory-flush content.`,
+      );
+    }
+    throw error;
+  }
 }
 
 const memoryDeps = {
@@ -165,6 +196,7 @@ const memoryDeps = {
   runEmbeddedAgent: runEmbeddedAgentDefault,
   ensureMemoryFlushTargetFile,
   clearAgentRunContext,
+  readMemoryFlushTargetFile,
   registerAgentRunContext,
   refreshQueuedFollowupSession,
   incrementCompactionCount,
@@ -181,6 +213,7 @@ function setAgentRunnerMemoryTestDeps(overrides?: Partial<typeof memoryDeps>): v
     runEmbeddedAgent: runEmbeddedAgentDefault,
     ensureMemoryFlushTargetFile,
     clearAgentRunContext,
+    readMemoryFlushTargetFile,
     registerAgentRunContext,
     refreshQueuedFollowupSession,
     incrementCompactionCount,
@@ -194,6 +227,8 @@ function setAgentRunnerMemoryTestDeps(overrides?: Partial<typeof memoryDeps>): v
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.agentRunnerMemoryTestApi")] = {
     setAgentRunnerMemoryTestDeps,
+    ensureMemoryFlushTargetFile,
+    readMemoryFlushTargetFile,
   };
 }
 
@@ -1292,14 +1327,18 @@ export async function runMemoryFlushIfNeeded(params: {
       workspaceDir: params.followupRun.run.workspaceDir,
       relativePath: writePath,
     });
-    const absolutePath = path.join(params.followupRun.run.workspaceDir, writePath);
     const readContent = () =>
-      fs.promises.readFile(absolutePath, "utf8").catch((error: unknown) => {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-          return "";
-        }
-        throw error;
-      });
+      memoryDeps
+        .readMemoryFlushTargetFile({
+          workspaceDir: params.followupRun.run.workspaceDir,
+          relativePath: writePath,
+        })
+        .catch((error: unknown) => {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+            return "";
+          }
+          throw error;
+        });
     // Capture one baseline before any write can start. Per-write snapshots can
     // pair a failed later write with an earlier success and miss mixed content.
     const contentBefore = await readContent();
@@ -1345,6 +1384,7 @@ export async function runMemoryFlushIfNeeded(params: {
     selection,
     preparedRunAdmission,
   } = preparedAttempt;
+  const memoryFlushAppendBudget: MemoryFlushAppendBudget = { acceptedChars: 0, acceptedLines: 0 };
   let memoryCompactionCompleted = false;
   let memoryFlushWroteTarget = false;
   let postCompactionSessionId: string | undefined;
@@ -1430,43 +1470,47 @@ export async function runMemoryFlushIfNeeded(params: {
           runId: flushRunId,
           allowTransientCooldownProbe: runOptions.allowTransientCooldownProbe,
         });
-        const result = await memoryDeps.runEmbeddedAgent({
-          preparedRunAdmission,
-          ...embeddedContext,
-          ...senderContext,
-          ...runBaseParams,
-          agentHarnessId: sessionRuntimeOverride,
-          agentHarnessRuntimeOverride: sessionRuntimeOverride,
-          sandboxSessionKey: params.runtimePolicySessionKey,
-          allowGatewaySubagentBinding: true,
-          silentExpected: true,
-          trigger: "memory",
-          memoryFlushWritePath,
-          prompt: activeMemoryFlushPlan.prompt,
-          transcriptPrompt: "",
-          extraSystemPrompt: flushSystemPrompt,
-          isFinalFallbackAttempt: runOptions.isFinalFallbackAttempt,
-          bootstrapPromptWarningSignaturesSeen,
-          bootstrapPromptWarningSignature:
-            bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
-          abortSignal: params.replyOperation.abortSignal,
-          replyOperation: params.replyOperation,
-          contextEngineLogicalTurnLease: runOptions.contextEngineLogicalTurnLease,
-          onContextEngineTurnCandidate: runOptions.onContextEngineTurnCandidate,
-          onAgentEvent: (evt) => {
-            if (evt.stream === "tool" && evt.data.name === "write") {
-              if (evt.data.phase === "result" && evt.data.isError !== true) {
-                memoryFlushWroteTarget = true;
+        const embeddedAgentParams = attachMemoryFlushAppendBudget(
+          {
+            preparedRunAdmission,
+            ...embeddedContext,
+            ...senderContext,
+            ...runBaseParams,
+            agentHarnessId: sessionRuntimeOverride,
+            agentHarnessRuntimeOverride: sessionRuntimeOverride,
+            sandboxSessionKey: params.runtimePolicySessionKey,
+            allowGatewaySubagentBinding: true,
+            silentExpected: true,
+            trigger: "memory",
+            memoryFlushWritePath,
+            prompt: activeMemoryFlushPlan.prompt,
+            transcriptPrompt: "",
+            extraSystemPrompt: flushSystemPrompt,
+            isFinalFallbackAttempt: runOptions.isFinalFallbackAttempt,
+            bootstrapPromptWarningSignaturesSeen,
+            bootstrapPromptWarningSignature:
+              bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
+            abortSignal: params.replyOperation.abortSignal,
+            replyOperation: params.replyOperation,
+            contextEngineLogicalTurnLease: runOptions.contextEngineLogicalTurnLease,
+            onContextEngineTurnCandidate: runOptions.onContextEngineTurnCandidate,
+            onAgentEvent: (evt) => {
+              if (evt.stream === "tool" && evt.data.name === "write") {
+                if (evt.data.phase === "result" && evt.data.isError !== true) {
+                  memoryFlushWroteTarget = true;
+                }
               }
-            }
-            if (evt.stream === "compaction") {
-              const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
-              if (phase === "end") {
-                memoryCompactionCompleted = true;
+              if (evt.stream === "compaction") {
+                const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
+                if (phase === "end") {
+                  memoryCompactionCompleted = true;
+                }
               }
-            }
+            },
           },
-        });
+          memoryFlushAppendBudget,
+        );
+        const result = await memoryDeps.runEmbeddedAgent(embeddedAgentParams);
         visibleErrorPayloads = resolveVisibleMemoryFlushErrorPayloads(result.payloads);
         if (result.meta?.agentMeta?.sessionId) {
           postCompactionSessionId = result.meta.agentMeta.sessionId;

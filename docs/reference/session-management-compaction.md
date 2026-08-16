@@ -287,6 +287,10 @@ Config (`agents.defaults.compaction.memoryFlush`), full reference at [/gateway/c
 
 Notes:
 
+- Writes to `memory/YYYY-MM-DD.md` remain append-only and always reject empty
+  payloads, more than 3 non-empty lines, lines over 500 characters, payloads or
+  cumulative flush-run content over 800 characters, and existing daily files
+  over 16 MiB. Accepted payload bytes are otherwise preserved.
 - The built-in prompt and system prompt include a `NO_REPLY` hint to suppress delivery.
 - When `model` is set, the flush turn uses that model without inheriting the active session's fallback chain, so local-only housekeeping does not silently fall back to a paid conversation model on failure.
 - The flush runs once per compaction cycle (tracked in the session row).

@@ -35,6 +35,7 @@ function createAttemptParams(workspaceDir: string) {
     thinkLevel: "off" as const,
     trigger: "memory" as const,
     memoryFlushWritePath: MEMORY_RELATIVE_PATH,
+    memoryFlushAppendBudget: { acceptedChars: 0, acceptedLines: 0 },
   };
 }
 
@@ -43,9 +44,11 @@ describe("runEmbeddedAttempt memory flush tool forwarding", () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attempt-memory-flush-"));
 
     try {
-      const context = buildEmbeddedAttemptToolRunContext(createAttemptParams(workspaceDir));
+      const attempt = createAttemptParams(workspaceDir);
+      const context = buildEmbeddedAttemptToolRunContext(attempt);
       expect(context.trigger).toBe("memory");
       expect(context.memoryFlushWritePath).toBe(MEMORY_RELATIVE_PATH);
+      expect(context.memoryFlushAppendBudget).toBe(attempt.memoryFlushAppendBudget);
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }

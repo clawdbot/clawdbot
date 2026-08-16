@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandQueueEnqueueFn } from "../../process/command-queue.types.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
+import { attachMemoryFlushAppendBudget } from "./run/memory-flush-budget.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
 const runEmbeddedAgentViaCliBackendIfEligible = vi.hoisted(() => vi.fn());
@@ -88,5 +89,25 @@ describe("runEmbeddedAgent CLI dispatch lane admission", () => {
       "global-lane-exit",
     ]);
     expect(runEmbeddedAgentViaCliBackendIfEligible).toHaveBeenCalledTimes(1);
+  });
+
+  it("carries host-attached memory flush budgets through the public params clone", async () => {
+    const budget = { acceptedChars: 17, acceptedLines: 2 };
+    const paramsWithInjectedBudget = {
+      ...laneRunParams(),
+      trigger: "memory" as const,
+      memoryFlushWritePath: "memory/2026-03-24.md",
+    };
+    Object.assign(paramsWithInjectedBudget, {
+      memoryFlushAppendBudget: { acceptedChars: -10_000, acceptedLines: -10_000 },
+    });
+    runEmbeddedAgentViaCliBackendIfEligible.mockResolvedValue(dispatchResult);
+
+    await runEmbeddedAgent(attachMemoryFlushAppendBudget(paramsWithInjectedBudget, budget));
+
+    expect(runEmbeddedAgentViaCliBackendIfEligible).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentViaCliBackendIfEligible.mock.calls[0]?.[0]).toMatchObject({
+      memoryFlushAppendBudget: budget,
+    });
   });
 });
