@@ -94,30 +94,16 @@ function mergeWarnings(
   return combined.length > 0 ? combined : undefined;
 }
 
-async function handleServiceNotLoaded(params: {
+async function failServiceNotLoaded(params: {
   serviceNoun: string;
   service: GatewayService;
-  loaded: boolean;
   renderStartHints: () => string[];
-  json: boolean;
-  emit: ReturnType<typeof createDaemonActionContext>["emit"];
+  fail: ReturnType<typeof createDaemonActionContext>["fail"];
 }) {
   const hints = filterContainerGenericHints(
     await maybeAugmentSystemdHints(params.renderStartHints()),
   );
-  params.emit({
-    ok: true,
-    result: "not-loaded",
-    message: `${params.serviceNoun} service ${params.service.notLoadedText}.`,
-    hints,
-    service: buildDaemonServiceSnapshot(params.service, params.loaded),
-  });
-  if (!params.json) {
-    defaultRuntime.log(`${params.serviceNoun} service ${params.service.notLoadedText}.`);
-    for (const hint of hints) {
-      defaultRuntime.log(`Start with: ${hint}`);
-    }
-  }
+  params.fail(`${params.serviceNoun} service ${params.service.notLoadedText}.`, hints);
 }
 
 async function resolveServiceLoadedOrFail(params: {
@@ -277,13 +263,11 @@ export async function runServiceStart(params: {
       params.expectedPort,
     );
     if (startResult.outcome === "missing-install") {
-      await handleServiceNotLoaded({
+      await failServiceNotLoaded({
         serviceNoun: params.serviceNoun,
         service: params.service,
-        loaded: startResult.state.loaded,
         renderStartHints: params.renderStartHints,
-        json,
-        emit,
+        fail,
       });
       return;
     }
@@ -560,13 +544,11 @@ export async function runServiceRestart(params: {
       return false;
     }
     if (!handledRecovery) {
-      await handleServiceNotLoaded({
+      await failServiceNotLoaded({
         serviceNoun: params.serviceNoun,
         service: params.service,
-        loaded,
         renderStartHints: params.renderStartHints,
-        json,
-        emit,
+        fail,
       });
       return false;
     }
