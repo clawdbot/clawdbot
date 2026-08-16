@@ -1887,6 +1887,14 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     testing.setDepsForTest({
       callGateway,
       dispatchGatewayMethodInProcess,
+      loadRequesterSessionEntry: () => ({
+        cfg: {} as never,
+        entry: {
+          sessionId: "requester-session-local",
+          lifecycleRevision: "requester-revision-1",
+        } as SessionEntry,
+        canonicalKey: "agent:main:slack:channel:C123:thread:171.222",
+      }),
       getRequesterSessionActivity: () => ({
         sessionId: "requester-session-local",
         isActive: false,
@@ -1910,6 +1918,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       }),
       requesterIsSubagent: false,
       expectsCompletionMessage: true,
+      expectedRequesterLifecycleRevision: "requester-revision-1",
       bestEffortDeliver: true,
       directIdempotencyKey: "announce-local-dispatch",
     });
@@ -1935,8 +1944,53 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         targetSessionId: "requester-session-local",
         idempotencyKey: "announce-local-dispatch",
       },
+      expectedRequesterLifecycleRevision: "requester-revision-1",
       timeoutMs: 120_000,
     });
+  });
+
+  it("retains a replaced requester lifecycle before ordinary completion dispatch", async () => {
+    const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
+      result: { payloads: [{ text: "requester voice completion" }] },
+    });
+    testing.setDepsForTest({
+      dispatchGatewayMethodInProcess,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-replacement",
+        isActive: false,
+      }),
+      loadRequesterSessionEntry: () => ({
+        cfg: {} as never,
+        entry: {
+          sessionId: "requester-session-replacement",
+          lifecycleRevision: "replacement-revision",
+        } as SessionEntry,
+        canonicalKey: "agent:main:requester",
+      }),
+      getRuntimeConfig: () => ({}) as never,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:requester",
+      targetRequesterSessionKey: "agent:main:requester",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      expectedRequesterLifecycleRevision: "admission-revision",
+      directIdempotencyKey: "announce-replaced-requester",
+    });
+
+    expect(result).toMatchObject({
+      delivered: false,
+      path: "none",
+      reason: "requester_lifecycle_changed",
+      lifecycleMismatch: "requester_replaced",
+      terminal: true,
+      disposition: "intentional_non_delivery",
+      error: "requester_replaced: requester lifecycle changed before completion delivery",
+    });
+    expect(dispatchGatewayMethodInProcess).not.toHaveBeenCalled();
   });
 
   it("does not dispatch child-derived completion after source lifecycle ownership changes", async () => {

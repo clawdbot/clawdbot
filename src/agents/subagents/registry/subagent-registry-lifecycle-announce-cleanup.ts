@@ -190,6 +190,7 @@ const finalizeSubagentCleanup = async (
     skipAnnounce?: boolean;
     skipDeliveryStatus?: boolean;
     skipRequesterDelivery?: boolean;
+    deliveryError?: string;
   },
 ) => {
   const params = context.options;
@@ -363,7 +364,7 @@ const finalizeSubagentCleanup = async (
 
   markPendingFinalDelivery({
     entry,
-    error: "announce deferred or direct delivery failed",
+    error: options?.deliveryError ?? "announce deferred or direct delivery failed",
   });
   const delivery = ensureDeliveryState(entry);
   delivery.windowStartedAt ??= entry.execution.endedAt ?? now;
@@ -531,6 +532,7 @@ export const startSubagentAnnounceCleanupFlow = (
       cleanup,
       shouldCreditPriorDelivery ? "delivered" : announceOutcome,
       cleanupGeneration,
+      latestDeliveryError ? { deliveryError: latestDeliveryError } : undefined,
     );
   };
 
@@ -538,6 +540,7 @@ export const startSubagentAnnounceCleanupFlow = (
     childSessionKey: pendingPayload.childSessionKey,
     childRunId: pendingPayload.childRunId,
     requesterSessionKey: pendingPayload.requesterSessionKey,
+    expectedRequesterLifecycleRevision: entry.expectedRequesterLifecycleRevision,
     requesterOrigin,
     requesterDisplayKey: pendingPayload.requesterDisplayKey,
     task: pendingPayload.task,

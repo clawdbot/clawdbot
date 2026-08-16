@@ -19,6 +19,7 @@ type SubagentAnnounceDeliveryFailureReason =
   | "generated_media_missing"
   | "message_tool_delivery_missing"
   | "requester_abandoned"
+  | "requester_lifecycle_changed"
   | "source_owner_changed"
   | "visible_reply_missing";
 
@@ -34,6 +35,7 @@ export type SubagentAnnounceDeliveryResult = {
   enqueuedAt?: number;
   reason?: SubagentAnnounceDeliveryFailureReason;
   error?: string;
+  lifecycleMismatch?: "requester_replaced" | "requester_missing";
   // Stops fallback delivery when ownership changed or another terminal result
   // makes trying a second path unsafe.
   terminal?: boolean;

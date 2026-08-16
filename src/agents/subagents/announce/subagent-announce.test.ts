@@ -21,6 +21,7 @@ const agentSpy = vi.fn(
 );
 const sessionsDeleteSpy = vi.fn((_req: AgentCallRequest) => undefined);
 const callGatewayMock = vi.fn(async (_request: unknown) => ({}));
+const deliveryParamsMock = vi.fn();
 const loadSessionStoreMock = vi.fn((_storePath: string) => ({}));
 const resolveAgentIdFromSessionKeyMock = vi.fn((sessionKey: string) => {
   return sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main";
@@ -114,7 +115,9 @@ vi.mock("./subagent-announce-delivery.js", () => ({
     requesterSessionOrigin?: { provider?: string; channel?: string };
     bestEffortDeliver?: boolean;
     isSourceSessionEffectsAllowed?: () => boolean;
+    expectedRequesterLifecycleRevision?: string | null;
   }) => {
+    deliveryParamsMock(params);
     if (params.isSourceSessionEffectsAllowed?.() === false) {
       return {
         delivered: false,
@@ -267,6 +270,7 @@ describe("subagent wait outcome timing", () => {
 describe("subagent announce seam flow", () => {
   beforeEach(() => {
     agentSpy.mockClear();
+    deliveryParamsMock.mockClear();
     sessionsDeleteSpy.mockClear();
     callGatewayMock.mockReset().mockImplementation(async (req: unknown) => {
       const typed = req as AgentCallRequest;
@@ -595,6 +599,38 @@ describe("subagent announce seam flow", () => {
     expect(agentCall.params?.deliver).toBe(false);
     expect(agentCall.params?.bestEffortDeliver).toBe(true);
     expect(agentCall.params?.accountId).toBe("default");
+  });
+
+  it("forwards the admitted requester lifecycle to ordinary completion delivery", async () => {
+    loadSessionStoreMock.mockReturnValue({
+      "agent:main:main": {
+        sessionId: "requester-session-id",
+        lifecycleRevision: "requester-revision-1",
+      },
+    });
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:direct-lifecycle",
+      childRunId: "run-direct-lifecycle",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "deliver completion",
+      timeoutMs: 10,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "done",
+      expectsCompletionMessage: true,
+      expectedRequesterLifecycleRevision: "requester-revision-1",
+    });
+
+    expect(didAnnounce).toBe("delivered");
+    expect(deliveryParamsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedRequesterLifecycleRevision: "requester-revision-1",
+      }),
+    );
   });
 
   it("keeps nested subagent completion announces channel-less in session-only mode", async () => {

@@ -138,6 +138,34 @@ export async function sendSubagentAnnounceDirectly(params: {
       params.targetRequesterSessionKey,
       params.requesterAgentId,
     ).entry;
+    if (
+      params.expectsCompletionMessage &&
+      params.expectedRequesterLifecycleRevision !== undefined
+    ) {
+      if (!requesterEntry) {
+        return {
+          delivered: false,
+          path: "none",
+          reason: "requester_lifecycle_changed",
+          error: "requester_missing: requester lifecycle no longer exists for completion delivery",
+          lifecycleMismatch: "requester_missing",
+          terminal: true,
+          disposition: "intentional_non_delivery",
+        };
+      }
+      const currentRequesterLifecycleRevision = requesterEntry.lifecycleRevision ?? null;
+      if (currentRequesterLifecycleRevision !== params.expectedRequesterLifecycleRevision) {
+        return {
+          delivered: false,
+          path: "none",
+          reason: "requester_lifecycle_changed",
+          error: "requester_replaced: requester lifecycle changed before completion delivery",
+          lifecycleMismatch: "requester_replaced",
+          terminal: true,
+          disposition: "intentional_non_delivery",
+        };
+      }
+    }
     const deliveryTarget = !params.requesterIsSubagent
       ? resolveExternalBestEffortDeliveryTarget({
           channel: effectiveDirectOrigin?.channel,

@@ -148,6 +148,41 @@ describe("buildSubagentList", () => {
     expect(item?.line).toContain("(retained: requester_replaced)");
   });
 
+  it("surfaces a retained direct-delivery lifecycle mismatch in list status", () => {
+    const now = Date.now();
+    const run = {
+      runId: "run-direct-retained",
+      childSessionKey: "agent:main:subagent:direct-retained",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "direct delegated work",
+      cleanup: "keep",
+      createdAt: now - 2_000,
+      execution: { status: "terminal", startedAt: now - 3_000, endedAt: now - 1_000 },
+      expectsCompletionMessage: true,
+      delivery: {
+        status: "pending",
+        lifecycleMismatch: "requester_replaced",
+        lastError: "requester_replaced: requester lifecycle changed before completion delivery",
+      },
+    } satisfies SubagentRunRecord;
+    addSubagentRunForTests(run);
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+
+    const list = buildSubagentList({
+      cfg,
+      runs: [run],
+      recentMinutes: 30,
+    });
+
+    const item = list.recent.find((entry) => entry.runId === run.runId) ?? list.active[0];
+    expect(item?.status).toBe("done (retained: requester_replaced)");
+    expect(item?.retentionReason).toContain("requester lifecycle changed");
+  });
+
   it.each([
     {
       name: "a killed run with a provider failure",

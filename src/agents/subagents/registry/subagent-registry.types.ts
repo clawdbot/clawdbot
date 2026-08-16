@@ -142,6 +142,8 @@ export type SubagentCompletionDeliveryState = {
   lastAttemptAt?: number;
   attemptCount?: number;
   lastError?: string | null;
+  /** Completion was retained because its admitted requester lifecycle is gone or replaced. */
+  lifecycleMismatch?: "requester_replaced" | "requester_missing";
   /** Closed result of the latest transport attempt; never doubles as delivery success. */
   disposition?: SubagentDeliveryDisposition;
   /** Logical obligation generation. Redrive increments it and never revives an old row. */

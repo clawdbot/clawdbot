@@ -88,6 +88,10 @@ export const recordAnnounceDeliveryResult = (
       typeof delivery.deliveredAt === "number" ? delivery.deliveredAt : Date.now();
     deliveryState.deliveredAt = deliveredAt;
     deliveryState.lastDropReason = undefined;
+    deliveryState.lifecycleMismatch = undefined;
+  }
+  if (delivery.lifecycleMismatch !== undefined) {
+    deliveryState.lifecycleMismatch = delivery.lifecycleMismatch;
   }
   deliveryState.disposition =
     delivery.disposition ?? (delivery.delivered ? "delivered" : "retryable");

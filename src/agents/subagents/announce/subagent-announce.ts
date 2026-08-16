@@ -161,6 +161,8 @@ export async function runSubagentAnnounceFlow(params: {
   childRunId: string;
   requesterSessionKey: string;
   requesterAgentId?: string;
+  /** Lifecycle captured when the completion-bearing handoff was admitted. */
+  expectedRequesterLifecycleRevision?: string | null;
   requesterOrigin?: DeliveryContext;
   requesterDisplayKey: string;
   task: string;
@@ -580,6 +582,7 @@ export async function runSubagentAnnounceFlow(params: {
       sourceRunId: params.childRunId,
       sourceChannel: INTERNAL_MESSAGE_CHANNEL,
       sourceTool: "subagent_announce",
+      expectedRequesterLifecycleRevision: params.expectedRequesterLifecycleRevision,
       isSourceSessionEffectsAllowed: completionDeliveryAllowed,
       isCompletionOwnedByRequesterYield: params.isCompletionOwnedByRequesterYield,
       targetRequesterSessionKey,

@@ -36,6 +36,7 @@ type MockModelServer = {
   baseUrl: string;
   requests: MockModelRequest[];
   childRequestSeen: () => Promise<void>;
+  parentTurnCompleted: () => Promise<void>;
   releaseChild: () => void;
   stop: () => Promise<void>;
 };
@@ -183,8 +184,11 @@ async function waitFor<T>(
   throw new Error(`timed out waiting for ${label}`);
 }
 
-async function startMockModelServer(): Promise<MockModelServer> {
+async function startMockModelServer(
+  params: { parentYields?: boolean } = {},
+): Promise<MockModelServer> {
   const requests: MockModelRequest[] = [];
+  const parentYields = params.parentYields !== false;
   // One-shot deferred: every child request handler awaits the same promise and
   // releaseChild resolves it directly, so the release cannot race a rebuild.
   let childRelease: () => void = () => {};
@@ -192,6 +196,12 @@ async function startMockModelServer(): Promise<MockModelServer> {
     childRelease = resolve;
   });
   let parentTurnSpawned = false;
+  let parentTurnYieldRequested = false;
+  let parentTurnCompleted = false;
+  let resolveParentTurnCompleted: () => void = () => {};
+  const parentTurnCompletedPromise = new Promise<void>((resolve) => {
+    resolveParentTurnCompleted = resolve;
+  });
   const server = createServer((req, res) => {
     void (async () => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -239,6 +249,7 @@ async function startMockModelServer(): Promise<MockModelServer> {
           taskName: "proof_child",
           cleanup: "keep",
           context: "isolated",
+          expectsCompletionMessage: true,
         });
         writeSse(
           res,
@@ -246,15 +257,25 @@ async function startMockModelServer(): Promise<MockModelServer> {
         );
         return;
       }
-      if (requests.length === 2) {
-        writeSse(
-          res,
-          spawnToolCallEvents(
-            `call_yield_${requests.length}`,
-            "sessions_yield",
-            JSON.stringify({ message: "waiting for child completion" }),
-          ),
-        );
+      if (
+        classification === "parent-text" &&
+        ((parentYields && !parentTurnYieldRequested) || (!parentYields && !parentTurnCompleted))
+      ) {
+        if (parentYields) {
+          parentTurnYieldRequested = true;
+          writeSse(
+            res,
+            spawnToolCallEvents(
+              `call_yield_${requests.length}`,
+              "sessions_yield",
+              JSON.stringify({ message: "waiting for child completion" }),
+            ),
+          );
+        } else {
+          parentTurnCompleted = true;
+          resolveParentTurnCompleted();
+          writeSse(res, textResponseEvents(requests.length, "PROOF_PARENT_DONE"));
+        }
         return;
       }
       writeSse(res, textResponseEvents(requests.length, "PROOF_PARENT_SAW_CHILD"));
@@ -293,6 +314,9 @@ async function startMockModelServer(): Promise<MockModelServer> {
         });
       }
       throw new Error("child model request never arrived");
+    },
+    parentTurnCompleted: async () => {
+      await parentTurnCompletedPromise;
     },
     releaseChild: () => childRelease(),
     stop: async () => {
@@ -361,6 +385,7 @@ type RegistryRow = {
   enqueuedAt: number | undefined;
   deliveredAt: number | undefined;
   announcedAt: number | undefined;
+  deliveryLastError: string | undefined;
   lastError: string | undefined;
   endedAt: number | undefined;
   cleanupCompletedAt: number | undefined;
@@ -389,6 +414,7 @@ function readRegistryRows(stateDbPath: string, requesterSessionKey: string): Reg
           deliveredAt?: number;
           announcedAt?: number;
           enqueuedAt?: number;
+          lastError?: string;
           payload?: unknown;
         };
         requesterSettleWake?: {
@@ -406,6 +432,7 @@ function readRegistryRows(stateDbPath: string, requesterSessionKey: string): Reg
         enqueuedAt: payload.delivery?.enqueuedAt,
         deliveredAt: payload.delivery?.deliveredAt,
         announcedAt: payload.delivery?.announcedAt,
+        deliveryLastError: payload.delivery?.lastError,
         lastError: payload.requesterSettleWake?.lastError,
         endedAt: payload.execution?.endedAt,
         cleanupCompletedAt: payload.cleanupCompletedAt,
@@ -448,7 +475,7 @@ afterEach(async () => {
 });
 
 describe("requester lifecycle fence real-runtime proof", () => {
-  async function startProofRuntime(): Promise<{
+  async function startProofRuntime(params: { parentYields?: boolean } = {}): Promise<{
     instance: OpenClawTestInstance;
     modelServer: MockModelServer;
     sessionKey: string;
@@ -458,7 +485,7 @@ describe("requester lifecycle fence real-runtime proof", () => {
     cleanupDirs.push(fixtureDir);
     const workspace = path.join(fixtureDir, "workspace");
     await mkdir(workspace, { recursive: true });
-    const modelServer = await startMockModelServer();
+    const modelServer = await startMockModelServer(params);
     modelServers.push(modelServer);
     const port = await getGatewayE2ePortBlock();
     const config = proofConfig(workspace, modelServer.baseUrl);
@@ -494,6 +521,7 @@ describe("requester lifecycle fence real-runtime proof", () => {
   async function startParentTurn(
     client: Awaited<ReturnType<typeof connectClient>>,
     sessionKey: string,
+    params: { parentYields?: boolean } = {},
   ): Promise<Promise<unknown>> {
     const pending = client.request<{ result?: unknown }>(
       "agent",
@@ -505,7 +533,9 @@ describe("requester lifecycle fence real-runtime proof", () => {
         message: [
           `Spawn one subagent with task text that contains ${CHILD_TASK}.`,
           "Use the sessions_spawn tool with taskName proof_child and cleanup keep.",
-          'After the spawn is accepted, call sessions_yield with message="waiting for child completion".',
+          params.parentYields === false
+            ? "After the spawn is accepted, finish this turn with a final reply."
+            : 'After the spawn is accepted, call sessions_yield with message="waiting for child completion".',
         ].join("\n"),
       },
       { expectFinal: true, timeoutMs: 120_000 },
@@ -638,6 +668,70 @@ describe("requester lifecycle fence real-runtime proof", () => {
             // requester's next turn; a delivered completion consumed it.
             expect(run.payloadPresent).toBe(true);
           }
+        }
+      } finally {
+        await disconnectGatewayClient(client);
+      }
+    },
+  );
+
+  it(
+    "fences ordinary direct completion after a parent reset without sessions_yield",
+    { timeout: E2E_TIMEOUT_MS },
+    async () => {
+      const { instance, modelServer, sessionKey, fixtureDir } = await startProofRuntime({
+        parentYields: false,
+      });
+      const client = await connectClient(instance);
+      try {
+        const parentTurn = startParentTurn(client, sessionKey, { parentYields: false });
+        parentTurn.catch(() => undefined);
+        await modelServer.childRequestSeen();
+        await modelServer.parentTurnCompleted();
+        await parentTurn;
+        const requestsBeforeReset = modelServer.requests.length;
+
+        const beforeReset = readParentLifecycleRevision(instance.stateDir, sessionKey);
+        const resetResult = await client.request<{ ok?: boolean }>("sessions.reset", {
+          key: sessionKey,
+          reason: "reset",
+        });
+        expect(resetResult.ok ?? resetResult).toBeTruthy();
+
+        modelServer.releaseChild();
+
+        await waitFor(
+          "direct completion child run ended",
+          () => {
+            const rows = readRegistryRows(
+              path.join(instance.stateDir, "state", "openclaw.sqlite"),
+              sessionKey,
+            );
+            return rows.some((row) => row.endedAt !== undefined) ? rows : undefined;
+          },
+          240_000,
+        );
+        await new Promise((resolve) => {
+          setTimeout(resolve, 10_000);
+        });
+
+        const outcome = await collectOutcome(instance, modelServer, sessionKey);
+        await writeFile(
+          path.join(fixtureDir, "proof-direct-fenced-outcome.json"),
+          JSON.stringify(outcome, null, 2),
+        );
+        console.log(`[proof:direct-fenced] ${JSON.stringify(outcome)}`);
+        const afterReset = readParentLifecycleRevision(instance.stateDir, sessionKey);
+        expect(afterReset).toBeTruthy();
+        expect(afterReset).not.toBe(beforeReset);
+        expect(modelServer.requests.length).toBe(requestsBeforeReset);
+        expect(outcome.wakeRequestCount).toBe(0);
+        expect(outcome.runs.length).toBeGreaterThan(0);
+        for (const run of outcome.runs) {
+          expect(run.deliveryStatus).not.toBe("delivered");
+          expect(run.deliveredAt).toBeUndefined();
+          expect(run.announcedAt).toBeUndefined();
+          expect(run.deliveryLastError).toBeTruthy();
         }
       } finally {
         await disconnectGatewayClient(client);

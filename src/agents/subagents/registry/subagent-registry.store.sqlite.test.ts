@@ -50,6 +50,7 @@ function createRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecor
       lastAttemptAt: 280,
       attemptCount: 2,
       lastError: "retry later",
+      lifecycleMismatch: "requester_replaced",
       payload: {
         requesterSessionKey: "agent:main:main",
         requesterDisplayKey: "main",

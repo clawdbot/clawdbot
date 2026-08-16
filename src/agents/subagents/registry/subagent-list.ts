@@ -225,10 +225,11 @@ export function buildSubagentList(params: {
     const totalTokens = resolveTotalTokens(sessionEntry);
     const usageText = formatTokenUsageDisplay(sessionEntry);
     const pendingDescendants = pendingDescendantCount(entry.childSessionKey);
-    const mismatch = entry.requesterSettleWake?.lifecycleMismatch;
+    const mismatch =
+      entry.requesterSettleWake?.lifecycleMismatch ?? entry.delivery?.lifecycleMismatch;
     const baseStatus = resolveSubagentDisplayStatus(entry, pendingDescendants);
     const status = mismatch ? `${baseStatus} (retained: ${mismatch})` : baseStatus;
-    const retentionReason = entry.requesterSettleWake?.lastError;
+    const retentionReason = entry.requesterSettleWake?.lastError ?? entry.delivery?.lastError;
     const childSessions = childSessionsByController.get(entry.childSessionKey) ?? [];
     const runtime = formatDurationCompact(runtimeMs) ?? "n/a";
     const label = truncateLine(resolveSubagentLabel(entry), 48);
