@@ -227,6 +227,7 @@ export type ChatPaneConnectionScope = {
   state: ChatPageHost;
   client: GatewayBrowserClient;
   generation: number;
+  headerOutcomeOwner: string;
   sessions: ChatPageContext["sessions"];
 };
 export const CHAT_OPEN_DETAILS_SELECTOR =

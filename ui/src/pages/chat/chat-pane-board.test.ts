@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
@@ -26,6 +27,8 @@ type TestChatPane = HTMLElement & {
   state: ChatPageHost;
   createSession: () => Promise<boolean>;
   paneId: string;
+  presented: boolean;
+  presentedChanged: (presented: boolean) => void;
   sessionKey: string;
   resetConfirmationOpen: boolean;
   routeFace: "chat" | "dashboard";
@@ -318,6 +321,24 @@ describe("chat pane board shell", () => {
     });
   });
 
+  it("does not publish a board dock failure after leaving and returning", async () => {
+    const pane = createTestPane();
+    const provider = mockBoardProvider("agent:main:stale-board-outcome");
+    const applied = createDeferred<never>();
+    const applyOps = vi.spyOn(provider, "applyOps").mockReturnValue(applied.promise);
+    pane.boardProvider = provider;
+    pane.presentedChanged = () => undefined;
+
+    pane.handleBoardDockChange("left");
+    pane.presented = false;
+    pane.presented = true;
+    applied.reject(new Error("stale board dock failed"));
+    await applied.promise.catch(() => undefined);
+    await vi.waitFor(() => expect(applyOps).toHaveBeenCalledOnce());
+
+    expect(pane.state.lastError).toBeNull();
+    expect(pane.state.chatError).toBeNull();
+  });
   it("activates an existing tabbed chat panel when reopening a side dock", () => {
     const pane = createTestPane();
     const withChat = openSlot(openSlot({ columns: [] }, "chat"), "discussion");

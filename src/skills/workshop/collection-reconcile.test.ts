@@ -842,6 +842,13 @@ describe("skill collection reconciliation", () => {
       { env: testState.env },
     );
     await acquired;
+    const startedAt = performance.now();
+    const clockSpy = vi
+      .spyOn(performance, "now")
+      .mockReturnValueOnce(startedAt)
+      .mockReturnValueOnce(startedAt + 5_001)
+      .mockReturnValueOnce(startedAt)
+      .mockReturnValue(startedAt + 5_001);
 
     try {
       await Promise.all([
@@ -858,6 +865,7 @@ describe("skill collection reconciliation", () => {
         }),
       ]);
     } finally {
+      clockSpy.mockRestore();
       releaseLock?.();
       await heldLock;
     }
