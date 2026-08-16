@@ -29,6 +29,7 @@
   "files": [
     "CHANGELOG.md",
     "LICENSE",
+    "node-version.mjs",
     "openclaw.mjs",
     "pnpm-workspace.yaml",
     "README.md",

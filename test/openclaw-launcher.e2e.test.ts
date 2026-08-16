@@ -14,6 +14,10 @@ async function makeLauncherFixture(fixtureRoots: string[]): Promise<string> {
     path.resolve(process.cwd(), "openclaw.mjs"),
     path.join(fixtureRoot, "openclaw.mjs"),
   );
+  await fs.copyFile(
+    path.resolve(process.cwd(), "node-version.mjs"),
+    path.join(fixtureRoot, "node-version.mjs"),
+  );
   await fs.mkdir(path.join(fixtureRoot, "dist"), { recursive: true });
   return fixtureRoot;
 }
@@ -164,6 +168,12 @@ describe("openclaw launcher", () => {
       { version: "25.8.1", supported: false },
       { version: "25.9.0", supported: true },
       { version: "26.0.0", supported: true },
+      { version: "24.15.0+local.1", supported: true },
+      { version: "24.15.0-rc.1", supported: false },
+      { version: "25.9.1-nightly.20260714", supported: false },
+      { version: "24.15", supported: false },
+      { version: "garbage24.15.0suffix", supported: false },
+      { version: "24.15.0suffix", supported: false },
     ] as const;
 
     for (const testCase of cases) {
