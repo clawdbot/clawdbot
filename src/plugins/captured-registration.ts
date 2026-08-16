@@ -22,7 +22,6 @@ import type {
   PluginToolMetadataRegistration,
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
-import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
 import type { PluginAgentToolResultMiddlewareRegistration } from "./registry-types.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type { SessionCatalogProvider } from "./session-catalog.js";
@@ -80,7 +79,6 @@ export type CapturedPluginRegistration = {
   webSearchProviders: WebSearchProviderPlugin[];
   workerProviders: WorkerProvider[];
   migrationProviders: MigrationProviderPlugin[];
-  memoryEmbeddingProviders: MemoryEmbeddingProviderAdapter[];
   sessionExtensions: PluginSessionExtensionRegistration[];
   trustedToolPolicies: PluginTrustedToolPolicyRegistration[];
   toolMetadata: PluginToolMetadataRegistration[];
@@ -121,7 +119,6 @@ export function createCapturedPluginRegistration(params?: {
   const webSearchProviders: WebSearchProviderPlugin[] = [];
   const workerProviders: WorkerProvider[] = [];
   const migrationProviders: MigrationProviderPlugin[] = [];
-  const memoryEmbeddingProviders: MemoryEmbeddingProviderAdapter[] = [];
   const sessionExtensions: PluginSessionExtensionRegistration[] = [];
   const trustedToolPolicies: PluginTrustedToolPolicyRegistration[] = [];
   const toolMetadata: PluginToolMetadataRegistration[] = [];
@@ -165,7 +162,6 @@ export function createCapturedPluginRegistration(params?: {
     webSearchProviders,
     workerProviders,
     migrationProviders,
-    memoryEmbeddingProviders,
     sessionExtensions,
     trustedToolPolicies,
     toolMetadata,
@@ -313,9 +309,6 @@ export function createCapturedPluginRegistration(params?: {
         },
         registerMigrationProvider(provider: MigrationProviderPlugin) {
           migrationProviders.push(provider);
-        },
-        registerMemoryEmbeddingProvider(adapter: MemoryEmbeddingProviderAdapter) {
-          memoryEmbeddingProviders.push(adapter);
         },
         registerSessionExtension(extension: PluginSessionExtensionRegistration) {
           sessionExtensions.push(extension);

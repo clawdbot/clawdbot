@@ -10,8 +10,8 @@ import {
   type RegisteredEmbeddingProvider,
 } from "../plugins/embedding-providers.js";
 import {
-  clearMemoryEmbeddingProviders,
-  registerMemoryEmbeddingProvider,
+  adaptMemoryEmbeddingProviderAdapter,
+  type MemoryEmbeddingProviderAdapter,
 } from "../plugins/memory-embedding-providers.js";
 import {
   SecretSurfaceUnavailableError,
@@ -29,23 +29,27 @@ const asConfig = (cfg: OpenClawConfig): OpenClawConfig => ({
 });
 let registeredEmbeddingProvidersSnapshot: RegisteredEmbeddingProvider[];
 
+function registerTestMemoryAdapter(adapter: MemoryEmbeddingProviderAdapter): void {
+  registerEmbeddingProvider(adaptMemoryEmbeddingProviderAdapter(adapter));
+}
+
 function registerBaseMemoryEmbeddingProviders(options?: { includeGemini?: boolean }): void {
   // Register provider contracts locally so config tests do not depend on the
   // plugin loader or live embedding backends.
-  registerMemoryEmbeddingProvider({
+  registerTestMemoryAdapter({
     id: "openai",
     defaultModel: "text-embedding-3-small",
     transport: "remote",
     create: async () => ({ provider: null }),
   });
-  registerMemoryEmbeddingProvider({
+  registerTestMemoryAdapter({
     id: "local",
     defaultModel: "local-default",
     transport: "local",
     create: async () => ({ provider: null }),
   });
   if (options?.includeGemini !== false) {
-    registerMemoryEmbeddingProvider({
+    registerTestMemoryAdapter({
       id: "gemini",
       defaultModel: "gemini-embedding-001",
       transport: "remote",
@@ -57,25 +61,25 @@ function registerBaseMemoryEmbeddingProviders(options?: { includeGemini?: boolea
       create: async () => ({ provider: null }),
     });
   }
-  registerMemoryEmbeddingProvider({
+  registerTestMemoryAdapter({
     id: "voyage",
     defaultModel: "voyage-4-large",
     transport: "remote",
     create: async () => ({ provider: null }),
   });
-  registerMemoryEmbeddingProvider({
+  registerTestMemoryAdapter({
     id: "mistral",
     defaultModel: "mistral-embed",
     transport: "remote",
     create: async () => ({ provider: null }),
   });
-  registerMemoryEmbeddingProvider({
+  registerTestMemoryAdapter({
     id: "lmstudio",
     defaultModel: "text-embedding-nomic-embed-text-v1.5",
     transport: "remote",
     create: async () => ({ provider: null }),
   });
-  registerMemoryEmbeddingProvider({
+  registerTestMemoryAdapter({
     id: "ollama",
     defaultModel: "nomic-embed-text",
     transport: "remote",
@@ -87,13 +91,11 @@ describe("memory search config", () => {
   beforeEach(() => {
     registeredEmbeddingProvidersSnapshot = listRegisteredEmbeddingProviders();
     clearEmbeddingProviders();
-    clearMemoryEmbeddingProviders();
     registerBaseMemoryEmbeddingProviders();
   });
 
   afterEach(() => {
     setActiveDegradedSecretOwners([]);
-    clearMemoryEmbeddingProviders();
     restoreRegisteredEmbeddingProviders(registeredEmbeddingProvidersSnapshot);
   });
 
@@ -490,7 +492,7 @@ describe("memory search config", () => {
   });
 
   it("resolves fixed sync defaults without consulting embedding providers", () => {
-    clearMemoryEmbeddingProviders();
+    clearEmbeddingProviders();
     const cfg = asConfig({
       memory: {
         search: {
@@ -753,7 +755,7 @@ describe("memory search config", () => {
   });
 
   it("accepts Gemini multimodal memory even when the runtime registry has not registered Gemini yet", () => {
-    clearMemoryEmbeddingProviders();
+    clearEmbeddingProviders();
     registerBaseMemoryEmbeddingProviders({ includeGemini: false });
     const cfg = asConfig({
       memory: {

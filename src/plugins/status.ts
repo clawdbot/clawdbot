@@ -59,10 +59,7 @@ export type { PluginCapabilityKind, PluginInspectShape } from "./inspect-shape.j
 
 export type PluginCompatibilityNotice = {
   pluginId: string;
-  code:
-    | "hook-only"
-    | "deprecated-memory-embedding-provider-api"
-    | "removed-session-transcript-file-api";
+  code: "hook-only" | "removed-session-transcript-file-api";
   compatCode: PluginCompatCode;
   severity: "warn" | "info";
   message: string;
@@ -124,7 +121,6 @@ export type PluginInspectReport = {
 function buildCompatibilityNoticesForInspect(
   inspect: Pick<PluginInspectReport, "plugin" | "shape"> & {
     diagnostics: readonly PluginDiagnostic[];
-    hasRuntimeMemoryEmbeddingProviderRegistration: boolean;
   },
 ): PluginCompatibilityNotice[] {
   const warnings: PluginCompatibilityNotice[] = [];
@@ -136,20 +132,6 @@ function buildCompatibilityNoticesForInspect(
       severity: "info",
       message:
         "is hook-only. This remains a supported compatibility path, but it has not migrated to explicit capability registration yet.",
-    });
-  }
-  const usesMemoryEmbeddingProviderApi =
-    inspect.plugin.memoryEmbeddingProviderIds.length > 0 ||
-    (inspect.plugin.contracts?.memoryEmbeddingProviders?.length ?? 0) > 0 ||
-    inspect.hasRuntimeMemoryEmbeddingProviderRegistration;
-  if (usesMemoryEmbeddingProviderApi && inspect.plugin.origin !== "bundled") {
-    warnings.push({
-      pluginId: inspect.plugin.id,
-      code: "deprecated-memory-embedding-provider-api",
-      compatCode: "deprecated-memory-embedding-provider-api",
-      severity: "warn",
-      message:
-        "uses deprecated memory-specific embedding provider API; use api.registerEmbeddingProvider and contracts.embeddingProviders for new embedding providers.",
     });
   }
   if (usesRemovedSessionTranscriptFileApi(inspect)) {
@@ -469,14 +451,10 @@ export function buildPluginInspectReport(params: {
     ];
   }
 
-  const hasRuntimeMemoryEmbeddingProviderRegistration = report.memoryEmbeddingProviders.some(
-    (entry) => entry.pluginId === plugin.id,
-  );
   const compatibility = buildCompatibilityNoticesForInspect({
     plugin,
     shape,
     diagnostics,
-    hasRuntimeMemoryEmbeddingProviderRegistration,
   });
   return {
     workspaceDir: report.workspaceDir,

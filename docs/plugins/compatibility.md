@@ -79,7 +79,7 @@ separately tracked so supported upgrade paths can still repair old config.
 The remaining dated compatibility areas are:
 
 - the September SDK subpath window listed in the migration guide
-- memory-specific embedding registration and the beta.5 session-store bridge
+- the beta.5 session-store bridge
 - the shipped agent-harness SDK aliases, whose removal is pending a new
   externally documented migration decision
 - the October 2026 SDK annotation families listed below

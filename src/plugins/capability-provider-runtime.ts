@@ -21,7 +21,6 @@ import type { PluginRegistry } from "./registry-types.js";
 
 type CapabilityProviderRegistryKey =
   | "embeddingProviders"
-  | "memoryEmbeddingProviders"
   | "speechProviders"
   | "realtimeTranscriptionProviders"
   | "realtimeVoiceProviders"
@@ -33,7 +32,6 @@ type CapabilityProviderRegistryKey =
 
 type CapabilityContractKey =
   | "embeddingProviders"
-  | "memoryEmbeddingProviders"
   | "speechProviders"
   | "realtimeTranscriptionProviders"
   | "realtimeVoiceProviders"
@@ -52,7 +50,6 @@ type CapabilityPluginResolution = {
 
 const CAPABILITY_CONTRACT_KEY: Record<CapabilityProviderRegistryKey, CapabilityContractKey> = {
   embeddingProviders: "embeddingProviders",
-  memoryEmbeddingProviders: "memoryEmbeddingProviders",
   speechProviders: "speechProviders",
   realtimeTranscriptionProviders: "realtimeTranscriptionProviders",
   realtimeVoiceProviders: "realtimeVoiceProviders",
@@ -574,7 +571,7 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
           }),
         )
       : undefined;
-  if (activeProviders.length > 0 && params.key !== "memoryEmbeddingProviders") {
+  if (activeProviders.length > 0) {
     if (!missingRequestedProviders && !shouldMergeManifestProvidersWhenActive(params.key)) {
       return activeProviders.map((entry) => entry.provider) as CapabilityProviderFor<K>[];
     }
@@ -625,25 +622,22 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
     loadOptions,
     requested: requestedProviderFilter,
   });
-  if (params.key !== "memoryEmbeddingProviders") {
-    const requestedLoadedProviders = requestedProviderFilter
+  const requestedLoadedProviders = requestedProviderFilter
+    ? filterLoadedProvidersForRequestedConfig({
+        key: params.key,
+        requested: requestedProviderFilter,
+        entries: loadedProviders,
+      })
+    : loadedProviders;
+  const mergeLoadedProviders =
+    activeProviders.length > 0 && missingRequestedProviders
       ? filterLoadedProvidersForRequestedConfig({
           key: params.key,
-          requested: requestedProviderFilter,
-          entries: loadedProviders,
+          requested: missingRequestedProviders,
+          entries: requestedLoadedProviders,
         })
-      : loadedProviders;
-    const mergeLoadedProviders =
-      activeProviders.length > 0 && missingRequestedProviders
-        ? filterLoadedProvidersForRequestedConfig({
-            key: params.key,
-            requested: missingRequestedProviders,
-            entries: requestedLoadedProviders,
-          })
-        : requestedLoadedProviders;
-    return mergeCapabilityProviders(activeProviders, mergeLoadedProviders);
-  }
-  return mergeCapabilityProviders(activeProviders, loadedProviders);
+      : requestedLoadedProviders;
+  return mergeCapabilityProviders(activeProviders, mergeLoadedProviders);
 }
 
 export function prepareMediaCapabilityProviders(params: {

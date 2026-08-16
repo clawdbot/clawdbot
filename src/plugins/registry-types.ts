@@ -43,7 +43,6 @@ import type { PluginKind } from "./plugin-kind.types.js";
 import type {
   ContextEngineRegistration,
   MemoryCorpusSupplementRegistration,
-  MemoryEmbeddingProviderAdapter,
   MemoryPluginCapabilityRegistration,
   MemoryPromptPreparationRegistration,
   MemoryPromptSupplementRegistration,
@@ -253,8 +252,6 @@ type PluginWebFetchProviderRegistration = PluginOwnedProviderRegistration<WebFet
 type PluginWebSearchProviderRegistration = PluginOwnedProviderRegistration<WebSearchProviderPlugin>;
 type PluginWorkerProviderRegistration = PluginOwnedProviderRegistration<WorkerProvider>;
 type PluginMigrationProviderRegistration = PluginOwnedProviderRegistration<MigrationProviderPlugin>;
-type PluginMemoryEmbeddingProviderRegistration =
-  PluginOwnedProviderRegistration<MemoryEmbeddingProviderAdapter>;
 type PluginCodexAppServerExtensionFactoryRegistration = {
   pluginId: string;
   pluginName?: string;
@@ -494,7 +491,6 @@ export type PluginRecord = {
   webSearchProviderIds: string[];
   migrationProviderIds: string[];
   contextEngineIds?: string[];
-  memoryEmbeddingProviderIds: string[];
   agentHarnessIds: string[];
   cliCommands: string[];
   services: string[];
@@ -540,7 +536,6 @@ export type PluginRegistry = {
   codexAppServerExtensionFactories: PluginCodexAppServerExtensionFactoryRegistration[];
   agentToolResultMiddlewareOwners: PluginAgentToolResultMiddlewareOwner[];
   agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[];
-  memoryEmbeddingProviders: PluginMemoryEmbeddingProviderRegistration[];
   agentHarnesses: PluginAgentHarnessRegistration[];
   pluginRuntimeArtifacts: Map<string, ResolvedPluginRuntimeArtifact>;
   compactionProviders: RegisteredCompactionProvider[];

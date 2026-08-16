@@ -135,7 +135,6 @@ function buildPluginsFromActiveRegistry() {
         musicGenerationProviderIds: toSortedUniqueStrings(plugin.musicGenerationProviderIds),
         webFetchProviderIds: toSortedUniqueStrings(plugin.webFetchProviderIds),
         webSearchProviderIds: toSortedUniqueStrings(plugin.webSearchProviderIds),
-        memoryEmbeddingProviderIds: toSortedUniqueStrings(plugin.memoryEmbeddingProviderIds),
         agentHarnessIds: toSortedUniqueStrings(plugin.agentHarnessIds),
       }))
       .toSorted((left, right) => left.id.localeCompare(right.id)),

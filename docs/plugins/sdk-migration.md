@@ -787,10 +787,9 @@ timeline for current status.
     `contracts.embeddingProviders`.
 
     The generic embedding provider contract is reusable outside memory and is
-    the supported path for new providers. The memory-specific registration API
-    remains wired as deprecated compatibility while existing providers
-    migrate. Plugin inspection reports non-bundled usage as compatibility
-    debt.
+    the supported path for every provider. The memory-specific registration API
+    and manifest contract were removed after the **2026-08-21** migration
+    deadline.
 
   </Accordion>
 

@@ -1,5 +1,6 @@
 // Github Copilot plugin entrypoint registers its OpenClaw integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { adaptMemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   definePluginEntry,
@@ -640,7 +641,9 @@ export default definePluginEntry({
       return await runGitHubCopilotDeviceAuth(ctx, domain);
     }
 
-    api.registerMemoryEmbeddingProvider(githubCopilotMemoryEmbeddingProviderAdapter);
+    api.registerEmbeddingProvider(
+      adaptMemoryEmbeddingProviderAdapter(githubCopilotMemoryEmbeddingProviderAdapter),
+    );
 
     api.registerProvider({
       id: PROVIDER_ID,

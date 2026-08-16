@@ -228,6 +228,18 @@ describe("plugin compatibility registry", () => {
     expect(record?.removeAfter).toBeUndefined();
   });
 
+  it("keeps the removed memory embedding registrar as a migration tombstone", () => {
+    const record = listPluginCompatRecords().find(
+      (candidate) => candidate.code === "deprecated-memory-embedding-provider-api",
+    );
+
+    expect(record).toMatchObject({
+      status: "removed",
+      replacement: "`api.registerEmbeddingProvider(...)` and `contracts.embeddingProviders`",
+    });
+    expect(record?.removeAfter).toBeUndefined();
+  });
+
   it("keeps removed WhatsApp inbound aliases as migration tombstones", () => {
     const records = new Map(listPluginCompatRecords().map((record) => [record.code, record]));
 

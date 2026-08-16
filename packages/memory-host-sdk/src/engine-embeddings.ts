@@ -2,7 +2,6 @@
 
 export {
   getMemoryEmbeddingProvider,
-  listRegisteredMemoryEmbeddingProviders,
   listMemoryEmbeddingProviders,
   listRegisteredMemoryEmbeddingProviderAdapters,
 } from "./host/openclaw-runtime-memory.js";
