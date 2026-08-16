@@ -6,6 +6,7 @@ import type { AuthenticatedUser } from "./user-profile.ts";
 export type ApplicationGatewayPhase =
   | "stopped"
   | "connecting"
+  | "starting"
   | "connected"
   | "reconnecting"
   | "offline";

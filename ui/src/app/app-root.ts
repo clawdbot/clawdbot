@@ -33,10 +33,16 @@ export function resolveTerminalThemeMode(): "dark" | "light" {
   return document.documentElement.dataset.themeMode === "light" ? "light" : "dark";
 }
 
-function renderConnectingSplash() {
+function renderConnectingSplash(status?: string) {
   return html`
-    <main class="connect-splash" role="status" aria-live="polite" aria-label=${t("common.loading")}>
+    <main
+      class="connect-splash"
+      role="status"
+      aria-live="polite"
+      aria-label=${status ?? t("common.loading")}
+    >
       <openclaw-mascot mood="thinking" .size=${120}></openclaw-mascot>
+      ${status ? html`<span class="connect-splash__status">${status}</span>` : nothing}
     </main>
   `;
 }
@@ -277,13 +283,16 @@ export class OpenClawApp extends OpenClawLightDomElement {
     // loginGatePinned protects manual submissions.
     const initialConnectPending =
       runtime.documentMode === null &&
-      gatewaySnapshot.phase === "connecting" &&
+      (gatewaySnapshot.phase === "connecting" || gatewaySnapshot.phase === "starting") &&
       !this.loginGatePinned &&
       gatewaySnapshot.lastError === null;
     if (initialConnectPending) {
       return html`
         <openclaw-tooltip-provider>
-          ${renderConnectingSplash()} ${gatewayUrlConfirmation}
+          ${renderConnectingSplash(
+            gatewaySnapshot.phase === "starting" ? t("common.gatewayStarting") : undefined,
+          )}
+          ${gatewayUrlConfirmation}
         </openclaw-tooltip-provider>
       `;
     }

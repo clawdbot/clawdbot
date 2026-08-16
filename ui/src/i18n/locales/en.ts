@@ -12,6 +12,7 @@ export const en: TranslationMap = {
     assistant: "Assistant",
     active: "Active",
     loading: "Loading…",
+    gatewayStarting: "Gateway starting…",
     refreshing: "Refreshing…",
     offline: "Offline",
     connect: "Connect",

@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   GatewayBrowserClient,
@@ -43,6 +44,7 @@ function renderGatewaySurface(gateway: ApplicationGateway): string {
     synchronizeGateway: (gateway: ApplicationGateway) => void;
   };
   app.runtime = {
+    documentMode: null,
     context: {
       gateway,
       basePath: "",
@@ -50,7 +52,9 @@ function renderGatewaySurface(gateway: ApplicationGateway): string {
     } as unknown as ApplicationContext,
   };
   app.synchronizeGateway(gateway);
-  return app.render().strings.join("");
+  const container = document.createElement("div");
+  render(app.render(), container);
+  return container.innerHTML;
 }
 
 afterEach(() => {
@@ -70,6 +74,30 @@ describe("Control UI Gateway target lineage", () => {
 
     expect(surface).toContain("<openclaw-login-gate");
     expect(surface).not.toContain("<openclaw-app-shell");
+  });
+
+  it("keeps retryable Gateway startup on the initial progress surface", () => {
+    const { gateway, clients } = createGatewayHarness();
+    gateway.start();
+    clients[0]?.opts.onClose?.({
+      code: 4013,
+      reason: "gateway starting",
+      willRetry: true,
+      error: {
+        code: "UNAVAILABLE",
+        message: "gateway starting; retry shortly",
+        details: { reason: "startup-sidecars" },
+        retryable: true,
+        retryAfterMs: 250,
+      },
+    });
+
+    const surface = renderGatewaySurface(gateway);
+
+    expect(gateway.snapshot.phase).toBe("starting");
+    expect(surface).toContain('class="connect-splash"');
+    expect(surface).toContain("Gateway starting…");
+    expect(surface).not.toContain("<openclaw-login-gate");
   });
 
   it("keeps an established Gateway's dashboard mounted during its own retry", () => {

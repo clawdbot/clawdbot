@@ -349,6 +349,28 @@ describe("createApplicationGateway connection phase", () => {
     expect(gateway.snapshot.lastError).toContain("1006");
   });
 
+  it("keeps retryable startup unavailable in the initial progress state", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+
+    current().opts.onClose?.({
+      code: 4013,
+      reason: "gateway starting",
+      willRetry: true,
+      error: {
+        code: "UNAVAILABLE",
+        message: "gateway starting; retry shortly",
+        details: { reason: "startup-sidecars" },
+        retryable: true,
+        retryAfterMs: 250,
+      },
+    });
+
+    expect(gateway.snapshot.phase).toBe("starting");
+    expect(gateway.snapshot.lastError).toBeNull();
+    expect(gateway.snapshot.lastErrorCode).toBeNull();
+  });
+
   it("returns a never-connected terminal close to stopped", () => {
     const { gateway, current } = createStore();
     gateway.start();

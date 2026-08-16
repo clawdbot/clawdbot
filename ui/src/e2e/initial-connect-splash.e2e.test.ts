@@ -229,6 +229,35 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     expect(await page.locator(".connect-splash").count()).toBe(0);
   });
 
+  it("keeps retryable Gateway startup on the progress splash", async () => {
+    const page = await createPage();
+    const loginGateMounted = await traceLoginGateMounts(page);
+    const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+
+    await page.goto(`${server.baseUrl}#token=e2e-shared-token`);
+    await gateway.waitForRequest("connect");
+    const initialConnectCount = (await gateway.getRequests("connect")).length;
+    await gateway.deferNext("connect");
+    await gateway.rejectDeferred("connect", {
+      code: "UNAVAILABLE",
+      message: "gateway starting; retry shortly",
+      details: { reason: "startup-sidecars" },
+      retryable: true,
+    });
+
+    const splash = page.locator(".connect-splash");
+    await splash.getByText("Gateway starting…", { exact: true }).waitFor();
+    expect(await page.locator("openclaw-login-gate").count()).toBe(0);
+    expect(await loginGateMounted()).toBe(false);
+    await captureProof(page, "06-gateway-starting-progress");
+
+    await expect
+      .poll(async () => (await gateway.getRequests("connect")).length)
+      .toBeGreaterThan(initialConnectCount);
+    await gateway.resolveDeferred("connect");
+    await page.locator("openclaw-app-shell").waitFor();
+  });
+
   it("uses the splash for a stored device token on reload", async () => {
     const page = await createPage();
     const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
