@@ -346,9 +346,14 @@
   text-decoration: none;
   /* Atomic: prose cannot break between the glyph and the label, or at a hyphen
      inside it. max-width keeps a label the parser could not shorten wrapping
-     inside the chip; the chat scroller's overflow-x: hidden would clip it. */
+     inside the chip; the chat scroller's overflow-x: hidden would clip it.
+     The wrap policy is declared here rather than inherited: .chat-text sets
+     overflow-wrap: anywhere but .sidebar-markdown sets no wrapping policy, so
+     an unbreakable label would size the capped box past the panel, whose body
+     hides horizontal overflow, and be clipped instead of wrapping. */
   display: inline-block;
   max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 :is(.chat-text, .sidebar-markdown) a.markdown-file-link:hover {
