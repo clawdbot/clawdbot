@@ -812,6 +812,8 @@ const config = {
       "web/vite.config.ts!",
       // Imported directly from the GitHub Actions smoke-plan script.
       "src/ci-smoke-plan.ts!",
+      // Imported directly from the GitHub Actions evidence workflow.
+      "src/profile-evidence-sharding.ts!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/senseaudio`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/tavily`]: bundledPluginWorkspace(),
