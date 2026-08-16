@@ -1465,6 +1465,7 @@ describe("main-session-restart-recovery", () => {
         sessionManager.appendMessage(
           makeUserMessage("[System] continue after restart", {
             idempotencyKey: `${dispatchedRunId}:user`,
+            timestamp: Date.now(),
           }),
         );
       } catch (error) {

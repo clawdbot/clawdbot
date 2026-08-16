@@ -109,11 +109,15 @@ describe("qa scenario catalog causality", () => {
     const liveMultiRestart = requireFlowScenario(readQaScenarioById("gateway-restart-multi-live"));
     const liveMultiRestartFlow = liveMultiRestart.execution.flow;
     const liveMultiRestartContract = JSON.stringify(liveMultiRestartFlow);
-    const liveMultiRestartPrompt = String(liveMultiRestart.execution.config?.prompt ?? "");
+    const liveMultiRestartPrompt =
+      typeof liveMultiRestart.execution.config?.prompt === "string"
+        ? liveMultiRestart.execution.config.prompt
+        : "";
     const liveMultiRestartActions = liveMultiRestartFlow?.steps[1]?.actions ?? [];
-    const checkpointLoop = liveMultiRestartActions.find((action) => "forEach" in action) as
-      | { forEach?: { actions?: unknown[] } }
-      | undefined;
+    const checkpointLoop = liveMultiRestartActions.find(
+      (action): action is { forEach?: { actions?: unknown[] } } =>
+        typeof action === "object" && action !== null && "forEach" in action,
+    );
     const checkpointActions = checkpointLoop?.forEach?.actions ?? [];
     const checkpointTranscriptIndex = checkpointActions.findIndex(
       (action) =>
@@ -148,7 +152,7 @@ describe("qa scenario catalog causality", () => {
       (action) => (action as { set?: string }).set === "outboundCountAfterDelivery",
     );
     const quietWindowIndex = liveMultiRestartActions.findIndex(
-      (action) => "waitForNoOutbound" in action,
+      (action) => typeof action === "object" && action !== null && "waitForNoOutbound" in action,
     );
     const finalCardinalityAssertIndex = liveMultiRestartActions.findIndex((action) =>
       readFlowAssertExpression(action).includes("finalMatches.length === 1"),
