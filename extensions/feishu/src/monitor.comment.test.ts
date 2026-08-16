@@ -822,4 +822,64 @@ describe("drive.notice.comment_add_v1 monitor handler", () => {
     expect(handleFeishuCommentEventMock).toHaveBeenCalledTimes(1);
     expect(abandoned).toHaveBeenCalledTimes(1);
   });
+
+  it("releases the same-document comment lane at adoption while the first turn is still running", async () => {
+    let resolveFirst!: () => void;
+    handleFeishuCommentEventMock
+      .mockImplementationOnce(async (params) => {
+        const lifecycle = (params as { turnAdoptionLifecycle?: FeishuIngressLifecycle })
+          .turnAdoptionLifecycle;
+        await lifecycle?.onAdopted();
+        await new Promise<void>((resolve) => {
+          resolveFirst = resolve;
+        });
+      })
+      .mockImplementationOnce(async () => {});
+
+    const lifecycles = new Map<string, FeishuIngressLifecycle>([
+      [
+        "evt_first",
+        {
+          abortSignal: new AbortController().signal,
+          onAdopted: vi.fn(async () => {}),
+          onDeferred: vi.fn(),
+          onAdoptionFinalizing: vi.fn(),
+          onAbandoned: vi.fn(async () => {}),
+        },
+      ],
+      [
+        "evt_second",
+        {
+          abortSignal: new AbortController().signal,
+          onAdopted: vi.fn(async () => {}),
+          onDeferred: vi.fn(),
+          onAdoptionFinalizing: vi.fn(),
+          onAbandoned: vi.fn(async () => {}),
+        },
+      ],
+    ]);
+    const onComment = createFeishuDriveCommentNoticeHandler({
+      cfg: buildMonitorConfig(),
+      accountId: "default",
+      runtime: createNonExitingRuntimeEnv(),
+      fireAndForget: true,
+      getBotOpenId: () => "ou_bot",
+      resolveIngressLifecycle: (data) =>
+        lifecycles.get((data as { event_id?: string }).event_id ?? ""),
+    });
+
+    await onComment(makeDriveCommentEvent({ event_id: "evt_first" }));
+    await vi.waitFor(() => expect(handleFeishuCommentEventMock).toHaveBeenCalledTimes(1));
+
+    // The first notice's turn was adopted (run start) but is still running; a
+    // rapid same-document notice must reach the handler while it is — the
+    // document lane released at adoption, not at turn completion.
+    const second = onComment(makeDriveCommentEvent({ event_id: "evt_second" }));
+    await vi.waitFor(() => expect(handleFeishuCommentEventMock).toHaveBeenCalledTimes(2));
+
+    resolveFirst();
+    await second;
+
+    expect(handleFeishuCommentEventMock).toHaveBeenCalledTimes(2);
+  });
 });
