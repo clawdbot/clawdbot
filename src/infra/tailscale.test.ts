@@ -1,10 +1,9 @@
 import { existsSync, watch } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 // Covers Tailscale whois, Serve, and Funnel helpers.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { captureEnv } from "../test-utils/env.js";
 import * as tailscale from "./tailscale.js";
 
@@ -16,6 +15,7 @@ const {
   hasTailscaleFunnelRouteForPort,
 } = tailscale;
 const tailscaleBin = "tailscale";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function expectExecCall(
   exec: ReturnType<typeof vi.fn>,
@@ -232,31 +232,27 @@ describe("tailscale helpers", () => {
       const fixture = fileURLToPath(
         new URL("../../test/fixtures/tailscale-foreground-fixture.mjs", import.meta.url),
       );
-      const fixtureDir = await mkdtemp(path.join(tmpdir(), "openclaw-tailscale-fixture-"));
+      const fixtureDir = tempDirs.make("openclaw-tailscale-fixture-");
       const marker = path.join(fixtureDir, "started");
       process.env.OPENCLAW_TEST_TAILSCALE_BINARY = fixture;
       process.env.OPENCLAW_TEST_TAILSCALE_FIXTURE_MARKER = marker;
 
-      try {
-        const markerWritten = new Promise<void>((resolve) => {
-          const watcher = watch(fixtureDir, (_event, filename) => {
-            if (`${filename}` === "started") {
-              watcher.close();
-              resolve();
-            }
-          });
+      const markerWritten = new Promise<void>((resolve) => {
+        const watcher = watch(fixtureDir, (_event, filename) => {
+          if (`${filename}` === "started") {
+            watcher.close();
+            resolve();
+          }
         });
-        const claimPromise = claimTailscaleRoute("funnel", 18790);
-        void claimPromise.catch(() => undefined);
-        await markerWritten;
-        expect(existsSync(marker)).toBe(true);
+      });
+      const claimPromise = claimTailscaleRoute("funnel", 18790);
+      void claimPromise.catch(() => undefined);
+      await markerWritten;
+      expect(existsSync(marker)).toBe(true);
 
-        await vi.advanceTimersToNextTimerAsync();
+      await vi.advanceTimersToNextTimerAsync();
 
-        await expect(claimPromise).rejects.toThrow("Funnel is not enabled on your tailnet.");
-      } finally {
-        await rm(fixtureDir, { force: true, recursive: true });
-      }
+      await expect(claimPromise).rejects.toThrow("Funnel is not enabled on your tailnet.");
     },
   );
 

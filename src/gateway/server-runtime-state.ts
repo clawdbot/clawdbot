@@ -490,7 +490,7 @@ export async function createGatewayHttpTransport(params: {
           retryEaddrinuse: false,
           serviceName: "Tailscale gateway ingress",
         });
-        const address = tailscaleHttpServer.address() as AddressInfo | null;
+        const address = tailscaleHttpServer.address();
         if (!address || typeof address === "string") {
           throw new Error("Tailscale gateway ingress failed to resolve its loopback port");
         }

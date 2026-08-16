@@ -1,6 +1,7 @@
 // Owns one foreground Tailscale route claim and releases it when Gateway IPC closes.
 import { spawn, type ChildProcess } from "node:child_process";
 import process from "node:process";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { signalProcessTree } from "../process/kill-tree.js";
 import {
   TAILSCALE_ROUTE_OWNER_ARG,
@@ -21,17 +22,16 @@ function appendBounded(current: string, chunk: Buffer | string): string {
 }
 
 function parseStart(raw: string | undefined): RouteOwnerStart {
-  const parsed = JSON.parse(raw ?? "null") as unknown;
+  const parsed: unknown = JSON.parse(raw ?? "null");
+  const argv = isRecord(parsed) ? parsed.argv : undefined;
   if (
-    !parsed ||
-    typeof parsed !== "object" ||
-    !Array.isArray((parsed as RouteOwnerStart).argv) ||
-    !(parsed as RouteOwnerStart).argv.every((entry) => typeof entry === "string") ||
-    (parsed as RouteOwnerStart).argv.length === 0
+    !Array.isArray(argv) ||
+    !argv.every((entry) => typeof entry === "string") ||
+    argv.length === 0
   ) {
     throw new Error("invalid Tailscale route-owner start payload");
   }
-  return parsed as RouteOwnerStart;
+  return { argv };
 }
 
 function send(message: TailscaleRouteOwnerMessage): void {
@@ -139,11 +139,7 @@ if (process.argv[2] === TAILSCALE_ROUTE_OWNER_ARG) {
     const owner = runTailscaleRouteOwner(parseStart(process.argv[3]));
     process.once("disconnect", owner.stop);
     process.once("message", (message: unknown) => {
-      if (
-        message &&
-        typeof message === "object" &&
-        (message as { type?: unknown }).type === "stop"
-      ) {
+      if (isRecord(message) && message.type === "stop") {
         owner.stop();
       }
     });

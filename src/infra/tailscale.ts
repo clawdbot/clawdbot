@@ -232,7 +232,12 @@ function resolveTailscaleRouteOwnerUrl(currentModuleUrl = import.meta.url): URL 
   return new URL(`./tailscale-route-owner.worker${extension}`, currentModuleUrl);
 }
 
-function routeClaimError(message: TailscaleRouteOwnerMessage & { type: "failed" }): Error {
+type TailscaleRouteOwnerFailure = Pick<
+  Extract<TailscaleRouteOwnerMessage, { type: "failed" }>,
+  "code" | "stdout" | "stderr"
+>;
+
+function routeClaimError(message: TailscaleRouteOwnerFailure): Error {
   const detail = [message.stderr.trim(), message.stdout.trim()].find(Boolean);
   return Object.assign(new Error(detail || "Tailscale route owner exited before claiming route"), {
     code: message.code,
@@ -300,18 +305,32 @@ async function startTailscaleRouteOwner(argv: string[]): Promise<TailscaleRouteC
     startupTimer.unref?.();
 
     worker.on("message", (message: unknown) => {
-      if (!message || typeof message !== "object") {
+      const event = readRecord(message);
+      if (!event) {
         return;
       }
-      const event = message as TailscaleRouteOwnerMessage;
       if (event.type === "spawned") {
+        if (typeof event.pid !== "number") {
+          return;
+        }
         routePid = event.pid;
       } else if (event.type === "ready") {
         ready = true;
         active = true;
         settle();
       } else if (event.type === "failed") {
-        failure = routeClaimError(event);
+        if (
+          (event.code !== null && typeof event.code !== "number") ||
+          typeof event.stdout !== "string" ||
+          typeof event.stderr !== "string"
+        ) {
+          return;
+        }
+        failure = routeClaimError({
+          code: event.code,
+          stdout: event.stdout,
+          stderr: event.stderr,
+        });
         if (!ready) {
           settle(failure);
         }
