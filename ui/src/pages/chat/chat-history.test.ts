@@ -109,6 +109,35 @@ describe("syncSelectedSessionMessageSubscription", () => {
     expect(state.chatSessionMessageSubscription).toBeNull();
   });
 
+  it("does not promote the Control Model until legacy observer retirement succeeds", async () => {
+    const previous = { key: "agent:main:previous", agentId: null };
+    const unsubscribeMessages = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("release failed"))
+      .mockResolvedValue(undefined);
+    const model = {} as ControlModel;
+    const state = createState({ messages: [] }) as TestState & {
+      chatSessionMessageSubscriptionRequestedKey: string | null;
+      chatSessionMessageSubscription: typeof previous | null;
+    };
+    state.chatSessionMessageSubscriptionRequestedKey = previous.key;
+    state.chatSessionMessageSubscription = previous;
+    state.loadControlModel = vi.fn(async () => model);
+    state.sessions = {
+      setModelOverride: vi.fn(),
+      subscribeMessages: vi.fn(async (key: string) => ({ key, agentId: null })),
+      unsubscribeMessages,
+    };
+
+    await syncSelectedSessionMessageSubscription(state as never);
+    expect(state.controlModel).toBeUndefined();
+
+    await syncSelectedSessionMessageSubscription(state as never);
+    await syncSelectedSessionMessageSubscription(state as never);
+    expect(state.controlModel).toBe(model);
+    expect(unsubscribeMessages).toHaveBeenCalledWith(previous);
+  });
+
   it("starts the new subscription before the previous unsubscribe settles", async () => {
     let resolveUnsubscribe: () => void = () => undefined;
     const unsubscribeMessages = vi.fn(

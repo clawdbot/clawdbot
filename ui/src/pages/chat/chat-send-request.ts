@@ -12,7 +12,10 @@ import {
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { buildChatApiAttachments } from "./attachment-api.ts";
-import { selectedControlModelConversationForRoute } from "./chat-control-model.ts";
+import {
+  controlModelAgentIdForRoute,
+  selectedControlModelConversationForRoute,
+} from "./chat-control-model.ts";
 import type { ChatState } from "./chat-history.ts";
 import { normalizeChatSendAck, type ChatSendAck } from "./chat-send-ack.ts";
 
@@ -40,7 +43,7 @@ export async function requestChatSend(
       ? selectedControlModelConversationForRoute(
           state,
           routing.sessionKey,
-          isUiGlobalSessionKey(routing.sessionKey) ? routing.selectedAgentId : undefined,
+          controlModelAgentIdForRoute(state, routing.sessionKey),
         )
       : null;
   let payload: unknown;

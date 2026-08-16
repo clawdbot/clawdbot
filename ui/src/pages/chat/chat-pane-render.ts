@@ -24,6 +24,7 @@ import {
   controlModelChatInteractionProps,
   questionPromptsForRoute,
 } from "./chat-control-model-interactions.ts";
+import { controlModelAgentIdForRoute } from "./chat-control-model.ts";
 import { clearChatHistory } from "./chat-history.ts";
 import { resolveChatMessageAccess } from "./chat-message-access.ts";
 import { createChatModelSetupBanner, requiresChatModelSetup } from "./chat-model-setup.ts";
@@ -325,7 +326,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
         state,
         this.questionPromptState,
         state.sessionKey,
-        currentAgentId,
+        controlModelAgentIdForRoute(state, state.sessionKey),
       ),
       onGatewayQuestionChange: () => {
         this.questionPrompts = [...this.questionPrompts];

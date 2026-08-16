@@ -6,6 +6,7 @@ import {
   controlModelQuestionPromptCommand,
   questionPromptsForRoute,
 } from "./chat-control-model-interactions.ts";
+import { controlModelAgentIdForRoute } from "./chat-control-model.ts";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -105,5 +106,24 @@ describe("controlModelQuestionPromptCommand", () => {
       "work",
       "legacy",
     ]);
+    expect(questionPromptsForRoute(prompts, "global").map((prompt) => prompt.id)).toEqual([
+      "legacy",
+    ]);
+  });
+
+  it("uses agent identity only for global aliases, not channel-scoped session keys", () => {
+    const state = {
+      assistantAgentId: "main",
+      agentsList: {
+        defaultId: "main",
+        mainKey: "main",
+        agents: [{ id: "main" }, { id: "work" }],
+      },
+      hello: null,
+    };
+
+    expect(controlModelAgentIdForRoute(state, "global")).toBe("main");
+    expect(controlModelAgentIdForRoute(state, "agent:work:main")).toBe("work");
+    expect(controlModelAgentIdForRoute(state, "agent:work:discord:123")).toBeUndefined();
   });
 });

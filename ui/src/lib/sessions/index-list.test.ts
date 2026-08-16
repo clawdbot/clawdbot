@@ -273,13 +273,17 @@ describe("session list requests", () => {
       assistantAgentId: "main",
       hello: null,
     };
+    let connectionListener: ((snapshot: typeof snapshot) => void) | undefined;
     const sessions = createSessionCapability({
       snapshot,
       loadControlModelCatalog: async () => {
         modelLoadAttempts += 1;
         throw new Error("chunk failed");
       },
-      subscribe: () => () => undefined,
+      subscribe(listener) {
+        connectionListener = listener;
+        return () => undefined;
+      },
       subscribeEvents(listener) {
         eventListener = listener;
         return () => undefined;
@@ -300,6 +304,11 @@ describe("session list requests", () => {
     });
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
     expect(modelLoadAttempts).toBe(2);
+
+    connectionListener?.({ ...snapshot, phase: "reconnecting" });
+    connectionListener?.(snapshot);
+    await sessions.refresh({ agentId: "main", force: true });
+    expect(modelLoadAttempts).toBeGreaterThan(2);
 
     sessions.dispose();
   });

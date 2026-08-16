@@ -707,6 +707,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       }
     },
     reset() {
+      controlModelUnavailable = false;
       eventRefreshCoordinator.reset();
       inFlight = null;
       queuedExplicitRefresh = null;

@@ -50,6 +50,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import { replaceChatAttachmentsFromEditor } from "./attachment-payload-store.ts";
+import { controlModelAgentIdForRoute } from "./chat-control-model.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import {
   isRetryableStartupUnavailable,
@@ -773,7 +774,7 @@ async function retryPendingSessionMessageSubscriptionReleases(
 
 async function retireLegacySessionMessageSubscription(
   state: ChatSessionMessageSubscriptionState,
-): Promise<void> {
+): Promise<boolean> {
   const requests = getChatHistoryPaneRequests(state);
   requests.subscriptionGeneration += 1;
   if (state.chatSessionMessageSubscription) {
@@ -782,7 +783,10 @@ async function retireLegacySessionMessageSubscription(
   state.chatSessionMessageSubscriptionRequestedKey = null;
   state.chatSessionMessageSubscription = null;
   await retryPendingSessionMessageSubscriptionReleases(state);
+  return getChatHistoryPaneRequests(state).pendingSubscriptionReleases.size === 0;
 }
+
+const controlModelLoads = new WeakMap<object, Promise<ControlModel | undefined>>();
 
 async function ensureControlModel(state: ChatState): Promise<ControlModel | undefined> {
   if (state.controlModel) {
@@ -791,25 +795,41 @@ async function ensureControlModel(state: ChatState): Promise<ControlModel | unde
   if (!state.loadControlModel) {
     return undefined;
   }
-  let model: ControlModel;
-  try {
-    model = await state.loadControlModel();
-  } catch (error) {
-    console.error("[chat] Control Model load failed; using Gateway fallback:", error);
-    return undefined;
+  const existing = controlModelLoads.get(state);
+  if (existing) {
+    return existing;
   }
-  if (!state.controlModel) {
-    state.controlModel = model;
-    if (
-      state.chatSessionMessageSubscription &&
-      state.sessions?.subscribeMessages &&
-      state.sessions.unsubscribeMessages
-    ) {
-      await retireLegacySessionMessageSubscription(state as ChatSessionMessageSubscriptionState);
+  const loading = (async () => {
+    let model: ControlModel;
+    try {
+      model = await state.loadControlModel!();
+    } catch (error) {
+      console.error("[chat] Control Model load failed; using Gateway fallback:", error);
+      return undefined;
     }
-    state.requestUpdate?.();
-  }
-  return state.controlModel;
+    if (!state.controlModel) {
+      if (
+        (state.chatSessionMessageSubscription ||
+          getChatHistoryPaneRequests(state).pendingSubscriptionReleases.size > 0) &&
+        state.sessions?.subscribeMessages &&
+        state.sessions.unsubscribeMessages &&
+        !(await retireLegacySessionMessageSubscription(
+          state as ChatSessionMessageSubscriptionState,
+        ))
+      ) {
+        return undefined;
+      }
+      state.controlModel = model;
+      state.requestUpdate?.();
+    }
+    return state.controlModel;
+  })().finally(() => {
+    if (controlModelLoads.get(state) === loading) {
+      controlModelLoads.delete(state);
+    }
+  });
+  controlModelLoads.set(state, loading);
+  return loading;
 }
 
 export function disposeSelectedSessionMessageSubscription(state: ChatState): void {
@@ -1690,9 +1710,7 @@ function controlModelConversationForState(state: ChatState): ControlModelConvers
   if (!model || !state.sessionKey.trim()) {
     return null;
   }
-  const agentId = isUiSelectedGlobalSessionKey(state, state.sessionKey)
-    ? resolveUiSelectedSessionAgentId(state)
-    : undefined;
+  const agentId = controlModelAgentIdForRoute(state, state.sessionKey);
   if (
     state.controlModelConversation &&
     state.controlModelConversationSessionKey === state.sessionKey &&

@@ -69,9 +69,9 @@ export function questionPromptsForRoute(
     (prompt) =>
       prompt.sessionKey !== undefined &&
       areUiSessionKeysEquivalent(prompt.sessionKey, sessionKey) &&
-      (!normalizedAgentId ||
-        !prompt.agentId ||
-        prompt.agentId.trim().toLowerCase() === normalizedAgentId),
+      (normalizedAgentId
+        ? !prompt.agentId || prompt.agentId.trim().toLowerCase() === normalizedAgentId
+        : !prompt.agentId),
   );
 }
 
