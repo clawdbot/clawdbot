@@ -37,7 +37,8 @@ describe("trusted in-process Gateway session creation", () => {
   it("surfaces creation provenance only on in-process dispatch", async () => {
     const creation = {
       via: "spawn" as const,
-      actor: { type: "agent" as const, id: "agent:main:main" },
+      actor: { type: "agent" as const, id: "main" },
+      requesterSessionKey: "agent:main:main",
     };
     await callInProcessGatewayToolWithCreation("sessions.create", { agentId: "main" }, creation);
 
@@ -84,7 +85,8 @@ describe("trusted in-process Gateway session creation", () => {
       { agentId: "main", parentSessionKey: "agent:main:main", spawnDepth: 1 },
       {
         via: "spawn",
-        actor: { type: "agent", id: "agent:main:main" },
+        actor: { type: "agent", id: "main" },
+        requesterSessionKey: "agent:main:main",
         completionOwnerSessionKey: "agent:main:discord:direct:alice",
         inheritedToolPolicy,
       },

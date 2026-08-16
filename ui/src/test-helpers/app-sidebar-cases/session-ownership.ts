@@ -168,10 +168,11 @@ describe("AppSidebar session ownership", () => {
     expect(carolChip?.textContent?.trim()).toBe("C");
   });
 
-  it("keeps emoji display-name initials as whole grapheme clusters", async () => {
-    for (const { label, expected } of [
-      { label: "🦞小明", expected: "🦞" },
-      { label: "👨‍👩‍👧‍👦Family", expected: "👨‍👩‍👧‍👦" },
+  it("derives creator initials from agent labels and whole grapheme clusters", async () => {
+    for (const { type, label, expected } of [
+      { type: "agent" as const, label: "Roboclaw", expected: "R" },
+      { type: "human" as const, label: "🦞小明", expected: "🦞" },
+      { type: "human" as const, label: "👨‍👩‍👧‍👦Family", expected: "👨‍👩‍👧‍👦" },
     ]) {
       const gateway = createGateway({} as GatewayBrowserClient);
       const harness = createSessionsHarness("main", ["agent:main:main", "agent:main:lobster"]);
@@ -183,7 +184,7 @@ describe("AppSidebar session ownership", () => {
       if (!lobster) {
         throw new Error("expected creator row");
       }
-      lobster.createdActor = { type: "human", id: "profile-lobster", label };
+      lobster.createdActor = { type, id: "profile-lobster", label };
       result.creators = [
         { id: "profile-lobster", label },
         { id: "profile-ada", label: "Ada" },

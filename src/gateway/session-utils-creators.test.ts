@@ -21,6 +21,7 @@ vi.mock("./session-utils-row.js", async (importOriginal) => {
     projectSessionActor: (
       actor: Parameters<typeof actual.projectSessionActor>[0],
       identities: Parameters<typeof actual.projectSessionActor>[1],
+      cfg: Parameters<typeof actual.projectSessionActor>[2],
     ) => {
       if (actor?.id === "shared-id") {
         return actor.type === "human"
@@ -34,7 +35,7 @@ vi.mock("./session-utils-row.js", async (importOriginal) => {
           label: actor.type === "human" ? "é" : "e\u0301",
         };
       }
-      return actual.projectSessionActor(actor, identities);
+      return actual.projectSessionActor(actor, identities, cfg);
     },
   };
 });

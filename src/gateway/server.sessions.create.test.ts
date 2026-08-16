@@ -2404,7 +2404,8 @@ test("sessions.create atomically persists trusted visible-spawn tool policy", as
           syntheticClient: true,
           sessionCreation: {
             via: "spawn",
-            actor: { type: "agent", id: parentSessionKey },
+            actor: { type: "agent", id: "main" },
+            requesterSessionKey: parentSessionKey,
             completionOwnerSessionKey: "agent:main:discord:direct:alice",
             inheritedToolPolicy: {
               version: 1,
@@ -2492,7 +2493,7 @@ test("sessions.create accepts a signed agent-runtime visible-spawn policy", asyn
   expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
   expect(created.payload?.entry).toMatchObject({
     createdVia: "spawn",
-    createdActor: { type: "agent", id: parentSessionKey },
+    createdActor: { type: "agent", id: "main" },
     spawnedBy: parentSessionKey,
     completionOwnerSessionKey: "agent:main:discord:direct:bob",
     inheritedToolAllow: ["read", "sessions_spawn"],
@@ -3356,7 +3357,8 @@ test("sessions.create stamps trusted operator provenance and records created", a
           syntheticClient: true,
           sessionCreation: {
             via: "spawn",
-            actor: { type: "agent", id: "agent:main:main" },
+            actor: { type: "agent", id: "main" },
+            requesterSessionKey: "agent:main:main",
           },
         },
       } as never,
@@ -3364,7 +3366,7 @@ test("sessions.create stamps trusted operator provenance and records created", a
   );
   expect(hinted.payload?.entry).toMatchObject({
     createdVia: "spawn",
-    createdActor: { type: "agent", id: "agent:main:main" },
+    createdActor: { type: "agent", id: "main" },
   });
 });
 

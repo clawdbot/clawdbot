@@ -1,10 +1,13 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { readMissingScopeErrorDetails } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
+import { buildControlUiSessionPath } from "../../../packages/session-url-contract/src/index.js";
 import {
   DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT,
   DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
 } from "../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { resolveGatewayPublicOrigin } from "../../config/gateway-public-origin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ADMIN_SCOPE } from "../../gateway/method-scopes.js";
 import { resolveWorkspacePathContainment } from "../../gateway/server-methods/workspace-path-containment.js";
@@ -14,6 +17,7 @@ import { resolveUserPath } from "../../utils.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { listAgentIds, resolveAgentConfig, resolveSessionAgentId } from "../agent-scope.js";
 import { reserveChildAdmissionSlot } from "../child-admission.js";
+import { resolveAgentIdentity } from "../identity.js";
 import { resolveSubagentSpawnModelSelection } from "../model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { resolveSpawnedWorkspaceInheritance } from "../spawned-context.js";
@@ -69,6 +73,29 @@ type VisibleSessionsSpawnOptions = VisibleSessionsSpawnDeps & {
 
 function summarizeSessionsSpawnError(error: unknown): string {
   return error instanceof Error ? error.message : typeof error === "string" ? error : "error";
+}
+
+function resolveVisibleSessionUrl(
+  cfg: OpenClawConfig,
+  childSessionKey: string,
+  targetAgentId: string,
+): string | undefined {
+  if (cfg.gateway?.controlUi?.enabled === false) {
+    return undefined;
+  }
+  const publicOrigin = resolveGatewayPublicOrigin(cfg);
+  const path = buildControlUiSessionPath({
+    namespace: "chat",
+    sessionKey: childSessionKey,
+    fallbackAgentId: targetAgentId,
+    basePath: cfg.gateway?.controlUi?.basePath,
+  });
+  if (!publicOrigin || !path) {
+    return undefined;
+  }
+  const url = new URL(publicOrigin);
+  url.pathname = path;
+  return url.toString();
 }
 
 async function deleteVisibleSession(
@@ -287,7 +314,8 @@ export async function maybeSpawnVisibleSession(params: {
       ((method, requestParams) =>
         callInProcessGatewayToolWithCreation(method, requestParams, {
           via: "spawn",
-          actor: { type: "agent", id: requesterKey },
+          actor: { type: "agent", id: requesterAgentId },
+          requesterSessionKey: requesterKey,
           completionOwnerSessionKey: ownership.completionRequesterSessionKey,
           inheritedToolPolicy: {
             version: 1,
@@ -419,12 +447,20 @@ export async function maybeSpawnVisibleSession(params: {
         runId,
       };
     }
+    const ownerLabel = normalizeOptionalString(resolveAgentIdentity(cfg, requesterAgentId)?.name);
+    const sessionUrl = resolveVisibleSessionUrl(cfg, childSessionKey, targetAgentId);
     return {
       status: "accepted",
       childSessionKey,
       runId,
       mode: "run",
       cleanup: "keep",
+      ...(sessionUrl ? { sessionUrl } : {}),
+      owner: {
+        type: "agent",
+        id: requesterAgentId,
+        ...(ownerLabel ? { label: ownerLabel } : {}),
+      },
     };
   } finally {
     reservation.release();

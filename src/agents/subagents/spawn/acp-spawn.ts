@@ -492,7 +492,7 @@ export async function spawnAcpDirect(
     async initialize() {
       const creationStamp = buildSessionCreationStamp({
         via: "spawn",
-        actor: { type: "agent", id: requesterInternalKey },
+        actor: { type: "agent", id: requesterAgentId },
       });
       const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId });
       const childSessionPatch = admission.childSessionPatch

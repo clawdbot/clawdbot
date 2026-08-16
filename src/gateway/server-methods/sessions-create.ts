@@ -504,14 +504,13 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     let runMeta: Record<string, unknown> | undefined;
     let messageSeq: number | undefined;
     const sessionCreation = resolveOperatorSessionCreation(client, { allowTrustedHint: true });
-    const spawnActorSessionKey =
-      sessionCreation.via === "spawn" && sessionCreation.actor?.type === "agent"
-        ? normalizeOptionalString(sessionCreation.actor.id)
+    const spawnRequesterSessionKey =
+      sessionCreation.via === "spawn"
+        ? normalizeOptionalString(sessionCreation.requesterSessionKey)
         : undefined;
     if (
       sessionCreation.inheritedToolPolicy &&
-      spawnActorSessionKey &&
-      parentSessionKey !== spawnActorSessionKey
+      parentSessionKey !== spawnRequesterSessionKey
     ) {
       respond(
         false,

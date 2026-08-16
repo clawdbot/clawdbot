@@ -4,6 +4,7 @@ import type { SessionCreatedActor } from "../../packages/gateway-protocol/src/in
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
+import { resolveAgentIdentity } from "../agents/identity.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
 import {
@@ -31,8 +32,10 @@ import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.j
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { classifySessionKind } from "../sessions/classify-session-kind.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
+import { looksLikeAvatarPath } from "../shared/avatar-policy.js";
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
+import { buildControlUiAvatarUrl, normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import { sessionHasAutomation } from "./session-automation-index.js";
 import { sessionClassificationForRow } from "./session-classification.js";
@@ -68,15 +71,31 @@ import {
 import { isGroupOrChannelDisplaySession, parseGroupKey } from "./session-utils-store.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
-/** Adds current durable human profile display data without persisting rename-prone metadata. */
+/** Adds current actor display data without persisting rename-prone metadata. */
 export function projectSessionActor(
   actor: SessionEntry["createdActor"],
   userProfileIdentityById: Map<string, SessionActorProfileIdentity | undefined> = new Map(),
+  cfg?: OpenClawConfig,
 ): SessionCreatedActor | undefined {
   if (!actor) {
     return undefined;
   }
   const id = normalizeOptionalString(actor.id);
+  if (actor.type === "agent" && id && cfg) {
+    const identity = resolveAgentIdentity(cfg, id);
+    const label = normalizeOptionalString(identity?.name);
+    const avatar = normalizeOptionalString(identity?.avatar);
+    const avatarUrl =
+      avatar && looksLikeAvatarPath(avatar)
+        ? buildControlUiAvatarUrl(normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath), id)
+        : undefined;
+    return {
+      type: actor.type,
+      id,
+      ...(label ? { label } : {}),
+      ...(avatarUrl ? { avatarUrl } : {}),
+    };
+  }
   if (actor.type !== "human" || !id) {
     return { type: actor.type, ...(id ? { id } : {}) };
   }
@@ -411,7 +430,11 @@ export function buildGatewaySessionRow(params: {
     subagentRole: entry?.subagentRole,
     subagentControlScope: entry?.subagentControlScope,
     createdVia: entry?.createdVia,
-    createdActor: projectSessionActor(entry?.createdActor, rowContext?.userProfileIdentityById),
+    createdActor: projectSessionActor(
+      entry?.createdActor,
+      rowContext?.userProfileIdentityById,
+      cfg,
+    ),
     createdAt: entry?.createdAt,
     forkSource: entry?.forkSource,
     previousSessionId: entry?.previousSessionId,
@@ -433,7 +456,7 @@ export function buildGatewaySessionRow(params: {
     updatedAt,
     archived: entry?.archivedAt !== undefined,
     archivedAt: entry?.archivedAt,
-    archivedBy: projectSessionActor(entry?.archivedBy, rowContext?.userProfileIdentityById),
+    archivedBy: projectSessionActor(entry?.archivedBy, rowContext?.userProfileIdentityById, cfg),
     pinned: entry?.pinnedAt !== undefined,
     pinnedAt: entry?.pinnedAt,
     unread: deriveSessionUnread(entry),
