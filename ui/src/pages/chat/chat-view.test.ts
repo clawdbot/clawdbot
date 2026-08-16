@@ -3520,7 +3520,7 @@ describe("chat slash menu accessibility", () => {
     });
     inputDraftAtEnd(container, "Use $pro");
     expect(container.querySelector(".skill-menu")?.textContent).toContain("Loading skills");
-    const send = container.querySelector<HTMLButtonElement>(".chat-send-btn");
+    const send = container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]');
     expect(send?.disabled).toBe(true);
 
     keydownComposer(container, "Enter");
@@ -3822,6 +3822,10 @@ describe("chat slash menu accessibility", () => {
     expect(onSend).not.toHaveBeenCalled();
 
     keydownComposer(container, "Enter", { ctrlKey: true });
+    container
+      .querySelector("textarea")
+      ?.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, inputType: "insertText" }));
+    inputDraft(container, "compose across lines");
     keydownComposer(container, "Enter", { metaKey: true });
 
     expect(onDraftChange).toHaveBeenCalledWith("compose across lines");

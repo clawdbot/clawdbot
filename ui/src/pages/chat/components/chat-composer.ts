@@ -19,6 +19,7 @@ import {
   scheduleTextareaHeightAdjustment,
   scrollActiveMenuOptionIntoView,
 } from "./chat-composer-dom.ts";
+import { steerableQueuedMessage } from "./chat-composer-queue.ts";
 import {
   getActiveSkillMenuOptionId,
   getActiveSkillMenuOptionLabel,
@@ -28,7 +29,6 @@ import {
   updateSkillMenu,
 } from "./chat-composer-skill-menu.ts";
 import {
-  exportMarkdown,
   getActiveSlashMenuOptionId,
   getActiveSlashMenuOptionLabel,
   isSlashMenuVisible,
@@ -401,13 +401,45 @@ export function renderChatComposer(props: ChatComposerProps) {
       }
     }
 
+    if (
+      event.key === "Escape" &&
+      !state.skillMenuOpen &&
+      !state.slashMenuOpen &&
+      !props.replyTarget &&
+      !state.dictation?.active &&
+      showAbortableUi &&
+      props.onAbort
+    ) {
+      event.preventDefault();
+      props.onAbort();
+      return;
+    }
+
     const sendShortcutMatches = sendShortcut === "enter" || event.metaKey || event.ctrlKey;
     if (event.key === "Enter" && !event.shiftKey && sendShortcutMatches) {
-      if (!canSubmitDraft((event.target as HTMLTextAreaElement).value)) {
+      const target = event.target as HTMLTextAreaElement;
+      const attachments = props.getAttachments?.() ?? props.attachments ?? [];
+      if (!target.value.trim() && attachments.length === 0) {
+        const queued =
+          showAbortableUi && props.onQueueSteer
+            ? steerableQueuedMessage(
+                props.queue.filter((item) => item.sessionKey === props.sessionKey),
+              )
+            : undefined;
+        if (queued) {
+          event.preventDefault();
+          props.onQueueSteer?.(queued.id);
+          return;
+        }
+        if (canSubmitDraft(target.value)) {
+          event.preventDefault();
+        }
+        return;
+      }
+      if (!canSubmitDraft(target.value)) {
         return;
       }
       event.preventDefault();
-      const target = event.target as HTMLTextAreaElement;
       commitComposerDraft(props, target.value);
       props.onSend();
       syncComposerDraftAfterSend(target);
@@ -650,7 +682,6 @@ export function renderChatComposer(props: ChatComposerProps) {
     connected: props.connected,
     draft: visibleDraft,
     hasAttachments: !props.suggestionComposer && Boolean(props.attachments?.length),
-    hasMessages: props.messages.length > 0,
     isBusy,
     followUpMode: props.followUpMode,
     suggestionComposer: props.suggestionComposer,
@@ -663,8 +694,6 @@ export function renderChatComposer(props: ChatComposerProps) {
     voiceVideoEnabled: Boolean(props.realtimeTalkVideoStream),
     voiceVideoPending: props.realtimeTalkVideoPending,
     onAbort: props.onAbort,
-    onExport: () => exportMarkdown(props),
-    onNewSession: props.onNewSession,
     onSend: handleSend,
     onStoreDraft: () => {},
     onToggleVoice: props.onToggleRealtimeTalk ? handleVoicePrimaryAction : undefined,

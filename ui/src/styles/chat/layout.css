@@ -3709,6 +3709,10 @@ button.chat-reply-preview--message:disabled {
     margin-left: var(--chat-box-inset);
   }
 
+  .agent-chat__composer-actions:has(> .chat-talk-control:not(.chat-talk-control--active)) {
+    flex-direction: row;
+  }
+
   .agent-chat__composer-controls {
     order: 0;
     display: flex;

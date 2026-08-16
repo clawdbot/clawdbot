@@ -1,4 +1,7 @@
 // Control UI E2E tests cover the redesigned chat composer.
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
+import type { Page } from "playwright-core";
 import { expect, it } from "vitest";
 import {
   controlUiSessionUrl,
@@ -10,6 +13,25 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({
   name: "Control UI chat composer redesign",
 });
+
+const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const uiProofArtifactDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "chat-composer-redesign",
+);
+
+async function captureUiProof(page: Page, fileName: string) {
+  if (!captureUiProofEnabled) {
+    return;
+  }
+  await mkdir(uiProofArtifactDir, { recursive: true });
+  await page.screenshot({
+    animations: "disabled",
+    path: path.join(uiProofArtifactDir, fileName),
+  });
+}
 
 // Browser contexts preserve test isolation; keep one process warm for this file.
 suite.define(() => {
@@ -91,6 +113,13 @@ suite.define(() => {
           },
         ],
         methodResponses: {
+          "config.get": {
+            config: { ui: { prefs: { chatFollowUpMode: "steer" } } },
+            hash: "composer-redesign-config",
+            issues: [],
+            raw: JSON.stringify({ ui: { prefs: { chatFollowUpMode: "steer" } } }),
+            valid: true,
+          },
           "models.authStatus": {
             ts: Date.now(),
             providers: [
@@ -174,6 +203,10 @@ suite.define(() => {
       await expect.poll(() => attach.isVisible()).toBe(true);
       await expect.poll(() => camera.isVisible()).toBe(false);
       await expect.poll(() => voice.isVisible()).toBe(true);
+      const emptySend = page.getByRole("button", { name: "Write a message to send." });
+      await expect.poll(() => emptySend.isVisible()).toBe(true);
+      await expect.poll(() => emptySend.isDisabled()).toBe(true);
+      await captureUiProof(page, "01-empty-idle-disabled-send.png");
       await expect
         .poll(() => page.getByRole("button", { name: "Start video talk" }).count())
         .toBe(0);
@@ -403,6 +436,7 @@ suite.define(() => {
       await expect
         .poll(() => page.getByRole("button", { name: "Start voice input" }).isVisible())
         .toBe(true);
+      await captureUiProof(page, "02-draft-single-send.png");
 
       await page.getByRole("button", { name: "Send message" }).click();
       const sendRequest = await gateway.waitForRequest("chat.send");
@@ -459,9 +493,19 @@ suite.define(() => {
         ),
       ).toBeLessThanOrEqual(24);
       expect(Math.abs(activeSplitViewBox.y - activeChatContentBox.y)).toBeLessThanOrEqual(24);
+      await textarea.fill("Steer this queued follow-up");
+      const followUp = page.getByRole("button", {
+        name: /^(Queue message|Steer into the active run)$/,
+      });
+      await expect.poll(() => followUp.isVisible()).toBe(true);
+      await expect.poll(() => page.locator(".chat-send-btn--stop").count()).toBe(0);
+      await captureUiProof(page, "03-active-run-draft-single-follow-up.png");
+
+      await textarea.fill("");
       const stop = page.getByRole("button", { name: "Stop generating" });
       await expect.poll(() => stop.isVisible()).toBe(true);
-      await stop.click();
+      await captureUiProof(page, "04-active-run-empty-stop.png");
+      await textarea.press("Escape");
       const abortRequest = await gateway.waitForRequest("chat.abort");
       expect(abortRequest.params).toMatchObject({
         runId,
@@ -473,7 +517,8 @@ suite.define(() => {
       await expect
         .poll(() => page.getByRole("button", { name: "Start voice input" }).isVisible())
         .toBe(true);
-      await expect.poll(() => page.getByRole("button", { name: "Send message" }).count()).toBe(0);
+      await expect.poll(() => emptySend.isVisible()).toBe(true);
+      await expect.poll(() => emptySend.isDisabled()).toBe(true);
 
       await page.setViewportSize({ width: 393, height: 852 });
       await expect.poll(() => camera.count()).toBe(0);

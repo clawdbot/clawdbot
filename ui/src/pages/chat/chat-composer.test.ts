@@ -56,7 +56,7 @@ describe("suggestion composer", () => {
     const onTypingChange = vi.fn();
     const view = renderComposer({
       suggestionComposer: true,
-      draft: "",
+      draft: "Suggest this",
       onTypingChange,
     });
     expect(view.container.querySelector(".agent-chat__control-label")?.textContent).toContain(
@@ -112,6 +112,16 @@ function button(container: Element, label: string): HTMLButtonElement {
   if (!result) {
     throw new Error(`expected button ${label}`);
   }
+  return result;
+}
+
+function primaryButton(container: Element): HTMLButtonElement {
+  const actions = container.querySelector(".agent-chat__composer-actions");
+  const result = actions?.querySelector<HTMLButtonElement>(":scope > openclaw-tooltip > button");
+  if (!result) {
+    throw new Error("expected one primary composer button");
+  }
+  expect(actions?.querySelectorAll(":scope > openclaw-tooltip > button")).toHaveLength(1);
   return result;
 }
 
@@ -248,57 +258,65 @@ describe("renderChatComposer controls", () => {
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(true);
   });
 
-  it("switches the primary action between voice, send, queue, and stop", () => {
-    const onToggleRealtimeTalk = vi.fn();
-    let view = renderComposer({ onToggleRealtimeTalk });
-    button(view.container, t("chat.composer.startVoiceInput")).click();
-    expect(onToggleRealtimeTalk).toHaveBeenCalledOnce();
-    expect(view.container.querySelector('[aria-label="Start video talk"]')).toBeNull();
+  it.each([
+    {
+      name: "empty idle",
+      overrides: {},
+      label: "Write a message to send.",
+      disabled: true,
+      stop: false,
+    },
+    {
+      name: "empty abortable",
+      overrides: { canAbort: true, onAbort: vi.fn() },
+      label: t("chat.runControls.stopGenerating"),
+      disabled: false,
+      stop: true,
+    },
+    {
+      name: "queued follow-up",
+      overrides: {
+        canAbort: true,
+        draft: "Follow up later",
+        followUpMode: "queue" as const,
+        onAbort: vi.fn(),
+      },
+      label: t("chat.runControls.queueMessage"),
+      disabled: false,
+      stop: false,
+    },
+    {
+      name: "steered follow-up",
+      overrides: {
+        canAbort: true,
+        draft: "Steer this run",
+        followUpMode: "steer" as const,
+        onAbort: vi.fn(),
+      },
+      label: t("chat.followUpModeSteer"),
+      disabled: false,
+      stop: false,
+    },
+    {
+      name: "draft idle",
+      overrides: { draft: "Send this" },
+      label: t("chat.runControls.sendMessage"),
+      disabled: false,
+      stop: false,
+    },
+  ])(
+    "renders one primary action with a separate mic for $name",
+    ({ overrides, label, disabled, stop }) => {
+      const view = renderComposer({ ...overrides, onToggleRealtimeTalk: vi.fn() });
+      const primary = primaryButton(view.container);
 
-    const onSend = vi.fn();
-    view = renderComposer({ draft: "Send this", onSend });
-    button(view.container, t("chat.runControls.sendMessage")).click();
-    expect(onSend).toHaveBeenCalledOnce();
-
-    const onAbort = vi.fn();
-    view = renderComposer({ canAbort: true, onAbort, draft: "Follow up" });
-    expect(button(view.container, t("chat.runControls.sendMessage")).disabled).toBe(false);
-    button(view.container, t("chat.runControls.stopGenerating")).click();
-    expect(onAbort).toHaveBeenCalledOnce();
-
-    view = renderComposer({
-      canAbort: true,
-      draft: "Steer this run",
-      followUpMode: "steer",
-      onAbort,
-    });
-    expect(button(view.container, t("chat.followUpModeSteer")).disabled).toBe(false);
-
-    view = renderComposer({
-      canAbort: true,
-      draft: "Follow up later",
-      followUpMode: "queue",
-      onAbort,
-    });
-    expect(button(view.container, t("chat.runControls.queueMessage")).disabled).toBe(false);
-
-    const onToggleWithDraft = vi.fn();
-    view = renderComposer({
-      draft: "Keep this text",
-      onToggleRealtimeTalk: onToggleWithDraft,
-    });
-    button(view.container, t("chat.composer.startVoiceInput")).click();
-    expect(onToggleWithDraft).toHaveBeenCalledOnce();
-    expect(button(view.container, t("chat.runControls.sendMessage"))).toBeTruthy();
-
-    view = renderComposer({
-      canAbort: true,
-      draft: "Replace the current run",
-      followUpMode: "interrupt",
-      onAbort,
-    });
-    expect(button(view.container, t("chat.runControls.sendMessage")).disabled).toBe(false);
-  });
+      expect(primary.getAttribute("aria-label")).toBe(label);
+      expect(primary.disabled).toBe(disabled);
+      expect(primary.classList.contains("chat-send-btn--stop")).toBe(stop);
+      expect(view.container.querySelectorAll(".chat-send-btn--stop")).toHaveLength(stop ? 1 : 0);
+      expect(button(view.container, t("chat.composer.startVoiceInput"))).not.toBe(primary);
+    },
+  );
 
   it("opens the microphone picker, marks the selected input, and persists a selection", async () => {
     discoverRealtimeTalkInputsMock.mockResolvedValue({
@@ -762,6 +780,87 @@ describe("renderChatComposer controls", () => {
     steer[0]?.click();
     steer[1]?.click();
     expect(onQueueSteer.mock.calls).toEqual([["queued-1"], ["waiting-idle-1"]]);
+  });
+
+  it("steers the oldest eligible current-session message when Enter is pressed on empty", () => {
+    const onQueueSteer = vi.fn();
+    const onSend = vi.fn();
+    const { container } = renderComposer({
+      canAbort: true,
+      onAbort: vi.fn(),
+      onQueueSteer,
+      onSend,
+      queue: [
+        { id: "later", text: "later", createdAt: 30, sessionKey: "main" },
+        { id: "other-session", text: "other", createdAt: 1, sessionKey: "other" },
+        { id: "oldest", text: "oldest", createdAt: 20, sessionKey: "main" },
+        {
+          id: "failed",
+          text: "failed",
+          createdAt: 2,
+          sessionKey: "main",
+          sendState: "failed",
+        },
+      ],
+    });
+    const event = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+
+    container.querySelector("textarea")?.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(onQueueSteer).toHaveBeenCalledWith("oldest");
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("keeps empty Enter inert when no queued message can be steered", () => {
+    const onQueueSteer = vi.fn();
+    const onSend = vi.fn();
+    const { container } = renderComposer({
+      canAbort: true,
+      onAbort: vi.fn(),
+      onQueueSteer,
+      onSend,
+      queue: [{ id: "failed", text: "failed", createdAt: 1, sendState: "failed" }],
+    });
+
+    expect(() =>
+      container
+        .querySelector("textarea")
+        ?.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+        ),
+    ).not.toThrow();
+    expect(onQueueSteer).not.toHaveBeenCalled();
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("stops an abortable run with Escape unless reply or menu precedence owns it", () => {
+    const onAbort = vi.fn();
+    let view = renderComposer({ canAbort: true, onAbort });
+    let event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    view.container.querySelector("textarea")?.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+    expect(onAbort).toHaveBeenCalledOnce();
+
+    onAbort.mockClear();
+    view = renderComposer({
+      canAbort: true,
+      onAbort,
+      replyTarget: { messageId: "reply-1", text: "Original message" },
+    });
+    event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    view.container.querySelector("textarea")?.dispatchEvent(event);
+    expect(onAbort).not.toHaveBeenCalled();
+
+    view = renderComposer({ canAbort: true, onAbort });
+    const textarea = view.container.querySelector<HTMLTextAreaElement>("textarea")!;
+    textarea.value = "/";
+    textarea.dispatchEvent(new InputEvent("beforeinput", { bubbles: true }));
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    textarea.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+    expect(onAbort).not.toHaveBeenCalled();
   });
 
   it("renders the queued author's avatar before the turn is submitted", async () => {

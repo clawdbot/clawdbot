@@ -4216,7 +4216,7 @@ ui/src/pages/chat/components/chat-audio-player.ts	1
 ui/src/pages/chat/components/chat-composer-plus-menu.ts	1
 ui/src/pages/chat/components/chat-composer-slash-menu.ts	1
 ui/src/pages/chat/components/chat-composer-view.ts	1
-ui/src/pages/chat/components/chat-composer.ts	8
+ui/src/pages/chat/components/chat-composer.ts	7
 ui/src/pages/chat/components/chat-effort-picker.ts	6
 ui/src/pages/chat/components/chat-header-session-menu.ts	3
 ui/src/pages/chat/components/chat-message-attachment-availability.ts	1
