@@ -18,8 +18,12 @@ import {
   normalizeInheritedToolDenylist,
 } from "../agents/inherited-tool-deny.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
+  buildModelAliasIndex,
+  inferUniqueProviderFromConfiguredModels,
   resolveDefaultModelForAgent,
+  resolveModelRefFromString,
   resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
@@ -94,6 +98,42 @@ type TrustedCatalogSessionTarget = {
 const loadSessionLifecycleRuntime = createLazyRuntimeModule(
   () => import("./server-methods/sessions.runtime.js"),
 );
+
+export function resolveSessionCreateModelSelection(
+  cfg: OpenClawConfig,
+  agentId: string,
+  input: string | { model: string; agentRuntime?: string } | undefined,
+) {
+  const model = normalizeOptionalString(typeof input === "string" ? input : input?.model);
+  if (!model) {
+    return undefined;
+  }
+  const defaults = resolveDefaultModelForAgent({ cfg, agentId });
+  const split = splitTrailingAuthProfile(model);
+  // Patch selection resolves this config-owned ref/profile before its catalog status check;
+  // the persisted create path remains the sole availability/allowlist validator.
+  const resolved = resolveModelRefFromString({
+    cfg,
+    raw: split.model,
+    defaultProvider:
+      (!split.model.includes("/")
+        ? inferUniqueProviderFromConfiguredModels({ cfg, model: split.model })
+        : undefined) ?? defaults.provider,
+    aliasIndex: buildModelAliasIndex({ cfg, defaultProvider: defaults.provider }),
+  });
+  if (!resolved) {
+    return undefined;
+  }
+  const agentRuntimeOverride = normalizeOptionalAgentRuntimeId(
+    typeof input === "string" ? undefined : input?.agentRuntime,
+  );
+  return {
+    providerOverride: resolved.ref.provider,
+    modelOverride: resolved.ref.model,
+    ...(agentRuntimeOverride ? { agentRuntimeOverride } : {}),
+    ...(split.profile ? { authProfileOverride: split.profile } : {}),
+  };
+}
 
 async function existingModelSelectionWouldChange(params: {
   agentId: string;

@@ -29,7 +29,11 @@ import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-ke
 import { resolveUserPath } from "../../utils.js";
 import { prepareWorktreeSessionTitle } from "../dashboard-session-title.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
-import { buildDashboardSessionKey, createGatewaySession } from "../session-create-service.js";
+import {
+  buildDashboardSessionKey,
+  createGatewaySession,
+  resolveSessionCreateModelSelection as resolveCreateTitleEntry,
+} from "../session-create-service.js";
 import { ensureSessionGroupRegistered } from "../session-groups.js";
 import type { PrepareGatewaySessionLifecycle } from "../session-lifecycle-preparation.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
@@ -96,19 +100,15 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           }
         : undefined;
     const catalogId = normalizeOptionalString(p.catalogId);
-    if (catalogId && p.model) {
+    const catalogConflict = p.model ? "model" : p.key ? "key" : undefined;
+    if (catalogId && catalogConflict) {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "sessions.create catalogId cannot include model"),
-      );
-      return;
-    }
-    if (catalogId && p.key) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "sessions.create catalogId cannot include key"),
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `sessions.create catalogId cannot include ${catalogConflict}`,
+        ),
       );
       return;
     }
@@ -235,15 +235,14 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       return;
     }
     const explicitSessionLabel = normalizeOptionalString(p.label);
-    // Start before repository resolution, but cap the whole shared request: either
-    // naming gets a title within eight seconds or creation falls back to the raw source.
+    const titleAgentId = normalizeAgentId(explicitlyRequestedAgent.agentId);
+    // Start before repository resolution; the bounded request falls back to raw source after 8s.
     const worktreeTitle =
       p.worktree === true && !requestedWorktreeName && !explicitSessionLabel
         ? prepareWorktreeSessionTitle({
             cfg,
-            agentId: normalizeAgentId(
-              catalogAgentId ?? explicitlyRequestedAgent.agentId ?? explicitlyRequestedAgentId,
-            ),
+            agentId: titleAgentId,
+            entry: resolveCreateTitleEntry(cfg, titleAgentId, catalogTarget?.target ?? p.model),
             userMessage: initialMessage ?? "",
             attachments: initialAttachments,
             onError: (error) =>

@@ -212,6 +212,7 @@ async function generateDashboardSessionTitle(params: {
 export function prepareWorktreeSessionTitle(params: {
   cfg: OpenClawConfig;
   agentId: string;
+  entry?: DashboardSessionTitleModelEntry;
   userMessage: string;
   attachments?: readonly ChatAttachment[];
   onError: (error: unknown) => void;
