@@ -41,10 +41,6 @@ const SEARCH_CACHE = new Map<
   string,
   { value: Record<string, unknown>; expiresAt: number; insertedAt: number }
 >();
-const SCRAPE_CACHE = new Map<
-  string,
-  { value: Record<string, unknown>; expiresAt: number; insertedAt: number }
->();
 const DEFAULT_SEARCH_COUNT = 5;
 const FIRECRAWL_SEARCH_MAX_RESULTS = 100;
 const FIRECRAWL_SEARCH_MAX_CONTENT_CHARS = 20_000;
@@ -653,24 +649,6 @@ export async function runFirecrawlScrape(
       ? Math.floor(params.maxChars)
       : DEFAULT_SCRAPE_MAX_CHARS;
   const maxChars = Math.min(requestedMaxChars, maxCharsCap);
-  const cacheKey = normalizeCacheKey(
-    JSON.stringify({
-      type: "firecrawl-scrape",
-      url: params.url,
-      extractMode: params.extractMode,
-      baseUrl,
-      onlyMainContent,
-      maxAgeMs,
-      proxy,
-      storeInCache,
-      maxChars,
-    }),
-  );
-  const cached = readCache(SCRAPE_CACHE, cacheKey);
-  if (cached) {
-    return { ...cached.value, cached: true };
-  }
-
   const endpoint = await resolveEndpoint(baseUrl, "/v2/scrape");
   const payload = await postFirecrawlJson(
     {
@@ -718,12 +696,6 @@ export async function runFirecrawlScrape(
     extractMode: params.extractMode,
     maxChars,
   });
-  writeCache(
-    SCRAPE_CACHE,
-    cacheKey,
-    result,
-    resolveCacheTtlMs(undefined, DEFAULT_CACHE_TTL_MINUTES),
-  );
   return result;
 }
 
