@@ -9,6 +9,7 @@ import type {
 } from "../api/gateway.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import "./app-host.ts";
+import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationGateway } from "./context.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
 import { loadSettings } from "./settings.ts";
@@ -39,7 +40,7 @@ function createGatewayHarness() {
 
 function renderGatewaySurface(gateway: ApplicationGateway): string {
   const app = document.createElement("openclaw-app") as unknown as {
-    runtime: { context: ApplicationContext };
+    runtime: Pick<ApplicationRuntime, "context" | "documentMode">;
     render: () => { strings: readonly string[] };
     synchronizeGateway: (gateway: ApplicationGateway) => void;
   };
