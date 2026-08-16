@@ -79,7 +79,6 @@ separately tracked so supported upgrade paths can still repair old config.
 The remaining dated compatibility areas are:
 
 - the September SDK subpath window listed in the migration guide
-- the `api.on("subagent_spawning", ...)` hook alias
 - memory-specific embedding registration and the beta.5 session-store bridge
 - WhatsApp inbound callback aliases described below
 - the shipped agent-harness SDK aliases, whose removal is pending a new

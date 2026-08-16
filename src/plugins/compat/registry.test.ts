@@ -190,6 +190,19 @@ describe("plugin compatibility registry", () => {
     expect(record?.removeAfter).toBeUndefined();
   });
 
+  it("keeps the removed subagent spawning hook as a migration tombstone", () => {
+    const record = listPluginCompatRecords().find(
+      (candidate) => candidate.code === "legacy-subagent-spawning-hook",
+    );
+
+    expect(record).toMatchObject({
+      status: "removed",
+      replacement:
+        "`subagent_spawned` for post-launch observation; core session-binding adapters for thread routing",
+    });
+    expect(record?.removeAfter).toBeUndefined();
+  });
+
   it("keeps the removed embedded Pi aliases as a migration tombstone", () => {
     const record = listPluginCompatRecords().find(
       (candidate) => candidate.code === "embedded-pi-agent-sdk-aliases",

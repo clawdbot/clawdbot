@@ -57,12 +57,9 @@ export const PLUGIN_COMPAT_RECORDS = [
   },
   {
     code: "legacy-subagent-spawning-hook",
-    status: "deprecated",
+    status: "removed",
     owner: "sdk",
     introduced: "2026-05-30",
-    deprecated: "2026-05-30",
-    warningStarts: "2026-05-30",
-    removeAfter: "2026-08-30",
     replacement:
       "`subagent_spawned` for post-launch observation; core session-binding adapters for thread routing",
     docsPath: "/plugins/hooks#upcoming-deprecations",
@@ -72,10 +69,10 @@ export const PLUGIN_COMPAT_RECORDS = [
       "PluginHookSubagentSpawningResult",
       "SubagentLifecycleHookRunner.runSubagentSpawning",
     ],
-    diagnostics: ["plugin runtime compatibility warning"],
-    tests: ["src/plugins/loader.test.ts", "src/plugins/compat/registry.test.ts"],
+    diagnostics: ["plugin compatibility registry and migration guide"],
+    tests: ["src/plugins/compat/registry.test.ts"],
     releaseNote:
-      '`api.on("subagent_spawning", ...)` remains wired only for older plugins; core now owns thread-bound subagent routing.',
+      '`api.on("subagent_spawning", ...)` was removed; core now owns thread-bound subagent routing, and `subagent_spawned` remains available for observation.',
   },
   {
     code: "hook-only-plugin-shape",
