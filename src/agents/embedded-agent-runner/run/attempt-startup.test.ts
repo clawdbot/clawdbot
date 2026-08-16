@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { attachPublishedSandboxSkills } from "../../sandbox/published-skills-handoff.js";
+import type { SandboxContext } from "../../sandbox/types.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -43,16 +45,18 @@ describe("prepareEmbeddedAttemptSkills", () => {
 
   it("restores environment overrides when later preparation fails", () => {
     const restore = vi.fn();
+    const sandbox = { enabled: true } as SandboxContext;
     mocks.applySkillEnvOverrides.mockReturnValue(restore);
     mocks.mapSandboxSkillEntriesForPrompt.mockImplementation(() => {
       throw new Error("skill prompt mapping failed");
     });
+    attachPublishedSandboxSkills(sandbox, { prompt: "", skills: [], resolvedSkills: [] });
 
     expect(() =>
       prepareEmbeddedAttemptSkills({
         attempt: { config: {} } as EmbeddedRunAttemptParams,
         effectiveWorkspace: "/tmp/workspace",
-        sandbox: null,
+        sandbox,
         sessionAgentId: "main",
       }),
     ).toThrow("skill prompt mapping failed");
@@ -60,10 +64,13 @@ describe("prepareEmbeddedAttemptSkills", () => {
   });
 
   it("does not load skills or apply their environment during settled finalization", () => {
+    const sandbox = { enabled: true } as SandboxContext;
+    attachPublishedSandboxSkills(sandbox, { prompt: "", skills: [], resolvedSkills: [] });
+
     const prepared = prepareEmbeddedAttemptSkills({
       attempt: { operation: "settled-tool-finalization" } as EmbeddedRunAttemptParams,
       effectiveWorkspace: "/tmp/workspace",
-      sandbox: null,
+      sandbox,
       sessionAgentId: "main",
     });
 

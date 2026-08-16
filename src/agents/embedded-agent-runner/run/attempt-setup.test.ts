@@ -5,14 +5,16 @@ import type { ProviderRuntimePluginHandle } from "../../../plugins/provider-hook
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const resolveProviderRuntimePluginHandle = vi.hoisted(() => vi.fn());
-const resolveSandboxContext = vi.hoisted(() => vi.fn(async () => null));
+const resolveSandboxContext = vi.hoisted(() => vi.fn(async (): Promise<unknown> => null));
 
 vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../plugins/provider-hook-runtime.js")>()),
   resolveProviderRuntimePluginHandle,
 }));
 
-vi.mock("../../sandbox.js", () => ({ resolveSandboxContext }));
+vi.mock("../../sandbox.js", () => ({
+  resolveSandboxContext,
+}));
 
 import { prepareEmbeddedAttemptSetup, resolveAttemptWorkspaceSandbox } from "./attempt-setup.js";
 
@@ -84,6 +86,26 @@ describe("prepareEmbeddedAttemptSetup", () => {
       expect(setup.effectiveWorkspace).toBe(workspaceDir);
     },
   );
+
+  it("rejects a cwd override for sandboxed runs", async () => {
+    const workspaceDir = path.join(os.tmpdir(), "openclaw-attempt-setup-cwd-reject");
+    resolveSandboxContext.mockResolvedValueOnce({
+      enabled: true as const,
+      workspaceDir: path.join(workspaceDir, "sandbox"),
+      workspaceAccess: "ro" as const,
+    });
+
+    await expect(
+      resolveAttemptWorkspaceSandbox({
+        agentId: "main",
+        config: {},
+        cwd: path.join(os.tmpdir(), "openclaw-attempt-setup-other-cwd"),
+        sessionId: "session-cwd-reject",
+        sessionKey: "agent:main:cwd-reject",
+        workspaceDir,
+      }),
+    ).rejects.toThrow(/cwd override is not supported/);
+  });
 
   it("reuses lifecycle metadata and the provider handle from the runtime plan", async () => {
     const metadataSnapshot = { plugins: [] } as never;

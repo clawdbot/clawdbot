@@ -111,15 +111,16 @@ export async function resolveAttemptWorkspaceSandbox(params: AttemptWorkspacePar
     params.sandboxSessionKey?.trim() || params.sessionKey?.trim() || params.sessionId;
   // Collection review is a host-owned maintenance run with one restricted tool.
   // Sandboxing would hide that tool or redirect it to a disposable workspace.
+  const sandboxParams = {
+    config: params.config,
+    execOverrides: params.execOverrides,
+    sessionKey: sandboxSessionKey,
+    skillsSnapshot: params.skillsSnapshot,
+    workspaceDir: resolvedWorkspace,
+  };
   const sandbox = params.skillWorkshopCollectionReconcile
     ? null
-    : await resolveSandboxContext({
-        config: params.config,
-        execOverrides: params.execOverrides,
-        sessionKey: sandboxSessionKey,
-        skillsSnapshot: params.skillsSnapshot,
-        workspaceDir: resolvedWorkspace,
-      });
+    : await resolveSandboxContext(sandboxParams);
   const effectiveWorkspace =
     sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? sandbox.workspaceDir : resolvedWorkspace;
   const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
@@ -476,9 +477,13 @@ export function prepareEmbeddedAttemptSkills(params: {
   sandbox: AttemptSetup["sandbox"];
   sessionAgentId: string;
 }) {
+  let restoreApplied = () => {};
+  const restoreSkillEnv = () => {
+    restoreApplied();
+  };
   if (params.attempt.operation === "settled-tool-finalization") {
     return {
-      restoreSkillEnv: () => {},
+      restoreSkillEnv,
       skillUsagePaths: undefined,
       skillsPrompt: "",
       skillsSnapshotForRun: undefined,
@@ -496,24 +501,24 @@ export function prepareEmbeddedAttemptSkills(params: {
     effectiveWorkspace: params.effectiveWorkspace,
     skillsSnapshot: params.attempt.skillsSnapshot,
   });
-  const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
-    workspaceDir: skillsWorkspaceDir,
-    config: params.attempt.config,
-    agentId: params.sessionAgentId,
-    eligibility: skillsEligibility,
-    skillsSnapshot,
-    workspaceOnly,
-  });
-  const restoreSkillEnv = skillsSnapshot
-    ? applySkillEnvOverridesFromSnapshot({
-        snapshot: skillsSnapshot,
-        config: params.attempt.config,
-      })
-    : applySkillEnvOverrides({
-        skills: skillEntries ?? [],
-        config: params.attempt.config,
-      });
   try {
+    const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
+      workspaceDir: skillsWorkspaceDir,
+      config: params.attempt.config,
+      agentId: params.sessionAgentId,
+      eligibility: skillsEligibility,
+      skillsSnapshot,
+      workspaceOnly,
+    });
+    restoreApplied = skillsSnapshot
+      ? applySkillEnvOverridesFromSnapshot({
+          snapshot: skillsSnapshot,
+          config: params.attempt.config,
+        })
+      : applySkillEnvOverrides({
+          skills: skillEntries ?? [],
+          config: params.attempt.config,
+        });
     const promptSkillEntries = mapSandboxSkillEntriesForPrompt({
       entries: shouldLoadSkillEntries ? skillEntries : undefined,
       skillsWorkspaceDir,

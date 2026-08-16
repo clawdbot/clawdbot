@@ -410,9 +410,12 @@ export function findSkillUsageMatch(params: {
   if (params.toolName !== "read") {
     return undefined;
   }
-  const skillPaths = params.ctx?.skillsSnapshot?.resolvedSkills?.length
-    ? skillInstructionPaths(params.ctx.skillsSnapshot)
-    : materializedSkillInstructionPaths(params.ctx?.skillUsagePaths);
+  // Usage paths own readPath → canonical skillFile. Remapped snapshot
+  // filePaths are generation locations and must not replace that identity.
+  const skillPaths = skillInstructionPaths(params.ctx?.skillsSnapshot);
+  for (const [readPath, match] of materializedSkillInstructionPaths(params.ctx?.skillUsagePaths)) {
+    skillPaths.set(readPath, match);
+  }
   for (const candidate of readToolPathCandidates(params.toolParams, params.ctx)) {
     const match = skillPaths.get(candidate);
     if (match) {

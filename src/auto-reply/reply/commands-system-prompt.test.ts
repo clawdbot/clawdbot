@@ -10,6 +10,7 @@ import {
   ensureSandboxWorkspaceForSession,
   resolveSandboxRuntimeStatus,
 } from "../../agents/sandbox.js";
+import { attachPublishedSandboxSkills } from "../../agents/sandbox/published-skills-handoff.js";
 import { buildSystemPromptParams } from "../../agents/system-prompt-params.js";
 import { buildAgentSystemPrompt } from "../../agents/system-prompt.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
@@ -342,6 +343,37 @@ describe("resolveCommandsSystemPromptBundle", () => {
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("uses the published sandbox catalog for command prompt inspection", async () => {
+    const sandboxWorkspace = {
+      workspaceDir: "/tmp/workspace",
+      containerWorkdir: "/workspace",
+      skillsWorkspaceDir: "/tmp/sandbox-skills",
+      workspaceAccess: "rw" as const,
+    };
+    const publishedLocation = "/workspace/.openclaw/sandbox-skills/skills/gog/SKILL.md";
+    attachPublishedSandboxSkills(sandboxWorkspace, {
+      prompt: [
+        "<available_skills>",
+        "  <skill>",
+        "    <name>gog</name>",
+        `    <location>${publishedLocation}</location>`,
+        "  </skill>",
+        "</available_skills>",
+      ].join("\n"),
+      skills: [{ name: "gog" }],
+      resolvedSkills: [],
+    });
+    vi.mocked(resolveSandboxRuntimeStatus).mockReturnValue({
+      sandboxed: true,
+      mode: "workspace-write",
+    } as never);
+    vi.mocked(ensureSandboxWorkspaceForSession).mockResolvedValue(sandboxWorkspace as never);
+
+    const result = await resolveCommandsSystemPromptBundle(makeParams());
+
+    expect(result.skillsPrompt).toContain(publishedLocation);
   });
 
   it("preserves host skill snapshots for custom backends without a declared workdir", async () => {

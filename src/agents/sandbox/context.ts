@@ -23,6 +23,7 @@ import { resolveSandboxConfigForAgent } from "./config.js";
 import { resolveSandboxDockerUser } from "./docker-user.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
 import { toSandboxProvisioningError } from "./provisioning-error.js";
+import { attachPublishedSandboxSkills } from "./published-skills-handoff.js";
 import { readRegisteredSandboxRuntimeIds, updateRegistry } from "./registry.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
 import { assertSshSandboxSecretOwnerAvailable } from "./secret-owner.js";
@@ -43,7 +44,11 @@ async function syncSandboxSkillsToWorkspace(params: {
   rawSessionKey: string;
   execOverrides?: ExecPolicyOverrides;
   skillsSnapshot?: SkillSnapshot;
-}): Promise<{ eligibility?: SkillEligibilityContext; skillUsagePaths?: SkillUsagePath[] }> {
+}): Promise<{
+  eligibility?: SkillEligibilityContext;
+  skillUsagePaths?: SkillUsagePath[];
+  skillsSnapshot?: SkillSnapshot;
+}> {
   try {
     const [syncWorkspaceSkills, { getRemoteSkillEligibility }, { resolveNodeExecEligibility }] =
       await Promise.all([
@@ -63,7 +68,7 @@ async function syncSandboxSkillsToWorkspace(params: {
         advertiseExecNode: nodeSkills.canExec,
       }),
     };
-    const skillUsagePaths = await syncWorkspaceSkills({
+    const synced = await syncWorkspaceSkills({
       sourceWorkspaceDir: params.sourceWorkspaceDir,
       targetWorkspaceDir: params.targetWorkspaceDir,
       config: params.config,
@@ -71,7 +76,11 @@ async function syncSandboxSkillsToWorkspace(params: {
       eligibility,
       skillsSnapshot: params.skillsSnapshot,
     });
-    return { eligibility, skillUsagePaths };
+    return {
+      eligibility,
+      skillUsagePaths: synced.skillUsagePaths,
+      skillsSnapshot: synced.skillsSnapshot,
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : JSON.stringify(error);
     defaultRuntime.error?.(`Sandbox skill sync failed: ${message}`);
@@ -94,6 +103,7 @@ async function ensureSandboxWorkspaceLayout(params: {
   skillsWorkspaceDir: string;
   skillsEligibility?: SkillEligibilityContext;
   skillUsagePaths?: SkillUsagePath[];
+  publishedSkills?: SkillSnapshot;
   workspaceDir: string;
 }> {
   const { cfg, rawSessionKey } = params;
@@ -142,6 +152,7 @@ async function ensureSandboxWorkspaceLayout(params: {
     skillsWorkspaceDir,
     ...(syncedSkills.eligibility ? { skillsEligibility: syncedSkills.eligibility } : {}),
     ...(syncedSkills.skillUsagePaths ? { skillUsagePaths: syncedSkills.skillUsagePaths } : {}),
+    ...(syncedSkills.skillsSnapshot ? { publishedSkills: syncedSkills.skillsSnapshot } : {}),
     workspaceDir,
   };
 }
@@ -232,6 +243,7 @@ async function resolveProvisionedSandboxContext(
     skillUsagePaths,
     skillsWorkspaceDir,
     workspaceDir,
+    publishedSkills,
   } = await ensureSandboxWorkspaceLayout({
     cfg,
     agentId: runtime.agentId,
@@ -342,18 +354,15 @@ async function resolveProvisionedSandboxContext(
     backend.createFsBridge?.({ sandbox: sandboxContext }) ??
     createSandboxFsBridge({ sandbox: sandboxContext });
 
+  if (publishedSkills) {
+    attachPublishedSandboxSkills(sandboxContext, publishedSkills);
+  }
   return sandboxContext;
 }
 
-export async function resolveSandboxContext(params: {
-  config?: OpenClawConfig;
-  agentId?: string;
-  execOverrides?: ExecPolicyOverrides;
-  requireCurrentConfig?: boolean;
-  sessionKey?: string;
-  skillsSnapshot?: SkillSnapshot;
-  workspaceDir?: string;
-}): Promise<SandboxContext | null> {
+export async function resolveSandboxContext(
+  params: ResolveSandboxContextParams,
+): Promise<SandboxContext | null> {
   const resolved = resolveSandboxSession(params);
   if (!resolved) {
     return null;
@@ -388,6 +397,7 @@ export async function ensureSandboxWorkspaceForSession(params: {
     skillUsagePaths,
     skillsWorkspaceDir,
     workspaceDir,
+    publishedSkills,
   } = await ensureSandboxWorkspaceLayout({
     cfg,
     agentId: runtime.agentId,
@@ -404,7 +414,7 @@ export async function ensureSandboxWorkspaceForSession(params: {
     agentWorkspaceDir,
     skillsWorkspaceDir,
   });
-  return {
+  const sandboxWorkspace: SandboxWorkspaceInfo = {
     workspaceDir,
     ...(containerWorkdir ? { containerWorkdir } : {}),
     skillsWorkspaceDir,
@@ -412,4 +422,8 @@ export async function ensureSandboxWorkspaceForSession(params: {
     ...(skillUsagePaths ? { skillUsagePaths } : {}),
     workspaceAccess: cfg.workspaceAccess,
   };
+  if (publishedSkills) {
+    attachPublishedSandboxSkills(sandboxWorkspace, publishedSkills);
+  }
+  return sandboxWorkspace;
 }

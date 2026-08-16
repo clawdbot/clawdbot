@@ -4,15 +4,28 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import type { SkillUsagePath } from "../skills/types.js";
+import type { SkillSnapshot, SkillUsagePath } from "../skills/types.js";
 import { registerSandboxBackend } from "./sandbox/backend.js";
 import { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandbox/context.js";
 import { isSandboxProvisioningError } from "./sandbox/provisioning-error.js";
+import { readPublishedSandboxSkills } from "./sandbox/published-skills-handoff.js";
 
 const updateRegistryMock = vi.hoisted(() => vi.fn());
 const readRegisteredSandboxRuntimeIdsMock = vi.hoisted(() => vi.fn(async () => [] as string[]));
 const syncSkillsToWorkspaceMock = vi.hoisted(() =>
-  vi.fn<() => Promise<SkillUsagePath[]>>(async () => []),
+  vi.fn(
+    async (): Promise<{
+      skillUsagePaths: SkillUsagePath[];
+      skillsSnapshot: SkillSnapshot;
+    }> => ({
+      skillUsagePaths: [],
+      skillsSnapshot: {
+        prompt: "",
+        skills: [],
+        resolvedSkills: [],
+      },
+    }),
+  ),
 );
 const ensureSandboxBrowserMock = vi.hoisted(() => vi.fn(async () => null));
 const resolveNodeExecEligibilityMock = vi.hoisted(() => vi.fn(() => ({ canExec: false })));
@@ -287,6 +300,7 @@ describe("resolveSandboxContext", () => {
       expect(syncSkillsToWorkspaceMock).toHaveBeenCalledWith(
         expect.objectContaining({ skillsSnapshot }),
       );
+      expect(result).not.toHaveProperty("skillsSnapshot");
 
       const workspace = await ensureSandboxWorkspaceForSession({
         config: cfg,
@@ -744,7 +758,15 @@ describe("resolveSandboxContext", () => {
         skillSource: "workspace" as const,
       },
     ];
-    syncSkillsToWorkspaceMock.mockResolvedValueOnce(skillUsagePaths);
+    const skillsSnapshot = {
+      prompt: "<available_skills></available_skills>",
+      skills: [{ name: "demo" }],
+      resolvedSkills: [],
+    } satisfies SkillSnapshot;
+    syncSkillsToWorkspaceMock.mockResolvedValueOnce({
+      skillUsagePaths,
+      skillsSnapshot,
+    });
 
     const cfg: OpenClawConfig = {
       agents: {
@@ -790,6 +812,47 @@ describe("resolveSandboxContext", () => {
       remote: { note: "test-remote" },
     });
     expect(result.skillUsagePaths).toEqual(skillUsagePaths);
+  }, 15_000);
+
+  it("carries the published catalog on session workspace objects", async () => {
+    syncSkillsToWorkspaceMock.mockClear();
+    const bundledDir = await createSandboxFixtureDir("bundled");
+    const workspaceDir = await createSandboxFixtureDir("workspace");
+    const skillsSnapshot = {
+      prompt: "<available_skills></available_skills>",
+      skills: [{ name: "demo" }],
+      resolvedSkills: [],
+    } satisfies SkillSnapshot;
+    syncSkillsToWorkspaceMock.mockResolvedValueOnce({
+      skillUsagePaths: [],
+      skillsSnapshot,
+    });
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            scope: "session",
+            workspaceAccess: "ro",
+            workspaceRoot: path.join(bundledDir, "sandboxes"),
+          },
+        },
+      },
+    };
+
+    const result = await ensureSandboxWorkspaceForSession({
+      config: cfg,
+      sessionKey: "agent:main:main",
+      workspaceDir,
+    });
+
+    if (!result) {
+      throw new Error("expected sandbox workspace resolution");
+    }
+    expect(readPublishedSandboxSkills(result)).toEqual(skillsSnapshot);
+    // The catalog rides the opaque handoff, never the public workspace shape.
+    expect(result).not.toHaveProperty("skillsSnapshot");
   }, 15_000);
 
   it("materializes skills into a hidden read-only workspace for writable sandboxes", async () => {

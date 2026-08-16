@@ -1598,6 +1598,19 @@ describe("before_tool_call loop detection behavior", () => {
       agentId: "main",
       sessionKey: "session-key",
       workspaceDir,
+      skillsSnapshot: {
+        prompt: "",
+        skills: [{ name: "demo" }],
+        resolvedSkills: [
+          createCanonicalFixtureSkill({
+            name: "demo",
+            description: "Demo",
+            filePath: readPath,
+            baseDir: path.dirname(readPath),
+            source: "workspace",
+          }),
+        ],
+      },
       skillUsagePaths: [
         {
           readPath,
@@ -1626,6 +1639,7 @@ describe("before_tool_call loop detection behavior", () => {
         toolName: "read",
       });
       expect(JSON.stringify(emitted[1])).not.toContain(skillFile);
+      expect(JSON.stringify(emitted[1])).not.toContain(readPath);
       expect(privateData[0]?.skillUsage?.skillFile).toBe(skillFile);
     });
   });

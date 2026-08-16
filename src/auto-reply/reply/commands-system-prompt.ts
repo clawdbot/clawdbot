@@ -5,10 +5,7 @@ import { createOpenClawCodingTools } from "../../agents/agent-tools.js";
 import { resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
 import type { EmbeddedContextFile } from "../../agents/embedded-agent-helpers.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/embedded-agent-runner/sandbox-info.js";
-import {
-  mapSandboxSkillEntriesForPrompt,
-  resolveSandboxSkillRuntimeInputs,
-} from "../../agents/embedded-agent-runner/sandbox-skills.js";
+import { resolveSandboxedWorkspaceSkillsPrompt } from "../../agents/embedded-agent-runner/sandbox-skills.js";
 import { resolveNodeExecEligibility } from "../../agents/exec-defaults.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../../agents/prompt-surface.js";
@@ -21,8 +18,6 @@ import { buildConfiguredAgentSystemPrompt } from "../../agents/system-prompt-con
 import { buildSystemPromptParams } from "../../agents/system-prompt-params.js";
 import type { WorkspaceBootstrapFile } from "../../agents/workspace.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
-import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
-import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
 import type { SkillEligibilityContext } from "../../skills/types.js";
@@ -92,48 +87,10 @@ async function resolveCommandSkillsPrompt(params: {
         return "";
       }
       if (sandboxWorkspace.containerWorkdir) {
-        const {
-          skillsEligibility,
-          skillsPromptWorkspaceDir,
-          skillsSnapshot: skillsSnapshotForRun,
-          skillsWorkspaceDir,
-          workspaceOnly,
-        } = resolveSandboxSkillRuntimeInputs({
-          sandbox: {
-            enabled: true,
-            containerWorkdir: sandboxWorkspace.containerWorkdir,
-            ...(sandboxWorkspace.skillsEligibility
-              ? { skillsEligibility: sandboxWorkspace.skillsEligibility }
-              : {}),
-            ...(sandboxWorkspace.skillsWorkspaceDir
-              ? { skillsWorkspaceDir: sandboxWorkspace.skillsWorkspaceDir }
-              : {}),
-            ...(sandboxWorkspace.workspaceAccess
-              ? { workspaceAccess: sandboxWorkspace.workspaceAccess }
-              : {}),
-          },
-          effectiveWorkspace: sandboxWorkspace.workspaceDir,
-        });
-        const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
-          workspaceDir: skillsWorkspaceDir,
-          config: params.config,
+        return resolveSandboxedWorkspaceSkillsPrompt({
           agentId: params.agentId,
-          eligibility: skillsEligibility,
-          skillsSnapshot: skillsSnapshotForRun,
-          workspaceOnly,
-        });
-        const promptSkillEntries = mapSandboxSkillEntriesForPrompt({
-          entries: shouldLoadSkillEntries ? skillEntries : undefined,
-          skillsWorkspaceDir,
-          skillsPromptWorkspaceDir,
-        });
-        return resolveSkillsPrompt({
-          skillsSnapshot: skillsSnapshotForRun,
-          entries: promptSkillEntries,
           config: params.config,
-          workspaceDir: skillsPromptWorkspaceDir,
-          agentId: params.agentId,
-          eligibility: skillsEligibility,
+          workspace: sandboxWorkspace,
         });
       }
       // Existing third-party backends may not expose the optional workdir
