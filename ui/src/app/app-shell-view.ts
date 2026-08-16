@@ -274,6 +274,10 @@ export function renderApplicationShell(host: ShellViewHost) {
   const custodianPanelAvailable =
     gatewayConnected && isGatewayMethodAdvertised(gatewaySnapshot, "openclaw.chat") === true;
   const activeRoute = host.routeState.routeId ?? "chat";
+  // Chat has an explicit offline outbox. Other pages cannot submit useful
+  // work while disconnected, so keep their visible controls honest.
+  const pageActionsBlocked =
+    gatewaySnapshot.phase === "reload-required" || (!gatewayConnected && activeRoute !== "chat");
   // Plugin tabs share one route; the search picks the active item.
   const activePluginRef =
     activeRoute === "plugin"
@@ -595,7 +599,14 @@ export function renderApplicationShell(host: ShellViewHost) {
           onRefresh: () => host.refreshControlUi(),
           onHoldUpdate: () => context.overlays.holdUpdate(),
         })}
+        ${pageActionsBlocked && gatewaySnapshot.phase !== "reload-required"
+          ? html`<div class="connection-action-block" role="status" aria-live="polite">
+              ${t("connection.actionsUnavailable")}
+            </div>`
+          : nothing}
         <openclaw-router-outlet
+          ?inert=${pageActionsBlocked}
+          aria-disabled=${pageActionsBlocked ? "true" : nothing}
           .router=${runtime.router}
           .retryContext=${context}
           .onNotFound=${() => host.replaceChatWithCurrentSession()}

@@ -209,6 +209,7 @@ export function renderExecApprovalCard(props: ExecApprovalCardProps) {
         return html`<button
           class=${decisionClass(decision)}
           type="button"
+          aria-label=${label}
           ?disabled=${props.busy}
           title=${props.variant === "modal" ? `${label} (${decisionShortcut(decision)})` : label}
           @click=${() => props.onDecision(active.id, decision)}

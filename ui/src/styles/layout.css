@@ -3867,6 +3867,15 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   margin-top: 8px;
 }
 
+.connection-action-block {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--secondary);
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .content--chat {
   display: flex;
   flex-direction: column;

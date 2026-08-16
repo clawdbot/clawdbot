@@ -3750,6 +3750,7 @@ export const en: TranslationMap = {
     queuedCount: "{count} queued",
     reconnecting: "Reconnecting…",
     retryNow: "Retry now",
+    actionsUnavailable: "Actions are unavailable while the Gateway reconnects.",
     scopeUpgrade: {
       limited: "This browser has limited access.",
       guidance:

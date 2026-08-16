@@ -287,8 +287,9 @@ export class OpenClawApp extends OpenClawLightDomElement {
         </openclaw-tooltip-provider>
       `;
     }
-    const showLoginGate =
-      !gatewayConnected && (this.loginGatePinned || gatewaySnapshot.phase !== "reconnecting");
+    const shellOwnsRecovery =
+      gatewaySnapshot.phase === "reconnecting" || gatewaySnapshot.phase === "reload-required";
+    const showLoginGate = !gatewayConnected && !shellOwnsRecovery;
     if (showLoginGate) {
       return html`
         <openclaw-tooltip-provider>

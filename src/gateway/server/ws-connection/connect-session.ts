@@ -332,7 +332,11 @@ export async function attachAuthenticatedGatewayConnect(
     });
     sendHandshakeErrorResponse(ErrorCodes.UNAVAILABLE, message, {
       retryable: false,
-      details: { code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH },
+      details: {
+        code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+        gatewayBuildId: controlUiBuildMismatch.gatewayBuildId,
+        reloadRequired: true,
+      },
     });
     logWsControl.warn(
       `control ui build rejected conn=${connId} clientBuild=${formatForLog(controlUiBuildMismatch.clientBuildId ?? "legacy")} gatewayBuild=${formatForLog(controlUiBuildMismatch.gatewayBuildId)}; reload required`,
