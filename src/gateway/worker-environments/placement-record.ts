@@ -23,6 +23,18 @@ export type WorkerSessionTurnClaim = {
   owner: WorkerSessionTurnOwner;
 };
 
+export function placementTurnOwner(placement: {
+  executionMode: WorkerPlacementExecutionMode;
+  environmentId: string;
+  activeOwnerEpoch: number;
+}): WorkerSessionTurnOwner {
+  return {
+    kind: placement.executionMode === "remote-exec" ? "local" : "worker",
+    environmentId: placement.environmentId,
+    ownerEpoch: placement.activeOwnerEpoch,
+  };
+}
+
 export type PersistedTurnClaim =
   | {
       owner: "local";

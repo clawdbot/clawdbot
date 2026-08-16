@@ -1,5 +1,5 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { WorkerPlacementExecutionMode } from "./placement-record.js";
+import { placementTurnOwner, type WorkerPlacementExecutionMode } from "./placement-record.js";
 import type {
   createWorkerSessionPlacementStore,
   WorkerSessionPlacementRecord,
@@ -44,6 +44,7 @@ export type WorkerDispatchPlacementStore = Pick<
   | "listPendingWorkspaceResults"
   | "markWorkspaceResultPending"
   | "workspaceResultInstanceId"
+  | "validateWorkspaceResultClaim"
   | "recordStagedWorkspaceResult"
   | "recordWorkspaceResultConflict"
   | "acceptWorkspaceResult"
@@ -235,18 +236,7 @@ export function createPlacementFailureActions(deps: {
         claimId: current.turnClaim.claimId,
         runId: current.turnClaim.runId,
         placementGeneration: current.turnClaim.generation,
-        owner:
-          current.turnClaim.owner === "worker"
-            ? {
-                kind: "worker",
-                environmentId: current.environmentId,
-                ownerEpoch: current.turnClaim.ownerEpoch,
-              }
-            : {
-                kind: "local",
-                environmentId: current.environmentId,
-                ownerEpoch: current.activeOwnerEpoch,
-              },
+        owner: placementTurnOwner(current),
       });
     }
     const reconciling = startReconcile(current);

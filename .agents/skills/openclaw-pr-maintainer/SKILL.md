@@ -332,8 +332,9 @@ gh search issues --repo openclaw/openclaw --match title,body --limit 50 \
   Tests that source `scripts/pr-lib/*` directly must provide the same command
   surface instead of weakening the production wrapper for a minimal test image.
 - Classify source trust before executing code-changing or landing proof; acquire
-  the safe backend lazily through `$crabbox` at the first heavy proof, never
-  pre-warm it at task start. Trusted maintainer code defaults to Blacksmith Testbox;
+  a safe remote backend lazily through `$crabbox` only when the current host
+  gate requires one; never pre-warm it at task start. Trusted maintainer code
+  runs suitable proof on a dedicated Linux worker and otherwise defaults to Blacksmith Testbox;
   contributor/fork code stays untrusted unless a maintainer explicitly approves
   credentialed execution after review; it uses secretless fork CI or
   sanitized direct AWS Crabbox with `CRABBOX_ENV_ALLOW=CI`,

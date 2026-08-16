@@ -150,7 +150,8 @@ work, copy the DB into a dev state dir first.
 - Worker/dist/lazy import/package surface: targeted tests plus `pnpm build`.
 - Live provider/model behavior: same provider/model with debug flags and a real
   key if available.
-- Docker/package/Linux/CI-parity: `$crabbox`.
+- Docker/package/Linux/CI-parity: current dedicated Linux worker when capable;
+  otherwise `$crabbox`.
 - CI failure: exact SHA, relevant job only, logs only after failure/completion.
 
 ## Output Habit
