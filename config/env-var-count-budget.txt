@@ -1,5 +1,5 @@
 # Distinct OPENCLAW_* names in production source under src, packages, and extensions.
 # Ratchet: lower this number when cleanup removes names; never raise it without owner approval.
-# One-time owner-approved increase: 502 -> 503.
-# One atomic private CUA driver endpoint replaces two uncounted split facts.
-503
+# Worker bundle installation no longer injects OPENCLAW_STATE_DIR into a remote npm process.
+# The retired compile-time version define no longer contributes OPENCLAW_VERSION.
+501

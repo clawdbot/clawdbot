@@ -8,12 +8,23 @@ import {
   TSDOWN_UNIFIED_CONFIG_GROUP,
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
 } from "../../scripts/lib/tsdown-config-groups.mts";
+import { WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID } from "../../scripts/lib/worker-deploy-build-plugin.mts";
 import config from "../../tsdown.config.ts";
 
 const configs = Array.isArray(config) ? config : [config];
 
 type TsdownConfig = (typeof configs)[number];
 type OutExtensions = NonNullable<TsdownConfig["outExtensions"]>;
+
+function isWorkerDeployConfig(config: TsdownConfig): boolean {
+  const entry = config.entry;
+  if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+    return false;
+  }
+  return (
+    (entry as Record<string, unknown>)["worker/worker"] === "src/worker/worker-deploy-entry.ts"
+  );
+}
 
 describe("tsdown config", () => {
   it.each(["tsdown.config.ts", "tsdown.ai.config.ts"])(
@@ -85,8 +96,60 @@ describe("tsdown config", () => {
     expect(privateDeclarationSources).toContain("src/plugin-sdk/tts-runtime.ts");
   });
 
+  it("builds one worker-only executable with every package dependency bundled", () => {
+    const workerConfig = configs.find(isWorkerDeployConfig);
+    expect(workerConfig?.entry).toEqual({
+      "worker/worker": "src/worker/worker-deploy-entry.ts",
+    });
+    expect(workerConfig?.dts).toBe(false);
+    const packageVersion = (
+      JSON.parse(fs.readFileSync("package.json", "utf8")) as {
+        version: string;
+      }
+    ).version;
+    expect(workerConfig?.define).toEqual({
+      WORKER_DEPLOY_BUILD: "true",
+      WORKER_DEPLOY_VERSION: JSON.stringify(packageVersion),
+    });
+    expect(workerConfig?.alias).toMatchObject({
+      bufferutil: WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+      "chromium-bidi/lib/cjs/bidiMapper/BidiMapper": WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+      "chromium-bidi/lib/cjs/cdp/CdpConnection": WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+      "electron/index.js": WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+      fsevents: WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+      kerberos: WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+      "utf-8-validate": WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+    });
+    expect(workerConfig?.outDir).toBe("dist");
+    expect(workerConfig?.shims).toBe(true);
+    expect(workerConfig?.plugins).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: "openclaw:worker-deploy" })]),
+    );
+    expect(workerConfig?.outputOptions).toMatchObject({
+      codeSplitting: false,
+      assetFileNames: "worker/[name][extname]",
+    });
+    expect(workerConfig?.deps?.onlyBundle).toBe(false);
+    expect(workerConfig?.deps?.alwaysBundle).toBeTypeOf("function");
+    const alwaysBundle = workerConfig?.deps?.alwaysBundle;
+    if (typeof alwaysBundle !== "function") {
+      throw new Error("worker deploy config must define dependency bundling");
+    }
+    expect(alwaysBundle("json5", undefined)).toBe(true);
+    expect(alwaysBundle("node:fs", undefined)).toBe(false);
+
+    const context = {
+      format: "es",
+      options: {},
+      pkgType: "module",
+    } as Parameters<OutExtensions>[0];
+    expect(workerConfig?.outExtensions?.(context)).toEqual({ js: ".mjs", dts: ".d.ts" });
+  });
+
   it("keeps node package artifacts on the declared js and dts extensions", () => {
-    const nodePackageConfigs = configs.filter((entry) => entry.fixedExtension === false);
+    const nodePackageConfigs = configs.filter(
+      (entry) => entry.fixedExtension === false && !isWorkerDeployConfig(entry),
+    );
     expect(nodePackageConfigs).not.toHaveLength(0);
 
     const context = {

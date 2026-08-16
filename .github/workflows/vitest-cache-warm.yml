@@ -58,4 +58,9 @@ jobs:
           EOF
 
       - name: Warm transform and compile caches
+        env:
+          # Match the CI shard lanes running the same envelopes: without the
+          # raised ceiling a heavy suite's worker can die under default heap
+          # (run 31874567859), skipping every cache save for the day.
+          NODE_OPTIONS: --max-old-space-size=8192
         run: node --import tsx scripts/ci-run-node-test-shard.mts

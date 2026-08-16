@@ -1,6 +1,7 @@
 import { chmod, mkdtemp, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import type { WorkerBrowserRuntime } from "./browser-runtime.js";
 import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
 import {
@@ -51,6 +52,7 @@ export async function runWorkerDescriptor(
   options: {
     signal?: AbortSignal;
     onConnectionFailure?: (cause: string | undefined) => void;
+    browserRuntime?: WorkerBrowserRuntime;
   } = {},
 ): Promise<WorkerRuntimeResult> {
   const workspaceDir = await assertWorkspaceDirectory(descriptor.assignment.workspaceDir);
@@ -146,6 +148,7 @@ export async function runWorkerDescriptor(
         inferenceOptions: descriptor.assignment.inferenceOptions,
         allowedToolNames: descriptor.assignment.toolAuthority.allowedToolNames,
         ...(descriptor.assignment.browser ? { browser: descriptor.assignment.browser } : {}),
+        ...(options.browserRuntime ? { browserRuntime: options.browserRuntime } : {}),
         inference: { stream },
         transcript: {
           commit: async (messages) => {

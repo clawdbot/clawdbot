@@ -1,3 +1,4 @@
+import type { RuntimeTargetIssue } from "../../packages/gateway-protocol/src/schema/environments.js";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
 import type { ComputerUseCapabilityDescriptor } from "../plugins/computer-use-contract.js";
 
@@ -22,6 +23,7 @@ export type NodeListNode = {
   computerUse?: ComputerUseCapabilityDescriptor;
   /** Connected node currently advertises full worker session hosting. */
   sessionHost?: boolean;
+  issues?: readonly RuntimeTargetIssue[];
   nodePluginTools?: NodePluginToolDescriptor[];
   permissions?: Record<string, boolean>;
   approvalState?: "approved" | "pending-approval" | "pending-reapproval" | "unapproved";
