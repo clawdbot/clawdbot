@@ -759,7 +759,6 @@ extensions/memory-core/src/memory/manager-embedding-cache.ts	1
 extensions/memory-core/src/memory/manager-embedding-errors.ts	2
 extensions/memory-core/src/memory/manager-embedding-ops.ts	2
 extensions/memory-core/src/memory/manager-keyword-retrieval.ts	1
-extensions/memory-core/src/memory/manager-reindex-lock.ts	1
 extensions/memory-core/src/memory/manager-search-orchestration.ts	3
 extensions/memory-core/src/memory/manager-search.ts	12
 extensions/memory-core/src/memory/manager-source-state.ts	2
