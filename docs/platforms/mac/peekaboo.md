@@ -96,7 +96,7 @@ owner.
 
 The elevation archive is Foundation-signed, notarized, stapled, named by the full OpenClaw and Peekaboo source
 commits, and contains exactly `OpenClaw.app`. Its receipt binds the archive and portable-installer names and digests,
-OpenClaw and Peekaboo source revisions, signer, CDHash, architectures, entitlement digests, and Apple notarization
+OpenClaw and Peekaboo source revisions, signer, per-architecture CDHashes, architectures, entitlement digests, and Apple notarization
 submission ID. No AppleScript or Apple Events entitlement is part of this workflow.
 
 ## Client discovery order

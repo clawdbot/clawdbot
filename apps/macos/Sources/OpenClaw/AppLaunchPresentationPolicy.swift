@@ -1,4 +1,35 @@
+import Darwin
 import Foundation
+
+enum ElevationExclusiveRename {
+    static let argument = "--elevation-rename-exclusive"
+
+    static func runIfRequested(arguments: [String] = CommandLine.arguments) -> Int32? {
+        guard arguments.dropFirst().first == self.argument else { return nil }
+        guard arguments.count == 4 else {
+            fputs("OpenClaw elevation rename requires absolute source and destination paths\n", stderr)
+            return 2
+        }
+        let source = arguments[2]
+        let destination = arguments[3]
+        guard source.hasPrefix("/"), destination.hasPrefix("/") else {
+            fputs("OpenClaw elevation rename paths must be absolute\n", stderr)
+            return 2
+        }
+
+        let result = source.withCString { sourcePath in
+            destination.withCString { destinationPath in
+                renamex_np(sourcePath, destinationPath, UInt32(RENAME_EXCL))
+            }
+        }
+        guard result == 0 else {
+            let code = errno
+            fputs("OpenClaw elevation rename failed: \(String(cString: strerror(code)))\n", stderr)
+            return 1
+        }
+        return 0
+    }
+}
 
 struct AppLaunchRuntimePlan: Equatable {
     enum Mode: Equatable {

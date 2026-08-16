@@ -4,6 +4,35 @@ import Testing
 @testable import OpenClaw
 
 struct AppLaunchRuntimePlanTests {
+    @Test func `elevation rename is exclusive and source preserving on conflict`() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-elevation-rename-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        let source = root.appendingPathComponent("source", isDirectory: true)
+        let destination = root.appendingPathComponent("destination", isDirectory: true)
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: false)
+        var applicationConstructed = false
+        let moved = try #require(OpenClawProcessEntrypoint.run(
+            arguments: ["OpenClaw", ElevationExclusiveRename.argument, source.path, destination.path],
+            launchApplication: { applicationConstructed = true }))
+        #expect(moved == 0)
+        #expect(!applicationConstructed)
+        #expect(!FileManager.default.fileExists(atPath: source.path))
+        #expect(FileManager.default.fileExists(atPath: destination.path))
+
+        let conflictingSource = root.appendingPathComponent("conflicting-source", isDirectory: true)
+        try FileManager.default.createDirectory(at: conflictingSource, withIntermediateDirectories: false)
+        let rejected = try #require(OpenClawProcessEntrypoint.run(
+            arguments: ["OpenClaw", ElevationExclusiveRename.argument, conflictingSource.path, destination.path],
+            launchApplication: { applicationConstructed = true }))
+        #expect(rejected != 0)
+        #expect(!applicationConstructed)
+        #expect(FileManager.default.fileExists(atPath: conflictingSource.path))
+        #expect(FileManager.default.fileExists(atPath: destination.path))
+    }
+
     @Test func `normal launches allow automatic presentation`() {
         let policy = AppLaunchRuntimePlan(arguments: ["OpenClaw"])
 

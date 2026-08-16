@@ -37,6 +37,8 @@ AUTHENTICATED_ARCHIVE_PATH=""
 AUTHENTICATED_ARCHIVE_NAME=""
 AUTHENTICATED_RECEIPT_PATH=""
 AUTHENTICATED_INSTALLER_NAME=""
+STAGED_APP_CONTAINER=""
+STAGED_INSTALL_APP_PATH=""
 NOTARY_RESULT_TEMP=""
 CUTOVER_ACTIVE=0
 CUTOVER_COMMITTED=0
@@ -193,6 +195,13 @@ cleanup_artifact_snapshot() {
   ARTIFACT_SNAPSHOT_ROOT=""
 }
 
+cleanup_staged_install_app() {
+  [[ -n "$STAGED_APP_CONTAINER" && -d "$STAGED_APP_CONTAINER" ]] || return 0
+  rm -rf "$STAGED_APP_CONTAINER"
+  STAGED_APP_CONTAINER=""
+  STAGED_INSTALL_APP_PATH=""
+}
+
 cleanup() {
   local exit_code=$?
   set +e
@@ -216,6 +225,7 @@ cleanup() {
   fi
   cleanup_work_root
   cleanup_artifact_snapshot
+  cleanup_staged_install_app
   if [[ -n "$NOTARY_RESULT_TEMP" && -f "$NOTARY_RESULT_TEMP" ]]; then
     rm -f "$NOTARY_RESULT_TEMP"
   fi
@@ -267,6 +277,10 @@ plist_file_value() {
 
 codesign_value() {
   codesign -dv --verbose=4 "$1" 2>&1 | awk -F= -v key="$2" '$1 == key {print $2; exit}'
+}
+
+codesign_value_for_arch() {
+  codesign -dv --verbose=4 --arch "$3" "$1" 2>&1 | awk -F= -v key="$2" '$1 == key {print $2; exit}'
 }
 
 entitlements_for() {
@@ -459,9 +473,10 @@ prepare_authenticated_artifact_inputs() {
     fail 'artifact receipt does not match the authenticated release handoff digest'
   jq -e '
     type == "object" and
-    keys == ["architectures","archive","archiveChecksum","archiveSha256","authority","build","cdhash","entitlementsSha256","installer","installerChecksum","installerSha256","kind","notarizationId","peekabooCommit","schemaVersion","sourceCommit","teamIdentifier","version"] and
+    keys == ["architectures","archive","archiveChecksum","archiveSha256","authority","build","cdhashes","entitlementsSha256","installer","installerChecksum","installerSha256","kind","notarizationId","peekabooCommit","schemaVersion","sourceCommit","teamIdentifier","version"] and
     .schemaVersion == 1 and .kind == "openclaw-elevation-artifact" and
     (.architectures | type == "object" and keys == ["helper","main"]) and
+    (.cdhashes | type == "object" and keys == ["arm64","x86_64"]) and
     (.entitlementsSha256 | type == "object" and keys == ["helper","main"]) and
     (.notarizationId | type == "string" and test("^[0-9a-fA-F-]{36}$"))
   ' "$AUTHENTICATED_RECEIPT_PATH" >/dev/null 2>&1 || fail 'artifact receipt schema is invalid'
@@ -502,14 +517,16 @@ verify_artifact_receipt() {
     fail 'artifact receipt does not match the authenticated release handoff digest'
   jq -e '
     type == "object" and
-    keys == ["architectures","archive","archiveChecksum","archiveSha256","authority","build","cdhash","entitlementsSha256","installer","installerChecksum","installerSha256","kind","notarizationId","peekabooCommit","schemaVersion","sourceCommit","teamIdentifier","version"] and
+    keys == ["architectures","archive","archiveChecksum","archiveSha256","authority","build","cdhashes","entitlementsSha256","installer","installerChecksum","installerSha256","kind","notarizationId","peekabooCommit","schemaVersion","sourceCommit","teamIdentifier","version"] and
     .schemaVersion == 1 and .kind == "openclaw-elevation-artifact" and
     (.architectures | type == "object" and keys == ["helper","main"]) and
+    (.cdhashes | type == "object" and keys == ["arm64","x86_64"]) and
     (.entitlementsSha256 | type == "object" and keys == ["helper","main"]) and
     (.notarizationId | type == "string" and test("^[0-9a-fA-F-]{36}$"))
   ' "$receipt" >/dev/null 2>&1 || fail 'artifact receipt schema is invalid'
 
   local archive_name installer_name archive_sha installer_sha source_commit peekaboo_commit
+  local arm64_cdhash x86_64_cdhash
   archive_name="$AUTHENTICATED_ARCHIVE_NAME"
   installer_name="$AUTHENTICATED_INSTALLER_NAME"
   archive_sha="$(shasum -a 256 "$archive" | awk '{print $1}')"
@@ -533,7 +550,12 @@ verify_artifact_receipt() {
   [[ "$(receipt_string "$receipt" '.build' build)" == "$(plist_value "$app" CFBundleVersion)" ]] || fail 'artifact receipt build mismatch'
   [[ "$(receipt_string "$receipt" '.authority' authority)" == "$(codesign_value "$app" Authority)" ]] || fail 'artifact receipt signing authority mismatch'
   [[ "$(receipt_string "$receipt" '.teamIdentifier' teamIdentifier)" == "$(codesign_value "$app" TeamIdentifier)" ]] || fail 'artifact receipt TeamIdentifier mismatch'
-  [[ "$(receipt_string "$receipt" '.cdhash' cdhash)" == "$(codesign_value "$app" CDHash)" ]] || fail 'artifact receipt CDHash mismatch'
+  arm64_cdhash="$(codesign_value_for_arch "$app" CDHash arm64)"
+  x86_64_cdhash="$(codesign_value_for_arch "$app" CDHash x86_64)"
+  [[ "$(receipt_string "$receipt" '.cdhashes.arm64' cdhashes.arm64)" == "$arm64_cdhash" ]] ||
+    fail 'artifact receipt arm64 CDHash mismatch'
+  [[ "$(receipt_string "$receipt" '.cdhashes.x86_64' cdhashes.x86_64)" == "$x86_64_cdhash" ]] ||
+    fail 'artifact receipt x86_64 CDHash mismatch'
   [[ "$(receipt_string "$receipt" '.architectures.main' architectures.main)" == "$(lipo -archs "$app/Contents/MacOS/OpenClaw")" ]] || fail 'artifact receipt main architecture mismatch'
   [[ "$(receipt_string "$receipt" '.architectures.helper' architectures.helper)" == "$(lipo -archs "$app/Contents/MacOS/openclaw-mlx-tts")" ]] || fail 'artifact receipt helper architecture mismatch'
   [[ "$(receipt_string "$receipt" '.entitlementsSha256.main' entitlementsSha256.main)" == "$(entitlements_for "$app/Contents/MacOS/OpenClaw" | shasum -a 256 | awk '{print $1}')" ]] || fail 'artifact receipt main entitlement mismatch'
@@ -570,6 +592,44 @@ extract_archive() {
     fail 'elevation archive root must contain exactly OpenClaw.app'
   verify_elevation_app "$WORK_ROOT/OpenClaw.app"
   printf -v "$output_variable" '%s' "$WORK_ROOT/OpenClaw.app"
+}
+
+stage_verified_app_for_install() {
+  local source_app="$1" source_commit="$2" peekaboo_commit="$3"
+  cleanup_staged_install_app
+  STAGED_APP_CONTAINER="$(mktemp -d "${APP_PATH}.incoming-${source_commit}.XXXXXX")"
+  STAGED_INSTALL_APP_PATH="$STAGED_APP_CONTAINER/OpenClaw.app"
+  ditto "$source_app" "$STAGED_INSTALL_APP_PATH"
+  verify_elevation_app "$STAGED_INSTALL_APP_PATH"
+  [[ "$(plist_value "$STAGED_INSTALL_APP_PATH" OpenClawGitCommit)" == "$source_commit" ]] ||
+    fail 'same-filesystem staged app source mismatch'
+  [[ "$(plist_value "$STAGED_INSTALL_APP_PATH" PeekabooSourceCommit)" == "$peekaboo_commit" ]] ||
+    fail 'same-filesystem staged Peekaboo source mismatch'
+  verify_artifact_receipt \
+    "$AUTHENTICATED_RECEIPT_PATH" \
+    "$AUTHENTICATED_ARCHIVE_PATH" \
+    "$STAGED_INSTALL_APP_PATH" \
+    "${BASH_SOURCE[0]}"
+}
+
+rename_app_exclusively() {
+  local source="$1" destination="$2" helper=""
+  local candidate
+  # A rollback bundle may predate this private subcommand. Before commit the verified
+  # staged candidate is retained; committed recovery starts at APP and then preserves
+  # that candidate under RECOVERED_FAILED_APP_PATH before restoring an older bundle.
+  for candidate in \
+    "$STAGED_INSTALL_APP_PATH/Contents/MacOS/OpenClaw" \
+    "$RECOVERED_FAILED_APP_PATH/Contents/MacOS/OpenClaw" \
+    "$APP_PATH/Contents/MacOS/OpenClaw"
+  do
+    if [[ -x "$candidate" ]]; then
+      helper="$candidate"
+      break
+    fi
+  done
+  [[ -n "$helper" ]] || return 1
+  "$helper" --elevation-rename-exclusive "$source" "$destination"
 }
 
 render_plist() {
@@ -1245,7 +1305,7 @@ package_host() {
   chmod 444 "$tmp_zip"
 
   local archive_sha installer_sha committed_installer_sha notary_id
-  local main_archs helper_archs main_entitlements helper_entitlements
+  local main_archs helper_archs main_entitlements helper_entitlements arm64_cdhash x86_64_cdhash
   archive_sha="$(shasum -a 256 "$tmp_zip" | awk '{print $1}')"
   local tmp_installer="${installer_path}.tmp.$$"
   cp "$ROOT_DIR/scripts/mac-elevation-host.sh" "$tmp_installer"
@@ -1260,6 +1320,9 @@ package_host() {
   helper_archs="$(lipo -archs "$app/Contents/MacOS/openclaw-mlx-tts")"
   main_entitlements="$(entitlements_for "$app/Contents/MacOS/OpenClaw" | shasum -a 256 | awk '{print $1}')"
   helper_entitlements="$(entitlements_for "$app/Contents/MacOS/openclaw-mlx-tts" | shasum -a 256 | awk '{print $1}')"
+  arm64_cdhash="$(codesign_value_for_arch "$app" CDHash arm64)"
+  x86_64_cdhash="$(codesign_value_for_arch "$app" CDHash x86_64)"
+  [[ -n "$arm64_cdhash" && -n "$x86_64_cdhash" ]] || fail 'could not resolve per-architecture app CDHashes'
   mv "$tmp_zip" "$zip_path"
   mv "$tmp_installer" "$installer_path"
   jq -n \
@@ -1277,13 +1340,14 @@ package_host() {
     --arg build "$(plist_value "$app" CFBundleVersion)" \
     --arg authority "$EXPECTED_AUTHORITY" \
     --arg teamIdentifier "$EXPECTED_TEAM_ID" \
-    --arg cdhash "$(codesign_value "$app" CDHash)" \
+    --arg arm64CDHash "$arm64_cdhash" \
+    --arg x8664CDHash "$x86_64_cdhash" \
     --arg mainArchitectures "$main_archs" \
     --arg helperArchitectures "$helper_archs" \
     --arg mainEntitlementsSha256 "$main_entitlements" \
     --arg helperEntitlementsSha256 "$helper_entitlements" \
     --arg notarizationId "$notary_id" \
-    '{schemaVersion:$schemaVersion,kind:$kind,archive:$archive,archiveSha256:$archiveSha256,archiveChecksum:$archiveChecksum,installer:$installer,installerSha256:$installerSha256,installerChecksum:$installerChecksum,sourceCommit:$sourceCommit,peekabooCommit:$peekabooCommit,version:$version,build:$build,authority:$authority,teamIdentifier:$teamIdentifier,cdhash:$cdhash,architectures:{main:$mainArchitectures,helper:$helperArchitectures},entitlementsSha256:{main:$mainEntitlementsSha256,helper:$helperEntitlementsSha256},notarizationId:$notarizationId}' >"${receipt_path}.tmp.$$"
+    '{schemaVersion:$schemaVersion,kind:$kind,archive:$archive,archiveSha256:$archiveSha256,archiveChecksum:$archiveChecksum,installer:$installer,installerSha256:$installerSha256,installerChecksum:$installerChecksum,sourceCommit:$sourceCommit,peekabooCommit:$peekabooCommit,version:$version,build:$build,authority:$authority,teamIdentifier:$teamIdentifier,cdhashes:{arm64:$arm64CDHash,x86_64:$x8664CDHash},architectures:{main:$mainArchitectures,helper:$helperArchitectures},entitlementsSha256:{main:$mainEntitlementsSha256,helper:$helperEntitlementsSha256},notarizationId:$notarizationId}' >"${receipt_path}.tmp.$$"
   chmod 444 "${receipt_path}.tmp.$$"
   mv "${receipt_path}.tmp.$$" "$receipt_path"
   EXPECTED_ARTIFACT_RECEIPT_SHA256="$(shasum -a 256 "$receipt_path" | awk '{print $1}')"
@@ -1323,6 +1387,7 @@ install_host() {
     "${BASH_SOURCE[0]}"
   source_commit="$(plist_value "$staged_app" OpenClawGitCommit)"
   peekaboo_commit="$(plist_value "$staged_app" PeekabooSourceCommit)"
+  stage_verified_app_for_install "$staged_app" "$source_commit" "$peekaboo_commit"
   mkdir -p "$STATE_DIR/logs" "$(dirname "$PLIST_PATH")"
   if [[ -n "$MIGRATE_LAUNCH_AGENT" ]]; then
     [[ -d "$STATE_DIR" && ! -L "$STATE_DIR" ]] ||
@@ -1460,9 +1525,26 @@ install_host() {
   fi
   CUTOVER_APP_MUTATED=1
   if [[ -n "$ROLLBACK_APP_PATH" ]]; then
-    mv "$APP_PATH" "$ROLLBACK_APP_PATH"
+    verify_rollback_app "$APP_PATH" "$ROLLBACK_APP_CDHASH" ||
+      fail 'installed OpenClaw app changed before rollback custody'
+    rename_app_exclusively "$APP_PATH" "$ROLLBACK_APP_PATH" || true
+    verify_rollback_app "$ROLLBACK_APP_PATH" "$ROLLBACK_APP_CDHASH" ||
+      fail 'could not take verified custody of the installed OpenClaw app'
+    [[ ! -e "$APP_PATH" && ! -L "$APP_PATH" ]] ||
+      fail 'installed OpenClaw app path was recreated during rollback custody'
   fi
-  mv "$staged_app" "$APP_PATH"
+  rename_app_exclusively "$STAGED_INSTALL_APP_PATH" "$APP_PATH" || true
+  verify_elevation_app "$APP_PATH"
+  verify_artifact_receipt \
+    "$AUTHENTICATED_RECEIPT_PATH" \
+    "$AUTHENTICATED_ARCHIVE_PATH" \
+    "$APP_PATH" \
+    "${BASH_SOURCE[0]}"
+  [[ ! -e "$STAGED_INSTALL_APP_PATH" && ! -L "$STAGED_INSTALL_APP_PATH" ]] ||
+    fail 'same-filesystem staged app was not atomically installed'
+  rmdir "$STAGED_APP_CONTAINER"
+  STAGED_APP_CONTAINER=""
+  STAGED_INSTALL_APP_PATH=""
   mv "$plist_tmp" "$PLIST_PATH"
 
   if ! launchctl bootstrap "$launch_domain" "$PLIST_PATH" ||
@@ -1489,6 +1571,10 @@ install_host() {
   then
     fail 'migration LaunchAgent path was recreated before cutover commit'
   fi
+  if [[ -n "$ROLLBACK_MIGRATION_LABEL" ]]; then
+    [[ "$(job_loaded_state "$launch_domain/$ROLLBACK_MIGRATION_LABEL")" == "absent" ]] ||
+      fail 'migration LaunchAgent reloaded before cutover commit'
+  fi
 
   trap 'commit_signal=INT' INT
   trap 'commit_signal=TERM' TERM
@@ -1506,7 +1592,7 @@ install_host() {
 }
 
 recover_install() {
-  local recovery_failed=0 elevation_state failed_container failed_path restored_state
+  local recovery_failed=0 elevation_state failed_container failed_path restored_state failed_cdhash=""
   if [[ "$CUTOVER_APP_MUTATED" == "1" && -n "$ROLLBACK_APP_PATH" ]]; then
     if [[ -e "$ROLLBACK_APP_PATH" || -L "$ROLLBACK_APP_PATH" ]]; then
       verify_rollback_app "$ROLLBACK_APP_PATH" "$ROLLBACK_APP_CDHASH" || return 1
@@ -1538,7 +1624,11 @@ recover_install() {
     failed_container="$(mktemp -d "${APP_PATH}.failed-elevation-host-${ROLLBACK_FAILED_SOURCE}.XXXXXX")" ||
       return 1
     failed_path="$failed_container/OpenClaw.app"
-    if ! mv "$APP_PATH" "$failed_path"; then
+    failed_cdhash="$(codesign_value "$APP_PATH" CDHash)"
+    rename_app_exclusively "$APP_PATH" "$failed_path" || true
+    if ! verify_rollback_app "$failed_path" "$failed_cdhash" ||
+      [[ -e "$APP_PATH" || -L "$APP_PATH" ]]
+    then
       rmdir "$failed_container" 2>/dev/null || true
       return 1
     fi
@@ -1548,8 +1638,9 @@ recover_install() {
   fi
   if [[ -n "$ROLLBACK_APP_PATH" && -d "$ROLLBACK_APP_PATH" ]]; then
     [[ ! -e "$APP_PATH" && ! -L "$APP_PATH" ]] || return 1
-    mv "$ROLLBACK_APP_PATH" "$APP_PATH" || recovery_failed=1
+    rename_app_exclusively "$ROLLBACK_APP_PATH" "$APP_PATH" || true
     verify_rollback_app "$APP_PATH" "$ROLLBACK_APP_CDHASH" || recovery_failed=1
+    [[ ! -e "$ROLLBACK_APP_PATH" && ! -L "$ROLLBACK_APP_PATH" ]] || recovery_failed=1
   elif [[ -n "$ROLLBACK_APP_PATH" ]]; then
     verify_rollback_app "$APP_PATH" "$ROLLBACK_APP_CDHASH" || recovery_failed=1
   fi
@@ -1676,14 +1767,14 @@ restore_current_generation_after_recovery_failure() {
     if [[ -e "$ROLLBACK_APP_PATH" || -L "$ROLLBACK_APP_PATH" ]]; then
       app_restore_failed=1
     elif [[ -d "$APP_PATH" && ! -L "$APP_PATH" ]]; then
-      mv "$APP_PATH" "$ROLLBACK_APP_PATH" || true
+      rename_app_exclusively "$APP_PATH" "$ROLLBACK_APP_PATH" || true
       verify_rollback_app "$ROLLBACK_APP_PATH" "$ROLLBACK_APP_CDHASH" || app_restore_failed=1
       [[ ! -e "$APP_PATH" && ! -L "$APP_PATH" ]] || app_restore_failed=1
     fi
     if [[ "$app_restore_failed" == "0" && -d "$RECOVERED_FAILED_APP_PATH" &&
       ! -L "$RECOVERED_FAILED_APP_PATH" ]]
     then
-      mv "$RECOVERED_FAILED_APP_PATH" "$APP_PATH" || true
+      rename_app_exclusively "$RECOVERED_FAILED_APP_PATH" "$APP_PATH" || true
       verify_rollback_app "$APP_PATH" "$RECOVERY_CURRENT_APP_CDHASH" || app_restore_failed=1
       [[ ! -e "$RECOVERED_FAILED_APP_PATH" && ! -L "$RECOVERED_FAILED_APP_PATH" ]] ||
         app_restore_failed=1
@@ -1839,6 +1930,8 @@ recover_host() {
       fail 'receipt migration plist backup digest is invalid'
     [[ ! -e "$ROLLBACK_MIGRATION_SOURCE" && ! -L "$ROLLBACK_MIGRATION_SOURCE" ]] ||
       fail 'could not restore the previous OpenClaw installation completely'
+    [[ "$(job_loaded_state "$launch_domain/$ROLLBACK_MIGRATION_LABEL")" == "absent" ]] ||
+      fail 'migration LaunchAgent is already loaded before recovery'
   fi
   local current_receipt_sha recovered_receipt receipt_restore_tmp="" current_job_state recovery_signal=""
   current_receipt_sha="$(shasum -a 256 "$RECEIPT_PATH" | awk '{print $1}')"
