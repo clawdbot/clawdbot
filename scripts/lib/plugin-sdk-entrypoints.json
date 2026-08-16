@@ -30,6 +30,7 @@
   "approval-reference-runtime",
   "approval-handler-adapter-runtime",
   "approval-handler-runtime",
+  "channel-runtime",
   "channel-runtime-context",
   "approval-native-runtime",
   "approval-reaction-runtime",
