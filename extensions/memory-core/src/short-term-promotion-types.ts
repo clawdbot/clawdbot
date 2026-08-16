@@ -128,10 +128,7 @@ export type ShortTermAuditIssue = {
     | "recall-store-dangling"
     | "recall-store-over-limit"
     | "recall-lock-stale"
-    | "recall-lock-unreadable"
-    | "qmd-index-missing"
-    | "qmd-index-empty"
-    | "qmd-collections-empty";
+    | "recall-lock-unreadable";
   message: string;
   fixable: boolean;
 };
@@ -149,13 +146,6 @@ export type ShortTermAuditSummary = {
   invalidEntryCount: number;
   danglingEntryCount?: number;
   issues: ShortTermAuditIssue[];
-  qmd?:
-    | {
-        dbPath?: string;
-        collections?: number;
-        dbBytes?: number;
-      }
-    | undefined;
 };
 
 export type RepairShortTermPromotionArtifactsResult = {

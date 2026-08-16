@@ -1,5 +1,5 @@
 import {
-  WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
   type WorkerAdmissionHandshake,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { WorkerProfile, WorkerSshEndpoint } from "../../plugins/types.js";
@@ -9,7 +9,7 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementRecord,
 } from "./placement-store.js";
-import { workerEnvironmentIdForIdempotencyKey } from "./service.js";
+import { deriveEnvironmentIntent } from "./service-contract.js";
 
 type WorkerDispatchRequest = Parameters<
   ReturnType<typeof createWorkerPlacementDispatchService>["dispatch"]
@@ -19,8 +19,8 @@ type DispatchEnvironmentRecord = Awaited<ReturnType<WorkerDispatchEnvironmentSer
 export type DispatchStage =
   | "barrier"
   | "workspace"
+  | "preflight"
   | "create"
-  | "tunnel:ready"
   | "sync"
   | "attach"
   | "tunnel:attached"
@@ -33,9 +33,10 @@ export const REQUEST: WorkerDispatchRequest = {
   sessionKey: "agent:main:session-1",
   agentId: "main",
   profileId: "development",
+  executionMode: "worker-turn",
 };
 
-export function seedStartingPlacement(
+export function seedSyncingPlacement(
   store: PlacementStore,
   environmentId: string,
 ): WorkerSessionPlacementRecord {
@@ -54,6 +55,14 @@ export function seedStartingPlacement(
     expectedGeneration: current.generation,
     patch: { workerBundleHash: BUNDLE_HASH },
   });
+  return current;
+}
+
+export function seedStartingPlacement(
+  store: PlacementStore,
+  environmentId: string,
+): WorkerSessionPlacementRecord {
+  let current = seedSyncingPlacement(store, environmentId);
   current = store.transition({
     sessionId: REQUEST.sessionId,
     from: "syncing",
@@ -81,15 +90,15 @@ export function seedActivePlacement(
   });
 }
 
-export function createDispatchEnvironmentFixtures() {
-  const environmentId = workerEnvironmentIdForIdempotencyKey(
-    `session-dispatch:${REQUEST.sessionId}:1`,
-  );
+export function createDispatchEnvironmentFixtures(generation = 1) {
+  const environmentId = deriveEnvironmentIntent(
+    `session-dispatch:${REQUEST.sessionId}:${generation}`,
+  ).environmentId;
   const profileSnapshot: WorkerProfile = { settings: { region: "test" } };
   const bootstrapReceipt: WorkerAdmissionHandshake = {
     bundleHash: BUNDLE_HASH,
     openclawVersion: "2026.7.2",
-    protocolFeatures: [WORKER_LAUNCH_V2_PROTOCOL_FEATURE],
+    protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
   };
   const sshEndpoint: WorkerSshEndpoint = {
     host: "worker.example.test",
@@ -104,6 +113,7 @@ export function createDispatchEnvironmentFixtures() {
     profileId: "development",
     profileSnapshot,
     provisionOperationId: "provision-1",
+    sharedHost: false,
     bootstrapReceipt,
     teardownTerminalState: null,
     lastError: null,
@@ -114,6 +124,9 @@ export function createDispatchEnvironmentFixtures() {
     destroyRequestedAtMs: null,
     leaseId: "lease-1",
     sshEndpoint,
+    desktop: null,
+    desktopAvailable: false,
+    desktopApps: [],
   };
   const ready = {
     ...environmentBase,

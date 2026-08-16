@@ -6,6 +6,7 @@ import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
+import { resolveAgentConfig } from "../agent-scope.js";
 import {
   listActiveProcessSessionReferences,
   type ActiveProcessSessionReference,
@@ -149,29 +150,26 @@ export function resolveEmbeddedCompactionTarget(params: {
       ...(useNativeHarnessRuntime ? { nativeHarnessCompaction: true } : {}),
     };
   };
-  if (!override) {
-    const authProfileId = params.authProfileId ?? undefined;
+  const assembleTarget = (targetProvider: string | undefined, targetModel: string | undefined) => {
+    // A provider switch cannot inherit credentials selected for the session's
+    // original provider; all target paths share that boundary.
+    const authProfileId =
+      targetProvider !== provider ? undefined : (params.authProfileId ?? undefined);
     return {
-      provider,
-      ...resolveTargetProviders(provider, authProfileId),
-      model,
+      provider: targetProvider,
+      ...resolveTargetProviders(targetProvider, authProfileId),
+      model: targetModel,
       authProfileId,
     };
+  };
+  if (!override) {
+    return assembleTarget(provider, model);
   }
   const slashIdx = override.indexOf("/");
   if (slashIdx > 0) {
     const overrideProvider = override.slice(0, slashIdx).trim();
     const overrideModel = override.slice(slashIdx + 1).trim() || params.defaultModel;
-    // When switching provider via override, drop the primary auth profile to
-    // avoid sending the wrong credentials.
-    const authProfileId =
-      overrideProvider !== provider ? undefined : (params.authProfileId ?? undefined);
-    return {
-      provider: overrideProvider,
-      ...resolveTargetProviders(overrideProvider, authProfileId),
-      model: overrideModel,
-      authProfileId,
-    };
+    return assembleTarget(overrideProvider, overrideModel);
   }
   const config = params.config ?? {};
   const currentProvider = provider?.trim();
@@ -183,27 +181,14 @@ export function resolveEmbeddedCompactionTarget(params: {
       model: override,
     })
   ) {
-    const authProfileId = params.authProfileId ?? undefined;
-    return {
-      provider: currentProvider,
-      ...resolveTargetProviders(currentProvider, authProfileId),
-      model: override,
-      authProfileId,
-    };
+    return assembleTarget(currentProvider, override);
   }
   const inferredLiteralProvider = inferUniqueProviderFromConfiguredModels({
     cfg: config,
     model: override,
   });
   if (inferredLiteralProvider) {
-    const authProfileId =
-      inferredLiteralProvider !== provider ? undefined : (params.authProfileId ?? undefined);
-    return {
-      provider: inferredLiteralProvider,
-      ...resolveTargetProviders(inferredLiteralProvider, authProfileId),
-      model: override,
-      authProfileId,
-    };
+    return assembleTarget(inferredLiteralProvider, override);
   }
   const defaultProvider = provider || DEFAULT_PROVIDER;
   const aliasResolution = resolveModelRefFromString({
@@ -216,23 +201,9 @@ export function resolveEmbeddedCompactionTarget(params: {
     }),
   });
   if (aliasResolution?.alias) {
-    const resolvedProvider = aliasResolution.ref.provider;
-    const authProfileId =
-      resolvedProvider !== provider ? undefined : (params.authProfileId ?? undefined);
-    return {
-      provider: resolvedProvider,
-      ...resolveTargetProviders(resolvedProvider, authProfileId),
-      model: aliasResolution.ref.model,
-      authProfileId,
-    };
+    return assembleTarget(aliasResolution.ref.provider, aliasResolution.ref.model);
   }
-  const authProfileId = params.authProfileId ?? undefined;
-  return {
-    provider,
-    ...resolveTargetProviders(provider, authProfileId),
-    model: override,
-    authProfileId,
-  };
+  return assembleTarget(provider, override);
 }
 
 function normalizeCompactionConfigKey(value: string): string {
@@ -307,9 +278,14 @@ export function resolveCompactionContextTokenBudget(params: {
   provider: string;
   modelId: string;
   model?: ProviderRuntimeModel;
+  agentId?: string;
   requestedTokenBudget?: number;
   fallbackTokenBudget?: number;
 }) {
+  // Caller budgets stay bounded by the selected agent and model ceilings.
+  const agentContextTokens = params.agentId
+    ? resolveAgentConfig(params.config ?? {}, params.agentId)?.contextTokens
+    : undefined;
   const resolvedBudget =
     normalizeContextTokenBudget(
       resolveContextWindowInfo({
@@ -318,6 +294,7 @@ export function resolveCompactionContextTokenBudget(params: {
         modelId: params.modelId,
         modelContextTokens: readAgentModelContextTokens(params.model),
         modelContextWindow: params.model?.contextWindow,
+        agentContextTokens,
         defaultTokens: DEFAULT_CONTEXT_TOKENS,
       }).tokens,
     ) ?? DEFAULT_CONTEXT_TOKENS;

@@ -1,8 +1,8 @@
 import { isContextOverflow } from "@openclaw/ai/internal/runtime";
 import type { AssistantMessage } from "../../llm/types.js";
-import { classifyRateLimitWindow } from "../../llm/utils/rate-limit-window.js";
 import { isRetryableAssistantError } from "../../llm/utils/retry.js";
-import { sleep } from "../utils/sleep.js";
+import { sleep } from "../../utils/sleep.js";
+import { classifyRateLimitWindow } from "../failover/retry-evidence.js";
 import { AgentSessionExtensions } from "./agent-session-extensions.js";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.js";
 import type { BashExecutionMessage } from "./messages.js";

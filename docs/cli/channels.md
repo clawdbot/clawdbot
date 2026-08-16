@@ -31,6 +31,11 @@ openclaw channels dead-letters list --channel telegram --account default
 
 `channels list` shows chat channels only: configured accounts by default, with `installed`, `configured`, and `enabled` status tags per account (`--json` for machine output). Pass `--all` to also surface bundled channels that have no configured account yet and installable catalog channels that are not yet on disk. Provider auth and model usage live elsewhere: `openclaw models auth list` for provider auth profiles, `openclaw status` or `openclaw models list` for usage/quota.
 
+In an explicit multi-agent setup, workspace-scoped channel plugins come from
+`agents.defaults.systemAgent.agentId`. Without that owner, `channels list`
+returns the shared bundled, managed, and global inventory with a diagnostic;
+it does not guess one agent workspace.
+
 ## Status / capabilities / resolve / logs
 
 - `channels status`: `--channel <name>`, `--probe`, `--timeout <ms>` (default `10000`), `--json`
@@ -79,6 +84,25 @@ openclaw channels add --channel nostr --private-key "$NOSTR_PRIVATE_KEY"
 openclaw channels remove --channel telegram --delete
 ```
 
+For a headless host, complete non-interactive onboarding first, then add each channel with explicit credential flags or its environment-backed setup option:
+
+```bash
+export OPENAI_API_KEY="<provider-key>"
+export TELEGRAM_BOT_TOKEN="<bot-token>"
+
+openclaw onboard --non-interactive --accept-risk --skip-health \
+  --mode local \
+  --auth-choice openai-api-key \
+  --secret-input-mode ref \
+  --skip-channels \
+  --no-install-daemon
+openclaw channels add --channel telegram --use-env
+```
+
+`--use-env` validates the environment variables declared by the selected channel plugin before writing config. For Telegram, the command requires `TELEGRAM_BOT_TOKEN`; other plugins name their missing variables in the error. The Gateway service must receive the same environment variables as the bootstrap shell. If the Gateway is already running with config reload enabled, it watches the config write and restarts the affected channel automatically.
+
+See [CLI automation](/start/wizard-cli-automation) for additional non-interactive provider and Gateway options. Container deployments should also follow the [Docker headless bootstrap](/install/docker#headless-bootstrap) environment guidance.
+
 <Tip>
 `openclaw channels add telegram --help` or `openclaw channels add --channel telegram --help` shows only Telegram's setup flags. `openclaw channels add --help` shows only the shared command envelope.
 </Tip>
@@ -112,6 +136,8 @@ When you run `openclaw channels add` with no direct account, credential, or chan
 openclaw channels add telegram
 openclaw channels add --channel telegram
 ```
+
+Guided setup requires an interactive terminal. In a non-TTY shell, OpenClaw exits immediately instead of waiting for input; use `openclaw channels add --channel <id> --use-env` or pass the selected plugin's credential flags.
 
 The wizard can prompt for:
 

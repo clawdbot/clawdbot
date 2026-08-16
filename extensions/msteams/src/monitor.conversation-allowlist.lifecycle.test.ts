@@ -45,20 +45,15 @@ const keepHttpServerTaskAliveMock = vi.hoisted(() =>
   }),
 );
 
-vi.mock("../runtime-api.js", () => ({
-  DEFAULT_WEBHOOK_MAX_BODY_BYTES: 1024 * 1024,
-  isDangerousNameMatchingEnabled,
-  normalizeSecretInputString: (value: unknown) =>
-    typeof value === "string" && value.trim() ? value.trim() : undefined,
-  hasConfiguredSecretInput: (value: unknown) =>
-    typeof value === "string" && value.trim().length > 0,
-  normalizeResolvedSecretInputString: (params: { value?: unknown }) =>
-    typeof params?.value === "string" && params.value.trim() ? params.value.trim() : undefined,
-  keepHttpServerTaskAlive: keepHttpServerTaskAliveMock,
-  mergeAllowlist: (params: { existing?: string[]; additions: string[] }) =>
-    Array.from(new Set([...(params.existing ?? []), ...params.additions])),
-  summarizeMapping: vi.fn(),
-}));
+vi.mock("../runtime-api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runtime-api.js")>();
+  return {
+    ...actual,
+    isDangerousNameMatchingEnabled,
+    keepHttpServerTaskAlive: keepHttpServerTaskAliveMock,
+    summarizeMapping: vi.fn(),
+  };
+});
 
 vi.mock("express", () => ({
   default: () => {

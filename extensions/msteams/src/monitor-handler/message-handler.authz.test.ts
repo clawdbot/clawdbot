@@ -641,6 +641,44 @@ describe("msteams monitor handler authz", () => {
     ).toBe("19:group@thread.tacv2");
   });
 
+  it.each([
+    {
+      name: "missing",
+      accessGroups: undefined,
+    },
+    {
+      name: "unsupported",
+      accessGroups: {
+        operators: {
+          type: "discord.channelAudience" as const,
+          guildId: "guild-1",
+          channelId: "channel-1",
+        },
+      },
+    },
+  ])("fails closed when a group sender access group is $name", async ({ accessGroups }) => {
+    resetThreadMocks();
+    const { conversationStore, deps } = createDeps({
+      accessGroups,
+      channels: {
+        msteams: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["accessGroup:operators"],
+          requireMention: false,
+        },
+      },
+    } as OpenClawConfig);
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler(createAttackerGroupActivity());
+
+    expect(conversationStore.upsert).not.toHaveBeenCalled();
+    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(logMeta(deps.log.info, "dropping group message (not in groupAllowFrom)").sender).toBe(
+      "attacker-aad",
+    );
+  });
+
   it("blocks unauthorized text control commands through shared ingress", async () => {
     resetThreadMocks();
     const hasControlCommand = vi.fn(() => true);

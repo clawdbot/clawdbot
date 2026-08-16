@@ -9,6 +9,7 @@ export function resolveDiscordQaScenarioIds(params: {
 }) {
   return resolveLiveTransportQaScenarioIds({
     channelId: "discord",
+    supportsModuleFlows: true,
     ...params,
     providerMode: params.providerMode ?? "live-frontier",
   });

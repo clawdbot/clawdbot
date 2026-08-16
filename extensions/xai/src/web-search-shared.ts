@@ -1,6 +1,7 @@
 // Xai plugin module implements web search shared behavior.
 import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
 import { postTrustedWebToolsJson, wrapWebContent } from "openclaw/plugin-sdk/provider-web-search";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { XAI_DEFAULT_MODEL_ID } from "../model-definitions.js";
 import { normalizeXaiModelId } from "../model-id.js";
 import {
@@ -8,7 +9,6 @@ import {
   requireXaiResponseTextCitationsAndInline,
   resolveXaiResponsesEndpoint,
 } from "./responses-tool-shared.js";
-import { isRecord } from "./tool-config-shared.js";
 import type { XaiWebSearchResponse } from "./web-search-response.types.js";
 export { extractXaiWebSearchContent } from "./responses-tool-shared.js";
 export type { XaiWebSearchResponse } from "./web-search-response.types.js";

@@ -18,6 +18,7 @@ describe("shouldPauseGatewayReconnect", () => {
     ConnectErrorDetailCodes.AUTH_RATE_LIMITED,
     ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH,
     ConnectErrorDetailCodes.AUTH_SCOPE_MISMATCH,
+    ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH,
     ConnectErrorDetailCodes.PAIRING_REQUIRED,
     ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
   ])("pauses reconnect for %s", (code) => {

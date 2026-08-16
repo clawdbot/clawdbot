@@ -3,7 +3,8 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SessionManager } from "../agents/sessions/index.js";
+import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
+import { SessionManager } from "../agents/sessions/session-manager.js";
 import {
   SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT,
   SYSTEM_AGENT_GREETING_SYSTEM_PROMPT,
@@ -143,11 +144,18 @@ async function runConfiguredSystemAgentText(params: {
   }
   const tempDir = await (params.deps?.createTempDir ?? createTempPlannerDir)();
   let text: string | undefined;
+  let preparedRunAdmission: ReturnType<typeof prepareSystemAgentRunAdmission> | undefined;
   try {
     const runId = `${params.runIdPrefix}-${randomUUID()}`;
     const timeoutMs =
       params.timeoutMs ??
       (params.deps?.resolveAssistantTimeoutMs ?? resolveSystemAgentAssistantTimeoutMs)(route);
+    preparedRunAdmission = prepareSystemAgentRunAdmission(
+      route.runConfig,
+      runId,
+      route.agentId,
+      "system-agent.assistant",
+    );
     const shared = {
       sessionId: `${runId}-session`,
       // OpenClaw is the planner surface, but the configured roster owner supplies runtime policy.
@@ -179,6 +187,7 @@ async function runConfiguredSystemAgentText(params: {
         ? await (params.deps?.runCliAgent ?? (await import("../agents/cli-runner.js")).runCliAgent)(
             {
               ...shared,
+              preparedRunAdmission,
               executionMode: "side-question",
               cleanupCliLiveSessionOnRunEnd: true,
             },
@@ -188,6 +197,7 @@ async function runConfiguredSystemAgentText(params: {
             (await import("../agents/embedded-agent.js")).runEmbeddedAgent
           )({
             ...shared,
+            preparedRunAdmission,
             toolsAllow: [],
             agentHarnessRuntimeOverride: route.agentHarnessRuntimeOverride,
             ...(expectedAgentHarnessRuntimeArtifact ? { expectedAgentHarnessRuntimeArtifact } : {}),
@@ -201,6 +211,7 @@ async function runConfiguredSystemAgentText(params: {
     }
     text = undefined;
   } finally {
+    preparedRunAdmission?.close();
     await (params.deps?.removeTempDir ?? removeTempPlannerDir)(tempDir);
   }
   if (!text) {

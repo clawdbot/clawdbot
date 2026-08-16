@@ -1480,6 +1480,72 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("keeps recent valid recall stats ahead of malformed timestamps at the entry cap", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const nowMs = Date.parse("2026-04-05T10:00:00.000Z");
+      const malformedEntries = Object.fromEntries(
+        Array.from({ length: 8 }, (_, index) => {
+          const key = `malformed-${index}`;
+          return [
+            key,
+            {
+              key,
+              path: `memory/2026-04-01-malformed-${index}.md`,
+              startLine: 1,
+              endLine: 1,
+              source: "memory",
+              snippet: `Malformed timestamp entry ${index}`,
+              recallCount: 100 - index,
+              dailyCount: 0,
+              groundedCount: 0,
+              totalScore: 1,
+              maxScore: 1,
+              firstRecalledAt: "not-a-timestamp",
+              lastRecalledAt: "not-a-timestamp",
+              queryHashes: [],
+              recallDays: [],
+              conceptTags: [],
+            },
+          ];
+        }),
+      );
+      await testing.writeRawRecallStore(workspaceDir, {
+        version: 1,
+        updatedAt: "2026-04-05T10:00:00.000Z",
+        entries: {
+          ...malformedEntries,
+          recent: {
+            key: "recent",
+            path: "memory/2026-04-05-recent.md",
+            startLine: 1,
+            endLine: 1,
+            source: "memory",
+            snippet: "Recent valid timestamp entry",
+            recallCount: 1,
+            dailyCount: 0,
+            groundedCount: 0,
+            totalScore: 1,
+            maxScore: 1,
+            firstRecalledAt: "2026-04-05T09:00:00.000Z",
+            lastRecalledAt: "2026-04-05T09:00:00.000Z",
+            queryHashes: [],
+            recallDays: [],
+            conceptTags: [],
+          },
+        },
+      });
+
+      const stats = await loadShortTermPromotionDreamingStats({ workspaceDir, nowMs });
+
+      expect(stats.shortTermEntries).toHaveLength(8);
+      expect(stats.shortTermEntries[0]?.path).toBe("memory/2026-04-05-recent.md");
+      expect(stats.shortTermEntries[1]?.path).toBe("memory/2026-04-01-malformed-0.md");
+      expect(stats.shortTermEntries.map((entry) => entry.path)).not.toContain(
+        "memory/2026-04-01-malformed-7.md",
+      );
+    });
+  });
+
   it("reconciles existing promotion markers instead of appending duplicates", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
@@ -3111,7 +3177,7 @@ describe("short-term promotion", () => {
   it("audits and repairs invalid store metadata plus stale locks", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
-        "Gateway host uses qmd vector search for router notes.",
+        "Gateway host uses vector search for router notes.",
       ]);
       await testing.writeRawRecallStore(workspaceDir, {
         version: 1,
@@ -3123,7 +3189,7 @@ describe("short-term promotion", () => {
             startLine: 1,
             endLine: 2,
             source: "memory",
-            snippet: "Gateway host uses qmd vector search for router notes.",
+            snippet: "Gateway host uses vector search for router notes.",
             recallCount: 2,
             totalScore: 1.8,
             maxScore: 0.95,
@@ -3569,7 +3635,7 @@ describe("short-term promotion", () => {
 
   it("does not rewrite an already normalized healthy recall store", async () => {
     await withTempWorkspace(async (workspaceDir) => {
-      const snippet = "Gateway host uses qmd vector search for router notes.";
+      const snippet = "Gateway host uses vector search for router notes.";
       await writeDailyMemoryNote(workspaceDir, "2026-04-01", [snippet]);
       const raw = {
         version: 1,
@@ -4211,7 +4277,19 @@ describe("short-term promotion", () => {
         });
 
         const truncateAt = 51_200;
+        const originalOpen = fs.open.bind(fs);
         const originalWriteFile = fs.writeFile.bind(fs);
+        const promotionTempHandles = new WeakSet<object>();
+        vi.spyOn(fs, "open").mockImplementation(async (target, flags, mode) => {
+          const handle = await originalOpen(target, flags, mode);
+          if (
+            typeof target === "string" &&
+            path.basename(target).startsWith("MEMORY.md.promotion")
+          ) {
+            promotionTempHandles.add(handle);
+          }
+          return handle;
+        });
         vi.spyOn(fs, "writeFile").mockImplementation((async (
           target: Parameters<typeof fs.writeFile>[0],
           data: Parameters<typeof fs.writeFile>[1],
@@ -4219,7 +4297,10 @@ describe("short-term promotion", () => {
         ) => {
           const targetPath =
             typeof target === "string" ? target : target instanceof URL ? target.pathname : "";
-          if (targetPath && path.basename(targetPath).startsWith("MEMORY.md")) {
+          if (
+            (targetPath && path.basename(targetPath).startsWith("MEMORY.md")) ||
+            (typeof target === "object" && target !== null && promotionTempHandles.has(target))
+          ) {
             const text =
               typeof data === "string" ? data : Buffer.from(data as Uint8Array).toString();
             await originalWriteFile(target, text.slice(0, truncateAt), options);

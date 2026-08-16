@@ -1,4 +1,5 @@
 /** Tests web-tool secret metadata resolution from config and plugins. */
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type {
@@ -8,7 +9,7 @@ import type {
 import { listSecretResolutionErrorOwners } from "./runtime-degraded-state.js";
 import {
   activateSecretsRuntimeSnapshotState,
-  clearSecretsRuntimeSnapshot,
+  clearSecretsRuntimeSnapshotState,
 } from "./runtime-state.js";
 
 type ProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "duckduckgo";
@@ -340,12 +341,7 @@ function readProviderKey(config: OpenClawConfig, provider: ProviderUnderTest): u
   return pluginConfig?.webSearch?.apiKey;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function diagnostics(value: unknown) {
   expect(Array.isArray(value), "diagnostics").toBe(true);
@@ -421,7 +417,7 @@ describe("runtime web tools resolution", () => {
   afterEach(() => {
     restoreResolveSecretRefValuesSpy?.();
     restoreResolveSecretRefValuesSpy = undefined;
-    clearSecretsRuntimeSnapshot();
+    clearSecretsRuntimeSnapshotState();
   });
 
   it("keeps web search inactive when only web fetch is configured", async () => {

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { LegacyConfigIssue } from "../config/types.js";
+import type { ConfigFileSnapshot, LegacyConfigIssue } from "../config/types.js";
 import type { StateMigrationResult } from "./doctor-config-preflight.state-migration.test-helpers.js";
 
 const autoMigrateLegacyStateDir = vi.hoisted(() =>
@@ -45,6 +45,9 @@ const autoMigrateLegacyTaskStateSidecars = vi.hoisted(() =>
 const migrateLegacyMediaPersistence = vi.hoisted(() =>
   vi.fn(() => ({ changes: [], warnings: [] })),
 );
+const migrateLegacyConfigMachineState = vi.hoisted(() =>
+  vi.fn(() => ({ changes: ["cron-store-selection-imported"], warnings: [] })),
+);
 const repairLegacyCronStoreWithoutPrompt = vi.hoisted(() =>
   vi.fn(async () => ({ changes: ["cron-imported"], warnings: [] })),
 );
@@ -63,7 +66,20 @@ const readConfigFileSnapshot = vi.hoisted(() =>
     issues: [] as Array<{ path: string; message: string }>,
   })),
 );
-const findDoctorLegacyConfigIssues = vi.hoisted(() => vi.fn((): LegacyConfigIssue[] => []));
+const findDoctorLegacyConfigIssues = vi.hoisted(() =>
+  vi.fn((_raw: unknown, _sourceRaw?: unknown): LegacyConfigIssue[] => []),
+);
+const addDoctorLegacyIssues = vi.hoisted(() =>
+  vi.fn((snapshot: ConfigFileSnapshot): ConfigFileSnapshot => {
+    if (!snapshot.exists) {
+      return snapshot;
+    }
+    const resolvedRaw = snapshot.sourceConfig ?? snapshot.config ?? {};
+    const sourceRaw = snapshot.parsed ?? resolvedRaw;
+    const legacyIssues = findDoctorLegacyConfigIssues(resolvedRaw, sourceRaw);
+    return legacyIssues.length === 0 ? snapshot : { ...snapshot, legacyIssues };
+  }),
+);
 const note = vi.hoisted(() => vi.fn());
 
 vi.mock("./doctor-state-migrations.js", () => ({
@@ -71,6 +87,7 @@ vi.mock("./doctor-state-migrations.js", () => ({
   autoMigrateLegacyStateDir,
   autoMigrateLegacyPluginDoctorState,
   autoMigrateLegacyTaskStateSidecars,
+  migrateLegacyConfigMachineState,
   migrateLegacyMediaPersistence,
 }));
 
@@ -87,6 +104,7 @@ vi.mock("../config/io.js", () => ({
 }));
 
 vi.mock("./doctor/shared/legacy-config-issues.js", () => ({
+  addDoctorLegacyIssues,
   findDoctorLegacyConfigIssues,
 }));
 
@@ -126,6 +144,52 @@ describe("runDoctorConfigPreflight state migration input", () => {
     expect(autoMigrateLegacyState).toHaveBeenCalledWith(
       expect.objectContaining({ doctorOnlyStateMigrations: true }),
     );
+  });
+
+  it("does not skip a retired custom cron partition on a pristine state root", async () => {
+    const sourceConfig = {
+      gateway: { mode: "local", port: 19091 },
+      agents: {
+        entries: { ops: {}, research: {} },
+        defaults: {
+          heartbeat: { agentId: "ops" },
+          systemAgent: { agentId: "ops" },
+          authInheritance: { agentId: "ops" },
+        },
+      },
+      cron: { store: "/tmp/custom-cron/jobs.json" },
+      talk: { agentId: "ops" },
+    };
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      exists: true,
+      valid: false,
+      config: sourceConfig,
+      sourceConfig,
+      parsed: {
+        agents: { list: [{ id: "ops", default: true }, { id: "research" }] },
+        cron: { store: "/tmp/custom-cron/jobs.json" },
+      },
+      legacyIssues: [{ path: "cron.store", message: "cron.store is retired" }],
+      warnings: [],
+      issues: [{ path: "agents.ownership", message: "explicit ownership is required" }],
+    });
+
+    await runDoctorConfigPreflight({
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+      skipPristineCoreStateMigrations: true,
+    });
+
+    expect(repairLegacyCronStoreWithoutPrompt).toHaveBeenCalledWith({
+      cfg: { cron: { store: "/tmp/custom-cron/jobs.json" } },
+      migrateCodexModelRefs: false,
+    });
+    expect(migrateLegacyConfigMachineState).toHaveBeenCalledWith({
+      config: sourceConfig,
+      env: process.env,
+    });
+    expect(autoMigrateLegacyState).not.toHaveBeenCalled();
+    expect(autoMigrateLegacyPluginDoctorState).toHaveBeenCalled();
   });
 
   it("runs plugin state migrations with resolved legacy config before config repair removes retired paths", async () => {
@@ -179,7 +243,7 @@ describe("runDoctorConfigPreflight state migration input", () => {
         }),
         agents: expect.objectContaining({
           defaults: expect.objectContaining({}),
-          entries: { main: { default: true } },
+          entries: { main: {} },
         }),
       }),
       migrateCodexModelRefs: false,
@@ -195,7 +259,7 @@ describe("runDoctorConfigPreflight state migration input", () => {
         }),
         agents: expect.objectContaining({
           defaults: expect.objectContaining({}),
-          entries: { main: { default: true } },
+          entries: { main: {} },
         }),
       }),
       pluginDoctorConfig: resolvedConfig,
@@ -290,7 +354,7 @@ describe("runDoctorConfigPreflight state migration input", () => {
     });
     expect(migrationParams?.env).toBe(process.env);
     expect(repairLegacyCronStoreWithoutPrompt).toHaveBeenCalledWith({
-      cfg: migrationParams?.cfg,
+      cfg: expect.objectContaining({ cron: { store: "/tmp/legacy-cron.json" } }),
       migrateCodexModelRefs: false,
     });
     expect(autoMigrateLegacyTaskStateSidecars).not.toHaveBeenCalled();

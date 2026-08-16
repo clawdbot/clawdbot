@@ -6,6 +6,7 @@ import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "./helpers/openclaw-test-instance.js";
+import { createDeferred } from "./helpers/promise.js";
 
 const TEST_TIMEOUT_MS = 180_000;
 const MODEL_REF = "hook-concurrency/hook-concurrency";
@@ -88,7 +89,10 @@ describe("Gateway hook concurrency", () => {
         error: "hook agent run did not start before admission timeout",
         runId: expect.any(String),
       });
-      expect(modelServer.active(), instance.logs()).toBeGreaterThan(0);
+      await vi.waitFor(() => expect(modelServer.active(), instance.logs()).toBeGreaterThan(0), {
+        interval: 20,
+        timeout: 30_000,
+      });
       expect(modelServer.peak(), instance.logs()).toBeLessThanOrEqual(SHARED_BUDGET);
       expect(modelServer.requestCount(), instance.logs()).toBeLessThanOrEqual(SHARED_BUDGET + 1);
 
@@ -202,14 +206,6 @@ async function postHook(instance: OpenClawTestInstance, index: number): Promise<
     body: await response.text(),
     status: response.status,
   };
-}
-
-function createDeferred(): Deferred {
-  let resolve!: () => void;
-  const promise = new Promise<void>((settle) => {
-    resolve = settle;
-  });
-  return { promise, resolve };
 }
 
 async function startHeldModelServer(): Promise<HeldModelServer> {

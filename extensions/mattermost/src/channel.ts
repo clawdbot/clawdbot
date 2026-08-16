@@ -972,6 +972,13 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
       targetIdComparison: "case-sensitive",
       defaultMarkdownTableMode: "off",
       normalizeTarget: normalizeMattermostMessagingTarget,
+      inferTargetChatType: ({ to }) => {
+        const target = normalizeMattermostMessagingTarget(to);
+        if (!target) {
+          return undefined;
+        }
+        return target.startsWith("user:") || target.startsWith("@") ? "direct" : "channel";
+      },
       resolveDeliveryTarget: ({ conversationId, parentConversationId }) => {
         const parent = parentConversationId?.trim();
         const child = conversationId.trim();

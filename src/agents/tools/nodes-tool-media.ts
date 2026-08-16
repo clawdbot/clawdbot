@@ -41,7 +41,7 @@ import {
 } from "./common.js";
 import type { GatewayCallOptions } from "./gateway.js";
 import { callGatewayTool } from "./gateway.js";
-import { resolveNode, resolveNodeId } from "./nodes-utils.js";
+import { resolveAgentNode, resolveAgentNodeId } from "./nodes-utils.js";
 
 export const MEDIA_INVOKE_ACTIONS = {
   "camera.snap": "camera_snap",
@@ -151,7 +151,7 @@ async function executeCameraSnap({
   imageSanitization,
 }: ExecuteNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
   const node = requireString(params, "node");
-  const resolvedNode = await resolveNode(gatewayOpts, node);
+  const resolvedNode = await resolveAgentNode(gatewayOpts, node);
   const nodeId = resolvedNode.nodeId;
   const facingRaw = normalizeLowercaseStringOrEmpty(params.facing) || "front";
   const facing =
@@ -243,7 +243,7 @@ async function executePhotosLatest({
   imageSanitization,
 }: ExecuteNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
   const node = requireString(params, "node");
-  const resolvedNode = await resolveNode(gatewayOpts, node);
+  const resolvedNode = await resolveAgentNode(gatewayOpts, node);
   const nodeId = resolvedNode.nodeId;
   const limit = Math.min(
     readPositiveIntegerParam(params, "limit") ?? DEFAULT_PHOTOS_LIMIT,
@@ -331,7 +331,7 @@ async function executeCameraClip({
   gatewayOpts,
 }: ExecuteNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
   const node = requireString(params, "node");
-  const resolvedNode = await resolveNode(gatewayOpts, node);
+  const resolvedNode = await resolveAgentNode(gatewayOpts, node);
   const nodeId = resolvedNode.nodeId;
   const facing = normalizeLowercaseStringOrEmpty(params.facing) || "front";
   if (facing !== "front" && facing !== "back") {
@@ -384,7 +384,7 @@ async function executeScreenRecord({
   gatewayOpts,
 }: ExecuteNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
   const node = requireString(params, "node");
-  const nodeId = await resolveNodeId(gatewayOpts, node);
+  const nodeId = await resolveAgentNodeId(gatewayOpts, node);
   const durationMs = Math.min(
     readPositiveIntegerParam(params, "durationMs") ??
       (typeof params.duration === "string" ? parseDurationMs(params.duration) : 10_000),
@@ -435,7 +435,7 @@ async function executeScreenSnapshot({
   gatewayOpts,
 }: ExecuteNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
   const node = requireString(params, "node");
-  const nodeId = await resolveNodeId(gatewayOpts, node);
+  const nodeId = await resolveAgentNodeId(gatewayOpts, node);
   const screenIndex = readNonNegativeIntegerParam(params, "screenIndex") ?? 0;
   const maxWidth = readPositiveIntegerParam(params, "maxWidth");
   const outPath = normalizeOptionalString(params.outPath);

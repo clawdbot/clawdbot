@@ -70,13 +70,26 @@ Disable it on the node if needed:
 
 ## Run (foreground)
 
+For one-paste onboarding, use [`openclaw connect`](/cli/connect). It accepts a
+single-use join URL or the same setup code forms as `--pair`, then runs this
+node-host runtime.
+
 ```bash
 openclaw node run --host <gateway-host> --port 18789
+```
+
+Or paste a short-lived node setup link from the Control UI Devices page:
+
+```bash
+openclaw node run --pair "oc-pair://<setup-code>"
 ```
 
 Options:
 
 - `--host <host>`: Gateway WebSocket host (default: `127.0.0.1`)
+- `--pair <code-or-url>`: Read the Gateway endpoint, bootstrap token, TLS mode,
+  and optional certificate pin from a setup code or `oc-pair://` URL. Explicit
+  gateway flags override values from `--pair`.
 - `--port <port>`: Gateway WebSocket port (default: `18789`)
 - `--context-path <path>`: Gateway WebSocket context path (e.g. `/openclaw-gw`). Appended to the WebSocket URL.
 - `--tls`: Use TLS for the gateway connection
@@ -86,6 +99,12 @@ Options:
 - `--display-name <name>`: Override the node display name
 
 ## Gateway auth for node host
+
+`--pair` uses a 10-minute single-use bootstrap token for the first connection.
+After pairing, reconnects use the durable device credential. The setup link
+does not pre-approve `system.run`; normal node approval and SSH verification
+remain in force. `node install --pair` is intentionally unavailable because a
+short-lived bearer setup link must not be persisted in service arguments.
 
 `openclaw node run` and `openclaw node install` resolve gateway auth from config/env (no `--token`/`--password` flags on node commands):
 
@@ -125,6 +144,12 @@ Options:
 - `--display-name <name>`: Override the node display name
 - `--runtime <runtime>`: Service runtime (`node`)
 - `--force`: Reinstall/overwrite if already installed
+
+> **Linux (systemd user service):** Run `sudo loginctl enable-linger <user>` after
+> install. Without lingering, `systemd --user` tears down the node service when
+> your last SSH session ends, so the node silently goes offline after logout.
+> `openclaw node install` prints this warning when it detects lingering is
+> disabled.
 
 Manage the service:
 
@@ -260,4 +285,5 @@ created are rejected instead of changing what the node executes.
 ## Related
 
 - [CLI reference](/cli)
+- [Connect a machine](/cli/connect)
 - [Nodes](/nodes)

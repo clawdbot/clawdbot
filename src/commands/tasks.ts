@@ -3,10 +3,11 @@
 
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { parseCliEnumFilter } from "../cli/enum-filter.js";
 import { formatLookupMiss } from "../cli/error-format.js";
 import { getRuntimeConfig } from "../config/config.js";
 import {
@@ -42,14 +43,23 @@ import {
   reconcileTaskLookupToken,
 } from "../tasks/task-registry.reconcile.js";
 import { summarizeTaskRecords } from "../tasks/task-registry.summary.js";
-import type { TaskNotifyPolicy, TaskRecord } from "../tasks/task-registry.types.js";
+import {
+  TASK_RUNTIMES,
+  TASK_STATUSES,
+  type TaskNotifyPolicy,
+  type TaskRecord,
+} from "../tasks/task-registry.types.js";
 import { formatTaskStatusDetail } from "../tasks/task-status.js";
+import {
+  TASK_SYSTEM_AUDIT_CODES,
+  TASK_SYSTEM_AUDIT_SEVERITIES,
+  type TaskSystemAuditCode,
+  type TaskSystemAuditSeverity,
+} from "../tasks/task-system-audit.types.js";
 import {
   buildTaskSystemAuditJsonPayload,
   buildTaskSystemAuditFindings,
-  type TaskSystemAuditCode,
   type TaskSystemAuditFinding,
-  type TaskSystemAuditSeverity,
 } from "./tasks-audit-system.js";
 
 const RUNTIME_PAD = 8;
@@ -206,7 +216,9 @@ function truncate(value: string, maxChars: number) {
   if (value.length <= maxChars) {
     return value;
   }
-  return maxChars <= 0 ? "" : `${truncateUtf16Safe(value, maxChars - 1)}…`;
+  return maxChars <= 0
+    ? ""
+    : truncateWithMarker(value, maxChars, { marker: "…", reserve: 1, trimEnd: false });
 }
 
 function shortToken(value: string | undefined, maxChars = ID_PAD): string {
@@ -348,8 +360,8 @@ export async function tasksListCommand(
   opts: { json?: boolean; runtime?: string; status?: string },
   runtime: RuntimeEnv,
 ) {
-  const runtimeFilter = normalizeOptionalString(opts.runtime);
-  const statusFilter = normalizeOptionalString(opts.status);
+  const runtimeFilter = parseCliEnumFilter(opts.runtime, "--runtime", TASK_RUNTIMES);
+  const statusFilter = parseCliEnumFilter(opts.status, "--status", TASK_STATUSES);
   const tasks = reconcileInspectableTasks().filter((task) => {
     if (runtimeFilter && task.runtime !== runtimeFilter) {
       return false;
@@ -594,11 +606,15 @@ export async function tasksAuditCommand(
   },
   runtime: RuntimeEnv,
 ) {
-  configureTaskMaintenanceFromConfig();
-  const severityFilter = normalizeOptionalString(opts.severity) as
-    | TaskSystemAuditSeverity
+  const severityFilter = parseCliEnumFilter(
+    opts.severity,
+    "--severity",
+    TASK_SYSTEM_AUDIT_SEVERITIES,
+  ) as TaskSystemAuditSeverity | undefined;
+  const codeFilter = parseCliEnumFilter(opts.code, "--code", TASK_SYSTEM_AUDIT_CODES) as
+    | TaskSystemAuditCode
     | undefined;
-  const codeFilter = normalizeOptionalString(opts.code) as TaskSystemAuditCode | undefined;
+  configureTaskMaintenanceFromConfig();
   const auditResult = toSystemAuditFindings({
     severityFilter,
     codeFilter,

@@ -12,7 +12,7 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { readFiniteNumberParam, readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { isIncognitoSessionKey, normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import { asOptionalRecord as asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { Type } from "typebox";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
@@ -81,6 +81,14 @@ export {
   normalizeRecallQuery,
   shouldCapture,
 } from "./memory-policy.js";
+
+function memoryDeleteFailureResult(id: string) {
+  const error = `Memory ${id} was not deleted because it was not found.`;
+  return {
+    content: [{ type: "text" as const, text: error }],
+    details: { action: "not_found", status: "error", error, id },
+  };
+}
 
 export default definePluginEntry({
   id: "memory-lancedb",
@@ -154,7 +162,7 @@ export default definePluginEntry({
           ...(typeof cfg.embedding.dimensions === "number"
             ? { dimensions: cfg.embedding.dimensions }
             : {}),
-          ...asRecord(runtimePluginConfig.embedding),
+          ...asOptionalRecord(runtimePluginConfig.embedding),
         },
         ...(cfg.dreaming ? { dreaming: cfg.dreaming } : {}),
         dbPath: cfg.dbPath,
@@ -163,7 +171,7 @@ export default definePluginEntry({
         captureMaxChars: cfg.captureMaxChars,
         recallMaxChars: cfg.recallMaxChars,
         ...(cfg.storageOptions ? { storageOptions: cfg.storageOptions } : {}),
-        ...asRecord(runtimePluginConfig),
+        ...asOptionalRecord(runtimePluginConfig),
       });
     };
     const readMemoryRecallCooldown = (agentId: string): { error: string } | undefined => {
@@ -227,13 +235,13 @@ export default definePluginEntry({
             try {
               recall = await runWithTimeout({
                 timeoutMs: DEFAULT_TOOL_RECALL_TIMEOUT_MS,
-                task: async () => {
+                task: async (deadlineAtMs) => {
                   let vector: number[];
                   try {
                     vector = await embeddings.embed(
                       agentId,
                       normalizeRecallQuery(query, currentCfg.recallMaxChars),
-                      { timeoutMs: DEFAULT_TOOL_RECALL_TIMEOUT_MS },
+                      { timeoutMs: Math.max(1, deadlineAtMs - Date.now()) },
                     );
                   } catch (error) {
                     throw new MemoryRecallEmbeddingError(error);
@@ -244,6 +252,7 @@ export default definePluginEntry({
                     vector,
                     limit + DEFAULT_TOOL_RECALL_OVERFETCH_EXTRA,
                     0.1,
+                    { timeoutMs: Math.max(0, deadlineAtMs - Date.now()) },
                   );
                 },
               });
@@ -323,7 +332,7 @@ export default definePluginEntry({
           name: "memory_store",
           label: "Memory Store",
           description:
-            "Save important information in long-term memory. Use for preferences, facts, decisions.",
+            "Save important information in long-term memory. Success means the exact text already exists or the database commit completed; it does not guarantee semantic recall.",
           parameters: Type.Object({
             text: Type.String({ description: "Information to remember" }),
             importance: optionalFiniteNumberSchema({
@@ -342,7 +351,11 @@ export default definePluginEntry({
                     text: "Memory was not stored because this is an incognito session.",
                   },
                 ],
-                details: { action: "rejected", reason: "incognito_session" },
+                details: {
+                  action: "rejected",
+                  reason: "incognito_session",
+                  status: "blocked",
+                },
               };
             }
             const { text, category = "other" } = params as {
@@ -366,23 +379,24 @@ export default definePluginEntry({
                 details: {
                   action: "rejected",
                   reason: "prompt_injection_detected",
+                  status: "blocked",
                 },
               };
             }
 
             const vector = await embeddings.embed(agentId, text);
 
-            const existing = await findCleanDuplicateMemory(db, agentId, vector);
+            const existing = await findCleanDuplicateMemory(db, agentId, vector, text);
             if (existing) {
               return {
                 content: [
                   {
                     type: "text",
-                    text: `Similar memory already exists: "${existing.entry.text}"`,
+                    text: `Already stored: "${existing.entry.text}"`,
                   },
                 ],
                 details: {
-                  action: "duplicate",
+                  action: "already_present",
                   existingId: existing.entry.id,
                   existingText: existing.entry.text,
                 },
@@ -429,10 +443,7 @@ export default definePluginEntry({
             if (memoryId) {
               const deleted = await db.delete(agentId, memoryId);
               if (!deleted) {
-                return {
-                  content: [{ type: "text", text: `Memory ${memoryId} was not found.` }],
-                  details: { action: "not_found", id: memoryId },
-                };
+                return memoryDeleteFailureResult(memoryId);
               }
               return {
                 content: [{ type: "text", text: `Memory ${memoryId} forgotten.` }],
@@ -457,7 +468,10 @@ export default definePluginEntry({
 
               const singleResult = results.length === 1 ? results[0] : undefined;
               if (singleResult && singleResult.score > 0.9) {
-                await db.delete(agentId, singleResult.entry.id);
+                const deleted = await db.delete(agentId, singleResult.entry.id);
+                if (!deleted) {
+                  return memoryDeleteFailureResult(singleResult.entry.id);
+                }
                 return {
                   content: [{ type: "text", text: `Forgotten: "${singleResult.entry.text}"` }],
                   details: { action: "deleted", id: singleResult.entry.id },
@@ -535,11 +549,11 @@ export default definePluginEntry({
         let recallPhase: "embedding" | "search" = "embedding";
         const recall = await runWithTimeout({
           timeoutMs: DEFAULT_AUTO_RECALL_TIMEOUT_MS,
-          task: async () => {
+          task: async (deadlineAtMs) => {
             let vector: number[];
             try {
               vector = await embeddings.embed(agentId, recallQuery, {
-                timeoutMs: DEFAULT_AUTO_RECALL_TIMEOUT_MS,
+                timeoutMs: Math.max(1, deadlineAtMs - Date.now()),
               });
             } catch (error) {
               throw new MemoryRecallEmbeddingError(error);
@@ -549,7 +563,9 @@ export default definePluginEntry({
             recallPhase = "search";
             // Overfetch to compensate for sludge filtering: if contaminated
             // entries occupy the top slots we still surface enough clean ones.
-            return await db.search(agentId, vector, DEFAULT_AUTO_RECALL_OVERFETCH_LIMIT, 0.3);
+            return await db.search(agentId, vector, DEFAULT_AUTO_RECALL_OVERFETCH_LIMIT, 0.3, {
+              timeoutMs: Math.max(0, deadlineAtMs - Date.now()),
+            });
           },
         });
         if (recall.status === "timeout") {

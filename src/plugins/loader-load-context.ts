@@ -5,6 +5,7 @@ import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import { resolveUserPath } from "../utils.js";
 import { resolvePluginActivationSourceConfig } from "./activation-source-config.js";
@@ -30,14 +31,6 @@ import {
 } from "./plugin-control-plane-context.js";
 import { normalizePluginIdScope, serializePluginIdScope } from "./plugin-scope.js";
 import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
-
-function safeRealpathOrResolve(value: string): string {
-  try {
-    return fs.realpathSync(value);
-  } catch {
-    return path.resolve(value);
-  }
-}
 
 function resolveBundledPackageRootForCache(stockRoot?: string): string | undefined {
   if (!stockRoot) {
@@ -120,8 +113,8 @@ function resolveBundledPackageCacheIdentity(
   try {
     const stat = fs.statSync(packageJsonPath);
     identity = {
-      packageJson: safeRealpathOrResolve(packageJsonPath),
-      packageRoot: safeRealpathOrResolve(packageRoot),
+      packageJson: resolveRealpathOrAbsolute(packageJsonPath),
+      packageRoot: resolveRealpathOrAbsolute(packageRoot),
       packageVersion: readPackageVersionForCache(packageJsonPath),
       size: stat.size,
       mtimeMs: stat.mtimeMs,
@@ -129,7 +122,7 @@ function resolveBundledPackageCacheIdentity(
   } catch {
     identity = {
       packageJson: path.resolve(packageJsonPath),
-      packageRoot: safeRealpathOrResolve(packageRoot),
+      packageRoot: resolveRealpathOrAbsolute(packageRoot),
       packageVersion: "missing",
       size: -1,
       mtimeMs: -1,
@@ -196,6 +189,7 @@ function buildCacheKey(params: {
   runtimeBindingIdentity?: string;
   pluginSdkResolution?: PluginSdkResolutionPreference;
   coreGatewayMethodNames?: string[];
+  allowProcessHomeSessionCatalogs?: boolean;
   activate?: boolean;
 }): string {
   const discoveryContext = resolvePluginDiscoveryContext({
@@ -244,6 +238,7 @@ function buildCacheKey(params: {
       installs,
       loadPaths,
       activationMetadataKey: params.activationMetadataKey ?? "",
+      allowProcessHomeSessionCatalogs: params.allowProcessHomeSessionCatalogs !== false,
     },
   )}::${serializePluginIdScope(params.onlyPluginIds)}::${setupOnlyKey}::${setupOnlyModeKey}::${setupOnlyRequirementKey}::${params.channelPluginLoadIntent}::${bundledArtifactMode}::${rawConfigEnvMode}::${moduleLoadMode}::${discoveryMode}::${params.runtimeSubagentMode ?? "default"}::${params.runtimeBindingIdentity ?? "{}"}::${params.pluginSdkResolution ?? "auto"}::${JSON.stringify(params.coreGatewayMethodNames ?? [])}::${activationMode}`;
   return createHash("sha256").update(cacheIdentity).digest("hex");
@@ -394,6 +389,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     runtimeBindingIdentity: resolveRuntimeBindingCacheIdentity(options.runtimeOptions),
     pluginSdkResolution: options.pluginSdkResolution,
     coreGatewayMethodNames,
+    allowProcessHomeSessionCatalogs: options.allowProcessHomeSessionCatalogs,
     activate: options.activate,
   });
   return {

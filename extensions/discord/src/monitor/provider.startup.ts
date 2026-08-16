@@ -286,7 +286,7 @@ export function registerDiscordMonitorListeners(params: {
   }
   registerDiscordListener(
     params.client.listeners,
-    new DiscordThreadUpdateListener(params.cfg, params.accountId, params.logger),
+    new DiscordThreadUpdateListener(params.cfg, params.logger),
   );
   registerDiscordListener(
     params.client.listeners,

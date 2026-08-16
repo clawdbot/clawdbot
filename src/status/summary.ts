@@ -1,20 +1,32 @@
 // Builds the status summary used by human and JSON status output.
 // It aggregates sessions, tasks, heartbeat, channel summary, and model/runtime metadata.
 
+import { normalizeLowercaseStringOrEmpty as normalizeStatusModelPart } from "@openclaw/normalization-core/string-coerce";
+import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import { getRuntimeConfig, projectConfigOntoRuntimeSourceSnapshot } from "../config/config.js";
-import { resolveMainSessionKey } from "../config/sessions/main-session.js";
+import { resolveSystemMainSessionKey } from "../config/sessions/main-session.js";
 import {
   hasSessionActiveAutoModelFallback,
   hasSessionAutoModelFallbackProvenance,
 } from "../config/sessions/model-override-provenance.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
-import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
-import { resolveSessionTotalTokens, type SessionEntry } from "../config/sessions/types.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import {
+  listSessionEntriesReadOnly,
+  loadExactSessionEntryReadOnly,
+} from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import {
+  resolveFreshSessionTotalTokens,
+  resolveSessionTotalTokens,
+  type SessionEntry,
+} from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
+import { resolveHeartbeatSessionKey } from "../infra/heartbeat-runner-session.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
+import { hasResolvableHeartbeatOwnerRoute } from "../infra/outbound/targets.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import {
   listActiveDegradedPlugins,
@@ -31,6 +43,7 @@ import {
   summarizeActionableTaskAuditFindings,
   summarizeRetainedLostTaskAuditFindings,
 } from "../tasks/task-registry.audit.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./types.js";
 
@@ -148,10 +161,6 @@ function hasUserPinnedModelSelection(entry: SessionEntry | undefined): boolean {
   return !hasSessionAutoModelFallbackProvenance(entry);
 }
 
-function normalizeStatusModelPart(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
-}
-
 function resolveTrustedSessionContextTokens(params: {
   entry: SessionEntry | undefined;
   provider: string | undefined;
@@ -255,6 +264,7 @@ export async function getStatusSummary(
     includeChannelSummary?: boolean;
     config?: OpenClawConfig;
     sourceConfig?: OpenClawConfig;
+    hostDesktopStatus?: import("../gateway/desktop/host-source.js").HostDesktopStatus;
   } = {},
 ): Promise<StatusSummary> {
   const { includeSensitive = true, includeChannelSummary = true } = options;
@@ -326,11 +336,36 @@ export async function getStatusSummary(
   const agentList = listGatewayAgentsBasic(cfg);
   const heartbeatAgents: HeartbeatStatus[] = agentList.agents.map((agent) => {
     const summary = resolveHeartbeatSummaryForAgent(cfg, agent.id);
+    const heartbeatSession = resolveHeartbeatSessionKey(
+      cfg,
+      agent.id,
+      summary.session === undefined ? undefined : { session: summary.session },
+    );
+    // Status must not create, register, or migrate an absent session database.
+    const entry = loadExactSessionEntryReadOnly({
+      agentId: agent.id,
+      storePath: heartbeatSession.storePath,
+      sessionKey: heartbeatSession.sessionKey,
+    })?.entry;
+    const route = deliveryContextFromSession(entry);
+    const heartbeat = {
+      ...cfg.agents?.defaults?.heartbeat,
+      ...resolveAgentConfig(cfg, agent.id)?.heartbeat,
+    };
+    // Owner status uses the runner's synchronous stage-1 decision.
+    // The shared probe requires positive direct proof before reporting ready.
+    const hasDeliveryRoute =
+      summary.target === "last"
+        ? Boolean(route?.channel && route.to)
+        : summary.target === "owner"
+          ? hasResolvableHeartbeatOwnerRoute({ cfg, agentId: agent.id, entry, heartbeat })
+          : true;
     return {
       agentId: agent.id,
       enabled: summary.enabled,
       every: summary.every,
       everyMs: summary.everyMs,
+      waitingForRoute: summary.enabled && !hasDeliveryRoute,
     } satisfies HeartbeatStatus;
   });
   const channelSummary = needsChannelPlugins
@@ -342,11 +377,12 @@ export async function getStatusSummary(
         }),
       )
     : [];
-  const mainSessionKey = resolveMainSessionKey(cfg);
+  const mainSessionKey = resolveSystemMainSessionKey(cfg);
   const queuedSystemEvents = peekSystemEvents(mainSessionKey);
   const taskMaintenanceModule = await loadTaskRegistryMaintenanceModule();
-  taskMaintenanceModule.configureTaskRegistryMaintenance();
-  const inspectableTasks = taskMaintenanceModule.reconcileInspectableTasks();
+  // Status may overlap a live Gateway, so task inspection must not initialize
+  // the writable process registry or its schema-owning shared-state handle.
+  const inspectableTasks = taskMaintenanceModule.listInspectableTasksReadOnly();
   const rawTasks = taskMaintenanceModule.getInspectableTaskRegistrySummary(inspectableTasks);
   const taskAuditFindings = taskMaintenanceModule.getInspectableTaskAuditFindings(inspectableTasks);
   const now = Date.now();
@@ -458,13 +494,15 @@ export async function getStatusSummary(
             allowAsyncLoad: false,
           }) ?? null;
         const total = resolveSessionTotalTokens(entry);
-        const totalTokensFresh =
-          typeof entry?.totalTokens === "number" ? entry?.totalTokensFresh !== false : false;
+        const freshTotal = resolveFreshSessionTotalTokens(entry);
+        const totalTokensFresh = freshTotal !== undefined;
         const remaining =
-          contextTokens != null && total !== undefined ? Math.max(0, contextTokens - total) : null;
+          contextTokens != null && freshTotal !== undefined
+            ? Math.max(0, contextTokens - freshTotal)
+            : null;
         const pct =
-          contextTokens && contextTokens > 0 && total !== undefined
-            ? Math.min(999, Math.round((total / contextTokens) * 100))
+          contextTokens && contextTokens > 0 && freshTotal !== undefined
+            ? Math.min(999, Math.round((freshTotal / contextTokens) * 100))
             : null;
         const runtime = resolveSessionRuntimeLabel({
           cfg,
@@ -513,28 +551,33 @@ export async function getStatusSummary(
       }),
     );
 
-  const storeSources = agentList.agents.map((agent) => ({
-    agentId: agent.id,
-    storePath: resolveStorePath(cfg.session?.store, { agentId: agent.id }),
-  }));
+  const storeSources = agentList.agents.map((agent) => {
+    const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: agent.id });
+    return {
+      agentId: agent.id,
+      databasePath: resolveSqliteTargetFromSessionStorePath(storePath, {
+        agentId: agent.id,
+      }).path,
+      storePath,
+    };
+  });
   const paths = new Set<string>();
   const pathCounts = new Map<string, number>();
   for (const source of storeSources) {
-    paths.add(source.storePath);
-    pathCounts.set(source.storePath, (pathCounts.get(source.storePath) ?? 0) + 1);
+    paths.add(source.databasePath);
+    pathCounts.set(source.databasePath, (pathCounts.get(source.databasePath) ?? 0) + 1);
   }
 
   const byAgent = await Promise.all(
-    agentList.agents.map(async (agent) => {
-      const storePath = resolveStorePath(cfg.session?.store, { agentId: agent.id });
-      const candidates = loadSessionCandidates(storePath, agent.id);
+    storeSources.map(async ({ agentId, databasePath, storePath }) => {
+      const candidates = loadSessionCandidates(storePath, agentId);
       const sessions = await buildSessionRows(
         selectRecentSessionCandidates(candidates, RECENT_SESSION_LIMIT),
-        { agentIdOverride: agent.id },
+        { agentIdOverride: agentId },
       );
       return {
-        agentId: agent.id,
-        path: storePath,
+        agentId,
+        path: databasePath,
         count: candidates.length,
         recent: sessions,
       };
@@ -543,21 +586,30 @@ export async function getStatusSummary(
 
   const allSessions = storeSources
     .filter((source, index, sources) => {
-      return sources.findIndex((candidate) => candidate.storePath === source.storePath) === index;
+      return (
+        sources.findIndex((candidate) => candidate.databasePath === source.databasePath) === index
+      );
     })
     .flatMap((source) =>
       loadSessionCandidates(
         source.storePath,
-        pathCounts.get(source.storePath) === 1 ? source.agentId : undefined,
+        pathCounts.get(source.databasePath) === 1 ? source.agentId : undefined,
       ),
     );
   const recent = await buildSessionRows(
     selectRecentSessionCandidates(allSessions, RECENT_SESSION_LIMIT),
   );
   const totalSessions = allSessions.length;
-
+  const hostDesktopStatus =
+    options.hostDesktopStatus ??
+    (
+      await (
+        await import("../gateway/desktop/host-source.js")
+      ).inspectHostDesktop({ config: cfg.desktop?.host })
+    ).status;
   const summary: StatusSummary = {
     runtimeVersion: resolveRuntimeServiceVersion(process.env),
+    hostDesktop: hostDesktopStatus,
     linkChannel: linkContext
       ? {
           id: linkContext.plugin.id,

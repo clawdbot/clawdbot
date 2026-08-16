@@ -2,6 +2,17 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
+/** @typedef {import("node:child_process").ExecFileSyncOptions} ExecFileSyncOptions */
+/** @typedef {import("node:child_process").ExecFileSyncOptionsWithBufferEncoding} ExecFileSyncOptionsWithBufferEncoding */
+/** @typedef {import("node:child_process").ExecFileSyncOptionsWithStringEncoding} ExecFileSyncOptionsWithStringEncoding */
+/**
+ * @typedef {(
+ *   command: string,
+ *   args: readonly string[],
+ *   options: ExecFileSyncOptions,
+ * ) => string | Uint8Array<ArrayBuffer>} ExecGhReadImpl
+ */
+
 const PLAIN_GH_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
 export const PLAIN_GH_SYSTEM_CANDIDATES = [
   // Prefer package-manager opt paths: bin/gh may intentionally be an Octopool shim.
@@ -12,6 +23,10 @@ export const PLAIN_GH_SYSTEM_CANDIDATES = [
   "/usr/local/bin/gh",
 ];
 
+/**
+ * @param {string} filePath
+ * @returns {boolean}
+ */
 function isExecutable(filePath) {
   try {
     fs.accessSync(filePath, fs.constants.X_OK);
@@ -21,12 +36,18 @@ function isExecutable(filePath) {
   }
 }
 
+/**
+ * @param {NodeJS.ProcessEnv} env
+ * @returns {string[]}
+ */
 function pathEntries(env) {
-  return String(env.PATH ?? "")
-    .split(path.delimiter)
-    .filter(Boolean);
+  return (env.PATH ?? "").split(path.delimiter).filter(Boolean);
 }
 
+/**
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {NodeJS.ProcessEnv}
+ */
 export function plainGhEnv(env = process.env) {
   const next = { ...env };
   delete next.CLICOLOR;
@@ -40,6 +61,11 @@ export function plainGhEnv(env = process.env) {
   return next;
 }
 
+/**
+ * @param {NodeJS.ProcessEnv} [env]
+ * @param {readonly string[]} [systemCandidates]
+ * @returns {string}
+ */
 export function resolvePlainGhBin(
   env = process.env,
   systemCandidates = PLAIN_GH_SYSTEM_CANDIDATES,
@@ -78,6 +104,29 @@ export function resolvePlainGhBin(
   throw new Error("missing required command: gh");
 }
 
+/**
+ * @overload
+ * @param {readonly string[]} args
+ * @param {ExecFileSyncOptionsWithStringEncoding} options
+ * @returns {string}
+ */
+/**
+ * @overload
+ * @param {readonly string[]} args
+ * @param {ExecFileSyncOptionsWithBufferEncoding} [options]
+ * @returns {Uint8Array<ArrayBuffer>}
+ */
+/**
+ * @overload
+ * @param {readonly string[]} args
+ * @param {ExecFileSyncOptions} [options]
+ * @returns {string | Uint8Array<ArrayBuffer>}
+ */
+/**
+ * @param {readonly string[]} args
+ * @param {ExecFileSyncOptions} [options]
+ * @returns {string | Uint8Array<ArrayBuffer>}
+ */
 export function execPlainGh(args, options = {}) {
   const env = plainGhEnv(options.env ?? process.env);
   const ghBin = resolvePlainGhBin(env);
@@ -88,6 +137,33 @@ export function execPlainGh(args, options = {}) {
   });
 }
 
+/**
+ * @overload
+ * @param {readonly string[]} args
+ * @param {ExecFileSyncOptionsWithStringEncoding} options
+ * @param {{execFileSyncImpl?: ExecGhReadImpl}} [params]
+ * @returns {string}
+ */
+/**
+ * @overload
+ * @param {readonly string[]} args
+ * @param {ExecFileSyncOptionsWithBufferEncoding} [options]
+ * @param {{execFileSyncImpl?: ExecGhReadImpl}} [params]
+ * @returns {Uint8Array<ArrayBuffer>}
+ */
+/**
+ * @overload
+ * @param {readonly string[]} args
+ * @param {ExecFileSyncOptions} [options]
+ * @param {{execFileSyncImpl?: ExecGhReadImpl}} [params]
+ * @returns {string | Uint8Array<ArrayBuffer>}
+ */
+/**
+ * @param {readonly string[]} args
+ * @param {ExecFileSyncOptions} [options]
+ * @param {{execFileSyncImpl?: ExecGhReadImpl}} [params]
+ * @returns {string | Uint8Array<ArrayBuffer>}
+ */
 export function execGhRead(args, options = {}, params = {}) {
   const env = plainGhEnv(options.env ?? process.env);
   // Reads stay on the cache-aware PATH shim; the explicit binary is reserved for writes.
@@ -100,10 +176,39 @@ export function execGhRead(args, options = {}, params = {}) {
   });
 }
 
+/**
+ * @param {readonly string[]} args
+ * @param {ExecFileSyncOptions} [options]
+ * @param {{execFileSyncImpl?: ExecGhReadImpl}} [params]
+ * @returns {unknown}
+ */
 export function execGhJson(args, options = {}, params = {}) {
   return JSON.parse(execGhRead(args, { ...options, encoding: "utf8" }, params));
 }
 
+/**
+ * @overload
+ * @param {string} endpoint
+ * @param {ExecFileSyncOptionsWithStringEncoding} options
+ * @returns {string}
+ */
+/**
+ * @overload
+ * @param {string} endpoint
+ * @param {ExecFileSyncOptionsWithBufferEncoding} [options]
+ * @returns {Uint8Array<ArrayBuffer>}
+ */
+/**
+ * @overload
+ * @param {string} endpoint
+ * @param {ExecFileSyncOptions} [options]
+ * @returns {string | Uint8Array<ArrayBuffer>}
+ */
+/**
+ * @param {string} endpoint
+ * @param {ExecFileSyncOptions} [options]
+ * @returns {string | Uint8Array<ArrayBuffer>}
+ */
 export function execGhApiRead(endpoint, options = {}) {
   return execGhRead(["api", endpoint, "--method", "GET"], options);
 }

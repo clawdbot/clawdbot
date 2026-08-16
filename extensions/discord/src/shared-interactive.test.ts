@@ -223,6 +223,30 @@ describe("buildDiscordInteractiveComponents", () => {
     expect(buildDiscordPresentationComponents(presentation)).toBeUndefined();
   });
 
+  it("preserves authored block order around controls", () => {
+    expect(
+      buildDiscordPresentationComponents({
+        blocks: [
+          { type: "text", text: "First" },
+          {
+            type: "buttons",
+            buttons: [{ label: "Approve", value: "approve", style: "success" }],
+          },
+          { type: "text", text: "Last" },
+        ],
+      }),
+    ).toEqual({
+      blocks: [
+        { type: "text", text: "First" },
+        {
+          type: "actions",
+          buttons: [{ label: "Approve", style: "success", callbackData: "approve" }],
+        },
+        { type: "text", text: "Last" },
+      ],
+    });
+  });
+
   it("renders typed approvals as actionable transport-private Discord controls", () => {
     const rendered = buildDiscordPresentationComponents({
       blocks: [

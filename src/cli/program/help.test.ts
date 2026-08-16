@@ -167,9 +167,13 @@ describe("configureProgramHelp", () => {
     process.argv = ["node", "openclaw", "plugins", "list", "--still-wat"];
     const secondError = await program.parseAsync(process.argv).catch((error: unknown) => error);
     expect(secondError).toBeInstanceOf(CommanderError);
+    process.argv = ["node", "openclaw", "plugins", "lis"];
+    const thirdError = await program.parseAsync(process.argv).catch((error: unknown) => error);
+    expect(thirdError).toBeInstanceOf(CommanderError);
 
     expect(stderr.match(/Try: openclaw plugins list --help/g)).toHaveLength(2);
     expect(stderr).not.toContain("openclaw plugins list list --help");
+    expect(stderr).toContain("Did you mean this?\n  openclaw plugins list\n");
   });
 
   it("suppresses banner formatting when parent default help requests it", () => {

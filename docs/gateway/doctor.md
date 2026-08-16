@@ -84,11 +84,12 @@ cat ~/.openclaw/openclaw.json
 `openclaw doctor --fix`. They share the same Doctor rule registry, but they do
 not select or act on rules in the same way:
 
-| Mode                     | Prompts   | Writes config/state     | Output                 | Use it for                      |
-| ------------------------ | --------- | ----------------------- | ---------------------- | ------------------------------- |
-| `openclaw doctor`        | yes       | no                      | friendly health report | a human checking status         |
-| `openclaw doctor --fix`  | sometimes | yes, with repair policy | friendly repair log    | applying approved repairs       |
-| `openclaw doctor --lint` | no        | no                      | structured findings    | CI, preflight, and review gates |
+| Mode                     | Prompts   | Writes config/state     | Output                 | Use it for                       |
+| ------------------------ | --------- | ----------------------- | ---------------------- | -------------------------------- |
+| `openclaw doctor`        | yes       | no                      | friendly health report | a human checking status          |
+| `openclaw doctor --json` | no        | no                      | JSON advisory report   | machine-readable operator checks |
+| `openclaw doctor --fix`  | sometimes | yes, with repair policy | friendly repair log    | applying approved repairs        |
+| `openclaw doctor --lint` | no        | no                      | structured findings    | CI, preflight, and review gates  |
 
 Default `doctor --lint` runs the broad-safe automation profile: checks that are
 static, local, and useful in CI or preflight output. It skips opt-in checks that
@@ -134,13 +135,15 @@ Exit codes:
 | `1`  | one or more findings met the selected threshold          |
 | `2`  | command/runtime failure before findings could be emitted |
 
+These threshold-based exit codes belong to explicit `--lint` mode, with or without `--json`. Bare `openclaw doctor --json` preserves ordinary Doctor's advisory exit `0` after producing its payload; machine consumers should read `ok` and `findings`. Fatal errors before output remain nonzero.
+
 Flags:
 
 - `--severity-min info|warning|error` (default `warning`): controls both what prints and what causes a non-zero exit.
 - `--all`: runs every registered lint check, including opt-in checks excluded from the default automation set.
 - `--only <id>` (repeatable): run only the named check id(s); an unknown id is reported as an error finding.
 - `--skip <id>` (repeatable): exclude a check while keeping the rest of the run active.
-- `--json`, `--severity-min`, `--all`, `--only`, and `--skip` require `--lint`; plain `openclaw doctor` and `--fix` runs reject them.
+- `--severity-min`, `--all`, `--only`, and `--skip` require `--lint`. Bare `--json` is allowed for an advisory machine-readable report; `--fix` rejects it unless another machine mode owns the output.
 
 ## What it does (summary)
 
@@ -155,12 +158,13 @@ Flags:
   <Accordion title="Config and migrations">
     - Config normalization for legacy value shapes.
     - Talk config migration from legacy flat `talk.*` fields into `talk.provider` + `talk.providers.<provider>`.
-    - Browser migration checks for legacy Chrome extension configs and Chrome MCP readiness.
+    - Browser migration checks for legacy Chrome extension configs, owned native-bootstrap registration drift, and Chrome MCP readiness.
     - OpenCode provider override warnings (`models.providers.opencode` / `opencode-zen` / `opencode-go`).
     - Legacy OpenAI Codex provider/profile migration (`openai-codex` → `openai`) and shadowing warnings for stale `models.providers.openai-codex`.
     - OAuth TLS prerequisites check for OpenAI Codex OAuth profiles.
     - Plugin/tool allowlist warnings when `plugins.allow` is restrictive but tool policy still asks for wildcard or plugin-owned tools.
     - Legacy on-disk state migration (sessions/agent dir/WhatsApp auth).
+    - Retired QMD memory config and derived workspace cleanup; see [Migrating from QMD](/concepts/memory-builtin#migrating-from-qmd).
     - Legacy plugin manifest contract key migration (`speechProviders`, `realtimeTranscriptionProviders`, `realtimeVoiceProviders`, `mediaUnderstandingProviders`, `imageGenerationProviders`, `videoGenerationProviders`, `webFetchProviders`, `webSearchProviders` → `contracts`).
     - Legacy cron store migration (`jobId`, `schedule.cron`, top-level delivery/payload fields, payload `provider`, `notify: true` webhook fallback jobs).
     - Legacy workspace `TOOLS.md` migration into the `## Tools` section of `AGENTS.md`, with the original archived under the state directory before removal.
@@ -203,7 +207,7 @@ Flags:
     - Workspace bootstrap file size check (truncation/near-limit warnings for context files).
     - Skills readiness check for the default agent; reports allowed skills with missing bins, env, config, or OS requirements, and `--fix` can disable unavailable skills in `skills.entries`.
     - Shell completion status check and auto-install/upgrade.
-    - Memory search embedding provider readiness check (local model, remote API key, or QMD binary).
+    - Memory search embedding provider readiness check (local model or remote API key).
     - Source install checks (pnpm workspace mismatch, missing UI assets, missing tsx binary).
     - Writes updated config + wizard metadata.
 
@@ -287,7 +291,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     | `plugins.entries.voice-call.config.streaming.openaiApiKey`/`sttModel`/`silenceDurationMs`/`vadThreshold` | `plugins.entries.voice-call.config.streaming.providers.openai.*`             |
     | `models.providers.*.api: "openai"`                                                               | `"openai-completions"` (gateway startup also skips providers whose `api` is a future/unknown enum value rather than failing closed) |
     | `browser.ssrfPolicy.allowPrivateNetwork`                                                         | `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork`                          |
-    | `browser.profiles.*.driver: "extension"`                                                         | `"existing-session"`                                                          |
+    | `browser.profiles.*.driver: "extension"` with a stale `cdpUrl`                                  | driver preserved; stale relay URL removed                                     |
     | `browser.relayBindHost`                                                                          | removed (legacy Chrome extension relay setting)                             |
     | `mcp.servers.*.type` (CLI-native aliases)                                                        | `mcp.servers.*.transport`                                                    |
     | `mcp.servers.*.disabled`                                                                         | inverse `mcp.servers.*.enabled`                                              |
@@ -355,7 +359,15 @@ That stages grounded durable candidates into the short-term dreaming store while
     If you have added `models.providers.opencode`, `opencode-zen`, or `opencode-go` manually while the matching official external plugin is installed and enabled, it overrides that plugin-provided catalog. That can force models onto the wrong API or zero out costs. Doctor warns so you can remove the override and restore per-model API routing + costs. Without the matching plugin, the entry remains a valid standalone custom provider.
   </Accordion>
   <Accordion title="2c. Browser migration and Chrome MCP readiness">
-    If your browser config still points at the removed Chrome extension path, doctor normalizes it to the current host-local Chrome MCP attach model (`browser.profiles.*.driver: "extension"` → `"existing-session"`; `browser.relayBindHost` removed).
+    If an extension-driver profile still carries a retired relay `cdpUrl`, doctor removes that URL while preserving `driver: "extension"`; the current extension relay owns its endpoint. Doctor also removes the retired `browser.relayBindHost` setting.
+
+    Doctor warns while `browser.extensionRelay.allowLegacyAuth` is enabled. Upgrade paired Chrome extensions and external CDP clients to Browser Relay Authentication v2, then set the flag to `false`. V2 clients do not downgrade to legacy authentication.
+
+    When a stable Chrome extension copy and owned native-host registration already
+    exist, doctor reports registration drift. `openclaw doctor --fix` may repair
+    that owned registration, but it never installs the host for every OpenClaw
+    user and never overwrites a foreign same-name manifest or launcher. Use
+    `openclaw browser extension install` for the initial setup.
 
     Doctor also audits the host-local Chrome MCP path when you use `defaultProfile: "user"` or a configured `existing-session` profile:
 
@@ -405,6 +417,8 @@ That stages grounded durable candidates into the short-term dreaming store while
     - Signed device identity: from `~/.openclaw/identity/device.json` into the `primary` `device_identities` row in `state/openclaw.sqlite`; the separate device-auth file is left untouched
 
     These migrations are best-effort and idempotent; doctor emits warnings when it leaves any legacy folders behind as backups. The Gateway/CLI also auto-migrates the legacy sessions + agent dir on startup so history/auth/models land in the per-agent path without a manual doctor run. WhatsApp auth is intentionally only migrated via `openclaw doctor`. Talk provider/provider-map normalization compares by structural equality, so key-order-only diffs no longer trigger repeat no-op `doctor --fix` changes.
+
+    When an explicit roster no longer contains `main`, OpenClaw migrates durable `agent:main:*` SQLite rows only if the replacement owner is unambiguous: the sole roster member or the configured upgrade owner in `agents.defaults.sessionStore.agentId`. The explicit owner works for both per-agent and fixed session stores; fixed-store runtime ownership remains scoped to that physical store. Conflicting canonical or alias rows are preserved during startup and reported with a Doctor hint. `openclaw doctor --fix` first imports any legacy JSON session store, then keeps the winning canonical claim and renames each losing claim to `agent:<owner>:legacy-main-conflict-<n>` in its original database. Quarantine changes only the key; the entry and full transcript remain available for inspection or archival.
 
   </Accordion>
   <Accordion title="3a. Legacy plugin manifest migrations">
@@ -559,9 +573,8 @@ That stages grounded durable candidates into the short-term dreaming store while
     Doctor runs a health check and offers to restart the gateway when it looks unhealthy.
   </Accordion>
   <Accordion title="13b. Memory search readiness">
-    Doctor checks whether the configured memory search embedding provider is ready for the default agent. The behavior depends on the configured backend and provider:
+    Doctor checks whether the configured memory search embedding provider is ready for the default agent. The behavior depends on the configured provider:
 
-    - **QMD backend**: probes whether the `qmd` binary is available and startable. If not, prints fix guidance including `npm install -g @tobilu/qmd` (or the Bun equivalent) and a manual binary path option.
     - **Explicit local provider**: checks for a local model file or a recognized remote/downloadable model URL. If missing, suggests switching to a remote provider.
     - **Explicit remote provider** (`openai`, `voyage`, etc.): verifies an API key is present in the environment or auth store. Prints actionable fix hints if missing.
     - **Legacy auto provider**: treats `memorySearch.provider: "auto"` as OpenAI, checks OpenAI readiness, and `doctor --fix` rewrites it to `provider: "openai"`.

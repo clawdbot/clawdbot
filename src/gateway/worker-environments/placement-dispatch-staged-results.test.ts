@@ -170,6 +170,86 @@ describe("staged worker placement result recovery", () => {
     ).not.toBe(0);
   });
 
+  it("does not destroy the worker while a nested session operation is running", async () => {
+    const workspacePath = path.join(root, "running-session-operation");
+    const harness = createHarness(placementStore, { workspacePath });
+    const active = harness.placements.seedActive(2);
+    if (active.state !== "active") {
+      throw new Error("active placement fixture was not active");
+    }
+    harness.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);
+    const claim = placementStore.claimTurn({
+      ...REQUEST,
+      claimId: "running-session-operation-claim",
+      runId: "running-session-operation-run",
+      owner: {
+        kind: "worker",
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+    });
+    await stagePendingResult({
+      store: placementStore,
+      claim,
+      workspacePath,
+      base: "base\n",
+      current: "worker\n",
+    });
+    placementStore.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+    const binding = {
+      sessionId: claim.sessionId,
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      runId: claim.runId,
+    };
+    expect(
+      placementStore.beginWorkerSessionToolOperation({
+        binding,
+        toolName: "sessions_send",
+        toolCallId: "running-session-operation-call",
+        requestDigest: "running-session-operation-digest",
+      }),
+    ).toMatchObject({ kind: "execute" });
+    placementStore.handoffWorkspaceResultRecovery(claim);
+    let signalToolAdmissionClosed!: () => void;
+    const toolAdmissionClosed = new Promise<void>((resolve) => {
+      signalToolAdmissionClosed = resolve;
+    });
+    const closeWorkerTurnToolState = placementStore.closeWorkerTurnToolState.bind(placementStore);
+    // Reconciliation performs real Git I/O before reaching this boundary, so
+    // synchronize on admission closure instead of a wall-clock polling budget.
+    vi.spyOn(placementStore, "closeWorkerTurnToolState").mockImplementation((closingClaim) => {
+      const closing = closeWorkerTurnToolState(closingClaim);
+      signalToolAdmissionClosed();
+      return closing;
+    });
+
+    const reconciliation = harness.service.reconcile();
+
+    await toolAdmissionClosed;
+    expect(placementStore.isWorkerTurnToolAuthorized(binding, "sessions_send")).toBe(false);
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
+    expect(harness.placements.current()).toMatchObject({
+      state: "active",
+      turnClaim: { claimId: claim.claimId },
+    });
+    expect(placementStore.listPendingWorkspaceResults()).toHaveLength(1);
+
+    expect(
+      placementStore.completeWorkerSessionToolOperation({
+        sourceSessionId: claim.sessionId,
+        sourceClaimId: claim.claimId,
+        toolCallId: "running-session-operation-call",
+        requestDigest: "running-session-operation-digest",
+        resultJson: '{"status":"ok"}',
+      }),
+    ).toBe(true);
+    await reconciliation;
+
+    expect(harness.environments.destroy).toHaveBeenCalledWith(active.environmentId);
+    expect(harness.placements.current()).toMatchObject({ state: "reclaimed", turnClaim: null });
+  });
+
   it("applies a staged result after restart even when the worker is dead", async () => {
     const workspacePath = path.join(root, "dead-worker-staged-result");
     const originalHarness = createHarness(placementStore, { workspacePath });

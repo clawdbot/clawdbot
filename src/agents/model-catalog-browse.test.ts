@@ -1,10 +1,10 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 /**
  * Regression coverage for model catalog browsing.
  * Verifies filtered catalog output and pending load behavior.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import {
   buildProviderConfigModelCatalogForBrowse,
   loadPreparedModelCatalogSnapshotForBrowse,
@@ -99,6 +99,40 @@ describe("loadPreparedModelCatalogSnapshotForBrowse", () => {
     ).resolves.toBe(fullCatalog);
 
     expect(loadCatalog).toHaveBeenCalledExactlyOnceWith({ readOnly: false });
+  });
+
+  it("keeps automatic wildcard reads on prepared facts", async () => {
+    const loadCatalog = vi.fn(async ({ readOnly }: { readOnly: boolean }) =>
+      readOnly ? readOnlyCatalog : fullCatalog,
+    );
+
+    await expect(
+      loadPreparedModelCatalogSnapshotForBrowse({
+        cfg: config({ providerWildcard: true }),
+        view: "configured",
+        preparedOnly: true,
+        loadCatalog,
+      }),
+    ).resolves.toBe(readOnlyCatalog);
+
+    expect(loadCatalog).toHaveBeenCalledExactlyOnceWith({ readOnly: true });
+  });
+
+  it("forwards explicit refresh to full discovery", async () => {
+    const loadCatalog = vi.fn(async ({ readOnly }: { readOnly: boolean }) =>
+      readOnly ? readOnlyCatalog : fullCatalog,
+    );
+
+    await expect(
+      loadPreparedModelCatalogSnapshotForBrowse({
+        cfg: config(),
+        view: "all",
+        refresh: true,
+        loadCatalog,
+      }),
+    ).resolves.toBe(fullCatalog);
+
+    expect(loadCatalog).toHaveBeenCalledExactlyOnceWith({ readOnly: false, refresh: true });
   });
 
   it("uses the read-only catalog for provider-config views without picker allowlists", async () => {

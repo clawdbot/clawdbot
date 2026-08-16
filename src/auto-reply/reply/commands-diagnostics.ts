@@ -313,7 +313,7 @@ async function requestGatewayDiagnosticsExportApproval(
       security: "allowlist",
       ask: "always",
       background: true,
-      timeout: timeoutSec,
+      timeoutSeconds: timeoutSec,
     });
     if (result.details?.status === "approval-pending") {
       return { status: "pending" };

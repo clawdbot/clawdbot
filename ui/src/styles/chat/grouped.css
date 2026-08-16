@@ -151,7 +151,7 @@
   pointer-events: none;
 }
 
-.chat-group-footer--persistent-identity .chat-delete-wrap,
+.chat-group-footer--persistent-identity .chat-confirm-wrap,
 .chat-group-footer--persistent-identity .chat-group-timestamp,
 .chat-group-footer--persistent-identity .msg-meta,
 .chat-group-footer--persistent-identity .chat-group-footer-actions {
@@ -166,13 +166,13 @@
   pointer-events: auto;
 }
 
-.chat-group:hover .chat-group-footer--persistent-identity .chat-delete-wrap,
+.chat-group:hover .chat-group-footer--persistent-identity .chat-confirm-wrap,
 .chat-group:hover .chat-group-footer--persistent-identity .chat-group-timestamp,
 .chat-group:hover .chat-group-footer--persistent-identity .msg-meta,
-.chat-group:focus-within .chat-group-footer--persistent-identity .chat-delete-wrap,
+.chat-group:focus-within .chat-group-footer--persistent-identity .chat-confirm-wrap,
 .chat-group:focus-within .chat-group-footer--persistent-identity .chat-group-timestamp,
 .chat-group:focus-within .chat-group-footer--persistent-identity .msg-meta,
-.chat-group-footer--persistent-identity:has(details.msg-meta[open]) .chat-delete-wrap,
+.chat-group-footer--persistent-identity:has(details.msg-meta[open]) .chat-confirm-wrap,
 .chat-group-footer--persistent-identity:has(details.msg-meta[open]) .chat-group-timestamp,
 .chat-group-footer--persistent-identity:has(details.msg-meta[open]) .msg-meta,
 .chat-group:hover .chat-group-footer--persistent-identity .chat-group-footer-actions,
@@ -189,6 +189,13 @@
   flex-wrap: nowrap;
   gap: 8px;
   min-width: 0;
+}
+
+/* Own-message footers are right-aligned, so hover-revealed time/actions must
+   slot in to the LEFT of the always-visible name; otherwise the name jumps
+   sideways on hover. Peer footers are left-aligned and already stable. */
+.chat-group.user:not(.chat-group--peer) .chat-group-footer--persistent-identity .chat-sender-name {
+  order: 1;
 }
 
 .chat-group-footer-actions,
@@ -336,17 +343,13 @@
   stroke-linejoin: round;
 }
 
-.chat-group-delete:hover {
-  color: var(--danger) !important;
-}
-
 /* Chat divider (e.g., compaction marker) */
 .chat-divider {
   display: grid;
-  gap: 10px;
+  gap: 7px;
   margin: 18px 8px;
   color: var(--muted);
-  font-size: 12px; /* was 11px */
+  font-size: 12px;
   letter-spacing: 0;
   user-select: none;
 }
@@ -366,14 +369,24 @@
 
 .chat-divider__label {
   display: inline-flex;
-  align-items: baseline;
+  align-items: center;
   gap: 6px;
-  padding: 2px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  background: rgba(255, 255, 255, 0.02);
+  color: var(--muted-strong);
   font-weight: 600;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
+}
+
+.chat-divider__icon {
+  display: inline-flex;
+  width: 13px;
+  height: 13px;
+  color: var(--muted);
+}
+
+.chat-divider__icon svg {
+  width: 100%;
+  height: 100%;
 }
 
 .chat-divider__separator,
@@ -388,7 +401,7 @@
   flex-wrap: wrap;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 6px;
   padding: 0 16px;
   text-align: center;
 }
@@ -400,11 +413,34 @@
   line-height: 1.4;
 }
 
+.chat-divider__details-separator {
+  color: var(--muted);
+}
+
 .chat-divider__action {
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid currentColor;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  line-height: inherit;
   white-space: nowrap;
+  cursor: var(--cursor-action);
+}
+
+.chat-divider__action:hover {
+  color: var(--muted-strong);
+}
+
+.chat-divider__action:focus-visible {
+  outline: 1px solid var(--muted-strong);
+  outline-offset: 3px;
 }
 
 .chat-notice {
+  display: grid;
+  gap: 7px;
   margin: 14px auto;
   padding: 0 16px;
   color: var(--muted);
@@ -417,6 +453,11 @@
   color: inherit;
   font-size: inherit;
   line-height: inherit;
+}
+
+.chat-notice__body {
+  width: min(560px, 100%);
+  margin: 0 auto;
 }
 
 .chat-notice :where(ul, ol, pre, blockquote) {
@@ -501,6 +542,11 @@ img.chat-avatar {
   object-position: center;
 }
 
+img.chat-avatar.chat-avatar--logo {
+  object-fit: contain;
+  padding: 2px;
+}
+
 /* Minimal Bubble Design - dynamic width based on content */
 .chat-bubble {
   position: relative;
@@ -516,6 +562,10 @@ img.chat-avatar {
   box-sizing: border-box;
   min-width: 0;
   overflow-wrap: break-word;
+}
+
+.chat-thread .chat-bubble {
+  letter-spacing: 0; /* Custodian shares .chat-bubble but keeps the application-wide tracking. */
 }
 
 .chat-group.workspace-conflict .chat-group-messages {
@@ -652,7 +702,7 @@ img.chat-avatar {
     margin-bottom: 14px;
   }
 
-  .chat-group-footer--persistent-identity .chat-delete-wrap,
+  .chat-group-footer--persistent-identity .chat-confirm-wrap,
   .chat-group-footer--persistent-identity .chat-group-timestamp,
   .chat-group-footer--persistent-identity .msg-meta,
   .chat-group-footer--persistent-identity .chat-group-footer-actions {
@@ -675,7 +725,6 @@ img.chat-avatar {
 
   .chat-group-footer-actions .chat-copy-btn,
   .chat-group-footer-actions .chat-reply-btn,
-  .chat-group-footer-actions .chat-group-delete,
   .chat-message-actions-row .chat-copy-btn,
   .chat-message-actions-row .chat-reply-btn {
     min-width: 44px;
@@ -741,7 +790,8 @@ img.chat-avatar {
   outline-offset: 2px;
 }
 
-.chat-bubble:hover {
+/* Tool rows own their hover treatment; an accent border reads as an error. */
+.chat-bubble:not(:where(.chat-bubble--tool-shell)):hover {
   border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
 }
 
@@ -878,7 +928,7 @@ details.msg-meta:not([open]) .msg-meta__details {
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
   background: var(--card);
-  box-shadow: 0 8px 24px color-mix(in srgb, #000 30%, transparent);
+  box-shadow: 0 8px 24px color-mix(in srgb, black 30%, transparent);
 }
 
 .chat-group.user .msg-meta__details {
@@ -907,7 +957,7 @@ details.msg-meta:not([open]) .msg-meta__details {
   background: var(--bg-hover, rgba(255, 255, 255, 0.06));
   padding: 1px 6px;
   border-radius: var(--radius-sm, 4px);
-  font-family: var(--font-mono, monospace);
+  font-family: var(--mono);
 }
 
 .msg-meta__cost {
@@ -922,15 +972,15 @@ details.msg-meta:not([open]) .msg-meta__details {
   color: var(--danger);
 }
 
-/* ── Delete confirmation popover ── */
-.chat-delete-wrap {
+/* ── Confirmed action popover ── */
+.chat-confirm-wrap {
   position: relative;
   display: inline-flex;
 }
 
-.chat-delete-confirm {
+.chat-confirm-popover {
   position: fixed;
-  background: var(--card, #1a1a1a);
+  background: var(--card);
   border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
   border-radius: var(--radius-md, 8px);
   padding: 12px;
@@ -939,47 +989,40 @@ details.msg-meta:not([open]) .msg-meta__details {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
   z-index: 100;
   animation: scale-in 0.15s ease-out;
-}
-
-.chat-delete-confirm--left {
   transform-origin: top right;
 }
 
-.chat-delete-confirm--right {
-  transform-origin: top left;
-}
-
-.chat-delete-confirm__text {
+.chat-confirm-popover__text {
   margin: 0 0 8px;
   font-size: 13px;
   font-weight: 500;
   color: var(--text);
 }
 
-.chat-delete-confirm__remember {
+.chat-confirm-popover__remember {
   display: flex;
   align-items: center;
   gap: 6px;
   font-size: 12px; /* was 11px */
-  color: var(--muted, #888);
+  color: var(--muted);
   margin-bottom: 10px;
   user-select: none;
 }
 
-.chat-delete-confirm__check {
+.chat-confirm-popover__check {
   width: 14px;
   height: 14px;
   accent-color: var(--accent);
 }
 
-.chat-delete-confirm__actions {
+.chat-confirm-popover__actions {
   display: flex;
   gap: 6px;
   justify-content: flex-end;
 }
 
-.chat-delete-confirm__cancel,
-.chat-delete-confirm__yes {
+.chat-confirm-popover__cancel,
+.chat-confirm-popover__yes {
   border: none;
   border-radius: var(--radius-sm, 4px);
   padding: 4px 12px;
@@ -988,41 +1031,41 @@ details.msg-meta:not([open]) .msg-meta__details {
   transition: background 120ms ease-out;
 }
 
-.chat-delete-confirm__cancel {
+.chat-confirm-popover__cancel {
   background: var(--bg-hover, rgba(255, 255, 255, 0.08));
-  color: var(--muted, #888);
+  color: var(--muted);
 }
 
-.chat-delete-confirm__cancel:hover {
+.chat-confirm-popover__cancel:hover {
   background: rgba(255, 255, 255, 0.12);
 }
 
-.chat-delete-confirm__yes {
+.chat-confirm-popover__yes {
   background: var(--danger);
-  color: #fff;
+  color: var(--media-foreground);
 }
 
-:root[data-theme="dark"] .chat-delete-confirm__yes {
+:root[data-theme="dark"] .chat-confirm-popover__yes {
   background: var(--destructive);
   color: var(--destructive-foreground);
 }
 
-:root[data-theme="openknot"] .chat-delete-confirm__yes,
-:root[data-theme="dash"] .chat-delete-confirm__yes {
+:root[data-theme="openknot"] .chat-confirm-popover__yes,
+:root[data-theme="dash"] .chat-confirm-popover__yes {
   background: var(--destructive);
   color: var(--destructive-foreground);
 }
 
-.chat-delete-confirm__yes:hover {
-  background: #dc2626;
+.chat-confirm-popover__yes:hover {
+  background: var(--danger-solid-hover);
 }
 
-:root[data-theme="dark"] .chat-delete-confirm__yes:hover {
+:root[data-theme="dark"] .chat-confirm-popover__yes:hover {
   background: var(--destructive-hover);
 }
 
-:root[data-theme="openknot"] .chat-delete-confirm__yes:hover,
-:root[data-theme="dash"] .chat-delete-confirm__yes:hover {
+:root[data-theme="openknot"] .chat-confirm-popover__yes:hover,
+:root[data-theme="dash"] .chat-confirm-popover__yes:hover {
   background: var(--destructive-hover);
 }
 

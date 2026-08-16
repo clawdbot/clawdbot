@@ -7,7 +7,7 @@ import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 import { formatGatewaySummary, formatOutboundDeliverySummary } from "../infra/outbound/format.js";
-import type { MessageActionRunResult } from "../infra/outbound/message-action-runner.js";
+import type { MessageActionResult } from "../infra/outbound/message-action-contracts.js";
 import { formatTargetDisplay } from "../infra/outbound/target-resolver.js";
 import { shortenText } from "./text-format.js";
 
@@ -269,7 +269,7 @@ function renderPaginationHint(payload: unknown, muted: (text: string) => string)
 }
 
 export function formatMessageCliText(
-  result: MessageActionRunResult,
+  result: MessageActionResult,
   opts?: { displayLimit?: number },
 ): string[] {
   const rich = isRich();

@@ -1,10 +1,11 @@
-// Discord tests cover message utils plugin behavior.
 import {
   type APIAttachment,
   type APIStickerItem,
   MessageReferenceType,
   StickerFormatType,
 } from "discord-api-types/v10";
+// Discord tests cover message utils plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Message } from "../internal/discord.js";
 
@@ -97,12 +98,7 @@ const DISCORD_CDN_HOSTNAMES = [
   "*.discordapp.net",
 ];
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function requireArray(value: unknown, label: string): Array<unknown> {
   expect(Array.isArray(value), label).toBe(true);

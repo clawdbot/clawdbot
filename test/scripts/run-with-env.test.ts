@@ -11,7 +11,7 @@ import {
   resolveForceKillDelayMs,
   resolveSpawnCommand,
   signalRunWithEnvChild,
-} from "../../scripts/run-with-env.mjs";
+} from "../../scripts/run-with-env.mts";
 
 const taskkillPath = path.win32.join("C:\\Windows", "System32", "taskkill.exe");
 
@@ -105,13 +105,17 @@ describe("run-with-env", () => {
   });
 
   it("prints wrapper help without spawning a command", () => {
-    const result = spawnSync(process.execPath, ["scripts/run-with-env.mjs", "--help"], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-    });
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/run-with-env.mts", "--help"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Usage: node scripts/run-with-env.mjs");
+    expect(result.stdout).toContain("Usage: node --import tsx scripts/run-with-env.mts");
     expect(result.stderr).toBe("");
   });
 
@@ -125,7 +129,9 @@ describe("run-with-env", () => {
     const result = spawnSync(
       process.execPath,
       [
-        "scripts/run-with-env.mjs",
+        "--import",
+        "tsx",
+        "scripts/run-with-env.mts",
         "1INVALID=value",
         "--",
         "node",
@@ -175,6 +181,7 @@ describe("run-with-env", () => {
 
   it("rejects malformed force-kill grace configuration before spawning", () => {
     expect(resolveForceKillDelayMs({})).toBe(5_000);
+    expect(resolveForceKillDelayMs({ OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS: "  " })).toBe(5_000);
     expect(resolveForceKillDelayMs({ OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS: "250" })).toBe(250);
     expect(
       resolveForceKillDelayMs({
@@ -190,7 +197,9 @@ describe("run-with-env", () => {
     const result = spawnSync(
       process.execPath,
       [
-        "scripts/run-with-env.mjs",
+        "--import",
+        "tsx",
+        "scripts/run-with-env.mts",
         "OPENCLAW_RUN_WITH_ENV_SIGNAL_TEST=1",
         "--",
         "node",
@@ -286,7 +295,9 @@ describe("run-with-env", () => {
       const wrapper = spawn(
         process.execPath,
         [
-          "scripts/run-with-env.mjs",
+          "--import",
+          "tsx",
+          "scripts/run-with-env.mts",
           `READY_FILE=${readyFile}`,
           `SIGNALED_FILE=${signaledFile}`,
           "--",
@@ -337,7 +348,9 @@ describe("run-with-env", () => {
       const wrapper = spawn(
         process.execPath,
         [
-          "scripts/run-with-env.mjs",
+          "--import",
+          "tsx",
+          "scripts/run-with-env.mts",
           `READY_FILE=${readyFile}`,
           `GRANDCHILD_READY_FILE=${grandchildReadyFile}`,
           `GRANDCHILD_PID_FILE=${grandchildPidFile}`,
@@ -411,7 +424,9 @@ describe("run-with-env", () => {
       const wrapper = spawn(
         process.execPath,
         [
-          "scripts/run-with-env.mjs",
+          "--import",
+          "tsx",
+          "scripts/run-with-env.mts",
           `READY_FILE=${readyFile}`,
           `GRACEFUL_FILE=${gracefulFile}`,
           `GRANDCHILD_READY_FILE=${grandchildReadyFile}`,
@@ -452,7 +467,9 @@ describe("run-with-env", () => {
     const result = spawnSync(
       process.execPath,
       [
-        "scripts/run-with-env.mjs",
+        "--import",
+        "tsx",
+        "scripts/run-with-env.mts",
         "OPENCLAW_RUN_WITH_ENV_SIGNAL_TEST=1",
         "--",
         "node",
@@ -470,7 +487,9 @@ describe("run-with-env", () => {
     const result = spawnSync(
       process.execPath,
       [
-        "scripts/run-with-env.mjs",
+        "--import",
+        "tsx",
+        "scripts/run-with-env.mts",
         "OPENCLAW_RUN_WITH_ENV_SIGNAL_TEST=1",
         "--",
         "node",

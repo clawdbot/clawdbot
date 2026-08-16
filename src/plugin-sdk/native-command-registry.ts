@@ -8,6 +8,7 @@ export {
   listChatCommands,
   listNativeCommandSpecs,
   listNativeCommandSpecsForConfig,
+  mergeNativeCommandSpecs,
   parseCommandArgs,
   resolveCommandArgChoices,
   resolveCommandArgMenu,

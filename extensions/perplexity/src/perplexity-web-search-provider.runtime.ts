@@ -558,11 +558,7 @@ export const testing = {
   resolvePerplexityBaseUrl,
   resolvePerplexityModel,
   resolvePerplexityTransport,
-  isDirectPerplexityBaseUrl,
   resolvePerplexityRequestModel,
   resolvePerplexityApiKey,
   readPerplexityJsonResponse,
-  normalizeToIsoDate,
-  isoToPerplexityDate,
 } as const;
-export { testing as __testing };

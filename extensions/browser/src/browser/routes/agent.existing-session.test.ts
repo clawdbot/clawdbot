@@ -1,5 +1,7 @@
 // Browser tests cover agent.existing session plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChromeMcpSnapshotNode } from "../chrome-mcp.snapshot.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import {
   createExistingSessionAgentSharedModule,
@@ -19,7 +21,7 @@ const chromeMcpMocks = vi.hoisted(() => ({
   fillChromeMcpElement: vi.fn(async () => {}),
   navigateChromeMcpPage: vi.fn(async ({ url }: { url: string }) => ({ url })),
   takeChromeMcpScreenshot: vi.fn(async () => Buffer.from("png")),
-  takeChromeMcpSnapshot: vi.fn(async () => ({
+  takeChromeMcpSnapshot: vi.fn<() => Promise<ChromeMcpSnapshotNode>>(async () => ({
     id: "root",
     role: "document",
     name: "Example",
@@ -126,12 +128,7 @@ function getDialogHookPostHandler() {
   return handler;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function callArg(mock: unknown, callIndex: number, argIndex: number, label: string) {
   const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
@@ -272,6 +269,53 @@ describe("existing-session browser routes", () => {
     );
     expect(renderParams.fn).toContain('"btn-1"');
     expect(renderParams.fn).not.toContain('"btn-2"');
+  });
+
+  it("reports automatic Chrome MCP depth truncation through AI and ARIA routes", async () => {
+    let root: ChromeMcpSnapshotNode = { id: "leaf", role: "text", name: "leaf" };
+    for (let index = 0; index < 1_000; index += 1) {
+      root = { id: `n${index}`, role: "generic", name: `n${index}`, children: [root] };
+    }
+    chromeMcpMocks.takeChromeMcpSnapshot
+      .mockResolvedValueOnce(root)
+      .mockResolvedValueOnce(root)
+      .mockResolvedValueOnce(root);
+    const handler = getSnapshotGetHandler();
+
+    const ai = createBrowserRouteResponse();
+    await handler?.({ params: {}, query: { format: "ai" } }, ai.res);
+    const aiBody = requireRecord(ai.body, "AI snapshot body");
+    expect(aiBody.truncated).toBe(true);
+    expect(aiBody.snapshot).toContain("[...TRUNCATED - accessibility tree too deep]");
+
+    const aria = createBrowserRouteResponse();
+    await handler?.({ params: {}, query: { format: "aria" } }, aria.res);
+    const ariaBody = requireRecord(aria.body, "ARIA snapshot body");
+    expect(ariaBody.truncated).toBe(true);
+    expect(ariaBody.nodes).toHaveLength(101);
+
+    const requestedDepth = createBrowserRouteResponse();
+    await handler?.({ params: {}, query: { format: "ai", depth: "5" } }, requestedDepth.res);
+    const requestedDepthBody = requireRecord(requestedDepth.body, "requested-depth snapshot body");
+    expect(requestedDepthBody.truncated).toBeUndefined();
+    expect(requestedDepthBody.snapshot).not.toContain("TRUNCATED");
+  });
+
+  it("reports automatic Chrome MCP depth truncation on labeled screenshots", async () => {
+    let root: ChromeMcpSnapshotNode = { id: "leaf", role: "text", name: "leaf" };
+    for (let index = 0; index < 1_000; index += 1) {
+      root = { id: `n${index}`, role: "generic", name: `n${index}`, children: [root] };
+    }
+    chromeMcpMocks.takeChromeMcpSnapshot.mockResolvedValueOnce(root);
+    const handler = getSnapshotPostHandler();
+    const response = createBrowserRouteResponse();
+
+    await handler?.({ params: {}, query: {}, body: { labels: true } }, response.res);
+
+    expect(response.statusCode).toBe(200);
+    const body = requireRecord(response.body, "labeled screenshot body");
+    expect(body.labels).toBe(true);
+    expect(body.truncated).toBe(true);
   });
 
   it("allows ref screenshots for existing-session profiles", async () => {

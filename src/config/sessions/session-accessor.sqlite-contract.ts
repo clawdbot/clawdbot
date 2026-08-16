@@ -14,7 +14,9 @@ import type {
   SessionLifecycleArtifactCleanupResult,
   SessionLifecycleStoreTarget,
 } from "./session-accessor.lifecycle-types.js";
+import type { TranscriptEvent } from "./session-accessor.types.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
+import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import type { SessionEntry } from "./types.js";
 
 export type SessionAccessScope = {
@@ -49,6 +51,8 @@ export type SessionTranscriptReadScope = Omit<SessionTranscriptRuntimeScope, "se
 
 export type SessionTranscriptWriteScope = Omit<SessionTranscriptAccessScope, "sessionId"> & {
   sessionId?: string;
+  expectedLifecycleRevision?: string;
+  expectedWriterRunId?: string;
 };
 
 export type ExactSessionEntry = {
@@ -74,11 +78,22 @@ export type SessionTranscriptInstance = SessionEntrySummary & {
   updatedAtMs: number;
 };
 
-export type TranscriptEvent = unknown;
-
 export type TranscriptEventAppendOptions = {
   appendIntent?: "active-branch";
 };
+
+export type TranscriptEventAppendError =
+  | {
+      actualSessionId: string;
+      code: "session-rebound";
+      expectedSessionId: string;
+      sessionKey: string;
+    }
+  | {
+      code: "session-entry-missing";
+      expectedSessionId: string;
+      sessionKey: string;
+    };
 
 export type SessionTranscriptStats = {
   eventCount: number;
@@ -103,6 +118,7 @@ export type {
   SessionTranscriptRawDeltaResult,
   SessionTranscriptVisibleMessageDeltaLimits,
   SessionTranscriptVisibleMessageDeltaResult,
+  TranscriptEvent,
 } from "./session-accessor.types.js";
 
 export type TranscriptMessageAppendOptions<TMessage> = {
@@ -120,6 +136,7 @@ export type TranscriptMessageAppendOptions<TMessage> = {
 
 export type TranscriptMessageAppendResult<TMessage> = {
   appended: boolean;
+  anchor?: TranscriptEntryAnchor;
   effectiveParentId?: string | null;
   message: TMessage;
   messageId: string;
@@ -182,6 +199,17 @@ type SessionEntryReplacement = {
 
 export type SessionEntryReplacementUpdate<T> = {
   replacements?: Iterable<SessionEntryReplacement>;
+  result: T;
+};
+
+type SessionEntryBatchProjectionMutation = {
+  entry: SessionEntry;
+  previousSessionKeys?: readonly string[];
+  sessionKey: string;
+};
+
+export type SessionEntryBatchProjectionUpdate<T> = {
+  mutations?: Iterable<SessionEntryBatchProjectionMutation>;
   result: T;
 };
 

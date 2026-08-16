@@ -5,7 +5,6 @@ export function shouldSyncSessionsForReindex(params: {
   hasSessionSource: boolean;
   sessionsDirty: boolean;
   sessionsFullRetryDirty?: boolean;
-  dirtySessionFileCount: number;
   sync?: MemorySyncParams;
   needsFullReindex?: boolean;
 }): boolean {
@@ -31,5 +30,5 @@ export function shouldSyncSessionsForReindex(params: {
   if (reason === "session-start" || reason === "watch") {
     return false;
   }
-  return params.sessionsDirty && params.dirtySessionFileCount > 0;
+  return params.sessionsDirty;
 }

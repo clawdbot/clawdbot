@@ -290,7 +290,8 @@ export function renderConfig(props: ConfigProps) {
   // Includes the app updater: writes are suspended while it runs, so raw
   // Save/Discard must read busy instead of silently no-opping.
   const configBusy = props.loading || props.saving || props.applying || props.updating;
-  const canRawSave = props.connected && !configBusy && hasRawChanges;
+  const mutationAllowed = props.mutationAllowed !== false;
+  const canRawSave = props.connected && mutationAllowed && !configBusy && hasRawChanges;
   const showAppearanceOnRoot =
     includeVirtualSections &&
     formMode === "form" &&
@@ -483,7 +484,7 @@ export function renderConfig(props: ConfigProps) {
                       value: props.formValue,
                       embedded: props.embeddedEditor === true,
                       rawAvailable,
-                      disabled: configBusy || !props.formValue,
+                      disabled: configBusy || !props.formValue || !mutationAllowed,
                       unsupportedPaths: analysis.unsupportedPaths,
                       onPatch: props.onFormPatch,
                       onRemove: props.onFormRemove,
@@ -512,6 +513,7 @@ export function renderConfig(props: ConfigProps) {
                               ${t("configView.peek")}
                             </button>`
                           : undefined,
+                      sectionPrelude: props.sectionPrelude,
                       revealSensitive: props.activeSection === "env" ? envSensitiveVisible : false,
                       isSensitivePathRevealed: (path) => isSensitivePathRevealed(viewState, path),
                       onToggleSensitivePath: (path) => {
@@ -533,7 +535,7 @@ export function renderConfig(props: ConfigProps) {
                   <div class="settings-group">
                     <div class="settings-row settings-row--stacked">
                       <div class="config-raw-actions">
-                        ${props.onOpenFile
+                        ${props.onOpenFile && props.openFileAllowed !== false
                           ? html`<button class="btn btn--sm" @click=${props.onOpenFile}>
                               ${icons.fileText} ${t("configView.open")}
                             </button>`
@@ -606,7 +608,7 @@ export function renderConfig(props: ConfigProps) {
                           : html`<textarea
                               placeholder=${t("configView.rawConfig")}
                               .value=${props.raw}
-                              ?disabled=${configBusy}
+                              ?disabled=${configBusy || !mutationAllowed}
                               @input=${(event: Event) => {
                                 props.onRawChange((event.target as HTMLTextAreaElement).value);
                               }}

@@ -33,8 +33,6 @@ extension OnboardingView {
             ScrollView {
                 OnboardingAISetupView(
                     model: self.aiSetup,
-                    systemAgentChat: self.systemAgentState.chat,
-                    showSystemAgentChat: self.$systemAgentState.isPresented,
                     returnToGatewayAuthentication: { self.returnToGatewayAuthentication() },
                     retryConfiguredGatewayProbe: { self.retryConfiguredGatewayProbe() })
                     .padding(.vertical, 4)
@@ -50,9 +48,6 @@ extension OnboardingView {
     private var aiSetupSubtitle: String {
         if self.aiSetup.configuredGatewayAuthIssue != nil {
             return "Finish the remote Gateway connection before continuing."
-        }
-        if aiSetup.connected {
-            return "All good — your assistant has a working AI connection."
         }
         if state.connectionMode == .remote {
             return "AI access is configured on the remote Gateway. OpenClaw will use that existing setup."
@@ -74,9 +69,6 @@ extension OnboardingView {
     }
 
     func prepareSystemAgentHandoff() {
-        systemAgentState.chat.onAgentHandoff = { [self] agentDraft in
-            self.finish(agentDraft: agentDraft)
-        }
         aiSetup.onPendingActivationDeadline = { [self] deadline, routeIdentity in
             let currentRouteIdentity = self.aiSetupRouteIdentityProvider()
             guard currentRouteIdentity == routeIdentity else { return }
@@ -88,7 +80,7 @@ extension OnboardingView {
             aiSetup.onConnected = { [self] in
                 // Activation already persisted the resume marker before its RPC.
                 self.configuredGatewayProbe.cancelPendingActivationRecheck()
-                self.systemAgentState.presentAndStart()
+                self.finish()
             }
         }
     }
@@ -112,9 +104,7 @@ extension OnboardingView {
                   !Task.isCancelled
             else { return }
             self.configuredGatewayProbe.cancelPendingActivationRecheck()
-            // `onConnected` already owns presentation. Await that exact start
-            // task without starting a replacement route's chat after suspension.
-            await self.systemAgentState.waitForStartIfNeeded()
+            self.finish()
         }
     }
 

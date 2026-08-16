@@ -57,7 +57,7 @@ describe("min-host-version", () => {
     });
     expect(
       checkMinHostVersion({
-        currentVersion: "2026.3.22",
+        currentVersion: "OpenClaw 2026.3.22",
         minHostVersion: "2026.3.22",
         allowLegacyBareSemver: true,
       }),

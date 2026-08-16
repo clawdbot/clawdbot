@@ -5,7 +5,9 @@ import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatQuestionPrompt
+import ai.openclaw.app.chat.ChatSubagentActivity
 import ai.openclaw.app.chat.OUTBOX_OWNER_CHANGED_ERROR
+import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 
 internal sealed class ChatTimelineItem {
@@ -35,6 +37,11 @@ internal sealed class ChatTimelineItem {
     val toolCalls: List<ChatPendingToolCall>,
   ) : ChatTimelineItem()
 
+  data class SubagentActivity(
+    val activities: List<ChatSubagentActivity>,
+    val moreWorkingCount: Int = 0,
+  ) : ChatTimelineItem()
+
   data class QuestionPrompt(
     val prompt: ChatQuestionPrompt,
   ) : ChatTimelineItem()
@@ -43,7 +50,26 @@ internal sealed class ChatTimelineItem {
     val recap: TurnRecap,
   ) : ChatTimelineItem()
 
+  data class SystemNotice(
+    val key: String,
+    val label: String,
+    val body: String,
+  ) : ChatTimelineItem()
+
+  data class SystemDivider(
+    val key: String,
+    val kind: SystemDividerKind,
+    val label: String,
+    val metric: String? = null,
+    val secondary: String? = null,
+  ) : ChatTimelineItem()
+
   object Thinking : ChatTimelineItem()
+}
+
+internal enum class SystemDividerKind {
+  Compaction,
+  Reset,
 }
 
 internal data class ChatTimeline(
@@ -60,11 +86,13 @@ internal fun buildChatTimeline(
   pendingRunCount: Int,
   pendingToolCalls: List<ChatPendingToolCall>,
   streamingAssistantText: String?,
+  subagentActivities: Map<String, ChatSubagentActivity> = emptyMap(),
   outboxItems: List<ChatOutboxItem> = emptyList(),
   recoveryOutboxItems: List<ChatOutboxItem> = emptyList(),
   questions: List<ChatQuestionPrompt> = emptyList(),
 ): ChatTimeline {
   val stream = streamingAssistantText?.trim()?.takeIf { it.isNotEmpty() }
+  val visibleSubagents = visibleSubagentActivities(subagentActivities.values)
   val items =
     buildList {
       // reverseLayout: index 0 renders bottom-most; queued commands are the newest user input.
@@ -74,8 +102,18 @@ internal fun buildChatTimeline(
       if (recoveryOutboxItems.isNotEmpty()) add(ChatTimelineItem.OutboxRecoveryHeader(recoveryOutboxItems.size))
       if (stream != null) add(ChatTimelineItem.StreamingAssistant(stream))
       if (pendingToolCalls.isNotEmpty()) add(ChatTimelineItem.PendingTools(pendingToolCalls))
+      if (visibleSubagents.activities.isNotEmpty()) {
+        add(
+          ChatTimelineItem.SubagentActivity(
+            activities = visibleSubagents.activities,
+            moreWorkingCount = visibleSubagents.moreWorkingCount,
+          ),
+        )
+      }
       if (pendingRunCount > 0) add(ChatTimelineItem.Thinking)
-      messages.asReversed().forEach { message -> add(ChatTimelineItem.Message(message)) }
+      for (index in messages.indices.reversed()) {
+        classifyTranscriptMessage(messages[index], index)?.let(::add)
+      }
     }
   if (items.isEmpty()) {
     return ChatTimeline(
@@ -114,6 +152,8 @@ internal fun buildChatTimeline(
         messages,
         pendingRunCount,
         pendingToolCalls,
+        visibleSubagents.activities,
+        visibleSubagents.moreWorkingCount,
         stream,
         outboxItems + recoveryOutboxItems,
         questions,
@@ -216,6 +256,8 @@ private fun latestContentVersion(
   messages: List<ChatMessage>,
   pendingRunCount: Int,
   pendingToolCalls: List<ChatPendingToolCall>,
+  subagentActivities: Collection<ChatSubagentActivity>,
+  moreWorkingCount: Int,
   stream: String?,
   outboxItems: List<ChatOutboxItem> = emptyList(),
   questions: List<ChatQuestionPrompt> = emptyList(),
@@ -252,8 +294,27 @@ private fun latestContentVersion(
       append(call.name)
       append(',')
       append(call.isError)
+      append(',')
+      append(call.liveDiff)
       append(';')
     }
+    append(":subagents=")
+    subagentActivities.sortedBy { it.id }.forEach { activity ->
+      append(activity.id)
+      append(',')
+      append(activity.status)
+      append(',')
+      append(activity.snippet?.hashCode() ?: 0)
+      append(',')
+      append(activity.terminalSummary?.hashCode() ?: 0)
+      append(',')
+      append(activity.error?.hashCode() ?: 0)
+      append(',')
+      append(activity.diffStat)
+      append(';')
+    }
+    append("more=")
+    append(moreWorkingCount)
     append(":stream=")
     append(stream?.hashCode() ?: 0)
     append(":outbox=")
@@ -288,8 +349,95 @@ internal fun chatTimelineItemKey(item: ChatTimelineItem): String =
     is ChatTimelineItem.RecoveryOutboxCommand -> "outbox-recovery:${item.item.id}"
     is ChatTimelineItem.OutboxRecoveryHeader -> "outbox-recovery-header"
     is ChatTimelineItem.PendingTools -> "tools"
+    is ChatTimelineItem.SubagentActivity -> "subagent-activity"
     is ChatTimelineItem.QuestionPrompt -> "question:${item.prompt.record.id}"
     is ChatTimelineItem.TurnRecapSummary -> "turn-recap"
+    is ChatTimelineItem.SystemNotice -> item.key
+    is ChatTimelineItem.SystemDivider -> item.key
     is ChatTimelineItem.StreamingAssistant -> "stream"
     ChatTimelineItem.Thinking -> "thinking"
   }
+
+private fun classifyTranscriptMessage(
+  message: ChatMessage,
+  index: Int,
+): ChatTimelineItem? {
+  message.transcriptMarker?.let { marker ->
+    val keySuffix = marker.id ?: "${message.timestampMs ?: "missing"}:$index"
+    return when (marker.kind) {
+      "compaction" -> {
+        val before = marker.tokensBefore
+        val after = marker.tokensAfter
+        val saved =
+          if (before != null && before.isFinite() && after != null && after.isFinite() && before > after) {
+            (before - after).toLong()
+          } else {
+            null
+          }
+        ChatTimelineItem.SystemDivider(
+          key = "divider:compaction:$keySuffix",
+          kind = SystemDividerKind.Compaction,
+          label = nativeString("Compacted history"),
+          metric = saved?.let { nativeString("saved \$count tokens", formatCompactTokenCount(it)) },
+        )
+      }
+      "reset" ->
+        ChatTimelineItem.SystemDivider(
+          key = "divider:reset:$keySuffix",
+          kind = SystemDividerKind.Reset,
+          label = nativeString("Session reset"),
+          secondary = nativeString("The earlier conversation was cleared."),
+        )
+      else -> null
+    }
+  }
+
+  val provenance = message.provenance
+  if (message.role == "user" && provenance?.kind == "internal_system") {
+    val rawBody = chatMessagePlainText(message.content).removePrefix("[System] ")
+    val label: String
+    val body: String
+    when (provenance.sourceTool) {
+      "main_session_restart_recovery" -> {
+        label = nativeString("System · restart recovery")
+        body = nativeString("Turn interrupted by a gateway restart — asked the agent to resume and finish the response.")
+      }
+      "restart-sentinel" -> {
+        label = nativeString("System · gateway restarted")
+        body = rawBody
+      }
+      else -> {
+        label = nativeString("System")
+        body = rawBody
+      }
+    }
+    if (body.isBlank()) return null
+    val keySuffix = message.entryId ?: message.idempotencyKey ?: "${message.timestampMs ?: "missing"}:$index"
+    return ChatTimelineItem.SystemNotice(
+      key = "system-notice:$keySuffix",
+      label = label,
+      body = body,
+    )
+  }
+
+  return ChatTimelineItem.Message(message)
+}
+
+internal data class VisibleSubagentActivities(
+  val activities: List<ChatSubagentActivity>,
+  val moreWorkingCount: Int,
+)
+
+internal fun visibleSubagentActivities(activities: Collection<ChatSubagentActivity>): VisibleSubagentActivities {
+  val working = activities.filter(ChatSubagentActivity::isWorking).sortedWith(compareBy<ChatSubagentActivity> { it.startedAtMs }.thenBy { it.id })
+  val finished =
+    activities
+      .filterNot(ChatSubagentActivity::isWorking)
+      .sortedWith(compareByDescending<ChatSubagentActivity> { it.endedAtMs ?: Long.MIN_VALUE }.thenBy { it.id })
+  val visible = (working + finished).take(5)
+  return VisibleSubagentActivities(
+    activities = visible,
+    moreWorkingCount =
+      working.count { it.status == "running" && it !in visible },
+  )
+}

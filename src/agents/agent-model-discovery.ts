@@ -11,7 +11,7 @@ import {
 } from "../plugins/provider-runtime.js";
 import { isRecord } from "../utils.js";
 import {
-  resolveAgentCredentialsForDiscovery,
+  resolveAgentDiscoveryAuthFacts,
   type DiscoverAuthStorageOptions,
 } from "./agent-auth-discovery.js";
 import { resolveModelPluginMetadataSnapshot } from "./model-discovery-context.js";
@@ -196,9 +196,23 @@ export function discoverAuthStorage(
   agentDir: string,
   options?: DiscoverAuthStorageOptions,
 ): AgentAuthStorage {
-  const credentials =
-    options?.skipCredentials === true ? {} : resolveAgentCredentialsForDiscovery(agentDir, options);
-  return AuthStorage.inMemory(credentials);
+  return discoverAuthStorageFacts(agentDir, options).authStorage;
+}
+
+/** Captures the effective profile store and its AuthStorage projection as one generation. */
+export function discoverAuthStorageFacts(
+  agentDir: string,
+  options?: DiscoverAuthStorageOptions,
+): {
+  authStorage: AgentAuthStorage;
+  store: import("./auth-profiles/types.js").AuthProfileStore;
+  credentials: import("./agent-auth-credentials.js").AgentCredentialMap;
+} {
+  const facts =
+    options?.skipCredentials === true
+      ? { store: { version: 1, profiles: {} }, credentials: {} }
+      : resolveAgentDiscoveryAuthFacts(agentDir, options);
+  return { ...facts, authStorage: AuthStorage.inMemory(facts.credentials) };
 }
 
 /** Creates the model registry used by agent model discovery. */

@@ -25,11 +25,10 @@ export type ChatRunRegistration = {
 };
 
 export type ChatRunEntry = ChatRunRegistration & {
-  registeredAtMs: number;
   registeredSequence: number;
 };
 
-export type ChatAbortMarker = number | { abortedAtMs: number; sequence: number };
+export type ChatAbortMarker = { abortedAtMs: number; sequence: number };
 
 let chatRunOrderingSequence = 0;
 
@@ -42,7 +41,6 @@ function nextChatRunOrderingSequence(): number {
 function createChatRunEntry(entry: ChatRunRegistration): ChatRunEntry {
   return {
     ...entry,
-    registeredAtMs: Date.now(),
     registeredSequence: nextChatRunOrderingSequence(),
   };
 }
@@ -52,34 +50,24 @@ export function createChatAbortMarker(now = Date.now()): ChatAbortMarker {
   return { abortedAtMs: now, sequence: nextChatRunOrderingSequence() };
 }
 
-/** Return the wall-clock timestamp used by maintenance TTL pruning for both legacy and structured markers. */
+/** Return the wall-clock timestamp used by maintenance TTL pruning. */
 export function chatAbortMarkerTimestampMs(marker: ChatAbortMarker): number {
-  return typeof marker === "number" ? marker : marker.abortedAtMs;
+  return marker.abortedAtMs;
 }
 
 /**
  * Return whether an abort marker should suppress events for the given chat run registration.
- * Structured markers compare the monotonic sequence first so same-millisecond aborts stay ordered;
- * legacy numeric markers fall back to timestamp comparison, and a missing entry preserves old suppress-on-presence behavior.
+ * The shared monotonic sequence keeps same-millisecond aborts ordered; a missing
+ * entry preserves suppress-on-presence behavior.
  */
 export function isChatAbortMarkerCurrent(
   marker: ChatAbortMarker | undefined,
-  entry?: Pick<ChatRunEntry, "registeredAtMs" | "registeredSequence">,
+  entry?: Pick<ChatRunEntry, "registeredSequence">,
 ): boolean {
   if (marker === undefined) {
     return false;
   }
-  if (!entry) {
-    return true;
-  }
-  if (typeof marker !== "number" && typeof entry.registeredSequence === "number") {
-    return marker.sequence >= entry.registeredSequence;
-  }
-  if (typeof entry.registeredAtMs !== "number") {
-    return true;
-  }
-  const abortedAtMs = typeof marker === "number" ? marker : marker.abortedAtMs;
-  return abortedAtMs >= entry.registeredAtMs;
+  return !entry || marker.sequence >= entry.registeredSequence;
 }
 
 export type BufferedAgentEvent = {
@@ -104,6 +92,11 @@ type ChatRunToolRecipientState = {
   finalizedAt?: number;
 };
 
+type PendingLiveTextFlush = {
+  timer: NodeJS.Timeout;
+  flush: () => void;
+};
+
 type ChatRunRecord = {
   registrations?: ChatRunEntry[];
   rawBuffer?: string;
@@ -124,6 +117,11 @@ type ChatRunRecord = {
   };
   abortMarker?: ChatAbortMarker;
   toolRecipient?: ChatRunToolRecipientState;
+};
+
+type InternalChatRunRecord = ChatRunRecord & {
+  /** Fixed-deadline trailing wake-up owned by this run's buffered state. */
+  pendingTextFlushes?: Partial<Record<"chat" | "agent", PendingLiveTextFlush>>;
 };
 
 type ChatRunRecordStore = {
@@ -153,12 +151,23 @@ function createChatRunRecordStore(): ChatRunRecordStore {
   return { runs, getOrCreate, releaseIfEmpty };
 }
 
+function internalChatRunRecord(record: ChatRunRecord): InternalChatRunRecord {
+  return record;
+}
+
+function clearPendingLiveTextFlushes(record: ChatRunRecord): void {
+  const internal = internalChatRunRecord(record);
+  for (const pending of Object.values(internal.pendingTextFlushes ?? {})) {
+    clearTimeout(pending.timer);
+  }
+  delete internal.pendingTextFlushes;
+}
+
 export type ChatRunRegistry = {
   add: (sessionId: string, entry: ChatRunRegistration) => void;
   peek: (sessionId: string) => ChatRunEntry | undefined;
   shift: (sessionId: string) => ChatRunEntry | undefined;
   remove: (sessionId: string, clientRunId: string, sessionKey?: string) => ChatRunEntry | undefined;
-  clear: () => void;
 };
 
 function createChatRunRegistryForStore(store: ChatRunRecordStore): ChatRunRegistry {
@@ -216,19 +225,7 @@ function createChatRunRegistryForStore(store: ChatRunRecordStore): ChatRunRegist
     return entry;
   };
 
-  const clear = () => {
-    for (const [runId, record] of store.runs) {
-      delete record.registrations;
-      store.releaseIfEmpty(runId);
-    }
-  };
-
-  return { add, peek, shift, remove, clear };
-}
-
-/** Create the FIFO registry that maps session IDs to active chat runs. */
-export function createChatRunRegistry(): ChatRunRegistry {
-  return createChatRunRegistryForStore(createChatRunRecordStore());
+  return { add, peek, shift, remove };
 }
 
 export type ChatRunState = {
@@ -274,11 +271,15 @@ export function createChatRunState(): ChatRunState {
     delete record.deltaSentAt;
     delete record.deltaLastBroadcastLen;
     delete record.deltaLastBroadcastText;
+    clearPendingLiveTextFlushes(record);
     delete record.agentText;
     store.releaseIfEmpty(runId);
   };
 
   const clear = () => {
+    for (const record of store.runs.values()) {
+      clearPendingLiveTextFlushes(record);
+    }
     store.runs.clear();
   };
 
@@ -729,9 +730,4 @@ function createToolEventRecipientRegistryForStore(
   };
 
   return { add, get, markFinal };
-}
-
-/** Create the run-id recipient registry used for streaming tool events. */
-export function createToolEventRecipientRegistry(): ToolEventRecipientRegistry {
-  return createToolEventRecipientRegistryForStore(createChatRunRecordStore());
 }

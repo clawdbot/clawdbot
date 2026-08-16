@@ -36,15 +36,11 @@ export function createBasetenThinkingWrapper(
     if (!usesBasetenChatTemplateThinking(model.id)) {
       return;
     }
-    const existing =
-      payload.chat_template_args &&
-      typeof payload.chat_template_args === "object" &&
-      !Array.isArray(payload.chat_template_args)
-        ? (payload.chat_template_args as Record<string, unknown>)
-        : {};
+    const existing = asNonArrayRecord(payload.chat_template_args);
     payload.chat_template_args = {
       ...existing,
       enable_thinking: isThinkingEnabled(ctx.thinkingLevel),
     };
   });
 }
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";

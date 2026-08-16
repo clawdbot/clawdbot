@@ -1,24 +1,12 @@
 // Channels domain tests.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ChannelsPairingListResult, ChannelsStatusSnapshot } from "../../api/types.ts";
 import {
   channelSnapshotEntryIsActive,
   channelSnapshotHasActiveChannel,
   createChannelCapability,
 } from "./index.ts";
-
-function createDeferred<T>() {
-  let resolve: ((value: T) => void) | undefined;
-  let reject: ((reason?: unknown) => void) | undefined;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
-}
 
 function createChannelsSnapshot(label: string): ChannelsStatusSnapshot {
   return {

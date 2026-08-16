@@ -38,7 +38,7 @@ import {
 const routedPayloads = vi.hoisted(() => [] as ReplyPayload[]);
 
 vi.mock("../channels/message/runtime.js", () => ({
-  sendDurableMessageBatch: async ({ payloads }: { payloads: ReplyPayload[] }) => {
+  sendDurableMessageBatchCore: async ({ payloads }: { payloads: ReplyPayload[] }) => {
     routedPayloads.push(...payloads);
     return { status: "sent", results: [{ messageId: "tts-route-1" }] };
   },

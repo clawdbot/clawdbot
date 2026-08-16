@@ -10,8 +10,12 @@ import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
 } from "../infra/device-identity.js";
+import {
+  approveNodePairing,
+  listNodePairing,
+  requestNodePairing,
+} from "../infra/device-pairing-node.js";
 import { approveDevicePairing, requestDevicePairing } from "../infra/device-pairing.js";
-import { approveNodePairing, listNodePairing, requestNodePairing } from "../infra/node-pairing.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   connectReq,

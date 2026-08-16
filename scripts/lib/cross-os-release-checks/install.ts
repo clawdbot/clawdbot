@@ -12,7 +12,7 @@ import {
 } from "node:fs";
 import { dirname, join, relative, resolve, win32 as pathWin32 } from "node:path";
 import { pathToFileURL } from "node:url";
-import { isLocalBuildMetadataDistPath } from "../local-build-metadata-paths.mjs";
+import { isLocalBuildMetadataDistPath } from "../local-build-metadata-paths.mts";
 import type { CandidateBuild, LaneCommandParams, LaneState, PackageJson } from "./config.ts";
 import {
   CROSS_OS_NPM_DEBUG_LOG_TAIL_BYTES,

@@ -1,3 +1,14 @@
+import {
+  Agent,
+  type AgentEvent,
+  type AgentTool,
+  type StreamFn,
+} from "openclaw/plugin-sdk/agent-core";
+import {
+  type AssistantMessage,
+  createAssistantMessageEventStream,
+  type Model,
+} from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -13,6 +24,7 @@ import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.j
 import {
   formatToolSearchControlError,
   formatToolSearchControlResult,
+  prepareToolSearchDispatcherArguments,
   readToolSearchCallArgs,
 } from "./tool-search-runtime.js";
 import type { ToolSearchCatalogEntry } from "./tool-search-types.js";
@@ -22,6 +34,7 @@ import {
   registerHeadlessToolSearchCatalog,
   resolveToolSearchConfig,
   TOOL_CALL_RAW_TOOL_NAME,
+  TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   ToolSearchRuntime,
 } from "./tool-search.js";
@@ -64,6 +77,24 @@ describe("Tool Search flattened call arguments", () => {
       expected: { command: "list", timeout_ms: 5_000 },
     },
     {
+      label: "dotted args from compatibility providers",
+      arguments: {
+        id: "inspect_resource",
+        "args.path": "projects/example.md",
+        "args.limit": 20,
+      },
+      expected: { path: "projects/example.md", limit: 20 },
+    },
+    {
+      label: "ordinary flattened args precedence over dotted args",
+      arguments: {
+        id: "inspect_resource",
+        "args.path": "projects/dotted.md",
+        path: "projects/flattened.md",
+      },
+      expected: { path: "projects/flattened.md" },
+    },
+    {
       label: "toolId selector with a target id",
       arguments: { toolId: "inspect_resource", id: "record-7" },
       expected: { id: "record-7" },
@@ -84,8 +115,10 @@ describe("Tool Search flattened call arguments", () => {
         id: "inspect_resource",
         args: { command: "nested" },
         command: "flattened",
+        "args.command": "dotted",
+        "args.path": "projects/dotted.md",
       },
-      expected: { command: "nested" },
+      expected: { command: "nested", path: "projects/dotted.md" },
     },
     {
       label: "explicit input precedence",
@@ -221,6 +254,208 @@ describe("Tool Search flattened call arguments", () => {
     expect(intended.execute).toHaveBeenCalledOnce();
     expect(vi.mocked(intended.execute).mock.calls[0]?.[1]).toEqual({ instruction: "run" });
     expect(colliding.execute).not.toHaveBeenCalled();
+  });
+});
+
+describe("Tool Search dispatcher argument preparation", () => {
+  it.each([
+    {
+      label: "args-wrapped selector and input",
+      input: { args: { id: "openclaw:example-plugin:example_tool", args: { path: "/x" } } },
+      expected: { id: "openclaw:example-plugin:example_tool", args: { path: "/x" } },
+    },
+    {
+      label: "input-wrapped selector and args",
+      input: { input: { id: "example_tool", args: { path: "/x" } } },
+      expected: { id: "example_tool", args: { path: "/x" } },
+    },
+    {
+      label: "args-wrapped toolId alias, canonicalized to id",
+      input: { args: { toolId: "example_tool" } },
+      expected: { id: "example_tool", toolId: "example_tool" },
+    },
+    {
+      label: "args-wrapped name alias, canonicalized to id",
+      input: { args: { name: "example_tool" } },
+      expected: { id: "example_tool", name: "example_tool" },
+    },
+    {
+      label: "sibling keys alongside the wrapper are preserved",
+      input: { extra: "keep", args: { id: "example_tool" } },
+      expected: { extra: "keep", id: "example_tool" },
+    },
+  ])("hoists a double-wrapped $label to the top level", ({ input, expected }) => {
+    expect(prepareToolSearchDispatcherArguments(input)).toEqual(expected);
+  });
+
+  it.each([
+    { label: "non-record input", input: "not an object" },
+    { label: "already-canonical selector", input: { id: "example_tool", args: { path: "/x" } } },
+    { label: "nested wrapper without a selector", input: { args: { path: "/x" } } },
+    { label: "nested wrapper that is not a record", input: { args: "not an object" } },
+    {
+      label: "malformed nested id before a valid alias",
+      input: { args: { id: "", toolId: "example_tool" } },
+    },
+    {
+      label: "empty-string outer id alongside a valid nested selector",
+      input: { id: "", args: { id: "example_tool" } },
+    },
+    {
+      label: "non-string outer id alongside a valid nested selector",
+      input: { id: 1, args: { id: "example_tool" } },
+    },
+    {
+      label: "empty-string outer toolId alongside a valid nested selector",
+      input: { toolId: "", args: { id: "example_tool" } },
+    },
+    {
+      label: "empty-string outer name alongside a valid nested selector",
+      input: { name: "", args: { id: "example_tool" } },
+    },
+  ])("leaves $label unchanged", ({ input }) => {
+    expect(prepareToolSearchDispatcherArguments(input)).toBe(input);
+  });
+
+  describe("through the real agent loop", () => {
+    const model: Model = {
+      id: "test-model",
+      name: "Test Model",
+      api: "test-api",
+      provider: "test-provider",
+      baseUrl: "https://example.test",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1000,
+      maxTokens: 1000,
+    };
+
+    function makeAssistantMessage(
+      content: AssistantMessage["content"],
+    ): AssistantMessage & { stopReason: "toolUse" | "stop" } {
+      return {
+        role: "assistant",
+        content,
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: content.some((item) => item.type === "toolCall") ? "toolUse" : "stop",
+        timestamp: 1,
+      };
+    }
+
+    function createSingleToolCallStreamFn(toolCall: {
+      id: string;
+      name: string;
+      arguments: Record<string, unknown>;
+    }): StreamFn {
+      // The stop turn terminates the loop after the tool result.
+      const turns: AssistantMessage["content"][] = [
+        [{ type: "toolCall", ...toolCall }],
+        [{ type: "text", text: "done" }],
+      ];
+      let turnIndex = 0;
+      return () => {
+        const content = turns[turnIndex];
+        if (!content) {
+          throw new Error("unexpected extra model turn");
+        }
+        turnIndex += 1;
+        const stream = createAssistantMessageEventStream();
+        queueMicrotask(() => {
+          const message = makeAssistantMessage(content);
+          stream.push({ type: "done", reason: message.stopReason, message });
+          stream.end();
+        });
+        return stream;
+      };
+    }
+
+    function findToolExecutionEnd(
+      events: AgentEvent[],
+    ): Extract<AgentEvent, { type: "tool_execution_end" }> | undefined {
+      return events.find(
+        (event): event is Extract<AgentEvent, { type: "tool_execution_end" }> =>
+          event.type === "tool_execution_end",
+      );
+    }
+
+    it("dispatches a double-wrapped tool_call through argument preparation", async () => {
+      const target = fakeTool("inspect_resource");
+      const { catalogRef, config } = createRuntime([target]);
+      const callTool = createToolSearchTools({ catalogRef, config }).find(
+        (tool) => tool.name === TOOL_CALL_RAW_TOOL_NAME,
+      );
+      expect(callTool).toBeDefined();
+
+      const doubleWrapped = {
+        args: { id: "inspect_resource", args: { path: "/x" } },
+      };
+      const streamFn = createSingleToolCallStreamFn({
+        id: "call-1",
+        name: TOOL_CALL_RAW_TOOL_NAME,
+        arguments: doubleWrapped,
+      });
+      const events: AgentEvent[] = [];
+      const agent = new Agent({
+        initialState: { model, tools: [callTool, target] as AgentTool[] },
+        streamFn,
+      });
+      agent.subscribe((event) => {
+        events.push(event);
+      });
+
+      await agent.prompt("call inspect_resource with a double-wrapped payload");
+
+      expect(target.execute).toHaveBeenCalledOnce();
+      expect(vi.mocked(target.execute).mock.calls[0]?.[1]).toEqual({ path: "/x" });
+      expect(findToolExecutionEnd(events)).toMatchObject({
+        toolCallId: "call-1",
+        isError: false,
+      });
+      expect(findToolExecutionEnd(events)?.errorKind).toBeUndefined();
+    });
+
+    it("dispatches a real double-wrapped tool_describe payload through prepareToolCallArguments", async () => {
+      const target = fakeTool("inspect_resource");
+      const { catalogRef, config } = createRuntime([target]);
+      const describeTool = createToolSearchTools({ catalogRef, config }).find(
+        (tool) => tool.name === TOOL_DESCRIBE_RAW_TOOL_NAME,
+      );
+      expect(describeTool).toBeDefined();
+
+      const doubleWrapped = { input: { id: "inspect_resource" } };
+      const streamFn = createSingleToolCallStreamFn({
+        id: "call-1",
+        name: TOOL_DESCRIBE_RAW_TOOL_NAME,
+        arguments: doubleWrapped,
+      });
+      const events: AgentEvent[] = [];
+      const agent = new Agent({
+        initialState: { model, tools: [describeTool] as AgentTool[] },
+        streamFn,
+      });
+      agent.subscribe((event) => {
+        events.push(event);
+      });
+
+      await agent.prompt("describe inspect_resource with a double-wrapped payload");
+
+      expect(findToolExecutionEnd(events)).toMatchObject({
+        toolCallId: "call-1",
+        isError: false,
+      });
+      expect(findToolExecutionEnd(events)?.errorKind).toBeUndefined();
+    });
   });
 });
 

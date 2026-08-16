@@ -3,6 +3,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { AssistantMessage } from "../../../llm/types.js";
+import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../../agent-compaction-constants.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import {
   extractObservedOverflowTokenCount,
@@ -25,13 +26,11 @@ import {
   compactEmbeddedRunForRecovery,
   type EmbeddedRunCompactionRecoveryInput,
 } from "./compaction-runtime.js";
-import { createCompactionDiagId } from "./helpers.js";
+import { createRunRecoveryDiagId } from "./helpers.js";
 import {
   isNoRealConversationCompactionNoop,
   resetNoRealConversationTokenSnapshot,
 } from "./session-bootstrap.js";
-
-const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
 
 type CompactResult = Awaited<ReturnType<ContextEngine["compact"]>>;
 
@@ -55,7 +54,6 @@ export async function recoverEmbeddedRunOverflow(
     toolResultPromptProjectionState: ToolResultPromptProjectionState;
     attemptCompactionCount: number;
     prepareCurrentTranscriptRetry: () => void;
-    prepareCompactedTranscriptRetry: () => Promise<void>;
   },
 ): Promise<EmbeddedRunOverflowRecoveryOutcome> {
   const contextOverflowError =
@@ -102,7 +100,7 @@ export async function recoverEmbeddedRunOverflow(
       : undefined;
 
   const runParams = input.runParams;
-  const overflowDiagId = createCompactionDiagId();
+  const overflowDiagId = createRunRecoveryDiagId();
   const errorText = contextOverflowError.text;
   const observedOverflowTokens = extractObservedOverflowTokenCount(errorText);
   const preflightRecovery = input.attempt.preflightRecovery;
@@ -188,6 +186,7 @@ export async function recoverEmbeddedRunOverflow(
           runtimeSettings: compaction.runtimeSettings,
           config: runParams.config,
           agentId: input.sessionAgentId,
+          contextEngineAgentId: input.contextEngineAgentId,
         });
       }
     } catch (compactErr) {
@@ -217,7 +216,6 @@ export async function recoverEmbeddedRunOverflow(
     }
 
     if (compactResult.compacted) {
-      await input.adoptCompactionTranscript(compactResult);
       const tokensAfter = compactResult.result?.tokensAfter;
       if (typeof tokensAfter === "number" && Number.isFinite(tokensAfter) && tokensAfter >= 0) {
         input.state.lastCompactionTokensAfter = Math.floor(tokensAfter);

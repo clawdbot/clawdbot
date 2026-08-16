@@ -1,5 +1,5 @@
 import { expect } from "vitest";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveSystemAgentTargetAgentId } from "../agents/agent-scope-config.js";
 import { resolveCliBackendConfig } from "../agents/cli-backends.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 // OpenClaw test helpers build runtime environments for rescue tests.
@@ -13,8 +13,9 @@ import { resolveCliRuntimeExecutionProvider } from "../agents/model-runtime-alia
 import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { installTemporaryCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
+import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import {
@@ -29,6 +30,14 @@ type SystemAgentVerifiedInferenceTestFixture = {
 };
 
 export type SystemAgentPluginMetadataTestSnapshot = {
+  /** Rebind one prepared inventory to the exact authored config under test. */
+  bind: (
+    params: Parameters<typeof resolvePluginMetadataSnapshot>[0],
+  ) => ReturnType<typeof resolvePluginMetadataSnapshot>;
+  bindForConfig: (
+    config: OpenClawConfig,
+    workspaceDir?: string,
+  ) => ReturnType<typeof resolvePluginMetadataSnapshot>;
   /** Rebind after a test redirects to another empty state root with the same plugin inventory. */
   rebindForCurrentEnv: () => void;
   restore: () => void;
@@ -67,17 +76,41 @@ export function installSystemAgentClaudeCliBackendTestFixture(): () => void {
 export function installSystemAgentPluginMetadataTestSnapshot(
   config: OpenClawConfig = {},
 ): SystemAgentPluginMetadataTestSnapshot {
-  const snapshot = resolvePluginMetadataSnapshot({ config, env: process.env });
+  const prepared = resolvePluginMetadataSnapshot({ config, env: process.env });
   let releaseCurrentSnapshot: () => boolean = () => false;
-  const rebindForCurrentEnv = () => {
+  const bind = (params: Parameters<typeof resolvePluginMetadataSnapshot>[0]) => {
     releaseCurrentSnapshot();
+    const policyHash = resolveInstalledPluginIndexPolicyHash(params.config);
+    const index =
+      prepared.index.policyHash === policyHash ? prepared.index : { ...prepared.index, policyHash };
+    const snapshot = {
+      ...prepared,
+      index,
+      policyHash,
+      configFingerprint: resolvePluginControlPlaneFingerprint({
+        config: params.config,
+        env: params.env,
+        index,
+        policyHash,
+        workspaceDir: params.workspaceDir,
+      }),
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    };
     releaseCurrentSnapshot = installTemporaryCurrentPluginMetadataSnapshot(snapshot, {
-      config,
-      env: process.env,
+      config: params.config,
+      env: params.env,
+      workspaceDir: params.workspaceDir,
     }).release;
+    return snapshot;
+  };
+  const rebindForCurrentEnv = () => {
+    bind({ config, env: process.env });
   };
   rebindForCurrentEnv();
   return {
+    bind,
+    bindForConfig: (nextConfig, workspaceDir) =>
+      bind({ config: nextConfig, env: process.env, workspaceDir }),
     rebindForCurrentEnv,
     restore: () => {
       releaseCurrentSnapshot();
@@ -119,7 +152,7 @@ export function expectSystemAgentAuditRecord(
 export async function createSystemAgentVerifiedInferenceTestFixture(
   config: OpenClawConfig,
 ): Promise<SystemAgentVerifiedInferenceTestFixture> {
-  const routeAgentId = resolveDefaultAgentId(config);
+  const routeAgentId = resolveSystemAgentTargetAgentId(config);
   const selection = resolveSimpleCompletionSelectionForAgent({
     cfg: config,
     agentId: routeAgentId,
@@ -264,7 +297,7 @@ export async function createSystemAgentVerifiedInferenceTestFixture(
   const agentHarnessId =
     configuredRoute.agentHarnessRuntimeOverride === "auto"
       ? "openclaw"
-      : configuredRoute.agentHarnessRuntimeOverride;
+      : (configuredRoute.agentHarnessRuntimeOverride ?? "codex");
   const authFingerprint =
     profileId && agentHarnessId !== "openclaw"
       ? fingerprintResolvedAuthProfileCredential({ profileId, credential, resolvedAuth })
@@ -295,25 +328,4 @@ export async function createSystemAgentVerifiedInferenceTestFixture(
     deps,
   });
   return { binding, deps };
-}
-
-/**
- * Test helpers for capturing OpenClaw runtime output.
- *
- * Tests use this lightweight runtime instead of the real CLI runtime so exits
- * become thrown errors and logs are easy to assert.
- */
-/** Create a RuntimeEnv that records log/error lines for tests. */
-export function createSystemAgentTestRuntime(): { runtime: RuntimeEnv; lines: string[] } {
-  const lines: string[] = [];
-  return {
-    lines,
-    runtime: {
-      log: (...args) => lines.push(args.join(" ")),
-      error: (...args) => lines.push(args.join(" ")),
-      exit: (code) => {
-        throw new Error(`exit ${code}`);
-      },
-    },
-  };
 }

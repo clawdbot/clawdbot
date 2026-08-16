@@ -28,7 +28,7 @@ import {
   type EmbeddedAgentQueueMessageOptions,
 } from "../agents/embedded-agent-runner/runs.js";
 import type { SandboxFsBridge } from "../agents/sandbox/fs-bridge.js";
-import { formatToolDetail, resolveToolDisplay } from "../agents/tool-display.js";
+import { inferToolMetaFromArgsCore } from "../agents/tool-display.js";
 import {
   buildWatchedSessionsPromptLines,
   prepareWatchedSessionsPrompt,
@@ -71,15 +71,22 @@ export type { AgentMessage } from "../agents/runtime/index.js";
 export type { FastModeAutoProgressState } from "../shared/fast-mode.js";
 export type {
   AgentHarness,
+  AgentHarnessV2,
   AgentHarnessAuthBindingFingerprintParams,
   AgentHarnessAttemptParams,
+  AgentHarnessAttemptParamsV2,
   AgentHarnessAttemptResult,
   AgentHarnessCompactParams,
   AgentHarnessCompactResult,
+  AgentHarnessNativeCompaction,
+  AgentHarnessNativeCompactionParams,
+  AgentHarnessNativeCompactionRequest,
+  AgentHarnessRegistrationOptions,
   AgentHarnessDeliveryDefaults,
   AgentHarnessResultClassification,
   AgentHarnessRuntimeArtifactBinding,
   AgentHarnessSideQuestionParams,
+  AgentHarnessSideQuestionParamsV2,
   AgentHarnessSideQuestionResult,
   AgentHarnessSettledTurnFinalizationResult,
   AgentHarnessResetParams,
@@ -109,7 +116,24 @@ export type {
   AgentHarnessUserInputQuestion,
 } from "../agents/harness/user-input-bridge.js";
 export type { AgentHarnessQuestionGatewayCall } from "../agents/harness/gateway-question.js";
-export type EmbeddedRunAttemptParams = Omit<CoreEmbeddedRunAttemptParams, "trajectoryRecorder">;
+type EmbeddedRunAttemptParamsBase = Omit<
+  CoreEmbeddedRunAttemptParams,
+  | "admittedRunContext"
+  | "contextEngineLogicalTurnLease"
+  | "onContextEngineTurnCandidate"
+  | "trajectoryRecorder"
+>;
+/**
+ * @deprecated Use EmbeddedRunAttemptParamsV2. The optional capability keeps
+ * existing harness source compatible through 2026-10-12.
+ */
+export type EmbeddedRunAttemptParams = EmbeddedRunAttemptParamsBase & {
+  hostCapabilities?: import("../agents/harness/host-capability-types.js").AgentHarnessHostCapabilities;
+};
+/** Current host-prepared attempt contract for agent harnesses. */
+export type EmbeddedRunAttemptParamsV2 = EmbeddedRunAttemptParamsBase & {
+  hostCapabilities: import("../agents/harness/host-capability-types.js").AgentHarnessHostCapabilities;
+};
 export type { EmbeddedRunAttemptResult };
 export type {
   ContextEngine as HarnessContextEngine,
@@ -117,16 +141,8 @@ export type {
   ContextEngineOperation,
   ContextEngineProjection,
 } from "../context-engine/types.js";
-export type {
-  CompactEmbeddedAgentSessionParams,
-  /** @deprecated Use CompactEmbeddedAgentSessionParams. */
-  CompactEmbeddedAgentSessionParams as CompactEmbeddedPiSessionParams,
-} from "../agents/embedded-agent-runner/compact.js";
-export type {
-  EmbeddedAgentCompactResult,
-  /** @deprecated Use EmbeddedAgentCompactResult. */
-  EmbeddedAgentCompactResult as EmbeddedPiCompactResult,
-} from "../agents/embedded-agent-runner/types.js";
+export type { CompactEmbeddedAgentSessionParams } from "../agents/embedded-agent-runner/compact.js";
+export type { EmbeddedAgentCompactResult } from "../agents/embedded-agent-runner/types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
 export type {
   MessagingToolSend,
@@ -174,11 +190,7 @@ export { resolveAgentRunAbortLifecycleFields } from "../agents/run-termination.j
 export { isHostScopedAgentToolActive } from "../agents/agent-tools.ring-zero-context.js";
 export { log as embeddedAgentLog } from "../agents/embedded-agent-runner/logger.js";
 export { buildAgentRuntimePlan } from "../agents/runtime-plan/build.js";
-export {
-  classifyEmbeddedAgentRunResultForModelFallback,
-  /** @deprecated Use classifyEmbeddedAgentRunResultForModelFallback. */
-  classifyEmbeddedAgentRunResultForModelFallback as classifyEmbeddedPiRunResultForModelFallback,
-} from "../agents/embedded-agent-runner/result-fallback-classifier.js";
+export { classifyEmbeddedAgentRunResultForModelFallback } from "../agents/embedded-agent-runner/result-fallback-classifier.js";
 export { resolveUserPath } from "../utils.js";
 export { callGatewayTool } from "../agents/tools/gateway.js";
 export type { NodeListNode } from "../agents/tools/nodes-utils.js";
@@ -196,14 +208,18 @@ export { isMessagingTool, isMessagingToolSendAction } from "../agents/embedded-a
 export {
   extractMessagingToolSend,
   extractMessagingToolSendResult,
-  extractToolErrorMessage,
+} from "../agents/embedded-agent-messaging-extraction.js";
+export {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
-  isToolResultError,
+} from "../agents/embedded-agent-tool-media.js";
+export {
+  extractToolErrorMessage,
   sanitizeToolResult,
-} from "../agents/embedded-agent-subscribe.tools.js";
+} from "../agents/embedded-agent-tool-results.js";
 export {
   formatToolExecutionErrorMessage,
+  isToolResultError,
   resolveToolExecutionErrorKind,
   resolveToolResultFailureKind,
   type ToolResultFailureKind,
@@ -234,14 +250,15 @@ export {
   buildSkillWorkshopPromptSection,
   SKILL_WORKSHOP_TOOL_NAME,
 } from "../agents/skill-workshop-prompt.js";
-export { resolveAttemptFsWorkspaceOnly } from "../agents/embedded-agent-runner/run/attempt.prompt-helpers.js";
-export { resolveAttemptSpawnWorkspaceDir } from "../agents/embedded-agent-runner/run/attempt.thread-helpers.js";
-export { buildEmbeddedAttemptToolRunContext } from "../agents/embedded-agent-runner/run/attempt.tool-run-context.js";
+export { TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT } from "../agents/transcript-credential-safety.js";
+export { resolveAttemptFsWorkspaceOnly } from "../agents/embedded-agent-runner/run/attempt-prompt-helpers.js";
+export { resolveAttemptSpawnWorkspaceDir } from "../agents/embedded-agent-runner/run/attempt-thread-helpers.js";
+export { buildEmbeddedAttemptToolRunContext } from "../agents/embedded-agent-runner/run/attempt-tool-run-context.js";
 export {
   applyEmbeddedAttemptToolsAllow,
   resolveEmbeddedAttemptToolConstructionPlan,
 } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
-export { getPluginToolMeta } from "../plugins/tools.js";
+export { getPluginToolMeta, getPluginToolSideEffectOwnerKey } from "../plugins/tools.js";
 export {
   attachModelProviderRequestTransport,
   getModelProviderRequestTransport,
@@ -331,7 +348,8 @@ export async function detectAndLoadAgentHarnessPromptImages(params: {
 export async function loadCodexBundleMcpThreadConfig(
   params: LoadCodexBundleMcpThreadConfigParams,
 ): Promise<CodexBundleMcpThreadConfig> {
-  const { loadCodexBundleMcpThreadConfig: load } = await import("../agents/codex-mcp-config.js");
+  const { loadCodexBundleMcpThreadConfigCore: load } =
+    await import("../agents/codex-mcp-config.js");
   return load(params);
 }
 
@@ -344,6 +362,7 @@ export { assignSafeServerNames as assignMcpCatalogSafeServerNames } from "../age
  */
 export async function prepareHarnessNativeMcpAppPreview(params: {
   runtime: import("../agents/agent-bundle-mcp-types.js").SessionMcpRuntime;
+  agentId?: string;
   serverName: string;
   toolName: string;
   uiResourceUri: string;
@@ -360,6 +379,7 @@ export async function prepareHarnessNativeMcpAppPreview(params: {
     await import("../agents/mcp-ui-resource.js");
   const view = await fetchMcpAppView({
     runtime: params.runtime,
+    agentId: params.agentId,
     serverName: params.serverName,
     toolName: params.toolName,
     uiResourceUri: params.uiResourceUri,
@@ -386,12 +406,12 @@ export async function prepareHarnessNativeMcpAppPreview(params: {
  */
 export async function materializeRequesterScopedMcpToolsForHarnessRun(
   params: Parameters<
-    typeof import("../agents/agent-bundle-mcp-harness.js").materializeRequesterScopedMcpToolsForHarnessRun
+    typeof import("../agents/agent-bundle-mcp-harness.js").materializeRequesterScopedMcpToolsForHarnessRunCore
   >[0],
 ): Promise<
   Awaited<
     ReturnType<
-      typeof import("../agents/agent-bundle-mcp-harness.js").materializeRequesterScopedMcpToolsForHarnessRun
+      typeof import("../agents/agent-bundle-mcp-harness.js").materializeRequesterScopedMcpToolsForHarnessRunCore
     >
   >
 > {
@@ -399,10 +419,11 @@ export async function materializeRequesterScopedMcpToolsForHarnessRun(
   if (!shouldLoad) {
     return undefined;
   }
-  const { materializeRequesterScopedMcpToolsForHarnessRun: materialize } =
+  const { materializeRequesterScopedMcpToolsForHarnessRunCore: materialize } =
     await import("../agents/agent-bundle-mcp-harness.js");
   return materialize(params);
 }
+
 export { resolveSandboxContext } from "../agents/sandbox.js";
 export type { SandboxContext, SandboxWorkspaceAccess } from "../agents/sandbox.js";
 export {
@@ -415,7 +436,7 @@ export {
   resolveBootstrapContextForRun,
   resolveBootstrapFilesForRun,
 } from "../agents/bootstrap-files.js";
-export type { EmbeddedContextFile } from "../agents/embedded-agent-helpers/types.js";
+export type { EmbeddedContextFile } from "../agents/embedded-agent-helpers/context-file.js";
 export { isSubagentSessionKey } from "../routing/session-key.js";
 export {
   acquireSessionWriteLock,
@@ -515,8 +536,7 @@ export function inferToolMetaFromArgs(
   args: unknown,
   options?: { detailMode?: ToolProgressDetailMode },
 ): string | undefined {
-  const display = resolveToolDisplay({ name: toolName, args, detailMode: options?.detailMode });
-  return formatToolDetail(display);
+  return inferToolMetaFromArgsCore(toolName, args, options);
 }
 
 /**

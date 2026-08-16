@@ -9,10 +9,18 @@
 
 export type DiffLineKind = "add" | "del" | "ctx" | "file" | "skip";
 
+export type DiffLineGap = {
+  oldStart: number;
+  newStart: number;
+  count: number;
+};
+
 export type DiffLine = {
   kind: DiffLineKind;
   /** 1-based line number in the file (new file for adds/ctx, old file for dels). */
   lineNo?: number;
+  /** Session-diff coordinates for an expandable unchanged-lines marker. */
+  gap?: DiffLineGap;
   text: string;
 };
 

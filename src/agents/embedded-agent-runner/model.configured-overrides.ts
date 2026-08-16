@@ -1,3 +1,4 @@
+import { asOptionalRecord as readModelParams } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ModelCompatConfig, ModelMediaInputConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -7,7 +8,10 @@ import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.
 import { resolveCatalogOwnedModelCompat } from "../model-compat-catalog.js";
 import { modelKey, normalizeStaticProviderModelId } from "../model-ref-shared.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
-import { shouldSuppressBuiltInModel, shouldUnconditionallySuppress } from "../model-suppression.js";
+import {
+  shouldSuppressBuiltInModelCore,
+  shouldUnconditionallySuppress,
+} from "../model-suppression.js";
 import { attachModelProviderLocalService } from "../provider-local-service.js";
 import {
   attachModelProviderMetadataOwners,
@@ -69,7 +73,7 @@ export function shouldSuppressConfiguredModel(params: {
   ) {
     return false;
   }
-  return shouldSuppressBuiltInModel({
+  return shouldSuppressBuiltInModelCore({
     provider: params.provider,
     id: params.modelId,
     ...(params.cfg ? { config: params.cfg } : {}),
@@ -226,13 +230,6 @@ export function hasConfiguredFallbackSurface(params: {
     return true;
   }
   return Boolean(params.providerConfig?.baseUrl?.trim());
-}
-
-function readModelParams(value: unknown): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  return value as Record<string, unknown>;
 }
 
 function mergeModelParams(

@@ -16,6 +16,12 @@ import {
   buildPlatformServiceStartHints,
 } from "../../daemon/runtime-hints.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
+import {
+  isSystemdUserServiceAvailable,
+  readSystemdUserLingerStatus,
+  resolveSystemdUserServiceAccount,
+} from "../../daemon/systemd.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
@@ -77,6 +83,32 @@ function buildNodeRuntimeHints(env: NodeJS.ProcessEnv = process.env): string[] {
   });
 }
 
+/**
+ * Warns (does NOT auto-enable) when systemd user lingering is disabled.
+ * The installed user-level node service stops when the last SSH session ends
+ * unless `loginctl enable-linger <user>` has been run. Read-only: this never
+ * changes host state, matching the operator-consent policy used elsewhere.
+ */
+async function warnIfSystemdUserLingerDisabled(warn: (message: string) => void): Promise<void> {
+  if (process.platform !== "linux") {
+    return;
+  }
+  if (!(await isSystemdUserServiceAvailable())) {
+    return;
+  }
+  const user = resolveSystemdUserServiceAccount(process.env);
+  if (!user) {
+    return;
+  }
+  const status = await readSystemdUserLingerStatus({ env: process.env, user });
+  if (!status || status.linger === "yes") {
+    return;
+  }
+  warn(
+    `Systemd lingering is disabled for ${status.user}. The node service will stop when you log out. Run: sudo loginctl enable-linger ${status.user}`,
+  );
+}
+
 export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   const { json, stdout, warnings, emit, fail } = createDaemonInstallActionContext(opts.json);
   if (failIfNixDaemonInstallMode(fail)) {
@@ -105,14 +137,22 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   }
 
   const service = resolveNodeService();
+  const warn = (message: string) => {
+    if (json) {
+      warnings.push(message);
+    } else {
+      defaultRuntime.log(message);
+    }
+  };
   let loaded;
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch (err) {
-    fail(`Node service check failed: ${String(err)}`);
+    fail(`Node service check failed: ${formatErrorMessage(err)}`);
     return;
   }
   if (loaded && !opts.force) {
+    await warnIfSystemdUserLingerDisabled(warn);
     emit({
       ok: true,
       result: "already-installed",
@@ -147,13 +187,6 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
         }
       },
     });
-  const warn = (message: string) => {
-    if (json) {
-      warnings.push(message);
-    } else {
-      defaultRuntime.log(message);
-    }
-  };
 
   await installDaemonServiceAndEmit({
     serviceNoun: "Node",
@@ -172,6 +205,14 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
         environmentValueSources,
         description,
       });
+    },
+    // Run the linger diagnostic only on the verified-success path: placing it
+    // in `install` (before service-load verification) would let a linger
+    // warning accompany a failed install or verification, misdirecting the
+    // operator (see #107033 review). The already-installed short-circuit
+    // above warns separately.
+    onVerified: async () => {
+      await warnIfSystemdUserLingerDisabled(warn);
     },
   });
 }
@@ -219,7 +260,7 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch (error) {
-    const message = `Node service check failed: ${String(error)}`;
+    const message = `Node service check failed: ${formatErrorMessage(error)}`;
     if (json) {
       defaultRuntime.writeJson({ error: message });
     } else {
@@ -230,9 +271,12 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   }
   const [command, runtime] = await Promise.all([
     service.readCommand(process.env).catch(() => null),
-    service
-      .readRuntime(process.env)
-      .catch((err: unknown): GatewayServiceRuntime => ({ status: "unknown", detail: String(err) })),
+    service.readRuntime(process.env).catch(
+      (err: unknown): GatewayServiceRuntime => ({
+        status: "unknown",
+        detail: formatErrorMessage(err),
+      }),
+    ),
   ]);
 
   const payload = {

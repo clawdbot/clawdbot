@@ -3,8 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import { collectChangedPaths } from "./config-change-paths.js";
 import { applyUnsetPathsForWrite } from "./config-path-mutation.js";
 import { restoreEnvRefsFromMap, resolveWriteEnvSnapshotForPath } from "./env-preserve.js";
-import { formatConfigValidationFailure } from "./io.write-errors.js";
+import { createConfigValidationFailedError } from "./io.write-errors.js";
 import { resolvePersistCandidateForWrite } from "./io.write-prepare.js";
+import { tryResolveLegacyCompatibilityAgentId } from "./legacy.default-agent-owner.js";
+import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { createMergePatch } from "./merge-patch.js";
 import type { OpenClawConfig } from "./types.js";
 
@@ -679,6 +681,29 @@ describe("config io write prepare", () => {
     });
   });
 
+  it("preserves an untouched legacy owner marker across a partial unrelated write", () => {
+    const authored = {
+      agents: { entries: { ops: {}, research: { default: true } } },
+      gateway: { port: 18789 },
+    };
+    const migrated = migratePersistedImplicitMainRoster(authored).config as OpenClawConfig;
+
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig: migrated,
+      sourceConfig: migrated,
+      sourceConfigBeforeMigrations: authored,
+      rootAuthoredConfig: authored,
+      nextConfig: { gateway: { port: 19001 } },
+      preserveLegacyAgentRoster: true,
+      explicitSetPaths: [["gateway", "port"]],
+      explicitSetValueSource: { gateway: { port: 19001 } },
+    }) as OpenClawConfig;
+
+    expect(persisted.agents?.entries?.research?.default).toBe(true);
+    const reloaded = migratePersistedImplicitMainRoster(persisted).config as OpenClawConfig;
+    expect(tryResolveLegacyCompatibilityAgentId(reloaded)).toBe("research");
+  });
+
   it("rejects duplicate normalized ids before canonicalizing a legacy roster", () => {
     const nextConfig = listRoster([
       { id: "Ops", workspace: "/first" },
@@ -1064,10 +1089,13 @@ describe("config io write prepare", () => {
   });
 
   it('formats actionable guidance for dmPolicy="open" without wildcard allowFrom', () => {
-    const message = formatConfigValidationFailure(
-      "channels.telegram.allowFrom",
-      'channels.telegram.dmPolicy = "open" requires channels.telegram.allowFrom to include "*"',
-    );
+    const message = createConfigValidationFailedError([
+      {
+        path: "channels.telegram.allowFrom",
+        message:
+          'channels.telegram.dmPolicy = "open" requires channels.telegram.allowFrom to include "*"',
+      },
+    ]).message;
     expect(message).toContain("openclaw config set channels.telegram.allowFrom '[\"*\"]'");
     expect(message).toContain('openclaw config set channels.telegram.dmPolicy "pairing"');
   });

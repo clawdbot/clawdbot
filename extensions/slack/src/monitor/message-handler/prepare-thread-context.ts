@@ -1,5 +1,4 @@
 // Slack plugin module implements prepare thread context behavior.
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import {
   formatInboundEnvelope,
   resolveInboundSupplementalSenderAllowed,
@@ -59,7 +58,7 @@ type SlackSessionResetFreshness =
 type SlackSessionFreshnessRuntime = {
   session?: {
     resolveEntryResetFreshness?: (params: {
-      defaultAgentId?: string;
+      agentId: string;
       storePath?: string;
       sessionKey: string;
       sessionCfg?: OpenClawConfig["session"];
@@ -71,6 +70,7 @@ type SlackSessionFreshnessRuntime = {
 
 function resolveSlackThreadSessionFreshness(params: {
   ctx: SlackMonitorContext;
+  agentId: string;
   storePath: string;
   sessionKey: string;
 }): SlackSessionResetFreshness | undefined {
@@ -78,7 +78,7 @@ function resolveSlackThreadSessionFreshness(params: {
   // intentionally keeps non-context helpers untyped for external plugins.
   const runtime = params.ctx.channelRuntime as SlackSessionFreshnessRuntime | undefined;
   return runtime?.session?.resolveEntryResetFreshness?.({
-    defaultAgentId: resolveDefaultAgentId(params.ctx.cfg),
+    agentId: params.agentId,
     storePath: params.storePath,
     sessionKey: params.sessionKey,
     sessionCfg: params.ctx.cfg.session,
@@ -153,6 +153,7 @@ async function resolveSlackThreadUserMap(params: {
 
 export async function resolveSlackThreadContextData(params: {
   ctx: SlackMonitorContext;
+  agentId: string;
   account: ResolvedSlackAccount;
   message: SlackMessageEvent;
   isGroupDm: boolean;
@@ -187,6 +188,7 @@ export async function resolveSlackThreadContextData(params: {
     params.isThreadReply && params.threadTs
       ? resolveSlackThreadSessionFreshness({
           ctx: params.ctx,
+          agentId: params.agentId,
           storePath: params.storePath,
           sessionKey: params.sessionKey,
         })

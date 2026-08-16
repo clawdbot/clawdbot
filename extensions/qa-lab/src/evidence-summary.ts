@@ -1,8 +1,9 @@
-// Qa Lab plugin module implements QA evidence summary behavior.
+// QA Lab plugin module implements QA evidence summary behavior.
 import { z } from "zod";
 import { qaCoverageIdSchema } from "./coverage-id.js";
 import { resolveQaEvidenceEnvironment } from "./evidence-environment.js";
 import { splitQaModelRef } from "./model-selection.js";
+import { qaProfileEvidencePlan, type QaProfileEvidencePlan } from "./profile-evidence-plan.js";
 import { getQaProvider, type QaProviderMode } from "./providers/index.js";
 import { qaRuntimePairLaneSchema, type QaRuntimePairLane } from "./scenario-catalog.js";
 import {
@@ -164,6 +165,7 @@ const qaEvidenceSummarySchema = z.strictObject({
   evidenceMode: qaScorecardEvidenceModeSchema,
   entries: z.array(qaEvidenceSummaryEntrySchema),
   profile: qaEvidenceProfileIdSchema.optional(),
+  profilePlan: qaProfileEvidencePlan.schema.optional(),
   scorecard: qaEvidenceScorecardSchema.optional(),
 });
 
@@ -328,14 +330,6 @@ function resolveQaEvidenceRunner(params: { env?: NodeJS.ProcessEnv; fallback?: s
   return params.env?.OPENCLAW_QA_RUNNER?.trim() || params.fallback || "host";
 }
 
-function resolveQaEvidenceChannelDriver(params: { env?: NodeJS.ProcessEnv; fallback?: string }) {
-  const id =
-    params.fallback?.trim() ||
-    params.env?.OPENCLAW_QA_CHANNEL_DRIVER?.trim() ||
-    params.env?.OPENCLAW_E2E_CHANNEL_DRIVER?.trim();
-  return id ? { id } : undefined;
-}
-
 function resolveQaEvidencePackageSource(env: NodeJS.ProcessEnv | undefined) {
   const spec = env?.OPENCLAW_QA_PACKAGE_SOURCE?.trim() || undefined;
   const sha = env?.OPENCLAW_QA_PACKAGE_SOURCE_SHA?.trim() || undefined;
@@ -441,6 +435,7 @@ function buildQaEvidenceSummary(params: {
   evidenceMode?: QaScorecardEvidenceMode;
   generatedAt: string;
   profile?: QaEvidenceProfile;
+  profilePlan?: QaProfileEvidencePlan;
   scorecard?: QaEvidenceScorecardJson;
 }): QaEvidenceSummaryJson {
   const profileOptions = readQaScorecardProfileOptions(params.profile);
@@ -459,6 +454,7 @@ function buildQaEvidenceSummary(params: {
     evidenceMode,
     entries,
     profile: params.profile,
+    profilePlan: params.profilePlan,
     scorecard: params.scorecard,
   });
 }
@@ -471,6 +467,7 @@ export function attachQaEvidenceScorecard(params: {
   evidenceMode?: QaScorecardEvidenceMode;
   summary: QaEvidenceSummaryJson;
   profile: QaEvidenceProfile;
+  profilePlan: QaProfileEvidencePlan;
   scorecard: QaEvidenceScorecardJson;
 }): QaEvidenceSummaryJson {
   return buildQaEvidenceSummary({
@@ -478,6 +475,7 @@ export function attachQaEvidenceScorecard(params: {
     evidenceMode: params.evidenceMode,
     generatedAt: params.summary.generatedAt,
     profile: params.profile,
+    profilePlan: params.profilePlan,
     scorecard: params.scorecard,
   });
 }
@@ -500,10 +498,7 @@ export function buildQaSuiteEvidenceSummary(
     env: params.env,
     explicit: params.profile,
   });
-  const channelDriver = resolveQaEvidenceChannelDriver({
-    env: params.env,
-    fallback: params.channelDriver,
-  });
+  const channelDriver = params.channelDriver?.trim() || undefined;
   const entries = params.scenarioResults.map((result, index): QaEvidenceSummaryEntry => {
     const scenario = params.scenarioDefinitions[index];
     const primaryCoverageIds = uniqueSortedStrings(scenario?.coverage?.primary ?? []);
@@ -539,8 +534,8 @@ export function buildQaSuiteEvidenceSummary(
         provider,
         channel: {
           id: params.channelId,
-          live: channelDriver?.id === "live",
-          driver: channelDriver?.id,
+          live: channelDriver === "live",
+          driver: channelDriver,
         },
         packageSource,
         artifacts: buildQaEvidenceArtifacts(params.artifactPaths, "qa-suite"),

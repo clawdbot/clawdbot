@@ -23,7 +23,7 @@ async function mount(
   render(
     renderSessionsHubHeader({
       active,
-      title: "Threads",
+      title: "Sessions",
       actions: withActions ? html`<div style="width: 240px">Agent selector</div>` : undefined,
       onSelect,
     }),

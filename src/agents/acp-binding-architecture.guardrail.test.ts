@@ -13,7 +13,7 @@ type GuardedSource = {
 
 const GUARDED_SOURCES: GuardedSource[] = [
   {
-    path: "agents/acp-spawn.ts",
+    path: "agents/subagents/spawn/acp-spawn.ts",
     forbiddenPatterns: [/\bgetThreadBindingManager\b/, /\bparseDiscordTarget\b/],
   },
   {

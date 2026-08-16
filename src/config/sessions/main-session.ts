@@ -1,11 +1,18 @@
-import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
+import {
+  listAgentIds,
+  resolveDefaultAgentId,
+  resolveSystemAgentTargetAgentId,
+} from "../../agents/agent-scope-config.js";
 // Main-session keys normalize configured agents and legacy aliases into store keys.
 import {
   normalizeAgentId,
   normalizeMainKey,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
+import { resolveCanonicalMainSessionKey } from "./main-session-key.js";
+import { resolvePersistedSessionStoreOwnerForKey } from "./session-store-owner.js";
 import type { SessionScope } from "./types.js";
 
 const FALLBACK_DEFAULT_AGENT_ID = "main";
@@ -18,19 +25,56 @@ function buildMainSessionKey(agentId: string, mainKey?: string): string {
 
 /** Resolves the configured main session key, honoring global session scope. */
 export function resolveMainSessionKey(cfg: OpenClawConfig): string {
-  if (cfg?.session?.scope === "global") {
-    return "global";
-  }
-  return buildMainSessionKey(resolveDefaultAgentId(cfg), cfg.session?.mainKey);
+  return resolveCanonicalMainSessionKey({
+    agentId:
+      tryResolveLegacyCompatibilityAgentId(cfg) ??
+      resolveDefaultAgentId(cfg, {
+        surface: "main-session routing",
+        hint: "Pass an explicit agent/session key instead of the unscoped main alias.",
+      }),
+    mainKey: cfg.session?.mainKey,
+    sessionScope: cfg.session?.scope,
+  });
+}
+
+/** Resolves the owner and canonical session target for ambient system work. */
+export function resolveSystemMainSessionTarget(cfg: OpenClawConfig): {
+  agentId: string;
+  sessionKey: string;
+} {
+  const agentId = resolveSystemAgentTargetAgentId(cfg);
+  return {
+    agentId,
+    sessionKey: resolveCanonicalMainSessionKey({
+      agentId,
+      mainKey: cfg.session?.mainKey,
+      sessionScope: cfg.session?.scope,
+    }),
+  };
+}
+
+/** Resolves the main session owned by configured ambient system work. */
+export function resolveSystemMainSessionKey(cfg: OpenClawConfig): string {
+  return resolveSystemMainSessionTarget(cfg).sessionKey;
 }
 
 /** Stable fingerprint for the config values that canonicalize chat session keys. */
 export function resolveSessionRoutingContract(cfg: OpenClawConfig): string {
-  const defaultAgentId = resolveDefaultAgentId(cfg);
   const scope = cfg?.session?.scope ?? "per-sender";
-  return [scope, normalizeMainKey(cfg?.session?.mainKey), normalizeAgentId(defaultAgentId)].join(
-    "|",
-  );
+  // Global keys carry no agent namespace, so their durable fixed-store owner is
+  // part of the routing contract; otherwise stale clients can target a changed row.
+  const persistedOwner =
+    scope === "global"
+      ? resolvePersistedSessionStoreOwnerForKey(cfg, "global")
+      : ({ kind: "none" } as const);
+  const routingOwner =
+    persistedOwner.kind === "configured"
+      ? persistedOwner.agentId
+      : persistedOwner.kind === "retired"
+        ? `retired:${persistedOwner.agentId}`
+        : (tryResolveLegacyCompatibilityAgentId(cfg) ??
+          (cfg.agents?.ownership === "explicit" ? "unowned" : (listAgentIds(cfg)[0] ?? "main")));
+  return [scope, normalizeMainKey(cfg?.session?.mainKey), routingOwner].join("|");
 }
 
 export { resolveAgentIdFromSessionKey };

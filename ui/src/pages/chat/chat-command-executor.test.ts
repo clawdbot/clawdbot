@@ -73,23 +73,32 @@ function executeSlashCommand(
 function restrictedSnapshot(
   client: GatewayBrowserClient,
   methods: string[],
+  scopes = ["operator.read"],
 ): Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase"> {
   return {
     client,
     phase: "connected",
     hello: {
-      auth: { role: "operator", scopes: ["operator.read"] },
+      auth: { role: "operator", scopes },
       features: { methods },
     } as ApplicationGatewaySnapshot["hello"],
   };
 }
 
 function row(key: string, overrides?: Partial<GatewaySessionRow>): GatewaySessionRow {
+  const active = overrides?.status === "running" || overrides?.hasActiveRun === true;
   return {
     key,
     spawnedBy: overrides?.spawnedBy,
     kind: "direct",
     updatedAt: null,
+    ...(active
+      ? {
+          hasActiveRun: true,
+          activeRunIds: ["active-run"],
+          activeLeafEntryId: "leaf-active",
+        }
+      : {}),
     ...overrides,
   };
 }
@@ -132,17 +141,27 @@ describe("executeSlashCommand directives", () => {
     expectNoRequestCall(request, "sessions.compact");
   });
 
-  it("does not patch session settings without operator.admin", async () => {
-    const request = vi.fn();
+  it.each([
+    { name: "allows /model with operator.write", scopes: ["operator.write"], allowed: true },
+    { name: "rejects /model without operator.write", scopes: ["operator.read"], allowed: false },
+  ])("$name", async ({ scopes, allowed }) => {
+    const request = vi.fn(async () => createResolvedModelPatch("gpt-5-mini", "openai"));
     const client = { request } as unknown as GatewayBrowserClient;
 
     const result = await executeSlashCommand(client, "main", "model", "gpt-5-mini", {
-      sessionAccessSnapshot: restrictedSnapshot(client, ["sessions.patch"]),
+      sessionAccessSnapshot: restrictedSnapshot(client, ["sessions.patch"], scopes),
       chatModelCatalog: [{ id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openai" }],
     });
 
-    expect(result.failed).toBe(true);
-    expectNoRequestCall(request, "sessions.patch");
+    expect(result.failed === true).toBe(!allowed);
+    if (allowed) {
+      expect(requireRequestCall(request, "sessions.patch").payload).toMatchObject({
+        key: "main",
+        model: "gpt-5-mini",
+      });
+    } else {
+      expectNoRequestCall(request, "sessions.patch");
+    }
   });
 
   it("defers slash-command model cache publication to the captured chat owner", async () => {
@@ -328,7 +347,10 @@ describe("executeSlashCommand directives", () => {
       ].join("\n"),
     );
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
-    expect(request).toHaveBeenNthCalledWith(2, "models.list", { view: "configured" });
+    expect(request).toHaveBeenNthCalledWith(2, "models.list", {
+      agentId: "main",
+      view: "configured",
+    });
   });
 
   it("omits unavailable catalog entries from bare /model output", async () => {
@@ -387,6 +409,11 @@ describe("executeSlashCommand directives", () => {
           ],
         };
       }
+      if (method === "models.list") {
+        return {
+          models: [{ id: "work-model", name: "Work Model", provider: "openai" }],
+        };
+      }
       throw new Error(`unexpected method: ${method}`);
     });
 
@@ -397,9 +424,6 @@ describe("executeSlashCommand directives", () => {
       "",
       {
         agentId: "work",
-        chatModelCatalog: [
-          { id: "work-model", name: "Work Model", provider: "openai", available: true },
-        ],
       },
     );
 
@@ -407,6 +431,10 @@ describe("executeSlashCommand directives", () => {
       t("chat.commandResults.model.current", { model: "`work-model`" }),
     );
     expect(request).toHaveBeenCalledWith("sessions.list", { agentId: "work" });
+    expect(request).toHaveBeenCalledWith("models.list", {
+      agentId: "work",
+      view: "configured",
+    });
   });
 
   it("does not report global model defaults for an agent without a session row", async () => {
@@ -1602,10 +1630,18 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     expect(chatSend.payload.queueMode).toBe("steer");
   });
 
-  it("uses canonical active-run state when the session row only reports hasActiveRun", async () => {
+  it("uses a unique run id when a real session row omits active leaf context", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.list") {
-        return { sessions: [row("agent:main:main", { hasActiveRun: true })] };
+        return {
+          sessions: [
+            row("agent:main:main", {
+              hasActiveRun: true,
+              activeRunIds: ["active-run"],
+              activeLeafEntryId: undefined,
+            }),
+          ],
+        };
       }
       if (method === "chat.send") {
         return { status: "started", runId: "run-active-flag", messageSeq: 2 };
@@ -1627,7 +1663,39 @@ describe("executeSlashCommand /steer (soft inject)", () => {
       sessionKey: "agent:main:main",
       message: "continue with the smaller fix",
       deliver: false,
+      expectedRunId: "active-run",
     });
+    expect(chatSend.payload).not.toHaveProperty("expectedLeafEntryId");
+  });
+
+  it.each([
+    ["zero", []],
+    ["multiple", ["run-a", "run-b"]],
+  ] as const)("refuses %s authoritative active run ids", async (_label, activeRunIds) => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return {
+          sessions: [
+            row("agent:main:main", {
+              hasActiveRun: true,
+              activeRunIds: [...activeRunIds],
+              activeLeafEntryId: undefined,
+            }),
+          ],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "steer",
+      "continue safely",
+    );
+
+    expect(result.content).toBe(t("chat.commandResults.steer.noActiveRun"));
+    expectNoRequestCall(request, "chat.send");
   });
 
   it("does not mark the current run pending when chat.send returns terminal ok", async () => {

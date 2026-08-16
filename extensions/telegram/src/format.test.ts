@@ -390,6 +390,24 @@ describe("markdownToTelegramHtml", () => {
     ).toBe("Name | Age\nAlice | 30");
   });
 
+  it.each([
+    ["malformed suffix", "colspan=2x", "Alice | 30"],
+    ["plus sign", "colspan=+2", "Alice | 30"],
+    ["minus sign", "colspan=-2", "Alice | 30"],
+    ["decimal", "colspan=2.5", "Alice | 30"],
+    ["exponent", "colspan=2e1", "Alice | 30"],
+    ["hexadecimal", "colspan=0x10", "Alice | 30"],
+    ["numeric data attribute", "data-colspan=9 colspan=2", "Alice |  | 30"],
+    ["unquoted decimal", "colspan=2", "Alice |  | 30"],
+    ["single-quoted decimal", "colspan='2'", "Alice |  | 30"],
+    ["double-quoted decimal", 'colspan="2"', "Alice |  | 30"],
+    ["whitespace-padded decimal", 'colspan=" 2 "', "Alice |  | 30"],
+  ])("parses only complete decimal fallback colspans: %s", (_label, attrs, expected) => {
+    expect(
+      telegramHtmlToPlainTextFallback(`<table><tr><td ${attrs}>Alice</td><td>30</td></tr></table>`),
+    ).toBe(expected);
+  });
+
   it("does not decode surrogate numeric entities into Telegram HTML fallback text", () => {
     const cases = [
       ["hex high surrogate", "x &#xD800; y", "x &#xD800; y"],

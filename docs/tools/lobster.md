@@ -92,14 +92,14 @@ Or per-agent:
 ```json
 {
   "agents": {
-    "list": [
-      {
-        "id": "main",
+    "entries": {
+      "main": {
+        "default": true,
         "tools": {
           "alsoAllow": ["lobster"]
         }
       }
-    ]
+    }
   }
 }
 ```
@@ -166,12 +166,12 @@ For a **structured LLM step** inside a workflow, enable the optional
     }
   },
   "agents": {
-    "list": [
-      {
-        "id": "main",
+    "entries": {
+      "main": {
+        "default": true,
         "tools": { "alsoAllow": ["llm-task"] }
       }
-    ]
+    }
   }
 }
 ```

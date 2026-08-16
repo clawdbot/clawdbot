@@ -54,7 +54,7 @@ export type ProviderAuthContext = {
    * Onboarding secret persistence preference.
    *
    * Interactive wizard flows set this when the caller explicitly requested
-   * plaintext or env/file/exec ref storage. Ad-hoc `models auth login` flows
+   * plaintext or env/file/exec/store ref storage. Ad-hoc `models auth login` flows
    * usually leave it undefined.
    */
   secretInputMode?: SecretInputMode;

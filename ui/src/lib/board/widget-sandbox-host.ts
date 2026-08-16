@@ -1,4 +1,5 @@
-import type { BoardViewWidget, BoardWidgetFrameUrl } from "./view-types.ts";
+import type { BoardWidget } from "./types.ts";
+import type { BoardWidgetFrameUrl } from "./view-types.ts";
 import {
   BoardWidgetBridgeController,
   type BoardWidgetBridgeGatewayClient,
@@ -9,7 +10,7 @@ const SANDBOX_READY_TIMEOUT_MS = 10_000;
 
 type BoardWidgetSandboxHostOptions = {
   frame: HTMLIFrameElement;
-  widget: BoardViewWidget;
+  widget: BoardWidget;
   sandboxOrigin: string;
   sandboxUrl: string;
   sourceOrigin: string;
@@ -17,8 +18,8 @@ type BoardWidgetSandboxHostOptions = {
   resolveFrameUrl: BoardWidgetFrameUrl;
   confirmPrompt: (text: string) => boolean;
   onFrameUrl: (url: string) => void;
-  onLoadFailed: (widget: BoardViewWidget) => void;
-  onUnauthorized: (widget: BoardViewWidget) => void;
+  onLoadFailed: (widget: BoardWidget) => void;
+  onUnauthorized: (widget: BoardWidget) => void;
   onReadyTimeout: () => void;
   onLoaded: () => void;
   onError: (error: unknown) => void;
@@ -27,6 +28,7 @@ type BoardWidgetSandboxHostOptions = {
 /** Owns one trusted outer sandbox frame and its ticket-bound inner widget bridge. */
 export class BoardWidgetSandboxHost {
   private options: BoardWidgetSandboxHostOptions;
+  private active = true;
   private bridgeController: BoardWidgetBridgeController | null = null;
   private bridgeClient: BoardWidgetBridgeGatewayClient | undefined;
   private bridgePort: MessagePort | null = null;
@@ -35,6 +37,7 @@ export class BoardWidgetSandboxHost {
   private ready = false;
   private readyTimer: number | null = null;
   private loadedDocumentKey = "";
+  private loadingDocumentKey = "";
   private loadGeneration = 0;
   private requestGeneration = 0;
   private readonly pendingRequests = new Map<string, number>();
@@ -46,6 +49,28 @@ export class BoardWidgetSandboxHost {
 
   get frame(): HTMLIFrameElement {
     return this.options.frame;
+  }
+
+  setActive(active: boolean): void {
+    if (active === this.active) {
+      return;
+    }
+    this.active = active;
+    if (!active) {
+      this.clearReadyTimeout();
+      this.loadGeneration += 1;
+      this.loadingDocumentKey = "";
+      this.cancelPendingRequests("Widget inactive");
+      this.requestGeneration += 1;
+      return;
+    }
+    if (!this.ready) {
+      this.scheduleReadyTimeout();
+    } else if (this.documentKey() !== this.loadedDocumentKey) {
+      void this.loadDocument();
+    } else {
+      this.postHostInit();
+    }
   }
 
   update(options: BoardWidgetSandboxHostOptions): void {
@@ -83,7 +108,7 @@ export class BoardWidgetSandboxHost {
       }
       this.postHostInit();
     }
-    if (this.ready && this.documentKey() !== this.loadedDocumentKey) {
+    if (this.active && this.ready && this.documentKey() !== this.loadedDocumentKey) {
       void this.loadDocument();
     }
   }
@@ -93,6 +118,7 @@ export class BoardWidgetSandboxHost {
     this.requestGeneration += 1;
     this.pendingRequests.clear();
     this.loadedDocumentKey = "";
+    this.loadingDocumentKey = "";
     this.bridgePort?.close();
     this.bridgePort = null;
     this.adoptedTicket = "";
@@ -100,6 +126,7 @@ export class BoardWidgetSandboxHost {
   }
 
   dispose(): void {
+    this.active = false;
     this.clearReadyTimeout();
     this.reset();
     this.ready = false;
@@ -115,7 +142,7 @@ export class BoardWidgetSandboxHost {
   }
 
   handleFrameError(): void {
-    if (this.ready || !this.options.frame.isConnected) {
+    if (!this.active || this.ready || !this.options.frame.isConnected) {
       return;
     }
     this.clearReadyTimeout();
@@ -132,7 +159,9 @@ export class BoardWidgetSandboxHost {
     ) {
       this.ready = true;
       this.clearReadyTimeout();
-      void this.loadDocument();
+      if (this.active) {
+        void this.loadDocument();
+      }
       return;
     }
     if (!this.ready) {
@@ -177,6 +206,12 @@ export class BoardWidgetSandboxHost {
       this.adoptedTicket = ticket;
       this.bridgeController?.updateIdentity(this.options.frame, ticket);
       this.postHostInit();
+      return;
+    }
+    if (!this.active) {
+      if (isBoardWidgetBridgeRequest(data)) {
+        this.postResponse(data.id, false, undefined, "Widget inactive");
+      }
       return;
     }
     this.handleBridgeRequest(data);
@@ -262,12 +297,12 @@ export class BoardWidgetSandboxHost {
   }
 
   private scheduleReadyTimeout(): void {
-    if (this.ready || this.readyTimer !== null) {
+    if (!this.active || this.ready || this.readyTimer !== null) {
       return;
     }
     this.readyTimer = window.setTimeout(() => {
       this.readyTimer = null;
-      if (this.ready || !this.options.frame.isConnected) {
+      if (!this.active || this.ready || !this.options.frame.isConnected) {
         return;
       }
       // Browsers do not expose iframe HTTP failures through `error`. Bound the
@@ -278,7 +313,7 @@ export class BoardWidgetSandboxHost {
 
   private retrySandboxFrame(): void {
     const { frame, sandboxUrl } = this.options;
-    if (!frame.isConnected) {
+    if (!this.active || !frame.isConnected) {
       return;
     }
     this.ready = false;
@@ -306,6 +341,7 @@ export class BoardWidgetSandboxHost {
     const ticket = this.options.widget.viewTicket;
     if (
       !this.ready ||
+      !this.active ||
       !this.bridgePort ||
       !ticket ||
       this.loadedDocumentKey !== this.documentKey() ||
@@ -319,6 +355,9 @@ export class BoardWidgetSandboxHost {
   }
 
   private async loadDocument(): Promise<void> {
+    if (!this.active) {
+      return;
+    }
     const { frame, widget, resolveFrameUrl } = this.options;
     if (!frame.contentWindow) {
       return;
@@ -335,12 +374,17 @@ export class BoardWidgetSandboxHost {
       this.options.onError(new Error("widget content URL is outside the active Gateway"));
       return;
     }
+    const documentKey = this.documentKey();
+    if (documentKey === this.loadedDocumentKey || documentKey === this.loadingDocumentKey) {
+      return;
+    }
+    this.loadingDocumentKey = documentKey;
     const sourceHref = sourceUrl.href;
     this.options.onFrameUrl(sourceHref);
     const generation = ++this.loadGeneration;
     try {
       const response = await fetch(sourceHref, { cache: "no-store" });
-      if (generation !== this.loadGeneration || !frame.isConnected) {
+      if (!this.active || generation !== this.loadGeneration || !frame.isConnected) {
         return;
       }
       if (response.status === 401) {
@@ -351,7 +395,7 @@ export class BoardWidgetSandboxHost {
         throw new Error(`widget content request failed (${response.status})`);
       }
       const documentHtml = await response.text();
-      if (generation !== this.loadGeneration || !frame.isConnected) {
+      if (!this.active || generation !== this.loadGeneration || !frame.isConnected) {
         return;
       }
       frame.contentWindow?.postMessage(
@@ -362,7 +406,7 @@ export class BoardWidgetSandboxHost {
         },
         this.options.sandboxOrigin,
       );
-      this.loadedDocumentKey = this.documentKey();
+      this.loadedDocumentKey = documentKey;
       this.options.onLoaded();
       // The wrapper may offer its private port while the source fetch is still
       // pending. Complete the handshake once these exact bytes become current.
@@ -370,6 +414,10 @@ export class BoardWidgetSandboxHost {
     } catch {
       if (generation === this.loadGeneration) {
         this.options.onLoadFailed(widget);
+      }
+    } finally {
+      if (generation === this.loadGeneration) {
+        this.loadingDocumentKey = "";
       }
     }
   }

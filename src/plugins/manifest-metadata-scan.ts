@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as normalizeTrimmedString } from "@openclaw/normalization-core/string-coerce";
+import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { readRegularFileSync } from "../infra/regular-file.js";
@@ -155,18 +156,10 @@ function listSourceCheckoutPluginDirs(startOrder: number): CandidateDir[] {
   return dirs;
 }
 
-function resolveComparablePath(filePath: string): string {
-  try {
-    return fs.realpathSync(filePath);
-  } catch {
-    return path.resolve(filePath);
-  }
-}
-
 function uniqueCandidateDirs(candidates: CandidateDir[]): CandidateDir[] {
   const byPath = new Map<string, CandidateDir>();
   for (const candidate of candidates) {
-    const key = resolveComparablePath(candidate.pluginDir);
+    const key = resolveRealpathOrAbsolute(candidate.pluginDir);
     const existing = byPath.get(key);
     if (!existing || candidate.rank < existing.rank || candidate.order < existing.order) {
       byPath.set(key, candidate);

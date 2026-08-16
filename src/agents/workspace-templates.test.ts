@@ -3,19 +3,13 @@
  * Verifies dev, package, fallback, and docs-template search paths.
  */
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { isHeartbeatContentEffectivelyEmpty } from "../auto-reply/heartbeat.js";
 
-const tempDirs: string[] = [];
-
-async function makeTempRoot(): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-templates-"));
-  tempDirs.push(root);
-  return root;
-}
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function loadWorkspaceTemplateResolvers() {
   vi.resetModules();
@@ -23,15 +17,9 @@ async function loadWorkspaceTemplateResolvers() {
 }
 
 describe("resolveWorkspaceTemplateSearchDirs", () => {
-  afterEach(async () => {
-    await Promise.all(
-      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-    );
-  });
-
   it("resolves templates from package root when module url is dist-rooted", async () => {
     const { resolveWorkspaceTemplateSearchDirs } = await loadWorkspaceTemplateResolvers();
-    const root = await makeTempRoot();
+    const root = tempDirs.make("openclaw-templates-");
     await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
 
     const templatesDir = path.join(root, "src", "agents", "templates");
@@ -49,7 +37,7 @@ describe("resolveWorkspaceTemplateSearchDirs", () => {
 
   it("falls back to package-root runtime path when templates directory is missing", async () => {
     const { resolveWorkspaceTemplateSearchDirs } = await loadWorkspaceTemplateResolvers();
-    const root = await makeTempRoot();
+    const root = tempDirs.make("openclaw-templates-");
     await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
 
     const distDir = path.join(root, "dist");
@@ -62,7 +50,7 @@ describe("resolveWorkspaceTemplateSearchDirs", () => {
 
   it("includes docs templates as secondary search roots", async () => {
     const { resolveWorkspaceTemplateSearchDirs } = await loadWorkspaceTemplateResolvers();
-    const root = await makeTempRoot();
+    const root = tempDirs.make("openclaw-templates-");
     await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
 
     const runtimeTemplatesDir = path.join(root, "src", "agents", "templates");

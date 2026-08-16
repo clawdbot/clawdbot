@@ -23,7 +23,7 @@ const {
 } = pwAi;
 
 const connectOverCdpSpy = vi.spyOn(chromium, "connectOverCDP");
-const getChromeWebSocketUrlSpy = vi.spyOn(chromeModule, "getChromeWebSocketUrl");
+const getChromeWebSocketEndpointSpy = vi.spyOn(chromeModule, "getChromeWebSocketEndpoint");
 
 const PROXY_ENV_KEYS = [
   "ALL_PROXY",
@@ -115,7 +115,7 @@ function installBrowserMocks() {
   } as unknown as import("playwright-core").Browser;
 
   connectOverCdpSpy.mockResolvedValue(browser);
-  getChromeWebSocketUrlSpy.mockResolvedValue(null);
+  getChromeWebSocketEndpointSpy.mockResolvedValue(null);
 
   const getBrowserDisconnectedHandler = () =>
     browserOn.mock.calls.find((call) => call[0] === "disconnected")?.[1] as
@@ -214,7 +214,7 @@ beforeEach(() => {
 afterEach(async () => {
   vi.unstubAllEnvs();
   connectOverCdpSpy.mockClear();
-  getChromeWebSocketUrlSpy.mockClear();
+  getChromeWebSocketEndpointSpy.mockClear();
   await closePlaywrightBrowserConnection().catch(() => {});
 });
 
@@ -246,6 +246,9 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
 
   it("blocks hostname navigation when strict SSRF policy is configured", async () => {
     const { pageGoto } = installBrowserMocks();
+    getChromeWebSocketEndpointSpy.mockResolvedValue({
+      url: "ws://127.0.0.1:18792/devtools/browser/ROOT",
+    });
 
     await expect(
       createPageViaPlaywright({

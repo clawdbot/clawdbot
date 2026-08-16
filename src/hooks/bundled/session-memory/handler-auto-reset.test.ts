@@ -66,8 +66,8 @@ describe("session-memory automatic reset", () => {
       );
       expect(files).toHaveLength(1);
       expect(memoryContent).toContain(`- **Reason**: ${reason}`);
-      expect(memoryContent).toContain(`user: Remember the ${reason} rollover`);
-      expect(memoryContent).toContain("assistant: Captured automatically");
+      expect(memoryContent).toContain(`user: ${JSON.stringify(`Remember the ${reason} rollover`)}`);
+      expect(memoryContent).toContain(`assistant: ${JSON.stringify("Captured automatically")}`);
     },
   );
 });

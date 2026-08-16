@@ -1,5 +1,8 @@
 {
   "id": "feishu",
+  "doctorContract": {
+    "configRepair": true
+  },
   "name": "Feishu/Lark",
   "description": "OpenClaw Feishu/Lark channel plugin for chats and workplace tools (community maintained by @m1heng).",
   "activation": {
@@ -121,7 +124,7 @@
         "properties": {
           "source": {
             "type": "string",
-            "enum": ["env", "file", "exec"]
+            "enum": ["env", "file", "exec", "store"]
           },
           "provider": { "type": "string" },
           "id": { "type": "string" }

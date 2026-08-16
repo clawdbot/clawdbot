@@ -1,7 +1,11 @@
+import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
-import { shouldWarnAboutPrivateMessageToolFinal } from "./private-message-tool-final.js";
+import {
+  classifyPrivateMessageToolFinal,
+  shouldClassifyPrivateMessageToolFinal,
+} from "./private-message-tool-final.js";
 import type { FollowupRun } from "./queue/types.js";
 
 const STRANDED_REPLY_RETRY_MARKER = "stranded-reply-retry";
@@ -31,29 +35,18 @@ export function resolveStrandedReplyRecovery(params: {
   isHeartbeat: boolean;
   isRoomEvent: boolean;
 }): StrandedReplyRecovery {
-  if (
-    params.isHeartbeat ||
-    params.isRoomEvent ||
-    params.sourceReplyDeliveryMode !== "message_tool_only" ||
-    params.sendPolicyDenied ||
-    params.successfulSourceReplyDelivery
-  ) {
+  if (!shouldClassifyPrivateMessageToolFinal(params)) {
     return { kind: "none" };
   }
-  const shouldWarn = shouldWarnAboutPrivateMessageToolFinal({
-    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-    sendPolicyDenied: params.sendPolicyDenied,
-    successfulSourceReplyDelivery: params.successfulSourceReplyDelivery,
-    finalText: params.finalText,
-  });
+  const classification = classifyPrivateMessageToolFinal(params);
   if (params.base.strandedReplyRetry === true) {
     return {
       kind: "diagnostic",
       payload: buildStrandedReplyDeliveryFailurePayload(),
-      warn: shouldWarn,
+      warn: classification === "substantive",
     };
   }
-  if (!shouldWarn) {
+  if (classification !== "substantive") {
     return { kind: "none" };
   }
   return {
@@ -66,12 +59,12 @@ export function resolveStrandedReplyRecovery(params: {
 }
 
 function buildStrandedReplyRetryPrompt(finalText: string): string {
-  return (
-    `[System] Your previous reply was not delivered to the conversation because ` +
-    `you did not call message(action=send). Your reply text was:\n\n` +
-    `"${finalText}"\n\n` +
-    `Please deliver this reply now by calling message(action=send). ` +
-    `Do not add any extra commentary; just deliver the original reply.`
+  return formatSystemTurnPrompt(
+    `Your previous reply was not delivered to the conversation because ` +
+      `you did not call message(action=send). Your reply text was:\n\n` +
+      `"${finalText}"\n\n` +
+      `Please deliver this reply now by calling message(action=send). ` +
+      `Do not add any extra commentary; just deliver the original reply.`,
   );
 }
 

@@ -9,6 +9,7 @@ import type {
   OpenClawPluginNodeInvokePolicyResult,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { projectBoundedTextTail } from "./append-bounded-text-tail.js";
 import { appendFileTransferAudit, type FileTransferAuditOp } from "./audit.js";
 import {
@@ -28,12 +29,6 @@ const DIR_FETCH_ARCHIVE_LIST_STDERR_TAIL_CHARS = 4096;
 const DIR_FETCH_ARCHIVE_LIST_ERROR_STDERR_CHARS = 200;
 
 type FileTransferCommand = FileTransferNodeInvokeCommand;
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
 
 function readPath(params: Record<string, unknown>): string {
   return typeof params.path === "string" ? params.path.trim() : "";
@@ -750,7 +745,7 @@ async function handleFileTransferInvoke(
   }
   const command = ctx.command as FileTransferCommand;
   const op: FileTransferAuditOp = command;
-  const params = asRecord(ctx.params);
+  const params = asOptionalRecord(ctx.params) ?? {};
   const requestedPath = readPath(params);
   const nodeDisplayName = ctx.node?.displayName;
   const startedAt = Date.now();

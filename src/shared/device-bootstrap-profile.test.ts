@@ -2,6 +2,8 @@
 import { describe, expect, test } from "vitest";
 import {
   BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
+  CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES,
+  CONTROL_UI_OWNER_BOOTSTRAP_PROFILE,
   FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -77,7 +79,33 @@ describe("device bootstrap profile", () => {
     });
   });
 
-  test("allows admin only for the closed full-mobile purpose", () => {
+  test("allows admin only for closed full-access purposes", () => {
+    expect(
+      normalizeDeviceBootstrapHandoffProfile({
+        roles: ["operator"],
+        scopes: [
+          "operator.admin",
+          "operator.approvals",
+          "operator.pairing",
+          "operator.read",
+          "operator.talk.secrets",
+          "operator.write",
+        ],
+        purpose: "control-ui-owner",
+      }),
+    ).toEqual({
+      roles: ["operator"],
+      scopes: [
+        "operator.admin",
+        "operator.approvals",
+        "operator.pairing",
+        "operator.read",
+        "operator.talk.secrets",
+        "operator.write",
+      ],
+      purpose: "control-ui-owner",
+    });
+
     expect(
       normalizeDeviceBootstrapHandoffProfile({
         roles: ["node", "operator"],
@@ -115,6 +143,25 @@ describe("device bootstrap profile", () => {
       ],
       purpose: "mobile-full",
     });
+  });
+
+  test("browser-owner profile carries the exact full Control UI handoff", () => {
+    expect(CONTROL_UI_OWNER_BOOTSTRAP_PROFILE).toEqual({
+      roles: ["operator"],
+      scopes: [
+        "operator.admin",
+        "operator.approvals",
+        "operator.pairing",
+        "operator.questions",
+        "operator.read",
+        "operator.talk.secrets",
+        "operator.write",
+      ],
+      purpose: "control-ui-owner",
+    });
+    expect([...CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES]).toEqual(
+      CONTROL_UI_OWNER_BOOTSTRAP_PROFILE.scopes,
+    );
   });
 
   test("existing setup profile preserves the bounded operator handoff", () => {

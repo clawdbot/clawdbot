@@ -343,11 +343,11 @@ describe("WorktreesPage lifecycle", () => {
     expect(secondRequest).not.toHaveBeenCalledWith("worktrees.remove", { id: "worktree-1" });
   });
 
-  it("offers force removal when the gateway reports a snapshot failure", async () => {
+  it("surfaces the snapshot failure after a forced removal", async () => {
     const request = vi.fn((method: string, params?: Record<string, unknown>) => {
       if (method === "worktrees.remove") {
         return params?.force
-          ? Promise.resolve({ removed: true })
+          ? Promise.resolve({ removed: true, snapshotError: "nested gitlink" })
           : Promise.resolve({ removed: false, snapshotError: "nested gitlink" });
       }
       return Promise.resolve({ worktrees: [] });
@@ -371,7 +371,9 @@ describe("WorktreesPage lifecycle", () => {
     expect(request).toHaveBeenCalledWith("worktrees.remove", { id: "worktree-1" });
     expect(request).toHaveBeenCalledWith("worktrees.remove", { id: "worktree-1", force: true });
     expect(showConfirmDialog).toHaveBeenCalledTimes(2);
-    expect(page.error).toBeNull();
+    expect(page.error).toBe("nested gitlink");
+    await page.updateComplete;
+    expect(page.querySelector(".callout.danger")?.textContent).toContain("nested gitlink");
   });
 
   it("discards a restore error across a same-client reconnect", async () => {

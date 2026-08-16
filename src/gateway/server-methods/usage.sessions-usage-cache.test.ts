@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 const mocks = vi.hoisted(() => ({
   discoverAllSessions: vi.fn(),
-  loadCombinedSessionStoreForGateway: vi.fn(),
+  loadCombinedSessionStoreForGatewayCore: vi.fn(),
   loadSessionCostSummariesFromCache: vi.fn(),
 }));
 
@@ -12,7 +12,7 @@ vi.mock("../session-utils.js", async () => {
   const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
   return {
     ...actual,
-    loadCombinedSessionStoreForGateway: mocks.loadCombinedSessionStoreForGateway,
+    loadCombinedSessionStoreForGatewayCore: mocks.loadCombinedSessionStoreForGatewayCore,
   };
 });
 
@@ -82,7 +82,7 @@ describe("sessions.usage result cache", () => {
     vi.spyOn(Date, "now").mockImplementation(() => now);
     vi.clearAllMocks();
     testApi.sessionsUsageCache.clear();
-    mocks.loadCombinedSessionStoreForGateway.mockReturnValue({
+    mocks.loadCombinedSessionStoreForGatewayCore.mockReturnValue({
       storePath: "(multiple)",
       store: {},
     });
@@ -141,10 +141,10 @@ describe("sessions.usage result cache", () => {
     expect(mocks.discoverAllSessions).toHaveBeenCalledTimes(variants.length + 1);
     expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(variants.length + 1);
 
-    const storeLoads = mocks.loadCombinedSessionStoreForGateway.mock.calls.length;
+    const storeLoads = mocks.loadCombinedSessionStoreForGatewayCore.mock.calls.length;
     await runSessionsUsage({ ...baseParams, key: "agent:main:missing" });
     expect(testApi.sessionsUsageCache.size).toBe(variants.length + 1);
-    expect(mocks.loadCombinedSessionStoreForGateway).toHaveBeenCalledTimes(storeLoads + 1);
+    expect(mocks.loadCombinedSessionStoreForGatewayCore).toHaveBeenCalledTimes(storeLoads + 1);
   });
 
   it("does not share entries across runtime config snapshots", async () => {

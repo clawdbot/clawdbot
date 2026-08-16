@@ -37,7 +37,8 @@ describe("Microsoft Teams meeting captions and permissions", () => {
     expect(script).toContain("continue on this browser");
     expect(script).toContain("someone will let you in shortly");
     expect(script).toContain("setSinkId");
-    expect(script).toContain("BlackHole");
+    expect(script).toContain("blackhole 2ch");
+    expect(script).toContain("openclaw meeting audio");
   });
 
   it("enables live captions and captures the validated Teams caption row DOM", async () => {

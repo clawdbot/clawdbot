@@ -1,13 +1,9 @@
-import { html, nothing, type TemplateResult } from "lit";
-import { repeat } from "lit/directives/repeat.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.ts";
 import { hasOperatorWriteAccess } from "../../../app/operator-access.ts";
-import { icons } from "../../../components/icons.ts";
-import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import type { SessionScopeHost } from "../../../lib/sessions/index.ts";
 import { canonicalUiSessionKeyForPersistence } from "../../../lib/sessions/session-key.ts";
-import { normalizeOptionalString } from "../../../lib/string-coerce.ts";
 import {
   applyTaskEvent,
   isActiveTask,
@@ -16,17 +12,14 @@ import {
   normalizeTasksCancelResult,
   normalizeTasksGetResult,
   normalizeTasksListResult,
-  partitionTasks,
   sortTasks,
-  taskTitle,
+  taskTimestampMs,
 } from "../../../lib/tasks/data.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
-import { renderTaskDetail, renderTaskRow } from "./chat-background-task-row.ts";
 import { newestTaskSnapshot } from "./chat-background-tasks-shared.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
-
-export { STATUS_TONES } from "./chat-background-tasks-shared.ts";
-export type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
+import { deriveSubagentActivity } from "./chat-subagent-activity.ts";
+import { observeTaskDetailEvent } from "./chat-task-detail-state.ts";
 
 type BackgroundTaskLoadEvent = NonNullable<ReturnType<typeof normalizeTaskEventPayload>>;
 
@@ -56,8 +49,11 @@ type BackgroundTasksState = {
   // wa-tooltip anchors by document id, so the status row's id must stay unique
   // per pane: two panes on the same agent would otherwise cross-anchor.
   statusRowId: string;
+  subagentActivityExpiryAt: number | null;
+  subagentActivityExpiryTimer: number | null;
+  taskActivityById: Map<string, Pick<TaskSummary, "lastActivity" | "diffStat">>;
+  terminalObservedAtByTask: Map<string, number>;
   tasks: TaskSummary[] | null;
-  selectedTaskId: string | null;
   taskDetails: Map<string, TaskSummary>;
   taskDetailErrors: Map<string, string>;
   taskDetailLoadingIds: Set<string>;
@@ -74,9 +70,9 @@ export type BackgroundTasksHost = {
   requestUpdate?: () => void;
 };
 
-// Bounded like the Tasks page: active tasks get their own query because the
-// ledger pages newest-first and long-running work can hide behind newer
-// terminal records on the first page.
+// The chat rail stays bounded to its session while the full Tasks page drains
+// every active page. A separate active query still keeps long-running work
+// from hiding behind newer terminal records here.
 const ACTIVE_TASKS_LIMIT = 200;
 const RECENT_TASKS_LIMIT = 100;
 
@@ -94,6 +90,12 @@ function getBackgroundTasksState(host: BackgroundTasksHost): BackgroundTasksStat
     current.connectionEpoch === host.connectionEpoch
   ) {
     return current;
+  }
+  if (
+    current?.subagentActivityExpiryTimer !== null &&
+    current?.subagentActivityExpiryTimer !== undefined
+  ) {
+    window.clearTimeout(current.subagentActivityExpiryTimer);
   }
   nextStatusRowId += 1;
   const next: BackgroundTasksState = {
@@ -116,14 +118,92 @@ function getBackgroundTasksState(host: BackgroundTasksHost): BackgroundTasksStat
     requestId: 0,
     sessionKey,
     statusRowId: `chat-tasks-status-${nextStatusRowId}`,
+    subagentActivityExpiryAt: null,
+    subagentActivityExpiryTimer: null,
+    taskActivityById: new Map(),
+    terminalObservedAtByTask: new Map(),
     tasks: null,
-    selectedTaskId: null,
     taskDetails: new Map(),
     taskDetailErrors: new Map(),
     taskDetailLoadingIds: new Set(),
   };
   host.backgroundTasksState = next;
   return next;
+}
+
+function retainTaskStreamingFields(state: BackgroundTasksState, task: TaskSummary): TaskSummary {
+  const retained = state.taskActivityById.get(task.id);
+  const lastActivity = task.lastActivity ?? retained?.lastActivity;
+  const diffStat = task.diffStat ?? retained?.diffStat;
+  if (lastActivity || diffStat) {
+    state.taskActivityById.set(task.id, {
+      ...(lastActivity ? { lastActivity } : {}),
+      ...(diffStat ? { diffStat } : {}),
+    });
+  }
+  if (lastActivity === task.lastActivity && diffStat === task.diffStat) {
+    return task;
+  }
+  return {
+    ...task,
+    ...(lastActivity ? { lastActivity } : {}),
+    ...(diffStat ? { diffStat } : {}),
+  };
+}
+
+function prepareTaskSnapshot(state: BackgroundTasksState, task: TaskSummary): TaskSummary {
+  const retained = retainTaskStreamingFields(state, task);
+  if (isActiveTask(retained)) {
+    state.terminalObservedAtByTask.delete(retained.id);
+  }
+  return retained;
+}
+
+function observeTaskTerminal(
+  state: BackgroundTasksState,
+  task: TaskSummary,
+  source: "event" | "snapshot",
+) {
+  if (isActiveTask(task)) {
+    state.terminalObservedAtByTask.delete(task.id);
+    return;
+  }
+  if (!state.terminalObservedAtByTask.has(task.id)) {
+    const terminalAt =
+      source === "event" ? Date.now() : taskTimestampMs(task.endedAt ?? task.updatedAt);
+    if (terminalAt > 0) {
+      state.terminalObservedAtByTask.set(task.id, terminalAt);
+    }
+  }
+}
+
+function scheduleSubagentActivityExpiry(
+  host: BackgroundTasksHost,
+  state: BackgroundTasksState,
+  nextExpiryAt: number | null,
+) {
+  if (state.subagentActivityExpiryAt === nextExpiryAt) {
+    return;
+  }
+  if (state.subagentActivityExpiryTimer !== null) {
+    window.clearTimeout(state.subagentActivityExpiryTimer);
+  }
+  state.subagentActivityExpiryAt = nextExpiryAt;
+  state.subagentActivityExpiryTimer = null;
+  if (nextExpiryAt === null) {
+    return;
+  }
+  state.subagentActivityExpiryTimer = window.setTimeout(
+    () => {
+      if (getBackgroundTasksState(host) !== state) {
+        return;
+      }
+      state.subagentActivityExpiryAt = null;
+      state.subagentActivityExpiryTimer = null;
+      host.requestUpdate?.();
+    },
+    Math.max(0, nextExpiryAt - Date.now()),
+  );
 }
 
 function loadBackgroundTasks(
@@ -166,8 +246,12 @@ function loadBackgroundTasks(
         }),
         client.request("tasks.list", { sessionKey, limit: RECENT_TASKS_LIMIT }),
       ]);
-      const active = normalizeTasksListResult(activePayload);
-      const recent = normalizeTasksListResult(recentPayload);
+      const active = normalizeTasksListResult(activePayload)?.tasks.map((task) =>
+        prepareTaskSnapshot(state, task),
+      );
+      const recent = normalizeTasksListResult(recentPayload)?.tasks.map((task) =>
+        prepareTaskSnapshot(state, task),
+      );
       if (!active || !recent) {
         throw new Error(t("tasksPage.invalidResponse"));
       }
@@ -184,6 +268,9 @@ function loadBackgroundTasks(
       current.tasks = sortTasks(
         merged.map((task) => newestTaskSnapshot(task, current.taskDetails.get(task.id))),
       );
+      for (const task of current.tasks) {
+        observeTaskTerminal(current, task, "snapshot");
+      }
       current.loadedClient = client;
     } catch (error) {
       const current = getBackgroundTasksState(host);
@@ -195,6 +282,9 @@ function loadBackgroundTasks(
             (tasks, event) => applyTaskEvent(tasks, event).tasks,
             [],
           );
+          for (const task of current.tasks) {
+            observeTaskTerminal(current, task, "event");
+          }
         }
         current.error =
           error instanceof Error && error.message.trim()
@@ -266,13 +356,24 @@ export function handleBackgroundTasksEvent(host: BackgroundTasksHost, payload: u
   ) {
     return;
   }
-  const event = normalizeTaskEventPayload(payload);
-  if (!event) {
+  const normalizedEvent = normalizeTaskEventPayload(payload);
+  if (!normalizedEvent) {
     return;
   }
-  if (event.action === "upserted" && !taskMatchesSessionScope(host, event.task, state.sessionKey)) {
+  if (
+    normalizedEvent.action === "upserted" &&
+    !taskMatchesSessionScope(host, normalizedEvent.task, state.sessionKey)
+  ) {
     return;
   }
+  observeTaskDetailEvent(host, normalizedEvent);
+  const event =
+    normalizedEvent.action === "upserted"
+      ? {
+          ...normalizedEvent,
+          task: prepareTaskSnapshot(state, normalizedEvent.task),
+        }
+      : normalizedEvent;
   const bufferedEvent = bufferBackgroundTaskEvent(host, state, event);
   if (state.tasks === null) {
     // The exact in-flight snapshot already replays its buffered events; a
@@ -291,10 +392,9 @@ export function handleBackgroundTasksEvent(host: BackgroundTasksHost, payload: u
       return;
     }
     state.tasks = state.tasks.filter((task) => task.id !== event.taskId);
-    if (state.selectedTaskId === event.taskId) {
-      state.selectedTaskId = null;
-    }
     state.taskDetails.delete(event.taskId);
+    state.taskActivityById.delete(event.taskId);
+    state.terminalObservedAtByTask.delete(event.taskId);
     state.taskDetailErrors.delete(event.taskId);
     state.taskDetailLoadingIds.delete(event.taskId);
     host.requestUpdate?.();
@@ -304,6 +404,7 @@ export function handleBackgroundTasksEvent(host: BackgroundTasksHost, payload: u
   const detail = state.taskDetails.get(event.task.id);
   let newest = current ? newestTaskSnapshot(current, event.task, "event") : event.task;
   newest = newestTaskSnapshot(newest, detail);
+  observeTaskTerminal(state, newest, "event");
   state.tasks = sortTasks([newest, ...state.tasks.filter((task) => task.id !== event.task.id)]);
   if (detail) {
     state.taskDetails = new Map(state.taskDetails).set(event.task.id, {
@@ -339,7 +440,8 @@ async function loadBackgroundTaskDetail(
     if (getBackgroundTasksState(host) !== state) {
       return;
     }
-    const detail = normalizeTasksGetResult(payload);
+    const normalizedDetail = normalizeTasksGetResult(payload);
+    const detail = normalizedDetail ? prepareTaskSnapshot(state, normalizedDetail) : null;
     if (!detail || detail.id !== rowId) {
       throw new Error(t("chat.backgroundTasks.detailFailed"));
     }
@@ -350,6 +452,7 @@ async function loadBackgroundTaskDetail(
       return;
     }
     const newest = newestTaskSnapshot(current, detail);
+    observeTaskTerminal(state, newest, "snapshot");
     state.taskDetails = new Map(state.taskDetails).set(rowId, {
       ...newest,
       ...(detail.prompt ? { prompt: detail.prompt } : {}),
@@ -378,55 +481,6 @@ async function loadBackgroundTaskDetail(
   }
 }
 
-function focusBackgroundTaskControl(
-  state: BackgroundTasksState,
-  target: "back" | { taskId: string },
-) {
-  window.requestAnimationFrame(() => {
-    const rail = document.getElementById(`${state.statusRowId}-rail`);
-    if (target === "back") {
-      rail?.querySelector<HTMLElement>(".chat-tasks-rail__back")?.focus();
-      return;
-    }
-    const row = [...(rail?.querySelectorAll<HTMLElement>("[data-task-id]") ?? [])].find(
-      (candidate) => candidate.dataset.taskId === target.taskId,
-    );
-    row?.querySelector<HTMLElement>(".chat-tasks-rail__task-disclosure")?.focus();
-  });
-}
-
-function selectBackgroundTaskDetail(
-  host: BackgroundTasksHost,
-  state: BackgroundTasksState,
-  task: TaskSummary,
-) {
-  state.selectedTaskId = task.id;
-  host.requestUpdate?.();
-  focusBackgroundTaskControl(state, "back");
-  void loadBackgroundTaskDetail(host, state, task);
-}
-
-function showBackgroundTaskList(host: BackgroundTasksHost, state: BackgroundTasksState) {
-  const taskId = state.selectedTaskId;
-  const listedTask = state.tasks?.find((task) => task.id === taskId);
-  const detailedTask = taskId ? state.taskDetails.get(taskId) : undefined;
-  const selectedTask = listedTask ? newestTaskSnapshot(listedTask, detailedTask) : detailedTask;
-  if (selectedTask && state.tasks) {
-    state.tasks = sortTasks([
-      selectedTask,
-      ...state.tasks.filter((task) => task.id !== selectedTask.id),
-    ]);
-    if (!isActiveTask(selectedTask)) {
-      state.finishedCollapsed = false;
-    }
-  }
-  state.selectedTaskId = null;
-  host.requestUpdate?.();
-  if (taskId) {
-    focusBackgroundTaskControl(state, { taskId });
-  }
-}
-
 async function cancelBackgroundTask(
   host: BackgroundTasksHost,
   state: BackgroundTasksState,
@@ -446,7 +500,8 @@ async function cancelBackgroundTask(
     }
     const result = normalizeTasksCancelResult(payload);
     if (result?.task && state.tasks !== null) {
-      const cancelled = result.task;
+      const cancelled = prepareTaskSnapshot(state, result.task);
+      observeTaskTerminal(state, cancelled, "event");
       const event = normalizeTaskEventPayload({ action: "upserted", task: cancelled });
       if (event) {
         // A slow client may miss the best-effort task event; the successful
@@ -488,7 +543,11 @@ function toggleBackgroundTasks(host: BackgroundTasksHost) {
 
 export function createBackgroundTasksProps(
   host: BackgroundTasksHost,
-  opts: { narrowLayout?: boolean; onOpenSession: (sessionKey: string) => void },
+  opts: {
+    narrowLayout?: boolean;
+    openTaskId?: string;
+    onOpenTaskDetail?: (task: TaskSummary) => void;
+  } = {},
 ): BackgroundTasksProps {
   const state = getBackgroundTasksState(host);
   if (!host.connected) {
@@ -506,6 +565,16 @@ export function createBackgroundTasksProps(
   ) {
     loadBackgroundTasks(host, state);
   }
+  const subagentActivity = deriveSubagentActivity({
+    tasks: state.tasks ?? [],
+    sessionKey: state.sessionKey,
+    terminalObservedAtByTask: state.terminalObservedAtByTask,
+    canonicalizeSessionKey: (sessionKey) =>
+      canonicalUiSessionKeyForPersistence(host, sessionKey) ||
+      normalizeOptionalString(sessionKey) ||
+      "",
+  });
+  scheduleSubagentActivityExpiry(host, state, subagentActivity.nextExpiryAt);
   return {
     sessionKey: state.sessionKey,
     statusRowId: state.statusRowId,
@@ -517,7 +586,8 @@ export function createBackgroundTasksProps(
     loading: state.loading,
     error: state.error,
     tasks: state.tasks,
-    selectedTaskId: state.selectedTaskId,
+    subagentActivity,
+    openTaskId: opts.openTaskId,
     taskDetails: state.taskDetails,
     taskDetailErrors: state.taskDetailErrors,
     taskDetailLoadingIds: state.taskDetailLoadingIds,
@@ -530,191 +600,19 @@ export function createBackgroundTasksProps(
     },
     onRefresh: () => loadBackgroundTasks(host, state, true),
     onCancel: (taskId) => void cancelBackgroundTask(host, state, taskId),
-    onSelectTask: (task) => selectBackgroundTaskDetail(host, state, task),
-    onBackToList: () => showBackgroundTaskList(host, state),
-    onOpenSession: opts.onOpenSession,
+    onLoadDetail: (task) => void loadBackgroundTaskDetail(host, state, task),
+    onOpenTaskDetail: opts.onOpenTaskDetail
+      ? (task) => {
+          // Opening retries a failed tasks.get: the panel's render-driven load
+          // must skip errored tasks (a retry there would loop every paint), so
+          // user selection is the one path that clears the error.
+          if (state.taskDetailErrors.has(task.id)) {
+            const next = new Map(state.taskDetailErrors);
+            next.delete(task.id);
+            state.taskDetailErrors = next;
+          }
+          opts.onOpenTaskDetail?.(task);
+        }
+      : undefined,
   };
-}
-
-/** Active-count badge shown on the collapsed-rail toggles; 0 until the task
- * list has loaded for the pane's session. */
-function backgroundTasksActiveCount(props: BackgroundTasksProps | undefined): number {
-  return props?.tasks?.filter(isActiveTask).length ?? 0;
-}
-
-export function renderBackgroundTasksToggle(
-  backgroundTasks: BackgroundTasksProps | undefined,
-): TemplateResult | typeof nothing {
-  if (!backgroundTasks) {
-    return nothing;
-  }
-  const expanded = !backgroundTasks.collapsed;
-  const label = expanded ? t("chat.backgroundTasks.collapse") : t("chat.backgroundTasks.show");
-  const activeCount = backgroundTasksActiveCount(backgroundTasks);
-  return html`
-    <openclaw-tooltip .content=${label}>
-      <button
-        class="btn btn--ghost btn--icon chat-icon-btn chat-tasks-toggle"
-        type="button"
-        aria-label=${label}
-        aria-expanded=${String(expanded)}
-        @click=${backgroundTasks.onToggleCollapsed}
-      >
-        ${icons.activity}
-        ${!expanded && activeCount > 0
-          ? html`<span class="chat-tasks-toggle__badge" aria-hidden="true">${activeCount}</span>`
-          : nothing}
-      </button>
-    </openclaw-tooltip>
-  `;
-}
-
-function renderTaskRows(
-  tasks: readonly TaskSummary[],
-  props: BackgroundTasksProps,
-): TemplateResult {
-  return html`
-    <div class="chat-tasks-rail__list" role="list">
-      ${repeat(
-        tasks,
-        (task) => task.id,
-        (task) => renderTaskRow(task, props),
-      )}
-    </div>
-  `;
-}
-
-export function renderBackgroundTasksRail(
-  backgroundTasks: BackgroundTasksProps | undefined,
-): TemplateResult | typeof nothing {
-  // Collapsed rails render nothing at all — no icon strip. Reopening happens
-  // through renderBackgroundTasksToggle.
-  if (!backgroundTasks || backgroundTasks.collapsed) {
-    return nothing;
-  }
-  const selectedTask = backgroundTasks.tasks?.find(
-    (task) => task.id === backgroundTasks.selectedTaskId,
-  );
-  const { active, recent } = partitionTasks(backgroundTasks.tasks ?? []);
-  const loaded = backgroundTasks.tasks !== null;
-  const empty = loaded && active.length === 0 && recent.length === 0;
-  const collapseButton = html`
-    <openclaw-tooltip .content=${t("chat.backgroundTasks.collapse")}>
-      <button
-        type="button"
-        class="nav-collapse-toggle chat-tasks-rail__collapse-toggle"
-        aria-label=${t("chat.backgroundTasks.collapse")}
-        aria-expanded="true"
-        @click=${backgroundTasks.onToggleCollapsed}
-      >
-        <span class="nav-collapse-toggle__icon" aria-hidden="true"
-          >${backgroundTasks.narrowLayout ? icons.panelBottomClose : icons.panelRightClose}</span
-        >
-      </button>
-    </openclaw-tooltip>
-  `;
-  return html`
-    <aside
-      id=${`${backgroundTasks.statusRowId}-rail`}
-      class="chat-tasks-rail"
-      aria-label=${t("chat.backgroundTasks.label")}
-    >
-      <div class="chat-tasks-rail__header">
-        ${selectedTask
-          ? html`
-              <button
-                class="btn btn--ghost btn--sm chat-tasks-rail__back"
-                type="button"
-                aria-label=${t("chat.backgroundTasks.backToTasks")}
-                @click=${backgroundTasks.onBackToList}
-              >
-                ${icons.arrowLeft}
-              </button>
-              <div class="chat-tasks-rail__title">
-                <span class="chat-tasks-rail__eyebrow"
-                  >${t("chat.backgroundTasks.detailTitle")}</span
-                >
-                <strong title=${taskTitle(selectedTask)}>${taskTitle(selectedTask)}</strong>
-              </div>
-              <div class="chat-tasks-rail__actions">${collapseButton}</div>
-            `
-          : html`
-              <div class="chat-tasks-rail__title">
-                <span class="chat-tasks-rail__eyebrow">${backgroundTasks.sessionKey}</span>
-                <strong>${t("chat.backgroundTasks.title")}</strong>
-              </div>
-              <div class="chat-tasks-rail__actions">
-                <openclaw-tooltip .content=${t("chat.backgroundTasks.refresh")}>
-                  <button
-                    class="btn btn--ghost btn--sm chat-tasks-rail__refresh"
-                    type="button"
-                    aria-label=${t("chat.backgroundTasks.refresh")}
-                    ?disabled=${backgroundTasks.loading || !backgroundTasks.connected}
-                    @click=${backgroundTasks.onRefresh}
-                  >
-                    ${icons.refresh}
-                  </button>
-                </openclaw-tooltip>
-                ${collapseButton}
-              </div>
-            `}
-      </div>
-      ${!backgroundTasks.connected
-        ? html`<div class="chat-tasks-rail__state">${t("tasksPage.disconnected")}</div>`
-        : nothing}
-      ${backgroundTasks.error
-        ? html`<div class="chat-tasks-rail__state chat-tasks-rail__state--error">
-            ${backgroundTasks.error}
-          </div>`
-        : nothing}
-      ${selectedTask
-        ? html`<div class="chat-tasks-rail__scroll">
-            ${renderTaskDetail(selectedTask, backgroundTasks)}
-          </div>`
-        : html`
-            ${backgroundTasks.loading && !loaded
-              ? html`<div class="chat-tasks-rail__state">${t("chat.backgroundTasks.loading")}</div>`
-              : nothing}
-            ${empty
-              ? html`<div class="chat-tasks-rail__state">${t("chat.backgroundTasks.empty")}</div>`
-              : nothing}
-            <div class="chat-tasks-rail__scroll chat-tasks-rail__scroll--split">
-              ${active.length > 0
-                ? html`
-                    <section class="chat-tasks-rail__section" data-tasks-section="running">
-                      <div class="chat-tasks-rail__section-title">
-                        ${t("chat.backgroundTasks.running", { count: String(active.length) })}
-                      </div>
-                      ${renderTaskRows(active, backgroundTasks)}
-                    </section>
-                  `
-                : nothing}
-              ${recent.length > 0
-                ? html`
-                    <section class="chat-tasks-rail__section" data-tasks-section="finished">
-                      <button
-                        class="chat-tasks-rail__section-toggle"
-                        type="button"
-                        aria-expanded=${String(!backgroundTasks.finishedCollapsed)}
-                        @click=${backgroundTasks.onToggleFinished}
-                      >
-                        <span class="chat-tasks-rail__section-title">
-                          ${t("chat.backgroundTasks.finished", { count: String(recent.length) })}
-                        </span>
-                        <span class="chat-tasks-rail__section-chevron" aria-hidden="true">
-                          ${backgroundTasks.finishedCollapsed
-                            ? icons.chevronRight
-                            : icons.chevronDown}
-                        </span>
-                      </button>
-                      ${backgroundTasks.finishedCollapsed
-                        ? nothing
-                        : renderTaskRows(recent, backgroundTasks)}
-                    </section>
-                  `
-                : nothing}
-            </div>
-          `}
-    </aside>
-  `;
 }

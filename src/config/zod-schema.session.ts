@@ -40,7 +40,7 @@ const PositiveDurationSchema = z.union([z.string(), z.number()]).superRefine((va
   }
 });
 
-export const SessionSendPolicySchema = createAllowDenyChannelRulesSchema();
+const SessionSendPolicySchema = createAllowDenyChannelRulesSchema();
 
 export const SessionSchema = z
   .object({
@@ -91,6 +91,7 @@ export const SessionSchema = z
         mode: z.enum(["enforce", "warn"]).optional(),
         pruneAfter: PositiveDurationSchema.optional(),
         maxEntries: z.number().int().positive().optional(),
+        preserveRecent: z.union([PositiveDurationSchema, z.literal(false)]).optional(),
         resetArchiveRetention: z.union([PositiveDurationSchema, z.literal(false)]).optional(),
         maxDiskBytes: z.union([z.string(), z.number(), z.literal(false)]).optional(),
         highWaterBytes: z.union([z.string(), z.number()]).optional(),

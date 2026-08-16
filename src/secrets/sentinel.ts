@@ -1,8 +1,9 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from "node:crypto";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
-const SECRET_SENTINEL_PREFIX = "oc-sent-v2.";
-const SECRET_SENTINEL_SUFFIX = ".end";
+export const SECRET_SENTINEL_PREFIX = "oc-sent-v2.";
+export const SECRET_SENTINEL_SUFFIX = ".end";
 const SECRET_SENTINEL_SOURCE = "oc-sent-v2\\.[A-Za-z0-9_-]+\\.end";
 const SECRET_SENTINEL_CIPHER = "aes-256-gcm";
 const SECRET_SENTINEL_NONCE_BYTES = 12;
@@ -10,12 +11,23 @@ const SECRET_SENTINEL_SCOPE_BYTES = 8;
 const SECRET_SENTINEL_TAG_BYTES = 16;
 const SECRET_SENTINEL_HEADER_BYTES =
   SECRET_SENTINEL_SCOPE_BYTES + SECRET_SENTINEL_NONCE_BYTES + SECRET_SENTINEL_TAG_BYTES;
+// Shared-store secrets are capped at 64 KiB. The egress proxy uses this bound
+// to keep only one maximum sentinel in memory while scanning streamed bodies.
+export const SECRET_SENTINEL_MAX_LENGTH =
+  SECRET_SENTINEL_PREFIX.length +
+  Math.ceil(((SECRET_SENTINEL_HEADER_BYTES + 64 * 1024) * 4) / 3) +
+  SECRET_SENTINEL_SUFFIX.length;
 
 export const SECRET_SENTINEL_PATTERN = new RegExp(SECRET_SENTINEL_SOURCE, "g");
 
-// One process key keeps sentinels resolvable for in-flight requests without a
-// plaintext registry that retains every historical credential until exit.
-const secretSentinelKeys = randomBytes(64);
+type SecretSentinelKeyState = { keys: Buffer };
+const SECRET_SENTINEL_KEY_STATE = Symbol.for("openclaw.secretSentinel.keys");
+// Bundled runtime chunks can instantiate this module independently. A process-global
+// key keeps their sentinels interoperable without retaining a plaintext registry.
+const secretSentinelKeys = resolveGlobalSingleton<SecretSentinelKeyState>(
+  SECRET_SENTINEL_KEY_STATE,
+  () => ({ keys: randomBytes(64) }),
+).keys;
 const secretSentinelCipherKey = secretSentinelKeys.subarray(0, 32);
 const secretSentinelNonceKey = secretSentinelKeys.subarray(32);
 

@@ -155,8 +155,7 @@ export function loadConfigFromContext(
         configPath,
         raw,
         parsed,
-        validateBackupSync: (backup) =>
-          context.resolveSuspiciousRecoveryBackupCandidate(backup.parsed) !== null,
+        prepareBackup: context.prepareRecoveryBackupCandidate,
       });
       if (recovery.raw !== raw) {
         restoreEnvChangesIfUnchanged({
@@ -171,7 +170,7 @@ export function loadConfigFromContext(
       context,
       validated.config,
       effectiveConfigRaw,
-      pluginMetadata.getSnapshot(),
+      pluginMetadata.getManifestRegistry(),
     );
     context.observeLoadConfigSnapshot(
       createConfigFileSnapshot({

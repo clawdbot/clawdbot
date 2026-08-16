@@ -6,7 +6,7 @@ import {
   archiveLegacyStateSource,
   legacyStateFileExists,
   type PluginDoctorStateMigration,
-} from "openclaw/plugin-sdk/runtime-doctor";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import { LEGACY_MEMORY_WIKI_COMPILED_CACHE_PATHS } from "./src/compiled-cache.js";
 import {

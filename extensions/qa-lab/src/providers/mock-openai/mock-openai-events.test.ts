@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { StreamEvent } from "./mock-openai-contracts.js";
 import {
   buildAssistantEvents,
+  buildPartialFailureEvents,
   buildAssistantThenToolCallEvents,
+  buildFailedResponseEvents,
   buildReasoningAndAssistantEvents,
   buildReasoningOnlyEvents,
 } from "./mock-openai-events.js";
@@ -29,6 +31,38 @@ function readOutputItemSlots(events: StreamEvent[]) {
 }
 
 describe("mock OpenAI Responses output item slots", () => {
+  it("emits the provider no-details failure used by repeated-request recovery QA", () => {
+    const events = buildFailedResponseEvents();
+    expect(events).toEqual([
+      expect.objectContaining({ type: "response.created" }),
+      expect.objectContaining({
+        type: "response.failed",
+        response: expect.not.objectContaining({ error: expect.anything() }),
+      }),
+    ]);
+    expect(events.some((event) => event.type === "response.output_text.delta")).toBe(false);
+  });
+
+  it("emits an unfinished assistant delta before the failed response", () => {
+    const marker = "TELEGRAM-VISIBLE-PARTIAL-BEFORE-FAILURE";
+    const events = buildPartialFailureEvents(marker);
+
+    expect(events.map((event) => event.type)).toEqual([
+      "response.created",
+      "response.output_item.added",
+      "response.output_text.delta",
+      "response.failed",
+    ]);
+    expect(events[1]).toMatchObject({
+      item: { type: "message", role: "assistant", status: "in_progress" },
+    });
+    expect(events[2]).toMatchObject({
+      type: "response.output_text.delta",
+      delta: marker,
+    });
+    expect(events.some((event) => event.type === "response.output_item.done")).toBe(false);
+  });
+
   it("indexes preview deltas and the final answer on the same assistant slot", () => {
     const events = buildAssistantEvents([
       {

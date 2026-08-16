@@ -15,9 +15,9 @@ normalize_npm_pack_json_file() {
   local pack_json_file="$1"
   (
     cd "$HARNESS_ROOT"
-    node --input-type=module - "$pack_json_file" <<'NODE'
+    node --import tsx --input-type=module - "$pack_json_file" <<'NODE'
 import fs from "node:fs";
-import { resolveNpmJsonEntries } from "./scripts/lib/npm-json-output.mjs";
+import { resolveNpmJsonEntries } from "./scripts/lib/npm-json-output.mts";
 
 const packJsonFile = process.argv[2];
 const parsed = JSON.parse(fs.readFileSync(packJsonFile, "utf8"));
@@ -99,9 +99,9 @@ assert_pack_unpacked_size_budget() {
   local pack_json_file="$2"
   (
     cd "$HARNESS_ROOT"
-    node --input-type=module - "$label" "$pack_json_file" <<'NODE'
+    node --import tsx --input-type=module - "$label" "$pack_json_file" <<'NODE'
 import { readFileSync } from "node:fs";
-import { collectPackUnpackedSizeErrors } from "./scripts/lib/npm-pack-budget.mjs";
+import { collectPackUnpackedSizeErrors } from "./scripts/lib/npm-pack-budget.mts";
 
 const label = process.argv[2];
 const packJsonFile = process.argv[3];

@@ -1,9 +1,11 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import {
   TerminalConnection,
   type TerminalGatewayClient,
   TerminalOpenTimeoutError,
+  TerminalOpenUnusableSessionError,
 } from "./terminal-connection.ts";
 
 const TERMINAL_LIVENESS_IDLE_MS = 20_000;
@@ -35,16 +37,6 @@ function sessionResult(overrides: Partial<TestSessionResult> = {}): TestSessionR
     confined: false,
     ...overrides,
   };
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((next, fail) => {
-    resolve = next;
-    reject = fail;
-  });
-  return { promise, resolve, reject };
 }
 
 /** Fake gateway client that records requests and lets tests push events. */
@@ -99,7 +91,13 @@ function makeHarness() {
 }
 
 function testSink(overrides: Partial<TerminalSink> = {}): TerminalSink {
-  return { onData: () => {}, onExit: () => {}, ...overrides };
+  const onData = overrides.onData ?? (() => {});
+  return {
+    onData,
+    onReplay: ({ data }) => onData(data),
+    onExit: () => {},
+    ...overrides,
+  };
 }
 
 function openSession(
@@ -125,7 +123,7 @@ function emitExit(
 function deferRequest<T>(
   client: FakeClient,
   method: string,
-  pending: ReturnType<typeof deferred<T>>,
+  pending: ReturnType<typeof createDeferred<T>>,
 ): void {
   const baseRequest = client.request.bind(client);
   client.request = (<R>(
@@ -176,6 +174,26 @@ function setLivenessProbeOutcomes(
 }
 
 describe("TerminalConnection", () => {
+  // The gateway creates the session before answering, so a response that cannot
+  // drive a tab must not simply throw: the live server session would keep its
+  // slot against the connection cap with nothing able to close it.
+  it.each(["shell", "agentId", "cwd"] as const)(
+    "closes the opened session when the response omits %s",
+    async (field) => {
+      const { client, conn } = makeHarness();
+      const { [field]: _dropped, ...incomplete } = sessionResult();
+      client.nextResponse = incomplete;
+
+      await expect(openSession(conn)).rejects.toBeInstanceOf(TerminalOpenUnusableSessionError);
+
+      expect(client.requests.map((request) => request.method)).toEqual([
+        "terminal.open",
+        "terminal.close",
+      ]);
+      expect(client.requests[1]?.params).toEqual({ sessionId: "s1" });
+    },
+  );
+
   it("opens a session and routes its data to the registered sink", async () => {
     const { client, conn } = makeHarness();
     const data: string[] = [];
@@ -225,10 +243,12 @@ describe("TerminalConnection", () => {
     const data: string[] = [];
     const replays: string[] = [];
     const exits: unknown[] = [];
-    const recovery = deferred<TestSessionResult>();
+    const recovery = createDeferred<TestSessionResult>();
     await openSession(conn, {
       onData: (chunk) => data.push(chunk),
-      onReplay: (snapshot) => replays.push(snapshot),
+      onReplay: ({ data: snapshot }) => {
+        replays.push(snapshot);
+      },
       onExit: (info) => exits.push(info),
     });
     deferRequest(client, "terminal.attach", recovery);
@@ -251,10 +271,12 @@ describe("TerminalConnection", () => {
     const { client, conn } = makeHarness();
     const data: string[] = [];
     const replays: Array<{ snapshot: string; newlyObservedFrom: number }> = [];
-    const recovery = deferred<TestSessionResult>();
+    const recovery = createDeferred<TestSessionResult>();
     await openSession(conn, {
       onData: (chunk) => data.push(chunk),
-      onReplay: (snapshot, newlyObservedFrom) => replays.push({ snapshot, newlyObservedFrom }),
+      onReplay: ({ data: snapshot, newlyObservedFrom }) => {
+        replays.push({ snapshot, newlyObservedFrom });
+      },
     });
     deferRequest(client, "terminal.attach", recovery);
 
@@ -278,19 +300,51 @@ describe("TerminalConnection", () => {
     expect(data).toEqual(["hello", "!"]);
   });
 
-  it("never appends a recovery snapshot when the sink cannot reset", async () => {
+  it("does not let a superseded recovery drain the replacement stream queue", async () => {
     const { client, conn } = makeHarness();
-    const data: string[] = [];
-    await openSession(conn, { onData: (chunk) => data.push(chunk) });
-    client.nextResponse = sessionResult({ buffer: "authoritative snapshot", seq: 12 });
-
+    const oldReplay = createDeferred();
+    const oldReplayEvents: string[] = [];
+    let oldReplaySignal: AbortSignal | undefined;
+    await openSession(conn, {
+      onData: () => {},
+      onReplay: async ({ signal }) => {
+        oldReplaySignal = signal;
+        oldReplayEvents.push("start");
+        await oldReplay.promise;
+        oldReplayEvents.push("done");
+      },
+    });
+    client.nextResponse = sessionResult({ buffer: "old snapshot", seq: 12 });
     emitData(client, 5, "hello");
     emitData(client, 12, "world");
+    await vi.waitFor(() => expect(oldReplayEvents).toEqual(["start"]));
+    expect(oldReplaySignal?.aborted).toBe(false);
 
-    await vi.waitFor(() =>
-      expect(client.forceReconnects).toEqual(["terminal replay reset unavailable"]),
-    );
-    expect(data).toEqual(["hello"]);
+    const newReplay = createDeferred();
+    const newReplayEvents: string[] = [];
+    const newData: string[] = [];
+    client.nextResponse = sessionResult({ buffer: "new snapshot", seq: 20 });
+    const newAttach = conn.attach("s1", {
+      onData: (chunk) => newData.push(chunk),
+      onReplay: async () => {
+        newReplayEvents.push("start");
+        await newReplay.promise;
+        newReplayEvents.push("done");
+      },
+      onExit: () => {},
+    });
+    await vi.waitFor(() => expect(newReplayEvents).toEqual(["start"]));
+    expect(oldReplaySignal?.aborted).toBe(true);
+    emitData(client, 21, "!");
+
+    oldReplay.resolve();
+    await vi.waitFor(() => expect(oldReplayEvents).toEqual(["start", "done"]));
+    await Promise.resolve();
+    newReplay.resolve();
+    await newAttach;
+
+    expect(newReplayEvents).toEqual(["start", "done"]);
+    expect(newData).toEqual(["!"]);
   });
 
   it("serializes a terminal exit behind an in-flight gap replay", async () => {
@@ -298,10 +352,12 @@ describe("TerminalConnection", () => {
     const data: string[] = [];
     const replays: string[] = [];
     const exits: unknown[] = [];
-    const recovery = deferred<TestSessionResult>();
+    const recovery = createDeferred<TestSessionResult>();
     await openSession(conn, {
       onData: (chunk) => data.push(chunk),
-      onReplay: (snapshot) => replays.push(snapshot),
+      onReplay: ({ data: snapshot }) => {
+        replays.push(snapshot);
+      },
       onExit: (info) => exits.push(info),
     });
     deferRequest(client, "terminal.attach", recovery);
@@ -323,10 +379,12 @@ describe("TerminalConnection", () => {
     const data: string[] = [];
     const replays: string[] = [];
     const exits: unknown[] = [];
-    const recovery = deferred<TestSessionResult>();
+    const recovery = createDeferred<TestSessionResult>();
     await openSession(conn, {
       onData: (chunk) => data.push(chunk),
-      onReplay: (snapshot) => replays.push(snapshot),
+      onReplay: ({ data: snapshot }) => {
+        replays.push(snapshot);
+      },
       onExit: (info) => exits.push(info),
     });
     deferRequest(client, "terminal.attach", recovery);
@@ -347,7 +405,7 @@ describe("TerminalConnection", () => {
     const { client, conn } = makeHarness();
     const data: string[] = [];
     const exits: unknown[] = [];
-    const recovery = deferred<never>();
+    const recovery = createDeferred<never>();
     await openSession(conn, {
       onData: (chunk) => data.push(chunk),
       onReplay: () => {},
@@ -369,8 +427,8 @@ describe("TerminalConnection", () => {
 
   it("keeps a queued exit behind recovery started while flushing early events", async () => {
     const { client, conn } = makeHarness();
-    const openResult = deferred<TestSessionResult>();
-    const recovery = deferred<TestSessionResult>();
+    const openResult = createDeferred<TestSessionResult>();
+    const recovery = createDeferred<TestSessionResult>();
     client.request = ((method: string, params: unknown) => {
       client.requests.push({ method, params });
       return method === "terminal.open" ? openResult.promise : recovery.promise;
@@ -380,7 +438,9 @@ describe("TerminalConnection", () => {
 
     const opening = openSession(conn, {
       onData: () => {},
-      onReplay: (snapshot) => replays.push(snapshot),
+      onReplay: ({ data: snapshot }) => {
+        replays.push(snapshot);
+      },
       onExit: (info) => exits.push(info),
     });
     emitData(client, 7, "first");
@@ -485,11 +545,34 @@ describe("TerminalConnection", () => {
     ]);
   });
 
+  it.each([
+    ["terminal.input", (conn: TerminalConnection) => conn.input("s1", "echo lost\n")],
+    ["terminal.resize", (conn: TerminalConnection) => conn.resize("s1", 120, 40)],
+  ] as const)("marks the session unavailable when %s rejects its live owner", async (_, act) => {
+    const { client, conn } = makeHarness();
+    const exits: unknown[] = [];
+    await openSession(conn, { onExit: (info) => exits.push(info) });
+    client.nextResponse = { ok: false };
+
+    await act(conn);
+
+    expect(exits).toEqual([
+      {
+        exitCode: null,
+        signal: null,
+        reason: "disconnected",
+        error: "Terminal session is no longer available. Open a new terminal session.",
+      },
+    ]);
+    expect(conn.size).toBe(0);
+    expect(client.listenerCount()).toBe(0);
+  });
+
   it("buffers output that races ahead of sink registration and replays it in order", async () => {
     const { client, conn } = makeHarness();
     const data: string[] = [];
     // Hold the open response so data can arrive before the sink registers.
-    const opening = deferred<TestSessionResult>();
+    const opening = createDeferred<TestSessionResult>();
     deferRequest(client, "terminal.open", opening);
     const openPromise = openSession(conn, { onData: (chunk) => data.push(chunk) });
     // Server streams the shell prompt before the client has a sink for s1.
@@ -506,7 +589,7 @@ describe("TerminalConnection", () => {
     const { client, conn } = makeHarness();
     const data: string[] = [];
     let exit: unknown;
-    const opening = deferred<TestSessionResult>();
+    const opening = createDeferred<TestSessionResult>();
     deferRequest(client, "terminal.open", opening);
     const openPromise = openSession(conn, {
       onData: (chunk) => data.push(chunk),
@@ -555,7 +638,7 @@ describe("TerminalConnection", () => {
     await openSession(conn);
 
     // Second open held in flight while the only registered session closes.
-    const opening = deferred<TestSessionResult>();
+    const opening = createDeferred<TestSessionResult>();
     deferRequest(client, "terminal.open", opening);
     const data: string[] = [];
     const openPromise = openSession(conn, { onData: (chunk) => data.push(chunk) });
@@ -605,7 +688,7 @@ describe("TerminalConnection", () => {
   it("attach replays the buffer before events that raced ahead, then resumes live", async () => {
     const { client, conn } = makeHarness();
     const data: string[] = [];
-    const attached = deferred<TestSessionResult>();
+    const attached = createDeferred<TestSessionResult>();
     deferRequest(client, "terminal.attach", attached);
 
     const attachPromise = conn.attach("s1", testSink({ onData: (chunk) => data.push(chunk) }));
@@ -625,17 +708,96 @@ describe("TerminalConnection", () => {
     expect(data).toEqual(["replayed history", " tail", " live"]);
   });
 
+  it("awaits asynchronous initial replay before flushing live output", async () => {
+    const { client, conn } = makeHarness();
+    const replay = createDeferred();
+    const order: string[] = [];
+    client.nextResponse = sessionResult({ buffer: "snapshot", seq: 8 });
+
+    const attachPromise = conn.attach("s1", {
+      onData: (chunk) => order.push(`data:${chunk}`),
+      onReplay: async ({ data: snapshot, mode }) => {
+        order.push(`${mode}:${snapshot}`);
+        await replay.promise;
+        order.push("replay:done");
+      },
+      onExit: () => {},
+    });
+    await vi.waitFor(() => expect(order).toEqual(["initial:snapshot"]));
+
+    emitData(client, 9, "!");
+    expect(order).toEqual(["initial:snapshot"]);
+    replay.resolve();
+
+    await attachPromise;
+    expect(order).toEqual(["initial:snapshot", "replay:done", "data:!"]);
+  });
+
+  it("rejects initial replay failures without retaining a stream", async () => {
+    const { client, conn } = makeHarness();
+    client.nextResponse = sessionResult({ buffer: "snapshot", seq: 8 });
+
+    let replaySignal: AbortSignal | undefined;
+    await expect(
+      conn.attach("s1", {
+        onData: () => {},
+        onReplay: async ({ signal }) => {
+          replaySignal = signal;
+          throw new Error("replay failed");
+        },
+        onExit: () => {},
+      }),
+    ).rejects.toThrow("replay failed");
+    expect(replaySignal?.aborted).toBe(true);
+    expect(conn.size).toBe(0);
+    expect(client.listenerCount()).toBe(0);
+  });
+
+  it.each(["close", "exit", "dispose"] as const)(
+    "aborts the replay lifetime when a stream ends via %s",
+    async (ending) => {
+      const { client, conn } = makeHarness();
+      client.nextResponse = sessionResult({ buffer: "snapshot", seq: 8 });
+      let replaySignal: AbortSignal | undefined;
+      let abortedAtExit: boolean | undefined;
+      await conn.attach("s1", {
+        onData: () => {},
+        onReplay: ({ signal }) => {
+          replaySignal = signal;
+        },
+        onExit: () => {
+          abortedAtExit = replaySignal?.aborted;
+        },
+      });
+
+      if (ending === "close") {
+        await conn.close("s1");
+      } else if (ending === "exit") {
+        emitExit(client, { exitCode: 0, signal: null });
+      } else {
+        conn.dispose();
+      }
+
+      expect(replaySignal?.aborted).toBe(true);
+      if (ending === "exit") {
+        expect(abortedAtExit).toBe(true);
+      }
+    },
+  );
+
   it("discards a detached exit that predates successful session adoption", async () => {
     const { client, conn } = makeHarness();
     const replays: string[] = [];
     const data: string[] = [];
     const exits: unknown[] = [];
-    const attached = deferred<TestSessionResult>();
+    const attached = createDeferred<TestSessionResult>();
     deferRequest(client, "terminal.attach", attached);
 
     const attachPromise = conn.attach("s1", {
       onData: (chunk) => data.push(chunk),
-      onReplay: (snapshot) => replays.push(snapshot),
+      onReplay: ({ data: snapshot }) => {
+        replays.push(snapshot);
+      },
       onExit: (info) => exits.push(info),
     });
     emitExit(client, { exitCode: null, signal: null, reason: "detached" });
@@ -652,7 +814,7 @@ describe("TerminalConnection", () => {
   it("preserves output that races an older gateway replay with no offset", async () => {
     const { client, conn } = makeHarness();
     const data: string[] = [];
-    const attached = deferred<TestSessionResult>();
+    const attached = createDeferred<TestSessionResult>();
     deferRequest(client, "terminal.attach", attached);
 
     const attachPromise = conn.attach("s1", testSink({ onData: (chunk) => data.push(chunk) }));

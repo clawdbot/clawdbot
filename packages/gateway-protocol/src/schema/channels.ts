@@ -205,9 +205,14 @@ export const TalkClientCreateParamsSchema = closedObject({
   transport: Type.Optional(TalkTransportSchema),
   brain: Type.Optional(TalkBrainSchema),
   capabilities: Type.Optional(
-    Type.Array(Type.Union([Type.Literal("camera-frame"), Type.Literal("voice-transcript")]), {
-      uniqueItems: true,
-    }),
+    Type.Array(
+      Type.Union([
+        Type.Literal("camera-frame"),
+        Type.Literal("voice-transcript"),
+        Type.Literal("gateway-control-v1"),
+      ]),
+      { uniqueItems: true },
+    ),
   ),
 });
 
@@ -280,12 +285,6 @@ export const TalkAgentControlResultSchema = closedObject({
   deliveredAtMs: Type.Optional(Type.Number()),
 });
 
-/** Joins an existing managed-room Talk session. */
-export const TalkSessionJoinParamsSchema = closedObject({
-  sessionId: NonEmptyString,
-  token: NonEmptyString,
-});
-
 /** Creates a gateway-managed Talk session for realtime, transcription, or relay use. */
 export const TalkSessionCreateParamsSchema = closedObject({
   sessionKey: Type.Optional(Type.String()),
@@ -309,19 +308,6 @@ export const TalkSessionAppendAudioParamsSchema = closedObject({
   sessionId: NonEmptyString,
   audioBase64: NonEmptyString,
   timestamp: Type.Optional(Type.Number()),
-});
-
-/** Starts or advances a Talk turn within a session. */
-export const TalkSessionTurnParamsSchema = closedObject({
-  sessionId: NonEmptyString,
-  turnId: Type.Optional(Type.String()),
-});
-
-/** Cancels the active or named Talk turn. */
-export const TalkSessionCancelTurnParamsSchema = closedObject({
-  sessionId: NonEmptyString,
-  turnId: Type.Optional(Type.String()),
-  reason: Type.Optional(Type.String()),
 });
 
 /** Cancels currently streaming Talk output without necessarily ending the turn. */
@@ -355,33 +341,6 @@ export const TalkSessionSteerParamsSchema = closedObject({
 /** Closes a gateway-managed Talk session. */
 export const TalkSessionCloseParamsSchema = closedObject({
   sessionId: NonEmptyString,
-});
-
-/** Mutable room state returned when a client joins a managed Talk room. */
-const TalkSessionManagedRoomStateSchema = closedObject({
-  activeClientId: Type.Optional(Type.String()),
-  activeTurnId: Type.Optional(Type.String()),
-  recentTalkEvents: Type.Array(TalkEventSchema),
-});
-
-/** Managed-room session record shared with browser clients. */
-const TalkSessionManagedRoomRecordSchema = closedObject({
-  id: NonEmptyString,
-  roomId: NonEmptyString,
-  roomUrl: NonEmptyString,
-  sessionKey: NonEmptyString,
-  sessionId: Type.Optional(Type.String()),
-  channel: Type.Optional(Type.String()),
-  target: Type.Optional(Type.String()),
-  provider: Type.Optional(Type.String()),
-  model: Type.Optional(Type.String()),
-  voice: Type.Optional(Type.String()),
-  mode: TalkModeSchema,
-  transport: TalkTransportSchema,
-  brain: TalkBrainSchema,
-  createdAt: Type.Number(),
-  expiresAt: Type.Number(),
-  room: TalkSessionManagedRoomStateSchema,
 });
 
 /** Empty request payload for reading configured Talk provider capabilities. */
@@ -468,16 +427,6 @@ export const TalkSessionCreateResultSchema = closedObject({
   expiresAt: Type.Optional(Type.Number()),
 });
 
-/** Result for a Talk turn request, optionally including emitted events. */
-export const TalkSessionTurnResultSchema = closedObject({
-  ok: Type.Boolean(),
-  turnId: Type.Optional(Type.String()),
-  events: Type.Optional(Type.Array(TalkEventSchema)),
-});
-
-/** Managed-room record returned to clients after joining an existing Talk session. */
-export const TalkSessionJoinResultSchema = TalkSessionManagedRoomRecordSchema;
-
 /** Generic success result for Talk session lifecycle calls. */
 export const TalkSessionOkResultSchema = closedObject({
   ok: Type.Boolean(),
@@ -494,6 +443,7 @@ const BrowserRealtimeWebRtcSdpSessionSchema = closedObject({
   model: Type.Optional(Type.String()),
   voice: Type.Optional(Type.String()),
   expiresAt: Type.Optional(Type.Number()),
+  clientControl: Type.Optional(closedObject({ owner: Type.Literal("gateway") })),
 });
 
 /** Browser websocket setup payload with JSON/PCM audio contract. */
@@ -789,13 +739,8 @@ export type TalkClientCloseParams = Static<typeof TalkClientCloseParamsSchema>;
 export type TalkClientMutationResult = Static<typeof TalkClientMutationResultSchema>;
 export type TalkSessionCreateParams = Static<typeof TalkSessionCreateParamsSchema>;
 export type TalkSessionCreateResult = Static<typeof TalkSessionCreateResultSchema>;
-export type TalkSessionJoinParams = Static<typeof TalkSessionJoinParamsSchema>;
-export type TalkSessionJoinResult = Static<typeof TalkSessionJoinResultSchema>;
 export type TalkSessionAppendAudioParams = Static<typeof TalkSessionAppendAudioParamsSchema>;
-export type TalkSessionTurnParams = Static<typeof TalkSessionTurnParamsSchema>;
-export type TalkSessionCancelTurnParams = Static<typeof TalkSessionCancelTurnParamsSchema>;
 export type TalkSessionCancelOutputParams = Static<typeof TalkSessionCancelOutputParamsSchema>;
-export type TalkSessionTurnResult = Static<typeof TalkSessionTurnResultSchema>;
 export type TalkSessionSteerParams = Static<typeof TalkSessionSteerParamsSchema>;
 export type TalkSessionSubmitToolResultParams = Static<
   typeof TalkSessionSubmitToolResultParamsSchema

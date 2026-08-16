@@ -203,17 +203,11 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "memory.search.sources":
     'Chooses which sources are indexed: "memory" reads MEMORY.md + memory files, and "sessions" includes transcript history. Keep ["memory"] unless you need recall from prior chat transcripts.',
   "memory.search.extraPaths":
-    "Adds extra directories or .md files to the memory index beyond default memory files. Use this when key reference docs live elsewhere in your repo; when multimodal memory is enabled, matching image/audio files under these paths are also eligible for indexing.",
-  "memory.search.qmd":
-    "Use this when one agent should query another agent's transcript collections; QMD-specific extra collections let you opt into cross-agent memory search without flattening everything into one shared namespace.",
-  "memory.search.qmd.extraCollections":
-    "Use this when you need directional transcript search across agents; add collections here to scope QMD recalls without creating a shared global transcript namespace.",
-  "memory.search.qmd.extraCollections.path":
-    "Use an absolute or workspace-relative filesystem path for the extra QMD collection; keep it pointed at the transcript directory or note folder you actually want this agent to search.",
-  "memory.search.qmd.extraCollections.name":
-    "Preserves the configured collection label only when the path points outside the agent workspace; paths inside the workspace stay agent-scoped even if a name is provided. Use this for shared cross-agent transcript roots that live outside the workspace.",
-  "memory.search.qmd.extraCollections.pattern":
-    "Use a glob pattern to restrict which files inside the collection are indexed; keep the default `**/*.md` unless you need a narrower subset.",
+    "Adds extra directories or .md files to the memory index beyond default memory files. Entries may be path strings or objects with a root-relative glob pattern. When multimodal memory is enabled, matching image/audio files under these paths are also eligible for indexing.",
+  "memory.search.extraPaths.*.path":
+    "Sets the extra memory directory or file. Relative paths resolve from the agent workspace; direct file entries are indexed exactly.",
+  "memory.search.extraPaths.*.pattern":
+    'Limits a directory entry to supported files matching this root-relative glob, for example "runbooks/**/*.md". Omit it to scan all supported files recursively.',
   "memory.search.multimodal":
     'Optional multimodal memory settings for indexing image and audio files from configured extra paths. Keep this off unless your embedding model explicitly supports cross-modal embeddings, and set `memory.search.fallback` to "none" while it is enabled. Matching files are uploaded to the configured remote embedding provider during indexing.',
   "memory.search.multimodal.enabled":
@@ -258,43 +252,7 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     "Minimum relevance score threshold for including memory results in final recall output. Increase to reduce weak/noisy matches, or lower when you need more permissive retrieval.",
   "memory.search.cache.enabled":
     "Caches computed chunk embeddings in SQLite so reindexing and incremental updates run faster (default: true). Keep this enabled unless investigating cache correctness or minimizing disk usage.",
-  memory: "Memory backend configuration (global).",
-  "memory.backend":
-    'Selects the global memory engine: "builtin" uses OpenClaw memory internals, while "qmd" uses the QMD sidecar pipeline. Keep "builtin" unless you intentionally operate QMD.',
+  memory: "Built-in memory configuration (global).",
   "memory.citations":
     'Controls citation visibility in replies: "auto" shows citations when useful, "on" always shows them, and "off" hides them. Keep "auto" for a balanced signal-to-noise default.',
-  "memory.qmd.command":
-    "Sets the executable path for the `qmd` binary used by the QMD backend (default: resolved from PATH). Use an explicit absolute path when multiple qmd installs exist or PATH differs across environments.",
-  "memory.qmd.searchMode":
-    'Selects the QMD retrieval path: "query" uses standard query flow, "search" uses search-oriented retrieval, and "vsearch" emphasizes vector retrieval. Keep default unless tuning relevance quality.',
-  "memory.qmd.rerank":
-    'Controls QMD query reranking. Set to false with searchMode "query" and QMD 2.1+ to skip QMD reranking for faster hybrid results; leave unset for QMD defaults.',
-  "memory.qmd.searchTool":
-    "Overrides the exact QMD search command while preserving `searchMode` as the semantic retrieval mode. Keep it unset for the normal built-in tool mapping.",
-  "memory.qmd.includeDefaultMemory":
-    "Automatically indexes default memory files (MEMORY.md and memory/**/*.md) into QMD collections. Keep enabled unless you want indexing controlled only through explicit custom paths.",
-  "memory.qmd.paths":
-    "Adds custom directories or files to include in QMD indexing, each with an optional name and glob pattern. Use this for project-specific knowledge locations that are outside default memory paths.",
-  "memory.qmd.paths.path":
-    "Defines the root location QMD should scan, using an absolute path or `~`-relative path. Use stable directories so collection identity does not drift across environments.",
-  "memory.qmd.paths.pattern":
-    "Filters files under each indexed root using a glob pattern, with default `**/*.md`. Use narrower patterns to reduce noise and indexing cost when directories contain mixed file types.",
-  "memory.qmd.paths.name":
-    "Sets a stable collection name for an indexed path instead of deriving it from filesystem location. Use this when paths vary across machines but you want consistent collection identity.",
-  "memory.qmd.sessions.enabled":
-    "Indexes session transcripts into QMD so recall can include prior conversation content (experimental, default: false). Enable only when transcript memory is required and you accept larger index churn.",
-  "memory.qmd.sessions.exportDir":
-    "Overrides where sanitized session exports are written before QMD indexing. Use this when default state storage is constrained or when exports must land on a managed volume.",
-  "memory.qmd.sessions.retentionDays":
-    "Defines how long exported session files are kept before automatic pruning, in days (default: unlimited). Set a finite value for storage hygiene or compliance retention policies.",
-  "memory.qmd.limits.maxResults":
-    "Limits how many QMD hits are returned into the agent loop for each recall request (default: 6). Increase for broader recall context, or lower to keep prompts tighter and faster.",
-  "memory.qmd.limits.maxSnippetChars":
-    "Caps per-result snippet length extracted from QMD hits in characters (default: 700). Lower this when prompts bloat quickly, and raise only if answers consistently miss key details.",
-  "memory.qmd.limits.maxInjectedChars":
-    "Caps how much QMD text can be injected into one turn across all hits. Use lower values to control prompt bloat and latency; raise only when context is consistently truncated.",
-  "memory.qmd.limits.timeoutMs":
-    "Sets per-query QMD search timeout in milliseconds (default: 4000). Increase for larger indexes or slower environments, and lower to keep request latency bounded.",
-  "memory.qmd.scope":
-    "Defines which sessions/channels are eligible for QMD recall using session.sendPolicy-style rules. Keep default direct-only scope unless you intentionally want cross-chat memory sharing.",
 };

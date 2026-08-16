@@ -7,6 +7,7 @@ export type {
   SessionCatalogListProviderParams,
   SessionCatalogProvider,
   SessionCatalogReadProviderParams,
+  SessionCatalogStartTerminalProviderParams,
   SessionCatalogTerminalPlan,
   SessionUpstreamActivity,
   SessionUpstreamJsonValue,
@@ -40,6 +41,8 @@ export type {
   SessionsCatalogListResult,
   SessionsCatalogReadParams,
   SessionsCatalogReadResult,
+  SessionsCatalogStartTerminalParams,
+  SessionsCatalogStartTerminalResult,
 } from "../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 export {
   deleteSessionUpstreamLink,

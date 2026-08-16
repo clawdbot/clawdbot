@@ -28,6 +28,7 @@
 // mirrors the pattern in queue.drain-restart.test.ts:207-234.
 
 import { afterEach, describe, expect, it } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   clearSessionQueues,
   enqueueFollowupRun,
@@ -35,7 +36,6 @@ import {
   scheduleFollowupDrain,
 } from "../queue.js";
 import {
-  createDeferred,
   createQueueTestRun as createRun,
   installQueueRuntimeErrorSilencer,
 } from "../queue.test-helpers.js";
@@ -59,8 +59,8 @@ describe("drain finally identity guard — late D1 must not orphan Q2", () => {
     const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
     const calls: FollowupRun[] = [];
 
-    const gate = createDeferred<void>();
-    const firstEntered = createDeferred<void>();
+    const gate = createDeferred();
+    const firstEntered = createDeferred();
     const runFollowup = async (run: FollowupRun) => {
       if (calls.length === 0) {
         firstEntered.resolve();
@@ -122,8 +122,8 @@ describe("drain finally identity guard — late D1 must not orphan Q2", () => {
     const key = `test-drain-callback-${Date.now()}-${Math.random()}`;
     keysToCleanup.push(key);
     const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
-    const gate = createDeferred<void>();
-    const firstEntered = createDeferred<void>();
+    const gate = createDeferred();
+    const firstEntered = createDeferred();
     const firstCallback = () => {};
     const secondCallback = () => {};
     const callbacks: Array<FollowupRun["onReplyAdmissionWaitChange"]> = [];

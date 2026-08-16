@@ -6,7 +6,7 @@ import { withTempDirSync } from "../../test-helpers/temp-dir.js";
 import type { SessionConfig } from "../types.base.js";
 import { resolveSessionWorkStartError } from "./lifecycle.js";
 import {
-  resolveSessionFilePath,
+  resolveSessionFilePathCore,
   resolveSessionFilePathOptions,
   resolveSessionTranscriptPathInDir,
   validateSessionId,
@@ -78,6 +78,35 @@ it("normalizes boolean-only pending delivery as transport-only", () => {
     }),
   ).toMatchObject({
     pendingFinalDelivery: { kind: "transport-only", createdAt: 42 },
+  });
+});
+
+it("normalizes exact pending-final delivery owners", () => {
+  expect(
+    normalizePersistedSessionEntryShape({
+      sessionId: "session-1",
+      updatedAt: 42,
+      pendingFinalDelivery: {
+        kind: "replayable",
+        text: "durable reply",
+        createdAt: 41,
+        intentId: "intent-1",
+        deliveries: [
+          { id: "delivery-prepared", state: "prepared" },
+          { id: "delivery-delivered", state: "delivered" },
+          { id: "", state: "queued" },
+          { id: "delivery-invalid", state: "invalid" },
+        ],
+      },
+    }),
+  ).toMatchObject({
+    pendingFinalDelivery: {
+      intentId: "intent-1",
+      deliveries: [
+        { id: "delivery-prepared", state: "prepared" },
+        { id: "delivery-delivered", state: "delivered" },
+      ],
+    },
   });
 });
 
@@ -167,7 +196,7 @@ describe("session path safety", () => {
   it("falls back to derived path when sessionFile is outside known agent sessions dirs", () => {
     const sessionsDir = "/tmp/openclaw/agents/main/sessions";
 
-    const resolved = resolveSessionFilePath(
+    const resolved = resolveSessionFilePathCore(
       "sess-1",
       { sessionFile: "/tmp/openclaw/agents/work/not-sessions/abc-123.jsonl" },
       { sessionsDir },
@@ -194,7 +223,11 @@ describe("session path safety", () => {
       fs.symlinkSync(realRoot, aliasRoot, "dir");
       const viaAlias = path.join(aliasRoot, "agents", "main", "sessions", "sess-1.jsonl");
       fs.writeFileSync(path.join(sessionsDir, "sess-1.jsonl"), "");
-      const resolved = resolveSessionFilePath("sess-1", { sessionFile: viaAlias }, { sessionsDir });
+      const resolved = resolveSessionFilePathCore(
+        "sess-1",
+        { sessionFile: viaAlias },
+        { sessionsDir },
+      );
       expect(fs.realpathSync(resolved)).toBe(
         fs.realpathSync(path.join(sessionsDir, "sess-1.jsonl")),
       );
@@ -215,7 +248,7 @@ describe("session path safety", () => {
       const symlinkPath = path.join(sessionsDir, "escaped.jsonl");
       fs.symlinkSync(outsideFile, symlinkPath, "file");
 
-      const resolved = resolveSessionFilePath(
+      const resolved = resolveSessionFilePathCore(
         "sess-1",
         { sessionFile: symlinkPath },
         { sessionsDir },

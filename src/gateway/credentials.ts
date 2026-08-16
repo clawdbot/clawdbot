@@ -14,6 +14,14 @@ export type ExplicitGatewayAuth = {
   password?: string;
 };
 
+/** Trim caller-supplied Gateway credentials without consulting config or environment. */
+export function resolveExplicitGatewayAuth(auth?: ExplicitGatewayAuth): ExplicitGatewayAuth {
+  return {
+    token: trimToUndefined(auth?.token),
+    password: trimToUndefined(auth?.password),
+  };
+}
+
 type ResolvedGatewayCredentials = {
   token?: string;
   password?: string;
@@ -330,11 +338,15 @@ export function resolveGatewayProbeCredentialsFromConfig(params: {
   mode: GatewayCredentialMode;
   env?: NodeJS.ProcessEnv;
   explicitAuth?: ExplicitGatewayAuth;
+  urlOverride?: string;
+  urlOverrideSource?: "cli" | "env";
 }): ResolvedGatewayCredentials {
   return resolveGatewayCredentialsFromConfig({
     cfg: params.cfg,
     env: params.env,
     explicitAuth: params.explicitAuth,
+    urlOverride: params.urlOverride,
+    urlOverrideSource: params.urlOverrideSource,
     modeOverride: params.mode,
     remoteTokenFallback: "remote-only",
   });

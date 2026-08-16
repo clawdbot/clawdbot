@@ -81,6 +81,13 @@ function readHistoryDetails(result: { details: unknown }) {
   return result.details as Record<string, unknown>;
 }
 
+function requireGatewayRequest(requests: CallGatewayRequest[], method: string): CallGatewayRequest {
+  return expectDefined(
+    requests.find((request) => request.method === method),
+    `${method} request test invariant`,
+  );
+}
+
 function readMessageSeq(message: unknown): number | undefined {
   if (!message || typeof message !== "object" || Array.isArray(message)) {
     return undefined;
@@ -139,6 +146,72 @@ describe("sessions_history redaction", () => {
     );
   });
 
+  it("returns not-found for an unknown explicit key without reading history", async () => {
+    const requests: CallGatewayRequest[] = [];
+    const sessionKey = "agent:main:missing";
+    const tool = createSessionsHistoryTool({
+      config: { tools: { sessions: { visibility: "all" } } },
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        if (request.method === "sessions.resolve") {
+          throw new Error(`No session found: ${sessionKey}`);
+        }
+        return { messages: [] } as T;
+      },
+    });
+
+    const result = await tool.execute("missing-explicit-key", { sessionKey });
+
+    expect(result.details).toEqual({
+      status: "error",
+      error: `No session found: ${sessionKey}`,
+    });
+    expect(requests.map((request) => request.method)).toEqual(["sessions.resolve"]);
+  });
+
+  it("conceals missing explicit keys denied by session visibility", async () => {
+    const requests: CallGatewayRequest[] = [];
+    const tool = createSessionsHistoryTool({
+      agentSessionKey: "agent:main:main",
+      config: { tools: { sessions: { visibility: "self" } } },
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        throw new Error("No session found: agent:main:missing");
+      },
+    });
+
+    const result = await tool.execute("hidden-missing-key", {
+      sessionKey: "agent:main:missing",
+    });
+
+    expect(result.details).toMatchObject({ status: "forbidden" });
+    expect(requests.map((request) => request.method)).toEqual(["sessions.resolve"]);
+  });
+
+  it("returns an empty history for an existing explicit key", async () => {
+    const requests: CallGatewayRequest[] = [];
+    const sessionKey = "agent:main:empty";
+    const tool = createSessionsHistoryTool({
+      config: { tools: { sessions: { visibility: "all" } } },
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        if (request.method === "sessions.resolve") {
+          return { key: sessionKey } as T;
+        }
+        return { messages: [] } as T;
+      },
+    });
+
+    const result = await tool.execute("existing-empty-key", { sessionKey });
+
+    expect(result.details).toMatchObject({
+      sessionKey,
+      messages: [],
+      bytes: 2,
+    });
+    expect(requests.map((request) => request.method)).toEqual(["sessions.resolve", "chat.history"]);
+  });
+
   it("redacts recalled session text even when log redaction is disabled", async () => {
     // Recalled transcript content is model-visible, so it is always redacted
     // even when normal logging redaction is configured off.
@@ -166,42 +239,6 @@ describe("sessions_history redaction", () => {
     expect(serialized).not.toContain("internal-ticket-AbC12345");
     expect(serialized).toContain("intern");
     expect((result.details as { contentRedacted?: unknown }).contentRedacted).toBe(true);
-  });
-
-  it.each([
-    {
-      name: "reports decoded bytes for raw image data",
-      content: [
-        {
-          type: "image",
-          data: Buffer.from([0, 1, 2, 3, 4]).toString("base64"),
-          mimeType: "image/png",
-        },
-      ],
-      expectedBytes: 5,
-    },
-    {
-      name: "replaces stale bytes for empty image data",
-      content: [{ type: "image", data: "", mimeType: "image/png", bytes: 999 }],
-      expectedBytes: 0,
-    },
-    {
-      name: "preserves existing bytes when image data is already omitted",
-      content: [{ type: "image", mimeType: "image/png", bytes: 37, omitted: true }],
-      expectedBytes: 37,
-    },
-  ])("$name", async ({ content, expectedBytes }) => {
-    const tool = createHistoryToolWithMessage(content);
-
-    const result = await tool.execute("call-1", { sessionKey: "main" });
-    const details = readHistoryDetails(result);
-
-    expect(details.messages).toEqual([
-      {
-        role: "user",
-        content: [{ type: "image", mimeType: "image/png", bytes: expectedBytes, omitted: true }],
-      },
-    ]);
   });
 
   it.each([0, 1.5])("rejects invalid limit value %s", async (limit) => {
@@ -255,15 +292,13 @@ describe("sessions_history redaction", () => {
     });
 
     const result = await tool.execute("call-1", { sessionKey: "main", limit: 2 });
+    const request = requireGatewayRequest(requests, "chat.history");
 
-    expect(requests[0]).toMatchObject({
+    expect(request).toMatchObject({
       method: "chat.history",
       params: { sessionKey: "main", limit: 2 },
     });
-    expect(
-      (expectDefined(requests[0], "requests[0] test invariant").params as Record<string, unknown>)
-        .offset,
-    ).toBeUndefined();
+    expect((request.params as Record<string, unknown>).offset).toBeUndefined();
     expect((result.details as Record<string, unknown>).offset).toBeUndefined();
   });
 
@@ -288,7 +323,7 @@ describe("sessions_history redaction", () => {
 
     const result = await tool.execute("call-1", { sessionKey: "main", limit: 2, offset: 0 });
 
-    expect(requests[0]).toMatchObject({
+    expect(requireGatewayRequest(requests, "chat.history")).toMatchObject({
       method: "chat.history",
       params: { sessionKey: "main", limit: 2, offset: 0 },
     });
@@ -323,7 +358,7 @@ describe("sessions_history redaction", () => {
       sessionId: "matching-session",
     });
 
-    expect(requests[0]).toMatchObject({
+    expect(requireGatewayRequest(requests, "chat.history")).toMatchObject({
       method: "chat.history",
       params: {
         sessionKey: "main",
@@ -499,7 +534,7 @@ describe("sessions_history redaction", () => {
         return undefined;
       }
       grantChecks += 1;
-      if (grantChecks === 2) {
+      if (grantChecks === 1) {
         replaceSessionEntrySync(
           { storePath, sessionKey: targetSessionKey },
           { sessionId: "replacement-incarnation", updatedAt: 2 },
@@ -530,7 +565,7 @@ describe("sessions_history redaction", () => {
       await expect(
         tool.execute("scoped-grant-race", { sessionKey: targetSessionKey }),
       ).rejects.toThrow(`Session "${targetSessionKey}" changed after access was granted.`);
-      expect(requests).toEqual([]);
+      expect(requests.some((request) => request.method === "chat.history")).toBe(false);
     } finally {
       unregister();
     }
@@ -553,7 +588,7 @@ describe("sessions_history redaction", () => {
         return undefined;
       }
       grantChecks += 1;
-      if (grantChecks === 2) {
+      if (grantChecks === 1) {
         replaceSessionEntrySync(
           { storePath, sessionKey: targetSessionKey },
           { sessionId: expectedSessionId, updatedAt: 2, archivedAt: 2 },
@@ -581,9 +616,63 @@ describe("sessions_history redaction", () => {
       await expect(
         tool.execute("scoped-grant-archive-race", { sessionKey: targetSessionKey }),
       ).rejects.toThrow(`Session "${targetSessionKey}" changed after access was granted.`);
-      expect(requests).toEqual([]);
+      expect(requests.some((request) => request.method === "chat.history")).toBe(false);
     } finally {
       unregister();
     }
+  });
+
+  it("carries the persisted fixed-store owner for a bare history key", async () => {
+    const requests: CallGatewayRequest[] = [];
+    const tool = createSessionsHistoryTool({
+      agentSessionKey: "global",
+      config: {
+        session: { store: path.join(tempDir!, "owned-shared.sqlite"), scope: "global" },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
+      },
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        return { messages: [] } as T;
+      },
+    });
+
+    await tool.execute("owned-global", { sessionKey: "global" });
+
+    expect(requests).toContainEqual({
+      method: "chat.history",
+      params: expect.objectContaining({ sessionKey: "global", agentId: "ops" }),
+    });
+  });
+
+  it("resolves current history under the requester instead of the fixed-store owner", async () => {
+    const requests: CallGatewayRequest[] = [];
+    const tool = createSessionsHistoryTool({
+      agentSessionKey: "agent:research:main",
+      requesterAgentIdOverride: "research",
+      config: {
+        session: { store: path.join(tempDir!, "owned-current.sqlite"), scope: "global" },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
+      },
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        return { messages: [] } as T;
+      },
+    });
+
+    await tool.execute("research-current-history", { sessionKey: "current" });
+
+    expect(requests).toContainEqual({
+      method: "chat.history",
+      params: expect.objectContaining({ sessionKey: "agent:research:main", agentId: "research" }),
+    });
+    expect(requests.some((request) => request.method === "sessions.resolve")).toBe(false);
   });
 });

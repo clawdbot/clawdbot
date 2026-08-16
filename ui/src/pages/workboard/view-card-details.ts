@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { normalizeAgentId, parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import {
   addWorkboardCardComment,
   getWorkboardDependencyState,
@@ -41,6 +42,13 @@ function ensureWorkboardCardDashboardElement(): Promise<void> {
     "openclaw-workboard-card-dashboard",
     () => import("./workboard-card-dashboard.ts"),
   );
+}
+
+function boardSessionKeyForCard(sessionKey: string, agentId?: string): string {
+  if (!agentId || parseAgentSessionKey(sessionKey)) {
+    return sessionKey;
+  }
+  return `agent:${normalizeAgentId(agentId)}:${sessionKey}`;
 }
 
 export function openCardDetails(state: WorkboardUiState, card: WorkboardCard) {
@@ -265,7 +273,7 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
             <div>
               <span class="workboard-card__priority">${formatPriorityLabel(card.priority)}</span>
               <h2 id=${workboardCardDetailTitleId}>
-                <span class="workboard-sr-only">${t("workboard.detailTitle")}: </span>${card.title}
+                <span class="sr-only">${t("workboard.detailTitle")}: </span>${card.title}
               </h2>
             </div>
             <openclaw-tooltip .content=${t("common.cancel")}>
@@ -318,7 +326,7 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
           ${linkedSessionKey
             ? html`
                 <openclaw-workboard-card-dashboard
-                  .sessionKey=${linkedSessionKey}
+                  .sessionKey=${boardSessionKeyForCard(linkedSessionKey, card.agentId)}
                   .client=${props.client}
                   .connected=${props.connected}
                   .canMutate=${props.canWrite !== false}

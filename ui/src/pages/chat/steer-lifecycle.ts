@@ -1,8 +1,18 @@
-import type { QueueMode } from "../../../../src/auto-reply/reply/queue/types.js";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { setLastActiveSessionKey } from "../../app/settings.ts";
+import { compareChatQueueOrder } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
+import {
+  areUiSessionKeysEquivalent,
+  isUiGlobalSessionKey,
+  normalizeAgentId,
+  uiSessionRowMatchesSelectedChat,
+} from "../../lib/sessions/session-key.ts";
+import { showToast } from "../../lib/toast.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import {
   getChatAttachmentDataUrl,
@@ -24,39 +34,83 @@ import {
   type ChatSendAck,
   type TerminalFailureChatSendAck,
 } from "./chat-send-ack.ts";
+import type { ChatState } from "./chat-state-contract.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
-import { scheduleChatScroll } from "./scroll.ts";
-import {
-  appendChatMessageToCache,
-  readChatMessagesFromCache,
-  type ChatMessageCache,
-} from "./session-message-cache.ts";
+import { scheduleChatScroll, type ChatScrollHost } from "./scroll.ts";
+import { appendChatMessageToCache, readChatMessagesFromCache } from "./session-message-cache.ts";
 import { ackSteeredChip, buildInflightSteerChip, isAckedSteeredChip } from "./steered-chip.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
-type SteerLifecycleHost = ChatQueueScopedSessionHost & {
-  connected: boolean;
-  chatRunId: string | null;
-  chatMessages: unknown[];
-  currentSessionId?: string | null;
-  chatDisplayedLeafEntryId?: string | null;
-  chatMessagesBySession?: ChatMessageCache;
-  sessionsResult?: SessionsListResult | null;
-  lastError?: string | null;
-  chatError?: string | null;
-};
+type SteerLifecycleHost = ChatState &
+  ChatQueueScopedSessionHost & {
+    sessionsResult?: SessionsListResult | null;
+  };
+
+type SteerSendHost = SteerLifecycleHost &
+  ChatScrollHost &
+  Parameters<typeof setLastActiveSessionKey>[0];
 
 export type SteerSendDependencies = {
-  loadChatHistory: (host: SteerLifecycleHost) => void;
-  resumeRestoredOutbox: (host: SteerLifecycleHost, itemId: string) => void;
+  loadChatHistory: (host: SteerSendHost) => void;
+  resumeRestoredOutbox: (host: SteerSendHost, itemId: string) => void;
   sendChatMessage: (
-    host: SteerLifecycleHost,
+    host: SteerSendHost,
     message: string,
     attachments: ChatAttachment[] | undefined,
-    options: { canApplyError: () => boolean; queueMode?: QueueMode; runId: string },
-  ) => Promise<ChatSendAck | null>;
+    options: {
+      canApplyError: () => boolean;
+      queueMode?: QueueMode;
+      runId: string;
+      expectedRunId?: string;
+      expectedLeafEntryId?: string | null;
+      replyToId?: string;
+    },
+  ) => Promise<SteerChatSendResult>;
 };
+
+type SteerTarget = { runId: string; leafEntryId?: string | null };
+
+function resolveSteerTarget(host: SteerLifecycleHost, item: ChatQueueItem): SteerTarget | null {
+  const matchingRows =
+    host.sessionsResult?.sessions.filter((row) =>
+      uiSessionRowMatchesSelectedChat(host, row.key, item.sessionKey ?? host.sessionKey),
+    ) ?? [];
+  const serverRunIds = new Set(
+    matchingRows.flatMap((row) => (row.hasActiveRun ? (row.activeRunIds ?? []) : [])),
+  );
+  const durableRunId = item.kind === "steered" ? item.steerTargetRunId?.trim() : undefined;
+  if (item.kind === "steered" && !durableRunId) {
+    return null;
+  }
+  const runId =
+    durableRunId ||
+    host.chatRunId?.trim() ||
+    (serverRunIds.size === 1 ? [...serverRunIds][0] : undefined);
+  if (!runId) {
+    return null;
+  }
+  const activeRow = matchingRows.find((row) => row.activeRunIds?.includes(runId));
+  const displayedLeaf =
+    host.chatRunId?.trim() === runId ? host.chatDisplayedLeafEntryId : undefined;
+  const leafEntryId =
+    displayedLeaf === null ? null : displayedLeaf?.trim() || activeRow?.activeLeafEntryId;
+  return {
+    runId,
+    ...(leafEntryId === null
+      ? { leafEntryId: null }
+      : typeof leafEntryId === "string" && leafEntryId.trim()
+        ? { leafEntryId: leafEntryId.trim() }
+        : {}),
+  };
+}
+
+type RejectedSteerChatSend = { kind: "rejected"; error: string };
+type SteerChatSendResult = ChatSendAck | RejectedSteerChatSend | null;
+
+function isRejectedSteerChatSend(result: SteerChatSendResult): result is RejectedSteerChatSend {
+  return result !== null && "kind" in result && result.kind === "rejected";
+}
 
 export const OFFLINE_QUEUE_STORAGE_ERROR =
   "Could not store this message for reconnect. Free browser storage or reconnect before sending.";
@@ -97,20 +151,16 @@ function findQueuedSendMessageIndex(
     return -1;
   }
   return (Array.isArray(messages) ? messages : []).findIndex((message) => {
-    if (!message || typeof message !== "object" || Array.isArray(message)) {
+    if (!isRecord(message)) {
       return false;
     }
     // Render retirement requires a user-role entry: an assistant entry can
     // carry the same run key without proving the queued turn is visible.
-    const record = message as Record<string, unknown>;
+    const record = message;
     if (userRoleOnly && record.role !== "user") {
       return false;
     }
-    const marker = record["__openclaw"];
-    const markerIdempotencyKey =
-      marker && typeof marker === "object" && !Array.isArray(marker)
-        ? (marker as { idempotencyKey?: unknown }).idempotencyKey
-        : undefined;
+    const markerIdempotencyKey = asOptionalRecord(record["__openclaw"])?.idempotencyKey;
     const idempotencyKey = markerIdempotencyKey ?? record.idempotencyKey;
     return idempotencyKey === item.sendRunId || idempotencyKey === `${item.sendRunId}:user`;
   });
@@ -202,7 +252,51 @@ export function retireSteeredChipsForTerminalRun(
   return firstPersistedSteerIndex;
 }
 
-export function retireHistoryProvenSteeredChips(state: SteerLifecycleHost): void {
+export function retireSteeredChipsForRequestRun(
+  state: SteerLifecycleHost,
+  runId: string | undefined,
+): number | undefined {
+  if (!runId) {
+    return undefined;
+  }
+  const landed = state.chatQueue.filter(
+    (item) => isAckedSteeredChip(item) && item.sendRunId === runId,
+  );
+  let firstPersistedSteerIndex: number | undefined;
+  for (const item of landed) {
+    // A started active turn can still exist only as an optimistic queue row.
+    // Promote that target before its landed steer so stable transcript history
+    // cannot render the newer steer ahead of the original prompt.
+    const target = state.chatQueue.find(
+      (candidate) => candidate.id !== item.id && candidate.sendRunId === item.pendingRunId,
+    );
+    if (target) {
+      preserveQueuedUserTurn(state, target);
+    }
+    const persistedIndex = findQueuedSendMessageIndex(state.chatMessages, item, true);
+    if (
+      persistedIndex >= 0 &&
+      (firstPersistedSteerIndex === undefined || persistedIndex < firstPersistedSteerIndex)
+    ) {
+      firstPersistedSteerIndex = persistedIndex;
+    }
+    preserveQueuedUserTurn(state, item);
+  }
+  if (landed.length > 0) {
+    const landedIds = new Set(landed.map((item) => item.id));
+    writeChatQueueForScope(
+      state,
+      state.sessionKey,
+      state.chatQueue.filter((item) => !landedIds.has(item.id)),
+    );
+    for (const item of landed) {
+      releaseChatAttachmentPayloads(excludeComposerAttachments(state, item.attachments));
+    }
+  }
+  return firstPersistedSteerIndex;
+}
+
+export function retirePersistedSteeredChips(state: SteerLifecycleHost): void {
   const retired = state.chatQueue.filter(
     (item) =>
       isAckedSteeredChip(item) && chatMessagesContainQueuedSend(state.chatMessages, item, true),
@@ -226,8 +320,45 @@ function setChatError(host: SteerLifecycleHost, error: string | null): void {
   host.chatError = error;
 }
 
+type ChatDeliveryFailureHost = Parameters<typeof visibleSessionMatches>[0] & {
+  lastError?: string | null;
+  chatError?: string | null;
+  sessionsResult?: SessionsListResult | null;
+};
+
+/**
+ * Terminal delivery failures must always end in a visible outcome. The pane
+ * showing this session keeps the inline chat error; after reconnect or alias
+ * drift the owning pane may no longer be on screen, so anything else surfaces
+ * a global toast naming the session instead of recording the error only on
+ * the queued row where nobody sees it.
+ */
+export function surfaceChatDeliveryFailure(
+  host: ChatDeliveryFailureHost,
+  sessionKey: string,
+  agentId: string | undefined,
+  error: string,
+): void {
+  if (visibleSessionMatches(host, sessionKey, agentId)) {
+    host.lastError = error;
+    host.chatError = error;
+    return;
+  }
+  // Global rows are agent-scoped while sharing one "global" key, so an
+  // agent-less equivalence match could borrow another agent's label.
+  const scopedAgentId = agentId ? normalizeAgentId(agentId) : undefined;
+  const row = host.sessionsResult?.sessions.find(
+    (session) =>
+      areUiSessionKeysEquivalent(session.key, sessionKey) &&
+      (!isUiGlobalSessionKey(sessionKey) ||
+        !scopedAgentId ||
+        (session.agentId !== undefined && normalizeAgentId(session.agentId) === scopedAgentId)),
+  );
+  showToast({ message: `${resolveSessionDisplayName(sessionKey, row)}: ${error}` });
+}
+
 export async function sendQueuedChatMessageWithQueueMode(
-  host: SteerLifecycleHost,
+  host: SteerSendHost,
   id: string,
   queueMode: QueueMode | undefined,
   dependencies: SteerSendDependencies,
@@ -237,7 +368,6 @@ export async function sendQueuedChatMessageWithQueueMode(
   }
   const isSteer = queueMode === "steer";
   const unconfirmedError = isSteer ? UNCONFIRMED_STEER_ERROR : UNCONFIRMED_FOLLOW_UP_ERROR;
-  const activeRunId = host.chatRunId;
   const item = host.chatQueue.find(
     (entry) =>
       entry.id === id &&
@@ -248,6 +378,17 @@ export async function sendQueuedChatMessageWithQueueMode(
   if (!item) {
     return;
   }
+  const steerTarget = isSteer ? resolveSteerTarget(host, item) : null;
+  if (isSteer && !steerTarget) {
+    const error =
+      item.kind === "steered"
+        ? "This restored steer has no original run target and cannot be retried safely."
+        : "The active run could not be identified uniquely. Review and retry.";
+    updateQueuedMessage(host, id, (entry) => ({ ...entry, sendError: error, sendState: "failed" }));
+    setChatError(host, error);
+    return;
+  }
+  const activeRunId = steerTarget?.runId ?? host.chatRunId;
   const itemSessionKey = item.sessionKey ?? host.sessionKey;
   const message = item.text.trim();
   const attachments = item.attachments ?? [];
@@ -259,6 +400,12 @@ export async function sendQueuedChatMessageWithQueueMode(
   // replay the original queued turn after active-run admission may have succeeded.
   const claimed = updateQueuedMessage(host, id, (entry) => ({
     ...entry,
+    ...(isSteer ? { kind: "steered" as const } : {}),
+    ...(steerTarget
+      ? {
+          steerTargetRunId: steerTarget.runId,
+        }
+      : {}),
     sendError: unconfirmedError,
     sendRunId: entry.sendRunId ?? generateUUID(),
     sendState: "unconfirmed",
@@ -272,6 +419,7 @@ export async function sendQueuedChatMessageWithQueueMode(
     text: item.text,
     createdAt: item.createdAt,
     attachments: item.attachments,
+    replyToId: item.replyToId,
     sendRunId: claimed.sendRunId,
     sessionKey: claimed.sessionKey,
     agentId: claimed.agentId,
@@ -297,13 +445,22 @@ export async function sendQueuedChatMessageWithQueueMode(
     return;
   }
   host.chatQueue = host.chatQueue.map((entry) => (entry.id === id ? pendingIndicator : entry));
-  const ack = await dependencies.sendChatMessage(
+  const result = await dependencies.sendChatMessage(
     host,
     message,
     attachments.length ? attachments : undefined,
     {
       canApplyError: () => visibleSessionMatches(host, itemSessionKey, item.agentId),
       ...(queueMode ? { queueMode } : {}),
+      ...(claimed.replyToId ? { replyToId: claimed.replyToId } : {}),
+      ...(steerTarget
+        ? {
+            expectedRunId: steerTarget.runId,
+            ...(steerTarget.leafEntryId !== undefined
+              ? { expectedLeafEntryId: steerTarget.leafEntryId }
+              : {}),
+          }
+        : {}),
       runId: claimed.sendRunId,
     },
   );
@@ -319,36 +476,48 @@ export async function sendQueuedChatMessageWithQueueMode(
   }
   clearTransientQueuedMessageProjection(host, itemSessionKey, id, item.agentId);
   const itemStillVisible = visibleSessionMatches(host, itemSessionKey, item.agentId);
-  if (!ack) {
+  if (!result) {
     // A transport failure does not prove active-run admission was rejected. Keep the
     // durable row parked so reconnect cannot replay it as a separate turn.
-    if (itemStillVisible) {
-      setChatError(host, unconfirmedError);
-    }
+    surfaceChatDeliveryFailure(host, itemSessionKey, item.agentId, unconfirmedError);
     return;
   }
+  if (isRejectedSteerChatSend(result)) {
+    const failed = updateQueuedMessage(host, id, (entry) => ({
+      ...entry,
+      sendError: result.error,
+      sendState: "failed",
+    }));
+    surfaceChatDeliveryFailure(
+      host,
+      itemSessionKey,
+      item.agentId,
+      failed ? result.error : OFFLINE_QUEUE_STORAGE_ERROR,
+    );
+    return;
+  }
+  const ack = result;
   if (isTerminalFailureChatSendAck(ack)) {
     const restored = updateQueuedMessage(host, id, (entry) => ({
       ...item,
       ...(entry.attachments?.length ? { attachments: entry.attachments } : {}),
     }));
     if (!restored) {
-      if (itemStillVisible) {
-        setChatError(host, unconfirmedError);
-      }
+      surfaceChatDeliveryFailure(host, itemSessionKey, item.agentId, unconfirmedError);
     } else {
-      if (itemStillVisible) {
-        setChatError(host, formatTerminalChatSendAckError(ack, isSteer ? "steer" : "chat"));
-      }
+      surfaceChatDeliveryFailure(
+        host,
+        itemSessionKey,
+        item.agentId,
+        formatTerminalChatSendAckError(ack, isSteer ? "steer" : "chat"),
+      );
       dependencies.resumeRestoredOutbox(host, id);
     }
     return;
   }
   const removed = removeQueuedMessageWithoutReleasing(host, id, itemSessionKey, item.agentId);
   if (!removed) {
-    if (itemStillVisible) {
-      setChatError(host, unconfirmedError);
-    }
+    surfaceChatDeliveryFailure(host, itemSessionKey, item.agentId, unconfirmedError);
     return;
   }
   const userTurnAlreadyVisible = chatMessagesContainQueuedSend(host.chatMessages, claimed, true);
@@ -368,7 +537,7 @@ export async function sendQueuedChatMessageWithQueueMode(
       host,
       itemSessionKey,
       [...host.chatQueue.filter((entry) => entry.id !== id), steeredIndicator].toSorted(
-        (left, right) => left.createdAt - right.createdAt,
+        compareChatQueueOrder,
       ),
       item.agentId,
     );
@@ -376,16 +545,13 @@ export async function sendQueuedChatMessageWithQueueMode(
     releaseChatAttachmentPayloads(attachments);
   }
   if (itemStillVisible) {
-    setLastActiveSessionKey(
-      host as unknown as Parameters<typeof setLastActiveSessionKey>[0],
-      itemSessionKey,
-    );
-    scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
+    setLastActiveSessionKey(host, itemSessionKey);
+    scheduleChatScroll(host);
   }
 }
 
 export function steerQueuedChatMessage(
-  host: SteerLifecycleHost,
+  host: SteerSendHost,
   id: string,
   dependencies: SteerSendDependencies,
 ): Promise<void> {

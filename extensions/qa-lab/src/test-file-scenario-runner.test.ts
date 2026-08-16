@@ -6,10 +6,16 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { validateQaEvidenceSummaryJson } from "./evidence-summary.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
-import { runQaScenarioCommandLifecycle } from "./test-file-scenario-command-lifecycle.js";
-import { dockerE2eLaneName } from "./test-file-scenario-docker-batch.js";
 import {
-  qaTestFileScenarioRunnerTesting,
+  resetQaScenarioCommandCleanupTimings,
+  runQaScenarioCommandLifecycle,
+  setQaScenarioCommandCleanupTimings,
+} from "./test-file-scenario-command-lifecycle.js";
+import {
+  dockerE2eLaneName,
+  prepareDockerE2eEnvironment,
+} from "./test-file-scenario-docker-batch.js";
+import {
   runQaTestFileScenarios,
   type QaScenarioCommandExecution,
 } from "./test-file-scenario-runner.js";
@@ -98,6 +104,18 @@ function makeDockerE2eScenario(id: string, lane: string): QaSeedScenarioWithSour
   };
 }
 
+async function writeDockerCandidateManifest(
+  command: QaScenarioCommandExecution,
+  manifest: unknown,
+) {
+  const manifestArg = command.args.find((arg) => arg.startsWith("--prepare-only="));
+  if (!manifestArg) {
+    throw new Error("missing prep-only manifest argument");
+  }
+  await fs.writeFile(manifestArg.slice("--prepare-only=".length), `${JSON.stringify(manifest)}\n`);
+  return { exitCode: 0, stdout: "", stderr: "" };
+}
+
 it("only batches the canonical Docker lane argument shape", () => {
   const scenario = makeDockerE2eScenario("docker-lane", "gateway-network");
   if (scenario.execution.kind !== "script") {
@@ -110,6 +128,118 @@ it("only batches the canonical Docker lane argument shape", () => {
       execution: { ...scenario.execution, args: ["--lane", "gateway-network", "--extra"] },
     }),
   ).toBeUndefined();
+});
+
+it("prepares the exact Docker lane union in a sanitized bound environment", async () => {
+  const repoRoot = await makeTempRepo("qa-docker-candidate-");
+  const outputDir = path.join(repoRoot, "out");
+  const packagePath = path.join(repoRoot, "openclaw.tgz");
+  const registryDir = path.join(repoRoot, "registry");
+  const runCommand = vi.fn(async (command: QaScenarioCommandExecution) => {
+    expect(command.env).toMatchObject({
+      KEEP_ME: "yes",
+      OPENCLAW_DOCKER_ALL_LANES: "gateway-network,openai-chat-tools",
+      OPENCLAW_DOCKER_E2E_REPO_ROOT: repoRoot,
+    });
+    expect(command.env).not.toHaveProperty("OPENCLAW_DOCKER_ALL_BUILD");
+    expect(command.env).not.toHaveProperty("OPENCLAW_CURRENT_PACKAGE_TGZ");
+    expect(command.env).not.toHaveProperty("OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR");
+    return await writeDockerCandidateManifest(command, {
+      schema: "openclaw.qa-docker-candidate/v1",
+      schemaVersion: 1,
+      sourceSha: "a".repeat(40),
+      candidate: {
+        package: {
+          path: packagePath,
+          name: "openclaw",
+          version: "2026.8.1",
+          sha256: "b".repeat(64),
+        },
+        registry: {
+          dir: registryDir,
+          candidateVersion: "2026.8.1",
+          manifestSha256: "c".repeat(64),
+        },
+      },
+    });
+  });
+  const env = await prepareDockerE2eEnvironment({
+    env: {
+      KEEP_ME: "yes",
+      OPENCLAW_DOCKER_ALL_BUILD: "1",
+      OPENCLAW_CURRENT_PACKAGE_TGZ: "/stale.tgz",
+      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: "/stale-registry",
+    },
+    outputDir,
+    repoRoot,
+    runCommand,
+    scenarios: [
+      makeDockerE2eScenario("one", "gateway-network"),
+      makeDockerE2eScenario("duplicate", "gateway-network"),
+      makeDockerE2eScenario("two", "openai-chat-tools"),
+    ],
+  });
+
+  expect(runCommand).toHaveBeenCalledTimes(1);
+  expect(Object.isFrozen(env)).toBe(true);
+  expect(env).toEqual({
+    KEEP_ME: "yes",
+    OPENCLAW_DOCKER_E2E_REPO_ROOT: repoRoot,
+    OPENCLAW_DOCKER_E2E_SELECTED_SHA: "a".repeat(40),
+    OPENCLAW_CURRENT_PACKAGE_TGZ: packagePath,
+    OPENCLAW_CURRENT_PACKAGE_VERSION: "2026.8.1",
+    OPENCLAW_CURRENT_PACKAGE_SHA256: "b".repeat(64),
+    OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: registryDir,
+    OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION: "2026.8.1",
+    OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: "c".repeat(64),
+  });
+});
+
+it("returns a sanitized bound env for a package-free candidate", async () => {
+  const repoRoot = await makeTempRepo("qa-docker-candidate-null-");
+  const env = await prepareDockerE2eEnvironment({
+    env: {
+      KEEP_ME: "yes",
+      OPENCLAW_DOCKER_ALL_BUILD: "1",
+      OPENCLAW_CURRENT_PACKAGE_TGZ: "/stale.tgz",
+    },
+    outputDir: path.join(repoRoot, "out"),
+    repoRoot,
+    runCommand: (command) =>
+      writeDockerCandidateManifest(command, {
+        schema: "openclaw.qa-docker-candidate/v1",
+        schemaVersion: 1,
+        sourceSha: "a".repeat(40),
+        candidate: null,
+      }),
+    scenarios: [makeDockerE2eScenario("one", "gateway-network")],
+  });
+
+  expect(env).toEqual({ KEEP_ME: "yes", OPENCLAW_DOCKER_E2E_REPO_ROOT: repoRoot });
+  expect(Object.isFrozen(env)).toBe(true);
+});
+
+it.each([
+  { label: "extra field", patch: { extra: true } },
+  { label: "malformed candidate", patch: { candidate: { package: null, registry: null } } },
+])("rejects a $label in the Docker candidate manifest", async ({ patch }) => {
+  const repoRoot = await makeTempRepo("qa-docker-candidate-invalid-");
+  await expect(
+    prepareDockerE2eEnvironment({
+      env: process.env,
+      outputDir: path.join(repoRoot, "out"),
+      repoRoot,
+      runCommand: (command) =>
+        writeDockerCandidateManifest(command, {
+          schema: "openclaw.qa-docker-candidate/v1",
+          schemaVersion: 1,
+          sourceSha: "a".repeat(40),
+          candidate: null,
+          ...patch,
+        }),
+      scenarios: [makeDockerE2eScenario("one", "gateway-network")],
+    }),
+  ).rejects.toThrow();
 });
 
 async function makeTempRepo(prefix: string) {
@@ -224,11 +354,76 @@ async function writeScriptProducerEvidence(params: {
 
 describe("qa test file scenario runner", () => {
   afterEach(async () => {
-    qaTestFileScenarioRunnerTesting.resetTimeoutCleanupTimings();
+    vi.unstubAllEnvs();
+    resetQaScenarioCommandCleanupTimings();
     await Promise.all([
       cleanupTempDirs(),
       ...tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
     ]);
+  });
+
+  it.each([
+    { label: "package", candidate: "package" as const },
+    { label: "package-free", candidate: "none" as const },
+  ])("keeps hostile inherited Docker state out of a prepared $label run", async ({ candidate }) => {
+    const repoRoot = await makeTempRepo("qa-docker-replace-env-");
+    const packagePath = path.join(repoRoot, "openclaw.tgz");
+    vi.stubEnv("OPENCLAW_DOCKER_ALL_POISON", "hostile");
+    vi.stubEnv("OPENCLAW_CURRENT_PACKAGE_TGZ", "/hostile.tgz");
+    vi.stubEnv("OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR", "/hostile-registry");
+    const prepared = await prepareDockerE2eEnvironment({
+      env: process.env,
+      outputDir: path.join(repoRoot, "prep"),
+      repoRoot,
+      runCommand: (command) =>
+        writeDockerCandidateManifest(command, {
+          schema: "openclaw.qa-docker-candidate/v1",
+          schemaVersion: 1,
+          sourceSha: "a".repeat(40),
+          candidate:
+            candidate === "package"
+              ? {
+                  package: {
+                    path: packagePath,
+                    name: "openclaw",
+                    version: "2026.8.1",
+                    sha256: "b".repeat(64),
+                  },
+                  registry: null,
+                }
+              : null,
+        }),
+      scenarios: [makeDockerE2eScenario("one", "gateway-network")],
+    });
+
+    await runQaTestFileScenarios({
+      env: prepared,
+      envMode: "replace",
+      outputDir: path.join(repoRoot, "run"),
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      providerMode: "mock-openai",
+      repoRoot,
+      scenarios: [makeDockerE2eScenario("one", "gateway-network")],
+      runCommand: async (command) => {
+        expect(command.env.OPENCLAW_DOCKER_ALL_POISON).toBeUndefined();
+        expect(command.env.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR).toBeUndefined();
+        expect(command.env.OPENCLAW_CURRENT_PACKAGE_TGZ).toBe(
+          candidate === "package" ? packagePath : undefined,
+        );
+        expect(command.env.OPENCLAW_DOCKER_E2E_REPO_ROOT).toBe(repoRoot);
+        const logDir = command.env.OPENCLAW_DOCKER_ALL_LOG_DIR!;
+        await fs.mkdir(logDir, { recursive: true });
+        await fs.writeFile(
+          path.join(logDir, "summary.json"),
+          JSON.stringify({
+            failures: [],
+            lanes: [{ elapsedSeconds: 1, name: "gateway-network", status: 0 }],
+            selectedLanes: ["gateway-network"],
+          }),
+        );
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    });
   });
 
   it("runs Playwright scenarios with the repo UI e2e command and writes Playwright evidence", async () => {
@@ -262,7 +457,7 @@ describe("qa test file scenario runner", () => {
 
     expect(result.executionKind).toBe("playwright");
     expect(commands.map((command) => command.args)).toEqual([
-      ["scripts/ensure-playwright-chromium.mjs"],
+      ["--import", "tsx", "scripts/ensure-playwright-chromium.mts"],
       [
         "scripts/run-vitest.mjs",
         "run",
@@ -1157,7 +1352,7 @@ describe("qa test file scenario runner", () => {
         "utf8",
       );
 
-      qaTestFileScenarioRunnerTesting.setTimeoutCleanupTimings({
+      setQaScenarioCommandCleanupTimings({
         forceSettleMs: 25,
         killGraceMs: 50,
       });
@@ -1204,47 +1399,6 @@ describe("qa test file scenario runner", () => {
       }
       expect(isProcessRunning(descendantPid)).toBe(false);
     });
-  });
-
-  it("force-kills Windows scenario command trees when graceful taskkill fails", () => {
-    const originalSystemRoot = process.env.SystemRoot;
-    const originalWindir = process.env.WINDIR;
-    process.env.SystemRoot = "C:\\Windows";
-    delete process.env.WINDIR;
-    const runTaskkill = vi
-      .fn()
-      .mockReturnValueOnce({ status: 1 })
-      .mockReturnValueOnce({ status: 0 });
-
-    try {
-      expect(
-        qaTestFileScenarioRunnerTesting.killQaScenarioWindowsProcessTree(
-          12345,
-          "SIGTERM",
-          runTaskkill,
-        ),
-      ).toBe(true);
-      const taskkillPath = path.win32.join("C:\\Windows", "System32", "taskkill.exe");
-      expect(runTaskkill).toHaveBeenNthCalledWith(1, taskkillPath, ["/pid", "12345", "/T"], {
-        stdio: "ignore",
-        windowsHide: true,
-      });
-      expect(runTaskkill).toHaveBeenNthCalledWith(2, taskkillPath, ["/pid", "12345", "/T", "/F"], {
-        stdio: "ignore",
-        windowsHide: true,
-      });
-    } finally {
-      if (originalSystemRoot === undefined) {
-        delete process.env.SystemRoot;
-      } else {
-        process.env.SystemRoot = originalSystemRoot;
-      }
-      if (originalWindir === undefined) {
-        delete process.env.WINDIR;
-      } else {
-        process.env.WINDIR = originalWindir;
-      }
-    }
   });
 
   it("fails script scenarios that exit cleanly after timeout termination", async () => {
@@ -1847,8 +2001,11 @@ describe("qa test file scenario runner", () => {
     );
 
     expect(result.executionKind).toBe("script");
-    expect(result.results[0]).toMatchObject({ status: "blocked" });
-    expect(result.results[0]?.producerEvidence?.entries).toHaveLength(3);
+    const producerEntries = result.results[0]?.producerEvidence?.entries ?? [];
+    const producerStatuses = producerEntries.map((entry) => entry.result.status);
+    expect(producerEntries).toHaveLength(3);
+    expect(producerStatuses).toContain("blocked");
+    expect(result.results[0]?.status).toBe(producerStatuses.includes("pass") ? "pass" : "blocked");
     expect(evidence.entries.map((entry) => entry.test.id)).toEqual([
       "ux-matrix.qa-lab.producer-artifact-fixture",
       "ux-matrix.control-ui.screenshot-artifact",

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_CRON } from "./legacy-config-migrations.runtime.cron.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY } from "./legacy-config-migrations.runtime.gateway.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_MCP } from "./legacy-config-migrations.runtime.mcp.js";
@@ -44,6 +45,113 @@ function getPath(value: unknown, path: string): unknown {
 }
 
 describe("retired runtime config migrations", () => {
+  it.each([
+    ["a normal registration", [{ event: "command:new", module: "hooks/legacy.js" }]],
+    ["an empty array", []],
+    ["null", null],
+    ["a malformed scalar", "hooks/legacy.js"],
+    ["a malformed object", { module: "hooks/legacy.js" }],
+  ])("detects hooks.internal.handlers by key presence for %s", (_label, handlers) => {
+    const issues = findLegacyConfigIssues({ hooks: { internal: { handlers } } });
+
+    expect(issues).toContainEqual({
+      path: "hooks.internal.handlers",
+      message: expect.stringContaining("hooks.internal.handlers is retired"),
+    });
+  });
+
+  it("removes retired hook registrations while preserving canonical siblings", () => {
+    const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED.find(
+      (candidate) => candidate.id === "runtime.retired-internal-hook-handlers",
+    );
+    expect(migration).toBeDefined();
+    const raw = {
+      hooks: {
+        internal: {
+          enabled: true,
+          handlers: [{ event: "command:new", module: "hooks/legacy.js" }],
+          entries: { canonical: { enabled: true } },
+          load: { extraDirs: ["/opt/openclaw/hooks"] },
+          sibling: "preserved",
+        },
+      },
+    };
+    const changes: string[] = [];
+
+    migration?.apply(raw, changes);
+
+    expect(raw.hooks.internal).toEqual({
+      enabled: true,
+      entries: { canonical: { enabled: true } },
+      load: { extraDirs: ["/opt/openclaw/hooks"] },
+      sibling: "preserved",
+    });
+    expect(changes).toEqual([
+      "Removed retired hooks.internal.handlers registrations; hook files must be migrated separately.",
+    ]);
+  });
+
+  it.each([
+    ["no canonical siblings", {}, {}],
+    [
+      "empty canonical siblings",
+      { entries: {}, load: { extraDirs: [] } },
+      {
+        entries: {},
+        load: { extraDirs: [] },
+      },
+    ],
+    ["blank extra directories", { load: { extraDirs: ["  "] } }, { load: { extraDirs: ["  "] } }],
+  ])("removes legacy-only enabled for %s", (_label, siblings, expected) => {
+    const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED.find(
+      (candidate) => candidate.id === "runtime.retired-internal-hook-handlers",
+    );
+    const raw = {
+      hooks: { internal: { enabled: true, handlers: [], ...structuredClone(siblings) } },
+    };
+    const changes: string[] = [];
+
+    migration?.apply(raw, changes);
+
+    expect(raw.hooks.internal).toEqual(expected);
+    expect(changes).toEqual([
+      "Removed retired hooks.internal.handlers registrations; hook files must be migrated separately.",
+      "Removed legacy-only hooks.internal.enabled to avoid enabling broad hook discovery.",
+    ]);
+  });
+
+  it.each([
+    ["named entries", { enabled: true, entries: { canonical: { enabled: false } } }],
+    ["extra directories", { enabled: true, load: { extraDirs: ["/opt/openclaw/hooks"] } }],
+    ["explicit disablement", { enabled: false }],
+  ])("preserves canonical enabled state for %s", (_label, expected) => {
+    const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED.find(
+      (candidate) => candidate.id === "runtime.retired-internal-hook-handlers",
+    );
+    const raw = { hooks: { internal: { ...structuredClone(expected), handlers: null } } };
+    const changes: string[] = [];
+
+    migration?.apply(raw, changes);
+
+    expect(raw.hooks.internal).toEqual(expected);
+    const rerunChanges: string[] = [];
+    migration?.apply(raw, rerunChanges);
+    expect(rerunChanges).toEqual([]);
+  });
+
+  it("explains the required manual migration before doctor removes registrations", () => {
+    const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED.find(
+      (candidate) => candidate.id === "runtime.retired-internal-hook-handlers",
+    );
+    const message = migration?.legacyRules?.[0]?.message ?? "";
+
+    expect(message).toContain("managed/workspace hook directory");
+    expect(message).toContain("HOOK.md + handler file");
+    expect(message.indexOf("Move each module")).toBeLessThan(message.indexOf("doctor --fix"));
+    expect(message).toContain("removes retired registrations");
+    expect(message).toContain("does not materialize executable files");
+  });
+
   it.each([
     [
       "strips the retired compaction gate while keeping an enabled byte threshold",
@@ -320,6 +428,35 @@ describe("retired runtime config migrations", () => {
   ] as const)("strips retired tuning knob %s", (path) => {
     const result = applyAll(configWithPath(path));
     expect(getPath(result.raw, path)).toBeUndefined();
+    expect(result.changes).toContain(
+      "Removed retired runtime tuning knobs; built-in defaults now apply.",
+    );
+  });
+
+  it("strips retired channel progress render keys and prunes emptied parents", () => {
+    const result = applyAll({
+      channels: {
+        slack: {
+          streaming: { progress: { render: "rich", maxLines: 4 } },
+        },
+        discord: {
+          accounts: {
+            main: { streaming: { progress: { render: "text" } } },
+          },
+        },
+      },
+    });
+
+    expect(result.raw).toEqual({
+      channels: {
+        slack: {
+          streaming: { progress: { maxLines: 4 } },
+        },
+        discord: {
+          accounts: { main: {} },
+        },
+      },
+    });
     expect(result.changes).toContain(
       "Removed retired runtime tuning knobs; built-in defaults now apply.",
     );

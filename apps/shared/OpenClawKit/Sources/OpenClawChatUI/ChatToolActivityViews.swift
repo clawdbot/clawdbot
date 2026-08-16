@@ -13,6 +13,7 @@ struct ChatToolActivityItem: Identifiable, Equatable {
     let resultText: String?
     let isError: Bool
     let isPending: Bool
+    let liveDiffStat: ChatToolDiffStat?
 }
 
 enum ChatToolActivity {
@@ -34,7 +35,8 @@ enum ChatToolActivity {
                 details: result?.details,
                 resultText: result?.text,
                 isError: result?.isError ?? false,
-                isPending: false)
+                isPending: false,
+                liveDiffStat: nil)
         }
 
         items.append(contentsOf: remainingResults.map { index, result in
@@ -45,7 +47,8 @@ enum ChatToolActivity {
                 details: result.details,
                 resultText: result.text,
                 isError: result.isError ?? false,
-                isPending: false)
+                isPending: false,
+                liveDiffStat: nil)
         })
         return items
     }
@@ -104,6 +107,10 @@ struct ChatToolActivityRow: View {
         return Array(lines.prefix(Self.expandedLineLimit - 1)) + [
             ChatToolDiffLine(kind: .skip, text: ""),
         ]
+    }
+
+    private var displayedDiffStat: ChatToolDiffStat? {
+        self.item.isPending ? self.item.liveDiffStat ?? self.resolvedDiff?.stat : self.resolvedDiff?.stat
     }
 
     init(item: ChatToolActivityItem) {
@@ -222,15 +229,8 @@ struct ChatToolActivityRow: View {
                     .truncationMode(.tail)
             }
 
-            if let stat = self.resolvedDiff?.stat {
-                Text(verbatim: "+\(stat.added)")
-                    .font(OpenClawChatTypography.mono(size: 12, relativeTo: .footnote))
-                    .foregroundStyle(OpenClawChatTheme.success.opacity(0.9))
-                    .lineLimit(1)
-                Text(verbatim: "−\(stat.removed)")
-                    .font(OpenClawChatTypography.mono(size: 12, relativeTo: .footnote))
-                    .foregroundStyle(OpenClawChatTheme.danger.opacity(0.9))
-                    .lineLimit(1)
+            if let stat = self.displayedDiffStat {
+                ChatDiffStatChips(stat: stat)
             }
 
             Spacer(minLength: 0)
@@ -395,6 +395,21 @@ struct ChatToolActivityRow: View {
         ]
         return fallbacks.first { keys, _ in keys.contains(where: normalized.contains) }?.1
             ?? "wrench.and.screwdriver"
+    }
+}
+
+struct ChatDiffStatChips: View {
+    let stat: ChatToolDiffStat
+
+    var body: some View {
+        Group {
+            Text(verbatim: "+\(self.stat.added)")
+                .foregroundStyle(OpenClawChatTheme.success.opacity(0.9))
+            Text(verbatim: "−\(self.stat.removed)")
+                .foregroundStyle(OpenClawChatTheme.danger.opacity(0.9))
+        }
+        .font(OpenClawChatTypography.mono(size: 12, relativeTo: .footnote))
+        .lineLimit(1)
     }
 }
 

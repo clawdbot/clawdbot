@@ -70,11 +70,14 @@ describe("configured model refs", () => {
       collectConfiguredModelRefValues(
         {
           agents: { defaults: { model: "openai/gpt-5.5" } },
-          channels: { modelByChannel: { discord: { guild: "anthropic/claude-sonnet-4-6" } } },
+          channels: {
+            modelByChannel: { discord: { guild: "anthropic/claude-sonnet-4-6" } },
+            discord: { voice: { tts: { summaryModel: "discord-tts/model" } } },
+          },
         },
         { includeChannelModelOverrides: false },
       ),
-    ).toEqual(["openai/gpt-5.5"]);
+    ).toEqual(["openai/gpt-5.5", "discord-tts/model"]);
   });
 
   it("preserves legacy list indices when collecting agent model refs", () => {
@@ -102,6 +105,154 @@ describe("configured model refs", () => {
         },
       }),
     ).toEqual([{ path: "agents.entries.ops.model", value: "openai/gpt-5.6" }]);
+  });
+
+  it.each([
+    {
+      name: "global exec reviewer string",
+      config: { tools: { exec: { reviewer: { model: "global-review/model" } } } },
+      expected: [{ path: "tools.exec.reviewer.model", value: "global-review/model" }],
+    },
+    {
+      name: "global exec reviewer selector",
+      config: {
+        tools: {
+          exec: {
+            reviewer: {
+              model: { primary: "global-primary/model", fallbacks: ["global-fallback/model"] },
+            },
+          },
+        },
+      },
+      expected: [
+        { path: "tools.exec.reviewer.model.primary", value: "global-primary/model" },
+        { path: "tools.exec.reviewer.model.fallbacks.0", value: "global-fallback/model" },
+      ],
+    },
+    {
+      name: "media preferences",
+      config: {
+        tools: {
+          media: {
+            image: { preferredModel: "image-provider/model" },
+            audio: { preferredModel: "audio-provider/model" },
+            video: { preferredModel: "video-provider/model" },
+          },
+        },
+      },
+      expected: [
+        {
+          path: "tools.media.image.preferredModel",
+          value: "image-provider/model",
+        },
+        {
+          path: "tools.media.audio.preferredModel",
+          value: "audio-provider/model",
+        },
+        {
+          path: "tools.media.video.preferredModel",
+          value: "video-provider/model",
+        },
+      ],
+    },
+    {
+      name: "keyed agent exec reviewer",
+      config: {
+        agents: {
+          entries: {
+            worker: {
+              tools: {
+                exec: {
+                  reviewer: {
+                    model: {
+                      primary: "entry-review-primary/model",
+                      fallbacks: ["entry-review-fallback/model"],
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      expected: [
+        {
+          path: "agents.entries.worker.tools.exec.reviewer.model.primary",
+          value: "entry-review-primary/model",
+        },
+        {
+          path: "agents.entries.worker.tools.exec.reviewer.model.fallbacks.0",
+          value: "entry-review-fallback/model",
+        },
+      ],
+    },
+    {
+      name: "legacy agent exec reviewer",
+      config: {
+        agents: {
+          list: [{ id: "worker", tools: { exec: { reviewer: { model: "list-review/model" } } } }],
+        },
+      },
+      expected: [{ path: "agents.list.0.tools.exec.reviewer.model", value: "list-review/model" }],
+    },
+    {
+      name: "keyed agent TTS summary",
+      config: { agents: { entries: { worker: { tts: { summaryModel: "entry-tts/model" } } } } },
+      expected: [{ path: "agents.entries.worker.tts.summaryModel", value: "entry-tts/model" }],
+    },
+    {
+      name: "legacy agent TTS summary",
+      config: { agents: { list: [{ id: "worker", tts: { summaryModel: "list-tts/model" } }] } },
+      expected: [{ path: "agents.list.0.tts.summaryModel", value: "list-tts/model" }],
+    },
+    {
+      name: "Discord root voice model",
+      config: { channels: { discord: { voice: { model: "discord-voice/model" } } } },
+      expected: [{ path: "channels.discord.voice.model", value: "discord-voice/model" }],
+    },
+    {
+      name: "Discord root voice TTS summary",
+      config: { channels: { discord: { voice: { tts: { summaryModel: "discord-tts/model" } } } } },
+      expected: [{ path: "channels.discord.voice.tts.summaryModel", value: "discord-tts/model" }],
+    },
+    {
+      name: "Discord account voice model",
+      config: {
+        channels: { discord: { accounts: { work: { voice: { model: "account-voice/model" } } } } },
+      },
+      expected: [
+        { path: "channels.discord.accounts.work.voice.model", value: "account-voice/model" },
+      ],
+    },
+    {
+      name: "Discord account voice TTS summary",
+      config: {
+        channels: {
+          discord: {
+            accounts: { work: { voice: { tts: { summaryModel: "account-tts/model" } } } },
+          },
+        },
+      },
+      expected: [
+        {
+          path: "channels.discord.accounts.work.voice.tts.summaryModel",
+          value: "account-tts/model",
+        },
+      ],
+    },
+  ])("collects $name", ({ config, expected }) => {
+    expect(collectConfiguredModelRefs(config)).toEqual(expected);
+  });
+
+  it.each([{}, null])("does not inspect a shadow list when entries is %j", (entries) => {
+    expect(
+      collectConfiguredModelRefs({
+        agents: {
+          entries,
+          list: [{ id: "shadow", tools: { exec: { reviewer: { model: "shadow/model" } } } }],
+        },
+      }),
+    ).toEqual([]);
   });
 
   it("ignores array-shaped malformed records", () => {

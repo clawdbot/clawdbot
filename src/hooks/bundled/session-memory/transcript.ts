@@ -13,6 +13,16 @@ const SESSION_MEMORY_DROP_BLOCK_RE = new RegExp(
 const SESSION_MEMORY_ROLE_DIRECTIVE_BLOCK_RE = /<(system|assistant|user)\b[^>]*>[\s\S]*?<\/\1>/gi;
 const SESSION_MEMORY_ROLE_DIRECTIVE_TAG_RE = /<\/?(?:system|assistant|user)\b[^>]*>/gi;
 const SESSION_MEMORY_TRAILING_NO_REPLY_RE = /(?:^|\n)\s*NO_REPLY\s*$/i;
+const SESSION_MEMORY_JSON_LINE_SEPARATOR_RE = /[\u0085\u2028\u2029]/gu;
+
+function quoteSessionMemoryText(text: string): string {
+  // One JSON string per role record keeps message text from forging later
+  // records while preserving every character for memory readers.
+  return JSON.stringify(text).replace(
+    SESSION_MEMORY_JSON_LINE_SEPARATOR_RE,
+    (separator) => `\\u${separator.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
 
 function isNoReplyMarker(text: string): boolean {
   const trimmed = text.trim();
@@ -117,7 +127,7 @@ function renderSessionMemoryLines(events: readonly unknown[]): string[] {
     if (rendered.isDeliveryMirror && rendered.text === lastAssistantText) {
       continue;
     }
-    allMessages.push(`${rendered.role}: ${rendered.text}`);
+    allMessages.push(`${rendered.role}: ${quoteSessionMemoryText(rendered.text)}`);
     if (rendered.role === "assistant") {
       lastAssistantText = rendered.text;
     }

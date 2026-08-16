@@ -93,8 +93,9 @@ struct PermissionsSettings: View {
 private struct LocationAccessSettings: View {
     private static let controlWidth: CGFloat = 180
 
-    @AppStorage(locationModeKey) private var locationModeRaw: String = OpenClawLocationMode.off.rawValue
-    @AppStorage(locationPreciseKey) private var locationPreciseEnabled: Bool = true
+    @AppStorage(locationModeKey, store: AppDefaults.standard)
+    private var locationModeRaw: String = OpenClawLocationMode.off.rawValue
+    @AppStorage(locationPreciseKey, store: AppDefaults.standard) private var locationPreciseEnabled: Bool = true
     @State private var lastLocationModeRaw: String = OpenClawLocationMode.off.rawValue
 
     var body: some View {

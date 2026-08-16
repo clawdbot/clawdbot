@@ -5,7 +5,7 @@ import {
   isPersistentSystemAgentOperation,
   parseSystemAgentOperation,
 } from "./operations.js";
-import { createSystemAgentTestRuntime } from "./system-agent.test-helpers.js";
+import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
 
 describe("system agent setup-flow operations", () => {
   it("parses channel listing and connect requests", () => {

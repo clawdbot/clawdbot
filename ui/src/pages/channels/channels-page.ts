@@ -27,6 +27,7 @@ import { importNostrProfile, parseValidationErrors, putNostrProfile } from "./no
 import { createNostrProfileFormState } from "./view.nostr-profile-form.ts";
 import { renderChannels } from "./view.ts";
 import type { ChannelPairingPrompt } from "./view.types.ts";
+import { runWhatsAppLogoutConfirmation } from "./whatsapp-logout.ts";
 import { ChannelWizardHost } from "./wizard-host.ts";
 
 type NostrProfileFormState = ReturnType<typeof createNostrProfileFormState> | null;
@@ -281,6 +282,23 @@ class ChannelsPage extends OpenClawLightDomElement {
     }
     await context.runtimeConfig.refresh({ discardPendingChanges: true });
     await context.channels.refresh(true);
+  }
+
+  private async confirmWhatsAppLogout() {
+    const context = this.context;
+    const channels = context.channels;
+    const scope = this.gateway.capture();
+    if (!scope || this.channelsSource !== channels) {
+      return;
+    }
+    await runWhatsAppLogoutConfirmation({
+      channels,
+      getWizardAccountId: () => this.wizardHost.whatsappAccountId,
+      isCurrent: () =>
+        this.gateway.isCurrent(scope) &&
+        this.context === context &&
+        this.channelsSource === channels,
+    });
   }
 
   private resolveNostrAccountId(): string {
@@ -706,8 +724,7 @@ class ChannelsPage extends OpenClawLightDomElement {
             void context.channels.startWhatsApp(force, this.wizardHost.whatsappAccountId),
           onWhatsAppWait: () =>
             void context.channels.waitWhatsApp(this.wizardHost.whatsappAccountId),
-          onWhatsAppLogout: () =>
-            void context.channels.logoutWhatsApp(this.wizardHost.whatsappAccountId),
+          onWhatsAppLogout: () => void this.confirmWhatsAppLogout(),
           onShowAdvancedSettings: (enabled) => this.setShowAdvancedSettings(enabled),
           onConfigPatch: (path, value) => context.runtimeConfig.patchForm(path, value),
           onConfigSave: () => void this.saveChannelConfig(),

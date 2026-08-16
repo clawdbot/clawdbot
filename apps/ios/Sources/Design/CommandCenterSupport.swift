@@ -155,8 +155,10 @@ struct CommandSessionActionsModifier: ViewModifier {
         content
             .contextMenu {
                 if self.isArchived {
-                    self.actionButton("Unarchive", systemImage: "archivebox") {
-                        self.actions.toggleArchived()
+                    if self.canArchive {
+                        self.actionButton("Unarchive", systemImage: "archivebox") {
+                            self.actions.toggleArchived()
+                        }
                     }
                     if self.canDelete {
                         self.deleteButton
@@ -181,7 +183,12 @@ struct CommandSessionActionsModifier: ViewModifier {
                     self.actionButton("Rename…", systemImage: "pencil") {
                         self.beginRename()
                     }
-                    self.actionButton("Fork", systemImage: "arrow.triangle.branch") {
+                    self.actionButton(
+                        self.session.hasActiveRun == true
+                            ? OpenClawTextValue.localized("Fork from last completed message")
+                            : OpenClawTextValue.localized("Fork"),
+                        systemImage: "arrow.triangle.branch")
+                    {
                         self.actions.fork()
                     }
                     self.groupMenu

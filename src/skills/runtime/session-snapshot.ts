@@ -1,15 +1,14 @@
 // Session snapshot helpers capture and restore runtime skill state for sessions.
-import crypto from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
-import { redactConfigObject } from "../../config/redact-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { matchesSkillFilter } from "../discovery/filter.js";
-import { buildWorkspaceSkillSnapshot } from "../loading/workspace.js";
+import { buildSkillSnapshot } from "../loading/workspace-skill-prompt.js";
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import type { SkillEligibilityContext, SkillSnapshot } from "../types.js";
 import { getSkillsSnapshotVersion, shouldRefreshSnapshotForVersion } from "./refresh-state.js";
 import { ensureSkillsWatcher } from "./refresh.js";
+import { fingerprintSkillSnapshotConfig } from "./snapshot-config-fingerprint.js";
 import { hydrateResolvedSkills } from "./snapshot-hydration.js";
 
 // The resolved index is gateway-process state. Mutation RPCs and watcher events
@@ -36,13 +35,6 @@ type ReusableSkillSnapshotResult = {
   shouldRefresh: boolean;
   snapshotVersion: number;
 };
-
-function fingerprintSkillSnapshotConfig(config: OpenClawConfig): string {
-  return crypto
-    .createHash("sha256")
-    .update(stableStringify(redactConfigObject(config)))
-    .digest("hex");
-}
 
 function cacheResolvedSkills(cacheKey: string, snapshot: SkillSnapshot): SkillSnapshot {
   resolvedSkillsCache.set(cacheKey, snapshot.resolvedSkills);
@@ -76,7 +68,7 @@ export function resolveReusableWorkspaceSkillSnapshot(
     !matchesSkillFilter(params.existingSnapshot?.skillFilter, params.skillFilter) ||
     skillOverridesChanged;
   const buildSnapshot = () => {
-    return buildWorkspaceSkillSnapshot(params.workspaceDir, {
+    return buildSkillSnapshot(params.workspaceDir, {
       config: params.config,
       agentId: params.agentId,
       skillFilter: params.skillFilter,

@@ -2,10 +2,10 @@
 import net from "node:net";
 import os from "node:os";
 import { expectDefined } from "@openclaw/normalization-core";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import pMap from "p-map";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import { buildPortHints } from "./ports-format.js";
 import {
   parseLsofListenerRecordsByPort,
@@ -520,18 +520,17 @@ async function resolveWindowsImageName(pid: number): Promise<string | undefined>
     "/FI",
     `PID eq ${pid}`,
     "/FO",
-    "LIST",
+    "CSV",
+    "/NH",
   ]);
   if (res.code !== 0) {
     return undefined;
   }
   for (const rawLine of res.stdout.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!normalizeLowercaseStringOrEmpty(line).startsWith("image name:")) {
-      continue;
+    const match = rawLine.trim().match(/^"([^"]+)","(\d+)",/);
+    if (match?.[1] && match[2] === String(pid)) {
+      return match[1];
     }
-    const value = line.slice("image name:".length).trim();
-    return value || undefined;
   }
   return undefined;
 }

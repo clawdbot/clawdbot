@@ -150,7 +150,7 @@ final class DeepLinkHandler {
     }
 
     private static func expectedKey() -> String {
-        let defaults = UserDefaults.standard
+        let defaults = AppDefaults.standard
         if let key = defaults.string(forKey: deepLinkKeyKey), !key.isEmpty {
             return key
         }

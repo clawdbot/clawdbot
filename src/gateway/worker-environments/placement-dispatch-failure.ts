@@ -1,11 +1,11 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { formatErrorMessage } from "../../infra/errors.js";
-import { redactSensitiveText } from "../../logging/redact.js";
+import type { WorkerPlacementExecutionMode } from "./placement-record.js";
 import type {
   createWorkerSessionPlacementStore,
   WorkerSessionPlacementRecord,
 } from "./placement-store.js";
 import type { WorkerEnvironmentService } from "./service.js";
+import { boundedWorkerError } from "./worker-error.js";
 
 export type WorkerDispatchPlacement = WorkerSessionPlacementRecord;
 export type WorkerActiveDispatchPlacement = Extract<
@@ -32,6 +32,7 @@ export type WorkerDispatchPlacementStore = Pick<
   | "acceptIdleWorkspaceReconciliation"
   | "claimReclaimWorkspaceResult"
   | "claimTurn"
+  | "closeWorkerTurnToolState"
   | "fail"
   | "finishReclaim"
   | "get"
@@ -48,6 +49,7 @@ export type WorkerDispatchPlacementStore = Pick<
   | "acceptWorkspaceResult"
   | "cancelWorkspaceResultAndReleaseTurn"
   | "completeWorkspaceResultAndReleaseTurn"
+  | "failWorkspaceResultAndReleaseTurn"
   | "abandonWorkspaceResult"
   | "listForReconcile"
   | "releaseTurn"
@@ -60,24 +62,26 @@ export type WorkerDispatchPlacementStore = Pick<
 
 export type WorkerDispatchEnvironmentService = Pick<
   WorkerEnvironmentService,
-  "attachSession" | "create" | "destroy" | "get" | "reconcileOnce" | "startTunnel" | "stopTunnel"
+  | "attachSession"
+  | "create"
+  | "createFromProfileSnapshot"
+  | "destroy"
+  | "get"
+  | "reconcileOnce"
+  | "startTunnel"
+  | "stopTunnel"
 >;
 
 export type WorkerActivationBarrier = (params: {
   sessionId: string;
   sessionKey: string;
   agentId: string;
+  executionMode: WorkerPlacementExecutionMode;
   activate: () => WorkerActiveDispatchPlacement;
 }) => Promise<WorkerActiveDispatchPlacement>;
 
 const RECOVERY_ERROR_LIMIT = 1_024;
-
-function boundedError(error: unknown): string {
-  const redacted = redactSensitiveText(formatErrorMessage(error), { mode: "tools" })
-    .replace(/\s+/gu, " ")
-    .trim();
-  return truncateUtf16Safe(redacted || "unknown dispatch failure", RECOVERY_ERROR_LIMIT);
-}
+const boundedError = boundedWorkerError;
 
 export function isUnavailableEnvironment(
   environment: NonNullable<ReturnType<WorkerEnvironmentService["get"]>>,
@@ -225,6 +229,26 @@ export function createPlacementFailureActions(deps: {
     if (current?.state !== "draining") {
       return;
     }
+    if (current.turnClaim) {
+      await placements.closeWorkerTurnToolState({
+        sessionId: current.sessionId,
+        claimId: current.turnClaim.claimId,
+        runId: current.turnClaim.runId,
+        placementGeneration: current.turnClaim.generation,
+        owner:
+          current.turnClaim.owner === "worker"
+            ? {
+                kind: "worker",
+                environmentId: current.environmentId,
+                ownerEpoch: current.turnClaim.ownerEpoch,
+              }
+            : {
+                kind: "local",
+                environmentId: current.environmentId,
+                ownerEpoch: current.activeOwnerEpoch,
+              },
+      });
+    }
     const reconciling = startReconcile(current);
     const teardownErrors = await cleanupEnvironment({
       environmentId: current.environmentId,
@@ -238,17 +262,21 @@ export function createPlacementFailureActions(deps: {
     environment: ReturnType<WorkerEnvironmentService["get"]>,
     claimedTurnError: Error,
   ): Promise<void> => {
-    if (placement.turnClaim) {
-      const draining = startDrain(placement);
-      await failDraining(draining, claimedTurnError, { forceClaimFence: true });
-      return;
-    }
     const draining = startDrain(placement);
     if (draining.turnClaim) {
       await failDraining(draining, claimedTurnError, { forceClaimFence: true });
       return;
     }
     const reconciling = startReconcile(draining);
+    if (
+      !environment ||
+      environment.state === "destroyed" ||
+      environment.state === "failed" ||
+      environment.state === "orphaned"
+    ) {
+      finishReconcilingFailure(reconciling, claimedTurnError, []);
+      return;
+    }
     if (environment && !isUnavailableEnvironment(environment)) {
       const teardownErrors = await cleanupEnvironment({
         environmentId: placement.environmentId,

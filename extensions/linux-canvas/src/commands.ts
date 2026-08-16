@@ -57,10 +57,7 @@ function cleanToken(value: unknown, fallback: string): string {
 }
 
 function buildActionMessage(action: unknown, sessionKey?: string): string {
-  const value =
-    action && typeof action === "object" && !Array.isArray(action)
-      ? (action as Record<string, unknown>)
-      : {};
+  const value = asNonArrayRecord(action);
   const actionName = cleanToken(value.name, "unknown");
   const surface = cleanToken(value.surfaceId, "main");
   const component = cleanToken(value.sourceComponentId, "unknown");
@@ -188,3 +185,4 @@ export function createLinuxCanvasCommands(
     return registration;
   });
 }
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";

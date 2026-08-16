@@ -1,3 +1,4 @@
+import { resolvePositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { readResponseBodySnippet } from "../infra/http-error-body.js";
 /**
  * Adapts MiniMax VLM image-understanding requests for agent image inputs.
@@ -6,7 +7,6 @@ import {
   postJsonRequest,
   resolveProviderHttpRequestConfigWithOriginTrust,
 } from "../media-understanding/shared.js";
-import { resolvePositiveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { isRecord } from "../utils.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { readProviderJsonResponse } from "./provider-http-errors.js";

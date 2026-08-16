@@ -1,6 +1,5 @@
 import type { Tool as SdkTool } from "@github/copilot-sdk";
 import type {
-  AgentHarnessAttemptParams,
   AgentMessage,
   AnyAgentTool,
   SandboxContext,
@@ -21,10 +20,10 @@ import {
   createPromptError,
   createResult,
   isSdkSendAndWaitTimeoutError,
+  readNonEmptyString,
   readResolvedAttemptPath,
-  readString,
   resolvePoolAcquire,
-  toError,
+  toCopilotError,
 } from "./attempt-config.js";
 import { completeCopilotAttempt } from "./attempt-finalize.js";
 import { resolveCopilotAttemptSandbox } from "./attempt-prepare.js";
@@ -33,12 +32,14 @@ import {
   createAttemptTranscriptJournal,
   type AttemptTranscriptJournal,
 } from "./attempt-transcript-journal.js";
+import { assertCopilotAttemptHostCapabilities } from "./attempt-types.js";
 import type {
   AgentHarnessAttemptResult,
   AttemptParamsLike,
   CopilotAttemptDeps,
   CopilotAgentEndHookParams,
   ModelRef,
+  CopilotAttemptParams,
 } from "./attempt-types.js";
 import { createCopilotByokProxy } from "./byok-proxy.js";
 import { attachEventBridge, type SessionLike } from "./event-bridge.js";
@@ -47,7 +48,7 @@ import { classifyResumeFailure, decideReplayAction } from "./replay-shim.js";
 import type { PooledClient } from "./runtime.js";
 import type { CopilotUserInputBridge } from "./user-input-bridge.js";
 export async function runCopilotExecution(context: {
-  params: AgentHarnessAttemptParams;
+  params: CopilotAttemptParams;
   deps: CopilotAttemptDeps;
   now: () => number;
   attemptStartedAt: number;
@@ -108,12 +109,13 @@ export async function runCopilotExecution(context: {
   let session: SessionLike | undefined;
   let bridge: ReturnType<typeof attachEventBridge> | undefined;
   let transcriptJournal: AttemptTranscriptJournal | undefined;
+  let initialSdkUserValidated = false;
   const nativeSubagentTaskMirror = createCopilotNativeSubagentTaskMirror({
     agentId: sessionAgentId,
     now,
     scope: input.agentHarnessTaskRuntimeScope,
   });
-  let activeRunHandleRef: Parameters<typeof clearActiveEmbeddedRun>[1] | undefined;
+  let activeRunHandleRef: ReturnType<typeof registerCopilotActiveRun> | undefined;
   let userInputBridgeRef: CopilotUserInputBridge | undefined;
   let cleanupToolBridge: (() => void) | undefined;
   let releaseError: Error | undefined;
@@ -177,7 +179,7 @@ export async function runCopilotExecution(context: {
           now,
           promptError: createPromptError(
             "sandbox_resolution_failure",
-            `[copilot-attempt] sandbox resolution failed: ${toError(error).message}`,
+            `[copilot-attempt] sandbox resolution failed: ${toCopilotError(error).message}`,
             error,
           ),
           sdkSessionId: undefined,
@@ -235,7 +237,7 @@ export async function runCopilotExecution(context: {
       createResult(input, {
         messagesSnapshot: messages,
         now,
-        promptError: createPromptError("model_not_supported", toError(error).message, error),
+        promptError: createPromptError("model_not_supported", toCopilotError(error).message, error),
         sdkSessionId: undefined,
         sessionIdUsed: input.sessionId,
       }),
@@ -258,14 +260,15 @@ export async function runCopilotExecution(context: {
     >();
     if (!settledToolFinalization) {
       try {
+        assertCopilotAttemptHostCapabilities(input);
         const toolBridge = await createToolBridge({
           allowModelTools: poolAcquire.provider.mode === "byok",
           modelProvider: modelRef.provider,
           modelId: modelRef.id,
-          agentId: readString(params.agentId) ?? "copilot",
-          sessionId: readString(input.sessionId) ?? "copilot-session",
-          sessionKey: readString((input as { sessionKey?: unknown }).sessionKey),
-          agentDir: readString(input.agentDir),
+          agentId: readNonEmptyString(params.agentId) ?? "copilot",
+          sessionId: readNonEmptyString(input.sessionId) ?? "copilot-session",
+          sessionKey: readNonEmptyString((input as { sessionKey?: unknown }).sessionKey),
+          agentDir: readNonEmptyString(input.agentDir),
           workspaceDir: effectiveWorkspaceDir,
           cwd: effectiveCwd,
           sandbox,
@@ -306,7 +309,7 @@ export async function runCopilotExecution(context: {
           now,
           promptError: createPromptError(
             "tool_bridge_failure",
-            `[copilot-attempt] tool-bridge construction failed: ${toError(error).message}`,
+            `[copilot-attempt] tool-bridge construction failed: ${toCopilotError(error).message}`,
             error,
           ),
           sdkSessionId: undefined,
@@ -363,7 +366,7 @@ export async function runCopilotExecution(context: {
         if (settledToolFinalization) {
           throw createPromptError(
             "settled_finalization_resume_failed",
-            `[copilot-attempt] settled tool finalization could not resume the existing Copilot SDK session: ${toError(error).message}`,
+            `[copilot-attempt] settled tool finalization could not resume the existing Copilot SDK session: ${toCopilotError(error).message}`,
             error,
           );
         }
@@ -383,8 +386,8 @@ export async function runCopilotExecution(context: {
     }
     sessionRef.current = session;
     sdkSessionId =
-      readString(session.sessionId) ??
-      readString(session.id) ??
+      readNonEmptyString(session.sessionId) ??
+      readNonEmptyString(session.id) ??
       (resumeFailureRecovered ? undefined : resumeSessionId);
     if (!sdkSessionId) {
       throw createPromptError(
@@ -403,6 +406,15 @@ export async function runCopilotExecution(context: {
         });
       } catch {}
     }
+    transcriptJournal = createAttemptTranscriptJournal({
+      abortSession: () => session?.abort() ?? Promise.resolve(),
+      attempt: input,
+      messages,
+      onInitialSdkUserValidated: () => {
+        initialSdkUserValidated = true;
+      },
+      sdkSessionId,
+    });
     bridge = attachEventBridge(session, {
       onAssistantDelta: settledToolFinalization ? undefined : input.onAssistantDelta,
       onAgentEvent: settledToolFinalization ? undefined : input.onAgentEvent,
@@ -416,7 +428,7 @@ export async function runCopilotExecution(context: {
         if (settledToolFinalization) {
           return;
         }
-        const sessionFile = readString(input.sessionFile);
+        const sessionFile = readNonEmptyString(input.sessionFile);
         if (!sessionFile) {
           return;
         }
@@ -429,7 +441,7 @@ export async function runCopilotExecution(context: {
         if (settledToolFinalization) {
           return;
         }
-        const sessionFile = readString(input.sessionFile);
+        const sessionFile = readNonEmptyString(input.sessionFile);
         if (!success || !sessionFile) {
           return;
         }
@@ -442,25 +454,29 @@ export async function runCopilotExecution(context: {
       getSdkSessionId: () => sdkSessionId,
       isAborted: () => aborted || transcriptJournal?.hasFailed() === true,
       transcriptProjection: {
-        journal: (transcriptJournal = createAttemptTranscriptJournal({
-          abortSession: () => session?.abort() ?? Promise.resolve(),
-          attempt: input,
-          messages,
-          sdkSessionId,
-        })),
+        journal: transcriptJournal,
         modelRef,
         now,
         resultContentSourceByToolName,
       },
     });
-    activeRunHandleRef = registerCopilotActiveRun({
-      abortActiveSession,
-      bridge,
-      input,
-      isAborted: () => aborted,
-      isSettled: () => settled,
-      userInputBridge,
-    });
+    if (!settledToolFinalization) {
+      assertCopilotAttemptHostCapabilities(input);
+      if (!userInputBridge) {
+        throw new Error("[copilot-attempt] ordinary attempts require a user-input bridge");
+      }
+      activeRunHandleRef = registerCopilotActiveRun({
+        abortActiveSession,
+        bridge,
+        canAcceptSteering: () => initialSdkUserValidated,
+        input,
+        isAborted: () => aborted,
+        isSettled: () => settled,
+        session,
+        transcriptJournal,
+        userInputBridge,
+      });
+    }
     const messageOptions = await createMessageOptions(attemptInput, {
       effectiveCwd,
       effectiveWorkspaceDir,
@@ -509,15 +525,15 @@ export async function runCopilotExecution(context: {
         try {
           await transcriptJournal?.barrier("timeout");
         } catch (transcriptError) {
-          promptError = toError(transcriptError);
+          promptError = toCopilotError(transcriptError);
         }
       } else {
         try {
           bridge?.flushTranscriptProjection();
           await transcriptJournal?.barrier("attempt error");
-          promptError = toError(error);
+          promptError = toCopilotError(error);
         } catch (transcriptError) {
-          promptError = toError(transcriptError);
+          promptError = toCopilotError(transcriptError);
         }
       }
     }
@@ -527,10 +543,11 @@ export async function runCopilotExecution(context: {
       bridge?.flushTranscriptProjection();
       await transcriptJournal?.barrier("bridge detach");
     } catch (transcriptError) {
-      promptError = toError(transcriptError);
+      promptError = toCopilotError(transcriptError);
     }
     userInputBridgeRef?.cancelPending();
     if (activeRunHandleRef) {
+      input.replyOperation?.detachBackend(activeRunHandleRef);
       clearActiveEmbeddedRun(
         input.sessionId,
         activeRunHandleRef,
@@ -595,7 +612,7 @@ export async function runCopilotExecution(context: {
         try {
           await session.disconnect();
         } catch (error: unknown) {
-          disconnectError = toError(error);
+          disconnectError = toCopilotError(error);
           if (!promptError && !timedOut) {
             promptError = disconnectError;
           }
@@ -605,7 +622,7 @@ export async function runCopilotExecution(context: {
         try {
           await deps.pool.release(handle);
         } catch (error: unknown) {
-          const releaseFailure = toError(error);
+          const releaseFailure = toCopilotError(error);
           if (promptError) {
             console.warn(
               "[copilot-attempt] pool.release failed after primary error",

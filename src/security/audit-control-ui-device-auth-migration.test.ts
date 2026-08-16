@@ -8,7 +8,7 @@ import {
   importPendingControlUiDeviceAuthMigration,
 } from "../state/control-ui-device-auth-migration.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { runSecurityAudit } from "./audit.js";
+import { runSecurityAuditCore } from "./audit.js";
 
 const stateDirs: string[] = [];
 
@@ -19,7 +19,7 @@ function createStateEnv(): { stateDir: string; env: NodeJS.ProcessEnv } {
 }
 
 async function collectMigrationFinding(params: { stateDir: string; env: NodeJS.ProcessEnv }) {
-  const report = await runSecurityAudit({
+  const report = await runSecurityAuditCore({
     config: {},
     env: params.env,
     stateDir: params.stateDir,

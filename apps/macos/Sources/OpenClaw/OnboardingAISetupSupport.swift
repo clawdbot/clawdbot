@@ -11,6 +11,7 @@ extension OnboardingAISetupModel {
     struct AttemptContext: Equatable {
         let token: UUID
         let routeIdentity: String
+        let supersededAttemptDeadline: Date?
     }
 
     struct PendingVerification {
@@ -25,6 +26,7 @@ extension OnboardingAISetupModel {
 
     struct DetectResult: Decodable {
         struct DetectedCandidate: Decodable {
+            let brandId: String?
             let icon: String?
             let website: String?
             let kind: String
@@ -55,8 +57,6 @@ extension OnboardingAISetupModel {
     struct ActivateResult: Decodable {
         let ok: Bool
         let modelRef: String?
-        let latencyMs: Double?
-        let lines: [String]?
         let status: String?
         let error: String?
     }
@@ -74,6 +74,7 @@ extension OnboardingAISetupModel {
     }
 
     struct CandidatePresentation: Equatable {
+        let brandId: String?
         let icon: String?
         let website: String?
     }
@@ -89,7 +90,6 @@ extension OnboardingAISetupModel {
         case untried
         case testing
         case failed(Failure)
-        case connected
     }
 
     struct Failure: Equatable {
@@ -118,6 +118,7 @@ extension OnboardingAISetupModel {
 
     struct ManualProvider: Identifiable, Equatable, Decodable {
         let id: String
+        let brandId: String?
         let label: String
         let hint: String?
         let icon: String?
@@ -126,6 +127,7 @@ extension OnboardingAISetupModel {
 
     struct AuthOption: Identifiable, Equatable, Decodable {
         let id: String
+        let brandId: String?
         let label: String
         let hint: String?
         let groupLabel: String?
@@ -141,6 +143,7 @@ extension OnboardingAISetupModel {
         let hint: String
         let website: String
         let icon: String
+        let brandId: String?
     }
 
     struct PrepareOption: Identifiable, Equatable, Decodable {
@@ -187,6 +190,11 @@ extension OnboardingAISetupModel {
     var isBusy: Bool {
         self.phase == .detecting || self.phase == .testing || self.manualTesting || self.authBusy ||
             self.pendingActivationVerification
+    }
+
+    func canSelectCandidate(kind: String) -> Bool {
+        guard !self.connected else { return false }
+        return !self.isBusy || (self.phase == .testing && self.selectedKind != kind)
     }
 
     /// Once setup starts changing inference, its successful result belongs to
@@ -275,6 +283,13 @@ extension OnboardingAISetupModel {
             error is OpenClawChatTransportSendError
     }
 
+    static func activationAdmissionIsBusy(_ error: Error) -> Bool {
+        guard let response = error as? GatewayResponseError else { return false }
+        return response.method == "openclaw.setup.activate" &&
+            response.code.uppercased() == "UNAVAILABLE" &&
+            response.details["retryable"]?.value as? Bool == true
+    }
+
     static func activationParams(
         kind: String,
         modelRef: String,
@@ -296,13 +311,6 @@ extension OnboardingAISetupModel {
 
     static func providerAuthCancellationSessionID(requested: String, returned: String) -> String? {
         requested == returned ? nil : returned
-    }
-
-    static func normalizedSetupLines(_ lines: [String]?) -> [String] {
-        (lines ?? []).compactMap { line in
-            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
-        }
     }
 
     /// Keep the exact Gateway-sanitized error available behind the friendly
@@ -344,22 +352,6 @@ extension OnboardingAISetupModel {
         }
     }
 
-    var connectedSummary: String {
-        guard let modelRef = connectedModelRef else { return "Your AI is connected." }
-        let label = candidates.first { $0.kind == self.selectedKind }?.label ??
-            (selectedKind == "api-key" ? self.selectedManualProvider?.label : nil)
-        let via = label.map { " via \($0)" } ?? ""
-        if let latency = connectedLatencyMs {
-            let seconds = Double(latency) / 1000
-            return "\(modelRef)\(via) — replied in \(String(format: "%.1f", seconds))s"
-        }
-        return "\(modelRef)\(via)"
-    }
-
-    var connectedSetupCopyText: String {
-        connectedSetupLines.joined(separator: "\n")
-    }
-
     static func activationTransitionWasPersisted(
         expectedModel: String,
         before: PersistedActivationState?,
@@ -378,5 +370,17 @@ extension OnboardingAISetupModel {
         let components = clock.now.duration(to: deadline).components
         let milliseconds = components.seconds * 1000 + components.attoseconds / 1_000_000_000_000_000
         return max(0, min(capMs, Int(milliseconds)))
+    }
+}
+
+enum OnboardingAISetupError: LocalizedError {
+    case providerCatalogUnavailable
+
+    var errorDescription: String? {
+        switch self {
+        case .providerCatalogUnavailable:
+            "The Gateway is running an older OpenClaw version that doesn’t provide the " +
+                "supported provider list. Update OpenClaw on the gateway, then try again."
+        }
     }
 }

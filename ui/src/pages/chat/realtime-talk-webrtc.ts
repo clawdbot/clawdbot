@@ -20,6 +20,7 @@ import {
 import { captureRealtimeTalkVideoFrame } from "./realtime-talk-video.ts";
 import {
   RealtimeTalkWebRtcOfferExchange,
+  RealtimeTalkResponseOutcomeOwner,
   realtimeTalkDataChannelMaxMessageSize,
   realtimeTalkImageEvent,
   type RealtimeServerEvent,
@@ -49,6 +50,9 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   private responseActive = false;
   private responseCreateInFlight = false;
   private responseCreatePending = false;
+  private readonly responseOutcomes = new RealtimeTalkResponseOutcomeOwner(
+    MAX_COMPLETED_TOOL_CALL_IDS,
+  );
   private readonly completedToolCallIds = new Set<string>();
   private readonly offerExchange = new RealtimeTalkWebRtcOfferExchange();
   private mediaSetupController: AbortController | null = null;
@@ -275,6 +279,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     }
     this.consultAbortControllers.clear();
     this.completedToolCallIds.clear();
+    this.responseOutcomes.reset();
     this.responseActive = false;
     this.responseCreateInFlight = false;
     this.responseCreatePending = false;
@@ -392,30 +397,51 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       case "response.created":
         this.responseActive = true;
         this.responseCreateInFlight = false;
+        this.responseOutcomes.start(event.response?.id);
         this.ctx.callbacks.onStatus?.("thinking", "Generating response");
         return;
       case "response.cancelled":
-      case "response.done":
-        if (event.type === "response.done") {
-          this.handleCompletedResponse(event);
-          if (this.closed) {
-            return;
-          }
+      case "response.done": {
+        const terminal = this.responseOutcomes.finish(event);
+        if (!terminal) {
+          return;
         }
-        this.responseActive = false;
-        this.responseCreateInFlight = false;
-        this.ctx.callbacks.onStatus?.("listening", this.extractResponseStatus(event));
-        this.emitTalkEvent({
-          type: "turn.ended",
-          final: true,
-          payload: {
-            status:
-              event.response?.status ??
-              (event.type === "response.cancelled" ? "cancelled" : "completed"),
-          },
-        });
-        this.flushPendingResponseCreate();
+        const { outcome } = terminal;
+        try {
+          if (outcome.status === "completed") {
+            this.handleCompletedResponse(event);
+            if (this.closed) {
+              return;
+            }
+          }
+          if (outcome.status === "failed" || outcome.status === "incomplete") {
+            this.ctx.callbacks.onStatus?.("error", outcome.message);
+            this.emitTalkEvent({
+              type: "session.error",
+              final: true,
+              payload: outcome,
+            });
+          } else {
+            this.ctx.callbacks.onStatus?.(
+              "listening",
+              outcome.status === "cancelled" ? "Response cancelled" : undefined,
+            );
+          }
+          this.emitTalkEvent({
+            type: outcome.status === "cancelled" ? "turn.cancelled" : "turn.ended",
+            final: true,
+            payload: outcome,
+          });
+        } finally {
+          if (terminal.overflow) {
+            this.failConnection("Realtime response session limit exceeded");
+          }
+          this.responseActive = false;
+          this.responseCreateInFlight = false;
+          this.flushPendingResponseCreate();
+        }
         return;
+      }
       case "error":
         this.responseCreateInFlight = false;
         this.ctx.callbacks.onStatus?.("error", this.extractErrorDetail(event.error));
@@ -427,11 +453,6 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
 
       default:
     }
-  }
-
-  private extractResponseStatus(event: RealtimeServerEvent): string | undefined {
-    const status = event.response?.status;
-    return status && status !== "completed" ? `Response ${status}` : undefined;
   }
 
   private emitAssistantTranscript(event: RealtimeServerEvent, final: boolean): void {

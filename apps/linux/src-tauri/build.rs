@@ -33,8 +33,8 @@ fn stage_canvas_a2ui() {
     for input in [
         "package.json",
         "pnpm-lock.yaml",
-        "scripts/bundle-a2ui.mjs",
-        "scripts/sync-native-a2ui.mjs",
+        "scripts/bundle-a2ui.mts",
+        "scripts/sync-native-a2ui.mts",
         "extensions/canvas/package.json",
         "extensions/canvas/scripts/bundle-a2ui.mjs",
         "extensions/canvas/src/host/a2ui/index.html",
@@ -44,7 +44,13 @@ fn stage_canvas_a2ui() {
     }
 
     let status = Command::new("node")
-        .args(["scripts/sync-native-a2ui.mjs", "--write", "--output"])
+        .args([
+            "--import",
+            "tsx",
+            "scripts/sync-native-a2ui.mts",
+            "--write",
+            "--output",
+        ])
         .arg(&output_dir)
         .current_dir(&repo_root)
         .status()

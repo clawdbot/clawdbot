@@ -32,14 +32,3 @@ export { detectMime } from "openclaw/plugin-sdk/media-mime";
 export { ensureMediaDir, saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
 export { describeImageFile } from "openclaw/plugin-sdk/media-understanding-runtime";
 export { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
-export {
-  completeWithPreparedSimpleCompletionModel,
-  extractAssistantText,
-  prepareSimpleCompletionModelForAgent,
-} from "openclaw/plugin-sdk/simple-completion-runtime";
-export { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
-export {
-  htmlToMarkdown,
-  normalizeWhitespace,
-  sanitizeHtml,
-} from "openclaw/plugin-sdk/web-content-extractor";

@@ -4,10 +4,12 @@ import {
   DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
   formatMemoryDreamingDay,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { MemoryConsolidationResult } from "./dreaming-consolidation-artifacts.js";
 import { filterConsolidationCandidates } from "./dreaming-consolidation-candidates.js";
 import type { SubagentSurface } from "./dreaming-narrative.js";
+import { extractAssistantText } from "./dreaming-shared.js";
 import { DEFAULT_MEMORY_FILE_MAX_CHARS } from "./memory-budget.js";
 import {
   buildPromotionRecallAnnotations,
@@ -92,69 +94,35 @@ function buildConsolidationPrompt(
   });
 }
 
-function extractAssistantText(messages: unknown[]): string | null {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (!message || typeof message !== "object" || Array.isArray(message)) {
-      continue;
-    }
-    const record = message as { role?: unknown; content?: unknown };
-    if (record.role !== "assistant") {
-      continue;
-    }
-    if (typeof record.content === "string" && record.content.trim()) {
-      return record.content.trim();
-    }
-    if (Array.isArray(record.content)) {
-      const text = record.content
-        .flatMap((part) => {
-          if (!part || typeof part !== "object" || Array.isArray(part)) {
-            return [];
-          }
-          const item = part as { type?: unknown; text?: unknown };
-          return (item.type === "text" || item.type === "output_text") &&
-            typeof item.text === "string"
-            ? [item.text]
-            : [];
-        })
-        .join("\n")
-        .trim();
-      if (text) {
-        return text;
-      }
-    }
-  }
-  return null;
-}
-
 function parseConsolidatedMemory(raw: string): ConsolidationOutput | null {
   try {
-    const parsed = JSON.parse(raw) as { memory?: unknown; operations?: unknown };
-    if (typeof parsed.memory !== "string" || !Array.isArray(parsed.operations)) {
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      !isRecord(parsed) ||
+      typeof parsed.memory !== "string" ||
+      !Array.isArray(parsed.operations)
+    ) {
       return null;
     }
     const operations = parsed.operations.flatMap((value): ConsolidationOperation[] => {
-      if (!value || typeof value !== "object" || Array.isArray(value)) {
+      if (!isRecord(value)) {
         return [];
       }
-      const operation = value as Record<string, unknown>;
       if (
-        typeof operation.candidateKey !== "string" ||
-        (operation.action !== "added" &&
-          operation.action !== "merged" &&
-          operation.action !== "superseded") ||
-        typeof operation.resultEntry !== "string" ||
-        !Array.isArray(operation.priorEntries) ||
-        !operation.priorEntries.every((entry) => typeof entry === "string")
+        typeof value.candidateKey !== "string" ||
+        (value.action !== "added" && value.action !== "merged" && value.action !== "superseded") ||
+        typeof value.resultEntry !== "string" ||
+        !Array.isArray(value.priorEntries) ||
+        !value.priorEntries.every((entry): entry is string => typeof entry === "string")
       ) {
         return [];
       }
       return [
         {
-          candidateKey: operation.candidateKey,
-          action: operation.action,
-          resultEntry: operation.resultEntry.trim(),
-          priorEntries: operation.priorEntries.map((entry) => entry.trim()),
+          candidateKey: value.candidateKey,
+          action: value.action,
+          resultEntry: value.resultEntry.trim(),
+          priorEntries: value.priorEntries.map((entry) => entry.trim()),
         },
       ];
     });

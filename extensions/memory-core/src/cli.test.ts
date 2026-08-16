@@ -114,9 +114,7 @@ let isVerbose: typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli")
 let setVerbose: typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli").setVerbose;
 let fixtureRoot = "";
 let workspaceFixtureRoot = "";
-let qmdFixtureRoot = "";
 let workspaceCaseId = 0;
-let qmdCaseId = 0;
 
 beforeAll(async () => {
   await configureMemoryCoreDreamingStateForTests();
@@ -131,9 +129,7 @@ beforeAll(async () => {
   setVerbose = loadedSetVerbose;
   fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-cli-fixtures-"));
   workspaceFixtureRoot = path.join(fixtureRoot, "workspace");
-  qmdFixtureRoot = path.join(fixtureRoot, "qmd");
   await fs.mkdir(workspaceFixtureRoot, { recursive: true });
-  await fs.mkdir(qmdFixtureRoot, { recursive: true });
 });
 
 beforeEach(() => {
@@ -437,12 +433,6 @@ describe("memory cli", () => {
     return captureHelpOutput(memoryCommand);
   }
 
-  async function withQmdIndexDb(content: string, run: (dbPath: string) => Promise<void>) {
-    const dbPath = path.join(qmdFixtureRoot, `case-${qmdCaseId++}.sqlite`);
-    await fs.writeFile(dbPath, content, "utf-8");
-    await run(dbPath);
-  }
-
   async function withTempWorkspace(run: (workspaceDir: string) => Promise<void>) {
     const workspaceDir = path.join(workspaceFixtureRoot, `case-${workspaceCaseId++}`);
     await fs.mkdir(path.join(workspaceDir, "memory", ".dreams"), { recursive: true });
@@ -512,6 +502,23 @@ describe("memory cli", () => {
     expectLogged(log, "Vector path: /opt/sqlite-vec.dylib");
     expectLogged(log, "FTS: ready");
     expectLogged(log, "Embedding cache: enabled (123 entries)");
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("prints extra path glob patterns in status output", async () => {
+    const close = vi.fn(async () => {});
+    mockManager({
+      status: () =>
+        makeMemoryStatus({
+          extraPaths: [{ path: "notes", pattern: "runbooks/**/*.md" }],
+        }),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status"]);
+
+    expectLogged(log, "Extra paths: /tmp/openclaw/notes (pattern: runbooks/**/*.md)");
     expect(close).toHaveBeenCalled();
   });
 
@@ -594,7 +601,7 @@ describe("memory cli", () => {
               engine: "llama.cpp",
               state: "ready",
               backend: "metal",
-              buildType: "prebuilt",
+              buildInfo: "b10357 (689e227db)",
             },
           },
         }),
@@ -609,6 +616,40 @@ describe("memory cli", () => {
     expectLogged(log, "Provider: auto");
     expectLogged(log, "Vector store: unknown");
     expectNotLogged(log, "llama.cpp:");
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("reports a complete persisted vector index without probing the store", async () => {
+    const close = vi.fn(async () => {});
+    const probeVectorStoreAvailability = vi.fn(async () => {
+      throw new Error("unexpected vector store probe");
+    });
+    const probeVectorAvailability = vi.fn(async () => {
+      throw new Error("unexpected vector probe");
+    });
+    const probeEmbeddingAvailability = vi.fn(async () => {
+      throw new Error("unexpected embedding probe");
+    });
+    mockManager({
+      probeVectorStoreAvailability,
+      probeVectorAvailability,
+      probeEmbeddingAvailability,
+      status: () =>
+        makeMemoryStatus({
+          chunks: 5,
+          vector: { enabled: true, index: { state: "complete" } },
+        }),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status"]);
+
+    expect(probeVectorStoreAvailability).not.toHaveBeenCalled();
+    expect(probeVectorAvailability).not.toHaveBeenCalled();
+    expect(probeEmbeddingAvailability).not.toHaveBeenCalled();
+    expectLogged(log, "Vector store: indexed (unprobed)");
+    expectNotLogged(log, "Vector store: unknown");
     expect(close).toHaveBeenCalled();
   });
 
@@ -772,6 +813,7 @@ describe("memory cli", () => {
           dirty: true,
           vector: {
             enabled: true,
+            index: { state: "complete" },
             storeAvailable: false,
             semanticAvailable: false,
             available: false,
@@ -808,22 +850,17 @@ describe("memory cli", () => {
               engine: "llama.cpp",
               state: "ready",
               backend: "metal",
-              buildType: "prebuilt",
-              deviceNames: ["Apple M4 Max"],
-              memory: {
-                totalBytes: 64 * 1024 ** 3,
-                usedBytes: 8 * 1024 ** 3,
-                freeBytes: 56 * 1024 ** 3,
-                unifiedBytes: 64 * 1024 ** 3,
-                observedAtMs: Date.parse("2026-07-10T12:00:00.000Z"),
+              buildInfo: "b10357 (689e227db)",
+              model: {
+                id: "embeddinggemma-300m-qat-q8_0",
+                path: "/models/embedding.gguf",
               },
-              offload: {
-                supported: true,
-                offloadedLayers: 20,
-                totalLayers: 24,
-              },
-              context: {
-                requestedSize: 4096,
+              capabilities: { vision: false, draft: false },
+              endpoints: {
+                health: "ready",
+                models: "ready",
+                props: "ready",
+                metrics: "ready",
               },
             },
           },
@@ -838,14 +875,11 @@ describe("memory cli", () => {
     expect(probeVectorAvailability).toHaveBeenCalled();
     expect(probeEmbeddingAvailability).toHaveBeenCalled();
     expectLogged(log, "Embeddings: ready");
-    expectLogged(log, "llama.cpp: metal (prebuilt)");
-    expectLogged(log, "Devices: Apple M4 Max");
-    expectLogged(
-      log,
-      "VRAM snapshot: 8.0 GB used · 56 GB free · 64 GB total · 64 GB unified (2026-07-10T12:00:00.000Z)",
-    );
-    expectLogged(log, "GPU offload: 20/24 layers");
-    expectLogged(log, "Requested context: 4096 tokens");
+    expectLogged(log, "llama.cpp server: metal (b10357 (689e227db))");
+    expectLogged(log, "Server model: embeddinggemma-300m-qat-q8_0");
+    expectLogged(log, "Model path: /models/embedding.gguf");
+    expectLogged(log, "Capabilities: text only");
+    expectLogged(log, "Endpoints: health=ready models=ready props=ready metrics=ready");
     expect(close).toHaveBeenCalled();
   });
 
@@ -885,77 +919,6 @@ describe("memory cli", () => {
     expectLogged(log, "Semantic vectors: unavailable");
     expectLogged(log, "Embeddings: unavailable");
     expectLogged(log, "Embeddings error: No embedding provider available");
-    expect(close).toHaveBeenCalled();
-  });
-
-  it("keeps non-builtin deep status on the semantic vector probe", async () => {
-    const close = vi.fn(async () => {});
-    const probeVectorStoreAvailability = vi.fn(async () => true);
-    const probeVectorAvailability = vi.fn(async () => true);
-    const probeEmbeddingAvailability = vi.fn(async () => ({ ok: true }));
-    mockManager({
-      probeVectorStoreAvailability,
-      probeVectorAvailability,
-      probeEmbeddingAvailability,
-      status: () =>
-        makeMemoryStatus({
-          backend: "qmd",
-          provider: "qmd",
-          model: "qmd",
-          requestedProvider: "qmd",
-          vector: {
-            enabled: true,
-            semanticAvailable: true,
-            available: true,
-          },
-        }),
-      close,
-    });
-
-    const log = spyRuntimeLogs(defaultRuntime);
-    await runMemoryCli(["status", "--deep"]);
-
-    expect(probeVectorStoreAvailability).not.toHaveBeenCalled();
-    expect(probeVectorAvailability).toHaveBeenCalled();
-    expect(probeEmbeddingAvailability).toHaveBeenCalled();
-    expectLogged(log, "Vector: ready");
-    expectNotLogged(log, "Vector store:");
-    expect(close).toHaveBeenCalled();
-  });
-
-  it("does not report qmd lexical search mode as embedding unavailable", async () => {
-    const close = vi.fn(async () => {});
-    const probeVectorStoreAvailability = vi.fn(async () => true);
-    const probeVectorAvailability = vi.fn(async () => false);
-    const probeEmbeddingAvailability = vi.fn(async () => ({ ok: true, checked: false }));
-    mockManager({
-      probeVectorStoreAvailability,
-      probeVectorAvailability,
-      probeEmbeddingAvailability,
-      status: () =>
-        makeMemoryStatus({
-          backend: "qmd",
-          provider: "qmd",
-          model: "qmd",
-          requestedProvider: "qmd",
-          vector: {
-            enabled: false,
-            semanticAvailable: false,
-            available: false,
-          },
-        }),
-      close,
-    });
-
-    const log = spyRuntimeLogs(defaultRuntime);
-    await runMemoryCli(["status", "--deep"]);
-
-    expect(probeVectorStoreAvailability).not.toHaveBeenCalled();
-    expect(probeVectorAvailability).toHaveBeenCalled();
-    expect(probeEmbeddingAvailability).toHaveBeenCalled();
-    expectLogged(log, "Vector: disabled");
-    expectLogged(log, "Embeddings: skipped");
-    expectNotLogged(log, "Embeddings error:");
     expect(close).toHaveBeenCalled();
   });
 
@@ -1198,7 +1161,7 @@ describe("memory cli", () => {
       await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
       await fs.writeFile(
         path.join(workspaceDir, "memory", "2026-04-03.md"),
-        "QMD router cache note\n",
+        "Vector router cache note\n",
         "utf-8",
       );
       await shortTermTesting.writeRawRecallStore(workspaceDir, {
@@ -1211,7 +1174,7 @@ describe("memory cli", () => {
             startLine: 1,
             endLine: 2,
             source: "memory",
-            snippet: "QMD router cache note",
+            snippet: "Vector router cache note",
             recallCount: 1,
             totalScore: 0.8,
             maxScore: 0.8,
@@ -1349,51 +1312,108 @@ describe("memory cli", () => {
   });
 
   it("reindexes on status --index", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-08-14", ["# Indexed memory"]);
+      const close = vi.fn(async () => {});
+      const sync = vi.fn(async () => {});
+      const probeVectorStoreAvailability = vi.fn(async () => true);
+      const probeVectorAvailability = vi.fn(async () => true);
+      const probeEmbeddingAvailability = vi.fn(async () => ({ ok: true }));
+      mockManager({
+        probeVectorStoreAvailability,
+        probeVectorAvailability,
+        probeEmbeddingAvailability,
+        sync,
+        status: () => makeMemoryStatus({ workspaceDir, sources: ["memory"], files: 1, chunks: 1 }),
+        close,
+      });
+
+      const log = spyRuntimeLogs(defaultRuntime);
+      await runMemoryCli(["status", "--index"]);
+
+      expectCliSync(sync);
+      expect(probeVectorStoreAvailability).toHaveBeenCalled();
+      expect(probeVectorAvailability).toHaveBeenCalled();
+      expect(probeEmbeddingAvailability).toHaveBeenCalled();
+      expect(getMemorySearchManager).toHaveBeenCalledWith({
+        cfg: {},
+        agentId: "main",
+        purpose: "cli",
+      });
+      expectLogged(log, "Memory index updated (main): 1 file indexed.");
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("reports the same truthful no-op from status --index", async () => {
+    const workspaceDir = path.join(workspaceFixtureRoot, `case-${workspaceCaseId++}`);
+    await fs.mkdir(workspaceDir, { recursive: true });
     const close = vi.fn(async () => {});
     const sync = vi.fn(async () => {});
-    const probeVectorStoreAvailability = vi.fn(async () => true);
-    const probeVectorAvailability = vi.fn(async () => true);
-    const probeEmbeddingAvailability = vi.fn(async () => ({ ok: true }));
     mockManager({
-      probeVectorStoreAvailability,
-      probeVectorAvailability,
-      probeEmbeddingAvailability,
+      probeVectorAvailability: vi.fn(async () => true),
+      probeEmbeddingAvailability: vi.fn(async () => ({ ok: true })),
       sync,
-      status: () => makeMemoryStatus({ files: 1, chunks: 1 }),
+      status: () => makeMemoryStatus({ workspaceDir, sources: ["memory"] }),
       close,
     });
 
-    spyRuntimeLogs(defaultRuntime);
+    const log = spyRuntimeLogs(defaultRuntime);
     await runMemoryCli(["status", "--index"]);
 
     expectCliSync(sync);
-    expect(probeVectorStoreAvailability).toHaveBeenCalled();
-    expect(probeVectorAvailability).toHaveBeenCalled();
-    expect(probeEmbeddingAvailability).toHaveBeenCalled();
-    expect(getMemorySearchManager).toHaveBeenCalledWith({
-      cfg: {},
-      agentId: "main",
-      purpose: "cli",
-    });
+    expectLogged(log, `No memory files found in ${workspaceDir}; nothing indexed (main).`);
+    expectNotLogged(log, "Memory index complete");
+    await expectPathMissing(path.join(workspaceDir, "memory"));
     expect(close).toHaveBeenCalled();
+    expect(process.exitCode).toBeUndefined();
   });
 
-  it("closes manager after index", async () => {
+  it("reports a truthful no-op when the memory directory is missing", async () => {
+    const workspaceDir = path.join(workspaceFixtureRoot, `case-${workspaceCaseId++}`);
+    await fs.mkdir(workspaceDir, { recursive: true });
     const close = vi.fn(async () => {});
     const sync = vi.fn(async () => {});
-    mockManager({ sync, status: () => makeMemoryStatus(), close });
+    mockManager({
+      sync,
+      status: () => makeMemoryStatus({ workspaceDir, sources: ["memory"] }),
+      close,
+    });
 
     const log = spyRuntimeLogs(defaultRuntime);
     await runMemoryCli(["index"]);
 
     expectCliSync(sync);
-    expect(getMemorySearchManager).toHaveBeenCalledWith({
-      cfg: {},
-      agentId: "main",
-      purpose: "cli",
-    });
+    expectLogged(log, `No memory files found in ${workspaceDir}; nothing indexed (main).`);
+    expectNotLogged(log, "Memory index updated");
+    await expectPathMissing(path.join(workspaceDir, "memory"));
     expect(close).toHaveBeenCalled();
-    expect(log).toHaveBeenCalledWith("Memory index updated (main).");
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("reports the indexed file count and closes the manager after index", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-08-14", ["# Indexed memory"]);
+      const close = vi.fn(async () => {});
+      const sync = vi.fn(async () => {});
+      mockManager({
+        sync,
+        status: () => makeMemoryStatus({ workspaceDir, sources: ["memory"], files: 1 }),
+        close,
+      });
+
+      const log = spyRuntimeLogs(defaultRuntime);
+      await runMemoryCli(["index"]);
+
+      expectCliSync(sync);
+      expect(getMemorySearchManager).toHaveBeenCalledWith({
+        cfg: {},
+        agentId: "main",
+        purpose: "cli",
+      });
+      expect(close).toHaveBeenCalled();
+      expect(log).toHaveBeenCalledWith("Memory index updated (main): 1 file indexed.");
+    });
   });
 
   it("warns on stderr when index completes without sqlite-vec embeddings", async () => {
@@ -1456,98 +1476,6 @@ describe("memory cli", () => {
     );
     expect(close).toHaveBeenCalled();
     expect(process.exitCode).toBeUndefined();
-  });
-
-  it("logs qmd index file path and size after index", async () => {
-    const close = vi.fn(async () => {});
-    const sync = vi.fn(async () => {});
-    await withQmdIndexDb("sqlite-bytes", async (dbPath) => {
-      mockManager({ sync, status: () => ({ backend: "qmd", dbPath }), close });
-
-      const log = spyRuntimeLogs(defaultRuntime);
-      await runMemoryCli(["index"]);
-
-      expectCliSync(sync);
-      expectLogged(log, "QMD index: ");
-      expect(log).toHaveBeenCalledWith("Memory index updated (main).");
-      expect(close).toHaveBeenCalled();
-    });
-  });
-
-  it("surfaces qmd audit details in status output", async () => {
-    const close = vi.fn(async () => {});
-    await withQmdIndexDb("sqlite-bytes", async (dbPath) => {
-      mockManager({
-        probeVectorAvailability: vi.fn(async () => true),
-        status: () =>
-          makeMemoryStatus({
-            backend: "qmd",
-            provider: "qmd",
-            model: "qmd",
-            requestedProvider: "qmd",
-            dbPath,
-            custom: {
-              qmd: {
-                collections: 2,
-              },
-            },
-          }),
-        close,
-      });
-
-      const log = spyRuntimeLogs(defaultRuntime);
-      await runMemoryCli(["status"]);
-
-      expectLogged(log, "QMD audit:");
-      expectLogged(log, "2 collections");
-      expect(close).toHaveBeenCalled();
-    });
-  });
-
-  it("suggests reindexing instead of --fix when the qmd index is missing", async () => {
-    await withTempWorkspace(async (workspaceDir) => {
-      const close = vi.fn(async () => {});
-      const missingDbPath = path.join(qmdFixtureRoot, `missing-${qmdCaseId++}.sqlite`);
-      mockManager({
-        probeVectorAvailability: vi.fn(async () => true),
-        status: () =>
-          makeMemoryStatus({
-            backend: "qmd",
-            provider: "qmd",
-            model: "qmd",
-            requestedProvider: "qmd",
-            workspaceDir,
-            dbPath: missingDbPath,
-          }),
-        close,
-      });
-
-      const log = spyRuntimeLogs(defaultRuntime);
-      await runMemoryCli(["status"]);
-
-      expectLogged(log, "QMD index file is missing.");
-      expectLogged(log, "Fix: openclaw memory index --agent main");
-      expectNotLogged(log, "Fix: openclaw memory status --fix --agent main");
-      expect(close).toHaveBeenCalled();
-    });
-  });
-
-  it("fails index when qmd db file is empty", async () => {
-    const close = vi.fn(async () => {});
-    const sync = vi.fn(async () => {});
-    await withQmdIndexDb("", async (dbPath) => {
-      mockManager({ sync, status: () => ({ backend: "qmd", dbPath }), close });
-
-      const error = spyRuntimeErrors(defaultRuntime);
-      await runMemoryCli(["index"]);
-
-      expectCliSync(sync);
-      expect(error).toHaveBeenCalledWith(
-        `Memory index failed (main): QMD index file is empty: ${dbPath}`,
-      );
-      expect(close).toHaveBeenCalled();
-      expect(process.exitCode).toBe(1);
-    });
   });
 
   it("logs close failures without failing the command", async () => {
@@ -1692,21 +1620,6 @@ describe("memory cli", () => {
       agentId: "main",
       purpose: "cli",
       acquireLocalService,
-    });
-  });
-
-  it("passes the host SQLite lease hook to CLI memory managers", async () => {
-    const close = vi.fn(async () => {});
-    mockManager({ search: vi.fn(async () => []), close });
-    const withLease = vi.fn();
-
-    await runMemoryCli(["search", "hello"], { withLease });
-
-    expect(getMemorySearchManager).toHaveBeenCalledWith({
-      cfg: {},
-      agentId: "main",
-      purpose: "cli",
-      withLease,
     });
   });
 
@@ -2572,7 +2485,7 @@ describe("memory cli", () => {
             startLine: 4,
             endLine: 8,
             score: 0.9,
-            snippet: "Configured router VLAN 10 and Glacier backup notes for QMD.",
+            snippet: "Configured router VLAN 10 and Glacier backup notes for vectors.",
             source: "memory",
           },
         ],
@@ -2587,7 +2500,7 @@ describe("memory cli", () => {
             startLine: 4,
             endLine: 8,
             score: 0.88,
-            snippet: "Configured router VLAN 10 and Glacier backup notes for QMD.",
+            snippet: "Configured router VLAN 10 and Glacier backup notes for vectors.",
             source: "memory",
           },
         ],
@@ -2611,7 +2524,7 @@ describe("memory cli", () => {
       ]);
 
       expectLogged(log, "recalls=2 avg=0.890 queries=2 age=1.0d consolidate=0.30 conceptual=1.00");
-      expectLogged(log, "concepts=backup, glacier, qmd, router, vlan, configured");
+      expectLogged(log, "concepts=backup, glacier, router, vlan, configured, vectors");
       expect(close).toHaveBeenCalled();
     });
   });

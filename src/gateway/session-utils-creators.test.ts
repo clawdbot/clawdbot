@@ -1,20 +1,19 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { filterSessionStoreToConfiguredAgents } from "./server-methods/sessions-shared.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { createSessionListEntryFilter } from "./session-sharing.js";
 
-const getUserProfileListItem = vi.hoisted(() =>
+const getUserProfileDisplay = vi.hoisted(() =>
   vi.fn((profileId: string) => ({
     id: profileId,
     displayName: profileId === "profile-ada" ? "Ada" : "Bob",
+    avatarRevision: profileId === "profile-ada" ? "ada-hash-png" : "42",
     hasAvatar: profileId === "profile-ada",
-    updatedAt: 42,
   })),
 );
 
-vi.mock("../state/user-profiles.js", () => ({ getUserProfileListItem }));
+vi.mock("../state/user-profiles.js", () => ({ getUserProfileDisplay }));
 vi.mock("./session-utils-row.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-utils-row.js")>();
   return {
@@ -44,7 +43,7 @@ import { listSessionsFromStore, listSessionsFromStoreAsync } from "./session-uti
 
 afterEach(() => {
   vi.restoreAllMocks();
-  getUserProfileListItem.mockClear();
+  getUserProfileDisplay.mockClear();
 });
 
 it("keeps creator labels and avatars stable across actor order", () => {
@@ -129,7 +128,7 @@ it("returns the complete deterministic creator facet independently of pagination
     {
       id: "profile-ada",
       label: "Ada",
-      avatarUrl: "/api/users/profile-ada/avatar?v=42",
+      avatarUrl: "/api/users/profile-ada/avatar?v=ada-hash-png",
     },
     { id: "profile-bob", label: "Bob" },
   ]);
@@ -137,14 +136,14 @@ it("returns the complete deterministic creator facet independently of pagination
     type: "human",
     id: "profile-ada",
     label: "Ada",
-    avatarUrl: "/api/users/profile-ada/avatar?v=42",
+    avatarUrl: "/api/users/profile-ada/avatar?v=ada-hash-png",
   });
   expect(result.sessions[0]?.archivedBy).toEqual({
     type: "human",
     id: "profile-bob",
     label: "Bob",
   });
-  expect(getUserProfileListItem).toHaveBeenCalledTimes(2);
+  expect(getUserProfileDisplay).toHaveBeenCalledTimes(2);
 
   const filtered = listSessionsFromStore({
     cfg: {} as OpenClawConfig,
@@ -159,12 +158,12 @@ it("returns the complete deterministic creator facet independently of pagination
 it("preserves legacy list output across visibility, scope, creator, and search filters", async () => {
   const now = 1_000_000;
   vi.spyOn(Date, "now").mockReturnValue(now);
-  getUserProfileListItem.mockImplementation((profileId: string) => ({
+  getUserProfileDisplay.mockImplementation((profileId: string) => ({
     id: profileId,
     displayName:
       profileId === "profile-ada" ? "Ada" : profileId === "profile-bob" ? "Bob" : "Carol",
+    avatarRevision: String(now),
     hasAvatar: false,
-    updatedAt: now,
   }));
   const cfg = {
     agents: {
@@ -208,13 +207,6 @@ it("preserves legacy list output across visibility, scope, creator, and search f
       updatedAt: now - 5,
       visibility: "shared",
     },
-    "agent:retired:shared": {
-      createdActor: { type: "human", id: "profile-carol" },
-      sessionId: "session-retired-shared",
-      subject: "needle retired",
-      updatedAt: now - 6,
-      visibility: "shared",
-    },
     "agent:main:archived": {
       archivedAt: now - 10,
       createdActor: { type: "human", id: "profile-bob" },
@@ -247,14 +239,13 @@ it("preserves legacy list output across visibility, scope, creator, and search f
     },
   } as GatewayClient;
   const entryFilter = createSessionListEntryFilter({ client: viewer });
-  const configuredStore = filterSessionStoreToConfiguredAgents(cfg, store);
 
   const project = async (opts: Parameters<typeof listSessionsFromStore>[0]["opts"]) => {
     const result = await listSessionsFromStoreAsync({
       cfg,
       ...(entryFilter ? { entryFilter } : {}),
       opts,
-      store: configuredStore,
+      store,
       storePath: "/tmp/openclaw-session-filter-parity",
     });
     return {
@@ -317,7 +308,7 @@ it("preserves legacy list output across visibility, scope, creator, and search f
   );
 });
 
-it("keeps the serialized list response byte-identical to the legacy filter path", () => {
+it("keeps the serialized list response deterministic for the current filter path", () => {
   vi.spyOn(Date, "now").mockReturnValue(1_000_000);
   const result = listSessionsFromStore({
     cfg: {
@@ -338,16 +329,17 @@ it("keeps the serialized list response byte-identical to the legacy filter path"
         subject: "needle global",
         totalTokens: 1,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
         updatedAt: 999_999,
       },
     },
     storePath: "/tmp/openclaw-session-byte-parity",
   });
-  const legacySerializedResponse = [
+  const expectedSerializedResponse = [
     '{"ts":1000000,"path":"/tmp/openclaw-session-byte-parity","count":1,"totalCount":1,"limitApplied":100,"nextOffset":null,"hasMore":false,"creators":[{"id":"creator-b"}]',
-    ',"defaults":{"modelProvider":"openai","model":"gpt-5.4","contextTokens":200000,"agentRuntime":{"id":"codex","source":"implicit"},"thinkingLevels":[{"id":"off","label":"off"},{"id":"minimal","label":"minimal"},{"id":"low","label":"low"},{"id":"medium","label":"medium"},{"id":"high","label":"high"},{"id":"xhigh","label":"xhigh"}],"thinkingOptions":["off","minimal","low","medium","high","xhigh"],"thinkingDefault":"off"}',
-    ',"sessions":[{"key":"global","visibility":"shared","createdActor":{"type":"system","id":"creator-b"},"kind":"global","subject":"needle global","updatedAt":999999,"archived":false,"pinned":false,"unread":false,"sessionId":"session-global","thinkingLevels":[{"id":"off","label":"off"},{"id":"minimal","label":"minimal"},{"id":"low","label":"low"},{"id":"medium","label":"medium"},{"id":"high","label":"high"},{"id":"xhigh","label":"xhigh"}],"thinkingOptions":["off","minimal","low","medium","high","xhigh"],"thinkingDefault":"off","effectiveFastMode":false,"effectiveFastModeSource":"default","fastAutoOnSeconds":60,"totalTokens":1,"totalTokensFresh":true,"estimatedCostUsd":0,"effectiveResponseUsage":"off","effectiveQueueMode":"steer","modelProvider":"openai","model":"gpt-5.4","agentRuntime":{"id":"codex","source":"implicit"},"contextTokens":100}]}',
+    ',"defaults":{"modelProvider":"openai","model":"gpt-5.4","contextTokens":200000,"agentRuntime":{"id":"codex","cloudPlacementSupported":false,"source":"implicit"},"thinkingLevels":[{"id":"off","label":"off"},{"id":"minimal","label":"minimal"},{"id":"low","label":"low"},{"id":"medium","label":"medium"},{"id":"high","label":"high"},{"id":"xhigh","label":"xhigh"}],"thinkingOptions":["off","minimal","low","medium","high","xhigh"],"thinkingDefault":"off"}',
+    ',"sessions":[{"key":"global","visibility":"shared","createdActor":{"type":"system","id":"creator-b"},"kind":"global","classification":"global","agentId":"main","isMain":false,"isBackground":false,"subject":"needle global","updatedAt":999999,"archived":false,"pinned":false,"unread":false,"sessionId":"session-global","thinkingLevels":[{"id":"off","label":"off"},{"id":"minimal","label":"minimal"},{"id":"low","label":"low"},{"id":"medium","label":"medium"},{"id":"high","label":"high"},{"id":"xhigh","label":"xhigh"}],"thinkingOptions":["off","minimal","low","medium","high","xhigh"],"thinkingDefault":"off","effectiveFastMode":false,"effectiveFastModeSource":"default","fastAutoOnSeconds":60,"totalTokens":1,"totalTokensFresh":true,"estimatedCostUsd":0,"effectiveResponseUsage":"off","effectiveQueueMode":"steer","modelProvider":"openai","model":"gpt-5.4","agentRuntime":{"id":"codex","source":"implicit"},"contextTokens":100}]}',
   ].join("");
 
-  expect(JSON.stringify(result)).toBe(legacySerializedResponse);
+  expect(JSON.stringify(result)).toBe(expectedSerializedResponse);
 });

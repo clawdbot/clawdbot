@@ -1,5 +1,5 @@
 /** Stable cron run-history wire shape and legacy JSONL migration input. */
-import type { FailoverReason } from "../agents/embedded-agent-helpers/types.js";
+import type { FailoverReason } from "../agents/failover/signal.js";
 import type {
   CronDeliveryStatus,
   CronDeliveryTrace,

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { resolveSessionResetPolicy, type SessionEntry } from "../../config/sessions.js";
+import {
+  resolveSessionResetPolicy,
+  type InternalSessionEntry as SessionEntry,
+} from "../../config/sessions.js";
 import { buildAgentSessionPatch } from "./agent-session-patch.js";
 
 function buildPatch(touchInteraction: boolean, opts?: { requestLabel?: string; label?: string }) {
@@ -7,6 +10,8 @@ function buildPatch(touchInteraction: boolean, opts?: { requestLabel?: string; l
   const entry: SessionEntry = {
     sessionId: "session",
     updatedAt: now,
+    lifecycleRunId: "completed-run",
+    status: "failed",
     agentStatus: { note: "Need a password", attention: "key", expiresAt: now + 60_000 },
     ...(opts?.label ? { label: opts.label } : {}),
   };
@@ -37,6 +42,8 @@ describe("agent session patch", () => {
     const patch = buildPatch(true);
     expect(Object.hasOwn(patch, "agentStatus")).toBe(true);
     expect(patch.agentStatus).toBeUndefined();
+    expect(Object.hasOwn(patch, "lifecycleRunId")).toBe(true);
+    expect(patch.lifecycleRunId).toBeUndefined();
   });
 
   it("does not clear agent status for lifecycle-only patches", () => {

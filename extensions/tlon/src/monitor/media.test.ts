@@ -38,9 +38,10 @@ describe("tlon monitor media", () => {
       contentType: "image/png",
     }));
 
-    const images = await downloadMessageImages(content);
+    const result = await downloadMessageImages(content);
 
-    expect(images).toHaveLength(8);
+    expect(result).toMatchObject({ unavailableCount: 2 });
+    expect(result.attachments).toHaveLength(8);
     expect(saveRemoteMediaMock.mock.calls.map(([options]) => options.url)).toEqual(
       Array.from({ length: 8 }, (_, index) => `https://example.com/${index}.png`),
     );
@@ -87,12 +88,15 @@ describe("tlon monitor media", () => {
       ssrfPolicy: undefined,
       requestInit: { method: "GET" },
     });
-    expect(result).toEqual([
-      { path: "/tmp/openclaw/media/inbound/photo---uuid.png", contentType: "image/png" },
-    ]);
+    expect(result).toEqual({
+      attachments: [
+        { path: "/tmp/openclaw/media/inbound/photo---uuid.png", contentType: "image/png" },
+      ],
+      unavailableCount: 0,
+    });
   });
 
-  it("returns null when the fetch exceeds the image cap", async () => {
+  it("reports an unavailable image when the fetch exceeds the image cap", async () => {
     saveRemoteMediaMock.mockRejectedValue(
       new Error(
         `Failed to fetch media from https://example.com/photo.png: payload exceeds maxBytes ${MAX_IMAGE_BYTES}`,
@@ -103,7 +107,7 @@ describe("tlon monitor media", () => {
       { block: { image: { src: "https://example.com/photo.png" } } },
     ]);
 
-    expect(result).toEqual([]);
+    expect(result).toEqual({ attachments: [], unavailableCount: 1 });
     expect(readRemoteMediaBufferMock).not.toHaveBeenCalled();
   });
 });

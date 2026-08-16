@@ -10,10 +10,12 @@ export {
 } from "./agent-harness-runtime.js";
 export type {
   AgentHarness,
+  AgentHarnessV2,
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareEvent,
   AnyAgentTool,
   EmbeddedRunAttemptParams,
+  EmbeddedRunAttemptParamsV2,
   OpenClawAgentToolResult,
 } from "./agent-harness-runtime.js";
 export { createOpenClawCodingTools } from "../agents/agent-tools.js";

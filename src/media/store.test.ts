@@ -80,7 +80,7 @@ describe("media store", () => {
             ...actualStore,
             write: async (...args: Parameters<typeof actualStore.write>) => {
               const [relativePath] = args;
-              if (!injectedEnoent && relativePath.includes(`${params.segment}${path.sep}`)) {
+              if (!injectedEnoent && relativePath.includes(`${params.segment}/`)) {
                 injectedEnoent = true;
                 await fs.rm(path.dirname(actualStore.path(relativePath)), {
                   recursive: true,
@@ -126,7 +126,7 @@ describe("media store", () => {
             ...actualStore,
             write: async (...args: Parameters<typeof actualStore.write>) => {
               const [relativePath] = args;
-              if (relativePath.includes(`failed-buffer${path.sep}`)) {
+              if (relativePath.includes("failed-buffer/")) {
                 attemptedRelPaths.push(relativePath);
                 const err = new Error("no space left on device") as NodeJS.ErrnoException;
                 err.code = "ENOSPC";
@@ -1021,9 +1021,9 @@ describe("media store", () => {
         expectedExtractedFilename: "report.txt",
       },
       {
-        name: "sanitizes unsafe characters in original filename",
-        originalFilename: "my<file>:test.txt",
-        expectedIdPattern: /^my_file_test---[a-f0-9-]{36}\.txt$/,
+        name: "strips Windows-invalid and underscores non-portable characters",
+        originalFilename: "my <file>:test!.txt",
+        expectedIdPattern: /^my_filetest---[a-f0-9-]{36}\.txt$/,
       },
       {
         name: "truncates long original filenames",

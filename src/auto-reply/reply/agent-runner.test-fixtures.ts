@@ -17,7 +17,7 @@ export function createTestFollowupRun(overrides: Partial<FollowupRun["run"]> = {
       sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp",
       config: {},
-      skillsSnapshot: {},
+      skillsSnapshot: { prompt: "", skills: [] },
       provider: "anthropic",
       model: "claude",
       thinkLevel: "low",
@@ -29,7 +29,7 @@ export function createTestFollowupRun(overrides: Partial<FollowupRun["run"]> = {
       skipProviderRuntimeHints: true,
       ...overrides,
     },
-  } as unknown as FollowupRun;
+  } satisfies FollowupRun;
 }
 
 export async function writeTestSessionStore(

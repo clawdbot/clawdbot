@@ -9,6 +9,15 @@ export type AgentRunTerminalReplySnapshot =
   | { disposition: "silent" }
   | { disposition: "empty" };
 
+function isMessageToolNotCalledTerminalReply(
+  reply: AgentRunTerminalReplySnapshot | undefined,
+): boolean {
+  return (
+    reply?.disposition === "empty" &&
+    (reply as { code?: unknown }).code === "message-tool-not-called"
+  );
+}
+
 /** Sanitizes and caps producer-owned text before it enters lifecycle or durable state. */
 export function sanitizeAgentRunTerminalReplyText(text: string): string {
   const sanitized = stripInternalMetadataForDisplay(text).trim();
@@ -42,7 +51,14 @@ export function normalizeAgentRunTerminalReplySnapshot(
     return undefined;
   }
   const disposition = (value as { disposition?: unknown }).disposition;
-  if (disposition === "silent" || disposition === "empty") {
+  if (disposition === "silent") {
+    return { disposition };
+  }
+  if (disposition === "empty") {
+    if ((value as { code?: unknown }).code === "message-tool-not-called") {
+      const reply = { disposition, code: "message-tool-not-called" } as const;
+      return reply;
+    }
     return { disposition };
   }
   if (disposition !== "visible") {
@@ -64,11 +80,17 @@ export function mergeAgentRunTerminalReplySnapshot(
   if (!incoming) {
     return existing;
   }
-  if (!existing || existing.disposition === "empty") {
+  if (!existing) {
     return incoming;
   }
-  if (incoming.disposition === "empty") {
+  if (isMessageToolNotCalledTerminalReply(existing)) {
     return existing;
   }
-  return incoming;
+  if (isMessageToolNotCalledTerminalReply(incoming)) {
+    return incoming;
+  }
+  if (existing.disposition === "empty") {
+    return incoming;
+  }
+  return incoming.disposition === "empty" ? existing : incoming;
 }

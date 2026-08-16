@@ -11,11 +11,25 @@ import {
   formatTuiErrorMessage,
   isolateRtlRenderedLine,
   isTerminalSafeAutocompleteValue,
-  isCommandMessage,
+  isCommandMarkedMessage,
+  resolveFinalAssistantText,
   sanitizeMarkdownSource,
   sanitizeRenderableLine,
   sanitizeRenderableText,
 } from "./tui-formatters.js";
+
+describe("resolveFinalAssistantText", () => {
+  it("hides complete HTML error pages after an HTTP reason phrase", () => {
+    const raw = "HTTP 502 Bad Gateway\n\n<!doctype html><html><body>down</body></html>";
+
+    const rendered = resolveFinalAssistantText({ errorMessage: raw });
+
+    expect(rendered).toBe(
+      "The AI service is temporarily unavailable (HTTP 502). Please try again in a moment.",
+    );
+    expect(rendered).not.toContain("<html>");
+  });
+});
 
 describe("formatTuiFooter", () => {
   it("shows session modes and the process delivery mode in one compact summary", () => {
@@ -642,11 +656,11 @@ describe("extractContentFromMessage", () => {
   });
 });
 
-describe("isCommandMessage", () => {
+describe("isCommandMarkedMessage", () => {
   it("detects command-marked messages", () => {
-    expect(isCommandMessage({ command: true })).toBe(true);
-    expect(isCommandMessage({ command: false })).toBe(false);
-    expect(isCommandMessage({})).toBe(false);
+    expect(isCommandMarkedMessage({ command: true })).toBe(true);
+    expect(isCommandMarkedMessage({ command: false })).toBe(false);
+    expect(isCommandMarkedMessage({})).toBe(false);
   });
 });
 

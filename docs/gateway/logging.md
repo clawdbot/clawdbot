@@ -100,7 +100,7 @@ The console formatter is **TTY-aware** and prints consistent, prefixed lines. Su
 - **Subsystem prefixes** on every line (e.g. `[gateway]`, `[canvas]`, `[tailscale]`).
 - **Subsystem colors** (stable per subsystem, hashed from the name) plus level coloring.
 - **Color when output is a TTY** or the environment looks like a rich terminal (`TERM`/`COLORTERM`/`TERM_PROGRAM`); respects `NO_COLOR` and `FORCE_COLOR`.
-- **Shortened subsystem prefixes**: drops a leading `gateway/`, `channels/`, or `providers/` segment, then keeps at most the last 2 remaining segments (e.g. `channels/turn/kernel` displays as `turn/kernel`). Known channel subsystems (`telegram`, `whatsapp`, `slack`, etc.) always collapse to just the channel name.
+- **Shortened subsystem prefixes**: drops a leading `gateway/`, `channels/`, or `providers/` segment, then keeps at most the last 2 remaining segments (e.g. `channels/turn/execution` displays as `turn/execution`). Known channel subsystems (`telegram`, `whatsapp`, `slack`, etc.) always collapse to just the channel name.
 - **Sub-loggers by subsystem** (auto prefix + structured field `{ subsystem }`).
 - **`logRaw()`** for QR/UX output (no prefix, no formatting).
 - **Console styles**: `pretty` | `compact` | `json`.

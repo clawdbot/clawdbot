@@ -20,11 +20,13 @@ scenario:
     - docs/help/testing.md
   codeRefs:
     - extensions/qa-lab/src/providers/mock-openai/server.ts
-    - src/agents/embedded-agent-runner/run/incomplete-turn.ts
+    - src/agents/embedded-agent-runner/run/incomplete-turn-resolution.ts
+    - src/agents/embedded-agent-runner/run/incomplete-turn-recovery.ts
   execution:
     kind: flow
     summary: Verify reasoning-only turns after a write do not auto-retry.
     config:
+      requiredProviderMode: mock-openai
       requiredProvider: mock-openai
       promptSnippet: Reasoning-only after write safety check
       prompt: "Reasoning-only after write safety check: write reasoning-only-side-effect.txt, then answer with exactly SIDE-EFFECT-GUARD-OK."

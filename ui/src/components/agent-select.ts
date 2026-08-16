@@ -7,6 +7,7 @@ import { ref } from "lit/directives/ref.js";
 import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { resolveAgentTextAvatar } from "../lib/agents/display.ts";
+import { AuthenticatedAvatarRouteLoader } from "../lib/authenticated-avatar-route.ts";
 import { deriveAvatarInitial, resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
@@ -23,11 +24,6 @@ export type AgentSelectOption = {
 };
 
 type WebAwesomeSelectEvent = Event & { detail: { item: Element } };
-type AvatarFetch = { authToken: string; controller: AbortController };
-
-/** Bound local avatar fetches so a stalled Control UI media route cannot pin pending state forever. */
-const AGENT_SELECT_AVATAR_FETCH_TIMEOUT_MS = 30_000;
-
 export function renderAgentSelectAvatar(
   option: AgentSelectOption,
   identity: AgentIdentityResult | null = null,
@@ -78,94 +74,23 @@ export class AgentSelect extends OpenClawLightDomElement {
   @property({ attribute: false }) onSelect: (value: string) => void = () => {};
   @property({ attribute: false }) onCreateAgent: (() => void) | null = null;
 
-  private readonly avatarBlobUrlByRoute = new Map<string, string>();
-  private readonly avatarFetchByRoute = new Map<string, AvatarFetch>();
+  private readonly avatarLoader = new AuthenticatedAvatarRouteLoader(() => {
+    if (this.isConnected) {
+      this.requestUpdate();
+    }
+  });
 
   override disconnectedCallback() {
-    this.resetAvatarState();
+    this.avatarLoader.reset();
     super.disconnectedCallback();
   }
 
   protected override willUpdate(changed: PropertyValues<this>) {
-    // Cached blobs and failures belong to the credential that fetched them;
-    // a rotated token must refetch with the current authorization.
-    if (changed.has("authToken")) {
-      this.resetAvatarState();
-    }
     if (changed.has("disabled") && this.disabled) {
       const dropdown = this.querySelector<HTMLElement & { open: boolean }>("wa-dropdown");
       if (dropdown) {
         dropdown.open = false;
       }
-    }
-  }
-
-  private resetAvatarState() {
-    for (const request of this.avatarFetchByRoute.values()) {
-      request.controller.abort();
-    }
-    for (const blobUrl of this.avatarBlobUrlByRoute.values()) {
-      if (blobUrl) {
-        URL.revokeObjectURL(blobUrl);
-      }
-    }
-    this.avatarBlobUrlByRoute.clear();
-    this.avatarFetchByRoute.clear();
-  }
-
-  private ensureLocalAvatar(url: string, authToken: string) {
-    if (this.avatarFetchByRoute.has(url)) {
-      return;
-    }
-    const request: AvatarFetch = { authToken, controller: new AbortController() };
-    this.avatarFetchByRoute.set(url, request);
-    void this.fetchLocalAvatarBlobUrl(url, request).then((blobUrl) => {
-      // Rotation can start a replacement before the aborted request settles.
-      // Only the request still owning this route may clear or cache its state.
-      if (this.avatarFetchByRoute.get(url) !== request) {
-        if (blobUrl) {
-          URL.revokeObjectURL(blobUrl);
-        }
-        return;
-      }
-      if (!this.isConnected || this.authToken !== authToken) {
-        this.avatarFetchByRoute.delete(url);
-        if (blobUrl) {
-          URL.revokeObjectURL(blobUrl);
-        }
-        return;
-      }
-      // Cache the result (including empty miss) before clearing pending so a
-      // concurrent re-render cannot start a second unbounded fetch for the same URL.
-      this.avatarBlobUrlByRoute.set(url, blobUrl);
-      this.avatarFetchByRoute.delete(url);
-      if (blobUrl) {
-        this.requestUpdate();
-      }
-    });
-  }
-
-  private async fetchLocalAvatarBlobUrl(url: string, request: AvatarFetch): Promise<string> {
-    const timeout = setTimeout(
-      () =>
-        request.controller.abort(new DOMException("agent avatar fetch timed out", "TimeoutError")),
-      AGENT_SELECT_AVATAR_FETCH_TIMEOUT_MS,
-    );
-    try {
-      const res = await fetch(url, {
-        headers: { Authorization: `Bearer ${request.authToken}` },
-        signal: request.controller.signal,
-      });
-      if (!res.ok) {
-        return "";
-      }
-      return URL.createObjectURL(await res.blob());
-    } catch {
-      // Timeouts and transport failures share the empty-string miss path so the
-      // picker keeps the text fallback instead of leaving avatarRoutesPending set.
-      return "";
-    } finally {
-      clearTimeout(timeout);
     }
   }
 
@@ -175,20 +100,10 @@ export class AgentSelect extends OpenClawLightDomElement {
     const agentId = option.agent?.id;
     const identity = agentId ? (this.identityById[agentId] ?? null) : null;
     const url = option.agent ? resolveAgentAvatarUrl(option.agent, identity) : null;
-    const imageUrl = url ? this.resolveRenderableAvatarUrl(url) : null;
+    const imageUrl = url
+      ? this.avatarLoader.resolve(url, this.authToken ? [this.authToken] : [])
+      : null;
     return renderAgentSelectAvatar(option, identity, imageUrl);
-  }
-
-  private resolveRenderableAvatarUrl(url: string): string | null {
-    if (!this.authToken || !url.startsWith("/")) {
-      return url;
-    }
-    const cached = this.avatarBlobUrlByRoute.get(url);
-    if (cached !== undefined) {
-      return cached || null;
-    }
-    this.ensureLocalAvatar(url, this.authToken);
-    return null;
   }
 
   private readonly handleSelect = (event: WebAwesomeSelectEvent) => {
@@ -235,6 +150,10 @@ export class AgentSelect extends OpenClawLightDomElement {
   };
 
   override render() {
+    return this.avatarLoader.withActiveRoutes(() => this.renderContent());
+  }
+
+  private renderContent() {
     const selectedOption = this.options.find((option) => option.value === this.value);
     const missingValueOption: AgentSelectOption | null =
       !selectedOption && this.value

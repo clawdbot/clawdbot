@@ -394,24 +394,6 @@ describe("buildInboundMetaSystemPrompt", () => {
 });
 
 describe("buildInboundUserContextPrefix", () => {
-  it("injects a pending skill suggestion into the current user-role context", () => {
-    const entry: SessionEntry = {
-      sessionId: "skill-suggestion-session",
-      updatedAt: 1,
-      pendingSkillSuggestion: {
-        skillName: "github-pr-workflow",
-        detectedAt: 1,
-      },
-    };
-
-    const text = buildInboundUserContextPrefix({} as TemplateContext, undefined, entry);
-
-    expect(text).toBe(
-      'A reusable workflow ("github-pr-workflow") was detected last turn — offer to save it as a skill via skill_workshop if the user agrees.',
-    );
-    expect(text.split("\n")).toHaveLength(1);
-  });
-
   it("injects an active goal into the current user-role context", () => {
     const text = buildInboundUserContextPrefix(
       {} as TemplateContext,
@@ -454,6 +436,7 @@ describe("buildInboundUserContextPrefix", () => {
     const entry = createGoalSessionEntry("active");
     entry.totalTokens = 10;
     entry.totalTokensFresh = true;
+    entry.totalTokensVersion = 1;
     entry.goal = { ...entry.goal!, tokenBudget: 10 };
 
     expect(buildInboundUserContextPrefix({} as TemplateContext, undefined, entry)).toBe("");

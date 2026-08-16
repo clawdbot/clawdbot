@@ -34,8 +34,8 @@ vi.mock("../process/exec.js", async (importOriginal) => ({
   spawnCommand: spawnDockerProcess,
 }));
 
-vi.mock("../skills/loading/workspace.js", () => ({
-  syncSkillsToWorkspace: vi.fn(async () => undefined),
+vi.mock("../skills/loading/workspace-skill-sync.runtime.js", () => ({
+  syncWorkspaceSkills: vi.fn(async () => undefined),
 }));
 
 let resolveSandboxContext: typeof import("./sandbox/context.js").resolveSandboxContext;

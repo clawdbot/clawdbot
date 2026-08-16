@@ -1,17 +1,14 @@
 import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
-import { html, nothing, svg } from "lit";
+import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
+import { renderDockDestinations } from "../dock-destination-controls.ts";
+import { icons } from "../icons.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import {
   encodeTerminalUpload,
   quoteTerminalUploadPath,
   uploadTerminalFile,
 } from "./terminal-file-upload.ts";
-
-const CLOSE_GLYPH = svg`<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>`;
-const DOCK_BOTTOM_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M2 10h12" /></svg>`;
-const DOCK_RIGHT_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M10 2.5v11" /></svg>`;
-const UPLOAD_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5.2 8.1 9.8 3.5a2.5 2.5 0 0 1 3.5 3.5l-6 6a3.5 3.5 0 0 1-5-5l5.8-5.8" /><path d="m4.4 9 5.2-5.2a1.4 1.4 0 0 1 2 2l-5.3 5.3a2.3 2.3 0 0 1-3.2-3.2l4.6-4.6" /></svg>`;
 
 type TerminalUploadTab = {
   gatewaySessionId: string;
@@ -315,13 +312,15 @@ export class TerminalPanelUploadController {
 
 export function renderTerminalPanelActions(params: {
   fullscreen: boolean;
-  dock: "bottom" | "right";
+  embedded?: boolean;
+  dock: "bottom" | "right" | "main";
   upload: TerminalPanelUploadController;
   sessionPicker: unknown;
-  onDock: (dock: "bottom" | "right") => void;
+  onDock: (dock: "bottom" | "right" | "main") => void;
+  onOpenFullscreen: () => void;
   onHide: () => void;
 }) {
-  return html`<div class="tp-actions">
+  return html`<div class="rail-header__actions tp-actions">
     <input
       class="tp-file-input"
       type="file"
@@ -331,44 +330,71 @@ export function renderTerminalPanelActions(params: {
       @change=${params.upload.handleFileSelection}
     />
     <button
-      class="tp-icon tp-upload"
+      class="rail-header__action tp-icon tp-upload"
       type="button"
       title=${t("terminal.addFiles")}
       aria-label=${t("terminal.addFiles")}
       ?disabled=${params.upload.hasPendingBatch() || !params.upload.hasActiveTab()}
       @click=${params.upload.chooseFiles}
     >
-      ${UPLOAD_GLYPH}
+      ${icons.paperclip}
     </button>
     ${params.fullscreen
       ? nothing
-      : html`${params.sessionPicker}<button
-            class="tp-icon ${params.dock === "bottom" ? "is-active" : ""}"
-            type="button"
-            title=${t("terminal.dockBottom")}
-            aria-label=${t("terminal.dockBottom")}
-            @click=${() => params.onDock("bottom")}
-          >
-            ${DOCK_BOTTOM_GLYPH}
-          </button>
-          <button
-            class="tp-icon ${params.dock === "right" ? "is-active" : ""}"
-            type="button"
-            title=${t("terminal.dockRight")}
-            aria-label=${t("terminal.dockRight")}
-            @click=${() => params.onDock("right")}
-          >
-            ${DOCK_RIGHT_GLYPH}
-          </button>
-          <button
-            class="tp-icon"
-            type="button"
-            title=${t("terminal.hide")}
-            aria-label=${t("terminal.hide")}
-            @click=${params.onHide}
-          >
-            ${CLOSE_GLYPH}
-          </button>`}
+      : html`${params.sessionPicker}${params.embedded
+          ? html`<button
+              class="rail-header__action tp-icon"
+              type="button"
+              title=${t("terminal.dockBottom")}
+              aria-label=${t("terminal.dockBottom")}
+              @click=${() => params.onDock("bottom")}
+            >
+              ${icons.panelBottomOpen}
+            </button>`
+          : html`${renderDockDestinations({
+                current: params.dock,
+                groupClass: "tp-dock-modes",
+                groupLabel: t("terminal.dockMode"),
+                destinations: [
+                  {
+                    dock: "bottom",
+                    label: t("terminal.dockBottom"),
+                    icon: icons.panelBottomOpen,
+                    className: "tp-icon",
+                  },
+                  {
+                    dock: "right",
+                    label: t("terminal.dockRight"),
+                    icon: icons.panelRightOpen,
+                    className: "tp-icon",
+                  },
+                  {
+                    dock: "main",
+                    label: t("terminal.dockMain"),
+                    icon: icons.columns2,
+                    className: "tp-icon",
+                  },
+                ],
+                onSelect: params.onDock,
+              })}
+              <button
+                class="rail-header__action tp-icon tp-open-fullscreen"
+                type="button"
+                title=${t("terminal.openFullscreen")}
+                aria-label=${t("terminal.openFullscreen")}
+                @click=${params.onOpenFullscreen}
+              >
+                ${icons.maximize}
+              </button>
+              <button
+                class="rail-header__action tp-icon"
+                type="button"
+                title=${t("terminal.hide")}
+                aria-label=${t("terminal.hide")}
+                @click=${params.onHide}
+              >
+                ${icons.x}
+              </button>`}`}
   </div>`;
 }
 

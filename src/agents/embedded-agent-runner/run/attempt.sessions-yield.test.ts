@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "../../../llm/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { SessionManager } from "../../sessions/session-manager.js";
-import { stripSessionsYieldArtifacts } from "./attempt.sessions-yield.js";
+import { stripSessionsYieldArtifacts } from "./attempt-sessions-yield.js";
 
 const SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE = "openclaw.sessions_yield_interrupt";
 

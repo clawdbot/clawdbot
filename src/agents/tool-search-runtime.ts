@@ -34,6 +34,7 @@ import {
   tokenizeDocument,
   tokenizeQuery,
 } from "./tool-search-ranking.js";
+import { readToolSearchLimit } from "./tool-search-request.js";
 import { snapshotToolSearchTargetTranscriptResult } from "./tool-search-transcript.js";
 import type {
   CatalogSource,
@@ -201,39 +202,20 @@ function findEntryByExactId(
   return entry;
 }
 
+const TOOL_SEARCH_SELECTOR_KEYS = ["id", "toolId", "name"] as const;
+
+function readToolSearchSelector(params: Record<string, unknown>): string | undefined {
+  const value = params.id ?? params.toolId ?? params.name;
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
 export function readToolSearchId(args: unknown): string {
   const params = asToolParamsRecord(args);
-  const value = params.id ?? params.toolId ?? params.name;
-  if (typeof value !== "string" || !value.trim()) {
+  const value = readToolSearchSelector(params);
+  if (value === undefined) {
     throw new ToolInputError("id must be a non-empty string.");
   }
   return value.trim();
-}
-
-function readToolSearchLimit(value: unknown, config: ToolSearchConfig): number {
-  if (value === undefined) {
-    return config.searchDefaultLimit;
-  }
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
-    throw new ToolInputError("limit must be a positive integer.");
-  }
-  return Math.min(value, config.maxSearchLimit);
-}
-
-export function readToolSearchArgs(
-  args: unknown,
-  config: ToolSearchConfig,
-): { query: string; limit: number } {
-  const params = asToolParamsRecord(args);
-  const query = params.query;
-  if (typeof query !== "string") {
-    throw new ToolInputError("query must be a string.");
-  }
-  const options = isRecord(params.options) ? params.options : undefined;
-  return {
-    query,
-    limit: readToolSearchLimit(params.limit ?? options?.limit, config),
-  };
 }
 
 export function readToolSearchCallArgs(
@@ -241,14 +223,21 @@ export function readToolSearchCallArgs(
   catalog?: ToolSearchCatalogSession,
 ): { id: string; input: unknown } {
   const params = asToolParamsRecord(args);
+  const dottedInput = Object.fromEntries(
+    Object.entries(params)
+      .filter(([key]) => key.startsWith("args.") && key.length > 5)
+      .map(([key, value]) => [key.slice(5), value]),
+  );
   const nestedInput = params.args ?? params.input;
   if (nestedInput != null) {
-    return { id: readToolSearchId(params), input: nestedInput };
+    return {
+      id: readToolSearchId(params),
+      input: isRecord(nestedInput) ? { ...dottedInput, ...nestedInput } : nestedInput,
+    };
   }
 
-  const selectorKeys = ["id", "toolId", "name"] as const;
   const matchingSelectors = catalog
-    ? selectorKeys.flatMap((key) => {
+    ? TOOL_SEARCH_SELECTOR_KEYS.flatMap((key) => {
         const value = params[key];
         if (typeof value !== "string") {
           return [];
@@ -268,7 +257,7 @@ export function readToolSearchCallArgs(
     );
   }
   const matchingSelector = matchingSelectors[0]?.key;
-  const selector = matchingSelector ?? selectorKeys.find((key) => params[key] != null);
+  const selector = matchingSelector ?? TOOL_SEARCH_SELECTOR_KEYS.find((key) => params[key] != null);
   const id = readToolSearchId(selector ? { [selector]: params[selector] } : params);
 
   // Remove every alias that actually identifies the selected catalog tool;
@@ -279,10 +268,27 @@ export function readToolSearchCallArgs(
     ...matchingSelectors.map(({ key }) => key),
     ...(matchingSelector ? [] : [selector ?? "id"]),
   ]);
+  const targetInputEntries = Object.entries(params).filter(([key]) => !wrapperKeys.has(key));
   const flattenedInput = Object.fromEntries(
-    Object.entries(params).filter(([key]) => !wrapperKeys.has(key)),
+    targetInputEntries.filter(([key]) => !(key.startsWith("args.") && key.length > 5)),
   );
-  return { id, input: flattenedInput };
+  return { id, input: { ...dottedInput, ...flattenedInput } };
+}
+
+export function prepareToolSearchDispatcherArguments(args: unknown): unknown {
+  if (!isRecord(args) || TOOL_SEARCH_SELECTOR_KEYS.some((key) => Object.hasOwn(args, key))) {
+    return args;
+  }
+  const nestedInput = args.args ?? args.input;
+  if (!isRecord(nestedInput)) {
+    return args;
+  }
+  const selectorValue = readToolSearchSelector(nestedInput);
+  if (selectorValue === undefined) {
+    return args;
+  }
+  const { args: _wrappedArgs, input: _wrappedInput, ...outerRest } = args;
+  return { ...outerRest, ...nestedInput, id: selectorValue };
 }
 
 function getTelemetry(catalog: ToolSearchCatalogSession) {

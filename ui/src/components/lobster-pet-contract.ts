@@ -1,3 +1,5 @@
+import type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
+
 export type LobsterPetMode = "idle" | "busy" | "offline";
 
 export type LobsterRunOutcome = "ok" | "error" | "aborted";
@@ -125,7 +127,7 @@ export function lobsterPetSeed(sessionKey: string): number {
 export function resolveLobsterRunOutcome(
   sessions:
     | ReadonlyArray<{
-        status?: "running" | "done" | "failed" | "killed" | "timeout";
+        status?: SessionRunStatus;
         endedAt?: number | null;
         lastActivityAt?: number | null;
         updatedAt?: number | null;

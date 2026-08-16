@@ -1,6 +1,8 @@
 import type { NpmIntegrityDrift, NpmSpecResolution } from "../infra/install-source-utils.js";
 import type { InstallPolicySource } from "../security/install-policy.js";
+import type { PluginInstallArtifactInspection } from "./install-artifact-inspection.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
+import type { InstallPolicyWarningDetails } from "./install-security-scan.types.js";
 import type { PackageManifest as PluginPackageManifest, PluginManifestSetup } from "./manifest.js";
 
 export type PluginInstallLogger = {
@@ -45,10 +47,16 @@ export type InstallPluginResult =
       version?: string;
       extensions: string[];
       setup?: PluginManifestSetup;
+      artifactInspection?: PluginInstallArtifactInspection;
       npmResolution?: NpmSpecResolution;
       integrityDrift?: NpmIntegrityDrift;
     }
-  | { ok: false; error: string; code?: PluginInstallErrorCode };
+  | {
+      ok: false;
+      error: string;
+      code?: PluginInstallErrorCode;
+      installPolicyWarning?: InstallPolicyWarningDetails;
+    };
 
 export type PluginInstallFailureResult = Extract<InstallPluginResult, { ok: false }>;
 

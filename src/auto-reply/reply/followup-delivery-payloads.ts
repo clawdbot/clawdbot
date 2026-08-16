@@ -3,11 +3,7 @@ import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.ty
 import type { ReplyToMode } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
-import {
-  copyReplyPayloadMetadata,
-  getReplyPayloadMetadata,
-  setReplyPayloadMetadata,
-} from "../reply-payload.js";
+import { copyReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -15,12 +11,7 @@ import {
   resolveOriginMessageProvider,
   resolveOriginMessageTo,
 } from "./origin-routing.js";
-import {
-  applyReplyThreading,
-  filterMessagingToolDuplicates,
-  filterMessagingToolMediaDuplicates,
-  resolveMessagingToolPayloadDedupe,
-} from "./reply-payloads.js";
+import { applyReplyThreading, filterMessagingToolReplyPayload } from "./reply-payloads.js";
 import { createReplyDeliveryContext, resolveReplyToMode } from "./reply-threading.js";
 
 /** Strips empty/heartbeat payloads, applies threading, and dedupes message-tool sends. */
@@ -94,49 +85,20 @@ export function resolveFollowupDeliveryPayloads(params: {
       ...(replyDeliverySource ? { replyDeliverySource } : {}),
     }),
   );
-  const sentMediaUrlFallback = params.sentMediaUrls ?? [];
-  const sentTextFallback = params.sentTexts ?? [];
   const originatingTo = resolveOriginMessageTo({
     originatingTo: params.originatingTo,
   });
-  const dedupedPayloads: ReplyPayload[] = [];
-  for (const payload of replyTaggedPayloads) {
-    const decision = resolveMessagingToolPayloadDedupe({
+  return replyTaggedPayloads.flatMap((payload) =>
+    filterMessagingToolReplyPayload({
+      payload,
       config: params.cfg,
       messageProvider: replyMessageProvider,
       messagingToolSentTargets: params.sentTargets,
       originatingTo,
       originatingThreadId: params.originatingThreadId,
-      replyToId: payload.replyToId,
-      replyToIsExplicit: Boolean(
-        getReplyPayloadMetadata(payload)?.replyToIdExplicit ||
-        payload.replyToTag ||
-        payload.replyToCurrent,
-      ),
-      replyDelivery: getReplyPayloadMetadata(payload)?.replyDelivery,
       accountId,
-    });
-    if (!decision.shouldDedupePayloads) {
-      dedupedPayloads.push(payload);
-      continue;
-    }
-    const sentMediaUrls =
-      decision.matchingRoute && !decision.useGlobalSentMediaUrlEvidenceFallback
-        ? decision.routeSentMediaUrls
-        : sentMediaUrlFallback;
-    const sentTexts =
-      decision.matchingRoute && !decision.useGlobalSentTextEvidenceFallback
-        ? decision.routeSentTexts
-        : sentTextFallback;
-    const mediaFiltered = filterMessagingToolMediaDuplicates({
-      payloads: [payload],
-      sentMediaUrls,
-    });
-    const textFiltered = filterMessagingToolDuplicates({
-      payloads: mediaFiltered,
-      sentTexts,
-    });
-    dedupedPayloads.push(...textFiltered);
-  }
-  return dedupedPayloads;
+      sentMediaUrls: params.sentMediaUrls,
+      sentTexts: params.sentTexts,
+    }),
+  );
 }

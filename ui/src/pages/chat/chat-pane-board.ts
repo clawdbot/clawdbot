@@ -1,7 +1,6 @@
-import {
-  GATEWAY_SERVER_CAPS,
-  type SessionObserverDigest,
-} from "../../../../packages/gateway-protocol/src/index.js";
+import { html, nothing, type TemplateResult } from "lit";
+import { guard } from "lit/directives/guard.js";
+import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/index.js";
 import { hasOperatorApprovalsAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
@@ -11,10 +10,14 @@ import {
   boardProviderForSession,
   type BoardCommandEvent,
   type BoardProvider,
+  type BoardViewCallbacks,
 } from "../../lib/board/provider.ts";
-import { updateBoardSessionView, type BoardSessionView } from "../../lib/board/settings.ts";
+import {
+  updateBoardSessionView,
+  type BoardSessionView,
+  type BoardVisibleChatDock,
+} from "../../lib/board/settings.ts";
 import type { BoardTab } from "../../lib/board/types.ts";
-import type { BoardViewSnapshot } from "../../lib/board/view-types.ts";
 import {
   isGatewayCapabilityAdvertised,
   isGatewayMethodAdvertised,
@@ -23,28 +26,26 @@ import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import {
   buildAgentMainSessionKey,
-  normalizeAgentId,
   normalizeSessionKeyForUiComparison,
   resolveAgentIdFromSessionKey,
-  resolveUiGlobalAliasAgentId,
 } from "../../lib/sessions/session-key.ts";
-import type { WorkboardCardChipProps } from "./board-session-surface.ts";
-import { ChatPaneHistory } from "./chat-pane-history.ts";
 import {
-  boardChatDockLayout,
-  type ResolvedBoardView,
-  type VisibleBoardDock,
-} from "./chat-pane-shared.ts";
+  ensureBoardViewElement,
+  ensureWorkboardCardChipElement,
+  renderBoardSessionSurface,
+  type WorkboardCardChipProps,
+} from "./board-session-surface.ts";
+import { ChatPaneHistory } from "./chat-pane-history.ts";
+import { boardChatDockLayout, type ResolvedBoardView } from "./chat-pane-shared.ts";
 import { renderChatResizableDivider } from "./components/chat-resizable-divider.ts";
 import {
   SIDEBAR_NARROW_BREAKPOINT_PX,
   activatePanel,
-  detachPanelToColumn,
   fitSidebarLayout,
   openSlot,
-  resizeColumn,
+  resizeSidebarPanel,
+  sidebarDock,
   type SidebarLayout,
-  type SidebarSide,
 } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneBoard extends ChatPaneHistory {
@@ -60,55 +61,28 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     state.updateSidebarLayout(fitted);
   }
 
-  protected commitSidebarPanelMove(
-    layout: SidebarLayout,
-    panelId: string,
-    targetSide: SidebarSide,
-    board: ResolvedBoardView,
-  ): void {
-    const panel = layout.columns
-      .flatMap((column) => column.panels)
-      .find((candidate) => candidate.id === panelId);
-    if (panel?.slot !== "chat" || board.dock === targetSide) {
-      this.commitSidebarLayout(layout);
-      this.commitSidebarMovedPanelActive(panelId);
-      return;
-    }
-    if (!board.provider.canMutate || board.activeTabReadOnly) {
-      return;
-    }
-    this.commitSidebarLayout(layout);
-    this.commitSidebarMovedPanelActive(panelId);
-    this.handleBoardDockChange(targetSide);
-  }
-
-  // A move activates the panel in its destination column, but the collapsed layout
-  // reads a separate persisted selection. Without this the narrow view foregrounds
-  // a stale panel after a drag, and the stale choice survives reload.
-  private commitSidebarMovedPanelActive(panelId: string): void {
-    this.state?.updateSidebarActivePanel(panelId);
-  }
-
-  protected commitSidebarColumnResize(
+  protected commitSidebarPanelResize(
     renderedLayout: SidebarLayout,
     columnId: string,
-    width: number,
+    size: number,
   ): void {
     const state = this.state;
     if (!state) {
       return;
     }
-    const resizedProjection = resizeColumn(renderedLayout, columnId, width);
+    const resizedProjection = resizeSidebarPanel(renderedLayout, columnId, size);
     const fittedProjection =
       this.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
         ? (fitSidebarLayout(resizedProjection, this.paneWidth) ?? resizedProjection)
         : resizedProjection;
-    const fittedWidth = fittedProjection.columns.find((column) => column.id === columnId)?.width;
+    const fittedColumn = fittedProjection.columns.find((column) => column.id === columnId);
+    const fittedSize =
+      sidebarDock(fittedProjection) === "bottom" ? fittedColumn?.height : fittedColumn?.width;
     if (
-      fittedWidth !== undefined &&
+      fittedSize !== undefined &&
       state.sidebarLayout.columns.some((column) => column.id === columnId)
     ) {
-      state.updateSidebarLayout(resizeColumn(state.sidebarLayout, columnId, fittedWidth));
+      state.updateSidebarLayout(resizeSidebarPanel(state.sidebarLayout, columnId, fittedSize));
       return;
     }
     this.commitSidebarLayout(fittedProjection);
@@ -123,28 +97,16 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       return true;
     }
     const beforeOpen = state.sidebarLayout;
-    let layout = openSlot(beforeOpen, "chat", dock);
-    const chatColumn = layout.columns.find((column) =>
-      column.panels.some((panel) => panel.slot === "chat"),
-    );
-    if (chatColumn && chatColumn.side !== dock) {
-      const panel = chatColumn.panels.find((candidate) => candidate.slot === "chat");
-      if (panel) {
-        layout = detachPanelToColumn(layout, panel.id, dock, 0);
-      }
-    }
+    let layout = openSlot(beforeOpen, "chat");
     const chatPanel = layout.columns
       .flatMap((column) => column.panels)
       .find((panel) => panel.slot === "chat");
     if (chatPanel) {
       layout = activatePanel(layout, chatPanel.id);
     }
-    const newColumn = layout.columns.find(
-      (column) => !beforeOpen.columns.some((current) => current.id === column.id),
-    );
     const fitted =
       this.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
-        ? (fitSidebarLayout(layout, this.paneWidth, newColumn?.id) ?? layout)
+        ? (fitSidebarLayout(layout, this.paneWidth) ?? layout)
         : layout;
     state.updateSidebarLayout(fitted);
     if (chatPanel) {
@@ -154,10 +116,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
   }
 
   protected resolveBoardProvider(): BoardProvider {
-    const sessionKey = resolveSessionKey(
-      this.state?.sessionKey ?? this.sessionKey,
-      this.context?.gateway.snapshot.hello,
-    );
+    const sessionKey = this.resolveBoardSessionKey();
     if (this.boardProvider) {
       this.releaseBoardProviderLease();
       return this.boardProvider;
@@ -217,12 +176,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     const enabled = isWorkboardEnabledInConfigSnapshot(
       this.context?.runtimeConfig?.state.configSnapshot,
     );
-    if (
-      !board.hasBoard ||
-      board.face !== "dashboard" ||
-      !enabled ||
-      gateway?.phase !== "connected"
-    ) {
+    if (!board.hasBoard || !enabled || gateway?.phase !== "connected") {
       return null;
     }
     const client = gateway.client;
@@ -231,10 +185,36 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       return null;
     }
     return {
+      active: board.face === "dashboard",
       basePath: state.basePath,
       client,
       sessionKey: this.resolveBoardSessionKey(board.snapshot.sessionKey),
     };
+  }
+
+  protected syncRetainedBoardSession(board: ResolvedBoardView): void {
+    const sessionKey = this.resolveBoardSessionKey(board.snapshot.sessionKey);
+    if (!board.hasBoard || !sessionKey) {
+      this.retainedBoardSessionKey = "";
+    } else if (board.face === "dashboard") {
+      this.retainedBoardSessionKey = sessionKey;
+    } else if (this.retainedBoardSessionKey !== sessionKey) {
+      this.retainedBoardSessionKey = "";
+    }
+    if (this.retainedBoardSessionKey === sessionKey && this.resolveWorkboardCardChip(board)) {
+      void ensureWorkboardCardChipElement().catch(() => undefined);
+    }
+    if (
+      board.hasBoard &&
+      board.face === "dashboard" &&
+      !customElements.get("openclaw-board-view")
+    ) {
+      void ensureBoardViewElement().then((loaded) => {
+        if (loaded) {
+          this.requestUpdate();
+        }
+      });
+    }
   }
 
   protected resolveBoardSessionKey(snapshotSessionKey = ""): string {
@@ -244,27 +224,6 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     );
     const normalized = normalizeSessionKeyForUiComparison(resolved);
     return normalized === "main" ? buildAgentMainSessionKey({ agentId: "main" }) : normalized;
-  }
-
-  protected resolveObserverDigestHistoryKey(snapshotSessionKey = "", agentId?: string): string {
-    const sessionKey = this.resolveBoardSessionKey(snapshotSessionKey);
-    const globalAliasAgentId = resolveUiGlobalAliasAgentId(
-      {
-        agentsList: this.context?.agents?.state.agentsList,
-        hello: this.context?.gateway.snapshot.hello,
-      },
-      sessionKey,
-    );
-    if (sessionKey !== "global" && !globalAliasAgentId) {
-      return sessionKey;
-    }
-    const owner = normalizeAgentId(
-      agentId ??
-        globalAliasAgentId ??
-        this.context?.agentSelection?.state.selectedId ??
-        this.state?.assistantAgentId,
-    );
-    return `agent:${owner}:global`;
   }
 
   protected refreshSwarmRoster(): void {
@@ -310,52 +269,9 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     );
   }
 
-  protected refreshBuiltinBoardSnapshot(): void {
-    const state = this.state;
-    if (!state) {
-      return;
-    }
-    const parentKey = this.resolveBoardSessionKey();
-    const sourceEpoch = state.connectionEpoch;
-    void import("../../lib/board/builtin-dashboard.ts").then(({ withBuiltinDashboardWidgets }) => {
-      if (
-        !this.state ||
-        this.state.connectionEpoch !== sourceEpoch ||
-        parentKey !== this.resolveBoardSessionKey()
-      ) {
-        return;
-      }
-      const base = this.resolveBoardProvider().snapshot$.value;
-      const sessionKey = this.resolveObserverDigestHistoryKey(base.sessionKey);
-      this.builtinBoardSnapshotBase = base;
-      this.builtinBoardSnapshot = withBuiltinDashboardWidgets(
-        base,
-        this.observerDigestHistory.get(sessionKey),
-      );
-      this.requestUpdate();
-    });
-  }
-
-  protected recordObserverDigest(digest: SessionObserverDigest): void {
-    if (
-      normalizeSessionKeyForUiComparison(digest.sessionKey) === "global" &&
-      !digest.agentId?.trim()
-    ) {
-      return;
-    }
-    const sessionKey = this.resolveObserverDigestHistoryKey(digest.sessionKey, digest.agentId);
-    if (this.observerDigestHistory.record({ ...digest, sessionKey })) {
-      this.refreshBuiltinBoardSnapshot();
-    }
-  }
-
   protected resolveBoardView(): ResolvedBoardView {
     const provider = this.resolveBoardProvider();
-    const baseSnapshot = provider.snapshot$.value;
-    const snapshot: BoardViewSnapshot =
-      this.builtinBoardSnapshotBase === baseSnapshot
-        ? (this.builtinBoardSnapshot ?? baseSnapshot)
-        : baseSnapshot;
+    const snapshot = provider.snapshot$.value;
     const hasBoard = snapshot.tabs.length > 0 || snapshot.widgets.length > 0;
     const sessionKey = this.resolveBoardSessionKey(snapshot.sessionKey);
     const saved =
@@ -366,9 +282,6 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       : undefined;
     const activeTabId = savedTab ?? snapshot.tabs[0]?.tabId ?? snapshot.widgets[0]?.tabId ?? "";
     const tab = snapshot.tabs.find((candidate) => candidate.tabId === activeTabId);
-    const activeTabReadOnly = snapshot.widgets.some(
-      (candidate) => candidate.tabId === activeTabId && candidate.readOnly === true,
-    );
     const commandDock =
       this.boardCommandDock?.sessionKey === sessionKey &&
       this.boardCommandDock.tabId === activeTabId
@@ -385,7 +298,6 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       hasBoard,
       face: hasBoard ? this.routeFace : "chat",
       activeTabId,
-      activeTabReadOnly,
       dock,
       reopenDock:
         this.lastVisibleBoardDock.get(dockKey) ?? saved?.reopenDockByTab?.[activeTabId] ?? "right",
@@ -396,7 +308,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     patch: Partial<BoardSessionView> & { face?: "chat" | "dashboard" },
   ): void {
     if (patch.face) {
-      this.onFaceChange?.(patch.face);
+      this.onFaceChange?.(this.paneId, this.sessionKey, patch.face);
     }
     const persistedPatch = { ...patch };
     delete persistedPatch.face;
@@ -423,7 +335,48 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     this.requestUpdate();
   }
 
-  protected persistBoardReopenDock(board: ResolvedBoardView, dock: VisibleBoardDock): void {
+  protected renderBoardPrimary(board: ResolvedBoardView, chat: TemplateResult) {
+    const sessionKey = this.resolveBoardSessionKey(board.snapshot.sessionKey);
+    const shouldRender =
+      board.hasBoard &&
+      Boolean(sessionKey) &&
+      (board.face === "dashboard" || this.retainedBoardSessionKey === sessionKey);
+    const boardActive = board.face === "dashboard";
+    const renderSurface = (active: boolean) =>
+      renderBoardSessionSurface({
+        active,
+        snapshot: board.snapshot,
+        activeTabId: board.activeTabId,
+        dock: board.dock,
+        dockSize: this.boardChatDockSize,
+        chat,
+        divider: this.renderBoardDivider("bottom"),
+        canMutate: board.provider.canMutate,
+        canGrant: board.provider.canGrant,
+        callbacks: {
+          applyOps: (ops) => board.provider.applyOps(ops),
+          grant: (name, decision) => board.provider.grant(name, decision),
+          selectTab: (tabId) => {
+            this.boardCommandDock = null;
+            this.persistBoardSessionView({ face: "dashboard", activeTabId: tabId });
+          },
+          frameLoadFailed: (name) => board.provider.refreshWidgetFrame(name),
+          widgetAppView: (name, revision) => board.provider.widgetAppView(name, revision),
+          refreshWidgetAppView: (name, revision) =>
+            board.provider.refreshWidgetAppView(name, revision),
+        } satisfies BoardViewCallbacks,
+        widgetFrameUrl: (name, revision) => board.provider.widgetFrameUrl(name, revision),
+        workboardCardChip: this.resolveWorkboardCardChip(board),
+      });
+    const boardSurface = !shouldRender
+      ? nothing
+      : boardActive
+        ? renderSurface(true)
+        : guard([sessionKey], () => renderSurface(false));
+    return html`${boardActive ? nothing : chat}${boardSurface}`;
+  }
+
+  protected persistBoardReopenDock(board: ResolvedBoardView, dock: BoardVisibleChatDock): void {
     if (!board.activeTabId) {
       return;
     }
@@ -473,7 +426,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
 
   protected handleBoardDockChange(dock: BoardTab["chatDock"]): void {
     const board = this.resolveBoardView();
-    if (!board.activeTabId || board.activeTabReadOnly || !board.provider.canMutate) {
+    if (!board.activeTabId || !board.provider.canMutate) {
       return;
     }
     const sessionKey = this.resolveBoardSessionKey(board.snapshot.sessionKey);
@@ -484,12 +437,13 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     const reopenDock = dock === "hidden" ? board.reopenDock : dock;
     this.lastVisibleBoardDock.set(`${sessionKey}:${board.activeTabId}`, reopenDock);
     this.persistBoardReopenDock(board, reopenDock);
+    const owner = this.headerOutcomeOwner;
     void board.provider
       .applyOps([{ kind: "tab_update", tabId: board.activeTabId, chatDock: dock }])
-      .catch((error: unknown) => this.publishHeaderError(error));
+      .catch((error: unknown) => this.publishHeaderError(error, owner));
   }
 
-  protected renderBoardDivider(dock: VisibleBoardDock) {
+  protected renderBoardDivider(dock: BoardVisibleChatDock) {
     return renderChatResizableDivider({
       className: "board-session-surface__divider",
       orientation: dock === "bottom" ? "horizontal" : "vertical",
@@ -518,7 +472,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
   }
 
   protected handleBoardDockResize(
-    dock: VisibleBoardDock,
+    dock: BoardVisibleChatDock,
     event: CustomEvent<{ splitRatio: number }>,
   ): void {
     if (dock !== "bottom") {

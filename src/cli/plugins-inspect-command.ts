@@ -11,6 +11,7 @@ import { defaultRuntime } from "../runtime.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
 import { formatMissingPluginMessage } from "./error-format.js";
 import { quietPluginJsonLogger } from "./plugins-json-logger.js";
+import { formatPluginBundleFormat } from "./plugins-list-format.js";
 
 /** Options accepted by `openclaw plugins inspect`. */
 export type PluginInspectOptions = {
@@ -299,7 +300,9 @@ export async function runPluginsInspectCommand(
   }
   lines.push(`${theme.muted("Format:")} ${inspect.plugin.format ?? "openclaw"}`);
   if (inspect.plugin.bundleFormat) {
-    lines.push(`${theme.muted("Bundle format:")} ${inspect.plugin.bundleFormat}`);
+    lines.push(
+      `${theme.muted("Bundle format:")} ${formatPluginBundleFormat(inspect.plugin.bundleFormat)}`,
+    );
   }
   lines.push(`${theme.muted("Source:")} ${shortenHomeInString(inspect.plugin.source)}`);
   lines.push(`${theme.muted("Origin:")} ${inspect.plugin.origin}`);
@@ -356,7 +359,7 @@ export async function runPluginsInspectCommand(
     ...formatInspectSection(
       "MCP servers",
       inspect.mcpServers.map((entry) =>
-        entry.hasStdioTransport ? entry.name : `${entry.name} (unsupported transport)`,
+        entry.unsupported ? `${entry.name} (unsupported transport)` : entry.name,
       ),
     ),
   );

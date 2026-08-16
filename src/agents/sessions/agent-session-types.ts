@@ -53,7 +53,7 @@ export type AgentSessionEvent =
   | { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string };
 
 export type AgentSessionEventListener = (event: AgentSessionEvent) => unknown;
-export type AgentSessionWriteLockRunner = <T>(run: () => Promise<T> | T) => Promise<T>;
+export type AgentSessionWriteSettlementRunner = <T>(run: () => Promise<T> | T) => Promise<T>;
 
 export interface AgentSessionConfig {
   agent: Agent;
@@ -80,10 +80,12 @@ export interface AgentSessionConfig {
   extensionRunnerRef?: { current?: ExtensionRunner };
   /** Session start metadata emitted when extensions bind to this runtime. */
   sessionStartEvent?: SessionStartEvent;
-  /** Lock used before session-file writes or write-capable hooks. */
-  withSessionWriteLock?: AgentSessionWriteLockRunner;
+  /** Settlement boundary for session writes and write-capable hooks. */
+  withSessionWriteSettlement?: AgentSessionWriteSettlementRunner;
   /** Owner of reactive context-overflow recovery. Defaults to the session. */
   contextOverflowRecoveryOwner?: "session" | "caller";
+  /** Whether disposing this object ends the durable provider session. Defaults to true. */
+  cleanupProviderSessionResourcesOnDispose?: boolean;
 }
 
 export interface ExtensionBindings {

@@ -55,6 +55,9 @@ const autoMigrateLegacyTaskStateSidecars = vi.hoisted(() =>
     }),
   ),
 );
+const migrateLegacyConfigMachineState = vi.hoisted(() =>
+  vi.fn(() => ({ changes: [], warnings: [] })),
+);
 const migrateLegacyMediaPersistence = vi.hoisted(() =>
   vi.fn(() => ({ changes: [], warnings: [] })),
 );
@@ -81,8 +84,8 @@ const startupMigrationLease = vi.hoisted(() => ({
   owner: "startup-test-owner",
   release: startupMigrationLeaseRelease,
 }));
-const acquireStartupMigrationLease = vi.hoisted(() =>
-  vi.fn((_params: { env: NodeJS.ProcessEnv }) => startupMigrationLease),
+const acquireStartupMigrationLeaseWithWait = vi.hoisted(() =>
+  vi.fn(async (_params: { env: NodeJS.ProcessEnv }) => startupMigrationLease),
 );
 const recordSuccessfulStateMigrations = vi.hoisted(() => vi.fn());
 const recordSuccessfulStartupMigrations = vi.hoisted(() => vi.fn());
@@ -143,6 +146,10 @@ const readConfigFileSnapshotWithPluginMetadata = vi.hoisted(() =>
   })),
 );
 const findDoctorLegacyConfigIssues = vi.hoisted(() => vi.fn((): LegacyConfigIssue[] => []));
+const addDoctorLegacyIssues = vi.hoisted(() => vi.fn(<T>(snapshot: T): T => snapshot));
+const runWithPluginMetadataSnapshot = vi.hoisted(() =>
+  vi.fn((_scope: unknown, run: () => unknown) => run()),
+);
 const note = vi.hoisted(() => vi.fn());
 
 function queueConfigSnapshot(
@@ -171,6 +178,7 @@ vi.mock("./doctor-state-migrations.js", () => ({
   autoMigrateLegacyStateDir,
   autoMigrateLegacyPluginDoctorState,
   autoMigrateLegacyTaskStateSidecars,
+  migrateLegacyConfigMachineState,
   migrateLegacyMediaPersistence,
 }));
 
@@ -180,7 +188,7 @@ vi.mock("./doctor/cron/legacy-repair.js", () => ({
 }));
 
 vi.mock("../infra/startup-migration-checkpoint.js", () => ({
-  acquireStartupMigrationLease,
+  acquireStartupMigrationLeaseWithWait,
   needsStateMigrationCheckpoint,
   needsStartupMigrationCheckpoint,
   recordSuccessfulStateMigrations,
@@ -215,7 +223,15 @@ vi.mock("../config/io.js", () => ({
 }));
 
 vi.mock("./doctor/shared/legacy-config-issues.js", () => ({
+  addDoctorLegacyIssues,
   findDoctorLegacyConfigIssues,
+}));
+
+vi.mock("./doctor/shared/plugin-metadata-snapshot-scope.js", () => ({
+  createDoctorPluginMetadataSnapshotScope: () => ({
+    run: runWithPluginMetadataSnapshot,
+    invalidate: vi.fn(),
+  }),
 }));
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
@@ -225,6 +241,7 @@ const { runDoctorConfigPreflight } = await import("./doctor-config-preflight.js"
 describe("runDoctorConfigPreflight state migration", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    acquireStartupMigrationLeaseWithWait.mockResolvedValue(startupMigrationLease);
     pluginMigrationFingerprint.mockReset();
     pluginMigrationFingerprint.mockReturnValue("plugin-migrations");
     findDoctorLegacyConfigIssues.mockReset();
@@ -355,7 +372,7 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(planStartupPluginConvergence).not.toHaveBeenCalled();
     if (needed && warnings.length === 0) {
       expect(recordSuccessfulStateMigrations).toHaveBeenCalledWith({
-        env: acquireStartupMigrationLease.mock.calls[0]?.[0]?.env,
+        env: acquireStartupMigrationLeaseWithWait.mock.calls[0]?.[0]?.env,
         identity: expectMigrationIdentity(),
         lease: startupMigrationLease,
       });
@@ -392,6 +409,14 @@ describe("runDoctorConfigPreflight state migration", () => {
         pluginMetadataSnapshot: {
           configFingerprint: "plugin-migrations",
           index,
+          registrySource: "derived",
+        },
+      })
+      .mockResolvedValueOnce({
+        snapshot,
+        pluginMetadataSnapshot: {
+          configFingerprint: "plugin-migrations",
+          index,
           registrySource: "persisted",
         },
       });
@@ -399,7 +424,7 @@ describe("runDoctorConfigPreflight state migration", () => {
 
     await runDoctorConfigPreflight(stateCheckpointOptions);
 
-    const pinnedEnv = acquireStartupMigrationLease.mock.calls[0]?.[0]?.env;
+    const pinnedEnv = acquireStartupMigrationLeaseWithWait.mock.calls[0]?.[0]?.env;
     expect(writePersistedInstalledPluginIndexWithLeaseSync).toHaveBeenCalledWith(index, {
       env: pinnedEnv,
       lease: startupMigrationLease,
@@ -407,9 +432,9 @@ describe("runDoctorConfigPreflight state migration", () => {
     const writeOrder =
       writePersistedInstalledPluginIndexWithLeaseSync.mock.invocationCallOrder[0] ?? 0;
     const verificationReadOrder =
-      readConfigFileSnapshotWithPluginMetadata.mock.invocationCallOrder[2] ?? 0;
+      readConfigFileSnapshotWithPluginMetadata.mock.invocationCallOrder[3] ?? 0;
     expect(verificationReadOrder).toBeGreaterThan(writeOrder);
-    expect(readConfigFileSnapshotWithPluginMetadata.mock.calls[2]?.[0]).toEqual({
+    expect(readConfigFileSnapshotWithPluginMetadata.mock.calls[3]?.[0]).toEqual({
       allowCurrentPluginMetadata: false,
     });
     const checkpointOrder = recordSuccessfulStateMigrations.mock.invocationCallOrder[0] ?? 0;
@@ -474,7 +499,7 @@ describe("runDoctorConfigPreflight state migration", () => {
     ).rejects.toThrow("selected config changed during startup");
 
     expect(needsStartupMigrationCheckpoint).not.toHaveBeenCalled();
-    expect(acquireStartupMigrationLease).not.toHaveBeenCalled();
+    expect(acquireStartupMigrationLeaseWithWait).not.toHaveBeenCalled();
     expect(readConfigFileSnapshot).not.toHaveBeenCalled();
   });
 
@@ -483,7 +508,7 @@ describe("runDoctorConfigPreflight state migration", () => {
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-original-state";
     let leaseEnv: NodeJS.ProcessEnv | undefined;
-    acquireStartupMigrationLease.mockImplementationOnce(({ env }) => {
+    acquireStartupMigrationLeaseWithWait.mockImplementationOnce(async ({ env }) => {
       leaseEnv = env;
       return {
         ...startupMigrationLease,
@@ -608,8 +633,9 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(result.cronCodexRuntimePolicyTargets).toEqual([{ modelRef: "openai/gpt-5.6-sol" }]);
   });
 
-  it("records the startup migration checkpoint after clean startup migrations", async () => {
-    needsStartupMigrationCheckpoint.mockReturnValue(true);
+  it("rechecks the checkpoint after acquisition before running migrations", async () => {
+    needsStateMigrationCheckpoint.mockReturnValueOnce(true).mockReturnValue(false);
+    needsStartupMigrationCheckpoint.mockReturnValueOnce(true).mockReturnValue(false);
 
     await runDoctorConfigPreflight({
       migrateLegacyConfig: false,
@@ -617,29 +643,44 @@ describe("runDoctorConfigPreflight state migration", () => {
       requireStartupMigrationCheckpoint: true,
     });
 
-    const pinnedEnv = acquireStartupMigrationLease.mock.calls[0]?.[0]?.env;
-    expect(pinnedEnv).toBeDefined();
-    expect(pinnedEnv).not.toBe(process.env);
-    expect(needsStartupMigrationCheckpoint).toHaveBeenCalledWith({
-      env: pinnedEnv,
-      identity: expectMigrationIdentity(),
-    });
+    expect(autoMigrateLegacyStateDir).not.toHaveBeenCalled();
+    expect(autoMigrateLegacyState).not.toHaveBeenCalled();
+    expect(recordSuccessfulStateMigrations).not.toHaveBeenCalled();
+    expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
+    expect(readConfigFileSnapshotWithPluginMetadata).toHaveBeenCalledTimes(2);
+    expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
+  });
+
+  it("pins startup plugin convergence without re-persisting the installed record snapshot", async () => {
+    needsStartupMigrationCheckpoint.mockReturnValue(true);
+    const previousHostVersion = process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
+    process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = "2026.7.2-beta.7";
+
+    try {
+      await runDoctorConfigPreflight({
+        migrateLegacyConfig: false,
+        invalidConfigNote: false,
+        requireStartupMigrationCheckpoint: true,
+      });
+    } finally {
+      if (previousHostVersion === undefined) {
+        delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
+      } else {
+        process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = previousHostVersion;
+      }
+    }
+
     expect(runPostCorePluginConvergence).toHaveBeenCalledWith({
       cfg: { gateway: { mode: "local", port: 19091 } },
-      env: process.env,
-      baselineInstallRecords: {},
+      env: expect.any(Object),
+      compatibilityHostVersion: "2026.7.2-beta.7",
     });
-    expect(recordSuccessfulStartupMigrations).toHaveBeenCalledWith({
-      env: pinnedEnv,
-      identity: expectMigrationIdentity(),
-      lease: startupMigrationLease,
-    });
-    expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
   });
 
   it("refuses startup when plugin migration inputs change during convergence", async () => {
     needsStartupMigrationCheckpoint.mockReturnValue(true);
     pluginMigrationFingerprint
+      .mockReturnValueOnce("plugin-migrations-before")
       .mockReturnValueOnce("plugin-migrations-before")
       .mockReturnValueOnce("plugin-migrations-before")
       .mockReturnValueOnce("plugin-migrations-after");
@@ -653,7 +694,7 @@ describe("runDoctorConfigPreflight state migration", () => {
     ).rejects.toThrow("plugin migration inputs changed during startup convergence");
 
     expect(recordSuccessfulStateMigrations).toHaveBeenCalledWith({
-      env: acquireStartupMigrationLease.mock.calls[0]?.[0]?.env,
+      env: acquireStartupMigrationLeaseWithWait.mock.calls[0]?.[0]?.env,
       identity: expect.objectContaining({
         pluginMigrationFingerprint: "plugin-migrations-before",
       }),
@@ -679,7 +720,7 @@ describe("runDoctorConfigPreflight state migration", () => {
       requireStartupMigrationCheckpoint: true,
     });
 
-    const pinnedEnv = acquireStartupMigrationLease.mock.calls[0]?.[0]?.env;
+    const pinnedEnv = acquireStartupMigrationLeaseWithWait.mock.calls[0]?.[0]?.env;
     expect(recordSuccessfulStartupMigrations).toHaveBeenCalledWith({
       env: pinnedEnv,
       identity: expectMigrationIdentity(),
@@ -771,7 +812,7 @@ describe("runDoctorConfigPreflight state migration", () => {
         warnings: [],
         issues: [],
       },
-      2,
+      3,
     );
     runPostCorePluginConvergence.mockResolvedValueOnce(
       makeStartupConvergenceResult({
@@ -891,8 +932,9 @@ describe("runDoctorConfigPreflight state migration", () => {
     });
   });
 
-  it("blocks gateway readiness when startup migrations leave warnings", async () => {
-    needsStartupMigrationCheckpoint.mockReturnValue(true);
+  it("blocks gateway readiness when state migration warnings outlive the startup checkpoint", async () => {
+    needsStateMigrationCheckpoint.mockReturnValue(true);
+    needsStartupMigrationCheckpoint.mockReturnValue(false);
     autoMigrateLegacyStateDir.mockResolvedValueOnce({
       migrated: false,
       skipped: false,
@@ -937,7 +979,7 @@ describe("runDoctorConfigPreflight state migration", () => {
     ).rejects.toThrow("Configured plugin discord is not installed");
 
     expect(recordSuccessfulStateMigrations).toHaveBeenCalledWith({
-      env: acquireStartupMigrationLease.mock.calls[0]?.[0]?.env,
+      env: acquireStartupMigrationLeaseWithWait.mock.calls[0]?.[0]?.env,
       identity: expectMigrationIdentity(),
       lease: startupMigrationLease,
     });
@@ -971,7 +1013,7 @@ describe("runDoctorConfigPreflight state migration", () => {
         warnings: [],
         issues: [],
       },
-      3,
+      4,
     );
     runPostCorePluginConvergence.mockResolvedValueOnce(
       makeStartupConvergenceResult({
@@ -1040,7 +1082,7 @@ describe("runDoctorConfigPreflight state migration", () => {
         warnings: [],
         issues: [{ path: "gateway.port", message: "invalid" }],
       },
-      2,
+      3,
     );
 
     await expect(

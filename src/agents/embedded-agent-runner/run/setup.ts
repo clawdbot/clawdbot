@@ -210,6 +210,7 @@ function resolveEffectiveRuntimeModel(params: {
   contextConfigProvider?: string;
   modelId: string;
   runtimeModel: ProviderRuntimeModel;
+  agentContextTokens?: number;
 }): {
   ctxInfo: ContextWindowInfo;
   effectiveModel: ProviderRuntimeModel;
@@ -220,6 +221,7 @@ function resolveEffectiveRuntimeModel(params: {
     modelId: params.modelId,
     modelContextTokens: readAgentModelContextTokens(params.runtimeModel),
     modelContextWindow: params.runtimeModel.contextWindow,
+    agentContextTokens: params.agentContextTokens,
     defaultTokens: DEFAULT_CONTEXT_TOKENS,
   });
 
@@ -273,6 +275,7 @@ export function resolveEmbeddedRuntimeModelPolicy(params: {
   modelId: string;
   runtimeModel: ProviderRuntimeModel;
   nativeModelOwned: boolean;
+  agentContextTokens?: number;
 }): {
   contextWindowInfo?: ContextWindowInfo;
   contextTokenBudget?: number;

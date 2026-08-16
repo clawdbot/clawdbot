@@ -18,6 +18,7 @@ import {
   writeQaRequestBodyLimitError,
 } from "./bus-server.js";
 import { createQaBusState, type QaBusState } from "./bus-state.js";
+import { toQaError } from "./errors.js";
 import {
   QaEvidenceGalleryError,
   buildQaEvidenceGalleryModel,
@@ -50,7 +51,10 @@ import type {
 } from "./lab-server.types.js";
 import type { QaRunnerModelOption } from "./model-catalog.runtime.js";
 import { createQaChannelGatewayConfig } from "./qa-channel-transport.js";
-import type { QaTransportAdapterFactory } from "./qa-transport-registry.js";
+import {
+  qaTransportSupportsModuleFlows,
+  type QaTransportAdapterFactory,
+} from "./qa-transport-registry.js";
 import {
   createIdleQaRunnerSnapshot,
   createQaRunOutputDir,
@@ -217,10 +221,6 @@ function createQaLabConfig(baseUrl: string): OpenClawConfig {
   return createQaChannelGatewayConfig({ baseUrl });
 }
 
-function normalizeQaLabCleanupError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(formatErrorMessage(error));
-}
-
 function detectQaEvidenceArtifactContentType(filePath: string): string {
   const lower = filePath.toLowerCase();
   if (lower.endsWith(".png")) {
@@ -348,6 +348,13 @@ export async function startQaLabServer(
                 adapterFactories.some((factory) =>
                   factory.matches({ channelId: channel, driver: "live" }),
                 ),
+              resolveModuleFlowSupport: (channel?: string) =>
+                channel
+                  ? qaTransportSupportsModuleFlows(adapterFactories, {
+                      channelId: channel,
+                      driver: "live",
+                    })
+                  : false,
             }
           : {}),
     });
@@ -579,7 +586,7 @@ export async function startQaLabServer(
             return;
           }
           fs.createReadStream(artifactFile)
-            .on("error", (error) => res.destroy(normalizeQaLabCleanupError(error)))
+            .on("error", (error) => res.destroy(toQaError(error)))
             .pipe(res);
           return;
         }
@@ -801,6 +808,7 @@ export async function startQaLabServer(
               const runtimeResult = await runQaSuite({
                 lab: labHandle ?? undefined,
                 startLab: startQaLabServer,
+                controlUiEnabled: true,
                 repoRoot,
                 outputDir: createQaRunOutputDir(repoRoot),
                 channelDriver: selection.channelDriver,
@@ -940,13 +948,20 @@ export async function startQaLabServer(
   const stopLabServerResources = async (): Promise<Error | undefined> => {
     runnerModelCatalogAbort?.abort();
     await runnerModelCatalogPromise?.catch(() => undefined);
+    let cleanupError: Error | undefined;
+    // Gateway shutdown can flush completed work through this server, so the
+    // bus must remain reachable until the gateway has fully stopped.
+    try {
+      await gateway?.stop();
+    } catch (error) {
+      cleanupError = toQaError(error);
+    }
     const results = await Promise.allSettled([
-      Promise.resolve().then(() => gateway?.stop()),
-      Promise.resolve().then(() => (serverListening ? closeQaHttpServer(server) : undefined)),
+      serverListening ? closeQaHttpServer(server, state) : undefined,
       Promise.resolve().then(releaseCaptureStore),
     ]);
     const failed = results.find((result) => result.status === "rejected");
-    return failed ? normalizeQaLabCleanupError(failed.reason) : undefined;
+    return cleanupError ?? (failed ? toQaError(failed.reason) : undefined);
   };
 
   try {

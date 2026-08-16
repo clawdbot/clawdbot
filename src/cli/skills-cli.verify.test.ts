@@ -65,16 +65,23 @@ vi.mock("../agents/agent-scope.js", () => ({
     mocks.resolveAgentWorkspaceDirMock(config, agentId),
 }));
 
-vi.mock("../infra/clawhub.js", () => ({
+vi.mock("../infra/clawhub-skills.js", () => ({
+  CLAWHUB_SKILLS_SH_REF_PREFIX: "skills-sh:",
   CLAWHUB_SKILLS_SH_TRUST_LABEL: "Not scanned by ClawHub",
   CLAWHUB_SKILLS_SH_TRUST_STATE: "not-scanned-by-clawhub",
-  downloadClawHubSkillArchive: mocks.noopAsync,
   fetchClawHubSkillCard: (...args: unknown[]) => mocks.fetchClawHubSkillCardMock(...args),
   fetchClawHubSkillDetail: mocks.noopAsync,
   fetchClawHubSkillVerification: (...args: unknown[]) =>
     mocks.fetchClawHubSkillVerificationMock(...args),
-  resolveClawHubBaseUrl: (baseUrl?: string) => mocks.resolveClawHubBaseUrlMock(baseUrl),
   searchClawHubSkills: mocks.noopAsync,
+}));
+
+vi.mock("../infra/clawhub-artifacts.js", () => ({
+  downloadClawHubSkillArchive: mocks.noopAsync,
+}));
+
+vi.mock("../infra/clawhub-client.js", () => ({
+  resolveClawHubBaseUrl: (baseUrl?: string) => mocks.resolveClawHubBaseUrlMock(baseUrl),
 }));
 
 describe("skills verify CLI", () => {
@@ -248,17 +255,39 @@ describe("skills verify CLI", () => {
     });
   });
 
-  it("rejects a different installed skills.sh reference before network verification", async () => {
+  it.each([
+    ["implicit JSON", []],
+    ["explicit JSON", ["--json"]],
+  ])("returns machine-readable target errors with %s", async (_label, outputArgs: string[]) => {
     await writeInstalledSkillsShSkill("skills-sh:owner-a/repo-a/html");
 
-    await expect(runCommand(["skills", "verify", "skills-sh:owner-b/repo-b/html"])).rejects.toThrow(
-      "__exit__:1",
+    await expect(
+      runCommand(["skills", "verify", "skills-sh:owner-b/repo-b/html", ...outputArgs]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(JSON.parse(mocks.runtimeStdout.at(-1) ?? "{}")).toEqual({
+      error: 'Skill "html" is not tracked from skills-sh:owner-b/repo-b/html.',
+    });
+    expect(mocks.runtimeErrors).toStrictEqual([]);
+    expect(mocks.fetchClawHubSkillVerificationMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["implicit JSON", []],
+    ["explicit JSON", ["--json"]],
+  ])("returns machine-readable runtime errors with %s", async (_label, outputArgs: string[]) => {
+    mocks.fetchClawHubSkillVerificationMock.mockRejectedValueOnce(
+      new Error("ClawHub verification unavailable"),
     );
 
-    expect(mocks.runtimeErrors).toContain(
-      'Skill "html" is not tracked from skills-sh:owner-b/repo-b/html.',
-    );
-    expect(mocks.fetchClawHubSkillVerificationMock).not.toHaveBeenCalled();
+    await expect(
+      runCommand(["skills", "verify", "@demo-owner/weather", ...outputArgs]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(JSON.parse(mocks.runtimeStdout.at(-1) ?? "{}")).toEqual({
+      error: "ClawHub verification unavailable",
+    });
+    expect(mocks.runtimeErrors).toStrictEqual([]);
   });
 
   it("verifies an installed skills.sh skill by slug without a version selector", async () => {

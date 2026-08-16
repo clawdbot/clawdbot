@@ -11,6 +11,7 @@ import {
   getCachedIMessagePrivateApiStatus,
   imessageRpcSupportsMethod,
 } from "./private-api-status.js";
+import { getCachedIMessageRemoteHost } from "./remote-host.js";
 import { inferIMessageTargetChatType } from "./targets.js";
 
 const PRIVATE_API_ACTIONS = new Set<ChannelMessageActionName>([
@@ -47,6 +48,12 @@ export function describeIMessageMessageTool({
   }
   const cliPath = account.config.cliPath?.trim() || "imsg";
   const privateApiStatus = getCachedIMessagePrivateApiStatus(cliPath);
+  const remote = Boolean(
+    getCachedIMessageRemoteHost({
+      cliPath,
+      remoteHost: account.config.remoteHost,
+    }),
+  );
   const gate = createActionGate(account.config.actions);
   const actions = new Set<ChannelMessageActionName>();
   for (const action of IMESSAGE_ACTION_NAMES) {
@@ -111,8 +118,29 @@ export function describeIMessageMessageTool({
       ? {
           schema: {
             properties: {
+              ...(remote
+                ? {
+                    pollOptionId: Type.Optional(
+                      Type.String({
+                        description:
+                          "Stable iMessage poll option id. Required for Remote Mac over SSH accounts; copy it from the inbound poll options.",
+                      }),
+                    ),
+                    pollOptionIndex: Type.Optional(
+                      Type.Integer({
+                        minimum: 1,
+                        description:
+                          "Local iMessage accounts only. Remote Mac accounts must use pollOptionId.",
+                      }),
+                    ),
+                  }
+                : {}),
               pollOptionText: Type.Optional(
-                Type.String({ description: "Exact iMessage poll option text." }),
+                Type.String({
+                  description: remote
+                    ? "Local iMessage accounts only. Remote Mac accounts must use pollOptionId."
+                    : "Exact iMessage poll option text.",
+                }),
               ),
             },
             actions: ["poll-vote" as const],

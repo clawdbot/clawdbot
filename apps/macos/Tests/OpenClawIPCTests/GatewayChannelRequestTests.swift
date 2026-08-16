@@ -66,7 +66,8 @@ struct GatewayChannelRequestTests {
         let channel = try GatewayChannelActor(
             url: #require(URL(string: "ws://example.invalid")),
             token: nil,
-            session: WebSocketSessionBox(session: session))
+            session: WebSocketSessionBox(session: session),
+            connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions)
 
         do {
             _ = try await channel.request(method: "test", params: nil, timeoutMs: 10)
@@ -97,7 +98,8 @@ struct GatewayChannelRequestTests {
         let channel = try GatewayChannelActor(
             url: #require(URL(string: "ws://example.invalid")),
             token: nil,
-            session: WebSocketSessionBox(session: session))
+            session: WebSocketSessionBox(session: session),
+            connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions)
 
         await #expect(throws: CancellationError.self) {
             try await channel.request(method: "cancelled-send", params: nil, timeoutMs: 5000)
@@ -123,7 +125,8 @@ struct GatewayChannelRequestTests {
         let channel = try GatewayChannelActor(
             url: #require(URL(string: "ws://example.invalid")),
             token: nil,
-            session: WebSocketSessionBox(session: session))
+            session: WebSocketSessionBox(session: session),
+            connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions)
         let request = Task {
             try await channel.request(method: "cancel-me", params: nil, timeoutMs: 5000)
         }
@@ -160,7 +163,8 @@ struct GatewayChannelRequestTests {
         let channel = try GatewayChannelActor(
             url: #require(URL(string: "ws://example.invalid")),
             token: nil,
-            session: WebSocketSessionBox(session: session))
+            session: WebSocketSessionBox(session: session),
+            connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions)
         let resumedGate = GatewayRequestStartGate()
         await channel._test_setRequestResumedHandler { await resumedGate.wait() }
         let request = Task {
@@ -194,7 +198,8 @@ struct GatewayChannelRequestTests {
         let channel = try GatewayChannelActor(
             url: #require(URL(string: "ws://example.invalid")),
             token: nil,
-            session: WebSocketSessionBox(session: session))
+            session: WebSocketSessionBox(session: session),
+            connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions)
         let resumedGate = GatewayRequestStartGate()
         await channel._test_setRequestResumedHandler { await resumedGate.wait() }
         let request = Task {
@@ -219,7 +224,8 @@ struct GatewayChannelRequestTests {
         let channel = try GatewayChannelActor(
             url: #require(URL(string: "ws://example.invalid")),
             token: nil,
-            session: WebSocketSessionBox(session: session))
+            session: WebSocketSessionBox(session: session),
+            connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions)
         try await channel.connect()
         let socket = try #require(session.latestTask())
         #expect(socket.snapshotSendCount() == 1)
@@ -246,7 +252,8 @@ struct GatewayChannelRequestTests {
         let channel = try GatewayChannelActor(
             url: #require(URL(string: "ws://example.invalid")),
             token: nil,
-            session: WebSocketSessionBox(session: session))
+            session: WebSocketSessionBox(session: session),
+            connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions)
         try await channel.connect()
         let socket = try #require(session.latestTask())
         #expect(socket.snapshotSendCount() == 1)
@@ -279,7 +286,8 @@ struct GatewayChannelRequestTests {
         let channel = try GatewayChannelActor(
             url: #require(URL(string: "ws://example.invalid")),
             token: nil,
-            session: WebSocketSessionBox(session: session))
+            session: WebSocketSessionBox(session: session),
+            connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions)
         let connecting = Task { try await channel.connect() }
         await connectGate.waitUntilEntered()
         let request = Task {
@@ -322,7 +330,8 @@ struct GatewayChannelRequestTests {
         let channel = try GatewayChannelActor(
             url: #require(URL(string: "ws://example.invalid")),
             token: nil,
-            session: WebSocketSessionBox(session: session))
+            session: WebSocketSessionBox(session: session),
+            connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions)
         let initiator = Task { try await channel.connect() }
         await connectGate.waitUntilEntered()
         let peer = Task { try await channel.connect() }

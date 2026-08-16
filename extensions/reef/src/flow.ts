@@ -1,4 +1,7 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   appendAudit,
   appendInboxRead,
@@ -42,12 +45,6 @@ interface LegacyDeliveryCandidate {
   expiresAt: number;
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function buildLegacyDeliveryIndex(
   entries: readonly AuditEntry[],
 ): Map<string, LegacyDeliveryCandidate> {
@@ -57,12 +54,12 @@ function buildLegacyDeliveryIndex(
   const candidates = new Map<string, LegacyDeliveryCandidate>();
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index]!;
-    const payload = asRecord(entry.event.payload);
+    const payload = asOptionalRecord(entry.event.payload);
     if (entry.event.type === "confirm_delivery") {
       if (entry.event.ts < oldest) {
         continue;
       }
-      const receipt = asRecord(payload?.receipt);
+      const receipt = asOptionalRecord(payload?.receipt);
       if (typeof receipt?.id === "string") {
         confirmed.add(receipt.id);
         sealed.delete(receipt.id);

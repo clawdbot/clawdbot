@@ -265,6 +265,7 @@ Set up an Azure Linux VM with the Azure CLI, apply Network Security Group (NSG) 
     After onboarding completes:
 
     ```bash
+    openclaw doctor --json
     openclaw gateway status
     ```
 

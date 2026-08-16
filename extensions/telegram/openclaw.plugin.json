@@ -1,5 +1,9 @@
 {
   "id": "telegram",
+  "doctorContract": {
+    "configRepair": true,
+    "stateMigrations": true
+  },
   "icon": "https://cdn.simpleicons.org/telegram",
   "activation": {
     "onStartup": false

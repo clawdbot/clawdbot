@@ -1,3 +1,4 @@
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 // Webhook CLI registrations, currently Gmail Pub/Sub setup and service runner commands.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
@@ -20,7 +21,7 @@ import {
   DEFAULT_GMAIL_SUBSCRIPTION,
   DEFAULT_GMAIL_TOPIC,
 } from "../hooks/gmail.js";
-import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatCliCommand } from "./command-format.js";
 
@@ -71,7 +72,12 @@ export function registerWebhooksCli(program: Command) {
         const parsed = parseGmailSetupOptions(opts);
         await runGmailSetup(parsed);
       } catch (err) {
-        defaultRuntime.error(danger(String(err)));
+        const message = formatErrorMessage(err);
+        if (opts.json) {
+          defaultRuntime.writeJson({ error: message });
+        } else {
+          defaultRuntime.error(danger(message));
+        }
         defaultRuntime.exit(1);
       }
     });
@@ -103,7 +109,7 @@ export function registerWebhooksCli(program: Command) {
         const parsed = parseGmailRunOptions(opts);
         await runGmailService(parsed);
       } catch (err) {
-        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.error(danger(formatErrorMessage(err)));
         defaultRuntime.exit(1);
       }
     });
@@ -149,7 +155,7 @@ function parseGmailCommonOptions(raw: Record<string, unknown>) {
     includeBody: booleanOption(raw.includeBody),
     maxBytes: numberOption(raw.maxBytes, "--max-bytes"),
     renewEveryMinutes: numberOption(raw.renewMinutes, "--renew-minutes"),
-    tailscaleRaw: normalizeOptionalString(raw.tailscale),
+    tailscale: tailscaleModeOption(raw.tailscale),
     tailscalePath: normalizeOptionalString(raw.tailscalePath),
     tailscaleTarget: normalizeOptionalString(raw.tailscaleTarget),
   };
@@ -171,10 +177,21 @@ function gmailOptionsFromCommon(
     includeBody: common.includeBody,
     maxBytes: common.maxBytes,
     renewEveryMinutes: common.renewEveryMinutes,
-    tailscale: common.tailscaleRaw as GmailRunOptions["tailscale"],
+    tailscale: common.tailscale,
     tailscalePath: common.tailscalePath,
     tailscaleTarget: common.tailscaleTarget,
   };
+}
+
+function tailscaleModeOption(value: unknown): GmailRunOptions["tailscale"] {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  const mode = normalizeOptionalString(value);
+  if (mode === "funnel" || mode === "serve" || mode === "off") {
+    return mode;
+  }
+  throw new Error("Invalid --tailscale (must be funnel, serve, or off).");
 }
 
 function numberOption(value: unknown, label: string): number | undefined {

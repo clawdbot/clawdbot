@@ -4,12 +4,17 @@ import {
   type SessionProjectionScope,
 } from "@openclaw/gateway-client/browser";
 import { describe, expect, it } from "vitest";
+import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import {
+  admitInitialUserMessageHandoff,
   getChatSessionProjection,
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
   setChatSessionProjection,
 } from "./history-merge.ts";
+import { prepareInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
+
+const imageDataUrl = "data:image/png;base64,iVBORw0KGgo=";
 
 function createHistoryMessage(
   role: "assistant" | "user",
@@ -31,6 +36,54 @@ function projectLiveMessage(owner: object, message: unknown, scope: SessionProje
   });
   setChatSessionProjection(owner, projection);
   return projection;
+}
+
+function createInitialHandoffFixture(messageSequence = 1) {
+  const sessionKey = "agent:main:initial-image";
+  const client = {};
+  const initialUserMessage = createInitialUserMessageHandoff();
+  const owner = {
+    sessionKey,
+    client,
+    initialUserMessage,
+    chatMessages: [] as unknown[],
+    currentSessionId: "initial-session",
+  };
+  prepareInitialUserMessageHandoff(
+    initialUserMessage,
+    sessionKey,
+    {
+      text: "inspect this image",
+      attachments: [
+        {
+          id: "image-1",
+          mimeType: "image/png",
+          fileName: "image.png",
+          sizeBytes: 68,
+          dataUrl: imageDataUrl,
+        },
+      ],
+      createdAt: 123,
+    },
+    client,
+    { runId: "initial-run", messageSeq: messageSequence },
+  );
+  return { client, initialUserMessage, owner, sessionKey };
+}
+
+function createAuthoritativeInitialMessage(sequence = 1) {
+  return {
+    role: "user",
+    content: [{ type: "image", source: { type: "url", url: "/persisted.png" } }],
+    timestamp: 456,
+    serverField: "authoritative",
+    __openclaw: {
+      id: "persisted-initial-user",
+      idempotencyKey: "initial-run:user",
+      seq: sequence,
+      media: [{ path: "/persisted.png", contentType: "image/png" }],
+    },
+  };
 }
 
 describe("pane-owned canonical session projection", () => {
@@ -74,6 +127,97 @@ describe("pane-owned canonical session projection", () => {
 
     expect(owner.chatMessages).toEqual([liveUser]);
     expect(getChatSessionProjection(owner, owner.chatMessages, projection.scope)).toBe(projection);
+  });
+
+  it.each([
+    {
+      name: "live-first active adoption",
+      admitFirst: true,
+      eventType: "messagePersisted" as const,
+    },
+    {
+      name: "history-first terminal adoption",
+      admitFirst: false,
+      eventType: "snapshotLoaded" as const,
+    },
+  ])("owns $name in one projection publication", ({ admitFirst, eventType }) => {
+    const { client, initialUserMessage, owner, sessionKey } = createInitialHandoffFixture();
+    const handoff = initialUserMessage.read(sessionKey, client);
+    expect(handoff).not.toBeNull();
+    if (!handoff) {
+      throw new Error("expected initial prompt handoff");
+    }
+    if (admitFirst) {
+      expect(admitInitialUserMessageHandoff(owner, sessionKey)).toBe(true);
+      const admittedMessage = owner.chatMessages[0];
+      owner.chatMessages = [];
+      expect(admitInitialUserMessageHandoff(owner, sessionKey)).toBe(true);
+      expect(owner.chatMessages).toEqual([admittedMessage]);
+      owner.chatMessages = [];
+      const reboundScope = readChatSessionProjectionScope(owner, {
+        sessionId: "rebound-session",
+      });
+      reduceChatSessionProjection(
+        owner,
+        { type: "snapshotLoaded", messages: [] },
+        { scope: reboundScope },
+      );
+      expect(owner.chatMessages).toEqual([admittedMessage]);
+      owner.currentSessionId = "rebound-session";
+    }
+    const localContent = handoff.message.content;
+    const authoritative = createAuthoritativeInitialMessage();
+    const event =
+      eventType === "messagePersisted"
+        ? ({ type: eventType, message: authoritative } as const)
+        : ({ type: eventType, messages: [authoritative] } as const);
+    const projection = reduceChatSessionProjection(owner, event, { runActive: admitFirst });
+    const adopted = owner.chatMessages[0] as Record<string, unknown>;
+
+    expect(owner.chatMessages).toHaveLength(1);
+    expect(projection.messages[0]).toBe(adopted);
+    expect(adopted.content).toBe(localContent);
+    expect(adopted).toMatchObject({
+      role: "user",
+      timestamp: 456,
+      serverField: "authoritative",
+      __openclaw: {
+        id: "persisted-initial-user",
+        idempotencyKey: "initial-run:user",
+        seq: 1,
+      },
+    });
+    expect((adopted["__openclaw"] as Record<string, unknown>).media).toBeUndefined();
+
+    if (admitFirst) {
+      expect(initialUserMessage.read(sessionKey, client)).not.toBeNull();
+      reduceChatSessionProjection(owner, { type: "sessionReset" });
+      expect(admitInitialUserMessageHandoff(owner, sessionKey)).toBe(true);
+      expect(owner.chatMessages).toEqual([handoff.message]);
+      reduceChatSessionProjection(
+        owner,
+        { type: "snapshotLoaded", messages: [authoritative] },
+        { runActive: false },
+      );
+      expect(initialUserMessage.read(sessionKey, client)).toBeNull();
+    } else {
+      expect(initialUserMessage.read(sessionKey, client)).toBeNull();
+      expect(admitInitialUserMessageHandoff(owner, sessionKey)).toBe(false);
+    }
+  });
+
+  it("requires the accepted sequence when adopting the initial run", () => {
+    const { client, initialUserMessage, owner, sessionKey } = createInitialHandoffFixture(2);
+    const authoritative = createAuthoritativeInitialMessage(1);
+    const projection = reduceChatSessionProjection(
+      owner,
+      { type: "snapshotLoaded", messages: [authoritative] },
+      { runActive: false },
+    );
+
+    expect(projection.messages[0]).toBe(authoritative);
+    expect(owner.chatMessages[0]).toBe(authoritative);
+    expect(initialUserMessage.read(sessionKey, client)).not.toBeNull();
   });
 
   it("keeps each split pane's live projection independent", () => {

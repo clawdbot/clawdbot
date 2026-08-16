@@ -6,7 +6,7 @@ import {
   embeddedAgentLog,
   formatToolExecutionErrorMessage,
   resolveToolExecutionErrorKind,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   hasPendingInternalDiagnosticEvent,
@@ -146,7 +146,8 @@ function formatDynamicToolTimeoutDetails(params: {
  */
 export async function handleDynamicToolCallWithTimeout(params: {
   call: CodexDynamicToolCallParams;
-  toolBridge: Pick<CodexDynamicToolBridge, "handleToolCall" | "consumeToolExecutionSnapshot">;
+  toolBridge: Pick<CodexDynamicToolBridge, "handleToolCall" | "consumeToolExecutionSnapshot"> &
+    Partial<Pick<CodexDynamicToolBridge, "sideEffectOwnerKeyForTool">>;
   signal: AbortSignal;
   timeoutMs: number;
   toolMeta?: string;
@@ -162,6 +163,7 @@ export async function handleDynamicToolCallWithTimeout(params: {
   const conservativeRaceResponses = new WeakSet<CodexDynamicToolRuntimeResponse>();
   const finalizeTerminal = (response: CodexDynamicToolRuntimeResponse) => {
     const executionSnapshot = params.toolBridge.consumeToolExecutionSnapshot?.(params.call.callId);
+    const ownerKey = params.toolBridge.sideEffectOwnerKeyForTool?.(params.call.tool);
     // The host observer owns active wrapper state. A bridge snapshot is only needed
     // after that wrapper settles while result post-processing remains pending.
     const observedExecutionStarted =
@@ -173,6 +175,7 @@ export async function handleDynamicToolCallWithTimeout(params: {
       arguments:
         response.executedArguments ?? executionSnapshot?.executedArguments ?? params.call.arguments,
       ...(params.toolMeta ? { meta: params.toolMeta } : {}),
+      ...(ownerKey ? { ownerMutation: { ownerKey } } : {}),
       ...(observedExecutionStarted !== undefined
         ? { executionStarted: observedExecutionStarted }
         : {}),

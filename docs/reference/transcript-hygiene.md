@@ -77,9 +77,9 @@ Implementation:
 - Max image side is configurable via `agents.defaults.imageMaxDimensionPx`
   (default: `1200`)
 - Blank text blocks are removed while this pass walks replay content.
-  Assistant turns that become empty are dropped from the replay copy; user
-  and tool-result turns that become empty receive a non-empty
-  omitted-content placeholder.
+  Assistant turns that become empty are dropped unless they own opaque
+  provider replay state; user and tool-result turns that become empty receive
+  a non-empty omitted-content placeholder.
 
 ---
 

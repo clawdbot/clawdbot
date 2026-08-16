@@ -364,6 +364,9 @@ export function ensurePageState(page: Page): PageState {
       }
     });
     page.on("close", () => {
+      const emulationSession = state.emulation?.session;
+      state.emulation = undefined;
+      void emulationSession?.then((session) => session.detach()).catch(() => {});
       clearArmedDialogResponse(state);
       for (const controller of state.dialogAbortControllers) {
         if (!controller.signal.aborted) {

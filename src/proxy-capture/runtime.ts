@@ -3,6 +3,7 @@ import { isUtf8 } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { URL } from "node:url";
 import { normalizeRequestInitHeadersForFetch } from "../infra/fetch-headers.js";
+import { readChunkWithIdleTimeout } from "../infra/http-body.js";
 import {
   hasRegisteredSecretValuesForRedaction,
   redactRegisteredSecretValues,
@@ -29,10 +30,21 @@ const REDACTED_CAPTURE_BINARY_PAYLOAD = Buffer.from("[REDACTED BINARY PAYLOAD]",
 // through clone(), so a single large (or hostile, effectively endless) provider
 // response would otherwise be buffered fully into memory just to record it.
 const MAX_CAPTURED_RESPONSE_BODY_BYTES = 16 * 1024 * 1024;
+// The byte cap bounds how much a capture can buffer; this bounds how long it can
+// wait for the next byte. Without it a remote that sends headers and then stalls
+// keeps the capture branch of the clone() tee readable forever, and a tee branch
+// only settles once both branches cancel or the source reaches EOF — so the
+// caller's own cancellation, and the transport release that follows it, wait on
+// a diagnostic read. Matches the idle bounds the shared body readers already
+// take (src/infra/http-body.ts).
+const CAPTURED_RESPONSE_BODY_IDLE_TIMEOUT_MS = 10_000;
+
+/** Distinguishes the capture deadline from a genuine response-stream failure. */
+class CaptureReadIdleTimeoutError extends Error {}
 
 type CapturedResponseBodyResult =
   | { status: "captured"; buffer: Buffer }
-  | { status: "too-large" | "unavailable" };
+  | { status: "too-large" | "unavailable" | "stalled" };
 
 // Reads a cloned capture response body under a byte cap. Oversized or
 // non-streaming Response-like bodies return a metadata-only status instead of
@@ -49,7 +61,7 @@ async function readCapturedResponseBodyBounded(
   maxBytes: number,
 ): Promise<CapturedResponseBodyResult> {
   const clone = response.clone();
-  const body = (clone as unknown as { body?: ReadableStream<Uint8Array> | null }).body;
+  const body = clone.body;
   if (!body || typeof body.getReader !== "function") {
     // A real null-body Response consumes as empty. Response-like objects without
     // a stream cannot be read under a byte cap, so never call arrayBuffer().
@@ -61,9 +73,34 @@ async function readCapturedResponseBodyBounded(
   const chunks: Buffer[] = [];
   let total = 0;
   let truncated = false;
+  let stalled = false;
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      let next: Awaited<ReturnType<typeof readChunkWithIdleTimeout>>;
+      try {
+        next = await readChunkWithIdleTimeout(
+          reader,
+          CAPTURED_RESPONSE_BODY_IDLE_TIMEOUT_MS,
+          ({ chunkTimeoutMs }) =>
+            new CaptureReadIdleTimeoutError(
+              `capture read stalled: no data for ${chunkTimeoutMs}ms`,
+            ),
+        );
+      } catch (error) {
+        // The helper rejects for a failed read as well as for the deadline, and
+        // only the deadline is a capture decision: a reset or aborted stream is
+        // the exchange failing, and has to keep reaching the error handler.
+        if (!(error instanceof CaptureReadIdleTimeoutError)) {
+          throw error;
+        }
+        // The helper has already issued the branch cancel fire-and-forget, which
+        // is what lets the tee settle. Capture keeps what it has and records the
+        // exchange as metadata: a stalled remote must not turn a diagnostic read
+        // into a failure of the request being observed.
+        stalled = true;
+        break;
+      }
+      const { done, value } = next;
       if (done) {
         break;
       }
@@ -86,6 +123,9 @@ async function readCapturedResponseBodyBounded(
     } catch {
       // Some non-compliant/mocked streams reject releaseLock; ignore.
     }
+  }
+  if (stalled) {
+    return { status: "stalled" };
   }
   return truncated
     ? { status: "too-large" }
@@ -502,7 +542,7 @@ export function captureHttpExchange(
   // Records the response status/headers without a body. Used both when a
   // Response-like object cannot be cloned and when capturing the body would be
   // unsafe (over the cap), so the exchange is still observable without OOM risk.
-  const recordResponseMetadataOnly = (bodyCapture: "unavailable" | "too-large") => {
+  const recordResponseMetadataOnly = (bodyCapture: "unavailable" | "too-large" | "stalled") => {
     store.recordEvent({
       ...createHttpCaptureEventBase({
         settings,

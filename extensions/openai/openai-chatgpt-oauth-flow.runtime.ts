@@ -6,46 +6,33 @@
  */
 
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { parseOAuthAuthorizationInput } from "openclaw/plugin-sdk/provider-oauth-runtime";
-import { resolveCodexAuthIdentity } from "./openai-chatgpt-auth-identity.js";
 import {
   createOAuthLoginCancelledError,
+  oauthErrorHtml,
+  oauthSuccessHtml,
+  parseOAuthAuthorizationInput,
   throwIfOAuthLoginAborted,
   withOAuthLoginAbort,
-} from "./openai-chatgpt-oauth-abort.runtime.js";
+  type OAuthCredentials,
+  type OAuthPrompt,
+} from "openclaw/plugin-sdk/provider-oauth-runtime";
+import { resolveCodexAuthIdentity } from "./openai-chatgpt-auth-identity.js";
 import {
   createOpenAIAuthorizationFlow,
   resolveOpenAICallbackHost,
   resolveOpenAIRedirectUri,
 } from "./openai-chatgpt-oauth-authorization.runtime.js";
-import { oauthErrorHtml, oauthSuccessHtml } from "./openai-chatgpt-oauth-page.runtime.js";
 import {
   exchangeOpenAIAuthorizationCode,
   refreshOpenAIAccessToken,
 } from "./openai-chatgpt-oauth-token.runtime.js";
-import type { OAuthCredentials, OAuthPrompt } from "./openai-chatgpt-oauth-types.runtime.js";
 
 const CALLBACK_PORT = 1455;
 const CALLBACK_HOST = resolveOpenAICallbackHost();
 const REDIRECT_URI = resolveOpenAIRedirectUri(CALLBACK_HOST);
 const MANUAL_PROMPT_FALLBACK_MS = 15_000;
 
-type NodeOAuthRuntime = {
-  http: typeof import("node:http");
-};
-
-const loadNodeOAuthModules = createLazyRuntimeModule(() =>
-  import("node:http").then((http) => ({ http })),
-);
-
-function loadNodeOAuthRuntime(): Promise<NodeOAuthRuntime> {
-  if (typeof process === "undefined" || (!process.versions?.node && !process.versions?.bun)) {
-    return Promise.reject(
-      new Error("OpenAI Codex OAuth is only available in Node.js environments"),
-    );
-  }
-  return loadNodeOAuthModules();
-}
+const loadNodeOAuthHttp = createLazyRuntimeModule(() => import("node:http"));
 
 function waitForManualPromptFallback(signal?: AbortSignal): Promise<null> {
   return new Promise((resolve, reject) => {
@@ -72,18 +59,22 @@ function waitForManualPromptFallback(signal?: AbortSignal): Promise<null> {
   });
 }
 
-async function promptForAuthorizationCode(
-  onPrompt: (prompt: OAuthPrompt) => Promise<string>,
-  state: string,
-): Promise<string | undefined> {
-  const input = await onPrompt({
-    message: "Paste the authorization code (or full redirect URL):",
-  });
+function parseAuthorizationCode(input: string, state: string): string | undefined {
   const parsed = parseOAuthAuthorizationInput(input);
   if (parsed.state && parsed.state !== state) {
     throw new Error("State mismatch");
   }
   return parsed.code;
+}
+
+async function promptForAuthorizationCode(
+  onPrompt: (prompt: OAuthPrompt) => Promise<string>,
+  state: string,
+): Promise<string | undefined> {
+  return parseAuthorizationCode(
+    await onPrompt({ message: "Paste the authorization code (or full redirect URL):" }),
+    state,
+  );
 }
 
 type OAuthServerInfo = {
@@ -106,17 +97,10 @@ function sendOAuthHtmlResponse(
 }
 
 async function startLocalOAuthServer(state: string): Promise<OAuthServerInfo> {
-  const { http } = await loadNodeOAuthRuntime();
+  const http = await loadNodeOAuthHttp();
   let settleWait: ((value: { code: string } | null) => void) | undefined;
   const waitForCodePromise = new Promise<{ code: string } | null>((resolve) => {
-    let settled = false;
-    settleWait = (value) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      resolve(value);
-    };
+    settleWait = resolve;
   });
 
   const server = http.createServer((req, res) => {
@@ -182,9 +166,22 @@ async function startLocalOAuthServer(state: string): Promise<OAuthServerInfo> {
   });
 }
 
-function getAccountId(accessToken: string): string | null {
-  const accountId = resolveCodexAuthIdentity({ accessToken }).accountId;
-  return typeof accountId === "string" && accountId.length > 0 ? accountId : null;
+function resolveOpenAICredentials(
+  result: Awaited<ReturnType<typeof refreshOpenAIAccessToken>>,
+): OAuthCredentials {
+  if (result.type !== "success") {
+    throw new Error(result.message);
+  }
+  const accountId = resolveCodexAuthIdentity({ accessToken: result.access }).accountId;
+  if (!accountId) {
+    throw new Error("Failed to extract accountId from token");
+  }
+  return {
+    access: result.access,
+    refresh: result.refresh,
+    expires: result.expires,
+    accountId,
+  };
 }
 
 /**
@@ -243,36 +240,16 @@ export async function loginOpenAICodex(options: {
         server.cancelWait,
       );
 
-      // If manual input was cancelled, throw that error
+      if (!result?.code && !manualCode && !manualError) {
+        await withOAuthLoginAbort(manualPromise, options.signal, server.cancelWait);
+      }
       if (manualError) {
         throw manualError;
       }
-
       if (result?.code) {
-        // Browser callback won
         code = result.code;
       } else if (manualCode) {
-        // Manual input won (or callback timed out and user had entered code)
-        const parsed = parseOAuthAuthorizationInput(manualCode);
-        if (parsed.state && parsed.state !== state) {
-          throw new Error("State mismatch");
-        }
-        code = parsed.code;
-      }
-
-      // If still no code, wait for manual promise to complete and try that
-      if (!code) {
-        await withOAuthLoginAbort(manualPromise, options.signal, server.cancelWait);
-        if (manualError) {
-          throw toLintErrorObject(manualError, "Non-Error thrown");
-        }
-        if (manualCode) {
-          const parsed = parseOAuthAuthorizationInput(manualCode);
-          if (parsed.state && parsed.state !== state) {
-            throw new Error("State mismatch");
-          }
-          code = parsed.code;
-        }
+        code = parseAuthorizationCode(manualCode, state);
       }
     } else {
       const callbackPromise = server.waitForCode();
@@ -311,24 +288,11 @@ export async function loginOpenAICodex(options: {
       throw new Error("Missing authorization code");
     }
 
-    const tokenResult = await exchangeOpenAIAuthorizationCode(code, verifier, redirectUri, {
-      signal: options.signal,
-    });
-    if (tokenResult.type !== "success") {
-      throw new Error(tokenResult.message);
-    }
-
-    const accountId = getAccountId(tokenResult.access);
-    if (!accountId) {
-      throw new Error("Failed to extract accountId from token");
-    }
-
-    return {
-      access: tokenResult.access,
-      refresh: tokenResult.refresh,
-      expires: tokenResult.expires,
-      accountId,
-    };
+    return resolveOpenAICredentials(
+      await exchangeOpenAIAuthorizationCode(code, verifier, redirectUri, {
+        signal: options.signal,
+      }),
+    );
   } finally {
     server.close();
   }
@@ -338,34 +302,5 @@ export async function loginOpenAICodex(options: {
  * Refresh OpenAI Codex OAuth token
  */
 export async function refreshOpenAICodexToken(refreshToken: string): Promise<OAuthCredentials> {
-  const result = await refreshOpenAIAccessToken(refreshToken);
-  if (result.type !== "success") {
-    throw new Error(result.message);
-  }
-
-  const accountId = getAccountId(result.access);
-  if (!accountId) {
-    throw new Error("Failed to extract accountId from token");
-  }
-
-  return {
-    access: result.access,
-    refresh: result.refresh,
-    expires: result.expires,
-    accountId,
-  };
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
+  return resolveOpenAICredentials(await refreshOpenAIAccessToken(refreshToken));
 }

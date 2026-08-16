@@ -20,7 +20,7 @@ type ThinkingHookParams<TContext> = {
 };
 
 /** Resolves a provider thinking profile from active plugins or bundled policy surface. */
-export function resolveProviderThinkingProfile(
+export function resolveEffectiveThinkingProfile(
   params: ThinkingHookParams<ProviderDefaultThinkingPolicyContext>,
   options?: { allowPublicArtifactFallback?: boolean },
 ) {

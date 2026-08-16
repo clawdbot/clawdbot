@@ -1,30 +1,23 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   clearLocalAudioInspectionCacheForTests,
   inspectLocalAudioSelection,
   recordLocalAudioBackendObservation,
 } from "./local-audio.js";
 
-let tempDirs: string[] = [];
-
-async function createTempDir(): Promise<string> {
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-audio-"));
-  tempDirs.push(tempDir);
-  return tempDir;
-}
+const tempDirs = createTempDirTracker();
 
 afterEach(async () => {
   clearLocalAudioInspectionCacheForTests();
-  await Promise.all(tempDirs.map(async (tempDir) => await fs.rm(tempDir, { recursive: true })));
-  tempDirs = [];
+  tempDirs.cleanup();
 });
 
 describe("local audio selection", () => {
   it("expands home-directory shorthand in PATH entries", async () => {
-    const tempDir = await createTempDir();
+    const tempDir = tempDirs.make("openclaw-local-audio-");
     const binDir = path.join(tempDir, "bin");
     const modelPath = path.join(tempDir, "whisper.bin");
     const commandPath = path.join(binDir, "whisper-cli");
@@ -51,7 +44,7 @@ describe("local audio selection", () => {
   });
 
   it("does not resolve auto-detected commands from empty PATH entries", async () => {
-    const tempDir = await createTempDir();
+    const tempDir = tempDirs.make("openclaw-local-audio-");
     const modelPath = path.join(tempDir, "whisper.bin");
     await fs.writeFile(modelPath, "model");
     const checkedPaths: string[] = [];
@@ -78,7 +71,7 @@ describe("local audio selection", () => {
   });
 
   it("retries binary inspection after a transient failure", async () => {
-    const tempDir = await createTempDir();
+    const tempDir = tempDirs.make("openclaw-local-audio-");
     const modelPath = path.join(tempDir, "whisper.bin");
     await fs.writeFile(modelPath, "model");
     const attempts = new Map<string, number>();
@@ -107,7 +100,7 @@ describe("local audio selection", () => {
   });
 
   it("does not rank Metal-capable whisper ahead of sherpa until a run observes Metal", async () => {
-    const tempDir = await createTempDir();
+    const tempDir = tempDirs.make("openclaw-local-audio-");
     const modelPath = path.join(tempDir, "whisper.bin");
     const sherpaDir = path.join(tempDir, "sherpa");
     await fs.writeFile(modelPath, "model");
@@ -233,7 +226,7 @@ describe("local audio selection", () => {
   });
 
   it("reports Parakeet as MLX-capable without treating capability as observation", async () => {
-    const tempDir = await createTempDir();
+    const tempDir = tempDirs.make("openclaw-local-audio-");
     const whisperModel = path.join(tempDir, "whisper.bin");
     const sherpaDir = path.join(tempDir, "sherpa");
     await fs.writeFile(whisperModel, "model");
@@ -272,7 +265,7 @@ describe("local audio selection", () => {
   });
 
   it("keeps an unproven whisper runtime behind CPU sherpa", async () => {
-    const tempDir = await createTempDir();
+    const tempDir = tempDirs.make("openclaw-local-audio-");
     const whisperModel = path.join(tempDir, "whisper.bin");
     const sherpaDir = path.join(tempDir, "sherpa");
     await fs.writeFile(whisperModel, "model");
@@ -306,7 +299,7 @@ describe("local audio selection", () => {
   });
 
   it("reports a dynamically linked CUDA runtime as capable but unobserved", async () => {
-    const tempDir = await createTempDir();
+    const tempDir = tempDirs.make("openclaw-local-audio-");
     const whisperModel = path.join(tempDir, "whisper.bin");
     await fs.writeFile(whisperModel, "model");
 

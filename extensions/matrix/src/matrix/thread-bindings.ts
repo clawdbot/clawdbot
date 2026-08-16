@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveSessionAgentId } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
 import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
@@ -25,7 +25,6 @@ import {
   getMatrixThreadBindingManagerEntry,
   listBindingsForAccount,
   removeBindingRecord,
-  resetMatrixThreadBindingsForTests,
   resolveBindingKey,
   resolveEffectiveBindingExpiry,
   setBindingRecord,
@@ -499,9 +498,10 @@ export async function createMatrixThreadBindingManager(params: {
       });
       if (getMatrixThreadBindingManagerEntry(params.accountId)?.manager === manager) {
         deleteMatrixThreadBindingManagerEntry(params.accountId);
-      }
-      for (const record of listBindingsForAccount(params.accountId)) {
-        removeBindingRecord(record);
+        // Live bindings belong to this manager generation; persisted rows reload on restart.
+        for (const record of listBindingsForAccount(params.accountId)) {
+          removeBindingRecord(record);
+        }
       }
     },
   };
@@ -586,8 +586,8 @@ export async function createMatrixThreadBindingManager(params: {
         targetKind: toMatrixBindingTargetKind(input.targetKind),
         targetSessionKey,
         agentId:
-          normalizeOptionalString(input.metadata?.agentId) ||
-          resolveAgentIdFromSessionKey(targetSessionKey, resolveDefaultAgentId(params.cfg)),
+          normalizeOptionalString(input.metadata?.agentId) ??
+          resolveSessionAgentId({ config: params.cfg, sessionKey: targetSessionKey }),
         label: normalizeOptionalString(input.metadata?.label) || undefined,
         boundBy: normalizeOptionalString(input.metadata?.boundBy) || "system",
         boundAt: now,
@@ -708,4 +708,4 @@ export async function createMatrixThreadBindingManager(params: {
   });
   return manager;
 }
-export { getMatrixThreadBindingManager, resetMatrixThreadBindingsForTests };
+export { getMatrixThreadBindingManager };

@@ -4,7 +4,7 @@ import path from "node:path";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
 import { runExec } from "../process/exec.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
-import { fileExists } from "./fs.js";
+import { optionalPathExists } from "./fs.js";
 
 type LocalAudioCandidate = {
   id: "parakeet-mlx" | "whisper-cli" | "sherpa-onnx-offline" | "whisper";
@@ -283,8 +283,9 @@ export async function inspectLocalAudioSelection(
 
   const envModel = env.WHISPER_CPP_MODEL?.trim();
   const defaultWhisperModel = "/opt/homebrew/share/whisper-cpp/for-tests-ggml-tiny.bin";
-  const whisperModel = envModel && (await fileExists(envModel)) ? envModel : defaultWhisperModel;
-  const whisperReady = Boolean(whisperCommand) && (await fileExists(whisperModel));
+  const whisperModel =
+    envModel && (await optionalPathExists(envModel)) ? envModel : defaultWhisperModel;
+  const whisperReady = Boolean(whisperCommand) && (await optionalPathExists(whisperModel));
   const whisperBackend = whisperCommand
     ? await inspectWhisperBackend({
         command: whisperCommand,
@@ -306,7 +307,7 @@ export async function inspectLocalAudioSelection(
   const sherpaReady =
     Boolean(sherpaCommand) &&
     sherpaFiles.length === 4 &&
-    (await Promise.all(sherpaFiles.map(fileExists))).every(Boolean);
+    (await Promise.all(sherpaFiles.map(optionalPathExists))).every(Boolean);
   const parakeetReady = Boolean(parakeetCommand) && platform === "darwin" && arch === "arm64";
   const parakeetArgs = [
     "{{AttachmentPath}}",

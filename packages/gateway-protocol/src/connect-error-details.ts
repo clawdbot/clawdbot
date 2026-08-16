@@ -4,20 +4,14 @@
  * These details cross client/server boundaries, so readers normalize untrusted
  * payloads before using them in reconnect decisions or user-facing messages.
  */
-function normalizeOptionalString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
+import { normalizeOptionalProtocolString } from "./protocol-value-normalization.js";
 
-function normalizeArrayBackedTrimmedStringList(value: unknown): string[] | undefined {
+function normalizeOptionalConnectDetailStringList(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }
   const values = value
-    .map((entry) => normalizeOptionalString(entry))
+    .map((entry) => normalizeOptionalProtocolString(entry))
     .filter((entry): entry is string => Boolean(entry));
   // Pairing details omit absent lists. Emitting empty arrays makes clients think
   // the gateway intentionally supplied scope/role context when it did not.
@@ -42,6 +36,7 @@ export const ConnectErrorDetailCodes = {
   AUTH_TAILSCALE_PROXY_MISSING: "AUTH_TAILSCALE_PROXY_MISSING",
   AUTH_TAILSCALE_WHOIS_FAILED: "AUTH_TAILSCALE_WHOIS_FAILED",
   AUTH_TAILSCALE_IDENTITY_MISMATCH: "AUTH_TAILSCALE_IDENTITY_MISMATCH",
+  CONTROL_UI_BUILD_MISMATCH: "CONTROL_UI_BUILD_MISMATCH",
   CONTROL_UI_ORIGIN_NOT_ALLOWED: "CONTROL_UI_ORIGIN_NOT_ALLOWED",
   PROTOCOL_MISMATCH: "PROTOCOL_MISMATCH",
   CONTROL_UI_DEVICE_IDENTITY_REQUIRED: "CONTROL_UI_DEVICE_IDENTITY_REQUIRED",
@@ -235,6 +230,19 @@ export function readConnectErrorDetailCode(details: unknown): string | null {
   return typeof code === "string" && code.trim().length > 0 ? code.trim() : null;
 }
 
+/** Read the exact target artifact from an untrusted reload-required rejection. */
+export function readControlUiBuildMismatchId(details: unknown): string | null {
+  if (readConnectErrorDetailCode(details) !== ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH) {
+    return null;
+  }
+  const raw = details as { gatewayBuildId?: unknown; reloadRequired?: unknown };
+  const gatewayBuildId = normalizeOptionalProtocolString(raw.gatewayBuildId);
+  if (!gatewayBuildId || gatewayBuildId.length > 96 || raw.reloadRequired !== true) {
+    return null;
+  }
+  return gatewayBuildId;
+}
+
 /** Extracts normalized retry advice from untrusted connect-error details. */
 export function readConnectErrorRecoveryAdvice(details: unknown): ConnectErrorRecoveryAdvice {
   if (!details || typeof details !== "object" || Array.isArray(details)) {
@@ -246,7 +254,7 @@ export function readConnectErrorRecoveryAdvice(details: unknown): ConnectErrorRe
   };
   const canRetryWithDeviceToken =
     typeof raw.canRetryWithDeviceToken === "boolean" ? raw.canRetryWithDeviceToken : undefined;
-  const normalizedNextStep = normalizeOptionalString(raw.recommendedNextStep) ?? "";
+  const normalizedNextStep = normalizeOptionalProtocolString(raw.recommendedNextStep) ?? "";
   const recommendedNextStep = CONNECT_RECOVERY_NEXT_STEP_VALUES.has(
     normalizedNextStep as ConnectRecoveryNextStep,
   )
@@ -259,7 +267,7 @@ export function readConnectErrorRecoveryAdvice(details: unknown): ConnectErrorRe
 }
 
 function normalizePairingConnectReason(value: unknown): ConnectPairingRequiredReason | undefined {
-  const normalized = normalizeOptionalString(value) ?? "";
+  const normalized = normalizeOptionalProtocolString(value) ?? "";
   return CONNECT_PAIRING_REQUIRED_REASON_VALUES.has(normalized as ConnectPairingRequiredReason)
     ? (normalized as ConnectPairingRequiredReason)
     : undefined;
@@ -267,12 +275,12 @@ function normalizePairingConnectReason(value: unknown): ConnectPairingRequiredRe
 
 /** Normalizes pairing request ids before echoing them in close reasons or UI text. */
 export function normalizePairingConnectRequestId(value: unknown): string | undefined {
-  const normalized = normalizeOptionalString(value);
+  const normalized = normalizeOptionalProtocolString(value);
   return normalized && PAIRING_CONNECT_REQUEST_ID_PATTERN.test(normalized) ? normalized : undefined;
 }
 
 function normalizeStringArray(value: unknown): string[] | undefined {
-  return normalizeArrayBackedTrimmedStringList(value);
+  return normalizeOptionalConnectDetailStringList(value);
 }
 
 function createPairingConnectErrorDetails(params: {
@@ -355,10 +363,10 @@ export function buildPairingConnectErrorDetails(params: {
 }): PairingConnectErrorDetails {
   const requestId = normalizePairingConnectRequestId(params.requestId);
   const remediationHint =
-    normalizeOptionalString(params.remediationHint) ??
+    normalizeOptionalProtocolString(params.remediationHint) ??
     buildPairingConnectRemediationHint(params.reason);
-  const deviceId = normalizeOptionalString(params.deviceId);
-  const requestedRole = normalizeOptionalString(params.requestedRole);
+  const deviceId = normalizeOptionalProtocolString(params.deviceId);
+  const requestedRole = normalizeOptionalProtocolString(params.requestedRole);
   const requestedScopes = normalizeStringArray(params.requestedScopes);
   const approvedRoles = normalizeStringArray(params.approvedRoles);
   const approvedScopes = normalizeStringArray(params.approvedScopes);
@@ -413,15 +421,16 @@ export function readPairingConnectErrorDetails(
   const reason = normalizePairingConnectReason(raw.reason);
   const requestId = normalizePairingConnectRequestId(raw.requestId);
   const remediationHint =
-    normalizeOptionalString(raw.remediationHint) ?? buildPairingConnectRemediationHint(reason);
-  const normalizedNextStep = normalizeOptionalString(raw.recommendedNextStep) ?? "";
+    normalizeOptionalProtocolString(raw.remediationHint) ??
+    buildPairingConnectRemediationHint(reason);
+  const normalizedNextStep = normalizeOptionalProtocolString(raw.recommendedNextStep) ?? "";
   const recommendedNextStep = CONNECT_RECOVERY_NEXT_STEP_VALUES.has(
     normalizedNextStep as ConnectRecoveryNextStep,
   )
     ? (normalizedNextStep as ConnectRecoveryNextStep)
     : undefined;
-  const deviceId = normalizeOptionalString(raw.deviceId);
-  const requestedRole = normalizeOptionalString(raw.requestedRole);
+  const deviceId = normalizeOptionalProtocolString(raw.deviceId);
+  const requestedRole = normalizeOptionalProtocolString(raw.requestedRole);
   const requestedScopes = normalizeStringArray(raw.requestedScopes);
   const approvedRoles = normalizeStringArray(raw.approvedRoles);
   const approvedScopes = normalizeStringArray(raw.approvedScopes);
@@ -444,7 +453,7 @@ export function readPairingConnectErrorDetails(
 export function readConnectPairingRequiredMessage(
   message: string | null | undefined,
 ): ConnectPairingRequiredDetails | null {
-  const normalizedMessage = normalizeOptionalString(message);
+  const normalizedMessage = normalizeOptionalProtocolString(message);
   if (!normalizedMessage) {
     return null;
   }
@@ -473,6 +482,98 @@ export function readConnectPairingRequiredMessage(
   };
 }
 
+const PAIRING_APPROVAL_REMEDIATION =
+  "Run `openclaw devices approve --latest` to preview the pending request, then rerun the printed " +
+  "`openclaw devices approve <requestId>` command and reconnect (pass the same --url and " +
+  "--token/--password flags if you connected with explicit credentials).";
+const DEVICE_TOKEN_REMEDIATION =
+  "Rotate the paired-device token with `openclaw devices rotate --device <deviceId> --role operator`, then reconnect.";
+const SHARED_TOKEN_REMEDIATION =
+  "Verify `gateway.remote.token` matches `gateway.auth.token`. If a paired-device token is stale, " +
+  "rotate it with `openclaw devices rotate --device <deviceId> --role operator`, then reconnect.";
+const SCOPE_MISMATCH_REMEDIATION =
+  "Review approved scopes with `openclaw devices list`; if an upgrade is pending, preview it with " +
+  "`openclaw devices approve --latest`, approve the printed request, then reconnect.";
+const RATE_LIMITED_REMEDIATION =
+  "Wait for the temporary authentication lockout to expire, then retry.";
+const GATEWAY_CLOSED_MESSAGE_PATTERN = /\bgateway closed \(\d+\):/i;
+
+/** Classifies Gateway connect failures from structured details, with one legacy text fallback. */
+export function classifyGatewayConnectFailure(input: {
+  details?: unknown;
+  reason?: string | null;
+  message?: string | null;
+}) {
+  const code = readConnectErrorDetailCode(input.details);
+  const message = normalizeOptionalProtocolString(input.message);
+  const reason = normalizeOptionalProtocolString(input.reason);
+  const userMessage = message ?? reason;
+  const classificationText = [message, reason]
+    .filter((value): value is string => Boolean(value))
+    .join("\n");
+  const normalized = classificationText.toLowerCase();
+  const pairing =
+    readPairingConnectErrorDetails(input.details) ??
+    readConnectPairingRequiredMessage(classificationText);
+  if (code === ConnectErrorDetailCodes.PAIRING_REQUIRED || pairing) {
+    return {
+      kind: "pairing-required" as const,
+      userMessage:
+        code === ConnectErrorDetailCodes.PAIRING_REQUIRED
+          ? formatConnectPairingRequiredMessage(input.details)
+          : (userMessage ?? "device pairing required"),
+      remediation: PAIRING_APPROVAL_REMEDIATION,
+    };
+  }
+  const deviceIdentityRequired =
+    code === ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED ||
+    code === ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED ||
+    normalized.includes("device identity required");
+  const scopeMismatch =
+    code === ConnectErrorDetailCodes.AUTH_SCOPE_MISMATCH || normalized.includes("scope mismatch");
+  const rateLimited =
+    code === ConnectErrorDetailCodes.AUTH_RATE_LIMITED ||
+    (!code && normalized.includes("too many failed authentication attempts"));
+  const deviceTokenMismatch =
+    code === ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH ||
+    normalized.includes("device token mismatch");
+  const sharedTokenMismatch =
+    code === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH ||
+    normalized.includes("gateway token mismatch");
+  const authRejected =
+    deviceTokenMismatch ||
+    sharedTokenMismatch ||
+    code?.startsWith("AUTH_") ||
+    code?.startsWith("DEVICE_AUTH_");
+  const kind = deviceIdentityRequired
+    ? ("device-identity-required" as const)
+    : scopeMismatch
+      ? ("scope-mismatch" as const)
+      : rateLimited
+        ? ("rate-limited" as const)
+        : authRejected
+          ? ("auth-rejected" as const)
+          : code || GATEWAY_CLOSED_MESSAGE_PATTERN.test(classificationText)
+            ? ("gateway-rejected" as const)
+            : ("unreachable" as const);
+  const remediation = rateLimited
+    ? RATE_LIMITED_REMEDIATION
+    : scopeMismatch
+      ? SCOPE_MISMATCH_REMEDIATION
+      : deviceTokenMismatch
+        ? DEVICE_TOKEN_REMEDIATION
+        : sharedTokenMismatch
+          ? SHARED_TOKEN_REMEDIATION
+          : undefined;
+  return {
+    kind,
+    userMessage:
+      userMessage ??
+      (kind === "unreachable" ? "gateway unreachable" : "gateway rejected connection"),
+    ...(remediation ? { remediation } : {}),
+  };
+}
+
 /** Formats pairing-required details into the canonical user-facing message. */
 export function formatConnectPairingRequiredMessage(details: unknown): string {
   const pairing = readPairingConnectErrorDetails(details);
@@ -491,7 +592,7 @@ export function formatConnectErrorMessage(params: { message?: string; details?: 
   if (readConnectErrorDetailCode(params.details) === ConnectErrorDetailCodes.PROTOCOL_MISMATCH) {
     return formatProtocolMismatchMessage(params.message, params.details);
   }
-  return normalizeOptionalString(params.message) ?? "gateway request failed";
+  return normalizeOptionalProtocolString(params.message) ?? "gateway request failed";
 }
 
 function formatProtocolMismatchMessage(message: string | undefined, details: unknown): string {
@@ -519,7 +620,7 @@ function formatProtocolMismatchMessage(message: string | undefined, details: unk
   if (probeMin !== undefined) {
     parts.push(`probe min v${probeMin}`);
   }
-  const normalized = normalizeOptionalString(message) ?? "protocol mismatch";
+  const normalized = normalizeOptionalProtocolString(message) ?? "protocol mismatch";
   return parts.length > 0 ? `${normalized}: ${parts.join(", ")}` : normalized;
 }
 

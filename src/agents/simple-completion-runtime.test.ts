@@ -70,8 +70,8 @@ vi.mock("./model-auth.js", () => ({
     (auth: { source: string; mode: string }, provider: string) =>
       `No API key resolved for provider "${provider}" (auth mode: ${auth.mode}, checked: ${auth.source}).`,
   ),
-  getApiKeyForModel: hoisted.getApiKeyForModelMock,
-  resolveApiKeyForProvider: hoisted.getApiKeyForModelMock,
+  getApiKeyForModelCore: hoisted.getApiKeyForModelMock,
+  resolveApiKeyForProviderCore: hoisted.getApiKeyForModelMock,
   applyLocalNoAuthHeaderOverride: hoisted.applyLocalNoAuthHeaderOverrideMock,
 }));
 
@@ -478,7 +478,7 @@ describe("prepareSimpleCompletionModel", () => {
     expect(result.model.baseUrl).toBe("https://api.copilot.enterprise.example");
   });
 
-  it("returns error when getApiKeyForModel throws", async () => {
+  it("returns error when getApiKeyForModelCore throws", async () => {
     hoisted.getApiKeyForModelMock.mockRejectedValueOnce(new Error("Profile not found: copilot"));
 
     const result = await prepareSimpleCompletionModel({

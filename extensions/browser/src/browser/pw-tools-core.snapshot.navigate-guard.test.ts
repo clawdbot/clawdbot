@@ -86,6 +86,32 @@ describe("pw-tools-core.snapshot navigate guard", () => {
     expect(result.url).toBe("https://example.com");
   });
 
+  it.each([
+    { requestedTimeoutMs: undefined, expectedTimeoutMs: 20_000 },
+    { requestedTimeoutMs: 180_000, expectedTimeoutMs: 120_000 },
+    { requestedTimeoutMs: Number.MAX_SAFE_INTEGER, expectedTimeoutMs: 120_000 },
+  ])(
+    "applies the shipped navigation timeout contract to Playwright timeout $requestedTimeoutMs",
+    async ({ requestedTimeoutMs, expectedTimeoutMs }) => {
+      const goto = vi.fn(async () => {});
+      setPwToolsCoreCurrentPage({
+        goto,
+        url: vi.fn(() => "https://example.com"),
+      });
+
+      await mod.navigateViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        url: "https://example.com",
+        timeoutMs: requestedTimeoutMs,
+      });
+
+      expect(goto).toHaveBeenCalledWith("https://example.com", { timeout: expectedTimeoutMs });
+      expect(getPwToolsCoreSessionMocks().gotoPageWithNavigationGuard).toHaveBeenCalledWith(
+        expect.objectContaining({ timeoutMs: expectedTimeoutMs }),
+      );
+    },
+  );
+
   it("returns managed download metadata when navigation starts an attachment download", async () => {
     const download = {
       url: "https://example.com/export.csv",

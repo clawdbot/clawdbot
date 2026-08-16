@@ -46,8 +46,8 @@ function makeParams(overrides: Partial<Params> = {}): Params {
     resolveAuthProfileFailureReason: vi.fn<Params["resolveAuthProfileFailureReason"]>(
       () => "rate_limit",
     ),
-    maybeEscalateRateLimitProfileFallback: vi.fn(),
-    advanceAttemptAuthProfile: vi.fn(async () => true),
+    advanceAuthProfile: vi.fn(async () => true),
+    advanceRateLimitAuthProfile: vi.fn(async () => true),
     maybeMarkAuthProfileFailure: vi.fn(async () => {}),
     maybeBackoffBeforeOverloadFailover: vi.fn(async () => {}),
     attemptedThinking: new Set(),
@@ -75,7 +75,7 @@ describe("handleEmbeddedPromptFailure", () => {
     try {
       const outcome = await handleEmbeddedPromptFailure(
         makeParams({
-          advanceAttemptAuthProfile: vi.fn(async () => {
+          advanceRateLimitAuthProfile: vi.fn(async () => {
             events.push("advance");
             return true;
           }),

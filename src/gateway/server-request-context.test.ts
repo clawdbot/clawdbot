@@ -7,26 +7,43 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import {
+  ensureProfileForEmail,
+  getUserProfileDisplay,
+  linkEmail,
+  resolveUserProfileId,
+} from "../state/user-profiles.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createChatRunState } from "./server-chat-state.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 
 type GatewayRequestContextParams = Parameters<typeof createGatewayRequestContext>[0];
+type TestCronState = GatewayServerLiveState["cronState"];
+
+function makeCronState(overrides: Partial<TestCronState> = {}): TestCronState {
+  return {
+    cron: { start: vi.fn(), stop: vi.fn() } as never,
+    storePath: "/tmp/cron",
+    cronEnabled: true,
+    reconcileExitWatchers: vi.fn(async () => {}),
+    stopExitWatchers: vi.fn(),
+    reconcileStreamWatchers: vi.fn(async () => {}),
+    stopStreamWatchers: vi.fn(async () => {}),
+    reconcileHeartbeatJobs: vi.fn(async () => {}),
+    ...overrides,
+  };
+}
 
 function makeContextParams(
   overrides: Partial<GatewayRequestContextParams> = {},
 ): GatewayRequestContextParams {
   const config = {} as never;
-  const runtimeState: Pick<GatewayServerLiveState, "cronState" | "configReloader"> = {
-    cronState: {
+  const runtimeState: Pick<GatewayServerLiveState, "cronState"> = {
+    cronState: makeCronState({
       cron: { start: vi.fn(), stop: vi.fn() } as never,
       storePath: "/tmp/cron",
-      cronEnabled: true,
-    },
-    configReloader: {
-      stop: vi.fn(async () => {}),
-      notifyPluginMetadataChanged: vi.fn(),
-    },
+    }),
   };
   return {
     deps: {} as never,
@@ -41,16 +58,19 @@ function makeContextParams(
     isTerminalEnabled: vi.fn(() => false),
     execApprovalManager: undefined,
     pluginApprovalManager: undefined,
+    validateAgentRuntimeApprovalAuthority: () => false,
     listSessionPendingApprovals: undefined,
     loadGatewayModelCatalog: vi.fn(async () => []),
     loadGatewayModelCatalogSnapshot: vi.fn(async () => ({
       agentId: "main",
       agentDir: "/tmp/model-catalog-agent",
+      catalogComplete: false,
       workspaceDir: "/tmp/model-catalog-workspace",
       config,
       entries: [],
       routeVariants: [],
     })),
+    readChatMetadata: vi.fn(async () => ({ swarmEnabled: false })),
     getHealthCache: vi.fn(() => null),
     refreshHealthSnapshot: vi.fn(async () => ({}) as never),
     logHealth: { error: vi.fn() },
@@ -94,6 +114,8 @@ function makeContextParams(
     channelWizardRunner: vi.fn(async () => undefined),
     broadcastVoiceWakeChanged: vi.fn(),
     broadcastVoiceWakeRoutingChanged: vi.fn(),
+    notifyPluginMetadataChanged: vi.fn(),
+    getConfigReloaderHotReloadStatus: vi.fn(() => undefined),
     unavailableGatewayMethods: new Set(),
     ...overrides,
   };
@@ -152,16 +174,8 @@ describe("createGatewayRequestContext", () => {
   it("reads cron state live from runtime state", () => {
     const cronA = { start: vi.fn(), stop: vi.fn() } as never;
     const cronB = { start: vi.fn(), stop: vi.fn() } as never;
-    const runtimeState: Pick<GatewayServerLiveState, "cronState" | "configReloader"> = {
-      cronState: {
-        cron: cronA,
-        storePath: "/tmp/cron-a",
-        cronEnabled: true,
-      },
-      configReloader: {
-        stop: vi.fn(async () => {}),
-        notifyPluginMetadataChanged: vi.fn(),
-      },
+    const runtimeState: Pick<GatewayServerLiveState, "cronState"> = {
+      cronState: makeCronState({ cron: cronA, storePath: "/tmp/cron-a" }),
     };
 
     const context = createGatewayRequestContext(makeContextParams({ runtimeState }));
@@ -169,46 +183,43 @@ describe("createGatewayRequestContext", () => {
     expect(context.cron).toBe(cronA);
     expect(context.cronStorePath).toBe("/tmp/cron-a");
 
-    runtimeState.cronState = {
-      cron: cronB,
-      storePath: "/tmp/cron-b",
-      cronEnabled: true,
-    };
+    runtimeState.cronState = makeCronState({ cron: cronB, storePath: "/tmp/cron-b" });
 
     expect(context.cron).toBe(cronB);
     expect(context.cronStorePath).toBe("/tmp/cron-b");
   });
 
-  it("reads config hot-reload status live from runtime state", () => {
-    const runtimeState: Pick<GatewayServerLiveState, "cronState" | "configReloader"> = {
-      cronState: {
-        cron: { start: vi.fn(), stop: vi.fn() } as never,
-        storePath: "/tmp/cron",
-        cronEnabled: true,
-      },
-      configReloader: {
-        stop: vi.fn(async () => {}),
-        notifyPluginMetadataChanged: vi.fn(),
-      },
-    };
-
-    const context = createGatewayRequestContext(makeContextParams({ runtimeState }));
+  it("reads config hot-reload status through the live kernel bridge", () => {
+    let status: "active" | "disabled" | undefined;
+    const context = createGatewayRequestContext(
+      makeContextParams({ getConfigReloaderHotReloadStatus: () => status }),
+    );
 
     expect(context.getConfigReloaderHotReloadStatus?.()).toBeUndefined();
 
-    runtimeState.configReloader = {
-      stop: vi.fn(async () => {}),
-      hotReloadStatus: () => "active",
-      notifyPluginMetadataChanged: vi.fn(),
-    };
+    status = "active";
     expect(context.getConfigReloaderHotReloadStatus?.()).toBe("active");
 
-    runtimeState.configReloader = {
-      stop: vi.fn(async () => {}),
-      hotReloadStatus: () => "disabled",
-      notifyPluginMetadataChanged: vi.fn(),
-    };
+    status = "disabled";
     expect(context.getConfigReloaderHotReloadStatus?.()).toBe("disabled");
+  });
+
+  it("publishes the worker disk-space reader through the kernel bridge", () => {
+    const workerPlacementDiskSpaceReader = { read: vi.fn(), version: vi.fn(() => 1) };
+    const context = createGatewayRequestContext(
+      makeContextParams({ workerPlacementDiskSpaceReader }),
+    );
+
+    expect(context.workerPlacementDiskSpaceReader).toBe(workerPlacementDiskSpaceReader);
+  });
+
+  it("routes plugin metadata changes through the kernel bridge", () => {
+    const notifyPluginMetadataChanged = vi.fn();
+    const context = createGatewayRequestContext(makeContextParams({ notifyPluginMetadataChanged }));
+
+    context.notifyPluginMetadataChanged();
+
+    expect(notifyPluginMetadataChanged).toHaveBeenCalledOnce();
   });
 
   it("does not treat scoped CLI or backend callers as approval delivery routes", () => {
@@ -230,6 +241,299 @@ describe("createGatewayRequestContext", () => {
     expect(context.hasExecApprovalClients?.()).toBe(false);
     expect(context.getApprovalClientConnIds?.()).toEqual(new Set());
     expect(context.getApprovalClientConnIds?.({ approvalKind: "plugin" })).toEqual(new Set());
+  });
+
+  it("refreshes every live connection and presence row for a changed user profile", () => {
+    const first = {
+      ...makeGatewayClient({
+        connId: "ada-one",
+        clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+      }),
+      authenticatedUserId: "ada@example.test",
+      authenticatedUserProfile: {
+        profileId: "profile-ada",
+        displayName: "Ada",
+        avatarRevision: "avatar-old-png",
+        hasAvatar: true,
+        updatedAt: 1,
+      },
+      presenceKey: "profile-refresh-ada-one",
+    };
+    const second = {
+      ...makeGatewayClient({
+        connId: "ada-two",
+        clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+      }),
+      authenticatedUserId: "ada@work.test",
+      authenticatedUserProfile: {
+        profileId: "profile-ada",
+        displayName: "Ada",
+        avatarRevision: "avatar-old-png",
+        hasAvatar: true,
+        updatedAt: 1,
+      },
+      presenceKey: "profile-refresh-ada-two",
+    };
+    const unrelated = {
+      ...makeGatewayClient({
+        connId: "grace",
+        clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+      }),
+      authenticatedUserId: "grace@example.test",
+      authenticatedUserProfile: {
+        profileId: "profile-grace",
+        displayName: "Grace",
+        avatarRevision: "1",
+        hasAvatar: false,
+        updatedAt: 1,
+      },
+      presenceKey: "profile-refresh-grace",
+    };
+    const clients = new Set([first, second, unrelated]) as never;
+    const params = makeContextParams({ clients });
+    const context = createGatewayRequestContext(params);
+    const capturedFirstProfile = first.authenticatedUserProfile;
+    const readCapturedDisplayName = () => capturedFirstProfile.displayName;
+
+    context.refreshConnectedUserProfile?.({
+      id: "profile-ada",
+      displayName: "Augusta Ada",
+      avatarRevision: "avatar-new-png",
+      hasAvatar: true,
+      updatedAt: 2,
+    });
+
+    context.refreshConnectedUserProfile?.({
+      id: "profile-ada",
+      displayName: "Augusta Ada",
+      avatarRevision: "avatar-newer-png",
+      hasAvatar: true,
+      updatedAt: 2,
+    });
+
+    expect(first.authenticatedUserProfile).toEqual({
+      profileId: "profile-ada",
+      displayName: "Augusta Ada",
+      avatarRevision: "avatar-newer-png",
+      hasAvatar: true,
+      updatedAt: 2,
+    });
+    expect(first.authenticatedUserProfile).toBe(capturedFirstProfile);
+    expect(readCapturedDisplayName()).toBe("Augusta Ada");
+    expect(second.authenticatedUserProfile).toEqual(first.authenticatedUserProfile);
+    expect(unrelated.authenticatedUserProfile.displayName).toBe("Grace");
+    expect(params.broadcast).toHaveBeenNthCalledWith(
+      1,
+      "presence",
+      {
+        presence: expect.arrayContaining([
+          expect.objectContaining({
+            user: {
+              id: "profile-ada",
+              email: "ada@example.test",
+              name: "Augusta Ada",
+              avatarUrl: "/api/users/profile-ada/avatar?v=avatar-new-png",
+            },
+          }),
+          expect.objectContaining({
+            user: {
+              id: "profile-ada",
+              email: "ada@work.test",
+              name: "Augusta Ada",
+              avatarUrl: "/api/users/profile-ada/avatar?v=avatar-new-png",
+            },
+          }),
+        ]),
+      },
+      {
+        dropIfSlow: true,
+        stateVersion: { presence: 1, health: 1 },
+      },
+    );
+    expect(params.broadcast).toHaveBeenNthCalledWith(
+      2,
+      "presence",
+      {
+        presence: expect.arrayContaining([
+          expect.objectContaining({
+            user: {
+              id: "profile-ada",
+              email: "ada@example.test",
+              name: "Augusta Ada",
+              avatarUrl: "/api/users/profile-ada/avatar?v=avatar-newer-png",
+            },
+          }),
+          expect.objectContaining({
+            user: {
+              id: "profile-ada",
+              email: "ada@work.test",
+              name: "Augusta Ada",
+              avatarUrl: "/api/users/profile-ada/avatar?v=avatar-newer-png",
+            },
+          }),
+        ]),
+      },
+      {
+        dropIfSlow: true,
+        stateVersion: { presence: 1, health: 1 },
+      },
+    );
+  });
+
+  it("canonicalizes a connected profile after its durable identity is merged", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const source = ensureProfileForEmail("merge-source@example.test");
+      const target = ensureProfileForEmail("merge-target@example.test");
+      const unrelatedProfile = ensureProfileForEmail("merge-unrelated@example.test");
+      const sourceClient = {
+        ...makeGatewayClient({
+          connId: "merge-source",
+          clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+        }),
+        authenticatedUserId: "merge-source@example.test",
+        authenticatedUserProfile: {
+          profileId: source.id,
+          displayName: source.displayName,
+          avatarRevision: String(source.updatedAt),
+          hasAvatar: false,
+          updatedAt: source.updatedAt,
+        },
+        presenceKey: "profile-refresh-merge-source",
+      };
+      const unrelatedClient = {
+        ...makeGatewayClient({
+          connId: "merge-unrelated",
+          clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+        }),
+        authenticatedUserId: "merge-unrelated@example.test",
+        authenticatedUserProfile: {
+          profileId: unrelatedProfile.id,
+          displayName: unrelatedProfile.displayName,
+          avatarRevision: String(unrelatedProfile.updatedAt),
+          hasAvatar: false,
+          updatedAt: unrelatedProfile.updatedAt,
+        },
+        presenceKey: "profile-refresh-merge-unrelated",
+      };
+      const capturedProfile = sourceClient.authenticatedUserProfile;
+      const params = makeContextParams({
+        clients: new Set([sourceClient, unrelatedClient]) as never,
+      });
+      const context = createGatewayRequestContext(params);
+
+      const linked = linkEmail("merge-source@example.test", target.id);
+      expect(resolveUserProfileId(source.id)).toBe(target.id);
+      const display = getUserProfileDisplay(linked.id);
+      context.refreshConnectedUserProfile?.({
+        ...display,
+        updatedAt: linked.updatedAt,
+      });
+
+      expect(sourceClient.authenticatedUserProfile).toBe(capturedProfile);
+      expect(sourceClient.authenticatedUserProfile).toEqual({
+        profileId: target.id,
+        displayName: target.displayName,
+        avatarRevision: display.avatarRevision,
+        hasAvatar: false,
+        updatedAt: linked.updatedAt,
+      });
+      expect(unrelatedClient.authenticatedUserProfile.profileId).toBe(unrelatedProfile.id);
+      const presence = vi.mocked(params.broadcast).mock.calls[0]?.[1] as {
+        presence?: Array<{ user?: { id?: string; email?: string; avatarUrl?: string } }>;
+      };
+      expect(
+        presence.presence?.find((entry) => entry.user?.email === "merge-source@example.test")?.user,
+      ).toEqual({
+        id: target.id,
+        email: "merge-source@example.test",
+        name: target.displayName,
+        avatarUrl: `/api/users/${target.id}/avatar?v=${display.avatarRevision}`,
+      });
+      expect(presence.presence?.some((entry) => entry.user?.id === unrelatedProfile.id)).toBe(
+        false,
+      );
+    });
+  });
+
+  it("preserves the Gravatar-backed route when a changed profile has no upload", () => {
+    const client = {
+      ...makeGatewayClient({
+        connId: "ada-avatar-removed",
+        clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+      }),
+      authenticatedUserId: "ada@example.test",
+      authenticatedUserProfile: {
+        profileId: "profile-ada-avatar-removed",
+        displayName: "Ada",
+        avatarRevision: "avatar-upload-png",
+        hasAvatar: true,
+        updatedAt: 1,
+      },
+      presenceKey: "profile-refresh-ada-avatar-removed",
+    };
+    const params = makeContextParams({ clients: new Set([client]) as never });
+    const context = createGatewayRequestContext(params);
+
+    context.refreshConnectedUserProfile?.({
+      id: "profile-ada-avatar-removed",
+      displayName: "Ada",
+      avatarRevision: "profile-updated-2",
+      hasAvatar: false,
+      updatedAt: 2,
+    });
+
+    expect(client.authenticatedUserProfile.hasAvatar).toBe(false);
+    const presence = vi.mocked(params.broadcast).mock.calls[0]?.[1] as {
+      presence?: Array<{ user?: { id?: string; avatarUrl?: string } }>;
+    };
+    expect(
+      presence.presence?.find((entry) => entry.user?.id === "profile-ada-avatar-removed")?.user,
+    ).toEqual({
+      id: "profile-ada-avatar-removed",
+      email: "ada@example.test",
+      name: "Ada",
+      avatarUrl: "/api/users/profile-ada-avatar-removed/avatar?v=profile-updated-2",
+    });
+  });
+
+  it("keeps Tailscale provider identities out of refreshed presence email", () => {
+    const client = {
+      ...makeGatewayClient({
+        connId: "ada-tailscale",
+        clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+      }),
+      authenticatedUserId: "ada@github",
+      authenticatedUserIsTailscaleProvider: true,
+      authenticatedUserProfile: {
+        profileId: "profile-ada-tailscale",
+        displayName: "Ada",
+        avatarRevision: "avatar-tailscale-png",
+        hasAvatar: true,
+        updatedAt: 1,
+      },
+      presenceKey: "profile-refresh-ada-tailscale",
+    };
+    const params = makeContextParams({ clients: new Set([client]) as never });
+    const context = createGatewayRequestContext(params);
+
+    context.refreshConnectedUserProfile?.({
+      id: "profile-ada-tailscale",
+      displayName: "Augusta Ada",
+      avatarRevision: "avatar-tailscale-new-png",
+      hasAvatar: true,
+      updatedAt: 2,
+    });
+
+    const presence = vi.mocked(params.broadcast).mock.calls[0]?.[1] as {
+      presence?: Array<{ user?: { id?: string; email?: string } }>;
+    };
+    expect(
+      presence.presence?.find((entry) => entry.user?.id === "profile-ada-tailscale")?.user,
+    ).toEqual({
+      id: "profile-ada-tailscale",
+      name: "Augusta Ada",
+      avatarUrl: "/api/users/profile-ada-tailscale/avatar?v=avatar-tailscale-new-png",
+    });
   });
 
   it("preserves only clients that handle each approval kind", () => {

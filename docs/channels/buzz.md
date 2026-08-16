@@ -272,10 +272,10 @@ workspace, or model while one Gateway and Buzz bot serve all of them:
 ```json5
 {
   agents: {
-    list: [
-      { id: "support", workspace: "~/.openclaw/workspace-support" },
-      { id: "engineering", workspace: "~/.openclaw/workspace-engineering" },
-    ],
+    entries: {
+      support: { default: true, workspace: "~/.openclaw/workspace-support" },
+      engineering: { workspace: "~/.openclaw/workspace-engineering" },
+    },
   },
   bindings: [
     {

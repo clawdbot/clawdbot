@@ -12,8 +12,8 @@ import {
   signDevicePayload,
 } from "../infra/device-identity.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
+import { shouldRetainControlUiDeviceAuthMigrationSession } from "./server-public.js";
 import { CONTROL_UI_CLIENT } from "./server.auth.test-helpers.js";
-import { shouldRetainControlUiDeviceAuthMigrationSession } from "./server.impl.js";
 import {
   connectReq,
   createGatewaySuiteHarness,

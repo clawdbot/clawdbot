@@ -9,13 +9,13 @@ type ControlUiAuthPolicy = {
   deviceAuthMigrationPending: boolean;
 };
 
+export type ControlUiPairingKind = "tailscale-device" | "auth-none" | null;
+
 export function resolveControlUiAuthPolicy(params: {
   isControlUi: boolean;
-  controlUiConfig: unknown;
   deviceRaw: ConnectParams["device"] | null | undefined;
   deviceAuthMigrationPending?: boolean;
 }): ControlUiAuthPolicy {
-  void params.controlUiConfig;
   return {
     isControlUi: params.isControlUi,
     device: params.deviceRaw,
@@ -48,9 +48,9 @@ export function shouldSkipControlUiPairing(
   _trustedProxyAuthOk = false,
   authMode?: string,
   authMethod?: string,
-): boolean {
+): ControlUiPairingKind {
   if (policy.isControlUi && role === "operator" && authMethod === "tailscale" && policy.device) {
-    return true;
+    return "tailscale-device";
   }
   // When auth is completely disabled (mode=none), there is no shared secret
   // or token to gate pairing. Requiring pairing in this configuration adds
@@ -60,9 +60,9 @@ export function shouldSkipControlUiPairing(
   // Scope to operator role so node-role sessions still need device identity
   // (#43478 was reverted for skipping ALL clients).
   if (policy.isControlUi && role === "operator" && authMode === "none") {
-    return true;
+    return "auth-none";
   }
-  return false;
+  return null;
 }
 
 export function isTrustedProxyControlUiOperatorAuth(params: {

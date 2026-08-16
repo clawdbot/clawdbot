@@ -1,6 +1,7 @@
-// Doctor device pairing tests cover device-pairing checks, repair prompts, and diagnostics.
 import fs from "node:fs/promises";
 import path from "node:path";
+// Doctor device pairing tests cover device-pairing checks, repair prompts, and diagnostics.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { storeDeviceAuthToken } from "../infra/device-auth-store.js";
 import {
@@ -52,12 +53,7 @@ function requireNoteTitle(callIndex = 0): unknown {
   return title;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label} record`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label-record-short");
 
 describe("noteDevicePairingHealth", () => {
   let collectDevicePairingHealthFindings: typeof import("./doctor-device-pairing.js").collectDevicePairingHealthFindings;
@@ -110,6 +106,28 @@ describe("noteDevicePairingHealth", () => {
   afterEach(() => {
     callGatewayMock.mockReset();
     noteMock.mockReset();
+  });
+
+  it("does not create shared state while collecting local pairing findings", async () => {
+    await withTempDir("openclaw-doctor-device-pairing-readonly-", async (stateDir) => {
+      await withEnvAsync(
+        {
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_TEST_FAST: "1",
+        },
+        async () => {
+          await expect(
+            collectDevicePairingHealthFindings({
+              cfg: { gateway: { mode: "local" } },
+              healthOk: false,
+            }),
+          ).resolves.toEqual([]);
+          await expect(
+            fs.stat(path.join(stateDir, "state", "openclaw.sqlite")),
+          ).rejects.toMatchObject({ code: "ENOENT" });
+        },
+      );
+    });
   });
 
   it("warns about pending scope upgrades from local pairing state when the gateway is down", async () => {

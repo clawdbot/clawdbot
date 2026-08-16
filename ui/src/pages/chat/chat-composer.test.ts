@@ -209,12 +209,14 @@ describe("renderChatComposer controls", () => {
         actionLabel: "Unarchive",
         onAction,
       },
+      typingActors: [{ id: "ayaan", label: "Ayaan" }],
     });
 
     const banner = container.querySelector(".agent-chat__disabled-banner");
     expect(banner?.textContent).toContain("This session is archived.");
     expect(container.querySelector(".agent-chat__input")).toBeNull();
     expect(container.querySelector("textarea")).toBeNull();
+    expect(container.querySelector(".agent-chat__typing-indicator--outside")).toBeNull();
     banner?.querySelector<HTMLButtonElement>("button")?.click();
     expect(onAction).toHaveBeenCalledOnce();
     button(container, t("chat.runControls.stopGenerating")).click();
@@ -229,6 +231,20 @@ describe("renderChatComposer controls", () => {
 
     expect(container.querySelector(".agent-chat__disabled-banner")).toBeNull();
     expect(container.querySelector(".agent-chat__input")).not.toBeNull();
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(true);
+  });
+
+  it("shows the disabled reason even when draft text hides the placeholder", () => {
+    const reason = "This session is read-only.";
+    const { container } = renderComposer({
+      canSend: false,
+      disabledReason: reason,
+      draft: "a draft that hides the placeholder",
+    });
+
+    // The placeholder carries the reason only for an empty composer; the
+    // dedicated reason row must keep the explanation visible alongside a draft.
+    expect(container.querySelector(".agent-chat__disabled-reason")?.textContent).toContain(reason);
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(true);
   });
 
@@ -290,7 +306,7 @@ describe("renderChatComposer controls", () => {
         { deviceId: "studio-mic", label: "Studio microphone" },
         { deviceId: "headset", label: "USB headset" },
       ],
-      warning: null,
+      issue: null,
     });
     patchSettings({ realtimeTalkInputDeviceId: "studio-mic" });
     const container = document.createElement("div");
@@ -344,10 +360,55 @@ describe("renderChatComposer controls", () => {
     expect(dropdown?.open).toBe(true);
   });
 
-  it("shows discovery warnings and the next-session hint during active Talk", async () => {
+  it.each([
+    ["none-found", "chat.composer.microphoneNoneFound", false],
+    ["list-unsupported", "chat.composer.microphoneListUnsupported", false],
+    ["permission-blocked", "chat.composer.microphonePermissionBlocked", true],
+    ["busy", "chat.composer.microphoneBusy", true],
+    ["page-inactive", "chat.composer.microphonePageInactive", true],
+    ["failed", "chat.composer.microphoneAccessFailed", true],
+  ] as const)(
+    "renders %s as one empty state with no claimed selection",
+    async (issue, messageKey, fault) => {
+      discoverRealtimeTalkInputsMock.mockResolvedValue({ devices: [], issue });
+      const container = document.createElement("div");
+      document.body.append(container);
+      const composerProps = props({
+        onToggleRealtimeTalk: vi.fn(),
+        realtimeTalkActive: true,
+        realtimeTalkStatus: "listening",
+      });
+      const draw = () => render(renderChatComposer(composerProps), container);
+      composerProps.onRequestUpdate = draw;
+      draw();
+
+      const dropdown = container.querySelector<
+        HTMLElement & { open: boolean; updateComplete: Promise<unknown> }
+      >("wa-dropdown.chat-talk-input-picker");
+      await dropdown?.updateComplete;
+      button(container, t("chat.composer.microphoneInput")).click();
+      const empty = await vi.waitFor(() => {
+        const node = container.querySelector(".chat-talk-input-picker__empty");
+        expect(node?.textContent?.trim()).toBe(t(messageKey));
+        return node;
+      });
+
+      // One designed state: never a checked System default row, a second
+      // negative note, or a hint about a selection that cannot be made.
+      expect(container.querySelectorAll(".chat-talk-input-picker__item")).toHaveLength(0);
+      expect(container.querySelector(".chat-talk-input-picker__note")).toBeNull();
+      expect(container.querySelector(".chat-talk-input-picker__warning")).toBeNull();
+      expect(container.querySelector(".chat-talk-input-picker__hint")).toBeNull();
+      expect(container.querySelectorAll(".chat-talk-input-picker__empty")).toHaveLength(1);
+      expect(empty?.getAttribute("role")).toBe("status");
+      expect(empty?.classList.contains("chat-talk-input-picker__empty--fault")).toBe(fault);
+    },
+  );
+
+  it("keeps the list plus one warning when inputs exist but discovery reported an issue", async () => {
     discoverRealtimeTalkInputsMock.mockResolvedValue({
-      devices: [],
-      warning: "Microphone permission is blocked.",
+      devices: [{ deviceId: "headset", label: "USB headset" }],
+      issue: "busy",
     });
     const container = document.createElement("div");
     document.body.append(container);
@@ -366,17 +427,13 @@ describe("renderChatComposer controls", () => {
     await dropdown?.updateComplete;
     button(container, t("chat.composer.microphoneInput")).click();
     await vi.waitFor(() =>
-      expect(container.querySelector(".chat-talk-input-picker__warning")?.textContent).toContain(
-        "Microphone permission is blocked.",
-      ),
+      expect(container.querySelectorAll(".chat-talk-input-picker__item")).toHaveLength(2),
     );
 
-    expect(container.querySelector(".chat-talk-input-picker__warning")?.getAttribute("role")).toBe(
-      "alert",
+    expect(container.querySelector(".chat-talk-input-picker__warning")?.textContent?.trim()).toBe(
+      t("chat.composer.microphoneBusy"),
     );
-    expect(container.querySelector(".chat-talk-input-picker__note")?.textContent).toContain(
-      t("chat.composer.noMicrophones"),
-    );
+    expect(container.querySelector(".chat-talk-input-picker__empty")).toBeNull();
     expect(container.querySelector(".chat-talk-input-picker__hint")?.textContent).toContain(
       t("chat.composer.microphoneAppliesNextSession"),
     );
@@ -386,6 +443,92 @@ describe("renderChatComposer controls", () => {
     );
     await dropdown?.updateComplete;
     expect(dropdown?.open).toBe(false);
+  });
+
+  it("marks the selected input with a single trailing check", async () => {
+    discoverRealtimeTalkInputsMock.mockResolvedValue({
+      devices: [{ deviceId: "headset", label: "USB headset" }],
+      issue: null,
+    });
+    const container = document.createElement("div");
+    document.body.append(container);
+    const composerProps = props({ onToggleRealtimeTalk: vi.fn() });
+    const draw = () => render(renderChatComposer(composerProps), container);
+    composerProps.onRequestUpdate = draw;
+    draw();
+
+    const dropdown = container.querySelector<
+      HTMLElement & { open: boolean; updateComplete: Promise<unknown> }
+    >("wa-dropdown.chat-talk-input-picker");
+    await dropdown?.updateComplete;
+    button(container, t("chat.composer.microphoneInput")).click();
+    const items = await vi.waitFor(() => {
+      const rows = [...container.querySelectorAll(".chat-talk-input-picker__item")];
+      expect(rows).toHaveLength(2);
+      return rows;
+    });
+
+    // type="checkbox" would make wa-dropdown-item paint its own leading check
+    // and toggle it on click, so the row would show two disagreeing marks.
+    expect(items.map((item) => item.getAttribute("type"))).toEqual(["normal", "normal"]);
+    expect(items.map((item) => item.querySelectorAll("svg").length)).toEqual([1, 0]);
+    expect(items[0]?.querySelector(".chat-talk-input-picker__check")?.getAttribute("slot")).toBe(
+      "details",
+    );
+    expect(items.map((item) => item.getAttribute("aria-checked"))).toEqual(["true", "false"]);
+  });
+
+  it("follows devicechange while open and stops listening once closed", async () => {
+    const mediaDevices = new EventTarget();
+    Object.defineProperty(globalThis.navigator, "mediaDevices", {
+      configurable: true,
+      value: mediaDevices,
+    });
+    discoverRealtimeTalkInputsMock.mockResolvedValue({ devices: [], issue: "none-found" });
+    const container = document.createElement("div");
+    document.body.append(container);
+    const composerProps = props({ onToggleRealtimeTalk: vi.fn() });
+    const draw = () => render(renderChatComposer(composerProps), container);
+    composerProps.onRequestUpdate = draw;
+    draw();
+
+    const dropdown = container.querySelector<
+      HTMLElement & { open: boolean; updateComplete: Promise<unknown> }
+    >("wa-dropdown.chat-talk-input-picker");
+    await dropdown?.updateComplete;
+    button(container, t("chat.composer.microphoneInput")).click();
+    await vi.waitFor(() =>
+      expect(container.querySelector(".chat-talk-input-picker__empty")?.textContent?.trim()).toBe(
+        t("chat.composer.microphoneNoneFound"),
+      ),
+    );
+
+    // The empty state promises the list keeps up, so plugging in has to land
+    // without reopening the popover.
+    discoverRealtimeTalkInputsMock.mockResolvedValue({
+      devices: [{ deviceId: "usb", label: "USB Audio Interface" }],
+      issue: null,
+    });
+    mediaDevices.dispatchEvent(new Event("devicechange"));
+    await vi.waitFor(() =>
+      expect(container.querySelectorAll(".chat-talk-input-picker__item")).toHaveLength(2),
+    );
+    expect(container.querySelector(".chat-talk-input-picker__empty")).toBeNull();
+
+    discoverRealtimeTalkInputsMock.mockResolvedValue({ devices: [], issue: "none-found" });
+    mediaDevices.dispatchEvent(new Event("devicechange"));
+    await vi.waitFor(() =>
+      expect(container.querySelectorAll(".chat-talk-input-picker__item")).toHaveLength(0),
+    );
+
+    dropdown?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    await dropdown?.updateComplete;
+    const callsWhileClosed = discoverRealtimeTalkInputsMock.mock.calls.length;
+    mediaDevices.dispatchEvent(new Event("devicechange"));
+    await Promise.resolve();
+    expect(discoverRealtimeTalkInputsMock.mock.calls.length).toBe(callsWhileClosed);
   });
 
   it("offers camera only inside a video-capable active talk session", () => {
@@ -716,6 +859,7 @@ describe("renderChatComposer status", () => {
       gatewayQuestionPrompts: [],
       composerControls: html`<button type="button">Model</button>`,
       onRequestUpdate: vi.fn(),
+      typingActors: [{ id: "ayaan", label: "Ayaan" }],
     });
     composerProps.onDraftChange = (next) => {
       composerProps.draft = next;
@@ -740,6 +884,7 @@ describe("renderChatComposer status", () => {
     await panel.updateComplete;
     expect(container.querySelector(".agent-chat__input")).toBeNull();
     expect(container.querySelector(".agent-chat__composer-footer")).toBeNull();
+    expect(container.querySelector(".agent-chat__typing-indicator--outside")).toBeNull();
     expect(document.activeElement).toBe(panel.querySelector(".chat-question-panel"));
     expect(composerProps.draft).toBe("Keep this draft while composing");
 
@@ -897,194 +1042,5 @@ describe("renderChatComposer status", () => {
 
     const idle = renderComposer({ planStatus });
     expect(idle.container.querySelector(".plan-checklist")).toBeNull();
-  });
-
-  it("renders session context and plan usage through the full composer", () => {
-    const { container } = renderComposer({
-      sessions: {
-        sessions: [
-          {
-            key: "main",
-            kind: "direct",
-            updatedAt: null,
-            totalTokens: 46_000,
-            contextTokens: 200_000,
-          },
-        ],
-        defaults: { contextTokens: 200_000 },
-      } as never,
-      providerUsage: {
-        basePath: "/control",
-        modelAuthStatusResult: {
-          ts: Date.now(),
-          providers: [
-            {
-              provider: "openai",
-              displayName: "OpenAI",
-              status: "ok",
-              profiles: [{ profileId: "openai", type: "oauth", status: "ok" }],
-              usage: { providerId: "openai", windows: [{ label: "Week", usedPercent: 72 }] },
-            },
-          ],
-        },
-      },
-    });
-    expect(container.querySelector(".context-ring")?.getAttribute("aria-label")).toBe(
-      "Thread context usage: 46k of 200k (23%)",
-    );
-    expect(container.querySelector(".context-usage__plan-header")?.textContent).toContain(
-      "Plan usage",
-    );
-    expect(container.querySelector(".context-usage__limit")?.textContent).toContain("72%");
-  });
-
-  it("renders plan usage before session metrics arrive", () => {
-    const { container } = renderComposer({
-      sessions: null,
-      providerUsage: {
-        basePath: "/control",
-        modelAuthStatusResult: {
-          ts: Date.now(),
-          providers: [
-            {
-              provider: "openai",
-              displayName: "OpenAI",
-              status: "ok",
-              profiles: [{ profileId: "openai", type: "oauth", status: "ok" }],
-              usage: { providerId: "openai", windows: [{ label: "Week", usedPercent: 72 }] },
-            },
-          ],
-        },
-      },
-    });
-
-    expect(container.querySelector(".context-ring")?.getAttribute("aria-label")).toBe(
-      "Usage Remaining",
-    );
-    expect(container.querySelector(".context-usage__bar")).toBeNull();
-    expect(container.querySelector(".context-usage__limit")?.textContent).toContain("72%");
-    expect(
-      container
-        .querySelector<HTMLAnchorElement>("[data-chat-provider-usage='true']")
-        ?.getAttribute("href"),
-    ).toBe("/control/usage");
-  });
-
-  it("deduplicates provider aliases and hides cost estimates for subscriptions", () => {
-    const resetAt = Date.now() + 2 * 3_600_000 + 45_000;
-    const usage = {
-      providerId: "anthropic",
-      plan: "Max (20x)",
-      windows: [
-        { label: "5h", usedPercent: 22, resetAt },
-        { label: "Week", usedPercent: 25 },
-        { label: "Fable", usedPercent: 92 },
-      ],
-      billing: [{ type: "budget" as const, used: 157.85, limit: 400, unit: "USD" }],
-    };
-    const { container } = renderComposer({
-      messages: [{ role: "user", content: "hi" }],
-      sessions: {
-        sessions: [
-          {
-            key: "main",
-            kind: "direct",
-            updatedAt: null,
-            inputTokens: 2,
-            outputTokens: 3,
-            totalTokens: 78_700,
-            contextTokens: 1_000_000,
-            estimatedCostUsd: 0.02,
-            model: "claude-fable-5",
-            modelProvider: "anthropic",
-          },
-        ],
-        defaults: { contextTokens: 1_000_000 },
-      } as never,
-      providerUsage: {
-        modelAuthStatusResult: {
-          ts: Date.now(),
-          providers: [
-            {
-              provider: "anthropic",
-              displayName: "Claude",
-              status: "ok",
-              profiles: [{ profileId: "anthropic:oauth", type: "oauth", status: "ok" }],
-              usage,
-            },
-            {
-              provider: "claude-cli",
-              displayName: "Claude",
-              status: "ok",
-              profiles: [{ profileId: "claude-cli", type: "oauth", status: "ok" }],
-              usage,
-            },
-          ],
-        },
-      },
-    });
-
-    expect(container.querySelectorAll(".context-usage__plan-header")).toHaveLength(1);
-    expect(container.querySelector(".context-usage__plan-badge")?.textContent).toBe("Max (20x)");
-    expect(
-      [...container.querySelectorAll(".context-usage__limit")].map((row) =>
-        row.textContent?.replace(/\s+/g, " ").trim(),
-      ),
-    ).toEqual([
-      "5-hour limit Resets 2h 22%",
-      "Weekly · all models 25%",
-      "Fable 92%",
-      "Usage credits $157.85 of $400.00",
-    ]);
-    expect(container.querySelector(".context-usage__stats")).not.toBeNull();
-    expect(container.querySelector(".context-usage__stats--cost")).toBeNull();
-    expect(container.textContent).not.toContain("Est. cost");
-  });
-
-  it("warns on fresh high usage but keeps stale usage approximate and nonactionable", () => {
-    const onCompact = vi.fn();
-    let view = renderComposer({
-      onCompact,
-      sessions: {
-        sessions: [
-          {
-            key: "main",
-            kind: "direct",
-            updatedAt: null,
-            totalTokens: 190_000,
-            contextTokens: 200_000,
-          },
-        ],
-        defaults: { contextTokens: 200_000 },
-      } as never,
-    });
-    expect(view.container.querySelector(".context-ring")?.textContent?.trim()).toBe("95%");
-    expect(view.container.querySelector(".context-ring")?.classList).toContain(
-      "context-ring--warning",
-    );
-    view.container.querySelector<HTMLButtonElement>(".context-ring__action")?.click();
-    expect(onCompact).toHaveBeenCalledOnce();
-
-    view = renderComposer({
-      onCompact,
-      sessions: {
-        sessions: [
-          {
-            key: "main",
-            kind: "direct",
-            updatedAt: null,
-            totalTokens: 190_000,
-            totalTokensFresh: false,
-            contextTokens: 200_000,
-          },
-        ],
-        defaults: { contextTokens: 200_000 },
-      } as never,
-    });
-    expect(view.container.querySelector(".context-ring")?.textContent?.trim()).toBe("~95%");
-    expect(view.container.querySelector(".context-ring")?.classList).not.toContain(
-      "context-ring--warning",
-    );
-    expect(view.container.querySelector(".context-ring__action")).toBeNull();
   });
 });

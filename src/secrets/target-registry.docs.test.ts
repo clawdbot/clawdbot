@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   buildSecretRefCredentialMatrix,
   type SecretRefCredentialMatrixDocument,
-} from "./credential-matrix.js";
+} from "./credential-matrix.test-support.js";
 
 function buildSecretRefCredentialMatrixJson(): string {
   return `${JSON.stringify(buildSecretRefCredentialMatrix(), null, 2)}\n`;

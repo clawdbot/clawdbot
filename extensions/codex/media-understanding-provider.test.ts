@@ -12,6 +12,7 @@ const sharedClientMocks = vi.hoisted(() => ({
 
 vi.mock("./src/app-server/shared-client.js", () => ({
   createIsolatedCodexAppServerClient: sharedClientMocks.createIsolatedCodexAppServerClient,
+  retireSharedCodexAppServerClientIfCurrent: () => undefined,
 }));
 
 function codexModel(inputModalities: string[] = ["text", "image"]) {
@@ -47,7 +48,7 @@ function threadStartResult() {
       status: { type: "idle" },
       path: null,
       cwd: "/tmp/openclaw-agent",
-      cliVersion: "0.146.0",
+      cliVersion: "0.147.0",
       source: "unknown",
       agentNickname: null,
       agentRole: null,

@@ -9,6 +9,8 @@ describe("buildLearnPrompt", () => {
     expect(prompt).toContain("docs/a.md and https://example.com; focus on recovery");
     expect(prompt).toContain("SOURCES and REQUIREMENTS");
     expect(prompt).toContain("never fetch only the first source");
+    expect(prompt).toContain("update the best existing skill before creating anything new");
+    expect(prompt).toContain("no durable reusable procedure");
     expect(buildLearnPrompt(" ")).toContain(DEFAULT_LEARN_REQUEST);
   });
 });

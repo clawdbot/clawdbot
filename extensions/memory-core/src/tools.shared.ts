@@ -9,7 +9,6 @@ import {
   type AnyAgentTool,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import type { PluginStateLeaseRunner } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
@@ -24,7 +23,6 @@ type MemoryToolOptions = {
   sandboxed?: boolean;
   oneShotCliRun?: boolean;
   acquireLocalService?: MemoryCoreAcquireLocalService;
-  withLease?: PluginStateLeaseRunner;
 };
 
 export const loadMemoryToolRuntime = createLazyRuntimeModule(() => import("./tools.runtime.js"));
@@ -64,7 +62,6 @@ export async function getMemoryManagerContextWithPurpose(params: {
   agentId: string;
   purpose?: "default" | "status" | "cli";
   acquireLocalService?: MemoryCoreAcquireLocalService;
-  withLease?: PluginStateLeaseRunner;
 }): Promise<
   | {
       manager: NonNullable<MemorySearchManagerResult["manager"]>;
@@ -81,13 +78,13 @@ export async function getMemoryManagerContextWithPurpose(params: {
     agentId: params.agentId,
     purpose: params.purpose,
     ...(params.acquireLocalService ? { acquireLocalService: params.acquireLocalService } : {}),
-    ...(params.withLease ? { withLease: params.withLease } : {}),
   });
   return manager
     ? {
         manager,
         debug: {
-          ...debug,
+          backend: debug?.backend ?? "builtin",
+          purpose: debug?.purpose ?? params.purpose ?? "default",
           managerMs: debug?.managerMs ?? Math.max(0, Date.now() - startedAt),
         },
       }

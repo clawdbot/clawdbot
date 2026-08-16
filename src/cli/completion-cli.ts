@@ -25,7 +25,7 @@ import {
 import { publishOutputFileAtomically } from "./output-file.runtime.js";
 import { getCoreCliCommandNames, registerCoreCliByName } from "./program/command-registry-core.js";
 import { getProgramContext } from "./program/program-context.js";
-import { getSubCliEntries, registerSubCliByName } from "./program/register.subclis-core.js";
+import { getSubCliEntries, registerSubCliByNameCore } from "./program/register.subclis-core.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
 
 export function getCompletionScript(shell: CompletionShell, program: Command): string {
@@ -164,7 +164,7 @@ async function registerSubcommandsForCompletion(program: Command): Promise<void>
       continue;
     }
     try {
-      await registerSubCliByName(program, entry.name, process.argv, { purpose: "completion" });
+      await registerSubCliByNameCore(program, entry.name, process.argv, { purpose: "completion" });
     } catch (error) {
       writeCompletionRegistrationWarning(
         `skipping subcommand \`${entry.name}\` while building completion cache: ${error instanceof Error ? error.message : String(error)}`,

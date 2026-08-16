@@ -11,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveSlackAccount } from "./accounts.js";
 import { createSlackLookupClient } from "./client.js";
+import { collectSlackCursorPages } from "./cursor-pages.js";
 
 type SlackUser = NonNullable<UsersListResponse["members"]>[number];
 type SlackChannel = NonNullable<ConversationsListResponse["channels"]>[number];
@@ -95,20 +96,12 @@ export async function listSlackDirectoryPeersLive(
     return [];
   }
   const query = normalizeQuery(params.query);
-  const members: SlackUser[] = [];
-  let cursor: string | undefined;
-
-  do {
-    const res = await client.users.list({
-      limit: 200,
-      cursor,
-    });
-    if (Array.isArray(res.members)) {
-      members.push(...res.members);
-    }
-    const next = res.response_metadata?.next_cursor?.trim();
-    cursor = next ? next : undefined;
-  } while (cursor);
+  // Route through the shared cursor guard: a repeated or endless next_cursor
+  // (buggy proxy or Slack edge case) must fail instead of paginating forever.
+  const members = await collectSlackCursorPages({
+    fetchPage: (cursor) => client.users.list({ limit: 200, cursor }),
+    collectPageItems: (res) => (Array.isArray(res.members) ? res.members : []),
+  });
 
   const filtered = members.filter((member) => {
     const name = member.profile?.display_name || member.profile?.real_name || member.real_name;
@@ -141,22 +134,16 @@ export async function listSlackDirectoryGroupsLive(
     return [];
   }
   const query = normalizeQuery(params.query);
-  const channels: SlackChannel[] = [];
-  let cursor: string | undefined;
-
-  do {
-    const res = await client.conversations.list({
-      types: "public_channel,private_channel",
-      exclude_archived: false,
-      limit: 1000,
-      cursor,
-    });
-    if (Array.isArray(res.channels)) {
-      channels.push(...res.channels);
-    }
-    const next = res.response_metadata?.next_cursor?.trim();
-    cursor = next ? next : undefined;
-  } while (cursor);
+  const channels = await collectSlackCursorPages({
+    fetchPage: (cursor) =>
+      client.conversations.list({
+        types: "public_channel,private_channel",
+        exclude_archived: false,
+        limit: 1000,
+        cursor,
+      }),
+    collectPageItems: (res) => (Array.isArray(res.channels) ? res.channels : []),
+  });
 
   const filtered = channels.filter((channel) => {
     const name = normalizeOptionalLowercaseString(channel.name);

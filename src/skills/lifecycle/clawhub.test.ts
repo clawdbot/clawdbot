@@ -25,21 +25,30 @@ const installPackageDirMock = vi.fn();
 const evaluateSkillInstallPolicyMock = vi.fn();
 const pathExistsMock = vi.fn();
 const digestClawHubSkillTreeMock = vi.fn(async () => `sha256:${"a".repeat(64)}`);
+const markClawPackageIndependentlyOwnedMock = vi.fn();
 const tempDirs = createTrackedTempDirs();
 
-vi.mock("../../infra/clawhub.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/clawhub.js")>()),
+vi.mock("../../infra/clawhub-skills.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/clawhub-skills.js")>()),
   fetchClawHubSkillDetail: fetchClawHubSkillDetailMock,
   fetchClawHubSkillInstallResolution: fetchClawHubSkillInstallResolutionMock,
   fetchClawHubSkillVerification: fetchClawHubSkillVerificationMock,
   fetchClawHubSkillSecurityVerdicts: fetchClawHubSkillSecurityVerdictsMock,
+  reportClawHubSkillInstallTelemetry: reportClawHubSkillInstallTelemetryMock,
+  searchClawHubSkills: searchClawHubSkillsMock,
+}));
+
+vi.mock("../../infra/clawhub-artifacts.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/clawhub-artifacts.js")>()),
   downloadClawHubSkillArchive: downloadClawHubSkillArchiveMock,
   downloadClawHubSkillArchiveUrl: downloadClawHubSkillArchiveUrlMock,
   downloadClawHubGitHubSkillArchive: downloadClawHubGitHubSkillArchiveMock,
-  reportClawHubSkillInstallTelemetry: reportClawHubSkillInstallTelemetryMock,
+}));
+
+vi.mock("../../infra/clawhub-client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/clawhub-client.js")>()),
   isDefaultClawHubBaseUrl: isDefaultClawHubBaseUrlMock,
   resolveClawHubBaseUrl: resolveClawHubBaseUrlMock,
-  searchClawHubSkills: searchClawHubSkillsMock,
 }));
 
 vi.mock("../../infra/install-flow.js", () => ({
@@ -64,6 +73,10 @@ vi.mock("../../infra/fs-safe.js", () => ({
 
 vi.mock("./skill-tree-digest.js", () => ({
   digestClawHubSkillTree: digestClawHubSkillTreeMock,
+}));
+
+vi.mock("../../state/claw-package-adoption.js", () => ({
+  markClawPackageIndependentlyOwned: markClawPackageIndependentlyOwnedMock,
 }));
 
 const {
@@ -211,6 +224,7 @@ describe("skills-clawhub", () => {
     installPackageDirMock.mockReset();
     evaluateSkillInstallPolicyMock.mockReset();
     pathExistsMock.mockReset();
+    markClawPackageIndependentlyOwnedMock.mockReset();
 
     resolveClawHubBaseUrlMock.mockImplementation((baseUrl?: string) =>
       (baseUrl ?? "https://clawhub.ai").replace(/\/+$/, ""),
@@ -1136,6 +1150,13 @@ describe("skills-clawhub", () => {
       slug: "weather",
       ownerHandle: "demo-owner",
       installedVersion: "1.0.0",
+    });
+    expect(markClawPackageIndependentlyOwnedMock).toHaveBeenCalledWith({
+      kind: "skill",
+      source: "clawhub",
+      ref: "@demo-owner/weather",
+      version: "1.0.0",
+      workspace: workspaceDir,
     });
     expect(reportClawHubSkillInstallTelemetryMock).toHaveBeenCalledWith({
       baseUrl: undefined,
@@ -3121,6 +3142,7 @@ describe("ClawHub origin provenance readback", () => {
         slug: "agentreceipt",
         installedVersion: "1.0.0",
         installedAt: 123,
+        ownerHandle: "acme",
         sourceUrl,
         artifact,
         skillFile,
@@ -3133,6 +3155,7 @@ describe("ClawHub origin provenance readback", () => {
           version: "1.0.0",
           installedAt: 123,
           registry: "https://clawhub.ai",
+          ownerHandle: "acme",
           sourceUrl,
           artifact,
           skillFile,
@@ -3150,6 +3173,7 @@ describe("ClawHub origin provenance readback", () => {
       if (link?.status !== "linked") {
         throw new Error(`expected linked status, got ${link?.status}`);
       }
+      expect(link.ownerHandle).toBe("acme");
       expect(link.artifact).toEqual(artifact);
       expect(link.skillFile).toEqual(skillFile);
       expect(link.sourceUrl).toBe(sourceUrl);

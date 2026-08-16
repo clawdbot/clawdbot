@@ -1,9 +1,11 @@
 ---
+doc-schema-version: 1
 summary: "The default SQLite-based memory backend with keyword, vector, and hybrid search"
 title: "Builtin memory engine"
 read_when:
   - You want to understand the default memory backend
   - You want to configure embedding providers or hybrid search
+  - You are migrating from the removed QMD memory backend
 ---
 
 The builtin engine is the default memory backend. It stores your memory index
@@ -16,6 +18,7 @@ started.
 - **Vector search** via embeddings from any supported provider.
 - **Hybrid search** that combines both for best results.
 - **Deterministic ranking** by relevance, recency, and write-time importance.
+- **Diversity-aware ordering** with MMR enabled on hybrid results by default.
 - **Trusted trigger recall** for bounded pre-reply context without a recall model.
 - **CJK support** via trigram tokenization for Chinese, Japanese, and Korean.
 - **sqlite-vec acceleration** for in-database vector queries (optional).
@@ -40,8 +43,8 @@ To set a provider explicitly:
 
 Without an embedding provider, only keyword search is available.
 
-To force local GGUF embeddings, install the official llama.cpp provider
-plugin, then point `local.modelPath` at a GGUF file:
+To force local GGUF embeddings, install and configure the official llama.cpp
+provider, then point `local.modelPath` at a GGUF file:
 
 ```bash
 openclaw plugins install @openclaw/llama-cpp-provider
@@ -54,7 +57,7 @@ openclaw plugins install @openclaw/llama-cpp-provider
       provider: "local",
       fallback: "none",
       local: {
-        modelPath: "~/.node-llama-cpp/models/embeddinggemma-300m-qat-Q8_0.gguf",
+        modelPath: "~/.openclaw/models/llama.cpp/hf_ggml-org_embeddinggemma-300m-qat-Q8_0.gguf",
       },
     },
   },
@@ -70,7 +73,7 @@ openclaw plugins install @openclaw/llama-cpp-provider
 | Gemini            | `gemini`            | Supports multimodal (image + audio) |
 | GitHub Copilot    | `github-copilot`    | Uses your Copilot subscription      |
 | LM Studio         | `lmstudio`          | Local/self-hosted                   |
-| Local             | `local`             | `@openclaw/llama-cpp-provider`      |
+| Local             | `local`             | OpenClaw-managed llama.cpp server   |
 | Mistral           | `mistral`           |                                     |
 | Ollama            | `ollama`            | Local/self-hosted                   |
 | OpenAI            | `openai`            | Default: `text-embedding-3-small`   |
@@ -87,8 +90,8 @@ per-agent SQLite database. OpenClaw does not create `USER.md` automatically.
 
 Each chunk can carry nullable importance and trigger metadata. Null values are
 neutral, so older indexes remain usable. Search combines hybrid relevance,
-recency decay, and importance; trigger recall only injects curated or
-promoted-trusted entries.
+recency decay, and importance before applying MMR diversity; trigger recall
+only injects curated or promoted-trusted entries.
 
 Each indexed chunk also has SQLite-owned provenance: origin class (`owner`,
 `agent`, `untrusted`, or `system`), session kind, observation time, and an
@@ -111,6 +114,42 @@ You can also index Markdown files outside the workspace with
 [configuration reference](/reference/memory-config#additional-memory-paths).
 </Info>
 
+## Migrating from QMD
+
+QMD has been removed; builtin is the only memory engine. After upgrading, run:
+
+```bash
+openclaw doctor --fix
+```
+
+Doctor removes the retired `memory.backend`, `memory.qmd`, and
+`memory.search.qmd` settings, including agent-scoped `memory.search.qmd`
+forms. It preserves QMD paths and extra collections as the corresponding
+`memory.search.extraPaths` entries, including `{ path, pattern }` globs. When
+Memory Core finds a retired per-agent QMD workspace under
+`~/.openclaw/agents/<agentId>/qmd/`, Doctor also offers to remove its derived
+indexes, model downloads, collection metadata, and session exports.
+
+Canonical memory remains in `MEMORY.md`, `USER.md`, `memory/*.md`, and the
+migrated extra paths. Builtin indexes those same Markdown sources on its next
+sync. The cutover is lossless by construction: no canonical memory content is
+copied or deleted; only derived state is rebuilt.
+
+Builtin now covers most QMD use cases with:
+
+- hybrid BM25 and vector retrieval by default, followed by temporal decay,
+  importance, and project affinity before MMR diversity,
+- bounded lexical query expansion for conversational searches,
+- string or `{ path, pattern }` entries in `memory.search.extraPaths`, and
+- optional image and audio indexing under `extraPaths` only.
+
+QMD query mode's learned cross-encoder reranking and HyDE generation are not
+part of builtin memory. MMR reduces duplicate results but is not a learned
+relevance reranker. To replace QMD's in-process, zero-key GGUF embeddings,
+install the [llama.cpp provider](/plugins/llama-cpp) and set
+`memory.search.provider: "local"`; without an embedding provider, builtin uses
+BM25 keyword search only.
+
 ## When to use
 
 The builtin engine is the right choice for most users:
@@ -120,8 +159,10 @@ The builtin engine is the right choice for most users:
 - Supports all embedding providers.
 - Hybrid search combines the best of both retrieval approaches.
 
-Consider switching to [QMD](/concepts/memory-qmd) if you need reranking, query
-expansion, or want to index directories outside the workspace.
+The builtin engine can index directories outside the workspace with
+`memory.search.extraPaths`. It uses bounded lexical query expansion to improve
+conversational recall, but it does not provide a learned or model-based relevance
+reranking stage. Its MMR pass is deterministic and local.
 
 Consider [Honcho](/concepts/memory-honcho) if you want cross-session memory
 with automatic user modeling.
@@ -131,7 +172,8 @@ with automatic user modeling.
 **Memory search disabled?** Check `openclaw memory status`. If no provider is
 detected, set one explicitly or add an API key.
 
-**Local provider not detected?** Confirm the local path exists and run:
+**Local provider not detected?** Run interactive llama.cpp setup once, confirm
+the local path exists, and run:
 
 ```bash
 openclaw memory status --deep --agent main
@@ -153,9 +195,9 @@ error.
 
 ## Configuration
 
-For embedding provider setup, hybrid search tuning (weights, MMR, temporal
-decay), batch indexing, multimodal memory, sqlite-vec, extra paths, and all
-other config knobs, see the
+For embedding provider setup, search result limits and thresholds, batch
+indexing, multimodal memory, sqlite-vec, extra paths, and all other config
+knobs, see the
 [Memory configuration reference](/reference/memory-config).
 
 ## Related

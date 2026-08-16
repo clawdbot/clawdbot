@@ -3,6 +3,8 @@ import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   cleanupCommandLogMessages,
   createCleanupCommandRuntime,
+  gatewayService,
+  listAgentSessionDirs,
   removeStateAndLinkedPaths,
   removeWorkspaceDirs,
   resetCleanupCommandMocks,
@@ -20,6 +22,30 @@ describe("resetCommand", () => {
   beforeEach(() => {
     resetCleanupCommandMocks();
     silenceCleanupCommandRuntime(runtime);
+  });
+
+  it.each([
+    {
+      failure: "inspection fails",
+      arrange: () => gatewayService.isLoaded.mockRejectedValue(new Error("inspection failed")),
+    },
+    {
+      failure: "stop fails",
+      arrange: () => gatewayService.stop.mockRejectedValue(new Error("stop failed")),
+    },
+  ])("preserves user data when gateway $failure", async ({ arrange }) => {
+    arrange();
+
+    await expect(
+      resetCommand(runtime, {
+        scope: "full",
+        yes: true,
+        nonInteractive: true,
+      }),
+    ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+
+    expect(removeStateAndLinkedPaths).not.toHaveBeenCalled();
+    expect(removeWorkspaceDirs).not.toHaveBeenCalled();
   });
 
   it("recommends creating a backup before state-destructive reset scopes", async () => {
@@ -79,5 +105,21 @@ describe("resetCommand", () => {
       dryRun: false,
       removeStateRows: true,
     });
+  });
+
+  it("continues a scoped reset when session directory inspection fails", async () => {
+    listAgentSessionDirs.mockRejectedValueOnce(new Error("permission denied"));
+
+    await expect(
+      resetCommand(runtime, {
+        scope: "config+creds+sessions",
+        yes: true,
+        nonInteractive: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Failed to inspect session directories: Error: permission denied",
+    );
   });
 });

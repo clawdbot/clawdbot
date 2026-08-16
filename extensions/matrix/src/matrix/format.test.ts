@@ -281,60 +281,57 @@ describe("markdownToMatrixHtml", () => {
     );
   });
 
-  it("renders qualified Matrix user mentions as matrix.to links and m.mentions metadata", async () => {
-    const result = await renderMarkdownToMatrixHtmlWithMentions({
+  it.each([
+    {
+      name: "renders qualified Matrix user mentions as matrix.to links and m.mentions metadata",
       markdown: "hello @alice:example.org",
-      client: createMentionClient(),
-    });
-
-    expect(result.html).toBe(
-      '<p>hello <a href="https://matrix.to/#/%40alice%3Aexample.org">@alice:example.org</a></p>',
-    );
-    expect(result.mentions).toEqual({
-      user_ids: ["@alice:example.org"],
-    });
-  });
-
-  it("url-encodes matrix.to hrefs for valid mxids with path characters", async () => {
-    const result = await renderMarkdownToMatrixHtmlWithMentions({
+      html: '<p>hello <a href="https://matrix.to/#/%40alice%3Aexample.org">@alice:example.org</a></p>',
+      userId: "@alice:example.org",
+    },
+    {
+      name: "url-encodes matrix.to hrefs for valid mxids with path characters",
       markdown: "hello @foo/bar:example.org",
-      client: createMentionClient(),
-    });
-
-    expect(result.html).toBe(
-      '<p>hello <a href="https://matrix.to/#/%40foo%2Fbar%3Aexample.org">@foo/bar:example.org</a></p>',
-    );
-    expect(result.mentions).toEqual({
-      user_ids: ["@foo/bar:example.org"],
-    });
-  });
-
-  it("treats mxids that begin with room as user mentions", async () => {
-    const result = await renderMarkdownToMatrixHtmlWithMentions({
+      html: '<p>hello <a href="https://matrix.to/#/%40foo%2Fbar%3Aexample.org">@foo/bar:example.org</a></p>',
+      userId: "@foo/bar:example.org",
+    },
+    {
+      name: "treats mxids that begin with room as user mentions",
       markdown: "hello @room:example.org",
-      client: createMentionClient(),
-    });
-
-    expect(result.html).toBe(
-      '<p>hello <a href="https://matrix.to/#/%40room%3Aexample.org">@room:example.org</a></p>',
-    );
-    expect(result.mentions).toEqual({
-      user_ids: ["@room:example.org"],
-    });
-  });
-
-  it("treats hyphenated room-prefixed mxids as user mentions", async () => {
-    const result = await renderMarkdownToMatrixHtmlWithMentions({
+      html: '<p>hello <a href="https://matrix.to/#/%40room%3Aexample.org">@room:example.org</a></p>',
+      userId: "@room:example.org",
+    },
+    {
+      name: "treats hyphenated room-prefixed mxids as user mentions",
       markdown: "hello @room-admin:example.org",
+      html: '<p>hello <a href="https://matrix.to/#/%40room-admin%3Aexample.org">@room-admin:example.org</a></p>',
+      userId: "@room-admin:example.org",
+    },
+    {
+      name: "trims punctuation before storing mentioned user ids",
+      markdown: "hello @alice:example.org.",
+      html: '<p>hello <a href="https://matrix.to/#/%40alice%3Aexample.org">@alice:example.org</a>.</p>',
+      userId: "@alice:example.org",
+    },
+    {
+      name: "accepts bracketed homeservers in matrix mentions",
+      markdown: "hello @alice:[2001:db8::1]",
+      html: '<p>hello <a href="https://matrix.to/#/%40alice%3A%5B2001%3Adb8%3A%3A1%5D">@alice:[2001:db8::1]</a></p>',
+      userId: "@alice:[2001:db8::1]",
+    },
+    {
+      name: "accepts bracketed homeservers with ports in matrix mentions",
+      markdown: "hello @alice:[2001:db8::1]:8448.",
+      html: '<p>hello <a href="https://matrix.to/#/%40alice%3A%5B2001%3Adb8%3A%3A1%5D%3A8448">@alice:[2001:db8::1]:8448</a>.</p>',
+      userId: "@alice:[2001:db8::1]:8448",
+    },
+  ])("$name", async ({ markdown, html, userId }) => {
+    const result = await renderMarkdownToMatrixHtmlWithMentions({
+      markdown,
       client: createMentionClient(),
     });
 
-    expect(result.html).toBe(
-      '<p>hello <a href="https://matrix.to/#/%40room-admin%3Aexample.org">@room-admin:example.org</a></p>',
-    );
-    expect(result.mentions).toEqual({
-      user_ids: ["@room-admin:example.org"],
-    });
+    expect(result.html).toBe(html);
+    expect(result.mentions).toEqual({ user_ids: [userId] });
   });
 
   it("keeps explicit room mentions as room mentions", async () => {
@@ -373,157 +370,69 @@ describe("markdownToMatrixHtml", () => {
     });
   });
 
-  it("trims punctuation before storing mentioned user ids", async () => {
-    const result = await renderMarkdownToMatrixHtmlWithMentions({
-      markdown: "hello @alice:example.org.",
-      client: createMentionClient(),
-    });
-
-    expect(result.html).toBe(
-      '<p>hello <a href="https://matrix.to/#/%40alice%3Aexample.org">@alice:example.org</a>.</p>',
-    );
-    expect(result.mentions).toEqual({
-      user_ids: ["@alice:example.org"],
-    });
-  });
-
-  it("does not emit mentions for mxid-like tokens with path suffixes", async () => {
-    const result = await renderMarkdownToMatrixHtmlWithMentions({
+  it.each([
+    {
+      name: "does not emit mentions for mxid-like tokens with path suffixes",
       markdown: "hello @alice:example.org/path",
-      client: createMentionClient(),
-    });
-
-    expect(result.html).toBe("<p>hello @alice:example.org/path</p>");
-    expect(result.mentions).toStrictEqual({});
-  });
-
-  it("does not emit mentions for filename-embedded mxids with trailing hyphens", async () => {
-    const result = await renderMarkdownToMatrixHtmlWithMentions({
+      html: "<p>hello @alice:example.org/path</p>",
+    },
+    {
+      name: "does not emit mentions for filename-embedded mxids with trailing hyphens",
       markdown: "read matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt",
-      client: createMentionClient(),
-    });
-
-    expect(result.html).toBe(
-      "<p>read matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt</p>",
-    );
-    expect(result.mentions).toStrictEqual({});
-  });
-
-  it("accepts bracketed homeservers in matrix mentions", async () => {
-    const result = await renderMarkdownToMatrixHtmlWithMentions({
-      markdown: "hello @alice:[2001:db8::1]",
-      client: createMentionClient(),
-    });
-
-    expect(result.html).toBe(
-      '<p>hello <a href="https://matrix.to/#/%40alice%3A%5B2001%3Adb8%3A%3A1%5D">@alice:[2001:db8::1]</a></p>',
-    );
-    expect(result.mentions).toEqual({
-      user_ids: ["@alice:[2001:db8::1]"],
-    });
-  });
-
-  it("accepts bracketed homeservers with ports in matrix mentions", async () => {
-    const result = await renderMarkdownToMatrixHtmlWithMentions({
-      markdown: "hello @alice:[2001:db8::1]:8448.",
-      client: createMentionClient(),
-    });
-
-    expect(result.html).toBe(
-      '<p>hello <a href="https://matrix.to/#/%40alice%3A%5B2001%3Adb8%3A%3A1%5D%3A8448">@alice:[2001:db8::1]:8448</a>.</p>',
-    );
-    expect(result.mentions).toEqual({
-      user_ids: ["@alice:[2001:db8::1]:8448"],
-    });
-  });
-
-  it("leaves bare localpart text unmentioned", async () => {
-    const result = await renderMarkdownToMatrixHtmlWithMentions({
+      html: "<p>read matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt</p>",
+    },
+    {
+      name: "leaves bare localpart text unmentioned",
       markdown: "hello @alice",
-      client: createMentionClient(),
-    });
-
-    expect(result.html).toBe("<p>hello @alice</p>");
-    expect(result.mentions).toStrictEqual({});
-  });
-
-  it("does not convert escaped qualified mentions", async () => {
-    const result = await renderMarkdownToMatrixHtmlWithMentions({
+      html: "<p>hello @alice</p>",
+    },
+    {
+      name: "does not convert escaped qualified mentions",
       markdown: "\\@alice:example.org",
-      client: createMentionClient(),
-    });
-
-    expect(result.html).toBe("<p>@alice:example.org</p>");
-    expect(result.mentions).toStrictEqual({});
-  });
-
-  it("does not convert escaped room mentions", async () => {
-    const result = await renderMarkdownToMatrixHtmlWithMentions({
+      html: "<p>@alice:example.org</p>",
+    },
+    {
+      name: "does not convert escaped room mentions",
       markdown: "\\@room",
-      client: createMentionClient(),
-    });
-
-    expect(result.html).toBe("<p>@room</p>");
-    expect(result.mentions).toStrictEqual({});
-  });
-
-  it("keeps escaped mentions literal after escaped backticks", async () => {
-    const result = await renderMarkdownToMatrixHtmlWithMentions({
+      html: "<p>@room</p>",
+    },
+    {
+      name: "keeps escaped mentions literal after escaped backticks",
       markdown: "\\`literal then \\@alice:example.org",
-      client: createMentionClient(),
-    });
-
-    expect(result.html).toBe("<p>`literal then @alice:example.org</p>");
-    expect(result.mentions).toStrictEqual({});
-  });
-
-  it("restores escaped mentions in markdown link labels without linking them", async () => {
-    const result = await renderMarkdownToMatrixHtmlWithMentions({
+      html: "<p>`literal then @alice:example.org</p>",
+    },
+    {
+      name: "restores escaped mentions in markdown link labels without linking them",
       markdown: "[\\@alice:example.org](https://example.com)",
-      client: createMentionClient(),
-    });
-
-    expect(result.html).toBe('<p><a href="https://example.com">@alice:example.org</a></p>');
-    expect(result.mentions).toStrictEqual({});
-  });
-
-  it("keeps backslashes inside code spans", async () => {
-    const result = await renderMarkdownToMatrixHtmlWithMentions({
+      html: '<p><a href="https://example.com">@alice:example.org</a></p>',
+    },
+    {
+      name: "keeps backslashes inside code spans",
       markdown: "`\\@alice:example.org`",
-      client: createMentionClient(),
-    });
-
-    expect(result.html).toBe("<p><code>\\@alice:example.org</code></p>");
-    expect(result.mentions).toStrictEqual({});
-  });
-
-  it("does not convert mentions inside code spans", async () => {
-    const result = await renderMarkdownToMatrixHtmlWithMentions({
+      html: "<p><code>\\@alice:example.org</code></p>",
+    },
+    {
+      name: "does not convert mentions inside code spans",
       markdown: "`@alice:example.org`",
-      client: createMentionClient(),
-    });
-
-    expect(result.html).toBe("<p><code>@alice:example.org</code></p>");
-    expect(result.mentions).toStrictEqual({});
-  });
-
-  it("keeps backslashes inside tilde fenced code blocks", async () => {
-    const result = await renderMarkdownToMatrixHtmlWithMentions({
+      html: "<p><code>@alice:example.org</code></p>",
+    },
+    {
+      name: "keeps backslashes inside tilde fenced code blocks",
       markdown: "~~~\n\\@alice:example.org\n~~~",
-      client: createMentionClient(),
-    });
-
-    expect(result.html).toBe("<pre><code>\\@alice:example.org\n</code></pre>");
-    expect(result.mentions).toStrictEqual({});
-  });
-
-  it("keeps backslashes inside indented code blocks", async () => {
-    const result = await renderMarkdownToMatrixHtmlWithMentions({
+      html: "<pre><code>\\@alice:example.org\n</code></pre>",
+    },
+    {
+      name: "keeps backslashes inside indented code blocks",
       markdown: "    \\@alice:example.org",
+      html: "<pre><code>\\@alice:example.org\n</code></pre>",
+    },
+  ])("$name", async ({ markdown, html }) => {
+    const result = await renderMarkdownToMatrixHtmlWithMentions({
+      markdown,
       client: createMentionClient(),
     });
 
-    expect(result.html).toBe("<pre><code>\\@alice:example.org\n</code></pre>");
+    expect(result.html).toBe(html);
     expect(result.mentions).toStrictEqual({});
   });
 });

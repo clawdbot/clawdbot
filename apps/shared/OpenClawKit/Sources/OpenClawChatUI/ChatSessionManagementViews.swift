@@ -200,7 +200,7 @@ struct ChatSessionInspectorSheet: View {
                         .font(OpenClawChatTypography.body)
                     Toggle("Archived", isOn: self.archivedBinding)
                         .font(OpenClawChatTypography.body)
-                        .disabled(!self.displayedSession.isArchived && !ChatSessionSidebarModel.canArchiveSession(
+                        .disabled(!ChatSessionSidebarModel.canArchiveSession(
                             self.displayedSession,
                             mainSessionKey: self.viewModel.resolvedMainSessionKey))
                 }
@@ -305,7 +305,7 @@ struct ChatSessionInspectorSheet: View {
             get: { self.displayedSession.isArchived },
             set: { archived in
                 self.displayedSession.archived = archived
-                self.viewModel.setSessionArchived(key: self.displayedSession.key, archived: archived)
+                self.viewModel.setSessionArchived(self.displayedSession, archived: archived)
             })
     }
 

@@ -12,7 +12,8 @@ struct MacNodeHostWorkerPipeTests {
         printf '%s\\n' '{"type":"ready","version":"test","manifest":{"caps":[],"commands":[],"pathEnv":"/bin"}}'
         sleep 1
         """
-        _ = try await worker.start(command: ["/bin/sh", "-c", script])
+        _ = try await worker.start(launch: MacNodeHostWorkerLaunch(
+            command: ["/bin/sh", "-c", script]))
 
         let response = await worker.invoke(BridgeInvokeRequest(
             id: "closed",

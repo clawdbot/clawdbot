@@ -2,10 +2,7 @@ import { resolveGlobalMap } from "../shared/global-singleton.js";
 
 export type ForegroundReplyFenceState = {
   generation: number;
-  visibleDeliveryGeneration: number;
-  activeDispatches: number;
-  activeGenerations: Map<number, number>;
-  suspendedGenerations: Set<number>;
+  activeGenerations: Set<number>;
   waiters: Set<() => void>;
 };
 

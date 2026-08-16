@@ -15,6 +15,7 @@ import {
   SsrFPolicyConfigSchema,
   TtsConfigSchema,
 } from "./zod-schema.core.js";
+import { DesktopConfigSchema } from "./zod-schema.desktop.js";
 import { GatewayConfigSchema } from "./zod-schema.gateway.js";
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
 import { BrowserSnapshotDefaultsSchema } from "./zod-schema.node-host.js";
@@ -117,6 +118,7 @@ export const OpenClawSchemaShape = {
       audit: z
         .strictObject({
           enabled: z.boolean().optional(),
+          executionIdentity: z.boolean().optional(),
           messages: z.union([z.literal("off"), z.literal("direct"), z.literal("all")]).optional(),
         })
         .optional(),
@@ -198,6 +200,11 @@ export const OpenClawSchemaShape = {
       tabCleanup: z
         .strictObject({
           enabled: z.boolean().optional(),
+        })
+        .optional(),
+      extensionRelay: z
+        .strictObject({
+          allowLegacyAuth: z.boolean().optional(),
         })
         .optional(),
     })
@@ -418,6 +425,7 @@ export const OpenClawSchemaShape = {
   talk: TalkSchema.optional(),
   gateway: GatewayConfigSchema,
   cloudWorkers: CloudWorkersConfigSchema,
+  desktop: DesktopConfigSchema,
   memory: MemorySchema,
   mcp: McpConfigSchema,
   skills: z

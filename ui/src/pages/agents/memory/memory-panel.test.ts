@@ -306,6 +306,7 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
         },
       },
       note: "Dreaming settings reset to the plugin default.",
+      canDispatch: expect.any(Function),
     });
     expect(context.runtimeConfig.removeFormValue).not.toHaveBeenCalled();
     expect(context.runtimeConfig.save).not.toHaveBeenCalled();
@@ -621,6 +622,7 @@ describe.runIf(process.env.OPENCLAW_UI_MEMORY_CHROMIUM_E2E === "1")(
       });
       const page = await context.newPage();
       const gateway = await e2e.installMockGateway(page, {
+        webSocketPassthroughPrefixes: [`${e2e.controlUiBundledGatewayUrl(server.baseUrl)}/?token=`],
         featureMethods: [
           "chat.metadata",
           "chat.startup",

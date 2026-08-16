@@ -1,10 +1,11 @@
 // Doctor core checks collect environment, config, and runtime readiness diagnostics.
 import path from "node:path";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentIds, tryResolveSoleAgentId } from "../agents/agent-scope.js";
 import { isExperimentalClawsEnabled } from "../claws/experimental.js";
 import {
   detectLegacyClawdBrowserProfileResidue,
   maybeArchiveLegacyClawdBrowserProfileResidue,
+  maybeRepairOwnedChromeExtensionNativeHosts,
   noteChromeMcpBrowserReadiness,
   type LegacyClawdBrowserProfileResidue,
 } from "../commands/doctor-browser.js";
@@ -15,11 +16,6 @@ import {
   shellCompletionStatusToRepairEffects,
 } from "../commands/doctor-completion.js";
 import {
-  detectStaleSessionLocks,
-  sessionLockToHealthFinding,
-  sessionLockToRepairEffect,
-} from "../commands/doctor-session-locks.js";
-import {
   disableUnavailableSkillsInConfig,
   formatMissingSkillSummary,
 } from "../commands/doctor-skills-core.js";
@@ -28,7 +24,10 @@ import {
   uiProtocolFreshnessIssueToHealthFinding,
   uiProtocolFreshnessIssueToRepairEffects,
 } from "../commands/doctor-ui.js";
-import { collectDisabledCodexPluginRouteIssues } from "../commands/doctor/shared/codex-route-warnings.js";
+import {
+  collectCodexRuntimeCompatibilityWarnings,
+  collectDisabledCodexPluginRouteIssues,
+} from "../commands/doctor/shared/codex-route-warnings.js";
 import { isDefaultInstallIdentity } from "../config/paths.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
@@ -37,6 +36,7 @@ import type { CronJob } from "../cron/types.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
 import { resolveGatewayAuthToken } from "../gateway/auth-token-resolution.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
+import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import { getSkippedExecRefStaticError } from "../secrets/exec-resolution-policy.js";
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
 import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
@@ -58,7 +58,6 @@ const FINAL_CONFIG_VALIDATION_CHECK_ID = "core/doctor/final-config-validation";
 const GATEWAY_DAEMON_CHECK_ID = "core/doctor/gateway-daemon";
 const GATEWAY_HEALTH_CHECK_ID = "core/doctor/gateway-health";
 const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
-const SESSION_LOCKS_CHECK_ID = "core/doctor/session-locks";
 const TELEGRAM_GENERAL_TOPIC_CONVERSATIONS_CHECK_ID =
   "core/doctor/telegram-general-topic-conversations";
 const SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID = "core/doctor/skill-workshop-tool-policy";
@@ -74,7 +73,7 @@ const loadDoctorCoreChecksRuntimeModule = async () =>
 const loadDoctorWorkspaceModule = async () => await import("../commands/doctor-workspace.js");
 
 export type CoreHealthCheckDeps = {
-  readonly detectUnavailableSkills: (cfg: OpenClawConfig) => Promise<readonly SkillStatusEntry[]>;
+  readonly detectUnavailableSkills: typeof detectUnavailableSkillsWithRuntime;
   readonly collectSecurityWarnings: (cfg: OpenClawConfig) => Promise<readonly string[]>;
   readonly collectWorkspaceSuggestionNotes: (workspaceDir: string) => Promise<readonly string[]>;
   readonly collectRuntimeToolSchemaFindings: (
@@ -94,10 +93,10 @@ export type CoreHealthCheckDeps = {
 };
 
 async function detectUnavailableSkillsWithRuntime(
-  cfg: OpenClawConfig,
+  ctx: HealthCheckContext,
 ): Promise<readonly SkillStatusEntry[]> {
   const runtime = await loadDoctorCoreChecksRuntimeModule();
-  return runtime.detectUnavailableSkills(cfg);
+  return ctx.cwd ? runtime.detectUnavailableSkills(ctx.cfg, ctx.cwd) : [];
 }
 
 async function collectSecurityWarningsWithRuntime(cfg: OpenClawConfig): Promise<readonly string[]> {
@@ -125,14 +124,22 @@ async function collectRuntimeToolSchemaFindingsWithRuntime(
   ctx: HealthCheckContext,
 ): Promise<readonly HealthFinding[]> {
   const runtime = await loadDoctorCoreChecksRuntimeModule();
-  return runtime.collectRuntimeToolSchemaFindings(ctx.cfg);
+  const runWithPluginMetadataSnapshot = (
+    ctx as HealthCheckContext & {
+      runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
+    }
+  ).runWithPluginMetadataSnapshot;
+  return runtime.collectRuntimeToolSchemaFindings(
+    ctx.cfg,
+    runWithPluginMetadataSnapshot ? { runWithPluginMetadataSnapshot } : undefined,
+  );
 }
 
 async function collectProviderCatalogProjectionFindingsWithRuntime(
   ctx: HealthCheckContext,
 ): Promise<readonly HealthFinding[]> {
   const runtime = await loadDoctorCoreChecksRuntimeModule();
-  return runtime.collectProviderCatalogProjectionFindings(ctx.cfg);
+  return runtime.collectProviderCatalogProjectionFindings(ctx.cfg, ctx.cwd);
 }
 
 async function collectLocalAudioAccelerationFindingsWithRuntime(): Promise<
@@ -311,24 +318,27 @@ const skillWorkshopToolPolicyCheck: HealthCheck = {
   description: "Autonomous Skill Workshop capture has a callable review tool.",
   source: "doctor",
   async detect(ctx) {
-    const diagnostic = detectSkillWorkshopToolPolicyDiagnostic({
-      config: ctx.cfg,
-      workshopEnabled: resolveSkillWorkshopConfig(ctx.cfg).autonomous.mode !== "off",
-    });
-    if (!diagnostic) {
-      return [];
-    }
-    return [
-      {
-        checkId: SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID,
-        severity: "warning",
-        message: diagnostic.detail,
-        path: diagnostic.source,
-        target: diagnostic.agentId,
-        requirement: "Autonomous Skill Workshop review requires the skill_workshop tool.",
-        fixHint: diagnostic.fix,
+    const workshopEnabled = resolveSkillWorkshopConfig(ctx.cfg).autonomous.mode !== "off";
+    const listedAgentIds = listAgentIds(ctx.cfg);
+    const diagnostics = (listedAgentIds.length > 0 ? listedAgentIds : [undefined]).flatMap(
+      (agentId) => {
+        const diagnostic = detectSkillWorkshopToolPolicyDiagnostic({
+          config: ctx.cfg,
+          workshopEnabled,
+          ...(agentId ? { agentId } : {}),
+        });
+        return diagnostic ? [diagnostic] : [];
       },
-    ];
+    );
+    return diagnostics.map((diagnostic) => ({
+      checkId: SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID,
+      severity: "warning",
+      message: diagnostic.detail,
+      path: diagnostic.source,
+      target: diagnostic.agentId,
+      requirement: "Autonomous Skill Workshop review requires the skill_workshop tool.",
+      fixHint: diagnostic.fix,
+    }));
   },
 };
 
@@ -477,7 +487,11 @@ const hooksModelCheck: HealthCheck = {
       defaultProvider: DEFAULT_PROVIDER,
       defaultModel: DEFAULT_MODEL,
     });
-    const catalog = await loadPreparedModelCatalog({ config: ctx.cfg, readOnly: true });
+    const catalog = await loadPreparedModelCatalog({
+      config: ctx.cfg,
+      readOnly: true,
+      providerDiscoveryProviderIds: [],
+    });
     const status = getModelRefStatus({
       cfg: ctx.cfg,
       catalog,
@@ -517,9 +531,12 @@ const legacyStateCheck: HealthCheck & { readonly defaultEnabled: false } = {
   defaultEnabled: false,
   async detect(ctx) {
     const { detectLegacyStateMigrations } = await import("../commands/doctor-state-migrations.js");
+    const { prepareLegacySessionSurfaces } = await import("../plugins/legacy-session-surfaces.js");
+    const legacySessionSurfaces = prepareLegacySessionSurfaces({ config: ctx.cfg });
     const detected = await detectLegacyStateMigrations({
       cfg: ctx.cfg,
       doctorOnlyStateMigrations: true,
+      legacySessionSurfaces,
     });
     return [
       ...detected.preview.map(
@@ -550,17 +567,21 @@ const bootstrapSizeCheck: HealthCheck = {
   description: "Workspace bootstrap files fit within configured injection limits.",
   source: "doctor",
   async detect(ctx) {
+    if (!ctx.cwd) {
+      return [];
+    }
     const { buildBootstrapInjectionStats, analyzeBootstrapBudget } =
       await import("../agents/bootstrap-budget.js");
     const { resolveBootstrapContextForRun } = await import("../agents/bootstrap-files.js");
     const { resolveBootstrapMaxChars, resolveBootstrapTotalMaxChars } =
       await import("../agents/embedded-agent-helpers.js");
-    const defaultAgentId = resolveDefaultAgentId(ctx.cfg);
-    const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, defaultAgentId);
+    const defaultAgentId = tryResolveSoleAgentId(ctx.cfg);
+    const workspaceDir = ctx.cwd;
     const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
       workspaceDir,
       config: ctx.cfg,
       agentId: defaultAgentId,
+      readOnlyState: true,
     });
     const analysis = analyzeBootstrapBudget({
       files: buildBootstrapInjectionStats({
@@ -823,10 +844,10 @@ const legacyCronStoreCheck: SplitHealthCheckInput = {
 const codexSessionRoutesCheck: HealthCheck = {
   id: CODEX_SESSION_ROUTES_CHECK_ID,
   kind: "core",
-  description: "Codex runtime routes have a registered Codex plugin harness before sessions run.",
+  description: "Codex runtime routes are compatible with the configured plugin harness.",
   source: "doctor",
   async detect(ctx) {
-    return collectDisabledCodexPluginRouteIssues(ctx.cfg).map(
+    const disabledPluginFindings = collectDisabledCodexPluginRouteIssues(ctx.cfg, ctx.env).map(
       (issue): HealthFinding => ({
         checkId: CODEX_SESSION_ROUTES_CHECK_ID,
         severity: "warning",
@@ -848,6 +869,15 @@ const codexSessionRoutesCheck: HealthCheck = {
             ].join(" "),
       }),
     );
+    const compatibilityFindings = collectCodexRuntimeCompatibilityWarnings(ctx.cfg, ctx.env).map(
+      (text) =>
+        noteTextToFinding({
+          checkId: CODEX_SESSION_ROUTES_CHECK_ID,
+          severity: "warning",
+          text,
+        }),
+    );
+    return [...disabledPluginFindings, ...compatibilityFindings];
   },
 };
 
@@ -978,33 +1008,6 @@ function createGatewayDaemonCheck(deps: CoreHealthCheckDeps): SplitHealthCheckIn
   };
 }
 
-const sessionLocksCheck: SplitHealthCheckInput = {
-  id: SESSION_LOCKS_CHECK_ID,
-  kind: "core",
-  description: "Stale session lock files are represented as structured findings.",
-  source: "doctor",
-  defaultEnabled: false,
-  async detect(ctx) {
-    return (await detectStaleSessionLocks({ config: ctx.cfg, env: process.env })).map(
-      sessionLockToHealthFinding,
-    );
-  },
-  async repair(ctx) {
-    const effects = (await detectStaleSessionLocks({ config: ctx.cfg, env: process.env })).map(
-      sessionLockToRepairEffect,
-    );
-    if (ctx.dryRun === true) {
-      return { status: "repaired", changes: [], effects };
-    }
-    return {
-      status: "skipped",
-      reason: "legacy doctor session lock contribution owns cleanup",
-      changes: [],
-      effects,
-    };
-  },
-};
-
 const browserCheck: HealthCheck = {
   id: "core/doctor/browser",
   kind: "core",
@@ -1015,11 +1018,49 @@ const browserCheck: HealthCheck = {
     await noteChromeMcpBrowserReadiness(ctx.cfg, { noteFn: collector.noteFn });
     return collector.findings;
   },
+  async repair(ctx) {
+    if (ctx.dryRun === true) {
+      return {
+        status: "skipped",
+        reason: "native-host repair requires filesystem writes",
+        changes: [],
+      };
+    }
+    const result = await maybeRepairOwnedChromeExtensionNativeHosts();
+    return {
+      ...(result.changes.length === 0 && result.warnings.length > 0
+        ? { status: "failed" as const, reason: result.warnings.join("; ") }
+        : {}),
+      changes: result.changes,
+      warnings: result.warnings,
+    };
+  },
 };
 
 function createSkillsReadinessCheck(
   deps: CoreHealthCheckDeps,
 ): HealthCheck & { readonly defaultEnabled: false } {
+  const detectUnavailableSkills = async (
+    ctx: HealthCheckContext | HealthRepairContext,
+  ): Promise<readonly SkillStatusEntry[]> => {
+    const runWithPluginMetadataSnapshot = (
+      ctx as (HealthCheckContext | HealthRepairContext) & {
+        runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
+      }
+    ).runWithPluginMetadataSnapshot;
+    const detect = ctx.cwd ? () => deps.detectUnavailableSkills(ctx) : async () => [];
+    if (!runWithPluginMetadataSnapshot) {
+      return await detect();
+    }
+    return await runWithPluginMetadataSnapshot(
+      {
+        config: ctx.cfg,
+        workspaceDir: ctx.cwd,
+      },
+      detect,
+    );
+  };
+
   return {
     id: "core/doctor/skills-readiness",
     kind: "core",
@@ -1028,14 +1069,14 @@ function createSkillsReadinessCheck(
     defaultEnabled: false,
     async detect(ctx, scope) {
       const unavailable = filterUnavailableSkillsForScope(
-        await deps.detectUnavailableSkills(ctx.cfg),
+        await detectUnavailableSkills(ctx),
         scope?.paths,
       );
       return unavailable.map(unavailableSkillToFinding);
     },
     async repair(ctx, findings) {
       const unavailable = filterUnavailableSkillsForScope(
-        await deps.detectUnavailableSkills(ctx.cfg),
+        await detectUnavailableSkills(ctx),
         findings.map((finding) => finding.path),
       );
       if (unavailable.length === 0) {
@@ -1275,7 +1316,6 @@ function createConvertedWorkflowChecks(
     legacyCronStoreCheck,
     codexSessionRoutesCheck,
     telegramGeneralTopicConversationsCheck,
-    sessionLocksCheck,
     shellCompletionCheck,
     uiProtocolFreshnessCheck,
     gatewayServicesExtraCheck,

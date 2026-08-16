@@ -9,8 +9,8 @@ import * as musicGenerationRuntime from "../../music-generation/runtime.js";
 import * as fetchTimeout from "../../utils/fetch-timeout.js";
 import { formatAgentInternalEventsForPrompt } from "../internal-events.js";
 import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
+import * as musicGenerateBackground from "./media-generate-background.js";
 import { canonicalizeMediaGenerationTestConfig } from "./media-generation-config.test-support.js";
-import * as musicGenerateBackground from "./music-generate-background.js";
 import { createMusicGenerateTool as createMusicGenerateToolImpl } from "./music-generate-tool.js";
 
 function createMusicGenerateTool(
@@ -51,6 +51,7 @@ const configMocks = vi.hoisted(() => ({
 }));
 
 const mediaStoreMocks = vi.hoisted(() => ({
+  deleteMediaBuffer: vi.fn(),
   saveMediaBuffer: vi.fn(),
 }));
 const probeMediaFilesWithinBudgetMock = vi.hoisted(() =>
@@ -166,7 +167,7 @@ vi.mock("../../utils/fetch-timeout.js", async () => {
     buildTimeoutAbortSignal: vi.fn(actual.buildTimeoutAbortSignal),
   };
 });
-vi.mock("./music-generate-background.js", () => musicGenerateBackgroundMocks);
+vi.mock("./media-generate-background.js", () => musicGenerateBackgroundMocks);
 vi.mock("../../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
 vi.mock("../../tasks/detached-task-runtime.js", () => taskExecutorMocks);
 
@@ -188,6 +189,7 @@ function resetMusicGenerateMocks() {
   vi.restoreAllMocks();
   vi.spyOn(musicGenerationRuntime, "listRuntimeMusicGenerationProviders").mockReturnValue([]);
   musicGenerationRuntimeMocks.generateMusic.mockReset();
+  mediaStoreMocks.deleteMediaBuffer.mockReset();
   mediaStoreMocks.saveMediaBuffer.mockReset();
   vi.mocked(webMedia.loadWebMedia).mockReset();
   probeMediaFilesWithinBudgetMock.mockReset();
@@ -1133,6 +1135,67 @@ describe("createMusicGenerateTool", () => {
     const details = detailsOf(result);
     expect(details.duplicateGuard).toBe(true);
     expect(details.active).toBe(false);
+  });
+
+  it("rolls back late music saves after a concurrent persistence failure", async () => {
+    vi.spyOn(musicGenerationRuntime, "generateMusic").mockResolvedValue({
+      provider: "minimax",
+      model: "music-2.6",
+      attempts: [],
+      ignoredOverrides: [],
+      tracks: [
+        { buffer: Buffer.from("failed"), mimeType: "audio/mpeg", fileName: "failed.mp3" },
+        { buffer: Buffer.from("late"), mimeType: "audio/mpeg", fileName: "late.mp3" },
+      ],
+    });
+    const terminalError = new Error("music persistence failed");
+    const lateSavedMedia = {
+      path: "/tmp/late.mp3",
+      id: "late.mp3",
+      size: 4,
+      contentType: "audio/mpeg",
+    };
+    let resolveLateSave!: (saved: typeof lateSavedMedia) => void;
+    const lateSave = new Promise<typeof lateSavedMedia>((resolve) => {
+      resolveLateSave = resolve;
+    });
+    mediaStoreMocks.saveMediaBuffer
+      .mockRejectedValueOnce(terminalError)
+      .mockImplementationOnce(() => lateSave);
+    mediaStoreMocks.deleteMediaBuffer.mockRejectedValueOnce(new Error("music cleanup failed"));
+    const tool = expectMusicGenerateTool(
+      createMusicGenerateTool({
+        config: asConfig({
+          agents: {
+            defaults: {
+              musicGenerationModel: { primary: "minimax/music-2.6" },
+            },
+          },
+        }),
+      }),
+    );
+
+    const execution = tool.execute("call-partial-save", { prompt: "two tracks" });
+    let executionSettled = false;
+    void execution.then(
+      () => {
+        executionSettled = true;
+      },
+      () => {
+        executionSettled = true;
+      },
+    );
+    await vi.waitFor(() => expect(mediaStoreMocks.saveMediaBuffer).toHaveBeenCalledTimes(2));
+    await Promise.resolve();
+    expect(executionSettled).toBe(false);
+
+    resolveLateSave(lateSavedMedia);
+    await expect(execution).rejects.toBe(terminalError);
+    expect(mediaStoreMocks.deleteMediaBuffer).toHaveBeenCalledTimes(1);
+    expect(mediaStoreMocks.deleteMediaBuffer).toHaveBeenCalledWith(
+      "late.mp3",
+      "tool-music-generation",
+    );
   });
 
   it("lists provider capabilities", async () => {

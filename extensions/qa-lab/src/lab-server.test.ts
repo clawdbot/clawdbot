@@ -1,6 +1,6 @@
-// Qa Lab tests cover lab server plugin behavior.
+// QA Lab tests cover lab server plugin behavior.
 import fs, { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { createServer } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -407,6 +407,8 @@ describe("qa-lab server", () => {
     });
     suiteLaunchMock.runQaSuite.mockResolvedValue({
       executionKind: "suite",
+      expectedCells: [],
+      observedCells: [],
       result: await createQaLabSuiteResultFixture(),
     });
 
@@ -457,6 +459,7 @@ describe("qa-lab server", () => {
       expect.objectContaining({
         alternateModel: "openai/gpt-5.6-luna",
         channelDriver: "crabline",
+        controlUiEnabled: true,
         primaryModel: "openai/gpt-5.6-luna",
         providerMode: "live-frontier",
         scenarioIds: ["dm-chat-baseline", "browser-talk-start-stop"],
@@ -493,7 +496,12 @@ describe("qa-lab server", () => {
       const result = await createQaLabSuiteResultFixture({
         scenarios: [{ name: "Channel chat baseline", status, steps: [] }],
       });
-      suiteLaunchMock.runQaSuite.mockResolvedValue({ executionKind: "flow", result });
+      suiteLaunchMock.runQaSuite.mockResolvedValue({
+        executionKind: "flow",
+        expectedCells: [],
+        observedCells: [],
+        result,
+      });
 
       const response = await fetch(`${lab.baseUrl}/api/scenario/suite`, {
         method: "POST",
@@ -560,7 +568,12 @@ describe("qa-lab server", () => {
       });
       const result = await createQaLabSuiteResultFixture();
       await writeFile(result.summaryPath, invalidResult.summary, "utf8");
-      suiteLaunchMock.runQaSuite.mockResolvedValue({ executionKind: "flow", result });
+      suiteLaunchMock.runQaSuite.mockResolvedValue({
+        executionKind: "flow",
+        expectedCells: [],
+        observedCells: [],
+        result,
+      });
 
       const response = await fetch(`${lab.baseUrl}/api/scenario/suite`, {
         method: "POST",
@@ -600,7 +613,12 @@ describe("qa-lab server", () => {
         },
       ],
     });
-    suiteLaunchMock.runQaSuite.mockResolvedValue({ executionKind: "flow", result });
+    suiteLaunchMock.runQaSuite.mockResolvedValue({
+      executionKind: "flow",
+      expectedCells: [],
+      observedCells: [],
+      result,
+    });
 
     const response = await fetch(`${lab.baseUrl}/api/scenario/suite`, {
       method: "POST",
@@ -629,6 +647,8 @@ describe("qa-lab server", () => {
     });
     suiteLaunchMock.runQaSuite.mockResolvedValue({
       executionKind: "flow",
+      expectedCells: [],
+      observedCells: [],
       result: await createQaLabSuiteResultFixture({ watchUrl: "http://runtime-watch.invalid" }),
     });
 
@@ -692,6 +712,8 @@ describe("qa-lab server", () => {
     expect(suiteLaunchMock.runQaSuite).toHaveBeenCalledTimes(1);
     finishSuite?.({
       executionKind: "flow",
+      expectedCells: [],
+      observedCells: [],
       result: await createQaLabSuiteResultFixture(),
     });
     await vi.waitFor(async () => {
@@ -726,6 +748,8 @@ describe("qa-lab server", () => {
     });
     suiteLaunchMock.runQaSuite.mockResolvedValue({
       executionKind: "flow",
+      expectedCells: [],
+      observedCells: [],
       result: await createQaLabSuiteResultFixture({ watchUrl: lab.baseUrl }),
     });
 
@@ -879,6 +903,74 @@ describe("qa-lab server", () => {
     await expect(lab.stop()).rejects.toThrow("gateway stop failed");
 
     expect(captureMock.store.close).toHaveBeenCalledTimes(1);
+    await expect(fetch(`${lab.baseUrl}/healthz`)).rejects.toThrow();
+  });
+
+  it("keeps the bus available until the embedded gateway finishes stopping", async () => {
+    let markGatewayStopping = () => {};
+    const gatewayStopping = new Promise<void>((resolve) => {
+      markGatewayStopping = resolve;
+    });
+    let finishGatewayStop = () => {};
+    const gatewayStopped = new Promise<void>((resolve) => {
+      finishGatewayStop = resolve;
+    });
+    qaChannelMock.startAccount.mockImplementationOnce(
+      async ({ abortSignal }: { abortSignal?: AbortSignal }) => {
+        await new Promise<void>((resolve) => {
+          abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+        markGatewayStopping();
+        await gatewayStopped;
+      },
+    );
+
+    const lab = await startQaLabServer({ host: "127.0.0.1", port: 0 });
+    const waitForCursorAdvance = lab.state.waitForCursorAdvance.bind(lab.state);
+    let pollWaiterStarted = false;
+    let pollWaiterSettled = false;
+    lab.state.waitForCursorAdvance = async (...args) => {
+      pollWaiterStarted = true;
+      try {
+        return await waitForCursorAdvance(...args);
+      } finally {
+        pollWaiterSettled = true;
+      }
+    };
+    const poll = fetch(`${lab.listenUrl}/v1/poll`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ accountId: "cleanup", cursor: 0, timeoutMs: 30_000 }),
+    }).catch(() => undefined);
+    const inboundBody = JSON.stringify({
+      conversation: { id: "late-room", kind: "direct" },
+      senderId: "late-sender",
+      text: "must not survive shutdown",
+    });
+    const slowInbound = httpRequest(new URL("/api/inbound/message", lab.listenUrl), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "content-length": Buffer.byteLength(inboundBody),
+      },
+    });
+    slowInbound.on("response", (response) => response.resume());
+    slowInbound.on("error", () => undefined);
+    slowInbound.write(inboundBody.slice(0, 1));
+    await vi.waitFor(() => expect(pollWaiterStarted).toBe(true));
+    const stopping = lab.stop();
+    await gatewayStopping;
+    try {
+      await expect(fetch(`${lab.baseUrl}/healthz`)).resolves.toMatchObject({ status: 200 });
+      expect(pollWaiterSettled).toBe(false);
+    } finally {
+      finishGatewayStop();
+      setTimeout(() => slowInbound.end(inboundBody.slice(1)), 50);
+      await stopping;
+    }
+    await poll;
+    expect(pollWaiterSettled).toBe(true);
+    expect(lab.state.getSnapshot()).toMatchObject({ events: [], messages: [] });
     await expect(fetch(`${lab.baseUrl}/healthz`)).rejects.toThrow();
   });
 

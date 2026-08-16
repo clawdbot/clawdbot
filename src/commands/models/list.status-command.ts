@@ -1,5 +1,9 @@
 /** Implementation of `openclaw models status`. */
 import path from "node:path";
+import {
+  parseStrictFiniteNumber,
+  parseStrictPositiveInteger,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
 import {
@@ -14,6 +18,7 @@ import {
   DEFAULT_OAUTH_WARN_MS,
   formatRemainingShort,
 } from "../../agents/auth-health.js";
+import { buildAuthProfileUnusableHint } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths.js";
 import {
   ensureAuthProfileStore,
@@ -68,10 +73,6 @@ import {
 } from "../../config/model-input.js";
 import { parseModelPolicyWildcardRef } from "../../config/model-policy-ref.js";
 import { resolveMergedModelProviderConfig } from "../../config/model-provider-config.js";
-import {
-  parseStrictFiniteNumber,
-  parseStrictPositiveInteger,
-} from "../../infra/parse-finite-number.js";
 import { getShellEnvAppliedKeys, shouldEnableShellEnvFallback } from "../../infra/shell-env.js";
 import type { ProviderModelRouteCandidate } from "../../plugin-sdk/provider-model-types.js";
 import {
@@ -86,7 +87,10 @@ import { resolveRuntimeSyntheticAuthProviderRefs } from "../../plugins/synthetic
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveUserPath, shortenHomePath } from "../../utils.js";
-import { resolveProviderAuthOverview } from "./list.auth-overview.js";
+import {
+  formatProviderAuthProfileCounts,
+  resolveProviderAuthOverview,
+} from "./list.auth-overview.js";
 import { isRich } from "./list.format.js";
 import type { AuthProbeSummary } from "./list.probe.js";
 import type { ProviderAuthOverview } from "./list.types.js";
@@ -1222,6 +1226,9 @@ export async function modelsStatusCommand(
               concurrency: probeConcurrency,
               maxTokens: probeMaxTokens,
             },
+            // Direct CLI probes create hidden sessions in the canonical agent DB.
+            // Gateway RPC probes omit this because the Gateway already owns the lock.
+            stateOwnership: { mode: "exclusive" },
             onProgress: update,
           });
         },
@@ -1254,6 +1261,7 @@ export async function modelsStatusCommand(
         provider?: string;
         kind: "cooldown" | "disabled";
         reason?: string;
+        recoveryHint: string;
         until: number;
         remainingMs: number;
       }> = [];
@@ -1267,11 +1275,19 @@ export async function modelsStatusCommand(
           typeof stats?.disabledUntil === "number" && now < stats.disabledUntil
             ? "disabled"
             : "cooldown";
+        const reason = kind === "disabled" ? stats?.disabledReason : stats?.cooldownReason;
+        const provider = store.profiles[profileId]?.provider;
         out.push({
           profileId,
-          provider: store.profiles[profileId]?.provider,
+          provider,
           kind,
-          reason: stats?.disabledReason,
+          reason,
+          recoveryHint: buildAuthProfileUnusableHint({
+            kind,
+            reason,
+            provider: provider ?? profileId,
+            profileId,
+          }),
           until: unusableUntil,
           remainingMs: unusableUntil - now,
         });
@@ -1513,12 +1529,7 @@ export async function modelsStatusCommand(
         ),
       );
       if (entry.profiles.count > 0) {
-        bits.push(
-          formatKeyValue(
-            "profiles",
-            `${entry.profiles.count} (oauth=${entry.profiles.oauth}, token=${entry.profiles.token}, api_key=${entry.profiles.apiKey})`,
-          ),
-        );
+        bits.push(formatKeyValue("profiles", formatProviderAuthProfileCounts(entry.profiles)));
         if (entry.profiles.labels.length > 0) {
           bits.push(colorize(rich, theme.info, entry.profiles.labels.join(", ")));
         }
@@ -1619,6 +1630,18 @@ export async function modelsStatusCommand(
           includeEnvVar: !requiresSubscription,
         });
         runtime.log(`- ${theme.heading(provider)} ${hint}`);
+      }
+    }
+
+    if (unusableProfiles.length > 0) {
+      runtime.log("");
+      runtime.log(colorize(rich, theme.heading, "Unavailable auth profiles"));
+      for (const profile of unusableProfiles) {
+        const reason = profile.reason ? `:${profile.reason}` : "";
+        const provider = profile.provider ? ` (${profile.provider})` : "";
+        runtime.log(
+          `- ${theme.heading(profile.profileId)}${provider} ${profile.kind}${reason} (${formatRemainingShort(profile.remainingMs)}) — ${profile.recoveryHint}`,
+        );
       }
     }
 

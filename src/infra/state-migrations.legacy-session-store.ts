@@ -57,7 +57,7 @@ import {
 import { writeTextAtomic } from "./json-files.js";
 import { readSessionStoreJson5 } from "./state-migrations.fs.js";
 
-export type LegacySessionStoreLoadOptions = {
+type LegacySessionStoreLoadOptions = {
   skipCache?: boolean;
   maintenanceConfig?: ResolvedSessionMaintenanceConfig;
   runMaintenance?: boolean;
@@ -67,7 +67,6 @@ export type LegacySessionStoreLoadOptions = {
 
 export type LegacySessionStoreSaveOptions = {
   skipMaintenance?: boolean;
-  skipSerializeForUnchangedStore?: boolean;
   takeCacheOwnership?: boolean;
   activeSessionKey?: string;
   onWarn?: (warning: SessionMaintenanceWarning) => void | Promise<void>;
@@ -279,12 +278,14 @@ export function loadLegacySessionStore(
         pruneStaleModelRunEntries(sessionStore, maintenance.modelRunPruneAfterMs, {
           log: false,
           preserveKeys: preserveSessionKeys,
+          preserveRecentMs: maintenance.preserveRecentMs,
         });
       }
       if (Object.keys(sessionStore).length > maintenance.maxEntries) {
         pruneStaleEntries(sessionStore, maintenance.pruneAfterMs, {
           log: false,
           preserveKeys: preserveSessionKeys,
+          preserveRecentMs: maintenance.preserveRecentMs,
         });
         if (
           shouldRunSessionEntryMaintenance({
@@ -295,6 +296,7 @@ export function loadLegacySessionStore(
           capEntryCount(sessionStore, maintenance.maxEntries, {
             log: false,
             preserveKeys: preserveSessionKeys,
+            preserveRecentMs: maintenance.preserveRecentMs,
           });
         }
       }

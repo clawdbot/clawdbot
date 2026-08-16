@@ -7,15 +7,22 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { satisfiesPluginApiRange } from "../infra/clawhub.js";
 import { readRootJsonObjectSync } from "../infra/json-files.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
-import { resolveSourceCheckoutDependencyDiagnostic } from "./bundled-dir.js";
+import {
+  hasUsableBundledPluginTree,
+  resolveSourceCheckoutDependencyDiagnostic,
+} from "./bundled-dir.js";
 import { buildLegacyBundledRootPath } from "./bundled-load-path-aliases.js";
 import { listBundledSourceOverlayDirs } from "./bundled-source-overlays.js";
+import {
+  isPluginCandidateInstallOwnerAmbiguous,
+  recordPluginCandidateInstallOwner,
+  resolvePluginCandidateInstallOwner,
+} from "./candidate-install-owner.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { readLegacyNpmPluginDeclaration } from "./legacy-npm-declaration.js";
 import type { PluginBundleFormat, PluginDiagnostic, PluginFormat } from "./manifest-types.js";
@@ -29,6 +36,7 @@ import {
   type PackageExtensionResolution,
   type PackageManifest,
 } from "./manifest.js";
+import { satisfiesPluginApiRange } from "./package-compat.js";
 import { resolvePackagePluginApiRange } from "./package-compat.js";
 import {
   resolvePackageRuntimeExtensionSources,
@@ -72,6 +80,8 @@ registerPluginMetadataProcessMemoLifecycleClear(() => {
 /** One potential plugin root discovered before manifest validation and registry normalization. */
 export type PluginCandidate = {
   idHint: string;
+  /** Discovery-owned identity for one entry in a multi-entry package pack. */
+  effectivePluginId?: string;
   diagnosticIdHint?: string;
   source: string;
   setupSource?: string;
@@ -381,18 +391,45 @@ function createDiscoveryResult(): PluginDiscoveryResult {
   };
 }
 
+function mergeCandidateInstallOwner(
+  existing: PluginCandidate,
+  candidateOwner: string | undefined,
+  candidateOwnerAmbiguous: boolean,
+): void {
+  const existingOwner = resolvePluginCandidateInstallOwner(existing);
+  const ownerConflict = existingOwner && candidateOwner && existingOwner !== candidateOwner;
+  if (
+    isPluginCandidateInstallOwnerAmbiguous(existing) ||
+    candidateOwnerAmbiguous ||
+    ownerConflict
+  ) {
+    recordPluginCandidateInstallOwner(existing, undefined, true);
+  } else if (candidateOwner) {
+    recordPluginCandidateInstallOwner(existing, candidateOwner);
+  }
+}
+
 function mergeDiscoveryResult(
   target: PluginDiscoveryResult,
   source: PluginDiscoveryResult,
-  seenSources: Set<string>,
+  candidatesBySource: Map<string, PluginCandidate>,
   seenDiagnostics: Set<string>,
+  realpathCache: Map<string, string>,
 ): void {
   for (const candidate of source.candidates) {
-    const key = candidate.source;
-    if (seenSources.has(key)) {
+    // Configured aliases keep their precedence, but lifecycle ownership follows
+    // the one physical package entry rather than its textual path spelling.
+    const key = safeRealpathSync(candidate.source, realpathCache) ?? path.resolve(candidate.source);
+    const existing = candidatesBySource.get(key);
+    if (existing) {
+      mergeCandidateInstallOwner(
+        existing,
+        resolvePluginCandidateInstallOwner(candidate),
+        isPluginCandidateInstallOwnerAmbiguous(candidate),
+      );
       continue;
     }
-    seenSources.add(key);
+    candidatesBySource.set(key, candidate);
     target.candidates.push(candidate);
   }
   for (const diagnostic of source.diagnostics) {
@@ -463,6 +500,8 @@ function addMissingRequiredPluginDiagnostics(
 type InstalledPluginRecordPath = {
   path: string;
   requireBuiltRuntimeEntry: boolean;
+  installOwner?: string;
+  installOwnerAmbiguous?: true;
 };
 
 function isLinkedLocalPluginRecord(params: {
@@ -492,10 +531,11 @@ function collectInstalledPluginRecordPaths(
   installRecords: Record<string, PluginInstallRecord> | undefined,
   env: NodeJS.ProcessEnv,
   realpathCache: Map<string, string>,
+  diagnostics: PluginDiagnostic[],
 ): InstalledPluginRecordPath[] {
   const paths: InstalledPluginRecordPath[] = [];
-  const seen = new Set<string>();
-  for (const record of Object.values(installRecords ?? {})) {
+  const byPath = new Map<string, InstalledPluginRecordPath>();
+  for (const [installOwner, record] of Object.entries(installRecords ?? {})) {
     const rawPath =
       typeof record.installPath === "string" && record.installPath.trim()
         ? record.installPath
@@ -506,14 +546,33 @@ function collectInstalledPluginRecordPaths(
       continue;
     }
     const resolved = resolveUserPath(rawPath, env);
-    if (seen.has(resolved) || !fs.existsSync(resolved)) {
+    if (!fs.existsSync(resolved)) {
       continue;
     }
-    seen.add(resolved);
-    paths.push({
+    const pathKey = safeRealpathSync(resolved, realpathCache) ?? path.resolve(resolved);
+    const requireBuiltRuntimeEntry = !isLinkedLocalPluginRecord({ record, env, realpathCache });
+    const existing = byPath.get(pathKey);
+    if (existing) {
+      existing.requireBuiltRuntimeEntry ||= requireBuiltRuntimeEntry;
+      if (existing.installOwner !== installOwner) {
+        delete existing.installOwner;
+        existing.installOwnerAmbiguous = true;
+        diagnostics.push({
+          level: "error",
+          source: resolved,
+          message:
+            "multiple plugin install records claim the same package path; refresh or reinstall the package before using managed lifecycle actions",
+        });
+      }
+      continue;
+    }
+    const installedPath: InstalledPluginRecordPath = {
       path: resolved,
-      requireBuiltRuntimeEntry: !isLinkedLocalPluginRecord({ record, env, realpathCache }),
-    });
+      requireBuiltRuntimeEntry,
+      installOwner,
+    };
+    byPath.set(pathKey, installedPath);
+    paths.push(installedPath);
   }
   return paths;
 }
@@ -731,6 +790,9 @@ function addCandidate(params: {
   diagnostics: PluginDiagnostic[];
   seen: Set<string>;
   idHint: string;
+  effectivePluginId?: string;
+  installOwner?: string;
+  installOwnerAmbiguous?: true;
   diagnosticIdHint?: string;
   source: string;
   setupSource?: string;
@@ -751,6 +813,14 @@ function addCandidate(params: {
 }) {
   const resolved = path.resolve(params.source);
   if (params.seen.has(resolved)) {
+    const existing = params.candidates.find((candidate) => candidate.source === resolved);
+    if (existing) {
+      mergeCandidateInstallOwner(
+        existing,
+        params.installOwner,
+        params.installOwnerAmbiguous === true,
+      );
+    }
     return;
   }
   const resolvedRoot =
@@ -776,8 +846,9 @@ function addCandidate(params: {
     dependencies: manifest?.dependencies,
     optionalDependencies: manifest?.optionalDependencies,
   });
-  params.candidates.push({
+  const candidate = {
     idHint: params.idHint,
+    ...(params.effectivePluginId ? { effectivePluginId: params.effectivePluginId } : {}),
     ...(params.diagnosticIdHint && params.diagnosticIdHint !== params.idHint
       ? { diagnosticIdHint: params.diagnosticIdHint }
       : {}),
@@ -803,7 +874,14 @@ function addCandidate(params: {
       ? { requiredPluginIds: params.requiredPluginIds }
       : {}),
     ...(params.requiredPluginSource ? { requiredPluginSource: params.requiredPluginSource } : {}),
-  });
+  } satisfies PluginCandidate;
+  params.candidates.push(
+    recordPluginCandidateInstallOwner(
+      candidate,
+      params.installOwner,
+      params.installOwnerAmbiguous === true,
+    ),
+  );
 }
 
 function discoverBundleInRoot(params: {
@@ -812,6 +890,8 @@ function discoverBundleInRoot(params: {
   env: NodeJS.ProcessEnv;
   ownershipUid?: number | null;
   workspaceDir?: string;
+  installOwner?: string;
+  installOwnerAmbiguous?: true;
   manifest?: PackageManifest | null;
   candidates: PluginCandidate[];
   diagnostics: PluginDiagnostic[];
@@ -856,6 +936,8 @@ function discoverBundleInRoot(params: {
       bundleFormat,
       ownershipUid: params.ownershipUid,
       workspaceDir: params.workspaceDir,
+      ...(params.installOwner ? { installOwner: params.installOwner } : {}),
+      ...(params.installOwnerAmbiguous ? { installOwnerAmbiguous: true } : {}),
       manifest: params.manifest,
       packageDir: params.rootDir,
       bundledManifestId: bundleManifest.manifest.id,
@@ -928,6 +1010,8 @@ type PluginDirectoryDiscoveryParams = {
   env: NodeJS.ProcessEnv;
   ownershipUid?: number | null;
   workspaceDir?: string;
+  installOwner?: string;
+  installOwnerAmbiguous?: true;
   requireBuiltRuntimeEntry?: boolean;
   managedPluginDirs?: Set<string>;
   candidates: PluginCandidate[];
@@ -1005,12 +1089,17 @@ function discoverPluginDirectory(params: PluginDirectoryDiscoveryParams): boolea
     diagnostics: params.diagnostics,
     rejectHardlinks,
   });
-  const addPackageCandidate = (source: string, idHint: string): void => {
+  const addPackageCandidate = (
+    source: string,
+    idHint: string,
+    effectivePluginId?: string,
+  ): void => {
     addCandidate({
       candidates: params.candidates,
       diagnostics: params.diagnostics,
       seen: params.seen,
       idHint,
+      ...(effectivePluginId ? { effectivePluginId } : {}),
       diagnosticIdHint: pluginIdHint,
       source,
       ...(setupSource ? { setupSource } : {}),
@@ -1018,6 +1107,8 @@ function discoverPluginDirectory(params: PluginDirectoryDiscoveryParams): boolea
       origin: params.origin,
       ownershipUid: params.ownershipUid,
       workspaceDir: params.workspaceDir,
+      ...(params.installOwner ? { installOwner: params.installOwner } : {}),
+      ...(params.installOwnerAmbiguous ? { installOwnerAmbiguous: true } : {}),
       manifest,
       packageDir: dir,
       requiredPluginIds: candidateManifest?.manifest.requiresPlugins,
@@ -1039,17 +1130,41 @@ function discoverPluginDirectory(params: PluginDirectoryDiscoveryParams): boolea
       diagnostics: params.diagnostics,
       rejectHardlinks,
     });
+    // Entry ids derive from basenames, so ./a/index.js and ./b/index.js would
+    // both become <pack>/index and one entry would silently vanish in the
+    // registry's same-id dedupe. Reject the colliding entries loudly instead.
+    const entryIdSources = new Map<string, string[]>();
     for (const source of resolvedRuntimeSources) {
-      addPackageCandidate(
-        source,
-        deriveIdHint({
-          filePath: source,
-          manifestId: manifestId ?? normalizeOptionalString(packageMetadata?.plugin?.id),
-          packageName: manifest?.name,
-          fallbackId: path.basename(dir),
-          hasMultipleExtensions: extensions.length > 1,
-        }),
-      );
+      const idHint = deriveIdHint({
+        filePath: source,
+        manifestId: manifestId ?? normalizeOptionalString(packageMetadata?.plugin?.id),
+        packageName: manifest?.name,
+        fallbackId: path.basename(dir),
+        hasMultipleExtensions: extensions.length > 1,
+      });
+      const sources = entryIdSources.get(idHint);
+      if (sources) {
+        sources.push(source);
+      } else {
+        entryIdSources.set(idHint, [source]);
+      }
+    }
+    for (const [idHint, sources] of entryIdSources) {
+      if (extensions.length > 1 && sources.length > 1) {
+        params.diagnostics.push({
+          level: "error",
+          pluginId: idHint,
+          source: dir,
+          message:
+            `plugin package entries collide on derived id "${idHint}" ` +
+            `(${sources.map((s) => path.relative(dir, s)).join(", ")}); ` +
+            "rename the entry files to unique basenames",
+        });
+        continue;
+      }
+      for (const source of sources) {
+        addPackageCandidate(source, idHint, extensions.length > 1 ? idHint : undefined);
+      }
     }
     return true;
   }
@@ -1061,6 +1176,8 @@ function discoverPluginDirectory(params: PluginDirectoryDiscoveryParams): boolea
       env: params.env,
       ownershipUid: params.ownershipUid,
       workspaceDir: params.workspaceDir,
+      ...(params.installOwner ? { installOwner: params.installOwner } : {}),
+      ...(params.installOwnerAmbiguous ? { installOwnerAmbiguous: true } : {}),
       manifest,
       candidates: params.candidates,
       diagnostics: params.diagnostics,
@@ -1087,6 +1204,8 @@ function discoverInDirectory(params: {
   env: NodeJS.ProcessEnv;
   ownershipUid?: number | null;
   workspaceDir?: string;
+  installOwner?: string;
+  installOwnerAmbiguous?: true;
   requireBuiltRuntimeEntry?: boolean;
   managedPluginDirs?: Set<string>;
   skipRootDirKeys?: Set<string>;
@@ -1143,6 +1262,8 @@ function discoverInDirectory(params: {
         origin: params.origin,
         ownershipUid: params.ownershipUid,
         workspaceDir: params.workspaceDir,
+        ...(params.installOwner ? { installOwner: params.installOwner } : {}),
+        ...(params.installOwnerAmbiguous ? { installOwnerAmbiguous: true } : {}),
         realpathCache: params.realpathCache,
       });
       continue;
@@ -1181,31 +1302,13 @@ function discoverInDirectory(params: {
   }
 }
 
-function hasDiscoverablePluginTree(pluginsDir: string): boolean {
-  try {
-    return fs.readdirSync(pluginsDir, { withFileTypes: true }).some((entry) => {
-      if (!entry.isDirectory()) {
-        return false;
-      }
-      const pluginDir = path.join(pluginsDir, entry.name);
-      return (
-        fs.existsSync(path.join(pluginDir, "package.json")) ||
-        fs.existsSync(path.join(pluginDir, "openclaw.plugin.json"))
-      );
-    });
-  } catch {
-    return false;
-  }
-}
-
 function isSourceCheckoutExtensionsDir(extensionsDir: string): boolean {
   const packageRoot = path.dirname(extensionsDir);
   return (
     fs.existsSync(path.join(packageRoot, ".git")) &&
     fs.existsSync(path.join(packageRoot, "pnpm-workspace.yaml")) &&
     fs.existsSync(path.join(packageRoot, "src")) &&
-    fs.existsSync(extensionsDir) &&
-    hasDiscoverablePluginTree(extensionsDir)
+    hasUsableBundledPluginTree(extensionsDir)
   );
 }
 
@@ -1259,6 +1362,8 @@ function discoverFromPath(params: {
   origin: PluginOrigin;
   ownershipUid?: number | null;
   workspaceDir?: string;
+  installOwner?: string;
+  installOwnerAmbiguous?: true;
   requireBuiltRuntimeEntry?: boolean;
   managedPluginDirs?: Set<string>;
   skipRootDirKeys?: Set<string>;
@@ -1300,6 +1405,8 @@ function discoverFromPath(params: {
       origin: params.origin,
       ownershipUid: params.ownershipUid,
       workspaceDir: params.workspaceDir,
+      ...(params.installOwner ? { installOwner: params.installOwner } : {}),
+      ...(params.installOwnerAmbiguous ? { installOwnerAmbiguous: true } : {}),
       realpathCache: params.realpathCache,
     });
     return;
@@ -1552,6 +1659,7 @@ export function discoverOpenClawPlugins(params: {
           params.installRecords,
           env,
           realpathCache,
+          result.diagnostics,
         );
         const installedPluginDirKeys = collectManagedPluginDirKeys(
           installedPaths.map((installedPath) => installedPath.path),
@@ -1567,6 +1675,8 @@ export function discoverOpenClawPlugins(params: {
             origin: "global",
             ownershipUid: params.ownershipUid,
             workspaceDir,
+            ...(installedPath.installOwner ? { installOwner: installedPath.installOwner } : {}),
+            ...(installedPath.installOwnerAmbiguous ? { installOwnerAmbiguous: true } : {}),
             requireBuiltRuntimeEntry: installedPath.requireBuiltRuntimeEntry,
             managedPluginDirs,
             scanFiles: true,
@@ -1599,10 +1709,10 @@ export function discoverOpenClawPlugins(params: {
     { scope: "shared" },
   );
   const result = createDiscoveryResult();
-  const seenSources = new Set<string>();
+  const candidatesBySource = new Map<string, PluginCandidate>();
   const seenDiagnostics = new Set<string>();
-  mergeDiscoveryResult(result, scopedResult, seenSources, seenDiagnostics);
-  mergeDiscoveryResult(result, sharedResult, seenSources, seenDiagnostics);
+  mergeDiscoveryResult(result, scopedResult, candidatesBySource, seenDiagnostics, realpathCache);
+  mergeDiscoveryResult(result, sharedResult, candidatesBySource, seenDiagnostics, realpathCache);
   addMissingRequiredPluginDiagnostics(result, { env, realpathCache });
   return result;
 }

@@ -8,7 +8,7 @@ OpenClaw targets **WCAG 2.1 AA**. This checklist applies to every UI component �
 
 | Context                                   | Minimum Ratio    | Notes                                              |
 | ----------------------------------------- | ---------------- | -------------------------------------------------- |
-| Normal body text (< 18px / < 14px bold)   | **4.5:1**        | Use `--text` (#d4d4d8) or stronger on `--bg`       |
+| Normal body text (< 18px / < 14px bold)   | **4.5:1**        | Use `--text` (#bcbcc0) or stronger on `--bg`       |
 | Large text (≥ 18px regular / ≥ 14px bold) | **3:1**          | Headings in chat thread                            |
 | UI component boundaries (inputs, buttons) | **3:1**          | Border colours against adjacent background         |
 | Focus indicators                          | **3:1** (AA)     | `--focus-ring` / `--focus-glow` already compliant  |

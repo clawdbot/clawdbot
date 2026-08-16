@@ -61,8 +61,46 @@ describe("classifyCompactionReason", () => {
     ).toBe("guard_blocked");
   });
 
+  it("classifies transcript persistence failures without losing them as unknown", () => {
+    expect(
+      classifyCompactionReason(
+        "Session transcript entry was not persisted: compaction-1: session-rebound",
+      ),
+    ).toBe("transcript_persistence_failed");
+  });
+
   it("keeps unclassified provider errors in the stable unknown bucket", () => {
     expect(classifyCompactionReason("No API provider registered for api: ollama")).toBe("unknown");
+  });
+
+  it.each([
+    ["HTTP 400 invalid request", "provider_error_4xx"],
+    ["error, status code: 400, message: invalid request", "provider_error_4xx"],
+    ["Provider API error (429): too many requests", "provider_error_4xx"],
+    ["OpenAI API error (500): upstream failed", "provider_error_5xx"],
+    ["503 service unavailable", "provider_error_5xx"],
+  ])("classifies guarded provider status %s", (reason, expected) => {
+    expect(classifyCompactionReason(reason)).toBe(expected);
+  });
+
+  it.each([402, 404, 408, 413, 501, 521, 524, 529])(
+    "does not expand the established provider bucket set to HTTP %i",
+    (status) => {
+      expect(classifyCompactionReason(`HTTP ${status} provider response`)).toBe("unknown");
+    },
+  );
+
+  it.each([
+    "request id req-4291 failed",
+    "input length 14295 tokens exceeds the model limit",
+    "model model-x-500-preview not found",
+  ])("ignores embedded status-like numbers: %s", (reason) => {
+    // FIXED(refactor-06): numeric payload text is not an HTTP status.
+    expect(classifyCompactionReason(reason)).toBe("unknown");
+  });
+
+  it("preserves timeout precedence over its HTTP status bucket", () => {
+    expect(classifyCompactionReason("504 Gateway Timeout")).toBe("timeout");
   });
 });
 

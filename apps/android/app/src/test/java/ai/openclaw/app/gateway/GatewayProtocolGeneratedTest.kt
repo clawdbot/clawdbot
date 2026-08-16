@@ -47,6 +47,14 @@ class GatewayProtocolGeneratedTest {
   }
 
   @Test
+  fun projectsListResultDecodesALegacyProjectsOnlyPayload() {
+    val decoded = json.decodeFromString(ProjectsListResult.serializer(), """{"projects":[]}""")
+
+    assertTrue(decoded.projects.isEmpty())
+    assertNull(decoded.observedProjects)
+  }
+
+  @Test
   fun generatedGatewayCatalogsAreCompleteAndUnique() {
     val methods = GatewayMethod.entries.map { it.rawValue }
     val events = GatewayEvent.entries.map { it.rawValue }

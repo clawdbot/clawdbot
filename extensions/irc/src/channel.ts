@@ -228,6 +228,10 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
     messaging: {
       targetPrefixes: ["irc"],
       normalizeTarget: normalizeIrcMessagingTarget,
+      inferTargetChatType: ({ to }) => {
+        const target = normalizeIrcMessagingTarget(to);
+        return target ? (isChannelTarget(target) ? "group" : "direct") : undefined;
+      },
       resolveOutboundSessionRoute: (params) => resolveIrcOutboundSessionRoute(params),
       targetResolver: {
         looksLikeId: looksLikeIrcTargetId,

@@ -1,9 +1,13 @@
-// Together tests cover video generation provider plugin behavior.
 import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
+  oversizedJsonResponse,
+  requireFirstPostJsonRecordRequest as requireFirstPostJsonRequest,
+  streamedJsonResponse,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
+// Together tests cover video generation provider plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 const { postJsonRequestMock, fetchWithTimeoutMock } = getProviderHttpMocks();
@@ -16,20 +20,7 @@ beforeAll(async () => {
 
 installProviderHttpMockCleanup();
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be a record`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function requireFirstPostJsonRequest(label: string): Record<string, unknown> {
-  const [call] = postJsonRequestMock.mock.calls;
-  if (!call) {
-    throw new Error(`expected ${label}`);
-  }
-  return requireRecord(call[0], label);
-}
+const requireRecord = createRequireRecord("record", "expected-label-record");
 
 function streamingResponse(params: {
   body: string;
@@ -46,49 +37,6 @@ function streamingResponse(params: {
     },
   });
   return new Response(stream, { headers: params.headers });
-}
-
-function streamedJsonResponse(payload: unknown): Response {
-  return new Response(
-    new ReadableStream({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode(JSON.stringify(payload)));
-        controller.close();
-      },
-    }),
-    { headers: { "content-type": "application/json" } },
-  );
-}
-
-// Drives an unbounded JSON body (>16 MiB, no Content-Length) so the bounded
-// reader has to cancel the stream instead of buffering it all. A hard ceiling
-// guards the test from hanging if the reader ever fails to cancel.
-function oversizedJsonResponse(): {
-  response: Response;
-  state: { canceled: boolean; enqueuedBytes: number };
-} {
-  const state = { canceled: false, enqueuedBytes: 0 };
-  const chunk = 1024 * 1024;
-  const maxChunks = 64; // 64 MiB ceiling, 4x the 16 MiB cap.
-  let emitted = 0;
-  const response = new Response(
-    new ReadableStream({
-      pull(controller) {
-        if (emitted >= maxChunks) {
-          controller.close();
-          return;
-        }
-        emitted += 1;
-        state.enqueuedBytes += chunk;
-        controller.enqueue(new Uint8Array(chunk));
-      },
-      cancel() {
-        state.canceled = true;
-      },
-    }),
-    { headers: { "content-type": "application/json" } },
-  );
-  return { response, state };
 }
 
 describe("together video generation provider", () => {
@@ -135,7 +83,7 @@ describe("together video generation provider", () => {
     });
 
     expect(postJsonRequestMock).toHaveBeenCalledOnce();
-    const request = requireFirstPostJsonRequest("Together request");
+    const request = requireFirstPostJsonRequest(postJsonRequestMock, "Together request");
     expect(request.url).toBe("https://api.together.xyz/v2/videos");
     const body = requireRecord(request.body, "Together request body");
     expect(body.model).toBe("Wan-AI/Wan2.2-T2V-A14B");
@@ -377,7 +325,7 @@ describe("together video generation provider", () => {
       },
     });
 
-    const request = requireFirstPostJsonRequest("Together request");
+    const request = requireFirstPostJsonRequest(postJsonRequestMock, "Together request");
     expect(request.url).toBe("https://api.together.xyz/v2/videos");
   });
 
@@ -410,7 +358,7 @@ describe("together video generation provider", () => {
       cfg: {},
     });
 
-    const request = requireFirstPostJsonRequest("Together request");
+    const request = requireFirstPostJsonRequest(postJsonRequestMock, "Together request");
     const body = requireRecord(request.body, "Together request body");
     expect(body).not.toHaveProperty("seconds");
   });
@@ -471,7 +419,7 @@ describe("together video generation provider", () => {
       ],
     });
 
-    const request = requireFirstPostJsonRequest("Together request");
+    const request = requireFirstPostJsonRequest(postJsonRequestMock, "Together request");
     const body = requireRecord(request.body, "Together request body");
     const media = requireRecord(body.media, "Together video media payload");
     expect(body.model).toBe("Wan-AI/Wan2.2-I2V-A14B");

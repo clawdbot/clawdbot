@@ -72,8 +72,8 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  OCM_VERSION: v0.2.29
-  OCM_LINUX_X64_SHA256: d966098d6ba2bc10891be3c76e162a37b07f28c4f51da75d2eb509886eb7e1cf
+  OCM_VERSION: v0.2.32
+  OCM_LINUX_X64_SHA256: 5b20c21b2825f69b89eb37baa657f0f0062124517e6e6828e9857c7e9bbd3070
   KOVA_REPOSITORY: openclaw/Kova
   KOVA_CANONICAL_CONFIG_REF: 0f9e678e239b45db46d2bd930b7983203580df78
   KOVA_LEGACY_LIST_CONFIG_REF: 0f9e678e239b45db46d2bd930b7983203580df78
@@ -388,23 +388,6 @@ jobs:
           chmod 0755 "$HOME/.local/bin/kova"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Configure OCM local workspace dependencies
-        if: steps.lane.outputs.run == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm_wrapper="$PERFORMANCE_HELPER_DIR/scripts/ocm-npm-workspace-deps.mjs"
-          workspace_dependency_dirs=""
-          if [[ -f "${GITHUB_WORKSPACE}/packages/ai/package.json" ]]; then
-            workspace_dependency_dirs="${GITHUB_WORKSPACE}/packages/ai"
-          fi
-          chmod 0755 "$npm_wrapper"
-          {
-            echo "OCM_INTERNAL_NPM_BIN=$npm_wrapper"
-            echo "OPENCLAW_OCM_REAL_NPM_BIN=$(command -v npm)"
-            echo "OPENCLAW_OCM_WORKSPACE_DEPENDENCY_DIRS=$workspace_dependency_dirs"
-          } >> "$GITHUB_ENV"
-
       - name: Kova version and plan sanity
         if: steps.lane.outputs.run == 'true'
         shell: bash
@@ -529,7 +512,7 @@ jobs:
           echo "report_md=$report_md" >> "$GITHUB_OUTPUT"
 
           set +e
-          node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-workflow-evidence.mjs" \
+          node --import tsx "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-workflow-evidence.mts" \
             --plan "$KOVA_PLAN_JSON" \
             --report "$report_json" \
             --profile "$PROFILE" \
@@ -547,7 +530,7 @@ jobs:
             if [[ "$KOVA_REF" == "$KOVA_CANONICAL_CONFIG_REF" || "$KOVA_REF" == "$KOVA_LEGACY_LIST_CONFIG_REF" ]]; then
               gate_args+=(--require-instrumented-performance-contract)
             fi
-            if node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mjs" "${gate_args[@]}"
+            if node --import tsx "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mts" "${gate_args[@]}"
             then
               effective_status=0
               {
@@ -564,7 +547,7 @@ jobs:
           set -e
 
           summary_path="$SUMMARY_DIR/${LANE_ID}.md"
-          summary_args=(node "$PERFORMANCE_HELPER_DIR/scripts/kova-ci-summary.mjs" --report "$report_json" --output "$summary_path" --lane "$LANE_ID")
+          summary_args=(node --import tsx "$PERFORMANCE_HELPER_DIR/scripts/kova-ci-summary.mts" --report "$report_json" --output "$summary_path" --lane "$LANE_ID")
           set +e
           "${summary_args[@]}"
           summary_status=$?
@@ -733,7 +716,7 @@ jobs:
           fi
 
           mkdir -p "$SOURCE_PERF_DIR/mock-hello"
-          if ! node -e "const fs=require('node:fs'); const scripts=require('./package.json').scripts||{}; process.exit(scripts['test:gateway:cpu-scenarios'] && scripts['test:extensions:memory'] && scripts.openclaw && fs.existsSync('openclaw.mjs') && fs.existsSync('scripts/profile-extension-memory.mjs') ? 0 : 1)"; then
+          if ! node -e "const fs=require('node:fs'); const scripts=require('./package.json').scripts||{}; process.exit(scripts['test:gateway:cpu-scenarios'] && scripts['test:extensions:memory'] && scripts.openclaw && fs.existsSync('openclaw.mjs') && fs.existsSync('scripts/profile-extension-memory.mts') ? 0 : 1)"; then
             cat > "$SOURCE_PERF_DIR/index.md" <<EOF
           # OpenClaw Source Performance
 
@@ -745,15 +728,15 @@ jobs:
 
           - Tested ref: ${TESTED_REF}
           - Tested SHA: ${TESTED_SHA}
-          - Required scripts: test:gateway:cpu-scenarios, test:extensions:memory, openclaw, openclaw.mjs, scripts/profile-extension-memory.mjs
+          - Required scripts: test:gateway:cpu-scenarios, test:extensions:memory, openclaw, openclaw.mjs, scripts/profile-extension-memory.mts
           EOF
             cat "$SOURCE_PERF_DIR/index.md" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
           # target_ref may predate the dedicated profile; preserve the historical full build there.
-          if node -e "import('./scripts/build-all.mjs').then((module) => process.exit(module.BUILD_ALL_PROFILES?.sourcePerformance ? 0 : 1)).catch(() => process.exit(1))"; then
-            OPENCLAW_BUILD_PRIVATE_QA=1 node scripts/build-all.mjs sourcePerformance
+          if node --import tsx -e "import('./scripts/build-all.mts').then((module) => process.exit(module.BUILD_ALL_PROFILES?.sourcePerformance ? 0 : 1)).catch(() => process.exit(1))"; then
+            OPENCLAW_BUILD_PRIVATE_QA=1 node --import tsx scripts/build-all.mts sourcePerformance
           else
             pnpm build
           fi
@@ -812,6 +795,7 @@ jobs:
           fi
           cat > "$gateway_config" <<EOF
           {
+            "agents": { "defaults": { "heartbeat": { "every": "0m" } } },
             "browser": { "enabled": false },
           ${catalog_refresh_config}
             "update": { "checkOnStart": false },
@@ -839,7 +823,7 @@ jobs:
             rm -rf "$gateway_home" "$gateway_readiness_home"
           }
           trap cleanup_gateway EXIT
-          OPENCLAW_HOME="$gateway_home" OPENCLAW_STATE_DIR="$gateway_state" OPENCLAW_CONFIG_PATH="$gateway_config" OPENCLAW_GATEWAY_PORT="$gateway_port" OPENCLAW_SKIP_CHANNELS=1 \
+          OPENCLAW_HOME="$gateway_home" OPENCLAW_STATE_DIR="$gateway_state" OPENCLAW_CONFIG_PATH="$gateway_config" OPENCLAW_GATEWAY_PORT="$gateway_port" OPENCLAW_SKIP_CHANNELS=1 OPENCLAW_SKIP_CRON=1 \
             node dist/entry.js gateway run --bind loopback --port "$gateway_port" --auth none --allow-unconfigured --force \
             >"$gateway_log" 2>&1 &
           gateway_pid="$!"
@@ -917,7 +901,7 @@ jobs:
             echo "SQLite state smoke probe is not available in ${TESTED_REF}; continuing with the remaining source probes." >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          summary_args=(node "$PERFORMANCE_HELPER_DIR/scripts/openclaw-performance-source-summary.mjs" \
+          summary_args=(node --import tsx "$PERFORMANCE_HELPER_DIR/scripts/openclaw-performance-source-summary.mts" \
             --source-dir "$SOURCE_PERF_DIR" \
             --output "$SOURCE_PERF_DIR/index.md")
           if [[ -n "${SOURCE_PERF_BASELINE_DIR:-}" && -d "$SOURCE_PERF_BASELINE_DIR" ]]; then

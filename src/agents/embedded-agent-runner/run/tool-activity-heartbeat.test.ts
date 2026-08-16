@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getPluginToolMeta, setPluginToolMeta } from "../../../plugins/tools.js";
 import {
@@ -7,6 +8,10 @@ import {
 } from "../../before-tool-call-metadata.js";
 import { getChannelAgentToolMeta, setChannelAgentToolMeta } from "../../channel-tool-metadata.js";
 import { isCodeModeControlTool, markCodeModeControlTool } from "../../code-mode-control-tools.js";
+import {
+  attachInternalToolExecutionPreparer,
+  getInternalToolExecutionPreparer,
+} from "../../runtime/internal-hooks.js";
 import {
   getToolTerminalPresentation,
   setToolTerminalPresentation,
@@ -169,5 +174,27 @@ describe("heartbeat wrapper metadata preservation", () => {
     const wrapped = wrapEmbeddedAttemptToolWithActivity(source, RUN);
 
     expect(isCodeModeControlTool(wrapped)).toBe(true);
+  });
+
+  it("applies heartbeat ownership to private preparation and execution", async () => {
+    const body = vi.fn(async () => ({ content: [], details: {} }));
+    const source = attachInternalToolExecutionPreparer(
+      { name: "test-tool", execute: vi.fn() as never },
+      async () => ({ kind: "ready", args: {}, execute: body, dispose: vi.fn() }),
+    );
+    const wrapped = wrapEmbeddedAttemptToolWithActivity(source as never, RUN) as typeof source;
+    const preparer = expectDefined(
+      getInternalToolExecutionPreparer(wrapped),
+      "heartbeat-adapted preparer",
+    );
+
+    const prepared = await preparer({ toolCallId: "heartbeat-call", args: {} });
+    expect(prepared.kind).toBe("ready");
+    if (prepared.kind === "ready") {
+      await prepared.execute();
+    }
+
+    expect(body).toHaveBeenCalledOnce();
+    expect(getLastToolActivityMs(RUN)).toBeTypeOf("number");
   });
 });

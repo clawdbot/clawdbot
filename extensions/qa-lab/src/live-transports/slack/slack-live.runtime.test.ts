@@ -697,6 +697,52 @@ describe("Slack live QA runtime helpers", () => {
     }
   });
 
+  it("classifies only exact Slack commentary lane presentations", () => {
+    const scenario = testing.findScenario(["slack-progress-commentary-true"])[0];
+    const run = scenario?.buildRun("U999999999");
+    const input = run && "input" in run ? run.input : "";
+    const commentaryMarker = input.match(/SLACK-QA-COMMENTARY-[0-9A-F]{8}/u)?.[0];
+    const finalMarker = input.match(/SLACK-QA-COMMENTARY-DONE-[0-9A-F]{8}/u)?.[0];
+    const verifyObserved = run && "verifyObserved" in run ? run.verifyObserved : undefined;
+    if (!commentaryMarker || !finalMarker || !verifyObserved) {
+      throw new Error("missing Slack progress commentary lane verifier");
+    }
+    const verifyCommentaryMessage = (message: { blockText?: string[]; text: string }) =>
+      verifyObserved({
+        finalMessage: { text: finalMarker, ts: "2.000000" },
+        messages: [
+          {
+            channelId: "C123456789",
+            ...message,
+            ts: "1.500000",
+          },
+          {
+            channelId: "C123456789",
+            text: finalMarker,
+            ts: "2.000000",
+          },
+        ],
+      });
+
+    for (const message of [
+      { text: `_${commentaryMarker}_` },
+      { text: ` \n_${commentaryMarker}_\t` },
+      { text: `💬 ${commentaryMarker}` },
+      { blockText: ["Update", commentaryMarker], text: "Working…" },
+    ]) {
+      expect(() => verifyCommentaryMessage(message)).not.toThrow();
+    }
+    for (const text of [
+      commentaryMarker,
+      `prefix _${commentaryMarker}_ suffix`,
+      `_${commentaryMarker}_\nmore`,
+    ]) {
+      expect(() => verifyCommentaryMessage({ text })).toThrow(
+        "expected commentary in the Slack progress commentary lane",
+      );
+    }
+  });
+
   it("rejects commentary when false and mismatched tool progress", () => {
     const verify = (
       scenarioId: string,

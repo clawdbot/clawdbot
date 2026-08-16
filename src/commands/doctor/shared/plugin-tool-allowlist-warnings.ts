@@ -10,7 +10,7 @@ import { compileGlobPatterns, matchesAnyGlobPattern } from "../../../agents/glob
 import { resolveProviderToolPolicy } from "../../../agents/provider-tool-policy.js";
 import {
   mergeAlsoAllowPolicy,
-  normalizeToolName,
+  normalizeToolPolicyName,
   resolveToolProfilePolicy,
 } from "../../../agents/tool-policy.js";
 import type { AgentModelConfig } from "../../../config/types.agents-shared.js";
@@ -122,7 +122,7 @@ function collectToolOwners(registry: PluginManifestRegistry): Map<string, string
   for (const plugin of registry.plugins) {
     const pluginId = normalizePluginId(plugin.id);
     for (const toolNameRaw of plugin.contracts?.tools ?? []) {
-      const toolName = normalizeToolName(toolNameRaw);
+      const toolName = normalizeToolPolicyName(toolNameRaw);
       if (!toolName) {
         continue;
       }
@@ -319,7 +319,7 @@ function buildMcpToolNamePrefixes(serverNames: readonly string[]): string[] {
   const usedNames = new Set<string>();
   return serverNames
     .map((serverName) =>
-      normalizeToolName(`${sanitizeServerName(serverName, usedNames)}${TOOL_NAME_SEPARATOR}`),
+      normalizeToolPolicyName(`${sanitizeServerName(serverName, usedNames)}${TOOL_NAME_SEPARATOR}`),
     )
     .filter(Boolean);
 }
@@ -329,7 +329,7 @@ function entriesMatchMcpTool(
   serverNames: readonly string[],
   mode: "any" | "every",
 ): boolean {
-  const normalizedEntries = entries.map(normalizeToolName).filter(Boolean);
+  const normalizedEntries = entries.map(normalizeToolPolicyName).filter(Boolean);
   if (
     normalizedEntries.some(
       (entry) => entry === "*" || entry === "bundle-mcp" || entry === "group:plugins",
@@ -338,8 +338,11 @@ function entriesMatchMcpTool(
     return true;
   }
   const serverPrefixes = buildMcpToolNamePrefixes(serverNames);
-  const patterns = compileGlobPatterns({ raw: normalizedEntries, normalize: normalizeToolName });
-  const probeNames = buildMcpProbeToolNames(serverNames).map(normalizeToolName);
+  const patterns = compileGlobPatterns({
+    raw: normalizedEntries,
+    normalize: normalizeToolPolicyName,
+  });
+  const probeNames = buildMcpProbeToolNames(serverNames).map(normalizeToolPolicyName);
   const prefixOrPatternMatches = (prefix: string, index: number) =>
     normalizedEntries.some((entry) => entry.length > prefix.length && entry.startsWith(prefix)) ||
     matchesAnyGlobPattern(probeNames[index] ?? "", patterns);
@@ -532,7 +535,7 @@ export function collectPluginToolAllowlistWarnings(params: {
   }
 
   const wildcardSources = sources
-    .filter((source) => source.entries.some((entry) => normalizeToolName(entry) === "*"))
+    .filter((source) => source.entries.some((entry) => normalizeToolPolicyName(entry) === "*"))
     .map((source) => source.label);
   if (wildcardSources.length > 0) {
     warnings.push(
@@ -542,7 +545,7 @@ export function collectPluginToolAllowlistWarnings(params: {
 
   const exactEntries = sources.flatMap((source) =>
     source.entries
-      .map((entry) => ({ source: source.label, entry: normalizeToolName(entry) }))
+      .map((entry) => ({ source: source.label, entry: normalizeToolPolicyName(entry) }))
       .filter(({ entry }) => entry && entry !== "*" && entry !== "group:plugins"),
   );
   if (exactEntries.length === 0) {

@@ -112,11 +112,17 @@ actor MacNodeClaudeSessionCatalogWorker {
 actor MacNodeRuntime {
     private static let maxGatewayPayloadBytes = 25 * 1024 * 1024
     private static let maxScreenSnapshotRawBytesBeforeBase64 = (maxGatewayPayloadBytes / 4) * 3
+    private static let cuaOwnedCommands = Set([
+        MacNodeScreenCommand.snapshot.rawValue,
+        OpenClawComputerCommand.act.rawValue,
+    ])
     private let cameraCapture = CameraCaptureService()
+    private let cameraPTZ: any CameraPTZServicing
     private let nodeHostWorker: (any MacNodeHostWorking)?
     private let makeMainActorServices: @Sendable () async -> any MacNodeRuntimeMainActorServices
     // Injectable so tests pin the gate instead of racing on process-global UserDefaults.
     private let computerControlEnabled: @Sendable () -> Bool
+    private let computerControlProvider: @Sendable () -> ComputerControlProvider
     private let canvasHostedSurfaceResolver: MacNodeCanvasHostedSurfaceResolver
     private let codexThreadCatalogEnabled: @Sendable () -> Bool
     private let codexThreadCatalogClient: MacNodeCodexThreadCatalogClient
@@ -136,11 +142,15 @@ actor MacNodeRuntime {
 
     init(
         nodeHostWorker: (any MacNodeHostWorking)? = nil,
+        cameraPTZ: any CameraPTZServicing = CameraPTZService(),
         makeMainActorServices: @escaping @Sendable () async -> any MacNodeRuntimeMainActorServices = {
             await MainActor.run { LiveMacNodeRuntimeMainActorServices() }
         },
         computerControlEnabled: @escaping @Sendable () -> Bool = {
             MacNodeRuntime.computerControlEnabledDefault()
+        },
+        computerControlProvider: @escaping @Sendable () -> ComputerControlProvider = {
+            ComputerControlProvider.current()
         },
         canvasSurfaceUrl: @escaping @Sendable () async -> String? = {
             await GatewayConnection.shared.canvasPluginSurfaceUrl()
@@ -163,8 +173,10 @@ actor MacNodeRuntime {
         })
     {
         self.nodeHostWorker = nodeHostWorker
+        self.cameraPTZ = cameraPTZ
         self.makeMainActorServices = makeMainActorServices
         self.computerControlEnabled = computerControlEnabled
+        self.computerControlProvider = computerControlProvider
         self.canvasHostedSurfaceResolver = MacNodeCanvasHostedSurfaceResolver(
             currentSurfaceURL: canvasSurfaceUrl,
             refreshSurfaceURL: refreshCanvasSurfaceUrl)
@@ -194,6 +206,9 @@ actor MacNodeRuntime {
                     code: .unavailable,
                     message: "CANVAS_DISABLED: enable Canvas in Settings"))
         }
+        if let cuaResponse = await self.handleCuaInvokeIfSelected(req) {
+            return cuaResponse
+        }
         do {
             switch command {
             case OpenClawCanvasCommand.present.rawValue,
@@ -208,7 +223,9 @@ actor MacNodeRuntime {
                 return try await self.handleA2UIInvoke(req)
             case OpenClawCameraCommand.snap.rawValue,
                  OpenClawCameraCommand.clip.rawValue,
-                 OpenClawCameraCommand.list.rawValue:
+                 OpenClawCameraCommand.list.rawValue,
+                 OpenClawCameraCommand.ptzStatus.rawValue,
+                 OpenClawCameraCommand.ptzControl.rawValue:
                 return try await self.handleCameraInvoke(req)
             case OpenClawLocationCommand.get.rawValue:
                 return try await self.handleLocationInvoke(req)
@@ -242,6 +259,12 @@ actor MacNodeRuntime {
                 req,
                 code: error.isInvalidRequest ? .invalidRequest : .unavailable,
                 message: error.localizedDescription)
+        } catch let error as CameraPTZError {
+            let code: OpenClawNodeErrorCode = switch error {
+            case .invalidRequest, .axisUnsupported: .invalidRequest
+            case .deviceNotFound, .unsupported, .partial: .unavailable
+            }
+            return Self.errorResponse(req, code: code, message: error.localizedDescription)
         } catch {
             return Self.errorResponse(req, code: .unavailable, message: error.localizedDescription)
         }
@@ -249,6 +272,25 @@ actor MacNodeRuntime {
 
     private func isCanvasCommand(_ command: String) -> Bool {
         command.hasPrefix("canvas.") || command.hasPrefix("canvas.a2ui.")
+    }
+
+    private func handleCuaInvokeIfSelected(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse? {
+        guard self.computerControlProvider() == .cua,
+              Self.cuaOwnedCommands.contains(req.command)
+        else { return nil }
+        guard self.computerControlEnabled() else {
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "COMPUTER_DISABLED: enable Computer Control in Settings")
+        }
+        guard let nodeHostWorker, await nodeHostWorker.supports(req.command) else {
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "UNAVAILABLE: selected CUA provider is not ready")
+        }
+        return await nodeHostWorker.invoke(req)
     }
 
     private func handleCodexThreadInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
@@ -450,6 +492,24 @@ extension MacNodeRuntime {
             let devices = await cameraCapture.listDevices()
             let payload = try Self.encodePayload(["devices": devices])
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+        case OpenClawCameraCommand.ptzStatus.rawValue:
+            let params: OpenClawCameraPTZStatusParams
+            do {
+                params = try Self.decodeParams(OpenClawCameraPTZStatusParams.self, from: req.paramsJSON)
+            } catch {
+                throw CameraPTZError.invalidRequest("invalid camera.ptz.status params")
+            }
+            let payload = try await Self.encodePayload(self.cameraPTZ.status(deviceId: params.deviceId))
+            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+        case OpenClawCameraCommand.ptzControl.rawValue:
+            let params: OpenClawCameraPTZControlParams
+            do {
+                params = try Self.decodeParams(OpenClawCameraPTZControlParams.self, from: req.paramsJSON)
+            } catch {
+                throw CameraPTZError.invalidRequest("invalid camera.ptz.control params")
+            }
+            let payload = try await Self.encodePayload(self.cameraPTZ.control(params))
+            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
         default:
             return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: unknown command")
         }
@@ -471,14 +531,9 @@ extension MacNodeRuntime {
             (Self.locationPreciseEnabled() ? .precise : .balanced)
         let services = await mainActorServices()
         let status = await services.locationAuthorizationStatus()
-        let hasPermission = switch mode {
-        case .always:
-            status == .authorizedAlways
-        case .whileUsing:
-            status == .authorizedAlways
-        case .off:
-            false
-        }
+        let hasPermission = PermissionManager.isLocationAuthorized(
+            status: status,
+            requireAlways: mode == .always)
         if !hasPermission {
             return BridgeInvokeResponse(
                 id: req.id,
@@ -576,16 +631,21 @@ extension MacNodeRuntime {
                         + "under System Settings → Privacy & Security → Accessibility")
             case .noDisplays, .invalidScreenIndex, .missingDisplayFrameId, .displayFrameChanged,
                  .missingCoordinate, .coordinateOutOfBounds, .invalidReferenceWidth, .missingKeys,
-                 .emptyText, .invalidScroll, .invalidModifier, .buttonAlreadyHeld, .buttonNotHeld:
+                 .emptyText, .invalidScroll, .invalidModifier, .buttonAlreadyHeld, .buttonNotHeld,
+                 .invalidRequest, .staleObservation, .unsupportedAction:
                 return Self.errorResponse(
                     req,
                     code: .invalidRequest,
-                    message: "INVALID_REQUEST: \(error.localizedDescription)")
-            case .eventCreationFailed, .lifecycleChanged:
+                    message: error.localizedDescription.hasPrefix("COMPUTER_")
+                        ? error.localizedDescription
+                        : "INVALID_REQUEST: \(error.localizedDescription)")
+            case .eventCreationFailed, .lifecycleChanged, .refused:
                 return Self.errorResponse(
                     req,
                     code: .unavailable,
-                    message: "UNAVAILABLE: \(error.localizedDescription)")
+                    message: error.localizedDescription.hasPrefix("COMPUTER_")
+                        ? error.localizedDescription
+                        : "UNAVAILABLE: \(error.localizedDescription)")
             }
         }
     }
@@ -735,6 +795,10 @@ extension MacNodeRuntime {
         let lifecycleGeneration = self.computerInputReleaseGeneration
         await self.cachedMainActorServices?.releaseHeldInput(
             lifecycleGeneration: lifecycleGeneration)
+    }
+
+    func shutdown() async {
+        await self.codexThreadCatalogClient.shutdown()
     }
 }
 
@@ -951,11 +1015,11 @@ extension MacNodeRuntime {
     }
 
     private nonisolated static func canvasEnabled() -> Bool {
-        UserDefaults.standard.object(forKey: canvasEnabledKey) as? Bool ?? true
+        AppDefaults.standard.object(forKey: canvasEnabledKey) as? Bool ?? true
     }
 
     private nonisolated static func cameraEnabled() -> Bool {
-        UserDefaults.standard.object(forKey: cameraEnabledKey) as? Bool ?? false
+        AppDefaults.standard.object(forKey: cameraEnabledKey) as? Bool ?? false
     }
 
     nonisolated static func computerControlEnabledDefault() -> Bool {
@@ -963,15 +1027,15 @@ extension MacNodeRuntime {
     }
 
     private nonisolated static func locationMode() -> OpenClawLocationMode {
-        let raw = UserDefaults.standard.string(forKey: locationModeKey) ?? "off"
+        let raw = AppDefaults.standard.string(forKey: locationModeKey) ?? "off"
         return OpenClawLocationMode(rawValue: raw) ?? .off
     }
 
     private nonisolated static func locationPreciseEnabled() -> Bool {
-        if UserDefaults.standard.object(forKey: locationPreciseKey) == nil {
+        if AppDefaults.standard.object(forKey: locationPreciseKey) == nil {
             return true
         }
-        return UserDefaults.standard.bool(forKey: locationPreciseKey)
+        return AppDefaults.standard.bool(forKey: locationPreciseKey)
     }
 
     private static func errorResponse(

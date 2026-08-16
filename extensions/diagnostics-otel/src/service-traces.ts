@@ -1,5 +1,6 @@
 import {
   context as otelContextApi,
+  isSpanContextValid,
   trace,
   type SpanContext,
   type SpanKind,
@@ -218,6 +219,17 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
       ? trace.setSpanContext(otelContextApi.active(), retainedSpanContext)
       : undefined;
   };
+  const exportedSpanContextForDiagnosticTraceContext = (
+    traceContext: DiagnosticTraceContext,
+  ): SpanContext | undefined => {
+    if (!traceContext.spanId) {
+      return undefined;
+    }
+    const activeSpan = activeTrustedSpans.get(traceContext.spanId);
+    const spanContext =
+      activeSpan?.spanContext() ?? retainedTrustedSpanContext(traceContext, traceContext.spanId);
+    return spanContext && isSpanContextValid(spanContext) ? spanContext : undefined;
+  };
   // Message spans additionally accept a remote parent, because their trace context can
   // come from an inbound traceparent whose span really does live in another process.
   const activeInternalOrTrustedContext = (
@@ -389,6 +401,7 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     activeTrustedParentContext,
     activeInternalOrTrustedContext,
     exportedInternalOrTrustedContext,
+    exportedSpanContextForDiagnosticTraceContext,
     trackTrustedSpan,
     trackInternalOrTrustedSpan,
     takeTrackedTrustedSpan,

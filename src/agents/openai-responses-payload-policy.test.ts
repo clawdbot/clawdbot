@@ -248,6 +248,35 @@ describe("openai responses payload policy", () => {
     expect(policy.shouldStripStore).toBe(false);
   });
 
+  it("preserves native Azure payload policy after managed transport aliasing", () => {
+    const payload = {
+      input: [{ type: "message", role: "assistant", status: "completed", content: [] }],
+    } satisfies Record<string, unknown>;
+
+    applyOpenAIResponsesPayloadPolicy(
+      payload,
+      resolveOpenAIResponsesPayloadPolicy(
+        {
+          api: "openclaw-azure-openai-responses-transport",
+          provider: "azure-openai-responses",
+          baseUrl: "https://example.openai.azure.com/openai/v1",
+          contextWindow: 200_000,
+        },
+        {
+          enableServerCompaction: true,
+          extraParams: { responsesServerCompaction: true },
+          storeMode: "provider-policy",
+        },
+      ),
+    );
+
+    expect(payload).toEqual({
+      store: true,
+      context_management: [{ type: "compaction", compact_threshold: 140_000 }],
+      input: [{ type: "message", role: "assistant", status: "completed", content: [] }],
+    });
+  });
+
   it("strips status from input items for custom openai-responses endpoints", () => {
     const model = {
       id: "gpt-5.5",
@@ -309,6 +338,21 @@ describe("openai responses payload policy", () => {
       api: "azure-openai-responses",
       provider: "azure-openai",
       baseUrl: "https://example.openai.azure.com/openai/v1",
+    },
+    {
+      api: "azure-openai-responses",
+      provider: "azure",
+      baseUrl: "https://example.cognitiveservices.azure.com/openai/v1",
+    },
+    {
+      api: "azure-openai-responses",
+      provider: "azure",
+      baseUrl: "https://example.services.ai.azure.com/projects/demo/openai/v1",
+    },
+    {
+      api: "azure-openai-responses",
+      provider: "azure",
+      baseUrl: "https://example.api.cognitive.microsoft.com/openai/v1",
     },
   ])("preserves status for native $provider Responses endpoints", (route) => {
     const model = {

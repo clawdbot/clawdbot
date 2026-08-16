@@ -56,6 +56,29 @@ Behavior:
 - If a Gateway is already running on the configured port, the app attaches to
   it instead of starting a new one.
 
+Use the CLI for lifecycle checks and recovery:
+
+```bash
+openclaw gateway status --deep
+openclaw gateway restart
+```
+
+Launchd provides auto-start at login, crash restarts, and one predictable log
+location without tying the Gateway lifetime to the app process.
+
+### Attach-only development
+
+When another process already owns the local Gateway, run the development app
+without installing or changing its LaunchAgent:
+
+```bash
+scripts/restart-mac.sh --attach-only
+```
+
+Launching the app directly with `--attach-only` or `--no-launchd` has the same
+effect. The override persists in `~/.openclaw/disable-launchagent`; remove that
+file to restore app-managed launchd behavior.
+
 Logging:
 
 - launchd stdout: `~/Library/Logs/openclaw/gateway.log` (profiles use
@@ -64,7 +87,7 @@ Logging:
 - If the host loops with repeated `EADDRINUSE` or fast restarts, check for
   duplicate `ai.openclaw.gateway` / `ai.openclaw.node` LaunchAgents and the
   launchd-marker workaround in
-  [Gateway troubleshooting](/gateway/troubleshooting#macos-launchd-supervisor-loop-with-duplicate-gatewaynode-launchagents).
+  [Gateway troubleshooting](/gateway/troubleshooting#macos-launchd-supervisor-loop-with-duplicate-gateway%2Fnode-launchagents).
 
 ## Version compatibility
 

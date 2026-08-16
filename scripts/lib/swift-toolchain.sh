@@ -4,6 +4,16 @@ REQUIRED_SWIFT_TOOLS_MAJOR=6
 REQUIRED_SWIFT_TOOLS_MINOR=2
 
 require_swift_toolchain() {
+  local xcodebuild_version
+  if ! xcodebuild_version="$(xcrun xcodebuild -version 2>&1)"; then
+    printf '%s\n' "$xcodebuild_version" >&2
+    echo "ERROR: OpenClaw macOS app packaging requires a full Xcode developer directory." >&2
+    echo "       Command Line Tools do not include the required SwiftUI macro plugins." >&2
+    echo "       Use: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer" >&2
+    echo "       Or set: DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer" >&2
+    return 1
+  fi
+
   local swift_version
   if ! swift_version="$(swift --version 2>&1)"; then
     printf '%s\n' "$swift_version" >&2

@@ -3,6 +3,11 @@ import type { OpenAIReasoningEffort } from "./providers/openai-reasoning-effort.
 import type { OpenAICompletionsToolChoice } from "./providers/openai-tool-projection.js";
 import type { StreamOptions } from "./types.js";
 
+export type OpenAIResponsesCompactionRejection = {
+  data: string;
+  id?: string;
+};
+
 export type AnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export type AnthropicThinkingDisplay = "summarized" | "omitted";
@@ -59,7 +64,10 @@ export type BaseOpenAIStreamOptions = StreamOptions & {
   authProfileId?: string;
   firstEventTimeoutMs?: number;
   onFirstEventTimeout?: (reason: Error) => void;
+  /** Internal owner notification after a server rejects a persisted compaction checkpoint. */
+  onCompactionRejected?: (checkpoint: OpenAIResponsesCompactionRejection) => void;
   openclawCodeModeToolSurface?: boolean;
+  openclawCodeModeAllowedHostedToolTypes?: Set<string>;
   frequencyPenalty?: number;
   presencePenalty?: number;
   seed?: number;

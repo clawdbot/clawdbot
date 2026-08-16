@@ -1,9 +1,12 @@
 // Flows command tests cover task creation, task execution, and runtime command output.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
+import { runCommandWithRuntime } from "../cli/cli-utils.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createRunningTaskRun as createRunningTaskRunOrNull } from "../tasks/task-executor.js";
+import { createRunningTaskRunCore as createRunningTaskRunOrNull } from "../tasks/task-executor.js";
 import { createManagedTaskFlow as createManagedTaskFlowOrNull } from "../tasks/task-flow-registry.js";
 import type { TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
+import * as taskFlowRuntime from "../tasks/task-flow-runtime-internal.js";
 import { markTaskLostById, markTaskTerminalById } from "../tasks/task-registry.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import {
@@ -36,7 +39,7 @@ function createManagedTaskFlow(
   return flow;
 }
 
-function createRunningTaskRun(
+function createRunningTaskRunCore(
   params: Parameters<typeof createRunningTaskRunOrNull>[0],
 ): TaskRecord {
   const task = createRunningTaskRunOrNull(params);
@@ -108,7 +111,7 @@ describe("flows commands", () => {
         updatedAt: 100,
       });
 
-      const childTask = createRunningTaskRun({
+      const childTask = createRunningTaskRunCore({
         runtime: "acp",
         ownerKey: "agent:main:main",
         scopeKind: "session",
@@ -158,6 +161,14 @@ describe("flows commands", () => {
           },
         ],
       });
+
+      const emptyRuntime = createRuntime();
+      await flowsListCommand({ json: true, status: "waiting" }, emptyRuntime);
+      expect(jsonRoundTrip(emptyRuntime.writeJson.mock.calls[0]?.[0])).toStrictEqual({
+        count: 0,
+        status: "waiting",
+        flows: [],
+      });
     });
   });
 
@@ -182,6 +193,25 @@ describe("flows commands", () => {
         flows: [expect.objectContaining(jsonRoundTrip(flow))],
       });
     });
+  });
+
+  it("rejects invalid TaskFlow status filters before querying", async () => {
+    const query = vi.spyOn(taskFlowRuntime, "listTaskFlowRecords").mockImplementation(() => {
+      throw new Error("TaskFlow query performed");
+    });
+    const runtime = createRuntime();
+
+    try {
+      await runCommandWithRuntime(runtime, () => flowsListCommand({ status: "bogus" }, runtime));
+
+      expect(runtime.error).toHaveBeenCalledWith(
+        "--status must be queued, running, waiting, blocked, succeeded, failed, cancelled, or lost.",
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(query).not.toHaveBeenCalled();
+    } finally {
+      query.mockRestore();
+    }
   });
 
   it("counts pending cancellation intent in TaskFlow pressure", async () => {
@@ -228,6 +258,38 @@ describe("flows commands", () => {
     });
   });
 
+  it("keeps TaskFlow columns aligned for wide controller ids", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      const controllers = [
+        { controllerId: "plain-controller", goal: "Plain controller" },
+        { controllerId: "控制器🚀", goal: "Wide controller" },
+        { controllerId: "控制器".repeat(8), goal: "Long wide controller" },
+      ];
+      for (const [index, entry] of controllers.entries()) {
+        createManagedTaskFlow({
+          ownerKey: "agent:main:main",
+          controllerId: entry.controllerId,
+          goal: entry.goal,
+          status: "running",
+          createdAt: 100 + index,
+          updatedAt: 100 + index,
+        });
+      }
+      const runtime = createRuntime();
+
+      await flowsListCommand({}, runtime);
+
+      const lines = vi.mocked(runtime.log).mock.calls.map(([line]) => String(line));
+      const countColumnWidths = controllers.map((entry) => {
+        const line = lines.find((candidate) => candidate.endsWith(entry.goal));
+        expect(line).toBeDefined();
+        return visibleWidth((line ?? "").slice(0, (line ?? "").indexOf("0 active/0 total")));
+      });
+      expect(new Set(countColumnWidths).size).toBe(1);
+      expect(lines.find((line) => line.endsWith("Long wide controller"))).toContain("…");
+    });
+  });
+
   it("shows one TaskFlow as JSON through the runtime JSON writer", async () => {
     await withTaskFlowCommandStateDir(async () => {
       const flow = createManagedTaskFlow({
@@ -269,7 +331,7 @@ describe("flows commands", () => {
         updatedAt: 100,
       });
 
-      const task = createRunningTaskRun({
+      const task = createRunningTaskRunCore({
         runtime: "subagent",
         ownerKey: "agent:main:main",
         scopeKind: "session",
@@ -314,7 +376,7 @@ describe("flows commands", () => {
           goal: "Inspect child task failures",
           status: "running",
         });
-        const task = createRunningTaskRun({
+        const task = createRunningTaskRunCore({
           runtime: "subagent",
           ownerKey: "agent:main:main",
           scopeKind: "session",
@@ -369,7 +431,7 @@ describe("flows commands", () => {
         goal: "Inspect child task updates",
         status: "running",
       });
-      const running = createRunningTaskRun({
+      const running = createRunningTaskRunCore({
         runtime: "subagent",
         ownerKey: "agent:main:main",
         scopeKind: "session",
@@ -382,7 +444,7 @@ describe("flows commands", () => {
         startedAt: Date.now(),
         progressSummary: "Downloading provider metadata",
       });
-      const completed = createRunningTaskRun({
+      const completed = createRunningTaskRunCore({
         runtime: "subagent",
         ownerKey: "agent:main:main",
         scopeKind: "session",
@@ -422,7 +484,7 @@ describe("flows commands", () => {
         goal: "Inspect unsafe child error",
         status: "running",
       });
-      const task = createRunningTaskRun({
+      const task = createRunningTaskRunCore({
         runtime: "subagent",
         ownerKey: "agent:main:main",
         scopeKind: "session",
@@ -462,7 +524,7 @@ describe("flows commands", () => {
         currentStep: `step${unsafe}`,
         status: "running",
       });
-      const task = createRunningTaskRun({
+      const task = createRunningTaskRunCore({
         runtime: "subagent",
         ownerKey: "agent:main:main",
         scopeKind: "session",
@@ -516,16 +578,19 @@ describe("flows commands", () => {
     await withTaskFlowCommandStateDir(async () => {
       const unsafe = "\u001b]52;c;Zm9yZ2Vk\u0007\nforged: yes";
       const filterRuntime = createRuntime();
-      await flowsListCommand({ status: `running${unsafe}` }, filterRuntime);
+      await runCommandWithRuntime(filterRuntime, () =>
+        flowsListCommand({ status: `running${unsafe}` }, filterRuntime),
+      );
 
       const lookupRuntime = createRuntime();
       await flowsShowCommand({ lookup: `missing${unsafe}` }, lookupRuntime);
 
       const lines = [
         ...vi.mocked(filterRuntime.log).mock.calls.map(([line]) => String(line)),
+        ...vi.mocked(filterRuntime.error).mock.calls.map(([line]) => String(line)),
         ...vi.mocked(lookupRuntime.error).mock.calls.map(([line]) => String(line)),
       ];
-      expect(lines.some((line) => line.includes("Status filter: running"))).toBe(true);
+      expect(lines.some((line) => line.includes("--status must be queued"))).toBe(true);
       expect(lines.some((line) => line.includes("TaskFlow not found: missing"))).toBe(true);
       for (const line of lines) {
         expect(line).not.toContain("\u001b");
@@ -570,7 +635,7 @@ describe("flows commands", () => {
         updatedAt: 100,
       });
 
-      const task = createRunningTaskRun({
+      const task = createRunningTaskRunCore({
         runtime: "subagent",
         ownerKey: unsafeOwnerKey,
         scopeKind: "session",

@@ -86,11 +86,10 @@ OpenAI-SDK-style examples, but new config should use `baseUrl`.
     Non-interactive:
 
     ```bash
-    openclaw onboard --non-interactive \
+    openclaw onboard --non-interactive --accept-risk --skip-health \
       --auth-choice ollama \
       --custom-base-url "http://ollama-host:11434" \
-      --custom-model-id "qwen3.5:27b" \
-      --accept-risk
+      --custom-model-id "qwen3.5:27b"
     ```
 
     `--custom-base-url` and `--custom-model-id` are optional; omitting them uses the local default host and the `gemma4` suggested model.
@@ -421,9 +420,16 @@ timeout and cap `num_ctx`:
   },
   tools: {
     media: {
+      models: [
+        {
+          provider: "ollama",
+          model: "qwen2.5vl:7b",
+          timeoutSeconds: 300,
+          capabilities: ["image"],
+        },
+      ],
       image: {
         timeoutSeconds: 180,
-        models: [{ provider: "ollama", model: "qwen2.5vl:7b", timeoutSeconds: 300 }],
       },
     },
   },
@@ -727,15 +733,15 @@ Replace model IDs with exact names from `ollama list` or
     ```json5
     {
       agents: {
-        list: [
-          {
-            id: "local",
+        entries: {
+          local: {
+            default: true,
             experimental: {
               localModelLean: true,
             },
             model: { primary: "ollama/gemma4" },
           },
-        ],
+        },
       },
       models: {
         providers: {
@@ -1024,7 +1030,7 @@ For full setup and behavior, see [Ollama Web Search](/tools/ollama-search).
         defaults: {
           models: {
             "ollama/gemma4": {
-              thinking: "low",
+              params: { thinking: "low" },
             },
           },
         },
@@ -1077,28 +1083,17 @@ For full setup and behavior, see [Ollama Web Search](/tools/ollama-search).
     | --- | --- |
     | Default model | `nomic-embed-text` |
     | Auto-pull | Yes, if not present locally |
-    | Default inline concurrency | 1 (other providers default higher; raise with `nonBatchConcurrency` if the host can take it) |
+    | Embedding concurrency | Provider-owned; no memory-search tuning key is required |
 
     Query-time embeddings use retrieval prefixes for models that require or
     recommend them: `nomic-embed-text`, `qwen3-embedding`, and
     `mxbai-embed-large`. Document batches stay raw, so existing indexes need
     no format migration.
 
-    ```json5
-    {
-      memory: {
-        search: {
-          provider: "ollama",
-          remote: {
-            // Default for Ollama. Raise on larger hosts if reindexing is too slow.
-            nonBatchConcurrency: 1,
-          },
-        },
-      },
-    }
-    ```
-
-    For a remote embedding host, keep auth scoped to that host:
+    Embedding concurrency and batching behavior are owned by the Ollama
+    memory provider. For a remote embedding host, use the supported
+    `remote.baseUrl` and `remote.apiKey` fields to keep auth scoped to that
+    host:
 
     ```json5
     {
@@ -1109,7 +1104,6 @@ For full setup and behavior, see [Ollama Web Search](/tools/ollama-search).
           remote: {
             baseUrl: "http://gpu-box.local:11434",
             apiKey: "ollama-local",
-            nonBatchConcurrency: 2,
           },
         },
       },
@@ -1125,8 +1119,10 @@ For full setup and behavior, see [Ollama Web Search](/tools/ollama-search).
     For native requests, thinking control is forwarded directly: `/think off`
     and `openclaw agent --thinking off` send top-level `think: false` unless
     an explicit `params.think`/`params.thinking` is configured; `/think
-    low|medium|high` send the matching effort string; `/think max` maps to
-    Ollama's highest effort, `think: "high"`.
+    low|medium|high` send the matching effort string. Verified full-effort
+    Ollama Cloud families such as GLM 5.2 and DeepSeek V4 also send native
+    `think: "max"` for `/think max`; other models and local servers keep the
+    compatible `think: "high"` mapping.
 
     <Tip>
     For the OpenAI-compatible endpoint instead, see "Legacy OpenAI-compatible mode" above — streaming and tool calling may not work together there.

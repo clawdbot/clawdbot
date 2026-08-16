@@ -200,7 +200,12 @@ describe("filtered sidebar session event refresh", () => {
 
       expect(list).toHaveBeenCalledOnce();
       expect(list).toHaveBeenCalledWith(
-        expect.objectContaining({ agentId: "main", archivedFilter: statusFilter, limit: 120 }),
+        expect.objectContaining({
+          agentId: "main",
+          archivedFilter: statusFilter,
+          includeLastMessage: true,
+          limit: 120,
+        }),
       );
       expect(controller.sessionsResult?.sessions).toHaveLength(120);
       controller.hostDisconnected();

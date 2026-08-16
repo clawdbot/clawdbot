@@ -245,6 +245,38 @@ describe("printCronList", () => {
     expectLogsToInclude(show.logs, "last delivery error: offline");
   });
 
+  it("sanitizes every stored cron show value at the terminal boundary", () => {
+    const control = "\u001B]0;cron-show-injection\u0007";
+    const injected = (value: string) => `${control}${value}\r\nforged-row\tfield`;
+    const job = createBaseJob({
+      id: injected("job-id"),
+      declarationKey: injected("declaration"),
+      name: injected("name 🦞"),
+      displayName: injected("display"),
+      owner: { agentId: injected("owner"), sessionKey: injected("owner-session") },
+      agentId: injected("agent"),
+      sessionTarget: injected("session") as CronJob["sessionTarget"],
+      payload: { kind: "agentTurn", message: "test", model: injected("model") },
+      state: {
+        lastError: injected("last-error"),
+        lastDeliveryStatus: "not-delivered",
+        lastDeliveryError: injected("delivery-error"),
+        lastDiagnosticSummary: injected("diagnostic"),
+      },
+    });
+    const { logs, runtime } = createRuntimeLogCapture();
+
+    printCronShow(job, runtime, {
+      deliveryPreview: { label: injected("delivery"), detail: injected("detail") },
+    });
+
+    const output = logs.join("\n");
+    expect(output).not.toContain("\u001B");
+    expect(output).not.toContain("\nforged-row");
+    expect(output).toContain("\\r\\nforged-row\\tfield");
+    expect(output).toContain("name 🦞");
+  });
+
   it("tolerates malformed rows in human-readable output", () => {
     const { logs, runtime } = createRuntimeLogCapture();
     const malformedJob = {

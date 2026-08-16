@@ -3,6 +3,8 @@ title: Inbound media-store audio transcription
 scenario:
   id: inbound-media-store-audio-transcription
   surface: media-understanding
+  plugins:
+    - openai
   coverage:
     primary:
       - media.inbound-media-store
@@ -34,6 +36,7 @@ scenario:
     timeoutMs: 90000
     retryCount: 0
     config:
+      requiredProviderMode: mock-openai
       conversationId: qa-media-store-audio
       expectedMarker: WHATSAPP_QA_AUDIO_TRANSCRIPT_OK
 

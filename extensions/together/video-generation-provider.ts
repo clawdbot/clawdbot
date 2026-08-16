@@ -1,7 +1,9 @@
 // Together provider module implements model/runtime integration.
 import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
-import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
-import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import {
+  downloadGeneratedVideoAsset,
+  resolveGeneratedMediaMaxBytes,
+} from "openclaw/plugin-sdk/media-generation-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -16,7 +18,6 @@ import {
   resolveProviderHttpRequestConfig,
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   asSafeIntegerInRange,
   normalizeOptionalString,
@@ -136,37 +137,26 @@ async function downloadTogetherVideo(params: {
   fetchFn: typeof fetch;
   maxBytes: number;
 }): Promise<GeneratedVideoAsset> {
-  const deadline = createProviderOperationDeadline({
-    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    label: "Together generated video download",
-  });
-  const timeoutMs = createProviderOperationTimeoutResolver({
-    deadline,
-    defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-  });
-  const response = await fetchProviderDownloadResponse({
+  return await downloadGeneratedVideoAsset({
     url: params.url,
-    init: { method: "GET" },
-    deadline,
+    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
     fetchFn: params.fetchFn,
     provider: "together",
+    label: "Together generated video download",
     requestFailedMessage: "Together generated video download failed",
+    maxBytes: params.maxBytes,
+    fetchResponse: async ({ deadline }) => ({
+      response: await fetchProviderDownloadResponse({
+        url: params.url,
+        init: { method: "GET" },
+        deadline,
+        fetchFn: params.fetchFn,
+        provider: "together",
+        requestFailedMessage: "Together generated video download failed",
+      }),
+    }),
   });
-  const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
-  const buffer = await readResponseWithLimit(response, params.maxBytes, {
-    timeoutMs,
-    onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
-      new Error(
-        `Together generated video download timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`,
-      ),
-    onOverflow: ({ maxBytes }) =>
-      new Error(`Together generated video download exceeds ${maxBytes} bytes`),
-  });
-  return {
-    buffer,
-    mimeType,
-    fileName: `video-1.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`,
-  };
 }
 
 export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider {

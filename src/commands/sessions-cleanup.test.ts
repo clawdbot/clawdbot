@@ -36,7 +36,7 @@ vi.mock("./session-store-targets.js", () => ({
 vi.mock("../config/sessions.js", () => ({
   resolveMaintenanceConfig: mocks.resolveMaintenanceConfig,
   loadSessionStore: mocks.loadSessionStore,
-  resolveSessionFilePath: mocks.resolveSessionFilePath,
+  resolveSessionFilePathCore: mocks.resolveSessionFilePath,
   resolveSessionFilePathOptions: mocks.resolveSessionFilePathOptions,
   pruneStaleEntries: mocks.pruneStaleEntries,
   capEntryCount: mocks.capEntryCount,

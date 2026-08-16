@@ -40,7 +40,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.15.0"
+  NODE_VERSION: "24.16.0"
   CLAWHUB_REGISTRY: "https://clawhub.ai"
   CLAWHUB_CLI_PACKAGE: "clawhub@0.23.1"
 
@@ -340,7 +340,7 @@ jobs:
           install-deps: "true"
 
       - name: Verify package-local runtime build
-        run: node scripts/check-plugin-npm-runtime-builds.mjs --package "${{ matrix.plugin.packageDir }}"
+        run: node --import tsx scripts/check-plugin-npm-runtime-builds.mts --package "${{ matrix.plugin.packageDir }}"
 
       - name: Install pinned ClawHub CLI wrapper
         run: |
@@ -403,7 +403,7 @@ jobs:
       dry_run: ${{ inputs.dry_run }}
       registry: https://clawhub.ai
       site: https://clawhub.ai
-      family: ${{ contains(fromJson('["@openclaw/acpx","@openclaw/diffs","@openclaw/feishu","@openclaw/qqbot"]'), matrix.plugin.packageName) && 'bundle-plugin' || '' }}
+      family: ${{ contains(fromJson('["@openclaw/acpx","@openclaw/diffs","@openclaw/feishu"]'), matrix.plugin.packageName) && 'bundle-plugin' || '' }}
       tags: ${{ matrix.plugin.publishTag }}
       source_repo: ${{ github.repository }}
       source_commit: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}

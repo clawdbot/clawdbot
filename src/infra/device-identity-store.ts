@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import type { Insertable, Selectable } from "kysely";
 import { withOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -109,7 +110,7 @@ function keyPairMatches(publicKeyPem: string, privateKeyPem: string): boolean {
 }
 
 function parseCreatedAtMs(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+  return asSafeIntegerInRange(value, { min: 0 }) ?? null;
 }
 
 /** Validate persisted key material and return the canonical runtime shape. */

@@ -7,7 +7,10 @@ import type { ChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
-import { resolveStorePath, updateSessionLastRoute } from "../../config/sessions/inbound.runtime.js";
+import {
+  resolveSessionStorePathCore,
+  updateSessionLastRoute,
+} from "../../config/sessions/inbound.runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RoutePeer } from "../../routing/resolve-route.js";
@@ -87,20 +90,6 @@ function inferPeerKindFromPlugin(params: {
   return undefined;
 }
 
-function inferPeerKindFromLegacyParser(params: {
-  plugin: ReturnType<typeof resolveOutboundChannelPlugin>;
-  targets: readonly string[];
-}): ChatType | undefined {
-  for (const target of params.targets) {
-    const parsed = params.plugin?.messaging?.parseExplicitTarget?.({ raw: target });
-    const inferred = normalizeInferredPeerKind(parsed?.chatType);
-    if (inferred) {
-      return inferred;
-    }
-  }
-  return undefined;
-}
-
 function inferPeerKindFromFallbackPrefixes(targets: readonly string[]): ChatType | undefined {
   for (const target of targets) {
     for (const fallback of FALLBACK_TARGET_KIND_PREFIXES) {
@@ -155,7 +144,6 @@ function inferPeerKind(params: {
   const targets = uniqueStrings([params.target, strippedTarget].filter(Boolean));
   return (
     inferPeerKindFromPlugin({ plugin, targets }) ??
-    inferPeerKindFromLegacyParser({ plugin, targets }) ??
     inferPeerKindFromFallbackPrefixes(targets) ??
     inferPeerKindFromCapabilities(plugin) ??
     "direct"
@@ -235,7 +223,7 @@ type OutboundSessionEntryParams = {
 async function persistOutboundSessionEntry(
   params: OutboundSessionEntryParams,
 ): Promise<SessionEntry | null> {
-  const storePath = resolveStorePath(params.cfg.session?.store, {
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
     agentId: resolveAgentIdFromSessionKey(params.route.sessionKey),
   });
   const ctx: MsgContext = {

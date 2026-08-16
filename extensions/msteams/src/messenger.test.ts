@@ -1,6 +1,7 @@
 // Msteams tests cover messenger plugin behavior.
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply-chunking";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
@@ -397,6 +398,38 @@ describe("msteams messenger", () => {
         }),
       ).rejects.toBeInstanceOf(PlatformMessageNotDispatchedError);
       expect(sendActivity).not.toHaveBeenCalled();
+    });
+
+    it("loads uppercase file URLs before sending personal images", async () => {
+      const tmpDir = await mkdtemp(
+        path.join(resolvePreferredOpenClawTmpDir(), "msteams-file-url-"),
+      );
+      const localFile = path.join(tmpDir, "café image.png");
+      const png = Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+        "base64",
+      );
+      await writeFile(localFile, png);
+
+      try {
+        const mediaUrl = pathToFileURL(localFile).href.replace(/^file:/u, "FILE:");
+        const activity = await buildActivity(
+          { mediaUrl },
+          {
+            ...baseRef,
+            conversation: { ...baseRef.conversation, conversationType: "personal" },
+          },
+        );
+        const attachment = (activity.attachments as Array<Record<string, unknown>>)[0];
+
+        expect(attachment).toMatchObject({
+          name: "café image.png",
+          contentType: "image/png",
+          contentUrl: `data:image/png;base64,${png.toString("base64")}`,
+        });
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
     });
 
     it("does not claim no dispatch after an earlier batch message was sent", async () => {

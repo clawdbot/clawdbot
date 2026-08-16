@@ -24,7 +24,7 @@ import {
 } from "./codex-route-model-slots.js";
 import type {
   CodexRouteHit,
-  DisabledCodexPluginRouteHit,
+  CodexRuntimeRouteHit,
   DisabledCodexPluginRouteIssue,
 } from "./codex-route-types.js";
 
@@ -216,10 +216,18 @@ export function collectConfigModelRefs(
 export function collectDisabledCodexPluginRouteHits(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
-): DisabledCodexPluginRouteHit[] {
+): CodexRuntimeRouteHit[] {
   if (!isCodexPluginUnavailableByConfig(cfg)) {
     return [];
   }
+  return collectCodexRuntimeRouteHits(cfg, env);
+}
+
+/** Find effective configured model routes that select the Codex runtime. */
+export function collectCodexRuntimeRouteHits(
+  cfg: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
+): CodexRuntimeRouteHit[] {
   const defaults = cfg.agents?.defaults;
   const defaultRefs = collectAgentRuntimeModelRefs({
     agent: defaults,
@@ -280,7 +288,7 @@ export function collectDisabledCodexPluginRouteHits(
     }
   }
 
-  const hits: DisabledCodexPluginRouteHit[] = [];
+  const hits: CodexRuntimeRouteHit[] = [];
   const seen = new Set<string>();
   for (const ref of candidateRefs) {
     const canonicalModel = resolveRuntimeModelRef({
@@ -303,7 +311,12 @@ export function collectDisabledCodexPluginRouteHits(
       continue;
     }
     seen.add(key);
-    hits.push({ path: ref.path, modelRef: ref.modelRef, canonicalModel });
+    hits.push({
+      path: ref.path,
+      modelRef: ref.modelRef,
+      canonicalModel,
+      ...(ref.agentId ? { agentId: ref.agentId } : {}),
+    });
   }
   return hits;
 }
@@ -324,7 +337,7 @@ export function collectDisabledCodexPluginRouteIssues(
 
 export function enableCodexPluginForRequiredRoutes(params: {
   cfg: OpenClawConfig;
-  routeHits: DisabledCodexPluginRouteHit[];
+  routeHits: CodexRuntimeRouteHit[];
 }): { cfg: OpenClawConfig; changes: string[] } {
   // Explicit user opt-out wins over managed-harness repair; doctor warns instead.
   if (params.routeHits.length === 0 || codexPluginRepairIsBlocked(params.cfg)) {

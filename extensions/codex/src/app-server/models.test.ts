@@ -149,7 +149,7 @@ describe("listCodexAppServerModels", () => {
     const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
     harness.send({
       id: initialize.id,
-      result: { userAgent: "openclaw/0.146.0 (macOS; test)" },
+      result: { userAgent: "openclaw/0.147.0 (macOS; test)" },
     });
     await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(3));
     const list = JSON.parse(harness.writes[2] ?? "{}") as { id?: number; method?: string };
@@ -170,7 +170,7 @@ describe("listCodexAppServerModels", () => {
     const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
     harness.send({
       id: initialize.id,
-      result: { userAgent: "openclaw/0.146.0 (macOS; test)" },
+      result: { userAgent: "openclaw/0.147.0 (macOS; test)" },
     });
     await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(3));
     const list = JSON.parse(harness.writes[2] ?? "{}") as { id?: number; method?: string };
@@ -232,7 +232,7 @@ describe("listCodexAppServerModels", () => {
     const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
     harness.send({
       id: initialize.id,
-      result: { userAgent: "openclaw/0.146.0 (macOS; test)" },
+      result: { userAgent: "openclaw/0.147.0 (macOS; test)" },
     });
     await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(3));
     const firstList = JSON.parse(harness.writes[2] ?? "{}") as {
@@ -312,7 +312,7 @@ describe("listCodexAppServerModels", () => {
     const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
     harness.send({
       id: initialize.id,
-      result: { userAgent: "openclaw/0.146.0 (macOS; test)" },
+      result: { userAgent: "openclaw/0.147.0 (macOS; test)" },
     });
     await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(3));
     const firstList = JSON.parse(harness.writes[2] ?? "{}") as { id?: number };

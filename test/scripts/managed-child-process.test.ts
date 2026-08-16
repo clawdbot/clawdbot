@@ -10,7 +10,7 @@ import {
   runManagedCommand,
   signalExitCode,
   terminateManagedChild,
-} from "../../scripts/lib/managed-child-process.mjs";
+} from "../../scripts/lib/managed-child-process.mts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -386,7 +386,7 @@ setInterval(() => {}, 1_000);
   });
 
   posixIt("waits through transient indeterminate process-group state", async () => {
-    const originalKill = process.kill;
+    const originalKill = process.kill.bind(process);
     let childPid = 0;
     let injectedIndeterminate = false;
     process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {
@@ -415,6 +415,40 @@ setInterval(() => {}, 1_000);
     }
 
     expect(injectedIndeterminate).toBe(true);
+    expect(isProcessAlive(childPid)).toBe(false);
+  });
+
+  posixIt("accepts a process group that vanishes before its cleanup signal", async () => {
+    const originalKill = process.kill.bind(process);
+    let childPid = 0;
+    let injectedLiveGroup = false;
+    process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {
+      if (pid === -childPid && signal === 0 && !injectedLiveGroup) {
+        injectedLiveGroup = true;
+        return true;
+      }
+      return originalKill(pid, signal);
+    }) as typeof process.kill;
+
+    try {
+      await expect(
+        runManagedCommand({
+          bin: process.execPath,
+          args: ["-e", "process.exit(0)"],
+          onReady: (child) => {
+            childPid = expectProcessPid(child.pid);
+          },
+          requireProcessTreeExit: true,
+          shell: false,
+          stdio: "ignore",
+          timeoutMs: 1_000,
+        }),
+      ).resolves.toBe(0);
+    } finally {
+      process.kill = originalKill;
+    }
+
+    expect(injectedLiveGroup).toBe(true);
     expect(isProcessAlive(childPid)).toBe(false);
   });
 
@@ -503,7 +537,7 @@ fs.writeFileSync(process.argv[1], String(child.pid));
       const childPidPath = path.join(dir, "child.pid");
       const descendantPidPath = path.join(dir, "descendant.pid");
       const runnerReadyPath = path.join(dir, "runner.ready");
-      const helperUrl = pathToFileURL(path.resolve("scripts/lib/managed-child-process.mjs")).href;
+      const helperUrl = pathToFileURL(path.resolve("scripts/lib/managed-child-process.mts")).href;
 
       fs.writeFileSync(
         childPath,

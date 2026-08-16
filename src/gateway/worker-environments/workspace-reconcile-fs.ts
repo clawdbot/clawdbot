@@ -1,11 +1,8 @@
-import { createHash } from "node:crypto";
-import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isPathInside, resolveOpenedFileRealPathForHandle } from "../../infra/fs-safe.js";
 import { runCommandBuffered } from "../../process/exec.js";
+import { readWorkspaceFileSnapshotWithLimit } from "./workspace-actual-manifest.js";
 import {
-  gitFileMode,
   MAX_RECONCILIATION_FILE_BYTES,
   type WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
@@ -21,78 +18,16 @@ type WorkspaceFileSnapshot =
   | { type: "file"; mode: number; size: number; sha256: string }
   | { type: "unsupported" };
 
-async function readOpenedWorkspaceFile(params: {
-  handle: Awaited<ReturnType<typeof fs.open>>;
-  expectedPath: string;
-  root?: string;
-}): Promise<WorkspaceFileSnapshot> {
-  const before = await params.handle.stat();
-  const realPath = await resolveOpenedFileRealPathForHandle(params.handle, params.expectedPath);
-  if (!before.isFile() || (params.root && !isPathInside(params.root, realPath))) {
-    throw new Error("Gateway workspace file changed while it was being read");
-  }
-  if (before.size > MAX_RECONCILIATION_FILE_BYTES) {
-    return { type: "unsupported" };
-  }
-  const hash = createHash("sha256");
-  const buffer = Buffer.allocUnsafe(64 * 1024);
-  let size = 0;
-  for (;;) {
-    const { bytesRead } = await params.handle.read(buffer, 0, buffer.length, size);
-    if (bytesRead === 0) {
-      break;
-    }
-    size += bytesRead;
-    if (size > MAX_RECONCILIATION_FILE_BYTES) {
-      return { type: "unsupported" };
-    }
-    hash.update(buffer.subarray(0, bytesRead));
-  }
-  const after = await params.handle.stat();
-  if (
-    after.size !== size ||
-    after.size !== before.size ||
-    after.mtimeMs !== before.mtimeMs ||
-    after.ctimeMs !== before.ctimeMs ||
-    after.ino !== before.ino ||
-    after.dev !== before.dev
-  ) {
-    throw new Error("Gateway workspace file changed while it was being read");
-  }
-  return {
-    type: "file",
-    mode: gitFileMode(after.mode & 0o777),
-    size,
-    sha256: hash.digest("hex"),
-  };
-}
-
 export async function readWorkspaceFileSnapshot(
   root: string,
   entryPath: string,
 ): Promise<WorkspaceFileSnapshot> {
   const absolute = localPath(root, entryPath);
-  const handle = await fs.open(
-    absolute,
-    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-  );
-  try {
-    return await readOpenedWorkspaceFile({ handle, expectedPath: absolute, root });
-  } finally {
-    await handle.close();
-  }
+  return await readWorkspaceFileSnapshotWithLimit(absolute, MAX_RECONCILIATION_FILE_BYTES, root);
 }
 
 async function readAbsoluteFileSnapshot(absolute: string): Promise<WorkspaceFileSnapshot> {
-  const handle = await fs.open(
-    absolute,
-    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-  );
-  try {
-    return await readOpenedWorkspaceFile({ handle, expectedPath: absolute });
-  } finally {
-    await handle.close();
-  }
+  return await readWorkspaceFileSnapshotWithLimit(absolute, MAX_RECONCILIATION_FILE_BYTES);
 }
 
 export async function absoluteEntryMatches(

@@ -1,11 +1,11 @@
-import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
+import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 /**
  * CLI turn compaction lifecycle.
  *
  * This module decides when CLI-backed sessions need context compaction, chooses
  * native harness or context-engine compaction, and records resulting session state.
  */
-import type { SessionEntry } from "../../config/sessions/types.js";
+import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions/types.js";
 import type { AgentCompactionMode } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
@@ -177,9 +177,7 @@ function resolvePositiveInteger(value: number | undefined): number | undefined {
 }
 
 function resolveSessionTokenSnapshot(sessionEntry: SessionEntry | undefined): number | undefined {
-  return resolvePositiveInteger(
-    sessionEntry?.totalTokensFresh === false ? undefined : sessionEntry?.totalTokens,
-  );
+  return resolvePositiveInteger(resolveFreshSessionTotalTokens(sessionEntry));
 }
 
 function isNativeHarnessCompactionSession(
@@ -313,10 +311,10 @@ async function compactCliTranscript(params: {
       params.contextEngine,
       {
         sessionId: params.sessionId,
-        sessionKey: params.sessionKey || params.sessionId,
+        sessionKey: params.sessionKey,
         sessionTarget: {
           sessionId: params.sessionId,
-          sessionKey: params.sessionKey || params.sessionId,
+          sessionKey: params.sessionKey,
           ...(params.storePath ? { storePath: params.storePath } : {}),
         },
         tokenBudget: params.contextTokenBudget,
@@ -637,7 +635,7 @@ export async function runCliTurnCompactionLifecycle(params: {
     return params.sessionEntry;
   }
 
-  let compacted = false;
+  let compactionKind: EmbeddedAgentCompactResult["compactionKind"];
   let contextCompactionOutcome: CliTranscriptCompactionOutcome | undefined;
   let nativeCompactionResult: EmbeddedAgentCompactResult | undefined;
   let useContextEngineCompaction = true;
@@ -686,7 +684,7 @@ export async function runCliTurnCompactionLifecycle(params: {
       extraSystemPrompt: params.extraSystemPrompt,
     });
     if (nativeOutcome.compacted) {
-      compacted = true;
+      compactionKind = "native-harness";
       nativeCompactionResult = nativeOutcome.result;
       useContextEngineCompaction = false;
     } else if (nativeOutcome.fallbackToContextEngine) {
@@ -695,9 +693,7 @@ export async function runCliTurnCompactionLifecycle(params: {
       nativeFallbackNeedsBindingClear = nativeOutcome.clearCliSessionBinding === true;
     } else if (nativeOutcome.failureReason) {
       throw new Error(
-        `CLI native harness compaction failed for ${params.provider}/${params.model}: ${
-          nativeOutcome.failureReason ?? "compaction did not reduce context"
-        }`,
+        `CLI native harness compaction failed for ${params.provider}/${params.model}: ${nativeOutcome.failureReason}`,
       );
     } else {
       useContextEngineCompaction = false;
@@ -740,17 +736,15 @@ export async function runCliTurnCompactionLifecycle(params: {
       bestEffortMaintenance: nativeFallbackToContextEngine,
     });
     contextCompactionOutcome = contextOutcome;
-    compacted = contextOutcome.compacted;
-    if (!compacted && contextOutcome.failureReason) {
+    compactionKind = contextOutcome.compacted ? "context-engine" : undefined;
+    if (!compactionKind && contextOutcome.failureReason) {
       throw new Error(
-        `CLI transcript compaction failed for ${params.provider}/${params.model}: ${
-          contextOutcome.failureReason ?? "compaction did not reduce context"
-        }`,
+        `CLI transcript compaction failed for ${params.provider}/${params.model}: ${contextOutcome.failureReason}`,
       );
     }
   }
 
-  if (nativeFallbackNeedsBindingClear && !compacted && params.sessionStore && params.storePath) {
+  if (nativeFallbackNeedsBindingClear && !compactionKind && params.sessionStore) {
     return (
       (await cliCompactionDeps.clearCliSessionInStore({
         provider: params.provider,
@@ -762,13 +756,13 @@ export async function runCliTurnCompactionLifecycle(params: {
     );
   }
 
-  if (!compacted || !params.sessionStore || !params.storePath) {
+  if (!compactionKind || !params.sessionStore) {
     return params.sessionEntry;
   }
 
   return (
     (await cliCompactionDeps.recordCliCompactionInStore({
-      provider: params.provider,
+      compactionKind,
       sessionKey: params.sessionKey,
       sessionStore: params.sessionStore,
       storePath: params.storePath,

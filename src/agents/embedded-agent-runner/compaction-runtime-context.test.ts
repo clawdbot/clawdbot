@@ -9,6 +9,7 @@ import { createProcessSessionFixture } from "../bash-process-registry.test-helpe
 import { resetProcessRegistryForTests } from "../bash-process-registry.test-support.js";
 import {
   buildEmbeddedCompactionRuntimeContext,
+  resolveCompactionContextTokenBudget,
   resolveCompactionHarnessRuntime,
   resolveEmbeddedCompactionThinkingLevel,
   resolveEmbeddedCompactionTarget,
@@ -16,6 +17,46 @@ import {
 import { buildContextEngineCompactionSessionTarget } from "./run/session-bootstrap.js";
 
 const compactionTempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+describe("resolveCompactionContextTokenBudget", () => {
+  const cfg = {
+    agents: {
+      list: [{ id: "capped", contextTokens: 200_000 }],
+      defaults: { contextTokens: 128_000 },
+    },
+  } as unknown as OpenClawConfig;
+  const modelWithWindow = (contextWindow: number) =>
+    ({ contextWindow }) as Parameters<typeof resolveCompactionContextTokenBudget>[0]["model"];
+  it.each([
+    { requested: 500_000, modelWindow: 500_000, expected: 200_000 },
+    { requested: 100_000, modelWindow: 500_000, expected: 100_000 },
+    { requested: 500_000, modelWindow: 64_000, expected: 64_000 },
+  ])(
+    "caps requested=$requested by agent and model ceilings to $expected",
+    ({ requested, modelWindow, expected }) => {
+      const budget = resolveCompactionContextTokenBudget({
+        config: cfg,
+        provider: "openai",
+        modelId: "mock-model",
+        model: modelWithWindow(modelWindow),
+        agentId: "capped",
+        requestedTokenBudget: requested,
+      });
+      expect(budget).toBe(expected);
+    },
+  );
+
+  it("falls back to the default cap when no agent id is given", () => {
+    const budget = resolveCompactionContextTokenBudget({
+      config: cfg,
+      provider: "openai",
+      modelId: "mock-model",
+      model: modelWithWindow(272_000),
+      requestedTokenBudget: 200_000,
+    });
+    expect(budget).toBe(128_000);
+  });
+});
 
 describe("resolveEmbeddedCompactionThinkingLevel", () => {
   it("lets the compaction override replace the inherited session level", () => {
@@ -751,6 +792,70 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.authProfileId).toBe("openai:default");
   });
 
+  it.each([
+    {
+      name: "infers a different provider for a uniquely configured bare literal",
+      config: {
+        models: {
+          providers: {
+            anthropic: { models: [{ id: "compact-model" }] },
+          },
+        },
+        agents: { defaults: { compaction: { model: "compact-model" } } },
+      },
+      provider: "openai",
+      authProfileId: "openai:default",
+      expectedProvider: "anthropic",
+      expectedModel: "compact-model",
+      expectedAuthProfileId: undefined,
+    },
+    {
+      name: "keeps an ambiguous configured bare literal on the current provider",
+      config: {
+        models: {
+          providers: {
+            openai: { models: [{ id: "shared-model" }] },
+            anthropic: { models: [{ id: "shared-model" }] },
+          },
+        },
+        agents: { defaults: { compaction: { model: "shared-model" } } },
+      },
+      provider: "google",
+      authProfileId: "google:default",
+      expectedProvider: "google",
+      expectedModel: "shared-model",
+      expectedAuthProfileId: "google:default",
+    },
+    {
+      name: "preserves a multi-segment model id and trailing profile suffix",
+      config: {
+        agents: {
+          defaults: {
+            compaction: { model: "openrouter/meta-llama/llama-3.3-70b:free@work" },
+          },
+        },
+      },
+      provider: "openrouter",
+      authProfileId: "openrouter:default",
+      expectedProvider: "openrouter",
+      expectedModel: "meta-llama/llama-3.3-70b:free@work",
+      expectedAuthProfileId: "openrouter:default",
+    },
+  ])("$name", (fixture) => {
+    const result = resolveEmbeddedCompactionTarget({
+      config: fixture.config as unknown as OpenClawConfig,
+      provider: fixture.provider,
+      modelId: "current-model",
+      authProfileId: fixture.authProfileId,
+      defaultProvider: fixture.provider,
+      defaultModel: "current-model",
+    });
+
+    expect(result.provider).toBe(fixture.expectedProvider);
+    expect(result.model).toBe(fixture.expectedModel);
+    expect(result.authProfileId).toBe(fixture.expectedAuthProfileId);
+  });
+
   it("leaves non-openai providers unchanged", () => {
     const result = resolveEmbeddedCompactionTarget({
       provider: "anthropic",
@@ -779,7 +884,7 @@ describe("buildContextEngineCompactionSessionTarget", () => {
     });
   });
 
-  it("uses the marker session id when its store has no mapped key yet", () => {
+  it("leaves the key absent when a marker store has no mapped row", () => {
     const storePath = path.join(compactionTempDirs.make("compaction-marker-"), "sessions.json");
     const sessionId = "legacy-unmapped-session";
 
@@ -788,6 +893,6 @@ describe("buildContextEngineCompactionSessionTarget", () => {
         sessionFile: formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath }),
         sessionId,
       }),
-    ).toMatchObject({ agentId: "main", sessionId, sessionKey: sessionId, storePath });
+    ).toEqual({ agentId: "main", sessionId, storePath });
   });
 });

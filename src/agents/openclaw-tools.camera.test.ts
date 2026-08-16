@@ -1,6 +1,7 @@
-// Verifies node camera/photo tool payloads, media URLs, and vision gating.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+// Verifies node camera/photo tool payloads, media URLs, and vision gating.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cameraTempPath } from "../cli/nodes-camera.js";
 import {
@@ -77,12 +78,7 @@ async function executeNodes(
 type NodesToolResult = Awaited<ReturnType<typeof executeNodes>>;
 type GatewayMockResult = Record<string, unknown> | null | undefined;
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label");
 
 function expectInvokeParams(
   invokeParams: unknown,

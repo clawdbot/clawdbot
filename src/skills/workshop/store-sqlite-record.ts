@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJson } from "@openclaw/normalization-core";
 import type { Insertable } from "kysely";
 import {
   executeSqliteQuerySync,
@@ -16,14 +17,7 @@ import {
 import type { SkillProposalRecord } from "./types.js";
 
 export function parseJson(value: string | null): unknown {
-  if (value === null) {
-    return undefined;
-  }
-  try {
-    return JSON.parse(value) as unknown;
-  } catch {
-    return undefined;
-  }
+  return value === null ? undefined : safeParseJson(value);
 }
 
 export function parseSkillProposalRow(row: SkillProposalRow): SkillProposalRecord | null {

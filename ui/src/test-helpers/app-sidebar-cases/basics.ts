@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
 import { sessionRefFromPath } from "../../app-session-route-paths.ts";
@@ -18,36 +18,10 @@ import {
   mountSidebar,
   TWO_AGENTS,
 } from "../app-sidebar.ts";
+import { installDialogPolyfill, nextFrame, waitForRenderedModalDialog } from "../modal-dialog.ts";
 import "../../components/app-sidebar.ts";
 
 await import("../../components/viewer-facepile.ts");
-
-type SidebarNativeGatewayTestSnapshot = {
-  gateways: Array<{
-    id: string;
-    name: string;
-    isPrimary: boolean;
-    health: "ok" | "error" | "unknown";
-  }>;
-  currentId: string;
-};
-
-type SidebarNativeGatewayTestWindow = Window & {
-  __OPENCLAW_NATIVE_WEB_CHROME__?: boolean;
-  __OPENCLAW_NATIVE_GATEWAYS__?: SidebarNativeGatewayTestSnapshot;
-};
-
-function setNativeGatewayTestState(snapshot: SidebarNativeGatewayTestSnapshot): void {
-  const nativeWindow = window as SidebarNativeGatewayTestWindow;
-  nativeWindow["__OPENCLAW_NATIVE_WEB_CHROME__"] = true;
-  nativeWindow["__OPENCLAW_NATIVE_GATEWAYS__"] = snapshot;
-}
-
-afterEach(() => {
-  const nativeWindow = window as SidebarNativeGatewayTestWindow;
-  Reflect.deleteProperty(nativeWindow, "__OPENCLAW_NATIVE_WEB_CHROME__");
-  Reflect.deleteProperty(nativeWindow, "__OPENCLAW_NATIVE_GATEWAYS__");
-});
 
 describe("AppSidebar update card wiring", () => {
   it("keeps OpenClaw out of the workspace sidebar", async () => {
@@ -55,18 +29,22 @@ describe("AppSidebar update card wiring", () => {
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
 
     expect(sidebar.querySelector('.nav-item[href="/custodian"]')).toBeNull();
+    expect(sidebar.querySelector('.nav-item[href="/settings/secrets"]')).toBeNull();
   });
 
   it("renders the update card in the footer after the attention slot and forwards its action", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
     const onUpdate = vi.fn();
+    const onRefresh = vi.fn();
     sidebar.updateAvailable = {
       currentVersion: "1.0.0",
       latestVersion: "2.0.0",
       channel: "stable",
     };
+    sidebar.canUpdate = true;
     sidebar.onUpdate = onUpdate;
+    sidebar.onRefresh = onRefresh;
     await sidebar.updateComplete;
 
     const footer = sidebar.querySelector(".sidebar-shell__footer");
@@ -74,7 +52,25 @@ describe("AppSidebar update card wiring", () => {
     expect(footer?.firstElementChild?.localName).toBe("openclaw-sidebar-attention");
     const card = footer?.querySelector("openclaw-sidebar-update-card");
     expect(card).not.toBeNull();
+    const restoreDialogPolyfill = installDialogPolyfill();
     card?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
+    const { modal } = await waitForRenderedModalDialog(document.body);
+    [...modal.querySelectorAll("button")]
+      .find((button) => button.textContent?.trim() === "Update and restart")
+      ?.click();
+    await nextFrame();
+    restoreDialogPolyfill();
+    expect(onUpdate).toHaveBeenCalledOnce();
+
+    sidebar.refreshRequired = true;
+    await sidebar.updateComplete;
+    const refreshCard = footer?.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+      "openclaw-sidebar-update-card",
+    );
+    await refreshCard?.updateComplete;
+    expect(refreshCard?.textContent).toContain("Server updated");
+    refreshCard?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
+    expect(onRefresh).toHaveBeenCalledOnce();
     expect(onUpdate).toHaveBeenCalledOnce();
   });
 });
@@ -255,95 +251,13 @@ describe("AppSidebar viewer presence", () => {
   });
 });
 
-describe("AppSidebar gateway footer subtitle", () => {
-  const twoGateways = {
-    gateways: [
-      { id: "local", name: "Local Gateway", isPrimary: true, health: "ok" },
-      { id: "remote", name: "Remote Gateway", isPrimary: false, health: "unknown" },
-    ],
-    currentId: "local",
-  } satisfies SidebarNativeGatewayTestSnapshot;
-
-  it("stays hidden outside native chrome", async () => {
-    const nativeWindow = window as SidebarNativeGatewayTestWindow;
-    nativeWindow["__OPENCLAW_NATIVE_GATEWAYS__"] = twoGateways;
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-
-    expect(sidebar.querySelector(".sidebar-identity-card__subtitle")).toBeNull();
-  });
-
-  it("stays hidden with one configured gateway", async () => {
-    setNativeGatewayTestState({ gateways: [twoGateways.gateways[0]!], currentId: "local" });
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-
-    expect(sidebar.querySelector(".sidebar-identity-card__subtitle")).toBeNull();
-  });
-
-  it("shows the current gateway health, name, and primary suffix", async () => {
-    setNativeGatewayTestState(twoGateways);
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-
-    expect(
-      sidebar.querySelector(".sidebar-identity-card__gateway-health")?.getAttribute("data-health"),
-    ).toBe("ok");
-    expect(sidebar.querySelector(".sidebar-identity-card__gateway-name")?.textContent).toBe(
-      "Local Gateway",
-    );
-    expect(sidebar.querySelector(".sidebar-identity-card__gateway-primary")?.textContent).toBe(
-      "· primary",
-    );
-    expect(sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label")).toBe(
-      "Identity and app menu for Account: Local Gateway, primary",
-    );
-  });
-
-  it("keeps the reconnecting subtitle while offline", async () => {
-    setNativeGatewayTestState(twoGateways);
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    sidebar.offline = true;
-    await sidebar.updateComplete;
-
-    expect(sidebar.querySelector(".sidebar-identity-card__subtitle")?.textContent).toBe(
-      "Reconnecting…",
-    );
-    expect(sidebar.querySelector(".sidebar-identity-card__gateway-name")).toBeNull();
-  });
-
-  it("updates when the native gateway snapshot changes", async () => {
-    setNativeGatewayTestState(twoGateways);
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    setNativeGatewayTestState({
-      gateways: [
-        { id: "local", name: "Local Gateway", isPrimary: true, health: "ok" },
-        { id: "remote", name: "Remote Gateway", isPrimary: false, health: "error" },
-      ],
-      currentId: "remote",
-    });
-    window.dispatchEvent(new CustomEvent("openclaw:native-gateways-changed"));
-    await sidebar.updateComplete;
-
-    expect(sidebar.querySelector(".sidebar-identity-card__gateway-name")?.textContent).toBe(
-      "Remote Gateway",
-    );
-    expect(
-      sidebar.querySelector(".sidebar-identity-card__gateway-health")?.getAttribute("data-health"),
-    ).toBe("error");
-    expect(sidebar.querySelector(".sidebar-identity-card__gateway-primary")).toBeNull();
-  });
-});
-
 describe("AppSidebar brand actions", () => {
   it("starts a thread for the expanded agent from the brand action", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const agentsList = {
       defaultId: "main",
       mainKey: "main",
-      scope: "agent",
+      scope: "per-sender",
       agents: [{ id: "main" }, { id: "research" }],
     } as AgentsListResult;
     const { sidebar } = await mountSidebar(
@@ -362,7 +276,7 @@ describe("AppSidebar brand actions", () => {
     expect(actions?.firstElementChild?.querySelector(".sidebar-brand__new-thread")).toBe(
       brandButton,
     );
-    expect(brandButton?.getAttribute("aria-label")).toBe("New thread");
+    expect(brandButton?.getAttribute("aria-label")).toBe("New session");
     expect(brandButton?.disabled).toBe(true);
     expect(actions?.querySelectorAll("button")).toHaveLength(1);
     expect(sidebar.querySelector(".sidebar-search")).toBeNull();
@@ -377,7 +291,7 @@ describe("AppSidebar brand actions", () => {
     const headerButton = sidebar.querySelector<HTMLButtonElement>(
       '[data-session-section="ungrouped"] .sidebar-new-session',
     );
-    expect(headerButton?.getAttribute("aria-label")).toBe("New thread");
+    expect(headerButton?.getAttribute("aria-label")).toBe("New session");
   });
 });
 
@@ -465,7 +379,7 @@ describe("AppSidebar agent chip", () => {
     const agents = {
       defaultId: "main",
       mainKey: "main",
-      scope: "agent",
+      scope: "per-sender",
       agents: [{ id: "main" }, { id: "settings" }],
     } as AgentsListResult;
     const { sidebar } = await mountSidebar(
@@ -566,17 +480,14 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelector(".sidebar-agent-card__subtitle")?.textContent).toContain(
       "Working",
     );
-    // Run state rings the Home icon in the leading slot; the row edge keeps
-    // only approval/outbox counts.
-    const ring = sidebar.querySelector(
-      ".nav-item--home .session-glyph--running .session-glyph__ring",
-    );
-    expect(ring).not.toBeNull();
-    expect(sidebar.querySelector(".nav-item--home .nav-item__state")).toBeNull();
-    expect(ring?.hasAttribute("title")).toBe(false);
-    expect(
-      (ring?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)?.content,
-    ).toBe("Active run");
+    // Run state uses the session spinner at the row edge without changing the Home icon.
+    const spinner = sidebar.querySelector(".nav-item--home .nav-item__state .session-run-spinner");
+    expect(spinner).not.toBeNull();
+    expect(sidebar.querySelector(".nav-item--home .nav-item__icon")).not.toBeNull();
+    expect(sidebar.querySelector(".nav-item--home .session-glyph__ring")).toBeNull();
+    expect(spinner?.getAttribute("role")).toBe("img");
+    expect(spinner?.getAttribute("aria-label")).toBe("Active run");
+    expect(spinner?.getAttribute("title")).toBe("Active run");
   });
 
   it("uses the shared tooltip for the Home dashboard glyph", async () => {

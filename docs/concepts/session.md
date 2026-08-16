@@ -11,6 +11,9 @@ OpenClaw routes every inbound message to a **session** based on where it came
 from: DMs, group chats, cron jobs, etc. All session state is owned by the
 **gateway**; UI clients query the gateway for session data.
 
+To continue the same Gateway-owned session in the Control UI, terminal, or a
+coding harness, see [Session synchronization and attachment](/concepts/session-attachment).
+
 For the personal-agent default — one rolling conversation shared by all your
 DM channels, with group activity and background work flowing into it — see
 [The main session](/concepts/main-session).
@@ -182,6 +185,7 @@ shown:
       mode: "enforce", // "enforce" applies cleanup; "warn" only reports
       pruneAfter: "30d",
       maxEntries: 500,
+      preserveRecent: "7d", // optional; false or omitted disables
     },
   },
 }
@@ -192,6 +196,15 @@ high-water buffer and clean back down to the configured cap in batches.
 Session store reads do not prune or cap entries during Gateway startup, so
 startup and isolated cron sessions do not pay for a full store cleanup.
 `openclaw sessions cleanup --enforce` applies the cap immediately.
+
+`maxEntries` counts every live session row. Archived or pinned sessions, active
+or admitted work, model-locked sessions, and durable external conversation
+pointers are protected from automatic eviction, but still consume the cap.
+Cleanup removes the oldest unprotected rows until it reaches `maxEntries` or
+runs out of eligible victims. The total can therefore remain above the cap when
+protected rows alone exceed it or active work temporarily blocks eviction.
+Cleanup does not unprotect those rows; unarchive, unpin, wait for active work to
+finish, or explicitly delete sessions you no longer want to retain.
 
 Gateway model-run probe sessions are short-lived by default. Rows matching
 `agent:*:explicit:model-run-<uuid>` use fixed `24h` retention, but cleanup is
@@ -204,10 +217,22 @@ Maintenance preserves durable external conversation pointers, including group
 sessions and thread-scoped chat sessions, while still allowing synthetic cron,
 hook, heartbeat, ACP, and sub-agent entries to age out.
 
-Archived sessions are user-shelved and exempt from every automatic maintenance
-path, including age pruning, entry caps, model-run cleanup, and disk-budget
-eviction. They remain archived until you unarchive them or explicitly delete
-them.
+Shared or high-volume installations can set `preserveRecent` to protect
+recently active interactive sessions and every SQLite history generation owned
+by those sessions. The option is disabled when omitted or set to `false`, so
+personal installations keep the normal oldest-first policy. Synthetic
+model-run, cron, hook, heartbeat, ACP, and sub-agent sessions remain eligible
+for bounded cleanup. Protection can temporarily keep the store above its entry
+or disk target; it expires after the configured inactivity window.
+
+Recent-session protection does not archive sessions or change managed-worktree
+garbage collection. Archiving remains an explicit user action for sessions that
+should stay on the permanent shelf.
+
+Archived and pinned sessions are user-protected and exempt from every automatic
+maintenance path, including age pruning, entry caps, model-run cleanup, and
+disk-budget eviction. They remain protected until you unarchive, unpin, or
+explicitly delete them.
 
 If you previously used DM isolation and later returned `session.dmScope` to
 `main`, preview stale peer-keyed DM rows with

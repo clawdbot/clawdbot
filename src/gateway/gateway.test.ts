@@ -4,6 +4,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  WizardNextResult,
+  WizardStartResult,
+} from "../../packages/gateway-protocol/src/index.js";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
@@ -25,9 +29,10 @@ import {
   connectDeviceAuthReq,
   disconnectGatewayClient,
   connectGatewayClient,
-  getFreeGatewayPort,
+  getGatewayE2ePortBlock,
   startGatewayWithClient,
 } from "./test-helpers.e2e.js";
+import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
 import { installOpenAiResponsesMock } from "./test-helpers.openai-mock.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
@@ -36,6 +41,7 @@ const GATEWAY_E2E_TIMEOUT_MS = 90_000;
 let gatewayTestSeq = 0;
 const GATEWAY_TEST_ENV_KEYS = [
   "HOME",
+  ...GATEWAY_STARTUP_MUTATED_ENV_KEYS,
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_GATEWAY_TOKEN",
@@ -77,7 +83,7 @@ async function removeGatewayTempHome(tempHome: string): Promise<void> {
 }
 
 async function startLoopbackTokenGateway(token: string) {
-  const port = await getFreeGatewayPort();
+  const port = await getGatewayE2ePortBlock();
   const server = await startGatewayServer(port, {
     bind: "loopback",
     auth: { mode: "token", token },
@@ -190,6 +196,7 @@ describe("gateway e2e", () => {
   it("pairs the local CLI before a runtime-token loopback gateway becomes ready", async () => {
     const { envSnapshot, tempHome } = await setupGatewayTempHome({
       prefix: "openclaw-gw-runtime-token-cli-pairing-",
+      minimalGateway: true,
     });
     let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
     try {
@@ -201,7 +208,7 @@ describe("gateway e2e", () => {
         logging: { level: "info" },
       };
       await createConfigIO({ configPath }).writeConfigFile(initialConfig);
-      const port = await getFreeGatewayPort();
+      const port = await getGatewayE2ePortBlock();
       server = await startGatewayServer(port, {
         bind: "loopback",
         controlUiEnabled: false,
@@ -314,7 +321,7 @@ describe("gateway e2e", () => {
           authSource === "explicit-override"
             ? { mode: "off" as const, serviceName: "svc:startup" }
             : undefined;
-        const port = await getFreeGatewayPort();
+        const port = await getGatewayE2ePortBlock();
         server = await startGatewayServer(port, {
           bind: "loopback",
           ...(callerAuthOverride ? { auth: callerAuthOverride } : {}),
@@ -430,7 +437,7 @@ describe("gateway e2e", () => {
           logging: { level: "info" },
         });
         setTestEnvValue("OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN", oldToken);
-        const port = await getFreeGatewayPort();
+        const port = await getGatewayE2ePortBlock();
         server = await startGatewayServer(port, {
           bind: "loopback",
           auth: {
@@ -497,7 +504,7 @@ describe("gateway e2e", () => {
       logging: { level: "info" },
     };
     await configIO.writeConfigFile(initialConfig);
-    const port = await getFreeGatewayPort();
+    const port = await getGatewayE2ePortBlock();
     const server = await startGatewayServer(port, {
       bind: "lan",
       controlUiEnabled: false,
@@ -722,7 +729,7 @@ module.exports = {
       clearConfigCache();
 
       const wizardToken = nextGatewayId("wiz-token");
-      const port = await getFreeGatewayPort();
+      const port = await getGatewayE2ePortBlock();
       const server = await startGatewayServer(port, {
         bind: "loopback",
         auth: { mode: "token", token: wizardToken },
@@ -803,7 +810,7 @@ module.exports = {
         await server.close({ reason: "wizard e2e complete" });
       }
 
-      const port2 = await getFreeGatewayPort();
+      const port2 = await getGatewayE2ePortBlock();
       const server2 = await startGatewayServer(port2, {
         bind: "loopback",
         controlUiEnabled: false,
@@ -842,7 +849,7 @@ module.exports = {
         minimalGateway: true,
       });
       const wizardToken = nextGatewayId("wiz-contained-exit");
-      const port = await getFreeGatewayPort();
+      const port = await getGatewayE2ePortBlock();
       const server = await startGatewayServer(port, {
         bind: "loopback",
         auth: { mode: "token", token: wizardToken },
@@ -868,20 +875,14 @@ module.exports = {
       });
 
       try {
-        const start = await client.request<{
-          sessionId: string;
-          done: boolean;
-          status: "running" | "done" | "cancelled" | "error";
-          step?: { id: string };
-        }>("wizard.start", flow === "channels" ? { flow } : { mode: "local" });
+        const start = await client.request<WizardStartResult>(
+          "wizard.start",
+          flow === "channels" ? { flow } : { mode: "local" },
+        );
         expect(start).toMatchObject({ done: false, status: "running" });
         expect(start.step?.id).toBeTruthy();
 
-        const result = await client.request<{
-          done: boolean;
-          status: "running" | "done" | "cancelled" | "error";
-          error?: string;
-        }>("wizard.next", {
+        const result = await client.request<WizardNextResult>("wizard.next", {
           sessionId: start.sessionId,
           answer: { stepId: start.step?.id, value: null },
         });
@@ -910,7 +911,7 @@ module.exports = {
         minimalGateway: true,
       });
       const wizAuth = nextGatewayId("wiz-chan");
-      const port = await getFreeGatewayPort();
+      const port = await getGatewayE2ePortBlock();
       const channelRuns: Array<string | undefined> = [];
       const server = await startGatewayServer(port, {
         bind: "loopback",
@@ -938,43 +939,91 @@ module.exports = {
       });
 
       try {
-        const start = await client.request<{
-          sessionId?: string;
-          done: boolean;
-          status: "running" | "done" | "cancelled" | "error";
-          step?: { id: string; type: string };
-          channels?: string[];
-          accounts?: Array<{ channel: string; accountId: string }>;
-        }>("wizard.start", { flow: "channels", channel: "telegram" });
-        const sessionId = start.sessionId;
-        expect(typeof sessionId).toBe("string");
+        for (const testCase of [
+          { label: "omitted", channel: undefined, expected: "none" },
+          { label: "canonical", channel: "telegram", expected: "telegram" },
+          { label: "alias", channel: "imsg", expected: "imsg" },
+        ]) {
+          const start = await client.request<WizardStartResult>("wizard.start", {
+            flow: "channels",
+            ...(testCase.channel === undefined ? {} : { channel: testCase.channel }),
+          });
+          const sessionId = start.sessionId;
+          expect(typeof sessionId, testCase.label).toBe("string");
 
-        let next = start;
-        const seenSteps: string[] = [];
-        while (!next.done) {
-          const step = next.step;
-          if (!step) {
-            throw new Error("wizard missing step");
+          let next: WizardStartResult | WizardNextResult = start;
+          const seenSteps: string[] = [];
+          while (!next.done) {
+            const step = next.step;
+            if (!step) {
+              throw new Error("wizard missing step");
+            }
+            seenSteps.push(step.type);
+            next = await client.request<WizardNextResult>(
+              "wizard.next",
+              {
+                sessionId,
+                answer: {
+                  stepId: step.id,
+                  value: step.type === "select" ? testCase.expected : null,
+                },
+              },
+              { timeoutMs: 60_000 },
+            );
           }
-          seenSteps.push(step.type);
-          next = await client.request(
-            "wizard.next",
-            {
-              sessionId,
-              answer: { stepId: step.id, value: step.type === "select" ? "telegram" : null },
-            },
-            { timeoutMs: 60_000 },
-          );
-        }
 
-        expect(next.status, `seenSteps=${seenSteps.join(",")}`).toBe("done");
-        expect(seenSteps).toContain("select");
-        expect(channelRuns).toEqual(["telegram"]);
-        expect(next.channels).toEqual(["telegram"]);
-        expect(next.accounts).toEqual([{ channel: "telegram", accountId: "default" }]);
+          expect(next.status, `${testCase.label}: seenSteps=${seenSteps.join(",")}`).toBe("done");
+          expect(seenSteps, testCase.label).toContain("select");
+          expect(next.channels, testCase.label).toEqual([testCase.expected]);
+          expect(next.accounts, testCase.label).toEqual([
+            { channel: testCase.expected, accountId: "default" },
+          ]);
+        }
+        expect(channelRuns).toEqual([undefined, "telegram", "imsg"]);
       } finally {
         await disconnectGatewayClient(client);
         await server.close({ reason: "wizard channels flow complete" });
+        await removeGatewayTempHome(tempHome);
+        envSnapshot.restore();
+      }
+    },
+  );
+
+  it(
+    "returns targeted channel resolution errors without wizard or config effects",
+    { timeout: GATEWAY_E2E_TIMEOUT_MS },
+    async () => {
+      const { envSnapshot, tempHome } = await setupGatewayTempHome({
+        prefix: "openclaw-wizard-channel-target-home-",
+        minimalGateway: true,
+      });
+      const configPath = await createGatewayConfigPath(tempHome);
+      const { client, server } = await startGatewayWithClient({
+        cfg: {},
+        configPath,
+        token: nextGatewayId("wiz-channel-target"),
+      });
+
+      try {
+        for (const channel of [" \t ", "unknown-channel"]) {
+          const expectedChannel = channel.trim();
+          const result = await client.request<WizardStartResult>("wizard.start", {
+            flow: "channels",
+            channel,
+          });
+          expect(result).toMatchObject({
+            done: true,
+            status: "error",
+            error: `Error: Unknown channel "${expectedChannel}". Run \`openclaw channels list --all\` to see configured and installable channels.`,
+          });
+          expect(result.step).toBeUndefined();
+        }
+
+        await expect(client.request("health", {})).resolves.toBeDefined();
+        await expect(fs.readFile(configPath, "utf8")).resolves.toBe("{}\n");
+      } finally {
+        await disconnectGatewayClient(client);
+        await server.close({ reason: "wizard channel target validation E2E complete" });
         await removeGatewayTempHome(tempHome);
         envSnapshot.restore();
       }
@@ -986,17 +1035,7 @@ module.exports = {
     { timeout: GATEWAY_E2E_TIMEOUT_MS },
     async () => {
       const envSnapshot = captureEnv([
-        "HOME",
-        "OPENCLAW_STATE_DIR",
-        "OPENCLAW_CONFIG_PATH",
-        "OPENCLAW_GATEWAY_TOKEN",
-        "OPENCLAW_SKIP_CHANNELS",
-        "OPENCLAW_SKIP_GMAIL_WATCHER",
-        "OPENCLAW_SKIP_CRON",
-        "OPENCLAW_SKIP_CANVAS_HOST",
-        "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
-        "OPENCLAW_SKIP_PROVIDERS",
-        "OPENCLAW_BUNDLED_PLUGINS_DIR",
+        ...GATEWAY_TEST_ENV_KEYS,
         "OPENCLAW_TEST_MINIMAL_GATEWAY",
         "DISCORD_BOT_TOKEN",
       ]);

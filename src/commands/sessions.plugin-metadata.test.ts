@@ -86,6 +86,7 @@ describe("sessions plugin metadata preparation", () => {
     expect(resolvePluginMetadataSnapshotMock).toHaveBeenCalledWith({
       config,
       env: process.env,
+      allowWorkspaceScopedCurrent: true,
     });
   });
 });

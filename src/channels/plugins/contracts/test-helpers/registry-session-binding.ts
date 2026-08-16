@@ -19,6 +19,7 @@ import {
   resetPluginStateStoreForTests,
 } from "../../../../plugin-sdk/plugin-state-test-runtime.js";
 import { setActivePluginRegistry } from "../../../../plugins/runtime.js";
+import { loadBundledPluginFacade } from "../../../../test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../../../../test-utils/channel-plugins.js";
 import { getChannelPlugin } from "../../registry.js";
 import type { ChannelPlugin } from "../../types.public.js";
@@ -62,13 +63,17 @@ const matrixSessionBindingAuth = {
   accessToken: "token",
 } as const;
 
-async function getContractApi<T extends Record<string, unknown>>(pluginId: string): Promise<T> {
-  const existing = contractApiPromises.get(pluginId);
+async function getContractApi<T extends Record<string, unknown>>(
+  pluginId: string,
+  artifact = "session-binding-contract-api",
+): Promise<T> {
+  const cacheKey = `${pluginId}:${artifact}`;
+  const existing = contractApiPromises.get(cacheKey);
   if (existing) {
     return (await existing) as T;
   }
-  const next = importBundledChannelContractArtifact<T>(pluginId, "session-binding-contract-api");
-  contractApiPromises.set(pluginId, next);
+  const next = importBundledChannelContractArtifact<T>(pluginId, artifact);
+  contractApiPromises.set(cacheKey, next);
   return await next;
 }
 
@@ -122,7 +127,9 @@ function resetMatrixSessionBindingStateDir() {
 }
 
 async function createContractMatrixThreadBindingManager() {
-  resetMatrixSessionBindingStateDir();
+  if (matrixSessionBindingManager) {
+    return matrixSessionBindingManager;
+  }
   const { setMatrixRuntime, createMatrixThreadBindingManager } =
     await getContractApi<MatrixContractApi>("matrix");
   setMatrixRuntime({
@@ -132,7 +139,7 @@ async function createContractMatrixThreadBindingManager() {
       resolveStateDir: () => matrixSessionBindingStateDir,
     },
   } as never);
-  return await createMatrixThreadBindingManager({
+  const manager = await createMatrixThreadBindingManager({
     accountId: matrixSessionBindingAuth.accountId,
     auth: matrixSessionBindingAuth,
     client: {} as never,
@@ -140,6 +147,8 @@ async function createContractMatrixThreadBindingManager() {
     maxAgeMs: 0,
     enableSweeper: false,
   });
+  matrixSessionBindingManager = manager;
+  return manager;
 }
 
 const baseSessionBindingCfg = {
@@ -149,27 +158,23 @@ const baseSessionBindingCfg = {
 type ChannelConversationBindingManagerFactory = NonNullable<
   NonNullable<ChannelPlugin["conversationBindings"]>["createManager"]
 >;
+type ChannelConversationBindingManager = Awaited<
+  ReturnType<ChannelConversationBindingManagerFactory>
+>;
+let discordSessionBindingManager: ChannelConversationBindingManager | null = null;
+let feishuSessionBindingManager: ChannelConversationBindingManager | null = null;
+let matrixSessionBindingManager: ChannelConversationBindingManager | null = null;
+let telegramSessionBindingManager: ChannelConversationBindingManager | null = null;
 
 type DiscordContractApi = {
-  createThreadBindingManager: (params: {
-    accountId: string;
-    cfg?: OpenClawConfig;
-    persist: boolean;
-    enableSweeper: boolean;
-  }) => unknown;
-  discordThreadBindingTesting: {
-    resetThreadBindingsForTests: () => void;
-  };
+  discordPlugin: ChannelPlugin;
 };
 
 type FeishuContractApi = {
   createFeishuThreadBindingManager: (params: {
     accountId?: string;
     cfg: OpenClawConfig;
-  }) => unknown;
-  feishuThreadBindingTesting: {
-    resetFeishuThreadBindingsForTests: () => void;
-  };
+  }) => ChannelConversationBindingManager;
 };
 
 type IMessageContractApi = {
@@ -187,18 +192,12 @@ type MatrixContractApi = {
     idleTimeoutMs: number;
     maxAgeMs: number;
     enableSweeper: boolean;
-  }) => Promise<unknown>;
-  resetMatrixThreadBindingsForTests: () => void;
+  }) => Promise<ChannelConversationBindingManager>;
   setMatrixRuntime: (runtime: unknown) => void;
 };
 
 type TelegramContractApi = {
-  createTelegramThreadBindingManager: (params: {
-    accountId: string;
-    persist: boolean;
-    enableSweeper: boolean;
-  }) => unknown;
-  resetTelegramThreadBindingsForTests: () => Promise<void>;
+  telegramPlugin: ChannelPlugin;
 };
 
 function setRegistryBackedConversationBindingPlugin(params: {
@@ -234,14 +233,53 @@ function setRegistryBackedConversationBindingPlugin(params: {
   );
 }
 
+async function getDiscordContractApi() {
+  return await getContractApi<DiscordContractApi>("discord", "channel-plugin-api");
+}
+
+async function getTelegramContractApi() {
+  return await loadBundledPluginFacade<TelegramContractApi>({
+    pluginId: "telegram",
+    artifactBasename: "channel-plugin-api.js",
+  });
+}
+
+async function stopDiscordSessionBindingManager() {
+  await discordSessionBindingManager?.stop();
+  discordSessionBindingManager = null;
+}
+
+async function stopFeishuSessionBindingManager() {
+  await feishuSessionBindingManager?.stop();
+  feishuSessionBindingManager = null;
+}
+
+async function stopMatrixSessionBindingManager() {
+  await matrixSessionBindingManager?.stop();
+  matrixSessionBindingManager = null;
+}
+
+async function stopTelegramSessionBindingManager() {
+  await telegramSessionBindingManager?.stop();
+  telegramSessionBindingManager = null;
+}
+
 async function prepareDiscordSessionBindingContract() {
-  const api = await getContractApi<DiscordContractApi>("discord");
-  api.discordThreadBindingTesting.resetThreadBindingsForTests();
+  await stopDiscordSessionBindingManager();
+  const { discordPlugin } = await getDiscordContractApi();
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "discord",
+        plugin: discordPlugin,
+        source: "test",
+      },
+    ]),
+  );
 }
 
 async function prepareFeishuSessionBindingContract() {
-  const api = await getContractApi<FeishuContractApi>("feishu");
-  api.feishuThreadBindingTesting.resetFeishuThreadBindingsForTests();
+  await stopFeishuSessionBindingManager();
 }
 
 async function prepareIMessageSessionBindingContract() {
@@ -254,13 +292,22 @@ async function prepareIMessageSessionBindingContract() {
 }
 
 async function prepareMatrixSessionBindingContract() {
-  const api = await getContractApi<MatrixContractApi>("matrix");
-  api.resetMatrixThreadBindingsForTests();
+  await stopMatrixSessionBindingManager();
+  resetMatrixSessionBindingStateDir();
 }
 
 async function prepareTelegramSessionBindingContract() {
-  const api = await getContractApi<TelegramContractApi>("telegram");
-  await api.resetTelegramThreadBindingsForTests();
+  await stopTelegramSessionBindingManager();
+  const { telegramPlugin } = await getTelegramContractApi();
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "telegram",
+        plugin: telegramPlugin,
+        source: "test",
+      },
+    ]),
+  );
 }
 
 type SessionBindingContractFixture = {
@@ -338,17 +385,19 @@ const sessionBindingContractEntries = {
     targetKind: "subagent",
     label: "discord-child",
     placements: ["current", "child"],
-    preload: () => getContractApi<DiscordContractApi>("discord"),
+    preload: getDiscordContractApi,
     beforeEach: prepareDiscordSessionBindingContract,
     ensureManager: async () => {
-      const { createThreadBindingManager } = await getContractApi<DiscordContractApi>("discord");
-      createThreadBindingManager({
-        accountId: "default",
+      discordSessionBindingManager ??= await createContractChannelConversationBindingManager({
+        channelId: "discord",
         cfg: baseSessionBindingCfg,
-        persist: false,
-        enableSweeper: false,
+        accountId: "default",
       });
+      if (!discordSessionBindingManager) {
+        throw new Error("Discord session binding manager is unavailable");
+      }
     },
+    stopManager: stopDiscordSessionBindingManager,
   }),
   feishu: createSessionBindingContractEntry({
     id: "feishu",
@@ -364,11 +413,12 @@ const sessionBindingContractEntries = {
     ensureManager: async () => {
       const { createFeishuThreadBindingManager } =
         await getContractApi<FeishuContractApi>("feishu");
-      createFeishuThreadBindingManager({
+      feishuSessionBindingManager ??= createFeishuThreadBindingManager({
         accountId: "default",
         cfg: baseSessionBindingCfg,
       });
     },
+    stopManager: stopFeishuSessionBindingManager,
   }),
   imessage: createSessionBindingContractEntry({
     id: "imessage",
@@ -410,6 +460,7 @@ const sessionBindingContractEntries = {
     ensureManager: async () => {
       await createContractMatrixThreadBindingManager();
     },
+    stopManager: stopMatrixSessionBindingManager,
   }),
   telegram: createSessionBindingContractEntry({
     id: "telegram",
@@ -419,17 +470,19 @@ const sessionBindingContractEntries = {
     targetKind: "subagent",
     label: "telegram-topic",
     placements: ["current", "child"],
-    preload: () => getContractApi<TelegramContractApi>("telegram"),
+    preload: getTelegramContractApi,
     beforeEach: prepareTelegramSessionBindingContract,
     ensureManager: async () => {
-      const { createTelegramThreadBindingManager } =
-        await getContractApi<TelegramContractApi>("telegram");
-      createTelegramThreadBindingManager({
+      telegramSessionBindingManager ??= await createContractChannelConversationBindingManager({
+        channelId: "telegram",
+        cfg: baseSessionBindingCfg,
         accountId: "default",
-        persist: false,
-        enableSweeper: false,
       });
+      if (!telegramSessionBindingManager) {
+        throw new Error("Telegram session binding manager is unavailable");
+      }
     },
+    stopManager: stopTelegramSessionBindingManager,
   }),
 } satisfies Record<SessionBindingContractChannelId, Omit<SessionBindingContractEntry, "id">>;
 

@@ -18,14 +18,16 @@
 - Fetch failed-job logs only after a job reaches a terminal failing state.
 - Prefer same-parent failed-job reruns when the original inputs still select the
   right work.
-- Keep one active parent per target SHA. Create a replacement only when the
-  existing parent cannot consume a required workflow fix or its evidence
-  identity is invalid; record the superseded run and reason. The replacement
-  remains `rerun_group=all`.
-- Treat narrow `rerun_group` dispatches as supplemental diagnostics only; they
-  do not satisfy publish evidence.
-- Stop after two unchanged retries and report the exact blocker instead of
-  creating another verification loop.
+- Keep one active parent per exact Validation SHA + Tooling SHA + rerun group. Create
+  a replacement only when the current evidence is invalid or cannot consume a
+  required workflow fix; record the invalidating event and do not widen
+  automatically to `rerun_group=all`.
+- Classify one failed surface, make one fix when needed, and retry the narrowest
+  failed group once. Then reassess whether to ship, explicitly waive, or block
+  instead of creating another verification loop.
+- Preserve successful exact-tuple evidence when the documented finalization
+  rules allow reuse. Narrow evidence does not become publish authorization by
+  itself, and there is no standalone rerunnable finalizer today.
 - Leave bad secrets unset. A 401 candidate from 1Password should not overwrite GitHub.
 - Make the final release evidence note durable: parent URL, child run URLs, SHA, command proof, and gaps.
 

@@ -4,7 +4,7 @@ import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { SessionConfig, SessionResetConfig } from "../types.base.js";
 import { getCliSessionBinding } from "./cli-session-binding.js";
 import { resolveSessionLifecycleTimestamps } from "./lifecycle.js";
-import { resolveStorePath as resolveSessionStorePath } from "./paths.js";
+import { resolveSessionStorePathCore as resolveSessionStorePath } from "./paths.js";
 import {
   evaluateSessionFreshness,
   resolveSessionResetPolicy,

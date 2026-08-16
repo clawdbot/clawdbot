@@ -1,11 +1,7 @@
-import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  buildWorkspaceSkillStatus,
-  resolveSkillStatusEntry,
-  type SkillStatusEntry,
-} from "../discovery/status.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
+import { buildWorkspaceSkillStatus, resolveSkillStatusEntry } from "../discovery/status.js";
 import {
   assertInsideWorkspace,
   readWorkspaceSkillFile,
@@ -20,6 +16,7 @@ import {
   type SkillProposalTransitionInput,
 } from "./apply-transition.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
+import { stripProposalFrontmatterForSkill } from "./frontmatter.js";
 import { createSkillProposalEvent, dispatchSkillProposalChanged } from "./plugin-hooks.js";
 import {
   nextProposalVersion,
@@ -45,6 +42,7 @@ import {
   withSkillProposalTargetLock,
   type PreparedSkillProposalSupportFile,
 } from "./store.js";
+import { assertWritableSkillTarget } from "./workspace-skill-read.js";
 export {
   getSkillProposalRunProgress,
   inspectSkillProposal,
@@ -71,11 +69,12 @@ type SkillWorkshopWorkspaceOptions = {
   agentId?: string;
 };
 
+export class SkillProposalStaleTargetError extends Error {}
+
 function proposalStoreOptions(env?: NodeJS.ProcessEnv) {
   return env ? { env } : {};
 }
 
-const WRITABLE_WORKSPACE_SOURCES = new Set(["openclaw-workspace", "agents-skills-project"]);
 const APPLY_TRANSITION_DEPENDENCIES = {
   assertExpectedRevisionHash,
   evaluateSkillProposal,
@@ -225,38 +224,29 @@ export async function proposeCreateSkill(
   return { record, revisionHash: hashSkillProposalRevision(record), content: proposalContent };
 }
 
-/** Summary of a workspace skill the workshop is allowed to write. */
-type WritableWorkspaceSkillSummary = {
-  name: string;
-  description?: string;
-  filePath: string;
-};
-
-/**
- * Lists the workspace skills the workshop can target with update proposals, using the same
- * status discovery as `proposeUpdateSkill` so callers that route corrections to existing
- * skills stay in lockstep with what an update can actually write.
- */
-export function listWritableWorkspaceSkillSummaries(
-  workspaceDir: string,
-  opts?: { config?: OpenClawConfig; agentId?: string },
-): WritableWorkspaceSkillSummary[] {
-  const status = buildWorkspaceSkillStatus(workspaceDir, {
-    config: opts?.config,
-    agentId: opts?.agentId,
-  });
-  const summaries: WritableWorkspaceSkillSummary[] = [];
-  for (const skill of status.skills) {
-    if (!WRITABLE_WORKSPACE_SOURCES.has(skill.source)) {
-      continue;
+/** Applies a reviewer patch to the live body: unique-match replace, or append when oldString is empty. */
+export function composeSkillBodyPatch(
+  body: string,
+  patch: { oldString: string; newString: string },
+): string {
+  if (!patch.oldString) {
+    if (!patch.newString.trim()) {
+      throw new Error("Patch newString must not be empty when appending.");
     }
-    summaries.push(
-      skill.description
-        ? { name: skill.skillKey, description: skill.description, filePath: skill.filePath }
-        : { name: skill.skillKey, filePath: skill.filePath },
+    return `${body.trimEnd()}\n\n${patch.newString.trim()}\n`;
+  }
+  const first = body.indexOf(patch.oldString);
+  if (first === -1) {
+    throw new Error(
+      "Patch oldString not found in the live skill body. Read the skill and quote the exact current text.",
     );
   }
-  return summaries;
+  if (body.includes(patch.oldString, first + 1)) {
+    throw new Error(
+      "Patch oldString matches more than once in the live skill body. Quote a longer unique span.",
+    );
+  }
+  return `${body.slice(0, first)}${patch.newString}${body.slice(first + patch.oldString.length)}`;
 }
 
 export async function proposeUpdateSkill(
@@ -277,13 +267,30 @@ export async function proposeUpdateSkill(
   if (currentContent === null) {
     throw new Error(`Skill file is missing: ${targetSkill.filePath}`);
   }
+  if (
+    input.expectedCurrentContentHash !== undefined &&
+    sha256Hex(currentContent) !== input.expectedCurrentContentHash
+  ) {
+    throw new SkillProposalStaleTargetError(
+      "Skill changed since the reviewer's read: read it again and redraft the update.",
+    );
+  }
+  // Composition uses the same read that currentContentHash binds the proposal to, so a
+  // composed draft can never derive from a different body than the one apply validates.
+  const draftContent =
+    input.composePatch !== undefined
+      ? composeSkillBodyPatch(stripProposalFrontmatterForSkill(currentContent), input.composePatch)
+      : input.content;
+  if (draftContent === undefined) {
+    throw new Error("Update proposal requires content or composePatch.");
+  }
   const description = resolveUpdateProposalDescription(input.description, targetSkill.description);
 
   const now = new Date().toISOString();
   const prepared = prepareSkillProposalDraft({
     name: targetSkill.skillKey,
     description,
-    content: input.content,
+    content: draftContent,
     fallbackFrontmatterContent: currentContent,
     date: now,
     maxSkillBytes: config.maxSkillBytes,
@@ -695,17 +702,6 @@ async function assertSupportTargetsUnchanged(
       relativePath: file.path,
     });
     await assertSkillProposalSupportTargetUnchanged({ record, file, currentContent, input });
-  }
-}
-
-function assertWritableSkillTarget(workspaceDir: string, skill: SkillStatusEntry): void {
-  if (!WRITABLE_WORKSPACE_SOURCES.has(skill.source)) {
-    throw new Error(`Skill source is not writable by Skill Workshop: ${skill.source}`);
-  }
-  assertInsideWorkspace(workspaceDir, skill.filePath, "skill file");
-  assertInsideWorkspace(workspaceDir, skill.baseDir, "skill directory");
-  if (path.basename(skill.filePath) !== "SKILL.md") {
-    throw new Error("Skill Workshop can only update SKILL.md targets.");
   }
 }
 

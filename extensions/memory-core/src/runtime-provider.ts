@@ -19,7 +19,6 @@ export function createMemoryRuntime(host: MemoryCoreRuntimeHost = {}): MemoryPlu
       const { manager, debug, error } = await getMemorySearchManager({
         ...params,
         ...(host.acquireLocalService ? { acquireLocalService: host.acquireLocalService } : {}),
-        ...(host.withLease ? { withLease: host.withLease } : {}),
       });
       return {
         manager,

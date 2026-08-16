@@ -63,8 +63,7 @@ workspace memory (`MEMORY.md` and `memory/*.md`) keeps its existing behavior.
 Active Memory must remain enabled. Retrieval adds a bounded blocking step to
 eligible replies; timeout, unavailable search, and empty results all continue
 the reply without recalled transcript context. OpenClaw's built-in memory
-provider supports this protected transcript-recall path with both the builtin
-and QMD backends. Other memory providers keep their own recall behavior but do
+provider supports this protected transcript-recall path. Other memory providers keep their own recall behavior but do
 not automatically receive private transcript authorization. `openclaw doctor`
 reports an unsupported provider or missing `memory_search` tool.
 
@@ -662,7 +661,6 @@ All active memory configuration lives under `plugins.entries.active-memory`.
 | `config.persistTranscripts`  | `boolean`                                                                                            | Exports blocking sub-agent transcripts as JSONL artifacts before removing their temporary SQLite session rows                                                                                                                                     |
 | `config.transcriptDir`       | `string`                                                                                             | Relative transcript-artifact directory under the agent sessions folder (default `"active-memory"`)                                                                                                                                                |
 | `config.modelFallback`       | `string`                                                                                             | Optional model used only as the last step in the [model fallback chain](#model-fallback-policy)                                                                                                                                                   |
-| `config.qmd.searchMode`      | `"inherit" \| "search" \| "vsearch" \| "query"`                                                      | Overrides the QMD search mode used by the blocking sub-agent; default `"search"` (fast lexical search) — use `"inherit"` to match the main memory backend setting                                                                                 |
 
 Useful tuning fields:
 

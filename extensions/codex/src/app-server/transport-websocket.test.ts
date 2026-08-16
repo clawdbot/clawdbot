@@ -55,7 +55,7 @@ describe("Codex app-server websocket transport", () => {
         const message = JSON.parse(rawDataToText(data)) as { id?: number; method?: string };
         if (message.method === "initialize") {
           socket.send(
-            JSON.stringify({ id: message.id, result: { userAgent: "openclaw/0.146.0" } }),
+            JSON.stringify({ id: message.id, result: { userAgent: "openclaw/0.147.0" } }),
           );
           return;
         }

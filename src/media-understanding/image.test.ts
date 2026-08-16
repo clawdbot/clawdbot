@@ -1,6 +1,7 @@
+import path from "node:path";
 // Image runtime tests cover model-backed image routing, auth/profile handling,
 // provider payload transforms, and MiniMax/Copilot special paths.
-import path from "node:path";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { attachModelProviderRequestTransport } from "../agents/provider-request-config.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
@@ -24,7 +25,7 @@ const hoisted = vi.hoisted(() => ({
       mode: "oauth",
     }),
   ),
-  resolveApiKeyForProviderMock: vi.fn(async () => ({
+  resolveApiKeyForProviderCoreMock: vi.fn(async () => ({
     [API_KEY_FIELD]: "test-api-key", // pragma: allowlist secret
     source: "test",
     mode: "oauth",
@@ -47,7 +48,7 @@ const {
   completeMock,
   ensureOpenClawModelsJsonMock,
   getApiKeyForModelMock,
-  resolveApiKeyForProviderMock,
+  resolveApiKeyForProviderCoreMock,
   requireApiKeyMock,
   setRuntimeApiKeyMock,
   discoverModelsMock,
@@ -97,12 +98,7 @@ function requireFirstMockCall<const Calls extends readonly unknown[][]>(
   return requireMockCallAt(mock, 0, label);
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`Expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-capitalized");
 
 vi.mock("../llm/stream.js", async () => {
   const actual = await vi.importActual<typeof import("../llm/stream.js")>("../llm/stream.js");
@@ -121,8 +117,8 @@ vi.mock("../agents/models-config.js", async () => ({
 
 vi.mock("../agents/model-auth.js", () => ({
   applySecretRefHeaderSentinels: (model: unknown) => model,
-  getApiKeyForModel: getApiKeyForModelMock,
-  resolveApiKeyForProvider: resolveApiKeyForProviderMock,
+  getApiKeyForModelCore: getApiKeyForModelMock,
+  resolveApiKeyForProviderCore: resolveApiKeyForProviderCoreMock,
   [REQUIRE_API_KEY_FIELD]: requireApiKeyMock,
 }));
 
@@ -179,9 +175,9 @@ vi.mock("../infra/net/fetch-guard.js", async () => {
   };
 });
 
-const { describeImageWithModel, describeImagesWithModel } = await import("./image.js");
+const { describeImageWithModelCore, describeImagesWithModelCore } = await import("./image.js");
 
-describe("describeImageWithModel", () => {
+describe("describeImageWithModelCore", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllEnvs();
@@ -274,7 +270,7 @@ describe("describeImageWithModel", () => {
   function getApiKeyForModelCall(index = 0): AuthRequestCall {
     const call = (getApiKeyForModelMock.mock.calls as unknown[][]).at(index);
     if (!call) {
-      throw new Error(`Expected getApiKeyForModel call ${index}`);
+      throw new Error(`Expected getApiKeyForModelCore call ${index}`);
     }
     return call[0] as AuthRequestCall;
   }
@@ -282,7 +278,7 @@ describe("describeImageWithModel", () => {
   it("routes minimax-portal image models through the MiniMax VLM endpoint", async () => {
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
     const authStore = { version: 1, profiles: {} };
-    const result = await describeImageWithModel({
+    const result = await describeImageWithModelCore({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "minimax-portal",
@@ -337,7 +333,7 @@ describe("describeImageWithModel", () => {
     });
 
     await expect(
-      describeImagesWithModel({
+      describeImagesWithModelCore({
         cfg: {},
         agentDir: "/tmp/openclaw-agent",
         provider: "minimax-portal",
@@ -372,7 +368,7 @@ describe("describeImageWithModel", () => {
       ),
     });
 
-    await describeImageWithModel({
+    await describeImageWithModelCore({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "minimax-portal",
@@ -402,7 +398,7 @@ describe("describeImageWithModel", () => {
     });
     unwrapSecretSentinelsForProviderEgressMock.mockReturnValueOnce("test-token");
 
-    await describeImageWithModel({
+    await describeImageWithModelCore({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "minimax-portal",
@@ -443,7 +439,7 @@ describe("describeImageWithModel", () => {
       content: [{ type: "text", text: "generic ok" }],
     });
 
-    const result = await describeImageWithModel({
+    const result = await describeImageWithModelCore({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "minimax-portal",
@@ -513,7 +509,7 @@ describe("describeImageWithModel", () => {
       content: [{ type: "text", text: "an orange tabby cat" }],
     });
 
-    const result = await describeImageWithModel({
+    const result = await describeImageWithModelCore({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "amazon-bedrock",
@@ -549,7 +545,7 @@ describe("describeImageWithModel", () => {
     });
 
     await expect(
-      describeImageWithModel({
+      describeImageWithModelCore({
         cfg: {},
         agentDir: "/tmp/openclaw-agent",
         workspaceDir: "/tmp/openclaw-workspace",
@@ -566,7 +562,7 @@ describe("describeImageWithModel", () => {
       model: "MiniMax-VL-01",
     });
 
-    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith(
+    expect(resolveApiKeyForProviderCoreMock).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "minimax-portal",
         agentDir: "/tmp/openclaw-agent",
@@ -587,7 +583,7 @@ describe("describeImageWithModel", () => {
     });
 
     await expect(
-      describeImageWithModel({
+      describeImageWithModelCore({
         cfg: {
           models: {
             providers: {
@@ -613,7 +609,7 @@ describe("describeImageWithModel", () => {
       model: "MiniMax-VL-01",
     });
 
-    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith(
+    expect(resolveApiKeyForProviderCoreMock).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "minimax",
       }),
@@ -633,7 +629,7 @@ describe("describeImageWithModel", () => {
     });
 
     await expect(
-      describeImageWithModel({
+      describeImageWithModelCore({
         cfg: {
           models: {
             providers: {
@@ -663,7 +659,7 @@ describe("describeImageWithModel", () => {
       model: "MiniMax-VL-01",
     });
 
-    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith(
+    expect(resolveApiKeyForProviderCoreMock).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "minimax-cn",
       }),
@@ -683,7 +679,7 @@ describe("describeImageWithModel", () => {
     });
 
     await expect(
-      describeImageWithModel({
+      describeImageWithModelCore({
         cfg: {
           models: {
             providers: {
@@ -728,7 +724,7 @@ describe("describeImageWithModel", () => {
       content: [{ type: "text", text: "workspace ok" }],
     });
 
-    const result = await describeImageWithModel({
+    const result = await describeImageWithModelCore({
       cfg: {},
       agentId: "vision-agent",
       agentDir: "/tmp/openclaw-agent",
@@ -816,7 +812,7 @@ describe("describeImageWithModel", () => {
       content: [{ type: "text", text: "normalized ok" }],
     });
 
-    const result = await describeImageWithModel({
+    const result = await describeImageWithModelCore({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "openai",
@@ -889,7 +885,7 @@ describe("describeImageWithModel", () => {
     const streamFn = vi.fn(() => streamResult);
     registerProviderStreamForModelMock.mockReturnValueOnce(streamFn);
 
-    const result = await describeImageWithModel({
+    const result = await describeImageWithModelCore({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "ollama",
@@ -941,7 +937,7 @@ describe("describeImageWithModel", () => {
       content: [{ type: "text", text: "local vision ok" }],
     });
 
-    const result = await describeImageWithModel({
+    const result = await describeImageWithModelCore({
       cfg: {
         models: {
           providers: {

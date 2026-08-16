@@ -5,8 +5,8 @@ import { tryResolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import { resolveSessionFilePath } from "../config/sessions/paths.js";
-import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite.js";
+import { resolveSessionFilePathCore } from "../config/sessions/paths.js";
+import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite-import.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
 import {
@@ -531,7 +531,7 @@ function resolveLegacyTranscriptPath(
   if (parseSqliteSessionFileMarker(legacySessionFile)) {
     return undefined;
   }
-  const defaultPath = resolveSessionFilePath(entry.sessionId, entry, {
+  const defaultPath = resolveSessionFilePathCore(entry.sessionId, entry, {
     agentId: target.agentId,
     sessionsDir: path.dirname(target.storePath),
   });
@@ -1147,7 +1147,7 @@ function resolveActiveSqliteTranscriptFile(
 ): string | undefined {
   let transcriptPath: string;
   try {
-    transcriptPath = resolveSessionFilePath(entry.sessionId, entry, {
+    transcriptPath = resolveSessionFilePathCore(entry.sessionId, entry, {
       agentId: target.agentId,
       sessionsDir: path.dirname(target.storePath),
     });

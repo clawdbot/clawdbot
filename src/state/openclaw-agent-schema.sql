@@ -12,25 +12,6 @@ CREATE TABLE IF NOT EXISTS schema_meta (
   updated_at INTEGER NOT NULL
 ) STRICT;
 
-CREATE TABLE IF NOT EXISTS state_leases (
-  scope TEXT NOT NULL,
-  lease_key TEXT NOT NULL,
-  owner TEXT NOT NULL,
-  expires_at INTEGER,
-  heartbeat_at INTEGER,
-  payload_json TEXT,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
-  PRIMARY KEY (scope, lease_key)
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_agent_state_leases_expiry
-  ON state_leases(expires_at, scope, lease_key)
-  WHERE expires_at IS NOT NULL;
-
-CREATE INDEX IF NOT EXISTS idx_agent_state_leases_owner
-  ON state_leases(owner, updated_at DESC);
-
 CREATE TABLE IF NOT EXISTS session_nodes (
   session_key TEXT NOT NULL PRIMARY KEY,
   current_session_id TEXT NOT NULL,
@@ -42,6 +23,7 @@ CREATE TABLE IF NOT EXISTS session_nodes (
   created_via TEXT CHECK (created_via IS NULL OR created_via IN ('operator', 'spawn', 'channel', 'cron', 'talk', 'run', 'plugin', 'internal')),
   created_actor_type TEXT CHECK (created_actor_type IS NULL OR created_actor_type IN ('human', 'agent', 'system')),
   created_actor_id TEXT,
+  project_id TEXT,
   parent_session_key TEXT,
   spawned_by TEXT,
   fork_source_session_key TEXT,
@@ -342,6 +324,33 @@ CREATE TABLE IF NOT EXISTS transcript_events (
   FOREIGN KEY (session_id) REFERENCES "session_windows"(session_id) ON DELETE CASCADE
 ) STRICT;
 
+-- Canonical cold-tier owner for reclaimed transcript generations. The derived
+-- .deleted/.reset file may be recreated from this row after a crash.
+CREATE TABLE IF NOT EXISTS session_transcript_archives (
+  session_id TEXT NOT NULL,
+  generation TEXT NOT NULL,
+  session_key TEXT NOT NULL,
+  reason TEXT NOT NULL CHECK (reason IN ('deleted', 'reset')),
+  encoding TEXT NOT NULL CHECK (encoding IN ('identity', 'zstd')),
+  archive_blob BLOB NOT NULL,
+  archive_sha256 TEXT NOT NULL CHECK (length(archive_sha256) = 64),
+  archive_name TEXT NOT NULL UNIQUE,
+  created_at INTEGER NOT NULL,
+  published_at INTEGER,
+  publish_attempts INTEGER NOT NULL DEFAULT 0 CHECK (publish_attempts >= 0),
+  last_publish_attempt_at INTEGER,
+  last_publish_error TEXT,
+  PRIMARY KEY (session_id, generation),
+  CHECK (archive_name NOT LIKE '%/%' AND archive_name NOT LIKE '%\%')
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_transcript_archives_pending
+  ON session_transcript_archives(created_at, session_id, generation)
+  WHERE published_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_transcript_archives_retention
+  ON session_transcript_archives(created_at, session_id, generation);
+
 CREATE TABLE IF NOT EXISTS transcript_rewrite_watermarks (
   session_id TEXT NOT NULL PRIMARY KEY,
   generation TEXT NOT NULL,
@@ -398,6 +407,21 @@ CREATE INDEX IF NOT EXISTS idx_agent_transcript_event_parent
 
 CREATE INDEX IF NOT EXISTS idx_agent_transcript_event_sequence
   ON transcript_event_identities(session_id, event_type, seq DESC);
+
+CREATE TABLE IF NOT EXISTS context_engine_turn_outbox (
+  advancement_key TEXT NOT NULL PRIMARY KEY,
+  engine_id TEXT NOT NULL,
+  owner_plugin_id TEXT,
+  session_id TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  last_attempt_at INTEGER,
+  last_error TEXT,
+  created_at INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_agent_context_engine_turn_outbox_engine
+  ON context_engine_turn_outbox(engine_id, created_at);
 
 CREATE TABLE IF NOT EXISTS cache_entries (
   scope TEXT NOT NULL,

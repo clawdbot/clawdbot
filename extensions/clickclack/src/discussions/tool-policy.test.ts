@@ -3,7 +3,10 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { CoreConfig } from "../types.js";
-import { getClickClackDiscussionBindingStore } from "./binding-store.js";
+import {
+  attachBindingToCurrentActiveSession,
+  getClickClackDiscussionBindingStore,
+} from "./binding-store.js";
 import { discussionSessionKey } from "./naming.js";
 import { markClickClackDiscussionChannelRevoked } from "./revoked-channel-store.js";
 import { enforceClickClackDiscussionToolTarget } from "./tool-policy.js";
@@ -169,7 +172,7 @@ describe("ClickClack discussion session tool policy", () => {
     expect(run("sessions_send", { sessionKey: mainSessionKey, message: "x" })?.block).toBe(true);
   });
 
-  it("revokes the target capability for a synchronized archived binding", () => {
+  it("ignores legacy session-derived archive metadata on a durable room", () => {
     const { bindingStore, mainSessionKey, run } = setup();
     const binding = bindingStore.get(mainSessionKey);
     if (!binding) {
@@ -177,8 +180,8 @@ describe("ClickClack discussion session tool policy", () => {
     }
     bindingStore.set(mainSessionKey, { ...binding, archived: true });
 
-    expect(run("sessions_history", { sessionKey: mainSessionKey })?.block).toBe(true);
-    expect(run("sessions_send", { sessionKey: mainSessionKey, message: "x" })?.block).toBe(true);
+    expect(run("sessions_history", { sessionKey: mainSessionKey })).toBeUndefined();
+    expect(run("sessions_send", { sessionKey: mainSessionKey, message: "x" })).toBeUndefined();
   });
 
   it("lets a durable channel tombstone override a surviving binding", () => {
@@ -251,6 +254,32 @@ describe("ClickClack discussion session tool policy", () => {
     expect(
       bindingStore.getByChannel("https://clickclack.example", "chn_discussion")?.sessionKey,
     ).toBe(mainSessionKey);
+  });
+
+  it("keeps the old attachment authoritative when reset persistence fails", () => {
+    const { bindingStore, mainSessionKey, run, runtime, store } = setup();
+    const previous = bindingStore.get(mainSessionKey);
+    if (!previous) {
+      throw new Error("expected binding");
+    }
+    vi.mocked(runtime.agent.session.getSessionEntry).mockReturnValue({
+      sessionId: "replacement-session-id",
+      updatedAt: 2,
+    });
+    store.register = vi.fn(() => {
+      throw new Error("SQLITE_FULL");
+    });
+
+    expect(() =>
+      attachBindingToCurrentActiveSession({
+        runtime,
+        store: bindingStore,
+        sessionKey: mainSessionKey,
+        binding: previous,
+      }),
+    ).toThrow("SQLITE_FULL");
+    expect(bindingStore.get(mainSessionKey)).toEqual(previous);
+    expect(run("sessions_history", { sessionKey: mainSessionKey })?.block).toBe(true);
   });
 
   it("uses a different side-session identity after a server retarget", () => {

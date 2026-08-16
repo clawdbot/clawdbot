@@ -1,9 +1,10 @@
 import { constants } from "node:fs";
-import { access as fsAccess, readFile as fsReadFile } from "node:fs/promises";
+import { access as fsAccess, readdir as fsReaddir, stat as fsStat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { hasErrnoCode, toErrorObject } from "../../../infra/errors.js";
+import { readRegularFile } from "../../../infra/regular-file.js";
 import { decodeWindowsTextFileBuffer } from "../../../infra/windows-encoding.js";
 import type { ImageContent, Model, TextContent } from "../../../llm/types.js";
 import {
@@ -16,7 +17,8 @@ import {
  *
  * Reads text and image files through local or injected operations with highlighting, resizing, and bounded output.
  */
-import { toPosixPath } from "../../../shared/ignore-rules.js";
+import { normalizeNativePathSeparators } from "../../../shared/ignore-rules.js";
+import { levenshteinDistance } from "../../../shared/levenshtein-distance.js";
 import { getReadmePath } from "../../config.js";
 import { keyHint, keyText } from "../../modes/interactive/components/keybinding-hints.js";
 import {
@@ -26,11 +28,11 @@ import {
 } from "../../modes/interactive/theme/theme.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { processImage } from "../../utils/image-resize.js";
-import { detectSupportedImageMimeTypeFromFile } from "../../utils/mime.js";
+import { detectSupportedImageMimeType } from "../../utils/mime.js";
 import { formatPathRelativeToCwdOrAbsolute } from "../../utils/paths.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { normalizePositiveLimit } from "./limits.js";
-import { resolveReadPath } from "./path-utils.js";
+import { getReadPathVariants, resolveReadPath } from "./path-utils.js";
 import { getTextOutput, invalidArgText, replaceTabs, shortenPath, str } from "./render-utils.js";
 import type { ReadToolDetails, ReadToolTruncationDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
@@ -129,6 +131,43 @@ function normalizeReadError(error: unknown, filePath: string): Error {
   return toErrorObject(error, "Non-Error rejection");
 }
 
+function regularFileReadError(filePath: string): Error {
+  return new Error(`Read only supports regular files; no read was attempted: ${filePath}`);
+}
+
+async function assertLocalReadableFile(filePath: string): Promise<void> {
+  const stat = await fsStat(filePath);
+  if (stat.isDirectory()) {
+    throw Object.assign(new Error(`Read requires a file: ${filePath}`), { code: "EISDIR" });
+  }
+  if (!stat.isFile()) {
+    throw regularFileReadError(filePath);
+  }
+  await fsAccess(filePath, constants.R_OK);
+}
+
+async function suggestLocalReadPaths(filePath: string): Promise<string[]> {
+  let entries: string[];
+  try {
+    entries = await fsReaddir(dirname(filePath));
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT") || hasErrnoCode(error, "ENOTDIR")) {
+      return [];
+    }
+    throw error;
+  }
+  const requested = basename(filePath).toLowerCase();
+  const maxDistance = Math.max(1, Math.floor(requested.length * 0.4));
+  return entries
+    .map((entry) => ({ entry, distance: levenshteinDistance(requested, entry.toLowerCase()) }))
+    .filter(({ entry, distance }) => entry !== basename(filePath) && distance <= maxDistance)
+    .toSorted(
+      (left, right) => left.distance - right.distance || left.entry.localeCompare(right.entry),
+    )
+    .slice(0, 3)
+    .map(({ entry }) => entry);
+}
+
 interface CompactReadClassification {
   kind: "docs" | "resource" | "skill";
   label: string;
@@ -150,16 +189,29 @@ export interface ReadOperations {
   /** Check if file is readable (throw if not) */
   access: (absolutePath: string) => Promise<void>;
   /** Detect image MIME type, return null or undefined for non-images */
-  detectImageMimeType?: (absolutePath: string) => Promise<string | null | undefined>;
+  detectImageMimeType?: (
+    absolutePath: string,
+    buffer: Buffer,
+  ) => Promise<string | null | undefined>;
 }
 
 const defaultReadOperations: ReadOperations = {
   resolvePath: resolveLocalReadPath,
   decodeText: ({ buffer }) => decodeWindowsTextFileBuffer({ buffer }),
-  readFile: (path) => fsReadFile(path),
-  access: (path) => fsAccess(path, constants.R_OK),
-  detectImageMimeType: detectSupportedImageMimeTypeFromFile,
+  readFile: async (filePath) => (await readRegularFile({ filePath })).buffer,
+  access: assertLocalReadableFile,
 };
+
+async function detectReadImageMimeType(
+  ops: ReadOperations,
+  buffer: Buffer,
+  absolutePath: string,
+): Promise<string | null | undefined> {
+  if (ops.detectImageMimeType) {
+    return await ops.detectImageMimeType(absolutePath, buffer);
+  }
+  return detectSupportedImageMimeType(buffer);
+}
 
 export interface ReadToolOptions {
   /** Whether to auto-resize images to 2000x2000 max. Default: true */
@@ -223,7 +275,7 @@ function getOpenClawDocsClassification(
     return undefined;
   }
 
-  const label = toPosixPath(relativePath);
+  const label = normalizeNativePathSeparators(relativePath);
   if (label === "README.md" || label.startsWith("docs/") || label.startsWith("examples/")) {
     return { kind: "docs", label };
   }
@@ -269,8 +321,52 @@ async function resolveReadToolPath(
   ops: ReadOperations,
   filePath: string,
   cwd: string,
-): Promise<string> {
-  return await (ops.resolvePath?.(filePath, cwd) ?? resolveReadPath(filePath, cwd));
+): Promise<{ absolutePath: string; note?: string }> {
+  const absolutePath = await (ops.resolvePath?.(filePath, cwd) ?? resolveReadPath(filePath, cwd));
+  try {
+    await ops.access(absolutePath);
+    return { absolutePath };
+  } catch (error) {
+    if (!hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "ENOTDIR")) {
+      throw error;
+    }
+
+    const matches: string[] = [];
+    for (const candidate of getReadPathVariants(absolutePath)) {
+      try {
+        await ops.access(candidate);
+        matches.push(candidate);
+      } catch (candidateError) {
+        if (!hasErrnoCode(candidateError, "ENOENT") && !hasErrnoCode(candidateError, "ENOTDIR")) {
+          throw candidateError;
+        }
+      }
+    }
+
+    if (matches.length > 1) {
+      throw new Error(
+        `Read path is ambiguous: ${basename(absolutePath)} matches ${matches.map((match) => basename(match)).join(", ")}.`,
+        { cause: error },
+      );
+    }
+    const match = matches[0];
+    if (match !== undefined) {
+      return {
+        absolutePath: match,
+        note: `[Resolved filename: ${basename(absolutePath)} -> ${basename(match)}.]`,
+      };
+    }
+
+    const suggestions =
+      ops === defaultReadOperations ? await suggestLocalReadPaths(absolutePath) : [];
+    const suggestion = suggestions.length > 0 ? ` Did you mean: ${suggestions.join(", ")}?` : "";
+    throw Object.assign(
+      new Error(`File not found: ${absolutePath}.${suggestion}`, { cause: error }),
+      {
+        code: "ENOENT",
+      },
+    );
+  }
 }
 
 function formatCompactReadCall(
@@ -379,21 +475,16 @@ export function createReadToolDefinition(
 
         void (async () => {
           try {
-            const absolutePath = await resolveReadToolPath(ops, path, cwd);
-            // Check if file exists and is readable.
-            await ops.access(absolutePath);
+            const { absolutePath, note } = await resolveReadToolPath(ops, path, cwd);
             if (aborted) {
               return;
             }
-            const mimeType = ops.detectImageMimeType
-              ? await ops.detectImageMimeType(absolutePath)
-              : undefined;
+            const buffer = await ops.readFile(absolutePath);
+            const mimeType = await detectReadImageMimeType(ops, buffer, absolutePath);
             let content: (TextContent | ImageContent)[];
             let truncationDetails: TruncationResult | undefined;
             const nonVisionImageNote = getNonVisionImageNote(ctx?.model);
             if (mimeType) {
-              // Read image as binary.
-              const buffer = await ops.readFile(absolutePath);
               const base64 = buffer.toString("base64");
               const processed = await processImage(
                 { type: "image", data: base64, mimeType },
@@ -416,71 +507,89 @@ export function createReadToolDefinition(
                 content = [{ type: "text", text: textNote }, processed.image];
               }
             } else {
-              // Read text content.
-              const buffer = await ops.readFile(absolutePath);
               const decodedText =
                 ops.decodeText?.({ buffer, absolutePath }) ?? buffer.toString("utf8");
-              const textContent = decodedText.startsWith("\uFEFF")
-                ? decodedText.slice(1)
-                : decodedText;
+              const textContent = (
+                decodedText.startsWith("\uFEFF") ? decodedText.slice(1) : decodedText
+              ).replaceAll("\r\n", "\n");
               const allLines = textContent.split("\n");
+              if (allLines.at(-1) === "") {
+                allLines.pop();
+              }
               const totalFileLines = allLines.length;
               // Apply offset if specified. Convert from 1-indexed input to 0-indexed array access.
               const startLine = offset === undefined ? 0 : offset - 1;
               const startLineDisplay = startLine + 1;
-              // Check if offset is out of bounds.
-              if (startLine >= allLines.length) {
-                throw new Error(
-                  `Offset ${offset} is beyond end of file (${allLines.length} lines total)`,
-                );
-              }
-              let selectedContent: string;
-              let userLimitedLines: number | undefined;
-              // If limit is specified by the user, honor it first. Otherwise truncateHead decides.
-              if (limit !== undefined) {
-                const normalizedLimit = normalizePositiveLimit(limit, DEFAULT_MAX_LINES);
-                const endLine = Math.min(startLine + normalizedLimit, allLines.length);
-                selectedContent = allLines.slice(startLine, endLine).join("\n");
-                userLimitedLines = endLine - startLine;
-              } else {
-                selectedContent = allLines.slice(startLine).join("\n");
-              }
-              // Apply truncation, respecting both line and byte limits.
-              const truncation = truncateHead(selectedContent);
               let outputText: string;
-              if (truncation.firstLineExceedsLimit) {
-                // First line alone exceeds the byte limit. Point the model at a bash fallback.
-                const firstLine = allLines.at(startLine);
-                if (firstLine === undefined) {
-                  throw new Error("Requested line is outside the file.");
-                }
-                const firstLineSize = formatSize(Buffer.byteLength(firstLine, "utf-8"));
-                outputText = `[Line ${startLineDisplay} is ${firstLineSize}, exceeds ${formatSize(DEFAULT_MAX_BYTES)} limit. Use bash: sed -n '${startLineDisplay}p' ${quotePosixShellArg(path)} | head -c ${DEFAULT_MAX_BYTES}]`;
-                truncationDetails = truncation;
-              } else if (truncation.truncated) {
-                // Truncation occurred. Build an actionable continuation notice.
-                const endLineDisplay = startLineDisplay + truncation.outputLines - 1;
-                const nextOffset = endLineDisplay + 1;
-                outputText = truncation.content;
-                if (truncation.truncatedBy === "lines") {
-                  outputText += `\n\n[Showing lines ${startLineDisplay}-${endLineDisplay} of ${totalFileLines}. Use offset=${nextOffset} to continue.]`;
-                } else {
-                  outputText += `\n\n[Showing lines ${startLineDisplay}-${endLineDisplay} of ${totalFileLines} (${formatSize(DEFAULT_MAX_BYTES)} limit). Use offset=${nextOffset} to continue.]`;
-                }
-                truncationDetails = truncation;
-              } else if (
-                userLimitedLines !== undefined &&
-                startLine + userLimitedLines < allLines.length
-              ) {
-                // User-specified limit stopped early, but the file still has more content.
-                const remaining = allLines.length - (startLine + userLimitedLines);
-                const nextOffset = startLine + userLimitedLines + 1;
-                outputText = `${truncation.content}\n\n[${remaining} more lines in file. Use offset=${nextOffset} to continue.]`;
+              if (totalFileLines === 0) {
+                outputText =
+                  buffer.length === 0
+                    ? "File is empty (0 bytes)."
+                    : `File contains no readable text (${buffer.length} bytes).`;
+              } else if (startLine >= totalFileLines) {
+                outputText = `Offset ${offset} is beyond end of file (${totalFileLines} lines total). Retry with offset <= ${totalFileLines}.`;
               } else {
-                // No truncation and no remaining user-limited content.
-                outputText = truncation.content;
+                const endLine =
+                  limit === undefined
+                    ? totalFileLines
+                    : Math.min(
+                        startLine + normalizePositiveLimit(limit, DEFAULT_MAX_LINES),
+                        totalFileLines,
+                      );
+                const selectedLines = allLines.slice(startLine, endLine);
+                const userLimitedLines = limit === undefined ? undefined : endLine - startLine;
+                if (selectedLines.every((line) => line.length === 0)) {
+                  const selectedLineCount = selectedLines.length;
+                  const subject =
+                    startLine === 0 && endLine === totalFileLines ? "File" : "Selected range";
+                  outputText = `${subject} contains ${selectedLineCount} blank line${selectedLineCount === 1 ? "" : "s"}.`;
+                  if (userLimitedLines !== undefined && endLine < totalFileLines) {
+                    const remaining = totalFileLines - endLine;
+                    outputText += `\n\n[${remaining} more line${remaining === 1 ? "" : "s"} in file. Use offset=${endLine + 1} to continue.]`;
+                  }
+                } else {
+                  let selectedContent = selectedLines.join("\n");
+                  if (endLine === totalFileLines && textContent.endsWith("\n")) {
+                    selectedContent += "\n";
+                  }
+                  const truncation = truncateHead(selectedContent);
+                  if (truncation.firstLineExceedsLimit) {
+                    const lineBreak = selectedContent.indexOf("\n");
+                    const firstLine =
+                      lineBreak === -1 ? selectedContent : selectedContent.slice(0, lineBreak);
+                    const firstLineSize = formatSize(Buffer.byteLength(firstLine, "utf-8"));
+                    outputText = `[Line ${startLineDisplay} is ${firstLineSize}, exceeds ${formatSize(DEFAULT_MAX_BYTES)} limit. Use bash: sed -n '${startLineDisplay}p' ${quotePosixShellArg(path)} | head -c ${DEFAULT_MAX_BYTES}]`;
+                    truncationDetails = { ...truncation, totalLines: totalFileLines };
+                  } else if (truncation.truncated) {
+                    const endLineDisplay = startLineDisplay + truncation.outputLines - 1;
+                    const nextOffset = endLineDisplay + 1;
+                    outputText = truncation.content;
+                    if (truncation.truncatedBy === "lines") {
+                      outputText += `\n\n[Showing lines ${startLineDisplay}-${endLineDisplay} of ${totalFileLines}. Use offset=${nextOffset} to continue.]`;
+                    } else {
+                      outputText += `\n\n[Showing lines ${startLineDisplay}-${endLineDisplay} of ${totalFileLines} (${formatSize(DEFAULT_MAX_BYTES)} limit). Use offset=${nextOffset} to continue.]`;
+                    }
+                    truncationDetails = { ...truncation, totalLines: totalFileLines };
+                  } else if (
+                    userLimitedLines !== undefined &&
+                    startLine + userLimitedLines < totalFileLines
+                  ) {
+                    const remaining = totalFileLines - (startLine + userLimitedLines);
+                    const nextOffset = startLine + userLimitedLines + 1;
+                    outputText = `${truncation.content}\n\n[${remaining} more lines in file. Use offset=${nextOffset} to continue.]`;
+                  } else {
+                    outputText = truncation.content;
+                  }
+                }
               }
               content = [{ type: "text", text: outputText }];
+            }
+
+            if (note && content[0]?.type === "text") {
+              content = [
+                { ...content[0], text: `${note}\n${content[0].text}` },
+                ...content.slice(1),
+              ];
             }
 
             if (aborted) {

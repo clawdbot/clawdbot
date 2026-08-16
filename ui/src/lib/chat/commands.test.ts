@@ -1,26 +1,24 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // @vitest-environment node
-import { expectDefined, isRecord } from "@openclaw/normalization-core";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildFallbackSlashCommands,
   buildSlashCommandsFromEntries,
   getRemoteCommandEntries,
   getSkillCommandCompletions,
+  getSlashCommandCompletions,
   parseSlashCommand,
   replaceSlashCommands,
   SLASH_COMMANDS,
+  type SlashCommandDef,
 } from "./commands.ts";
 
 afterEach(() => {
   replaceSlashCommands(buildFallbackSlashCommands());
 });
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!isRecord(value)) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object");
 
 function requireArray(value: unknown, label: string): unknown[] {
   if (!Array.isArray(value)) {
@@ -63,6 +61,149 @@ function expectParsedSlash(input: string, commandFields: Record<string, unknown>
   expectRecordFields(parsed.command, `parsed ${input} command`, commandFields);
   expect(parsed.args).toBe(args);
 }
+
+function completionNames(filter: string, options?: { showAll?: boolean }): string[] {
+  return getSlashCommandCompletions(filter, options).map((command) => command.name);
+}
+
+function slashCommand(
+  name: string,
+  options: Partial<Omit<SlashCommandDef, "key" | "name">> = {},
+): SlashCommandDef {
+  return { key: name, name, description: `${name} command.`, ...options };
+}
+
+describe("getSlashCommandCompletions", () => {
+  it("ranks an exact name above prefixes and description-only matches", () => {
+    replaceSlashCommands([
+      slashCommand("openclaw", {
+        description: "Run the setup and repair helper.",
+        tier: "essential",
+        category: "session",
+      }),
+      slashCommand("pair-device", {
+        tier: "standard",
+        category: "tools",
+      }),
+      slashCommand("pair", { tier: "power", category: "agents" }),
+    ]);
+
+    expect(completionNames("pair")).toEqual(["pair", "pair-device", "openclaw"]);
+  });
+
+  it("ranks exact and prefix alias matches like primary names", () => {
+    replaceSlashCommands([
+      slashCommand("pair-device", {
+        tier: "power",
+        category: "agents",
+      }),
+      slashCommand("connect", {
+        aliases: ["pairing"],
+        tier: "essential",
+        category: "session",
+      }),
+      slashCommand("handoff", {
+        aliases: ["pair"],
+        tier: "power",
+        category: "agents",
+      }),
+    ]);
+
+    expect(completionNames("pair")).toEqual(["handoff", "connect", "pair-device"]);
+  });
+
+  it("ranks name and alias substrings above description-only matches", () => {
+    replaceSlashCommands([
+      slashCommand("helper", {
+        description: "Repair a device.",
+        tier: "essential",
+        category: "session",
+      }),
+      slashCommand("connect", {
+        aliases: ["repairing"],
+        tier: "standard",
+        category: "tools",
+      }),
+      slashCommand("repair", {
+        tier: "power",
+        category: "agents",
+      }),
+      slashCommand("pairing", {
+        tier: "power",
+        category: "agents",
+      }),
+    ]);
+
+    expect(completionNames("pair")).toEqual(["pairing", "connect", "repair", "helper"]);
+  });
+
+  it("uses tier and category tie-breakers while keeping equal matches stable", () => {
+    replaceSlashCommands([
+      slashCommand("path-first", {
+        tier: "essential",
+        category: "session",
+      }),
+      slashCommand("path-standard", {
+        tier: "standard",
+        category: "session",
+      }),
+      slashCommand("path-agent", {
+        tier: "essential",
+        category: "agents",
+      }),
+      slashCommand("path-second", {
+        tier: "essential",
+        category: "session",
+      }),
+    ]);
+
+    expect(completionNames("path-")).toEqual([
+      "path-first",
+      "path-second",
+      "path-agent",
+      "path-standard",
+    ]);
+  });
+
+  it("keeps empty-query tier and category ordering unchanged", () => {
+    replaceSlashCommands([
+      slashCommand("standard-agent", {
+        tier: "standard",
+        category: "agents",
+      }),
+      slashCommand("essential-tools", {
+        tier: "essential",
+        category: "tools",
+      }),
+      slashCommand("power-session", {
+        tier: "power",
+        category: "session",
+      }),
+      slashCommand("essential-session", {
+        tier: "essential",
+        category: "session",
+      }),
+      slashCommand("standard-session", {
+        tier: "standard",
+        category: "session",
+      }),
+    ]);
+
+    expect(completionNames("")).toEqual([
+      "essential-session",
+      "essential-tools",
+      "standard-session",
+      "standard-agent",
+    ]);
+    expect(completionNames("", { showAll: true })).toEqual([
+      "essential-session",
+      "essential-tools",
+      "standard-session",
+      "standard-agent",
+      "power-session",
+    ]);
+  });
+});
 
 describe("parseSlashCommand", () => {
   it("parses commands with an optional colon separator", () => {
@@ -187,10 +328,11 @@ describe("parseSlashCommand", () => {
     expect(getSkillCommandCompletions("pro").map((command) => command.name)).toEqual(["prose"]);
   });
 
-  it("normalizes hyphenated skill reference queries", () => {
+  it("matches skill queries against both display titles and command tokens", () => {
     applyRemoteEntries([
       {
         name: "release_notes",
+        skillDisplayName: "Release Notes",
         textAliases: ["/release_notes"],
         description: "Draft release notes.",
         source: "skill",
@@ -200,8 +342,11 @@ describe("parseSlashCommand", () => {
       },
     ]);
 
-    expect(getSkillCommandCompletions("release-n").map((command) => command.name)).toEqual([
-      "release_notes",
+    expect(getSkillCommandCompletions("notes")).toMatchObject([
+      { name: "release_notes", skillDisplayName: "Release Notes" },
+    ]);
+    expect(getSkillCommandCompletions("release_n")).toMatchObject([
+      { name: "release_notes", skillDisplayName: "Release Notes" },
     ]);
   });
 
@@ -326,6 +471,55 @@ describe("parseSlashCommand", () => {
     expect(first.args?.split(" ")).toHaveLength(20);
     expect(first.args?.split(" ")[0]).toBe("[" + "n".repeat(199) + "]");
     expect(first.argOptions).toHaveLength(50);
+  });
+
+  it("preserves only known closed plugin client presentation metadata", () => {
+    applyRemoteEntries([
+      {
+        name: "pair",
+        textAliases: ["/pair"],
+        description: "Pair a device.",
+        source: "plugin",
+        scope: "both",
+        acceptsArgs: true,
+        clientPresentation: {
+          when: "no-arguments",
+          action: { kind: "device-pairing" },
+        },
+      },
+    ]);
+
+    expect(requireCommandByName("pair").clientPresentation).toEqual({
+      when: "no-arguments",
+      action: { kind: "device-pairing" },
+    });
+  });
+
+  it.each([
+    { when: "always", action: { kind: "device-pairing" } },
+    { when: "no-arguments", action: { kind: "open-route" } },
+    { when: "no-arguments", action: { kind: "device-pairing", callback: "run" } },
+    {
+      when: "no-arguments",
+      action: { kind: "device-pairing" },
+      route: "/settings/devices",
+    },
+  ])("drops malformed client presentation metadata %#", (clientPresentation) => {
+    applyCommandsListResult({
+      commands: [
+        {
+          name: "pair",
+          textAliases: ["/pair"],
+          description: "Pair a device.",
+          source: "plugin",
+          scope: "both",
+          acceptsArgs: true,
+          clientPresentation,
+        },
+      ],
+    });
+
+    expect(requireCommandByName("pair").clientPresentation).toBeUndefined();
   });
 
   it("falls back safely when command payload shapes are malformed", () => {

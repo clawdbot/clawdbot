@@ -20,6 +20,7 @@ import { withTimeout } from "../../infra/fs-safe.js";
 import { boundedJsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import type { WorkerInferenceSessionDrain } from "./inference-control-internal.js";
 import {
   createWorkerInferenceStore,
   type WorkerInferenceStore,
@@ -228,6 +229,7 @@ export function createWorkerInferenceManager(options: {
   const now = options.now ?? Date.now;
   const active = new Map<string, ActiveInference>();
   const operations = new Map<Promise<void>, string>();
+  const drainingSessionIds = new Set<string>();
   let stopping = false;
   store.recoverPending(terminalError("provider-error"));
 
@@ -421,7 +423,7 @@ export function createWorkerInferenceManager(options: {
     sink: WorkerInferenceSink;
     revalidate?: RevalidateInference;
   }): WorkerInferenceStartApplicationResult => {
-    if (stopping) {
+    if (stopping || drainingSessionIds.has(params.request.sessionId)) {
       return { ok: false, reason: "cancelled" };
     }
     const identityError = matchesIdentity(params.identity, params.request);
@@ -611,12 +613,16 @@ export function createWorkerInferenceManager(options: {
   const cancelWhere = (
     predicate: (entry: ActiveInference) => boolean,
     reason: WorkerInferenceErrorReason,
-  ): void => {
+    onCancel?: (entry: ActiveInference) => void,
+  ): boolean => {
+    let terminalPersistenceFailed = false;
     for (const entry of active.values()) {
       if (predicate(entry)) {
-        settleAbort(entry, reason);
+        onCancel?.(entry);
+        terminalPersistenceFailed = !settleAbort(entry, reason) || terminalPersistenceFailed;
       }
     }
+    return terminalPersistenceFailed;
   };
 
   const cancelEnvironment = (
@@ -628,29 +634,70 @@ export function createWorkerInferenceManager(options: {
 
   const cancelSession = (sessionId: string, runId?: string): string[] => {
     const cancelledRunIds = new Set<string>();
-    for (const entry of active.values()) {
-      if (
-        entry.request.sessionId === sessionId &&
-        (runId === undefined || entry.request.runId === runId)
-      ) {
-        cancelledRunIds.add(entry.request.runId);
-      }
-    }
     cancelWhere(
       (entry) =>
         entry.request.sessionId === sessionId &&
         (runId === undefined || entry.request.runId === runId),
       "cancelled",
+      (entry) => cancelledRunIds.add(entry.request.runId),
     );
     return [...cancelledRunIds].toSorted();
   };
 
-  const hasSession = (sessionId: string, runId?: string): boolean =>
-    [...active.values()].some(
-      (entry) =>
+  const hasSession = (sessionId: string, runId?: string): boolean => {
+    for (const entry of active.values()) {
+      if (
         entry.request.sessionId === sessionId &&
-        (runId === undefined || entry.request.runId === runId),
+        (runId === undefined || entry.request.runId === runId)
+      ) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  const hasSessionOperation = (sessionId: string): boolean => {
+    for (const operationSessionId of operations.values()) {
+      if (operationSessionId === sessionId) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  const beginSessionDrain = (sessionId: string): WorkerInferenceSessionDrain => {
+    if (drainingSessionIds.has(sessionId)) {
+      throw new Error(`Worker inference drain already owns session ${sessionId}`);
+    }
+    // Block first so cancellation cannot race a replacement provider operation.
+    drainingSessionIds.add(sessionId);
+    const terminalPersistenceFailed = cancelWhere(
+      (entry) => entry.request.sessionId === sessionId,
+      "cancelled",
     );
+    const providerOperations: Promise<void>[] = [];
+    for (const [operation, operationSessionId] of operations) {
+      if (operationSessionId === sessionId) {
+        providerOperations.push(operation);
+      }
+    }
+    let released = false;
+    return {
+      drained: Promise.allSettled(providerOperations).then(() => {
+        if (terminalPersistenceFailed) {
+          throw new Error(`Worker inference terminal persistence failed for session ${sessionId}`);
+        }
+      }),
+      hasWork: () => hasSession(sessionId) || hasSessionOperation(sessionId),
+      release: () => {
+        if (released) {
+          return;
+        }
+        released = true;
+        drainingSessionIds.delete(sessionId);
+      },
+    };
+  };
 
   const resolveSessionIdForRunId = (runId: string): string | undefined => {
     const sessionIds = new Set<string>();
@@ -672,7 +719,7 @@ export function createWorkerInferenceManager(options: {
     ).catch(() => undefined);
   };
 
-  return {
+  const manager = {
     start,
     cancel,
     cancelEnvironment,
@@ -681,4 +728,7 @@ export function createWorkerInferenceManager(options: {
     resolveSessionIdForRunId,
     stop,
   };
+  // Archive-only control stays non-enumerable so the manager's inferred contract remains stable.
+  Object.defineProperty(manager, "beginSessionDrain", { value: beginSessionDrain });
+  return manager;
 }

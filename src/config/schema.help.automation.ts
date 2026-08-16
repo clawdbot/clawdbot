@@ -77,13 +77,15 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "session.maintenance.pruneAfter":
     "Removes entries older than this duration (for example `30d` or `12h`) during maintenance passes. Use this as the primary age-retention control and align it with data retention policy.",
   "session.maintenance.maxEntries":
-    "Caps total session entry count retained in the store to prevent unbounded growth over time. Use lower limits for constrained environments, or higher limits when longer history is required.",
+    "Caps total session entry count retained in the store to prevent unbounded growth over time. Protected entries count toward the limit but are never automatically removed, so the store can remain above the cap when protection alone exceeds it. Use lower limits for constrained environments, or higher limits when longer history is required.",
+  "session.maintenance.preserveRecent":
+    "Protects interactive sessions active within this duration (for example `7d`) from automatic age, count, and disk-budget history eviction. Unset or `false` keeps the normal oldest-first policy. Synthetic model-run, cron, hook, heartbeat, ACP, and sub-agent rows remain eligible for bounded cleanup.",
   "session.maintenance.resetArchiveRetention":
     "Age-based retention for archived transcripts (`*.reset.<timestamp>` and `*.deleted.<timestamp>`). Defaults to keeping archives until the disk budget evicts them oldest-first; set a duration (for example `30d`) to opt into wall-clock deletion, or `false` to disable it explicitly.",
   "session.maintenance.maxDiskBytes":
-    "Per-agent sessions-directory disk budget (for example `500mb`). Defaults to `10gb`; when exceeded, warn mode reports pressure and enforce mode performs oldest-first cleanup (archived transcripts before live sessions). Set `false` to disable.",
+    'Per-agent sessions-directory disk budget (for example `500mb`). Defaults to `10gb`; when exceeded, warn mode reports pressure and enforce mode performs oldest-first cleanup (archived transcripts before live sessions). Set `false`, `0`, or `"0"` to disable.',
   "session.maintenance.highWaterBytes":
-    "Target size after disk-budget cleanup (high-water mark). Defaults to 80% of maxDiskBytes; set explicitly for tighter reclaim behavior on constrained disks.",
+    "Target size after disk-budget cleanup (high-water mark). Defaults to 80% of maxDiskBytes; set explicitly for tighter reclaim behavior on constrained disks. A value that resolves to zero falls back to the default; negative values are invalid. Disable the budget with maxDiskBytes instead.",
   cron: "Global scheduler settings for stored automations, run concurrency, delivery fallback, and run-session retention. Keep defaults unless you are scaling automation volume or integrating external webhook receivers.",
   "cron.enabled":
     "Enables automation execution for stored schedules managed by the gateway. Keep enabled for normal reminder/automation flows, and disable only to pause all automation execution without deleting jobs.",
@@ -100,7 +102,7 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "cron.webhookSsrfPolicy.allowIpv6UniqueLocalRange":
     "Allows automation webhooks to IPv6 Unique Local Addresses (fc00::/7). Use only with trusted fake-IP proxy environments.",
   "cron.sessionRetention":
-    "Controls how long completed automation run sessions are kept before pruning (`24h`, `7d`, `1h30m`, or `false` to disable pruning; default: `24h`). Use shorter retention to reduce storage growth on high-frequency schedules.",
+    "Controls how long completed automation run sessions are kept before pruning (`24h`, `7d`, `1h30m`, or `false` to disable pruning; a zero duration such as `0h` also disables; default: `24h`). Use shorter retention to reduce storage growth on high-frequency schedules.",
   transcripts:
     "Core transcript capture settings for meeting notes, recording-capable agent tools, and configured live meeting auto-start sources. Meeting plugins capture durable notes by default; set enabled to false to opt out globally.",
   "transcripts.enabled":

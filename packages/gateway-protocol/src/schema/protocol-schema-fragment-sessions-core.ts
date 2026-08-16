@@ -18,6 +18,8 @@ export const SessionCoreProtocolSchemas = {
   SessionsCatalogContinueResult: sessionsCatalog.SessionsCatalogContinueResultSchema,
   SessionsCatalogArchiveParams: sessionsCatalog.SessionsCatalogArchiveParamsSchema,
   SessionsCatalogArchiveResult: sessionsCatalog.SessionsCatalogArchiveResultSchema,
+  SessionsCatalogStartTerminalParams: sessionsCatalog.SessionsCatalogStartTerminalParamsSchema,
+  SessionsCatalogStartTerminalResult: sessionsCatalog.SessionsCatalogStartTerminalResultSchema,
   SessionsCleanupParams: sessions.SessionsCleanupParamsSchema,
   SessionsPreviewParams: sessions.SessionsPreviewParamsSchema,
   SessionsDescribeParams: sessions.SessionsDescribeParamsSchema,

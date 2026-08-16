@@ -1,23 +1,11 @@
 // Docker E2E Observability tests cover docker e2e observability script behavior.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempDirs: string[] = [];
-
-function makeTempDir(): string {
-  const dir = mkdtempSync(path.join(tmpdir(), "openclaw-docker-e2e-observability-"));
-  tempDirs.push(dir);
-  return dir;
-}
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { force: true, recursive: true });
-  }
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function successTail(scriptPath: string): string {
   const script = readFileSync(scriptPath, "utf8");
@@ -29,7 +17,7 @@ function successTail(scriptPath: string): string {
 }
 
 function runSuccessTail(scriptPath: string) {
-  const tempDir = makeTempDir();
+  const tempDir = tempDirs.make("openclaw-docker-e2e-observability-");
   const clientLog = path.join(tempDir, "client.log");
   writeFileSync(clientLog, "client proof log\n", "utf8");
   const harness = [

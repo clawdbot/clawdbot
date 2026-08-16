@@ -5,13 +5,13 @@ import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
 } from "../../../../extensions/qa-lab/api.js";
+import { coerceErrorMessage as formatError } from "../../../../scripts/lib/error-format.mts";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
 const SCENARIO_ID = "browser-plugin-profiles-packaged";
 const SOURCE_PATH = "test/e2e/qa-lab/runtime/browser-plugin-profiles-packaged.ts";
 const SCRIPT_PATH = "scripts/e2e/browser-plugin-profiles-docker.sh";
 const SUCCESS_MARKER = "BROWSER_PLUGIN_PROFILES_PACKAGED_OK";
-const PRIMARY_COVERAGE_IDS = ["tools.browser-plugin-service", "tools.profiles"] as const;
 
 type ProducerOptions = { artifactBase: string; repoRoot: string };
 type DockerOutcome = {
@@ -20,10 +20,6 @@ type DockerOutcome = {
   markerSeen: boolean;
   signal: NodeJS.Signals | null;
 };
-
-function formatError(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
 
 export function parseBrowserPluginProfilesOptions(args: string[]): ProducerOptions {
   if (args.length !== 2 || args[0] !== "--artifact-base" || !args[1]) {
@@ -89,7 +85,6 @@ async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJ
     codeRefs: [SOURCE_PATH, SCRIPT_PATH, "extensions/browser/src/gateway/browser-request.ts"],
     docsRefs: ["docs/tools/browser.md", "docs/help/testing.md"],
     id: SCENARIO_ID,
-    primaryCoverageIds: PRIMARY_COVERAGE_IDS,
     sourcePath: SOURCE_PATH,
     title: "Packaged browser plugin profiles",
   };

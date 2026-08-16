@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 // Control UI module implements connect error behavior.
 import {
   ConnectErrorDetailCodes,
@@ -7,7 +8,6 @@ import {
   readPairingConnectErrorDetails,
 } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { resolveGatewayErrorDetailCode } from "../../api/gateway.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 
 type ErrorWithMessageAndDetails = {
   message?: unknown;
@@ -73,7 +73,7 @@ function formatErrorFromMessageAndDetails(error: ErrorWithMessageAndDetails): st
     case ConnectErrorDetailCodes.PAIRING_REQUIRED:
       return formatPairingRequiredError(error);
     case ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED:
-      return "device identity required (use HTTPS/localhost or allow insecure auth explicitly)";
+      return "device identity required (use HTTPS or localhost)";
     case ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED:
       return "origin not allowed (open the Control UI from the gateway host or allow it in gateway.controlUi.allowedOrigins)";
     case ConnectErrorDetailCodes.AUTH_TOKEN_MISSING:

@@ -18,7 +18,7 @@ const PRIVATE_CHAT_TYPES = new Set(["direct", "dm", "im", "private"]);
 const PUBLIC_CHAT_TYPES = new Set(["channel", "forum", "group", "public", "supergroup", "topic"]);
 const WEB_LOGIN_SURFACES = new Set(["control", "control-ui", "dashboard", "internal", "web"]);
 
-const activeCodexLoginFlows = new Map<string, { expiresAt: number }>();
+const activeCodexLoginFlows = codexChannelLoginRuntime.createFlowRegistry();
 
 type RunLoginFlow = (opts: ModelsAuthLoginFlowOptions) => Promise<unknown>;
 
@@ -262,6 +262,7 @@ async function runChannelCodexLogin(params: {
       agentId: params.agentId,
       config: params.commandParams.cfg,
       runtime: params.runtime ?? defaultRuntime,
+      signal: reservation.record.signal,
       sendMessage: async (text) => await emitLoginMessage(params.commandParams, text),
       unsupportedPromptMessage: "Channel /login supports only fixed Codex device-code auth.",
       runLoginFlow: params.runLoginFlow,

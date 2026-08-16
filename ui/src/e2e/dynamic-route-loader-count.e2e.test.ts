@@ -1,22 +1,13 @@
 // Control UI E2E tests prove dynamic startup routes do not reload their Gateway data.
-import { chromium, type Browser } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import {
-  canRunPlaywrightChromium,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  waitForControlUiRoute,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import { expect, it } from "vitest";
+import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-
-let browser: Browser;
-let server: ControlUiE2eServer;
+const suite = createControlUiE2eSuite({
+  name: "Control UI dynamic route startup loaders",
+  unavailableMessage: (executablePath) =>
+    `Playwright Chromium is not available at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
+});
 
 async function activeRouteFetchCount(page: import("playwright").Page): Promise<number | null> {
   return page.evaluate(() => {
@@ -31,44 +22,22 @@ async function activeRouteFetchCount(page: import("playwright").Page): Promise<n
   });
 }
 
-describeControlUiE2e("Control UI dynamic route startup loaders", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(
-        `Playwright Chromium is not available at ${chromiumExecutablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
-      );
-    }
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-    try {
-      server = await startControlUiE2eServer();
-    } catch (error) {
-      await browser.close();
-      throw error;
-    }
-  });
-
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
-  });
-
+suite.define(() => {
   it("loads the Plugins Discover deep link once and preserves it through reconnect", async () => {
-    const context = await browser.newContext({ viewport: { height: 900, width: 1440 } });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["plugins.list"],
-      methodResponses: {
-        "plugins.list": {
-          diagnostics: [],
-          mutationAllowed: true,
-          plugins: [],
+    await suite.withPage({ viewport: { height: 900, width: 1440 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["plugins.list"],
+        methodResponses: {
+          "plugins.list": {
+            diagnostics: [],
+            mutationAllowed: true,
+            plugins: [],
+          },
         },
-      },
-    });
-    const pathname = "/settings/plugins/discover";
+      });
+      const pathname = "/settings/plugins/discover";
 
-    try {
-      const response = await page.goto(`${server.baseUrl}${pathname.slice(1)}`);
+      const response = await page.goto(`${suite.server.baseUrl}${pathname.slice(1)}`);
       expect(response?.status()).toBe(200);
       await waitForControlUiRoute(page, { pathname, routeId: "plugins" });
       expect(await activeRouteFetchCount(page)).toBe(1);
@@ -78,8 +47,6 @@ describeControlUiE2e("Control UI dynamic route startup loaders", () => {
       await expect.poll(() => gateway.getSocketCount(), { timeout: 10_000 }).toBe(socketCount + 1);
       await waitForControlUiRoute(page, { pathname, routeId: "plugins" });
       expect(await activeRouteFetchCount(page)).toBe(1);
-    } finally {
-      await context.close();
-    }
+    });
   });
 });

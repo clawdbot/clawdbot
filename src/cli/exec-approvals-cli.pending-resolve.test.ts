@@ -1,5 +1,6 @@
-// Pending and resolve CLI tests stay separate from policy-management coverage.
 import { Command } from "commander";
+// Pending and resolve CLI tests stay separate from policy-management coverage.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerExecApprovalsCli } from "./exec-approvals-cli.js";
 
@@ -30,12 +31,7 @@ const mocks = vi.hoisted(() => {
 
 const { callGatewayFromCli, defaultRuntime, runtimeErrors } = mocks;
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`Expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-capitalized");
 
 function firstMockArg(mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } }): unknown {
   const call = mock.mock.calls[0];
@@ -275,6 +271,19 @@ describe("exec approvals pending and resolve CLI", () => {
         },
       ],
     });
+  });
+
+  it("writes pending approval failures as JSON", async () => {
+    callGatewayFromCli.mockRejectedValue(new Error("gateway unavailable"));
+
+    await expect(runApprovalsCommand(["approvals", "pending", "--json"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(defaultRuntime.writeJson).toHaveBeenCalledOnce();
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({ error: "gateway unavailable" }, 0);
+    expect(defaultRuntime.error).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
   it("preserves whitespace-bearing ids verbatim and keeps them distinct", async () => {

@@ -20,22 +20,18 @@ vi.mock("../../cache-trace.js", () => ({ createCacheTrace: mocks.createCacheTrac
 vi.mock("../session-prompt-state.js", () => ({
   getEmbeddedSessionPromptState: mocks.getSessionPromptState,
 }));
-vi.mock("./attempt-context-guards.js", () => ({
+vi.mock("./attempt-setup.js", () => ({
   installEmbeddedAttemptContextGuards: mocks.installContextGuards,
 }));
-vi.mock("./attempt-session-boundary.js", () => ({
+vi.mock("./attempt-session-prepare.js", () => ({
+  prepareEmbeddedAttemptAgentSession: mocks.prepareAgentSession,
   prepareEmbeddedAttemptSessionBoundary: mocks.prepareSessionBoundary,
-}));
-vi.mock("./attempt-session-manager-prepare.js", () => ({
   prepareEmbeddedAttemptSessionManager: mocks.prepareSessionManager,
 }));
 vi.mock("./attempt-session-settle.js", () => ({
   createEmbeddedAttemptSessionSettleTracker: mocks.createSessionSettleTracker,
 }));
-vi.mock("./attempt-session.js", () => ({
-  prepareEmbeddedAttemptAgentSession: mocks.prepareAgentSession,
-}));
-vi.mock("./attempt-stream-transport.js", () => ({
+vi.mock("./attempt-stream-settle.js", () => ({
   prepareEmbeddedAttemptTransport: mocks.prepareTransport,
 }));
 vi.mock("./attempt-trajectory.js", () => ({
@@ -171,8 +167,8 @@ function createFixture() {
       replayAllowedToolNames: new Set(["read"]),
       resolveActiveContextEnginePluginId: vi.fn(),
       sessionAgentId: "main",
-      sessionLockController: {},
-      withOwnedSessionWriteLock: vi.fn(),
+      transcriptLifecycle: {},
+      withOwnedTranscriptWrite: vi.fn(),
     },
     agentSession: {
       agentCoreThinkingLevel: "medium",

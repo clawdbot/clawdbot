@@ -26,7 +26,6 @@ export function attachGatewayWsHandlers(params: GatewayWsRuntimeParams) {
     gatewayHost: params.gatewayHost,
     pluginSurfaceScheme: params.pluginSurfaceScheme,
     getPluginNodeCapabilities: params.getPluginNodeCapabilities,
-    resolvedAuth: params.resolvedAuth,
     getResolvedAuth: params.getResolvedAuth,
     getRequiredSharedGatewaySessionGeneration: params.getRequiredSharedGatewaySessionGeneration,
     rateLimiter: params.rateLimiter,

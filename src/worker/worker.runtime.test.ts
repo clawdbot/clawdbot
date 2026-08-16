@@ -1,10 +1,14 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
+import { validateWorkerSessionsSpawnParams } from "../../packages/gateway-protocol/src/index.js";
 import {
   type WorkerConnectRequestFrame,
   WorkerConnectRequestFrameSchema,
@@ -15,6 +19,7 @@ import {
   WorkerLiveEventRequestFrameSchema,
   WORKER_PROTOCOL_FEATURES,
   WORKER_RPC_SET_VERSION,
+  type WorkerSessionsSpawnParams,
   type WorkerTranscriptCommitParams,
   type WorkerTranscriptCommitRequestFrame,
   WorkerTranscriptCommitRequestFrameSchema,
@@ -31,17 +36,41 @@ import {
   type WorkerInferenceTerminalFrame,
   type WorkerInferenceTerminalOutcome,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { listRunningSessions } from "../agents/bash-process-registry.js";
-import { rawDataToString } from "../infra/ws.js";
 import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
+import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "./transcript-message.js";
 import { WorkerAdmissionDeadlineExceededError } from "./worker-connection-contract.js";
-import { createWorkerConnection, WorkerConnectionStoppedError } from "./worker-connection.js";
+import {
+  createWorkerConnection,
+  WorkerConnectionStoppedError,
+  type WorkerConnectionState,
+} from "./worker-connection.js";
 import {
   WorkerInferenceProxyClient,
   WorkerLiveEventClient,
   WorkerTranscriptCommitClient,
 } from "./worker-rpc-clients.js";
 import { runWorkerDescriptor } from "./worker.runtime.js";
+
+const browserRuntimeMocks = vi.hoisted(() => ({
+  createWorkerBrowserToolRuntime: vi.fn(),
+  dispose: vi.fn(),
+}));
+
+vi.mock("./browser-runtime.js", () => {
+  browserRuntimeMocks.createWorkerBrowserToolRuntime.mockImplementation(async () => ({
+    tool: {
+      name: "browser",
+      label: "Browser",
+      description: "Control the attached worker browser.",
+      parameters: Type.Object({}),
+      execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+    },
+    dispose: browserRuntimeMocks.dispose,
+  }));
+  return { createWorkerBrowserToolRuntime: browserRuntimeMocks.createWorkerBrowserToolRuntime };
+});
 
 function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -54,6 +83,15 @@ const SESSION_ID = "worker-session";
 const RUN_ID = "worker-run";
 const OWNER_EPOCH = 4;
 const MODEL_REF = { provider: "openai", model: "gpt-5.6-luna" } as const;
+const WORKER_LOOP_REPLAY = {
+  v: 1 as const,
+  type: "openai-responses-compaction",
+  data: "opaque-worker-loop-replay",
+  provider: "openai",
+  api: "openai-responses",
+  model: MODEL_REF.model,
+  baseUrlHash: "ozhevd1smnk8s",
+};
 const BUNDLE_HASH = Array.from({ length: 64 }, () => "a").join("");
 const CREDENTIAL = ["worker", "fixture", "admission"].join("-");
 
@@ -61,10 +99,12 @@ type InferencePlan =
   | "text"
   | "tool"
   | "background-tool"
+  | "session-tool"
   | "hold"
   | "fence"
   | "error"
   | "cancelled"
+  | "length"
   | "burst-text"
   | "oversized-text"
   | "oversized-error"
@@ -80,6 +120,7 @@ type FakeGatewayOptions = {
   silenceFirstTranscript?: boolean;
   silenceFirstLiveEvent?: boolean;
   silenceFirstInference?: boolean;
+  silenceSessionSpawnResponses?: number;
   transcriptFailureAtRequest?: number;
   liveResyncAckedSeq?: number;
   liveResyncResponses?: number;
@@ -88,13 +129,9 @@ type FakeGatewayOptions = {
   heartbeatIntervalMs?: number;
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function assistantMessage(
   content: WorkerDoneMessage["content"],
-  stopReason: "stop" | "toolUse",
+  stopReason: WorkerDoneMessage["stopReason"],
 ): WorkerDoneMessage {
   return {
     role: "assistant",
@@ -135,6 +172,7 @@ class FakeWorkerGateway {
   readonly acceptedTranscriptRequests: WorkerTranscriptCommitParams[] = [];
   readonly liveEventRequests: WorkerLiveEventParams[] = [];
   readonly inferenceRequests: WorkerInferenceStartParams[] = [];
+  readonly sessionSpawnRequests: WorkerSessionsSpawnParams[] = [];
   readonly applicationOrder: string[] = [];
 
   constructor(private readonly options: FakeGatewayOptions = {}) {
@@ -208,6 +246,19 @@ class FakeWorkerGateway {
     }
     if (Value.Check(WorkerInferenceCancelRequestFrameSchema, parsed)) {
       this.handleInferenceCancel(socket, parsed as WorkerInferenceCancelRequestFrame);
+      return;
+    }
+    if (
+      isRecord(parsed) &&
+      parsed.type === "req" &&
+      typeof parsed.id === "string" &&
+      parsed.method === "worker.sessions.spawn" &&
+      validateWorkerSessionsSpawnParams(parsed.params)
+    ) {
+      this.handleSessionSpawn(socket, {
+        id: parsed.id,
+        params: parsed.params,
+      });
       return;
     }
     const unsupported: unknown = parsed;
@@ -299,6 +350,28 @@ class FakeWorkerGateway {
       id: frame.id,
       ok: true,
       payload: { status: "cancelled" },
+    });
+  }
+
+  private handleSessionSpawn(
+    socket: WebSocket,
+    frame: { id: string; params: WorkerSessionsSpawnParams },
+  ): void {
+    this.methods.push("worker.sessions.spawn");
+    this.sessionSpawnRequests.push(structuredClone(frame.params));
+    if (this.sessionSpawnRequests.length <= (this.options.silenceSessionSpawnResponses ?? 0)) {
+      return;
+    }
+    this.send(socket, {
+      type: "res",
+      id: frame.id,
+      ok: true,
+      payload: {
+        resultJson: JSON.stringify({
+          content: [{ type: "text", text: "child accepted" }],
+          details: { status: "accepted", childSessionKey: "agent:main:cloud-child" },
+        }),
+      },
     });
   }
 
@@ -425,6 +498,10 @@ class FakeWorkerGateway {
       this.sendToolTurn(socket, frame.params, plan === "background-tool");
       return;
     }
+    if (plan === "session-tool") {
+      this.sendSessionToolTurn(socket, frame.params);
+      return;
+    }
     if (plan === "burst-text") {
       this.sendBurstTextTurn(socket, frame.params);
       return;
@@ -441,7 +518,7 @@ class FakeWorkerGateway {
       this.sendEmptyTerminalTurn(socket, frame.params);
       return;
     }
-    this.sendTextTurn(socket, frame.params);
+    this.sendTextTurn(socket, frame.params, plan === "length" ? "length" : "stop");
   }
 
   private sendBurstTextTurn(
@@ -536,7 +613,11 @@ class FakeWorkerGateway {
     this.sendTerminal(socket, identity, 4, assistantMessage([], "stop"));
   }
 
-  private sendTextTurn(socket: WebSocket, identity: WorkerInferenceStartParams): void {
+  private sendTextTurn(
+    socket: WebSocket,
+    identity: WorkerInferenceStartParams,
+    stopReason: "stop" | "length" = "stop",
+  ): void {
     const events: WorkerInferenceEventFrame[] = [
       {
         type: "event",
@@ -586,7 +667,7 @@ class FakeWorkerGateway {
       socket,
       identity,
       5,
-      assistantMessage([{ type: "text", text: "worker reply" }], "stop"),
+      assistantMessage([{ type: "text", text: "worker reply" }], stopReason),
     );
   }
 
@@ -608,6 +689,27 @@ class FakeWorkerGateway {
           background: true,
         }
       : { command: "printf worker-local > local-proof.txt" };
+    this.sendToolCallTurn(socket, identity, {
+      args,
+      toolCallId,
+      toolName: "exec",
+    });
+  }
+
+  private sendSessionToolTurn(socket: WebSocket, identity: WorkerInferenceStartParams): void {
+    this.sendToolCallTurn(socket, identity, {
+      args: { task: "start a nested cloud child" },
+      toolCallId: "nested-session-spawn-call",
+      toolName: "sessions_spawn",
+    });
+  }
+
+  private sendToolCallTurn(
+    socket: WebSocket,
+    identity: WorkerInferenceStartParams,
+    tool: { args: Record<string, unknown>; toolCallId: string; toolName: string },
+  ): void {
+    const { args, toolCallId, toolName } = tool;
     const encodedArgs = JSON.stringify(args);
     const events: WorkerInferenceEventFrame[] = [
       {
@@ -629,7 +731,7 @@ class FakeWorkerGateway {
         payload: {
           ...this.identity(identity),
           seq: 2,
-          event: { type: "toolcall_start", contentIndex: 0, id: toolCallId, toolName: "exec" },
+          event: { type: "toolcall_start", contentIndex: 0, id: toolCallId, toolName },
         },
       },
       {
@@ -659,7 +761,7 @@ class FakeWorkerGateway {
       identity,
       5,
       assistantMessage(
-        [{ type: "toolCall", id: toolCallId, name: "exec", arguments: args }],
+        [{ type: "toolCall", id: toolCallId, name: toolName, arguments: args }],
         "toolUse",
       ),
     );
@@ -706,8 +808,8 @@ class FakeWorkerGateway {
 
 function descriptor(socketPath: string, workspaceDir: string): WorkerLaunchDescriptor {
   return {
-    version: 2,
-    socketPath,
+    version: 3,
+    connectionEndpoint: { kind: "unix", socketPath },
     admission: {
       environmentId: "worker-environment",
       credential: CREDENTIAL,
@@ -721,7 +823,10 @@ function descriptor(socketPath: string, workspaceDir: string): WorkerLaunchDescr
       },
     },
     assignment: {
+      agentId: "worker-agent",
       runId: RUN_ID,
+      operationalRunInstance: createOperationalRunInstanceRef(RUN_ID),
+      agentRuntimeIdentityToken: "test-agent-runtime-token",
       turnId: "worker-turn",
       prompt: "Complete the worker turn.",
       suppressPromptTranscript: false,
@@ -755,6 +860,8 @@ async function setup(options?: FakeGatewayOptions): Promise<{
 }
 
 afterEach(async () => {
+  browserRuntimeMocks.createWorkerBrowserToolRuntime.mockClear();
+  browserRuntimeMocks.dispose.mockClear();
   for (const gateway of gateways.splice(0)) {
     await gateway.stop();
   }
@@ -777,7 +884,7 @@ describe("worker runtime", () => {
     const toolNames = gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name) ?? [];
     expect(toolNames).toHaveLength(6);
     const terminalIndex = gateway.applicationOrder.findIndex(
-      (entry) => entry === "live:lifecycle:end",
+      (entry) => entry === "live:lifecycle:finishing",
     );
     const finalTranscriptIndex = gateway.applicationOrder.findLastIndex((entry) =>
       entry.startsWith("transcript:"),
@@ -794,7 +901,12 @@ describe("worker runtime", () => {
       request.event.kind === "lifecycle" ? [request.event.payload.phase] : [],
     );
     expect(lifecycleEvents).toContain("start");
-    expect(lifecycleEvents).toContain("end");
+    expect(lifecycleEvents).toContain("finishing");
+    expect(lifecycleEvents).not.toContain("end");
+    expect(gateway.liveEventRequests.at(-1)?.event).toMatchObject({
+      kind: "lifecycle",
+      payload: { phase: "finishing", stopReason: "stop" },
+    });
     expect(gateway.transcriptRequests.length).toBeGreaterThan(0);
     expect(gateway.transcriptRequests.map((request) => request.seq)).toEqual(
       gateway.transcriptRequests.map((_request, index) => index + 3),
@@ -813,13 +925,20 @@ describe("worker runtime", () => {
 
   it("exposes exactly the Gateway-authorized worker tools", async () => {
     const { gateway, launch } = await setup();
-    launch.assignment.toolAuthority.allowedToolNames = ["read", "exec"];
+    launch.assignment.toolAuthority.allowedToolNames = [
+      "read",
+      "exec",
+      "sessions_spawn",
+      "sessions_send",
+    ];
 
     await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
 
     expect(gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name)).toEqual([
       "read",
       "exec",
+      "sessions_spawn",
+      "sessions_send",
     ]);
   });
 
@@ -830,6 +949,109 @@ describe("worker runtime", () => {
     await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
 
     expect(gateway.inferenceRequests[0]?.context.tools ?? []).toEqual([]);
+  });
+
+  it("materializes exactly the Browser tool for a browser-only assignment", async () => {
+    const { gateway, launch } = await setup();
+    launch.assignment.toolAuthority.allowedToolNames = ["browser"];
+    launch.assignment.browser = {
+      cdpUrl: "http://127.0.0.1:9222",
+      launcherPath: "/usr/local/bin/openclaw-worker-browser",
+    };
+
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+
+    expect(gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name)).toEqual([
+      "browser",
+    ]);
+    expect(browserRuntimeMocks.createWorkerBrowserToolRuntime).toHaveBeenCalledWith({
+      descriptor: launch.assignment.browser,
+      sessionKey: `worker:${SESSION_ID}`,
+      stateDir: expect.any(String),
+      workspaceDir: await realpath(launch.assignment.workspaceDir),
+    });
+    expect(browserRuntimeMocks.dispose).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { authority: ["browser"] as const, browser: undefined },
+    {
+      authority: ["read"] as const,
+      browser: {
+        cdpUrl: "http://127.0.0.1:9222",
+        launcherPath: "/usr/local/bin/openclaw-worker-browser",
+      },
+    },
+  ])("fails before inference when Browser authority and descriptor disagree", async (testCase) => {
+    const { gateway, launch } = await setup();
+    launch.assignment.toolAuthority.allowedToolNames = [...testCase.authority];
+    if (testCase.browser) {
+      launch.assignment.browser = testCase.browser;
+    } else {
+      delete launch.assignment.browser;
+    }
+
+    await expect(runWorkerDescriptor(launch)).rejects.toThrow(
+      "Worker Browser authority and launch descriptor must be provided together",
+    );
+    expect(gateway.inferenceRequests).toHaveLength(0);
+  });
+
+  it("runs an authorized nested-session tool through the closed worker RPC", async () => {
+    const { gateway, launch } = await setup({ inferencePlans: ["session-tool", "text"] });
+    launch.assignment.toolAuthority.allowedToolNames = ["sessions_spawn"];
+
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+
+    expect(gateway.sessionSpawnRequests).toEqual([
+      {
+        toolCallId: "nested-session-spawn-call",
+        task: "start a nested cloud child",
+      },
+    ]);
+    expect(gateway.inferenceRequests).toHaveLength(2);
+    expect(
+      gateway.transcriptRequests.flatMap((request) =>
+        request.messages.flatMap((message) =>
+          message.role === "toolResult" ? [message.toolName] : [],
+        ),
+      ),
+    ).toContain("sessions_spawn");
+  });
+
+  it("replays the same durable session operation across repeated response loss", async () => {
+    const { gateway, launch } = await setup({
+      heartbeatIntervalMs: 1,
+      ignoreHeartbeat: true,
+      silenceSessionSpawnResponses: 2,
+    });
+    const connection = createWorkerConnection({
+      endpoint: { kind: "unix", socketPath: gateway.socketPath },
+      connectParams: buildWorkerConnectParams(launch),
+      requestTimeoutMs: 25,
+      reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
+    });
+    const states: WorkerConnectionState["kind"][] = [];
+    connection.onStateChange((state) => states.push(state.kind));
+    await connection.start();
+
+    const response = await connection.requestSessionsSpawn({
+      toolCallId: "call-durable-spawn",
+      task: "start a nested cloud child",
+    });
+
+    expect(response).toMatchObject({
+      ok: true,
+      payload: { resultJson: expect.stringContaining("child accepted") },
+    });
+    expect(gateway.connectionCount).toBe(3);
+    expect(states).toContain("reconnecting");
+    expect(gateway.sessionSpawnRequests).toEqual([
+      { toolCallId: "call-durable-spawn", task: "start a nested cloud child" },
+      { toolCallId: "call-durable-spawn", task: "start a nested cloud child" },
+      { toolCallId: "call-durable-spawn", task: "start a nested cloud child" },
+    ]);
+    await connection.stop();
   });
 
   it("fail-stops a stale mid-run transcript without duplicating or rebasing the paid tail", async () => {
@@ -889,7 +1111,7 @@ describe("worker runtime", () => {
     expect(gateway.liveEventRequests.length).toBeGreaterThanOrEqual(2);
     expect(gateway.liveEventRequests.at(-1)?.event).toMatchObject({
       kind: "lifecycle",
-      payload: { phase: "end" },
+      payload: { phase: "finishing" },
     });
   });
 
@@ -907,7 +1129,7 @@ describe("worker runtime", () => {
     expect(gateway.liveEventRequests).toHaveLength(3);
     expect(gateway.liveEventRequests.at(-1)?.event).toMatchObject({
       kind: "lifecycle",
-      payload: { phase: "end" },
+      payload: { phase: "finishing" },
     });
   });
 
@@ -948,7 +1170,7 @@ describe("worker runtime", () => {
     expect(gateway.methods).toContain("worker.inference.cancel");
     expect(gateway.liveEventRequests.at(-1)?.event).toMatchObject({
       kind: "lifecycle",
-      payload: { phase: "end", aborted: true },
+      payload: { phase: "finishing", aborted: true },
     });
   });
 
@@ -979,17 +1201,15 @@ describe("worker runtime", () => {
   });
 
   it.each([
-    ["error", "error", "error"],
-    ["cancelled", "aborted", "end"],
+    ["error", "error", "finishing", { status: "failed", reason: "turn-failed" }],
+    ["cancelled", "aborted", "finishing", { status: "failed", reason: "turn-failed" }],
+    ["length", "length", "finishing", { status: "completed" }],
   ] as const)(
-    "reports remote inference %s terminals as failed turns",
-    async (plan, stopReason, lifecyclePhase) => {
+    "reports remote inference %s terminal reasons",
+    async (plan, stopReason, lifecyclePhase, expectedResult) => {
       const { gateway, launch } = await setup({ inferencePlans: [plan] });
 
-      await expect(runWorkerDescriptor(launch)).resolves.toEqual({
-        status: "failed",
-        reason: "turn-failed",
-      });
+      await expect(runWorkerDescriptor(launch)).resolves.toMatchObject(expectedResult);
       const assistant = gateway.transcriptRequests
         .flatMap((request) => request.messages)
         .toReversed()
@@ -999,7 +1219,9 @@ describe("worker runtime", () => {
         .map((request) => request.event)
         .toReversed()
         .find((event) => event.kind === "lifecycle");
-      expect(lifecycle).toMatchObject({ payload: { phase: lifecyclePhase } });
+      expect(lifecycle).toMatchObject({
+        payload: { phase: lifecyclePhase, stopReason },
+      });
     },
   );
 
@@ -1012,7 +1234,7 @@ describe("worker runtime", () => {
     await expect(runWorkerDescriptor(launch)).rejects.toThrow("worker live event rejected");
     expect(gateway.liveEventRequests.at(-1)?.event).toMatchObject({
       kind: "lifecycle",
-      payload: { phase: "error" },
+      payload: { phase: "finishing" },
     });
   });
 
@@ -1048,9 +1270,11 @@ describe("worker runtime", () => {
     async (plan) => {
       const { gateway, launch } = await setup({ inferencePlans: [plan] });
 
-      await expect(runWorkerDescriptor(launch)).resolves.toEqual({
+      await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({
         status: "failed",
         reason: "turn-failed",
+        transcriptLeafId: expect.any(String),
+        transcriptNextSeq: expect.any(Number),
       });
       const assistant = gateway.transcriptRequests
         .flatMap((request) => request.messages)
@@ -1139,16 +1363,20 @@ describe("worker runtime", () => {
     ).toBe(true);
   });
 
-  it("windows near-limit history for every local tool-loop inference", async () => {
+  it("keeps a pinned replay anchor through repeated local tool-loop inference", async () => {
     const { gateway, launch } = await setup({ inferencePlans: ["tool", "text"] });
     launch.assignment.initialMessages = Array.from(
-      { length: WORKER_INFERENCE_MAX_CONTEXT_MESSAGES },
+      { length: WORKER_INFERENCE_MAX_CONTEXT_MESSAGES - 2 },
       (_value, index): WorkerTranscriptMessage => ({
         role: "user",
         content: [{ type: "text", text: `history-${index}` }],
         timestamp: index + 1,
       }),
     );
+    launch.assignment.initialMessages[2] = {
+      ...assistantMessage([{ type: "text", text: "checkpoint suffix" }], "stop"),
+      providerReplay: structuredClone(WORKER_LOOP_REPLAY),
+    };
 
     await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
 
@@ -1158,6 +1386,11 @@ describe("worker runtime", () => {
         WORKER_INFERENCE_MAX_CONTEXT_MESSAGES,
       );
       expect(request.context.messages[0]?.role).toBe("user");
+      expect(
+        request.context.messages.find(
+          (message) => message.role === "assistant" && message.providerReplay,
+        ),
+      ).toMatchObject({ providerReplay: WORKER_LOOP_REPLAY });
     }
     expect(
       gateway.inferenceRequests[1]?.context.messages.some(
@@ -1173,13 +1406,75 @@ describe("worker runtime", () => {
         .map((message) => message.role),
     ).toEqual(["user", "assistant", "toolResult", "assistant"]);
   });
+
+  it("fails before a second inference when the replay unit outgrows the window", async () => {
+    const { gateway, launch } = await setup({ inferencePlans: ["tool", "text"] });
+    launch.assignment.initialMessages = Array.from(
+      { length: WORKER_INFERENCE_MAX_CONTEXT_MESSAGES - 1 },
+      (_value, index): WorkerTranscriptMessage => ({
+        role: "user",
+        content: [{ type: "text", text: `history-${index}` }],
+        timestamp: index + 1,
+      }),
+    );
+    launch.assignment.initialMessages[0] = {
+      ...assistantMessage([{ type: "text", text: "checkpoint suffix" }], "stop"),
+      providerReplay: structuredClone(WORKER_LOOP_REPLAY),
+    };
+
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({
+      status: "failed",
+      reason: "turn-failed",
+      transcriptLeafId: expect.any(String),
+      transcriptNextSeq: expect.any(Number),
+    });
+
+    expect(gateway.inferenceRequests).toHaveLength(1);
+    expect(gateway.inferenceRequests[0]?.context.messages).toHaveLength(
+      WORKER_INFERENCE_MAX_CONTEXT_MESSAGES,
+    );
+    expect(gateway.inferenceRequests[0]?.context.messages[0]).toMatchObject({
+      providerReplay: WORKER_LOOP_REPLAY,
+    });
+    const terminal = gateway.transcriptRequests
+      .flatMap((request) => request.messages)
+      .toReversed()
+      .find((message) => message.role === "assistant");
+    expect(terminal).toMatchObject({
+      stopReason: "error",
+      errorMessage: `${WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE} (provider-replay-message-limit)`,
+    });
+  });
 });
 
 describe("worker reconnect clients", () => {
+  it("isolates ready listener failures while admitting the worker and starting heartbeats", async () => {
+    const { gateway, launch } = await setup({ heartbeatIntervalMs: 1 });
+    const connection = createWorkerConnection({
+      endpoint: { kind: "unix", socketPath: gateway.socketPath },
+      connectParams: buildWorkerConnectParams(launch),
+    });
+    let healthyReadyCalls = 0;
+    connection.onReady(() => {
+      throw new Error("induced ready observer failure");
+    });
+    connection.onReady(() => {
+      healthyReadyCalls += 1;
+    });
+
+    try {
+      await expect(connection.start()).resolves.toMatchObject({ ownerEpoch: OWNER_EPOCH });
+      expect(healthyReadyCalls).toBe(1);
+      await waitForFast(() => expect(gateway.methods).toContain("worker.heartbeat"));
+    } finally {
+      await connection.stop();
+    }
+  });
+
   it("fails closed when the overall admission deadline expires", async () => {
     const { gateway, launch } = await setup({ admissionFailure: "gateway-unavailable" });
     const connection = createWorkerConnection({
-      socketPath: gateway.socketPath,
+      endpoint: { kind: "unix", socketPath: gateway.socketPath },
       connectParams: buildWorkerConnectParams(launch),
       admissionTimeoutMs: 25,
       admissionDeadlineMs: 250,
@@ -1204,7 +1499,7 @@ describe("worker reconnect clients", () => {
   it("times out a silent admission attempt and admits on reconnect", async () => {
     const { gateway, launch } = await setup({ ignoreFirstAdmission: true });
     const connection = createWorkerConnection({
-      socketPath: gateway.socketPath,
+      endpoint: { kind: "unix", socketPath: gateway.socketPath },
       connectParams: buildWorkerConnectParams(launch),
       admissionTimeoutMs: 25,
       reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
@@ -1223,7 +1518,7 @@ describe("worker reconnect clients", () => {
       heartbeatIntervalMs: 1,
     });
     const connection = createWorkerConnection({
-      socketPath: gateway.socketPath,
+      endpoint: { kind: "unix", socketPath: gateway.socketPath },
       connectParams: buildWorkerConnectParams(launch),
       requestTimeoutMs: 25,
       reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
@@ -1243,7 +1538,7 @@ describe("worker reconnect clients", () => {
       silenceFirstInference: true,
     });
     const connection = createWorkerConnection({
-      socketPath: gateway.socketPath,
+      endpoint: { kind: "unix", socketPath: gateway.socketPath },
       connectParams: buildWorkerConnectParams(launch),
       requestTimeoutMs: 40,
       reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
@@ -1264,9 +1559,14 @@ describe("worker reconnect clients", () => {
           timestamp: 1,
         },
       ]);
-      await live.emit(RUN_ID, {
+      live.enqueuePreview(RUN_ID, {
         kind: "assistant",
         payload: { text: "silent live event", delta: "silent live event" },
+      });
+      await waitForFast(() => expect(gateway.liveEventRequests).toHaveLength(2));
+      await live.emitTerminal(RUN_ID, {
+        kind: "lifecycle",
+        payload: { phase: "finishing", startedAt: 1, endedAt: 2 },
       });
       await inference.start({
         runEpoch: OWNER_EPOCH,
@@ -1280,7 +1580,7 @@ describe("worker reconnect clients", () => {
 
       expect(gateway.transcriptRequests).toHaveLength(2);
       expect(gateway.transcriptRequests[1]).toEqual(gateway.transcriptRequests[0]);
-      expect(gateway.liveEventRequests).toHaveLength(2);
+      expect(gateway.liveEventRequests).toHaveLength(3);
       expect(gateway.liveEventRequests[1]).toEqual(gateway.liveEventRequests[0]);
       expect(gateway.inferenceRequests).toHaveLength(2);
       expect(gateway.inferenceRequests[1]).toEqual(gateway.inferenceRequests[0]);
@@ -1295,7 +1595,7 @@ describe("worker reconnect clients", () => {
   it("settles an in-flight commit and a later live emit after stop", async () => {
     const { gateway, launch } = await setup({ silenceFirstTranscript: true });
     const connection = createWorkerConnection({
-      socketPath: gateway.socketPath,
+      endpoint: { kind: "unix", socketPath: gateway.socketPath },
       connectParams: buildWorkerConnectParams(launch),
       requestTimeoutMs: 5_000,
       reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
@@ -1328,10 +1628,14 @@ describe("worker reconnect clients", () => {
       await expect(commit).rejects.toBeInstanceOf(WorkerConnectionStoppedError);
 
       live = new WorkerLiveEventClient(connection, { runEpoch: OWNER_EPOCH });
+      live.enqueuePreview(RUN_ID, {
+        kind: "assistant",
+        payload: { text: "late live event", delta: "late live event" },
+      });
       await expect(
-        live.emit(RUN_ID, {
-          kind: "assistant",
-          payload: { text: "late live event", delta: "late live event" },
+        live.emitTerminal(RUN_ID, {
+          kind: "lifecycle",
+          payload: { phase: "finishing", startedAt: 1, endedAt: 2 },
         }),
       ).rejects.toBeInstanceOf(WorkerConnectionStoppedError);
       expect(waitForReady.mock.calls.length).toBeLessThanOrEqual(2);

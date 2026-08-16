@@ -23,8 +23,8 @@ import { applyAgentToolSurfaceCatalog } from "../../tool-surface-plan.js";
 import { log } from "../logger.js";
 import type { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 import { collectAttemptExplicitToolAllowlistSources } from "./attempt-tool-allowlist.js";
-import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-base-prepare.js";
-import { buildToolSearchRunPlan } from "./attempt.tool-search-run-plan.js";
+import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
+import { buildToolSearchRunPlan } from "./attempt-tool-search-run-plan.js";
 import { wrapEmbeddedAttemptToolWithActivity } from "./tool-activity-heartbeat.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 

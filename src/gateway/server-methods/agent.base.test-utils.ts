@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import type { CronCreatorAuthorityCapability } from "../../agents/cron-creator-authority-context.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import {
   beginSessionWorkAdmission,
@@ -10,7 +11,7 @@ import {
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import {
   getAgentTestMocks,
@@ -68,6 +69,36 @@ describe("gateway agent handler", () => {
         maxEntries: 42,
       },
     });
+  });
+
+  it("carries exact cron creator authority through direct local agent RPC", async () => {
+    const runId = "direct-agent-cron-authority";
+    let capability: CronCreatorAuthorityCapability | undefined;
+    primeMainAgentRun();
+    mocks.agentCommand.mockImplementation(async (opts: AgentCommandCall) => {
+      capability = opts.cronCreatorAuthorityCapability as
+        | CronCreatorAuthorityCapability
+        | undefined;
+      expect(capability).toMatchObject({ active: true, runId });
+      return { payloads: [{ text: "ok" }], meta: { durationMs: 100 } };
+    });
+
+    await invokeAgent(
+      {
+        message: "create an automation",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: runId,
+      },
+      {
+        client: {
+          connect: { scopes: ["operator.admin"] },
+          internal: { isLocalClient: true },
+        } as AgentHandlerArgs["client"],
+      },
+    );
+
+    await waitForAssertion(() => expect(capability?.active).toBe(false));
   });
 
   it("resolves explicit recipient sessions before Gateway admission", async () => {
@@ -233,10 +264,15 @@ describe("gateway agent handler", () => {
       respond: duplicateRespond,
       flushDispatch: false,
     });
-    expect(duplicateRespond).toHaveBeenCalledWith(true, { runId, status: "in_flight" }, undefined, {
-      cached: true,
-      runId,
-    });
+    expect(duplicateRespond).toHaveBeenCalledWith(
+      true,
+      { runId, status: "in_flight", agentId: "ops" },
+      undefined,
+      {
+        cached: true,
+        runId,
+      },
+    );
     expect(mocks.resolveAgentExplicitRecipientSession).toHaveBeenCalledTimes(1);
 
     finishRoute({ sessionKey });
@@ -342,6 +378,27 @@ describe("gateway agent handler", () => {
     expectRespondError(respond, {
       code: ErrorCodes.INVALID_REQUEST,
       message: "ambiguous recipient",
+    });
+    expect(context.dedupe.has(`agent:${runId}`)).toBe(false);
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+  });
+
+  it("clears a sessionless reservation when content validation fails", async () => {
+    const runId = "sessionless-invalid-reply-channel";
+    const context = makeContext();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "hi",
+        replyChannel: "unknown-channel",
+        idempotencyKey: runId,
+      },
+      { context, respond, reqId: runId, flushDispatch: false },
+    );
+
+    expectRespondError(respond, {
+      message: "invalid agent params: unknown channel: unknown-channel",
     });
     expect(context.dedupe.has(`agent:${runId}`)).toBe(false);
     expect(mocks.agentCommand).not.toHaveBeenCalled();
@@ -638,7 +695,7 @@ describe("gateway agent handler", () => {
     );
 
     expectRespondError(respond, {
-      message: `Error: Session "${sessionKey}" was deleted while starting work. Retry.`,
+      message: `Session "${sessionKey}" was deleted while starting work. Retry.`,
     });
     expect(mocks.agentCommand).not.toHaveBeenCalled();
   });
@@ -666,7 +723,7 @@ describe("gateway agent handler", () => {
     );
 
     expectRespondError(respond, {
-      message: `Error: Session "${sessionKey}" was deleted while starting work. Retry.`,
+      message: `Session "${sessionKey}" was deleted while starting work. Retry.`,
     });
     expect(mocks.agentCommand).not.toHaveBeenCalled();
   });
@@ -699,7 +756,7 @@ describe("gateway agent handler", () => {
     );
 
     expectRespondError(respond, {
-      message: `Error: Session "${sessionKey}" was deleted while starting work. Retry.`,
+      message: `Session "${sessionKey}" was deleted while starting work. Retry.`,
     });
     expect(mocks.agentCommand).not.toHaveBeenCalled();
   });
@@ -1198,7 +1255,7 @@ describe("gateway agent handler", () => {
   });
 
   it("does not pass a text-only user-turn recorder for offloaded image agent runs", async () => {
-    await withTempDir({ prefix: "openclaw-gateway-agent-offloaded-image-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-gateway-agent-offloaded-image-" }, async (root) => {
       useTestStateDir(root);
       mockMainSessionEntry({
         sessionId: "existing-session-id",
@@ -1413,7 +1470,7 @@ describe("gateway agent handler", () => {
         sizeBytes: 64,
       });
 
-      await withTempDir({ prefix: "openclaw-gateway-terminal-main-newer-" }, async (root) => {
+      await withTestDir({ prefix: "openclaw-gateway-terminal-main-newer-" }, async (root) => {
         const sessionsDir = `${root}/sessions`;
         const sessionFile = "terminal-main-session.jsonl";
         mocks.loadSessionEntry.mockReturnValue({
@@ -1472,7 +1529,7 @@ describe("gateway agent handler", () => {
     setDateOnlyFakeClockActive(true);
     vi.setSystemTime(now);
 
-    await withTempDir({ prefix: "openclaw-gateway-terminal-main-fresh-marker-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-gateway-terminal-main-fresh-marker-" }, async (root) => {
       const sessionsDir = `${root}/sessions`;
       await fs.mkdir(sessionsDir, { recursive: true });
       const sessionFile = "terminal-main-session.jsonl";
@@ -1538,7 +1595,7 @@ describe("gateway agent handler", () => {
     setDateOnlyFakeClockActive(true);
     vi.setSystemTime(now);
 
-    await withTempDir(
+    await withTestDir(
       { prefix: "openclaw-gateway-terminal-main-explicit-resume-" },
       async (root) => {
         const sessionsDir = `${root}/sessions`;
@@ -1610,7 +1667,7 @@ describe("gateway agent handler", () => {
       setDateOnlyFakeClockActive(true);
       vi.setSystemTime(now);
 
-      await withTempDir(
+      await withTestDir(
         { prefix: `openclaw-gateway-terminal-main-${runKind}-reuse-` },
         async (root) => {
           const sessionsDir = `${root}/sessions`;

@@ -1,8 +1,9 @@
 // Qa Lab tests cover Windows system tool path resolution.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   resolveQaWindowsPowerShellExePath,
   resolveQaWindowsSystem32ExePath,
+  runQaWindowsTaskkill,
 } from "./windows-system-tools.js";
 
 describe("qa-lab windows system tools", () => {
@@ -12,6 +13,34 @@ describe("qa-lab windows system tools", () => {
     );
     expect(resolveQaWindowsPowerShellExePath({ SystemRoot: "D:\\Windows\\" })).toBe(
       "D:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    );
+  });
+
+  it("force-kills a process tree when graceful taskkill fails", () => {
+    const runCommand = vi
+      .fn()
+      .mockReturnValueOnce({ status: 1 })
+      .mockReturnValueOnce({ status: 0 });
+
+    expect(
+      runQaWindowsTaskkill({
+        pid: 12345,
+        signal: "SIGTERM",
+        env: { SystemRoot: "D:\\Windows" },
+        runCommand,
+      }),
+    ).toBe(true);
+    expect(runCommand).toHaveBeenNthCalledWith(
+      1,
+      "D:\\Windows\\System32\\taskkill.exe",
+      ["/PID", "12345", "/T"],
+      { stdio: "ignore", windowsHide: true, timeout: 5_000 },
+    );
+    expect(runCommand).toHaveBeenNthCalledWith(
+      2,
+      "D:\\Windows\\System32\\taskkill.exe",
+      ["/PID", "12345", "/T", "/F"],
+      { stdio: "ignore", windowsHide: true, timeout: 5_000 },
     );
   });
 

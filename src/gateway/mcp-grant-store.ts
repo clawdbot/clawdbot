@@ -1,4 +1,8 @@
 import crypto from "node:crypto";
+import {
+  getAdmittedRunDelegatedAuthority,
+  type AdmittedRunContext,
+} from "../agents/admitted-run-context.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { ExecElevatedDefaults } from "../agents/bash-tools.exec-types.js";
 import type { ExecPolicyOverrides, ExecSessionDefaults } from "../agents/exec-defaults.js";
@@ -8,12 +12,15 @@ import type {
   TaskSuggestionDeliveryMode,
 } from "../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
+import type { CronScheduledToolCallerOrigin } from "../cron/scheduled-tool-policy.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 
 export type McpLoopbackRequestContext = {
   sessionKey: string;
   runtimePolicySessionKey?: string;
+  /** Agent whose execution policy applies when it differs from the durable session owner. */
+  runtimePolicyAgentId?: string;
   agentId?: string;
   sessionId?: string;
   runId?: string;
@@ -44,6 +51,8 @@ export type McpLoopbackRequestContext = {
    */
   toolsAllow?: string[];
   scheduledToolPolicy?: ScheduledToolPolicyContext;
+  /** Host-owned creator origin; child MCP request fields cannot widen it. */
+  cronCreatorCallerOrigin?: CronScheduledToolCallerOrigin;
   senderIsOwner: boolean;
   /** Capability minted only for Gateway-launched CLI backends. */
   nodeExecAllowed?: boolean;
@@ -67,6 +76,8 @@ interface McpAttachGrant {
   readonly token: string;
   /** The openclaw session this grant is bound to; tool scope is resolved for this key. */
   readonly sessionKey: string;
+  /** Explicit agent owner for canonical global sessions, whose key cannot encode one. */
+  readonly agentId?: string;
   /** Absolute expiry (ms epoch). */
   readonly expiresAtMs: number;
   /** Absolute mint time (ms epoch). */
@@ -87,6 +98,8 @@ type McpLoopbackToolAuth = {
 
 type StoredMcpLoopbackClientGrant = McpLoopbackClientGrant & {
   runtimeOwnerToken: string;
+  /** Exact host admission retained outside the child-visible request context. */
+  admittedRunContext?: AdmittedRunContext;
   activeCaptureKey?: string;
   toolAuth?: McpLoopbackToolAuth;
 };
@@ -119,6 +132,7 @@ function clampTtlMs(ttlMs: number | undefined): number {
 
 export function mintAttachGrant(params: {
   sessionKey: string;
+  agentId?: string;
   ttlMs?: number;
   nowMs?: number;
 }): McpAttachGrant {
@@ -126,12 +140,14 @@ export function mintAttachGrant(params: {
   if (!sessionKey) {
     throw new Error("mintAttachGrant: sessionKey is required");
   }
+  const agentId = sessionKey === "global" ? params.agentId?.trim() || undefined : undefined;
   const nowMs = params.nowMs ?? Date.now();
   // Mint sweeps stale entries so abandoned grants do not accumulate.
   sweepExpiredAttachGrants(nowMs);
   const grant: McpAttachGrant = {
     token: crypto.randomBytes(32).toString("hex"),
     sessionKey,
+    ...(agentId ? { agentId } : {}),
     issuedAtMs: nowMs,
     expiresAtMs: nowMs + clampTtlMs(params.ttlMs),
   };
@@ -185,6 +201,7 @@ function sweepExpiredAttachGrants(nowMs: number = Date.now()): number {
 export function mintMcpLoopbackClientGrant(params: {
   context: McpLoopbackRequestContext;
   runtimeOwnerToken: string;
+  admittedRunContext?: AdmittedRunContext;
   toolAuth?: McpLoopbackToolAuth;
 }): McpLoopbackClientGrant {
   const sessionKey = params.context.sessionKey.trim();
@@ -199,6 +216,7 @@ export function mintMcpLoopbackClientGrant(params: {
     token: crypto.randomBytes(32).toString("hex"),
     context: structuredClone({ ...params.context, sessionKey }),
     runtimeOwnerToken,
+    ...(params.admittedRunContext ? { admittedRunContext: params.admittedRunContext } : {}),
     ...(params.toolAuth ? { toolAuth: structuredClone(params.toolAuth) } : {}),
   };
   clientGrantsByToken.set(grant.token, grant);
@@ -206,6 +224,27 @@ export function mintMcpLoopbackClientGrant(params: {
     token: grant.token,
     context: grant.context,
   });
+}
+
+/** Attaches the exact late CLI admission before the grant can execute tools. */
+export function bindMcpLoopbackClientGrantAdmission(params: {
+  token: string;
+  runtimeOwnerToken: string;
+  admittedRunContext: AdmittedRunContext;
+}): boolean {
+  const grant = clientGrantsByToken.get(params.token);
+  if (
+    !grant ||
+    grant.runtimeOwnerToken !== params.runtimeOwnerToken ||
+    (grant.admittedRunContext && grant.admittedRunContext !== params.admittedRunContext)
+  ) {
+    return false;
+  }
+  clientGrantsByToken.set(params.token, {
+    ...grant,
+    admittedRunContext: params.admittedRunContext,
+  });
+  return true;
 }
 
 /** Bind the active execution attempt's capture before its child process starts. */
@@ -253,6 +292,7 @@ export function resolveMcpLoopbackClientGrant(params: {
   | {
       context: McpLoopbackRequestContext;
       captureKey: string;
+      admittedRunContext?: AdmittedRunContext;
       toolAuth?: McpLoopbackToolAuth;
     }
   | undefined {
@@ -260,6 +300,8 @@ export function resolveMcpLoopbackClientGrant(params: {
   if (
     !grant ||
     grant.runtimeOwnerToken !== params.runtimeOwnerToken ||
+    !grant.admittedRunContext ||
+    !getAdmittedRunDelegatedAuthority(grant.admittedRunContext) ||
     !grant.activeCaptureKey ||
     grant.activeCaptureKey !== params.captureKey
   ) {
@@ -270,6 +312,7 @@ export function resolveMcpLoopbackClientGrant(params: {
   return {
     context: structuredClone(grant.context),
     captureKey: grant.activeCaptureKey,
+    ...(grant.admittedRunContext ? { admittedRunContext: grant.admittedRunContext } : {}),
     ...(grant.toolAuth ? { toolAuth: grant.toolAuth } : {}),
   };
 }

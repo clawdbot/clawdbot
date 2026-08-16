@@ -4,20 +4,40 @@ import { chmodSync, copyFileSync, mkdirSync, readdirSync, statSync } from "node:
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+/**
+ * @param {unknown} condition
+ * @param {string} message
+ * @returns {asserts condition}
+ */
 function check(condition, message) {
   if (!condition) {
     throw new Error(message);
   }
 }
 
+/**
+ * @param {unknown} value
+ * @param {string} label
+ * @returns {number}
+ */
 function positiveInteger(value, label) {
   const parsed = Number(value);
   check(Number.isSafeInteger(parsed) && parsed > 0, `${label} must be a positive integer`);
   return parsed;
 }
 
+/**
+ * @param {string} root
+ * @returns {Array<{absolute: string, relative: string}>}
+ */
 function regularFiles(root) {
+  /** @type {Array<{absolute: string, relative: string}>} */
   const files = [];
+  /**
+   * @param {string} dir
+   * @param {string} prefix
+   * @returns {void}
+   */
   const visit = (dir, prefix) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const relative = path.join(prefix, entry.name);
@@ -34,6 +54,10 @@ function regularFiles(root) {
   return files;
 }
 
+/**
+ * @param {{bundleDir: string, destinationDir: string}} params
+ * @returns {string[]}
+ */
 export function copyBundleMetadata({ bundleDir, destinationDir }) {
   const entries = readdirSync(bundleDir, { withFileTypes: true });
   const metadata = entries
@@ -58,6 +82,10 @@ export function copyBundleMetadata({ bundleDir, destinationDir }) {
   return metadata;
 }
 
+/**
+ * @param {{publishRoot: string, maxFileBytes: string | number}} params
+ * @returns {number}
+ */
 export function assertPublishedFileSizeLimit({ publishRoot, maxFileBytes }) {
   const limit = positiveInteger(maxFileBytes, "max file bytes");
   const files = regularFiles(publishRoot);
@@ -71,7 +99,12 @@ export function assertPublishedFileSizeLimit({ publishRoot, maxFileBytes }) {
   return files.length;
 }
 
+/**
+ * @param {readonly string[]} argv
+ * @returns {Record<"bundle-dir" | "bundle-destination" | "publish-root" | "max-file-bytes", string>}
+ */
 function parseArgs(argv) {
+  /** @type {Partial<Record<"bundle-dir" | "bundle-destination" | "publish-root" | "max-file-bytes", string>>} */
   const values = {};
   for (let index = 0; index < argv.length; index += 2) {
     const flag = argv[index];
@@ -83,14 +116,17 @@ function parseArgs(argv) {
       `unknown --${key}`,
     );
     check(values[key] === undefined, `duplicate --${key}`);
-    values[key] = value;
+    values[/** @type {keyof typeof values} */ (key)] = value;
   }
   for (const key of ["bundle-dir", "bundle-destination", "publish-root", "max-file-bytes"]) {
     check(values[key], `missing --${key}`);
   }
-  return values;
+  return /** @type {Record<"bundle-dir" | "bundle-destination" | "publish-root" | "max-file-bytes", string>} */ (
+    values
+  );
 }
 
+/** @returns {void} */
 function runCli() {
   const args = parseArgs(process.argv.slice(2));
   const bundleFiles = copyBundleMetadata({

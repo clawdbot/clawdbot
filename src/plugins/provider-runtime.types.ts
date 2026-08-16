@@ -260,7 +260,7 @@ export type ProviderExtraParamsForTransportContext = Omit<
   "extraParams"
 > & {
   model?: ProviderRuntimeModel;
-  transport?: "sse" | "websocket" | "auto";
+  transport?: "sse" | "websocket" | "websocket-cached" | "auto";
   extraParams: Record<string, unknown>;
 };
 

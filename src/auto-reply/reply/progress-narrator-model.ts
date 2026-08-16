@@ -68,7 +68,6 @@ export async function prepareNarrationModel(params: { cfg: OpenClawConfig; agent
       cfg: params.cfg,
       agentId: params.agentId,
       useUtilityModel: true,
-      useAsyncModelResolution: true,
       allowMissingApiKeyModes: ["aws-sdk"],
     });
     if ("error" in prepared) {

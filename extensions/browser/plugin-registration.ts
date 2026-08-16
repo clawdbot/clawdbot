@@ -67,7 +67,6 @@ function createLazyBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
   agentSessionKey?: string;
-  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   activeModel?: {
@@ -112,7 +111,6 @@ function createBrowserToolOptions(ctx: OpenClawPluginToolContext): {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
   agentSessionKey?: string;
-  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   activeModel?: {
@@ -134,7 +132,6 @@ function createBrowserToolOptions(ctx: OpenClawPluginToolContext): {
       ? { allowHostControl: ctx.browser.allowHostControl }
       : {}),
     ...(ctx.sessionKey ? { agentSessionKey: ctx.sessionKey } : {}),
-    ...(ctx.agentId ? { agentId: ctx.agentId } : {}),
     ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
     ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
     ...(ctx.activeModel?.provider || ctx.activeModel?.modelId
@@ -208,8 +205,9 @@ function createLazyBrowserPluginService(): OpenClawPluginService {
   let service: OpenClawPluginService | null = null;
   const loadService = async () => {
     if (!service) {
-      const { createBrowserPluginService } = await loadBrowserRegistrationRuntimeModule();
-      service = createBrowserPluginService();
+      const { createBrowserPluginService, stopBrowserControlService } =
+        await loadBrowserRegistrationRuntimeModule();
+      service = createBrowserPluginService({ stopOnDemand: stopBrowserControlService });
     }
     return service;
   };
@@ -224,7 +222,11 @@ function createLazyBrowserPluginService(): OpenClawPluginService {
     },
     stop: async (ctx) => {
       if (!service) {
-        const { stopBrowserControlService } = await import("./src/control-service.js");
+        const loadedRuntime = loadBrowserRegistrationRuntimeModule.peek();
+        if (!loadedRuntime) {
+          return;
+        }
+        const { stopBrowserControlService } = await loadedRuntime;
         await stopBrowserControlService();
         return;
       }

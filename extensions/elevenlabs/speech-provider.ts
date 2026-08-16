@@ -17,7 +17,6 @@ import type {
 import {
   asBoolean,
   asFiniteNumber,
-  asObject,
   normalizeApplyTextNormalization,
   normalizeLanguageCode,
   normalizeSeed,
@@ -30,6 +29,7 @@ import {
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
+  asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
   parseBooleanValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -134,9 +134,9 @@ function normalizeVoiceSettings(
 function normalizeElevenLabsProviderConfig(
   rawConfig: Record<string, unknown>,
 ): ElevenLabsProviderConfig {
-  const providers = asObject(rawConfig.providers);
-  const raw = asObject(providers?.elevenlabs) ?? asObject(rawConfig.elevenlabs);
-  const rawVoiceSettings = asObject(raw?.voiceSettings);
+  const providers = asOptionalRecord(rawConfig.providers);
+  const raw = asOptionalRecord(providers?.elevenlabs) ?? asOptionalRecord(rawConfig.elevenlabs);
+  const rawVoiceSettings = asOptionalRecord(raw?.voiceSettings);
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
@@ -162,7 +162,7 @@ function normalizeElevenLabsProviderConfig(
 
 function readElevenLabsProviderConfig(config: SpeechProviderConfig): ElevenLabsProviderConfig {
   const defaults = normalizeElevenLabsProviderConfig({});
-  const voiceSettings = asObject(config.voiceSettings);
+  const voiceSettings = asOptionalRecord(config.voiceSettings);
   return {
     apiKey: trimToUndefined(config.apiKey) ?? defaults.apiKey,
     baseUrl: normalizeElevenLabsBaseUrl(trimToUndefined(config.baseUrl) ?? defaults.baseUrl),
@@ -205,7 +205,7 @@ function mergeVoiceSettingsOverride(
   return {
     ...ctx.currentOverrides,
     voiceSettings: {
-      ...asObject(ctx.currentOverrides?.voiceSettings),
+      ...asOptionalRecord(ctx.currentOverrides?.voiceSettings),
       ...next,
     },
   };
@@ -215,7 +215,7 @@ function resolveVoiceSettingsOverride(
   base: ElevenLabsProviderConfig["voiceSettings"],
   overrides: unknown,
 ): ElevenLabsProviderConfig["voiceSettings"] {
-  const voiceSettings = asObject(overrides);
+  const voiceSettings = asOptionalRecord(overrides);
   return {
     ...base,
     ...normalizeVoiceSettings(voiceSettings),
@@ -450,7 +450,7 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
     parseDirectiveToken,
     resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {
       const base = normalizeElevenLabsProviderConfig(baseTtsConfig);
-      const talkVoiceSettings = asObject(talkProviderConfig.voiceSettings);
+      const talkVoiceSettings = asOptionalRecord(talkProviderConfig.voiceSettings);
       const resolvedTalkApiKey = resolveElevenLabsTalkApiKey(talkProviderConfig);
       return {
         ...base,

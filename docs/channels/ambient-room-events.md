@@ -182,15 +182,15 @@ Use an agent override when several agents share the same room but only one shoul
     },
   },
   agents: {
-    list: [
-      {
-        id: "main",
+    entries: {
+      main: {
+        default: true,
         groupChat: {
           unmentionedInbound: "room_event",
           mentionPatterns: ["@openclaw", "openclaw"],
         },
       },
-    ],
+    },
   },
 }
 ```

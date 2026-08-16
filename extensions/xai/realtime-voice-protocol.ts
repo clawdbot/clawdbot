@@ -13,6 +13,7 @@ import {
   XAI_REALTIME_DEFAULT_VAD_THRESHOLD,
   XAI_REALTIME_INPUT_TRANSCRIPTION_MODEL,
   XAI_REALTIME_MAX_PENDING_PLAYBACK_MARKS,
+  serializeXaiRealtimeToolResult,
   type XaiRealtimeAudioFormatConfig,
   type XaiRealtimeEvent,
   type XaiRealtimeSessionUpdate,
@@ -35,10 +36,7 @@ export abstract class XaiRealtimeVoiceProtocol {
   protected lastAssistantItemId: string | null = null;
   protected toolCallBuffers = new Map<string, { name: string; callId: string; args: string }>();
   protected deliveredToolCallKeys = new Set<string>();
-  protected pendingToolResultAcks = new Map<
-    string,
-    { result: unknown; options?: RealtimeVoiceToolResultOptions }
-  >();
+  protected pendingToolResultAcks = new Set<string>();
   protected conversationId: string | null = null;
 
   constructor(protected readonly config: XaiRealtimeVoiceBridgeConfig) {
@@ -67,18 +65,16 @@ export abstract class XaiRealtimeVoiceProtocol {
     if (options?.willContinue === true) {
       return;
     }
-    this.pendingToolResultAcks.set(callId, {
-      result,
-      ...(options ? { options } : {}),
-    });
+    const output = serializeXaiRealtimeToolResult(result);
     this.sendEvent({
       type: "conversation.item.create",
       item: {
         type: "function_call_output",
         call_id: callId,
-        output: JSON.stringify(result),
+        output,
       },
     });
+    this.pendingToolResultAcks.add(callId);
     this.continuingToolCallIds.delete(callId);
     this.pendingToolCallIds.delete(callId);
     if (options?.suppressResponse !== true) {

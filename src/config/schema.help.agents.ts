@@ -221,6 +221,8 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Exact MCP tool names or simple '*' globs to expose from this server. When omitted, all server tools remain eligible unless excluded.",
   "mcp.servers.*.toolFilter.exclude":
     "Exact MCP tool names or simple '*' globs to hide from this server.",
+  "mcp.servers.*.oauth.identity":
+    'OAuth credential ownership for this server. Omit this field or use "shared" for operator-managed credentials; use "per-requester" to let each authenticated sender connect their own account.',
   "mcp.servers.*.oauth.authProfileId":
     "Refresh-capable auth profile id used to inject the current bearer token into this remote MCP server. When set, OpenClaw resolves and refreshes the profile at runtime and does not project refresh material downstream.",
   "mcp.servers.*.codex.agents":

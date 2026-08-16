@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { createRuntimeConfigCapability } from "../../lib/config/index.ts";
+import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import * as avatarImage from "./avatar-image.ts";
 import { resetIdentityDraft, saveIdentityDraft, selectIdentityAvatar } from "./identity-actions.ts";
 
@@ -41,6 +41,7 @@ describe("agent identity actions", () => {
       runtimeConfig: {
         runExternalMutation,
       } as unknown as ApplicationContext["runtimeConfig"],
+      canDispatch: () => true,
       isCurrent: () => true,
       onSaved: vi.fn(),
     });
@@ -122,6 +123,7 @@ describe("agent identity actions", () => {
       agents,
       agentIdentity,
       runtimeConfig,
+      canDispatch: () => true,
       isCurrent: () => true,
       onSaved: vi.fn(),
     });
@@ -164,6 +166,7 @@ describe("agent identity actions", () => {
       agents: {} as ApplicationContext["agents"],
       agentIdentity: {} as ApplicationContext["agentIdentity"],
       runtimeConfig,
+      canDispatch: () => true,
       isCurrent: () => true,
       onSaved: vi.fn(),
     });
@@ -171,6 +174,42 @@ describe("agent identity actions", () => {
     expect(replacementRequest).not.toHaveBeenCalled();
     expect(state.identityError).toContain(
       "Connection changed before the agent identity update started.",
+    );
+  });
+
+  it("does not send a queued identity update after access changes", async () => {
+    const request = vi.fn();
+    const client = { request } as unknown as GatewayBrowserClient;
+    const state = host();
+    state.identityDraft.name = "Agent Smith";
+    const runExternalMutation = vi.fn(async (_task, options) => {
+      if (options?.canDispatch?.()) {
+        throw new Error("Expected identity access to be revoked.");
+      }
+      return {
+        ok: false as const,
+        reason: "unavailable" as const,
+        error: options?.dispatchError ?? "Access changed.",
+      };
+    });
+
+    await saveIdentityDraft({
+      host: state,
+      expectedClient: client,
+      agentId: "main",
+      agents: {} as ApplicationContext["agents"],
+      agentIdentity: {} as ApplicationContext["agentIdentity"],
+      runtimeConfig: {
+        runExternalMutation,
+      } as unknown as ApplicationContext["runtimeConfig"],
+      canDispatch: () => false,
+      isCurrent: () => true,
+      onSaved: vi.fn(),
+    });
+
+    expect(request).not.toHaveBeenCalled();
+    expect(state.identityError).toContain(
+      "Access changed before the agent identity update started.",
     );
   });
 
@@ -198,6 +237,7 @@ describe("agent identity actions", () => {
       runtimeConfig: {
         runExternalMutation,
       } as unknown as ApplicationContext["runtimeConfig"],
+      canDispatch: () => true,
       isCurrent: () => true,
       onSaved: vi.fn(),
     });

@@ -24,6 +24,7 @@ import {
   renderSettingsToggleRow,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { languageLabel, renderLanguageSelect } from "./language-select.ts";
 import { renderSessionObserverSettings } from "./session-observer-settings.ts";
 import { renderSettingsSelectRow } from "./settings-select-row.ts";
@@ -395,6 +396,7 @@ export function renderLobsterPetSection(props: ConfigProps) {
                           : "lobsterdex__mini--unseen"}"
                         style=${lobsterLookStyle(look)}
                         tabindex="0"
+                        role="img"
                         aria-label=${ariaLabel}
                       >
                         ${renderLobsterSvg(look, { standalone: true })}
@@ -416,16 +418,11 @@ export function renderLobsterPetSection(props: ConfigProps) {
                     class="btn btn--sm lobsterdex__open"
                     href=${props.lobsterdexHref}
                     @click=${(event: MouseEvent) => {
-                      if (
-                        event.button === 0 &&
-                        !event.metaKey &&
-                        !event.ctrlKey &&
-                        !event.shiftKey &&
-                        !event.altKey
-                      ) {
-                        event.preventDefault();
-                        props.onOpenLobsterdex?.();
+                      if (!shouldHandleNavigationClick(event)) {
+                        return;
                       }
+                      event.preventDefault();
+                      props.onOpenLobsterdex?.();
                     }}
                     >${t("quickSettings.appearance.lobsterdexOpen")}</a
                   >`
@@ -445,6 +442,16 @@ export function renderSidebarPreferencesSection(props: ConfigProps) {
     overridden: props.sidebarLiveActivity !== UI_APPEARANCE_DEFAULTS.sidebarLiveActivity,
     onReset: () => props.setSidebarLiveActivity(UI_APPEARANCE_DEFAULTS.sidebarLiveActivity),
   });
+  // The delete dialog's "Don't ask me again" writes this off; this row is where
+  // the operator turns it back on, so it has to stay next to the session prefs.
+  const setSessionDeleteConfirm = props.setSessionDeleteConfirm;
+  const sessionDeleteConfirm =
+    props.sessionDeleteConfirm ?? UI_APPEARANCE_DEFAULTS.sessionDeleteConfirm;
+  const deleteConfirmDefaultState = renderSettingsDefaultState({
+    value: t("common.enabled"),
+    overridden: sessionDeleteConfirm !== UI_APPEARANCE_DEFAULTS.sessionDeleteConfirm,
+    onReset: () => setSessionDeleteConfirm?.(UI_APPEARANCE_DEFAULTS.sessionDeleteConfirm),
+  });
   return html`
     <section id=${APPEARANCE_SETTINGS_TARGET_IDS.sidebar} class="settings-section">
       <div class="settings-section__header">
@@ -460,6 +467,16 @@ export function renderSidebarPreferencesSection(props: ConfigProps) {
           onChange: props.setSidebarLiveActivity,
           actions: liveActivityDefaultState.action,
         })}
+        ${setSessionDeleteConfirm
+          ? renderSettingsToggleRow({
+              title: t("configView.sidebarPrefs.deleteConfirm"),
+              description: html`${t("configView.sidebarPrefs.deleteConfirmHint")}<br />
+                ${deleteConfirmDefaultState.description} ${t("quickSettings.personal.browserOnly")}`,
+              checked: sessionDeleteConfirm,
+              onChange: setSessionDeleteConfirm,
+              actions: deleteConfirmDefaultState.action,
+            })
+          : nothing}
       </div>
       ${hiddenCatalogIds.length > 0
         ? html`
@@ -469,7 +486,7 @@ export function renderSidebarPreferencesSection(props: ConfigProps) {
             <div class="settings-group">
               ${hiddenCatalogIds.map((catalogId) =>
                 renderSettingsRow({
-                  title: catalogId,
+                  title: props.hiddenSessionCatalogLabels.get(catalogId) ?? catalogId,
                   description: t("quickSettings.personal.browserOnly"),
                   control: html`<button
                     type="button"

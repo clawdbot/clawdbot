@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { resolveActiveEmbeddedRunSessionId } from "../../agents/embedded-agent-runner/run-state.js";
 import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
@@ -157,12 +158,28 @@ export function createDispatchReplyOperationCoordinator(params: {
       params.operationSessionStoreEntry.entry?.sessionId ??
       crypto.randomUUID();
     const replyTurnKind = resolveReplyTurnKind(params.replyOptions);
+    const activeReplyOperation = replyRunRegistry.get(params.dispatchOperationSessionKey);
+    const activeEmbeddedSessionId = resolveActiveEmbeddedRunSessionId(
+      params.dispatchOperationSessionKey,
+    );
+    const allowGatewayEmbeddedQueueResolution =
+      replyTurnKind === "visible" &&
+      params.replyOptions?.turnAdoptionLifecycle !== undefined &&
+      activeReplyOperation === undefined &&
+      activeEmbeddedSessionId === operationSessionId;
+    if (allowGatewayEmbeddedQueueResolution) {
+      // An embedded owner can outlive its reply-operation registration. Do not
+      // create a competing operation for the same session before queue policy
+      // gets a chance to steer the active backend.
+      return { status: "ready" };
+    }
     const allowActivePreDispatch = phase === "pre_dispatch" && replyTurnKind === "visible";
     const allowGatewayQueueResolution =
       phase === "dispatch" &&
       replyTurnKind === "visible" &&
       params.replyOptions?.turnAdoptionLifecycle !== undefined &&
-      replyRunRegistry.get(params.dispatchOperationSessionKey) !== undefined;
+      activeReplyOperation !== undefined &&
+      activeReplyOperation.turnKind !== "heartbeat";
     if (allowGatewayQueueResolution) {
       // Gateway turns need to reach getReplyFromConfig while the owner is active;
       // that layer applies the session's steer/followup/collect/drop policy.
@@ -190,6 +207,7 @@ export function createDispatchReplyOperationCoordinator(params: {
       kind: replyTurnKind,
       resetTriggered: false,
       routeThreadId: params.routeThreadId,
+      originatingLeafEntryId: params.replyOptions?.turnAdoptionLifecycle?.originatingLeafEntryId,
       upstreamAbortSignal: params.replyOptions?.abortSignal,
       waitForActive: !allowActivePreDispatch && !allowSlackRoutedThreadBypass,
       retainLifecycleAdmissionOnActive: allowActivePreDispatch || allowSlackRoutedThreadBypass,
@@ -237,6 +255,8 @@ export function createDispatchReplyOperationCoordinator(params: {
           kind: replyTurnKind,
           resetTriggered: false,
           routeThreadId: params.routeThreadId,
+          originatingLeafEntryId:
+            params.replyOptions?.turnAdoptionLifecycle?.originatingLeafEntryId,
           upstreamAbortSignal: params.replyOptions?.abortSignal,
           waitForActive: !allowActivePreDispatch && !allowSlackRoutedThreadBypass,
           retainLifecycleAdmissionOnActive: allowActivePreDispatch || allowSlackRoutedThreadBypass,
@@ -352,6 +372,7 @@ export function createDispatchReplyOperationCoordinator(params: {
   const getQueuedFollowupAbortSignal = () =>
     dispatchReplyOperation?.abortSignal ?? params.replyOptions?.abortSignal;
   let observedReplyDelivery = false;
+  let agentRunTerminalOutcome: "completed" | "failed" | undefined;
   const markObservedReplyDelivery = async () => {
     if (observedReplyDelivery) {
       return;
@@ -359,17 +380,13 @@ export function createDispatchReplyOperationCoordinator(params: {
     observedReplyDelivery = true;
     await params.replyOptions?.onObservedReplyDelivery?.();
   };
-  const getReplyOptions = () => {
+  const getReplyOptions = (): DispatchFromConfigParams["replyOptions"] => {
     const abortSignal = getDispatchAbortSignal();
-    const onAgentRunStart = params.messageAuditTerminal
-      ? (runId: string) => {
-          params.messageAuditTerminal?.observeRunId(runId);
-          params.replyOptions?.onAgentRunStart?.(runId);
-        }
-      : undefined;
-    if (!abortSignal && !onAgentRunStart) {
-      return params.replyOptions;
-    }
+    const onAgentRunStart = (runId: string) => {
+      agentRunTerminalOutcome = "completed";
+      params.messageAuditTerminal?.observeRunId(runId);
+      params.replyOptions?.onAgentRunStart?.(runId);
+    };
     return {
       ...params.replyOptions,
       ...(abortSignal
@@ -378,7 +395,7 @@ export function createDispatchReplyOperationCoordinator(params: {
             queuedFollowupAbortSignal: getQueuedFollowupAbortSignal(),
           }
         : {}),
-      ...(onAgentRunStart ? { onAgentRunStart } : {}),
+      onAgentRunStart,
       ...(dispatchReplyOperation ? { replyOperation: dispatchReplyOperation } : {}),
     };
   };
@@ -394,7 +411,10 @@ export function createDispatchReplyOperationCoordinator(params: {
     }
   };
 
-  const failDispatchReplyOperation = (error: unknown) => {
+  const failDispatchReplyOperation = (error: unknown, terminalOutcome?: "failed") => {
+    if (terminalOutcome === "failed" && agentRunTerminalOutcome === "completed") {
+      agentRunTerminalOutcome = "failed";
+    }
     const completionBarrier = waitForDispatchLifecycleWorkAndDelivery();
     void releasePreDispatchLifecycleAdmission(() => waitForReplyDispatcherIdle(params.dispatcher));
     if (!dispatchReplyOperation) {
@@ -435,6 +455,7 @@ export function createDispatchReplyOperationCoordinator(params: {
     turnLedger,
     ensureDispatchReplyOperation,
     failDispatchReplyOperation,
+    getAgentRunTerminalOutcome: () => agentRunTerminalOutcome,
     getDispatchAbortOperation: () => dispatchAbortOperation,
     getDispatchAbortSignal,
     getDispatchReplyOperation: () => dispatchReplyOperation,

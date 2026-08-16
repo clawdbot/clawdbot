@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { EmbeddedFullAccessBlockedReason } from "../../agents/embedded-agent-runner/types.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { updateAmbientTranscriptWatermark } from "../../config/sessions/ambient-transcript-watermark.js";
-import type { PendingSkillSuggestion, SessionEntry } from "../../config/sessions/types.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { isImageMediaFact, type MediaFact } from "../../media/media-facts.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -92,6 +92,28 @@ export function buildPersistedMediaImageLayout(params: {
   };
 }
 
+/**
+ * Marks prompt-media facts whose original ctx positions are unresolved so every
+ * downstream runner skips them instead of attempting (and failing) hydration.
+ * Uses position identity, not path/URL, so distinct facts sharing the same path
+ * are not conflated.
+ */
+export function suppressUnresolvedPromptMedia(params: {
+  promptMedia: readonly MediaFact[];
+  inboundMediaIndexes: readonly number[];
+  unresolvedSourceIndexes: ReadonlySet<number>;
+}): MediaFact[] {
+  if (params.unresolvedSourceIndexes.size === 0) {
+    return [...params.promptMedia];
+  }
+  return params.promptMedia.map((fact, promptIndex) =>
+    params.inboundMediaIndexes[promptIndex] !== undefined &&
+    params.unresolvedSourceIndexes.has(params.inboundMediaIndexes[promptIndex])
+      ? { ...fact, hydrationSuppressed: true }
+      : fact,
+  );
+}
+
 export function routeThreadIdsMatch(
   activeThreadId: string | number | undefined,
   currentThreadId: string | number | undefined,
@@ -110,24 +132,6 @@ export function normalizeMessageTimestampMs(value: unknown): number | undefined 
   const timestampMs =
     timestamp < EPOCH_MILLISECONDS_THRESHOLD ? Math.trunc(timestamp * 1000) : timestamp;
   return asDateTimestampMs(timestampMs);
-}
-
-export function projectSkillSuggestionForTurn(
-  entry: SessionEntry | undefined,
-  suggestion: PendingSkillSuggestion | undefined,
-): SessionEntry | undefined {
-  if (!entry) {
-    return undefined;
-  }
-  if (suggestion) {
-    return { ...entry, pendingSkillSuggestion: suggestion };
-  }
-  if (!entry.pendingSkillSuggestion) {
-    return entry;
-  }
-  const projected = { ...entry };
-  delete projected.pendingSkillSuggestion;
-  return projected;
 }
 
 export async function updateRoomEventAmbientTranscriptWatermark(params: {
@@ -291,6 +295,14 @@ const agentRunnerRuntimeLoader = createLazyImportLoader(() => import("./agent-ru
 const sessionUpdatesRuntimeLoader = createLazyImportLoader(
   () => import("./session-updates.runtime.js"),
 );
+
+export async function prewarmReplyRunRuntimes(): Promise<void> {
+  await Promise.all([
+    sessionUpdatesRuntimeLoader.load(),
+    embeddedAgentRuntimeLoader.load(),
+    agentRunnerRuntimeLoader.load(),
+  ]);
+}
 
 export function loadEmbeddedAgentRuntime() {
   return embeddedAgentRuntimeLoader.load();

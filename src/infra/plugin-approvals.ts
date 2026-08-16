@@ -26,6 +26,8 @@ export type PluginApprovalRequestPayload = {
   actions?: readonly PluginApprovalActionView[] | null;
   agentId?: string | null;
   sessionKey?: string | null;
+  /** Host-derived source run; never accepted from plugin approval RPC params. */
+  runId?: string | null;
   turnSourceChannel?: string | null;
   turnSourceTo?: string | null;
   turnSourceAccountId?: string | null;

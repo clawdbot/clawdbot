@@ -58,7 +58,7 @@ const COMPUTED_RUNTIME_DEPENDENCIES = new Map<string, Set<string>>([
   [
     "extensions/discord",
     // Bundled at build time into the served Discord Activity shell asset rather than
-    // imported by plugin runtime code; see scripts/build-discord-activity-sdk.mjs.
+    // imported by plugin runtime code; see scripts/build-discord-activity-sdk.mts.
     new Set(["@discord/embedded-app-sdk"]),
   ],
   [

@@ -1,6 +1,7 @@
 // Tests follow-up queue message-id dedupe and drain scheduling behavior.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import {
   admitFollowupRunLifecycle,
@@ -10,7 +11,6 @@ import {
   scheduleFollowupDrain,
 } from "./queue.js";
 import {
-  createDeferred,
   createQueueTestRun as createRun,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
@@ -31,7 +31,7 @@ function createFollowupCollector(expectedCalls = 1): {
   runFollowup: (run: FollowupRun) => Promise<void>;
 } {
   const calls: FollowupRun[] = [];
-  const done = createDeferred<void>();
+  const done = createDeferred();
   return {
     calls,
     done,
@@ -381,12 +381,14 @@ describe("followup queue deduplication", () => {
     const key = `test-dedup-evicted-retry-${Date.now()}`;
     const evictSettings: QueueSettings = { mode: "collect", cap: 1, dropPolicy: "old" };
     const onAbandoned = vi.fn();
+    const onDisposition = vi.fn();
     const first = createRun({
       prompt: "first",
       messageId: "m1",
       originatingChannel: "line",
       originatingTo: "group:G1",
     });
+    first.onQueueDisposition = onDisposition;
     first.turnAdoptionLifecycle = { onAdopted: () => {}, onAbandoned };
     expect(enqueueFollowupRun(key, first, evictSettings)).toBe(true);
 
@@ -404,7 +406,8 @@ describe("followup queue deduplication", () => {
         evictSettings,
       ),
     ).toBe(true);
-    expect(onAbandoned).toHaveBeenCalledTimes(1);
+    expect(onDisposition).toHaveBeenCalledWith("queue-cap-old");
+    expect(onAbandoned).toHaveBeenCalledOnce();
 
     const retry = createRun({
       prompt: "first",
@@ -473,7 +476,7 @@ describe("followup queue deduplication", () => {
     try {
       vi.setSystemTime(new Date("2026-07-30T00:00:00Z"));
       const key = "test-dedup-stale-owner";
-      const stalledAdmission = createDeferred<void>();
+      const stalledAdmission = createDeferred();
       const first = createRun({
         prompt: "first",
         messageId: "same-id",

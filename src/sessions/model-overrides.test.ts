@@ -328,6 +328,38 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(entry.authProfileOverride).toBe("newprofile");
     expect(entry.liveModelSwitchPending).toBe(true);
   });
+
+  it.each([
+    { preserveAuthProfileOverride: undefined, expectedProfile: undefined },
+    { preserveAuthProfileOverride: false, expectedProfile: undefined },
+    { preserveAuthProfileOverride: true, expectedProfile: "openai:work" },
+  ])(
+    "keeps auth profile metadata only when preservation is $preserveAuthProfileOverride",
+    ({ preserveAuthProfileOverride, expectedProfile }) => {
+      const entry: SessionEntry = {
+        sessionId: "sess-profile-preservation-contract",
+        updatedAt: Date.now() - 5_000,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.4",
+        authProfileOverride: "openai:work",
+        authProfileOverrideSource: "user",
+        authProfileOverrideCompactionCount: 2,
+      };
+
+      applyModelOverrideToSessionEntry({
+        entry,
+        selection: {
+          provider: "openai",
+          model: "gpt-4.1",
+        },
+        preserveAuthProfileOverride,
+      });
+
+      expect(entry.authProfileOverride).toBe(expectedProfile);
+      expect(entry.authProfileOverrideSource).toBe(expectedProfile ? "user" : undefined);
+      expect(entry.authProfileOverrideCompactionCount).toBe(expectedProfile ? 2 : undefined);
+    },
+  );
 });
 
 describe("repairProviderWrappedModelOverride", () => {

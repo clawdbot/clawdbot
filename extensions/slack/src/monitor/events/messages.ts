@@ -11,11 +11,12 @@ import {
   asOptionalRecord as asRecord,
   normalizeOptionalString as asString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { noteSlackDraftConversationMessage } from "../../draft-message-boundaries.js";
 import type { SlackAppMentionEvent, SlackMessageEvent } from "../../types.js";
 import { normalizeSlackChannelType } from "../channel-type.js";
 import type { SlackMonitorContext } from "../context.js";
-import { resolveSlackEventScope, type SlackEventScope } from "../event-scope.js";
+import { resolveSlackListenerEventScope, type SlackEventScope } from "../event-scope.js";
 import { resolveSlackIngressTurnLifecycle } from "../ingress.js";
 import type { SlackMessageHandler } from "../message-handler.js";
 import type { SlackMessageChangedEvent } from "../types.js";
@@ -197,19 +198,31 @@ export function registerSlackMessageEvents(params: {
     body: unknown;
     context: AllMiddlewareArgs["context"];
     client: AllMiddlewareArgs["client"];
-  }): SlackEventScope | null | undefined => {
-    const resolved = resolveSlackEventScope({
+  }) =>
+    resolveSlackListenerEventScope({
       identity: ctx.installationIdentity,
       body: args.body,
       context: args.context,
       client: args.client,
       clientOptions: ctx.app.webClientOptions,
+      onDrop: (reason) => logVerbose(`slack: drop event (${reason})`),
     });
-    if (!resolved.ok) {
-      logVerbose(`slack: drop event (${resolved.reason})`);
-      return null;
-    }
-    return resolved.scope;
+
+  const noteConversationMessage = (
+    message: SlackMessageEvent | SlackAppMentionEvent,
+    eventScope?: SlackEventScope,
+  ) => {
+    noteSlackDraftConversationMessage({
+      accountId: ctx.accountId,
+      teamId: eventScope?.teamId,
+      channelId: message.channel,
+      threadTs: message.thread_ts,
+      messageTs: message.ts ?? message.event_ts,
+      userId: asString(message.user),
+      botUserId: ctx.botUserId,
+      botId: asString(message.bot_id),
+      subtype: "subtype" in message ? asString(message.subtype) : undefined,
+    });
   };
 
   const handleIncomingMessageEvent = async ({
@@ -219,7 +232,7 @@ export function registerSlackMessageEvents(params: {
     client,
   }: {
     event: unknown;
-    body: unknown;
+    body: SlackEventMiddlewareArgs<"message">["body"];
     context: AllMiddlewareArgs["context"];
     client: AllMiddlewareArgs["client"];
   }) => {
@@ -250,9 +263,10 @@ export function registerSlackMessageEvents(params: {
         ctx,
       });
       if (assistantChangedInbound) {
+        noteConversationMessage(assistantChangedInbound, eventScope);
         await handleSlackMessage(assistantChangedInbound, {
           source: "message",
-          ...(eventScope ? { eventScope } : {}),
+          eventScope,
           ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
           ...(eventScope || turnAdoptionLifecycle ? { awaitDispatch: true } : {}),
         });
@@ -281,20 +295,25 @@ export function registerSlackMessageEvents(params: {
           channelId,
           channelType: subtypeHandler.resolveChannelType(message),
           eventKind: subtypeHandler.eventKind,
+          eventScope,
         });
         if (!ingressContext) {
           return;
         }
-        enqueueSystemEvent(subtypeHandler.describe(ingressContext.channelLabel), {
-          sessionKey: ingressContext.sessionKey,
-          contextKey: subtypeHandler.contextKey(message),
-        });
+        enqueueRoutedSystemEvent(
+          subtypeHandler.describe(ingressContext.channelLabel),
+          ingressContext.route,
+          {
+            contextKey: `${subtypeHandler.contextKey(message)}:${body.event_id}`,
+          },
+        );
         return;
       }
 
+      noteConversationMessage(message, eventScope);
       await handleSlackMessage(message, {
         source: "message",
-        ...(eventScope ? { eventScope } : {}),
+        eventScope,
         ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
         ...(eventScope || turnAdoptionLifecycle ? { awaitDispatch: true } : {}),
       });
@@ -344,7 +363,7 @@ export function registerSlackMessageEvents(params: {
         const channelType = await resolveSlackAppMentionChannelType({
           ctx,
           mention,
-          ...(eventScope ? { eventScope } : {}),
+          eventScope,
         });
         if (!channelType) {
           // OpenClaw manifests pair app_mention with message.channels/groups/im/mpim.
@@ -373,10 +392,11 @@ export function registerSlackMessageEvents(params: {
           }),
         );
 
+        noteConversationMessage(mention, eventScope);
         await handleSlackMessage(mention as unknown as SlackMessageEvent, {
           source: "app_mention",
           wasMentioned: true,
-          ...(eventScope ? { eventScope } : {}),
+          eventScope,
           ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
           ...(eventScope || turnAdoptionLifecycle ? { awaitDispatch: true } : {}),
         });

@@ -1,8 +1,9 @@
-import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
 /** Builds the static and plugin-derived registry of secret migration targets. */
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { loadChannelSecretContractApiForRecord } from "./channel-contract-api.js";
+import { listOfficialExternalChannelSecretTargetRegistryEntries } from "./official-external-channel-secret-contract.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
 
 const SECRET_INPUT_SHAPE = "secret_input"; // pragma: allowlist secret
@@ -86,34 +87,12 @@ function listPluginConfigSecretTargetRegistryEntries(
   return entries.toSorted((left, right) => left.id.localeCompare(right.id));
 }
 
-function listSourceBundledPluginConfigContractRecords(): Array<
-  Pick<PluginManifestRecord, "id" | "configContracts">
-> {
-  return listBundledPluginMetadata({
-    includeChannelConfigs: false,
-    includeSyntheticChannelConfigs: false,
-  }).flatMap((metadata) =>
-    metadata.manifest.configContracts
-      ? [
-          {
-            id: metadata.manifest.id,
-            configContracts: metadata.manifest.configContracts,
-          },
-        ]
-      : [],
-  );
-}
-
 function listChannelSecretTargetRegistryEntries(
   channelPlugins: readonly PluginManifestRecord[],
 ): SecretTargetRegistryEntry[] {
   const entries: SecretTargetRegistryEntry[] = [];
 
   for (const record of channelPlugins) {
-    const channelIds = record.channels;
-    if (channelIds.length === 0) {
-      continue;
-    }
     try {
       const contractApi = loadChannelSecretContractApiForRecord(record);
       entries.push(...(contractApi?.secretTargetRegistryEntries ?? []));
@@ -463,30 +442,45 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
 let cachedSecretTargetRegistry: SecretTargetRegistryEntry[] | null = null;
 
 function loadSecretTargetRegistryFromPluginMetadata(params: {
+  config?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   preferPersisted?: boolean;
 }): SecretTargetRegistryEntry[] {
   const plugins = resolvePluginMetadataSnapshot({
-    config: {},
+    ...(params.config !== undefined ? { config: params.config } : {}),
     env: params.env,
+    allowWorkspaceScopedCurrent: true,
     ...(params.preferPersisted !== undefined ? { preferPersisted: params.preferPersisted } : {}),
   }).plugins;
-  const channelPlugins = plugins.filter((record) => record.channels.length > 0);
+  const channelPlugins = plugins.filter(
+    (record) =>
+      record.channels.length > 0 ||
+      Object.keys(record.channelConfigs ?? {}).length > 0 ||
+      Boolean(record.channelCatalogMeta?.id) ||
+      Boolean(record.packageChannel?.id),
+  );
   // Installed/workspace plugins own secret targets exactly like bundled ones
   // (#104320: the Exa split moved web providers out of bundled origin and their
   // targets vanished from the gateway's known-target registry). Entries stay
   // manifest-scoped — web-provider contract + sensitive hint, or declared
   // secretInput paths — so a non-bundled origin cannot widen target paths
   // beyond its own declared contracts.
-  return [
+  const entries = [
     ...CORE_SECRET_TARGET_REGISTRY,
     ...listPluginWebProviderSecretTargetRegistryEntries(plugins),
-    ...listPluginConfigSecretTargetRegistryEntries([
-      ...plugins,
-      ...listSourceBundledPluginConfigContractRecords(),
-    ]),
+    ...listPluginConfigSecretTargetRegistryEntries(plugins),
     ...listChannelSecretTargetRegistryEntries(channelPlugins),
+    ...listOfficialExternalChannelSecretTargetRegistryEntries(),
   ];
+  const seen = new Set<string>();
+  return entries.filter((entry) => {
+    const key = `${entry.configFile}:${entry.pathPattern}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 }
 
 /** Returns only core-owned secret target registry entries. */
@@ -498,6 +492,8 @@ export function getCoreSecretTargetRegistry(): SecretTargetRegistryEntry[] {
 /** Returns the process-cached registry including bundled plugin/channel metadata. */
 /** Returns core plus plugin/channel secret target registry entries for the current metadata view. */
 export function getSecretTargetRegistry(params?: {
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   sourceTree?: boolean;
 }): SecretTargetRegistryEntry[] {
   if (params?.sourceTree) {
@@ -508,6 +504,14 @@ export function getSecretTargetRegistry(params?: {
         OPENCLAW_BUNDLED_PLUGINS_DIR: process.env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? "extensions",
       },
       preferPersisted: false,
+    });
+  }
+  if (params?.config) {
+    // Config-scoped plugin roots and policy are not process-stable. Compile these registries per
+    // request so one config cannot poison discovery for a later config in the same process.
+    return loadSecretTargetRegistryFromPluginMetadata({
+      config: params.config,
+      env: params.env ?? process.env,
     });
   }
   if (cachedSecretTargetRegistry) {

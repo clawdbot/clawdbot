@@ -13,6 +13,7 @@ import {
   type TerminalBackend,
 } from "./backend.js";
 import { TERMINAL_EVENT_DATA, TERMINAL_EVENT_EXIT } from "./gateway-transport.js";
+import { composeTerminalIntroBanner } from "./intro-banner.js";
 import { TerminalOutputController } from "./output-flow-control.js";
 import { TerminalOutputRing } from "./output-ring.js";
 import {
@@ -35,6 +36,28 @@ import type {
 
 const log = createSubsystemLogger("gateway/terminal");
 
+// Task binding is manager-private metadata: public terminal ownership stays
+// conversation-scoped while lifecycle cleanup can target the exact producer.
+type TaskBoundAgentOwner = Extract<TerminalOwner, { kind: "agent" }> & { taskId?: string };
+
+function terminalOwnerMatches(
+  owner: TerminalOwner | null,
+  ownerKey: string,
+  agentId?: string,
+): boolean {
+  if (owner?.kind !== "agent") {
+    return false;
+  }
+  return owner.agentSessionKey === ownerKey && owner.agentId === agentId;
+}
+
+function terminalLifecycleOwnerMatches(owner: TerminalOwner | null, ownerKey: string): boolean {
+  return (
+    owner?.kind === "agent" &&
+    (owner.agentSessionKey === ownerKey || (owner as TaskBoundAgentOwner).taskId === ownerKey)
+  );
+}
+
 /**
  * Tracks live PTY sessions keyed by session id, with a reverse index for
  * connection owners and viewers so disconnect cleanup stays bounded.
@@ -42,7 +65,7 @@ const log = createSubsystemLogger("gateway/terminal");
 export class TerminalSessionManager {
   private readonly sessions = new Map<string, TerminalSession>();
   private readonly byConn = new Map<string, Set<string>>();
-  private readonly pendingOpens = new Set<TerminalPendingOpen>();
+  private readonly pendingOpens = new Map<TerminalPendingOpen, TerminalOwner>();
   // Connection-owned opens still awaiting spawn. A disconnect flips their
   // abort flag so the resumed open kills the PTY instead of registering an
   // orphan for a dead connection.
@@ -257,6 +280,7 @@ export class TerminalSessionManager {
     this.sessions.set(session.id, session);
     if (request.owner.kind === "conn") {
       this.indexByConn(request.owner.connId, session.id);
+      session.output.push(composeTerminalIntroBanner());
     }
 
     backend.onData((chunk) => {
@@ -293,8 +317,8 @@ export class TerminalSessionManager {
   }
 
   /** Writes agent input after proving session-key ownership. */
-  writeAgent(agentSessionKey: string, sessionId: string, data: string): boolean {
-    const session = this.agentOwnedSession(agentSessionKey, sessionId);
+  writeAgent(agentSessionKey: string, sessionId: string, data: string, agentId?: string): boolean {
+    const session = this.agentOwnedSession(agentSessionKey, sessionId, agentId);
     return session ? this.writeSession(session, data) : false;
   }
 
@@ -320,8 +344,14 @@ export class TerminalSessionManager {
   }
 
   /** Resizes an agent-owned PTY after proving session-key ownership. */
-  resizeAgent(agentSessionKey: string, sessionId: string, cols: number, rows: number): boolean {
-    const session = this.agentOwnedSession(agentSessionKey, sessionId);
+  resizeAgent(
+    agentSessionKey: string,
+    sessionId: string,
+    cols: number,
+    rows: number,
+    agentId?: string,
+  ): boolean {
+    const session = this.agentOwnedSession(agentSessionKey, sessionId, agentId);
     return session ? this.resizeSession(session, cols, rows) : false;
   }
 
@@ -372,13 +402,37 @@ export class TerminalSessionManager {
   }
 
   /** Closes an agent-owned PTY after proving session-key ownership. */
-  closeAgent(agentSessionKey: string, sessionId: string): boolean {
-    const session = this.agentOwnedSession(agentSessionKey, sessionId);
+  closeAgent(agentSessionKey: string, sessionId: string, agentId?: string): boolean {
+    const session = this.agentOwnedSession(agentSessionKey, sessionId, agentId);
     if (!session) {
       return false;
     }
     this.finalize(session, "closed", {});
     return true;
+  }
+
+  /** Closes every live or spawning PTY owned by one exact agent session or task. */
+  closeAgentSessions(agentSessionKey: string, agentId?: string): number {
+    for (const [pending, owner] of this.pendingOpens) {
+      if (
+        agentId
+          ? terminalOwnerMatches(owner, agentSessionKey, agentId)
+          : terminalLifecycleOwnerMatches(owner, agentSessionKey)
+      ) {
+        pending.abort("terminal closed because its task ended");
+      }
+    }
+    const owned = [...this.sessions.values()].filter(
+      (session) =>
+        !session.closed &&
+        (agentId
+          ? terminalOwnerMatches(session.owner, agentSessionKey, agentId)
+          : terminalLifecycleOwnerMatches(session.owner, agentSessionKey)),
+    );
+    for (const session of owned) {
+      this.finalize(session, "closed", {});
+    }
+    return owned.length;
   }
 
   /**
@@ -463,17 +517,25 @@ export class TerminalSessionManager {
   }
 
   /** Raw buffer for an agent-owned session, guarded by the caller session key. */
-  snapshotAgent(agentSessionKey: string, sessionId: string): string | undefined {
-    return this.agentOwnedSession(agentSessionKey, sessionId)?.buffer.snapshot();
+  snapshotAgent(agentSessionKey: string, sessionId: string, agentId?: string): string | undefined {
+    return this.agentOwnedSession(agentSessionKey, sessionId, agentId)?.buffer.snapshot();
   }
 
   /** Live sessions owned by one agent tool caller. */
-  listAgent(agentSessionKey: string): TerminalSessionSummary[] {
-    return this.list().filter((summary) => summary.owner === `agent:${agentSessionKey}`);
+  listAgent(agentSessionKey: string, agentId?: string): TerminalSessionSummary[] {
+    const sessionIds = new Set(
+      [...this.sessions.values()]
+        .filter(
+          (session) =>
+            !session.closed && terminalOwnerMatches(session.owner, agentSessionKey, agentId),
+        )
+        .map((session) => session.id),
+    );
+    return this.list().filter((summary) => sessionIds.has(summary.sessionId));
   }
 
   private trackPendingOpen(owner: TerminalOwner, pending: TerminalPendingOpen): void {
-    this.pendingOpens.add(pending);
+    this.pendingOpens.set(pending, owner);
     if (owner.kind !== "conn") {
       return;
     }
@@ -548,7 +610,7 @@ export class TerminalSessionManager {
   closeDisallowedAgents(isAllowed: (agentId: string) => boolean): void {
     // Config can change while spawn is awaiting the native PTY import. Mark the
     // pending open so it kills the process instead of registering stale access.
-    for (const pending of this.pendingOpens) {
+    for (const pending of this.pendingOpens.keys()) {
       if (!isAllowed(pending.agentId)) {
         pending.abort("terminal closed because the agent policy changed");
       }
@@ -599,7 +661,7 @@ export class TerminalSessionManager {
    */
   disposeAll(): void {
     // Abort any opens still spawning so they don't register after shutdown.
-    for (const pending of this.pendingOpens) {
+    for (const pending of this.pendingOpens.keys()) {
       pending.abort("gateway closed during terminal open");
     }
     // Snapshot first: finalize() deletes from this.sessions during iteration.
@@ -684,13 +746,14 @@ export class TerminalSessionManager {
   private agentOwnedSession(
     agentSessionKey: string,
     sessionId: string,
+    agentId?: string,
   ): TerminalSession | undefined {
     const session = this.sessions.get(sessionId);
     if (
       !session ||
       session.closed ||
       session.owner?.kind !== "agent" ||
-      session.owner.agentSessionKey !== agentSessionKey
+      !terminalOwnerMatches(session.owner, agentSessionKey, agentId)
     ) {
       return undefined;
     }

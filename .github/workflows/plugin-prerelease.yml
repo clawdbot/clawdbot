@@ -20,6 +20,11 @@ on:
         required: false
         default: false
         type: boolean
+      node_test_exclude_patterns_json:
+        description: Full Release Validation-only exact plugin test paths omitted for a frozen target
+        required: false
+        default: "[]"
+        type: string
       dispatch_id:
         description: Optional parent workflow dispatch identifier
         required: false
@@ -53,11 +58,73 @@ jobs:
       plugin_prerelease_static_matrix: ${{ steps.manifest.outputs.plugin_prerelease_static_matrix }}
       run_plugin_prerelease_node: ${{ steps.manifest.outputs.run_plugin_prerelease_node }}
       plugin_prerelease_node_matrix: ${{ steps.manifest.outputs.plugin_prerelease_node_matrix }}
+      node_test_exclude_patterns_json: ${{ steps.node_test_exclusions.outputs.patterns_json }}
       run_plugin_prerelease_extensions: ${{ steps.manifest.outputs.run_plugin_prerelease_extensions }}
       plugin_prerelease_extension_matrix: ${{ steps.manifest.outputs.plugin_prerelease_extension_matrix }}
       run_plugin_prerelease_docker: ${{ steps.manifest.outputs.run_plugin_prerelease_docker }}
       plugin_prerelease_docker_lanes: ${{ steps.manifest.outputs.plugin_prerelease_docker_lanes }}
     steps:
+      - name: Validate frozen-target Node exclusions
+        id: node_test_exclusions
+        env:
+          FULL_RELEASE_VALIDATION: ${{ inputs.full_release_validation && 'true' || 'false' }}
+          NODE_TEST_EXCLUDE_PATTERNS_JSON: ${{ inputs.node_test_exclude_patterns_json }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'EOF'
+          import { appendFileSync } from "node:fs";
+
+          const rawPatterns = process.env.NODE_TEST_EXCLUDE_PATTERNS_JSON ?? "";
+          let patterns;
+          try {
+            patterns = JSON.parse(rawPatterns);
+          } catch (error) {
+            console.error(`node_test_exclude_patterns_json must be valid JSON: ${error.message}`);
+            process.exit(1);
+          }
+          if (!Array.isArray(patterns)) {
+            console.error("node_test_exclude_patterns_json must be a JSON array");
+            process.exit(1);
+          }
+          const invalidPattern = patterns.find((pattern) => {
+            if (typeof pattern !== "string" || pattern.length === 0 || pattern !== pattern.trim()) {
+              return true;
+            }
+            const segments = pattern.split("/");
+            return (
+              !pattern.startsWith("src/plugins/") ||
+              !pattern.endsWith(".test.ts") ||
+              pattern.includes("\\") ||
+              pattern.includes("..") ||
+              segments.some((segment) => segment.length === 0 || segment === ".") ||
+              !/^[A-Za-z0-9._/-]+$/u.test(pattern)
+            );
+          });
+          if (invalidPattern !== undefined) {
+            console.error(
+              `Invalid frozen-target Node test omission: ${JSON.stringify(invalidPattern)}`,
+            );
+            process.exit(1);
+          }
+          if (new Set(patterns).size !== patterns.length) {
+            console.error("node_test_exclude_patterns_json must not contain duplicate paths");
+            process.exit(1);
+          }
+          const fullReleaseValidation = process.env.FULL_RELEASE_VALIDATION === "true";
+          if (!fullReleaseValidation && rawPatterns !== "[]") {
+            console.error(
+              "node_test_exclude_patterns_json may differ from [] only when full_release_validation=true",
+            );
+            process.exit(1);
+          }
+          appendFileSync(
+            process.env.GITHUB_OUTPUT,
+            `patterns_json=${JSON.stringify(patterns)}\n`,
+            "utf8",
+          );
+          EOF
+
       - name: Checkout target
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -67,14 +134,27 @@ jobs:
           persist-credentials: false
           submodules: false
 
+      - name: Setup manifest TypeScript runtime
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24.x"
+
+      - name: Setup manifest pnpm
+        uses: ./.github/actions/setup-pnpm-store-cache
+        with:
+          node-version: "24.x"
+
+      - name: Install manifest dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+
       - name: Build plugin prerelease manifest
         id: manifest
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
           FULL_RELEASE_VALIDATION: ${{ inputs.full_release_validation && 'true' || 'false' }}
         run: |
-          node --input-type=module <<'EOF'
-          import { appendFileSync } from "node:fs";
+          node --import tsx --input-type=module <<'EOF'
+          import { appendFileSync, existsSync } from "node:fs";
           import { execFileSync } from "node:child_process";
 
           const createMatrix = (include) => ({ include });
@@ -95,9 +175,19 @@ jobs:
           let extensionShards = [];
           let nodeShards = [];
 
+          const targetPlanPaths = {
+            "plugin-prerelease-test-plan": "./scripts/lib/plugin-prerelease-test-plan.mts",
+            "extension-test-plan": "./scripts/lib/extension-test-plan.mts",
+            "ci-node-test-plan": "./scripts/lib/ci-node-test-plan.mts",
+          };
+          const targetPlanPath = (name) => {
+            const mtsPath = targetPlanPaths[name];
+            return existsSync(mtsPath) ? mtsPath : mtsPath.replace(/\.mts$/u, ".mjs");
+          };
+
           try {
             const { assertPluginPrereleaseTestPlanComplete } = await import(
-              "./scripts/lib/plugin-prerelease-test-plan.mjs"
+              targetPlanPath("plugin-prerelease-test-plan")
             );
             pluginPrereleasePlan = assertPluginPrereleaseTestPlanComplete();
           } catch (error) {
@@ -107,7 +197,8 @@ jobs:
               error && typeof error === "object" && "url" in error ? String(error.url) : "";
             if (
               errorCode === "ERR_MODULE_NOT_FOUND" &&
-              moduleUrl.endsWith("/scripts/lib/plugin-prerelease-test-plan.mjs")
+              (moduleUrl.endsWith("/scripts/lib/plugin-prerelease-test-plan.mjs") ||
+                moduleUrl.endsWith("/scripts/lib/plugin-prerelease-test-plan.mts"))
             ) {
               console.warn(
                 "Plugin prerelease plan unavailable in target ref; skipping static and Docker plugin prerelease lanes.",
@@ -119,7 +210,7 @@ jobs:
 
           try {
             const { createExtensionTestShards, DEFAULT_EXTENSION_TEST_SHARD_COUNT } = await import(
-              "./scripts/lib/extension-test-plan.mjs"
+              targetPlanPath("extension-test-plan")
             );
             extensionShards = createExtensionTestShards({
               shardCount: DEFAULT_EXTENSION_TEST_SHARD_COUNT,
@@ -146,7 +237,8 @@ jobs:
               error && typeof error === "object" && "url" in error ? String(error.url) : "";
             if (
               errorCode === "ERR_MODULE_NOT_FOUND" &&
-              moduleUrl.endsWith("/scripts/lib/extension-test-plan.mjs")
+              (moduleUrl.endsWith("/scripts/lib/extension-test-plan.mjs") ||
+                moduleUrl.endsWith("/scripts/lib/extension-test-plan.mts"))
             ) {
               console.warn(
                 "Extension test plan unavailable in target ref; skipping extension prerelease shards.",
@@ -157,7 +249,7 @@ jobs:
           }
 
           try {
-            const { createNodeTestShards } = await import("./scripts/lib/ci-node-test-plan.mjs");
+            const { createNodeTestShards } = await import(targetPlanPath("ci-node-test-plan"));
             nodeShards = createNodeTestShards({
               includeReleaseOnlyPluginShards: true,
             })
@@ -178,7 +270,8 @@ jobs:
               error && typeof error === "object" && "url" in error ? String(error.url) : "";
             if (
               errorCode === "ERR_MODULE_NOT_FOUND" &&
-              moduleUrl.endsWith("/scripts/lib/ci-node-test-plan.mjs")
+              (moduleUrl.endsWith("/scripts/lib/ci-node-test-plan.mjs") ||
+                moduleUrl.endsWith("/scripts/lib/ci-node-test-plan.mts"))
             ) {
               console.warn(
                 "Node test plan unavailable in target ref; skipping release-only plugin Node shard.",
@@ -279,6 +372,32 @@ jobs:
           persist-credentials: false
           submodules: false
 
+      - name: Checkout trusted npm security inventory
+        if: inputs.full_release_validation
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.sha }}
+          path: .plugin-prerelease-trusted
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          sparse-checkout: src/plugins/npm-install-security-scan.release.test.ts
+          sparse-checkout-cone-mode: false
+          submodules: false
+
+      - name: Install trusted npm security inventory
+        if: inputs.full_release_validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          trusted_checkout=.plugin-prerelease-trusted
+          trap 'rm -rf -- "$trusted_checkout"' EXIT
+          install -m 0644 \
+            "$trusted_checkout/src/plugins/npm-install-security-scan.release.test.ts" \
+            src/plugins/npm-install-security-scan.release.test.ts
+          rm -rf -- "$trusted_checkout"
+          trap - EXIT
+
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
@@ -290,6 +409,7 @@ jobs:
       - name: Run release-only plugin Node shard
         env:
           NODE_OPTIONS: --max-old-space-size=8192
+          NODE_TEST_EXCLUDE_PATTERNS_JSON: ${{ needs.preflight.outputs.node_test_exclude_patterns_json }}
           OPENCLAW_NODE_TEST_CONFIGS_JSON: ${{ toJson(matrix.configs) }}
           OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
           OPENCLAW_VITEST_SHARD_NAME: ${{ matrix.shard_name }}
@@ -310,6 +430,16 @@ jobs:
           const includePatterns = JSON.parse(
             process.env.OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON ?? "null",
           );
+          const excludePatterns = JSON.parse(
+            process.env.NODE_TEST_EXCLUDE_PATTERNS_JSON ?? "[]",
+          );
+          if (
+            !Array.isArray(excludePatterns) ||
+            excludePatterns.some((pattern) => typeof pattern !== "string")
+          ) {
+            console.error("Invalid frozen-target Node exclusions");
+            process.exit(1);
+          }
           const childEnv = { ...process.env };
           if (Array.isArray(includePatterns) && includePatterns.length > 0) {
             const includeFile = join(
@@ -320,14 +450,13 @@ jobs:
             childEnv.OPENCLAW_VITEST_INCLUDE_FILE = includeFile;
           }
 
-          const result = spawnSync(
-            "pnpm",
-            ["exec", "node", "scripts/test-projects.mjs", ...configs],
-            {
-              env: childEnv,
-              stdio: "inherit",
-            },
+          const excludeArgs = excludePatterns.map(
+            (pattern) => `--exclude=${pattern.slice("src/plugins/".length)}`,
           );
+          const result = spawnSync("pnpm", ["test", "--", ...configs, "--", ...excludeArgs], {
+            env: childEnv,
+            stdio: "inherit",
+          });
           process.exit(result.status ?? 1);
           EOF
 
@@ -574,6 +703,13 @@ jobs:
       package_source_sha: ${{ fromJSON(inputs.candidate_artifact_json || '{}').packageSourceSha || '' }}
       package_sha256: ${{ fromJSON(inputs.candidate_artifact_json || '{}').packageSha256 || '' }}
       package_version: ${{ fromJSON(inputs.candidate_artifact_json || '{}').packageVersion || '' }}
+      enable_prepublish_plugin_registry: true
+      prepublish_plugin_registry_artifact_name: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactName || '' }}
+      prepublish_plugin_registry_artifact_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactId || '' }}
+      prepublish_plugin_registry_artifact_digest: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactDigest || '' }}
+      prepublish_plugin_registry_artifact_run_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactRunId || '' }}
+      prepublish_plugin_registry_artifact_run_attempt: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactRunAttempt || '' }}
+      prepublish_plugin_registry_manifest_sha256: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryManifestSha256 || '' }}
       shared_image_artifact_name: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactName || '' }}
       shared_image_artifact_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactId || '' }}
       shared_image_artifact_digest: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactDigest || '' }}

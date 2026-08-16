@@ -13,6 +13,7 @@ import { resolveConfigEnvVars } from "../../config/env-substitution.js";
 import { resolveConfigIncludes } from "../../config/includes.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
 import { CONFIG_PATH, resolveIncludeRoots } from "../../config/paths.js";
+import { parsePluginInstallRecordMap } from "../../config/plugin-install-record-map.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { normalizeUpdateChannel, type UpdateChannel } from "../../infra/update-channels.js";
@@ -31,16 +32,9 @@ export async function createUpdateConfigSnapshot(): Promise<void> {
 export function normalizePluginInstallRecordMap(
   value: unknown,
 ): Record<string, PluginInstallRecord> {
-  if (!isRecord(value)) {
-    return {};
-  }
-  const records: Record<string, PluginInstallRecord> = {};
-  for (const [pluginId, record] of Object.entries(value).toSorted(([left], [right]) =>
-    left.localeCompare(right),
-  )) {
-    if (isRecord(record) && typeof record.source === "string") {
-      records[pluginId] = structuredClone(record) as PluginInstallRecord;
-    }
+  const records = parsePluginInstallRecordMap(value);
+  if (!records) {
+    throw new Error("Invalid plugin install record map");
   }
   return records;
 }

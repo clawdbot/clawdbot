@@ -1,6 +1,14 @@
 // Upgrade Survivor Config Recipe tests cover upgrade survivor config recipe script behavior.
-import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import {
+  chmodSync,
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -9,13 +17,73 @@ import {
   CONFIG_COMMAND_TIMEOUT_MS,
   isReleaseBefore,
   resolveScenarioConfigSteps,
+  resolveUpgradeSurvivorConfigSteps,
+  resolveUpgradeSurvivorConfigStepsForBaseline,
   resolveUpgradeSurvivorOpenClawCommand,
   runUpgradeSurvivorOpenClawStep,
-} from "../../scripts/e2e/lib/upgrade-survivor/config-recipe.mjs";
+} from "../../scripts/e2e/lib/upgrade-survivor/config-recipe.mts";
 
-const RECIPE_PATH = "scripts/e2e/lib/upgrade-survivor/config-recipe.mjs";
+const RECIPE_PATH = "scripts/e2e/lib/upgrade-survivor/config-recipe.mts";
+const RUN_PATH = "scripts/e2e/lib/upgrade-survivor/run.sh";
+const DOCKER_RUNNER_PATH = "scripts/e2e/upgrade-survivor-docker.sh";
 
 describe("upgrade survivor config recipe command resolution", () => {
+  it("uses trusted tsx or the candidate compiled config recipe entrypoint", () => {
+    const runner = readFileSync(RUN_PATH, "utf8");
+    const dockerRunner = readFileSync(DOCKER_RUNNER_PATH, "utf8");
+    expect(runner).toContain("OPENCLAW_UPGRADE_SURVIVOR_TSX_IMPORT:-tsx");
+    expect(runner).toContain(
+      'node --import "$tsx_import" scripts/e2e/lib/upgrade-survivor/config-recipe.mts',
+    );
+    expect(runner).toContain(
+      "recipe_runner=(node scripts/e2e/lib/upgrade-survivor/config-recipe.mjs)",
+    );
+    expect(runner).toContain('"${recipe_runner[@]}" apply');
+    expect(dockerRunner).toContain(
+      'TRUSTED_TSX_IMPORT="$TRUSTED_TSX_NODE_MODULES/tsx/dist/loader.mjs"',
+    );
+  });
+
+  it("keeps trusted tsx dependencies resolvable at the Docker mount target", () => {
+    const dockerRunner = readFileSync(DOCKER_RUNNER_PATH, "utf8");
+    const loaderTarget = dockerRunner.match(
+      /OPENCLAW_UPGRADE_SURVIVOR_TSX_IMPORT=(\/tmp\/\S+\/loader\.mjs)/u,
+    )?.[1];
+    const mountTarget = dockerRunner.match(
+      /-v "\$TRUSTED_TSX_NODE_MODULES:(\/tmp\/[^:"]+):ro"/u,
+    )?.[1];
+    expect(loaderTarget).toBeTruthy();
+    expect(mountTarget).toBeTruthy();
+    if (!loaderTarget || !mountTarget) {
+      return;
+    }
+
+    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-tsx-mount-"));
+    try {
+      const mountedNodeModules = join(root, mountTarget.slice(1));
+      mkdirSync(mountedNodeModules, { recursive: true });
+      for (const packageName of ["tsx", "esbuild", "@esbuild"]) {
+        cpSync(
+          join(process.cwd(), "node_modules", packageName),
+          join(mountedNodeModules, packageName),
+          {
+            dereference: true,
+            recursive: true,
+          },
+        );
+      }
+
+      const loaderPath = join(root, loaderTarget.slice(1));
+      const result = spawnSync(process.execPath, ["--import", loaderPath, "-e", ""], {
+        cwd: root,
+        encoding: "utf8",
+      });
+      expect(result.status, result.stderr).toBe(0);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it("compares baseline versions with the shared release parser", () => {
     expect(isReleaseBefore("2026.3.31", "2026.4.0")).toBe(true);
     expect(isReleaseBefore("2026.3.31-beta.1", "2026.4.0")).toBe(true);
@@ -76,6 +144,20 @@ describe("upgrade survivor config recipe command resolution", () => {
         intent: "codex-allowlist-survival",
       },
     ]);
+  });
+
+  it("inserts scenario config before final validation", () => {
+    const steps = resolveUpgradeSurvivorConfigSteps("feishu-channel");
+    expect(steps.find((step) => step.id === "channels-discord")).toBeDefined();
+    expect(steps.find((step) => step.id === "channels-feishu")).toBeDefined();
+    expect(steps.at(-1)?.id).toBe("validate");
+  });
+
+  it("removes unsupported scenario config for older baselines", () => {
+    const steps = resolveUpgradeSurvivorConfigStepsForBaseline("feishu-channel", "2026.3.13");
+    expect(steps.find((step) => step.id === "channels-discord")).toBeDefined();
+    expect(steps.find((step) => step.id === "channels-feishu")).toBeUndefined();
+    expect(steps.at(-1)?.id).toBe("validate");
   });
 
   it("bounds baseline config commands and reports spawn errors", () => {
@@ -153,7 +235,16 @@ process.exit(0);
 
       execFileSync(
         process.execPath,
-        [RECIPE_PATH, "apply", "--summary", summaryPath, "--baseline-version", "2026.4.21"],
+        [
+          "--import",
+          "tsx",
+          RECIPE_PATH,
+          "apply",
+          "--summary",
+          summaryPath,
+          "--baseline-version",
+          "2026.4.21",
+        ],
         {
           env: {
             ...process.env,

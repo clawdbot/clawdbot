@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {
   collectActiveSessionWorkAdmissionIdentities,
@@ -17,13 +19,14 @@ import {
   type SessionDiskBudgetSweepResult,
   type SessionPhysicalDiskUsage,
 } from "./disk-budget.js";
-import { materializeSqliteSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
-import { emitArchivedSqliteTranscriptUpdates } from "./session-accessor.sqlite-events.js";
+import { publishSessionStateArchives } from "./session-accessor.sqlite-archive-store.js";
+import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
+import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
 import {
-  collectSqliteSessionStateIdsForEntry,
-  deleteMaterializedSqliteSessionStatePlans,
-  planSqliteSessionStateDeleteIfUnreferenced,
-  readReferencedSqliteSessionIds,
+  collectSessionStateIdsForEntry,
+  deleteMaterializedSessionStatePlans,
+  planSessionStateDeleteIfUnreferenced,
+  readReferencedSessionIds,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import {
   getSessionKysely,
@@ -32,16 +35,20 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { parseSqliteSessionEntryJson } from "./session-accessor.sqlite-status.js";
+import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
-import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
+import {
+  isRecentSessionMaintenanceEntry,
+  type ResolvedSessionMaintenanceConfig,
+} from "./store-maintenance.js";
 
 type SessionHistoryDiskBudgetParams = {
   agentId?: string;
   mode: ResolvedSessionMaintenanceConfig["mode"];
   storePath: string;
-  maintenance: Pick<ResolvedSessionMaintenanceConfig, "highWaterBytes" | "maxDiskBytes">;
+  maintenance: Pick<ResolvedSessionMaintenanceConfig, "highWaterBytes" | "maxDiskBytes"> &
+    Partial<Pick<ResolvedSessionMaintenanceConfig, "preserveRecentMs">>;
 };
 
 function createPhysicalBudgetResult(params: {
@@ -85,19 +92,23 @@ export async function inspectSqliteSessionHistoryDiskBudget(
   // Predict only definite reclamation: prunable archives or unprotected
   // historical generations. Checkpoint-only byte reclamation stays out of the
   // preview; applied summaries report it via their byte-decrease predicate.
-  if (await hasRetainedSessionTranscriptArchives(params.storePath)) {
-    return { diskBudget, wouldMutate: true };
-  }
   const resolved = resolveSqliteScope({
     ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionKey: "",
     storePath: params.storePath,
   });
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  if (
+    hasCanonicalSessionTranscriptArchives(database) ||
+    (await hasRetainedSessionTranscriptArchives(params.storePath))
+  ) {
+    return { diskBudget, wouldMutate: true };
+  }
   const candidates = readHistoricalSessionIds({
     database,
-    protectedSessionIds: collectProtectedHistoricalSessionIds({
+    protectedSessionIds: collectInitialProtectedHistoricalSessionIds({
       database,
+      preserveRecentMs: params.maintenance.preserveRecentMs,
       storePath: params.storePath,
     }),
   });
@@ -108,9 +119,106 @@ function collectProtectedHistoricalSessionIds(params: {
   database: OpenClawAgentDatabase;
   storePath: string;
 }): Set<string> {
-  const protectedSessionIds = readReferencedSqliteSessionIds(params.database);
+  const protectedSessionIds = readReferencedSessionIds(params.database);
   for (const sessionId of collectAdmissionProtectedSessionIds(params)) {
     protectedSessionIds.add(sessionId);
+  }
+  return protectedSessionIds;
+}
+
+function collectInitialProtectedHistoricalSessionIds(params: {
+  database: OpenClawAgentDatabase;
+  preserveRecentMs?: number | null;
+  storePath: string;
+}): Set<string> {
+  const protectedSessionIds = collectProtectedHistoricalSessionIds(params);
+  for (const sessionId of collectRecentSessionHistoryIds(params)) {
+    protectedSessionIds.add(sessionId);
+  }
+  return protectedSessionIds;
+}
+
+function collectRecentSessionHistoryIds(params: {
+  database: OpenClawAgentDatabase;
+  preserveRecentMs?: number | null;
+}): Set<string> {
+  if (params.preserveRecentMs == null) {
+    return new Set();
+  }
+  const db = getSessionKysely(params.database.db);
+  const rows = executeSqliteQuerySync(
+    params.database.db,
+    db
+      .selectFrom("session_windows")
+      .innerJoin("session_nodes", "session_nodes.session_key", "session_windows.session_key")
+      .select([
+        "session_nodes.current_session_id",
+        "session_nodes.entry_json",
+        "session_nodes.session_key",
+        "session_nodes.updated_at",
+        "session_windows.session_id",
+      ]),
+  ).rows;
+  return new Set(
+    rows.flatMap((row) => {
+      const entry = parseSessionEntryJson(row);
+      return entry &&
+        isRecentSessionMaintenanceEntry({
+          key: row.session_key,
+          entry,
+          preserveRecentMs: params.preserveRecentMs,
+        })
+        ? [row.session_id]
+        : [];
+    }),
+  );
+}
+
+function isRecentHistoricalSessionId(params: {
+  database: OpenClawAgentDatabase;
+  preserveRecentMs?: number | null;
+  sessionId: string;
+}): boolean {
+  if (params.preserveRecentMs == null) {
+    return false;
+  }
+  const db = getSessionKysely(params.database.db);
+  const row = executeSqliteQuerySync(
+    params.database.db,
+    db
+      .selectFrom("session_windows")
+      .innerJoin("session_nodes", "session_nodes.session_key", "session_windows.session_key")
+      .select([
+        "session_nodes.current_session_id",
+        "session_nodes.entry_json",
+        "session_nodes.session_key",
+        "session_nodes.updated_at",
+      ])
+      .where("session_windows.session_id", "=", params.sessionId),
+  ).rows[0];
+  if (!row) {
+    return false;
+  }
+  const entry = parseSessionEntryJson(row);
+  return Boolean(
+    entry &&
+    isRecentSessionMaintenanceEntry({
+      key: row.session_key,
+      entry,
+      preserveRecentMs: params.preserveRecentMs,
+    }),
+  );
+}
+
+function collectCandidateProtectedHistoricalSessionIds(params: {
+  database: OpenClawAgentDatabase;
+  preserveRecentMs?: number | null;
+  sessionId: string;
+  storePath: string;
+}): Set<string> {
+  const protectedSessionIds = collectProtectedHistoricalSessionIds(params);
+  if (isRecentHistoricalSessionId(params)) {
+    protectedSessionIds.add(params.sessionId);
   }
   return protectedSessionIds;
 }
@@ -144,9 +252,9 @@ export function collectAdmissionProtectedSessionIds(params: {
       continue;
     }
     protectedSessionIds.add(row.current_session_id);
-    const entry = parseSqliteSessionEntryJson(row);
+    const entry = parseSessionEntryJson(row);
     if (entry) {
-      for (const sessionId of collectSqliteSessionStateIdsForEntry(entry)) {
+      for (const sessionId of collectSessionStateIdsForEntry(entry)) {
         protectedSessionIds.add(sessionId);
       }
     }
@@ -193,6 +301,144 @@ function reclaimSqliteFreePages(database: OpenClawAgentDatabase): void {
     database.db.exec(`PRAGMA incremental_vacuum(${freePages});`);
   }
   database.walMaintenance.checkpoint();
+}
+
+function hasCanonicalSessionTranscriptArchives(database: OpenClawAgentDatabase): boolean {
+  const db = getSessionKysely(database.db);
+  const table = executeSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("sqlite_schema")
+      .select("name")
+      .where("type", "=", "table")
+      .where("name", "=", "session_transcript_archives"),
+  ).rows[0];
+  if (!table) {
+    return false;
+  }
+  return (
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .selectFrom("session_transcript_archives")
+        .select("session_id")
+        .where("published_at", "is not", null)
+        .limit(1),
+    ).rows.length > 0
+  );
+}
+
+function readUnpublishedSessionTranscriptArchiveNames(
+  database: OpenClawAgentDatabase,
+): Set<string> {
+  const db = getSessionKysely(database.db);
+  const table = executeSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("sqlite_schema")
+      .select("name")
+      .where("type", "=", "table")
+      .where("name", "=", "session_transcript_archives"),
+  ).rows[0];
+  if (!table) {
+    return new Set();
+  }
+  return new Set(
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .selectFrom("session_transcript_archives")
+        .select("archive_name")
+        .where("published_at", "is", null),
+    ).rows.map((row) => row.archive_name),
+  );
+}
+
+async function pruneCanonicalSessionTranscriptArchivesToHighWater(params: {
+  archiveDirectory: string;
+  database: OpenClawAgentDatabase;
+  highWaterBytes: number;
+  storePath: string;
+}): Promise<{ removedFiles: number; usage: SessionPhysicalDiskUsage }> {
+  let usage = await measureSessionPhysicalDiskUsage(params.storePath);
+  let removedFiles = 0;
+  while (usage.totalBytes > params.highWaterBytes) {
+    const db = getSessionKysely(params.database.db);
+    const row = executeSqliteQuerySync(
+      params.database.db,
+      db
+        .selectFrom("session_transcript_archives")
+        .select(["archive_name", "generation", "session_id"])
+        .where("published_at", "is not", null)
+        .orderBy("created_at", "asc")
+        .orderBy("session_id", "asc")
+        .orderBy("generation", "asc")
+        .limit(1),
+    ).rows[0];
+    if (!row) {
+      break;
+    }
+    const archivePath = path.resolve(params.archiveDirectory, row.archive_name);
+    if (
+      path.dirname(archivePath) !== path.resolve(params.archiveDirectory) ||
+      path.basename(archivePath) !== row.archive_name
+    ) {
+      throw new Error(`Invalid canonical session archive name for ${row.session_id}`);
+    }
+    try {
+      await fs.promises.rm(archivePath);
+      removedFiles += 1;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        // The database is the recovery copy. Retain it unless its derived file
+        // is gone, otherwise retention could leave an undeletable orphan.
+        break;
+      }
+    }
+    runOpenClawAgentWriteTransaction(
+      (transactionDb) => {
+        const transactionKysely = getSessionKysely(transactionDb.db);
+        executeSqliteQuerySync(
+          transactionDb.db,
+          transactionKysely
+            .deleteFrom("session_transcript_archives")
+            .where("session_id", "=", row.session_id)
+            .where("generation", "=", row.generation),
+        );
+      },
+      { agentId: params.database.agentId, path: params.database.path },
+    );
+    reclaimSqliteFreePages(params.database);
+    usage = await measureSessionPhysicalDiskUsage(params.storePath);
+  }
+  return { removedFiles, usage };
+}
+
+async function pruneAllSessionTranscriptArchivesToHighWater(params: {
+  archiveDirectory: string;
+  database: OpenClawAgentDatabase;
+  highWaterBytes: number;
+  storePath: string;
+}): Promise<{ removedFiles: number; usage: SessionPhysicalDiskUsage }> {
+  let canonical = {
+    removedFiles: 0,
+    usage: await measureSessionPhysicalDiskUsage(params.storePath),
+  };
+  if (hasCanonicalSessionTranscriptArchives(params.database)) {
+    canonical = await pruneCanonicalSessionTranscriptArchivesToHighWater(params);
+  }
+  if (canonical.usage.totalBytes <= params.highWaterBytes) {
+    return canonical;
+  }
+  const legacy = await pruneSessionTranscriptArchivesToHighWater({
+    excludeNames: readUnpublishedSessionTranscriptArchiveNames(params.database),
+    highWaterBytes: params.highWaterBytes,
+    storePath: params.storePath,
+  });
+  return {
+    removedFiles: canonical.removedFiles + legacy.removedFiles,
+    usage: legacy.usage,
+  };
 }
 
 const PHYSICAL_BUDGET_CHECK_INTERVAL_MS = 30 * 60 * 1000;
@@ -320,10 +566,12 @@ async function enforceSessionHistoryMaintenanceSerialized(
   let removedEntries = 0;
   let removedFiles = 0;
   if (usage.totalBytes > highWaterBytes) {
-    // Archive pruning shares the session write lock so a concurrent
+    // Archive pruning shares the SQLite writer queue so a concurrent
     // reset/delete cannot race its archive file against the unlink pass.
     const archiveSweep = await runExclusiveSqliteSessionWrite(resolved, async () =>
-      pruneSessionTranscriptArchivesToHighWater({
+      pruneAllSessionTranscriptArchivesToHighWater({
+        archiveDirectory,
+        database,
         highWaterBytes,
         storePath: params.storePath,
       }),
@@ -333,8 +581,9 @@ async function enforceSessionHistoryMaintenanceSerialized(
   }
   const candidates = readHistoricalSessionIds({
     database,
-    protectedSessionIds: collectProtectedHistoricalSessionIds({
+    protectedSessionIds: collectInitialProtectedHistoricalSessionIds({
       database,
+      preserveRecentMs: params.maintenance.preserveRecentMs,
       storePath: params.storePath,
     }),
   });
@@ -346,13 +595,15 @@ async function enforceSessionHistoryMaintenanceSerialized(
     const eviction = await runExclusiveSessionLifecycleMutation({
       scope: params.storePath,
       identities: [sessionId],
-      run: async () =>
-        await runExclusiveSqliteSessionWrite(resolved, async () => {
-          const protectedBeforeArchive = collectProtectedHistoricalSessionIds({
+      run: async () => {
+        const plan = await runExclusiveSqliteSessionWrite(resolved, async () => {
+          const protectedBeforeArchive = collectCandidateProtectedHistoricalSessionIds({
             database,
+            preserveRecentMs: params.maintenance.preserveRecentMs,
+            sessionId,
             storePath: params.storePath,
           });
-          const plan = planSqliteSessionStateDeleteIfUnreferenced({
+          const candidate = planSessionStateDeleteIfUnreferenced({
             archiveDirectory,
             archiveTranscript: true,
             database,
@@ -360,22 +611,28 @@ async function enforceSessionHistoryMaintenanceSerialized(
             referencedSessionIds: protectedBeforeArchive,
             sessionId,
           });
-          if (!plan) {
+          if (!candidate) {
             return null;
           }
-
-          // Extract-before-delete is the retention invariant. Admission is fenced across archive
-          // creation, then rechecked inside the write transaction before any rows are reclaimed.
-          const materialized = materializeSqliteSessionStateDeletePlans([plan]);
+          return candidate;
+        });
+        if (!plan) {
+          return null;
+        }
+        // Extract-before-delete is the retention invariant. The lifecycle hold
+        // fences admission while the store writer is released for archive I/O.
+        const materialized = await materializeSessionStateDeletePlans([plan]);
+        const committedArchives = await runExclusiveSqliteSessionWrite(resolved, async () => {
           let deleted = false;
-          let archivedTranscripts: ReturnType<typeof deleteMaterializedSqliteSessionStatePlans> =
-            [];
+          let archivedTranscripts: ReturnType<typeof deleteMaterializedSessionStatePlans> = [];
           runOpenClawAgentWriteTransaction((transactionDb) => {
-            const protectedAtDelete = collectProtectedHistoricalSessionIds({
+            const protectedAtDelete = collectCandidateProtectedHistoricalSessionIds({
               database: transactionDb,
+              preserveRecentMs: params.maintenance.preserveRecentMs,
+              sessionId,
               storePath: params.storePath,
             });
-            archivedTranscripts = deleteMaterializedSqliteSessionStatePlans(
+            archivedTranscripts = deleteMaterializedSessionStatePlans(
               transactionDb,
               materialized,
               protectedAtDelete,
@@ -401,18 +658,30 @@ async function enforceSessionHistoryMaintenanceSerialized(
           } catch {
             // Best-effort reclamation only.
           }
-          return {
-            archivedTranscripts,
-            usage: await measureSessionPhysicalDiskUsage(params.storePath),
-          };
-        }),
+          return archivedTranscripts;
+        });
+        if (!committedArchives) {
+          return null;
+        }
+        return {
+          archivedTranscripts: committedArchives,
+        };
+      },
     });
     if (!eviction) {
       continue;
     }
+    // The lifecycle and SQLite writer lanes are both released before file I/O;
+    // publication reacquires the writer only for its short status commit.
+    const publishedArchives = await publishSessionStateArchives(
+      resolved,
+      eviction.archivedTranscripts,
+    );
     removedEntries += 1;
-    emitArchivedSqliteTranscriptUpdates(eviction.archivedTranscripts);
-    usage = eviction.usage;
+    emitArchivedTranscriptUpdates(publishedArchives);
+    // Publication adds both the derived file and SQLite status WAL after the
+    // deletion measurement. Re-read physical usage before declaring high water.
+    usage = await measureSessionPhysicalDiskUsage(params.storePath);
     if (usage.totalBytes > highWaterBytes) {
       // Reclaim archives (oldest first, including ones this pass committed)
       // before spending another session's rows: each session's data should be
@@ -420,7 +689,9 @@ async function enforceSessionHistoryMaintenanceSerialized(
       // additional searchable history. No prune runs between an archive write
       // and its row-deletion commit, so a sole copy is never mid-flight here.
       const repruned = await runExclusiveSqliteSessionWrite(resolved, async () =>
-        pruneSessionTranscriptArchivesToHighWater({
+        pruneAllSessionTranscriptArchivesToHighWater({
+          archiveDirectory,
+          database,
           highWaterBytes,
           storePath: params.storePath,
         }),
@@ -434,7 +705,9 @@ async function enforceSessionHistoryMaintenanceSerialized(
     // Candidates are exhausted but archives may remain; finish the pass at the
     // target instead of returning over budget with removable artifacts.
     const finalPrune = await runExclusiveSqliteSessionWrite(resolved, async () =>
-      pruneSessionTranscriptArchivesToHighWater({
+      pruneAllSessionTranscriptArchivesToHighWater({
+        archiveDirectory,
+        database,
         highWaterBytes,
         storePath: params.storePath,
       }),

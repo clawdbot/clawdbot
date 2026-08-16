@@ -23,6 +23,7 @@ import {
 export { isPendingSendMessage, persistedMessageEntryId } from "./chat-thread-items.ts";
 export {
   assistantGroupCanOwnActiveRunStatus,
+  coalesceActivityRuns,
   coalesceStreamRuns,
   collapseCompletedTurnWork,
 } from "./chat-thread-grouping.ts";
@@ -76,7 +77,6 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
     senderIdentityKey(previous.sender) === senderIdentityKey(next.sender) &&
     senderIdentityKey(previous.replyToSender) === senderIdentityKey(next.replyToSender) &&
     previous.isStreaming === next.isStreaming &&
-    previous.turnSucceeded === next.turnSucceeded &&
     previous.messages.length === next.messages.length &&
     previous.messages.every((entry, index) => {
       const candidate = next.messages[index];
@@ -107,6 +107,8 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
       return (
         previous.kind === "notice" &&
         previous.text === next.text &&
+        previous.label === next.label &&
+        previous.startsTurn === next.startsTurn &&
         previous.timestamp === next.timestamp
       );
     case "divider":
@@ -350,17 +352,6 @@ export function buildCachedChatItems(
   return items;
 }
 
-export function deletedChatItemsSignature(
-  deleted: { has: (key: string) => boolean },
-  chatItems: ReturnType<typeof buildChatItems>,
-): string {
-  const deletedKeys = chatItems
-    .map((item) => item.key)
-    .filter((key) => deleted.has(key))
-    .toSorted();
-  return deletedKeys.length === 0 ? "" : deletedKeys.join("\u0000");
-}
-
 export function getExpansionStateVersion(values: ReadonlyMap<string, boolean>): number {
   return expandedBooleanMapVersions.get(values) ?? 0;
 }
@@ -399,7 +390,7 @@ export function getExpandedUserMessages(sessionKey: string): Map<string, boolean
 export type AssistantMessageExpansionState =
   | { status: "loading"; revision: number }
   | { status: "error"; revision: number }
-  | { status: "loaded"; expanded: boolean; markdown: string; revision: number };
+  | { status: "loaded"; markdown: string; revision: number };
 
 export function getExpandedAssistantMessages(
   sessionKey: string,

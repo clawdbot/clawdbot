@@ -1,12 +1,15 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   isToolCallContentType,
   isToolResultContentType,
   resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
+import { t } from "../../i18n/index.ts";
 import type { ChatItem, ChatQueueItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import {
+  advanceAccumulatedStreamText,
   streamSegmentHasItemId,
   streamSegmentUsesAccumulatedText,
   trimAccumulatedStreamPrefix,
@@ -19,15 +22,14 @@ import {
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
-import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import {
   buildCompactionDividerItem,
+  buildResetDividerItem,
   clearWorkingProgress,
   resolveWorkingProgress,
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
 import {
-  annotateToolTurnOutcome,
   coalesceToolActivityMessages,
   groupMessages,
   isKeyedAssistantStreamFallbackMessage,
@@ -47,7 +49,6 @@ import {
   messageMatchesSearchQuery,
   queuedSendThreadMessage,
   rawMessageTimestamp,
-  safeNormalizeMessage,
   insertChatItemsByTimestamp,
   sanitizeStreamText,
   timestampAfterVisibleItems,
@@ -56,7 +57,9 @@ import {
   userTurnSendIdentity,
   type TurnInsertionBounds,
 } from "./chat-thread-items.ts";
+import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import { chatMessagesContainQueuedSend } from "./steer-lifecycle.ts";
+import { resolveSystemNoticeKind } from "./system-notice-kinds.ts";
 import { isLiveTerminalForRun } from "./terminal-message-identity.ts";
 import {
   extractToolMessageRefs,
@@ -130,19 +133,18 @@ function resolveRunInsertionBounds(
   if (typeof runId !== "string" || !runId.trim()) {
     return currentRunId != null ? currentTurnBounds : null;
   }
-  if (currentRunId == null) {
-    return findRunTurnBounds(items, runId);
-  }
+  const runBounds = findRunTurnBounds(items, runId);
   if (runId === currentRunId) {
-    return currentTurnBounds;
+    // Active runs can span steers: the original prompt is a floor, not a ceiling.
+    return runBounds ? { afterKey: runBounds.afterKey } : currentTurnBounds;
+  }
+  if (runBounds || currentRunId == null) {
+    return runBounds;
   }
   // Legacy rows may lack the user-run identity needed for exact bounds. Keep
   // their timestamp ordering across historical turns, but never cross the
   // current prompt and become current-run output.
-  return (
-    findRunTurnBounds(items, runId) ??
-    (currentTurnBounds?.afterKey ? { beforeKey: currentTurnBounds.afterKey } : null)
-  );
+  return currentTurnBounds?.afterKey ? { beforeKey: currentTurnBounds.afterKey } : null;
 }
 
 function liveRenderedToolRefs(toolMessages: unknown[]): LiveToolStreamRef[] {
@@ -230,6 +232,10 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       items.push(buildCompactionDividerItem(marker, normalized.timestamp ?? Date.now(), i));
       continue;
     }
+    if (marker && marker.kind === "reset") {
+      items.push(buildResetDividerItem(marker, normalized.timestamp ?? Date.now(), i));
+      continue;
+    }
 
     const role = normalizeRoleForGrouping(normalized.role);
     if (role === "system") {
@@ -265,6 +271,28 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       continue;
     }
     if (!hasRenderableNormalizedMessage(msg) && normalized.role.toLowerCase() !== "assistant") {
+      continue;
+    }
+
+    const provenance = asRecord(raw.provenance);
+    if (role === "user" && provenance?.kind === "internal_system") {
+      const noticeKind = resolveSystemNoticeKind(
+        typeof provenance.sourceTool === "string" ? provenance.sourceTool : undefined,
+      );
+      const text = noticeKind?.summaryKey
+        ? t(noticeKind.summaryKey)
+        : extractTextCached(msg)?.replace(/^\[System\] /u, "");
+      if (text?.trim()) {
+        items.push({
+          kind: "notice",
+          key: itemKey,
+          icon: noticeKind?.icon ?? "cpu",
+          label: noticeKind ? t(noticeKind.labelKey) : t("common.system"),
+          startsTurn: true,
+          text,
+          timestamp: normalized.timestamp,
+        });
+      }
       continue;
     }
 
@@ -451,8 +479,11 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       const visibleText = usesAccumulatedText
         ? trimAccumulatedStreamPrefix(text, previousAccumulatedStreamText)
         : text;
-      if (usesAccumulatedText && text.length > 0) {
-        previousAccumulatedStreamText = text;
+      if (usesAccumulatedText) {
+        previousAccumulatedStreamText = advanceAccumulatedStreamText(
+          previousAccumulatedStreamText,
+          text,
+        );
       }
       if (visibleText.length > 0) {
         const streamKey = `stream-seg:${props.sessionKey}:${i}`;
@@ -587,7 +618,5 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     appendQueuedSend(queued);
   }
 
-  return annotateToolTurnOutcome(
-    groupMessages(collapseSequentialDuplicateMessages(coalesceToolActivityMessages(items))),
-  );
+  return groupMessages(collapseSequentialDuplicateMessages(coalesceToolActivityMessages(items)));
 }

@@ -1,3 +1,7 @@
+import {
+  createOutboundPayloadPlan,
+  projectOutboundPayloadPlanForDelivery,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { describe, expect, it, vi } from "vitest";
 import {
   describeTelegramDispatch,
@@ -294,6 +298,45 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
       });
 
       expect(finalDeliveryPayload().mediaUrls).toEqual([]);
+    });
+
+    it("does not restore block-sent legacy media when the final includes another attachment", async () => {
+      const sentMediaUrl = "/tmp/cat.jpg";
+      const remainingMediaUrl = "/tmp/dog.jpg";
+      deliverReplies.mockResolvedValue({ delivered: true });
+      deliverInboundReplyWithMessageSendContext.mockResolvedValue({
+        status: "handled_visible",
+        delivery: { messageIds: ["101"], visibleReplySent: true },
+      });
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+        await dispatcherOptions.deliver({ mediaUrl: sentMediaUrl }, { kind: "block" });
+        await dispatcherOptions.deliver(
+          {
+            text: "Here are the images",
+            mediaUrls: [remainingMediaUrl],
+            mediaUrl: sentMediaUrl,
+          },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      });
+
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode: "off",
+        telegramDeps: telegramDepsForTest,
+      });
+
+      const finalPayload = finalDeliveryPayload();
+      expect(finalPayload).toMatchObject({
+        text: "Here are the images",
+        mediaUrl: undefined,
+        mediaUrls: [remainingMediaUrl],
+      });
+      expect(
+        projectOutboundPayloadPlanForDelivery(createOutboundPayloadPlan([finalPayload]))[0]
+          ?.mediaUrls,
+      ).toEqual([remainingMediaUrl]);
     });
 
     it("preserves final media when block delivery reports no visible send", async () => {

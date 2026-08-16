@@ -51,6 +51,7 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
   const recordModelUsage = (
     evt: Extract<DiagnosticEventPayload, { type: "model.usage" }>,
     metadata: DiagnosticEventMetadata,
+    hostPluginId?: string,
   ) => {
     const attrs = {
       "openclaw.channel": evt.channel ?? "unknown",
@@ -124,6 +125,9 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
       "openclaw.tokens.cache_write": usage.cacheWrite ?? 0,
       "openclaw.tokens.total": usage.total ?? 0,
     };
+    if (metadata.trusted && metadata.internal && hostPluginId) {
+      spanAttrs["openclaw.plugin"] = normalizeDiagnosticValue(hostPluginId);
+    }
     assignGenAiSpanIdentityAttrs(spanAttrs, evt);
     assignPositiveNumberAttr(spanAttrs, "gen_ai.usage.input_tokens", genAiInputTokens);
     assignPositiveNumberAttr(spanAttrs, "gen_ai.usage.output_tokens", usage.output);
