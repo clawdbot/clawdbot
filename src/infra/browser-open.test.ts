@@ -3,9 +3,11 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SpawnResult } from "../process/exec-result.js";
 
+type DetectBinary = typeof import("./detect-binary.js").detectBinary;
+
 const { detectBinaryMock, getWindowsInstallRootsMock, runCommandWithTimeoutMock } = vi.hoisted(
   () => ({
-    detectBinaryMock: vi.fn(async () => false),
+    detectBinaryMock: vi.fn<DetectBinary>(async () => false),
     getWindowsInstallRootsMock: vi.fn(() => ({ systemRoot: "C:\\Windows" })),
     runCommandWithTimeoutMock: vi.fn<() => Promise<SpawnResult>>(async () => ({
       stdout: "",
