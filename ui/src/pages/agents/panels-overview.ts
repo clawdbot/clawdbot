@@ -16,6 +16,7 @@ import {
   buildModelOptions,
   normalizeModelValue,
   resolveAgentConfig,
+  resolveAgentSkillsFilter,
   resolveAgentRuntimeLabel,
   resolveAgentTextAvatar,
   resolveEffectiveModelFallbacks,
@@ -103,7 +104,7 @@ export function renderAgentOverview(params: {
     resolveEffectiveModelFallbacks(config.entry?.model, config.defaults?.model) ??
     (configForm ? null : resolveModelFallbacks(agentModel));
   const fallbackChips = modelFallbacks ?? [];
-  const skillFilter = Array.isArray(config.entry?.skills) ? config.entry?.skills : null;
+  const skillFilter = resolveAgentSkillsFilter(configForm, agent.id);
   const skillCount = skillFilter?.length ?? null;
   const disabled = !params.canUpdateConfig || !configForm || configLoading || configSaving;
   const thinkingDefault = agent.thinkingDefault ?? "-";
