@@ -206,6 +206,7 @@ export function createPreparedRuntimeModelMaterializer<Model extends RuntimeRout
     }
     // Prepared plans are immutable within one run. Carry their exact model
     // tuple into auth initialization instead of repeating provider discovery.
+    // A rejected promise keeps the typed materialization reason for fallback.
     const materialized = materializeUncached(plan);
     materializedRouteModels.set(plan, materialized);
     return materialized;

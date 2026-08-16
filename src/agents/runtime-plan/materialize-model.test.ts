@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { materializePreparedRuntimeModel } from "./materialize-model.js";
+import {
+  materializePreparedRuntimeModel,
+  PREPARED_RUNTIME_MODEL_MATERIALIZATION_REASON_CODES,
+  readPreparedRuntimeModelMaterializationReason,
+  type PreparedRuntimeModelMaterializationReason,
+} from "./materialize-model.js";
 import type { AgentRuntimeAuthPlan } from "./types.js";
 
 const plan: AgentRuntimeAuthPlan = {
@@ -310,5 +315,282 @@ describe("materializePreparedRuntimeModel", () => {
         })),
       }),
     ).rejects.toThrow(/prepared subscription route/u);
+  });
+});
+
+const SECRET_BEARING_ERROR =
+  "Unable to refresh SecretRef token=sk-secret-token for https://chatgpt.com/backend-api/codex profile openai:subscription Authorization: Bearer leaked";
+
+function collectStrings(value: unknown): string[] {
+  if (typeof value === "string") {
+    return [value];
+  }
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+  return Object.values(value).flatMap(collectStrings);
+}
+
+function expectReasonRedacted(reason: PreparedRuntimeModelMaterializationReason | undefined) {
+  expect(reason).toBeDefined();
+  const serialized = JSON.stringify(reason);
+  expect(serialized).not.toMatch(/https?:\/\//u);
+  expect(serialized).not.toMatch(/chatgpt\.com|api\.openai\.com/u);
+  expect(serialized).not.toMatch(/openai:(?:subscription|backup|key)/u);
+  expect(serialized).not.toMatch(/SecretRef|Bearer|Authorization|sk-secret-token/u);
+  for (const text of collectStrings(reason)) {
+    expect(text).not.toMatch(/https?:\/\//u);
+    expect(text).not.toContain("openai:subscription");
+    expect(text).not.toContain("sk-secret-token");
+  }
+}
+
+async function expectClosedReason(
+  run: () => Promise<unknown>,
+  expected: Partial<PreparedRuntimeModelMaterializationReason> &
+    Pick<PreparedRuntimeModelMaterializationReason, "code">,
+) {
+  try {
+    await run();
+    throw new Error(`expected ${expected.code} materialization failure`);
+  } catch (error) {
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).name).toBe("Error");
+    expect(Object.keys(error as object)).not.toContain("reason");
+    expect(JSON.stringify(error)).not.toMatch(/https?:\/\//u);
+    const reason = readPreparedRuntimeModelMaterializationReason(error);
+    expect(reason).toMatchObject(expected);
+    expectReasonRedacted(reason);
+    return { error: error as Error, reason };
+  }
+}
+
+describe("materializePreparedRuntimeModel closed reasons", () => {
+  it("assigns a distinct closed reason to every fail-closed predicate", async () => {
+    const missing = await expectClosedReason(
+      () =>
+        materializePreparedRuntimeModel({
+          plan,
+          provider: "openai",
+          modelId: "gpt-5.5",
+          resolveModel: vi.fn(async () => ({ error: SECRET_BEARING_ERROR })),
+        }),
+      {
+        code: "resolved-model-missing",
+        provider: "openai",
+        modelId: "gpt-5.5",
+        api: "openai-chatgpt-responses",
+        authRequirement: "subscription",
+      },
+    );
+    expect(missing.error.message).toBe(SECRET_BEARING_ERROR);
+
+    const providerMismatch = await expectClosedReason(
+      () =>
+        materializePreparedRuntimeModel({
+          plan,
+          provider: "openai",
+          modelId: "gpt-5.5",
+          resolveModel: vi.fn(async () => ({
+            error: SECRET_BEARING_ERROR,
+            model: {
+              provider: "github-copilot",
+              id: "gpt-5.5",
+              api: "openai-chatgpt-responses",
+              baseUrl: "https://chatgpt.com/backend-api/codex",
+            },
+          })),
+        }),
+      {
+        code: "resolved-provider-mismatch",
+        provider: "openai",
+        modelId: "gpt-5.5",
+        actualProvider: "github-copilot",
+        api: "openai-chatgpt-responses",
+        authRequirement: "subscription",
+      },
+    );
+
+    const modelMismatch = await expectClosedReason(
+      () =>
+        materializePreparedRuntimeModel({
+          plan,
+          provider: "openai",
+          modelId: "gpt-5.5",
+          resolveModel: vi.fn(async () => ({
+            model: {
+              provider: "openai",
+              id: "gpt-5.4",
+              api: "openai-chatgpt-responses",
+              baseUrl: "https://chatgpt.com/backend-api/codex",
+            },
+          })),
+        }),
+      {
+        code: "resolved-model-mismatch",
+        provider: "openai",
+        modelId: "gpt-5.5",
+        actualModelId: "gpt-5.4",
+        api: "openai-chatgpt-responses",
+        authRequirement: "subscription",
+      },
+    );
+
+    const routeMismatch = await expectClosedReason(
+      () =>
+        materializePreparedRuntimeModel({
+          plan,
+          provider: "openai",
+          modelId: "gpt-5.5",
+          resolveModel: vi.fn(async () => ({
+            model: {
+              provider: "openai",
+              id: "gpt-5.5",
+              api: "openai-responses",
+              baseUrl: "https://api.openai.com/v1",
+            },
+          })),
+        }),
+      {
+        code: "resolved-route-mismatch",
+        provider: "openai",
+        modelId: "gpt-5.5",
+        api: "openai-chatgpt-responses",
+        actualApi: "openai-responses",
+        authRequirement: "subscription",
+      },
+    );
+
+    const preparedTarget = await expectClosedReason(
+      () =>
+        materializePreparedRuntimeModel({
+          plan,
+          provider: "openai",
+          modelId: "gpt-5.6",
+          resolveModel: vi.fn(),
+        }),
+      {
+        code: "prepared-target-mismatch",
+        provider: "openai",
+        modelId: "gpt-5.6",
+        actualProvider: "openai",
+        actualModelId: "gpt-5.5",
+      },
+    );
+
+    const callerMismatch = await expectClosedReason(
+      () =>
+        materializePreparedRuntimeModel({
+          plan,
+          provider: "openai",
+          modelId: "gpt-5.5",
+          rejectMismatchedModel: true,
+          model: {
+            provider: "openai",
+            id: "gpt-5.5",
+            api: "openai-completions",
+            baseUrl: "https://api.openai.com/v1",
+          },
+          resolveModel: vi.fn(),
+        }),
+      {
+        code: "caller-model-mismatch",
+        provider: "openai",
+        modelId: "gpt-5.5",
+        actualProvider: "openai",
+        actualModelId: "gpt-5.5",
+        api: "openai-chatgpt-responses",
+        actualApi: "openai-completions",
+        authRequirement: "subscription",
+      },
+    );
+
+    const resolvedCodes = [
+      missing.reason?.code,
+      providerMismatch.reason?.code,
+      modelMismatch.reason?.code,
+      routeMismatch.reason?.code,
+    ];
+    expect(new Set(resolvedCodes).size).toBe(4);
+    expect(providerMismatch.error.message).toBe(SECRET_BEARING_ERROR);
+    expect(modelMismatch.error.message).toBe(
+      "Unable to materialize openai/gpt-5.5 for its prepared subscription route.",
+    );
+    expect(routeMismatch.error.message).toBe(modelMismatch.error.message);
+    expect(preparedTarget.error.message).toMatch(/does not match target/u);
+    expect(callerMismatch.error.message).toMatch(/does not match its prepared subscription route/u);
+    expect(PREPARED_RUNTIME_MODEL_MATERIALIZATION_REASON_CODES).toEqual([
+      "resolved-model-missing",
+      "resolved-provider-mismatch",
+      "resolved-model-mismatch",
+      "resolved-route-mismatch",
+      "prepared-target-mismatch",
+      "caller-model-mismatch",
+    ]);
+  });
+
+  it("keeps exact-route success and fail-closed order as controls", async () => {
+    const matching = {
+      provider: "openai",
+      id: "gpt-5.5",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    };
+    const resolveModel = vi.fn(async () => ({
+      model: {
+        provider: "github-copilot",
+        id: "gpt-5.5",
+        api: "openai-chatgpt-responses",
+        baseUrl: matching.baseUrl,
+      },
+    }));
+
+    await expect(
+      materializePreparedRuntimeModel({
+        plan,
+        provider: "openai",
+        modelId: "gpt-5.5",
+        model: matching,
+        resolveModel,
+      }),
+    ).resolves.toBe(matching);
+    expect(resolveModel).not.toHaveBeenCalled();
+
+    const missingThenMismatch = vi.fn(async () => ({
+      error: SECRET_BEARING_ERROR,
+      model: {
+        provider: "github-copilot",
+        id: "gpt-5.4",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      },
+    }));
+    const ordered = await expectClosedReason(
+      () =>
+        materializePreparedRuntimeModel({
+          plan,
+          provider: "openai",
+          modelId: "gpt-5.5",
+          resolveModel: missingThenMismatch,
+        }),
+      { code: "resolved-provider-mismatch" },
+    );
+    expect(ordered.error.message).toBe(SECRET_BEARING_ERROR);
+    expect(missingThenMismatch).toHaveBeenCalledOnce();
+  });
+
+  it("does not attach a reason to ordinary resolve throws", async () => {
+    const failure = new Error(SECRET_BEARING_ERROR);
+    await expect(
+      materializePreparedRuntimeModel({
+        plan,
+        provider: "openai",
+        modelId: "gpt-5.5",
+        resolveModel: vi.fn(async () => {
+          throw failure;
+        }),
+      }),
+    ).rejects.toBe(failure);
+    expect(readPreparedRuntimeModelMaterializationReason(failure)).toBeUndefined();
   });
 });
