@@ -1,3 +1,4 @@
+import { addApprovalReactionHintToText } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import {
   buildExecApprovalPendingReplyPayload,
   buildPluginApprovalPendingReplyPayload,
@@ -5,9 +6,7 @@ import {
 // Signal tests cover approval reactions plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  addSignalApprovalReactionHintToText,
   addSignalApprovalReactionHintToStructuredPayload,
-  buildSignalApprovalReactionHint,
   clearSignalApprovalReactionTargetsForTest,
   maybeResolveSignalApprovalReaction,
   registerSignalApprovalReactionTargetForDeliveredPayload,
@@ -43,48 +42,6 @@ describe("Signal approval reactions", () => {
     });
     resolverMocks.isApprovalNotFoundError.mockReset();
     resolverMocks.isApprovalNotFoundError.mockReturnValue(false);
-  });
-
-  it("renders thumbs-only reaction choices for allowed decisions", () => {
-    expect(buildSignalApprovalReactionHint(["allow-once", "deny"])).toBe(
-      "React with:\n\n👍 Allow Once\n👎 Deny",
-    );
-  });
-
-  it("exposes allow-always as a reaction choice when allowed", () => {
-    expect(buildSignalApprovalReactionHint(["allow-once", "allow-always", "deny"])).toBe(
-      "React with:\n\n👍 Allow Once\n♾️ Allow Always\n👎 Deny",
-    );
-  });
-
-  it("appends thumbs-only reaction choices to outbound approval prompts", () => {
-    expect(
-      addSignalApprovalReactionHintToText({
-        text: "Exec approval required\nID: exec-1\n\nReply with: /approve exec-1 allow-once|deny",
-        allowedDecisions: ["allow-once", "deny"],
-      }),
-    ).toBe(
-      "Exec approval required\nID: exec-1\n\nReact with:\n\n👍 Allow Once\n👎 Deny\n\nReply with: /approve exec-1 allow-once|deny",
-    );
-  });
-
-  it("does not duplicate reaction choices on native approval prompts", () => {
-    const prompt = [
-      "Plugin approval required",
-      "Reply with: /approve plugin:abc allow-once|allow-always|deny",
-      "",
-      "React with:",
-      "",
-      "👍 Allow Once",
-      "👎 Deny",
-    ].join("\n");
-
-    expect(
-      addSignalApprovalReactionHintToText({
-        text: prompt,
-        allowedDecisions: ["allow-once", "deny"],
-      }),
-    ).toBe(prompt);
   });
 
   it("registers delivered structured approval payloads for reactions", async () => {
@@ -472,7 +429,7 @@ describe("Signal approval reactions", () => {
     });
     const deliveredPayload = {
       ...payload,
-      text: addSignalApprovalReactionHintToText({
+      text: addApprovalReactionHintToText({
         text: payload.text ?? "",
         allowedDecisions: ["allow-once", "deny"],
       }),
