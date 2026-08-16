@@ -462,7 +462,7 @@ describe("session hook context wiring", () => {
       hookRunnerMocks.runSessionStart,
       "session_start",
     );
-    expectFields(startEvent, { resumedFrom: "old-session" });
+    expectFields(startEvent, { resumedFrom: "old-session", reason: "new" });
     expect(event?.nextSessionId).toBe("old-session");
     expect(startEvent?.sessionId).toBe("old-session");
     expectFields(startContext, { sessionId: startEvent?.sessionId });
@@ -564,7 +564,9 @@ describe("session hook context wiring", () => {
     });
 
     const [event] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
+    const [startEvent] = requireHookCall(hookRunnerMocks.runSessionStart, "session_start");
     expectFields(event, { reason: "reset" });
+    expectFields(startEvent, { reason: "reset" });
   });
 
   it("maps custom reset trigger aliases to the new-session reason", async () => {
@@ -589,7 +591,9 @@ describe("session hook context wiring", () => {
     });
 
     const [event] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
+    const [startEvent] = requireHookCall(hookRunnerMocks.runSessionStart, "session_start");
     expectFields(event, { reason: "new" });
+    expectFields(startEvent, { reason: "new" });
   });
 
   it("marks daily stale rollovers and exposes the archived transcript path", async () => {
@@ -611,6 +615,7 @@ describe("session hook context wiring", () => {
       expectFields(event, {
         reason: "daily",
       });
+      expectFields(startEvent, { reason: "daily" });
       expect(event?.nextSessionId).toBe(startEvent?.sessionId);
       expect(startEvent?.sessionId).toBe("daily-session");
     } finally {
@@ -636,7 +641,9 @@ describe("session hook context wiring", () => {
       });
 
       const [event] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
+      const [startEvent] = requireHookCall(hookRunnerMocks.runSessionStart, "session_start");
       expectFields(event, { reason: "idle" });
+      expectFields(startEvent, { reason: "idle" });
     } finally {
       vi.useRealTimers();
     }

@@ -296,4 +296,43 @@ describe("reply_payload_sending hook runner", () => {
       mediaUrl: "file:///tmp/plugin-replaced.wav",
     });
   });
+
+  it("skips long-session banners on /new status notices", async () => {
+    const banner = "\n⏳ session too long, try /new";
+    const handler = vi
+      .fn()
+      .mockImplementation(async (event: { payload: PluginHookReplyPayload }) => {
+        if (event.payload.isStatusNotice) {
+          return { payload: event.payload };
+        }
+        return {
+          payload: {
+            ...event.payload,
+            text: `${event.payload.text ?? ""}${banner}`,
+          },
+        };
+      });
+    const { runner } = createHookRunnerWithRegistry([
+      { hookName: "reply_payload_sending", handler },
+    ]);
+
+    const notice = await runner.runReplyPayloadSending(
+      {
+        ...replyPayloadSendingEvent,
+        payload: { text: "✅ New session started.", isStatusNotice: true },
+      },
+      replyPayloadSendingCtx,
+    );
+    const modelText = await runner.runReplyPayloadSending(
+      {
+        ...replyPayloadSendingEvent,
+        payload: { text: "hello" },
+      },
+      replyPayloadSendingCtx,
+    );
+
+    expect(notice?.payload).toEqual({ text: "✅ New session started.", isStatusNotice: true });
+    expect(modelText?.payload).toEqual({ text: `hello${banner}` });
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
 });

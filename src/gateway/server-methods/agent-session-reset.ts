@@ -65,7 +65,12 @@ export function buildBareSessionResetResult(params: {
   ackText?: string;
 }) {
   return {
-    payloads: [{ text: params.ackText ?? sessionResetAckText(params.reason) }],
+    payloads: [
+      {
+        text: params.ackText ?? sessionResetAckText(params.reason),
+        isStatusNotice: true,
+      },
+    ],
     meta: {
       durationMs: 0,
       ...(params.sessionId

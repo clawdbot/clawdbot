@@ -30,6 +30,7 @@ export function buildSessionStartHookPayload(params: {
   sessionKey: string;
   agentId: string;
   resumedFrom?: string;
+  reason?: PluginHookSessionEndReason;
 }): {
   event: PluginHookSessionStartEvent;
   context: SessionHookContext;
@@ -39,6 +40,7 @@ export function buildSessionStartHookPayload(params: {
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       resumedFrom: params.resumedFrom,
+      reason: params.reason,
     },
     context: buildSessionHookContext({
       sessionId: params.sessionId,

@@ -74,6 +74,7 @@ import {
 } from "../hooks/session-auto-reset.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import type { PluginHookSessionEndReason } from "../plugins/hook-types.js";
 import { runPluginHostCleanup } from "../plugins/host-hook-cleanup.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
@@ -269,6 +270,8 @@ export function emitGatewaySessionStartPluginHook(params: {
   sessionKey: string;
   sessionId?: string;
   resumedFrom?: string;
+  /** Present when start follows a predecessor-replacing boundary. */
+  reason?: PluginHookSessionEndReason;
   storePath?: string;
   sessionFile?: string;
   agentId: string;
@@ -301,6 +304,7 @@ export function emitGatewaySessionStartPluginHook(params: {
     sessionKey: params.sessionKey,
     agentId: params.agentId,
     resumedFrom: params.resumedFrom,
+    reason: params.reason,
   });
   void runWithGatewayIndependentRootWorkContinuation(async () => {
     await hookRunner.runSessionStart(payload.event, payload.context);
@@ -1880,6 +1884,7 @@ export async function performGatewaySessionReset(params: {
           sessionKey: target.canonicalKey ?? params.key,
           sessionId: next.sessionId,
           resumedFrom: oldSessionId,
+          reason: params.reason,
           storePath,
           sessionFile: target.canonicalKey ?? params.key,
           agentId: target.agentId,

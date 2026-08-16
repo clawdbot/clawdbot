@@ -1275,6 +1275,9 @@ async function initSessionStateAttemptLocked(
         sessionKey,
         agentId,
         resumedFrom: previousSessionEntry?.sessionId,
+        // Same predecessor-boundary reason as session_end. Plugins that reset
+        // occupancy on start would otherwise keep stale metrics after /new.
+        reason: previousSessionEndReason,
       });
       void runWithGatewayIndependentRootWorkContinuation(async () => {
         await hookRunner.runSessionStart(payload.event, payload.context);
