@@ -233,6 +233,15 @@ export function isRequestedExecTargetAllowed(params: {
     }
     return true;
   }
+  // When configuredTarget is "gateway" and requestedTarget is "auto", they resolve
+  // to the same effective host when no sandbox is available.
+  if (
+    params.configuredTarget === "gateway" &&
+    params.requestedTarget === "auto" &&
+    !params.sandboxAvailable
+  ) {
+    return true;
+  }
   return false;
 }
 
