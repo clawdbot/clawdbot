@@ -186,3 +186,59 @@ The generated total contains only the tracked Swift protocol model. The JSON sch
 - Foreign-language UI bundles were not edited; the requested `en.ts` plus baseline workflow was used.
 - `dist/protocol.schema.json` is absent from branch history and `git ls-files`, while final status reports it only as `!! dist/protocol.schema.json` after generation. Swift and both Kotlin targets were verified with `git cat-file -e origin/main:<path>`; no state-generated files changed.
 - Final branch status after proof: feature work is committed and the tracked worktree is clean. `origin/main` advanced by six commits after the successful gate; no push or further moving-base chase was performed.
+
+---
+
+# PR #124511 follow-up 2: preserve specific abort reasons
+
+## Outcome
+
+Rebased `steipete/cron-run-error-text` onto `origin/main` at `77902b185d4`, replaced the stale-lifecycle-only exclusion with the general abort-reason property, extended sibling coverage, and pushed commit `0bd0599487b` to PR #124511. No changelog or message-tool-policy assertion was changed, and the PR was not landed.
+
+## Final predicate
+
+`resolveCronAbortReasonText` is now the canonical abort-reason rule used both by `abortErrorMessage` and `normalizeCronRunErrorText`:
+
+- an `AbortError` with a structured `code` retains `message | code`;
+- an `AbortError` with any noncanonical, nonempty message retains that message;
+- an empty uncoded `AbortError` collapses to `cron: job execution timed out` because it carries no specific reason;
+- an uncoded abort already carrying the canonical cron timeout text also collapses to that same text because it adds no distinct reason.
+
+This removes the `isAgentRunStaleLifecycleError` import and the one-class comment. Direct, restart, superseded, and stale-lifecycle aborts now all flow through `formatErrorMessageWithCode`.
+
+## Restart recovery
+
+Main-session restart recovery does not consume the outer cron result/task-history text. It classifies persisted assistant transcript tails: current transports copy the abort reason's `code` into `errorCode`, and `resolveMainSessionResumePolicy` prefers `AGENT_RUN_RESTART_ABORT_ERROR_CODE`; only old uncoded transcript tails consult `LEGACY_RESTART_ABORT_ERROR_MESSAGES`.
+
+The cron lifecycle interrupt at `src/cron/isolated-agent/run.ts` aborts the runner signal with `createAgentRunRestartAbortError()`. The embedded transport persists that structured reason independently of the outer cron result, while the cron-normalized text goes to the cron return value, diagnostics, and task ledger. Therefore the old timeout rewrite did not feed restart resume-policy classification, but it did destroy the reason in cron-visible history. The new shared rule preserves both the cron-visible message and code without changing recovery authority.
+
+## Regression and validation
+
+- Pre-fix direct owner-boundary probe reproduced all three missing siblings:
+  - `OPENCLAW_DIRECT_ABORT` -> `cron: job execution timed out`
+  - `OPENCLAW_RESTART_ABORT` -> `cron: job execution timed out`
+  - `AGENT_RUN_SUPERSEDED_ABORT` -> `cron: job execution timed out`
+  - empty uncoded `AbortError` -> canonical timeout
+- Post-fix probe preserved every coded message/code while the empty abort still produced the canonical timeout.
+- `rg -l "AbortError" src/cron` covered `src/cron/trigger-script.ts`, `src/cron/isolated-agent/run.ts`, `src/cron/service/task-runs.test.ts`, and `src/cron/service/execution-errors.ts`.
+- Final focused Blacksmith Testbox proof:
+  - provider/id: `blacksmith-testbox` / `tbx_01m04z0arhfn9m4fw8qhb9xasj`
+  - Actions: `https://github.com/openclaw/openclaw/actions/runs/31939592612`
+  - formatting: 4 changed files clean
+  - cron shard: 5 files, 176 tests passed
+  - E2E shard: 1 file, 8 tests passed
+  - the table proves direct, restart, superseded, and stale-lifecycle errors retain their message and code; canonical timeout coverage remains green
+  - `run.message-tool-policy.test.ts` passed unchanged
+- `node scripts/check-changed.mjs`:
+  - provider/id: `blacksmith-testbox` / `tbx_01m04z8yt26ws3h6ng7p9xvknj`
+  - Actions: `https://github.com/openclaw/openclaw/actions/runs/31939801003`
+  - exit 0 in 9m50s; core/core-test typechecks, both lint partitions, formatting, dependency/boundary/database guards, dead exports, and zero runtime import cycles passed
+- Autoreview:
+  - command: `.agents/skills/autoreview/scripts/autoreview --mode branch --base origin/main --stream-engine-output`
+  - result: `autoreview clean: no accepted/actionable findings reported`
+  - no findings accepted or rejected; overall confidence 0.97
+- `git diff --check`: clean.
+
+## LOC and publication
+
+Follow-up commit classification: production `+14/-15` (net `-1`); tests `+17/-6`. Commit `0bd0599487b` (`fix(cron): preserve coded abort reasons`) was force-with-lease pushed over prior PR head `77ab08e4f5d`. PR #124511 remains open and unlanded.
