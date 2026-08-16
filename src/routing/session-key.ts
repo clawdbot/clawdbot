@@ -222,7 +222,6 @@ export function buildAgentPeerSessionKey(params: {
   identityLinks?: Record<string, string[]>;
   /** DM session scope. */
   dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
-  /** Group/channel session scope. */
   groupScope?: "main" | "per-group";
 }): string {
   const peerKind = params.peerKind ?? "direct";

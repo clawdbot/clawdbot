@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtim
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { resolveSessionAgentId } from "openclaw/plugin-sdk/memory-host-core";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import { buildAgentMainSessionKey } from "openclaw/plugin-sdk/routing";
 import { sessionDeliveryOrigin } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   extractTranscriptIdentityFromSessionsMemoryHit,
@@ -14,6 +15,7 @@ import {
   createAgentToAgentPolicy,
   createSessionVisibilityGuard,
   resolveEffectiveSessionToolsVisibility,
+  resolveSandboxSessionToolsVisibility,
 } from "openclaw/plugin-sdk/session-visibility";
 import {
   readSessionArchiveReasonFromHitPath,
@@ -187,6 +189,14 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     ? await createSessionVisibilityGuard({
         action: "history",
         requesterSessionKey: params.requesterSessionKey,
+        mainSessionKey:
+          requesterAgentId &&
+          (!params.sandboxed || resolveSandboxSessionToolsVisibility(params.cfg) === "all")
+            ? buildAgentMainSessionKey({
+                agentId: requesterAgentId,
+                mainKey: params.cfg.session?.mainKey,
+              })
+            : undefined,
         visibility,
         a2aPolicy,
       })

@@ -512,16 +512,9 @@ export function createSessionVisibilityRowChecker(params: SessionVisibilityCheck
 }
 
 /** Create a visibility guard, loading spawned-session ownership when direct keys need it. */
-export async function createSessionVisibilityGuard(params: {
-  action: SessionAccessAction;
-  defaultAgentId?: string;
-  requesterAgentId?: string;
-  requesterSessionKey: string;
-  mainSessionKey?: string;
-  visibility: SessionToolsVisibility;
-  a2aPolicy: AgentToAgentPolicy;
-  callGateway?: GatewayCaller;
-}): Promise<{
+export async function createSessionVisibilityGuard(
+  params: SessionVisibilityCheckerParams & { callGateway?: GatewayCaller },
+): Promise<{
   check: (targetSessionKey: string) => SessionAccessResult;
 }> {
   // Listing already has row ownership metadata; direct key actions still need
