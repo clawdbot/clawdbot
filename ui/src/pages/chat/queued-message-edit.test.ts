@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
@@ -31,8 +32,11 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function queueHost(items: readonly Partial<ChatQueueItem>[]) {
-  const host = makeChatHost({ sessionKey: SESSION_KEY, connected: false });
+function queueHost(
+  items: readonly Partial<ChatQueueItem>[],
+  overrides: Parameters<typeof makeChatHost>[0] = {},
+) {
+  const host = makeChatHost({ sessionKey: SESSION_KEY, connected: false, ...overrides });
   const unsubscribe = subscribeChatOutboxProjection(host as never);
   items.forEach((item, index) => {
     expect(
@@ -194,6 +198,32 @@ describe("queued message edit round-trip", () => {
     ]);
     expect(isQueuedMessageBeingEdited(host as never, "queued-2")).toBe(true);
     expect(host.chatMessage).toBe("");
+    unsubscribe();
+  });
+
+  it("does not collapse same-payload row and composer sends", async () => {
+    const ack = createDeferred<{ status: "started" }>();
+    const { host, unsubscribe } = queueHost([{}], {
+      connected: true,
+      requestHandlers: { "chat.send": () => ack.promise },
+    });
+    beginQueuedMessageEdit(host as never, "queued-1");
+    updateQueuedMessageEdit(host as never, "same payload");
+    const edit = host.chatQueuedEdit!;
+
+    const rowSend = handleSendChat(host as never, edit.draftText, {
+      attachmentsOverride: [...edit.attachments],
+      resumeQueuedMessageEditId: edit.id,
+    });
+    await vi.waitFor(() => expect(host.request).toHaveBeenCalledTimes(1));
+
+    host.chatMessage = "same payload";
+    const composerSend = handleSendChat(host as never);
+    await vi.waitFor(() => expect(host.chatMessage).toBe(""));
+    expect(host.chatQueue.map((item) => item.text)).toContain("same payload");
+
+    ack.resolve({ status: "started" });
+    await Promise.all([rowSend, composerSend]);
     unsubscribe();
   });
 

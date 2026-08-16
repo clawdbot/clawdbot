@@ -101,7 +101,7 @@ function attachmentSubmitSignature(attachment: ChatAttachment): string {
 
 function chatSubmitKey(
   host: ChatHost,
-  kind: "detached" | "local" | "message",
+  kind: "detached" | "local" | "message" | "queued-edit",
   message: string,
   attachments: ChatAttachment[],
   skillWorkshopRevision?: ChatQueueSkillWorkshopRevision,
@@ -447,9 +447,12 @@ export async function handleSendChat(
     replyTarget && !replyToId ? prependReplyQuote(message, replyTarget) : message;
 
   const refreshSessions = !skillWorkshopRevision && isChatResetCommand(message);
+  // A row edit and a composer send may intentionally carry the same payload.
+  // Keep their guards independent so submitting one cannot suppress the other.
+  const submitKind = opts?.resumeQueuedMessageEditId ? "queued-edit" : "message";
   const submitKey = chatSubmitKey(
     host,
-    "message",
+    submitKind,
     effectiveMessage,
     attachmentsToSend,
     skillWorkshopRevision,
