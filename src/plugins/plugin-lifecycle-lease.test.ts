@@ -11,11 +11,8 @@ import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 
 type LeaseChild = ChildProcessByStdio<null, Readable, Readable>;
 
-const activeLeaseChildren = new Set<LeaseChild>();
-
-afterEach(async () => {
+afterEach(() => {
   closeOpenClawStateDatabaseForTest();
-  await Promise.all(Array.from(activeLeaseChildren, terminateLeaseChild));
 });
 
 async function terminateLeaseChild(child: LeaseChild): Promise<void> {
@@ -31,6 +28,15 @@ async function terminateLeaseChild(child: LeaseChild): Promise<void> {
   });
 }
 
+async function withLeaseChildren<T>(fn: (children: Set<LeaseChild>) => Promise<T>): Promise<T> {
+  const children = new Set<LeaseChild>();
+  try {
+    return await fn(children);
+  } finally {
+    await Promise.all(Array.from(children, terminateLeaseChild));
+  }
+}
+
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
   const promise = new Promise<void>((resolvePromise) => {
@@ -40,13 +46,14 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 }
 
 function runLeaseChild(
+  children: Set<LeaseChild>,
   scriptPath: string,
   args: string[],
 ): { ready: Promise<void>; completed: Promise<void> } {
   const child = spawn(process.execPath, ["--import", "tsx", scriptPath, ...args], {
     stdio: ["ignore", "pipe", "pipe"],
   });
-  activeLeaseChildren.add(child);
+  children.add(child);
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
 
@@ -77,7 +84,7 @@ function runLeaseChild(
 
   const completed = new Promise<void>((resolve, reject) => {
     child.once("error", (error) => {
-      activeLeaseChildren.delete(child);
+      children.delete(child);
       const failure = new Error(`failed to start lease child: ${error.message}`, {
         cause: error,
       });
@@ -88,7 +95,7 @@ function runLeaseChild(
       reject(failure);
     });
     child.once("close", (code, signal) => {
-      activeLeaseChildren.delete(child);
+      children.delete(child);
       const output = `stdout:\n${stdout}\nstderr:\n${stderr}`;
       if (!readySettled) {
         readySettled = true;
@@ -185,15 +192,16 @@ describe("plugin lifecycle lease", () => {
 
   it("serializes lifecycle work across processes", async () => {
     await withOpenClawTestState({ label: "plugin-lifecycle-processes" }, async (state) => {
-      const releaseMarker = state.path("release-first");
-      const secondMarker = state.path("second-entered");
-      const secondResult = state.path("second-result");
-      const leaseModuleUrl = pathToFileURL(
-        path.resolve("src/plugins/plugin-lifecycle-lease.ts"),
-      ).href;
-      const childScript = await state.writeText(
-        "lease-child.mts",
-        `
+      await withLeaseChildren(async (children) => {
+        const releaseMarker = state.path("release-first");
+        const secondMarker = state.path("second-entered");
+        const secondResult = state.path("second-result");
+        const leaseModuleUrl = pathToFileURL(
+          path.resolve("src/plugins/plugin-lifecycle-lease.ts"),
+        ).href;
+        const childScript = await state.writeText(
+          "lease-child.mts",
+          `
           import fs from "node:fs/promises";
           import { withPluginLifecycleLease } from ${JSON.stringify(leaseModuleUrl)};
           const [role, stateDir, releaseMarker, secondMarker, secondResult] = process.argv.slice(2);
@@ -224,49 +232,51 @@ describe("plugin lifecycle lease", () => {
             });
           }
         `,
-      );
-
-      const childArgs = [state.stateDir, releaseMarker, secondMarker, secondResult];
-      const first = runLeaseChild(childScript, ["first", ...childArgs]);
-      await first.ready;
-      const second = runLeaseChild(childScript, ["second", ...childArgs]);
-      await second.ready;
-      // Wait for the child to close so its result write is fully flushed before
-      // reading; file existence alone can race with the write after open().
-      await second.completed;
-
-      let assertionError: unknown;
-      try {
-        await expect(fs.readFile(secondResult, "utf8")).resolves.toBe(
-          "OPENCLAW_STATE_LEASE_TIMEOUT",
         );
-        await expect(fs.access(secondMarker)).rejects.toMatchObject({ code: "ENOENT" });
-      } catch (error) {
-        assertionError = error;
-      } finally {
-        await fs.writeFile(releaseMarker, "release");
-      }
-      await Promise.all([first.completed, second.completed]);
-      if (assertionError) {
-        throw assertionError instanceof Error
-          ? assertionError
-          : new Error("cross-process lease assertion failed", { cause: assertionError });
-      }
+
+        const childArgs = [state.stateDir, releaseMarker, secondMarker, secondResult];
+        const first = runLeaseChild(children, childScript, ["first", ...childArgs]);
+        await first.ready;
+        const second = runLeaseChild(children, childScript, ["second", ...childArgs]);
+        await second.ready;
+        // Wait for the child to close so its result write is fully flushed before
+        // reading; file existence alone can race with the write after open().
+        await second.completed;
+
+        let assertionError: unknown;
+        try {
+          await expect(fs.readFile(secondResult, "utf8")).resolves.toBe(
+            "OPENCLAW_STATE_LEASE_TIMEOUT",
+          );
+          await expect(fs.access(secondMarker)).rejects.toMatchObject({ code: "ENOENT" });
+        } catch (error) {
+          assertionError = error;
+        } finally {
+          await fs.writeFile(releaseMarker, "release");
+        }
+        await Promise.all([first.completed, second.completed]);
+        if (assertionError) {
+          throw assertionError instanceof Error
+            ? assertionError
+            : new Error("cross-process lease assertion failed", { cause: assertionError });
+        }
+      });
     });
   });
 
   it("reloads install records after waiting for another process", async () => {
     await withOpenClawTestState({ label: "plugin-lifecycle-record-cache" }, async (state) => {
-      const leaseModuleUrl = pathToFileURL(
-        path.resolve("src/plugins/plugin-lifecycle-lease.ts"),
-      ).href;
-      const recordsModuleUrl = pathToFileURL(
-        path.resolve("src/plugins/installed-plugin-index-records.ts"),
-      ).href;
-      const goMarker = state.path("go");
-      const childScript = await state.writeText(
-        "record-cache-child.mts",
-        `
+      await withLeaseChildren(async (children) => {
+        const leaseModuleUrl = pathToFileURL(
+          path.resolve("src/plugins/plugin-lifecycle-lease.ts"),
+        ).href;
+        const recordsModuleUrl = pathToFileURL(
+          path.resolve("src/plugins/installed-plugin-index-records.ts"),
+        ).href;
+        const goMarker = state.path("go");
+        const childScript = await state.writeText(
+          "record-cache-child.mts",
+          `
           import fs from "node:fs/promises";
           import { withPluginLifecycleLease } from ${JSON.stringify(leaseModuleUrl)};
           import {
@@ -299,17 +309,18 @@ describe("plugin lifecycle lease", () => {
             });
           });
         `,
-      );
+        );
 
-      const alpha = runLeaseChild(childScript, ["alpha", state.stateDir, goMarker]);
-      const beta = runLeaseChild(childScript, ["beta", state.stateDir, goMarker]);
-      await Promise.all([alpha.ready, beta.ready]);
-      await fs.writeFile(goMarker, "go");
-      await Promise.all([alpha.completed, beta.completed]);
+        const alpha = runLeaseChild(children, childScript, ["alpha", state.stateDir, goMarker]);
+        const beta = runLeaseChild(children, childScript, ["beta", state.stateDir, goMarker]);
+        await Promise.all([alpha.ready, beta.ready]);
+        await fs.writeFile(goMarker, "go");
+        await Promise.all([alpha.completed, beta.completed]);
 
-      closeOpenClawStateDatabaseForTest();
-      const persisted = await readPersistedInstalledPluginIndex({ env: state.env });
-      expect(Object.keys(persisted?.installRecords ?? {}).toSorted()).toEqual(["alpha", "beta"]);
+        closeOpenClawStateDatabaseForTest();
+        const persisted = await readPersistedInstalledPluginIndex({ env: state.env });
+        expect(Object.keys(persisted?.installRecords ?? {}).toSorted()).toEqual(["alpha", "beta"]);
+      });
     });
   });
 
