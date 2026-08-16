@@ -8,15 +8,10 @@ import {
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
 } from "../infra/node-commands.js";
 import {
-  NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_BUNDLE_RETENTION_VERSION,
   NODE_WORKER_BUNDLE_STATUS_VERSION,
-  NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE,
-  NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-  NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE,
   type NodeRunnerInventoryIssue,
   type NodeRunnerInventoryDeclaration,
-  type NodeWorkerHostDeclaration,
 } from "../infra/node-runner-inventory.js";
 import type { NodeWorkerBundleStatus } from "../shared/node-list-types.js";
 import { sameWorkerProtocolFeatures } from "../worker/worker-build-identity.js";
@@ -27,17 +22,18 @@ import type {
   PendingSystemRunEvent,
 } from "./node-registry.invoke-stream.js";
 import { normalizeSystemRunTimeoutMs } from "./node-registry.system-run.js";
+import {
+  resolveNodeRunnerInventoryIssue,
+  resolveNodeWorkerSupervisorProof,
+  sameNodeWorkerHostDeclaration,
+  type NodeRunnerInventoryRecord,
+  type NodeRunnerRegistrySession,
+  type NodeWorkerSupervisorNodeProof,
+} from "./node-runner-inventory-runtime.js";
 
-type NodeRegistryPrivateSession = {
-  nodeId: string;
-  connId: string;
-  pairingIdentity?: string;
-  pairingGeneration?: string;
-  client: { invalidated?: boolean };
-  clientId?: string;
-  clientMode?: string;
-  commands: string[];
-};
+export type { NodeWorkerSupervisorNodeProof } from "./node-runner-inventory-runtime.js";
+
+type NodeRegistryPrivateSession = NodeRunnerRegistrySession;
 
 type NodeInvokeResult = {
   ok: boolean;
@@ -70,18 +66,6 @@ type NodeInvokeParams = {
 
 type NodeWorkerPrivateCommand = (typeof NODE_WORKER_PRIVATE_COMMANDS)[number];
 
-export type NodeWorkerSupervisorNodeProof = {
-  nodeId: string;
-  connId: string;
-  pairingIdentity: string;
-  pairingGeneration: string;
-  clientId: typeof GATEWAY_CLIENT_IDS.NODE_HOST;
-  clientMode: "node";
-  protocolFeature: typeof NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE;
-  workerHost: Extract<NodeWorkerHostDeclaration, { enabled: true }>;
-  commands: readonly string[];
-};
-
 type NodeWorkerBundleStatusObservation = {
   bundleHash: string;
   status: NodeWorkerBundleStatus;
@@ -106,14 +90,6 @@ export type NodeWorkerSupervisorTransport = {
     isDispatchAuthorized: () => boolean;
     onDispatchReady?: (invokeId: string) => void;
   }): Promise<NodeInvokeResult>;
-};
-
-type NodeRunnerInventoryRecord = Omit<
-  NodeWorkerSupervisorNodeProof,
-  "commands" | "pairingGeneration" | "protocolFeature" | "workerHost"
-> & {
-  protocolFeatures: readonly string[];
-  workerHost?: NodeWorkerHostDeclaration;
 };
 
 type NodeRegistryPrivateContext = {
@@ -208,21 +184,6 @@ function normalizeSystemRunInvokeParams(params: { command: string; params?: unkn
   return normalized;
 }
 
-function sameWorkerHostDeclaration(
-  left: NodeWorkerHostDeclaration | undefined,
-  right: NodeWorkerHostDeclaration | undefined,
-): boolean {
-  return (
-    left?.enabled === right?.enabled &&
-    (left?.enabled !== true ||
-      (right?.enabled === true &&
-        left.capacity === right.capacity &&
-        left.bundlePrewarm === right.bundlePrewarm &&
-        left.bundleRetention === right.bundleRetention &&
-        left.bundleStatus === right.bundleStatus))
-  );
-}
-
 function sameBundleStatusObservation(
   left: NodeWorkerBundleStatusObservation | undefined,
   right: NodeWorkerBundleStatusObservation | undefined,
@@ -235,57 +196,6 @@ function sameBundleStatusObservation(
   );
 }
 
-function resolveWorkerSupervisorProof(
-  node: NodeRegistryPrivateSession,
-  runnerInventoryByConn: ReadonlyMap<string, NodeRunnerInventoryRecord>,
-): NodeWorkerSupervisorNodeProof | undefined {
-  const declaration = runnerInventoryByConn.get(node.connId);
-  if (
-    !declaration ||
-    !node.pairingIdentity ||
-    !node.pairingGeneration ||
-    node.clientId !== GATEWAY_CLIENT_IDS.NODE_HOST ||
-    node.clientMode !== "node" ||
-    declaration.nodeId !== node.nodeId ||
-    declaration.pairingIdentity !== node.pairingIdentity ||
-    declaration.clientId !== node.clientId ||
-    declaration.clientMode !== node.clientMode ||
-    !declaration.protocolFeatures.includes(NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE) ||
-    declaration.workerHost?.enabled !== true
-  ) {
-    return undefined;
-  }
-  return {
-    nodeId: node.nodeId,
-    connId: node.connId,
-    pairingIdentity: node.pairingIdentity,
-    pairingGeneration: node.pairingGeneration,
-    clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-    clientMode: "node",
-    protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-    workerHost: { ...declaration.workerHost },
-    commands: [...node.commands],
-  };
-}
-
-function resolveNodeRunnerIssue(
-  node: NodeRegistryPrivateSession,
-  runnerInventoryByConn: ReadonlyMap<string, NodeRunnerInventoryRecord>,
-): NodeRunnerInventoryIssue | undefined {
-  const declaration = runnerInventoryByConn.get(node.connId);
-  return declaration &&
-    node.client.invalidated !== true &&
-    declaration.nodeId === node.nodeId &&
-    declaration.pairingIdentity === node.pairingIdentity &&
-    declaration.clientId === GATEWAY_CLIENT_IDS.NODE_HOST &&
-    declaration.clientMode === "node" &&
-    declaration.protocolFeatures.length === 1 &&
-    (declaration.protocolFeatures[0] === NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE ||
-      declaration.protocolFeatures[0] === NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE)
-    ? NODE_RUNNER_UPDATE_REQUIRED_ISSUE
-    : undefined;
-}
-
 function isWorkerSupervisorProofCurrent(
   state: NodeRegistryPrivateState,
   proof: NodeWorkerSupervisorNodeProof,
@@ -295,7 +205,7 @@ function isWorkerSupervisorProofCurrent(
   if (!node || node.client.invalidated === true || node.connId !== proof.connId) {
     return false;
   }
-  const current = resolveWorkerSupervisorProof(node, state.runnerInventoryByConn);
+  const current = resolveNodeWorkerSupervisorProof(node, state.runnerInventoryByConn);
   return (
     current?.pairingIdentity === proof.pairingIdentity &&
     current.pairingGeneration === proof.pairingGeneration &&
@@ -355,7 +265,7 @@ function updateWorkerRunnerInventory(
   const changed =
     !previous ||
     !sameWorkerProtocolFeatures(previous.protocolFeatures, next.protocolFeatures) ||
-    !sameWorkerHostDeclaration(previous.workerHost, next.workerHost) ||
+    !sameNodeWorkerHostDeclaration(previous.workerHost, next.workerHost) ||
     statusCleared;
   if (changed) {
     state.runnerInventoryByConn.set(node.connId, next);
@@ -539,13 +449,13 @@ export function registerNodeRegistryPrivateRuntime(
     listCurrentNodes: async () => {
       const current = await context.listCurrentConnected();
       return current.flatMap((node) => {
-        const proof = resolveWorkerSupervisorProof(node, state.runnerInventoryByConn);
+        const proof = resolveNodeWorkerSupervisorProof(node, state.runnerInventoryByConn);
         return proof ? [proof] : [];
       });
     },
     getIssue: (nodeId) => {
       const node = context.getNode(nodeId);
-      return node ? resolveNodeRunnerIssue(node, state.runnerInventoryByConn) : undefined;
+      return node ? resolveNodeRunnerInventoryIssue(node, state.runnerInventoryByConn) : undefined;
     },
     getBundleStatus: (nodeId) => {
       const node = context.getNode(nodeId);
@@ -558,7 +468,7 @@ export function registerNodeRegistryPrivateRuntime(
       }
       const currentNode = state.context.getNode(node.nodeId);
       const currentProof = currentNode
-        ? resolveWorkerSupervisorProof(currentNode, state.runnerInventoryByConn)
+        ? resolveNodeWorkerSupervisorProof(currentNode, state.runnerInventoryByConn)
         : undefined;
       if (
         currentProof?.workerHost.bundleRetention !== NODE_WORKER_BUNDLE_RETENTION_VERSION ||
@@ -697,7 +607,7 @@ export function isNodeRunnerSessionHost(params: {
   if (!state || !node || node.connId !== params.connId) {
     return false;
   }
-  const proof = resolveWorkerSupervisorProof(node, state.runnerInventoryByConn);
+  const proof = resolveNodeWorkerSupervisorProof(node, state.runnerInventoryByConn);
   return Boolean(
     proof &&
     proof.pairingGeneration === params.pairingGeneration &&
@@ -713,7 +623,7 @@ function getNodeRunnerInventoryIssue(params: {
   const state = NODE_REGISTRY_PRIVATE_STATES.get(params.registry);
   const node = state?.context.getNode(params.nodeId);
   return state && node?.connId === params.connId
-    ? resolveNodeRunnerIssue(node, state.runnerInventoryByConn)
+    ? resolveNodeRunnerInventoryIssue(node, state.runnerInventoryByConn)
     : undefined;
 }
 
