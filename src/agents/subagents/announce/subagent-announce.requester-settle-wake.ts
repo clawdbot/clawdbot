@@ -44,6 +44,7 @@ export type RequesterSettleWakeBatchState = Omit<RequesterSettleWakeState, "reti
 
 const REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS = 3;
 const REQUESTER_SETTLE_WAKE_MAX_AMBIGUOUS_REPLAYS = 3;
+const REQUESTER_SETTLE_WAKE_MAX_DEFERRALS = 10;
 const REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS = [30_000, 120_000] as const;
 const activeRequesterSettleWakeBatches = new Set<string>();
 
@@ -151,6 +152,25 @@ function deferRequesterSettleWakeBatch(params: {
   state: RequesterSettleWakeBatchState;
   transitionBatch: (runIds: readonly string[], state: RequesterSettleWakeBatchState) => void;
 }): void {
+  const deferralCount = (params.state.deferralCount ?? 0) + 1;
+  if (deferralCount >= REQUESTER_SETTLE_WAKE_MAX_DEFERRALS) {
+    // Max deferrals reached; complete the batch with a recorded reason.
+    params.transitionBatch(params.batchRunIds, {
+      status: "pending",
+      attemptCount: params.state.attemptCount,
+      ...(params.state.replayCount !== undefined ? { replayCount: params.state.replayCount } : {}),
+      nextAttemptAt: Date.now(),
+      batchRunIds: [...params.batchRunIds],
+      ...(params.state.requesterYieldBatch === true ? { requesterYieldBatch: true } : {}),
+      ...(params.state.afterRequesterYield === true ? { afterRequesterYield: true } : {}),
+      ...(params.state.rearmGeneration !== undefined
+        ? { rearmGeneration: params.state.rearmGeneration }
+        : {}),
+      lastError: "requester settle wake deferred too many times",
+      deferralCount,
+    });
+    return;
+  }
   params.transitionBatch(params.batchRunIds, {
     status: params.state.status,
     attemptCount: params.state.attemptCount,
@@ -166,6 +186,7 @@ function deferRequesterSettleWakeBatch(params: {
       ? { rearmGeneration: params.state.rearmGeneration }
       : {}),
     ...(params.state.lastError !== undefined ? { lastError: params.state.lastError } : {}),
+    deferralCount,
   });
 }
 

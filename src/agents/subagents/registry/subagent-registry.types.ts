@@ -193,6 +193,8 @@ export type RequesterSettleWakeState = {
   afterRequesterYield?: true;
   /** Monotonic process generation protecting a newer yield from stale completion. */
   rearmGeneration?: number;
+  /** Number of times this batch has been deferred due to unsettled descendants. */
+  deferralCount?: number;
   lastError?: string | null;
   /** Cleanup wanted to retire this row; defer deletion until the outbox resolves. */
   retireAfterSettle?: boolean;
