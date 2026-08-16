@@ -438,7 +438,7 @@ Work down in order; each failure names itself.
    - Reverse proxy with TLS, connect via `wss://` ([Tailscale serve](/gateway/tailscale) handles TLS for you)
    - `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` only for a host form the client cannot verify as private (for example an internal DNS name on a trusted network). Do not use it where an IP literal or `.ts.net` name would do.
 2. `unauthorized: gateway token mismatch (set gateway.remote.token to match gateway.auth.token)`: the error names its own fix. Check both ends; SSH tunnels do not bypass auth.
-3. `pairing required: device is not approved yet` (close code 1008): token auth is only half; new devices also need approval. On the gateway host run `openclaw devices list`, find the request id, then `openclaw devices approve <requestId>` and reconnect. See [pairing](/gateway/pairing).
+3. `pairing required: device is not approved yet` (close code 1008): token auth is only half; new devices also need approval. On the gateway host run `openclaw devices list`, find the request id, then `openclaw devices approve <requestId>` and reconnect. See [devices](/cli/devices).
 4. Diagnostic trap: `openclaw gateway status` prints local service and config summaries first even when probing a remote `--url`, and the CLI keeps working from config when the gateway is down. A calm-looking CLI is not proof of a reachable gateway. Trust `openclaw gateway probe` and `openclaw gateway health --url <url> --token <token>`.
 
 `404 Not Found` on `/v1/...` does not mean unreachable: those HTTP APIs are core endpoints gated by `gateway.http.endpoints.*.enabled` and disabled by default. Any HTTP response proves you reached the listener.
