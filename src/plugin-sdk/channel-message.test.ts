@@ -2,7 +2,7 @@
  * Tests channel message helper behavior and mocked runtime interactions.
  */
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { defineChannelMessageAdapter as defineCoreChannelMessageAdapter } from "../channels/message/index.js";
+import { defineChannelMessageAdapter as defineCoreChannelMessageAdapter } from "../channels/message/adapter.js";
 import {
   defineChannelMessageAdapter,
   type ChannelMessageDurableFinalAdapter,
