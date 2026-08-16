@@ -984,6 +984,32 @@ describe("handleInlineActions", () => {
     expect(typing.cleanup).toHaveBeenCalledOnce();
   });
 
+  it("keeps hidden skill references literal when text commands are disabled", async () => {
+    const typing = createTypingController();
+    const original = "Review with $office_hours.";
+    const ctx = buildTestCtx({ Body: original, CommandBody: original });
+
+    const result = await runTestInlineActions({
+      ctx,
+      typing,
+      cleanedBody: original,
+      command: {
+        isAuthorizedSender: true,
+        rawBodyNormalized: original,
+        commandBodyNormalized: original,
+      },
+      overrides: {
+        allowTextCommands: false,
+        cfg: { commands: { text: false } },
+        skillCommands: [],
+        skillFilter: ["another-skill"],
+      },
+    });
+
+    expect(result).toMatchObject({ kind: "continue", cleanedBody: original });
+    expect(listSkillCommandsForWorkspaceMock).not.toHaveBeenCalled();
+  });
+
   it("reloads preloaded skill commands when final exec overrides are present", async () => {
     const typing = createTypingController();
     handleCommandsMock.mockResolvedValue({ shouldContinue: false, reply: { text: "done" } });

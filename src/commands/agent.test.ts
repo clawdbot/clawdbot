@@ -31,6 +31,7 @@ import type { InternalSessionEntry as SessionEntry } from "../config/sessions/ty
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent, onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
+import { loadEnabledClaudeBundleCommands } from "../plugins/bundle-commands.js";
 import type { PluginProviderRegistration } from "../plugins/registry.test-fixtures.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -555,6 +556,7 @@ beforeEach(() => {
   vi.mocked(runEmbeddedAgent).mockResolvedValue(createDefaultAgentResult());
   vi.mocked(loadManifestModelCatalog).mockReturnValue([]);
   vi.mocked(loadPreparedModelCatalog).mockResolvedValue([]);
+  vi.mocked(loadEnabledClaudeBundleCommands).mockReturnValue([]);
   vi.mocked(modelSelectionModule.isCliProvider).mockImplementation(() => false);
   configIoMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
     snapshot: { valid: false, resolved: {} as OpenClawConfig },
@@ -563,6 +565,35 @@ beforeEach(() => {
 });
 
 describe("agentCommand", () => {
+  it("renders a Claude bundle command template on Gateway ingress", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+      vi.mocked(loadEnabledClaudeBundleCommands).mockReturnValue([
+        {
+          pluginId: "test-bundle",
+          rawName: "workflows-review",
+          description: "Review a workflow",
+          promptTemplate: "Review this workflow carefully.\n\nFocus on:\n$ARGUMENTS",
+          sourceFilePath: "/tmp/plugin/commands/workflows-review.md",
+        },
+      ]);
+
+      await agentCommandFromIngress(
+        {
+          message: "/workflows_review retries and cleanup",
+          agentId: "main",
+          allowModelOverride: false,
+        },
+        runtime,
+      );
+
+      expect(getLastEmbeddedCall()?.prompt).toBe(
+        "Review this workflow carefully.\n\nFocus on:\nretries and cleanup",
+      );
+    });
+  });
+
   it.each([
     {
       label: "dollar reference",

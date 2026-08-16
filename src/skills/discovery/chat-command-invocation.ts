@@ -108,7 +108,7 @@ function resolveSkillReferenceInvocations(params: {
   const seen = new Set<string>();
   for (const name of skillReferenceNames(params.text)) {
     const command = findSkillCommand(params.skillCommands, name);
-    if (!command || seen.has(command.name)) {
+    if (!command || command.promptTemplate || seen.has(command.name)) {
       continue;
     }
     seen.add(command.name);
@@ -159,6 +159,17 @@ export function resolveSkillCommandInvocation(params: {
   return { command, args: args || undefined };
 }
 
+export function expandBundleCommandPromptTemplate(template: string, args?: string): string {
+  const normalizedArgs = args?.trim() ?? "";
+  const rendered = template.includes("$ARGUMENTS")
+    ? template.replaceAll("$ARGUMENTS", normalizedArgs)
+    : template;
+  if (!normalizedArgs || template.includes("$ARGUMENTS")) {
+    return rendered.trim();
+  }
+  return `${rendered.trim()}\n\nUser input:\n${normalizedArgs}`;
+}
+
 function resolveExplicitSkillCommands(text: string, skillCommands: SkillCommandSpec[]) {
   if (!text.trimStart().startsWith("/")) {
     return resolveSkillReferenceInvocations({ text, skillCommands });
@@ -199,6 +210,21 @@ export function expandExplicitSkillReferences(params: {
   skillCommands: SkillCommandSpec[];
   allSkillCommands?: SkillCommandSpec[];
 }): { body: string; error?: string; skills: SkillCommandSpec[] } {
+  const leadingInvocation = params.text.trimStart().startsWith("/")
+    ? resolveSkillCommandInvocation({
+        commandBodyNormalized: params.text,
+        skillCommands: params.skillCommands,
+      })
+    : null;
+  if (leadingInvocation?.command.promptTemplate) {
+    return {
+      body: expandBundleCommandPromptTemplate(
+        leadingInvocation.command.promptTemplate,
+        leadingInvocation.args,
+      ),
+      skills: [leadingInvocation.command],
+    };
+  }
   const available = resolveExplicitSkillCommands(params.text, params.skillCommands);
   const allCommands = params.allSkillCommands ?? params.skillCommands;
   const unavailable =

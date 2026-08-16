@@ -312,6 +312,31 @@ describe("resolveSkillReferenceInvocations", () => {
 });
 
 describe("expandExplicitSkillReferences", () => {
+  it("renders a leading bundle command template and leaves dollar-like bundle text literal", () => {
+    const bundleCommand = {
+      name: "workflows_review",
+      skillName: "workflows-review",
+      description: "Review a workflow",
+      promptTemplate: "Review this workflow.\n\nFocus on:\n$ARGUMENTS",
+      sourceFilePath: "/tmp/plugin/commands/workflows-review.md",
+    };
+    expect(
+      expandExplicitSkillReferences({
+        text: "/workflows_review retries",
+        skillCommands: [bundleCommand],
+      }),
+    ).toEqual({
+      body: "Review this workflow.\n\nFocus on:\nretries",
+      skills: [bundleCommand],
+    });
+    expect(
+      expandExplicitSkillReferences({
+        text: "Keep $workflows_review literal.",
+        skillCommands: [bundleCommand],
+      }),
+    ).toEqual({ body: "Keep $workflows_review literal.", skills: [] });
+  });
+
   it("leaves unknown leading slash commands byte-identical", () => {
     const text = "/compact with $demo_skill";
     expect(

@@ -1,8 +1,5 @@
 /** Handles inline slash commands, skill invocations, and abort actions before model runs. */
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import type { BlockReplyChunking } from "../../agents/embedded-agent-block-chunker.js";
 import type { ExecPolicyOverrides } from "../../agents/exec-defaults.js";
@@ -14,6 +11,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
+  expandBundleCommandPromptTemplate,
   expandExplicitSkillReferences,
   hasSkillReferenceCandidate,
   listReservedChatSlashCommandNames,
@@ -121,17 +119,6 @@ function resolveSlashCommandName(commandBodyNormalized: string): string | null {
   const match = trimmed.match(/^\/([^\s:]+)(?::|\s|$)/);
   const name = normalizeOptionalLowercaseString(match?.[1]) ?? "";
   return name ? name : null;
-}
-
-function expandBundleCommandPromptTemplate(template: string, args?: string): string {
-  const normalizedArgs = normalizeOptionalString(args) || "";
-  const rendered = template.includes("$ARGUMENTS")
-    ? template.replaceAll("$ARGUMENTS", normalizedArgs)
-    : template;
-  if (!normalizedArgs || template.includes("$ARGUMENTS")) {
-    return rendered.trim();
-  }
-  return `${rendered.trim()}\n\nUser input:\n${normalizedArgs}`;
 }
 
 function isMentionOnlyResidualText(text: string, wasMentioned: boolean | undefined): boolean {
@@ -362,7 +349,7 @@ export async function handleInlineActions(params: {
           })
         : [];
   const allSkillCommands =
-    hasSkillReferences && skillFilter !== undefined
+    allowTextCommands && hasSkillReferences && skillFilter !== undefined
       ? (await loadSkillCommandsRuntime()).listSkillCommandsForWorkspace({
           workspaceDir,
           cfg,
@@ -529,7 +516,12 @@ export async function handleInlineActions(params: {
     sessionCtx.BodyStripped = cleanedBody;
   }
 
-  if (hasSkillReferences && !skillInvocation && resolveSlashCommandName(cleanedBody) === null) {
+  if (
+    allowTextCommands &&
+    hasSkillReferences &&
+    !skillInvocation &&
+    resolveSlashCommandName(cleanedBody) === null
+  ) {
     const referenced = expandExplicitSkillReferences({
       text: cleanedBody,
       skillCommands,
