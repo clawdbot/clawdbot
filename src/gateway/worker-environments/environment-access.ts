@@ -8,7 +8,11 @@ import type { NodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import type { WorkerDesktopLaunchResult, WorkerDesktopObserveResult } from "./service-contract.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
-import type { WorkerTunnelRequest } from "./tunnel-contract.js";
+import type {
+  WorkerRecoveryTunnelRequest,
+  WorkerTunnelRequest,
+  WorkerWorkspaceRecoveryTunnelHandle,
+} from "./tunnel-contract.js";
 import type { WorkerTunnelHandle, WorkerTunnelManager } from "./tunnel.js";
 import { boundedWorkerError as boundedError } from "./worker-error.js";
 
@@ -75,7 +79,10 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     };
   };
 
-  const startTunnel = async (request: WorkerTunnelRequest): Promise<WorkerTunnelHandle> => {
+  const startTunnelAccess = async (
+    request: WorkerTunnelRequest,
+    access: "current-worker" | "workspace-recovery",
+  ): Promise<WorkerTunnelHandle> => {
     let stopping = options.isStopping();
     if (stopping) {
       throw serviceError("invalid_state", "Worker environment service is stopping");
@@ -121,23 +128,31 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       ) {
         throw serviceError("invalid_state", "Worker tunnel owner credential is not current");
       }
-      let currentBundle: ExpectedWorkerBuild;
-      try {
-        currentBundle = await options.prepareCurrentBundle();
-      } catch {
-        throw serviceError("invalid_state", "Current worker build identity is unavailable");
-      }
-      if (!verifyWorkerAdmissionHandshake(record.bootstrapReceipt, currentBundle)) {
-        throw serviceError(
-          "worker_build_mismatch",
-          "Worker must bootstrap the current build before continuing",
-        );
+      let tunnelBundleHash = record.bootstrapReceipt.bundleHash;
+      let currentBundle: ExpectedWorkerBuild | undefined;
+      const usesInstalledSshBundle = access === "workspace-recovery" && record.sshEndpoint !== null;
+      if (!usesInstalledSshBundle) {
+        try {
+          currentBundle = await options.prepareCurrentBundle();
+        } catch {
+          throw serviceError("invalid_state", "Current worker build identity is unavailable");
+        }
+        if (!verifyWorkerAdmissionHandshake(record.bootstrapReceipt, currentBundle)) {
+          throw serviceError(
+            "worker_build_mismatch",
+            "Worker must bootstrap the current build before continuing",
+          );
+        }
+        tunnelBundleHash = currentBundle.bundleHash;
       }
       const nodeBundle =
         record.providerId === DEVICE_WORKER_PROVIDER_ID &&
         !record.sshEndpoint &&
         record.bootstrapReceipt.installKind === "bundle";
       if (nodeBundle) {
+        if (!currentBundle) {
+          throw serviceError("invalid_state", "Current worker build identity is unavailable");
+        }
         const profileSettings = record.profileSnapshot.settings;
         const deviceId = isRecord(profileSettings) ? profileSettings.device : undefined;
         const sessionId = record.attachedSessionIds[0];
@@ -173,7 +188,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       // lock while SSH connects so drain/destroy can fence an indefinitely reconnecting start.
       startup = tunnels.start({
         ...request,
-        bundleHash: currentBundle.bundleHash,
+        bundleHash: tunnelBundleHash,
         gateway,
         ssh: record.sshEndpoint,
         sharedHost: record.sharedHost,
@@ -202,6 +217,28 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       void stopStartup?.().catch(() => undefined);
       throw timeoutError;
     }
+  };
+
+  const startTunnel = async (request: WorkerTunnelRequest): Promise<WorkerTunnelHandle> =>
+    await startTunnelAccess(request, "current-worker");
+
+  const startRecoveryTunnel = async (
+    request: WorkerRecoveryTunnelRequest,
+  ): Promise<WorkerWorkspaceRecoveryTunnelHandle> => {
+    const { workerBuild, ...tunnelRequest } = request;
+    const tunnel = await startTunnelAccess(
+      tunnelRequest,
+      workerBuild === "current" ? "current-worker" : "workspace-recovery",
+    );
+    return {
+      environmentId: tunnel.environmentId,
+      ownerEpoch: tunnel.ownerEpoch,
+      quiesceWorkspace: tunnel.quiesceWorkspace,
+      reconcileWorkspace: tunnel.reconcileWorkspace,
+      runWorkspaceCommand: tunnel.runWorkspaceCommand,
+      stop: tunnel.stop,
+      syncWorkspace: tunnel.syncWorkspace,
+    };
   };
 
   const observeDesktop = async (request: {
@@ -401,6 +438,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     list: () => store.list().map(project),
     observeDesktop,
     project,
+    startRecoveryTunnel,
     startTunnel,
     stopAllTunnels: async () => {
       await Promise.all([tunnels?.stopAll(), nodeTunnels?.stopAll()]);

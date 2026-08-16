@@ -96,7 +96,11 @@ async function signalProcessReferences(references, concurrency = ${REMOTE_QUIESC
         results[index] = { kind: "signaled", state: observed.state };
       } catch (error) {
         if (error && error.code === "ESRCH") results[index] = { kind: "missing" };
-        else {
+        else if (error && error.code === "EPERM" && reference.signal !== 0) {
+          // SIGSTOP denial proves no freeze occurred. SIGCONT/SIGTERM denial settles cleanup
+          // by permission symmetry so an unowned reference cannot become a permanent lease.
+          results[index] = { kind: "permission-denied", state: observed.state };
+        } else {
           results[index] = { kind: "failed" };
         }
       }
@@ -116,11 +120,13 @@ function remainingProcessReferences(references, outcomes) {
 async function recoverProcessReferences(references, concurrency = ${REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY}, deadlineMs = Date.now() + ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS}) {
   let remaining = references;
   const failedReferences = new Set();
+  const permissionDeniedReferences = new Set();
   const settled = new Map();
   while (remaining.length > 0 && Date.now() < deadlineMs) {
     const outcomes = await signalProcessReferences(remaining, concurrency, deadlineMs);
     outcomes.forEach((outcome, index) => {
       if (outcome.kind === "failed") failedReferences.add(remaining[index]);
+      if (outcome.kind === "permission-denied") permissionDeniedReferences.add(remaining[index]);
       if (outcome.kind !== "deferred" && outcome.kind !== "timeout" && outcome.kind !== "failed") {
         settled.set(remaining[index], outcome);
       }
@@ -132,7 +138,7 @@ async function recoverProcessReferences(references, concurrency = ${REMOTE_QUIES
       Math.min(${REMOTE_WATCHDOG_PROCESS_PROBE_TIMEOUT_MS}, deadlineMs - Date.now()),
     ));
   }
-  return { remaining, failed: failedReferences.size > 0, failedReferences, settled };
+  return { remaining, failed: failedReferences.size > 0, failedReferences, permissionDeniedReferences, settled };
 }
 function quiescenceCandidates(rows, expectedUid, excludedPids, frozen) {
   const preserved = ancestors(rows);
@@ -355,6 +361,12 @@ try {
             ? "workspace quiescence process identity probe failed"
             : "workspace quiescence process identity probe timed out",
         );
+      }
+      for (const denied of stopped.permissionDeniedReferences) {
+        frozen.delete(denied.pid);
+      }
+      if (stopped.permissionDeniedReferences.size > 0) {
+        throw new Error("workspace quiescence process could not be stopped");
       }
       Atomics.wait(sleeper, 0, 0, 20);
       const stoppedRows = processes();
@@ -604,6 +616,13 @@ if (validationMode === "final" && !sharedHost) {
               ? "workspace quiescence process identity probe failed"
               : "workspace quiescence process identity probe timed out",
           ),
+        );
+      }
+      if (stopped.permissionDeniedReferences.size > 0) {
+        await rollbackLateProcesses(
+          references,
+          priorProcesses,
+          new Error("workspace quiescence process could not be stopped"),
         );
       }
       Atomics.wait(sleeper, 0, 0, 20);

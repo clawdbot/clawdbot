@@ -1,5 +1,6 @@
 import type { WorkerDispatchPlacementStore } from "./placement-dispatch-failure.js";
 import {
+  isCurrentPlacementTurnClaim,
   placementTurnOwner,
   placementWorkspaceResultClaim,
   type WorkerSessionTurnClaim,
@@ -159,7 +160,9 @@ export async function forceAbandonWorkerEnvironment(params: {
         if (!claim || !placements.validateWorkspaceResultClaim(claim)) {
           throw new Error(`Pending workspace result lost its claim for ${pending.sessionId}`);
         }
-        await placements.closeWorkerTurnToolState(claim);
+        if (placement && isCurrentPlacementTurnClaim(placement, claim)) {
+          await placements.closeWorkerTurnToolState(claim);
+        }
       }
       assertAbandonmentAllowed();
       placements.forceAbandonPendingWorkspaceResult({

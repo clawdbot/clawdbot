@@ -337,6 +337,15 @@ export function createHarness(
     currentEnvironment = destroyed;
     return destroyed;
   });
+  const startTunnel = vi.fn(
+    async ({ ownerEpoch }: Parameters<WorkerDispatchEnvironmentService["startTunnel"]>[0]) => {
+      fail("tunnel:attached");
+      if (ownerEpoch !== currentEnvironment?.ownerEpoch) {
+        throw new Error("tunnel fixture received a stale owner epoch");
+      }
+      return tunnelHandle(ownerEpoch);
+    },
+  );
   const environments: WorkerDispatchEnvironmentService = {
     create: vi.fn(async () => {
       fail("create");
@@ -347,19 +356,13 @@ export function createHarness(
       return ready;
     }),
     get: vi.fn(() => currentEnvironment),
-    isWorkerBuildMismatchError: vi.fn(() => false),
     attachSession: vi.fn(async () => {
       fail("attach");
       currentEnvironment = attached;
       return minted;
     }),
-    startTunnel: vi.fn(async ({ ownerEpoch }) => {
-      fail("tunnel:attached");
-      if (ownerEpoch !== currentEnvironment?.ownerEpoch) {
-        throw new Error("tunnel fixture received a stale owner epoch");
-      }
-      return tunnelHandle(ownerEpoch);
-    }),
+    startTunnel,
+    startRecoveryTunnel: startTunnel,
     stopTunnel: vi.fn(async () => {
       log.push("teardown:stop");
     }),

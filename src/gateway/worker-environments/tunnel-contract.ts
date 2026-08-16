@@ -64,6 +64,10 @@ export type WorkerTunnelRequest = {
   ownerEpoch: number;
 };
 
+export type WorkerRecoveryTunnelRequest = WorkerTunnelRequest & {
+  workerBuild: "current" | "installed";
+};
+
 export type WorkerWorkspaceCommand = {
   argv: readonly string[];
   transportRetry: "idempotent" | "never";
@@ -140,3 +144,5 @@ export type WorkerTunnelHandle = {
   ): Promise<WorkerWorkspaceReconcileResult>;
   stop(): Promise<void>;
 };
+
+export type WorkerWorkspaceRecoveryTunnelHandle = Omit<WorkerTunnelHandle, "launchTurn">;

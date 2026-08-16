@@ -493,6 +493,9 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
         throw new Error("Worker tunnel owner epoch is stale");
       }
       if (request.ownerEpoch === current.ownerEpoch) {
+        if (request.bundleHash !== current.bundleHash) {
+          throw new Error("Worker tunnel bundle changed without an owner epoch change");
+        }
         return await current.readiness.promise;
       }
     }

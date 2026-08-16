@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import {
+  REMOTE_WORKSPACE_QUIESCE_JS,
   REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
   REMOTE_WORKSPACE_RESUME_JS,
   WORKER_WORKSPACE_OPERATOR_RECOVERY_EXIT_CODE,
@@ -23,7 +24,103 @@ import {
   useBatchedDelayedProcessFixture,
 } from "./workspace-quiescence-scripts.test-support.js";
 
+async function signalPermissionFailureEnv(
+  input: Awaited<ReturnType<typeof fixture>>,
+  pid: number,
+  signal: "SIGSTOP" | "SIGCONT",
+) {
+  const preloadPath = path.join(input.home, `deny-${signal.toLowerCase()}.cjs`);
+  await fs.writeFile(
+    preloadPath,
+    `const originalKill = process.kill;
+process.kill = function (pid, signal) {
+  if (pid === Number(process.env.OPENCLAW_TEST_DENIED_PID) && signal === process.env.OPENCLAW_TEST_DENIED_SIGNAL) {
+    const error = new Error("signal denied");
+    error.code = "EPERM";
+    throw error;
+  }
+  return originalKill.call(process, pid, signal);
+};
+`,
+  );
+  return {
+    ...input.env,
+    NODE_OPTIONS: `${input.env.NODE_OPTIONS ?? ""} --require=${preloadPath}`.trim(),
+    OPENCLAW_TEST_DENIED_PID: String(pid),
+    OPENCLAW_TEST_DENIED_SIGNAL: signal,
+  };
+}
+
 describe("remote workspace quiescence scripts", () => {
+  it("fails SIGSTOP EPERM without retaining the unfrozen process", async () => {
+    const input = await fixture();
+    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      stdio: "ignore",
+    });
+    const childPid = child.pid!;
+
+    try {
+      await fs.writeFile(input.extraProcessPath, `${childPid}\n`);
+      const result = await runCommandWithTimeout(
+        [
+          process.execPath,
+          "-e",
+          REMOTE_WORKSPACE_QUIESCE_JS,
+          input.workspace,
+          "10000",
+          "dedicated",
+        ],
+        {
+          timeoutMs: 10_000,
+          baseEnv: await signalPermissionFailureEnv(input, childPid, "SIGSTOP"),
+        },
+      );
+
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain("workspace quiescence process could not be stopped");
+      await expectProcessState(childPid, false);
+      const leaseDirectory = path.join(input.home, ".openclaw-worker", "quiescence");
+      expect((await fs.readdir(leaseDirectory)).filter((name) => name.endsWith(".json"))).toEqual(
+        [],
+      );
+    } finally {
+      await terminate(child);
+      await fs.rm(input.extraProcessPath, { force: true });
+    }
+  });
+
+  it("settles SIGCONT EPERM without retaining a recovery lease", async () => {
+    const input = await fixture();
+    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      stdio: "ignore",
+    });
+    const childPid = child.pid!;
+    let nonce: string | undefined;
+
+    try {
+      await fs.writeFile(input.extraProcessPath, `${childPid}\n`);
+      nonce = await quiesce(input);
+      await expectProcessState(childPid, true);
+      const result = await runCommandWithTimeout(
+        [process.execPath, "-e", REMOTE_WORKSPACE_RESUME_JS, input.workspace, nonce],
+        {
+          timeoutMs: 10_000,
+          baseEnv: await signalPermissionFailureEnv(input, childPid, "SIGCONT"),
+        },
+      );
+
+      expect(result.code, result.stderr).toBe(0);
+      await expect(fs.access(leasePath(input.home, input.workspace, nonce))).rejects.toThrow();
+      await expectProcessState(childPid, true);
+    } finally {
+      try {
+        process.kill(childPid, "SIGCONT");
+      } catch {}
+      await terminate(child);
+      await fs.rm(input.extraProcessPath, { force: true });
+    }
+  });
+
   it("keeps unrelated same-uid processes running on a declared shared host", async () => {
     const input = await fixture();
     const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {

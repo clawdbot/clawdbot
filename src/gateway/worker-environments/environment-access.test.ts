@@ -105,7 +105,67 @@ describe("worker environment service", () => {
     expect(tunnelManager.start).not.toHaveBeenCalled();
   });
 
+  it("opens stale SSH bundles only through a workspace recovery handle", async () => {
+    const environmentId = "worker-stale-workspace-recovery";
+    const staleBundleHash = "c".repeat(64);
+    const bootstrapping = support.seedBootstrapping(environmentId, undefined, true);
+    support.testState.store.transition({
+      environmentId,
+      from: bootstrapping.state,
+      to: "ready",
+      patch: support.readyPatch(environmentId, {
+        ...support.BOOTSTRAP_RECEIPT,
+        bundleHash: staleBundleHash,
+      }),
+    });
+    const launchTurn = vi.fn();
+    const tunnelManager = {
+      status: () => "stopped" as const,
+      start: vi.fn(async (request) => ({
+        environmentId: request.environmentId,
+        ownerEpoch: request.ownerEpoch,
+        launchTurn,
+        runWorkspaceCommand: vi.fn(),
+        quiesceWorkspace: vi.fn(),
+        reconcileWorkspace: vi.fn(),
+        syncWorkspace: vi.fn(),
+        stop: vi.fn(async () => {}),
+      })),
+      stop: vi.fn(async () => {}),
+      stopAll: vi.fn(async () => {}),
+    } as unknown as WorkerTunnelManager;
+    const workerService = support.createService(support.createProvider(), { tunnelManager });
+    const prepareInstallation = vi.mocked(support.testState.prepareInstallation);
+    const prepareCallsBeforeRecovery = prepareInstallation.mock.calls.length;
+
+    await expect(
+      workerService.startRecoveryTunnel({
+        environmentId,
+        ownerEpoch: 1,
+        workerBuild: "current",
+      }),
+    ).rejects.toMatchObject({ code: "worker_build_mismatch" });
+    expect(tunnelManager.start).not.toHaveBeenCalled();
+
+    const recovery = await workerService.startRecoveryTunnel({
+      environmentId,
+      ownerEpoch: 1,
+      workerBuild: "installed",
+    });
+
+    expect(tunnelManager.start).toHaveBeenCalledWith(
+      expect.objectContaining({ bundleHash: staleBundleHash }),
+    );
+    expect(prepareInstallation).toHaveBeenCalledTimes(prepareCallsBeforeRecovery + 1);
+    expect(recovery).not.toHaveProperty("launchTurn");
+    expect(launchTurn).not.toHaveBeenCalled();
+  });
+
   it("starts a Gateway-bundle node tunnel without entering SSH", async () => {
+    let currentBundle = support.BUNDLE_ARTIFACT;
+    support.testState.prepareInstallation = vi.fn(async (install) =>
+      install === "bundle" ? currentBundle : support.NPM_ARTIFACT,
+    );
     const tunnelManager = {
       status: () => "stopped" as const,
       start: vi.fn(),
@@ -175,6 +235,16 @@ describe("worker environment service", () => {
         expectedBuild: expect.objectContaining({ bundleHash: support.BUNDLE_HASH }),
       }),
     );
+
+    currentBundle = { ...support.BUNDLE_ARTIFACT, bundleHash: "c".repeat(64) };
+    await expect(
+      workerService.startRecoveryTunnel({
+        environmentId: environment.environmentId,
+        ownerEpoch: credential.ownerEpoch,
+        workerBuild: "installed",
+      }),
+    ).rejects.toMatchObject({ code: "worker_build_mismatch" });
+    expect(nodeTunnelManager.start).toHaveBeenCalledTimes(1);
   });
 
   it("stops the node transport that owns a timed-out start", async () => {

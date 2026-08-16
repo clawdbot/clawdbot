@@ -188,10 +188,16 @@ export function createPlacementPendingFailureOps(
       if (!claim) {
         throw new Error(`Cannot fail stale pending worker result for session ${pending.sessionId}`);
       }
-      await dependencies.closeWorkerTurnToolState(claim);
+      if (isCurrentPlacementTurnClaim(beforeDrain, claim)) {
+        await dependencies.closeWorkerTurnToolState(claim);
+      }
       const outcome = write((db) => {
         const current = getRequired(db, pending.sessionId);
         const currentClaim = placementWorkspaceResultClaim(current, pending);
+        const liveClaim =
+          currentClaim && isCurrentPlacementTurnClaim(current, currentClaim)
+            ? currentClaim
+            : undefined;
         const durablePending = executeSqliteQuerySync(
           db,
           getNodeSqliteKysely<Pick<StateDatabase, "worker_workspace_pending_results">>(db)
@@ -227,22 +233,35 @@ export function createPlacementPendingFailureOps(
           ownerEpoch: pending.ownerEpoch,
           placementGeneration: current.generation,
         });
-        const claimedUpdate = query(db)
+        const placementUpdate = query(db)
           .updateTable("worker_session_placements")
           .set(values)
           .where("session_id", "=", pending.sessionId)
           .where("state", "=", current.state)
           .where("transition_generation", "=", current.generation)
           .where("environment_id", "=", pending.environmentId)
-          .where("active_owner_epoch", "=", pending.ownerEpoch)
-          .where("turn_claim_owner", "=", currentClaim.owner.kind)
-          .where("turn_claim_id", "=", pending.claimId)
-          .where("turn_claim_run_id", "=", pending.runId)
-          .where("turn_claim_generation", "=", pending.placementGeneration);
+          .where("active_owner_epoch", "=", pending.ownerEpoch);
         const update =
-          currentClaim.owner.kind === "worker"
-            ? claimedUpdate.where("turn_claim_owner_epoch", "=", pending.ownerEpoch)
-            : claimedUpdate.where("turn_claim_owner_epoch", "is", null);
+          liveClaim?.owner.kind === "worker"
+            ? placementUpdate
+                .where("turn_claim_owner", "=", "worker")
+                .where("turn_claim_id", "=", pending.claimId)
+                .where("turn_claim_run_id", "=", pending.runId)
+                .where("turn_claim_generation", "=", pending.placementGeneration)
+                .where("turn_claim_owner_epoch", "=", pending.ownerEpoch)
+            : liveClaim
+              ? placementUpdate
+                  .where("turn_claim_owner", "=", "local")
+                  .where("turn_claim_id", "=", pending.claimId)
+                  .where("turn_claim_run_id", "=", pending.runId)
+                  .where("turn_claim_generation", "=", pending.placementGeneration)
+                  .where("turn_claim_owner_epoch", "is", null)
+              : placementUpdate
+                  .where("turn_claim_owner", "is", null)
+                  .where("turn_claim_id", "is", null)
+                  .where("turn_claim_run_id", "is", null)
+                  .where("turn_claim_generation", "is", null)
+                  .where("turn_claim_owner_epoch", "is", null);
         const result = executeSqliteQuerySync(db, update);
         if (result.numAffectedRows !== 1n) {
           throw new Error(
@@ -251,10 +270,12 @@ export function createPlacementPendingFailureOps(
         }
         return {
           record: getRequired(db, pending.sessionId),
-          releasedClaim: currentClaim,
+          releasedClaim: liveClaim,
         };
       });
-      signalWorkerTurnClaimClosed(path, outcome.releasedClaim);
+      if (outcome.releasedClaim) {
+        signalWorkerTurnClaimClosed(path, outcome.releasedClaim);
+      }
       return outcome.record;
     },
   };

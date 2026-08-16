@@ -602,6 +602,24 @@ describe("worker tunnel manager", () => {
     await handle.stop();
   });
 
+  it("rejects same-epoch reuse across worker bundle identities", async () => {
+    const fake = fakeRunner();
+    const { manager, handle } = await startConnectedTunnel(fake, "worker:bundle-owner", 4);
+
+    await expect(
+      manager.start({
+        bundleHash: "c".repeat(64),
+        environmentId: "worker:bundle-owner",
+        ownerEpoch: 4,
+        ssh: SSH,
+        gateway: { host: "127.0.0.1", port: 18789 },
+        resolveIdentity,
+      }),
+    ).rejects.toThrow("bundle changed without an owner epoch change");
+    expect(fake.starts).toHaveLength(1);
+    await handle.stop();
+  });
+
   it("publishes a replacement epoch before awaiting prior teardown", async () => {
     const fake = fakeRunner();
     const manager = createWorkerTunnelManager({ runner: fake.runner, sleep: async () => {} });

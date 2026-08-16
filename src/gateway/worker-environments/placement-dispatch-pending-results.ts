@@ -9,7 +9,11 @@ import type {
 import { placementWorkspaceResultClaim } from "./placement-record.js";
 import { isRetainedFailedWorkspaceResultOwner } from "./placement-teardown-fence.js";
 import type { WorkerEnvironmentService } from "./service.js";
-import { findWorkerWorkspaceOperatorRecoveryError } from "./tunnel-contract.js";
+import {
+  findWorkerWorkspaceOperatorRecoveryError,
+  type WorkerTunnelRequest,
+  type WorkerWorkspaceRecoveryTunnelHandle,
+} from "./tunnel-contract.js";
 import type { WorkerWorkspaceResultConflict } from "./workspace-conflicts.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
@@ -54,6 +58,14 @@ export type PlacementRecoveryDeps = {
   }) => Promise<WorkerWorkspaceResultConflict | undefined>;
 };
 
+export type WorkerWorkspaceRecoveryTunnelStarter = (
+  request: WorkerTunnelRequest,
+) => Promise<WorkerWorkspaceRecoveryTunnelHandle>;
+
+export type WorkerWorkspaceRecoveryTunnelResolver = (
+  environmentId: string,
+) => WorkerWorkspaceRecoveryTunnelStarter | undefined;
+
 function sameActiveEnvironment(
   placement: WorkerActiveDispatchPlacement | WorkerDrainingDispatchPlacement,
   environment: ReturnType<WorkerEnvironmentService["get"]>,
@@ -95,7 +107,7 @@ export async function recoverPendingWorkspaceResults(
   deps: PlacementRecoveryDeps,
   cleanupOrphans: boolean,
   environmentId?: string,
-  freshHostIsolationEnvironmentIds: ReadonlySet<string> = new Set(),
+  recoveryTunnelFor?: WorkerWorkspaceRecoveryTunnelResolver,
 ): Promise<Set<string>> {
   const { environments, failure, placements } = deps;
   const retainedResultOwners = new Set<string>();
@@ -344,7 +356,8 @@ export async function recoverPendingWorkspaceResults(
         }
         continue;
       }
-      if (!freshHostIsolationEnvironmentIds.has(active.environmentId)) {
+      const startRecoveryTunnel = recoveryTunnelFor?.(active.environmentId);
+      if (!startRecoveryTunnel) {
         // Provider inspection owns the host-isolation fact consumed by tunnel
         // creation. A failed inspection must not reuse a stale dedicated-host scope.
         continue;
@@ -363,7 +376,7 @@ export async function recoverPendingWorkspaceResults(
           placements.updateWorkspaceBaseManifest({ claim: turnClaim, manifestRef }),
         abort: () => placements.abortWorkspaceReconciliation(owner),
       };
-      const tunnel = await environments.startTunnel({
+      const tunnel = await startRecoveryTunnel({
         environmentId: active.environmentId,
         ownerEpoch: active.activeOwnerEpoch,
       });
@@ -453,17 +466,14 @@ export async function recoverPendingWorkspaceResults(
       });
     } catch (error) {
       const operatorRecoveryError = findWorkerWorkspaceOperatorRecoveryError(error);
-      const terminalRecoveryError =
-        operatorRecoveryError ??
-        (environments.isWorkerBuildMismatchError(error) ? error : undefined);
       if (
-        terminalRecoveryError &&
+        operatorRecoveryError &&
         (placement?.state === "active" || placement?.state === "draining")
       ) {
-        await failure.recordRetainedResultFailure(placement, terminalRecoveryError);
+        await failure.recordRetainedResultFailure(placement, operatorRecoveryError);
       }
-      // Retryable failures remain fenced for the next sweep; classified terminal
-      // failures retain the result behind the explicit operator recovery action.
+      // Retryable failures remain fenced for the next sweep; operator recovery
+      // failures retain the result behind the explicit recovery action.
     }
   }
   if (cleanupOrphans) {

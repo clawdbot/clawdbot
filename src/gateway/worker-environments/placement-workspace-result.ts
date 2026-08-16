@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
+  isCurrentPlacementTurnClaim,
   placementWorkspaceResultClaim,
   resolvePlacementTurnEnvironment,
   type WorkerSessionPlacementRecord,
@@ -384,6 +385,10 @@ export function createPlacementWorkspaceResultOps(
       const outcome = write((db) => {
         const current = getRequired(db, pending.sessionId);
         const currentClaim = placementWorkspaceResultClaim(current, pending);
+        const liveClaim =
+          currentClaim && isCurrentPlacementTurnClaim(current, currentClaim)
+            ? currentClaim
+            : undefined;
         const isCurrentOwner = Boolean(currentClaim);
         const isRetainedFailedOwner = isRetainedFailedWorkspaceResultOwner(current, pending);
         if (!isCurrentOwner && !isRetainedFailedOwner) {
@@ -408,22 +413,35 @@ export function createPlacementWorkspaceResultOps(
           if (!currentClaim) {
             throw new Error(`Pending worker result lost its claim for ${pending.sessionId}`);
           }
-          const claimedUpdate = placementQuery(db)
+          const placementUpdate = placementQuery(db)
             .updateTable("worker_session_placements")
             .set(transitionValues(current, "failed", { recoveryError }, updatedAtMs))
             .where("session_id", "=", pending.sessionId)
             .where("state", "=", current.state)
             .where("transition_generation", "=", current.generation)
             .where("environment_id", "=", pending.environmentId)
-            .where("active_owner_epoch", "=", pending.ownerEpoch)
-            .where("turn_claim_owner", "=", currentClaim.owner.kind)
-            .where("turn_claim_id", "=", pending.claimId)
-            .where("turn_claim_run_id", "=", pending.runId)
-            .where("turn_claim_generation", "=", pending.placementGeneration);
+            .where("active_owner_epoch", "=", pending.ownerEpoch);
           update =
-            currentClaim.owner.kind === "worker"
-              ? claimedUpdate.where("turn_claim_owner_epoch", "=", pending.ownerEpoch)
-              : claimedUpdate.where("turn_claim_owner_epoch", "is", null);
+            liveClaim?.owner.kind === "worker"
+              ? placementUpdate
+                  .where("turn_claim_owner", "=", "worker")
+                  .where("turn_claim_id", "=", pending.claimId)
+                  .where("turn_claim_run_id", "=", pending.runId)
+                  .where("turn_claim_generation", "=", pending.placementGeneration)
+                  .where("turn_claim_owner_epoch", "=", pending.ownerEpoch)
+              : liveClaim
+                ? placementUpdate
+                    .where("turn_claim_owner", "=", "local")
+                    .where("turn_claim_id", "=", pending.claimId)
+                    .where("turn_claim_run_id", "=", pending.runId)
+                    .where("turn_claim_generation", "=", pending.placementGeneration)
+                    .where("turn_claim_owner_epoch", "is", null)
+                : placementUpdate
+                    .where("turn_claim_owner", "is", null)
+                    .where("turn_claim_id", "is", null)
+                    .where("turn_claim_run_id", "is", null)
+                    .where("turn_claim_generation", "is", null)
+                    .where("turn_claim_owner_epoch", "is", null);
         }
         const result = executeSqliteQuerySync(db, update);
         if (result.numAffectedRows !== 1n) {
@@ -434,7 +452,7 @@ export function createPlacementWorkspaceResultOps(
         deleteWorkerWorkspacePendingResult(db, pending);
         return {
           record: getRequired(db, pending.sessionId),
-          releasedClaim: isCurrentOwner ? currentClaim : undefined,
+          releasedClaim: isCurrentOwner ? liveClaim : undefined,
         };
       });
       if (outcome.releasedClaim) {

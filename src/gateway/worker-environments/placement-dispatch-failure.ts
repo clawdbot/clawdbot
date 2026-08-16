@@ -77,8 +77,8 @@ export type WorkerDispatchEnvironmentService = Pick<
   | "destroy"
   | "destroyOwned"
   | "get"
-  | "isWorkerBuildMismatchError"
   | "reconcileOnce"
+  | "startRecoveryTunnel"
   | "startTunnel"
   | "stopTunnel"
 >;

@@ -169,6 +169,87 @@ describe("forced worker environment abandonment", () => {
     expect(store.listPendingWorkspaceResults()).toEqual([]);
   });
 
+  it("abandons a restarted remote-exec result after local authority was revoked", async () => {
+    const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
+    const harness = createHarness(store);
+    await harness.service.dispatch({ ...REQUEST, executionMode: "remote-exec" });
+    const active = store.get(REQUEST.sessionId);
+    if (active?.state !== "active") {
+      throw new Error("active remote-exec placement fixture was not active");
+    }
+    const claimId = "reclaim-restarted-forced-local";
+    const claim = store.claimReclaimWorkspaceResult({
+      ...REQUEST,
+      claimId,
+      runId: claimId,
+      owner: {
+        kind: "local",
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+    });
+    store.acceptWorkspaceResult(claim);
+    const closed = vi.fn();
+    const unregister = store.registerTurnClaimClosedHandler(closed);
+    expect(store.clearLocalTurnClaimsAfterRestart()).toBe(1);
+
+    await forceAbandonWorkerEnvironment({
+      placements: store,
+      environmentId: active.environmentId,
+      resolveWorkspacePath: async () => root,
+    });
+
+    expect(store.get(REQUEST.sessionId)).toMatchObject({
+      state: "failed",
+      executionMode: "remote-exec",
+      turnClaim: null,
+      recoveryError: FORCED_WORKER_ABANDONMENT_ERROR,
+    });
+    expect(store.listPendingWorkspaceResults()).toEqual([]);
+    expect(closed).not.toHaveBeenCalled();
+    unregister();
+  });
+
+  it("records terminal recovery for a restarted remote-exec result", async () => {
+    const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
+    const harness = createHarness(store);
+    await harness.service.dispatch({ ...REQUEST, executionMode: "remote-exec" });
+    const active = store.get(REQUEST.sessionId);
+    if (active?.state !== "active") {
+      throw new Error("active remote-exec placement fixture was not active");
+    }
+    const claimId = "reclaim-restarted-terminal-local";
+    store.claimReclaimWorkspaceResult({
+      ...REQUEST,
+      claimId,
+      runId: claimId,
+      owner: {
+        kind: "local",
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+    });
+    const pending = store.listPendingWorkspaceResults()[0]!;
+    const closed = vi.fn();
+    const unregister = store.registerTurnClaimClosedHandler(closed);
+    expect(store.clearLocalTurnClaimsAfterRestart()).toBe(1);
+
+    const failed = await store.failPendingWorkspaceResult({
+      pending,
+      recoveryError: "Workspace recovery requires operator action",
+    });
+
+    expect(failed).toMatchObject({
+      state: "failed",
+      executionMode: "remote-exec",
+      turnClaim: null,
+      recoveryError: "Workspace recovery requires operator action",
+    });
+    expect(store.listPendingWorkspaceResults()).toEqual([pending]);
+    expect(closed).not.toHaveBeenCalled();
+    unregister();
+  });
+
   it("drains nested operations before forced teardown without a pending result", async () => {
     const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
     const { environmentId } = createDispatchEnvironmentFixtures();

@@ -482,7 +482,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     takeMintedCredential: credentialBroker.takeMintedCredential,
     acquireTurnCredential: credentialBroker.acquireTurnCredential,
     acknowledgeCredentialDelivery: credentialBroker.acknowledgeCredentialDelivery,
-    isWorkerBuildMismatchError: (error: unknown) => isServiceError(error, "worker_build_mismatch"),
+    startRecoveryTunnel: environmentAccess.startRecoveryTunnel,
     startTunnel: environmentAccess.startTunnel,
     stopTunnel: environmentAccess.stopTunnel,
     reconcileEnvironment,
