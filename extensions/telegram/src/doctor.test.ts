@@ -1,4 +1,5 @@
 // Telegram tests cover doctor plugin behavior.
+import type { ChannelDoctorEmptyAllowlistAccountContext } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { telegramDoctor } from "./doctor.js";
@@ -815,6 +816,69 @@ describe("telegram doctor", () => {
 
     expect((await collectPreviewWarnings(cfg, {})).join("\n")).not.toContain(
       "TELEGRAM_BOT_TOKEN is absent",
+    );
+  });
+});
+
+describe("telegram doctor empty allowlist extra warnings", () => {
+  function collectExtraWarnings(
+    context: Partial<ChannelDoctorEmptyAllowlistAccountContext>,
+  ): string[] {
+    const collect = telegramDoctor.collectEmptyAllowlistExtraWarnings;
+    if (!collect) {
+      throw new Error("expected Telegram empty allowlist extra warning collector");
+    }
+    return collect({
+      account: { groupPolicy: "allowlist" },
+      channelName: "telegram",
+      dmPolicy: "pairing",
+      prefix: "channels.telegram",
+      ...context,
+    });
+  }
+
+  it("skips parent-scope first-time guidance when every account configures groups", () => {
+    const warnings = collectExtraWarnings({
+      childAccounts: [
+        { groups: { "-1001": { requireMention: true } } },
+        { groups: { "-1002": { requireMention: true } } },
+      ],
+      effectiveAllowFrom: ["166534209"],
+    });
+
+    expect(warnings).toEqual([]);
+  });
+
+  it("keeps first-time guidance when one account still lacks groups", () => {
+    const warnings = collectExtraWarnings({
+      childAccounts: [{ groups: { "-1001": { requireMention: true } } }, {}],
+    });
+
+    expect(warnings.join("\n")).toContain("first-time setup mode");
+  });
+
+  it("keeps first-time guidance when no accounts are configured", () => {
+    const warnings = collectExtraWarnings({ childAccounts: [] });
+
+    expect(warnings.join("\n")).toContain("first-time setup mode");
+  });
+
+  it("keeps first-time guidance when child accounts are withheld", () => {
+    // The scanner withholds childAccounts when an implicit runtime account
+    // inherits the container scope, so its group routing is still unconfigured.
+    const warnings = collectExtraWarnings({});
+
+    expect(warnings.join("\n")).toContain("first-time setup mode");
+  });
+
+  it("keeps account-scope first-time guidance untouched", () => {
+    const warnings = collectExtraWarnings({
+      parent: { groupPolicy: "allowlist" },
+      prefix: "channels.telegram.accounts.default",
+    });
+
+    expect(warnings.join("\n")).toContain(
+      "channels.telegram.accounts.default: Telegram is in first-time setup mode.",
     );
   });
 });

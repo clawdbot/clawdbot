@@ -1,5 +1,6 @@
 // Channel doctor tests cover shared channel health checks and repair hints.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelDoctorEmptyAllowlistAccountContext } from "../../../channels/plugins/types.adapters.js";
 import { normalizeResolvedSecretInputString } from "../../../config/types.secrets.js";
 import {
   collectChannelDoctorCompatibilityMutations,
@@ -9,6 +10,7 @@ import {
   collectChannelDoctorStaleConfigMutations,
   createChannelDoctorEmptyAllowlistPolicyHooks,
 } from "./channel-doctor.js";
+import { scanEmptyAllowlistPolicyWarnings } from "./empty-allowlist-scan.js";
 
 const mocks = vi.hoisted(() => ({
   getLoadedChannelPlugin: vi.fn(),
@@ -33,6 +35,20 @@ vi.mock("../../../channels/plugins/bundled.js", () => ({
   getBundledChannelSetupPlugin: (...args: Parameters<typeof mocks.getBundledChannelSetupPlugin>) =>
     mocks.getBundledChannelSetupPlugin(...args),
 }));
+
+// Account-id resolution itself is covered by channel-capabilities.test.ts; here we
+// only pin that the scanner forwards childAccounts through the hooks to adapters.
+vi.mock("../channel-capabilities.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../channel-capabilities.js")>();
+  return {
+    ...actual,
+    resolveDoctorChannelAccountIds: (
+      _channelName: string,
+      _cfg: unknown,
+      configuredAccountIds: string[],
+    ) => ({ configured: configuredAccountIds, runtime: configuredAccountIds }),
+  };
+});
 
 vi.mock("../../../channels/plugins/read-only.js", () => ({
   resolveReadOnlyChannelPluginsForConfig: (
@@ -404,6 +420,39 @@ describe("channel doctor compatibility mutations", () => {
       READ_ONLY_CHANNEL_DOCTOR_OPTIONS,
     );
     expect(collectEmptyAllowlistExtraWarnings.mock.calls[0]?.[0]).not.toHaveProperty("cfg");
+  });
+
+  it("forwards container-scope child accounts through the empty allowlist hooks", () => {
+    const collectEmptyAllowlistExtraWarnings = vi.fn(
+      (_context: ChannelDoctorEmptyAllowlistAccountContext): string[] => [],
+    );
+    const cfg = {
+      channels: {
+        matrix: {
+          groupPolicy: "allowlist",
+          accounts: {
+            work: { groups: { "!room:example.org": {} } },
+          },
+        },
+      },
+    };
+    const env = { OPENCLAW_HOME: "/tmp/openclaw-test-home" };
+    mocks.resolveReadOnlyChannelPluginsForConfig.mockReturnValue({
+      plugins: [{ id: "matrix", doctor: { collectEmptyAllowlistExtraWarnings } }],
+    });
+
+    const hooks = createChannelDoctorEmptyAllowlistPolicyHooks({ cfg: cfg as never, env });
+    scanEmptyAllowlistPolicyWarnings(cfg as never, {
+      doctorFixCommand: "openclaw doctor --fix",
+      ...hooks,
+    });
+
+    const contexts = collectEmptyAllowlistExtraWarnings.mock.calls.map(([context]) => context);
+    const parent = contexts.find((context) => context.prefix === "channels.matrix");
+    const account = contexts.find((context) => context.prefix === "channels.matrix.accounts.work");
+
+    expect(parent?.childAccounts).toHaveLength(1);
+    expect(account?.childAccounts).toBeUndefined();
   });
 
   it("reuses empty allowlist doctor entries across per-account hooks", () => {

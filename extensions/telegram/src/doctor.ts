@@ -516,11 +516,23 @@ function hasConfiguredGroups(account: DoctorAccountRecord, parent?: DoctorAccoun
 function collectTelegramGroupPolicyWarnings(params: {
   account: DoctorAccountRecord;
   prefix: string;
+  childAccounts?: DoctorAccountRecord[];
   effectiveAllowFrom?: DoctorAllowFromList;
   dmPolicy?: string;
   parent?: DoctorAccountRecord;
 }): string[] {
   if (!hasConfiguredGroups(params.account, params.parent)) {
+    // The parent container scope carries no groups of its own once every active
+    // account defines them. Group routing already works, so first-time setup
+    // guidance here would be a false positive; per-account scopes still warn.
+    // `parent` is undefined only on that container scope.
+    if (
+      !params.parent &&
+      params.childAccounts?.length &&
+      params.childAccounts.every((child) => hasConfiguredGroups(child, params.account))
+    ) {
+      return [];
+    }
     const effectiveDmPolicy = params.dmPolicy ?? "pairing";
     const dmSetupLine =
       effectiveDmPolicy === "pairing"
@@ -560,6 +572,7 @@ function collectTelegramEmptyAllowlistExtraWarnings(
       undefined) === "allowlist"
     ? collectTelegramGroupPolicyWarnings({
         account,
+        childAccounts: params.childAccounts,
         dmPolicy: params.dmPolicy,
         effectiveAllowFrom: params.effectiveAllowFrom as DoctorAllowFromList | undefined,
         parent,

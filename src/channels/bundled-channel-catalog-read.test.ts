@@ -46,6 +46,7 @@ vi.mock("../infra/openclaw-root.js", () => ({
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
+  findBundledChannelCatalogId,
   findBundledChannelCatalogMetadata,
   listBundledChannelCatalogEntries,
 } from "./bundled-channel-catalog-read.js";
@@ -258,6 +259,10 @@ describe("listBundledChannelCatalogEntries", () => {
       approvalFlags: ["native"],
       doctorCapabilities: { openDmRequiresAllowFromWildcard: false },
     });
+    expect(findBundledChannelCatalogId("qqbot")).toBe("qqbot");
+    expect(findBundledChannelCatalogId("QQBOT")).toBe("qqbot");
+    expect(findBundledChannelCatalogId("not-a-real-channel")).toBeUndefined();
+    expect(findBundledChannelCatalogId("")).toBeUndefined();
   });
 
   it("finds doctor capabilities from the generated catalog when the package is excluded", () => {

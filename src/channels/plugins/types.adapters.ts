@@ -471,6 +471,16 @@ export type ChannelDoctorSequenceResult = {
 export type ChannelDoctorEmptyAllowlistAccountContext = {
   account: Record<string, unknown>;
   channelName: string;
+  /**
+   * Active child accounts, set only on the parent container scope
+   * (`channels.<id>`) and only when it is a pure container: at least one active
+   * account under `accounts`, and every runtime account configured there.
+   * Channels use it to skip setup guidance that the per-account scopes already
+   * cover. Left undefined when there are no active accounts, or when an
+   * implicit runtime account inherits this scope and so has no scope of its own
+   * to warn on. When present it is always non-empty.
+   */
+  childAccounts?: Array<Record<string, unknown>>;
   dmPolicy?: string;
   effectiveAllowFrom?: Array<string | number>;
   parent?: Record<string, unknown>;

@@ -42,7 +42,10 @@ export function scanEmptyAllowlistPolicyWarnings(
     prefix: string,
     channelName: string,
     parent?: DoctorAccountRecord,
-    options: { suppressGroupAllowlistWarning?: boolean } = {},
+    options: {
+      suppressGroupAllowlistWarning?: boolean;
+      childAccounts?: DoctorAccountRecord[];
+    } = {},
   ) => {
     const accountDm = asNullableRecord(account.dm);
     const parentDm = asNullableRecord(parent?.dm);
@@ -77,6 +80,7 @@ export function scanEmptyAllowlistPolicyWarnings(
         ...params.extraWarningsForAccount({
           account,
           channelName,
+          childAccounts: options.childAccounts,
           dmPolicy,
           effectiveAllowFrom,
           parent,
@@ -139,6 +143,11 @@ export function scanEmptyAllowlistPolicyWarnings(
       });
 
     checkAccount(channelConfig, `channels.${channelName}`, channelName, undefined, {
+      // Left undefined unless this scope is a pure container: an implicit
+      // runtime account inherits it and has no scope of its own to warn on, and
+      // with no active accounts there is no per-account scope to defer to.
+      childAccounts:
+        hasImplicitActiveAccount || activeAccounts.length === 0 ? undefined : activeAccounts,
       suppressGroupAllowlistWarning: suppressParentGroupAllowlistWarning,
     });
 

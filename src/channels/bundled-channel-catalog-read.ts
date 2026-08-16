@@ -165,15 +165,24 @@ export function listBundledChannelCatalogEntries(): BundledChannelCatalogEntry[]
   );
 }
 
-/** Finds bundled or generated channel metadata by id or alias. */
-export function findBundledChannelCatalogMetadata(
-  channelId: string,
-): PluginPackageChannel | undefined {
+function findBundledChannelCatalogEntry(channelId: string): BundledChannelCatalogEntry | undefined {
   const normalized = normalizeOptionalLowercaseString(channelId);
   if (!normalized) {
     return undefined;
   }
   return listBundledChannelCatalogEntries().find(
     (entry) => entry.id === normalized || entry.aliases.includes(normalized),
-  )?.channel;
+  );
+}
+
+/** Finds bundled or generated channel metadata by id or alias. */
+export function findBundledChannelCatalogMetadata(
+  channelId: string,
+): PluginPackageChannel | undefined {
+  return findBundledChannelCatalogEntry(channelId)?.channel;
+}
+
+/** Resolves a channel id or alias to its canonical bundled catalog id. */
+export function findBundledChannelCatalogId(channelId: string): string | undefined {
+  return findBundledChannelCatalogEntry(channelId)?.id;
 }

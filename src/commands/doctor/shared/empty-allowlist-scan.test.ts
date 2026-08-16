@@ -1,5 +1,6 @@
 // Empty allowlist scan tests cover doctor detection of unconfigured sender allowlists.
 import { describe, expect, it, vi } from "vitest";
+import type { ChannelDoctorEmptyAllowlistAccountContext } from "../../../channels/plugins/types.adapters.js";
 import { scanEmptyAllowlistPolicyWarnings } from "./empty-allowlist-scan.js";
 
 vi.mock("../channel-capabilities.js", () => ({
@@ -101,6 +102,32 @@ describe("doctor empty allowlist policy scan", () => {
     expect(warnings).toContain(
       '- channels.telegram.groupPolicy is "allowlist" but groupAllowFrom (and allowFrom) is empty — all group messages will be silently dropped. Add sender IDs to channels.telegram.groupAllowFrom or channels.telegram.allowFrom, or set groupPolicy to "open".',
     );
+  });
+
+  it("suppresses the parent groupAllowFrom warning for any channel whose accounts all resolve", () => {
+    const warnings = scanEmptyAllowlistPolicyWarnings(
+      {
+        channels: {
+          signal: {
+            groupPolicy: "allowlist",
+            groupAllowFrom: [],
+            accounts: {
+              work: { groupAllowFrom: ["signal:group:work"] },
+              personal: { groupAllowFrom: ["signal:group:personal"] },
+            },
+          },
+        },
+      },
+      { doctorFixCommand: "openclaw doctor --fix" },
+    );
+
+    expect(
+      warnings.some(
+        (warning) =>
+          warning.includes('channels.signal.groupPolicy is "allowlist"') &&
+          warning.includes("groupAllowFrom"),
+      ),
+    ).toBe(false);
   });
 
   it("keeps parent groupAllowFrom warning when an implicit default account is active", () => {
@@ -234,5 +261,62 @@ describe("doctor empty allowlist policy scan", () => {
     expect(extraWarningsForAccount).toHaveBeenCalledTimes(1);
     const [warningOptions] = extraWarningsForAccount.mock.calls[0] ?? [];
     expect(warningOptions?.prefix).toBe("channels.signal");
+  });
+
+  it("exposes active child accounts to the parent container scope only", () => {
+    const extraWarningsForAccount = vi.fn(
+      (_context: ChannelDoctorEmptyAllowlistAccountContext): string[] => [],
+    );
+
+    scanEmptyAllowlistPolicyWarnings(
+      {
+        channels: {
+          telegram: {
+            dmPolicy: "allowlist",
+            accounts: {
+              default: { dmPolicy: "allowlist" },
+              retired: { enabled: false, dmPolicy: "allowlist" },
+            },
+          },
+        },
+      },
+      { doctorFixCommand: "openclaw doctor --fix", extraWarningsForAccount },
+    );
+
+    const contexts = extraWarningsForAccount.mock.calls.map(([context]) => context);
+    const parent = contexts.find((context) => context?.prefix === "channels.telegram");
+    const account = contexts.find(
+      (context) => context?.prefix === "channels.telegram.accounts.default",
+    );
+
+    expect(parent?.childAccounts).toHaveLength(1);
+    expect(account?.childAccounts).toBeUndefined();
+  });
+
+  it("withholds child accounts when an implicit runtime account inherits the parent scope", () => {
+    const extraWarningsForAccount = vi.fn(
+      (_context: ChannelDoctorEmptyAllowlistAccountContext): string[] => [],
+    );
+
+    scanEmptyAllowlistPolicyWarnings(
+      {
+        channels: {
+          "qa-channel": {
+            baseUrl: "https://qa.example",
+            dmPolicy: "allowlist",
+            accounts: {
+              work: { dmPolicy: "allowlist" },
+            },
+          },
+        },
+      },
+      { doctorFixCommand: "openclaw doctor --fix", extraWarningsForAccount },
+    );
+
+    const parent = extraWarningsForAccount.mock.calls
+      .map(([context]) => context)
+      .find((context) => context?.prefix === "channels.qa-channel");
+
+    expect(parent?.childAccounts).toBeUndefined();
   });
 });
