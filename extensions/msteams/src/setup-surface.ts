@@ -105,7 +105,7 @@ async function promptMSTeamsAllowFrom(params: {
       continue;
     }
 
-    const ids = resolved.map((item) => item.id as string);
+    const ids = resolved.flatMap((item) => (item.id ? [item.id] : []));
     const unique = mergeAllowFromEntries(existing, ids);
     return patchChannelConfigForAccount({
       cfg: params.cfg,
@@ -134,7 +134,7 @@ function setMSTeamsTeamsAllowlist(
   entries: Array<{ teamKey: string; channelKey?: string }>,
 ): OpenClawConfig {
   const baseTeams = resolveMSTeamsAccountConfig(cfg, accountId).teams ?? {};
-  const teams: Record<string, { channels?: Record<string, unknown> }> = { ...baseTeams };
+  const teams: Record<string, MSTeamsTeamConfig> = { ...baseTeams };
   for (const entry of entries) {
     const teamKey = entry.teamKey;
     if (!teamKey) {
@@ -152,7 +152,7 @@ function setMSTeamsTeamsAllowlist(
   return patchMSTeamsAccountConfig({
     cfg,
     accountId,
-    patch: { teams: teams as Record<string, MSTeamsTeamConfig> },
+    patch: { teams },
   });
 }
 
@@ -307,7 +307,9 @@ export const msteamsSetupWizard: ChannelSetupWizard = {
     const baseResult = baseFinalize ? await baseFinalize(params) : undefined;
     let next = baseResult?.cfg ?? params.cfg;
     const resolvedAccountId =
-      (baseResult as { accountId?: string } | undefined)?.accountId ?? params.accountId;
+      baseResult && "accountId" in baseResult && typeof baseResult.accountId === "string"
+        ? baseResult.accountId
+        : params.accountId;
     const finalCreds = resolveMSTeamsCredentials(
       resolveMSTeamsAccountConfig(next, resolvedAccountId),
       {

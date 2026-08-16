@@ -92,6 +92,7 @@ function clearNamedAccountInheritedIdentity(
     if (account?.[field] === undefined) {
       delete next[field];
     } else {
+      // SAFETY: IDENTITY_FIELDS only contains writable keys shared by both config shapes.
       next[field] = account[field] as never;
     }
   }
@@ -115,6 +116,7 @@ export function resolveMSTeamsAccountConfig(
   accountId?: string | null,
 ): MSTeamsConfig {
   const resolvedAccountId = normalizeAccountId(accountId ?? resolveDefaultMSTeamsAccountId(cfg));
+  // SAFETY: MSTeamsConfig's public contract owns the optional multi-account fields.
   const channelConfig = cfg.channels?.msteams as MSTeamsMultiAccountConfig | undefined;
   const account = resolveMSTeamsAccountEntry(channelConfig?.accounts, resolvedAccountId);
   const merged = resolveMergedAccountConfig<MSTeamsConfig>({
@@ -202,10 +204,7 @@ export function inspectMSTeamsAccount(params: {
     hasIdentity:
       account.accountId === DEFAULT_ACCOUNT_ID ||
       accountDefinesIdentity(
-        resolveMSTeamsAccountEntry(
-          (params.cfg.channels?.msteams as MSTeamsMultiAccountConfig | undefined)?.accounts,
-          account.accountId,
-        ),
+        resolveMSTeamsAccountEntry(params.cfg.channels?.msteams?.accounts, account.accountId),
       ),
     port: account.config.webhook?.port ?? null,
     path: account.config.webhook?.path ?? "/api/messages",

@@ -22,6 +22,7 @@ export async function listMSTeamsDirectoryPeersLive(params: {
   if (!query) {
     return [];
   }
+  // SAFETY: channel directory callers pass the runtime OpenClawConfig through this generic seam.
   const token = await resolveGraphToken(params.cfg as OpenClawConfig, {
     accountId: params.accountId,
   });
@@ -45,7 +46,7 @@ export async function listMSTeamsDirectoryPeersLive(params: {
         raw: user,
       } satisfies ChannelDirectoryEntry;
     })
-    .filter(Boolean) as ChannelDirectoryEntry[];
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
 }
 
 export async function listMSTeamsDirectoryGroupsLive(params: {
@@ -58,6 +59,7 @@ export async function listMSTeamsDirectoryGroupsLive(params: {
   if (!rawQuery) {
     return [];
   }
+  // SAFETY: channel directory callers pass the runtime OpenClawConfig through this generic seam.
   const token = await resolveGraphToken(params.cfg as OpenClawConfig, {
     accountId: params.accountId,
   });

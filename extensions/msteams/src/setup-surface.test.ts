@@ -2,7 +2,10 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMSTeamsSetupWizardBase, msteamsSetupAdapter } from "./setup-core.js";
-import { msteamsSetupWizard as exportedMSTeamsSetupWizard } from "./setup-surface.js";
+import {
+  msteamsSetupWizard as delegatedMsteamsSetupWizard,
+  msteamsSetupWizard as exportedMSTeamsSetupWizard,
+} from "./setup-surface.js";
 
 const resolveMSTeamsUserAllowlist = vi.hoisted(() => vi.fn());
 const resolveMSTeamsChannelAllowlist = vi.hoisted(() => vi.fn());
@@ -35,8 +38,6 @@ vi.mock("./oauth.js", () => {
   oauthModuleState.loaded = true;
   return { loginMSTeamsDelegated };
 });
-
-import { msteamsSetupWizard as delegatedMsteamsSetupWizard } from "./setup-surface.js";
 
 describe("msteams setup surface", () => {
   const msteamsSetupWizard = createMSTeamsSetupWizardBase();

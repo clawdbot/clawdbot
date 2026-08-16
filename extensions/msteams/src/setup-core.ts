@@ -24,15 +24,26 @@ import { hasConfiguredMSTeamsCredentials, resolveMSTeamsCredentials } from "./to
 const t = createSetupTranslator();
 const channel = "msteams" as const;
 
-type MSTeamsSetupInput = ChannelSetupInput & {
-  appId?: string;
-  appPassword?: string;
-  tenantId?: string;
-};
-
 type MSTeamsSetupAccountConfig = Partial<MSTeamsConfig> & {
   name?: string;
 };
+
+function readMSTeamsSetupCredential(
+  input: ChannelSetupInput,
+  key: "appId" | "appPassword" | "tenantId",
+): string | undefined {
+  switch (key) {
+    case "appId":
+      return "appId" in input && typeof input.appId === "string" ? input.appId : undefined;
+    case "appPassword":
+      return "appPassword" in input && typeof input.appPassword === "string"
+        ? input.appPassword
+        : undefined;
+    case "tenantId":
+      return "tenantId" in input && typeof input.tenantId === "string" ? input.tenantId : undefined;
+  }
+  return undefined;
+}
 
 function resolveSetupAccountId(cfg: OpenClawConfig, accountId?: string | null): string {
   return normalizeAccountId(accountId ?? resolveDefaultMSTeamsAccountId(cfg));
@@ -54,6 +65,7 @@ function resolveRawMSTeamsAccountConfig(
   accountId: string,
 ): MSTeamsSetupAccountConfig {
   const normalized = normalizeAccountId(accountId);
+  // SAFETY: MSTeamsConfig's public contract owns the optional multi-account fields.
   const msteams = (cfg.channels?.msteams ?? {}) as MSTeamsMultiAccountConfig;
   if (normalized === DEFAULT_ACCOUNT_ID) {
     return msteams;
@@ -94,6 +106,7 @@ export function patchMSTeamsAccountConfig(params: {
   scopeDefaultToAccounts?: boolean;
 }): OpenClawConfig {
   const accountId = normalizeAccountId(params.accountId);
+  // SAFETY: MSTeamsConfig's public contract owns the optional multi-account fields.
   const msteams = (params.cfg.channels?.msteams ?? {}) as MSTeamsMultiAccountConfig;
   const ensureEnabled = params.ensureEnabled ?? true;
   const scopeDefaultToAccounts = params.scopeDefaultToAccounts ?? false;
@@ -130,8 +143,8 @@ export function patchMSTeamsAccountConfig(params: {
       : (resolveRawMSTeamsAccountKey(accounts, accountId) ?? accountId);
   const existing =
     accountId === DEFAULT_ACCOUNT_ID
-      ? ({ ...defaultAccount, ...accounts[rawAccountKey] } as MSTeamsSetupAccountConfig)
-      : ((accounts[rawAccountKey] ?? {}) as MSTeamsSetupAccountConfig);
+      ? ({ ...defaultAccount, ...accounts[rawAccountKey] } as MSTeamsSetupAccountConfig) // SAFETY: both are account fragments.
+      : ((accounts[rawAccountKey] ?? {}) as MSTeamsSetupAccountConfig); // SAFETY: map values are account fragments.
   return {
     ...params.cfg,
     channels: {
@@ -147,6 +160,7 @@ export function patchMSTeamsAccountConfig(params: {
             ...params.patch,
           },
         },
+        // SAFETY: the assembled object preserves MSTeamsConfig and adds its declared accounts map.
       } as MSTeamsMultiAccountConfig,
     },
   };
@@ -197,30 +211,31 @@ export const msteamsSetupAdapter: ChannelSetupAdapter = {
       : cfg;
   },
   validateInput: ({ accountId, input }) => {
-    const msteamsInput = input as MSTeamsSetupInput;
-    if (msteamsInput.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
+    const appId = readMSTeamsSetupCredential(input, "appId");
+    const appPassword = readMSTeamsSetupCredential(input, "appPassword");
+    const tenantId = readMSTeamsSetupCredential(input, "tenantId");
+    if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
       return "MSTEAMS_* environment variables can only be used for the default account.";
     }
-    if (
-      !msteamsInput.useEnv &&
-      !(msteamsInput.appId && msteamsInput.appPassword && msteamsInput.tenantId)
-    ) {
+    if (!input.useEnv && !(appId && appPassword && tenantId)) {
       return "MS Teams requires appId, appPassword, and tenantId (or --use-env for the default account).";
     }
     return null;
   },
   applyAccountConfig: ({ cfg, accountId, input }) => {
     const resolvedAccountId = resolveSetupAccountId(cfg, accountId);
-    const msteamsInput = input as MSTeamsSetupInput;
+    const appId = readMSTeamsSetupCredential(input, "appId");
+    const appPassword = readMSTeamsSetupCredential(input, "appPassword");
+    const tenantId = readMSTeamsSetupCredential(input, "tenantId");
     const patch: MSTeamsSetupAccountConfig = {};
-    if (typeof msteamsInput.appId === "string" && msteamsInput.appId.trim()) {
-      patch.appId = msteamsInput.appId.trim();
+    if (appId?.trim()) {
+      patch.appId = appId.trim();
     }
-    if (typeof msteamsInput.appPassword === "string" && msteamsInput.appPassword.trim()) {
-      patch.appPassword = msteamsInput.appPassword.trim();
+    if (appPassword?.trim()) {
+      patch.appPassword = appPassword.trim();
     }
-    if (typeof msteamsInput.tenantId === "string" && msteamsInput.tenantId.trim()) {
-      patch.tenantId = msteamsInput.tenantId.trim();
+    if (tenantId?.trim()) {
+      patch.tenantId = tenantId.trim();
     }
     return patchMSTeamsAccountConfig({
       cfg,
