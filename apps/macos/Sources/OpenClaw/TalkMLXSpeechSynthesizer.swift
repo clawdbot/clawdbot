@@ -100,7 +100,7 @@ actor TalkMLXSpeechSynthesizer {
             do {
                 let transport = try await ensureTransport()
                 guard self.activeID == id, self.cancelRequestedID != id else {
-                    await self.discardTransport()
+                    await self.discardTransport(forRequest: id)
                     throw SynthesizeError.canceled
                 }
                 try await transport.send(request)
@@ -194,7 +194,7 @@ actor TalkMLXSpeechSynthesizer {
             do {
                 let transport = try await ensureTransport()
                 guard self.activeID == id, self.cancelRequestedID != id else {
-                    await self.discardTransport()
+                    await self.discardTransport(forRequest: id)
                     throw SynthesizeError.canceled
                 }
                 try await transport.send(request)
@@ -265,7 +265,7 @@ actor TalkMLXSpeechSynthesizer {
         do {
             try await self.transport?.send(.cancel(id: activeID))
         } catch {
-            await self.discardTransport()
+            await self.discardTransport(forRequest: activeID)
         }
         self.scheduleCancelEscalation(id: activeID)
     }
@@ -394,7 +394,7 @@ actor TalkMLXSpeechSynthesizer {
         do {
             try await transport.send(.cancel(id: id))
         } catch {
-            await self.discardTransport()
+            await self.discardTransport(forRequest: id)
             return
         }
         self.scheduleCancelEscalation(id: id)
@@ -437,7 +437,7 @@ actor TalkMLXSpeechSynthesizer {
                 }
             }
         } catch SynthesizeError.timedOut {
-            await self.discardTransport()
+            await self.discardTransport(forRequest: id)
             self.finishRequest(id: id)
             continuation.finish(throwing: SynthesizeError.timedOut)
         } catch {
@@ -488,7 +488,7 @@ actor TalkMLXSpeechSynthesizer {
         // Soprano checks cancellation while producing tokens, but its final
         // decoder has no cancellation contract. Bound that phase with a kill.
         self.logger.info("talk mlx cancel grace expired; terminating helper")
-        await self.discardTransport()
+        await self.discardTransport(forRequest: id)
     }
 
     private func scheduleIdleShutdown() {
@@ -523,9 +523,13 @@ actor TalkMLXSpeechSynthesizer {
         await self.shutdown()
     }
 
-    private func discardTransport(forRequest id: String? = nil) async {
+    private func discardTransport(forRequest id: String) async {
         // A stale request may finish after shutdown admitted a replacement.
-        guard id == nil || self.activeID == id else { return }
+        guard self.activeID == id else { return }
+        await self.discardTransport()
+    }
+
+    private func discardTransport() async {
         let transport = self.transport
         self.transport = nil
         await transport?.close()

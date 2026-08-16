@@ -94,6 +94,79 @@ struct TalkMLXSpeechSynthesizerTests {
     }
 
     @Test
+    func `stale startup ready cannot discard the replacement helper`() async throws {
+        let stale = TestMLXTransport(mode: .staleStartupReady)
+        let replacement = TestMLXTransport(mode: .audio)
+        let factory = TestMLXTransportFactory([stale, replacement])
+        let synthesizer = TalkMLXSpeechSynthesizer(
+            transportFactory: { try await factory.make() },
+            idleDuration: .seconds(60))
+        let staleSynthesis = Task {
+            try await synthesizer.synthesize(
+                text: "stale startup",
+                modelRepo: nil,
+                language: nil,
+                voicePreset: nil)
+        }
+        await factory.waitForCall()
+        await synthesizer.shutdown()
+
+        _ = try await synthesizer.synthesize(
+            text: "replacement",
+            modelRepo: nil,
+            language: nil,
+            voicePreset: nil)
+        await stale.finishStaleReady()
+        _ = try? await staleSynthesis.value
+        _ = try await synthesizer.synthesize(
+            text: "reuse replacement",
+            modelRepo: nil,
+            language: nil,
+            voicePreset: nil)
+
+        #expect(await factory.callCount == 2)
+        await synthesizer.shutdown()
+    }
+
+    @Test
+    func `stale stream timeout cannot discard the replacement helper`() async throws {
+        let stale = TestMLXTransport(mode: .staleStreamTimeout)
+        let replacement = TestMLXTransport(mode: .audio)
+        let factory = TestMLXTransportFactory([stale, replacement])
+        let synthesizer = TalkMLXSpeechSynthesizer(
+            transportFactory: { try await factory.make() },
+            idleDuration: .seconds(60))
+        let playback = try await synthesizer.synthesizeStream(
+            text: "stale stream",
+            modelRepo: nil,
+            language: nil,
+            voicePreset: nil,
+            referenceAudioPath: nil,
+            referenceText: nil,
+            stallTimeoutSeconds: 0.25)
+        let staleConsumption = Task {
+            for try await _ in playback.chunks {}
+        }
+        await stale.waitForBlockedEvent()
+        await synthesizer.shutdown()
+
+        _ = try await synthesizer.synthesize(
+            text: "replacement",
+            modelRepo: nil,
+            language: nil,
+            voicePreset: nil)
+        _ = try? await staleConsumption.value
+        _ = try await synthesizer.synthesize(
+            text: "reuse replacement",
+            modelRepo: nil,
+            language: nil,
+            voicePreset: nil)
+
+        #expect(await factory.callCount == 2)
+        await synthesizer.shutdown()
+    }
+
+    @Test
     func `reuses resident helper across utterances`() async throws {
         let transport = TestMLXTransport(mode: .audio)
         let factory = TestMLXTransportFactory([transport])
@@ -443,6 +516,8 @@ private actor TestMLXTransport: MLXTTSTransport {
         case crash
         case ignoreCancel
         case staleStartupClose
+        case staleStartupReady
+        case staleStreamTimeout
         case startupHang
         case stream
         case streamWaitForCancel
@@ -457,7 +532,7 @@ private actor TestMLXTransport: MLXTTSTransport {
 
     init(mode: Mode) {
         self.mode = mode
-        if mode == .startupHang || mode == .staleStartupClose {
+        if mode == .startupHang || mode == .staleStartupClose || mode == .staleStartupReady {
             self.events = []
         }
     }
@@ -480,13 +555,14 @@ private actor TestMLXTransport: MLXTTSTransport {
                     id: synthesize.id,
                     pcm: Data([0x00, 0x00, 0xFF, 0x7F]))))
                 self.events.append(.completed(id: synthesize.id))
-            case .streamWaitForCancel:
+            case .staleStreamTimeout, .streamWaitForCancel:
                 self.events.append(.streamStarted(MLXTTSStreamStart(
                     id: synthesize.id,
                     sampleRate: 32000)))
             case .crash:
                 self.closed = true
-            case .audioAfterCancel, .ignoreCancel, .staleStartupClose, .startupHang, .waitForCancel:
+            case .audioAfterCancel, .ignoreCancel, .staleStartupClose, .staleStartupReady,
+                 .startupHang, .waitForCancel:
                 break
             }
         case let .cancel(id):
@@ -495,11 +571,18 @@ private actor TestMLXTransport: MLXTTSTransport {
                     id: id,
                     sampleRate: 32000,
                     pcm: Data([0x00, 0x00, 0xFF, 0x7F]))))
-            } else if self.mode != .ignoreCancel, self.mode != .startupHang {
+            } else if self.mode != .ignoreCancel,
+                      self.mode != .staleStartupReady,
+                      self.mode != .staleStreamTimeout,
+                      self.mode != .startupHang
+            {
                 self.events.append(.canceled(id: id))
             }
         case .shutdown:
-            if self.mode != .staleStartupClose {
+            if self.mode != .staleStartupClose,
+               self.mode != .staleStartupReady,
+               self.mode != .staleStreamTimeout
+            {
                 self.closed = true
             }
         }
@@ -517,13 +600,26 @@ private actor TestMLXTransport: MLXTTSTransport {
 
     func close() {
         self.closeCount += 1
-        if self.mode != .staleStartupClose {
+        if self.mode != .staleStartupClose,
+           self.mode != .staleStartupReady,
+           self.mode != .staleStreamTimeout
+        {
             self.closed = true
         }
     }
 
     func finishStaleClose() {
         self.closed = true
+    }
+
+    func finishStaleReady() {
+        self.events.append(.ready)
+    }
+
+    func waitForBlockedEvent() async {
+        while !self.events.isEmpty {
+            await Task.yield()
+        }
     }
 
     func waitForSynthesisRequest() async {
