@@ -22,7 +22,7 @@ import type {
   WorkerSessionPlacementStore,
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
-import { WorkerRunnerUnavailableError } from "./tunnel-contract.js";
+import { WorkerRunnerCapacityError, WorkerRunnerUnavailableError } from "./tunnel-contract.js";
 import { resolveWorkerBrowserLaunchPlan } from "./worker-browser-launch-plan.js";
 import {
   claimWorkerTurn,
@@ -527,7 +527,10 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
           await options.recoverPendingWorkspaceResult(placement.environmentId);
           throw error;
         }
-        if (error instanceof WorkerRunnerUnavailableError && !handedOff) {
+        if (
+          error instanceof WorkerRunnerCapacityError ||
+          (error instanceof WorkerRunnerUnavailableError && !handedOff)
+        ) {
           await releaseClaimIfOwned(options.placements, turnClaim);
           throw error;
         }

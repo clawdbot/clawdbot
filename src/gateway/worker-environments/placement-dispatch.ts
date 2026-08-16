@@ -60,6 +60,7 @@ type WorkerPlacementDispatchOptions = {
   runLocalBarrier: WorkerLocalDispatchBarrier;
   runActivationBarrier: WorkerActivationBarrier;
   runReclaimBarrier: WorkerPlacementReclaimBarrier;
+  onActivated?: (request: WorkerPlacementDispatchRequest) => void;
   workspaceOperations: WorkerWorkspaceOperationCoordinator;
   resolveWorkspacePath: (params: {
     sessionId: string;
@@ -253,6 +254,11 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           return activated;
         },
       });
+      try {
+        options.onActivated?.(request);
+      } catch {
+        // Maintenance scheduling cannot overturn a durable placement activation.
+      }
       return activePlacement;
     } catch (error) {
       try {

@@ -8,7 +8,11 @@ import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-messa
 import type { SpawnResult } from "../../process/exec.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
-import { WorkerRunnerUnavailableError, type WorkerTunnelHandle } from "./tunnel-contract.js";
+import {
+  WorkerRunnerCapacityError,
+  WorkerRunnerUnavailableError,
+  type WorkerTunnelHandle,
+} from "./tunnel-contract.js";
 import {
   ENVIRONMENT_ID,
   MANIFEST_REF,
@@ -237,7 +241,20 @@ describe("worker turn launcher failure recovery", () => {
     expect(environments.destroy).not.toHaveBeenCalled();
   });
 
-  it("keeps the placement active when launch fails before transport dispatch", async () => {
+  it.each([
+    {
+      name: "offline before transport dispatch",
+      error: new WorkerRunnerUnavailableError(),
+      dispatched: false,
+      expectedMessage: "The device runner is offline",
+    },
+    {
+      name: "capacity rejection after transport dispatch",
+      error: new WorkerRunnerCapacityError(),
+      dispatched: true,
+      expectedMessage: "device worker capacity remained full",
+    },
+  ])("keeps the placement active after $name", async ({ error, dispatched, expectedMessage }) => {
     seedActivePlacement();
     const teardownStates: string[] = [];
     const observedPlacements: WorkerSessionPlacementStore = {
@@ -272,8 +289,11 @@ describe("worker turn launcher failure recovery", () => {
           resume: vi.fn(async () => {}),
         })),
         runWorkspaceCommand: vi.fn(),
-        launchTurn: vi.fn(async () => {
-          throw new WorkerRunnerUnavailableError();
+        launchTurn: vi.fn(async (request) => {
+          if (dispatched) {
+            request.onDispatchReady?.();
+          }
+          throw error;
         }),
         syncWorkspace: vi.fn(async () => {
           throw new Error("unexpected workspace sync");
@@ -309,10 +329,10 @@ describe("worker turn launcher failure recovery", () => {
         turn("run-failed"),
         runLocal,
       ),
-    ).rejects.toThrow("The device runner is offline");
+    ).rejects.toThrow(expectedMessage);
     expect(runLocal).not.toHaveBeenCalled();
     expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
-    expect(acknowledgeCredentialDelivery).not.toHaveBeenCalled();
+    expect(acknowledgeCredentialDelivery).toHaveBeenCalledTimes(dispatched ? 1 : 0);
     expect(stopTunnel).not.toHaveBeenCalled();
     expect(destroy).not.toHaveBeenCalled();
     expect(teardownStates).toEqual([]);

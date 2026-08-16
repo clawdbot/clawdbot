@@ -286,9 +286,9 @@ describe("paired node worker lifecycle wire", () => {
               messages.some(
                 (message) =>
                   (message as { role?: unknown }).role === "assistant" &&
-                  wireMessageText(message).includes("agent run failed before producing a reply"),
+                  wireMessageText(message).includes("WIRE-CAPACITY-ATTEMPT"),
               ),
-            ).toBe(true);
+            ).toBe(false);
           },
           { timeout: 30_000, interval: 100 },
         );
