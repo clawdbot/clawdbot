@@ -42,6 +42,8 @@ export const QUEUED_MESSAGE_REORDER_CONFLICT_ERROR =
   "A queued message is being edited in another pane. Finish or cancel that edit before reordering it.";
 export const QUEUED_MESSAGE_RETRY_CONFLICT_ERROR =
   "A queued message is being edited in another pane. Finish or cancel that edit before retrying it.";
+export const QUEUED_MESSAGE_STEER_CONFLICT_ERROR =
+  "A queued message is being edited in another pane. Finish or cancel that edit before steering it.";
 
 /**
  * The edit belongs to the scope it started in — session and agent, the pair every

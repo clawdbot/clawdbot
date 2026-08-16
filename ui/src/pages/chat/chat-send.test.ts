@@ -9144,6 +9144,9 @@ describe("handleSendChat", () => {
         text: original.text,
         sendState: "waiting-idle",
       });
+      expect(peer.chatError).toBe(
+        "A queued message is being edited in another pane. Finish or cancel that edit before steering it.",
+      );
     } finally {
       stopHost();
       stopPeer();
