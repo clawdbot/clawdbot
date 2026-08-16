@@ -736,6 +736,51 @@ describe("gateway/node-registry", () => {
     await expect(invocation).resolves.toMatchObject({ ok: true, payloadJSON: "null" });
   });
 
+  it("promotes post-hello worker capabilities without changing build identity", async () => {
+    const { nodeRegistry, nodeWorkerSupervisorTransport } = createPrivateNodeRegistryRuntime();
+    registerNodeSession(
+      nodeRegistry,
+      makeClient("conn-1", "node-1", [], {
+        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+        commands: ["system.run"],
+        workerRuns: WORKER_RUNS,
+      }),
+      { pairingIdentity: "identity-a", pairingGeneration: "generation-a" },
+    );
+    const declaration = {
+      protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE] as const,
+      workerRuns: WORKER_RUNS,
+    };
+    expect(
+      updateNodeRunnerInventory({
+        registry: nodeRegistry,
+        nodeId: "node-1",
+        connId: "conn-1",
+        declaration,
+      }),
+    ).toEqual({ changed: true });
+    const [legacyProof] = await nodeWorkerSupervisorTransport.listCurrentNodes();
+
+    expect(
+      updateNodeRunnerInventory({
+        registry: nodeRegistry,
+        nodeId: "node-1",
+        connId: "conn-1",
+        declaration: {
+          ...declaration,
+          workerRuns: { ...WORKER_RUNS, bundlePrewarm: 1 },
+        },
+      }),
+    ).toEqual({ changed: true });
+    const [negotiatedProof] = await nodeWorkerSupervisorTransport.listCurrentNodes();
+
+    expect(legacyProof && nodeWorkerSupervisorTransport.isCurrent(legacyProof, true)).toBe(false);
+    expect(negotiatedProof?.workerRuns).toEqual({ ...WORKER_RUNS, bundlePrewarm: 1 });
+    expect(negotiatedProof && nodeWorkerSupervisorTransport.isCurrent(negotiatedProof, true)).toBe(
+      true,
+    );
+  });
+
   it("rejects generation-mismatched lookup and dispatch without invalidating the session", async () => {
     const registry = new NodeRegistry();
     const frames: string[] = [];

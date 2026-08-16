@@ -284,7 +284,7 @@ async function connectPairedNode(params: {
       gateway: params.gateway,
       role: "node",
       identity: params.identity,
-      workerRuns,
+      workerRuns: params.installation.build,
       onEvent: params.onEvent,
     });
   let client: GatewayClient;

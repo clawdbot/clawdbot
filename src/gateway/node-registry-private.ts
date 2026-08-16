@@ -204,6 +204,13 @@ function sameOptionalWorkerBuild(
   return left === undefined || right === undefined ? left === right : sameWorkerBuild(left, right);
 }
 
+function sameOptionalWorkerRuns(
+  left: WorkerAdmissionHandshake | undefined,
+  right: WorkerAdmissionHandshake | undefined,
+): boolean {
+  return sameOptionalWorkerBuild(left, right) && left?.bundlePrewarm === right?.bundlePrewarm;
+}
+
 function resolveWorkerSupervisorProof(
   node: NodeRegistryPrivateSession,
   runnerInventoryByConn: ReadonlyMap<string, NodeRunnerInventoryRecord>,
@@ -276,7 +283,7 @@ function isWorkerSupervisorProofCurrent(
     (!requireLaunchEligibility ||
       (current.workerRuns !== undefined &&
         proof.workerRuns !== undefined &&
-        sameWorkerBuild(current.workerRuns, proof.workerRuns)))
+        sameOptionalWorkerRuns(current.workerRuns, proof.workerRuns)))
   );
 }
 
@@ -322,7 +329,7 @@ function updateWorkerRunnerInventory(
   const changed =
     !previous ||
     !sameWorkerProtocolFeatures(previous.protocolFeatures, next.protocolFeatures) ||
-    !sameOptionalWorkerBuild(previous.workerRuns, next.workerRuns);
+    !sameOptionalWorkerRuns(previous.workerRuns, next.workerRuns);
   if (changed) {
     state.runnerInventoryByConn.set(node.connId, next);
     state.context.publishActiveNodeContext();
