@@ -394,11 +394,11 @@ async function statAgentCleanupPath(cleanupPath: AgentDeleteCleanupPath) {
   }
   const identity = cleanupPathIdentity(stat);
   if (cleanupPath.preparedIdentity === null) {
-    if (identity !== null) {
-      throw new AgentCleanupIdentityMismatchError(
-        "cleanup path appeared after deletion preparation",
-      );
-    }
+    // The journal fence blocks legitimate claims on prepared-absent paths, so a
+    // file that appeared here is leaked deleted-agent state (recreated WAL
+    // sidecars, runtime home rewrites). Adopt it and sweep it; preserving it
+    // cascades ancestor protection and finishes over a surviving tree.
+    cleanupPath.preparedIdentity = identity;
   } else if (
     identity === null ||
     identity.dev !== cleanupPath.preparedIdentity.dev ||
