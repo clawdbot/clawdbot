@@ -175,8 +175,8 @@ describe("placement session retirement", () => {
     const forceDestroyEnvironment = vi.fn();
     const retirement = createPlacementSessionRetirement({
       placements: {
-        get: placements.get,
-        list: placements.list,
+        get: (sessionId) => placements.get(sessionId),
+        list: () => placements.list(),
         retireSessionPlacement,
       },
       environments: { get: () => undefined },
