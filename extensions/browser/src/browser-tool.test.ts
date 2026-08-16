@@ -2028,6 +2028,41 @@ describe("browser tool snapshot maxChars", () => {
     expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: "explicit node discovery",
+      params: { action: "status", target: "node" },
+      configureUserProfile: false,
+    },
+    {
+      name: "automatic user-browser discovery",
+      params: { action: "status", profile: "user" },
+      configureUserProfile: true,
+    },
+  ])("cancels $name with the agent signal", async ({ params, configureUserProfile }) => {
+    if (configureUserProfile) {
+      setResolvedBrowserProfiles({
+        user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+      });
+    }
+    const controller = new AbortController();
+    const abortError = new Error("agent turn cancelled");
+    nodesUtilsMocks.listNodes.mockImplementationOnce(async (...args: unknown[]) => {
+      if (args[1] !== controller.signal) {
+        throw new Error("browser node discovery did not receive the agent signal");
+      }
+      controller.abort(abortError);
+      controller.signal.throwIfAborted();
+      return [];
+    });
+
+    await expect(createBrowserTool().execute?.("call-1", params, controller.signal)).rejects.toBe(
+      abortError,
+    );
+    expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
   it("falls back to the host for profile=user when node discovery errors", async () => {
     nodesUtilsMocks.listNodes.mockRejectedValueOnce(new Error("gateway unavailable"));
     setResolvedBrowserProfiles({

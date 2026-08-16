@@ -206,6 +206,7 @@ async function resolveBrowserToolNodeTarget(params: {
   target?: "sandbox" | "host" | "node";
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
+  signal?: AbortSignal;
 }): Promise<BrowserNodeTarget | null> {
   if (params.allowHostControl === false) {
     if (params.target === "node" || params.requestedNode) {
@@ -232,7 +233,7 @@ async function resolveBrowserToolNodeTarget(params: {
     return null;
   }
   const node = resolveBrowserNodeTarget({
-    nodes: await browserToolDeps.listNodes({}),
+    nodes: await browserToolDeps.listNodes({}, params.signal),
     policy,
     requestedNode,
     explicitTarget,
@@ -448,8 +449,10 @@ export function createBrowserTool(opts?: {
           target,
           sandboxBridgeUrl: opts?.sandboxBridgeUrl,
           allowHostControl: opts?.allowHostControl,
+          signal,
         });
       } catch (error) {
+        signal?.throwIfAborted();
         // Keep the logged-in user browser usable on the host when auto-discovery
         // of browser nodes fails transiently. Explicit node requests still fail.
         if (!(isUserBrowserProfile && !target && !requestedNode && !configuredNode)) {
