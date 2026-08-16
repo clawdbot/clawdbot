@@ -146,6 +146,37 @@ describe("queued message edit round-trip", () => {
     unsubscribe();
   });
 
+  it("aborts a replacement when its edit is cancelled during history loading", async () => {
+    const history = createDeferred<{ messages: unknown[] }>();
+    const { host, unsubscribe } = queueHost([{}], {
+      connected: true,
+      chatLoading: true,
+      requestHandlers: { "chat.history": () => history.promise },
+    });
+    beginQueuedMessageEdit(host as never, "queued-1");
+    updateQueuedMessageEdit(host as never, "message 1, corrected");
+    const edit = host.chatQueuedEdit!;
+
+    const send = handleSendChat(host as never, edit.draftText, {
+      attachmentsOverride: [...edit.attachments],
+      resumeQueuedMessageEditId: edit.id,
+    });
+    await vi.waitFor(() =>
+      expect(host.request).toHaveBeenCalledWith(
+        "chat.history",
+        expect.objectContaining({ sessionKey: SESSION_KEY }),
+      ),
+    );
+
+    expect(cancelQueuedMessageEdit(host as never)).toBe(true);
+    history.resolve({ messages: [] });
+    await send;
+
+    expect(storedOrder(host)).toEqual(["message 1"]);
+    expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+    unsubscribe();
+  });
+
   it("preserves the queued reply target instead of the composer target", async () => {
     const queuedReplyTarget = {
       messageId: "queued-reply",

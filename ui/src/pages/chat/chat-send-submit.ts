@@ -479,6 +479,12 @@ export async function handleSendChat(
       setChatError(host, t("mcpServers.sessionUnavailable"));
       return;
     }
+    // History can await while the operator cancels or replaces the row edit.
+    // Do not admit that stale replacement as a new queued message.
+    const resumedEditCandidate = activeQueuedMessageEdit(host);
+    if (isInlineEditSubmission && resumedEditCandidate !== inlineEdit) {
+      return;
+    }
     const cleared =
       messageOverride == null
         ? clearSubmittedComposerState(host, previousDraft, attachmentsToSend)
@@ -491,7 +497,6 @@ export async function handleSendChat(
     const waitingForSettings = Boolean(pendingSettings);
     // The edited row hands its place to the replacement and is retired by the same
     // store write, so a rejected write leaves the original queued and editable.
-    const resumedEditCandidate = activeQueuedMessageEdit(host);
     const resumedEdit =
       opts?.resumeQueuedMessageEditId && resumedEditCandidate?.id === opts.resumeQueuedMessageEditId
         ? resumedEditCandidate
