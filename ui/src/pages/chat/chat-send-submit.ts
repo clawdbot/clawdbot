@@ -442,6 +442,9 @@ export async function handleSendChat(
 
   const requestedEditId = opts?.resumeQueuedMessageEditId;
   const inlineEdit = requestedEditId ? activeQueuedMessageEdit(host) : null;
+  if (requestedEditId != null && !inlineEdit) {
+    return;
+  }
   const isInlineEditSubmission = requestedEditId != null && inlineEdit?.id === requestedEditId;
   const replyTarget = isInlineEditSubmission ? null : host.chatReplyTarget;
   // Persisted ids use replyToId; synthetic replies fall back to a quote.
@@ -519,13 +522,19 @@ export async function handleSendChat(
       host,
       submittedSessionKey,
       queued,
-      resumedEdit?.id,
+      resumedEdit
+        ? {
+            id: resumedEdit.id,
+            expected: resumedEdit.source,
+          }
+        : undefined,
     );
     if (resumedEdit) {
-      retireEditedQueuedMessageSource(host, admittedDurably, queued.attachments);
+      retireEditedQueuedMessageSource(host, admittedDurably, queued.attachments, resumedEdit);
     }
     const canSendFromMemory =
       !admittedDurably &&
+      (!resumedEdit || !resumedEdit.sourceWasDurable) &&
       // A still-open edit means its stored source outlived the rejected write;
       // sending the replacement from memory would strand the original as a duplicate.
       !activeQueuedMessageEdit(host) &&

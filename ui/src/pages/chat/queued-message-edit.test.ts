@@ -146,6 +146,45 @@ describe("queued message edit round-trip", () => {
     unsubscribe();
   });
 
+  it("rejects a stale second-pane replacement after the source is retired", async () => {
+    const paneA = makeChatHost({ sessionKey: SESSION_KEY, connected: false });
+    const paneB = makeChatHost({ sessionKey: SESSION_KEY, connected: false });
+    const unsubscribeA = subscribeChatOutboxProjection(paneA as never);
+    let unsubscribeB = subscribeChatOutboxProjection(paneB as never);
+    expect(
+      admitQueuedMessageForSession(paneA as never, SESSION_KEY, {
+        id: "queued-1",
+        text: "message 1",
+        createdAt: 1_000,
+        sendState: "waiting-reconnect",
+        sessionKey: SESSION_KEY,
+      }),
+    ).toBe(true);
+
+    // Model a pane that captured the edit before it was detached from the shared owner.
+    expect(beginQueuedMessageEdit(paneB as never, "queued-1")).toBe("started");
+    unsubscribeB();
+
+    expect(beginQueuedMessageEdit(paneA as never, "queued-1")).toBe("started");
+    updateQueuedMessageEdit(paneA as never, "message 1, corrected");
+    await handleSendChat(paneA as never, "message 1, corrected", {
+      attachmentsOverride: [],
+      resumeQueuedMessageEditId: "queued-1",
+    });
+
+    unsubscribeB = subscribeChatOutboxProjection(paneB as never);
+    expect(beginQueuedMessageEdit(paneB as never, "queued-1")).toBe("unavailable");
+    await handleSendChat(paneB as never, "message 1, corrected", {
+      attachmentsOverride: [],
+      resumeQueuedMessageEditId: "queued-1",
+    });
+
+    expect(storedOrder(paneA)).toEqual(["message 1, corrected"]);
+    expect(listStoredChatOutboxes(paneA as never)[0]?.queue).toHaveLength(1);
+    unsubscribeA();
+    unsubscribeB();
+  });
+
   it("aborts a replacement when its edit is cancelled during history loading", async () => {
     const history = createDeferred<{ messages: unknown[] }>();
     const { host, unsubscribe } = queueHost([{}], {

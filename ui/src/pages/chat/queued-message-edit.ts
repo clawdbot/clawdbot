@@ -1,6 +1,6 @@
 // Control UI chat module owns editing a queued message in its queue row.
 import { chatQueueOrderKey, isMovableChatQueueItem } from "../../lib/chat/chat-queue-order.ts";
-import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import {
@@ -25,6 +25,8 @@ export type QueuedMessageEdit = {
   orderKey: number;
   replyToId?: string;
   sessionKey: string;
+  source: ChatQueueItem;
+  sourceWasDurable: boolean;
 };
 
 type QueuedMessageEditHost = ChatQueueScopedSessionHost & {
@@ -67,7 +69,8 @@ export function beginQueuedMessageEdit(
     !item ||
     !isMovableChatQueueItem(item) ||
     item.localCommandName ||
-    activeQueuedMessageEdit(host)
+    activeQueuedMessageEdit(host) ||
+    isQueuedMessageBeingEdited(host, id)
   ) {
     return "unavailable";
   }
@@ -84,6 +87,8 @@ export function beginQueuedMessageEdit(
     orderKey: chatQueueOrderKey(item),
     ...(item.replyToId ? { replyToId: item.replyToId } : {}),
     sessionKey: host.sessionKey,
+    source: { ...item },
+    sourceWasDurable: isDurableQueuedMessage(host, id),
   };
   return "started";
 }
@@ -124,8 +129,12 @@ export function retireEditedQueuedMessageSource(
   host: QueuedMessageEditHost,
   admittedDurably: boolean,
   nextAttachments: readonly ChatAttachment[] = [],
+  editOverride?: QueuedMessageEdit,
 ): void {
-  const edit = activeQueuedMessageEdit(host);
+  const edit = editOverride ?? activeQueuedMessageEdit(host);
+  if (editOverride && host.chatQueuedEdit !== edit) {
+    return;
+  }
   if (!edit || (!admittedDurably && isDurableQueuedMessage(host, edit.id))) {
     return;
   }

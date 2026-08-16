@@ -15,6 +15,7 @@ import {
   resolveStoredChatOutboxScope,
   updateStoredChatComposerQueueItem,
   updateStoredChatComposerQueueItems,
+  type StoredChatQueueReplacement,
   type ChatComposerScope,
   type StoredChatOutbox,
   type StoredChatOutboxScope,
@@ -346,12 +347,12 @@ export function admitQueuedMessageForSession(
   host: ChatQueueScopedSessionHost,
   sessionKey: string,
   item: ChatQueueItem,
-  replacesId?: string,
+  replaces?: StoredChatQueueReplacement,
 ): boolean {
   const owner = chatOutboxOwner(host);
   const scope = resolveStoredChatOutboxScope(host, sessionKey, item.agentId);
   owner.keep(host, scope, item);
-  if (!admitStoredChatComposerQueueItem(host, sessionKey, item, item.agentId, replacesId)) {
+  if (!admitStoredChatComposerQueueItem(host, sessionKey, item, item.agentId, replaces)) {
     return false;
   }
   if (item.sendState !== "waiting-model") {
