@@ -318,4 +318,53 @@ describe("openai completions params", () => {
 
     expect(params.max_completion_tokens).toBe(200_000);
   });
+
+  it("does not count reasoning replay fields toward the input token estimate for proxy-like endpoints", () => {
+    // Regression: reasoning_content/reasoning_details accumulate across turns
+    // in long sessions with reasoning models. Counting them inflates the
+    // estimate beyond contextTokens, clamping maxTokens to 1.
+    const bigReasoning = "x".repeat(400_000);
+    const params = buildOpenAICompletionsParams(
+      makeCompletionsModel({
+        id: "glm-5.2",
+        name: "GLM-5.2",
+        provider: "vllm",
+        baseUrl: "http://localhost:8000/v1",
+        reasoning: true,
+        contextWindow: 380_000,
+        contextTokens: 380_000,
+        maxTokens: 16_000,
+      }),
+      {
+        messages: [
+          { role: "user", content: "hello", timestamp: 1 },
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "hi" }],
+            reasoning_content: bigReasoning,
+            api: "openai-completions",
+            provider: "vllm",
+            model: "glm-5.2",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "stop",
+            timestamp: 2,
+          },
+        ],
+        tools: [],
+      } as never,
+      undefined,
+    );
+
+    // maxTokens should NOT be clamped to 1 — the 400K chars of reasoning_content
+    // must not count toward the input estimate.
+    expect(params.max_completion_tokens).toBeGreaterThan(1);
+    expect(params.max_completion_tokens).toBe(16_000);
+  });
 });
