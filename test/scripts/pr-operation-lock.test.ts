@@ -639,6 +639,35 @@ describe("scripts/pr process-group platform guard", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("use WSL on Windows");
   });
+  it.runIf(process.platform !== "win32")(
+    "preserves the child status when the completion marker cannot be written",
+    async () => {
+      const repoDir = createRepo();
+      const fixture = writeFixtureFile(repoDir, "closed-completion-fd.sh", [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        `source '${lockScript}'`,
+        "exit 7",
+      ]);
+      chmodSync(fixture, 0o755);
+      const child = spawnDetached("bash", [fixture], {
+        cwd: repoDir,
+        env: {
+          ...process.env,
+          OPENCLAW_PR_DEDICATED_PROCESS_GROUP: "1",
+          OPENCLAW_PR_LOCK_NOTIFY_FD: "3",
+          OPENCLAW_PR_LOCK_SUPERVISOR_PID: String(process.pid),
+        },
+        stdio: "ignore",
+      });
+      try {
+        await waitForExit(child);
+        expect(child.exitCode).toBe(7);
+      } finally {
+        await cleanupChildren(child);
+      }
+    },
+  );
 });
 
 const describePosix = process.platform === "win32" ? describe.skip : describe;
@@ -1296,7 +1325,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
     expect(refOid(repoDir)).toBe(ownerOid);
     recoverOperationLock(repoDir, ownerOid);
   });
-  it("uses successful command return as the trusted completion contract", async () => {
+  it("releases after leader completion despite an fd-closing detached daemon", async () => {
     const repoDir = createRepo();
     const daemonPidFile = join(repoDir, "unrelated-daemon-pgid");
     const daemonScript = writeFixtureFile(
@@ -1395,7 +1424,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
       await cleanupRecordedProcessGroup(nestedPidFile, nestedPgid);
     }
   });
-  it("warns and releases a clean-exit lock when an escaped child keeps the notification pipe open", async () => {
+  it("warns and releases after leader completion when an escaped child keeps the notification pipe open", async () => {
     const repoDir = createRepo();
     const operationPgidFile = join(repoDir, "clean-pipe-holder-operation-pgid");
     const holderPidFile = join(repoDir, "clean-pipe-holder-pgid");
@@ -1423,6 +1452,38 @@ describePosix("scripts/pr per-PR operation lock", () => {
     expect(result.stderr).toContain("Warning:");
     expect(result.stderr).toContain("group=dead, pipe=open");
     expect(result.stderr).toContain("#124583");
+  }, 15_000);
+  it("retains a clean-exit lock when the leader completion marker is suppressed", async () => {
+    const repoDir = createRepo();
+    const holderPidFile = join(repoDir, "suppressed-completion-holder-pgid");
+    escapedPipeHolderPidFiles.add(holderPidFile);
+    const launcherScript = writeEscapedPipeHolderLauncher(repoDir, holderPidFile);
+    let holderPgid: number | undefined;
+    try {
+      const result = await runSupervisedOperation(
+        repoDir,
+        "suppressed-completion-operation.sh",
+        ["acquire_pr_operation_lock 42", "trap - EXIT", `node '${launcherScript}'`],
+        { accelerateTimeouts: true },
+      );
+      holderPgid = await waitForProcessId(holderPidFile);
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
+      expect(processGroupExists(holderPgid)).toBe(true);
+      const ownerOid = refOid(repoDir);
+      expect(result.stderr).toContain("reason: notification pipe still open after drain deadline");
+      expect(result.stderr).toContain(
+        "scripts/pr operation lifetime did not drain (group=dead, pipe=open)",
+      );
+      expect(result.stderr).not.toContain("Warning:");
+      const blocked = probeOperationLock(repoDir);
+      expect(blocked.status, `${blocked.stdout}\n${blocked.stderr}`).toBe(0);
+      expect(blocked.stdout.trim()).toBe("2");
+      killProcessGroup(holderPgid, "SIGKILL");
+      expect(await waitFor(() => !processGroupExists(holderPgid!))).toBe(true);
+      recoverOperationLock(repoDir, ownerOid);
+    } finally {
+      await cleanupRecordedProcessGroup(holderPidFile, holderPgid);
+    }
   }, 15_000);
   it("retains a failed side-effects lock when an escaped child keeps the notification pipe open", async () => {
     const repoDir = createRepo();

@@ -54,6 +54,7 @@ let drainFailure;
 let drainFailureGroupStatus;
 let drainFailureNotificationOpen = false;
 let validationPhaseState = "unannounced";
+let operationCompleteReceived = false;
 
 function delay(ms) {
   return new Promise((resolveDelay) => {
@@ -214,6 +215,14 @@ if (killDeadline) {
 }
 
 function consumeNotificationLine(line) {
+  if (operationCompleteReceived) {
+    notificationFailure ??= new Error("scripts/pr emitted metadata after operation completion");
+    return;
+  }
+  if (line === "phase\toperation-complete") {
+    operationCompleteReceived = true;
+    return;
+  }
   if (line === "phase\tvalidation-started") {
     // The FD is inherited by descendants, so phase messages are monotonic:
     // no later writer may reopen validation after side effects have started.
@@ -337,6 +346,9 @@ const childResult = await new Promise((resolveResult) => {
 });
 
 function childResultAllowsLockRelease() {
+  if (!operationCompleteReceived) {
+    return false;
+  }
   const completedCleanly =
     childResult.code === 0 &&
     !receivedSignal &&
@@ -384,9 +396,9 @@ async function waitForOperationDrain() {
       return "drained";
     }
     if (killDeadline && Date.now() >= killDeadline) {
-      // The pipe sentinel is best-effort because fd-closing daemonizers evade it.
-      // Exit 0 is the trusted synchronous-completion contract per scripts/AGENTS.md;
-      // inherited-fd innocents must not block landings (#124583).
+      // Release needs the leader's post-join completion marker (ClawSweeper P1, PR #124614).
+      // The pipe is diagnostic; a clean escapee has the same residual blind spot as an
+      // fd-closing daemonizer already has on main (#124583).
       if (
         groupStatus === "dead" &&
         !notificationEnded &&
@@ -545,6 +557,9 @@ if (drainResult === "drained-with-open-pipe") {
     notificationFailure ??= drainFailure;
   }
   notificationStream.destroy();
+}
+if (drained && !operationCompleteReceived) {
+  notificationFailure ??= new Error("scripts/pr leader completion marker was not received");
 }
 
 if (escalationTimer) {
