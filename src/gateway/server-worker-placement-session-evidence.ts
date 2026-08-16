@@ -1,6 +1,7 @@
 import { getRuntimeConfig } from "../config/config.js";
 import type { SessionStoreTargetsReadCache } from "../config/sessions/targets-read-availability.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   isIncognitoSessionKey,
   normalizeAgentId,
@@ -14,6 +15,8 @@ import type {
   PlacementSessionEvidence,
   PlacementSessionEvidenceResolver,
 } from "./worker-environments/placement-session-retirement.js";
+
+const log = createSubsystemLogger("gateway/placement-session-evidence");
 
 const loadPlacementSessionEvidenceRuntime = createLazyRuntimeModule(async () => {
   const [sessionTargetsReadAvailability, sessionAccessor] = await Promise.all([
@@ -138,7 +141,12 @@ export async function createWorkerPlacementSessionEvidenceResolver(
       }
     }
     return async (placement) => evidenceByPlacement.get(placement) ?? "unknown";
-  } catch {
+  } catch (error) {
+    // "unknown" keeps retirement fail-open, but a silent catch would hide a broken
+    // evidence pipeline (bad config, store corruption) behind indefinite retention.
+    log.warn("worker placement session evidence resolution failed; treating all as unknown", {
+      error,
+    });
     return async () => "unknown";
   }
 }
