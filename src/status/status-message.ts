@@ -803,11 +803,9 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   // snapshot only when it belongs to a real fallback/equivalent runtime. A
   // transcript-derived previous model is stale after a manual switch and must
   // not pin the newly selected model to the old context window. Separately,
-  // callers can pass an explicit configured cap that should still apply on
-  // fallback paths, but it cannot exceed the active runtime window when that
-  // window is known. Persisted runtime snapshots still take precedence over
-  // model metadata so historical fallback sessions keep their last known live
-  // limit even if the active model later becomes unresolvable.
+  // Persisted runtime snapshots still take precedence over model metadata so
+  // historical fallback sessions keep their last known live limit even if the
+  // active model later becomes unresolvable.
   const contextTokens = runtimeDiffersFromSelected
     ? (() => {
         if (!runtimeSnapshotHasFallbackProvenance) {
@@ -842,19 +840,20 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
         return DEFAULT_CONTEXT_TOKENS;
       })()
     : (() => {
-        const resolved =
-          resolveContextTokensForModel({
-            cfg: contextConfig,
-            ...(contextLookupProvider ? { provider: contextLookupProvider } : {}),
-            model: contextLookupModel,
-            fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
-            allowAsyncLoad: false,
-          }) ?? DEFAULT_CONTEXT_TOKENS;
+        const resolved = resolveContextTokensForModel({
+          cfg: contextConfig,
+          ...(contextLookupProvider ? { provider: contextLookupProvider } : {}),
+          model: contextLookupModel,
+          allowAsyncLoad: false,
+        });
         const runtimeLimit =
           channelOverrideContextTokens ??
           cappedPersistedContextTokens ??
           explicitRuntimeContextTokens;
-        return runtimeLimit === undefined ? resolved : Math.min(runtimeLimit, resolved);
+        if (runtimeLimit === undefined) {
+          return resolved ?? DEFAULT_CONTEXT_TOKENS;
+        }
+        return resolved === undefined ? runtimeLimit : Math.min(runtimeLimit, resolved);
       })();
 
   const thinkLevel =
