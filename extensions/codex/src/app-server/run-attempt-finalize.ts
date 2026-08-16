@@ -30,7 +30,10 @@ import {
 } from "./run-attempt-state.js";
 import type { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
-import { captureCodexSettledTurnFinalizationContext } from "./settled-turn-context.js";
+import {
+  bindCodexSettledTurnFinalizationRejectionReceipt,
+  captureCodexSettledTurnFinalizationContext,
+} from "./settled-turn-context.js";
 import { normalizeCodexTrajectoryError, recordCodexTrajectoryCompletion } from "./trajectory.js";
 import { codexTranscriptMirrorRuntime } from "./transcript-mirror.js";
 import {
@@ -326,7 +329,7 @@ export async function finalizeCodexAttempt(
     result.assistantTexts.every((text) => !text.trim()) &&
     result.messagesSnapshot.some((message) => message.role === "toolResult") &&
     (!finalPromptError || activeProjector.settledTurnFailureFinalizationAllowed);
-  const settledTurnFinalizationContext = shouldCaptureSettledTurnFinalizationContext
+  const settledTurnFinalizationCapture = shouldCaptureSettledTurnFinalizationContext
     ? await captureCodexSettledTurnFinalizationContext({
         ...activeTranscriptTarget,
         mirroredMessages: mirrorOutcome.mirroredMessages,
@@ -334,13 +337,25 @@ export async function finalizeCodexAttempt(
         turnId: activeTurnId,
       })
     : undefined;
-  if (shouldCaptureSettledTurnFinalizationContext && !settledTurnFinalizationContext) {
+  const settledTurnFinalizationContext = settledTurnFinalizationCapture?.ok
+    ? settledTurnFinalizationCapture.context
+    : undefined;
+  if (
+    shouldCaptureSettledTurnFinalizationContext &&
+    settledTurnFinalizationCapture &&
+    !settledTurnFinalizationCapture.ok
+  ) {
     // The isolated child must not infer around a partial or drifting transcript.
     // Omitting this field preserves the existing incomplete-turn failure.
-    embeddedAgentLog.warn("codex settled-turn finalization context is unavailable", {
-      threadId: resourceState.thread.threadId,
-      turnId: activeTurnId,
-    });
+    embeddedAgentLog.warn(
+      "codex settled-turn finalization context is unavailable",
+      bindCodexSettledTurnFinalizationRejectionReceipt({
+        reason: settledTurnFinalizationCapture.reason,
+        threadId: resourceState.thread.threadId,
+        turnId: activeTurnId,
+        runId: params.runId,
+      }),
+    );
   }
   runAgentHarnessLlmOutputHook({
     event: {

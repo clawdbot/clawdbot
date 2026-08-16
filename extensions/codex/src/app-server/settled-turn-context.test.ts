@@ -1,6 +1,10 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { captureCodexSettledTurnFinalizationContext } from "./settled-turn-context.js";
+import {
+  bindCodexSettledTurnFinalizationRejectionReceipt,
+  captureCodexSettledTurnFinalizationContext,
+  type CodexSettledTurnFinalizationRejectionReason,
+} from "./settled-turn-context.js";
 import { attachCodexMirrorAttestation } from "./transcript-mirror-attestation.js";
 import {
   attachCodexMirrorIdentity,
@@ -94,32 +98,44 @@ describe("captureCodexSettledTurnFinalizationContext", () => {
     const later = message({ role: "user", content: "later message" }, "turn-3:prompt");
     const historyMessages = [prior, ...settledMessages, later];
 
-    const context = await captureContext({
+    const result = await captureContext({
       historyMessages,
       mirroredMessages: settledMessages,
       settledMessages,
       turnId: "turn-2",
     });
-
-    expect(context).toEqual({
-      source: "openclaw-transcript",
+    const expected = {
+      source: "openclaw-transcript" as const,
       messages: [prior, ...settledMessages],
-    });
-    expect(Object.isFrozen(context?.messages)).toBe(true);
-    expect(context?.messages).not.toBe(historyMessages);
+    };
+
+    expect(result).toEqual({ ok: true, context: expected });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(JSON.stringify(result.context)).toBe(JSON.stringify(expected));
+    expect(Object.isFrozen(result.context.messages)).toBe(true);
+    expect(result.context.messages).not.toBe(historyMessages);
   });
 
   it("adopts an exact host-persisted prompt without rewriting its canonical metadata", async () => {
     const { persistedPrompt, ...turn } = settledHostPromptTurn();
 
-    const context = await captureContext(turn);
+    const result = await captureContext(turn);
+    const expected = { source: "openclaw-transcript" as const, messages: turn.historyMessages };
 
-    expect(context).toEqual({ source: "openclaw-transcript", messages: turn.historyMessages });
-    expect(Object.isFrozen(context?.messages)).toBe(true);
-    expect(context?.messages[0]).toEqual(persistedPrompt);
-    expect(readMirrorIdentity(context!.messages[0]!)).toBeUndefined();
-    expect(readUpstreamUserText(context!.messages[0]!)).toBeUndefined();
-    expect(context?.messages[0]).toMatchObject({
+    expect(result).toEqual({ ok: true, context: expected });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(JSON.stringify(result.context)).toBe(JSON.stringify(expected));
+    expect(Object.isFrozen(result.context.messages)).toBe(true);
+    expect(result.context.messages[0]).toEqual(persistedPrompt);
+    expect(readMirrorIdentity(result.context.messages[0]!)).toBeUndefined();
+    expect(readUpstreamUserText(result.context.messages[0]!)).toBeUndefined();
+    expect(result.context.messages[0]).toMatchObject({
       __openclaw: { senderIsOwner: true, transport: { messageId: "transport-message" } },
     });
   });
@@ -154,83 +170,134 @@ describe("captureCodexSettledTurnFinalizationContext", () => {
     const turn = settledHostPromptTurn();
     turn.historyMessages[0] = change(turn.persistedPrompt) as AgentMessage;
 
-    await expect(captureContext(turn)).resolves.toBeUndefined();
+    await expect(captureContext(turn)).resolves.toEqual({
+      ok: false,
+      reason: "mirror-boundary-order",
+    });
   });
 
   it("rejects duplicate host-persisted prompt idempotency keys", async () => {
     const turn = settledHostPromptTurn();
     turn.historyMessages.unshift({ ...turn.persistedPrompt });
 
-    await expect(captureContext(turn)).resolves.toBeUndefined();
+    await expect(captureContext(turn)).resolves.toEqual({
+      ok: false,
+      reason: "mirror-boundary-order",
+    });
   });
 
   it.each([
     {
-      name: "missing current prompt",
-      settledMessages: settledTurn().slice(1),
-      historyMessages: settledTurn(),
-    },
-    {
-      name: "missing current tool call",
+      name: "missing history",
+      reason: "missing-history" as const,
+      historyMessages: undefined,
+      mirroredMessages: settledTurn(),
       settledMessages: settledTurn(),
-      historyMessages: [settledTurn()[0]!, settledTurn()[2]!],
-    },
-    {
-      name: "duplicate persisted identity",
-      settledMessages: settledTurn(),
-      historyMessages: [...settledTurn(), settledTurn()[2]!],
     },
     {
       name: "foreign boundary turn",
-      settledMessages: settledTurn(),
+      reason: "missing-boundary-identity" as const,
       historyMessages: settledTurn(),
+      mirroredMessages: settledTurn(),
+      settledMessages: settledTurn(),
       turnId: "turn-3",
     },
-  ])("fails closed for $name", async ({ settledMessages, historyMessages, turnId }) => {
-    await expect(
-      captureContext({
-        historyMessages,
-        mirroredMessages: settledMessages,
+    {
+      name: "missing current prompt",
+      reason: "required-identity-shape" as const,
+      historyMessages: settledTurn(),
+      mirroredMessages: settledTurn().slice(1),
+      settledMessages: settledTurn().slice(1),
+    },
+    {
+      name: "duplicate persisted identity",
+      reason: "duplicate-history-identity" as const,
+      historyMessages: [...settledTurn(), settledTurn()[2]!],
+      mirroredMessages: settledTurn(),
+      settledMessages: settledTurn(),
+    },
+    {
+      name: "duplicate mirrored identity",
+      reason: "duplicate-mirror-identity" as const,
+      historyMessages: settledTurn(),
+      mirroredMessages: [...settledTurn(), settledTurn()[2]!],
+      settledMessages: settledTurn(),
+    },
+    {
+      name: "reordered mirrored messages",
+      reason: "mirror-boundary-order" as const,
+      historyMessages: settledTurn(),
+      mirroredMessages: (() => {
+        const settledMessages = settledTurn();
+        return [settledMessages[1]!, settledMessages[0]!, settledMessages[2]!];
+      })(),
+      settledMessages: settledTurn(),
+    },
+    {
+      name: "missing history boundary",
+      reason: "history-boundary" as const,
+      historyMessages: settledTurn().slice(0, 2),
+      mirroredMessages: settledTurn(),
+      settledMessages: settledTurn(),
+    },
+    {
+      name: "reordered history through the boundary",
+      reason: "history-boundary-order" as const,
+      historyMessages: (() => {
+        const settledMessages = settledTurn();
+        return [settledMessages[0]!, settledMessages[2]!, settledMessages[1]!];
+      })(),
+      mirroredMessages: settledTurn(),
+      settledMessages: settledTurn(),
+    },
+    {
+      name: "persisted payload drift under the same identity",
+      reason: "source-evidence-mismatch" as const,
+      historyMessages: (() => {
+        const historyMessages = settledTurn();
+        historyMessages[2] = message(
+          {
+            role: "toolResult",
+            toolCallId: "call-2",
+            toolName: "message",
+            content: [{ type: "text", text: "different result" }],
+          },
+          "turn-2:tool:call-2:result",
+        );
+        return historyMessages;
+      })(),
+      mirroredMessages: settledTurn(),
+      settledMessages: settledTurn(),
+    },
+  ] satisfies Array<{
+    name: string;
+    reason: CodexSettledTurnFinalizationRejectionReason;
+    historyMessages: AgentMessage[] | undefined;
+    mirroredMessages: AgentMessage[];
+    settledMessages: AgentMessage[];
+    turnId?: string;
+  }>)(
+    "rejects $name with $reason",
+    async ({ reason, historyMessages, mirroredMessages, settledMessages, turnId }) => {
+      if (historyMessages === undefined) {
+        mocks.readHistory.mockResolvedValue(undefined);
+      } else {
+        mocks.readHistory.mockResolvedValue(historyMessages);
+      }
+      const result = await captureCodexSettledTurnFinalizationContext({
+        sessionFile: "/tmp/session.jsonl",
+        sessionId: "session-1",
+        mirroredMessages,
         settledMessages,
         turnId: turnId ?? "turn-2",
-      }),
-    ).resolves.toBeUndefined();
-  });
-
-  it("fails closed when a persisted payload drifts under the same mirror identity", async () => {
-    const settledMessages = settledTurn();
-    const historyMessages = settledTurn();
-    historyMessages[2] = message(
-      {
-        role: "toolResult",
-        toolCallId: "call-2",
-        toolName: "message",
-        content: [{ type: "text", text: "different result" }],
-      },
-      "turn-2:tool:call-2:result",
-    );
-
-    await expect(
-      captureContext({
-        historyMessages,
-        mirroredMessages: settledMessages,
-        settledMessages,
-        turnId: "turn-2",
-      }),
-    ).resolves.toBeUndefined();
-  });
-
-  it("fails closed when current mirrored messages are reordered", async () => {
-    const settledMessages = settledTurn();
-    await expect(
-      captureContext({
-        historyMessages: settledMessages,
-        mirroredMessages: [settledMessages[1]!, settledMessages[0]!, settledMessages[2]!],
-        settledMessages,
-        turnId: "turn-2",
-      }),
-    ).resolves.toBeUndefined();
-  });
+      });
+      expect(result).toEqual({ ok: false, reason });
+      expect(result).not.toHaveProperty("context");
+      expect(JSON.stringify(result)).not.toMatch(
+        /Send it|different result|session\.jsonl|session-1|arguments/,
+      );
+    },
+  );
 
   it("contains transcript read failures after tools have settled", async () => {
     mocks.readHistory.mockRejectedValue(new Error("read failed"));
@@ -243,7 +310,7 @@ describe("captureCodexSettledTurnFinalizationContext", () => {
         settledMessages: settledTurn(),
         turnId: "turn-2",
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ ok: false, reason: "capture-error" });
   });
 
   it("contains transcript clone failures after tools have settled", async () => {
@@ -259,6 +326,25 @@ describe("captureCodexSettledTurnFinalizationContext", () => {
         settledMessages: historyMessages,
         turnId: "turn-2",
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ ok: false, reason: "capture-error" });
+  });
+
+  it("binds rejection receipts to reason and existing identities only", () => {
+    const receipt = bindCodexSettledTurnFinalizationRejectionReceipt({
+      reason: "source-evidence-mismatch",
+      threadId: "thread-1",
+      turnId: "turn-2",
+      runId: "run-9",
+    });
+    expect(Object.keys(receipt).sort()).toEqual(["reason", "runId", "threadId", "turnId"]);
+    expect(receipt).toEqual({
+      reason: "source-evidence-mismatch",
+      threadId: "thread-1",
+      turnId: "turn-2",
+      runId: "run-9",
+    });
+    expect(JSON.stringify(receipt)).not.toMatch(
+      /Send it|different result|session\.jsonl|toolCall|arguments|content/,
+    );
   });
 });

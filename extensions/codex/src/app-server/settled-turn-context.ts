@@ -21,6 +21,45 @@ import {
 
 type SettledTurnFinalizationContext = EmbeddedRunAttemptResult["settledTurnFinalizationContext"];
 
+/** Closed capture-rejection codes. Do not add payload, paths, or evidence. */
+export type CodexSettledTurnFinalizationRejectionReason =
+  | "missing-history"
+  | "missing-boundary-identity"
+  | "required-identity-shape"
+  | "duplicate-history-identity"
+  | "duplicate-mirror-identity"
+  | "mirror-boundary-order"
+  | "history-boundary"
+  | "history-boundary-order"
+  | "source-evidence-mismatch"
+  | "capture-error";
+
+export type CodexSettledTurnFinalizationCaptureResult =
+  | { ok: true; context: SettledTurnFinalizationContext }
+  | { ok: false; reason: CodexSettledTurnFinalizationRejectionReason };
+
+export type CodexSettledTurnFinalizationRejectionReceipt = {
+  reason: CodexSettledTurnFinalizationRejectionReason;
+  threadId: string;
+  turnId: string;
+  runId?: string;
+};
+
+/** Caller warning fields: reason plus existing thread/turn/run identities only. */
+export function bindCodexSettledTurnFinalizationRejectionReceipt(params: {
+  reason: CodexSettledTurnFinalizationRejectionReason;
+  threadId: string;
+  turnId: string;
+  runId?: string;
+}): CodexSettledTurnFinalizationRejectionReceipt {
+  return {
+    reason: params.reason,
+    threadId: params.threadId,
+    turnId: params.turnId,
+    ...(params.runId ? { runId: params.runId } : {}),
+  };
+}
+
 function collectUniqueMessageIdentities(
   messages: readonly AgentMessage[],
 ): Map<string, number> | undefined {
@@ -104,7 +143,7 @@ function buildCodexSettledTurnFinalizationContext(params: {
   mirroredMessages: readonly AgentMessage[];
   settledMessages: readonly AgentMessage[];
   turnId: string;
-}): SettledTurnFinalizationContext | undefined {
+}): CodexSettledTurnFinalizationCaptureResult {
   const { historyMessages, mirroredMessages } = adoptPersistedHostPrompt(params);
   const boundaryMessage = params.settledMessages.findLast(
     (message) => message.role === "toolResult",
@@ -115,7 +154,7 @@ function buildCodexSettledTurnFinalizationContext(params: {
     !boundaryIdentity ||
     !boundaryIdentity.startsWith(`${params.turnId}:tool:`)
   ) {
-    return undefined;
+    return { ok: false, reason: "missing-boundary-identity" };
   }
 
   const settledBoundaryIndex = params.settledMessages.indexOf(boundaryMessage);
@@ -128,17 +167,20 @@ function buildCodexSettledTurnFinalizationContext(params: {
     new Set(requiredIdentities).size !== requiredIdentities.length ||
     !requiredIdentities.includes(`${params.turnId}:prompt`)
   ) {
-    return undefined;
+    return { ok: false, reason: "required-identity-shape" };
   }
 
   const historyIdentities = collectUniqueMessageIdentities(historyMessages);
+  if (!historyIdentities) {
+    return { ok: false, reason: "duplicate-history-identity" };
+  }
   const mirroredIdentities = collectUniqueMessageIdentities(mirroredMessages);
-  if (!historyIdentities || !mirroredIdentities) {
-    return undefined;
+  if (!mirroredIdentities) {
+    return { ok: false, reason: "duplicate-mirror-identity" };
   }
   const mirroredBoundaryIndex = mirroredIdentities.get(boundaryIdentity);
   if (mirroredBoundaryIndex === undefined) {
-    return undefined;
+    return { ok: false, reason: "mirror-boundary-order" };
   }
   const mirroredThroughBoundary = mirroredMessages.slice(0, mirroredBoundaryIndex + 1);
   if (
@@ -147,11 +189,11 @@ function buildCodexSettledTurnFinalizationContext(params: {
       (message, index) => readMirrorIdentity(message) !== requiredIdentities[index],
     )
   ) {
-    return undefined;
+    return { ok: false, reason: "mirror-boundary-order" };
   }
   const historyBoundaryIndex = historyIdentities.get(boundaryIdentity);
   if (historyBoundaryIndex === undefined) {
-    return undefined;
+    return { ok: false, reason: "history-boundary" };
   }
   let previousHistoryIndex = -1;
   for (const mirroredMessage of mirroredThroughBoundary) {
@@ -162,11 +204,15 @@ function buildCodexSettledTurnFinalizationContext(params: {
       historyIndex === undefined ||
       historyIndex <= previousHistoryIndex ||
       historyIndex > historyBoundaryIndex ||
-      !historyMessage ||
-      serializeCodexMirrorSourceEvidence(historyMessage) !==
-        serializeCodexMirrorSourceEvidence(mirroredMessage)
+      !historyMessage
     ) {
-      return undefined;
+      return { ok: false, reason: "history-boundary-order" };
+    }
+    if (
+      serializeCodexMirrorSourceEvidence(historyMessage) !==
+      serializeCodexMirrorSourceEvidence(mirroredMessage)
+    ) {
+      return { ok: false, reason: "source-evidence-mismatch" };
     }
     previousHistoryIndex = historyIndex;
   }
@@ -176,7 +222,7 @@ function buildCodexSettledTurnFinalizationContext(params: {
   const messages = Object.freeze(
     structuredClone(params.historyMessages.slice(0, historyBoundaryIndex + 1)),
   );
-  return { source: "openclaw-transcript", messages };
+  return { ok: true, context: { source: "openclaw-transcript", messages } };
 }
 
 /** Reads and freezes the current active transcript branch after mirroring has settled. */
@@ -186,11 +232,11 @@ export async function captureCodexSettledTurnFinalizationContext(
     settledMessages: readonly AgentMessage[];
     turnId: string;
   },
-): Promise<SettledTurnFinalizationContext | undefined> {
+): Promise<CodexSettledTurnFinalizationCaptureResult> {
   try {
     const historyMessages = await readCodexMirroredSessionHistoryMessages(params);
     if (!historyMessages) {
-      return undefined;
+      return { ok: false, reason: "missing-history" };
     }
     return buildCodexSettledTurnFinalizationContext({
       historyMessages,
@@ -205,6 +251,6 @@ export async function captureCodexSettledTurnFinalizationContext(
       error: formatErrorMessage(error),
       turnId: params.turnId,
     });
-    return undefined;
+    return { ok: false, reason: "capture-error" };
   }
 }
