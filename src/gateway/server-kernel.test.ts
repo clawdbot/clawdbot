@@ -18,6 +18,87 @@ import { createGatewayKernel } from "./server-kernel.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 
 describe("createGatewayKernel", () => {
+  it("keeps readiness red until deferred startup unlocks chat dispatch", async () => {
+    const port = await getFreePort();
+    const state = await createOpenClawTestState({
+      label: "gateway-kernel-deferred-readiness",
+      layout: "home",
+      env: {
+        OPENCLAW_GATEWAY_PASSWORD: undefined,
+        OPENCLAW_GATEWAY_TOKEN: undefined,
+        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+        OPENCLAW_SKIP_CANVAS_HOST: "1",
+        OPENCLAW_SKIP_CHANNELS: "1",
+        OPENCLAW_SKIP_CRON: "1",
+        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+        OPENCLAW_SKIP_PROVIDERS: "1",
+        OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
+        VITEST: "1",
+      },
+    });
+    const token = "gateway-kernel-deferred-readiness-token";
+    let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
+    try {
+      await state.writeConfig({
+        gateway: {
+          auth: { mode: "token", token },
+          controlUi: { enabled: false },
+          port,
+        },
+      });
+      state.applyEnv();
+      kernel = await createGatewayKernel(port, {
+        auth: { mode: "token", token },
+        bind: "loopback",
+        controlUiEnabled: false,
+        sidecarStartup: "defer",
+      });
+
+      const client = createSyntheticPluginRuntimeClient({
+        scopes: [...CLI_DEFAULT_OPERATOR_SCOPES],
+      });
+      const dispatchOptions = {
+        client,
+        context: kernel.gatewayRequestContext,
+        methodRegistry: kernel.getAttachedGatewayMethodRegistry(),
+      };
+      const runId = "deferred-readiness-chat";
+      const chatParams = {
+        sessionKey: "agent:main:deferred-readiness",
+        message: "readiness truth",
+        idempotencyKey: runId,
+      };
+
+      const getReadiness = kernel.createHttpTransportOptions().getReadiness;
+      expect(getReadiness()).toMatchObject({
+        ready: false,
+        failing: ["startup-sidecars"],
+      });
+      await expect(
+        dispatchGatewayRequestInProcess("chat.send", chatParams, dispatchOptions),
+      ).rejects.toThrow("chat.send unavailable during gateway startup");
+
+      kernel.dedupe.set(`chat:${runId}`, {
+        ts: Date.now(),
+        ok: true,
+        payload: { runId, status: "ok" },
+      });
+      kernel.kernel.unlockStartupMethods();
+      kernel.kernel.markSidecarsReady();
+
+      expect(getReadiness()).toMatchObject({ ready: true, failing: [] });
+      await expect(
+        dispatchGatewayRequestInProcess("chat.send", chatParams, dispatchOptions),
+      ).resolves.toEqual({ runId, status: "ok" });
+    } finally {
+      try {
+        await kernel?.closeOnStartupFailure();
+      } finally {
+        await state.cleanup();
+      }
+    }
+  });
+
   it("dispatches health and an agent turn without creating a transport", async () => {
     const port = await getFreePort();
     const state = await createOpenClawTestState({
@@ -175,6 +256,7 @@ describe("createGatewayKernel", () => {
         "control-ui.root",
         "tls.runtime",
         "runtime.state",
+        "gateway.shutdown-runtime-import",
         "runtime.early",
         "runtime.early.discovery",
         "runtime.post-early-imports",

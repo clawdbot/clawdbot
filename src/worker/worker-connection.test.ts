@@ -9,8 +9,8 @@ import {
   type WorkerConnectParams,
   WORKER_PROTOCOL_FEATURES,
   WORKER_RPC_SET_VERSION,
+  WORKER_PUBLIC_INGRESS_PATH,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { WORKER_PUBLIC_INGRESS_PATH } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
   WorkerInferenceEventFrame,
   WorkerInferenceTerminalFrame,

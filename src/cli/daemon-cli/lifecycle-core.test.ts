@@ -234,23 +234,39 @@ describe("runServiceRestart token drift", () => {
     expectUnsupportedServiceCheckFailure();
   });
 
-  it("prints the container restart hint when restart is requested for a not-loaded service", async () => {
+  it("fails restart with the container hint when no service is installed", async () => {
     service.isLoaded.mockResolvedValue(false);
     vi.stubEnv("OPENCLAW_CONTAINER_HINT", "openclaw-demo-container");
 
-    await runServiceRestart({
-      serviceNoun: "Gateway",
-      service,
-      renderStartHints: () => [
-        "Restart the container or the service that manages it for openclaw-demo-container.",
-        "openclaw gateway install",
-      ],
-      opts: { json: false },
-    });
+    await expect(
+      runServiceRestart({
+        serviceNoun: "Gateway",
+        service,
+        renderStartHints: () => [
+          "Restart the container or the service that manages it for openclaw-demo-container.",
+          "openclaw gateway install",
+        ],
+        opts: { json: true },
+      }),
+    ).rejects.toThrow("__exit__:1");
 
-    expect(lifecycleRuntimeLogs).toContain("Gateway service not loaded.");
-    expect(lifecycleRuntimeLogs).toContain(
-      "Start with: Restart the container or the service that manages it for openclaw-demo-container.",
+    const payload = readJsonLog<{
+      action?: string;
+      ok?: boolean;
+      error?: string;
+      hints?: string[];
+      hintItems?: Array<{ kind: string; text: string }>;
+    }>();
+    expect(payload).toMatchObject({
+      action: "restart",
+      ok: false,
+      error: "Gateway service not loaded.",
+    });
+    expect(payload.hints).toContain(
+      "Restart the container or the service that manages it for openclaw-demo-container.",
+    );
+    expect(payload.hintItems).toContainEqual(
+      expect.objectContaining({ kind: "container-restart" }),
     );
   });
 
@@ -862,25 +878,27 @@ describe("runServiceRestart token drift", () => {
     expect(payload.error).toContain("launchctl kickstart failed: permission denied");
   });
 
-  it("falls back to not-loaded hints when start finds no install artifacts", async () => {
+  it("fails start with install hints when no service is installed", async () => {
     service.isLoaded.mockResolvedValue(false);
     service.readCommand.mockResolvedValue(null);
 
-    await runServiceStart({
-      serviceNoun: "Gateway",
-      service,
-      renderStartHints: () => ["openclaw gateway install"],
-      opts: { json: true },
-    });
+    await expect(
+      runServiceStart({
+        serviceNoun: "Gateway",
+        service,
+        renderStartHints: () => ["openclaw gateway install"],
+        opts: { json: true },
+      }),
+    ).rejects.toThrow("__exit__:1");
 
     const payload = readJsonLog<{
       ok?: boolean;
-      result?: string;
+      error?: string;
       hints?: string[];
       hintItems?: Array<{ kind: string; text: string }>;
     }>();
-    expect(payload.ok).toBe(true);
-    expect(payload.result).toBe("not-loaded");
+    expect(payload.ok).toBe(false);
+    expect(payload.error).toBe("Gateway service not loaded.");
     expect(payload.hints?.includes("openclaw gateway install")).toBe(true);
     expect(
       payload.hintItems?.some(

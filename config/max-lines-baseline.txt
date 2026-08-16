@@ -10,7 +10,6 @@ extensions/amazon-bedrock/stream.runtime.ts
 extensions/anthropic/index.test.ts
 extensions/anthropic/register.runtime.ts
 extensions/anthropic/session-catalog.test.ts
-extensions/anthropic/session-catalog.ts
 extensions/browser/src/browser-tool.test.ts
 extensions/browser/src/browser-tool.ts
 extensions/browser/src/browser/cdp.ts
@@ -65,7 +64,6 @@ extensions/codex/src/conversation-binding.test.ts
 extensions/codex/src/conversation-binding.ts
 extensions/codex/src/migration/provider.test.ts
 extensions/codex/src/migration/session-binding-sidecars.ts
-extensions/codex/src/session-catalog.test.ts
 extensions/codex/src/supervision-tools.ts
 extensions/comfy/image-generation-provider.test.ts
 extensions/comfy/workflow-runtime.ts
@@ -417,7 +415,6 @@ src/agents/system-prompt.ts
 src/agents/tool-display-common.ts
 src/agents/tool-loop-detection.test.ts
 src/agents/tool-search.test.ts
-src/agents/tools/computer-tool.ts
 src/agents/tools/cron-tool.test.ts
 src/agents/tools/image-generate-tool.test.ts
 src/agents/tools/image-generate-tool.ts
@@ -709,7 +706,6 @@ src/infra/backup-create.ts
 src/infra/clawhub-install-trust.ts
 src/infra/command-explainer/extract.ts
 src/infra/device-pairing.test.ts
-src/infra/device-pairing.ts
 src/infra/diagnostic-events.ts
 src/infra/exec-approval-forwarder.ts
 src/infra/exec-approvals-allow-always.test.ts

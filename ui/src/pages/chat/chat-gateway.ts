@@ -5,6 +5,7 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 // Control UI page module reconciles Chat Gateway events into Chat state.
 import { isUiGlobalSessionKey, resolveUiDefaultAgentId } from "../../lib/sessions/session-key.ts";
 import {
@@ -50,7 +51,7 @@ type AssistantMessageNormalizationOptions = {
 };
 
 function setChatRunError(state: ChatState, summary: string) {
-  state.chatRunError = { summary };
+  state.chatRunError = { summary: formatUiExternalText(summary) };
 }
 
 function chatEventSessionMatches(state: ChatState, payload: ChatEventPayload): boolean {
@@ -349,7 +350,7 @@ function handleChatEvent(
     outcome: "done" | "interrupted",
     sessionStatus: "done" | "failed" | "killed" | "timeout",
   ) =>
-    reconcileChatRunLifecycle(state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
+    reconcileChatRunLifecycle(state, {
       outcome,
       sessionStatus,
       runId: terminalRunId,
@@ -411,17 +412,14 @@ function handleChatEvent(
       state.chatMessages = materializeVisibleStream();
     }
     if (payload.yielded === true && payload.stopReason === "end_turn") {
-      reconcileChatRunLifecycle(
-        state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
-        {
-          yielded: true,
-          runId: terminalRunId,
-          sessionKey: state.sessionKey,
-          sessionKeys: sessionMatches ? [state.sessionKey, payload.sessionKey] : [],
-          clearLocalRun: true,
-          clearChatStream: true,
-        },
-      );
+      reconcileChatRunLifecycle(state, {
+        yielded: true,
+        runId: terminalRunId,
+        sessionKey: state.sessionKey,
+        sessionKeys: sessionMatches ? [state.sessionKey, payload.sessionKey] : [],
+        clearLocalRun: true,
+        clearChatStream: true,
+      });
     } else {
       reconcileTerminalRun("done", "done");
     }

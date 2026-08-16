@@ -24,6 +24,7 @@ import {
   deriveDeviceIdFromPublicKey,
   normalizeDevicePublicKeyBase64Url,
 } from "../infra/device-identity.js";
+import { approveBootstrapDevicePairing } from "../infra/device-pairing-approval.js";
 import { captureAuthenticatedNodePairingState } from "../infra/device-pairing-node-state.js";
 import {
   approveNodePairing,
@@ -35,13 +36,11 @@ import {
   recordPairedNodeDisconnection,
   type RequestNodePairingResult,
 } from "../infra/device-pairing-node.js";
+import { ensureDeviceToken, verifyDeviceToken } from "../infra/device-pairing-tokens.js";
 import {
-  approveBootstrapDevicePairing,
-  ensureDeviceToken,
   getPairedDevice,
   requestDevicePairing,
   resolveNodePairingState,
-  verifyDeviceToken,
 } from "../infra/device-pairing.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { isNodePairingSetupBootstrapProfile } from "../shared/device-bootstrap-profile.js";

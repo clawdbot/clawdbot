@@ -1,8 +1,14 @@
-import "./prepared-model-runtime.test-harness.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  getPreparedModelRuntimeMocks,
+  resetPreparedModelRuntimeHarness,
+} from "./prepared-model-runtime.test-harness.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-scope.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   getPreparedModelRuntimeSnapshot,
@@ -10,10 +16,6 @@ import {
   registerPreparedModelRuntimePublicationListener,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
-import {
-  getPreparedModelRuntimeMocks,
-  resetPreparedModelRuntimeHarness,
-} from "./prepared-model-runtime.test-harness.js";
 
 const mocks = getPreparedModelRuntimeMocks();
 
@@ -138,9 +140,23 @@ describe("prepared reply dispatch runtime", () => {
 
   it("reuses configured and retained dynamic plugin generations during auth refresh", async () => {
     mocks.configuredAgentIds = ["default"];
+    const workspaceDir = "/tmp/dynamic-auth-workspace";
+    const catalogGenerationRegistries: unknown[] = [];
+    const dynamicPreparationRegistries: unknown[] = [];
     mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() =>
       createEmptyPluginRegistry(),
     );
+    mocks.buildPreparedModelCatalogSnapshot.mockImplementation(async () => {
+      catalogGenerationRegistries.push(getPluginRuntimeGenerationRegistry());
+      return { entries: [], routeVariants: [] };
+    });
+    mocks.resolveAmbientCredentials.mockImplementation((...args: unknown[]) => {
+      const params = args[0] as { workspaceDir?: string };
+      if (params.workspaceDir === workspaceDir) {
+        dynamicPreparationRegistries.push(getPluginRuntimeGenerationRegistry());
+      }
+      return {};
+    });
     const config = { agents: { defaults: { model: "openai/gpt-5.5" } } };
     await refreshPreparedModelRuntimeSnapshots(config, {
       gatewayLifecycle: true,
@@ -161,7 +177,7 @@ describe("prepared reply dispatch runtime", () => {
       getPreparedModelRuntimeSnapshot(configuredInput)?.pluginRegistry;
     const dynamicInput = {
       ...configuredInput,
-      workspaceDir: "/tmp/dynamic-auth-workspace",
+      workspaceDir,
       runtimePluginSelections: [
         { provider: "openai", modelId: "gpt-5.5", runtime: "codex" as const },
       ],
@@ -169,11 +185,10 @@ describe("prepared reply dispatch runtime", () => {
     const dynamicLease = await acquireAgentRunPreparedModelRuntime(dynamicInput);
     const dynamicSelectedBefore = dynamicLease.snapshot.pluginRegistry;
     dynamicLease.release();
-    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(3);
-    expect(mocks.loadAgentRuntimePluginRegistryHandle.mock.calls[2]?.[0]).toMatchObject({
-      workspaceDir: "/tmp/dynamic-auth-workspace",
-      selections: [{ provider: "openai", modelId: "gpt-5.5", runtime: "codex" }],
-    });
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(2);
+    expect(dynamicPreparationRegistries.every(Boolean)).toBe(true);
+    expect(catalogGenerationRegistries.every(Boolean)).toBe(true);
+    expect(dynamicSelectedBefore).toBe(configuredSelectedBefore);
     const registryCallsBeforeAuth = mocks.loadAgentRuntimePluginRegistryHandle.mock.calls.length;
     const authStorageCallsBeforeAuth = mocks.discoverAuthStorage.mock.calls.length;
     const modelCallsBeforeAuth = mocks.discoverModels.mock.calls.length;

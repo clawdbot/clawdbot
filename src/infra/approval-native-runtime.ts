@@ -22,10 +22,8 @@ import {
   type ExecApprovalChannelRuntimeAdapter,
 } from "./exec-approval-channel-runtime.js";
 import type { ExecApprovalChannelRuntimeEventKind } from "./exec-approval-channel-runtime.types.js";
-import type { ExecApprovalResolved } from "./exec-approvals.js";
-import type { ExecApprovalRequest } from "./exec-approvals.js";
-import type { PluginApprovalResolved } from "./plugin-approvals.js";
-import type { PluginApprovalRequest } from "./plugin-approvals.js";
+import type { ExecApprovalResolved, ExecApprovalRequest } from "./exec-approvals.js";
+import type { PluginApprovalResolved, PluginApprovalRequest } from "./plugin-approvals.js";
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 type ApprovalResolved = ExecApprovalResolved | PluginApprovalResolved;

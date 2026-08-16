@@ -158,6 +158,7 @@ const mattermostSecurityAdapter = createRestrictSendersChannelSecurity<ResolvedM
   openScope: "any member",
   groupPolicyPath: "channels.mattermost.groupPolicy",
   groupAllowFromPath: "channels.mattermost.groupAllowFrom",
+  findingTitle: "Mattermost security warning",
   policyPathSuffix: "dmPolicy",
   normalizeDmEntry: (raw) => normalizeAllowEntry(raw),
 });

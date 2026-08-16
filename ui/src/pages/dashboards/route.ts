@@ -2,6 +2,7 @@ import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { DEFAULT_SESSION_LIST_QUERY } from "../../lib/sessions/index.ts";
 import { resolveSessionNavigationAgentId } from "../../lib/sessions/route-navigation.ts";
 import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
@@ -22,7 +23,7 @@ export async function loadDashboardsRoute(
         : {}),
     });
   } catch (cause) {
-    error = String(cause);
+    error = formatUiError(cause);
   }
   return {
     result: value,

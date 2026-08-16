@@ -29,7 +29,6 @@ async function invokeMcp(manager: NodeHostMcpManager, params: unknown) {
 
 function managerWith(callMcpTool: NodeHostMcpManager["callMcpTool"]): NodeHostMcpManager {
   return {
-    configuredServerCount: 1,
     descriptors: [],
     callMcpTool,
     close: async () => undefined,

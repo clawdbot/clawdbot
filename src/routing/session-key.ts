@@ -1,4 +1,8 @@
-import { isValidAgentId, normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import {
+  isValidAgentId,
+  normalizeAgentId,
+  normalizeAgentIdStrict,
+} from "@openclaw/normalization-core/agent-id";
 // Routing session key helpers build stable session keys from route targets.
 import {
   normalizeLowercaseStringOrEmpty,
@@ -29,7 +33,7 @@ export {
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "./account-id.js";
-export { isValidAgentId, normalizeAgentId };
+export { isValidAgentId, normalizeAgentId, normalizeAgentIdStrict };
 
 /** Legacy on-disk identity used only by doctor/migration and their fixtures. */
 export const LEGACY_IMPLICIT_AGENT_ID = "main";

@@ -413,11 +413,40 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
     }
   });
 
-  it("shows manual repair guidance without a signed browser device", async () => {
+  it("offers the admin upgrade without crypto.subtle", async () => {
     const context = await createContext();
     const page = await context.newPage();
     await page.addInitScript(() => {
       Object.defineProperty(globalThis.crypto, "subtle", {
+        configurable: true,
+        value: undefined,
+      });
+    });
+    const gateway = await installMockGateway(page, {
+      operatorScopes: LIMITED_SCOPES,
+      methodResponses: {
+        "device.scopes.requestUpgrade": { requestId: "upgrade-insecure" },
+      },
+    });
+
+    await page.goto(`${server.baseUrl}chat`);
+    // Pure-JS Ed25519 signs the device connect on insecure contexts, so the
+    // explicit upgrade path stays available instead of manual-only guidance.
+    await page.getByRole("button", { name: "Request admin" }).waitFor();
+    expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(0);
+  });
+
+  it("shows manual repair guidance when the browser cannot mint a device identity", async () => {
+    const context = await createContext();
+    const page = await context.newPage();
+    await page.addInitScript(() => {
+      // Without a WebCrypto RNG the identity mint fails and the client
+      // degrades to a device-less connect that cannot sign upgrade requests.
+      Object.defineProperty(globalThis.crypto, "subtle", {
+        configurable: true,
+        value: undefined,
+      });
+      Object.defineProperty(globalThis.crypto, "getRandomValues", {
         configurable: true,
         value: undefined,
       });

@@ -35,6 +35,7 @@ describe("Codex agent harness supports()", () => {
   });
 
   it("keeps computer-control denies out of the native-surface exemption", () => {
+    expect(harness.conversationToolPolicySafeDenyTools).toContain("image_generate");
     expect(harness.conversationToolPolicySafeDenyTools).not.toEqual(
       expect.arrayContaining(["browser", "computer", "mobile_ui", "nodes", "screen"]),
     );

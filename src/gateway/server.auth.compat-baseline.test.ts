@@ -240,8 +240,9 @@ describe("gateway auth compatibility baseline", () => {
       );
       const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
         await import("../infra/device-identity.js");
-      const { approveDevicePairing, requestDevicePairing, rotateDeviceToken } =
-        await import("../infra/device-pairing.js");
+      const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
+      const { rotateDeviceToken } = await import("../infra/device-pairing-tokens.js");
+      const { requestDevicePairing } = await import("../infra/device-pairing.js");
 
       const identity = loadOrCreateDeviceIdentity({ path: identityPath });
       const pending = await requestDevicePairing({
@@ -438,8 +439,8 @@ describe("gateway auth compatibility baseline", () => {
       try {
         const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
           await import("../infra/device-identity.js");
-        const { approveDevicePairing, requestDevicePairing } =
-          await import("../infra/device-pairing.js");
+        const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
+        const { requestDevicePairing } = await import("../infra/device-pairing.js");
         const nonce = await readConnectChallengeNonce(ws);
         const identityPath = path.join(
           os.tmpdir(),

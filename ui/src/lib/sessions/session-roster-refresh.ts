@@ -1,4 +1,5 @@
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { formatUiError } from "../format-error.ts";
 import { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
 import { appendSessionResults, reconcileRosterPresentationMetadata } from "./reconcile.ts";
 import type {
@@ -158,7 +159,11 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
           if (!isCurrent()) {
             return;
           }
-          publishFilteredList(entry, { ...entry.snapshot, loading: false, error: String(error) });
+          publishFilteredList(entry, {
+            ...entry.snapshot,
+            loading: false,
+            error: formatUiError(error),
+          });
         }
         if (!isCurrent()) {
           return;
@@ -295,7 +300,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
           {
             ...state,
             loading: backgroundHydrate ? state.loading : false,
-            error: String(error),
+            error: formatUiError(error),
             deletedSessions: [],
           },
           "operation",

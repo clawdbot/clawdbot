@@ -1,11 +1,10 @@
-// Control UI page module owns Chat transcript loading and selected-session message subscription.
 import {
   readSessionMessageIdentity,
   readSessionMessageSequence,
 } from "@openclaw/gateway-client/browser";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
-import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   AgentsListResult,
   GatewaySessionRow,
@@ -14,13 +13,13 @@ import type {
   SessionBranch,
   SessionsListResult,
 } from "../../api/types.ts";
-import type { ApplicationInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
-import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
   isAssistantHeartbeatAckForDisplay,
   stripHeartbeatTokenForDisplay,
 } from "../../lib/chat/heartbeat-display.ts";
 import { extractText, isEmptyUserTextOnlyMessage } from "../../lib/chat/message-extract.ts";
+// Control UI page module owns Chat transcript loading and selected-session message subscription.
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
@@ -52,7 +51,8 @@ import {
   resolveStartupRetryDelayMs,
   sleep,
 } from "./chat-history-retry.ts";
-import type { ChatRunStartupPhase, ChatRunStartupState } from "./chat-run-startup.ts";
+import type { ChatRunStartupPhase } from "./chat-run-startup.ts";
+import type { ChatState } from "./chat-state-contract.ts";
 import { persistChatComposerState } from "./composer-persistence.ts";
 import {
   getChatSessionProjection,
@@ -66,11 +66,7 @@ import {
 } from "./performance.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
-import {
-  cacheChatSessionSnapshot,
-  clearChatMessagesFromCache,
-  type ChatMessageCache,
-} from "./session-message-cache.ts";
+import { cacheChatSessionSnapshot, clearChatMessagesFromCache } from "./session-message-cache.ts";
 import { retirePersistedSteeredChips } from "./steer-lifecycle.ts";
 import {
   clearToolStreamSegments,
@@ -260,63 +256,7 @@ function chatPersistCommentaryEnabled(state: ChatState): boolean {
   return state.settings?.chatPersistCommentary !== false;
 }
 
-export type ChatState = {
-  client: GatewayBrowserClient | null;
-  connected: boolean;
-  initialUserMessage?: ApplicationInitialUserMessageHandoff;
-  /** Monotonic owner epoch; reconnects can reuse the same client object. */
-  connectionEpoch: number;
-  sessionKey: string;
-  currentSessionId?: string | null;
-  reconnectResumeSessionId?: string | null;
-  chatLoading: boolean;
-  chatHistoryPagination?: ChatHistoryPagination;
-  chatMessages: unknown[];
-  chatMessagesBySession?: ChatMessageCache;
-  /** Active leaf of the history snapshot currently rendered by this pane. */
-  chatDisplayedLeafEntryId?: string | null;
-  chatThinkingLevel: string | null;
-  chatVerboseLevel: string | null;
-  /** Pane-owned explicit session queue override from the latest history response. */
-  chatQueueModeOverride?: GatewaySessionRow["queueMode"];
-  /** Pane-owned effective queue mode from this session's latest history response. */
-  chatEffectiveQueueMode?: GatewaySessionRow["effectiveQueueMode"];
-  chatSending: boolean;
-  chatMessage: string;
-  chatAttachments: ChatAttachment[];
-  chatQueue: ChatQueueItem[];
-  chatRunId: string | null;
-  chatRunUsageById?: Map<string, number>;
-  chatStream: string | null;
-  chatStreamStartedAt: number | null;
-  chatRunStartup?: ChatRunStartupState | null;
-  planStatus?: PlanStatus | null;
-  lastError: string | null;
-  chatError?: string | null;
-  chatRunError?: { summary: string } | null;
-  lastLocalTerminalReconcile?: { runId: string | null } | null;
-  chatReplyTarget?: unknown;
-  agentsError?: string | null;
-  onAgentsList?: (agentsList: AgentsListResult, client: GatewayBrowserClient) => boolean;
-  resetChatInputHistoryNavigation?: () => void;
-  assistantAgentId?: string | null;
-  agentsList?: ChatAgentsListSnapshot | null;
-  agentsSelectedId?: string | null;
-  hello: GatewayHelloOk | null;
-  canvasPluginSurfaceUrl?: string | null;
-  settings?: { chatPersistCommentary?: boolean; gatewayUrl?: string | null };
-  sessions?: Partial<SessionCapability>;
-  chatSessionMessageSubscriptionRequestedKey?: string | null;
-  chatSessionMessageSubscription?: SessionMessageSubscription | null;
-  chatBranches?: SessionBranch[];
-  chatBranchesSessionKey?: string | null;
-  chatBranchesConnectionEpoch?: number | null;
-  requestUpdate?: () => void;
-};
-
-type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
-  agents?: AgentsListResult["agents"];
-};
+export type { ChatState } from "./chat-state-contract.ts";
 
 type ChatSessionMessageSubscriptionState = ChatState & {
   sessions: Pick<SessionCapability, "subscribeMessages" | "unsubscribeMessages">;
@@ -652,8 +592,9 @@ export type ChatEventPayload = {
 };
 
 function setChatError(state: ChatState, error: string | null) {
-  state.lastError = error;
-  state.chatError = error;
+  const message = error === null ? null : formatUiError(error);
+  state.lastError = message;
+  state.chatError = message;
 }
 
 function chatScopedEventAgentScopeMatches(
@@ -873,7 +814,7 @@ export async function syncSelectedSessionMessageSubscription(
             }
             state.chatSessionMessageSubscriptionRequestedKey = nextKey;
             state.chatSessionMessageSubscription = subscribeResult.value;
-            state.sessionsError = `${String(unsubscribeResult.reason)}; replacement release failed: ${String(replacementReleaseError)}`;
+            state.sessionsError = `${formatUiError(unsubscribeResult.reason)}; replacement release failed: ${formatUiError(replacementReleaseError)}`;
           } else {
             paneRequests.pendingSubscriptionReleases.add(subscribeResult.value);
           }
@@ -881,7 +822,7 @@ export async function syncSelectedSessionMessageSubscription(
         }
       }
       if (isCurrent()) {
-        state.sessionsError = String(unsubscribeResult.reason);
+        state.sessionsError = formatUiError(unsubscribeResult.reason);
       }
       return;
     }
@@ -915,7 +856,7 @@ export async function syncSelectedSessionMessageSubscription(
     state.chatSessionMessageSubscription = subscribed;
   } catch (err) {
     if (isCurrent()) {
-      state.sessionsError = String(err);
+      state.sessionsError = formatUiError(err);
     }
   }
 }
@@ -1262,7 +1203,7 @@ export async function clearChatHistory(
     }
   } catch (err) {
     if (ownsClearChatView(state, originalViewOwner)) {
-      setChatError(state, String(err));
+      setChatError(state, formatUiError(err));
       scheduleChatScroll(state);
     }
     return "failed";
@@ -1334,7 +1275,7 @@ export async function rewindChatHistory(
     state.handleChatDraftChange(editorText);
     return result;
   } catch (error) {
-    setChatError(state, error instanceof Error ? error.message : String(error));
+    setChatError(state, formatUiError(error));
     scheduleChatScroll(state);
     return null;
   }
@@ -1364,7 +1305,7 @@ export async function switchChatHistoryBranch(
     await Promise.all([loadChatHistory(state), loadChatBranches(state)]);
     return visibleSessionMatches(state, sessionKey, agentParams.agentId);
   } catch (error) {
-    setChatError(state, error instanceof Error ? error.message : String(error));
+    setChatError(state, formatUiError(error));
     scheduleChatScroll(state);
     return false;
   }
@@ -1855,7 +1796,7 @@ async function loadChatHistoryUncached(
       state.chatVerboseLevel = null;
       setChatError(state, formatMissingOperatorReadScopeMessage("existing chat history"));
     } else {
-      setChatError(state, String(err));
+      setChatError(state, formatUiError(err));
     }
   } finally {
     if (ownsChatHistoryRequest(state, ownership)) {

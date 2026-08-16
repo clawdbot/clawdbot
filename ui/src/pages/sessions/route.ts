@@ -3,6 +3,7 @@ import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   DEFAULT_SESSION_LIST_QUERY,
   type SessionArchivedFilter,
@@ -42,7 +43,7 @@ async function loadSessionsRoute(
       })
       .then(
         (result) => ({ result, error: null }),
-        (error: unknown) => ({ result: null, error: String(error) }),
+        (error: unknown) => ({ result: null, error: formatUiError(error) }),
       ),
     context.runtimeConfig.ensureLoaded().catch(() => undefined),
   ]);

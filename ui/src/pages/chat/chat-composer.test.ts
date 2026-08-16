@@ -234,6 +234,20 @@ describe("renderChatComposer controls", () => {
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(true);
   });
 
+  it("shows the disabled reason even when draft text hides the placeholder", () => {
+    const reason = "This session is read-only.";
+    const { container } = renderComposer({
+      canSend: false,
+      disabledReason: reason,
+      draft: "a draft that hides the placeholder",
+    });
+
+    // The placeholder carries the reason only for an empty composer; the
+    // dedicated reason row must keep the explanation visible alongside a draft.
+    expect(container.querySelector(".agent-chat__disabled-reason")?.textContent).toContain(reason);
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(true);
+  });
+
   it("switches the primary action between voice, send, queue, and stop", () => {
     const onToggleRealtimeTalk = vi.fn();
     let view = renderComposer({ onToggleRealtimeTalk });

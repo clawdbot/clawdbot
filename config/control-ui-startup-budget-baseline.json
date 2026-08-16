@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 334391,
-  "reason": "cumulative 2026-08-15 UI growth plus folder group defaults catalog and lazy New Session route resolution",
-  "updatedAt": "2026-08-15"
+  "startupJsGzipBytes": 335452,
+  "reason": "chat delivery failures surface globally: toast + session-display naming joins startup chat path",
+  "updatedAt": "2026-08-16"
 }

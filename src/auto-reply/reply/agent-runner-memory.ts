@@ -674,7 +674,6 @@ export async function runPreflightCompactionIfNeeded(params: {
   followupRun: FollowupRun;
   promptForEstimate?: string;
   defaultModel: string;
-  agentCfgContextTokens?: number;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
@@ -741,7 +740,6 @@ export async function runPreflightCompactionIfNeeded(params: {
       runtimePolicySessionKey: params.runtimePolicySessionKey,
     }),
     modelId: params.followupRun.run.model ?? params.defaultModel,
-    agentCfgContextTokens: params.agentCfgContextTokens,
   });
   const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
   const reserveTokensFloor = memoryFlushPlan?.reserveTokensFloor ?? 20_000;
@@ -932,7 +930,7 @@ export async function runPreflightCompactionIfNeeded(params: {
         entry.sessionId === params.followupRun.run.sessionId
           ? entry.modelSelectionLocked === true
             ? resolvePersistedSessionRuntimeId(entry)
-            : entry.agentHarnessId
+            : runtimeId
           : undefined,
       modelSelectionLocked: entry.modelSelectionLocked === true,
       thinkLevel: params.followupRun.run.thinkLevel,
@@ -1037,7 +1035,6 @@ export async function runMemoryFlushIfNeeded(params: {
   sessionCtx: TemplateContext;
   opts?: GetReplyOptions;
   defaultModel: string;
-  agentCfgContextTokens?: number;
   resolvedVerboseLevel: VerboseLevel;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
@@ -1111,7 +1108,6 @@ export async function runMemoryFlushIfNeeded(params: {
       runtimePolicySessionKey: params.runtimePolicySessionKey,
     }),
     modelId: params.followupRun.run.model ?? params.defaultModel,
-    agentCfgContextTokens: params.agentCfgContextTokens,
   });
 
   const promptTokenEstimate = estimatePromptTokensForMemoryFlush(

@@ -7,6 +7,7 @@ export type ChannelTurnDispatchResultLike =
       queuedFinal?: boolean;
       counts?: Partial<Record<ReplyDispatchKind, number>>;
       observedReplyDelivery?: boolean;
+      deferredToActiveRun?: "steer" | "followup";
     }
   | null
   | undefined;

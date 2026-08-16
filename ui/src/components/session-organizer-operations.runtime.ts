@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { WorktreesRemoveResult } from "../../../packages/gateway-protocol/src/index.js";
 import { loadSettings, patchSettings } from "../app/settings.ts";
 import { t } from "../i18n/index.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
@@ -294,6 +295,7 @@ export async function deleteSessionsBatch(
     key: row.key,
     agentId: parseAgentSessionKey(row.key)?.agentId ?? scope.selectedAgentId,
     deleteTranscript: true,
+    ...(row.sessionId ? { expectedSessionId: row.sessionId } : {}),
     ...(row.archived === true ? { archivedOnly: true } : {}),
   }));
   for (const params of requests) {
@@ -578,6 +580,7 @@ export async function deleteSession(
   const deleteParams = {
     agentId,
     deleteTranscript: true,
+    ...(session.sessionId ? { expectedSessionId: session.sessionId } : {}),
     ...(session.archived === true ? { archivedOnly: true } : {}),
   };
   if (
@@ -638,10 +641,13 @@ export async function deleteSession(
         }
         if (removeWorktree) {
           try {
-            await scope.client.request("worktrees.remove", {
+            const result = await scope.client.request<WorktreesRemoveResult>("worktrees.remove", {
               id: preserved.id,
               force: true,
             });
+            if (result.snapshotError) {
+              host.sessionData.publishSessionMutationError(scope, result.snapshotError);
+            }
           } catch (error) {
             host.sessionData.publishSessionMutationError(scope, error);
           }

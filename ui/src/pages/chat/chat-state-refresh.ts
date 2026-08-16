@@ -1,5 +1,6 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
@@ -288,7 +289,7 @@ export async function refreshChatModelAuthStatus(host: ChatPageHost, opts?: { re
       return;
     }
     host.modelAuthStatusResult = { ts: 0, providers: [] };
-    host.modelAuthStatusError = err instanceof Error ? err.message : String(err);
+    host.modelAuthStatusError = formatUiError(err);
   }
 }
 
@@ -320,7 +321,7 @@ export async function refreshChatModelCatalogOnDemand(host: ChatPageHost): Promi
     if (ownsRequest()) {
       // Keep the startup/prepared snapshot usable while making the failed
       // discovery and its retry path visible in the open picker.
-      host.chatModelCatalogError = error instanceof Error ? error.message : String(error);
+      host.chatModelCatalogError = formatUiError(error);
     }
   } finally {
     if (ownsRequest()) {

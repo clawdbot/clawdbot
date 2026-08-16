@@ -1,8 +1,10 @@
 import type { SessionPlacementDiskSpace } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { SessionVisibility } from "../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
-import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
-import type { SessionCreatedActor } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import type {
+  SessionObserverDigest,
+  SessionCreatedActor,
+} from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionAgentAttentionIconId } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { SessionRunStatus } from "../api/types.ts";
@@ -61,6 +63,12 @@ export type SidebarRecentSession = {
   createdActor?: SessionCreatedActor;
   archivedBy?: SessionCreatedActor;
   label: string;
+  /**
+   * Stored user label, undecorated. `label` above is the resolved display name
+   * and can carry a derived account or channel; rename edits this one so a
+   * derived string never lands back in persisted state.
+   */
+  userLabel?: string;
   /** Compact repo/branch/node line for work sessions. */
   subtitle?: string;
   href: string;
@@ -120,9 +128,9 @@ export type SidebarRecentSession = {
 };
 
 export const enum RowVisibilityReason {
-  Any,
-  ActiveRun,
-  Attention,
+  Any = 0,
+  ActiveRun = 1,
+  Attention = 2,
 }
 
 export function rowDemandsVisibility(

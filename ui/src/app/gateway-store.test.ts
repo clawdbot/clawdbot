@@ -359,6 +359,29 @@ describe("createApplicationGateway connection phase", () => {
     expect(gateway.snapshot.lastError).toContain("4008");
   });
 
+  it("redacts a secret-shaped WebSocket close reason", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+
+    current().opts.onClose?.({
+      code: 1006,
+      reason: "OPENAI_API_KEY=sk-1234567890abcdef",
+      willRetry: true,
+    });
+
+    expect(gateway.snapshot.lastError).toContain("OPENAI_API_KEY=sk-123...cdef");
+    expect(gateway.snapshot.lastError).not.toContain("sk-1234567890abcdef");
+  });
+
+  it("uses translated fallback copy for an empty WebSocket close reason", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+
+    current().opts.onClose?.({ code: 1006, reason: "", willRetry: true });
+
+    expect(gateway.snapshot.lastError).toBe("disconnected (1006): Unknown");
+  });
+
   it("starts a newly selected Gateway as a fresh connection", () => {
     const { gateway, clients, current } = createStore();
     gateway.start();

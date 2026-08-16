@@ -14,6 +14,7 @@ import { isCloudWorkerPlacementState } from "../../components/session-row-badges
 import { t } from "../../i18n/index.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import { openEditor } from "../../lib/editor-links.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
@@ -28,14 +29,6 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
   private headerSessionOperationsLoad: Promise<
     typeof import("../../components/session-organizer-operations.runtime.ts")
   > | null = null;
-  private headerPresentationGeneration = 0;
-  protected override presentedChanged(presented: boolean): void {
-    this.headerPresentationGeneration += 1;
-    super.presentedChanged(presented);
-  }
-  private get headerOutcomeOwner() {
-    return `${this.connectionGeneration}:${this.headerPresentationGeneration}`;
-  }
   protected async loadHeaderPlatform(
     client: GatewayBrowserClient,
     generation: number,
@@ -232,7 +225,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
 
   private isHeaderSessionActionCurrent(scope: SidebarSessionMutationScope, owner: string): boolean {
     return (
-      owner === this.headerOutcomeOwner &&
+      this.ownsHeaderOutcome(owner) &&
       this.isConnected &&
       this.context === scope.context &&
       this.context.gateway === scope.gateway &&
@@ -399,7 +392,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     if (copiedValue) {
       const owner = this.headerOutcomeOwner;
       void copy(copiedValue).then((copied) => {
-        if (!this.presented || owner !== this.headerOutcomeOwner) {
+        if (!this.ownsHeaderOutcome(owner)) {
           return;
         }
         if (copied) {
@@ -416,11 +409,10 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
   }
 
   protected publishHeaderError(error: unknown, owner = this.headerOutcomeOwner): void {
-    if (!this.state || !this.presented || owner !== this.headerOutcomeOwner) {
+    if (!this.state || !this.ownsHeaderOutcome(owner)) {
       return;
     }
-    this.state.chatError = this.state.lastError =
-      error instanceof Error ? error.message : String(error);
+    this.state.chatError = this.state.lastError = formatUiError(error);
     this.state.requestUpdate?.();
   }
 

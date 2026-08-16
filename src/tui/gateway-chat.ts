@@ -229,6 +229,11 @@ export class GatewayChatClient implements TuiBackend {
           this.resolveReady = resolve;
         });
         if (this.pendingConnectError && this.onConnectError) {
+          // Dedupe is per close-cycle: clearing here lets the next reconnect
+          // attempt report its own failure cause. Holding the guard until a
+          // successful hello froze the TUI on the first error forever (e.g. a
+          // later pairing-required failure and its approval hint never showed).
+          this.pendingConnectError = undefined;
           return;
         }
         this.onDisconnected?.(reason);

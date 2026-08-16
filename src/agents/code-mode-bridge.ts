@@ -30,7 +30,7 @@ import { ToolInputError } from "./tools/common.js";
 import { resolveEligibleNodeFromList } from "./tools/nodes-utils.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
 
-const CODE_MODE_NODES_TOOL_ID = "openclaw:core:nodes";
+export const CODE_MODE_NODES_TOOL_ID = "openclaw:core:nodes";
 
 type CodeModeNode = {
   id: string;

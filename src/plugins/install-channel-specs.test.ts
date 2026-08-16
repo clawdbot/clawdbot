@@ -75,19 +75,20 @@ describe("resolveNpmInstallSpecsForUpdateChannel", () => {
     });
   });
 
-  it("preserves beta behavior", () => {
+  it("preserves beta behavior for a version-bound plugin", () => {
     expect(
       resolveNpmInstallSpecsForUpdateChannel({
-        spec: "@openclaw/discord@latest",
+        spec: "@openclaw/codex@latest",
         updateChannel: "beta",
-        officialPackageName: "@openclaw/discord",
-        coreVersion: "2026.7.33",
+        officialPackageName: "@openclaw/codex",
+        coreVersion: "2026.8.1-beta.3",
+        versionBoundToCore: true,
       }),
     ).toEqual({
-      installSpec: "@openclaw/discord@beta",
-      recordSpec: "@openclaw/discord@latest",
-      fallbackSpec: "@openclaw/discord@latest",
-      fallbackLabel: "@openclaw/discord@beta",
+      installSpec: "@openclaw/codex@beta",
+      recordSpec: "@openclaw/codex@latest",
+      fallbackSpec: "@openclaw/codex@latest",
+      fallbackLabel: "@openclaw/codex@beta",
     });
   });
 });

@@ -62,6 +62,9 @@ type ChangedCheckDelegateOptions = {
   cwd?: string;
   result?: ChangedLaneResult;
   diffRefsReady?: boolean;
+  interactive?: boolean;
+  platform?: NodeJS.Platform;
+  virtualized?: boolean;
 };
 
 type ChangedCheckRunOptions = ChangedCheckPlanOptions & {
@@ -110,6 +113,7 @@ const CANVAS_A2UI_NATIVE_RESOURCE_PATH_RE =
   /^(?:pnpm-lock\.yaml$|apps\/(?:android\/app\/build\.gradle\.kts$|ios\/project\.yml$|linux\/src-tauri\/(?:build\.rs$|src\/canvas\.rs$)|shared\/OpenClawKit\/Sources\/OpenClawKit\/Resources\/CanvasA2UI\/)|extensions\/canvas\/(?:package\.json$|scripts\/bundle-a2ui\.mjs$|src\/host\/a2ui(?:\/(?:index\.html|a2ui\.bundle\.js|\.bundle\.hash)$|-app\/))|scripts\/(?:bundle-a2ui|sync-native-a2ui)\.mts$)/u;
 const CONTROL_UI_I18N_VERIFY_PATH_RE =
   /^(?:package\.json$|ui\/(?:src\/|config\/control-ui-locales\.ts$)|scripts\/(?:control-ui-i18n(?:-(?:report|verify))?\.ts|lib\/control-ui-i18n-[^/]+\.ts)$|test\/scripts\/control-ui-i18n[^/]*\.test\.ts$)/u;
+const RATCHET_BASE_OWNER_PATH = "scripts/lib/ratchet-base.mts";
 const CORE_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.core.json";
 const EXTENSIONS_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.extensions.json";
 const SCRIPTS_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.scripts.json";
@@ -132,7 +136,7 @@ const ANDROID_VERSION_SYNC_PATHS = new Set([
   "apps/android/version.json",
 ]);
 const MACOS_APP_CI_PATH_RE =
-  /^(?:apps\/(?:macos|macos-mlx-tts|shared|swabble)\/|Swabble\/|src\/(?:worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$|scripts\/(?:codesign-mac-app|create-dmg|mac-elevation-host|notarize-mac-artifact|package-mac-app|package-mac-dist|stage-cua-driver-macos)\.sh$|scripts\/lib\/(?:plistbuddy|swift-toolchain)\.sh$|test\/scripts\/(?:codesign-mac-app|create-dmg|mac-elevation-host|notarize-mac-artifact|package-mac-app|package-mac-dist)\.test\.ts$)/u;
+  /^(?:apps\/(?:macos|macos-mlx-tts|shared|swabble)\/|Swabble\/|src\/(?:shared\/worker-bundle-hash\.ts|worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$|scripts\/(?:codesign-mac-app|create-dmg|mac-elevation-host|notarize-mac-artifact|package-mac-app|package-mac-dist|stage-cua-driver-macos)\.sh$|scripts\/lib\/(?:plistbuddy|swift-toolchain)\.sh$|test\/scripts\/(?:codesign-mac-app|create-dmg|mac-elevation-host|notarize-mac-artifact|package-mac-app|package-mac-dist)\.test\.ts$)/u;
 let corepackPnpmShimDir: string | undefined;
 let corepackPnpmShimCleanupRegistered = false;
 let cachedGeneratedExtensionAssetPaths: Set<string> | undefined;
@@ -222,6 +226,37 @@ export function changedCheckRequiresRemote(result?: ChangedLaneResult) {
   );
 }
 
+function isDedicatedLinuxWorker(
+  env: NodeJS.ProcessEnv,
+  options: Pick<ChangedCheckDelegateOptions, "interactive" | "platform" | "virtualized">,
+) {
+  if ((options.platform ?? process.platform) !== "linux") {
+    return false;
+  }
+  const role = env.AGENT_HOST_ROLE?.trim().toLowerCase();
+  if (role === "worker") {
+    return true;
+  }
+  if (role === "workstation") {
+    return false;
+  }
+  if (env.DISPLAY || env.WAYLAND_DISPLAY || env.SSH_TTY) {
+    return false;
+  }
+  if (options.interactive ?? process.stdin.isTTY) {
+    return false;
+  }
+  if (options.virtualized !== undefined) {
+    return options.virtualized;
+  }
+  try {
+    execFileSync("systemd-detect-virt", ["--quiet"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function shouldDelegateChangedCheckToCrabbox(
   argv: string[] = [],
   env: NodeJS.ProcessEnv = process.env,
@@ -245,6 +280,9 @@ export function shouldDelegateChangedCheckToCrabbox(
   }
   if (isOpenEndedTruthyValue(env.OPENCLAW_TESTBOX)) {
     return true;
+  }
+  if (isDedicatedLinuxWorker(env, options)) {
+    return !changedCheckLocalDependenciesReady(options.cwd ?? process.cwd());
   }
   // Release metadata plans diff the supplied commits after classification. A missing
   // ref needs the hydrated remote checkout even when the explicit path itself is cheap.
@@ -590,14 +628,32 @@ export function createChangedCheckPlan(
     ]);
   }
   if (
-    result.paths.some((filePath) =>
-      /^(?:src\/|ui\/src\/|packages\/|extensions\/|\.oxlintrc\.json$|config\/max-lines-baseline\.txt$|scripts\/check-max-lines-ratchet\.mts$)/u.test(
-        filePath,
-      ),
+    result.paths.some(
+      (filePath) =>
+        filePath === RATCHET_BASE_OWNER_PATH ||
+        /^(?:src\/|ui\/src\/|packages\/|extensions\/|\.oxlintrc\.json$|config\/max-lines-baseline\.txt$|scripts\/check-max-lines-ratchet\.mts$)/u.test(
+          filePath,
+        ),
     )
   ) {
     add("max-lines suppression ratchet", [
       "check:max-lines-ratchet",
+      ...(options.staged ? ["--staged"] : []),
+      "--base",
+      options.staged ? "HEAD" : (options.base ?? "origin/main"),
+    ]);
+  }
+  if (
+    result.paths.some(
+      (filePath) =>
+        filePath === RATCHET_BASE_OWNER_PATH ||
+        /^(?:src\/|ui\/src\/|packages\/|extensions\/|config\/assertion-safety-baseline\.txt$|scripts\/check-assertion-safety-ratchet\.mts$|scripts\/lib\/type-assertion-guard-scope\.mjs$|scripts\/oxlint-boundary-guards\.mjs$)/u.test(
+          filePath,
+        ),
+    )
+  ) {
+    add("assertion SAFETY comment ratchet", [
+      "check:assertion-safety",
       ...(options.staged ? ["--staged"] : []),
       "--base",
       options.staged ? "HEAD" : (options.base ?? "origin/main"),

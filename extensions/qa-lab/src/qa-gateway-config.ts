@@ -9,8 +9,7 @@ import {
   type QaProviderMode,
 } from "./model-selection.js";
 import { resolveQaRuntimeModelPair } from "./model-selection.runtime.js";
-import { getQaProvider } from "./providers/index.js";
-import { DEFAULT_QA_PROVIDER_MODE } from "./providers/index.js";
+import { getQaProvider, DEFAULT_QA_PROVIDER_MODE } from "./providers/index.js";
 import { QA_FRONTIER_PROVIDER_IDS } from "./providers/live-frontier/catalog.js";
 import type { QaThinkingLevel } from "./qa-thinking.js";
 import type { QaTransportGatewayConfig } from "./qa-transport.js";

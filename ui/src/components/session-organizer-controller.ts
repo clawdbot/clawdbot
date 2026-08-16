@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ReactiveControllerHost } from "lit";
 import type { FsListDirResult } from "../../../packages/gateway-protocol/src/index.js";
 import {
@@ -419,7 +420,10 @@ export class SessionOrganizerController {
     const nextLabel =
       (await showInputDialog?.({
         title: t("sessionsView.renameSessionPrompt"),
-        defaultValue: session.label,
+        // The stored label, not the resolved display name: pre-filling the
+        // derived string persists it on submit and it then outranks every
+        // later derivation. Matches the Sessions page rename.
+        defaultValue: normalizeOptionalString(session.userLabel) ?? "",
       })) ?? null;
     if (nextLabel === null) {
       return;

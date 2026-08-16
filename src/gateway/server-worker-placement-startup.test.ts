@@ -4,6 +4,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 const runtimeFactoryMocks = vi.hoisted(() => ({
   createDispatch: vi.fn(),
   createDiskSpace: vi.fn(),
+  createSessionEvidenceResolver: vi.fn(),
   resolveSessionEvidence: vi.fn(),
 }));
 
@@ -17,7 +18,7 @@ vi.mock("./worker-environments/placement-dispatch.js", async (importOriginal) =>
 });
 
 vi.mock("./server-worker-placement-session-evidence.js", () => ({
-  resolveWorkerPlacementSessionEvidence: runtimeFactoryMocks.resolveSessionEvidence,
+  createWorkerPlacementSessionEvidenceResolver: runtimeFactoryMocks.createSessionEvidenceResolver,
 }));
 
 vi.mock("./worker-environments/placement-disk-space.js", async (importOriginal) => {
@@ -111,6 +112,9 @@ describe("worker placement startup health lifetime", () => {
   it("drains deferred startup session evidence before stopping environments", async () => {
     const evidence = createDeferredCore<"current">();
     runtimeFactoryMocks.resolveSessionEvidence.mockImplementation(async () => evidence.promise);
+    runtimeFactoryMocks.createSessionEvidenceResolver.mockResolvedValue(
+      runtimeFactoryMocks.resolveSessionEvidence,
+    );
     runtimeFactoryMocks.createDiskSpace.mockReturnValue({
       read: vi.fn(),
       version: vi.fn(() => 0),

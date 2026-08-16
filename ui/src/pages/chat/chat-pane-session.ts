@@ -6,6 +6,7 @@ import type {
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { clampText } from "../../lib/format.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
@@ -234,7 +235,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         failure = scope.sessions.state.error;
       }
     } catch (error) {
-      failure = error instanceof Error ? error.message : String(error);
+      failure = formatUiError(error);
     }
     if (failure && this.isConnectionScopeCurrent(scope) && scope.state.sessionKey === sessionKey) {
       scope.state.lastError = failure;
@@ -451,7 +452,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       return older ? !olderExhausted : true;
     } catch (error) {
       if (isCurrent()) {
-        (this.state ?? state).lastError = error instanceof Error ? error.message : String(error);
+        (this.state ?? state).lastError = formatUiError(error);
       }
       return false;
     } finally {

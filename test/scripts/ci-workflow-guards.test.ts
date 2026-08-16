@@ -74,6 +74,7 @@ type WorkflowStep = {
   run?: string;
   uses?: string;
   with?: Record<string, unknown>;
+  "working-directory"?: string;
 };
 
 function readCiWorkflow() {
@@ -83,6 +84,9 @@ function readCiWorkflow() {
 function evaluateWorkflowExpression(
   expression: unknown,
   context: {
+    // Runner routing keys off contributor trust, so pull-request cases default
+    // to CONTRIBUTOR: same-repo PRs always come from someone with write access.
+    authorAssociation?: string;
     eventName: "pull_request" | "push" | "workflow_dispatch";
     headRepository?: string;
     matrix?: Record<string, unknown>;
@@ -103,17 +107,25 @@ function evaluateWorkflowExpression(
     throw new Error(`workflow expression has no body: ${expression}`);
   }
   return runInNewContext(source, {
+    // GitHub expression builtins the runner-routing clauses use.
+    contains: (haystack: unknown, needle: unknown) =>
+      Array.isArray(haystack)
+        ? haystack.includes(needle)
+        : String(haystack).includes(String(needle)),
+    fromJSON: (value: string) => JSON.parse(value) as unknown,
     github: {
       event_name: context.eventName,
       repository: context.repository,
       run_attempt: context.runAttempt,
-      event: context.headRepository
-        ? {
-            pull_request: {
-              head: { repo: { full_name: context.headRepository } },
-            },
-          }
-        : {},
+      event:
+        context.headRepository || context.eventName === "pull_request"
+          ? {
+              pull_request: {
+                author_association: context.authorAssociation ?? "CONTRIBUTOR",
+                head: { repo: { full_name: context.headRepository ?? context.repository } },
+              },
+            }
+          : {},
     },
     matrix: context.matrix ?? {},
     vars: {
@@ -254,6 +266,7 @@ function runCiManifestFixture(options: {
               }
             : {}),
           ...(iosBuildCapability ? { "ios:build": "true" } : {}),
+          "check:assertion-safety": "true",
           "check:max-lines-ratchet": "true",
         }
       : {};
@@ -568,6 +581,8 @@ type QaProfileTimeoutFixtureMode = "natural-124" | "self-kill" | "term" | "kill"
 function runQaProfileTimeoutFixture(mode: QaProfileTimeoutFixtureMode) {
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-qa-profile-timeout-"));
   try {
+    const selectedRoot = path.join(root, "selected");
+    mkdirSync(selectedRoot);
     const binDir = path.join(root, "bin");
     mkdirSync(binDir);
     const fakePnpm = path.join(binDir, "pnpm");
@@ -611,10 +626,10 @@ esac
 
     const workflow = readQaProfileEvidenceWorkflow();
     const runProfileStep = expectDefined(
-      workflow.jobs.run_qa_profile.steps.find(
-        (step: WorkflowStep) => step.name === "Run QA profile",
+      workflow.jobs.run_qa_profile_shard.steps.find(
+        (step: WorkflowStep) => step.name === "Run QA profile shard",
       ),
-      "Run QA profile step",
+      "Run QA profile shard step",
     );
     let script = runProfileStep.run
       .replace("--kill-after=30s 110m", "--kill-after=0.05s 0.4s")
@@ -639,23 +654,33 @@ timeout_outcome="none"`,
     script = capturedScript;
     const githubOutput = path.join(root, "github-output");
     const run = runWorkflowShellScript(script, {
-      cwd: root,
+      cwd: selectedRoot,
       env: {
         ...process.env,
         FAKE_PNPM_MODE: mode,
         GITHUB_OUTPUT: githubOutput,
         GITHUB_RUN_ATTEMPT: "1",
         GITHUB_RUN_ID: "42",
+        GITHUB_WORKSPACE: root,
         LC_ALL: "POSIX",
         PATH: fixturePath,
+        CATEGORY_IDS_JSON: '["fixture.category"]',
         PROTOCOL_SINCE_BASE_SHA: "b".repeat(40),
         QA_PROFILE: "all",
+        QA_SHARD_ID: "shard-01",
         REQUESTED_REF: "fixture",
+        SCENARIO_IDS_JSON: '["fixture-scenario"]',
         TARGET_SHA: "a".repeat(40),
         TIMEOUT_SUPERVISOR_CAPTURE: timeoutSupervisorCapture,
       },
     });
-    const outputDir = path.join(root, ".artifacts", "qa-e2e", "profile-all-42-1");
+    const outputDir = path.join(
+      selectedRoot,
+      ".artifacts",
+      "qa-e2e",
+      "profile-all-42-1",
+      "shard-01",
+    );
     const status = JSON.parse(
       readFileSync(path.join(outputDir, "qa-profile-run-status.json"), "utf8"),
     ) as {
@@ -678,20 +703,15 @@ timeout_outcome="none"`,
   }
 }
 
-function runQaProfileFailureGate(options: {
-  allowFailures: boolean;
-  evidenceValidated?: boolean;
-  qaExitCode?: string;
-}) {
+function runQaProfileFailureGate(options: { allowFailures: boolean; qaExitCode?: string }) {
   const workflow = readQaProfileEvidenceWorkflow();
-  const failStep = workflow.jobs.run_qa_profile.steps.find(
+  const failStep = workflow.jobs.aggregate_qa_profile.steps.find(
     (step: WorkflowStep) => step.name === "Fail if QA profile failed",
   );
   return spawnSync("bash", ["-c", failStep.run], {
     encoding: "utf8",
     env: {
       ALLOW_FAILURES: String(options.allowFailures),
-      EVIDENCE_VALIDATED: String(options.evidenceValidated ?? true),
       PATH: process.env.PATH ?? "",
       QA_EXIT_CODE: options.qaExitCode ?? "",
       QA_PROFILE: "all",
@@ -2956,7 +2976,7 @@ NODE
     expect(source).toContain('task: useCompatibleAndroidCi ? "build-play-compat" : "build-play"');
     expect(androidJob.name).toBe("${{ matrix.check_name }}");
     expect(androidJob["runs-on"]).toBe(
-      "${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}",
+      "${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\",\"CONTRIBUTOR\"]'), github.event.pull_request.author_association)) && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}",
     );
     expect(runStep.env.CI_RUNNER_BACKEND).toContain(
       "vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1",
@@ -3066,6 +3086,9 @@ NODE
       "build-artifacts": "blacksmith-32vcpu-ubuntu-2404",
       "checks-node-core-test-nondist-shard": "blacksmith-32vcpu-ubuntu-2404",
       "checks-ui-e2e": "blacksmith-8vcpu-ubuntu-2404",
+      // Same serial Chromium workload as checks-ui-e2e: hosted attempt 1 made it
+      // the run's slowest job (205s mean vs a 150-190s plateau).
+      "checks-ui-e2e-real-gateway": "blacksmith-16vcpu-ubuntu-2404",
       "qa-smoke-ci-profile": "blacksmith-16vcpu-ubuntu-2404",
       "sqlite-session-lifecycle": "blacksmith-8vcpu-ubuntu-2404",
       "macos-node": "blacksmith-6vcpu-macos-15",
@@ -3121,14 +3144,29 @@ NODE
         }),
         jobName,
       ).toBe(evaluateWorkflowExpression(expression, canonicalPullRequest));
+      // Authors with no landed commit stay on free hosted infrastructure, so an
+      // unreviewed PR cannot spend Blacksmith capacity.
       expect(
         evaluateWorkflowExpression(expression, {
           ...canonicalPullRequest,
+          authorAssociation: "NONE",
           headRepository: "contributor/openclaw",
           runnerBackend: "hybrid",
         }),
-        jobName,
+        `${jobName}: untrusted fork`,
       ).toBe(hostedRunner);
+      // A fork PR from someone who already landed a commit routes exactly like a
+      // maintainer PR. Maintainers report CONTRIBUTOR here too (org membership is
+      // concealed), so this case also protects their own routing.
+      expect(
+        evaluateWorkflowExpression(expression, {
+          ...canonicalPullRequest,
+          authorAssociation: "CONTRIBUTOR",
+          headRepository: "contributor/openclaw",
+          runnerBackend: "hybrid",
+        }),
+        `${jobName}: returning-contributor fork`,
+      ).toBe(expectedHybridFirstAttemptRunners[jobName as keyof typeof expectedHostedRunners]);
     }
 
     const widenedHybridMatrixRows = [
@@ -3212,11 +3250,12 @@ NODE
       expect(
         evaluateWorkflowExpression(expression, {
           ...canonicalPullRequest,
+          authorAssociation: "NONE",
           headRepository: "contributor/openclaw",
           matrix,
           runnerBackend: "hybrid",
         }),
-        `${jobName}: fork pull request`,
+        `${jobName}: untrusted fork pull request`,
       ).toBe("ubuntu-24.04");
       expect(
         evaluateWorkflowExpression(expression, {
@@ -4154,7 +4193,7 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
         task,
       ).toBe("true");
     }
-    for (const task of ["coercion-helpers", "max-lines-ratchet"]) {
+    for (const task of ["baseline-ratchets", "coercion-helpers"]) {
       expect(
         evaluateWorkflowExpression(fastCoreSetup.with["restore-test-caches"], {
           eventName: "push",
@@ -5680,7 +5719,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ).toContain("--only=core --split-core --core-stripe=${{ matrix.stripe }}/5 --threads=1");
   });
 
-  it("runs the suppression-baseline max-lines ratchet against the exact tested tree", () => {
+  it("runs both baseline ratchets against the exact tested tree", () => {
     const workflow = readCiWorkflow();
     const checksFastJob = workflow.jobs["checks-fast-core"];
     const checksFastSteps = checksFastJob.steps;
@@ -5689,7 +5728,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       (step: WorkflowStep) => step.name === "Run ${{ matrix.task }} (${{ matrix.runtime }})",
     );
     const releaseGateMerge = checksFastSteps.find(
-      (step: WorkflowStep) => step.name === "Prepare release-gate max-lines merge tree",
+      (step: WorkflowStep) => step.name === "Prepare release-gate ratchet merge tree",
     );
     expect(
       checksFastSteps.some((step: WorkflowStep) => step.name === "Resolve manual protocol base"),
@@ -5700,23 +5739,26 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "pull-requests": "read",
     });
     expect(checksFastJob.env.CHECKOUT_BASE_SHA).toBe(
-      "${{ matrix.task == 'max-lines-ratchet' && needs.preflight.outputs.diff_base_revision || '' }}",
+      "${{ matrix.task == 'baseline-ratchets' && needs.preflight.outputs.diff_base_revision || '' }}",
     );
     expect(checkout.run).toContain(
-      'fetch_refs+=("+${CHECKOUT_BASE_SHA}:refs/remotes/origin/ci-max-lines-base")',
+      'fetch_refs+=("+${CHECKOUT_BASE_SHA}:refs/remotes/origin/ci-ratchet-base")',
     );
     expect(checkout.run).toContain('"${fetch_refs[@]}" || return 1');
     expect(releaseGateMerge.if).toBe(
-      "matrix.task == 'max-lines-ratchet' && github.event_name == 'workflow_dispatch' && inputs.release_gate",
+      "matrix.task == 'baseline-ratchets' && github.event_name == 'workflow_dispatch' && inputs.release_gate",
     );
-    expect(checksFastRun.run).toContain("max-lines-ratchet)");
+    expect(checksFastRun.run).toContain("baseline-ratchets)");
     expect(checksFastRun.run).toContain("coercion-helpers)");
     expect(checksFastRun.run).toContain("pnpm check:coercion-helpers");
     expect(checksFastRun.run).toContain("bun-launcher)");
     expect(checksFastRun.run).toContain(
       "OPENCLAW_E2E_SKIP_BUILD=1 OPENCLAW_TEST_BUN_LAUNCHER=1 pnpm test test/openclaw-launcher.e2e.test.ts",
     );
-    expect(checksFastRun.run).toContain('has_package_script "check:max-lines-ratchet"');
+    expect(checksFastRun.run).toContain(
+      "for required_script in check:max-lines-ratchet check:assertion-safety; do",
+    );
+    expect(checksFastRun.run).toContain('has_package_script "$required_script"');
     expect(checksFastRun.env.RATCHET_PR_HEAD_SHA).toBe(
       "${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}",
     );
@@ -5735,7 +5777,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(releaseGateMerge.run).toContain("for attempt in {1..6}");
     expect(releaseGateMerge.run).toContain(
-      '"+refs/pull/${PULL_REQUEST_NUMBER}/merge:refs/remotes/origin/ci-max-lines-merge"',
+      '"+refs/pull/${PULL_REQUEST_NUMBER}/merge:refs/remotes/origin/ci-ratchet-merge"',
     );
     expect(releaseGateMerge.run).toContain('"$merge_head" == "$TARGET_SHA"');
     expect(releaseGateMerge.run).toContain('git show -s --format=%P "$merge_sha"');
@@ -5764,7 +5806,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       '"+${PROTOCOL_SINCE_BASE_SHA}:refs/remotes/origin/protocol-since-base"',
     );
     expect(checksFastRun.run).toContain(
-      'base_ref="${RATCHET_BASE_REF:-refs/remotes/origin/ci-max-lines-base}"',
+      'base_ref="${RATCHET_BASE_REF:-refs/remotes/origin/ci-ratchet-base}"',
     );
     expect(checksFastRun.run).toContain('git cat-file -e "${base_ref}^{commit}"');
     expect(checksFastRun.run).toContain(
@@ -5774,10 +5816,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(checksFastRun.run).toContain('"${merge_parents[1]:-}" != "$RATCHET_PR_HEAD_SHA"');
     expect(checksFastRun.run).toContain('prepared_base="$(git rev-parse "$base_ref")"');
     expect(checksFastRun.run).toContain('"${merge_parents[0]}" != "$prepared_base"');
-    expect(checksFastRun.run).not.toContain("ci-max-lines-target^");
+    expect(checksFastRun.run).not.toContain("ci-ratchet-target^");
     expect(checksFastRun.run).not.toContain("resolve_manual_merge_base");
-    expect(checksFastRun.run).not.toContain("+${merge_base}:refs/remotes/origin/ci-max-lines-base");
+    expect(checksFastRun.run).not.toContain("+${merge_base}:refs/remotes/origin/ci-ratchet-base");
     expect(checksFastRun.run).toContain('pnpm check:max-lines-ratchet --base "$base_ref"');
+    expect(checksFastRun.run).toContain('pnpm check:assertion-safety --base "$base_ref"');
     expect(checksFastRun.run).toContain(
       'if [[ "${RATCHET_RELEASE_MERGE_TREE:-}" == "true" ]]; then',
     );
@@ -5803,9 +5846,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         .include,
     ).toEqual([
       {
-        check_name: "checks-fast-max-lines-ratchet",
+        check_name: "checks-fast-baseline-ratchets",
         runtime: "node",
-        task: "max-lines-ratchet",
+        task: "baseline-ratchets",
       },
       {
         check_name: "checks-fast-coercion-helpers",
@@ -5920,50 +5963,30 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       }),
     );
 
-    const push = runCiManifestFixture({
-      bundledPlanner: true,
-      eventName: "push",
-    });
-    expect(push.status, push.output).toBe(0);
-    expect(
-      JSON.parse(
-        expectDefined(
-          push.outputs.checks_node_core_nondist_matrix,
-          "push node core nondist matrix output",
-        ),
-      ).include,
-    ).toContainEqual(
-      expect.objectContaining({
-        check_name: "bundled-node-plan",
-        env: {
-          OPENCLAW_CI_TEST_COMPACT_MODE: "push",
-          OPENCLAW_CI_TEST_RUNNER_BACKEND: "",
-        },
-      }),
-    );
-
-    const githubPush = runCiManifestFixture({
-      bundledPlanner: true,
-      eventName: "push",
-      runnerBackend: "github",
-    });
-    expect(githubPush.status, githubPush.output).toBe(0);
-    expect(
-      JSON.parse(
-        expectDefined(
-          githubPush.outputs.checks_node_core_nondist_matrix,
-          "GitHub-hosted push node core nondist matrix output",
-        ),
-      ).include,
-    ).toContainEqual(
-      expect.objectContaining({
-        check_name: "bundled-node-plan",
-        env: {
-          OPENCLAW_CI_TEST_COMPACT_MODE: "push",
-          OPENCLAW_CI_TEST_RUNNER_BACKEND: "github",
-        },
-      }),
-    );
+    for (const runnerBackend of [undefined, "github", "hybrid"] as const) {
+      const push = runCiManifestFixture({
+        bundledPlanner: true,
+        eventName: "push",
+        runnerBackend,
+      });
+      expect(push.status, push.output).toBe(0);
+      expect(
+        JSON.parse(
+          expectDefined(
+            push.outputs.checks_node_core_nondist_matrix,
+            `${runnerBackend ?? "default"} push node core nondist matrix output`,
+          ),
+        ).include,
+      ).toContainEqual(
+        expect.objectContaining({
+          check_name: "bundled-node-plan",
+          env: {
+            OPENCLAW_CI_TEST_COMPACT_MODE: "push",
+            OPENCLAW_CI_TEST_RUNNER_BACKEND: runnerBackend ?? "",
+          },
+        }),
+      );
+    }
 
     const changedPullRequest = runCiManifestFixture({
       bundledPlanner: true,
@@ -6406,6 +6429,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     });
     expect(realGatewaySetup.with).toEqual(expectedSharedUiE2eSetup);
 
+    // Both Chromium lanes own the same serial workload, so they must share one
+    // routing shape and differ only in Blacksmith size. Pin the literal so a
+    // divergence like the hosted-only real-Gateway row cannot return unnoticed.
+    const uiE2eRunsOnExpression = (blacksmithRunner: string) =>
+      `\${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && '${blacksmithRunner}' || 'ubuntu-24.04') }}`;
     const routedUiE2eJobs = [
       {
         job: uiE2e,
@@ -6413,17 +6441,15 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         name: "checks-ui-e2e",
         setup: uiE2eSetup,
         blacksmithRunner: "blacksmith-8vcpu-ubuntu-2404",
-        runsOn:
-          "${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}",
+        runsOn: uiE2eRunsOnExpression("blacksmith-8vcpu-ubuntu-2404"),
       },
       {
         job: uiE2eRealGateway,
-        hybridFirstAttempt: false,
+        hybridFirstAttempt: true,
         name: "checks-ui-e2e-real-gateway",
         setup: realGatewaySetup,
         blacksmithRunner: "blacksmith-16vcpu-ubuntu-2404",
-        runsOn:
-          "${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}",
+        runsOn: uiE2eRunsOnExpression("blacksmith-16vcpu-ubuntu-2404"),
       },
     ] as const;
     const routingScenarios = [
@@ -6470,8 +6496,22 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         expected: { blacksmith: false, dependencyCache: "false", useActionsCache: "true" },
       },
       {
-        name: "fork pull request",
+        // Runner routing follows contributor trust; the exact dependency cache
+        // stays fork-gated either way, so a fork never writes what main reads.
+        name: "fork pull request from returning contributor",
         context: {
+          authorAssociation: "CONTRIBUTOR",
+          eventName: "pull_request",
+          headRepository: "contributor/openclaw",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+        },
+        expected: { blacksmith: true, dependencyCache: "false", useActionsCache: "true" },
+      },
+      {
+        name: "fork pull request from unknown author",
+        context: {
+          authorAssociation: "NONE",
           eventName: "pull_request",
           headRepository: "contributor/openclaw",
           repository: "openclaw/openclaw",
@@ -6607,6 +6647,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(realGatewayRuns).toEqual([
       "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/mcp-app-conformance.e2e.test.ts",
       "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/control-ui-auth-transports.e2e.test.ts",
+      "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/logs-lifecycle.e2e.test.ts",
     ]);
     const realGatewayRunContract = realGatewayRuns.join("\n");
     expect(realGatewayRunContract).not.toContain("--retry");
@@ -6719,12 +6760,19 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(parityStep.run).not.toContain("pnpm apple:i18n:check");
   });
 
-  it("verifies built runtime artifacts with hosted-serial and Blacksmith-parallel modes", () => {
+  it("runs built runtime verifiers inside the artifact-check wave", () => {
     const workflow = readCiWorkflow();
-    const verifierStep = workflow.jobs["build-artifacts"].steps.find(
-      (step: WorkflowStep) => step.name === "Verify built runtime artifacts",
+    const steps = workflow.jobs["build-artifacts"].steps;
+    const verifierStep = steps.find(
+      (step: WorkflowStep) => step.name === "Run built artifact checks",
     );
 
+    // The verifiers always run, so the shared step cannot be gated on the
+    // selected checks; each check keeps its own RUN_* gate inside the body.
+    expect(verifierStep.if).toBeUndefined();
+    expect(steps.some((step: WorkflowStep) => step.name === "Verify built runtime artifacts")).toBe(
+      false,
+    );
     // The hosted RSS allowance and the serial fallback keep the startup-memory
     // measurement unperturbed on 4-core hosted runners.
     expect(verifierStep.env.OPENCLAW_STARTUP_MEMORY_PLUGINS_LIST_MB).toBe(
@@ -6742,12 +6790,20 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(verifierStep.run).toContain("--config test/vitest/vitest.e2e.config.ts");
     expect(verifierStep.run).toContain("Selected target predates");
     expect(verifierStep.run).toContain("pnpm test:build:singleton");
-    // The parallel branch must complete any startup asset rebuild before
-    // forking so concurrent verifiers never read dist mid-write.
+    // The startup asset rebuild must complete before any verifier forks so
+    // concurrent readers never observe dist mid-write.
     expect(verifierStep.run).toContain("scripts/ensure-cli-startup-build.mts");
     expect(verifierStep.run).toContain("scripts/check-cli-startup-memory.mjs");
-    expect(verifierStep.run).toContain("pnpm test:startup:memory");
     expect(verifierStep.run).toContain(".artifacts/startup-memory/summary.md");
+    // Every verifier reports through the shared results map so a failure can
+    // never be swallowed by the wave.
+    for (const name of ["doctor-plugin-index", "plugin-singleton", "startup-memory"]) {
+      expect(verifierStep.run).toContain(`run_verifier "${name}"`);
+      expect(verifierStep.run).toContain(`["${name}"]="skipped"`);
+    }
+    expect(verifierStep.run).toContain(
+      "for name in channels core-support-boundary doctor-plugin-index gateway-watch plugin-singleton startup-memory tui-pty; do",
+    );
   });
 
   it("runs the scoped SQLite lifecycle proof against the exact built artifact", () => {
@@ -6888,7 +6944,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "launches openclaw (chat as local mode|tui against a real Gateway) through a real PTY",
     );
     expect(run).toContain("wait_checks()");
-    expect(run.match(/wait_checks$/gmu)).toHaveLength(3);
+    // Three wave barriers plus the one inside run_verifier, which serializes
+    // the built-runtime verifiers on hosted runners only.
+    expect(run.match(/wait_checks$/gmu)).toHaveLength(4);
   });
 
   it("keeps docs i18n CI on the workflow-owned patched Go toolchain", () => {
@@ -7036,9 +7094,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(workflow.on.pull_request).not.toHaveProperty("paths-ignore");
     expect(gate.name).toBe("openclaw/ci-gate");
     expect(gate.needs).toEqual([...requiredJobs, ...selectedJobs]);
+    // Every job in the file is gated; a new lane cannot slip in ungated.
     expect(gate.needs.toSorted()).toEqual(
       Object.keys(workflow.jobs)
-        .filter((job) => job !== "ci-gate" && job !== "ci-timings-summary")
+        .filter((job) => job !== "ci-gate")
         .toSorted(),
     );
     expect(gate.if).toBe(
@@ -7183,7 +7242,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       const qaWorkflow = readQaProfileEvidenceWorkflow();
       const maturityWorkflow = readMaturityScorecardWorkflow();
       const validateJob = qaWorkflow.jobs.validate_selected_ref;
-      const runJob = qaWorkflow.jobs.run_qa_profile;
+      const runJob = qaWorkflow.jobs.run_qa_profile_shard;
+      const aggregateJob = qaWorkflow.jobs.aggregate_qa_profile;
       const stepNames = runJob.steps.map((step: WorkflowStep) => step.name);
       const buildStep = expectDefined(
         runJob.steps.find((step: WorkflowStep) => step.name === "Build private QA runtime"),
@@ -7194,12 +7254,14 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         "protocol comparison base fetch",
       );
       const runStep = expectDefined(
-        runJob.steps.find((step: WorkflowStep) => step.name === "Run QA profile"),
-        "QA profile run",
+        runJob.steps.find((step: WorkflowStep) => step.name === "Run QA profile shard"),
+        "QA profile shard run",
       );
       const evidenceStep = expectDefined(
-        runJob.steps.find((step: WorkflowStep) => step.name === "Validate QA profile evidence"),
-        "QA profile evidence validation",
+        aggregateJob.steps.find(
+          (step: WorkflowStep) => step.name === "Finalize QA profile evidence",
+        ),
+        "QA profile evidence finalization",
       );
       const protocolOutput = "${{ needs.validate_selected_ref.outputs.protocol_base_revision }}";
       const trustedInput = "${{ inputs.trusted_ref || inputs.ref }}";
@@ -7213,13 +7275,20 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expect(validateJob.outputs.protocol_base_revision).toBe(
         "${{ steps.validate.outputs.protocol_base_revision }}",
       );
-      expect(validateJob.steps[1].env.INPUT_REF).toBe(trustedInput);
+      const validateStep = expectDefined(
+        validateJob.steps.find((step: WorkflowStep) => step.name === "Validate selected ref"),
+        "QA selected-ref validation",
+      );
+      expect(validateStep.env.INPUT_REF).toBe(trustedInput);
       const ordered = [
-        "Checkout selected ref",
-        "Fetch protocol comparison base",
+        "Checkout trusted QA harness",
+        "Restore trusted QA harness revision",
         "Setup Node environment",
+        "Checkout selected ref",
+        "Install selected dependencies",
+        "Fetch protocol comparison base",
         "Build private QA runtime",
-        "Run QA profile",
+        "Run QA profile shard",
       ].map((name) => stepNames.indexOf(name));
       expect(ordered.every((index, position) => index > (ordered[position - 1] ?? -1))).toBe(true);
       expect(fetchStep.env?.PROTOCOL_SINCE_BASE_SHA).toBe(protocolOutput);
@@ -7379,7 +7448,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const publisherPreflight = maturityWorkflow.jobs.publisher_preflight;
     const publishJob = maturityWorkflow.jobs.publish;
     const publishPrJob = maturityWorkflow.jobs.publish_generated_pr;
-    const qaRunJob = qaEvidenceWorkflow.jobs.run_qa_profile;
+    const qaAuthorizeJob = qaEvidenceWorkflow.jobs.authorize_actor;
+    const qaPlanJob = qaEvidenceWorkflow.jobs.plan_qa_profile;
+    const qaShardJob = qaEvidenceWorkflow.jobs.run_qa_profile_shard;
+    const qaAggregateJob = qaEvidenceWorkflow.jobs.aggregate_qa_profile;
+    const qaValidateJob = qaEvidenceWorkflow.jobs.validate_selected_ref;
 
     expect(maturityWorkflow.on.workflow_call.inputs).toMatchObject({
       qa_evidence_run_id: {
@@ -7409,7 +7482,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(maturityWorkflow.on.workflow_dispatch.inputs.allow_failures).toEqual({
       description: "Allow rendering from valid incomplete QA evidence",
       required: false,
-      default: false,
+      default: true,
       type: "boolean",
     });
     expect(maturityWorkflow.on.workflow_dispatch.inputs.publish_pull_request).toEqual({
@@ -7453,24 +7526,237 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs.qa_profile).not.toHaveProperty("options");
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs.qa_profile.default).toBe("all");
     expect(qaEvidenceWorkflow.on.workflow_call.inputs.qa_profile.type).toBe("string");
-    expect(qaRunJob["timeout-minutes"]).toBe(150);
-    const validateProfileStep = qaRunJob.steps.find(
-      (step: WorkflowStep) => step.name === "Validate QA profile input",
+    for (const outputName of [
+      "artifact_name",
+      "qa_profile",
+      "qa_exit_code",
+      "qa_passed",
+      "target_sha",
+      "trusted_reason",
+      "qa_evidence_path",
+    ]) {
+      expect(qaEvidenceWorkflow.on.workflow_call.outputs[outputName].value).toContain(
+        `jobs.aggregate_qa_profile.outputs.${outputName}`,
+      );
+    }
+    expect(qaPlanJob.needs).toBe("validate_selected_ref");
+    expect(qaPlanJob.outputs).toEqual({
+      channel_driver: "${{ steps.plan.outputs.channel_driver }}",
+      matrix: "${{ steps.plan.outputs.matrix }}",
+      profile: "${{ steps.plan.outputs.profile }}",
+      shard_count: "${{ steps.plan.outputs.shard_count }}",
+    });
+    const qaAuthorizeStep = expectDefined(
+      qaAuthorizeJob.steps.find(
+        (step: WorkflowStep) => step.name === "Require maintainer-level repository access",
+      ),
+      "QA workflow actor authorization",
     );
-    expect(validateProfileStep.run).toContain(
-      "readQaScorecardTaxonomyReport(readQaScenarioPack().scenarios)",
+    expect(qaAuthorizeStep.env).toEqual({
+      CALLER_WORKFLOW_REF: "${{ github.workflow_ref }}",
+      JOB_CONTEXT: "${{ toJSON(job) }}",
+    });
+    expect(qaAuthorizeStep.with?.script).toContain("callerWorkflowRef !== calledWorkflowRef");
+    expect(qaAuthorizeStep.with?.script).toContain(
+      'job.workflow_repository === "openclaw/openclaw"',
     );
-    expect(validateProfileStep.run).toContain(
-      "taxonomy.profiles.find((entry) => entry.id === requested)",
+    expect(qaAuthorizeStep.with?.script).toContain("job.workflow_ref === calledWorkflowRef");
+    expect(qaAuthorizeStep.with?.script).toContain(
+      'core.setOutput("authorized", trustedMainCaller ? "true" : "false")',
     );
-    expect(validateProfileStep.run).toContain("profile=${profile.id}");
-    const ensurePlaywrightStep = qaRunJob.steps.find(
+    expect(qaValidateJob.outputs.workflow_sha).toBe("${{ steps.workflow.outputs.workflow_sha }}");
+    expect(qaValidateJob.outputs).not.toHaveProperty("workflow_repository");
+    const workflowIdentityStep = qaValidateJob.steps[0];
+    expect(workflowIdentityStep).toMatchObject({
+      name: "Resolve job workflow identity",
+      id: "workflow",
+      env: { JOB_CONTEXT: "${{ toJSON(job) }}" },
+    });
+    expect(workflowIdentityStep.run).toContain("job.workflow_repository");
+    expect(workflowIdentityStep.run).toContain("job.workflow_sha");
+    expect(workflowIdentityStep.run).toContain("^[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+$");
+    expect(workflowIdentityStep.run).toContain("^[0-9a-f]{40}$");
+
+    const selectedCodeSteps = new Map([
+      [qaPlanJob, ["Build private QA runtime", "Resolve taxonomy profile shards"]],
+      [
+        qaShardJob,
+        [
+          "Fetch protocol comparison base",
+          "Build private QA runtime",
+          "Ensure Playwright Chromium",
+          "Run QA profile shard",
+          "Validate QA profile shard evidence",
+        ],
+      ],
+      [
+        qaAggregateJob,
+        [
+          "Build private QA runtime",
+          "Aggregate validated shard evidence",
+          "Finalize QA profile evidence",
+        ],
+      ],
+    ]);
+    for (const [job, codeStepNames] of selectedCodeSteps) {
+      expect(job.environment).toBe("qa-live-shared");
+      const stepIndex = (name: string) =>
+        job.steps.findIndex((step: WorkflowStep) => step.name === name);
+      const permissionStep = expectDefined(
+        job.steps.find((step: WorkflowStep) => step.name === "Require authorized workflow actor"),
+        "selected QA actor permission check",
+      );
+      const trustedCheckout = expectDefined(
+        job.steps.find((step: WorkflowStep) => step.name === "Checkout trusted QA harness"),
+        "trusted QA harness checkout",
+      );
+      const restoreTrusted = expectDefined(
+        job.steps.find((step: WorkflowStep) => step.name === "Restore trusted QA harness revision"),
+        "trusted QA harness revision restore",
+      );
+      const setupStep = expectDefined(
+        job.steps.find((step: WorkflowStep) => step.name === "Setup Node environment"),
+        "trusted QA harness Node setup",
+      );
+      const selectedCheckout = expectDefined(
+        job.steps.find((step: WorkflowStep) => step.name === "Checkout selected ref"),
+        "selected QA checkout",
+      );
+      const installSelected = expectDefined(
+        job.steps.find((step: WorkflowStep) => step.name === "Install selected dependencies"),
+        "selected QA dependency install",
+      );
+
+      expect(permissionStep).toMatchObject({
+        uses: "actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3",
+        env: {
+          CALLER_WORKFLOW_REF: "${{ github.workflow_ref }}",
+          JOB_CONTEXT: "${{ toJSON(job) }}",
+        },
+      });
+      expect(permissionStep.with?.script).toContain("getCollaboratorPermissionLevel");
+      expect(permissionStep.with?.script).toContain('new Set(["admin", "maintain", "write"])');
+      expect(permissionStep.with?.script).toContain("callerWorkflowRef !== calledWorkflowRef");
+      expect(permissionStep.with?.script).toContain(
+        'job.workflow_repository === "openclaw/openclaw"',
+      );
+      expect(permissionStep.with?.script).toContain("job.workflow_ref === calledWorkflowRef");
+      expect(permissionStep.with?.script).toContain("if (!trustedMainCaller)");
+      expect(trustedCheckout).toMatchObject({
+        name: "Checkout trusted QA harness",
+        uses: CHECKOUT_V6,
+        with: {
+          repository: "openclaw/openclaw",
+          ref: "main",
+          "fetch-depth": 1,
+          "persist-credentials": false,
+        },
+      });
+      const checkoutSteps = job.steps.filter((step: WorkflowStep) =>
+        step.uses?.startsWith("actions/checkout@"),
+      );
+      expect(checkoutSteps).toHaveLength(1);
+      expect(checkoutSteps[0]?.with).toMatchObject({
+        repository: "openclaw/openclaw",
+        ref: "main",
+      });
+      expect(restoreTrusted).toMatchObject({
+        env: {
+          EXPECTED_WORKFLOW_SHA: "${{ needs.validate_selected_ref.outputs.workflow_sha }}",
+        },
+        shell: "bash",
+      });
+      expect(restoreTrusted.run).toContain("^[0-9a-f]{40}$");
+      expect(restoreTrusted.run).toContain(
+        'git fetch --no-tags --no-recurse-submodules --depth=1 origin "$EXPECTED_WORKFLOW_SHA"',
+      );
+      expect(restoreTrusted.run).toContain('git checkout --detach "$EXPECTED_WORKFLOW_SHA"');
+      expect(restoreTrusted.run).toContain(
+        'test "$(git rev-parse HEAD)" = "$EXPECTED_WORKFLOW_SHA"',
+      );
+      expect(job.steps.some((step: WorkflowStep) => step.uses?.startsWith("actions/cache/"))).toBe(
+        false,
+      );
+      expect(setupStep.with?.["install-deps"]).toBe("false");
+      expect(setupStep.with?.["use-actions-cache"]).toBe("false");
+      expect(selectedCheckout).toMatchObject({
+        env: {
+          EXPECTED_SHA: "${{ needs.validate_selected_ref.outputs.selected_revision }}",
+        },
+        shell: "bash",
+      });
+      expect(selectedCheckout).not.toHaveProperty("uses");
+      expect(selectedCheckout.run).toContain("^[0-9a-f]{40}$");
+      expect(selectedCheckout.run).toContain("[[ ! -e selected ]]");
+      expect(selectedCheckout.run).toContain("git init selected");
+      expect(selectedCheckout.run).toContain(
+        'git -C selected remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"',
+      );
+      expect(selectedCheckout.run).toContain(
+        'git -C selected fetch --no-tags --no-recurse-submodules --depth=1 origin "$EXPECTED_SHA"',
+      );
+      expect(selectedCheckout.run).toContain("git -C selected checkout --detach FETCH_HEAD");
+      expect(selectedCheckout.run).toContain(
+        'test "$(git -C selected rev-parse HEAD)" = "$EXPECTED_SHA"',
+      );
+      expect(
+        job.steps.some((step: WorkflowStep) => step.name === "Verify selected checkout SHA"),
+      ).toBe(false);
+      expect(installSelected["working-directory"]).toBe("selected");
+      expect(installSelected.run).toContain(
+        '--store-dir "$RUNNER_TEMP/openclaw-qa-selected-pnpm-store"',
+      );
+      for (const installFlag of [
+        "--frozen-lockfile",
+        "--ignore-scripts=false",
+        "--config.engine-strict=false",
+        "--config.enable-pre-post-scripts=true",
+        "--config.side-effects-cache=true",
+      ]) {
+        expect(installSelected.run).toContain(installFlag);
+      }
+      const securitySequence = [
+        "Require authorized workflow actor",
+        "Checkout trusted QA harness",
+        "Restore trusted QA harness revision",
+        "Setup Node environment",
+        "Checkout selected ref",
+        "Install selected dependencies",
+      ];
+      expect(
+        job.steps.slice(0, securitySequence.length).map((step: WorkflowStep) => step.name),
+      ).toEqual(securitySequence);
+      const ordered = securitySequence.map(stepIndex);
+      expect(ordered.every((index, position) => index > (ordered[position - 1] ?? -1))).toBe(true);
+      for (const codeStepName of codeStepNames) {
+        const codeStep = expectDefined(
+          job.steps.find((step: WorkflowStep) => step.name === codeStepName),
+          `selected QA step ${codeStepName}`,
+        );
+        expect(codeStep["working-directory"], codeStepName).toBe("selected");
+      }
+    }
+    const validateProfileStep = qaPlanJob.steps.find(
+      (step: WorkflowStep) => step.name === "Resolve taxonomy profile shards",
+    );
+    expect(validateProfileStep.run).toContain("createQaProfileEvidenceShardPlan(requested)");
+    expect(validateProfileStep.run).toContain("matrix=${JSON.stringify({ include: plan.shards })}");
+    expect(validateProfileStep.run).toContain("shard_count=${plan.shards.length}");
+
+    expect(qaShardJob["timeout-minutes"]).toBe(150);
+    expect(qaShardJob.needs).toEqual(["validate_selected_ref", "plan_qa_profile"]);
+    expect(qaShardJob.strategy).toMatchObject({
+      "fail-fast": false,
+      "max-parallel": 8,
+      matrix: "${{ fromJSON(needs.plan_qa_profile.outputs.matrix) }}",
+    });
+    const ensurePlaywrightStep = qaShardJob.steps.find(
       (step: WorkflowStep) => step.name === "Ensure Playwright Chromium",
     );
     expect(ensurePlaywrightStep.run).toContain("scripts/ensure-playwright-chromium.mts");
     expect(ensurePlaywrightStep.run).toContain("scripts/ensure-playwright-chromium.mjs");
-    const runProfileStep = qaRunJob.steps.find(
-      (step: WorkflowStep) => step.name === "Run QA profile",
+    const runProfileStep = qaShardJob.steps.find(
+      (step: WorkflowStep) => step.name === "Run QA profile shard",
     );
     expect(runProfileStep.env?.OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF).toBe("1");
     expect(runProfileStep.env?.OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS).toBe("120000");
@@ -7483,9 +7769,16 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(runProfileStep.run).toContain("--concurrency 3");
     expect(runProfileStep.run).toContain("--fast");
-    expect(runProfileStep.run).toContain('mkdir -p "$output_dir"');
-    expect(runProfileStep.run.indexOf('mkdir -p "$output_dir"')).toBeLessThan(
-      runProfileStep.run.indexOf('echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"'),
+    expect(runProfileStep.run).toContain('qa_output_dir=".artifacts/qa-e2e/');
+    expect(runProfileStep.run).toContain(
+      'published_output_dir="${GITHUB_WORKSPACE}/selected/${qa_output_dir}"',
+    );
+    expect(runProfileStep.run).toContain('mkdir -p "$qa_output_dir"');
+    expect(runProfileStep.run).toContain('echo "output_dir=${published_output_dir}"');
+    expect(runProfileStep.run).toContain('--output-dir "$qa_output_dir"');
+    expect(runProfileStep.run).toContain('OUTPUT_DIR="$published_output_dir"');
+    expect(runProfileStep.run.indexOf('mkdir -p "$qa_output_dir"')).toBeLessThan(
+      runProfileStep.run.indexOf('echo "output_dir=${published_output_dir}"'),
     );
     expect(runProfileStep.run).toContain(
       "LC_ALL=C timeout --verbose --signal=TERM --kill-after=30s 110m",
@@ -7522,20 +7815,70 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(runProfileStep.run).toContain("qa-profile-run-status.json");
     expect(runProfileStep.run).toContain("protocolBaseSha: process.env.PROTOCOL_SINCE_BASE_SHA");
     expect(runProfileStep.run).toContain("exitCode: Number(process.env.QA_EXIT_CODE)");
-    expect(runProfileStep.run).toContain('timedOut: timeoutOutcome !== "none"');
-    expect(runProfileStep.run).toContain("timeoutOutcome,");
+    expect(runProfileStep.run).toContain('timedOut: process.env.TIMEOUT_OUTCOME !== "none"');
+    expect(runProfileStep.run).toContain("timeoutOutcome: process.env.TIMEOUT_OUTCOME");
     expect(runProfileStep.run).toContain("completedAt: new Date().toISOString()");
+    expect(runProfileStep.run).toContain("id: process.env.QA_SHARD_ID");
+    expect(runProfileStep.run).toContain("scenarioIds: JSON.parse(process.env.SCENARIO_IDS_JSON)");
     expect(runProfileStep.run).not.toContain("--allow-failures");
-    const failProfileStep = qaRunJob.steps.find(
+
+    const shardEvidenceStep = qaShardJob.steps.find(
+      (step: WorkflowStep) => step.name === "Validate QA profile shard evidence",
+    );
+    expect(shardEvidenceStep.if).toBe("always()");
+    expect(shardEvidenceStep.run).toContain("qaProfileEvidencePlan.attest");
+    const shardUploadStep = qaShardJob.steps.find(
+      (step: WorkflowStep) => step.name === "Upload QA profile shard evidence",
+    );
+    expect(shardUploadStep.if).toBe("always()");
+    expect(shardUploadStep.with).toMatchObject({
+      name: "qa-profile-evidence-shard-${{ matrix.id }}-${{ needs.validate_selected_ref.outputs.selected_revision }}",
+      path: "${{ steps.run_profile.outputs.output_dir }}",
+      "if-no-files-found": "error",
+    });
+
+    expect(qaAggregateJob.needs).toEqual([
+      "validate_selected_ref",
+      "plan_qa_profile",
+      "run_qa_profile_shard",
+    ]);
+    expect(qaAggregateJob.if.replace(/\s+/gu, " ")).toBe(
+      "${{ always() && needs.validate_selected_ref.result == 'success' && needs.plan_qa_profile.result == 'success' }}",
+    );
+    const aggregateDownloadStep = qaAggregateJob.steps.find(
+      (step: WorkflowStep) => step.name === "Download QA profile shard evidence",
+    );
+    expect(aggregateDownloadStep.with).toMatchObject({
+      pattern:
+        "qa-profile-evidence-shard-*-${{ needs.validate_selected_ref.outputs.selected_revision }}",
+      path: "selected/.artifacts/qa-profile-shards",
+      "merge-multiple": false,
+    });
+    const aggregateStep = qaAggregateJob.steps.find(
+      (step: WorkflowStep) => step.name === "Aggregate validated shard evidence",
+    );
+    expect(aggregateStep.run).toContain(
+      "Expected ${SHARD_COUNT} completed status and evidence files",
+    );
+    expect(aggregateStep.run).toContain("Timed-out QA shard cannot contribute partial evidence");
+    expect(aggregateStep.run).toContain("-mindepth 2 -maxdepth 2");
+    expect(aggregateStep.run).toContain("aggregateQaProfileEvidenceShards");
+    expect(aggregateStep.run).toContain("if jq -e '.timedOut == true'");
+    expect(aggregateStep.env?.OUTPUT_DIR).toContain(
+      "${{ github.workspace }}/selected/.artifacts/qa-e2e/",
+    );
+    const aggregateUploadStep = qaAggregateJob.steps.find(
+      (step: WorkflowStep) => step.name === "Upload QA profile evidence",
+    );
+    expect(aggregateUploadStep.with?.path).toBe("${{ steps.aggregate.outputs.output_dir }}");
+
+    const failProfileStep = qaAggregateJob.steps.find(
       (step: WorkflowStep) => step.name === "Fail if QA profile failed",
     );
-    expect(failProfileStep.if).toBe("always()");
     expect(failProfileStep.env?.ALLOW_FAILURES).toBe("${{ inputs.allow_failures }}");
-    expect(failProfileStep.env?.EVIDENCE_VALIDATED).toBe(
-      "${{ steps.evidence.outcome == 'success' }}",
-    );
+    expect(failProfileStep.run).toContain('[[ -z "${QA_EXIT_CODE:-}" ]]');
     expect(failProfileStep.run).toContain(
-      '[[ "$ALLOW_FAILURES" == "true" && "$EVIDENCE_VALIDATED" == "true" ]]',
+      '[[ "$QA_EXIT_CODE" != "0" && "$ALLOW_FAILURES" != "true" ]]',
     );
     expect(failProfileStep.run).toContain('exit "$QA_EXIT_CODE"');
     expect(generateJob.needs).toEqual(["validate_selected_ref", "publisher_preflight"]);
@@ -7557,6 +7900,12 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       OPENCLAW_QA_CONVEX_SITE_URL: "${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}",
     });
 
+    const maturityPermissionStep = expectDefined(
+      maturityWorkflow.jobs.validate_selected_ref.steps.find(
+        (step: WorkflowStep) => step.name === "Require authorized workflow actor",
+      ),
+      "maturity workflow actor authorization",
+    );
     const workflowStep = maturityWorkflow.jobs.validate_selected_ref.steps.find(
       (step: WorkflowStep) => step.name === "Resolve job workflow identity",
     );
@@ -7566,6 +7915,22 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const validateRefStep = maturityWorkflow.jobs.validate_selected_ref.steps.find(
       (step: WorkflowStep) => step.name === "Validate selected ref",
     );
+    expect(maturityPermissionStep).toMatchObject({
+      uses: "actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3",
+      env: {
+        CALLER_WORKFLOW_REF: "${{ github.workflow_ref }}",
+        JOB_CONTEXT: "${{ toJSON(job) }}",
+      },
+    });
+    expect(maturityPermissionStep.with?.script).toContain("getCollaboratorPermissionLevel");
+    expect(maturityPermissionStep.with?.script).toContain(
+      "callerWorkflowRef !== calledWorkflowRef",
+    );
+    expect(maturityPermissionStep.with?.script).toContain(`"${MATURITY_SCORECARD_WORKFLOW_REF}"`);
+    expect(maturityPermissionStep.with?.script).toContain(
+      'job.workflow_repository === "openclaw/openclaw"',
+    );
+    expect(maturityPermissionStep.with?.script).toContain("job.workflow_ref === calledWorkflowRef");
     expect(workflowStep.env.JOB_CONTEXT).toBe("${{ toJSON(job) }}");
     expect(workflowStep.run).toContain("job.workflow_sha must be a full lowercase commit SHA");
     expect(authorizeStep.env).toEqual({
@@ -7695,12 +8060,14 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(validateManifestStep.run).toContain("profilePlanSha256");
     expect(validateManifestStep.run).toContain("rerun the QA Profile Evidence workflow");
 
-    expect(qaRunJob.outputs.artifact_name).toBe("${{ steps.evidence.outputs.artifact_name }}");
-    const qaEvidenceStep = qaRunJob.steps.find(
-      (step: WorkflowStep) => step.name === "Validate QA profile evidence",
+    expect(qaAggregateJob.outputs.artifact_name).toBe(
+      "${{ steps.evidence.outputs.artifact_name }}",
+    );
+    const qaEvidenceStep = qaAggregateJob.steps.find(
+      (step: WorkflowStep) => step.name === "Finalize QA profile evidence",
     );
     expect(qaEvidenceStep.env.ARTIFACT_NAME).toBe(
-      "qa-profile-evidence-${{ steps.profile.outputs.profile }}-${{ needs.validate_selected_ref.outputs.selected_revision }}",
+      "qa-profile-evidence-${{ needs.plan_qa_profile.outputs.profile }}-${{ needs.validate_selected_ref.outputs.selected_revision }}",
     );
     expect(qaEvidenceStep.run).toContain("qa-profile-evidence-manifest.json");
     expect(qaEvidenceStep.run).toContain("validateQaEvidenceSummaryJson");
@@ -7708,7 +8075,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       /qaProfileEvidencePlan\.attest\(\s*payload\.profilePlan,\s*process\.env\.QA_EXIT_CODE === "0",?\s*\)/u,
     );
     expect(qaEvidenceStep.run).toContain("profilePlanSha256");
-    expect(qaEvidenceStep.run).toContain("rerun the QA Profile Evidence workflow");
     expect(qaEvidenceStep.env.PROTOCOL_BASE_SHA).toBe(
       "${{ needs.validate_selected_ref.outputs.protocol_base_revision }}",
     );
@@ -7718,15 +8084,14 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(qaEvidenceStep.run).toContain('qaPassed: process.env.QA_EXIT_CODE === "0"');
     expect(qaEvidenceStep.run).toContain('allowFailures: process.env.ALLOW_FAILURES === "true"');
     expect(qaEvidenceStep.run).toContain("protocolBaseSha: process.env.PROTOCOL_BASE_SHA");
-    expect(qaEvidenceStep.run).toContain("QA failures allowed:");
 
-    const qaUploadStep = qaRunJob.steps.find(
+    const qaUploadStep = qaAggregateJob.steps.find(
       (step: WorkflowStep) => step.name === "Upload QA profile evidence",
     );
-    expect(qaUploadStep.if).toBe("always()");
+    expect(qaUploadStep.if).toBe("always() && steps.evidence.outcome == 'success'");
     expect(qaUploadStep.with).toMatchObject({
-      name: "qa-profile-evidence-${{ steps.profile.outputs.profile }}-${{ needs.validate_selected_ref.outputs.selected_revision }}",
-      path: "${{ steps.run_profile.outputs.output_dir }}",
+      name: "qa-profile-evidence-${{ needs.plan_qa_profile.outputs.profile }}-${{ needs.validate_selected_ref.outputs.selected_revision }}",
+      path: "${{ steps.aggregate.outputs.output_dir }}",
       "if-no-files-found": "error",
     });
 
@@ -7852,8 +8217,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     () => {
       const qaWorkflow = readQaProfileEvidenceWorkflow();
       const maturityWorkflow = readMaturityScorecardWorkflow();
-      const producerStep = qaWorkflow.jobs.run_qa_profile.steps.find(
-        (step: WorkflowStep) => step.name === "Validate QA profile evidence",
+      const producerStep = qaWorkflow.jobs.aggregate_qa_profile.steps.find(
+        (step: WorkflowStep) => step.name === "Finalize QA profile evidence",
       );
       const consumerStep = maturityWorkflow.jobs.publish.steps.find(
         (step: WorkflowStep) => step.name === "Validate QA evidence manifest",
@@ -7995,13 +8360,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     () => {
       expect(runQaProfileFailureGate({ allowFailures: false, qaExitCode: "7" }).status).toBe(7);
       expect(runQaProfileFailureGate({ allowFailures: true, qaExitCode: "7" }).status).toBe(0);
-      expect(
-        runQaProfileFailureGate({
-          allowFailures: true,
-          evidenceValidated: false,
-          qaExitCode: "7",
-        }).status,
-      ).toBe(7);
       expect(runQaProfileFailureGate({ allowFailures: true }).status).toBe(1);
       expect(runQaProfileFailureGate({ allowFailures: false, qaExitCode: "0" }).status).toBe(0);
     },

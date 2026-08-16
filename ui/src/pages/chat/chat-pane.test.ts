@@ -20,7 +20,6 @@ import {
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";
 import { cacheChatSessionSnapshot, type ChatMessageCache } from "./session-message-cache.ts";
 import { openSlot } from "./sidebar-layout.ts";
@@ -670,19 +669,24 @@ describe("chat pane keyboard shortcuts", () => {
     state.sidebarContent = canvasContent;
     state.sidebarLayout = openSlot({ columns: [] }, "detail");
 
-    expect(createSessionWorkspaceProps(state).collapsed).toBe(true);
+    const hasWorkspace = () =>
+      state.sidebarLayout.columns[0]?.panels.some((panel) => panel.slot === "workspace") === true;
+    expect(hasWorkspace()).toBe(false);
 
     const expandEvent = dispatchSidebarShortcut(pane);
 
     expect(expandEvent.defaultPrevented).toBe(true);
-    expect(createSessionWorkspaceProps(state).collapsed).toBe(false);
-    expect(state.sidebarLayout.columns[0]?.panels[0]?.slot).toBe("detail");
+    expect(hasWorkspace()).toBe(true);
+    expect(state.sidebarLayout.columns[0]?.panels.map((panel) => panel.slot)).toEqual([
+      "detail",
+      "workspace",
+    ]);
     expect(state.sidebarContent).toBe(canvasContent);
 
     const collapseEvent = dispatchSidebarShortcut(pane);
 
     expect(collapseEvent.defaultPrevented).toBe(true);
-    expect(createSessionWorkspaceProps(state).collapsed).toBe(true);
+    expect(hasWorkspace()).toBe(false);
     expect(state.sidebarLayout.columns[0]?.panels[0]?.slot).toBe("detail");
     expect(state.sidebarContent).toBe(canvasContent);
 
@@ -692,7 +696,31 @@ describe("chat pane keyboard shortcuts", () => {
     pane.active = false;
     const inactivePaneEvent = dispatchSidebarShortcut(pane);
     expect(inactivePaneEvent.defaultPrevented).toBe(false);
-    expect(createSessionWorkspaceProps(state).collapsed).toBe(true);
+    expect(hasWorkspace()).toBe(false);
+  });
+
+  it("toggles the terminal tab in the active pane", () => {
+    const { pane, state } = createTestChatPane({
+      client: {} as GatewayBrowserClient,
+      sessions: {} as SessionCapability,
+    });
+    pane.active = true;
+    state.terminalAvailable = true;
+    const press = () => {
+      const event = new KeyboardEvent("keydown", {
+        cancelable: true,
+        code: "Backquote",
+        ctrlKey: true,
+      });
+      pane.handleDocumentKeydown(event);
+      return event;
+    };
+
+    expect(press().defaultPrevented).toBe(true);
+    expect(state.sidebarLayout.columns[0]?.panels.map((panel) => panel.slot)).toEqual(["terminal"]);
+    expect(press().defaultPrevented).toBe(true);
+    expect(state.sidebarLayout.columns).toEqual([]);
+    expect(state.sidebarLayout.open).toBe(true);
   });
 });
 

@@ -7,6 +7,7 @@ import {
   type CommandPaletteTargetDetail,
 } from "../../components/command-palette-contract.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   announceCatalogSessionContinued,
   parseCatalogSessionKey,
@@ -519,7 +520,7 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
       }
     } catch (error) {
       if (generation === this.olderLoadGeneration) {
-        state.lastError = error instanceof Error ? error.message : String(error);
+        state.lastError = formatUiError(error);
       }
     } finally {
       if (generation === this.olderLoadGeneration) {
@@ -620,7 +621,7 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
         return;
       }
       this.activeCatalogContinuation = null;
-      state.lastError = error instanceof Error ? error.message : String(error);
+      state.lastError = formatUiError(error);
       state.chatSending = false;
       state.requestUpdate();
     }
@@ -665,7 +666,7 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
         draft: editorText,
       });
     } catch (error) {
-      state.lastError = error instanceof Error ? error.message : String(error);
+      state.lastError = formatUiError(error);
       state.chatError = state.lastError;
       state.requestUpdate?.();
     }

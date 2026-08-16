@@ -596,9 +596,12 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     vi.setSystemTime(repairTimeMs);
     try {
       expect(isArtifactSetFresh(freshParams)).toBe(true);
-      // Round past fractional filesystem precision so the next check takes the fast path.
+      // The repaired output must clear the newest input by a whole millisecond.
+      // Matching it exactly leaves no headroom for sub-millisecond write
+      // rounding or lagging metadata, and a CI runner that lands even a
+      // fraction short puts every later invocation back on the full-hash path.
       expect(fs.statSync(outputPath).mtimeMs).toBeGreaterThanOrEqual(
-        fs.statSync(inputPath).mtimeMs,
+        Math.ceil(fs.statSync(inputPath).mtimeMs) + 1,
       );
     } finally {
       vi.useRealTimers();

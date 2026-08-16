@@ -16,6 +16,13 @@
   ],
   "name": "Codex",
   "description": "Codex app-server harness and native session catalog.",
+  "cliCommands": [
+    {
+      "name": "codex",
+      "description": "Inspect and branch from Codex sessions through the Gateway",
+      "hasSubcommands": true
+    }
+  ],
   "contracts": {
     "mediaUnderstandingProviders": ["codex"],
     "migrationProviders": ["codex"],
@@ -45,6 +52,7 @@
     "onConfigPaths": [
       "plugins.entries.codex.config.appServer.transport",
       "plugins.entries.codex.config.sessionCatalog.enabled",
+      "plugins.entries.codex.config.sessionCatalog.homes",
       "plugins.entries.codex.config.supervision.enabled"
     ]
   },
@@ -73,7 +81,11 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "enabled": { "type": "boolean", "default": true }
+          "enabled": { "type": "boolean", "default": true },
+          "homes": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1, "pattern": "\\S" }
+          }
         }
       },
       "discovery": {
@@ -391,6 +403,11 @@
     "sessionCatalog.enabled": {
       "label": "Discover Codex Sessions",
       "help": "List native Codex sessions in the sidebar from this Gateway and eligible paired nodes."
+    },
+    "sessionCatalog.homes": {
+      "label": "Additional Codex Homes",
+      "help": "Existing local Codex home directories to include in native session discovery. Paths are canonicalized and deduplicated. Requires appServer.transport=stdio and a Gateway restart.",
+      "advanced": true
     },
     "codexDynamicToolsLoading": {
       "label": "Dynamic Tools Loading",

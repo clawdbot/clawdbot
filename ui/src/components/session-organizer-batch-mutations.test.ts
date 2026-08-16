@@ -10,6 +10,7 @@ import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { loadSettings, patchSettings } from "../app/settings.ts";
 import { t } from "../i18n/index.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
+import type { SessionDeleteBatchResult } from "../lib/sessions/session-capability.ts";
 import { showToast } from "../lib/toast.ts";
 import {
   answerConfirmDialog,
@@ -95,7 +96,13 @@ function createHarness(
   } as ApplicationGatewaySnapshot;
   const refreshReplacement = vi.fn(async () => undefined);
   const refreshTheme = vi.fn();
-  const deleteMany = vi.fn(async () => ({ deleted: [], errors: [], preservedWorktrees: [] }));
+  const deleteMany = vi.fn(
+    async (): Promise<SessionDeleteBatchResult> => ({
+      deleted: [],
+      errors: [],
+      preservedWorktrees: [],
+    }),
+  );
   const deleteOne = vi.fn(async () => ({ deleted: true }));
   const groupsDelete = vi.fn(async () => "completed" as const);
   const scope = {
@@ -472,6 +479,12 @@ describe("session organizer destructive confirmations", () => {
   it("renders the localized batch-delete copy in-app and deletes once accepted", async () => {
     const harness = createHarness(destructiveHarness);
     const rows = [sessionRow(0), sessionRow(1)];
+    const retryError = `Session ${rows[0]!.key} changed before deletion. Retry.`;
+    harness.deleteMany.mockResolvedValueOnce({
+      deleted: [rows[1]!.key],
+      errors: [retryError],
+      preservedWorktrees: [],
+    });
 
     const pending = deleteSessionsBatch(harness.host, rows, harness.scope);
     const actions = await waitForConfirmDialogActions();
@@ -482,9 +495,21 @@ describe("session organizer destructive confirmations", () => {
     await pending;
 
     expect(harness.deleteMany).toHaveBeenCalledWith([
-      { key: rows[0]!.key, agentId: "main", deleteTranscript: true },
-      { key: rows[1]!.key, agentId: "main", deleteTranscript: true },
+      {
+        key: rows[0]!.key,
+        agentId: "main",
+        deleteTranscript: true,
+        expectedSessionId: rows[0]!.sessionId,
+      },
+      {
+        key: rows[1]!.key,
+        agentId: "main",
+        deleteTranscript: true,
+        expectedSessionId: rows[1]!.sessionId,
+      },
     ]);
+    expect(harness.publishSessionMutationError).toHaveBeenCalledWith(harness.scope, retryError);
+    expect(retryError).not.toContain("GatewayRequestError");
   });
 
   it.each(destructiveOperations)("sends no $name request when cancelled", async (operation) => {
@@ -558,6 +583,35 @@ describe("session organizer destructive confirmations", () => {
     });
   });
 
+  it("surfaces a forced worktree removal that could not create a snapshot", async () => {
+    const harness = createHarness({
+      ...destructiveHarness,
+      methods: [...destructiveHarness.methods, "worktrees.remove"],
+    });
+    harness.deleteOne.mockResolvedValueOnce({
+      deleted: true,
+      worktreePreserved: { id: "wt-1", branch: "feature", path: "/tmp/worktree" },
+    } as never);
+    harness.request.mockResolvedValueOnce({
+      removed: true,
+      snapshotError: "nested gitlink",
+    } as never);
+
+    const pending = deleteSession(harness.host, sessionRow(0), harness.scope);
+    answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
+    answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
+    await pending;
+
+    expect(harness.request).toHaveBeenCalledWith("worktrees.remove", {
+      id: "wt-1",
+      force: true,
+    });
+    expect(harness.publishSessionMutationError).toHaveBeenCalledWith(
+      harness.scope,
+      "nested gitlink",
+    );
+  });
+
   it("skips the delete confirm entirely once the operator opted out", async () => {
     patchSettings({ sessionDeleteConfirm: false });
     const harness = createHarness(destructiveHarness);
@@ -565,7 +619,11 @@ describe("session organizer destructive confirmations", () => {
     await deleteSession(harness.host, sessionRow(0), harness.scope, { offerSkip: true });
 
     expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
-    expect(harness.deleteOne).toHaveBeenCalledOnce();
+    expect(harness.deleteOne).toHaveBeenCalledWith(sessionRow(0).key, {
+      agentId: "main",
+      deleteTranscript: true,
+      expectedSessionId: sessionRow(0).sessionId,
+    });
   });
 
   it("asks again after the preference is reset", async () => {

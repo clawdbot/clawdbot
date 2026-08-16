@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Testing
 @testable import OpenClaw
 
@@ -289,6 +290,46 @@ struct CLIInstallerTests {
             appVersion: "2026.7.2",
             isDebug: false,
             defaults: defaults) == "2026.7.2")
+    }
+
+    @Test func `validated CLI cache changes only when the ready tuple changes`() throws {
+        let suite = "CLIInstallerTests.validated-cache.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let notificationCount = OSAllocatedUnfairLock(initialState: 0)
+        let initialLocation = "/Users/test/.local/bin/openclaw"
+        defaults.set(initialLocation, forKey: cliValidatedExecutableKey)
+        defaults.set("2026.8.1", forKey: cliValidatedVersionKey)
+        let observer = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification,
+            object: defaults,
+            queue: nil)
+        { _ in
+            notificationCount.withLock { $0 += 1 }
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        CLIInstaller.rememberValidated(
+            .ready(location: initialLocation, version: "2026.8.1"),
+            defaults: defaults)
+
+        #expect(notificationCount.withLock { $0 } == 0)
+
+        let updatedLocation = "/opt/homebrew/bin/openclaw"
+        CLIInstaller.rememberValidated(
+            .ready(location: updatedLocation, version: "2026.8.1"),
+            defaults: defaults)
+
+        #expect(notificationCount.withLock { $0 } == 1)
+        #expect(defaults.string(forKey: cliValidatedExecutableKey) == updatedLocation)
+        #expect(defaults.string(forKey: cliValidatedVersionKey) == "2026.8.1")
+
+        CLIInstaller.rememberValidated(
+            .ready(location: updatedLocation, version: "2026.8.2"),
+            defaults: defaults)
+
+        #expect(notificationCount.withLock { $0 } == 2)
+        #expect(defaults.string(forKey: cliValidatedVersionKey) == "2026.8.2")
     }
 
     @Test func `managed setup requires a parseable compatible version`() {

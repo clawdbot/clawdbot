@@ -74,6 +74,10 @@ export type WorkerEnvironmentMetadata = {
   error?: string;
 };
 
+export type NodeWorkerBundleStatus =
+  | { status: "installed"; version: string }
+  | { status: "missing" };
+
 export type EnvironmentSummary = {
   id: string;
   type: "local" | "gateway" | "node" | "managed" | "ephemeral" | (string & {});
@@ -81,6 +85,7 @@ export type EnvironmentSummary = {
   status: "available" | "unavailable" | "starting" | "stopping" | "error";
   platform?: string;
   sessionHost?: boolean;
+  workerBundle?: NodeWorkerBundleStatus;
   lastConnectedAtMs?: number;
   lastDisconnectedAtMs?: number;
   lastSeenAtMs?: number;

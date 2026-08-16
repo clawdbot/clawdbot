@@ -11,6 +11,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { GatewayRequestError, type GatewayEventFrame } from "../api/gateway.ts";
 import { t } from "../i18n/index.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import {
   publishQuestionClientResolution,
   registerQuestionClientOwner,
@@ -714,7 +715,7 @@ async function resolveQuestionPrompt(
     }
     current.submitting = false;
     if (current.status === "pending") {
-      current.error = error instanceof Error ? error.message : String(error);
+      current.error = formatUiError(error);
       current.revision = ++state.revision;
       state.onChange();
       return;

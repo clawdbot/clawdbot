@@ -16,7 +16,7 @@ Adds Ollama, Ollama Cloud model provider support to OpenClaw.
 
 ## Surface
 
-providers: `ollama`, `ollama-cloud`; contracts: `memoryEmbeddingProviders`, `tools`, `webSearchProviders`
+providers: `ollama`, `ollama-cloud`; contracts: `embeddingProviders`, `tools`, `webSearchProviders`
 
 ## Related docs
 

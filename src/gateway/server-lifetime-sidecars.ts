@@ -7,14 +7,13 @@ type GatewayChatMetadataLifecycle = Awaited<ReturnType<typeof createGatewayChatM
 export async function attachInitialGatewayLifetimeSidecars(params: {
   chatMetadataLifecycle: GatewayChatMetadataLifecycle;
   gatewayRequestContext: GatewayRequestContext;
+  flushPendingSessionsChangedEvents: (context?: object) => void;
   sidecars: GatewayPostReadySidecarHandle[];
 }): Promise<void> {
   await params.chatMetadataLifecycle.attachContext(params.gatewayRequestContext, params.sidecars);
   params.sidecars.push({
-    stop: async () => {
-      const { flushPendingSessionsChangedEvents } =
-        await import("./server-methods/session-change-event.js");
-      flushPendingSessionsChangedEvents(params.gatewayRequestContext);
+    stop: () => {
+      params.flushPendingSessionsChangedEvents(params.gatewayRequestContext);
     },
   });
 }

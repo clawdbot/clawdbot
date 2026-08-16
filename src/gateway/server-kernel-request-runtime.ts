@@ -60,9 +60,6 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     watchNodeHttpRuntime,
     sharedGatewaySessionGenerationState,
     resolveSharedGatewaySessionGenerationForRuntimeSnapshot,
-    completeControlUiDeviceAuthMigrationForEffectiveOperator,
-    claimControlUiDeviceAuthMigration,
-    releaseControlUiDeviceAuthMigrationClaim,
     nodeRegistry,
     nodeDesktopService,
     workerEnvironmentService,
@@ -103,6 +100,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     startupState,
     clearFallbackGatewayContextForServer,
     kernel,
+    shutdownRuntime,
   } = runtime;
   const chatMetadataLifecycle = await createGatewayChatMetadataLifecycle({
     getConfig: getRuntimeConfig,
@@ -160,12 +158,6 @@ export async function prepareGatewayKernelRequestRuntime(params: {
           clients,
         });
       },
-      completeControlUiDeviceAuthMigration:
-        completeControlUiDeviceAuthMigrationForEffectiveOperator,
-      claimControlUiDeviceAuthMigration: (deviceId: string) =>
-        claimControlUiDeviceAuthMigration(deviceId, { env: process.env }),
-      releaseControlUiDeviceAuthMigrationClaim: (deviceId: string) =>
-        releaseControlUiDeviceAuthMigrationClaim(deviceId, { env: process.env }),
       nodeRegistry,
       ...(nodeDesktopService ? { nodeDesktopService } : {}),
       ...(workerEnvironmentService ? { workerEnvironmentService } : {}),
@@ -221,6 +213,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   await attachInitialGatewayLifetimeSidecars({
     chatMetadataLifecycle,
     gatewayRequestContext,
+    flushPendingSessionsChangedEvents: shutdownRuntime.flushPendingSessionsChangedEvents,
     sidecars: runtimeState.gatewayLifetimeSidecars,
   });
   pluginGatewayContext.current = gatewayRequestContext;

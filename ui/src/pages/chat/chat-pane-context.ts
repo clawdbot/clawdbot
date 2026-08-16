@@ -24,8 +24,10 @@ import { invalidateChatAvatarCache } from "./chat-avatar.ts";
 import { applyChatAgentsList, syncSelectedSessionMessageSubscription } from "./chat-history.ts";
 import { ChatPaneLifecycle } from "./chat-pane-lifecycle.ts";
 import { reclaimChatPanePlacement } from "./chat-pane-placement.ts";
-import { applySelectedSessionProjection } from "./chat-pane-state.ts";
-import { resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
+import {
+  applySelectedSessionProjection,
+  resolveAssistantAttachmentAuthToken,
+} from "./chat-pane-state.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import { retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
@@ -43,6 +45,7 @@ import {
 } from "./run-lifecycle.ts";
 import { cancelChatScroll } from "./scroll.ts";
 import { clearChatMessagesFromCache } from "./session-message-cache.ts";
+import { migrateLegacyDockVisibility } from "./sidebar-layout-legacy-migration.ts";
 import { normalizeSidebarLayout } from "./sidebar-layout.ts";
 import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream.ts";
 
@@ -57,6 +60,10 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
   }
 
   protected async reclaimHeaderPlacement(row: GatewaySessionRow): Promise<void> {
+    const scope = this.captureConnectionScope();
+    if (!scope) {
+      return;
+    }
     const onReclaimingChange = (reclaimingKey: string | null) => {
       // A later reclaim may take ownership before this request settles. Only
       // the request that still owns the row may clear the pane's progress key.
@@ -65,16 +72,15 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       }
     };
     await reclaimChatPanePlacement({
-      client: this.connectedClient,
-      connectionGeneration: this.connectionGeneration,
-      gatewaySnapshot: this.context.gateway.snapshot,
+      client: scope.client,
+      connectionGeneration: scope.generation,
+      gatewaySnapshot: scope.context.gateway.snapshot,
       reclaimingKey: this.headerPlacementReclaimingKey,
       row,
-      isCurrent: (client, generation) =>
-        this.connectedClient === client && this.connectionGeneration === generation,
+      isCurrent: () => this.ownsHeaderOutcomeScope(scope),
       onReclaimingChange,
-      publishError: (error) => this.publishHeaderError(error),
-      refreshReplacement: (agentId) => this.context.sessions.refreshReplacement(agentId),
+      publishError: (error) => this.publishHeaderError(error, scope.headerOutcomeOwner),
+      refreshReplacement: (agentId) => scope.sessions.refreshReplacement(agentId),
       requestUpdate: () => this.requestUpdate(),
     });
   }
@@ -268,10 +274,28 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       releaseChatMediaResourceSubscriber(state.requestUpdate);
     }
     state.canvasPluginSurfaceUrl = snapshot.canvasPluginSurfaceUrl;
+    state.terminalAvailable =
+      this.context.config.current.terminalEnabled &&
+      snapshot.phase === "connected" &&
+      hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
+      isGatewayMethodAdvertised(snapshot, "terminal.open") === true;
+    state.browserPanelAvailable =
+      snapshot.phase === "connected" &&
+      hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
+      isGatewayMethodAdvertised(snapshot, "browser.request") === true;
+    const desktopPanelAvailable =
+      snapshot.phase === "connected" &&
+      hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
+      isGatewayMethodAdvertised(snapshot, "desktop.observe") === true;
     const sidebarSessionKey = canonicalUiSessionKeyForPersistence(state, state.sessionKey);
     const sidebarKeyChanged = sidebarSessionKey !== previousSidebarSessionKey;
     if (sidebarSessionKey && (clientChanged || sidebarKeyChanged)) {
-      const sidebarSettings = loadSettings();
+      const sidebarSettings = migrateLegacyDockVisibility({
+        settings: loadSettings(),
+        sessionKey: sidebarSessionKey,
+        browserAvailable: state.browserPanelAvailable,
+        desktopAvailable: desktopPanelAvailable,
+      });
       const persistedLayout = sidebarSettings.sidebarSessionLayouts?.[sidebarSessionKey];
       if (persistedLayout !== undefined) {
         state.sidebarLayout = normalizeSidebarLayout(persistedLayout);
@@ -298,15 +322,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       });
       this.deferSessionHydrationUntilTranscript(state.sessionKey, historyRefresh);
     }
-    state.terminalAvailable =
-      this.context.config.current.terminalEnabled &&
-      snapshot.phase === "connected" &&
-      hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
-      isGatewayMethodAdvertised(snapshot, "terminal.open") === true;
-    state.browserPanelAvailable =
-      snapshot.phase === "connected" &&
-      hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
-      isGatewayMethodAdvertised(snapshot, "browser.request") === true;
     state.assistantAgentId = snapshot.assistantAgentId;
     const routeSessionKey = this.sessionKey.trim();
     const catalogRouteKey = parseCatalogSessionKey(routeSessionKey);

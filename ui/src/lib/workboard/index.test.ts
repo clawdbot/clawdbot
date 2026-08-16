@@ -499,7 +499,7 @@ describe("workboard controller", () => {
   it("keeps loading cards when diagnostics refresh fails", async () => {
     const client = createClient((method) => {
       if (method === "workboard.cards.diagnostics.refresh") {
-        throw new Error("diagnostics denied");
+        throw new Error("diagnostics denied: OPENAI_API_KEY=sk-1234567890abcdef");
       }
       return listResult([sampleCard], ["todo", "done"]);
     });
@@ -510,7 +510,7 @@ describe("workboard controller", () => {
     expect(client.request).toHaveBeenNthCalledWith(2, "workboard.cards.list", {});
     expect(state.cards).toEqual([sampleCard]);
     expect(state.error).toBeNull();
-    expect(state.lastRefreshError).toBe("diagnostics denied");
+    expect(state.lastRefreshError).toBe("diagnostics denied: OPENAI_API_KEY=sk-123...cdef");
   });
 
   it("links loaded cards to matching Gateway tasks", async () => {

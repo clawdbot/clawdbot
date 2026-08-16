@@ -1,5 +1,7 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
+  COMPUTER_STALE_OBSERVATION,
   COMPUTER_USE_V2_ACTION_NAMES,
   parseComputerActParamsJSON,
   parseComputerActResult,
@@ -11,6 +13,17 @@ import {
 import type { OpenClawPluginNodeHostCommand } from "./types.js";
 
 describe("Computer Use wire contract", () => {
+  it("owns the shared provider ref-lifecycle error code", () => {
+    const contract = JSON.parse(
+      readFileSync(
+        new URL("../../test/fixtures/computer-ref-lifecycle-contract.json", import.meta.url),
+        "utf8",
+      ),
+    ) as { staleErrorCode: string };
+
+    expect(contract.staleErrorCode).toBe(COMPUTER_STALE_OBSERVATION);
+  });
+
   it("validates the canonical computer.act payload", () => {
     expect(
       parseComputerActParamsJSON(
