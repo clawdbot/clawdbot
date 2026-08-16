@@ -12,7 +12,10 @@ import {
   type ExecPolicyOverrides,
   type ExecSessionDefaults,
 } from "../agents/exec-defaults.js";
-import { createLazyExecTool, resolveExecToolConfig } from "../agents/lazy-exec-tool.js";
+import {
+  createLazyExecTool,
+  resolveExecToolConfig,
+} from "../agents/lazy-exec-tool.js";
 import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import { resolveRequesterToolPolicies } from "../agents/requester-tool-policy.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
@@ -154,7 +157,8 @@ export function resolveGatewayScopedTools(params: {
   const profilePolicy = resolveToolProfilePolicy(profile);
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
   const surface = params.surface ?? "http";
-  const nodeExecSurface = surface === "loopback" && params.includeNodeExecTool === true;
+  const nodeExecSurface =
+    surface === "loopback" && params.includeNodeExecTool === true;
   const gatewayRequestedTools = params.gatewayRequestedTools ?? [];
   const messageProvider = params.messageProvider?.trim().toLowerCase();
   const gatewayCaller = resolveScheduledToolCallerContext({
@@ -167,24 +171,29 @@ export function resolveGatewayScopedTools(params: {
     (params.inboundEventKind === "room_event" && messageProvider !== "webchat"
       ? "message_tool_only"
       : undefined);
-  const runtimeAlsoAllow = sourceReplyDeliveryMode === "message_tool_only" ? ["message"] : [];
+  const runtimeAlsoAllow =
+    sourceReplyDeliveryMode === "message_tool_only" ? ["message"] : [];
   const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, [
     ...(profileAlsoAllow ?? []),
     ...gatewayRequestedTools,
     ...runtimeAlsoAllow,
   ]);
-  const providerProfilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(providerProfilePolicy, [
-    ...(providerProfileAlsoAllow ?? []),
-    ...gatewayRequestedTools,
-    ...runtimeAlsoAllow,
-  ]);
+  const providerProfilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(
+    providerProfilePolicy,
+    [
+      ...(providerProfileAlsoAllow ?? []),
+      ...gatewayRequestedTools,
+      ...runtimeAlsoAllow,
+    ],
+  );
   const senderId = params.channelContext?.sender?.id;
   // Only immutable Gateway-launched grants can opt into node exec. Match the
   // embedded runner's wildcard sender policy while preserving owner WebChat.
   const isOwnerInternalSession =
     nodeExecSurface &&
     params.senderIsOwner === true &&
-    normalizeMessageChannel(params.messageProvider) === INTERNAL_MESSAGE_CHANNEL;
+    normalizeMessageChannel(params.messageProvider) ===
+      INTERNAL_MESSAGE_CHANNEL;
   const requesterPolicies = resolveRequesterToolPolicies({
     config: params.cfg,
     sessionKey: runtimePolicySessionKey,
@@ -208,9 +217,11 @@ export function resolveGatewayScopedTools(params: {
           : "always"
         : "when-sender-id",
     groupPolicySessionKey: params.scheduledToolPolicy?.ownerSessionKey,
-    requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
+    requireConfiguredGroupAccount:
+      params.scheduledToolPolicy?.mode === "account",
   });
-  const { groupPolicy, senderPolicy, subagentPolicy, inheritedToolPolicy } = requesterPolicies;
+  const { groupPolicy, senderPolicy, subagentPolicy, inheritedToolPolicy } =
+    requesterPolicies;
   const sandboxRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
@@ -218,8 +229,12 @@ export function resolveGatewayScopedTools(params: {
     classificationSessionKey: runtimePolicySessionKey,
     classificationAgentId: policyAgentId,
   });
-  const sandboxPolicy = sandboxRuntime.sandboxed ? sandboxRuntime.toolPolicy : undefined;
-  const excludedToolNames = params.excludeToolNames ? Array.from(params.excludeToolNames) : [];
+  const sandboxPolicy = sandboxRuntime.sandboxed
+    ? sandboxRuntime.toolPolicy
+    : undefined;
+  const excludedToolNames = params.excludeToolNames
+    ? Array.from(params.excludeToolNames)
+    : [];
   const mediatedToolNames = new Set(
     Array.from(params.mediatedToolNames ?? [], (name) => normalizeToolPolicyName(name)).filter(
       Boolean,
@@ -238,7 +253,8 @@ export function resolveGatewayScopedTools(params: {
         )
       : [];
   const ownerOnlyGatewayDeny =
-    params.senderIsOwner === false || (surface === "http" && params.senderIsOwner !== true)
+    params.senderIsOwner === false ||
+    (surface === "http" && params.senderIsOwner !== true)
       ? [...GATEWAY_OWNER_ONLY_CORE_TOOLS]
       : [];
   // HTTP callers start with additional surface denies because they cross auth only.
@@ -257,8 +273,12 @@ export function resolveGatewayScopedTools(params: {
     subagentPolicy,
     inheritedToolPolicy,
     defaultGatewayDeny.length > 0 ? { deny: defaultGatewayDeny } : undefined,
-    ownerOnlyGatewayDeny.length > 0 ? { deny: ownerOnlyGatewayDeny } : undefined,
-    Array.isArray(gatewayToolsCfg?.deny) ? { deny: gatewayToolsCfg.deny } : undefined,
+    ownerOnlyGatewayDeny.length > 0
+      ? { deny: ownerOnlyGatewayDeny }
+      : undefined,
+    Array.isArray(gatewayToolsCfg?.deny)
+      ? { deny: gatewayToolsCfg.deny }
+      : undefined,
   ]);
   const inheritedToolDenylist = [...explicitDenylist];
   // Passed by reference to sessions_spawn and populated after the final policy
@@ -277,7 +297,9 @@ export function resolveGatewayScopedTools(params: {
     sandboxPolicy,
     subagentPolicy,
     inheritedToolPolicy,
-    gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
+    gatewayRequestedTools.length > 0
+      ? { allow: gatewayRequestedTools }
+      : undefined,
   ].some(hasRestrictiveAllowPolicy);
 
   const openClawTools = createOpenClawTools({
@@ -329,7 +351,9 @@ export function resolveGatewayScopedTools(params: {
       sandboxPolicy,
       subagentPolicy,
       inheritedToolPolicy,
-      gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
+      gatewayRequestedTools.length > 0
+        ? { allow: gatewayRequestedTools }
+        : undefined,
     ]),
     pluginToolDenylist: explicitDenylist,
     cronCreatorToolAllowlist,
@@ -348,19 +372,22 @@ export function resolveGatewayScopedTools(params: {
         })
       : undefined;
   const nodeExecDefaults =
-    nodeExecSurface && execDefaults?.canRequestNode === true ? execDefaults : undefined;
+    nodeExecSurface && execDefaults?.canRequestNode === true
+      ? execDefaults
+      : undefined;
   const includeNodeExecTool = nodeExecDefaults !== undefined;
   const execConfig = includeNodeExecTool
     ? resolveExecToolConfig({ cfg: params.cfg, agentId: policyAgentId })
     : undefined;
-  const includeMediatedBaseCodingTools = ["read", "write", "edit"].some((name) =>
-    mediatedToolNames.has(name),
+  const includeMediatedBaseCodingTools = ["read", "write", "edit"].some(
+    (name) => mediatedToolNames.has(name),
   );
-  const includeMediatedShellTools = ["apply_patch", "exec", "process"].some((name) =>
-    mediatedToolNames.has(name),
+  const includeMediatedShellTools = ["apply_patch", "exec", "process"].some(
+    (name) => mediatedToolNames.has(name),
   );
   const mediatedCodingTools =
-    surface === "loopback" && (includeMediatedBaseCodingTools || includeMediatedShellTools)
+    surface === "loopback" &&
+    (includeMediatedBaseCodingTools || includeMediatedShellTools)
       ? createOpenClawCodingTools({
           config: params.cfg,
           agentId: policyAgentId,
@@ -480,8 +507,19 @@ export function resolveGatewayScopedTools(params: {
             notifyOnExitEmptySuccess: execConfig?.notifyOnExitEmptySuccess,
           },
           {
-            description:
-              "Execute a shell command on a connected OpenClaw node. This tool is node-only; use the CLI native shell for Gateway-local commands. Commands run synchronously. Set node when multiple nodes are available.",
+            description: (() => {
+              const hasFileWriteTool = toolsWithMediatedCoding.some(
+                (tool) =>
+                  tool.name === "write" ||
+                  tool.name === "edit" ||
+                  tool.name === "apply_patch",
+              );
+              const baseDescription =
+                "Execute a shell command on a connected OpenClaw node. This tool is node-only; use the CLI native shell for Gateway-local commands. Commands run synchronously. Set node when multiple nodes are available.";
+              return hasFileWriteTool
+                ? `${baseDescription} File writes: prefer dedicated file-writing tools over shell heredocs or bash -c for multi-line content.`
+                : baseDescription;
+            })(),
             displaySummary: "Run commands on a connected node",
             parameters: nodeExecSchema,
           },
@@ -489,7 +527,10 @@ export function resolveGatewayScopedTools(params: {
       ]
     : toolsWithMediatedCoding;
 
-  const toolsForMessageProvider = filterToolsByMessageProvider(allTools, params.messageProvider);
+  const toolsForMessageProvider = filterToolsByMessageProvider(
+    allTools,
+    params.messageProvider,
+  );
   const policyFiltered = applyToolPolicyPipeline({
     tools: toolsForMessageProvider,
     toolMeta: (tool: AnyAgentTool) => getPluginToolMeta(tool),
@@ -501,7 +542,8 @@ export function resolveGatewayScopedTools(params: {
         profileUnavailableCoreWarningAllowlist: profilePolicy?.allow,
         providerProfilePolicy: providerProfilePolicyWithAlsoAllow,
         providerProfile,
-        providerProfileUnavailableCoreWarningAllowlist: providerProfilePolicy?.allow,
+        providerProfileUnavailableCoreWarningAllowlist:
+          providerProfilePolicy?.allow,
         globalPolicy,
         globalProviderPolicy,
         agentPolicy,
@@ -538,8 +580,10 @@ export function resolveGatewayScopedTools(params: {
   if (shouldInheritEffectiveToolAllowlist) {
     replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, inheritableTools);
   }
-  replaceWithEffectiveCronCreatorToolAllowlist(cronCreatorToolAllowlist, inheritableTools, (tool) =>
-    getPluginToolMeta(tool),
+  replaceWithEffectiveCronCreatorToolAllowlist(
+    cronCreatorToolAllowlist,
+    inheritableTools,
+    (tool) => getPluginToolMeta(tool),
   );
 
   return {
