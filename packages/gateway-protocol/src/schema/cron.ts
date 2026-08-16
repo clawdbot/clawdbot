@@ -20,12 +20,18 @@ const CronDateTimestampMsSchema = Type.Integer({
  */
 
 /** Builds create/patch payload variants while preserving per-call field optionality. */
-function cronAgentTurnPayloadSchema(params: {
-  message: TSchema;
-  model: TSchema;
-  fallbacks: TSchema;
-  toolsAllow: TSchema;
-  thinking: TSchema;
+function cronAgentTurnPayloadSchema<
+  TMessage extends TSchema,
+  TModel extends TSchema,
+  TFallbacks extends TSchema,
+  TToolsAllow extends TSchema,
+  TThinking extends TSchema,
+>(params: {
+  message: TMessage;
+  model: TModel;
+  fallbacks: TFallbacks;
+  toolsAllow: TToolsAllow;
+  thinking: TThinking;
 }) {
   return closedObject({
     kind: Type.Literal("agentTurn"),
@@ -44,7 +50,10 @@ function cronAgentTurnPayloadSchema(params: {
 }
 
 /** Builds command payload variants while preserving create/patch argv optionality. */
-function cronCommandPayloadSchema(params: { argv: TSchema; toolsAllow: TSchema }) {
+function cronCommandPayloadSchema<TArgv extends TSchema, TToolsAllow extends TSchema>(params: {
+  argv: TArgv;
+  toolsAllow: TToolsAllow;
+}) {
   return closedObject({
     kind: Type.Literal("command"),
     argv: params.argv,
@@ -59,7 +68,10 @@ function cronCommandPayloadSchema(params: { argv: TSchema; toolsAllow: TSchema }
   });
 }
 
-function cronScriptPayloadSchema(params: { script: TSchema; toolsAllow: TSchema }) {
+function cronScriptPayloadSchema<TScript extends TSchema, TToolsAllow extends TSchema>(params: {
+  script: TScript;
+  toolsAllow: TToolsAllow;
+}) {
   return closedObject({
     kind: Type.Literal("script"),
     script: params.script,
@@ -75,7 +87,7 @@ const CronSessionTargetSchema = Type.Union([
   Type.Literal("main"),
   Type.Literal("isolated"),
   Type.Literal("current"),
-  Type.String({ pattern: "^session:.+" }),
+  Type.TemplateLiteral("session:${string}", { pattern: "^session:.+" }),
 ]);
 /** Whether a cron job waits for heartbeat processing or wakes immediately. */
 const CronWakeModeSchema = Type.Union([Type.Literal("next-heartbeat"), Type.Literal("now")]);
@@ -263,29 +275,34 @@ export const CronPacingSchema = Type.Object(
   },
 );
 
+const CronSystemEventPayloadSchema = closedObject({
+  kind: Type.Literal("systemEvent"),
+  text: NonEmptyString,
+  toolsAllow: Type.Optional(Type.Array(Type.String())),
+  toolsAllowIsDefault: Type.Optional(Type.Boolean()),
+});
+const CronAgentTurnPayloadSchema = cronAgentTurnPayloadSchema({
+  message: NonEmptyString,
+  model: Type.String(),
+  fallbacks: Type.Array(Type.String()),
+  toolsAllow: Type.Array(Type.String()),
+  thinking: Type.String(),
+});
+const CronCommandPayloadSchema = cronCommandPayloadSchema({
+  argv: Type.Array(NonEmptyString, { minItems: 1 }),
+  toolsAllow: Type.Array(Type.String()),
+});
+const CronScriptPayloadSchema = cronScriptPayloadSchema({
+  script: Type.String({ minLength: 1, maxLength: 65_536 }),
+  toolsAllow: Type.Array(Type.String()),
+});
+
 /** Full cron payload for new jobs. */
 const CronPayloadSchema = Type.Union([
-  closedObject({
-    kind: Type.Literal("systemEvent"),
-    text: NonEmptyString,
-    toolsAllow: Type.Optional(Type.Array(Type.String())),
-    toolsAllowIsDefault: Type.Optional(Type.Boolean()),
-  }),
-  cronAgentTurnPayloadSchema({
-    message: NonEmptyString,
-    model: Type.String(),
-    fallbacks: Type.Array(Type.String()),
-    toolsAllow: Type.Array(Type.String()),
-    thinking: Type.String(),
-  }),
-  cronCommandPayloadSchema({
-    argv: Type.Array(NonEmptyString, { minItems: 1 }),
-    toolsAllow: Type.Array(Type.String()),
-  }),
-  cronScriptPayloadSchema({
-    script: Type.String({ minLength: 1, maxLength: 65_536 }),
-    toolsAllow: Type.Array(Type.String()),
-  }),
+  CronSystemEventPayloadSchema,
+  CronAgentTurnPayloadSchema,
+  CronCommandPayloadSchema,
+  CronScriptPayloadSchema,
 ]);
 
 /**
@@ -293,7 +310,10 @@ const CronPayloadSchema = Type.Union([
  * gateway-converged only, so create/patch schemas intentionally omit it.
  */
 const CronReportedPayloadSchema = Type.Union([
-  ...CronPayloadSchema.anyOf,
+  CronSystemEventPayloadSchema,
+  CronAgentTurnPayloadSchema,
+  CronCommandPayloadSchema,
+  CronScriptPayloadSchema,
   closedObject({ kind: Type.Literal("heartbeat") }),
 ]);
 
