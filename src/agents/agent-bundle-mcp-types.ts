@@ -91,14 +91,7 @@ export type McpToolCatalogDiagnostic = {
 
 export type McpRequestOptions = {
   failureBackoff?: "track" | "ignore";
-  signal?: AbortSignal;
 };
-
-type McpServerRequest<TArgs extends unknown[], TResult> = (
-  serverName: string,
-  ...args: TArgs
-) => Promise<TResult>;
-type McpCursorParams = { cursor?: string };
 
 /** Trusted requester identity used to scope per-user MCP connections. */
 export type SessionMcpRequesterScope = {
@@ -139,24 +132,17 @@ export type SessionMcpRuntime = {
   /** Returns the configured request timeout for a server from the connected session, without touching the catalog. */
   getServerRequestTimeoutMs?: (serverName: string) => number | undefined;
   markUsed: () => void;
-  callTool: McpServerRequest<[toolName: string, input: unknown], CallToolResult>;
-  listTools?: McpServerRequest<[params?: McpCursorParams], ListToolsResult>;
-  listResources?: McpServerRequest<[], unknown>;
-  readResource?: McpServerRequest<[uri: string], unknown>;
-  listResourceTemplates?: McpServerRequest<[params?: McpCursorParams], ListResourceTemplatesResult>;
-  listPrompts?: McpServerRequest<[], unknown>;
-  getPrompt?: McpServerRequest<[name: string, args?: Record<string, string>], unknown>;
+  callTool: (serverName: string, toolName: string, input: unknown) => Promise<CallToolResult>;
+  listTools?: (serverName: string, params?: { cursor?: string }) => Promise<ListToolsResult>;
+  listResources?: (serverName: string, options?: McpRequestOptions) => Promise<unknown>;
+  readResource?: (serverName: string, uri: string, options?: McpRequestOptions) => Promise<unknown>;
+  listResourceTemplates?: (
+    serverName: string,
+    params?: { cursor?: string },
+  ) => Promise<ListResourceTemplatesResult>;
+  listPrompts?: (serverName: string) => Promise<unknown>;
+  getPrompt?: (serverName: string, name: string, args?: Record<string, string>) => Promise<unknown>;
   dispose: () => Promise<void>;
-};
-
-type McpRequestMethodName = "callTool" | `list${string}` | `read${string}` | "getPrompt";
-/** Core-only request extension; the public harness runtime contract stays unchanged. */
-export type SessionMcpRequestRuntime = Omit<SessionMcpRuntime, McpRequestMethodName> & {
-  [Key in Extract<keyof SessionMcpRuntime, McpRequestMethodName>]: NonNullable<
-    SessionMcpRuntime[Key]
-  > extends (...args: infer Args) => infer Result
-    ? (...args: [...Args, options?: McpRequestOptions]) => Result
-    : never;
 };
 
 /** Manager for session-scoped MCP runtimes and their idle lifecycle. */

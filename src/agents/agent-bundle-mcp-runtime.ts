@@ -40,6 +40,7 @@ import {
   setDefaultCreateSessionMcpRuntime,
 } from "./agent-bundle-mcp-manager.js";
 import { assignSafeServerNames, sanitizeServerName } from "./agent-bundle-mcp-names.js";
+import { getSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
 import {
   loadSessionMcpConfig,
   resolveSessionMcpConfigSummary,
@@ -52,7 +53,6 @@ import type {
   McpToolCatalog,
   McpToolCatalogDiagnostic,
   RequesterMcpConnect,
-  SessionMcpRequestRuntime,
   SessionMcpRequesterScope,
   SessionMcpRuntime,
   SessionMcpRuntimeManager,
@@ -553,12 +553,13 @@ export function createSessionMcpRuntime(params: {
     request: (signal: AbortSignal) => Promise<T>,
     parentSignal?: AbortSignal,
   ): Promise<T> => {
+    const requestSignal = parentSignal ?? getSessionMcpRequestSignal();
     const abortController = new AbortController();
-    const onParentAbort = () => abortController.abort(parentSignal?.reason);
-    if (parentSignal?.aborted) {
+    const onParentAbort = () => abortController.abort(requestSignal?.reason);
+    if (requestSignal?.aborted) {
       onParentAbort();
     } else {
-      parentSignal?.addEventListener("abort", onParentAbort, { once: true });
+      requestSignal?.addEventListener("abort", onParentAbort, { once: true });
     }
     const timeoutError = new McpError(ErrorCode.RequestTimeout, "Request timed out", {
       timeout: session.requestTimeoutMs,
@@ -572,13 +573,13 @@ export function createSessionMcpRuntime(params: {
       const signal = abortController.signal;
       signal.throwIfAborted();
       const result = await request(signal);
-      parentSignal?.throwIfAborted();
+      requestSignal?.throwIfAborted();
       return result;
     } catch (error) {
-      parentSignal?.throwIfAborted();
+      requestSignal?.throwIfAborted();
       throw error;
     } finally {
-      parentSignal?.removeEventListener("abort", onParentAbort);
+      requestSignal?.removeEventListener("abort", onParentAbort);
       clearTimeout(timeout);
     }
   };
@@ -588,6 +589,7 @@ export function createSessionMcpRuntime(params: {
     request: () => Promise<T>,
     options?: McpRequestOptions,
   ): Promise<T> => {
+    const requestSignal = getSessionMcpRequestSignal();
     const tracksFailureBackoff = options?.failureBackoff !== "ignore";
     const nowMs = Date.now();
     const backoff = serverBackoff.get(serverName);
@@ -620,9 +622,9 @@ export function createSessionMcpRuntime(params: {
         error instanceof StreamableHTTPError &&
         error.code === 404;
       let recycleReason: "expired HTTP session" | "repeated request timeouts" | undefined;
-      if (sessionExpired && !options?.signal?.aborted) {
+      if (sessionExpired && !requestSignal?.aborted) {
         recycleReason = "expired HTTP session";
-      } else if (tracksFailureBackoff && !options?.signal?.aborted) {
+      } else if (tracksFailureBackoff && !requestSignal?.aborted) {
         const failures = recordServerToolFailure(serverName, session, nowMs);
         const requestTimedOut =
           error !== null && typeof error === "object" && localRequestTimeouts.has(error);
@@ -651,27 +653,18 @@ export function createSessionMcpRuntime(params: {
     session: BundleMcpSession,
     request: (signal: AbortSignal) => Promise<T>,
     options?: McpRequestOptions,
-  ) =>
-    runGuardedServerRequest(
-      serverName,
-      session,
-      () => runMcpRequest(session, request, options?.signal),
-      options,
-    );
-  const collectServerItems = (
-    session: BundleMcpSession,
-    options: McpRequestOptions | undefined,
-    kind: "prompts" | "resources",
-  ) =>
-    collectMcpPaginatedItems({
+  ) => runGuardedServerRequest(serverName, session, () => runMcpRequest(session, request), options);
+  const collectServerItems = (session: BundleMcpSession, kind: "prompts" | "resources") => {
+    const callerSignal = getSessionMcpRequestSignal();
+    return collectMcpPaginatedItems({
       label: `MCP ${kind === "resources" ? "resource" : "prompt"} listing`,
       itemLabel: kind,
       timeoutMs: session.requestTimeoutMs,
       maxPages: BUNDLE_MCP_MAX_LIST_PAGES,
       maxItems: BUNDLE_MCP_MAX_LIST_ITEMS,
       maxBytes: BUNDLE_MCP_MAX_LIST_BYTES,
-      signal: options?.signal
-        ? AbortSignal.any([lifecycleAbortController.signal, options.signal])
+      signal: callerSignal
+        ? AbortSignal.any([lifecycleAbortController.signal, callerSignal])
         : lifecycleAbortController.signal,
       loadPage: ({ cursor, requestTimeoutMs: timeout, signal }) =>
         runMcpRequest(
@@ -689,6 +682,7 @@ export function createSessionMcpRuntime(params: {
           signal,
         ),
     });
+  };
 
   const loadCatalog = async (retryBaseCatalog?: McpToolCatalog): Promise<McpToolCatalog> => {
     failIfDisposed();
@@ -1106,7 +1100,7 @@ export function createSessionMcpRuntime(params: {
     return requireConnectedSession(serverName);
   };
 
-  const runtime: SessionMcpRequestRuntime = {
+  const runtime: SessionMcpRuntime = {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     workspaceDir: params.workspaceDir,
@@ -1148,28 +1142,20 @@ export function createSessionMcpRuntime(params: {
     markUsed() {
       lastUsedAt = Date.now();
     },
-    async callTool(serverName, toolName, input, options) {
+    async callTool(serverName, toolName, input) {
       const session = await getActiveSession(serverName);
-      return (await runGuardedMcpRequest(
-        serverName,
-        session,
-        (signal) =>
-          session.client.callTool(
-            { name: toolName, arguments: isRecord(input) ? input : {} },
-            undefined,
-            { timeout: session.requestTimeoutMs, signal },
-          ),
-        options,
+      return (await runGuardedMcpRequest(serverName, session, (signal) =>
+        session.client.callTool(
+          { name: toolName, arguments: isRecord(input) ? input : {} },
+          undefined,
+          { timeout: session.requestTimeoutMs, signal },
+        ),
       )) as CallToolResult;
     },
-    async listTools(serverName, requestParams, options) {
+    async listTools(serverName, requestParams) {
       const session = await getActiveSession(serverName);
-      return await runGuardedMcpRequest(
-        serverName,
-        session,
-        (signal) =>
-          session.client.listTools(requestParams, { timeout: session.requestTimeoutMs, signal }),
-        options,
+      return await runGuardedMcpRequest(serverName, session, (signal) =>
+        session.client.listTools(requestParams, { timeout: session.requestTimeoutMs, signal }),
       );
     },
     async listResources(serverName, options) {
@@ -1177,7 +1163,7 @@ export function createSessionMcpRuntime(params: {
       return await runGuardedServerRequest(
         serverName,
         session,
-        async () => collectServerItems(session, options, "resources"),
+        async () => collectServerItems(session, "resources"),
         options,
       );
     },
@@ -1191,39 +1177,28 @@ export function createSessionMcpRuntime(params: {
         options,
       );
     },
-    async listResourceTemplates(serverName, requestParams, options) {
+    async listResourceTemplates(serverName, requestParams) {
       const session = await getActiveSession(serverName);
-      return await runGuardedMcpRequest(
-        serverName,
-        session,
-        (signal) =>
-          session.client.listResourceTemplates(requestParams, {
-            timeout: session.requestTimeoutMs,
-            signal,
-          }),
-        options,
+      return await runGuardedMcpRequest(serverName, session, (signal) =>
+        session.client.listResourceTemplates(requestParams, {
+          timeout: session.requestTimeoutMs,
+          signal,
+        }),
       );
     },
-    async listPrompts(serverName, options) {
+    async listPrompts(serverName) {
       const session = await getActiveSession(serverName);
-      return await runGuardedServerRequest(
-        serverName,
-        session,
-        async () => collectServerItems(session, options, "prompts"),
-        options,
+      return await runGuardedServerRequest(serverName, session, async () =>
+        collectServerItems(session, "prompts"),
       );
     },
-    async getPrompt(serverName, name, args, options) {
+    async getPrompt(serverName, name, args) {
       const session = await getActiveSession(serverName);
-      return await runGuardedMcpRequest(
-        serverName,
-        session,
-        (signal) =>
-          session.client.getPrompt(
-            { name, ...(args ? { arguments: args } : {}) },
-            { timeout: session.requestTimeoutMs, signal },
-          ),
-        options,
+      return await runGuardedMcpRequest(serverName, session, (signal) =>
+        session.client.getPrompt(
+          { name, ...(args ? { arguments: args } : {}) },
+          { timeout: session.requestTimeoutMs, signal },
+        ),
       );
     },
     async dispose() {

@@ -4,8 +4,9 @@ import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/recor
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { getSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
 import { completeDeferredSessionMcpRuntimeRetirement } from "./agent-bundle-mcp-runtime.js";
-import type { SessionMcpRequestRuntime, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { clearMcpAppModelContextForView } from "./mcp-app-model-context.js";
 import { type McpAppCsp, normalizeMcpAppCsp } from "./mcp-app-sandbox.js";
 
@@ -189,7 +190,7 @@ function decodeResourceHtml(content: Record<string, unknown>): string {
 }
 
 async function resolveListingUiMeta(
-  runtime: SessionMcpRequestRuntime,
+  runtime: SessionMcpRuntime,
   serverName: string,
   uri: string,
 ): Promise<Record<string, unknown> | undefined> {
@@ -226,7 +227,6 @@ export async function fetchMcpAppView(params: {
   authorizeAppInteraction?: () => boolean | Promise<boolean>;
   readOnly?: true;
   viewId?: string;
-  signal?: AbortSignal;
 }): Promise<
   | {
       viewId: string;
@@ -240,7 +240,6 @@ export async function fetchMcpAppView(params: {
 > {
   let releaseRuntimeLease: (() => void) | undefined;
   try {
-    const runtime = params.runtime as SessionMcpRequestRuntime;
     assertBoundedViewDescriptor(params);
     const agentId = params.agentId
       ? normalizeAgentId(params.agentId)
@@ -248,13 +247,12 @@ export async function fetchMcpAppView(params: {
     if (!agentId) {
       throw new Error("MCP App view requires a resolved session owner");
     }
-    if (!runtime.readResource || !params.uiResourceUri.startsWith("ui://")) {
+    if (!params.runtime.readResource || !params.uiResourceUri.startsWith("ui://")) {
       return undefined;
     }
     const result = asRecord(
-      await runtime.readResource(params.serverName, params.uiResourceUri, {
+      await params.runtime.readResource(params.serverName, params.uiResourceUri, {
         failureBackoff: "ignore",
-        signal: params.signal,
       }),
     );
     const contents = Array.isArray(result?.contents) ? result.contents : [];
@@ -271,8 +269,8 @@ export async function fetchMcpAppView(params: {
     const contentUiMeta = asRecord(asRecord(metadata ?? deprecatedMetadata)?.ui);
     const listingUiMeta = contentUiMeta
       ? undefined
-      : await resolveListingUiMeta(runtime, params.serverName, params.uiResourceUri);
-    params.signal?.throwIfAborted();
+      : await resolveListingUiMeta(params.runtime, params.serverName, params.uiResourceUri);
+    getSessionMcpRequestSignal()?.throwIfAborted();
     const uiMeta = contentUiMeta ?? listingUiMeta;
     const csp = normalizeMcpAppCsp(uiMeta?.csp);
     const permissions = normalizePermissions(uiMeta?.permissions);
@@ -330,7 +328,7 @@ export async function fetchMcpAppView(params: {
     };
   } catch (error) {
     releaseRuntimeLease?.();
-    params.signal?.throwIfAborted();
+    getSessionMcpRequestSignal()?.throwIfAborted();
     logWarn(
       `mcp-app: failed to prepare ${params.uiResourceUri} from "${params.serverName}": ${formatErrorMessage(error)}`,
     );

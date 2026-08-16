@@ -24,7 +24,7 @@ import {
   retireSessionMcpRuntime,
   retireSessionMcpRuntimeForSessionKey,
 } from "./agent-bundle-mcp-tools.js";
-import type { SessionMcpRequestRuntime, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { writeExecutable } from "./bundle-mcp-shared.test-harness.js";
 import { updateMcpAppModelContext } from "./mcp-app-model-context.js";
 
@@ -2538,7 +2538,7 @@ process.on("SIGINT", shutdown);`,
     });
 
     try {
-      const readResource = (runtime as SessionMcpRequestRuntime).readResource;
+      const readResource = runtime.readResource;
       if (!readResource) {
         throw new Error("Expected test runtime to expose resource utilities");
       }
