@@ -175,7 +175,12 @@ function hasDuplicateJsonObjectKeys(text: string): boolean {
         next += 1;
       }
       if (text[next] === ":") {
-        const key = JSON.parse(text.slice(index, end + 1)) as string;
+        let key: string;
+        try {
+          key = JSON.parse(text.slice(index, end + 1)) as string;
+        } catch {
+          continue;
+        }
         if (keys.has(key)) {
           return true;
         }

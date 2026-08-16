@@ -853,4 +853,20 @@ describe("createModelExecAutoReviewer", () => {
     expect(prepare).toHaveBeenCalledTimes(2);
     expect(complete).toHaveBeenCalledTimes(2);
   });
+
+  it("handles JSON with escaped keys without throwing in duplicate-key detection", async () => {
+    // The hasDuplicateJsonObjectKeys function parses each key string via JSON.parse.
+    // Verify that escaped keys are handled correctly without throwing.
+    const text = JSON.stringify({
+      decision: "allow",
+      risk: "low",
+      rationale: "key with \"escaped\" quotes",
+    });
+
+    await expect(reviewExecResponse(text)).resolves.toEqual({
+      decision: "allow-once",
+      risk: "low",
+      rationale: 'key with "escaped" quotes',
+    });
+  });
 });
