@@ -20,7 +20,7 @@ type SessionRegistryMaintenanceStoreSummary = {
   preservedRunning: number;
 };
 
-export type SessionRegistryMaintenanceSummary = {
+type SessionRegistryMaintenanceSummary = {
   retentionMs: number;
   runningCronJobs: number;
   pruned: number;
