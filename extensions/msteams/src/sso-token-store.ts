@@ -15,6 +15,7 @@ import { createHash } from "node:crypto";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getMSTeamsRuntime } from "./runtime.js";
 import {
+  resolveMSTeamsAccountStateNamespace,
   resolveMSTeamsSqliteStateEnv,
   toPluginJsonValue,
   withMSTeamsSqliteMutationLock,
@@ -36,17 +37,9 @@ export type MSTeamsSsoStoredToken = {
 };
 
 type MSTeamsSsoTokenStore = {
-  get(params: {
-    accountId?: string | null;
-    connectionName: string;
-    userId: string;
-  }): Promise<MSTeamsSsoStoredToken | null>;
+  get(params: { connectionName: string; userId: string }): Promise<MSTeamsSsoStoredToken | null>;
   save(token: MSTeamsSsoStoredToken): Promise<void>;
-  remove(params: {
-    accountId?: string | null;
-    connectionName: string;
-    userId: string;
-  }): Promise<boolean>;
+  remove(params: { connectionName: string; userId: string }): Promise<boolean>;
 };
 
 type SsoStoreData = {
@@ -86,13 +79,17 @@ export function makeMSTeamsSsoTokenStoreKey(
 }
 
 function createTokenStore(params?: {
+  accountId?: string | null;
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
   stateDir?: string;
   storePath?: string;
 }): PluginStateKeyedStore<MSTeamsSsoStoredToken> {
+  const accountId = normalizeSsoAccountId(params?.accountId);
   return getMSTeamsRuntime().state.openKeyedStore<MSTeamsSsoStoredToken>({
-    namespace: MSTEAMS_SSO_TOKENS_NAMESPACE,
+    // Preserve the shipped default namespace while giving each named bot its
+    // own eviction quota so a busy account cannot discard another account's tokens.
+    namespace: resolveMSTeamsAccountStateNamespace(MSTEAMS_SSO_TOKENS_NAMESPACE, accountId),
     maxEntries: MSTEAMS_MAX_SSO_TOKENS,
     env: resolveMSTeamsSqliteStateEnv(params),
   });
@@ -143,42 +140,37 @@ export function createMSTeamsSsoTokenStoreFs(params?: {
   storePath?: string;
 }): MSTeamsSsoTokenStore {
   const tokenStore = createTokenStore(params);
-  const defaultAccountId = params?.accountId;
+  const accountId = normalizeSsoAccountId(params?.accountId);
 
   return {
-    async get({ accountId, connectionName, userId }) {
+    async get({ connectionName, userId }) {
       return (
-        (await tokenStore.lookup(
-          makeMSTeamsSsoTokenStoreKey(connectionName, userId, accountId ?? defaultAccountId),
-        )) ?? null
+        (await tokenStore.lookup(makeMSTeamsSsoTokenStoreKey(connectionName, userId, accountId))) ??
+        null
       );
     },
 
     async save(token) {
       await withMSTeamsSqliteMutationLock(params, SSO_TOKEN_MUTATION_KEY, async () => {
         await tokenStore.register(
-          makeMSTeamsSsoTokenStoreKey(
-            token.connectionName,
-            token.userId,
-            token.accountId ?? defaultAccountId,
-          ),
+          makeMSTeamsSsoTokenStoreKey(token.connectionName, token.userId, accountId),
           toPluginJsonValue({
-            ...token,
-            ...(token.accountId
-              ? { accountId: token.accountId }
-              : normalizeSsoAccountId(defaultAccountId) === "default"
-                ? {}
-                : { accountId: normalizeSsoAccountId(defaultAccountId) }),
+            connectionName: token.connectionName,
+            userId: token.userId,
+            token: token.token,
+            ...(token.expiresAt !== undefined ? { expiresAt: token.expiresAt } : {}),
+            updatedAt: token.updatedAt,
+            ...(accountId === "default" ? {} : { accountId }),
           }),
         );
       });
     },
 
-    async remove({ accountId, connectionName, userId }) {
+    async remove({ connectionName, userId }) {
       let removed = false;
       await withMSTeamsSqliteMutationLock(params, SSO_TOKEN_MUTATION_KEY, async () => {
         removed = await tokenStore.delete(
-          makeMSTeamsSsoTokenStoreKey(connectionName, userId, accountId ?? defaultAccountId),
+          makeMSTeamsSsoTokenStoreKey(connectionName, userId, accountId),
         );
       });
       return removed;

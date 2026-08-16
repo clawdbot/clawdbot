@@ -7,7 +7,11 @@ import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it } from "vitest";
 import { setMSTeamsRuntime } from "./runtime.js";
-import { createMSTeamsSsoTokenStoreFs, makeMSTeamsSsoTokenStoreKey } from "./sso-token-store.js";
+import {
+  createMSTeamsSsoTokenStoreFs,
+  makeMSTeamsSsoTokenStoreKey,
+  MSTEAMS_MAX_SSO_TOKENS,
+} from "./sso-token-store.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
 
 describe("msteams sso token store (plugin state)", () => {
@@ -108,6 +112,34 @@ describe("msteams sso token store (plugin state)", () => {
       expect(await namedStore.get(namedToken)).toEqual({
         ...namedToken,
         accountId: "secondary",
+      });
+    });
+  });
+
+  it("keeps each named account's SSO retention capacity independent", async () => {
+    await withTempDir("openclaw-msteams-sso-capacity-", async (stateDir) => {
+      const firstStore = createMSTeamsSsoTokenStoreFs({ accountId: "first", stateDir });
+      const busyStore = createMSTeamsSsoTokenStoreFs({ accountId: "busy", stateDir });
+      const firstToken = {
+        connectionName: "graph",
+        userId: "first-user",
+        token: "first-token",
+        updatedAt: "2026-04-10T00:00:00.000Z",
+      } as const;
+
+      await firstStore.save(firstToken);
+      for (let index = 0; index < MSTEAMS_MAX_SSO_TOKENS; index += 1) {
+        await busyStore.save({
+          connectionName: "graph",
+          userId: `busy-user-${index}`,
+          token: `busy-token-${index}`,
+          updatedAt: "2026-04-10T00:00:01.000Z",
+        });
+      }
+
+      await expect(firstStore.get(firstToken)).resolves.toEqual({
+        ...firstToken,
+        accountId: "first",
       });
     });
   });
