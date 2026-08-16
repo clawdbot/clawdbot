@@ -15,7 +15,6 @@ import {
   MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
   type MemorySessionSyncTarget,
-  type MemoryEntryProvenance,
   type MemorySource,
   type MemorySyncParams,
   type MemorySyncProgressUpdate,
@@ -44,41 +43,30 @@ import {
   type MemoryIndexMeta,
   type MemoryIndexProviderIdentity,
 } from "./manager-reindex-state.js";
+import type {
+  MemoryIndexEntry,
+  MemoryIndexWorkItem,
+  MemoryIndexWriteResult,
+  MemorySourceSyncPlan,
+} from "./manager-source-state.js";
 import {
   markMemoryVectorRebuildRequired,
   requiresMemoryVectorRebuild,
 } from "./manager-vector-rebuild-state.js";
 import type { MemoryWatchSettleQueue } from "./watch-settle.js";
 
+export type {
+  MemoryIndexEntry,
+  MemoryIndexWorkItem,
+  MemoryIndexWriteResult,
+  MemorySourceSyncPlan,
+} from "./manager-source-state.js";
+
 export type MemorySyncProgressState = {
   completed: number;
   total: number;
   label?: string;
   report: (update: MemorySyncProgressUpdate) => void;
-};
-
-export type MemoryIndexEntry = {
-  path: string;
-  absPath: string;
-  mtimeMs: number;
-  size: number;
-  hash: string;
-  kind?: "markdown" | "multimodal";
-  content?: string;
-  contentText?: string;
-  lineMap?: number[];
-  lineProvenance?: MemoryEntryProvenance[];
-};
-
-export type MemoryIndexWorkItem = {
-  entry: MemoryIndexEntry;
-  source: MemorySource;
-  afterIndex?: () => void;
-};
-
-export type MemorySourceSyncPlan = {
-  indexItems: MemoryIndexWorkItem[];
-  finalize: () => Promise<void> | void;
 };
 
 type MemoryReindexRetryState = {
@@ -181,7 +169,7 @@ export abstract class MemoryManagerSyncBase {
   protected abstract indexFile(
     entry: MemoryIndexEntry,
     options: { source: MemorySource; content?: string },
-  ): Promise<void>;
+  ): Promise<MemoryIndexWriteResult>;
   protected abstract syncMemoryFiles(params: {
     needsFullReindex: boolean;
     progress?: MemorySyncProgressState;
@@ -196,7 +184,7 @@ export abstract class MemoryManagerSyncBase {
   }): Promise<MemorySourceSyncPlan>;
   protected async indexFiles(items: MemoryIndexWorkItem[]): Promise<void> {
     for (const item of items) {
-      await this.indexFile(item.entry, { source: item.source });
+      item.afterIndex?.(await this.indexFile(item.entry, { source: item.source }));
     }
   }
 
@@ -240,11 +228,12 @@ export abstract class MemoryManagerSyncBase {
     }
   }
 
-  protected clearSessionRetryState(): void {
+  protected clearSessionRetryState(deferredSessionFiles: Iterable<string> = []): void {
     this.sessionsDirty = false;
     this.sessionsFullRetryDirty = false;
     this.sessionsReconcileDirty = false;
-    this.sessionsDirtyFiles.clear();
+    this.sessionsDirtyFiles = new Set(deferredSessionFiles);
+    this.sessionsDirty = this.sessionsDirtyFiles.size > 0;
   }
 
   protected clearMemoryRetryState(): void {
@@ -292,9 +281,6 @@ export abstract class MemoryManagerSyncBase {
       });
     }
     await this.indexFiles(items);
-    for (const item of items) {
-      item.afterIndex?.();
-    }
     this.advanceSyncProgress(progress, items.length);
   }
 
@@ -321,7 +307,7 @@ export abstract class MemoryManagerSyncBase {
     needsFullSessionReindex?: boolean;
     targetArchiveFiles?: string[];
     progress?: MemorySyncProgressState;
-  }): Promise<void> {
+  }): Promise<MemorySourceSyncPlan> {
     const memoryPlan = params.shouldSyncMemory
       ? await this.syncMemoryFiles({
           needsFullReindex: params.needsFullReindex,
@@ -330,7 +316,7 @@ export abstract class MemoryManagerSyncBase {
         })
       : this.emptySourceSyncPlan();
     if (params.shouldSyncSessions) {
-      await this.syncArchiveFiles({
+      const sessionPlan = await this.syncArchiveFiles({
         needsFullReindex: params.needsFullSessionReindex ?? params.needsFullReindex,
         targetArchiveFiles: params.targetArchiveFiles,
         progress: params.progress,
@@ -338,9 +324,10 @@ export abstract class MemoryManagerSyncBase {
         prefixIndexItems: memoryPlan.indexItems,
       });
       await memoryPlan.finalize();
-      return;
+      return sessionPlan;
     }
     await this.executeSourceSyncPlans([memoryPlan], params.progress);
+    return this.emptySourceSyncPlan();
   }
 
   protected hasIndexedChunks(): boolean {

@@ -465,12 +465,13 @@ describe("memory session chunk-delta sync", () => {
       .prepare(`SELECT hash FROM memory_index_sources WHERE source = 'sessions'`)
       .get() as { hash: string };
     expect(recordAfter.hash).toBe(recordBefore.hash);
+    expect(manager.status().dirty).toBe(true);
 
     ops.planSessionChunkDelta = originalPlan;
-    markSessionDirty(manager, sessionFile);
     await manager.sync({ reason: "test" });
 
-    // The follow-up sync replans from live rows and re-embeds what is missing.
+    // The deferred delta retains its own retry state, so an ordinary follow-up
+    // sync replans from live rows and re-embeds what is missing.
     const converged = readSessionChunkRows(manager);
     expect(converged.some((row) => row.text === keptRow?.text)).toBe(true);
     const recordConverged = ops.db
@@ -522,7 +523,6 @@ describe("memory session chunk-delta sync", () => {
     expect(recordAfter.hash).toBe(recordBefore.hash);
 
     ops.planSessionChunkDelta = originalPlan;
-    markSessionDirty(manager, sessionFile);
     await manager.sync({ reason: "test" });
 
     const converged = readSessionChunkRows(manager);

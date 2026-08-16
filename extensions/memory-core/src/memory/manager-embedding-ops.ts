@@ -61,6 +61,7 @@ import {
   type MemoryIndexProviderIdentity,
 } from "./manager-reindex-state.js";
 import { chunkSessionContentAtResetBoundary } from "./manager-reset-chunk-boundary.js";
+import type { MemoryIndexWriteResult } from "./manager-source-state.js";
 import {
   MemoryManagerSyncOps,
   type MemoryIndexWorkItem,
@@ -120,6 +121,7 @@ type PreparedMemoryIndexEntry = {
   structuredInputBytes?: number;
   /** Unchanged session rows whose current provenance is refreshed by the delta writer. */
   sessionRetainedChunks?: SessionRetainedChunk[];
+  afterIndex?: (result: MemoryIndexWriteResult) => void;
 };
 
 function resolveChunkRecallMetadata(params: {
@@ -983,7 +985,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     embeddings: number[][],
     vectorReady: boolean,
     sessionRetainedChunks?: SessionRetainedChunk[],
-  ): void {
+  ): MemoryIndexWriteResult {
     const now = Date.now();
     const needsVectorRebuild = !vectorReady && embeddings.some((embedding) => embedding.length > 0);
     const provenanceUpsert = this.db.prepare(
@@ -1147,6 +1149,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         kept: sessionRetainedChunks.length,
       });
     }
+    return keepRowsMissing ? { status: "deferred-session-retry" } : { status: "committed" };
   }
 
   private chunkRowId(
@@ -1472,10 +1475,14 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       generation.runtime?.sourceWideBatchEmbed !== true
     ) {
       await runWithConcurrency(
-        items.map(
-          (item) => async () =>
-            await this.indexFileWithGeneration(item.entry, { source: item.source }, generation),
-        ),
+        items.map((item) => async () => {
+          const result = await this.indexFileWithGeneration(
+            item.entry,
+            { source: item.source },
+            generation,
+          );
+          item.afterIndex?.(result);
+        }),
         this.getIndexConcurrency(),
       );
       return;
@@ -1543,7 +1550,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       for (const item of current) {
         const fileEmbeddings = embeddings.slice(offset, offset + item.chunks.length);
         offset += item.chunks.length;
-        this.writeChunks(
+        const result = this.writeChunks(
           item.entry,
           item.source,
           generation.provider.model,
@@ -1552,6 +1559,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           vectorReady,
           item.sessionRetainedChunks,
         );
+        item.afterIndex?.(result);
       }
       prepared = [];
       preparedRequestCount = 0;
@@ -1559,7 +1567,12 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
 
     for (const item of items) {
       if ("kind" in item.entry && item.entry.kind === "multimodal") {
-        await this.indexFileWithGeneration(item.entry, { source: item.source }, generation);
+        const result = await this.indexFileWithGeneration(
+          item.entry,
+          { source: item.source },
+          generation,
+        );
+        item.afterIndex?.(result);
         continue;
       }
       const preparedEntry = await this.prepareIndexEntry(
@@ -1568,8 +1581,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         generation,
       );
       if (!preparedEntry) {
+        item.afterIndex?.({ status: "committed" });
         continue;
       }
+      preparedEntry.afterIndex = item.afterIndex;
       const nextWouldExceedFiles = prepared.length >= SOURCE_WIDE_BATCH_MAX_FILES;
       const nextWouldExceedRequests =
         preparedRequestCount + preparedEntry.chunks.length > SOURCE_WIDE_BATCH_MAX_REQUESTS;
@@ -1593,10 +1608,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   protected async indexFile(
     entry: MemoryIndexEntry,
     options: { source: MemorySource; content?: string },
-  ): Promise<void> {
+  ): Promise<MemoryIndexWriteResult> {
     this.beginSyncProviderGeneration();
     try {
-      await this.indexFileWithGeneration(entry, options, this.syncProviderGeneration);
+      return await this.indexFileWithGeneration(entry, options, this.syncProviderGeneration);
     } finally {
       this.endSyncProviderGeneration();
     }
@@ -1606,15 +1621,15 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     entry: MemoryIndexEntry,
     options: { source: MemorySource; content?: string },
     generation: MemorySyncProviderGeneration | null,
-  ): Promise<void> {
+  ): Promise<MemoryIndexWriteResult> {
     // FTS-only mode: no embedding provider, but we can still build a FTS index
     if (generation?.kind !== "semantic") {
       // Multimodal files require an embedding provider; skip in FTS-only mode.
       if ("kind" in entry && entry.kind === "multimodal") {
-        return;
+        return { status: "committed" };
       }
       const prepared = await this.prepareIndexEntry(entry, options, null);
-      this.writeChunks(
+      return this.writeChunks(
         entry,
         options.source,
         "fts-only",
@@ -1623,12 +1638,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         false,
         prepared?.sessionRetainedChunks,
       );
-      return;
     }
 
     const prepared = await this.prepareIndexEntry(entry, options, generation);
     if (!prepared) {
-      return;
+      return { status: "committed" };
     }
 
     let embeddings: number[][];
@@ -1654,13 +1668,13 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         });
         this.clearIndexedFileData(entry.path, options.source);
         this.upsertFileRecord(entry, options.source);
-        return;
+        return { status: "committed" };
       }
       throw err;
     }
     const sample = embeddings.find((embedding) => embedding.length > 0);
     const vectorReady = sample ? await this.ensureVectorReady(sample.length) : false;
-    this.writeChunks(
+    return this.writeChunks(
       entry,
       options.source,
       generation.provider.model,

@@ -9,6 +9,8 @@ type TargetedSyncProgress = {
   report: (update: MemorySyncProgressUpdate) => void;
 };
 
+type TargetedSessionSyncResult = { deferredSessionFiles?: Iterable<string> } | void;
+
 function clearMemorySyncedArchiveFiles(params: {
   sessionsDirtyFiles: Set<string>;
   targetArchiveFiles?: Iterable<string> | null;
@@ -47,7 +49,7 @@ export async function runMemoryTargetedSessionSync(params: {
     needsFullReindex: boolean;
     targetArchiveFiles?: string[];
     progress?: TargetedSyncProgress;
-  }) => Promise<void>;
+  }) => Promise<TargetedSessionSyncResult>;
   shouldFallbackOnError: (err: unknown) => boolean;
   activateFallbackProvider: (reason: string) => Promise<boolean>;
 }): Promise<{ handled: boolean; sessionsDirty: boolean }> {
@@ -61,7 +63,7 @@ export async function runMemoryTargetedSessionSync(params: {
   }
 
   try {
-    await params.syncArchiveFiles({
+    const syncResult = await params.syncArchiveFiles({
       needsFullReindex: false,
       targetArchiveFiles: Array.from(params.targetArchiveFiles),
       progress: params.progress,
@@ -70,9 +72,14 @@ export async function runMemoryTargetedSessionSync(params: {
       sessionsDirtyFiles: params.sessionsDirtyFiles,
       targetArchiveFiles: params.targetArchiveFiles,
     });
+    for (const sessionFile of syncResult?.deferredSessionFiles ?? []) {
+      params.sessionsDirtyFiles.add(sessionFile);
+    }
     return {
       handled: true,
-      sessionsDirty: hasPendingSessionWork(remainingSessionsDirty),
+      sessionsDirty: hasPendingSessionWork(
+        remainingSessionsDirty || params.sessionsDirtyFiles.size > 0,
+      ),
     };
   } catch (err) {
     const reason = formatErrorMessage(err);
