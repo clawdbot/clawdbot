@@ -1,6 +1,7 @@
 import { ErrorCodes } from "openclaw/plugin-sdk/gateway-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import type { TranscriptSourceProvider } from "openclaw/plugin-sdk/transcripts";
 import { describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 
@@ -117,6 +118,7 @@ describe("Microsoft Teams meetings plugin surface", () => {
     const cli: unknown[] = [];
     const nodeCommands: unknown[] = [];
     const policies: unknown[] = [];
+    const transcriptProviders: TranscriptSourceProvider[] = [];
     const api = createTestPluginApi({
       id: "teams-meetings",
       name: "Microsoft Teams meetings",
@@ -140,6 +142,7 @@ describe("Microsoft Teams meetings plugin surface", () => {
       registerCli: (_registrar: unknown, options: unknown) => cli.push(options),
       registerNodeHostCommand: (command: unknown) => nodeCommands.push(command),
       registerNodeInvokePolicy: (policy: unknown) => policies.push(policy),
+      registerTranscriptSourceProvider: (provider) => transcriptProviders.push(provider),
     });
 
     plugin.register(api);
@@ -162,6 +165,13 @@ describe("Microsoft Teams meetings plugin surface", () => {
       expect.objectContaining({ command: "teamsmeetings.chrome", cap: "teams-meetings" }),
     ]);
     expect(policies).toHaveLength(1);
+    expect(transcriptProviders).toEqual([
+      expect.objectContaining({
+        id: "teams",
+        aliases: ["teams-meetings", "microsoft-teams", "msteams"],
+        sourceKinds: ["live-caption"],
+      }),
+    ]);
   });
 
   it("scopes trusted tool session operations to the invoking agent", async () => {
@@ -244,6 +254,23 @@ describe("Microsoft Teams meetings plugin surface", () => {
       },
     });
   });
+
+  it.each([
+    ["teamsmeetings.testSpeech", "transcribe", "test_speech requires mode: agent or bidi"],
+    ["teamsmeetings.testListen", "agent", "test_listen requires mode: transcribe"],
+  ])(
+    "classifies invalid probe mode for %s as an invalid request",
+    async (method, mode, message) => {
+      const { invoke } = authorizationHarness();
+      const response = await invoke(method, { mode, timeoutMs: 1, url: MEETING_URL });
+
+      expect(response).toMatchObject({
+        error: { code: ErrorCodes.INVALID_REQUEST },
+        ok: false,
+        payload: { error: message },
+      });
+    },
+  );
 
   it("classifies browser failures as unavailable, not invalid requests", async () => {
     const { invoke } = authorizationHarness({ browserError: new Error("browser unavailable") });

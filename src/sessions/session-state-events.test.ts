@@ -1,7 +1,7 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
-import { upsertSessionEntry } from "../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
 import {
@@ -22,6 +22,7 @@ import {
   listAmbientGroupWatchTargets,
   listSessionStateEventsSince,
   recordSessionCompacted,
+  recordSessionCreated,
   recordSessionGoalChanged,
   recordSessionHumanDirectMessage,
   recordSessionStateEvent,
@@ -103,7 +104,7 @@ async function createWatcherSession(
   database: ReturnType<typeof createDatabaseOptions>,
   watcherSessionKey = watcher,
 ) {
-  await upsertSessionEntry(
+  await upsertSessionEntryCore(
     { sessionKey: watcherSessionKey, env: database.env },
     { sessionId: `session-${watcherSessionKey}`, updatedAt: Date.now() },
   );
@@ -442,6 +443,7 @@ describe("session state events", () => {
 
     await drainFormattedSystemEvents({
       cfg,
+      agentId: "main",
       sessionKey: watcher,
       isMainSession: false,
       isNewSession: false,
@@ -453,6 +455,7 @@ describe("session state events", () => {
     enqueueSystemEvent("Exec completed", { sessionKey: watcher, contextKey: "exec:job-1" });
     await drainFormattedSystemEvents({
       cfg,
+      agentId: "main",
       sessionKey: watcher,
       isMainSession: false,
       isNewSession: false,
@@ -776,6 +779,17 @@ describe("session state events", () => {
 
   it("projects spawn, terminal, goal, and compaction producer helpers", () => {
     const database = createDatabaseOptions();
+    recordSessionCreated({
+      sessionKey: child,
+      agentId: "main",
+      entry: {
+        sessionId: "session-child",
+        updatedAt: Date.now(),
+        createdVia: "spawn",
+        createdActor: { type: "agent", id: watcher },
+        createdAt: Date.now(),
+      },
+    });
     recordSubagentSpawned({
       childSessionKey: child,
       childRunId: "run-child",
@@ -823,13 +837,19 @@ describe("session state events", () => {
 
     const events = listSessionStateEventsSince(child, "main", 0, 200, database).events;
     expect(events.map((event) => event.kind)).toEqual([
+      "created",
       "child_spawned",
       "run_completed",
       "run_failed",
       "goal_changed",
       "compacted",
     ]);
-    expect(events[2]).toMatchObject({
+    expect(events[0]).toMatchObject({
+      actorType: "agent",
+      actorId: watcher,
+      summary: "session created",
+    });
+    expect(events[3]).toMatchObject({
       runId: "run-child-cancelled",
       summary: "child run cancelled",
       payload: { outcome: "cancelled" },

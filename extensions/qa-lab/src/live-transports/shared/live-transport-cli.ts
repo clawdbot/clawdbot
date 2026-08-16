@@ -165,9 +165,13 @@ export function createLiveTransportQaCliRegistration(
 export function createLiveTransportQaAdapterFactory(params: {
   create: NonNullable<LiveTransportQaCliRegistrationOptions["adapterFactory"]>["create"];
   id: string;
+  isolatesInstances?: boolean;
+  supportsModuleFlows?: true;
 }): NonNullable<LiveTransportQaCliRegistrationOptions["adapterFactory"]> {
   return {
     id: params.id,
+    isolatesInstances: params.isolatesInstances,
+    supportsModuleFlows: params.supportsModuleFlows,
     matches: ({ channelId, driver }) => driver === "live" && channelId === params.id,
     create: params.create,
   };

@@ -34,6 +34,13 @@ shared `message` tool. Your plugin owns:
 Core owns the shared message tool, prompt wiring, the outer session-key shape,
 generic `:thread:` bookkeeping, and dispatch.
 
+Core also owns model-picker product actions. A channel that renders a
+`ModelPickerAction` declares its `ModelPickerCapabilityProfile`, then encodes
+the typed action in a transport-private authenticated callback envelope. Keep
+approval, command, URL, web-app, question, callback, and model-picker actions
+distinguishable until that encoding boundary; never infer picker intent from a
+raw callback string. Actor and source-message checks remain channel-owned.
+
 ## Message adapter
 
 Expose a `message` adapter with `defineChannelMessageAdapter` from
@@ -70,16 +77,49 @@ and `verifyChannelMessageLiveFinalizerProofs(...)` tests so native preview,
 progress, edit, fallback/retention, cleanup, and receipt behavior cannot drift
 silently.
 
+### Progress visibility acceptance
+
+Progress callbacks report what the operator can see, not merely what a plugin queued. Return
+`true` after accepting visible progress and `false` while delivery is pending or when no visible
+update occurred. Existing synchronous and asynchronous callbacks that return `void` remain
+backward-compatible and are treated as visible; new acceptance-aware implementations should use
+an explicit boolean.
+
+### Commentary delivery ownership
+
+Set `commentaryPayloadsEnabled: true` when the channel supports durable commentary messages.
+Channels that normally render commentary in one evolving progress draft can also provide
+`shouldDeliverCommentaryPayloads`. Core freezes verbose visibility for the turn, registers that
+getter through `onVerboseProgressVisibility`, evaluates the delivery callback once before
+dispatch, and snapshots that result for the whole turn. Session changes apply on the next turn.
+The callback is inert unless `commentaryPayloadsEnabled` is also `true`; without that static
+opt-in, core neither evaluates the callback nor freezes the registered visibility getter.
+
+Return `false` while the draft owns normal progress and `true` when verbose progress makes that
+draft yield to durable commentary. Keep the callback synchronous and read only channel-owned,
+already prepared state. Omitting it preserves durable delivery for existing plugins that use the
+static opt-in. The callback does not control reasoning, partial replies, tool progress, or final
+answers.
+
 Inbound receivers that defer platform acknowledgements should declare
 `message.receive.defaultAckPolicy` and `supportedAckPolicies` instead of hiding
 ack timing in monitor-local state. Cover every declared policy with
 `verifyChannelMessageReceiveAckPolicyAdapterProofs(...)`.
 
-Legacy reply helpers such as `dispatchInboundReplyWithBase` and
-`recordInboundSessionAndDispatchReply` remain available for compatibility
-dispatchers. Do not use them for new channel code; start with the `message`
-adapter, receipts, and receive/send lifecycle helpers on
-`openclaw/plugin-sdk/channel-outbound` instead.
+### TTS voice delivery
+
+Declare native voice-note behavior under `capabilities.tts.voice`. Set
+`synthesisTarget: "voice-note"` when TTS providers should produce a native
+voice-note format. Set `captionedFinalText: true` only when the outbound voice
+operation accepts visible final text and enforces its transport's caption and
+overflow rules. Core then holds final-mode streamed text for that operation and
+falls back to text when the voice payload is proven unsent.
+
+The legacy `dispatchInboundReplyWithBase` helper remains available from the
+deprecated `openclaw/plugin-sdk/inbound-reply-dispatch` compatibility shim.
+Do not use it for new channel code; start with the `message` adapter, receipts,
+and receive/send lifecycle helpers on `openclaw/plugin-sdk/channel-outbound`
+instead.
 
 ### Inbound ingress (experimental)
 
@@ -94,16 +134,31 @@ the resolved state or decision. See
 [Channel ingress API](/plugins/sdk-channel-ingress) for the API design,
 ownership boundary, and test expectations.
 
+Pass the exact resolver result to the host-injected registered context builder
+as `channelIngress`. Results used for execution must include the final
+agent/session/message/event `contextBinding`; decision-only resolver calls may
+omit it. This preserves the native plugin's record-, epoch-, and scope-bound participant evidence through one-shot queued run admission without
+exposing it in message context fields. The standalone public builder is not an
+authoritative substitute. Never reconstruct evidence from sender, route, room,
+account, thread, message, transport, or session values. Legacy adapters can explicitly pass
+`channelIngress: "unsupported"` only when the path is source-proven to lack an
+authoritative Phase 0 integration. Supported paths must pass the exact result;
+omission is invalid production wiring. Missing, fake, stale, reused, or mixed
+supported evidence projects as unknown, never as an allow signal.
+
 ### Durable ingress and replay dedupe
 
-Channels adopting the durable ingress drain follow the Telegram reference
-pattern: enqueue the raw transport envelope at a single receive chokepoint
-(no normalization at receive time), gate the transport ack on the durable
-append for webhook transports, derive one serialized lane per conversation,
-and mark the event complete at dispatch adoption. The queue's primary key is
-`(queue_name, event_id)` and completion tombstones the row instead of
-deleting it, so a late platform redelivery of the same `event_id` is rejected
-durably for the tombstone retention window.
+Channels adopting durable ingress should use `createChannelIngressMonitor`
+from `openclaw/plugin-sdk/channel-outbound` unless they need a materially
+different admission or pump contract. Enqueue the raw transport envelope at a
+single receive chokepoint (no normalization at receive time), gate the
+transport ack on the durable append for webhook transports, derive one
+serialized lane per conversation, and mark the event complete at dispatch
+adoption. The queue's primary key is `(queue_name, event_id)` and completion
+tombstones the row instead of deleting it, so a late platform redelivery of
+the same `event_id` is rejected durably for the tombstone retention window.
+See [Channel outbound API](/plugins/sdk-channel-outbound#durable-ingress-monitors)
+for the monitor API and shutdown contract.
 
 That tombstone is the layering rule for replay guards
 (`openclaw/plugin-sdk/persistent-dedupe`): a drained channel keeps a separate
@@ -113,8 +168,69 @@ dedupes `chat_id:message_id` because debounce merges can re-surface a message
 under a fresh `update_id`), or a longer window than the channel's tombstone
 retention. If your guard key would equal the drain `event_id`, delete the
 guard when adopting the drain and size `completedTtlMs`/`completedMaxEntries`
-to cover the old guard window instead. Non-dedupe protections (age fences,
-outbound echo caches) are unrelated to this rule and stay.
+to cover the old guard window instead. Non-dedupe protections such as age
+fences are unrelated to this rule. Stable outbound message IDs use the shared
+outbound-echo registry from `openclaw/plugin-sdk/channel-outbound` instead of a
+channel-local TTL cache.
+
+#### Transport classes and retention
+
+Classify a transport by the recovery guarantee at its receive boundary:
+
+- **Ack-gated webhook or event delivery:** acknowledge or return success only
+  after the durable append. An append failure must leave the delivery eligible
+  for retry or fail the receive boundary. This class includes Slack, SMS, Zalo,
+  Microsoft Teams, Google Chat, LINE, and Synology Chat.
+- **Awaited polling or stream delivery:** advance the remote cursor or send the
+  transport ack only after the append. When no explicit cursor exists, keep the
+  receive callback serialized and awaited so an append failure cannot let the
+  receive loop run ahead. Telegram polling, Signal, and Tlon use this class;
+  Telegram webhook delivery follows the ack-gated rule above.
+- **Non-replay sockets:** IRC, Mattermost, Twitch, and Zalo Personal cannot ask
+  the platform to redeliver an accepted event. Their durable queue protects the
+  process crash window and supports local restart recovery; completion
+  tombstones are near-inert against platform replay.
+
+Use 30 days as the fleet tombstone-TTL convention, not as an SDK default. A
+high-volume redelivery window normally uses a 20,000-entry completed cap;
+lower-volume awaited and non-replay transports normally use 1,000-2,000.
+Current exceptions include LINE's 4,096-entry caps, SMS's 24-hour completed
+TTL, and Tlon's cap-only completed retention. Failed-row caps may also be lower
+than completed caps. TTL and cap both prune rows, so effective retention ends
+when the first bound is reached. Deviate only for a documented platform retry
+horizon, preserved shipped replay-guard window, expected volume or disk budget,
+or non-replay transport, and cover the retention contract with tests.
+
+#### At-least-once side effects
+
+Drain dispatch runs command side effects before the ingress row reaches its
+completion tombstone. A process crash between those steps replays the row and
+can execute the side effect again. This at-least-once crash window is the
+default contract. For non-idempotent work such as config writes, storage
+clears, or visible acknowledgements outside the reply lane, use
+`createIngressEffectOnce(...)` from
+`openclaw/plugin-sdk/ingress-effect-once`. Give each call the stable ingress
+`eventId` plus an effect name. Create one helper per ingress queue/account and
+use a stable, unique `namespacePrefix` for that scope because transport event
+IDs may be queue-local. The helper commits its durable claim only after the
+effect succeeds; a thrown effect releases the claim so a drain retry can
+execute it again, while concurrent callers wait for the active claim. Durable
+state errors call `onDiskError` when provided and reject instead of falling
+back to process memory.
+
+Set the helper's `ttlMs` to at least the channel's ingress tombstone retention
+plus the maximum delay between effect commit and row completion, including
+bounded downtime and drain retries. The effect record's TTL starts at commit,
+while tombstone retention starts later at completion; if pending-row lifetime
+is unbounded, no finite TTL covers arbitrary downtime. After the tombstone can
+no longer replay the row, older effect records are dead weight. Size
+`stateMaxEntries` for every distinct event/effect key that can exist in that
+retention window, accounting for the queue's completed-entry bound and the
+maximum effects per event. A lower cap evicts the oldest record before its TTL
+and allows that effect to execute again. Residual at-least-once windows remain
+if the process dies or persistence fails after the effect succeeds but before
+the claim commits, or if the record expires while its ingress row is still
+pending.
 
 #### Account-scoped restart contract
 
@@ -142,6 +258,13 @@ resolved config unchanged, stopping one account settles only that account's
 monitor and drain, and a fresh monitor recovers that account's rows exactly
 once. If any guarantee cannot be proved, omit the flag.
 
+### Runtime lifecycle status
+
+For channel-authored runtime state, `ChannelAccountSnapshot.lifecycle` is the
+successor to `healthState`. Existing plugins may keep publishing `healthState`
+during adoption, and core-derived policy writes remain supported. There is no
+removal date; removal waits for external channel-plugin adoption.
+
 ### Typing indicators
 
 If your channel supports typing indicators outside inbound replies, expose
@@ -167,6 +290,26 @@ fetch can use `createHostedOutboundMediaStore(...)` from
 `openclaw/plugin-sdk/outbound-media` with plugin state stores. Keep platform
 route parsing and token enforcement in the channel plugin; the shared helper
 only owns media loading, expiry metadata, chunk rows, and cleanup.
+
+`prepareUrl({ mediaAccess })` forwards host-authorized local media access to
+the shared outbound loader. Hosted media capacity defaults to
+`overflowPolicy: "evict-oldest"` for compatibility. Use `"reject-new"` when
+issued URLs must remain valid until expiry, and configure both backing keyed
+stores with `"reject-new"` so independent writers cannot evict live rows.
+Use `validateBeforePersist` to inspect the guarded loader's exact bytes and
+metadata when a transport must reject a payload class. Treat its buffer as
+read-only and throw to reject before capability creation or any store write.
+Authenticate bearer requests with `readMetadata(...)` before calling `read(...)`
+so invalid tokens and `HEAD` requests do not hydrate stored media chunks.
+
+Inbound attachments use ordered facts, not parallel `Media*` fields. Normalize
+channel records with `toInboundMediaFacts(...)` from
+`openclaw/plugin-sdk/channel-inbound` and pass them as `media` when building the
+inbound context. When a plugin must authorize local media reads, import
+`getAgentScopedMediaLocalRoots(...)` or
+`getAgentScopedMediaLocalRootsForSources(...)` from the focused
+`openclaw/plugin-sdk/media-local-roots` subpath. The old
+`agent-media-payload` builder/root facade is deprecated compatibility.
 
 ### Native payload shaping
 
@@ -327,6 +470,11 @@ Other approval helpers:
   lookup, transport-enabled check, target normalization, and turn-source
   target resolution. Do not use it to create core-owned channel policy
   defaults; pass the channel's documented default mode explicitly.
+- `createNativeApprovalMessagingTargetResolvers` centralizes channel matching
+  and `{ to, accountId, threadId }` normalization for messaging transports
+  whose native approval target is a channel-owned normalized destination.
+  Keep group authorization, approver mapping, and other transport policy in
+  the channel plugin.
 - `createChannelNativeOriginTargetResolver` uses the shared channel-route
   matcher by default for `{ to, accountId, threadId }` targets. Pass
   `targetsMatch` only when a channel has provider-specific equivalence rules,
@@ -416,10 +564,9 @@ adapter/wizard fail closed on config writes and finalization, and they reuse
 the same install-required message across validation, finalize, and docs-link
 copy.
 
-If your channel supports env-driven setup or auth and generic startup/config
-flows should know those env names before runtime loads, declare them in the
-plugin manifest with `channelEnvVars`. Keep channel runtime `envVars` or local
-constants for operator-facing copy only.
+If your channel supports env-driven setup or auth, expose it through the
+channel config schema and setup descriptors. Keep channel runtime `envVars` or
+local constants for operator-facing copy only.
 
 If your channel can appear in `status`, `channels list`, `channels status`, or
 SecretRef scans before the plugin runtime starts, add `openclaw.setupEntry` in
@@ -449,10 +596,21 @@ surfaces:
 - `openclaw/plugin-sdk/inbound-envelope` and
   `openclaw/plugin-sdk/channel-inbound` for inbound route/envelope and
   record-and-dispatch wiring
+- `readAgentRunTerminalOutcome(dispatchResult)` from
+  `openclaw/plugin-sdk/channel-inbound` when terminal reactions or status UI
+  must distinguish a completed core agent run from a recovered failed run. It
+  returns `"completed"` or `"failed"` only when a core run actually started,
+  and `undefined` for commands, dedupe, busy, pre-run abort, and custom dispatch
+  results. Delivery counts and visibility remain transport facts, including
+  successful delivery of an error payload; the process-local carrier is not
+  serialized to JSON.
+- `createInboundEventDeliveryCorrelation(...)` from
+  `openclaw/plugin-sdk/inbound-event-delivery` when successful outbound sends must
+  retire an active inbound-event marker; create one tracker per channel and
+  keep target matching in the channel plugin
 - `openclaw/plugin-sdk/channel-targets` for target parsing helpers
-- `openclaw/plugin-sdk/outbound-media` for media loading and
-  `openclaw/plugin-sdk/channel-outbound` for outbound identity/send delegates
-  and payload planning
+- `openclaw/plugin-sdk/channel-outbound` for outbound identity/send delegates
+  and typed payload planning
 - `buildThreadAwareOutboundSessionRoute(...)` from
   `openclaw/plugin-sdk/channel-core` when an outbound route should preserve
   an explicit `replyToId`/`threadId` or recover the current `:thread:`
@@ -461,12 +619,6 @@ surfaces:
   their platform has native thread delivery semantics.
 - `openclaw/plugin-sdk/thread-bindings-runtime` for thread-binding lifecycle
   and adapter registration
-- `openclaw/plugin-sdk/agent-media-payload` only when a legacy agent/media
-  payload field layout is still required
-- `openclaw/plugin-sdk/telegram-command-config` (deprecated: no bundled
-  plugin uses it in production) for Telegram custom-command normalization,
-  duplicate/conflict validation, and a fallback-stable command config
-  contract; prefer plugin-local command config handling for new plugin code
 
 Auth-only channels can usually stop at the default path: core handles
 approvals and the plugin just exposes outbound/auth capabilities. Native
@@ -757,6 +909,19 @@ unrelated inbound runtime helpers.
 
     For channels that accept both canonical top-level DM keys and legacy nested keys, use the helpers from `plugin-sdk/channel-config-helpers`: `resolveChannelDmAccess`, `resolveChannelDmPolicy`, `resolveChannelDmAllowFrom`, and `normalizeChannelDmPolicy` keep account-local values ahead of inherited root values. Pair the same resolver with doctor repair through `normalizeLegacyDmAliases` so runtime and migration read the same contract.
 
+    If a channel intentionally applies stricter DM session routing than the
+    global config, expose that behavior through `security.dmRouting` so Doctor
+    and security audit resolve the same session owner as runtime. The optional
+    `resolveDmScope` callback runs before core route resolution; its context
+    includes `cfg`, `accountId`, the resolved `account`, and a `principalId`
+    for finite allowlist entries. `resolveDmRoute` receives those fields plus
+    the resolved core `route`; it may return `{ sessionKey }` for a shared final
+    bucket, `{ kind: "isolated" }` for an unknown peer, or `{ kind: "core" }`
+    to preserve core `dmScope` namespace analysis. For wildcard/open policy,
+    `principalId` is absent and an undefined result is reported as unverified.
+    Diagnostics never invent a peer ID. Keep both callbacks pure and
+    import-safe because read-only diagnostics run without channel runtime.
+
     <Accordion title="What createChatChannelPlugin does for you">
       Instead of implementing low-level adapter interfaces manually, you pass
       declarative options and the builder composes them:
@@ -779,6 +944,48 @@ unrelated inbound runtime helpers.
       when a native reply target was resolved, so payload helpers can preserve
       explicit reply tags without consuming an implicit single-use reply slot.
     </Accordion>
+
+    ### Group tool-policy adapters
+
+    A channel that implements `group.resolveToolPolicy` and supports
+    `toolsBySender` must forward the complete `ChannelGroupContext` to its
+    shared policy resolver. In particular, honor `senderPolicyMode: "never"`
+    by skipping sender-specific overlays at both the matched-group and wildcard
+    scopes while still applying the base `tools` policy.
+
+    OpenClaw sets this mode only for trusted non-ingress execution whose sender
+    authority was already captured in a server-owned envelope, such as an
+    explicitly capped scheduled run. Plugins must not derive the mode from
+    inbound metadata, persist it as channel state, or expose it as config. Add
+    an adapter test that proves the mode skips a wildcard `toolsBySender` entry
+    without dropping the matching base `tools` restriction.
+
+    ### Native plugin command ownership
+
+    Channel plugins that publish provider-native command catalogs should use
+    `openclaw/plugin-sdk/plugin-command-runtime`. Create one runtime while
+    planning the catalog, merge its candidates with built-in and skill entries,
+    and retain the winning candidate object in the registered handler closure.
+    Once the provider catalog is finalized, call
+    `retainNativeCatalog(provider)` when at least one plugin candidate remains;
+    if listener registration can fail synchronously, call it after those
+    listeners are installed. This records the current channel-account lifecycle
+    so a registry reload restarts only accounts whose handlers retain that
+    registry generation.
+    Call `prepareDispatch(rawArgs)` only on that winner and execute the returned
+    dispatch with `dispatch.execute(context)`. Carry an explicit
+    `{ kind: "non-plugin" }` decision for retained built-in and skill winners.
+    This keeps the advertised command and
+    its executable plugin registration on the same registry generation.
+
+    Candidates expose only immutable display/auth/progress metadata plus an
+    opaque process-local dispatch. They do not expose handlers, plugin roots,
+    or registry rows. Dispatches cannot cross runtime factories or channels,
+    and a registry replacement makes new executions return an unavailable
+    result instead of rematching command text against the replacement registry.
+    A command already admitted before retirement may finish on its captured
+    generation. Do not serialize candidates or dispatches; project only their
+    display fields into provider API payloads.
 
   </Step>
 

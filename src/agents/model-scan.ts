@@ -1,10 +1,14 @@
+import { createLlmRuntime, type LlmRuntime } from "@openclaw/ai";
 import type { OpenAICompletionsOptions } from "@openclaw/ai/internal/openai";
 import { getEnvApiKey } from "@openclaw/ai/internal/runtime";
+import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   asDateTimestampMs,
+  asPositiveSafeInteger,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -16,12 +20,14 @@ import {
 import pMap from "p-map";
 import { Type } from "typebox";
 import { formatErrorMessage } from "../infra/errors.js";
+import { cancelUnreadResponseBody } from "../infra/http-body.js";
 /**
  * Scans remote provider model catalogs for configured providers.
  */
 import { readResponseWithLimit } from "../infra/http-body.js";
-import { complete } from "../llm/stream.js";
+import "../llm/ai-transport-host.js";
 import type { Context, Model, Tool } from "../llm/types.js";
+import { runAbortableTimeout } from "../node-host/with-timeout.js";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
@@ -179,19 +185,6 @@ function isFreeOpenRouterModel(entry: OpenRouterModelMeta): boolean {
   return entry.pricing.prompt === 0 && entry.pricing.completion === 0;
 }
 
-async function withTimeout<T>(
-  timeoutMs: number,
-  fn: (signal: AbortSignal) => Promise<T>,
-): Promise<T> {
-  const controller = new AbortController();
-  const timer = setTimeout(controller.abort.bind(controller), timeoutMs);
-  try {
-    return await fn(controller.signal);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 // Reads the OpenRouter /models success body under a byte cap before JSON.parse.
 // The success path was previously buffered with an unbounded res.json(); a faulty
 // or hostile provider could stream an effectively endless document and exhaust
@@ -220,78 +213,79 @@ async function fetchOpenRouterModels(
   try {
     // fetch resolves after headers, so keep the shared timeout active until
     // the provider-controlled catalog body has been consumed.
-    return await withTimeout(timeoutMs, async (signal) => {
-      res = await fetchImpl(OPENROUTER_MODELS_URL, {
-        headers: { Accept: "application/json" },
-        signal,
-      });
-      if (!res.ok) {
-        throw new Error(`OpenRouter /models failed: HTTP ${res.status}`);
-      }
-      const payload = (await readOpenRouterModelsJson(res, timeoutMs)) as { data?: unknown };
-      const entries = Array.isArray(payload.data) ? payload.data : [];
+    return await runAbortableTimeout(
+      async (signal) => {
+        res = await fetchImpl(OPENROUTER_MODELS_URL, {
+          headers: { Accept: "application/json" },
+          signal,
+        });
+        if (!res.ok) {
+          throw new Error(`OpenRouter /models failed: HTTP ${res.status}`);
+        }
+        const payload = (await readOpenRouterModelsJson(res, timeoutMs)) as { data?: unknown };
+        const entries = Array.isArray(payload.data) ? payload.data : [];
 
-      return entries
-        .map((entry) => {
-          if (!entry || typeof entry !== "object") {
-            return null;
-          }
-          const obj = entry as Record<string, unknown>;
-          const id = normalizeOptionalString(obj.id) ?? "";
-          if (!id) {
-            return null;
-          }
-          const name = typeof obj.name === "string" && obj.name.trim() ? obj.name.trim() : id;
+        return entries
+          .map((entry) => {
+            if (!entry || typeof entry !== "object") {
+              return null;
+            }
+            const obj = entry as Record<string, unknown>;
+            const id = normalizeOptionalString(obj.id) ?? "";
+            if (!id) {
+              return null;
+            }
+            const name = typeof obj.name === "string" && obj.name.trim() ? obj.name.trim() : id;
+            const topProvider = asOptionalRecord(obj.top_provider);
 
-          const contextLength =
-            typeof obj.context_length === "number" && Number.isFinite(obj.context_length)
-              ? obj.context_length
-              : null;
+            const contextLength =
+              asPositiveSafeInteger(topProvider?.context_length) ??
+              asPositiveSafeInteger(obj.context_length) ??
+              null;
 
-          const maxCompletionTokens =
-            typeof obj.max_completion_tokens === "number" &&
-            Number.isFinite(obj.max_completion_tokens)
-              ? obj.max_completion_tokens
-              : typeof obj.max_output_tokens === "number" && Number.isFinite(obj.max_output_tokens)
-                ? obj.max_output_tokens
-                : null;
+            const maxCompletionTokens =
+              asPositiveSafeInteger(topProvider?.max_completion_tokens) ??
+              asPositiveSafeInteger(obj.max_completion_tokens) ??
+              asPositiveSafeInteger(obj.max_output_tokens) ??
+              null;
 
-          const supportedParameters = Array.isArray(obj.supported_parameters)
-            ? normalizeStringEntries(
-                obj.supported_parameters.filter((value) => typeof value === "string"),
-              )
-            : [];
+            const supportedParameters = Array.isArray(obj.supported_parameters)
+              ? normalizeStringEntries(
+                  obj.supported_parameters.filter((value) => typeof value === "string"),
+                )
+              : [];
 
-          const supportedParametersCount = supportedParameters.length;
-          const supportsToolsMeta = supportedParameters.includes("tools");
+            const supportedParametersCount = supportedParameters.length;
+            const supportsToolsMeta = supportedParameters.includes("tools");
 
-          const modality =
-            typeof obj.modality === "string" && obj.modality.trim() ? obj.modality.trim() : null;
+            const modality =
+              typeof obj.modality === "string" && obj.modality.trim() ? obj.modality.trim() : null;
 
-          const inferredParamB = inferParamBFromIdOrName(`${id} ${name}`);
-          const createdAtMs = normalizeCreatedAtMs(obj.created_at);
-          const pricing = parseOpenRouterPricing(obj.pricing);
+            const inferredParamB = inferParamBFromIdOrName(`${id} ${name}`);
+            const createdAtMs = normalizeCreatedAtMs(obj.created_at);
+            const pricing = parseOpenRouterPricing(obj.pricing);
 
-          return {
-            id,
-            name,
-            contextLength,
-            maxCompletionTokens,
-            supportedParameters,
-            supportedParametersCount,
-            supportsToolsMeta,
-            modality,
-            inferredParamB,
-            createdAtMs,
-            pricing,
-          } satisfies OpenRouterModelMeta;
-        })
-        .filter((entry): entry is OpenRouterModelMeta => Boolean(entry));
-    });
+            return {
+              id,
+              name,
+              contextLength,
+              maxCompletionTokens,
+              supportedParameters,
+              supportedParametersCount,
+              supportsToolsMeta,
+              modality,
+              inferredParamB,
+              createdAtMs,
+              pricing,
+            } satisfies OpenRouterModelMeta;
+          })
+          .filter((entry): entry is OpenRouterModelMeta => Boolean(entry));
+      },
+      timeoutMs,
+      "OpenRouter model scan",
+    );
   } finally {
-    if (res && !res.bodyUsed) {
-      await res.body?.cancel().catch(() => undefined);
-    }
+    await cancelUnreadResponseBody(res);
   }
 }
 
@@ -299,6 +293,7 @@ async function probeTool(
   model: OpenAIModel,
   apiKey: string,
   timeoutMs: number,
+  complete: LlmRuntime["complete"],
 ): Promise<ProbeResult> {
   const context: Context = {
     messages: [
@@ -312,14 +307,17 @@ async function probeTool(
   };
   const startedAt = Date.now();
   try {
-    const message = await withTimeout(timeoutMs, (signal) =>
-      complete(model, context, {
-        apiKey,
-        maxTokens: 256,
-        temperature: 0,
-        toolChoice: "required",
-        signal,
-      } satisfies OpenAICompletionsOptions),
+    const message = await runAbortableTimeout(
+      (signal) =>
+        complete(model, context, {
+          apiKey,
+          maxTokens: 256,
+          temperature: 0,
+          toolChoice: "required",
+          signal,
+        } satisfies OpenAICompletionsOptions),
+      timeoutMs,
+      "model tool probe",
     );
 
     const hasToolCall = message.content.some((block) => block.type === "toolCall");
@@ -345,6 +343,7 @@ async function probeImage(
   model: OpenAIModel,
   apiKey: string,
   timeoutMs: number,
+  complete: LlmRuntime["complete"],
 ): Promise<ProbeResult> {
   const context: Context = {
     messages: [
@@ -360,13 +359,16 @@ async function probeImage(
   };
   const startedAt = Date.now();
   try {
-    await withTimeout(timeoutMs, (signal) =>
-      complete(model, context, {
-        apiKey,
-        maxTokens: 16,
-        temperature: 0,
-        signal,
-      } satisfies OpenAICompletionsOptions),
+    await runAbortableTimeout(
+      (signal) =>
+        complete(model, context, {
+          apiKey,
+          maxTokens: 16,
+          temperature: 0,
+          signal,
+        } satisfies OpenAICompletionsOptions),
+      timeoutMs,
+      "model image probe",
     );
     return { ok: true, latencyMs: Date.now() - startedAt };
   } catch (err) {
@@ -433,6 +435,8 @@ export async function scanOpenRouterModels(
   const providerFilter = normalizeProviderId(options.providerFilter ?? "");
 
   const catalog = await fetchOpenRouterModels(fetchImpl, timeoutMs);
+  const llmRuntime = createLlmRuntime();
+  registerBuiltInApiProviders(llmRuntime.registry);
   const now = Date.now();
 
   const filtered = catalog.filter((entry) => {
@@ -504,9 +508,9 @@ export async function scanOpenRouterModels(
           reasoning: baseModel.reasoning,
         };
 
-        const toolResult = await probeTool(model, apiKey, timeoutMs);
+        const toolResult = await probeTool(model, apiKey, timeoutMs, llmRuntime.complete);
         const imageResult = model.input?.includes("image")
-          ? await probeImage(ensureImageInput(model), apiKey, timeoutMs)
+          ? await probeImage(ensureImageInput(model), apiKey, timeoutMs, llmRuntime.complete)
           : { ok: false, latencyMs: null, skipped: true };
 
         result = buildOpenRouterScanResult({

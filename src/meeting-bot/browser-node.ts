@@ -4,7 +4,7 @@ import type {
   MeetingBrowserRequestCaller,
   MeetingBrowserRequestParams,
   MeetingPlatformAdapter,
-} from "./platform-adapter.js";
+} from "./platform-adapter-contract.js";
 import type { MeetingBrowserHealth, MeetingTranscriptSnapshot } from "./session-types.js";
 
 type BrowserProxyResult = { result?: unknown };

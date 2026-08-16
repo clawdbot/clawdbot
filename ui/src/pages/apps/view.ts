@@ -11,6 +11,8 @@ import { appsBrandIcons } from "./brand-icons.ts";
 
 type AppsProps = {
   onNavigate: (routeId: RouteId) => void;
+  /** Opens the device-pairing dialog; absent when the operator cannot pair. */
+  onPairDevice?: () => void;
 };
 
 type AppCardCta =
@@ -162,9 +164,12 @@ const APP_SECTIONS: readonly AppSection[] = [
         icon: appsBrandIcons.chrome,
         title: () => t("appsPage.cards.chrome.title"),
         desc: () => t("appsPage.cards.chrome.desc"),
-        // Installs unpacked via `openclaw browser extension path`; there is no
-        // Chrome Web Store listing, so the only CTA is the setup guide.
         ctas: [
+          {
+            kind: "external",
+            href: "https://chromewebstore.google.com/detail/openclaw/kcdjddhmeafeomebliikmbpblkmkfoig",
+            label: () => t("appsPage.ctaChromeWebStore"),
+          },
           {
             kind: "external",
             href: "https://docs.openclaw.ai/tools/chrome-extension",
@@ -258,10 +263,22 @@ function renderAppCard(card: AppCard, props: AppsProps) {
 }
 
 function renderSection(section: AppSection, props: AppsProps) {
+  const pairHint =
+    section.id === "mobile" && props.onPairDevice
+      ? html`
+          <p class="apps-pair-hint">
+            ${t("appsPage.havePhone")}
+            <button type="button" @click=${props.onPairDevice}>
+              ${t("appsPage.pairDevice")}
+            </button>
+          </p>
+        `
+      : nothing;
   return html`
     <section class="apps-section" aria-label=${section.label()}>
       <h2 class="apps-section__heading">${section.label()}</h2>
       <div class="apps-grid">${section.cards.map((card) => renderAppCard(card, props))}</div>
+      ${pairHint}
     </section>
   `;
 }

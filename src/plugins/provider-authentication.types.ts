@@ -54,7 +54,7 @@ export type ProviderAuthContext = {
    * Onboarding secret persistence preference.
    *
    * Interactive wizard flows set this when the caller explicitly requested
-   * plaintext or env/file/exec ref storage. Ad-hoc `models auth login` flows
+   * plaintext or env/file/exec/store ref storage. Ad-hoc `models auth login` flows
    * usually leave it undefined.
    */
   secretInputMode?: SecretInputMode;
@@ -113,6 +113,11 @@ export type ProviderAuthMethodNonInteractiveContext = {
   ) => ApiKeyCredential | null;
 };
 
+type ProviderAuthMethodNonInteractiveValidationContext = Omit<
+  ProviderAuthMethodNonInteractiveContext,
+  "toApiKeyCredential"
+>;
+
 /** Read-only context for app-guided discovery of already available inference. */
 export type ProviderAppGuidedSetupContext = {
   config: OpenClawConfig;
@@ -129,6 +134,11 @@ export type ProviderAppGuidedSetupCandidate = {
 };
 
 export type ProviderAppGuidedSetup = {
+  /**
+   * Report whether the provider's local service is reachable, even when no
+   * model is suitable for automatic activation. This probe must be read-only.
+   */
+  detectAvailability?: (ctx: ProviderAppGuidedSetupContext) => Promise<boolean>;
   /** Detection is read-only: no model pull, download, login, or config write. */
   detect: (ctx: ProviderAppGuidedSetupContext) => Promise<ProviderAppGuidedSetupCandidate | null>;
   /** Recheck one detected model and return the config required for a live probe. */
@@ -156,6 +166,10 @@ export type ProviderAuthMethod = {
   runNonInteractive?: (
     ctx: ProviderAuthMethodNonInteractiveContext,
   ) => Promise<OpenClawConfig | null>;
+  /** Side-effect-free prerequisite validation used before destructive reset handling. */
+  validateNonInteractive?: (
+    ctx: ProviderAuthMethodNonInteractiveValidationContext,
+  ) => Promise<boolean>;
   /** Provider-owned local model discovery for the shared guided setup ladder. */
   appGuidedSetup?: ProviderAppGuidedSetup;
 };

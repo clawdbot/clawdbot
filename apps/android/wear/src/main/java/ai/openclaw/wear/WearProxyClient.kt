@@ -98,7 +98,7 @@ internal class WearProxyClient private constructor(
   ): WearRpcResult {
     var attemptedPreferredPhone: PreferredPhoneRegistration? = null
     val result =
-      withTimeoutOrNull(REQUEST_TIMEOUT_MS) {
+      withTimeoutOrNull(WearProtocol.RPC_REQUEST_TIMEOUT_MILLIS) {
         requestBeforeDeadline(method, params, expectedNodeId, requirePreferredNode) { registration ->
           attemptedPreferredPhone = registration
         }
@@ -337,7 +337,6 @@ internal class WearProxyClient private constructor(
   )
 
   companion object {
-    private const val REQUEST_TIMEOUT_MS = 10_000L
     private const val MAX_BUFFERED_EVENTS = 64
 
     fun create(context: Context): WearProxyClient {
@@ -393,16 +392,28 @@ internal enum class WearSequenceDecision {
   GapOrReset,
 }
 
+internal data class WearResponseRequest(
+  val responseGeneration: Long,
+  val eventGeneration: Long,
+)
+
+internal data class WearReadOnlyResponseRequest(
+  val eventGeneration: Long,
+)
+
 internal class WearEventSequenceTracker {
   private var streamId: String? = null
   private var lastSequence: Long? = null
   private var awaitingSnapshot = false
+  private var responseGeneration = 0L
+  private var eventGeneration = 0L
 
   @Synchronized
   fun adoptSnapshot(
     streamId: String?,
     sequence: Long?,
   ) {
+    eventGeneration += 1
     if (sequence == null) {
       this.streamId = streamId
       lastSequence = null
@@ -426,25 +437,85 @@ internal class WearEventSequenceTracker {
     if (previous == null) {
       this.streamId = streamId
       lastSequence = sequence
+      eventGeneration += 1
       return WearSequenceDecision.Accepted
     }
     if (this.streamId != streamId && (this.streamId != null || streamId != null)) {
       awaitingSnapshot = true
+      eventGeneration += 1
       return WearSequenceDecision.GapOrReset
     }
     if (sequence == previous + 1) {
       lastSequence = sequence
+      eventGeneration += 1
       return WearSequenceDecision.Accepted
     }
     // Stream epochs expose phone restarts even when the new process happens to
     // produce the next numeric sequence. Legacy null epochs still use gap detection.
     awaitingSnapshot = true
+    eventGeneration += 1
     return WearSequenceDecision.GapOrReset
+  }
+
+  // Only the newest model RPC may mutate UI state. The event generation also
+  // rejects legacy unwatermarked responses when live state advanced meanwhile.
+  @Synchronized
+  fun beginResponseRequest(): WearResponseRequest {
+    responseGeneration += 1
+    return WearResponseRequest(responseGeneration = responseGeneration, eventGeneration = eventGeneration)
+  }
+
+  // Read-only projections may overlap a model request. Their owner supplies
+  // feature-local cancellation, while this token only binds the event cursor.
+  @Synchronized
+  fun beginReadOnlyResponseRequest(): WearReadOnlyResponseRequest = WearReadOnlyResponseRequest(eventGeneration = eventGeneration)
+
+  @Synchronized
+  fun invalidateResponseRequests() {
+    responseGeneration += 1
+  }
+
+  @Synchronized
+  fun isResponseCurrent(
+    request: WearResponseRequest,
+    streamId: String?,
+    sequence: Long?,
+  ): Boolean {
+    if (request.responseGeneration != responseGeneration) return false
+    return isEventCursorCurrent(request.eventGeneration, streamId, sequence)
+  }
+
+  @Synchronized
+  fun isReadOnlyResponseCurrent(
+    request: WearReadOnlyResponseRequest,
+    streamId: String?,
+    sequence: Long?,
+  ): Boolean = isEventCursorCurrent(request.eventGeneration, streamId, sequence)
+
+  private fun isEventCursorCurrent(
+    requestEventGeneration: Long,
+    responseStreamId: String?,
+    sequence: Long?,
+  ): Boolean {
+    if (awaitingSnapshot) return false
+    if (
+      this.streamId != responseStreamId &&
+      (this.streamId != null || responseStreamId != null)
+    ) {
+      return false
+    }
+    val currentSequence = lastSequence
+    return if (sequence == null) {
+      requestEventGeneration == eventGeneration
+    } else {
+      sequence == currentSequence
+    }
   }
 
   @Synchronized
   fun requireSnapshot() {
     awaitingSnapshot = true
+    eventGeneration += 1
   }
 }
 

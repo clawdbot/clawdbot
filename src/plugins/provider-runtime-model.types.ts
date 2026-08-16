@@ -9,6 +9,8 @@ import type { ModelCompatConfig, ModelMediaInputConfig } from "../config/types.m
 export type ProviderRuntimeModel = Omit<Model, "compat"> & {
   compat?: ModelCompatConfig;
   contextTokens?: number;
+  /** Host-resolved provenance for the top-level wire output cap. */
+  maxTokensSource?: "configured" | "discovered";
   params?: Record<string, unknown>;
   requestTimeoutMs?: number;
   mediaInput?: ModelMediaInputConfig;

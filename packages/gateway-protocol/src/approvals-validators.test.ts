@@ -1,21 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
-  validateApprovalAllowDecision,
   validateApprovalGetParams,
   validateApprovalGetResult,
   validateApprovalHistoryParams,
   validateApprovalHistoryResult,
-  validateApprovalDecision,
-  validateApprovalKind,
   validateApprovalPresentation,
   validateApprovalResolveParams,
+  validateExecApprovalResolveParams,
+  validatePluginApprovalResolveParams,
   validateApprovalResolveResult,
-  validateApprovalSnapshot,
-  validateApprovalTerminalReason,
-  validateExecApprovalPresentation,
-  validatePluginApprovalPresentation,
-  validatePluginApprovalSeverity,
-  validateTerminalApprovalSnapshot,
 } from "./index.js";
 
 const execPresentation = {
@@ -66,41 +59,21 @@ const pluginRecord = {
 } as const;
 
 describe("unified approval protocol validators", () => {
-  it("keeps approval kinds and decisions closed", () => {
-    expect(validateApprovalKind("exec")).toBe(true);
-    expect(validateApprovalKind("plugin")).toBe(true);
-    expect(validateApprovalKind("system-agent")).toBe(true);
-    expect(validateApprovalKind("tool")).toBe(false);
-    expect(validateApprovalDecision("deny")).toBe(true);
-    expect(validateApprovalDecision("accept")).toBe(false);
-    expect(validateApprovalAllowDecision("allow-once")).toBe(true);
-    expect(validateApprovalAllowDecision("deny")).toBe(false);
-    for (const reason of [
-      "user",
-      "timeout",
-      "malformed-verdict",
-      "no-route",
-      "run-aborted",
-      "gateway-restart",
-      "storage-corrupt",
-    ] as const) {
-      expect(validateApprovalTerminalReason(reason)).toBe(true);
-    }
-    expect(validateApprovalTerminalReason("reviewer-decision")).toBe(false);
-    expect(validatePluginApprovalSeverity("critical")).toBe(true);
-    expect(validatePluginApprovalSeverity("blocker")).toBe(false);
-  });
-
   it("accepts only reviewer-safe approval presentations", () => {
-    expect(validateExecApprovalPresentation(execPresentation)).toBe(true);
-    expect(validatePluginApprovalPresentation(pluginPresentation)).toBe(true);
     expect(validateApprovalPresentation(execPresentation)).toBe(true);
     expect(validateApprovalPresentation(pluginPresentation)).toBe(true);
     expect(validateApprovalPresentation(systemAgentPresentation)).toBe(true);
+    expect(validateApprovalPresentation({ ...pluginPresentation, detail: "full tool input" })).toBe(
+      true,
+    );
+    expect(validateApprovalPresentation({ ...pluginPresentation, detail: "" })).toBe(false);
+    expect(
+      validateApprovalPresentation({ ...pluginPresentation, detail: "x".repeat(16_385) }),
+    ).toBe(false);
 
     for (const forbiddenField of ["cwd", "env", "systemRunBinding", "systemRunPlan"] as const) {
       expect(
-        validateExecApprovalPresentation({
+        validateApprovalPresentation({
           ...execPresentation,
           [forbiddenField]: forbiddenField === "env" ? { TOKEN: "secret" } : "private",
         }),
@@ -110,13 +83,13 @@ describe("unified approval protocol validators", () => {
 
   it("keeps deny available on every presentation and resolve request", () => {
     expect(
-      validateExecApprovalPresentation({
+      validateApprovalPresentation({
         ...execPresentation,
         allowedDecisions: ["allow-once"],
       }),
     ).toBe(false);
     expect(
-      validatePluginApprovalPresentation({
+      validateApprovalPresentation({
         ...pluginPresentation,
         allowedDecisions: ["allow-always"],
       }),
@@ -127,6 +100,32 @@ describe("unified approval protocol validators", () => {
     expect(validateApprovalResolveParams({ id: execRecord.id, decision: "deny" })).toBe(false);
     expect(
       validateApprovalResolveParams({ id: execRecord.id, kind: "exec", decision: "accept" }),
+    ).toBe(false);
+  });
+
+  it("accepts only complete channel reviewer facts on every resolve surface", () => {
+    const reviewer = { channel: "telegram", accountId: "ops", senderId: "owner" };
+    expect(
+      validateApprovalResolveParams({
+        id: execRecord.id,
+        kind: "exec",
+        decision: "deny",
+        reviewer,
+      }),
+    ).toBe(true);
+    expect(
+      validateExecApprovalResolveParams({ id: execRecord.id, decision: "deny", reviewer }),
+    ).toBe(true);
+    expect(
+      validatePluginApprovalResolveParams({ id: pluginRecord.id, decision: "deny", reviewer }),
+    ).toBe(true);
+    expect(
+      validateApprovalResolveParams({
+        id: execRecord.id,
+        kind: "exec",
+        decision: "deny",
+        reviewer: { channel: "telegram", accountId: "ops" },
+      }),
     ).toBe(false);
   });
 
@@ -160,19 +159,22 @@ describe("unified approval protocol validators", () => {
     } as const;
 
     for (const snapshot of [pending, allowed, denied, expired, cancelled]) {
-      expect(validateApprovalSnapshot(snapshot)).toBe(true);
       expect(validateApprovalGetResult({ approval: snapshot })).toBe(true);
     }
 
-    expect(validateApprovalSnapshot({ ...allowed, decision: "deny" })).toBe(false);
-    expect(validateApprovalSnapshot({ ...allowed, resolvedBy: "device:phone" })).toBe(false);
-    expect(validateApprovalSnapshot({ ...denied, reason: "" })).toBe(false);
-    expect(validateApprovalSnapshot({ ...expired, decision: "deny" })).toBe(false);
+    expect(validateApprovalGetResult({ approval: { ...allowed, decision: "deny" } })).toBe(false);
     expect(
-      validateApprovalSnapshot({
-        ...execRecord,
-        presentation: { ...execPresentation, kind: "plugin" },
-        status: "pending",
+      validateApprovalGetResult({ approval: { ...allowed, resolvedBy: "device:phone" } }),
+    ).toBe(false);
+    expect(validateApprovalGetResult({ approval: { ...denied, reason: "" } })).toBe(false);
+    expect(validateApprovalGetResult({ approval: { ...expired, decision: "deny" } })).toBe(false);
+    expect(
+      validateApprovalGetResult({
+        approval: {
+          ...execRecord,
+          presentation: { ...execPresentation, kind: "plugin" },
+          status: "pending",
+        },
       }),
     ).toBe(false);
   });
@@ -204,17 +206,21 @@ describe("unified approval protocol validators", () => {
     expect(validateApprovalGetParams({ id: "approval:🦞/percent%" })).toBe(true);
 
     expect(
-      validateApprovalSnapshot({
-        ...execRecord,
-        status: "pending",
-        sourceSessionKey: "agent:worker:subagent:123",
+      validateApprovalGetResult({
+        approval: {
+          ...execRecord,
+          status: "pending",
+          sourceSessionKey: "agent:worker:subagent:123",
+        },
       }),
     ).toBe(false);
     expect(
-      validateApprovalSnapshot({
-        ...execRecord,
-        status: "pending",
-        audienceSessionKeys: ["agent:worker:subagent:123", "agent:main"],
+      validateApprovalGetResult({
+        approval: {
+          ...execRecord,
+          status: "pending",
+          audienceSessionKeys: ["agent:worker:subagent:123", "agent:main"],
+        },
       }),
     ).toBe(false);
   });
@@ -256,7 +262,6 @@ describe("unified approval protocol validators", () => {
 
     expect(validateApprovalResolveResult({ applied: true, approval: recorded })).toBe(true);
     expect(validateApprovalResolveResult({ applied: false, approval: recorded })).toBe(true);
-    expect(validateTerminalApprovalSnapshot(recorded)).toBe(true);
     expect(
       validateApprovalResolveResult({
         applied: false,

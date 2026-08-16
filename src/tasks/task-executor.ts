@@ -1,6 +1,5 @@
 // Executes task records through configured runtimes and updates registry state.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type {
   DetachedRunningTaskCreateParams,
@@ -9,20 +8,16 @@ import type {
   DetachedTaskFailParams,
   DetachedTaskFinalizeParams,
 } from "./detached-task-runtime-contract.js";
-import { getRegisteredDetachedTaskLifecycleRuntime } from "./detached-task-runtime-state.js";
 import {
-  assertTaskCancellationReadyById,
-  cancelTaskById,
   createTaskRecord,
   findTaskByRunId as findTaskByRunIdInRegistry,
   getTaskById,
   isParentFlowLinkError,
   linkTaskToFlowById,
-  listTaskRecordsUnsorted as listTaskRecordsUnsortedInRegistry,
   listTasksForFlowId,
   markTaskTerminalById as markTaskTerminalByIdInRegistry,
   markTaskRunningByRunId,
-  finalizeTaskRunByRunId as finalizeTaskRunByRunIdInRegistry,
+  finalizeTaskRecordByRunId,
   recordTaskProgressByRunId,
   setTaskRunDeliveryStatusByRunId,
 } from "./runtime-internal.js";
@@ -100,7 +95,7 @@ function ensureSingleTaskFlow(params: {
   }
 }
 
-export function createQueuedTaskRun(params: DetachedTaskCreateParams): TaskRecord | null {
+export function createQueuedTaskRunCore(params: DetachedTaskCreateParams): TaskRecord | null {
   const task = createTaskRecord({
     ...params,
     status: "queued",
@@ -118,7 +113,9 @@ export function getFlowTaskSummary(flowId: string): TaskRegistrySummary {
   return summarizeTaskRecords(listTasksForFlowId(flowId));
 }
 
-export function createRunningTaskRun(params: DetachedRunningTaskCreateParams): TaskRecord | null {
+export function createRunningTaskRunCore(
+  params: DetachedRunningTaskCreateParams,
+): TaskRecord | null {
   const task = createTaskRecord({
     ...params,
     status: "running",
@@ -134,10 +131,6 @@ export function createRunningTaskRun(params: DetachedRunningTaskCreateParams): T
 
 export function findTaskByRunId(runId: string): TaskRecord | undefined {
   return findTaskByRunIdInRegistry(runId);
-}
-
-export function listTaskRecordsUnsorted(): TaskRecord[] {
-  return listTaskRecordsUnsortedInRegistry();
 }
 
 type RunTaskInFlowParams = {
@@ -159,7 +152,7 @@ type RunTaskInFlowParams = {
   progressSummary?: string | null;
 };
 
-export function startTaskRunByRunId(params: {
+export function startTaskRunByRunIdCore(params: {
   runId: string;
   runtime?: TaskRuntime;
   sessionKey?: string;
@@ -171,10 +164,11 @@ export function startTaskRunByRunId(params: {
   return markTaskRunningByRunId(params);
 }
 
-export function recordTaskRunProgressByRunId(params: {
+export function recordTaskRunProgressByRunIdCore(params: {
   runId: string;
   runtime?: TaskRuntime;
   sessionKey?: string;
+  childSessionKey?: string | null;
   lastEventAt?: number;
   progressSummary?: string | null;
   eventSummary?: string | null;
@@ -182,15 +176,15 @@ export function recordTaskRunProgressByRunId(params: {
   return recordTaskProgressByRunId(params);
 }
 
-export function completeTaskRunByRunId(params: DetachedTaskCompleteParams) {
-  return finalizeTaskRunByRunId({
+export function completeTaskRunByRunIdCore(params: DetachedTaskCompleteParams) {
+  return finalizeTaskRunByRunIdCore({
     ...params,
     status: "succeeded",
   });
 }
 
-export function finalizeTaskRunByRunId(params: DetachedTaskFinalizeParams) {
-  return finalizeTaskRunByRunIdInRegistry(params);
+export function finalizeTaskRunByRunIdCore(params: DetachedTaskFinalizeParams) {
+  return finalizeTaskRecordByRunId(params);
 }
 
 export function finalizeTaskRunById(
@@ -199,14 +193,14 @@ export function finalizeTaskRunById(
   return markTaskTerminalByIdInRegistry(params);
 }
 
-export function failTaskRunByRunId(params: DetachedTaskFailParams) {
-  return finalizeTaskRunByRunId({
+export function failTaskRunByRunIdCore(params: DetachedTaskFailParams) {
+  return finalizeTaskRunByRunIdCore({
     ...params,
     status: params.status ?? "failed",
   });
 }
 
-export function setDetachedTaskDeliveryStatusByRunId(params: {
+export function setDetachedTaskDeliveryStatusByRunIdCore(params: {
   runId: string;
   runtime?: TaskRuntime;
   sessionKey?: string;
@@ -389,13 +383,13 @@ function runTaskInFlow(params: RunTaskInFlowParams): RunTaskInFlowResult {
   try {
     task =
       params.status === "running"
-        ? createRunningTaskRun({
+        ? createRunningTaskRunCore({
             ...common,
             startedAt: params.startedAt,
             lastEventAt: params.lastEventAt,
             progressSummary: params.progressSummary,
           })
-        : createQueuedTaskRun(common);
+        : createQueuedTaskRunCore(common);
   } catch (error) {
     return mapRunTaskInFlowCreateError({
       error,
@@ -598,32 +592,6 @@ export async function cancelDetachedTaskRunById(params: {
   taskId: string;
   reason?: string;
 }) {
-  const task = getTaskById(params.taskId);
-  const registeredRuntime = getRegisteredDetachedTaskLifecycleRuntime();
-  if (!task) {
-    if (registeredRuntime) {
-      const cancelled = await registeredRuntime.cancelDetachedTaskRunById(params);
-      if (cancelled.found) {
-        return cancelled;
-      }
-    }
-    return cancelTaskById(params);
-  }
-  try {
-    assertTaskCancellationReadyById(task.taskId);
-  } catch (error) {
-    return {
-      found: true,
-      cancelled: false,
-      reason: formatErrorMessage(error),
-      task,
-    };
-  }
-  if (registeredRuntime) {
-    const cancelled = await registeredRuntime.cancelDetachedTaskRunById(params);
-    if (cancelled.found) {
-      return cancelled;
-    }
-  }
-  return cancelTaskById(params);
+  const runtime = await import("./task-executor-cancel.runtime.js");
+  return runtime.cancelDetachedTaskRunByIdCore(params);
 }

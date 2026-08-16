@@ -60,7 +60,7 @@ function isOlderGatewayWithoutUsageTimeZone(
   );
 }
 
-export async function requestSessionsUsage(
+async function requestSessionsUsage(
   client: SessionRequestClient,
   params: Record<string, unknown>,
 ): Promise<SessionsUsageResult> {

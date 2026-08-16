@@ -1,10 +1,16 @@
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { GPT5_HEARTBEAT_PROMPT_OVERLAY as CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { codexSandboxPolicyForTurn, type CodexAppServerRuntimeOptions } from "./config.js";
 import type {
   CodexSandboxPolicy,
   CodexTurnEnvironmentParams,
   CodexTurnStartParams,
+  CodexUserInput,
 } from "./protocol.js";
 import { readCodexSupportedReasoningEfforts } from "./reasoning-effort.js";
 import {
@@ -14,6 +20,37 @@ import {
 } from "./thread-model-selection.js";
 import { buildCodexUserInput } from "./user-input.js";
 
+const CODEX_CURRENT_SENDER_FIELD_MAX_CHARS = 256;
+
+function buildCodexCurrentSenderContextValue(params: EmbeddedRunAttemptParams): string | undefined {
+  const metadata = asOptionalRecord(
+    asOptionalRecord(params.userTurnTranscriptRecorder?.message as unknown)?.["__openclaw"],
+  );
+  const recorded = [
+    normalizeOptionalString(metadata?.["senderId"]),
+    normalizeOptionalString(metadata?.["senderName"]),
+    normalizeOptionalString(metadata?.["senderUsername"]),
+  ] as const;
+  const [id, name, username] = recorded.some(Boolean)
+    ? recorded
+    : [
+        normalizeOptionalString(params.senderId),
+        normalizeOptionalString(params.senderName),
+        normalizeOptionalString(params.senderUsername),
+      ];
+  if (!id && !name && !username) {
+    return undefined;
+  }
+  const bound = (value: string) => truncateUtf16Safe(value, CODEX_CURRENT_SENDER_FIELD_MAX_CHARS);
+  return JSON.stringify({
+    sender: {
+      ...(id ? { id: bound(id) } : {}),
+      ...(name ? { name: bound(name) } : {}),
+      ...(username ? { username: bound(username) } : {}),
+    },
+  });
+}
+
 export function buildTurnStartParams(
   params: EmbeddedRunAttemptParams,
   options: {
@@ -21,6 +58,7 @@ export function buildTurnStartParams(
     cwd: string;
     appServer: CodexAppServerRuntimeOptions;
     promptText?: string;
+    explicitSkillInputs?: Array<Extract<CodexUserInput, { type: "skill" }>>;
     sandboxPolicy?: CodexSandboxPolicy;
     environmentSelection?: CodexTurnEnvironmentParams[];
     model?: string | null;
@@ -28,8 +66,8 @@ export function buildTurnStartParams(
     turnScopedDeveloperInstructions?: string;
     skillsCollaborationInstructions?: string;
     memoryCollaborationInstructions?: string;
-    heartbeatCollaborationInstructions?: string;
     preserveNativeTurnSettings?: boolean;
+    clearInheritedServiceTier?: boolean;
   },
 ): CodexTurnStartParams {
   const modelSelection = options.preserveNativeTurnSettings
@@ -43,9 +81,22 @@ export function buildTurnStartParams(
         config: params.config,
       });
   const useThreadPermissionProfile = options.appServer.networkProxy && !options.sandboxPolicy;
+  const currentSenderContext =
+    params.trigger === "user" ? buildCodexCurrentSenderContextValue(params) : undefined;
+  // Untrusted context exposes authenticated attribution without promoting human-controlled labels.
+  const additionalContext: CodexTurnStartParams["additionalContext"] = currentSenderContext
+    ? { openclaw_current_sender: { kind: "untrusted", value: currentSenderContext } }
+    : undefined;
   return {
     threadId: options.threadId,
-    input: buildCodexUserInput(options.promptText ?? params.prompt, params.images),
+    // codex-rs/app-server-protocol/src/protocol/v2/turn.rs:292-324 at 91d6f48992ad defines
+    // UserInput::Skill; skills/src/selection.rs:60-92 blocks those names from duplicate text
+    // selection while leaving unmatched Codex-native-only names scannable.
+    input: [
+      ...buildCodexUserInput(options.promptText ?? params.prompt, params.images),
+      ...(options.explicitSkillInputs ?? []),
+    ],
+    ...(additionalContext ? { additionalContext } : {}),
     cwd: options.cwd,
     approvalPolicy: options.appServer.approvalPolicy,
     approvalsReviewer: options.appServer.approvalsReviewer,
@@ -54,14 +105,22 @@ export function buildTurnStartParams(
       : {
           sandboxPolicy:
             options.sandboxPolicy ??
-            codexSandboxPolicyForTurn(options.appServer.sandbox, options.cwd),
+            codexSandboxPolicyForTurn(
+              options.appServer.sandbox,
+              options.cwd,
+              options.appServer.start?.args,
+            ),
         }),
     ...(modelSelection
       ? { model: modelSelection.model, personality: CODEX_NATIVE_PERSONALITY_NONE }
       : {}),
+    // Codex distinguishes an omitted native default from explicitly clearing
+    // an OpenClaw-owned priority override left on this exact warm session.
     ...(options.appServer.serviceTier !== undefined
       ? { serviceTier: options.appServer.serviceTier }
-      : {}),
+      : options.clearInheritedServiceTier
+        ? { serviceTier: null }
+        : {}),
     ...(modelSelection
       ? {
           effort: resolveReasoningEffort(
@@ -79,7 +138,6 @@ export function buildTurnStartParams(
             turnScopedDeveloperInstructions: options.turnScopedDeveloperInstructions,
             skillsCollaborationInstructions: options.skillsCollaborationInstructions,
             memoryCollaborationInstructions: options.memoryCollaborationInstructions,
-            heartbeatCollaborationInstructions: options.heartbeatCollaborationInstructions,
           }),
         }
       : {}),
@@ -95,7 +153,6 @@ export function buildTurnCollaborationMode(
     turnScopedDeveloperInstructions?: string;
     skillsCollaborationInstructions?: string;
     memoryCollaborationInstructions?: string;
-    heartbeatCollaborationInstructions?: string;
   } = {},
 ): CodexTurnCollaborationMode {
   const model = options.model ?? params.modelId;
@@ -119,7 +176,6 @@ function buildTurnScopedCollaborationInstructions(
     turnScopedDeveloperInstructions?: string;
     skillsCollaborationInstructions?: string;
     memoryCollaborationInstructions?: string;
-    heartbeatCollaborationInstructions?: string;
   } = {},
 ): string | null {
   const contextInstructions = joinPresentSections(
@@ -130,12 +186,8 @@ function buildTurnScopedCollaborationInstructions(
   if (params.trigger === "cron") {
     return joinPresentSections(buildCronCollaborationInstructions(), contextInstructions);
   }
-  if (params.trigger === "heartbeat" && params.bootstrapContextRunKind !== "commitment-only") {
-    return joinPresentSections(
-      buildHeartbeatCollaborationInstructions(),
-      contextInstructions,
-      options.heartbeatCollaborationInstructions,
-    );
+  if (params.trigger === "heartbeat") {
+    return joinPresentSections(buildHeartbeatCollaborationInstructions(), contextInstructions);
   }
   if (contextInstructions?.trim()) {
     return joinPresentSections(buildDefaultCollaborationInstructions(), contextInstructions);

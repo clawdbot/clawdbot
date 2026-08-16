@@ -25,7 +25,7 @@ export async function loginWeb(
 ) {
   const cfg = getRuntimeConfig();
   const account = resolveWhatsAppAccount({ cfg, accountId });
-  const socketTiming = resolveWhatsAppSocketTiming(cfg);
+  const socketTiming = resolveWhatsAppSocketTiming();
   const restoredFromBackup = await restoreCredsFromBackupIfNeeded(account.authDir, {
     beforeCredentialPersistence: options?.beforeCredentialPersistence,
   });

@@ -1,7 +1,7 @@
 /**
  * Queues embedded-agent session compaction onto the correct command lane.
  */
-import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
@@ -9,77 +9,58 @@ import {
   resolveContextEngineOwnerPluginId,
 } from "../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
-import {
-  resolveCompactionSuccessorTranscript,
-  type ContextEngine,
-  type ContextEngineRuntimeContext,
-  type ContextEngineRuntimeSettings,
-  type ContextEngineSessionTarget,
+import type {
+  ContextEngine,
+  ContextEngineRuntimeContext,
+  ContextEngineRuntimeSettings,
+  ContextEngineSessionTarget,
 } from "../../context-engine/types.js";
-import {
-  createFileBackedCompactionCheckpointStore,
-  readSessionLeafStateFromTranscriptAsync,
-  resolveCompactionCheckpointTranscriptPosition,
-  resolveSessionCompactionCheckpointReason,
-  type CapturedCompactionCheckpointSnapshot,
-} from "../../gateway/session-compaction-checkpoints.js";
+import type { CapturedCompactionCheckpointSnapshot } from "../../gateway/session-compaction-checkpoints.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import { requireActivePluginRegistry } from "../../plugins/runtime.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
-import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
+import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
-import { resolveContextWindowInfo } from "../context-window-guard.js";
-import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { isRecoverableNativeHarnessBindingFailure } from "../harness/compaction-recovery.js";
 import { maybeCompactAgentHarnessSession } from "../harness/compaction.js";
-import { resolveAgentHarnessPolicy } from "../harness/policy.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
-import {
-  selectAgentHarness,
-  selectAgentHarnessForPreparedModelProviders,
-} from "../harness/selection.js";
-import {
-  ensureAuthProfileStore,
-  ensureAuthProfileStoreWithoutExternalProfiles,
-} from "../model-auth.js";
 import { isOpenAIProvider } from "../openai-routing.js";
+import {
+  acquireAgentRunPreparedModelRuntime,
+  type PreparedModelRuntimeSnapshot,
+} from "../prepared-model-runtime.js";
 import { resolveAgentRunSessionTarget } from "../run-session-target.js";
-import {
-  providerUsesCredentialScopedModelMetadata,
-  resolveReusableRuntimeModelAuth,
-} from "../runtime-plan/credential-scoped-model.js";
 import { materializePreparedRuntimeModel } from "../runtime-plan/materialize-model.js";
-import {
-  prepareAgentRuntimeAuth,
-  type PreparedAgentRuntimeAuthAttempt,
-} from "../runtime-plan/prepare-auth.js";
-import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
+import type { SandboxContext } from "../sandbox/types.js";
+import { resolveSessionPlacementSandbox } from "../session-placement-admission.js";
 import { SessionManager } from "../sessions/index.js";
 import { DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON } from "./compact-reasons.js";
+import { compactNativeCliSession } from "./compact.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
-import { buildCompactionHarnessModelProvider } from "./compaction-harness-model-provider.js";
+import { compactionCheckpointStore, persistCompactionCheckpoint } from "./compaction-checkpoint.js";
 import { asCompactionHookRunner, runPostCompactionSideEffects } from "./compaction-hooks.js";
 import {
   buildEmbeddedCompactionRuntimeContext,
-  resolveCompactionHarnessRuntime,
-  resolveEmbeddedCompactionTarget,
+  resolveCompactionContextTokenBudget,
 } from "./compaction-runtime-context.js";
+import {
+  prepareCompactionHarnessAuth,
+  resolveCompactionRuntimeSelection,
+} from "./compaction-runtime-preparation.js";
 import {
   compactContextEngineWithSafetyTimeout,
   resolveCompactionTimeoutMs,
 } from "./compaction-safety-timeout.js";
-import {
-  rotateTranscriptFileAfterCompaction,
-  shouldRotateCompactionTranscript,
-} from "./compaction-successor-transcript.js";
+import { resolveContextEngineCompactionSuccessor } from "./compaction-successor.js";
 import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
-import { readAgentModelContextTokens } from "./model-context-tokens.js";
+import { resolveTieredModel } from "./model-resolution.js";
 import { resolveModelAsync } from "./model.js";
 import type { EmbeddedAgentQueueHandle } from "./run-state.js";
 import {
@@ -90,9 +71,6 @@ import {
   setActiveEmbeddedRun,
 } from "./runs.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
-import { normalizeContextTokenBudget } from "./utils.js";
-
-const compactionCheckpointStore = createFileBackedCompactionCheckpointStore();
 
 function shouldFallbackAfterHarnessCompaction(
   result: EmbeddedAgentCompactResult | undefined,
@@ -155,13 +133,12 @@ function shouldDeferOwningContextEngineBudgetCompaction(params: {
 function buildContextEngineCompactionSessionTarget(
   params: CompactEmbeddedAgentSessionParams,
 ): ContextEngineSessionTarget {
-  const sqliteMarker = parseSqliteSessionFileMarker(params.sessionFile);
-  const agentId = params.sessionTarget?.agentId ?? params.agentId ?? sqliteMarker?.agentId;
-  const sessionKey = params.sessionTarget?.sessionKey ?? params.sessionKey ?? params.sessionId;
-  const storePath = params.sessionTarget?.storePath ?? sqliteMarker?.storePath;
+  const agentId = params.sessionTarget?.agentId ?? params.agentId;
+  const sessionKey = params.sessionTarget?.sessionKey ?? params.sessionKey;
+  const storePath = params.sessionTarget?.storePath;
   return {
     ...(agentId ? { agentId } : {}),
-    sessionId: params.sessionTarget?.sessionId ?? sqliteMarker?.sessionId ?? params.sessionId,
+    sessionId: params.sessionTarget?.sessionId ?? params.sessionId,
     ...(sessionKey ? { sessionKey } : {}),
     ...(storePath ? { storePath } : {}),
     ...(params.sessionTarget?.threadId !== undefined
@@ -182,6 +159,7 @@ async function disposeContextEngine(contextEngine: ContextEngine): Promise<void>
 
 async function deferOwningContextEngineBudgetCompaction(params: {
   compactParams: CompactEmbeddedAgentSessionParams;
+  contextEngineSessionKey?: string;
   contextEngine: ContextEngine;
   contextEngineRuntimeContext: ContextEngineRuntimeContext;
   contextEngineRuntimeSettings: ContextEngineRuntimeSettings;
@@ -192,13 +170,14 @@ async function deferOwningContextEngineBudgetCompaction(params: {
     await runContextEngineMaintenance({
       contextEngine: params.contextEngine,
       sessionId: params.compactParams.sessionId,
-      sessionKey: params.compactParams.sessionKey,
+      sessionKey: params.contextEngineSessionKey ?? params.compactParams.sessionKey,
       sessionTarget: buildContextEngineCompactionSessionTarget(params.compactParams),
       sessionFile: params.compactParams.sessionFile,
       reason: "turn",
       runtimeContext: params.contextEngineRuntimeContext,
       runtimeSettings: params.contextEngineRuntimeSettings,
       config: params.compactParams.config,
+      contextEngineAgentId: params.compactParams.contextEngineAgentId,
       disposeDeferredContextEngineAfterMaintenance: true,
       onDeferredMaintenance: () => {
         deferredScheduled = true;
@@ -247,19 +226,14 @@ function mergeSecondaryNativeHarnessCompactionDetails(params: {
   if (!params.nativeResult) {
     return params.details;
   }
-  if (params.details && typeof params.details === "object" && !Array.isArray(params.details)) {
-    return {
-      ...(params.details as Record<string, unknown>),
-      [params.detailsKey]: params.nativeResult,
-    };
-  }
-  if (params.details !== undefined) {
-    return {
-      contextEngine: params.details,
-      [params.detailsKey]: params.nativeResult,
-    };
-  }
+  const details =
+    params.details && typeof params.details === "object" && !Array.isArray(params.details)
+      ? (params.details as Record<string, unknown>)
+      : params.details === undefined
+        ? {}
+        : { contextEngine: params.details };
   return {
+    ...details,
     [params.detailsKey]: params.nativeResult,
   };
 }
@@ -272,12 +246,30 @@ function mergeSecondaryNativeHarnessCompactionDetails(params: {
 export async function compactEmbeddedAgentSession(
   params: CompactEmbeddedAgentSessionParams,
 ): Promise<EmbeddedAgentCompactResult> {
-  if (params.trigger !== "manual") {
-    return await compactEmbeddedAgentSessionImpl(params);
+  const contextEngineAgentId =
+    normalizeOptionalString(params.contextEngineAgentId) ?? normalizeOptionalString(params.agentId);
+  const contextEngineSessionKey =
+    normalizeOptionalString(params.sessionKey) ??
+    normalizeOptionalString(params.sessionTarget?.sessionKey);
+  const runtimeTarget = await resolveAgentRunSessionTarget({
+    ...params,
+    missingSessionKey: "resolve-existing",
+  });
+  const resolvedParams = {
+    ...params,
+    agentId: runtimeTarget.agentId,
+    sessionId: runtimeTarget.sessionId,
+    sessionKey: runtimeTarget.sessionKey,
+    sessionTarget: runtimeTarget,
+    sessionFile: runtimeTarget.sessionKey,
+    contextEngineAgentId,
+  };
+  if (resolvedParams.trigger !== "manual") {
+    return await compactEmbeddedAgentSessionImpl(resolvedParams, contextEngineSessionKey);
   }
   // Reply operations and embedded handles are separate lifecycle owners. A
   // /compact reply may coexist with this handle, but another embedded writer may not.
-  if (resolveManualCompactionActiveRunSessionId(params)) {
+  if (resolveManualCompactionActiveRunSessionId(resolvedParams)) {
     return {
       ok: false,
       compacted: false,
@@ -287,68 +279,154 @@ export async function compactEmbeddedAgentSession(
   }
 
   const controller = new AbortController();
-  const abortSignal = params.abortSignal
-    ? AbortSignal.any([params.abortSignal, controller.signal])
+  const abortSignal = resolvedParams.abortSignal
+    ? AbortSignal.any([resolvedParams.abortSignal, controller.signal])
     : controller.signal;
   const handle: EmbeddedAgentQueueHandle = {
     kind: "embedded",
     queueMessage: async () => {},
     isStreaming: () => true,
+    isAborted: () => abortSignal.aborted,
     isCompacting: () => true,
     abort: (reason) => controller.abort(reason ?? "user_abort"),
     cancel: (reason) => controller.abort(reason ?? "user_abort"),
   };
-  setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
+  setActiveEmbeddedRun(
+    resolvedParams.sessionId,
+    handle,
+    resolvedParams.sessionKey,
+    resolvedParams.sessionFile,
+  );
   try {
-    return await compactEmbeddedAgentSessionImpl({
-      ...params,
-      abortSignal,
-    });
+    return await compactEmbeddedAgentSessionImpl(
+      {
+        ...resolvedParams,
+        abortSignal,
+      },
+      contextEngineSessionKey,
+    );
   } finally {
-    clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
+    clearActiveEmbeddedRun(
+      resolvedParams.sessionId,
+      handle,
+      resolvedParams.sessionKey,
+      resolvedParams.sessionFile,
+    );
   }
 }
 
 async function compactEmbeddedAgentSessionImpl(
-  params: CompactEmbeddedAgentSessionParams,
+  inputParams: CompactEmbeddedAgentSessionParams,
+  contextEngineSessionKey?: string,
 ): Promise<EmbeddedAgentCompactResult> {
-  if (params.abortSignal?.aborted) {
+  if (inputParams.abortSignal?.aborted) {
     return createCompactionAbortedResult();
   }
-  ensureRuntimePluginsLoaded({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
+  const runtimeTarget = await resolveAgentRunSessionTarget({
+    ...inputParams,
+    missingSessionKey: "resolve-existing",
   });
-  ensureContextEnginesInitialized();
   const agentIds = resolveSessionAgentIds({
-    sessionKey: params.sessionKey,
-    config: params.config,
-    agentId: params.agentId,
+    sessionKey: runtimeTarget.sessionKey,
+    config: inputParams.config,
+    agentId: runtimeTarget.agentId,
   });
+  const params = {
+    ...inputParams,
+    agentId: runtimeTarget.agentId,
+    sessionId: runtimeTarget.sessionId,
+    sessionKey: runtimeTarget.sessionKey,
+    sessionTarget: runtimeTarget,
+    sessionFile: runtimeTarget.sessionKey,
+  };
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, agentIds.sessionAgentId);
   const resolvedWorkspaceDir = resolveUserPath(params.workspaceDir);
-  const contextEngine = await resolveContextEngine(params.config, {
+  const placementParams = params as CompactEmbeddedAgentSessionParams & {
+    sandbox?: SandboxContext | null;
+  };
+  const placementSandbox =
+    placementParams.sandbox === undefined
+      ? await resolveSessionPlacementSandbox({
+          agentId: runtimeTarget.agentId,
+          config: params.config,
+          sessionId: runtimeTarget.sessionId,
+          sessionKey: runtimeTarget.sessionKey,
+          workspaceDir: resolvedWorkspaceDir,
+        })
+      : null;
+  const preparedParams = placementSandbox ? { ...params, sandbox: placementSandbox } : params;
+  const runtimeSelection = resolveCompactionRuntimeSelection({
+    ...preparedParams,
+    modelId: preparedParams.model,
+    boundHarnessRuntime: preparedParams.agentHarnessId,
+    preparedRuntimePlan: preparedParams.runtimePlan,
+    selectedHarnessRuntime:
+      preparedParams.modelSelectionLocked === true
+        ? normalizeOptionalAgentRuntimeId(preparedParams.agentHarnessId)
+        : undefined,
+  });
+  // Native control operations reuse the backend's existing authenticated session.
+  // Run them before generic model preparation so subscription-only CLI sessions do
+  // not incorrectly require an OpenClaw model API credential.
+  const nativeCliResult = await compactNativeCliSession({
+    runtime: runtimeSelection.selectedHarnessRuntime,
+    compactParams: {
+      ...params,
+      agentDir,
+      workspaceDir: resolvedWorkspaceDir,
+    },
+  });
+  if (nativeCliResult) {
+    return nativeCliResult;
+  }
+  const lease = await acquireAgentRunPreparedModelRuntime({
+    config: params.config ?? {},
+    agentId: agentIds.sessionAgentId,
     agentDir,
     workspaceDir: resolvedWorkspaceDir,
-  });
-  let disposeContextEngineOnExit = true;
-  try {
-    // Retain engine ownership until the queued path settles. Explicit cleanup
-    // or accepted background maintenance may release it from this call.
-    return await compactResolvedContextEngine(
-      params,
-      contextEngine,
-      agentDir,
-      resolvedWorkspaceDir,
-      () => {
-        disposeContextEngineOnExit = false;
+    ...(params.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
+    runtimePluginSelections: [
+      {
+        provider: runtimeSelection.provider,
+        modelId: runtimeSelection.modelId,
+        ...(runtimeSelection.selectedHarnessRuntime
+          ? { runtime: runtimeSelection.selectedHarnessRuntime }
+          : {}),
+        agentId: agentIds.sessionAgentId,
       },
-    );
-  } finally {
-    if (disposeContextEngineOnExit) {
-      await disposeContextEngine(contextEngine);
+    ],
+  });
+  const run = async () => {
+    ensureContextEnginesInitialized();
+    const contextEngine = await resolveContextEngine(params.config, {
+      agentDir,
+      workspaceDir: resolvedWorkspaceDir,
+    });
+    let disposeContextEngineOnExit = true;
+    try {
+      // Retain engine ownership until the queued path settles. Explicit cleanup
+      // or accepted background maintenance may release it from this call.
+      return await compactResolvedContextEngine(
+        preparedParams,
+        contextEngine,
+        agentDir,
+        resolvedWorkspaceDir,
+        lease.snapshot,
+        contextEngineSessionKey,
+        () => {
+          disposeContextEngineOnExit = false;
+        },
+      );
+    } finally {
+      if (disposeContextEngineOnExit) {
+        await disposeContextEngine(contextEngine);
+      }
     }
+  };
+  try {
+    return await withPluginRuntimeGenerationScope(lease.snapshot, run);
+  } finally {
+    lease.release();
   }
 }
 
@@ -357,37 +435,14 @@ async function compactResolvedContextEngine(
   contextEngine: ContextEngine,
   agentDir: string,
   resolvedWorkspaceDir: string,
+  preparedModelRuntime: PreparedModelRuntimeSnapshot,
+  contextEngineSessionKey: string | undefined,
   releaseContextEngineOwnership: () => void,
 ): Promise<EmbeddedAgentCompactResult> {
-  const runtimePolicySessionKey = params.sandboxSessionKey ?? params.sessionKey;
-  const runtimePolicyAgentId =
-    params.sandboxSessionKey && parseAgentSessionKey(params.sandboxSessionKey)
-      ? undefined
-      : params.agentId;
-  const policyCompactionTarget = resolveEmbeddedCompactionTarget({
-    config: params.config,
-    provider: params.provider,
-    modelId: params.model,
-    authProfileId: params.authProfileId,
-    modelSelectionLocked: params.modelSelectionLocked,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
+  const runtimeTarget = await resolveAgentRunSessionTarget({
+    ...params,
+    missingSessionKey: "resolve-existing",
   });
-  const policyProvider = policyCompactionTarget.provider ?? DEFAULT_PROVIDER;
-  const policyModelId = policyCompactionTarget.model ?? DEFAULT_MODEL;
-  const configuredHarnessPolicy = resolveAgentHarnessPolicy({
-    provider: policyProvider,
-    modelId: policyModelId,
-    config: params.config,
-    agentId: runtimePolicyAgentId,
-    sessionKey: runtimePolicySessionKey,
-  });
-  const configuredHarnessRuntime =
-    configuredHarnessPolicy.runtimeSource &&
-    configuredHarnessPolicy.runtimeSource !== "implicit" &&
-    !isDefaultAgentRuntimeId(configuredHarnessPolicy.runtime)
-      ? configuredHarnessPolicy.runtime
-      : undefined;
   const lockedHarnessRuntime =
     params.modelSelectionLocked === true
       ? normalizeOptionalAgentRuntimeId(params.agentHarnessId)
@@ -400,40 +455,25 @@ async function compactResolvedContextEngine(
   }
   // A model lock makes the persisted harness authoritative. Config may select
   // a runtime only for unlocked sessions that have no concrete pin.
-  const selectedHarnessRuntime =
-    params.modelSelectionLocked === true
-      ? lockedHarnessRuntime
-      : resolveCompactionHarnessRuntime({
-          boundHarnessRuntime: params.agentHarnessId,
-          preparedRuntimePlan: params.runtimePlan,
-          configuredHarnessRuntime,
-          provider: policyProvider,
-          modelId: policyModelId,
-        });
+  const {
+    runtimePolicySessionKey,
+    runtimePolicyAgentId,
+    selectedHarnessRuntime,
+    target: resolvedCompactionTarget,
+    runtimeModelAuth: { plan: reusableRuntimeAuthPlan, modelAuth: initialModelAuth },
+    provider: ceProvider,
+    runtimeProvider: ceRuntimeProvider,
+    contextConfigProvider: ceContextConfigProvider,
+    modelId: ceModelId,
+  } = resolveCompactionRuntimeSelection({
+    ...params,
+    modelId: params.model,
+    boundHarnessRuntime: params.agentHarnessId,
+    preparedRuntimePlan: params.runtimePlan,
+    selectedHarnessRuntime: params.modelSelectionLocked === true ? lockedHarnessRuntime : undefined,
+  });
   const lockedNativeHarness =
     params.modelSelectionLocked === true && selectedHarnessRuntime !== "openclaw";
-  const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
-    config: params.config,
-    provider: params.provider,
-    modelId: params.model,
-    authProfileId: params.authProfileId,
-    harnessRuntime: selectedHarnessRuntime,
-    modelSelectionLocked: params.modelSelectionLocked,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
-  const ceProvider = resolvedCompactionTarget.provider ?? DEFAULT_PROVIDER;
-  const ceRuntimeProvider = resolvedCompactionTarget.runtimeProvider ?? ceProvider;
-  const ceContextConfigProvider = resolvedCompactionTarget.contextProvider ?? ceProvider;
-  const ceModelId = resolvedCompactionTarget.model ?? DEFAULT_MODEL;
-  const providedRuntimeAuthPlan = params.runtimeAuthPlan ?? params.runtimePlan?.auth;
-  const { plan: reusableRuntimeAuthPlan, modelAuth: initialModelAuth } =
-    resolveReusableRuntimeModelAuth({
-      plan: providedRuntimeAuthPlan,
-      provider: ceProvider,
-      modelId: ceModelId,
-      authProfileId: resolvedCompactionTarget.authProfileId,
-    });
   const attemptNativeHarnessCompaction = shouldAttemptNativeHarnessCompaction({
     provider: ceProvider,
     nativeHarnessCompaction: resolvedCompactionTarget.nativeHarnessCompaction,
@@ -453,103 +493,42 @@ async function compactResolvedContextEngine(
       agentHarnessId: params.agentHarnessId,
       agentHarnessRuntimeOverride: selectedHarnessRuntime,
       workspaceDir: resolvedWorkspaceDir,
+      pluginRegistry: requireActivePluginRegistry(),
     });
-    const {
-      model: ceModel,
-      authStorage,
-      modelRegistry,
-    } = await resolveModelAsync(
-      ceRuntimeProvider,
-      ceModelId,
-      agentDir,
-      params.config,
-      initialModelAuth,
-    );
-    const ceRuntimeModel = ceModel as ProviderRuntimeModel | undefined;
-    const runtimeAuthProfileStore = isOpenAIProvider(ceProvider)
-      ? ensureAuthProfileStore(agentDir, {
-          externalCliProviderIds: ["openai"],
-          allowKeychainPrompt: false,
-        })
-      : ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
-          allowKeychainPrompt: false,
-        });
-    // Overrides stay unset when no bound/planned/explicit harness resolved so auth-aware
-    // selection can pick the credential-owning harness (codex for ChatGPT OAuth).
-    const selectHarnessForPreparedAttempts = (
-      attempts: readonly PreparedAgentRuntimeAuthAttempt[],
-    ) =>
-      selectAgentHarnessForPreparedModelProviders({
-        provider: ceProvider,
-        modelId: ceModelId,
-        modelProviders: attempts.map((attempt) =>
-          buildCompactionHarnessModelProvider({
-            model: ceRuntimeModel,
-            plan: attempt.plan,
-            attempt,
-          }),
-        ),
-        config: params.config,
-        agentId: runtimePolicyAgentId,
-        sessionKey: runtimePolicySessionKey,
-        agentHarnessId: params.agentHarnessId,
-        agentHarnessRuntimeOverride: selectedHarnessRuntime,
-      });
-    const initialHarness = reusableRuntimeAuthPlan
-      ? undefined
-      : selectAgentHarness({
-          provider: ceProvider,
-          modelId: ceModelId,
-          modelProvider: buildCompactionHarnessModelProvider({ model: ceRuntimeModel }),
-          config: params.config,
-          agentId: runtimePolicyAgentId,
-          sessionKey: runtimePolicySessionKey,
-          agentHarnessId: params.agentHarnessId,
-          agentHarnessRuntimeOverride: selectedHarnessRuntime,
-        });
-    const prepareRuntimeAuth = (harness: ReturnType<typeof selectAgentHarness>) =>
-      prepareAgentRuntimeAuth({
-        provider: ceProvider,
-        modelId: ceModelId,
-        modelApi: ceRuntimeModel?.api,
-        modelBaseUrl: ceRuntimeModel?.baseUrl,
-        config: params.config,
-        env: process.env,
-        agentDir,
-        workspaceDir: resolvedWorkspaceDir,
-        authProfileStore: runtimeAuthProfileStore,
-        sessionAuthProfileId: resolvedCompactionTarget.authProfileId,
-        sessionAuthProfileSource: params.authProfileIdSource,
-        harnessId: harness.id,
-        harnessRuntime: harness.id,
-        harnessAuthBootstrap: harness.authBootstrap,
-      });
-    let runtimeAuthPreparation = reusableRuntimeAuthPlan
-      ? {
-          plan: reusableRuntimeAuthPlan,
-          attempts: [{ kind: "implicit" as const, plan: reusableRuntimeAuthPlan }],
-        }
-      : prepareRuntimeAuth(initialHarness!);
-    let selectedPreparedHarness = selectHarnessForPreparedAttempts(runtimeAuthPreparation.attempts);
-    if (!reusableRuntimeAuthPlan && selectedPreparedHarness.id !== initialHarness?.id) {
-      runtimeAuthPreparation = prepareRuntimeAuth(selectedPreparedHarness);
-      const confirmedHarness = selectHarnessForPreparedAttempts(runtimeAuthPreparation.attempts);
-      if (confirmedHarness.id !== selectedPreparedHarness.id) {
-        throw new Error(
-          `Prepared queued compaction auth routes did not converge on one agent harness for ${ceProvider}/${ceModelId}.`,
-        );
-      }
-      selectedPreparedHarness = confirmedHarness;
-    }
-    preparedHarnessRuntime = selectedPreparedHarness.id;
-    const runtimeAuthPlan = runtimeAuthPreparation.plan;
-    const providerUsesProfileScopedModelMetadata = providerUsesCredentialScopedModelMetadata({
+    const { resolution: modelResolution } = await resolveTieredModel({
       provider: ceRuntimeProvider,
       modelId: ceModelId,
+      agentDir,
       config: params.config,
+      workspaceDir: resolvedWorkspaceDir,
+      ...initialModelAuth,
+      preparedModelRuntime,
+    });
+    const { model: ceModel, authStorage, modelRegistry } = modelResolution;
+    const ceRuntimeModel = ceModel as ProviderRuntimeModel | undefined;
+    // Overrides stay unset when no bound/planned/explicit harness resolved so auth-aware
+    // selection can pick the credential-owning harness (codex for ChatGPT OAuth).
+    const {
+      runtimeAuthPreparation,
+      selectedPreparedHarness,
+      providerUsesProfileScopedModelMetadata,
+    } = await prepareCompactionHarnessAuth({
+      ...params,
+      provider: ceProvider,
+      metadataProvider: ceRuntimeProvider,
+      modelId: ceModelId,
+      model: ceRuntimeModel,
+      reusableRuntimeAuthPlan,
       agentDir,
       workspaceDir: resolvedWorkspaceDir,
+      authProfileId: resolvedCompactionTarget.authProfileId,
+      runtimePolicyAgentId,
+      runtimePolicySessionKey,
+      agentHarnessRuntimeOverride: selectedHarnessRuntime,
+      convergenceErrorPrefix: "Prepared queued compaction",
     });
+    preparedHarnessRuntime = selectedPreparedHarness.id;
+    const runtimeAuthPlan = runtimeAuthPreparation.plan;
     effectiveRuntimeModel = await materializePreparedRuntimeModel<ProviderRuntimeModel>({
       plan: runtimeAuthPlan,
       provider: ceProvider,
@@ -600,26 +579,19 @@ async function compactResolvedContextEngine(
     releaseContextEngineOwnership();
     throw err;
   }
-  const resolvedContextTokenBudget =
-    normalizeContextTokenBudget(
-      resolveContextWindowInfo({
-        cfg: params.config,
-        provider: ceContextConfigProvider,
-        modelId: ceModelId,
-        modelContextTokens: readAgentModelContextTokens(effectiveRuntimeModel),
-        modelContextWindow: effectiveRuntimeModel?.contextWindow,
-        defaultTokens: DEFAULT_CONTEXT_TOKENS,
-      }).tokens,
-    ) ?? DEFAULT_CONTEXT_TOKENS;
-  const requestedContextTokenBudget = normalizeContextTokenBudget(params.contextTokenBudget);
-  const contextTokenBudget = Math.min(
-    requestedContextTokenBudget ?? resolvedContextTokenBudget,
-    resolvedContextTokenBudget,
-  );
+  const contextTokenBudget = resolveCompactionContextTokenBudget({
+    config: params.config,
+    provider: ceContextConfigProvider,
+    modelId: ceModelId,
+    model: effectiveRuntimeModel,
+    agentId: runtimeTarget.agentId,
+    requestedTokenBudget: params.contextTokenBudget,
+  });
   const contextEngineRuntimeContext = buildCompactionContextEngineRuntimeContext({
     params: preparedParams,
     agentDir,
     harnessRuntime: preparedHarnessRuntime,
+    contextEngineSessionKey,
     contextTokenBudget,
     contextEnginePluginId: resolveContextEngineOwnerPluginId(contextEngine),
   });
@@ -633,22 +605,48 @@ async function compactResolvedContextEngine(
     promptTokenBudget: contextTokenBudget,
   });
   const contextEngineOwnsCompaction = contextEngine.info.ownsCompaction === true;
+  let requiredPreflightNativeCapabilityUsed = false;
   const harnessResult =
     attemptNativeHarnessCompaction && (!contextEngineOwnsCompaction || lockedNativeHarness)
-      ? await maybeCompactAgentHarnessSession({
-          ...preparedParams,
-          runtimeModel: effectiveRuntimeModel,
-          contextEngine,
-          contextTokenBudget,
-          contextEngineRuntimeContext,
-        })
+      ? await maybeCompactAgentHarnessSession(
+          {
+            ...preparedParams,
+            runtimeModel: effectiveRuntimeModel,
+            contextEngine,
+            contextTokenBudget,
+            contextEngineRuntimeContext,
+          },
+          preparedParams.preflightRequired === true
+            ? {
+                nativeCompactionRequest: "required_preflight",
+                onNativeCompactionCapabilityUsed: () => {
+                  requiredPreflightNativeCapabilityUsed = true;
+                },
+              }
+            : undefined,
+        )
       : undefined;
-  if (lockedNativeHarness) {
+  // A model lock normally makes the native harness result terminal: the
+  // persisted runtime is authoritative and must not be swapped for
+  // context-engine compaction. Required preflight permits a harness-declared
+  // exception: missing or stale thread bindings can be recoverable and would
+  // otherwise drop the user's turn, so they fall through to the shared
+  // context-engine fallback below while `preparedHarnessRuntime` keeps the
+  // lock intact. Authorization comes from the private native capability that
+  // core actually dispatched; public result fields cannot escape the lock.
+  if (
+    lockedNativeHarness &&
+    !(
+      preparedParams.preflightRequired === true &&
+      requiredPreflightNativeCapabilityUsed &&
+      shouldFallbackAfterHarnessCompaction(harnessResult)
+    )
+  ) {
     return harnessResult ?? lockedCompactionRuntimeFailure(selectedHarnessRuntime);
   }
   if (harnessResult) {
     if (!shouldFallbackAfterHarnessCompaction(harnessResult)) {
-      return harnessResult;
+      return { ...harnessResult, compactionKind: "native-harness" };
     }
     log.warn(
       `native harness compaction could not use its session binding; falling back to context engine: ${harnessResult.reason ?? "unknown"}`,
@@ -662,6 +660,7 @@ async function compactResolvedContextEngine(
   ) {
     const deferredResult = await deferOwningContextEngineBudgetCompaction({
       compactParams: preparedParams,
+      contextEngineSessionKey,
       contextEngine,
       contextEngineRuntimeContext,
       contextEngineRuntimeSettings,
@@ -688,19 +687,17 @@ async function compactResolvedContextEngine(
         // Fire before_compaction / after_compaction hooks here so plugin subscribers
         // are notified regardless of which engine is active.
         const engineOwnsCompaction = contextEngine.info.ownsCompaction === true;
-        const isSqliteSessionTranscript = Boolean(parseSqliteSessionFileMarker(params.sessionFile));
         checkpointSnapshot = engineOwnsCompaction
           ? await compactionCheckpointStore.captureSnapshot({
               sessionFile: params.sessionFile,
-              ...(isSqliteSessionTranscript
-                ? { sessionManager: SessionManager.open(params.sessionFile) }
-                : {}),
+              sessionManager: SessionManager.open(runtimeTarget),
+              sessionTarget: runtimeTarget,
             })
           : null;
         const hookRunner = engineOwnsCompaction
           ? asCompactionHookRunner(getGlobalHookRunner())
           : null;
-        const hookSessionKey = params.sessionKey?.trim() || params.sessionId;
+        const hookSessionKey = runtimeTarget.sessionKey;
         const { sessionAgentId } = resolveSessionAgentIds({
           sessionKey: params.sessionKey,
           config: params.config,
@@ -786,100 +783,45 @@ async function compactResolvedContextEngine(
             reason: formatErrorMessage(compactErr),
           };
         }
-        const delegatedSuccessor = resolveCompactionSuccessorTranscript(result);
-        const delegatedSessionTarget = result.result?.sessionTarget;
-        const delegatedSessionId = delegatedSuccessor.sessionId;
-        const delegatedSessionFile = delegatedSuccessor.sessionFile;
-        const delegatedRotatedTranscript =
-          (typeof delegatedSessionId === "string" && delegatedSessionId !== params.sessionId) ||
-          (typeof delegatedSessionFile === "string" && delegatedSessionFile !== params.sessionFile);
-        let postCompactionSessionId = delegatedSessionId ?? params.sessionId;
-        // Shipped pre-sessionTarget engines report rotation via the deprecated
-        // sessionFile field; honor it when no typed target is present.
-        let postCompactionSessionFile = delegatedSessionFile ?? params.sessionFile;
-        if (delegatedSessionTarget) {
-          const resolvedDelegatedTarget = await resolveAgentRunSessionTarget({
-            agentId: delegatedSessionTarget.agentId ?? sessionAgentId,
-            config: params.config,
-            sessionId: delegatedSessionTarget.sessionId ?? postCompactionSessionId,
-            sessionKey: delegatedSessionTarget.sessionKey ?? params.sessionKey,
-            sessionTarget: delegatedSessionTarget,
-          });
-          postCompactionSessionId = resolvedDelegatedTarget.sessionId;
-          postCompactionSessionFile = resolvedDelegatedTarget.sessionFile;
-        }
-        let postCompactionLeafId: string | undefined;
+        const successor = await resolveContextEngineCompactionSuccessor({
+          config: params.config,
+          currentSessionFile: params.sessionFile,
+          currentTarget: runtimeTarget,
+          result,
+        });
+        const postCompactionSessionId = successor.sessionId;
+        const postCompactionSessionFile = successor.sessionFile;
+        const postCompactionSessionTarget = successor.sessionTarget;
         if (result.ok && result.compacted) {
-          if (
-            shouldRotateCompactionTranscript(params.config) &&
-            !delegatedRotatedTranscript &&
-            !isSqliteSessionTranscript
-          ) {
-            try {
-              const rotation = await rotateTranscriptFileAfterCompaction({
-                sessionFile: params.sessionFile,
-              });
-              if (rotation.rotated) {
-                postCompactionSessionId = rotation.sessionId ?? postCompactionSessionId;
-                postCompactionSessionFile = rotation.sessionFile ?? postCompactionSessionFile;
-                postCompactionLeafId = rotation.leafId;
-                log.info(
-                  `[compaction] rotated active transcript after context-engine compaction ` +
-                    `(sessionKey=${params.sessionKey ?? params.sessionId})`,
-                );
-              }
-            } catch (err) {
-              log.warn("failed to rotate compacted transcript", {
-                errorMessage: formatErrorMessage(err),
-              });
-            }
-          }
-          if (params.config && params.sessionKey && checkpointSnapshot) {
-            try {
-              const transcriptState =
-                await readSessionLeafStateFromTranscriptAsync(postCompactionSessionFile);
-              const checkpointPosition = resolveCompactionCheckpointTranscriptPosition({
-                preferredLeafId: postCompactionLeafId,
-                transcriptState,
-              });
-              const storedCheckpoint = await compactionCheckpointStore.persistCheckpoint({
-                cfg: params.config,
-                sessionKey: params.sessionKey,
-                sessionId: postCompactionSessionId,
-                reason: resolveSessionCompactionCheckpointReason({
-                  trigger: params.trigger,
-                }),
-                snapshot: checkpointSnapshot,
-                summary: result.result?.summary,
-                firstKeptEntryId: result.result?.firstKeptEntryId,
-                tokensBefore: result.result?.tokensBefore,
-                tokensAfter: result.result?.tokensAfter,
-                postSessionFile: postCompactionSessionFile,
-                postLeafId: checkpointPosition.leafId,
-                postEntryId: checkpointPosition.entryId,
-              });
-              checkpointSnapshotRetained = storedCheckpoint !== null;
-            } catch (err) {
-              log.warn("failed to persist compaction checkpoint", {
-                errorMessage: formatErrorMessage(err),
-              });
-            }
-          }
+          checkpointSnapshotRetained = await persistCompactionCheckpoint({
+            config: params.config,
+            sessionKey: params.sessionKey,
+            sessionId: postCompactionSessionId,
+            trigger: params.trigger,
+            snapshot: checkpointSnapshot,
+            summary: result.result?.summary,
+            firstKeptEntryId: result.result?.firstKeptEntryId,
+            tokensBefore: result.result?.tokensBefore,
+            tokensAfter: result.result?.tokensAfter,
+            sessionFile: postCompactionSessionFile,
+            sessionTarget: postCompactionSessionTarget,
+          });
           await runContextEngineMaintenance({
             contextEngine,
             sessionId: postCompactionSessionId,
-            sessionKey: params.sessionKey,
+            sessionKey: contextEngineSessionKey ?? params.sessionKey,
             sessionTarget: buildContextEngineCompactionSessionTarget({
               ...params,
               sessionFile: postCompactionSessionFile,
               sessionId: postCompactionSessionId,
-              sessionTarget: delegatedSessionTarget ?? params.sessionTarget,
+              sessionTarget: postCompactionSessionTarget,
             }),
             sessionFile: postCompactionSessionFile,
             reason: "compaction",
             runtimeContext,
             runtimeSettings: contextEngineRuntimeSettings,
             config: params.config,
+            contextEngineAgentId: params.contextEngineAgentId,
           });
         }
         if (engineOwnsCompaction && result.ok && result.compacted) {
@@ -966,14 +908,22 @@ async function compactResolvedContextEngine(
           normalizeOptionalAgentRuntimeId(preparedHarnessRuntime) === "codex"
             ? "codexNativeCompaction"
             : "nativeHarnessCompaction";
+        const serverEndpointCompaction =
+          (result.result?.details as { compactionKind?: unknown } | undefined)?.compactionKind ===
+            "server-endpoint" && typeof result.result?.tokensAfter === "number";
         return {
           ok: result.ok,
           compacted: result.compacted,
+          compactionKind: serverEndpointCompaction ? "server-endpoint" : "context-engine",
           reason: result.reason,
           result: result.result
             ? {
-                summary: result.result.summary ?? "",
-                firstKeptEntryId: result.result.firstKeptEntryId ?? "",
+                ...(serverEndpointCompaction
+                  ? { kind: "server-endpoint" as const }
+                  : {
+                      summary: result.result.summary ?? "",
+                      firstKeptEntryId: result.result.firstKeptEntryId ?? "",
+                    }),
                 tokensBefore: result.result.tokensBefore,
                 tokensAfter: result.result.tokensAfter,
                 details: mergeSecondaryNativeHarnessCompactionDetails({
@@ -1014,53 +964,25 @@ function shouldAttemptNativeHarnessCompaction(params: {
 function buildCompactionContextEngineRuntimeContext(params: {
   params: CompactEmbeddedAgentSessionParams;
   agentDir: string;
+  contextEngineSessionKey?: string;
   harnessRuntime?: string;
   contextEnginePluginId?: string;
   contextTokenBudget?: number;
 }): ContextEngineRuntimeContext {
-  const { sessionAgentId } = resolveSessionAgentIds({
-    sessionKey: params.params.sessionKey,
-    config: params.params.config,
-    agentId: params.params.agentId,
-  });
-  const { sessionFile: _sessionFile, ...runtimeParams } = params.params;
+  const { sessionFile: _sessionFile, contextEngineAgentId, ...runtimeParams } = params.params;
   return {
     ...runtimeParams,
     sessionTarget: buildContextEngineCompactionSessionTarget(params.params),
     ...buildEmbeddedCompactionRuntimeContext({
-      sessionKey: params.params.sessionKey,
-      messageChannel: params.params.messageChannel,
-      messageProvider: params.params.messageProvider,
-      agentAccountId: params.params.agentAccountId,
-      currentChannelId: params.params.currentChannelId,
-      currentThreadTs: params.params.currentThreadTs,
-      currentMessageId: params.params.currentMessageId,
-      authProfileId: params.params.authProfileId,
-      authProfileIdSource: params.params.authProfileIdSource,
-      runtimeAuthPlan: params.params.runtimeAuthPlan,
-      workspaceDir: params.params.workspaceDir,
-      cwd: params.params.cwd,
+      ...params.params,
       agentDir: params.agentDir,
-      config: params.params.config,
-      skillsSnapshot: params.params.skillsSnapshot,
-      senderIsOwner: params.params.senderIsOwner,
-      senderId: params.params.senderId,
-      provider: params.params.provider,
       modelId: params.params.model,
       harnessRuntime: params.harnessRuntime,
-      modelSelectionLocked: params.params.modelSelectionLocked,
-      modelFallbacksOverride: params.params.modelFallbacksOverride,
-      thinkLevel: params.params.thinkLevel,
-      reasoningLevel: params.params.reasoningLevel,
-      bashElevated: params.params.bashElevated,
-      extraSystemPrompt: params.params.extraSystemPrompt,
-      sourceReplyDeliveryMode: params.params.sourceReplyDeliveryMode,
-      ownerNumbers: params.params.ownerNumbers,
     }),
     ...resolveContextEngineCapabilities({
       config: params.params.config,
-      sessionKey: params.params.sessionKey,
-      agentId: sessionAgentId,
+      sessionKey: params.contextEngineSessionKey ?? params.params.sessionKey,
+      explicitAgentId: contextEngineAgentId,
       authProfileId: params.params.authProfileId,
       contextEnginePluginId: params.contextEnginePluginId,
       purpose: "context-engine.compaction",

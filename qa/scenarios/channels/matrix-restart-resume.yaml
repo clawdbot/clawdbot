@@ -5,7 +5,7 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.restart-resume
+      - channels.resumed-final-reply
   objective: Verify channel delivery resumes after a Gateway restart without replaying completed delivery.
   successCriteria:
     - A reply is delivered before restart.

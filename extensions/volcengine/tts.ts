@@ -1,5 +1,6 @@
 // Volcengine plugin module implements tts behavior.
 import * as crypto from "node:crypto";
+import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
@@ -171,7 +172,11 @@ async function seedSpeechTTS(params: VolcengineTTSParams & { apiKey: string }): 
     for (const frame of frames) {
       if (frame.code === 0) {
         if (frame.data) {
-          chunks.push(Buffer.from(frame.data, "base64"));
+          const canonicalAudio = canonicalizeBase64(frame.data);
+          if (!canonicalAudio) {
+            throw new Error("BytePlus Seed Speech TTS returned malformed base64 audio data");
+          }
+          chunks.push(Buffer.from(canonicalAudio, "base64"));
         }
         continue;
       }
@@ -260,7 +265,11 @@ async function legacyVolcengineTTS(
         `Volcengine TTS error ${body.code ?? response.status}: ${body.message ?? "unknown"}`,
       );
     }
-    return Buffer.from(body.data, "base64");
+    const canonicalAudio = canonicalizeBase64(body.data);
+    if (!canonicalAudio) {
+      throw new Error("Volcengine TTS returned malformed base64 audio data");
+    }
+    return Buffer.from(canonicalAudio, "base64");
   } finally {
     await release();
   }

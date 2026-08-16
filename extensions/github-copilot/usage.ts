@@ -9,6 +9,7 @@ import {
   type ProviderUsageSnapshot,
   type UsageWindow,
 } from "openclaw/plugin-sdk/provider-usage";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { PUBLIC_GITHUB_COPILOT_DOMAIN } from "./domain.js";
 
 type CopilotUsageResponse = {
@@ -45,7 +46,8 @@ export async function fetchCopilotUsage(
     });
   }
 
-  const data = await readProviderJsonResponse<CopilotUsageResponse>(res, "github-copilot-usage");
+  const payload = await readProviderJsonResponse<unknown>(res, "github-copilot-usage");
+  const data = isRecord(payload) ? (payload as CopilotUsageResponse) : {};
   const windows: UsageWindow[] = [];
 
   if (data.quota_snapshots?.premium_interactions) {

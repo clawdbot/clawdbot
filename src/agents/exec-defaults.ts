@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   loadExecApprovals,
   type ExecAsk,
+  type ExecApprovalsFile,
   type ExecHost,
   type ExecMode,
   type ExecSecurity,
@@ -73,6 +74,7 @@ function resolveExecConfigState(params: {
   execOverrides?: ExecPolicyOverrides;
   agentId?: string;
   sessionKey?: string;
+  scope?: { kind: "defaults" };
 }): {
   cfg: OpenClawConfig;
   host: ExecTarget;
@@ -82,11 +84,13 @@ function resolveExecConfigState(params: {
 } {
   const cfg = params.cfg ?? {};
   const resolvedAgentId =
-    params.agentId ??
-    resolveSessionAgentId({
-      sessionKey: params.sessionKey,
-      config: cfg,
-    });
+    params.scope?.kind === "defaults"
+      ? undefined
+      : (params.agentId ??
+        resolveSessionAgentId({
+          sessionKey: params.sessionKey,
+          config: cfg,
+        }));
   const globalExec = cfg.tools?.exec;
   const agentExec = resolvedAgentId
     ? resolveAgentConfig(cfg, resolvedAgentId)?.tools?.exec
@@ -109,6 +113,7 @@ function resolveExecConfigState(params: {
 /** Resolves whether node exec is usable and any effective node binding. */
 export function resolveNodeExecEligibility(params: {
   cfg?: OpenClawConfig;
+  execApprovals?: ExecApprovalsFile;
   sessionEntry?: ExecSessionDefaults;
   execOverrides?: ExecPolicyOverrides;
   agentId?: string;
@@ -116,7 +121,7 @@ export function resolveNodeExecEligibility(params: {
   sandboxAvailable?: boolean;
 }): { canExec: boolean; node?: string } {
   const defaults = resolveExecDefaults(params);
-  const systemRunDenied = params.cfg?.gateway?.nodes?.denyCommands?.some(
+  const systemRunDenied = params.cfg?.gateway?.nodes?.commands?.deny?.some(
     (command) => command.trim() === "system.run",
   );
   return {
@@ -128,10 +133,13 @@ export function resolveNodeExecEligibility(params: {
 /** Resolves effective exec host, mode, approval policy, and node availability. */
 export function resolveExecDefaults(params: {
   cfg?: OpenClawConfig;
+  execApprovals?: ExecApprovalsFile;
   sessionEntry?: ExecSessionDefaults;
   execOverrides?: ExecPolicyOverrides;
   agentId?: string;
   sessionKey?: string;
+  /** Resolve agents.defaults/tools.exec without applying any roster entry override. */
+  scope?: { kind: "defaults" };
   sandboxAvailable?: boolean;
   elevatedRequested?: boolean;
 }): {
@@ -168,7 +176,7 @@ export function resolveExecDefaults(params: {
     resolved.effectiveHost === "sandbox"
       ? undefined
       : resolveExecApprovalsFromFile({
-          file: loadExecApprovals(),
+          file: params.execApprovals ?? loadExecApprovals(),
           agentId: resolvedAgentId,
           overrides: {
             security: defaultSecurity,

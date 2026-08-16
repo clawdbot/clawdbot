@@ -13,6 +13,7 @@ const RelayUrlSchema = z
 export const ReefChannelConfigSchema = z
   .object({
     enabled: z.boolean().default(true),
+    configWrites: z.boolean().optional(),
     relayUrl: RelayUrlSchema.default("https://reefwire.ai"),
     handle: HandleSchema.optional(),
     email: z.email().optional(),
@@ -37,7 +38,6 @@ export type ReefChannelConfig = z.infer<typeof ReefChannelConfigSchema>;
 
 export type ReefCoreConfig = {
   channels?: { reef?: Partial<ReefChannelConfig> };
-  commands?: { useAccessGroups?: boolean };
   session?: { store?: string };
 };
 

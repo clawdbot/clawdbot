@@ -5,7 +5,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { sortUniqueStrings } from "../../packages/normalization-core/src/string-normalization.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { planManifestModelCatalogRows } from "../model-catalog/manifest-planner.js";
+import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { clearNativeRequireJavaScriptModuleCache } from "./native-module-require.js";
@@ -17,7 +17,7 @@ import {
   getCachedPluginModuleLoader,
 } from "./plugin-module-loader-cache.js";
 import { resolveDiscoveredProviderPluginIds } from "./providers.js";
-import { resolvePluginProviders } from "./providers.runtime.js";
+import { resolvePluginProvidersCore } from "./providers.runtime.js";
 import type { ProviderPlugin } from "./types.js";
 
 type ProviderDiscoveryModule =
@@ -109,9 +109,7 @@ function loadProviderDiscoveryModule(params: {
 }
 
 function hasLiveProviderDiscoveryHook(provider: ProviderPlugin): boolean {
-  return (
-    typeof provider.catalog?.run === "function" || typeof provider.discovery?.run === "function"
-  );
+  return typeof provider.catalog?.run === "function";
 }
 
 function hasProviderCatalogHook(provider: ProviderPlugin): boolean {
@@ -124,10 +122,7 @@ function hasProviderAuthEnvCredential(
   plugin: PluginManifestRecord,
   env: NodeJS.ProcessEnv,
 ): boolean {
-  const envVars = [
-    ...(plugin.setup?.providers ?? []).flatMap((provider) => provider.envVars ?? []),
-    ...Object.values(plugin.providerAuthEnvVars ?? {}).flat(),
-  ];
+  const envVars = (plugin.setup?.providers ?? []).flatMap((provider) => provider.envVars ?? []);
   return envVars.some((name) => {
     const value = env[name]?.trim();
     return value !== undefined && value !== "";
@@ -210,13 +205,14 @@ function providerConfigFromManifestRows(
 
 function resolveManifestModelCatalogProviders(
   pluginRecords: readonly PluginManifestRecord[],
+  config: OpenClawConfig,
 ): ProviderPlugin[] {
   const providers: ProviderPlugin[] = [];
   for (const plugin of pluginRecords) {
     if (!plugin.modelCatalog?.providers) {
       continue;
     }
-    const plan = planManifestModelCatalogRows({ registry: { plugins: [plugin] } });
+    const plan = planEffectiveModelCatalogRows({ registry: { plugins: [plugin] }, config });
     for (const entry of plan.entries) {
       if (
         entry.rows.length === 0 ||
@@ -246,6 +242,7 @@ function resolveManifestModelCatalogProviders(
 
 function resolveRuntimeManifestCatalogPluginIds(
   pluginRecords: readonly PluginManifestRecord[],
+  config: OpenClawConfig,
 ): Set<string> {
   const pluginIds = new Set<string>();
   for (const plugin of pluginRecords) {
@@ -264,7 +261,7 @@ function resolveRuntimeManifestCatalogPluginIds(
     if (!plugin.modelCatalog?.providers) {
       continue;
     }
-    const plan = planManifestModelCatalogRows({ registry: { plugins: [plugin] } });
+    const plan = planEffectiveModelCatalogRows({ registry: { plugins: [plugin] }, config });
     if (
       plan.entries.some(
         (entry) => entry.discovery === "runtime" || entry.discovery === "refreshable",
@@ -303,13 +300,17 @@ function resolveProviderDiscoveryEntryPlugins(params: {
   });
   const pluginIdSet = new Set(pluginIds);
   const pluginRecords = manifestRegistry.plugins.filter((plugin) => pluginIdSet.has(plugin.id));
-  const runtimeManifestCatalogPluginIds = resolveRuntimeManifestCatalogPluginIds(pluginRecords);
+  const config = params.config ?? {};
+  const runtimeManifestCatalogPluginIds = resolveRuntimeManifestCatalogPluginIds(
+    pluginRecords,
+    config,
+  );
   const entryRecords = pluginRecords.filter((plugin) => plugin.providerDiscoverySource);
   const entryPluginIds = new Set(entryRecords.map((plugin) => plugin.id));
   const manifestProviders =
     params.includeManifestModelCatalogProviders === false
       ? []
-      : resolveManifestModelCatalogProviders(pluginRecords);
+      : resolveManifestModelCatalogProviders(pluginRecords, config);
   const manifestEntryPluginIds = new Set<string>();
   for (const pluginId of manifestProviders.map((provider) => provider.pluginId)) {
     if (pluginId) {
@@ -436,18 +437,22 @@ export function resolvePluginDiscoveryProvidersRuntime(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-  bundledProviderVitestCompat?: boolean;
   onlyPluginIds?: string[];
   includeUntrustedWorkspacePlugins?: boolean;
   requireCompleteDiscoveryEntryCoverage?: boolean;
   discoveryEntriesOnly?: boolean;
   includeManifestModelCatalogProviders?: boolean;
+  includeSyntheticAuthProviders?: boolean;
   pluginMetadataSnapshot?: PluginMetadataRegistryView;
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
-  const bundledProviderVitestCompat = params.bundledProviderVitestCompat ?? env.VITEST === "true";
   const entryResult = resolveProviderDiscoveryEntryPlugins({ ...params, env });
-  const entryProviders = entryResult.providers.filter(hasProviderCatalogHook);
+  const entryProviders = entryResult.providers.filter(
+    (provider) =>
+      hasProviderCatalogHook(provider) ||
+      (params.includeSyntheticAuthProviders === true &&
+        typeof provider.resolveSyntheticAuth === "function"),
+  );
   const runtimeEntryProviders = resolveRuntimeEntryProviders(entryResult);
   if (params.discoveryEntriesOnly === true) {
     return entryProviders;
@@ -467,10 +472,9 @@ export function resolvePluginDiscoveryProvidersRuntime(params: {
     });
     const fullProviders =
       fullPluginIds.length > 0
-        ? resolvePluginProviders({
+        ? resolvePluginProvidersCore({
             ...params,
             env,
-            bundledProviderVitestCompat,
             onlyPluginIds: fullPluginIds,
           })
         : [];
@@ -486,10 +490,9 @@ export function resolvePluginDiscoveryProvidersRuntime(params: {
     ]);
     const fullProviders =
       fullPluginIds.length > 0
-        ? resolvePluginProviders({
+        ? resolvePluginProvidersCore({
             ...params,
             env,
-            bundledProviderVitestCompat,
             onlyPluginIds: fullPluginIds,
           })
         : [];
@@ -500,10 +503,9 @@ export function resolvePluginDiscoveryProvidersRuntime(params: {
   }
   const runtimeManifestCatalogPluginIds = listRuntimeManifestCatalogPluginIds(entryResult);
   if (runtimeManifestCatalogPluginIds.length > 0) {
-    return resolvePluginProviders({
+    return resolvePluginProvidersCore({
       ...params,
       env,
-      bundledProviderVitestCompat,
       onlyPluginIds: runtimeManifestCatalogPluginIds,
     });
   }
@@ -514,17 +516,15 @@ export function resolvePluginDiscoveryProvidersRuntime(params: {
         .filter((pluginId): pluginId is string => typeof pluginId === "string" && pluginId !== ""),
     );
     if (fullPluginIds.length > 0) {
-      return resolvePluginProviders({
+      return resolvePluginProvidersCore({
         ...params,
         env,
-        bundledProviderVitestCompat,
         onlyPluginIds: fullPluginIds,
       });
     }
   }
-  return resolvePluginProviders({
+  return resolvePluginProvidersCore({
     ...params,
     env,
-    bundledProviderVitestCompat,
   });
 }

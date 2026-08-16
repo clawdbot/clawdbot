@@ -1,5 +1,4 @@
 // Telegram plugin module recovers dispatch routing and group-history context.
-import { CURRENT_MESSAGE_MARKER } from "openclaw/plugin-sdk/channel-mention-gating";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -75,25 +74,13 @@ function normalizeDispatchTelegramThreadPayload(params: {
   if (messageThreadId === params.threadSpec.id && transportThreadId === params.threadSpec.id) {
     return params.context;
   }
-  return {
-    ...params.context,
-    ctxPayload: {
-      ...params.context.ctxPayload,
-      MessageThreadId: params.threadSpec.id,
-      TransportThreadId: params.threadSpec.id,
-    },
-  };
-}
-
-function extractCurrentTelegramBody(body: string | undefined): string {
-  if (!body) {
-    return "";
-  }
-  const markerIndex = body.lastIndexOf(CURRENT_MESSAGE_MARKER);
-  if (markerIndex === -1) {
-    return body;
-  }
-  return body.slice(markerIndex + CURRENT_MESSAGE_MARKER.length).trimStart();
+  // This payload owns private host admission state outside its enumerable fields.
+  // Normalize routing in place so a plugin-visible copier is never needed.
+  Object.assign(params.context.ctxPayload, {
+    MessageThreadId: params.threadSpec.id,
+    TransportThreadId: params.threadSpec.id,
+  });
+  return params.context;
 }
 
 function buildRecoveredTelegramChatActionSender(params: {
@@ -231,11 +218,8 @@ export function resolveDispatchTelegramContext(params: {
         ? recoveredPromptHistoryEntries
         : undefined
       : params.context.ctxPayload.InboundHistory;
-  const recoveredBodyForAgent = extractCurrentTelegramBody(
-    params.context.ctxPayload.BodyForAgent ?? params.context.ctxPayload.Body,
-  );
   const recoveredPromptContextBase = retainTelegramGroupHistoryPromptContext({
-    promptContext: params.context.ctxPayload.UntrustedStructuredContext ?? [],
+    promptContext: params.context.ctxPayload.ChannelStructuredContext ?? [],
     entries: recoveredPromptHistoryEntries,
   });
   const recoveredPromptContext =
@@ -258,7 +242,20 @@ export function resolveDispatchTelegramContext(params: {
     action: "record_voice",
   });
   migrateRecoveredTelegramGroupHistory({ context: params.context, recoveredHistoryKey });
-  return {
+  if (threadSpec.id != null) {
+    // Keep the admitted payload object intact; replacing it would discard the
+    // host-only participant carrier before canonical run admission.
+    Object.assign(params.context.ctxPayload, {
+      From: recoveredFrom,
+      InboundHistory: recoveredInboundHistory,
+      MessageThreadId: threadSpec.id,
+      OriginatingTo: recoveredRoutingTarget,
+      To: recoveredRoutingTarget,
+      TransportThreadId: threadSpec.id,
+      ChannelStructuredContext: recoveredPromptContext,
+    });
+  }
+  const recovered = {
     ...params.context,
     historyKey: recoveredHistoryKey,
     threadSpec,
@@ -273,20 +270,7 @@ export function resolveDispatchTelegramContext(params: {
         updateLastRoute: recoveredUpdateLastRoute,
       },
     },
-    ctxPayload:
-      threadSpec.id == null
-        ? params.context.ctxPayload
-        : {
-            ...params.context.ctxPayload,
-            Body: recoveredBodyForAgent,
-            BodyForAgent: recoveredBodyForAgent,
-            From: recoveredFrom,
-            InboundHistory: recoveredInboundHistory,
-            MessageThreadId: threadSpec.id,
-            OriginatingTo: recoveredRoutingTarget,
-            To: recoveredRoutingTarget,
-            TransportThreadId: threadSpec.id,
-            UntrustedStructuredContext: recoveredPromptContext,
-          },
+    ctxPayload: params.context.ctxPayload,
   };
+  return recovered;
 }

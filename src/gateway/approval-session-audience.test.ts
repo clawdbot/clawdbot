@@ -28,11 +28,12 @@ const buildLatestSubagentRunReadIndexMock = vi.fn(() => ({
 vi.mock("../config/io.js", () => ({
   getRuntimeConfig: () => getRuntimeConfigMock(),
 }));
-vi.mock("../agents/subagent-registry-read.js", () => ({
+vi.mock("../agents/subagents/registry/subagent-registry-read.js", () => ({
   buildLatestSubagentRunReadIndex: () => buildLatestSubagentRunReadIndexMock(),
 }));
 vi.mock("../config/sessions/session-accessor.js", () => ({
   loadSessionEntry: (scope: { sessionKey: string }) => loadSessionEntryMock(scope),
+  loadSessionEntryReadOnly: (scope: { sessionKey: string }) => loadSessionEntryMock(scope),
 }));
 
 beforeEach(() => {

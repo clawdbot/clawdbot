@@ -2,30 +2,29 @@ title: Remember across conversations
 
 scenario:
   id: remember-across-conversations
-  surface: memory
+  surface: session-memory
   risk: high
   coverage:
-    primary:
-      - memory.active-recall
     secondary:
-      - memory.recall
-      - channels.qa-channel
+      - session-memory.active-memory-active-recall
+      - session-memory.active-memory-recall
+      - session-memory.active-memory-qa-channel
   objective: Verify bounded private transcript recall across separate conversations without crossing shared, anchor, disabled, or paused conversation boundaries.
   plugins:
     - active-memory
   gatewayConfigPatch:
     session:
       dmScope: per-channel-peer
-    agents:
-      defaults:
-        memorySearch:
-          rememberAcrossConversations: true
+    memory:
+      search:
+        rememberAcrossConversations: true
     plugins:
       entries:
         active-memory:
           enabled: true
           config:
             enabled: true
+            mode: always
             agents: []
             toolsAllow:
               - memory_search
@@ -35,7 +34,7 @@ scenario:
             queryMode: message
             maxSummaryChars: 220
   successCriteria:
-    - Two private conversations keep distinct session keys and transcript files.
+    - Two private conversations keep distinct session keys and persisted transcript identities.
     - A private reply recalls the relevant fact from the other private conversation.
     - Accepted memory-search evidence excludes the group transcript and anchor transcript.
     - Group destinations, the disabled setting, and a session-scoped pause do not start product recall.
@@ -98,7 +97,7 @@ flow:
             - ref: env
         - set: originalMemorySearch
           value:
-            expr: "original.config.agents && typeof original.config.agents === 'object' && typeof original.config.agents.defaults === 'object' ? structuredClone(original.config.agents.defaults.memorySearch) : undefined"
+            expr: "original.config.memory && typeof original.config.memory === 'object' ? structuredClone(original.config.memory.search) : undefined"
         - set: initialSessionsVisibility
           value:
             expr: "original.config.tools && typeof original.config.tools === 'object' && typeof original.config.tools.sessions === 'object' ? original.config.tools.sessions.visibility : undefined"
@@ -206,23 +205,26 @@ flow:
                 value:
                   expr: seededStore[groupSessionKey]
               - assert:
-                  expr: "Boolean(sourceSession?.sessionId && sourceSession?.sessionFile)"
+                  expr: "Boolean(sourceSession?.sessionId)"
                   message:
                     expr: "`private source session missing: key=${sourceSessionKey} storeKeys=${Object.keys(seededStore).join(',')}`"
               - assert:
-                  expr: "Boolean(targetSession?.sessionId && targetSession?.sessionFile)"
+                  expr: "Boolean(targetSession?.sessionId)"
                   message:
                     expr: "`private target session missing: key=${targetSessionKey} storeKeys=${Object.keys(seededStore).join(',')}`"
               - assert:
-                  expr: "Boolean(groupSession?.sessionId && groupSession?.sessionFile)"
+                  expr: "Boolean(groupSession?.sessionId)"
                   message:
                     expr: "`group source session missing: key=${groupSessionKey} storeKeys=${Object.keys(seededStore).join(',')}`"
               - assert:
                   expr: "new Set([sourceSession.sessionId, targetSession.sessionId, groupSession.sessionId]).size === 3"
                   message: source, target, and group sessions unexpectedly share a transcript id
+              - set: seededTranscripts
+                value:
+                  expr: "await Promise.all([sourceSessionKey, targetSessionKey, groupSessionKey].map((sessionKey) => readSessionTranscriptSummary(env, sessionKey)))"
               - assert:
-                  expr: "new Set([sourceSession.sessionFile, targetSession.sessionFile, groupSession.sessionFile]).size === 3"
-                  message: source, target, and group sessions unexpectedly share a transcript file
+                  expr: "seededTranscripts.every((transcript) => transcript.eventCursor > 0)"
+                  message: source, target, and group sessions must each own a persisted transcript
               - call: runQaCli
                 args:
                   - ref: env
@@ -248,7 +250,7 @@ flow:
                   expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length : 0"
               - set: targetStartIndex
                 value:
-                  expr: state.getSnapshot().messages.length
+                  expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
               - sendInbound:
                   conversation:
                     id:
@@ -363,7 +365,7 @@ flow:
                           expr: "`group destination received private recall context: ${JSON.stringify(groupDestinationRequests)}`"
                     - set: pauseCommandStartIndex
                       value:
-                        expr: state.getSnapshot().messages.length
+                        expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
                     - sendInbound:
                         conversation:
                           id:
@@ -372,19 +374,16 @@ flow:
                         senderId: qa-operator
                         senderName: QA Operator
                         text: /active-memory off
-                    - call: sleep
+                    - call: waitForOutboundMessage
+                      saveAs: pauseCommandOutbound
                       args:
-                        - 2000
-                    - set: pauseCommandMessages
-                      value:
-                        expr: state.getSnapshot().messages.slice(pauseCommandStartIndex)
-                    - set: pauseCommandOutbound
-                      value:
-                        expr: "pauseCommandMessages.find((candidate) => candidate.direction === 'outbound')"
-                    - assert:
-                        expr: Boolean(pauseCommandOutbound)
-                        message:
-                          expr: "`Active Memory command produced no outbound message: ${JSON.stringify(pauseCommandMessages)}`"
+                        - ref: state
+                        - lambda:
+                            params: [candidate]
+                            expr: "candidate.direction === 'outbound' && candidate.conversation.id === config.pausedConversationId && candidate.text.includes('Active Memory: off for this session.')"
+                        - expr: liveTurnTimeoutMs(env, 60000)
+                        - sinceIndex:
+                            ref: pauseCommandStartIndex
                     - assert:
                         expr: "pauseCommandOutbound.text.includes('Active Memory: off for this session.')"
                         message:
@@ -459,10 +458,9 @@ flow:
                         - env:
                             ref: env
                           patch:
-                            agents:
-                              defaults:
-                                memorySearch:
-                                  expr: "{ ...structuredClone(originalMemorySearch ?? {}), rememberAcrossConversations: false }"
+                            memory:
+                              search:
+                                expr: "{ ...structuredClone(originalMemorySearch ?? {}), rememberAcrossConversations: false }"
                     - call: waitForGatewayHealthy
                       args:
                         - ref: env
@@ -511,10 +509,9 @@ flow:
                   - env:
                       ref: env
                     patch:
-                      agents:
-                        defaults:
-                          memorySearch:
-                            expr: "originalMemorySearch === undefined ? null : structuredClone(originalMemorySearch)"
+                      memory:
+                        search:
+                          expr: "originalMemorySearch === undefined ? null : structuredClone(originalMemorySearch)"
               - call: waitForGatewayHealthy
                 args:
                   - ref: env

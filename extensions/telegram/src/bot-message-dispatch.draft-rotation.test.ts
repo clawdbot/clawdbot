@@ -28,7 +28,11 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
     await dispatchWithContext({ context: createContext() });
 
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Working");
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Done");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(
+      2,
+      "Done",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expect(answerDraftStream.stop).toHaveBeenCalled();
     expect(deliverReplies).not.toHaveBeenCalled();
     expect(editMessageTelegram).not.toHaveBeenCalled();
@@ -49,7 +53,10 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
 
     expect(answerDraftStream.update.mock.calls).toEqual([
       ["Normal reply"],
-      [trailingFinalStatusText],
+      [
+        trailingFinalStatusText,
+        expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+      ],
     ]);
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
     expect(
@@ -104,6 +111,41 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("keeps partial text lazy until the draft stream materializes it", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    let resolveText: (() => string | undefined) | undefined;
+    answerDraftStream.updateLazy.mockImplementation((resolve) => {
+      resolveText = resolve;
+    });
+    let textReads = 0;
+    const lazyPayload = Object.defineProperty({}, "text", {
+      enumerable: true,
+      get: () => {
+        textReads += 1;
+        return "lazy preview";
+      },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.(lazyPayload);
+        expect(textReads).toBe(0);
+        expect(answerDraftStream.updateLazy).toHaveBeenCalledTimes(1);
+        expect(resolveText?.()).toBe("lazy preview");
+        expect(textReads).toBe(1);
+        await dispatcherOptions.deliver({ text: "lazy preview" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      telegramCfg: { streaming: { mode: "partial" } },
+    });
+
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("replaces non-prefix partial snapshots instead of appending them", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
@@ -155,7 +197,10 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
     expect(mockCallArg(answerDraftStream.updatePreview).text).toContain("Exec");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Done ");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Done answer");
-    expect(answerDraftStream.update).toHaveBeenLastCalledWith("Done answer.");
+    expect(answerDraftStream.update).toHaveBeenLastCalledWith(
+      "Done answer.",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
@@ -196,9 +241,17 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
     await dispatchWithContext({ context: createContext() });
 
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Message A final");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(
+      1,
+      "Message A final",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Message B partial");
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(3, "Message B final");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(
+      3,
+      "Message B final",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
@@ -228,7 +281,11 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
 
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "First chunk.");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Second chunk.");
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(3, "First chunk. \nSecond chunk.");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(
+      3,
+      "First chunk. \nSecond chunk.",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expect(answerDraftStream.forceNewMessage).not.toHaveBeenCalled();
     expect(deliverReplies).not.toHaveBeenCalled();
   });
@@ -275,7 +332,11 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
 
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Site A shows X.");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Site B shows Y.");
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(3, "Final answer");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(
+      3,
+      "Final answer",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
     const rotationOrder = requireInvocationOrder(
       answerDraftStream.forceNewMessage,
@@ -376,7 +437,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
     expect(answerDraftStream.update.mock.calls).toEqual([
       ["Site A shows X."],
       ["Site B shows Y."],
-      ["Final answer"],
+      ["Final answer", expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) })],
     ]);
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
     const firstBlockFlushOrder = requireInvocationOrder(
@@ -416,7 +477,11 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
 
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Existing preview");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "PFX Original block text");
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(3, "Final answer");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(
+      3,
+      "Final answer",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
     const blockUpdateOrder = requireInvocationOrder(
       answerDraftStream.update,

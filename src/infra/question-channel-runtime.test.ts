@@ -1,6 +1,8 @@
 // Covers question message finalization lifecycle and delivery races.
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import type { QuestionRecord } from "../../packages/gateway-protocol/src/schema/questions.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { createQuestionChannelRuntime } from "./question-channel-runtime-internal.js";
 
 const record: QuestionRecord = {
@@ -8,7 +10,7 @@ const record: QuestionRecord = {
   status: "pending",
   questions: [
     {
-      id: "target",
+      questionId: "target",
       header: "Target",
       question: "Deploy where?",
       options: [{ label: "Staging" }, { label: "Production" }],
@@ -19,6 +21,64 @@ const record: QuestionRecord = {
 };
 
 describe("question channel runtime", () => {
+  it("shares finalizers between separately evaluated gateway and plugin runtime modules", async () => {
+    const gateway = await importFreshModule<typeof import("./question-channel-runtime.js")>(
+      import.meta.url,
+      "./question-channel-runtime.js?scope=question-gateway-owner",
+    );
+    const plugin = await importFreshModule<typeof import("./question-channel-runtime.js")>(
+      import.meta.url,
+      "./question-channel-runtime.js?scope=question-plugin-sdk",
+    );
+    const finalize = vi.fn();
+
+    try {
+      gateway.handleQuestionChannelRequested(record);
+      plugin.registerQuestionChannelDelivery({
+        questionId: record.id,
+        deliveryId: "slack:default:C123:171234.001",
+        finalize,
+      });
+      gateway.handleQuestionChannelResolved({
+        id: record.id,
+        status: "answered",
+        answers: { answers: { target: ["Production"] } },
+      });
+
+      expect(finalize).toHaveBeenCalledExactlyOnceWith("Answered: Production");
+    } finally {
+      await drainGlobalSingletonLifecycleState("restart");
+    }
+  });
+
+  it("clears shared callbacks and retention timers when the gateway restarts", async () => {
+    vi.useFakeTimers();
+    try {
+      const gateway = await importFreshModule<typeof import("./question-channel-runtime.js")>(
+        import.meta.url,
+        "./question-channel-runtime.js?scope=question-gateway-lifecycle",
+      );
+      const staleFinalize = vi.fn();
+      gateway.handleQuestionChannelRequested(record);
+      gateway.registerQuestionChannelDelivery({
+        questionId: record.id,
+        deliveryId: "slack:default:C123:171234.002",
+        finalize: staleFinalize,
+      });
+      gateway.handleQuestionChannelResolved({ id: "ask_terminal", status: "expired" });
+
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+      await drainGlobalSingletonLifecycleState("restart");
+      expect(vi.getTimerCount()).toBe(0);
+
+      gateway.handleQuestionChannelResolved({ id: record.id, status: "cancelled" });
+      expect(staleFinalize).not.toHaveBeenCalled();
+    } finally {
+      await drainGlobalSingletonLifecycleState("restart");
+      vi.useRealTimers();
+    }
+  });
+
   it("finalizes delivered messages once with canonical answer labels", async () => {
     const finalize = vi.fn();
     const runtime = createQuestionChannelRuntime();
@@ -28,7 +88,7 @@ describe("question channel runtime", () => {
     const event = {
       id: record.id,
       status: "answered" as const,
-      answers: { answers: { target: { answers: ["Production"] } } },
+      answers: { answers: { target: ["Production"] } },
     };
     runtime.handleResolved(event);
     runtime.handleResolved(event);
@@ -60,7 +120,7 @@ describe("question channel runtime", () => {
     runtime.handleResolved({
       id: record.id,
       status: "answered",
-      answers: { answers: { target: { answers: ["@everyone secret-ish text"] } } },
+      answers: { answers: { target: ["@everyone secret-ish text"] } },
     });
 
     await vi.waitFor(() => expect(finalize).toHaveBeenCalledWith("Answered"));
@@ -111,7 +171,7 @@ describe("terminal status labels", () => {
       id: "ask_q",
       questions: [
         {
-          id: "deploy",
+          questionId: "deploy",
           header: "Deploy",
           question: "Where?",
           options: [{ label: "Staging" }, { label: "Production" }],
@@ -121,7 +181,7 @@ describe("terminal status labels", () => {
       createdAtMs: 1,
       expiresAtMs: 2,
       status: "answered",
-      answers: { answers: { deploy: { answers: ["Staging"] } } },
+      answers: { answers: { deploy: ["Staging"] } },
     };
     const finalize = vi.fn();
     const runtime = createQuestionChannelRuntime();
@@ -130,7 +190,7 @@ describe("terminal status labels", () => {
     runtime.handleResolved({
       id: "ask_q",
       status: "answered",
-      answers: { answers: { deploy: { answers: ["Staging"] } } },
+      answers: { answers: { deploy: ["Staging"] } },
     });
 
     await vi.waitFor(() => expect(finalize).toHaveBeenCalledWith("Answered: Staging"));

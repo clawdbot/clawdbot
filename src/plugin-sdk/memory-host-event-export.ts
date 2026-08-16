@@ -1,8 +1,9 @@
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
+import { syncDirectoryIfSupported } from "../infra/directory-durability.js";
+import { isMissingPathError } from "../infra/errors.js";
 import { sameFileIdentity, type FileIdentityStat } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, root as createFsSafeRoot } from "../infra/fs-safe.js";
-import { syncDirectoryBestEffort } from "../infra/sqlite-snapshot.js";
 
 export type MemoryHostEventExportOwner = {
   queueKey: string;
@@ -14,15 +15,6 @@ export type MemoryHostEventExportOwner = {
 };
 
 type MemoryHostWorkspaceRoot = Awaited<ReturnType<typeof createFsSafeRoot>>;
-
-export function isMissingPathError(error: unknown): boolean {
-  const code = (error as { code?: unknown }).code;
-  return (
-    code === "ENOENT" ||
-    code === "ENOTDIR" ||
-    (error instanceof FsSafeError && code === "not-found")
-  );
-}
 
 export function isRejectedWorkspaceArtifactPath(error: unknown): boolean {
   if (!(error instanceof FsSafeError)) {
@@ -204,7 +196,7 @@ export async function publishMemoryHostEventArtifact(params: {
       return undefined;
     }
     const publishedIdentity = { dev: writable.stat.dev, ino: writable.stat.ino };
-    await syncDirectoryBestEffort(path.dirname(params.absolutePath));
+    await syncDirectoryIfSupported(path.dirname(params.absolutePath));
 
     const identityPendingOwnerContent = memoryHostEventExportOwnerContent(params.owner, {
       pendingSha256: params.contentSha256,
@@ -220,7 +212,7 @@ export async function publishMemoryHostEventArtifact(params: {
     ) {
       return undefined;
     }
-    await syncDirectoryBestEffort(path.dirname(params.absolutePath));
+    await syncDirectoryIfSupported(path.dirname(params.absolutePath));
 
     await writePinnedMemoryHostEventArtifact(writable.handle, params.content);
     // Workspace actors can mutate this inode without replacing the path. Verify
@@ -235,7 +227,7 @@ export async function publishMemoryHostEventArtifact(params: {
     ) {
       return undefined;
     }
-    await syncDirectoryBestEffort(path.dirname(params.absolutePath));
+    await syncDirectoryIfSupported(path.dirname(params.absolutePath));
 
     if (
       !(await rewriteMemoryHostEventArtifactIfUnchanged({
@@ -250,7 +242,7 @@ export async function publishMemoryHostEventArtifact(params: {
     ) {
       return undefined;
     }
-    await syncDirectoryBestEffort(path.dirname(params.absolutePath));
+    await syncDirectoryIfSupported(path.dirname(params.absolutePath));
     if (
       !(await isMemoryHostEventArtifactAtIdentity({
         workspaceRoot: params.workspaceRoot,

@@ -12,14 +12,16 @@ import {
 } from "../../test-utils/plugin-registration.js";
 import type { OpenClawPluginApi } from "../plugin-entry.js";
 export { assertNoImportTimeSideEffects } from "./import-side-effects.js";
-import { uniqueSortedStrings } from "./string-utils.js";
 
-export { registerProviders, requireProvider, uniqueSortedStrings };
+export { registerProviders, requireProvider };
 
 /** Creates a minimal plugin registry fixture with quiet logger defaults. */
 export function createPluginRegistryFixture(
   config = {} as OpenClawConfig,
-  params: { hostServices?: PluginRegistryParams["hostServices"] } = {},
+  params: {
+    allowProcessHomeSessionCatalogs?: boolean;
+    hostServices?: PluginRegistryParams["hostServices"];
+  } = {},
 ) {
   return {
     config,
@@ -31,6 +33,7 @@ export function createPluginRegistryFixture(
         debug() {},
       },
       runtime: {} as PluginRuntime,
+      allowProcessHomeSessionCatalogs: params.allowProcessHomeSessionCatalogs ?? true,
       ...(params.hostServices ? { hostServices: params.hostServices } : {}),
     }),
   };
@@ -47,6 +50,7 @@ export function registerTestPlugin(params: {
   params.register(
     params.registry.createApi(params.record, {
       config: params.config,
+      hookPolicy: params.config.plugins?.entries?.[params.record.id]?.hooks,
     }),
   );
 }

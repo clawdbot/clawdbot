@@ -8,13 +8,14 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class ChatControllerCommandControlsTest {
-  private val json = Json { ignoreUnknownKeys = true }
+  private val json = chatControllerTestJson
 
   @Test
   fun parseChatCommandsKeepsTextAliasesAndArgumentFlag() {
@@ -52,35 +53,13 @@ class ChatControllerCommandControlsTest {
     assertEquals(true, commands[1].acceptsArgs)
   }
 
-  @OptIn(ExperimentalCoroutinesApi::class)
   @Test
   fun healthEventRefreshesCommandsAfterReconnect() =
     runTest {
-      val requests = mutableListOf<Pair<String, String?>>()
-      val controller =
-        ChatController(
-          scope = this,
-          json = json,
-          requestGateway = { method, paramsJson ->
-            requests += method to paramsJson
-            when (method) {
-              "chat.metadata" ->
-                """
-                {
-                  "commands": [
-                    {
-                      "name": "model",
-                      "description": "Switch models",
-                      "textAliases": ["/model"],
-                      "acceptsArgs": true
-                    }
-                  ]
-                }
-                """.trimIndent()
-              else -> "{}"
-            }
-          },
-        )
+      val (controller, requests) =
+        chatControllerTestSetup {
+          respond("chat.metadata", commandResponse("model", "Switch models", acceptsArgs = true))
+        }
 
       controller.handleGatewayEvent("health", null)
       advanceUntilIdle()
@@ -105,52 +84,21 @@ class ChatControllerCommandControlsTest {
       assertEquals(2, requests.count { it.first == "chat.metadata" })
     }
 
-  @OptIn(ExperimentalCoroutinesApi::class)
   @Test
   fun commandListScopesToActiveAgentAndRefreshesAfterAgentSwitch() =
     runTest {
-      val requests = mutableListOf<Pair<String, String?>>()
-      val controller =
-        ChatController(
-          scope = this,
-          json = json,
-          requestGateway = { method, paramsJson ->
-            requests += method to paramsJson
-            when (method) {
-              "chat.metadata" ->
-                if (paramsJson.orEmpty().contains("\"agentId\":\"ops\"")) {
-                  """
-                  {
-                    "commands": [
-                      {
-                        "name": "ops",
-                        "description": "Ops command",
-                        "textAliases": ["/ops"],
-                        "acceptsArgs": false
-                      }
-                    ]
-                  }
-                  """.trimIndent()
-                } else {
-                  """
-                  {
-                    "commands": [
-                      {
-                        "name": "main",
-                        "description": "Main command",
-                        "textAliases": ["/main"],
-                        "acceptsArgs": false
-                      }
-                    ]
-                  }
-                  """.trimIndent()
-                }
-              "chat.history" -> """{"sessionId":"loaded-session","messages":[]}"""
-              "health" -> "{}"
-              else -> "{}"
+      val (controller, requests) =
+        chatControllerTestSetup {
+          respond("chat.metadata") { paramsJson ->
+            if (paramsJson.orEmpty().contains("\"agentId\":\"ops\"")) {
+              commandResponse("ops", "Ops command")
+            } else {
+              commandResponse("main", "Main command")
             }
-          },
-        )
+          }
+          respond("chat.history", """{"sessionId":"loaded-session","messages":[]}""")
+          respond("health", "{}")
+        }
 
       controller.handleGatewayEvent("health", null)
       advanceUntilIdle()
@@ -175,17 +123,13 @@ class ChatControllerCommandControlsTest {
       assertTrue(commandRequests.any { it.second.orEmpty().contains("\"agentId\":\"ops\"") })
     }
 
-  @OptIn(ExperimentalCoroutinesApi::class)
   @Test
   fun delayedCommandListFromPreviousGatewayCannotReplaceCurrentCommands() =
     runTest {
       var cacheScope = ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1)
       val gatewayAResponse = CompletableDeferred<String>()
       val controller =
-        ChatController(
-          scope = this,
-          json = json,
-          requestGateway = { _, _ -> error("gateway-bound request expected") },
+        createChatController(
           requestGatewayForGateway = { gatewayId, method, _ ->
             require(method == "chat.metadata")
             if (gatewayId == "gateway-a") {
@@ -195,7 +139,7 @@ class ChatControllerCommandControlsTest {
             }
           },
           cacheScope = { cacheScope },
-        )
+        ) { _, _ -> error("gateway-bound request expected") }
 
       controller.refreshCommands()
       runCurrent()
@@ -221,26 +165,16 @@ class ChatControllerCommandControlsTest {
       )
     }
 
-  @OptIn(ExperimentalCoroutinesApi::class)
   @Test
   fun startNewChatCreatesWriteScopedSessionAndReloadsHistory() =
     runTest {
-      val requests = mutableListOf<Pair<String, String?>>()
-      val controller =
-        ChatController(
-          scope = this,
-          json = json,
-          requestGateway = { method, paramsJson ->
-            requests += method to paramsJson
-            when (method) {
-              "sessions.create" -> """{"ok":true,"key":"agent:main:dashboard:fresh"}"""
-              "chat.history" -> """{"sessionId":"fresh-session","messages":[]}"""
-              "health" -> "{}"
-              "sessions.list" -> """{"sessions":[]}"""
-              else -> "{}"
-            }
-          },
-        )
+      val (controller, requests) =
+        chatControllerTestSetup {
+          respond("sessions.create", """{"ok":true,"key":"agent:main:dashboard:fresh"}""")
+          respond("chat.history", """{"sessionId":"fresh-session","messages":[]}""")
+          respond("health", "{}")
+          respond("sessions.list", """{"sessions":[]}""")
+        }
       controller.handleGatewayEvent("health", null)
       controller.load("main")
       advanceUntilIdle()
@@ -259,39 +193,29 @@ class ChatControllerCommandControlsTest {
       assertTrue(requests.any { it.first == "sessions.list" })
     }
 
-  @OptIn(ExperimentalCoroutinesApi::class)
   @Test
   fun startNewChatRetriesWithoutParentLifecycleAgainstOlderGateway() =
     runTest {
-      val requests = mutableListOf<Pair<String, String?>>()
       var createCalls = 0
-      val controller =
-        ChatController(
-          scope = this,
-          json = json,
-          requestGateway = { method, paramsJson ->
-            requests += method to paramsJson
-            when (method) {
-              "sessions.create" -> {
-                createCalls += 1
-                if (createCalls == 1) {
-                  throw GatewayRequestRejected(
-                    GatewaySession.ErrorShape(
-                      code = "INVALID_REQUEST",
-                      message =
-                        "invalid sessions.create params: at root: unexpected property 'succeedsParent'",
-                    ),
-                  )
-                }
-                """{"ok":true,"key":"agent:main:dashboard:fresh"}"""
-              }
-              "chat.history" -> """{"sessionId":"fresh-session","messages":[]}"""
-              "health" -> "{}"
-              "sessions.list" -> """{"sessions":[]}"""
-              else -> "{}"
+      val (controller, requests) =
+        chatControllerTestSetup {
+          respond("sessions.create") { paramsJson ->
+            createCalls += 1
+            if (createCalls == 1) {
+              throw GatewayRequestRejected(
+                GatewaySession.ErrorShape(
+                  code = "INVALID_REQUEST",
+                  message =
+                    "invalid sessions.create params: at root: unexpected property 'succeedsParent'",
+                ),
+              )
             }
-          },
-        )
+            """{"ok":true,"key":"agent:main:dashboard:fresh"}"""
+          }
+          respond("chat.history", """{"sessionId":"fresh-session","messages":[]}""")
+          respond("health", "{}")
+          respond("sessions.list", """{"sessions":[]}""")
+        }
       controller.handleGatewayEvent("health", null)
       controller.load("main")
       advanceUntilIdle()
@@ -309,26 +233,16 @@ class ChatControllerCommandControlsTest {
       assertEquals("agent:main:dashboard:fresh", controller.sessionKey.value)
     }
 
-  @OptIn(ExperimentalCoroutinesApi::class)
   @Test
   fun startNewChatInWorktreeIncludesWorktreeFlag() =
     runTest {
-      val requests = mutableListOf<Pair<String, String?>>()
-      val controller =
-        ChatController(
-          scope = this,
-          json = json,
-          requestGateway = { method, paramsJson ->
-            requests += method to paramsJson
-            when (method) {
-              "sessions.create" -> """{"ok":true,"key":"agent:main:dashboard:worktree"}"""
-              "chat.history" -> """{"sessionId":"worktree-session","messages":[]}"""
-              "health" -> "{}"
-              "sessions.list" -> """{"sessions":[]}"""
-              else -> "{}"
-            }
-          },
-        )
+      val (controller, requests) =
+        chatControllerTestSetup {
+          respond("sessions.create", """{"ok":true,"key":"agent:main:dashboard:worktree"}""")
+          respond("chat.history", """{"sessionId":"worktree-session","messages":[]}""")
+          respond("health", "{}")
+          respond("sessions.list", """{"sessions":[]}""")
+        }
       controller.handleGatewayEvent("health", null)
       controller.load("main")
       advanceUntilIdle()
@@ -342,24 +256,16 @@ class ChatControllerCommandControlsTest {
   @Test
   fun sessionMutationsSendGatewayContractsAndRefresh() =
     runTest {
-      val requests = mutableListOf<Pair<String, String?>>()
-      val controller =
-        ChatController(
-          scope = this,
-          json = json,
-          requestGateway = { method, paramsJson ->
-            requests += method to paramsJson
-            when (method) {
-              "sessions.list" -> """{"sessions":[]}"""
-              "sessions.delete" -> """{"deleted":true}"""
-              else -> "{}"
-            }
-          },
-        )
+      val (controller, requests) =
+        chatControllerTestSetup {
+          respond("sessions.list", """{"sessions":[]}""")
+          respond("sessions.delete", """{"deleted":true}""")
+        }
 
       controller.patchSession(
         key = "main",
         ownerAgentId = "owner-a",
+        expectedSessionId = "session-main",
         clearLabel = true,
         clearCategory = true,
         pinned = true,
@@ -371,6 +277,7 @@ class ChatControllerCommandControlsTest {
       val patch = requests.first { it.first == "sessions.patch" }.second.orEmpty()
       assertTrue(patch.contains("\"key\":\"main\""))
       assertTrue(patch.contains("\"agentId\":\"owner-a\""))
+      assertTrue(patch.contains("\"expectedSessionId\":\"session-main\""))
       assertTrue(patch.contains("\"label\":null"))
       assertTrue(patch.contains("\"category\":null"))
       assertTrue(patch.contains("\"pinned\":true"))
@@ -384,26 +291,68 @@ class ChatControllerCommandControlsTest {
     }
 
   @Test
-  fun renameSessionGroupPatchesEveryMemberIncludingArchivedOnlyOnes() =
+  fun archiveUsesObservedIdentityAndArchiveDeadline() =
     runTest {
-      val requests = mutableListOf<Pair<String, String?>>()
+      var archiveParams: String? = null
+      var archiveTimeoutMs: Long? = null
       val controller =
         ChatController(
           scope = this,
           json = json,
-          requestGateway = { method, paramsJson ->
-            requests += method to paramsJson
-            when (method) {
-              "sessions.list" ->
-                if (paramsJson.orEmpty().contains("\"archived\":true")) {
-                  """{"sessions":[{"key":"agent:main:active","category":"Work"},{"key":"agent:main:archived","category":" Work "}]}"""
-                } else {
-                  """{"sessions":[{"key":"agent:main:active","category":"Work"},{"key":"agent:main:other","category":"Play"}]}"""
-                }
-              else -> "{}"
-            }
+          requestGateway = { method, _ ->
+            if (method == "sessions.list") """{"sessions":[]}""" else "{}"
+          },
+          requestGatewayWithTimeout = { method, paramsJson, timeoutMs ->
+            assertEquals("sessions.patch", method)
+            archiveParams = paramsJson
+            archiveTimeoutMs = timeoutMs
+            "{}"
           },
         )
+
+      assertTrue(
+        controller.patchSession(
+          key = "agent:main:side",
+          expectedSessionId = "session-side",
+          archived = true,
+        ),
+      )
+
+      assertTrue(archiveParams.orEmpty().contains("\"expectedSessionId\":\"session-side\""))
+      assertEquals(10 * 60_000L, archiveTimeoutMs)
+    }
+
+  @Test
+  fun archiveWithoutObservedIdentityDoesNotDispatch() =
+    runTest {
+      val requests = mutableListOf<String>()
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            requests += method
+            "{}"
+          },
+        )
+
+      assertFalse(controller.patchSession(key = "agent:main:cached", archived = true))
+      assertFalse(requests.contains("sessions.patch"))
+    }
+
+  @Test
+  fun renameSessionGroupPatchesEveryMemberIncludingArchivedOnlyOnes() =
+    runTest {
+      val (controller, requests) =
+        chatControllerTestSetup {
+          respond("sessions.list") { paramsJson ->
+            if (paramsJson.orEmpty().contains("\"archived\":true")) {
+              """{"sessions":[{"key":"agent:main:active","category":"Work"},{"key":"agent:main:archived","category":" Work "}]}"""
+            } else {
+              """{"sessions":[{"key":"agent:main:active","category":"Work"},{"key":"agent:main:other","category":"Play"}]}"""
+            }
+          }
+        }
 
       controller.renameSessionGroup(from = "Work", to = "Focus")
 
@@ -424,29 +373,21 @@ class ChatControllerCommandControlsTest {
   @Test
   fun dissolveSessionGroupClearsCategoriesBestEffort() =
     runTest {
-      val requests = mutableListOf<Pair<String, String?>>()
       var patchCount = 0
-      val controller =
-        ChatController(
-          scope = this,
-          json = json,
-          requestGateway = { method, paramsJson ->
-            requests += method to paramsJson
-            when (method) {
-              "sessions.list" ->
-                if (paramsJson.orEmpty().contains("\"archived\":true")) {
-                  """{"sessions":[{"key":"agent:main:archived","category":"Work"}]}"""
-                } else {
-                  """{"sessions":[{"key":"agent:main:a","category":"Work"},{"key":"agent:main:b","category":"Work"}]}"""
-                }
-              "sessions.patch" -> {
-                patchCount += 1
-                if (patchCount == 1) throw RuntimeException("offline") else "{}"
-              }
-              else -> "{}"
+      val (controller, requests) =
+        chatControllerTestSetup {
+          respond("sessions.list") { paramsJson ->
+            if (paramsJson.orEmpty().contains("\"archived\":true")) {
+              """{"sessions":[{"key":"agent:main:archived","category":"Work"}]}"""
+            } else {
+              """{"sessions":[{"key":"agent:main:a","category":"Work"},{"key":"agent:main:b","category":"Work"}]}"""
             }
-          },
-        )
+          }
+          respond("sessions.patch") { paramsJson ->
+            patchCount += 1
+            if (patchCount == 1) throw RuntimeException("offline") else "{}"
+          }
+        }
 
       controller.dissolveSessionGroup("Work")
 
@@ -460,20 +401,11 @@ class ChatControllerCommandControlsTest {
   @Test
   fun forkSessionReturnsCreatedKeyAndRefreshesActiveSessions() =
     runTest {
-      val requests = mutableListOf<Pair<String, String?>>()
-      val controller =
-        ChatController(
-          scope = this,
-          json = json,
-          requestGateway = { method, paramsJson ->
-            requests += method to paramsJson
-            when (method) {
-              "sessions.create" -> """{"session":{"key":"agent:main:forked"}}"""
-              "sessions.list" -> """{"sessions":[]}"""
-              else -> "{}"
-            }
-          },
-        )
+      val (controller, requests) =
+        chatControllerTestSetup {
+          respond("sessions.create", """{"session":{"key":"agent:main:forked"}}""")
+          respond("sessions.list", """{"sessions":[]}""")
+        }
 
       val key = controller.forkSession("main")
 
@@ -481,6 +413,7 @@ class ChatControllerCommandControlsTest {
       val create = requests.first { it.first == "sessions.create" }.second.orEmpty()
       assertTrue(create.contains("\"parentSessionKey\":\"main\""))
       assertTrue(create.contains("\"fork\":true"))
+      assertFalse(create.contains("\"forkFrom\""))
       // The active unqualified parent keeps the captured default-agent owner.
       assertTrue(create.contains("\"agentId\":\"main\""))
 
@@ -495,6 +428,10 @@ class ChatControllerCommandControlsTest {
       val capturedOwnerCreate = requests.last { it.first == "sessions.create" }.second.orEmpty()
       assertTrue(capturedOwnerCreate.contains("\"parentSessionKey\":\"custom\""))
       assertTrue(capturedOwnerCreate.contains("\"agentId\":\"owner-a\""))
+
+      controller.forkSession("main", fromLastCompleted = true)
+      val activeCreate = requests.last { it.first == "sessions.create" }.second.orEmpty()
+      assertTrue(activeCreate.contains("\"forkFrom\":\"last-completed\""))
       assertTrue(requests.any { it.first == "sessions.list" })
       assertEquals(
         false,
@@ -506,23 +443,16 @@ class ChatControllerCommandControlsTest {
       )
     }
 
-  @OptIn(ExperimentalCoroutinesApi::class)
   @Test
   fun archivedSessionListAndOpenUnreadSessionUsePatchContracts() =
     runTest {
-      val requests = mutableListOf<Pair<String, String?>>()
-      val controller =
-        ChatController(
-          scope = this,
-          json = json,
-          requestGateway = { method, paramsJson ->
-            requests += method to paramsJson
-            when (method) {
-              "sessions.list" -> """{"sessions":[{"key":"main","unread":true}]}"""
-              else -> "{}"
-            }
-          },
-        )
+      val (controller, requests) =
+        chatControllerTestSetup {
+          respond(
+            "sessions.list",
+            """{"sessions":[{"key":"main","sessionId":"session-main","unread":true}]}""",
+          )
+        }
 
       controller.refreshSessions(archived = true)
       advanceUntilIdle()
@@ -532,6 +462,12 @@ class ChatControllerCommandControlsTest {
           .second
           .orEmpty()
           .contains("\"archived\":true"),
+      )
+      assertEquals(
+        "session-main",
+        controller.sessions.value
+          .single()
+          .sessionId,
       )
 
       controller.switchSession("main")
@@ -544,21 +480,13 @@ class ChatControllerCommandControlsTest {
       assertTrue(patch.contains("\"unread\":false"))
     }
 
-  @OptIn(ExperimentalCoroutinesApi::class)
   @Test
   fun sessionEventsApplyExplicitLabelAndCategoryClears() =
     runTest {
       val controller =
-        ChatController(
-          scope = this,
-          json = json,
-          requestGateway = { method, _ ->
-            when (method) {
-              "sessions.list" -> """{"sessions":[{"key":"main","label":"Named","category":"Work"}]}"""
-              else -> "{}"
-            }
-          },
-        )
+        createScriptedChatController {
+          respond("sessions.list", """{"sessions":[{"key":"main","label":"Named","category":"Work"}]}""")
+        }
 
       controller.refreshSessions()
       advanceUntilIdle()
@@ -580,25 +508,17 @@ class ChatControllerCommandControlsTest {
       assertEquals(null, merged.category)
     }
 
-  @OptIn(ExperimentalCoroutinesApi::class)
   @Test
   fun failedReadAcknowledgementUnlatchesForRetry() =
     runTest {
-      val requests = mutableListOf<Pair<String, String?>>()
       var failPatches = true
-      val controller =
-        ChatController(
-          scope = this,
-          json = json,
-          requestGateway = { method, paramsJson ->
-            requests += method to paramsJson
-            when (method) {
-              "sessions.patch" -> if (failPatches) throw RuntimeException("offline") else "{}"
-              "sessions.list" -> """{"sessions":[{"key":"main","unread":true}]}"""
-              else -> "{}"
-            }
-          },
-        )
+      val (controller, requests) =
+        chatControllerTestSetup {
+          respond("sessions.patch") { paramsJson ->
+            if (failPatches) throw RuntimeException("offline") else "{}"
+          }
+          respond("sessions.list", """{"sessions":[{"key":"main","unread":true}]}""")
+        }
 
       controller.refreshSessions()
       advanceUntilIdle()
@@ -616,30 +536,24 @@ class ChatControllerCommandControlsTest {
       assertEquals(2, requests.count { it.first == "sessions.patch" })
     }
 
-  @OptIn(ExperimentalCoroutinesApi::class)
   @Test
   fun archivingOrDeletingTheOpenSessionFallsBackToMain() =
     runTest {
-      val requests = mutableListOf<Pair<String, String?>>()
-      val controller =
-        ChatController(
-          scope = this,
-          json = json,
-          requestGateway = { method, paramsJson ->
-            requests += method to paramsJson
-            when (method) {
-              "sessions.list" -> """{"sessions":[{"key":"agent:main:side"}]}"""
-              "sessions.delete" -> """{"deleted":true}"""
-              else -> "{}"
-            }
-          },
-        )
+      val (controller, requests) =
+        chatControllerTestSetup {
+          respond("sessions.list", """{"sessions":[{"key":"agent:main:side","sessionId":"session-side"}]}""")
+          respond("sessions.delete", """{"deleted":true}""")
+        }
 
       controller.switchSession("agent:main:side")
       advanceUntilIdle()
       assertEquals("agent:main:side", controller.sessionKey.value)
 
-      controller.patchSession(key = "agent:main:side", archived = true)
+      controller.patchSession(
+        key = "agent:main:side",
+        expectedSessionId = "session-side",
+        archived = true,
+      )
       advanceUntilIdle()
       assertEquals("main", controller.sessionKey.value)
 
@@ -650,23 +564,13 @@ class ChatControllerCommandControlsTest {
       assertEquals("main", controller.sessionKey.value)
     }
 
-  @OptIn(ExperimentalCoroutinesApi::class)
   @Test
   fun openSessionReacknowledgesUnreadOncePerEpisode() =
     runTest {
-      val requests = mutableListOf<Pair<String, String?>>()
-      val controller =
-        ChatController(
-          scope = this,
-          json = json,
-          requestGateway = { method, paramsJson ->
-            requests += method to paramsJson
-            when (method) {
-              "sessions.list" -> """{"sessions":[{"key":"main","unread":false}]}"""
-              else -> "{}"
-            }
-          },
-        )
+      val (controller, requests) =
+        chatControllerTestSetup {
+          respond("sessions.list", """{"sessions":[{"key":"main","unread":false}]}""")
+        }
 
       controller.refreshSessions()
       advanceUntilIdle()
@@ -699,22 +603,13 @@ class ChatControllerCommandControlsTest {
   @Test
   fun startNewChatWithoutLoadedParentCreatesFirstSession() =
     runTest {
-      val requests = mutableListOf<Pair<String, String?>>()
-      val controller =
-        ChatController(
-          scope = this,
-          json = json,
-          requestGateway = { method, paramsJson ->
-            requests += method to paramsJson
-            when (method) {
-              "sessions.create" -> """{"ok":true,"key":"agent:main:dashboard:first"}"""
-              "chat.history" -> """{"sessionId":"first-session","messages":[]}"""
-              "health" -> "{}"
-              "sessions.list" -> """{"sessions":[]}"""
-              else -> "{}"
-            }
-          },
-        )
+      val (controller, requests) =
+        chatControllerTestSetup {
+          respond("sessions.create", """{"ok":true,"key":"agent:main:dashboard:first"}""")
+          respond("chat.history", """{"sessionId":"first-session","messages":[]}""")
+          respond("health", "{}")
+          respond("sessions.list", """{"sessions":[]}""")
+        }
       controller.handleGatewayEvent("health", null)
 
       assertTrue(controller.startNewChatAwait())
@@ -726,34 +621,25 @@ class ChatControllerCommandControlsTest {
       assertEquals("agent:main:dashboard:first", controller.sessionKey.value)
     }
 
-  @OptIn(ExperimentalCoroutinesApi::class)
   @Test
   fun startNewChatUsesNextAvailableNewChatLabel() =
     runTest {
-      val requests = mutableListOf<Pair<String, String?>>()
-      val controller =
-        ChatController(
-          scope = this,
-          json = json,
-          requestGateway = { method, paramsJson ->
-            requests += method to paramsJson
-            when (method) {
-              "sessions.create" -> """{"ok":true,"key":"agent:main:dashboard:fresh-3"}"""
-              "chat.history" -> """{"sessionId":"fresh-session-3","messages":[]}"""
-              "health" -> "{}"
-              "sessions.list" ->
-                """
-                {
-                  "sessions": [
-                    {"key":"agent:main:dashboard:fresh","displayName":"New chat"},
-                    {"key":"agent:main:dashboard:fresh-2","displayName":"New chat 2"}
-                  ]
-                }
-                """.trimIndent()
-              else -> "{}"
+      val (controller, requests) =
+        chatControllerTestSetup {
+          respond("sessions.create", """{"ok":true,"key":"agent:main:dashboard:fresh-3"}""")
+          respond("chat.history", """{"sessionId":"fresh-session-3","messages":[]}""")
+          respond("health", "{}")
+          respond("sessions.list") { paramsJson ->
+            """
+            {
+              "sessions": [
+                {"key":"agent:main:dashboard:fresh","displayName":"New chat"},
+                {"key":"agent:main:dashboard:fresh-2","displayName":"New chat 2"}
+              ]
             }
-          },
-        )
+            """.trimIndent()
+          }
+        }
       controller.handleGatewayEvent("health", null)
       controller.refreshSessions()
       advanceUntilIdle()
@@ -765,26 +651,16 @@ class ChatControllerCommandControlsTest {
       assertEquals("agent:main:dashboard:fresh-3", controller.sessionKey.value)
     }
 
-  @OptIn(ExperimentalCoroutinesApi::class)
   @Test
   fun startNewChatScopesCreateToActiveAgentSession() =
     runTest {
-      val requests = mutableListOf<Pair<String, String?>>()
-      val controller =
-        ChatController(
-          scope = this,
-          json = json,
-          requestGateway = { method, paramsJson ->
-            requests += method to paramsJson
-            when (method) {
-              "sessions.create" -> """{"ok":true,"key":"agent:ops:dashboard:fresh"}"""
-              "chat.history" -> """{"sessionId":"ops-session","messages":[]}"""
-              "health" -> "{}"
-              "sessions.list" -> """{"sessions":[]}"""
-              else -> "{}"
-            }
-          },
-        )
+      val (controller, requests) =
+        chatControllerTestSetup {
+          respond("sessions.create", """{"ok":true,"key":"agent:ops:dashboard:fresh"}""")
+          respond("chat.history", """{"sessionId":"ops-session","messages":[]}""")
+          respond("health", "{}")
+          respond("sessions.list", """{"sessions":[]}""")
+        }
 
       controller.switchSession("agent:ops:dashboard:parent")
       advanceUntilIdle()
@@ -800,20 +676,11 @@ class ChatControllerCommandControlsTest {
   @Test
   fun bareNewSlashCommandUsesGatewayChatCommandPath() =
     runTest {
-      val requests = mutableListOf<Pair<String, String?>>()
-      val controller =
-        ChatController(
-          scope = this,
-          json = json,
-          requestGateway = { method, paramsJson ->
-            requests += method to paramsJson
-            when (method) {
-              "chat.send" -> """{"runId":"run-new"}"""
-              "health" -> "{}"
-              else -> "{}"
-            }
-          },
-        )
+      val (controller, requests) =
+        chatControllerTestSetup {
+          respond("chat.send", """{"runId":"run-new"}""")
+          respond("health", "{}")
+        }
       controller.handleGatewayEvent("health", null)
 
       assertTrue(controller.sendMessageAwaitAcceptance("/new", "off", emptyList()))
@@ -826,20 +693,11 @@ class ChatControllerCommandControlsTest {
   @Test
   fun startNewChatRejectsWhileRunPending() =
     runTest {
-      val requests = mutableListOf<Pair<String, String?>>()
-      val controller =
-        ChatController(
-          scope = this,
-          json = json,
-          requestGateway = { method, paramsJson ->
-            requests += method to paramsJson
-            when (method) {
-              "chat.send" -> """{"runId":"run-1"}"""
-              "health" -> "{}"
-              else -> "{}"
-            }
-          },
-        )
+      val (controller, requests) =
+        chatControllerTestSetup {
+          respond("chat.send", """{"runId":"run-1"}""")
+          respond("health", "{}")
+        }
       controller.handleGatewayEvent("health", null)
 
       assertTrue(controller.sendMessageAwaitAcceptance("hello", "off", emptyList()))
@@ -848,34 +706,24 @@ class ChatControllerCommandControlsTest {
       assertTrue(requests.none { it.first == "sessions.create" })
     }
 
-  @OptIn(ExperimentalCoroutinesApi::class)
   @Test
   fun startNewChatRejectsDuplicateCreateWhileFirstRequestIsPending() =
     runTest {
-      val requests = mutableListOf<Pair<String, String?>>()
       val createEntered = CompletableDeferred<Unit>()
       val releaseCreate = CompletableDeferred<Unit>()
       var createCount = 0
-      val controller =
-        ChatController(
-          scope = this,
-          json = json,
-          requestGateway = { method, paramsJson ->
-            requests += method to paramsJson
-            when (method) {
-              "sessions.create" -> {
-                createCount += 1
-                createEntered.complete(Unit)
-                releaseCreate.await()
-                """{"ok":true,"key":"agent:main:dashboard:fresh"}"""
-              }
-              "chat.history" -> """{"sessionId":"fresh-session","messages":[]}"""
-              "health" -> "{}"
-              "sessions.list" -> """{"sessions":[]}"""
-              else -> "{}"
-            }
-          },
-        )
+      val (controller, requests) =
+        chatControllerTestSetup {
+          respond("sessions.create") { paramsJson ->
+            createCount += 1
+            createEntered.complete(Unit)
+            releaseCreate.await()
+            """{"ok":true,"key":"agent:main:dashboard:fresh"}"""
+          }
+          respond("chat.history", """{"sessionId":"fresh-session","messages":[]}""")
+          respond("health", "{}")
+          respond("sessions.list", """{"sessions":[]}""")
+        }
       controller.handleGatewayEvent("health", null)
 
       val first = async { controller.startNewChatAwait() }
@@ -891,30 +739,25 @@ class ChatControllerCommandControlsTest {
       assertEquals(1, requests.count { it.first == "sessions.create" })
     }
 
-  @OptIn(ExperimentalCoroutinesApi::class)
   @Test
   fun startNewChatIgnoresStaleCreateResponseAfterSessionSwitch() =
     runTest {
       val requests = mutableListOf<Pair<String, String?>>()
       lateinit var controller: ChatController
       controller =
-        ChatController(
-          scope = this,
-          json = json,
-          requestGateway = { method, paramsJson ->
-            requests += method to paramsJson
-            when (method) {
-              "sessions.create" -> {
-                controller.switchSession("agent:main:dashboard:other")
-                """{"ok":true,"key":"agent:main:dashboard:fresh"}"""
-              }
-              "chat.history" -> """{"sessionId":"other-session","messages":[]}"""
-              "health" -> "{}"
-              "sessions.list" -> """{"sessions":[]}"""
-              else -> "{}"
+        createChatController { method, paramsJson ->
+          requests += method to paramsJson
+          when (method) {
+            "sessions.create" -> {
+              controller.switchSession("agent:main:dashboard:other")
+              """{"ok":true,"key":"agent:main:dashboard:fresh"}"""
             }
-          },
-        )
+            "chat.history" -> """{"sessionId":"other-session","messages":[]}"""
+            "health" -> "{}"
+            "sessions.list" -> """{"sessions":[]}"""
+            else -> "{}"
+          }
+        }
       controller.handleGatewayEvent("health", null)
 
       assertEquals(false, controller.startNewChatAwait())
@@ -924,5 +767,12 @@ class ChatControllerCommandControlsTest {
       assertTrue(requests.any { it.first == "sessions.create" })
     }
 
-  private fun commandResponse(name: String): String = """{"commands":[{"name":"$name","textAliases":["/$name"],"acceptsArgs":false}]}"""
+  private fun commandResponse(
+    name: String,
+    description: String? = null,
+    acceptsArgs: Boolean = false,
+  ): String {
+    val descriptionJson = description?.let { ""","description":"$it"""" }.orEmpty()
+    return """{"commands":[{"name":"$name"$descriptionJson,"textAliases":["/$name"],"acceptsArgs":$acceptsArgs}]}"""
+  }
 }

@@ -1,6 +1,7 @@
 // Tool policy pipeline tests cover profile/allowlist filtering, diagnostics,
 // warning dedupe, and plugin-aware policy application.
 import { beforeEach, describe, expect, test, vi } from "vitest";
+import { markFrozenClawToolAllowPolicy } from "../claws/tool-policy-runtime.js";
 import { buildDeclaredToolAllowlistContext } from "./tool-policy-declared-context.js";
 import {
   applyToolPolicyPipeline,
@@ -80,6 +81,71 @@ describe("tool-policy-pipeline", () => {
     const names = filtered.map((t) => (t as unknown as DummyTool).name).toSorted();
     expect(names).toEqual(["plugin_tool"]);
   });
+
+  test("can freeze an allowlist entry against a later plugin-id collision", () => {
+    const tools = [{ name: "read" }, { name: "future_tool" }];
+    const toolMeta = (tool: DummyTool) =>
+      tool.name === "future_tool" ? { pluginId: "read" } : undefined;
+    const apply = (frozen: boolean) => {
+      const policy = { allow: ["read"] };
+      if (frozen) {
+        markFrozenClawToolAllowPolicy(policy);
+      }
+      return applyToolPolicyPipeline({
+        tools: asPolicyTools(tools),
+        toolMeta,
+        warn: () => {},
+        steps: [
+          {
+            policy,
+            label: "agent tools.allow",
+            stripPluginOnlyAllowlist: true,
+          },
+        ],
+      }).map((tool) => tool.name);
+    };
+
+    expect(apply(false)).toEqual(["future_tool"]);
+    expect(apply(true)).toEqual(["read"]);
+  });
+
+  test.each([
+    { expected: ["exec"], policy: { deny: ["canvas"] } },
+    { expected: ["canvas", "show_widget"], policy: { allow: ["canvas"] } },
+  ])("keeps promoted show_widget in the Canvas policy family ($policy)", ({ expected, policy }) => {
+    const tools = [{ name: "exec" }, { name: "show_widget" }, { name: "canvas" }];
+    const filtered = applyToolPolicyPipeline({
+      tools: asPolicyTools(tools),
+      toolMeta: (tool) => (tool.name === "canvas" ? { pluginId: "canvas" } : undefined),
+      warn: () => {},
+      steps: [{ policy, label: "tools", stripPluginOnlyAllowlist: true }],
+    });
+
+    expect(filtered.map((tool) => tool.name).toSorted()).toEqual(expected);
+  });
+
+  test.each([
+    { expected: ["exec", "show_widget"], policy: { deny: ["canvas"] } },
+    { expected: ["canvas"], policy: { allow: ["canvas"] } },
+  ])(
+    "does not apply the Canvas core alias to Discord-owned show_widget ($policy)",
+    ({ expected, policy }) => {
+      const tools = [{ name: "exec" }, { name: "show_widget" }, { name: "canvas" }];
+      const filtered = applyToolPolicyPipeline({
+        tools: asPolicyTools(tools),
+        toolMeta: (tool) => {
+          if (tool.name === "show_widget") {
+            return { pluginId: "discord" };
+          }
+          return tool.name === "canvas" ? { pluginId: "canvas" } : undefined;
+        },
+        warn: () => {},
+        steps: [{ policy, label: "tools", stripPluginOnlyAllowlist: true }],
+      });
+
+      expect(filtered.map((tool) => tool.name).toSorted()).toEqual(expected);
+    },
+  );
 
   test("warns about unknown allowlist entries", () => {
     const warnings: string[] = [];
@@ -283,14 +349,43 @@ describe("tool-policy-pipeline", () => {
     ]);
   });
 
-  test("warns when bundle MCP is denied and allowlisted", () => {
+  test.each([
+    {
+      title: "warns when bundle MCP is denied and allowlisted",
+      allowEntry: "bundle-mcp",
+      expectedUnknownEntry: "bundle-mcp",
+      expectedWarning:
+        "tools: tools.allow allowlist contains unknown entries (bundle-mcp). These entries won't match any tool unless the plugin is enabled.",
+    },
+    {
+      title: "warns when denied MCP server namespace is allowlisted",
+      allowEntry: "paperless__*",
+      expectedUnknownEntry: "paperless__*",
+      expectedWarning:
+        "tools: tools.allow allowlist contains unknown entries (paperless__*). These entries won't match any tool unless the plugin is enabled.",
+    },
+    {
+      title: "warns when broad MCP server wildcard deny covers an allowlisted namespace",
+      allowEntry: "paperless*",
+      expectedUnknownEntry: "paperless__*",
+      expectedWarning:
+        "tools: tools.allow allowlist contains unknown entries (paperless__*). These entries won't match any tool unless the plugin is enabled.",
+    },
+    {
+      title: "warns when plugin group is denied and MCP server namespace is allowlisted",
+      allowEntry: "group:plugins",
+      expectedUnknownEntry: "paperless__*",
+      expectedWarning:
+        "tools: tools.allow allowlist contains unknown entries (paperless__*). These entries won't match any tool unless the plugin is enabled.",
+    },
+  ])("$title", ({ allowEntry, expectedUnknownEntry, expectedWarning }) => {
     const warnings: string[] = [];
     const declared = buildDeclaredToolAllowlistContext({
       config: {
         mcp: { servers: { paperless: { command: "paperless-mcp" } } },
       },
       workspaceDir: process.cwd(),
-      toolDenylist: ["bundle-mcp"],
+      toolDenylist: [allowEntry],
     });
 
     applyToolPolicyPipeline({
@@ -300,74 +395,14 @@ describe("tool-policy-pipeline", () => {
       declaredToolAllowlist: declared,
       steps: [
         {
-          policy: { allow: ["bundle-mcp"] },
+          policy: { allow: [expectedUnknownEntry] },
           label: "tools.allow",
           stripPluginOnlyAllowlist: true,
         },
       ],
     });
 
-    expect(warnings).toEqual([
-      "tools: tools.allow allowlist contains unknown entries (bundle-mcp). These entries won't match any tool unless the plugin is enabled.",
-    ]);
-  });
-
-  test("warns when denied MCP server namespace is allowlisted", () => {
-    const warnings: string[] = [];
-    const declared = buildDeclaredToolAllowlistContext({
-      config: {
-        mcp: { servers: { paperless: { command: "paperless-mcp" } } },
-      },
-      workspaceDir: process.cwd(),
-      toolDenylist: ["paperless__*"],
-    });
-
-    applyToolPolicyPipeline({
-      tools: asPolicyTools([{ name: "exec" }]),
-      toolMeta: () => undefined,
-      warn: (msg) => warnings.push(msg),
-      declaredToolAllowlist: declared,
-      steps: [
-        {
-          policy: { allow: ["paperless__*"] },
-          label: "tools.allow",
-          stripPluginOnlyAllowlist: true,
-        },
-      ],
-    });
-
-    expect(warnings).toEqual([
-      "tools: tools.allow allowlist contains unknown entries (paperless__*). These entries won't match any tool unless the plugin is enabled.",
-    ]);
-  });
-
-  test("warns when broad MCP server wildcard deny covers an allowlisted namespace", () => {
-    const warnings: string[] = [];
-    const declared = buildDeclaredToolAllowlistContext({
-      config: {
-        mcp: { servers: { paperless: { command: "paperless-mcp" } } },
-      },
-      workspaceDir: process.cwd(),
-      toolDenylist: ["paperless*"],
-    });
-
-    applyToolPolicyPipeline({
-      tools: asPolicyTools([{ name: "exec" }]),
-      toolMeta: () => undefined,
-      warn: (msg) => warnings.push(msg),
-      declaredToolAllowlist: declared,
-      steps: [
-        {
-          policy: { allow: ["paperless__*"] },
-          label: "tools.allow",
-          stripPluginOnlyAllowlist: true,
-        },
-      ],
-    });
-
-    expect(warnings).toEqual([
-      "tools: tools.allow allowlist contains unknown entries (paperless__*). These entries won't match any tool unless the plugin is enabled.",
-    ]);
+    expect(warnings).toEqual([expectedWarning]);
   });
 
   test("does not warn for MCP server namespace allowlist when one exact server tool is denied", () => {
@@ -395,35 +430,6 @@ describe("tool-policy-pipeline", () => {
     });
 
     expect(warnings).toEqual([]);
-  });
-
-  test("warns when plugin group is denied and MCP server namespace is allowlisted", () => {
-    const warnings: string[] = [];
-    const declared = buildDeclaredToolAllowlistContext({
-      config: {
-        mcp: { servers: { paperless: { command: "paperless-mcp" } } },
-      },
-      workspaceDir: process.cwd(),
-      toolDenylist: ["group:plugins"],
-    });
-
-    applyToolPolicyPipeline({
-      tools: asPolicyTools([{ name: "exec" }]),
-      toolMeta: () => undefined,
-      warn: (msg) => warnings.push(msg),
-      declaredToolAllowlist: declared,
-      steps: [
-        {
-          policy: { allow: ["paperless__*"] },
-          label: "tools.allow",
-          stripPluginOnlyAllowlist: true,
-        },
-      ],
-    });
-
-    expect(warnings).toEqual([
-      "tools: tools.allow allowlist contains unknown entries (paperless__*). These entries won't match any tool unless the plugin is enabled.",
-    ]);
   });
 
   test("warns when denied duplicate-safe MCP server namespace is allowlisted", () => {
@@ -623,42 +629,13 @@ describe("tool-policy-pipeline", () => {
       ],
     });
 
-    expect(toolPolicyAuditInfo).toHaveBeenCalledWith(
+    expect(toolPolicyAuditDebug).toHaveBeenCalledWith(
       "tool policy removed 2 tool(s) via agent tools.allow: browser, write",
       {
         rule: "agent tools.allow",
         ruleKind: "allow",
         removedToolCount: 2,
         removedTools: ["browser", "write"],
-        removedToolsTruncated: false,
-      },
-    );
-    expect(toolPolicyAuditDebug).not.toHaveBeenCalled();
-  });
-
-  test("can lower removal audits for diagnostic-only policy probes", () => {
-    const tools = [{ name: "exec" }, { name: "browser" }] as unknown as DummyTool[];
-
-    applyToolPolicyPipeline({
-      tools: asPolicyTools(tools),
-      toolMeta: () => undefined,
-      warn: () => {},
-      auditLogLevel: "debug",
-      steps: [
-        {
-          policy: { allow: ["exec"] },
-          label: "doctor tools.profile (coding)",
-        },
-      ],
-    });
-
-    expect(toolPolicyAuditDebug).toHaveBeenCalledWith(
-      "tool policy removed 1 tool(s) via doctor tools.profile (coding): browser",
-      {
-        rule: "doctor tools.profile (coding)",
-        ruleKind: "allow",
-        removedToolCount: 1,
-        removedTools: ["browser"],
         removedToolsTruncated: false,
       },
     );
@@ -680,7 +657,7 @@ describe("tool-policy-pipeline", () => {
       ],
     });
 
-    expect(toolPolicyAuditInfo).toHaveBeenCalledWith(
+    expect(toolPolicyAuditDebug).toHaveBeenCalledWith(
       "tool policy removed 1 tool(s) via tools.deny: browser; matched browser",
       {
         rule: "tools.deny",
@@ -691,7 +668,7 @@ describe("tool-policy-pipeline", () => {
         removedToolsTruncated: false,
       },
     );
-    expect(toolPolicyAuditDebug).not.toHaveBeenCalled();
+    expect(toolPolicyAuditInfo).not.toHaveBeenCalled();
   });
 
   test("splits mixed allow and deny policy audit entries by cause", () => {
@@ -713,7 +690,7 @@ describe("tool-policy-pipeline", () => {
       ],
     });
 
-    expect(toolPolicyAuditInfo).toHaveBeenCalledWith(
+    expect(toolPolicyAuditDebug).toHaveBeenCalledWith(
       "tool policy removed 1 tool(s) via agents.worker.tools.deny: browser; matched browser",
       {
         rule: "agents.worker.tools.deny",
@@ -724,7 +701,7 @@ describe("tool-policy-pipeline", () => {
         removedToolsTruncated: false,
       },
     );
-    expect(toolPolicyAuditInfo).toHaveBeenCalledWith(
+    expect(toolPolicyAuditDebug).toHaveBeenCalledWith(
       "tool policy removed 1 tool(s) via agents.worker.tools.allow: write",
       {
         rule: "agents.worker.tools.allow",
@@ -734,7 +711,7 @@ describe("tool-policy-pipeline", () => {
         removedToolsTruncated: false,
       },
     );
-    expect(toolPolicyAuditDebug).not.toHaveBeenCalled();
+    expect(toolPolicyAuditInfo).not.toHaveBeenCalled();
   });
 
   test("does not audit policy steps that leave the tool surface unchanged", () => {
@@ -771,7 +748,7 @@ describe("tool-policy-pipeline", () => {
       ],
     });
 
-    expect(toolPolicyAuditInfo).toHaveBeenCalledWith(
+    expect(toolPolicyAuditDebug).toHaveBeenCalledWith(
       "tool policy removed 1 tool(s) via agents.worker\\nbad.tools.allow: exec\\nbad",
       {
         rule: "agents.worker\\nbad.tools.allow",
@@ -781,7 +758,7 @@ describe("tool-policy-pipeline", () => {
         removedToolsTruncated: false,
       },
     );
-    expect(toolPolicyAuditDebug).not.toHaveBeenCalled();
+    expect(toolPolicyAuditInfo).not.toHaveBeenCalled();
   });
 
   test("truncates audit fields without splitting surrogate pairs", () => {
@@ -801,7 +778,7 @@ describe("tool-policy-pipeline", () => {
     });
 
     const rule = `${labelPrefix}...`;
-    expect(toolPolicyAuditInfo).toHaveBeenCalledWith(
+    expect(toolPolicyAuditDebug).toHaveBeenCalledWith(
       `tool policy removed 1 tool(s) via ${rule}: exec`,
       {
         rule,

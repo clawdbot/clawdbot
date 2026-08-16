@@ -6,6 +6,7 @@ import type { ProviderConfig } from "./models-config.providers.secrets.js";
 type ResolveImplicitProvidersForModelsJson = (params: {
   agentDir: string;
   config: OpenClawConfig;
+  discoveryAuthConfig?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   workspaceDir?: string;
   explicitProviders: Record<string, ProviderConfig>;
@@ -21,6 +22,7 @@ type PlanResult = Awaited<
 >;
 type ResolveProvidersParams = {
   cfg: OpenClawConfig;
+  discoveryAuthConfig?: OpenClawConfig;
   agentDir: string;
   env: NodeJS.ProcessEnv;
   workspaceDir?: string;

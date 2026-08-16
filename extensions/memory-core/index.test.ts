@@ -10,8 +10,10 @@ import { buildPromptSection } from "./src/prompt-section.js";
 
 const closeMemorySearchManagerMock = vi.hoisted(() => vi.fn(async () => {}));
 const getMemorySearchManagerMock = vi.hoisted(() => vi.fn(async () => null));
+const authorizeSearchHitsMock = vi.hoisted(() => vi.fn(async ({ hits }) => hits));
 const createMemoryRuntimeMock = vi.hoisted(() =>
   vi.fn((_host: MemoryCoreRuntimeHost = {}) => ({
+    authorizeSearchHits: authorizeSearchHitsMock,
     closeAllMemorySearchManagers: vi.fn(async () => {}),
     closeMemorySearchManager: closeMemorySearchManagerMock,
     getMemorySearchManager: getMemorySearchManagerMock,
@@ -34,7 +36,6 @@ const hostRuntime = {
     acquireLocalService: async () => undefined,
   },
   state: {
-    withLease: vi.fn(),
     openKeyedStore: vi.fn(() => ({
       lookup: vi.fn(),
       register: vi.fn(),
@@ -127,6 +128,83 @@ describe("memory-core plugin runtime registration", () => {
     expect(command?.description).toContain("Enable or disable");
   });
 
+  it("registers the standing-intent tool and deterministic prompt hook", () => {
+    const toolNames: string[] = [];
+    const hooks: string[] = [];
+    const subagentRun = vi.fn();
+    plugin.register(
+      createTestPluginApi({
+        runtime: { ...hostRuntime, subagent: { run: subagentRun } } as never,
+        registerTool(_factory, options?: Parameters<OpenClawPluginApi["registerTool"]>[1]) {
+          toolNames.push(...(options?.names ?? []));
+        },
+        on(hookName) {
+          hooks.push(hookName);
+        },
+      }),
+    );
+
+    expect(toolNames).toContain("intent");
+    expect(hooks).toContain("before_prompt_build");
+    expect(subagentRun).not.toHaveBeenCalled();
+  });
+
+  it("scopes both reply hooks to scheduled turns across three registrations", () => {
+    for (let cycle = 1; cycle <= 3; cycle += 1) {
+      const replyHookTriggers: unknown[] = [];
+      plugin.register(
+        createTestPluginApi({
+          runtime: hostRuntime,
+          on(hookName, _handler, options) {
+            if (hookName === "before_agent_reply") {
+              replyHookTriggers.push(options?.eligibleTriggers);
+            }
+          },
+        }),
+      );
+
+      expect(replyHookTriggers, `cycle ${cycle}`).toEqual([
+        ["heartbeat", "cron"],
+        ["heartbeat", "cron"],
+      ]);
+    }
+  });
+
+  it("hides intent create, list, and cancel from non-owner turns", () => {
+    let intentFactory:
+      | ((ctx: { config?: OpenClawConfig; senderIsOwner?: boolean }) => unknown)
+      | undefined;
+    plugin.register(
+      createTestPluginApi({
+        config: {},
+        runtime: hostRuntime,
+        registerTool(factory, options) {
+          if (options?.names?.includes("intent") && typeof factory === "function") {
+            intentFactory = factory as typeof intentFactory;
+          }
+        },
+      }),
+    );
+    if (!intentFactory) {
+      throw new Error("expected standing-intent tool factory");
+    }
+
+    expect(intentFactory({ config: {}, senderIsOwner: false })).toBeNull();
+    expect(intentFactory({ config: {} })).toBeNull();
+    expect(intentFactory({ config: {}, senderIsOwner: true })).toMatchObject({ name: "intent" });
+  });
+
+  it("keeps memory manager initialization demand-driven", () => {
+    plugin.register(
+      createTestPluginApi({
+        runtime: hostRuntime,
+      }),
+    );
+
+    expect(createMemoryRuntimeMock).not.toHaveBeenCalled();
+    expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
+  });
+
   it("wires scoped memory search cleanup through the lazy runtime", async () => {
     const runtime = registerMemoryCoreRuntime();
     const cfg = {} as OpenClawConfig;
@@ -143,19 +221,99 @@ describe("memory-core plugin runtime registration", () => {
     await runtime.getMemorySearchManager({ cfg, agentId: "main" });
 
     expect(createMemoryRuntimeMock).toHaveBeenCalledWith({
-      acquireLocalService: hostRuntime.llm.acquireLocalService,
-      withLease: expect.any(Function),
+      acquireLocalService: expect.any(Function),
+      openKeyedStore: expect.any(Function),
     });
   });
 
-  it("binds the host SQLite lease hook to tools and CLI runtime", async () => {
+  it("defers nested host runtime access until the injected operation runs", async () => {
+    const acquireLocalService = vi.fn(async () => undefined);
+    const openKeyedStore = vi.fn(() => ({}));
+    const llmGetter = vi.fn(() => ({ acquireLocalService }));
+    const stateGetter = vi.fn(() => ({ openKeyedStore }));
+    const host = Object.defineProperties(
+      {},
+      {
+        llm: { configurable: true, enumerable: true, get: llmGetter },
+        state: { configurable: true, enumerable: true, get: stateGetter },
+      },
+    ) as OpenClawPluginApi["runtime"];
+    let runtime: MemoryPluginRuntime | undefined;
+
+    plugin.register(
+      createTestPluginApi({
+        runtime: host,
+        registerMemoryCapability(capability) {
+          runtime = capability.runtime;
+        },
+      }),
+    );
+
+    expect(llmGetter).not.toHaveBeenCalled();
+    expect(stateGetter).not.toHaveBeenCalled();
+    await runtime?.getMemorySearchManager({ cfg: {}, agentId: "main" });
+    const injectedHost = createMemoryRuntimeMock.mock.calls.at(-1)?.[0];
+    if (!injectedHost?.acquireLocalService || !injectedHost.openKeyedStore) {
+      throw new Error("expected memory-core host operations");
+    }
+
+    const target = { providerId: "local", baseUrl: "http://127.0.0.1:11434" };
+    await injectedHost.acquireLocalService(target);
+    const storeOptions = { namespace: "lazy-host", maxEntries: 1 };
+    injectedHost.openKeyedStore(storeOptions);
+
+    expect(llmGetter).toHaveBeenCalledOnce();
+    expect(acquireLocalService).toHaveBeenCalledWith(target);
+    expect(stateGetter).toHaveBeenCalledOnce();
+    expect(openKeyedStore).toHaveBeenCalledWith(storeOptions);
+  });
+
+  it("forwards search-hit authorization through the registered memory runtime", async () => {
+    const runtime = registerMemoryCoreRuntime();
+    const cfg = {} as OpenClawConfig;
+    const hits = [
+      {
+        source: "sessions" as const,
+        path: "sessions/private.jsonl",
+        startLine: 1,
+        endLine: 1,
+        score: 1,
+        snippet: "private",
+      },
+    ];
+
+    await expect(
+      runtime.authorizeSearchHits?.({
+        cfg,
+        agentId: "main",
+        requesterSessionKey: "agent:main:voice:15550001234",
+        sandboxed: false,
+        hits,
+      }),
+    ).resolves.toEqual(hits);
+    expect(authorizeSearchHitsMock).toHaveBeenCalledWith({
+      cfg,
+      agentId: "main",
+      requesterSessionKey: "agent:main:voice:15550001234",
+      sandboxed: false,
+      hits,
+    });
+    expect(createMemoryRuntimeMock).toHaveBeenCalledWith({
+      acquireLocalService: expect.any(Function),
+      openKeyedStore: expect.any(Function),
+    });
+  });
+
+  it("binds the host SQLite state hook to tools and CLI runtime", async () => {
     const runtime = registerMemoryCoreRuntime();
     const cfg = {} as OpenClawConfig;
 
     await runtime.getMemorySearchManager({ cfg, agentId: "main" });
 
     const host = createMemoryRuntimeMock.mock.calls.at(-1)?.[0];
-    expect(host?.withLease).toEqual(expect.any(Function));
+    const storeOptions = { namespace: "cli-status-regression", maxEntries: 1 };
+    host?.openKeyedStore?.(storeOptions);
+    expect(hostRuntime.state.openKeyedStore).toHaveBeenCalledWith(storeOptions);
   });
 });
 
@@ -171,20 +329,7 @@ describe("buildMemoryFlushPlan", () => {
 
   it("replaces YYYY-MM-DD using user timezone and appends current time", () => {
     const plan = buildMemoryFlushPlan({
-      cfg: {
-        ...cfg,
-        agents: {
-          ...cfg.agents,
-          defaults: {
-            ...cfg.agents?.defaults,
-            compaction: {
-              memoryFlush: {
-                prompt: "Store durable notes in memory/YYYY-MM-DD.md",
-              },
-            },
-          },
-        },
-      },
+      cfg,
       nowMs: Date.UTC(2026, 1, 16, 15, 0, 0),
     });
 
@@ -196,26 +341,12 @@ describe("buildMemoryFlushPlan", () => {
     expect(plan?.relativePath).toBe("memory/2026-02-16.md");
   });
 
-  it("does not append a duplicate current time line", () => {
+  it("appends one current time line to the built-in prompt", () => {
     const plan = buildMemoryFlushPlan({
-      cfg: {
-        ...cfg,
-        agents: {
-          ...cfg.agents,
-          defaults: {
-            ...cfg.agents?.defaults,
-            compaction: {
-              memoryFlush: {
-                prompt: "Store notes.\nCurrent time: already present",
-              },
-            },
-          },
-        },
-      },
+      cfg,
       nowMs: Date.UTC(2026, 1, 16, 15, 0, 0),
     });
 
-    expect(plan?.prompt).toContain("Current time: already present");
     expect((plan?.prompt.match(/Current time:/g) ?? []).length).toBe(1);
   });
 
@@ -264,7 +395,6 @@ describe("buildMemoryFlushPlan", () => {
         agents: {
           defaults: {
             compaction: {
-              reserveTokensFloor: Number.NaN,
               memoryFlush: {
                 softThresholdTokens: -100,
               },
@@ -276,7 +406,6 @@ describe("buildMemoryFlushPlan", () => {
 
     expect(plan?.softThresholdTokens).toBe(4000);
     expect(plan?.forceFlushTranscriptBytes).toBe(2 * 1024 * 1024);
-    expect(plan?.reserveTokensFloor).toBe(20_000);
   });
 
   it("parses forceFlushTranscriptBytes from byte-size strings", () => {

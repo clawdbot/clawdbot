@@ -569,7 +569,8 @@ describe("qa-otel-smoke receiver bounds", () => {
       stopDockerContainer,
       waitForLocalPort: async () => {},
       writeFile: async (_path, config) => {
-        writtenConfig = String(config);
+        writtenConfig =
+          typeof config === "string" ? config : Buffer.from(config as Uint8Array).toString("utf8");
       },
     });
 

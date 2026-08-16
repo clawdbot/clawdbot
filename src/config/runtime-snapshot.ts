@@ -1,5 +1,6 @@
 // Produces redacted runtime config snapshots for diagnostics and UI surfaces.
 import { sha256Base64Url } from "../infra/crypto-digest.js";
+import { clearExecutablePathCache } from "../infra/executable-path.js";
 import {
   resetPublishedConfigRuntimeEnv,
   type PreparedConfigRuntimeEnv,
@@ -118,6 +119,7 @@ const managedRuntimeConfigWriteOwners = new Map<
   Set<{ id: symbol; preflight?: ManagedRuntimeConfigWritePreflight }>
 >();
 const runtimeConfigWriteListeners = new Set<(event: RuntimeConfigWriteNotification) => void>();
+const runtimeConfigSnapshotPreparers = new Set<(config: OpenClawConfig) => void>();
 
 function stableConfigStringify(value: unknown): string {
   if (value === null || typeof value !== "object") {
@@ -165,9 +167,23 @@ export function setRuntimeConfigSnapshot(
   config: OpenClawConfig,
   sourceConfig?: OpenClawConfig,
 ): void {
+  for (const prepare of runtimeConfigSnapshotPreparers) {
+    prepare(config);
+  }
+  clearExecutablePathCache();
   runtimeConfigSnapshot = config;
   runtimeConfigSourceSnapshot = sourceConfig ?? null;
   runtimeConfigSnapshotMetadata = createRuntimeConfigSnapshotMetadata(config, sourceConfig);
+}
+
+export function registerRuntimeConfigSnapshotPreparer(
+  prepare: (config: OpenClawConfig) => void,
+): () => void {
+  runtimeConfigSnapshotPreparers.add(prepare);
+  if (runtimeConfigSnapshot) {
+    prepare(runtimeConfigSnapshot);
+  }
+  return () => runtimeConfigSnapshotPreparers.delete(prepare);
 }
 
 export function setAppliedRuntimeConfigSnapshot(
@@ -178,7 +194,24 @@ export function setAppliedRuntimeConfigSnapshot(
   runtimeConfigAppliedHash = hashRuntimeConfigValue(sourceConfig);
 }
 
+/** Publish a newer canonical source without changing the active runtime object. */
+export function setRuntimeConfigSourceSnapshotIfCurrent(params: {
+  expectedRevision: number;
+  sourceConfig: OpenClawConfig;
+}): boolean {
+  if (
+    !runtimeConfigSnapshot ||
+    !runtimeConfigSnapshotMetadata ||
+    runtimeConfigSnapshotMetadata.revision !== params.expectedRevision
+  ) {
+    return false;
+  }
+  setRuntimeConfigSnapshot(runtimeConfigSnapshot, params.sourceConfig);
+  return true;
+}
+
 export function resetConfigRuntimeState(): void {
+  clearExecutablePathCache();
   runtimeConfigSnapshot = null;
   runtimeConfigSourceSnapshot = null;
   runtimeConfigSnapshotMetadata = null;

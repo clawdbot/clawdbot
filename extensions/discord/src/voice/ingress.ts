@@ -106,6 +106,7 @@ export async function resolveDiscordVoiceIngressContext(params: {
 
 export async function runDiscordVoiceAgentTurn(params: {
   entry: VoiceSessionEntry;
+  accountId: string;
   userId: string;
   message: string;
   cfg: OpenClawConfig;
@@ -139,6 +140,7 @@ export async function runDiscordVoiceAgentTurn(params: {
       agentId: params.entry.route.agentId,
       messageChannel: "discord",
       messageProvider: DISCORD_VOICE_MESSAGE_PROVIDER,
+      accountId: params.accountId,
       extraSystemPrompt: context.extraSystemPrompt,
       senderIsOwner: context.senderIsOwner,
       allowModelOverride: Boolean(voiceModel),

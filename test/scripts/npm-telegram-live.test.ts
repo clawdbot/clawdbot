@@ -1,16 +1,18 @@
 // Npm Telegram Live tests cover npm telegram live script behavior.
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { testing } from "../../scripts/e2e/npm-telegram-live-runner.ts";
+import { privateLocalOnlyPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mts";
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DOCKER_SCRIPT_PATH = path.resolve(TEST_DIR, "../../scripts/e2e/npm-telegram-live-docker.sh");
 const PREPARE_PACKAGE_PATH = path.resolve(
   TEST_DIR,
-  "../../scripts/e2e/lib/npm-telegram-live/prepare-package.mjs",
+  "../../scripts/e2e/lib/npm-telegram-live/prepare-package.mts",
 );
 const tempRoots: string[] = [];
 
@@ -50,7 +52,7 @@ describe("package Telegram live Docker E2E", () => {
   it("installs the package candidate before forwarding runtime secrets", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
     const installRunStart = script.indexOf('echo "Running package Telegram live Docker E2E');
-    const installRunEnd = script.indexOf("# Mount only QA harness source");
+    const installRunEnd = script.indexOf("# Mount the trusted current-source QA harness");
     const installRun = script.slice(installRunStart, installRunEnd);
 
     expect(installRunStart).toBeGreaterThanOrEqual(0);
@@ -94,7 +96,7 @@ describe("package Telegram live Docker E2E", () => {
 
   it("bounds installed-package hot path OpenClaw commands", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
-    const runtimeRunStart = script.indexOf("# Mount only QA harness source");
+    const runtimeRunStart = script.indexOf("# Mount the trusted current-source QA harness");
     const runtimeRun = script.slice(runtimeRunStart);
 
     expect(runtimeRunStart).toBeGreaterThanOrEqual(0);
@@ -102,15 +104,19 @@ describe("package Telegram live Docker E2E", () => {
       '-e OPENCLAW_E2E_COMMAND_TIMEOUT="${OPENCLAW_E2E_COMMAND_TIMEOUT:-300s}"',
     );
     expect(runtimeRun).toContain("source scripts/lib/openclaw-e2e-instance.sh");
-    expect(runtimeRun).toContain("openclaw_e2e_run_command openclaw --version");
-    expect(runtimeRun).toContain("openclaw_e2e_run_command openclaw onboard");
+    expect(runtimeRun).toContain('sut_command="/npm-global/bin/openclaw"');
+    expect(runtimeRun).toContain('openclaw_e2e_run_command "$sut_command" --version');
+    expect(runtimeRun).toContain('openclaw_e2e_run_command "$sut_command" onboard');
     expect(runtimeRun).toContain(
-      'OPENAI_API_KEY="$hotpath_model_value" openclaw_e2e_run_command openclaw onboard',
+      'OPENAI_API_KEY="$hotpath_model_value" openclaw_e2e_run_command "$sut_command" onboard',
     );
     expect(runtimeRun).not.toContain("export OPENAI_API_KEY=");
-    expect(runtimeRun).toContain("openclaw_e2e_run_command openclaw channels add");
-    expect(runtimeRun).toContain("openclaw_e2e_run_command openclaw doctor --fix");
-    expect(runtimeRun).toContain("openclaw_e2e_run_command openclaw doctor --non-interactive");
+    expect(runtimeRun).toContain('openclaw_e2e_run_command "$sut_command" channels add');
+    expect(runtimeRun).toContain('openclaw_e2e_run_command "$sut_command" doctor --fix');
+    expect(runtimeRun).toContain(
+      'openclaw_e2e_run_command "$sut_command" doctor --non-interactive',
+    );
+    expect(runtimeRun).toContain('export OPENCLAW_NPM_TELEGRAM_SUT_COMMAND="$sut_command"');
     expect(runtimeRun).toContain('openclaw_e2e_print_log "$file"');
     expect(runtimeRun).not.toContain("sed -n '1,220p'");
     expect(runtimeRun).not.toMatch(/^\s*openclaw (onboard|channels add|doctor )/mu);
@@ -163,7 +169,7 @@ describe("package Telegram live Docker E2E", () => {
     expect(script).toContain('package_install_source="openclaw@$(read_package_version');
     expect(script).toContain('-v "$resolved_package_dir:/package-under-test:ro"');
     expect(script).toContain(
-      '-v "$ROOT_DIR/scripts/e2e/lib/bounded-response-text.mjs:/tmp/openclaw-e2e/lib/bounded-response-text.mjs:ro"',
+      '-v "$ROOT_DIR/scripts/lib/bounded-response.mjs:/tmp/lib/bounded-response.mjs:ro"',
     );
     expect(script).toContain(
       '-v "$ROOT_DIR/scripts/e2e/lib/plugins/npm-registry-server.mjs:/tmp/openclaw-e2e/lib/plugins/npm-registry-server.mjs:ro"',
@@ -214,8 +220,11 @@ describe("package Telegram live Docker E2E", () => {
   it("keeps the installed OpenClaw command as the package SUT", async () => {
     const prefix = mkTempRoot();
     const command = path.join(prefix, "bin", "openclaw");
+    const harnessCommand = path.join(mkTempRoot(), "bin", "openclaw");
     mkdirSync(path.dirname(command), { recursive: true });
-    writeFileSync(command, "#!/bin/sh\n");
+    mkdirSync(path.dirname(harnessCommand), { recursive: true });
+    writeFileSync(command, "#!/bin/sh\n", { mode: 0o755 });
+    writeFileSync(harnessCommand, "#!/bin/sh\n", { mode: 0o755 });
 
     await expect(
       testing.resolveTrustedOpenClawCommand(command, {
@@ -225,6 +234,18 @@ describe("package Telegram live Docker E2E", () => {
       executablePath: command,
       usePackagedPlugins: true,
     });
+    await expect(
+      testing.resolveTrustedOpenClawCommand(harnessCommand, {
+        NPM_CONFIG_PREFIX: prefix,
+      }),
+    ).rejects.toThrow("OPENCLAW_NPM_TELEGRAM_SUT_COMMAND must resolve inside NPM_CONFIG_PREFIX.");
+  });
+
+  it("mounts the QA taxonomy without exposing the repository root", () => {
+    const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
+
+    expect(script).toContain('-v "$ROOT_DIR/taxonomy.yaml:/app/taxonomy.yaml:ro"');
+    expect(script).not.toContain('-v "$ROOT_DIR:/app');
   });
 
   it("mounts configured output paths before entering the container", () => {
@@ -267,53 +288,69 @@ describe("package Telegram live Docker E2E", () => {
     expect(script).toContain("OPENCLAW_NPM_TELEGRAM_RTT_CHECKS");
   });
 
-  it("keeps private QA harness imports local while using the installed package dist", () => {
+  it("isolates the trusted private QA harness from the installed package candidate", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
-    const preparePackage = readFileSync(PREPARE_PACKAGE_PATH, "utf8");
-    const gatewayRpcClient = readFileSync(
-      path.resolve(TEST_DIR, "../../extensions/qa-lab/src/gateway-rpc-client.ts"),
-      "utf8",
+    expect(script).toContain('cp "$ROOT_DIR/package.json" "$harness_package_json"');
+    expect(script).toContain(
+      'node --import tsx "$ROOT_DIR/scripts/e2e/lib/npm-telegram-live/prepare-package.mts" "$harness_package_json"',
     );
-    const qaRuntimeApi = readFileSync(
-      path.resolve(TEST_DIR, "../../extensions/qa-lab/src/runtime-api.ts"),
-      "utf8",
-    );
-    const qaHarnessSources = [
-      "extensions/qa-lab/api.ts",
-      "extensions/qa-lab/src/self-check.ts",
-      "extensions/qa-lab/src/live-transports/shared/live-transport-cli.ts",
-      "extensions/qa-lab/src/suite-launch.runtime.ts",
-      "extensions/qa-lab/src/suite.ts",
-    ].map((relativePath) => readFileSync(path.resolve(TEST_DIR, "../..", relativePath), "utf8"));
-
-    expect(script).toContain('ln -sfnT "$openclaw_package_dir/dist" /app/dist');
-    expect(script).toContain('cp "$openclaw_package_dir/package.json" /app/package.json');
-    expect(script).toContain('-v "$ROOT_DIR/extensions/qa-lab:/app/extensions/qa-lab:ro"');
+    expect(script).toContain('-v "$harness_package_json:/app/package.json:ro"');
+    expect(script).toContain('-v "$ROOT_DIR/dist:/app/dist:ro"');
+    expect(script).toContain('-v "$ROOT_DIR/node_modules:/trusted-harness/node_modules:ro"');
+    expect(script).toContain('-v "$ROOT_DIR/packages:/app/packages:ro"');
+    expect(script).toContain('-v "$ROOT_DIR/extensions:/app/extensions:ro"');
+    expect(script).toContain('-v "$ROOT_DIR/taxonomy.yaml:/app/taxonomy.yaml:ro"');
     expect(script).toContain('-v "$ROOT_DIR/qa/scenarios:/app/qa/scenarios:ro"');
-    expect(script).not.toContain('ln -sfnT /app/extensions "$openclaw_package_dir/extensions"');
-    expect(script).toContain("node scripts/e2e/lib/npm-telegram-live/prepare-package.mjs");
-    expect(script).toContain("/app/node_modules/openclaw/package.json");
-    expect(preparePackage).toContain('pkg.exports["./plugin-sdk/gateway-runtime"]');
-    expect(preparePackage).toContain('"./dist/plugin-sdk/gateway-runtime.js"');
-    expect(gatewayRpcClient).toContain('from "openclaw/plugin-sdk/gateway-runtime"');
-    expect(qaRuntimeApi).toContain('from "openclaw/plugin-sdk/gateway-runtime"');
-    for (const source of qaHarnessSources) {
-      expect(source).not.toContain('from "openclaw/plugin-sdk/qa-runtime"');
-    }
+    expect(script).toContain("for dependency_dir in /trusted-harness/node_modules/*");
+    expect(script).toContain("for workspace_dir in /app/packages/* /app/extensions/*");
+    expect(script).toContain('link_harness_dependency "$workspace_dir" "$workspace_name"');
+    expect(script).toContain("link_harness_dependency /app openclaw");
+    expect(script).not.toContain('openclaw_package_dir="/npm-global/lib/node_modules/openclaw"');
+    expect(script).not.toContain('cp "$openclaw_package_dir/package.json" /app/package.json');
+    expect(script).not.toContain("/app/node_modules/openclaw/package.json");
+    expect(script).not.toContain("link_installed_package_dependency");
   });
 
-  it("exposes installed package dependencies to the mounted QA harness", () => {
-    const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
-
-    expect(script).toContain("link_installed_package_dependency()");
-    expect(script).toContain(
-      'local source="/npm-global/lib/node_modules/openclaw/node_modules/$name"',
+  it("adds private SDK exports only to the trusted harness manifest", () => {
+    const root = mkTempRoot();
+    const harnessManifestPath = path.join(root, "harness-package.json");
+    const candidateManifestPath = path.join(root, "candidate-package.json");
+    const existingGatewayExport = {
+      types: "./existing/gateway-runtime.d.ts",
+      default: "./existing/gateway-runtime.js",
+    };
+    writeFileSync(
+      harnessManifestPath,
+      `${JSON.stringify({
+        name: "openclaw",
+        exports: {
+          "./kept": "./dist/kept.js",
+          "./plugin-sdk/gateway-runtime": existingGatewayExport,
+        },
+      })}\n`,
     );
-    expect(script).toContain('ln -sfn "$source" "$target"');
-    expect(script).toContain('link_installed_package_dependency "$dependency"');
-    expect(script).toContain("@modelcontextprotocol/sdk");
-    expect(script).toContain("yaml");
-    expect(script).toContain("zod");
+    writeFileSync(candidateManifestPath, '{"name":"candidate","exports":{}}\n');
+    const candidateBefore = readFileSync(candidateManifestPath, "utf8");
+
+    execFileSync(process.execPath, [PREPARE_PACKAGE_PATH, harnessManifestPath]);
+
+    const prepared = JSON.parse(readFileSync(harnessManifestPath, "utf8")) as {
+      exports: Record<string, unknown>;
+    };
+    expect(prepared.exports["./kept"]).toBe("./dist/kept.js");
+    expect(prepared.exports["./plugin-sdk/gateway-runtime"]).toEqual(existingGatewayExport);
+    expect(prepared.exports["./plugin-sdk/qa-runtime"]).toEqual({
+      default: "./dist/plugin-sdk/qa-runtime.js",
+    });
+    expect(prepared.exports["./plugin-sdk/qa-lab"]).toEqual({
+      default: "./dist/plugin-sdk/qa-lab.js",
+    });
+    for (const subpath of privateLocalOnlyPluginSdkEntrypoints) {
+      expect(prepared.exports[`./plugin-sdk/${subpath}`]).toEqual({
+        default: `./dist/plugin-sdk/${subpath}.js`,
+      });
+    }
+    expect(readFileSync(candidateManifestPath, "utf8")).toBe(candidateBefore);
   });
 
   it("lets npm-specific credential aliases override shared QA env", () => {
@@ -376,6 +413,41 @@ describe("package Telegram live Docker E2E", () => {
     });
   });
 
+  it.each([
+    {
+      name: "promotes the default canary before taxonomy-backed release selection",
+      env: {},
+      requested: [],
+      resolved: ["telegram-status-command"],
+      expected: ["channel-canary", "telegram-status-command"],
+    },
+    {
+      name: "keeps focused non-RTT selections unchanged",
+      env: {},
+      requested: ["telegram-status-command"],
+      resolved: ["telegram-status-command"],
+      expected: ["telegram-status-command"],
+    },
+    {
+      name: "promotes an explicitly requested RTT canary",
+      env: { OPENCLAW_NPM_TELEGRAM_RTT_CHECKS: "channel-canary" },
+      requested: ["telegram-status-command"],
+      resolved: ["telegram-status-command"],
+      expected: ["channel-canary", "telegram-status-command"],
+    },
+    {
+      name: "does not duplicate an already selected RTT canary",
+      env: {},
+      requested: ["telegram-status-command", "channel-canary"],
+      resolved: ["telegram-status-command", "channel-canary"],
+      expected: ["channel-canary", "telegram-status-command"],
+    },
+  ])("$name", ({ env, requested, resolved, expected }) => {
+    const options = testing.resolveRttOptions(env, requested);
+
+    expect(testing.prioritizeRoundTripProbeScenario(resolved, options)).toEqual(expected);
+  });
+
   it("rejects retired RTT scenario ids", () => {
     expect(() =>
       testing.resolveRttOptions({
@@ -392,7 +464,31 @@ describe("package Telegram live Docker E2E", () => {
     ).toThrow("invalid OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES: 7samples");
   });
 
-  it("gates package Telegram status on the summary artifact", async () => {
+  it.each(["fail", "skip", "skipped", "timeout"])(
+    "fails package Telegram QA when a scenario has %s status",
+    async (status) => {
+      const summaryPath = path.join(mkTempRoot(), "qa-evidence.json");
+      writeFileSync(
+        summaryPath,
+        JSON.stringify({
+          kind: "openclaw.qa.evidence-summary",
+          schemaVersion: 2,
+          generatedAt: "2026-05-01T00:00:00.000Z",
+          entries: [{ result: { status } }],
+        }),
+        "utf8",
+      );
+
+      await expect(
+        testing.shouldFailPackageTelegramRun(
+          { summaryPath },
+          { OPENCLAW_NPM_TELEGRAM_ALLOW_FAILURES: "" },
+        ),
+      ).resolves.toBe(true);
+    },
+  );
+
+  it("passes package Telegram QA when every scenario passes", async () => {
     const summaryPath = path.join(mkTempRoot(), "qa-evidence.json");
     writeFileSync(
       summaryPath,
@@ -400,7 +496,7 @@ describe("package Telegram live Docker E2E", () => {
         kind: "openclaw.qa.evidence-summary",
         schemaVersion: 2,
         generatedAt: "2026-05-01T00:00:00.000Z",
-        entries: [{ result: { status: "fail" } }],
+        entries: [{ result: { status: "pass" } }],
       }),
       "utf8",
     );
@@ -410,7 +506,7 @@ describe("package Telegram live Docker E2E", () => {
         { summaryPath },
         { OPENCLAW_NPM_TELEGRAM_ALLOW_FAILURES: "" },
       ),
-    ).resolves.toBe(true);
+    ).resolves.toBe(false);
   });
 
   it("does not read package Telegram summaries when failures are allowed", async () => {

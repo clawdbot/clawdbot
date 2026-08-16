@@ -1,3 +1,8 @@
+import { asPositiveFiniteNumber as normalizePairingQrExpiresAtMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  readNonBlankString,
+  readNonBlankString as normalizeTtsSupplementSpokenText,
+} from "@openclaw/normalization-core/string-coerce";
 import type { OutboundLocation } from "../channels/location.js";
 /** Reply payload contracts and metadata helpers shared by dispatch and channel renderers. */
 import type { ReplyToMode } from "../config/types.base.js";
@@ -7,11 +12,35 @@ import type {
   ReplyPayloadDelivery,
 } from "../interactive/payload.js";
 
+export type ReplyMediaAttachment = {
+  type?: "image" | "audio" | "video" | "file";
+  path?: string;
+  url?: string;
+  mediaUrl?: string;
+  filePath?: string;
+  mimeType?: string;
+  name?: string;
+  sizeBytes?: number;
+  durationMs?: number;
+  width?: number;
+  height?: number;
+  /** Internal per-URL trust carried until mixed media is split for history projection. */
+  trustedLocalMedia?: boolean;
+};
+
 /** Channel-agnostic assistant reply payload. */
 export type ReplyPayload = {
   text?: string;
+  /** Visible body a channel adapter may use when native structured content requires text. */
+  fallbackText?: {
+    text: string;
+    /** Batch payload replaced when the adapter adopts this fallback body. */
+    replacesPayloadIndex?: number;
+  };
   mediaUrl?: string;
   mediaUrls?: string[];
+  /** Prepared metadata aligned with mediaUrls for client-facing history projection. */
+  attachments?: ReplyMediaAttachment[];
   /** Internal-only trust signal for gateway webchat local media embedding. */
   trustedLocalMedia?: boolean;
   /** Treat media as live-only content and avoid persisting the underlying media reference. */
@@ -71,6 +100,17 @@ export type ReplyPayload = {
   channelData?: Record<string, unknown>;
 };
 
+export function readAskUserQuestionId(
+  payload: Pick<ReplyPayload, "channelData">,
+): string | undefined {
+  const askUser = payload.channelData?.askUser;
+  if (!askUser || typeof askUser !== "object" || Array.isArray(askUser)) {
+    return undefined;
+  }
+  const questionId = (askUser as { questionId?: unknown }).questionId;
+  return typeof questionId === "string" && questionId ? questionId : undefined;
+}
+
 // Private device-pair -> Gateway live-display envelope key. Do not re-export
 // through Plugin SDK; this is not a third-party plugin contract.
 const PAIRING_QR_REPLY_CHANNEL_DATA_KEY = "openclawPairingQr";
@@ -80,14 +120,6 @@ type PairingQrReplyChannelData = {
   expiresAtMs: number;
 };
 
-function normalizePairingQrSetupCode(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
-function normalizePairingQrExpiresAtMs(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
-}
-
 export function readPairingQrReplyChannelData(
   payload: Pick<ReplyPayload, "channelData">,
 ): PairingQrReplyChannelData | undefined {
@@ -96,7 +128,7 @@ export function readPairingQrReplyChannelData(
     return undefined;
   }
   const record = raw as Record<string, unknown>;
-  const setupCode = normalizePairingQrSetupCode(record.setupCode);
+  const setupCode = readNonBlankString(record.setupCode);
   const expiresAtMs = normalizePairingQrExpiresAtMs(record.expiresAtMs);
   return setupCode && expiresAtMs ? { setupCode, expiresAtMs } : undefined;
 }
@@ -120,7 +152,8 @@ export type ReplyDeliveryContext = {
   replyToMode: ReplyToMode;
 };
 
-const REPLY_MEDIA_FAILURE_WARNING = "⚠️ Media failed.";
+const REPLY_MEDIA_FAILURE_WARNING =
+  "⚠️ Media failed. Try sending a smaller supported file or a different format.";
 
 /** Appends the standard media failure warning without duplicating it. */
 export function appendReplyMediaFailureWarning(text: string | undefined): string {
@@ -131,10 +164,6 @@ export function appendReplyMediaFailureWarning(text: string | undefined): string
     return text;
   }
   return `${text}\n${REPLY_MEDIA_FAILURE_WARNING}`;
-}
-
-function normalizeTtsSupplementSpokenText(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
 }
 
 function hasReplyPayloadMedia(payload: Pick<ReplyPayload, "mediaUrl" | "mediaUrls">): boolean {
@@ -209,18 +238,27 @@ export function buildTtsSupplementMediaPayload(payload: ReplyPayload): ReplyPayl
 /** WeakMap-backed metadata attached to payload objects without changing wire shape. */
 export type ReplyPayloadMetadata = {
   assistantMessageIndex?: number;
+  /** Original runtime MEDIA references used to identify the persisted assistant row. */
+  assistantTranscriptMediaUrls?: string[];
   /** The runtime owns the transcript decision for this assistant payload. */
   assistantTranscriptOwned?: boolean;
-  /** Foreground freshness prevented a visible final after transcript persistence. */
-  foregroundDeliverySuppression?: {
-    reason: "stale-foreground";
-  };
+  /** Exact channel/account transform owner that already accepted this payload. */
+  channelReplyTransformOwner?: object;
+  /** Exact dispatcher that already ran its full normalization before side effects. */
+  replyDispatcherNormalizationOwner?: object;
+  /** Exact key for replacing a runtime-owned assistant row after media materialization. */
+  assistantTranscriptIdempotencyKey?: string;
   /** Opaque owner for one final-delivery transcript capture on a shared dispatcher. */
   finalDeliveryCapture?: object;
-  /** Durable pending-final intent represented by this runtime payload. */
-  pendingFinalDeliveryIntentId?: string;
-  /** Restart-safe text this payload contributes to its pending-final intent. */
-  pendingFinalDeliveryRetryText?: string;
+  /** Exact persisted delivery owner; WeakMap-only and never serialized. */
+  pendingFinalDeliveryCompletion?: {
+    deliveryId: string;
+    intentId: string;
+    recoveryRunId?: string;
+    sessionId: string;
+    sessionKey: string;
+    storePath: string;
+  };
   /** replyToId existed before reply threading could inject an implicit target. */
   replyToIdExplicit?: boolean;
   /** Canonical reply policy used by both message-tool dedupe and final delivery routing. */
@@ -231,9 +269,9 @@ export type ReplyPayloadMetadata = {
     accountId?: string;
   };
   /**
-   * Internal OpenClaw notices generated after a runtime/provider failure are
-   * not assistant source replies. Dispatch may deliver them even when normal
-   * assistant source replies are message-tool-only; sendPolicy deny still wins.
+   * Internal OpenClaw notices and host-owned artifacts are not assistant source
+   * replies. Dispatch may deliver them even when normal assistant source replies
+   * are message-tool-only; sendPolicy deny still wins.
    */
   deliverDespiteSourceReplySuppression?: boolean;
   /**
@@ -245,6 +283,9 @@ export type ReplyPayloadMetadata = {
   sourceReplyTranscriptMirror?: {
     sessionKey: string;
     agentId?: string;
+    expectedSessionId?: string;
+    /** Delivery stays live, but neither side may be appended to a transcript. */
+    transcriptWriteBlocked?: boolean;
     text?: string;
     mediaUrls?: string[];
     idempotencyKey?: string;
@@ -286,7 +327,7 @@ export function copyReplyPayloadMetadata<T extends object>(source: object, paylo
   return metadata ? setReplyPayloadMetadata(payload, metadata) : payload;
 }
 
-/** Marks a notice payload as deliverable even when normal source replies are suppressed. */
+/** Marks a host-owned payload as deliverable even when normal source replies are suppressed. */
 export function markReplyPayloadForSourceSuppressionDelivery<T extends object>(payload: T): T {
   return setReplyPayloadMetadata(payload, {
     deliverDespiteSourceReplySuppression: true,

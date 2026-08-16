@@ -14,13 +14,17 @@ export type DispatchFromConfigResult = {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   sendPolicyDenied?: boolean;
   observedReplyDelivery?: boolean;
+  deferredToActiveRun?: "steer" | "followup";
   noVisibleReplyFallbackEligible?: boolean;
+  noVisibleReplyFallbackDelivered?: boolean;
+  deliberateSilentTerminalReply?: true;
   beforeAgentRunBlocked?: boolean;
   sessionMetadataChanges?: CommandSessionMetadataChange[];
 };
 
 export type DispatchFromConfigParams = {
   ctx: FinalizedMsgContext;
+  /** Full runtime config captured by the channel; reply resolution refreshes it per turn. */
   cfg: OpenClawConfig;
   dispatcher: ReplyDispatcher;
   replyOptions?: Omit<InternalGetReplyOptions, "onBlockReply">;
@@ -28,8 +32,13 @@ export type DispatchFromConfigParams = {
   onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
   fastAbortResolver?: TryFastAbortFromMessage;
   formatAbortReplyTextResolver?: FormatAbortReplyText;
-  /** Optional patch applied to the already loaded config before reply resolution. */
+  /** Optional patch applied to the current runtime config before reply resolution. */
   configOverride?: OpenClawConfig;
+  /**
+   * Channel turns consume the Gateway's committed model-runtime owner even when the global
+   * config snapshot is unavailable during startup or durable ingress replay.
+   */
+  usePublishedModelRuntime?: boolean;
 };
 
 export type DispatchReplyFromConfig = (

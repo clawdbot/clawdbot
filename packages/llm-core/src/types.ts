@@ -68,6 +68,11 @@ export interface StreamOptions {
   temperature?: number;
   maxTokens?: number;
   /**
+   * Optional JSON Schema for the generated response. Providers that support
+   * constrained decoding map it to their native request shape; others ignore it.
+   */
+  responseFormat?: Record<string, unknown>;
+  /**
    * Stop sequences forwarded to providers that support them. Providers map this
    * to their native request field, such as OpenAI `stop` or Anthropic
    * `stop_sequences`.
@@ -245,6 +250,21 @@ export interface ThinkingContent {
   redacted?: boolean;
 }
 
+/** Opaque provider-owned state that must survive transcript replay without being rendered. */
+export interface ProviderReplayState {
+  v: 1;
+  type: string;
+  id?: string;
+  data: string;
+  replayIndex?: number;
+  provider: Provider;
+  api: Api;
+  model: string;
+  baseUrlHash?: string;
+  sessionHash?: string;
+  authProfileHash?: string;
+}
+
 /** Base64 image content block with MIME type metadata. */
 export interface ImageContent {
   type: "image";
@@ -268,6 +288,8 @@ export interface Usage {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  /** Whether the provider reported a cache-read/write token split. */
+  cacheTelemetry?: { state: "available" | "unavailable" };
   /** Subset of `cacheWrite` written with 1-hour retention when reported. */
   cacheWrite1h?: number;
   /** Exact context snapshot for the final provider iteration. */
@@ -288,6 +310,10 @@ export interface Usage {
 
 /** Normalized assistant stop reasons across text providers. */
 export type StopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
+
+/** Stable error codes for provider outcomes that cannot be replayed safely. */
+export const PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE = "PROVIDER_POST_DISPATCH_AMBIGUITY";
+export const PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE = "PROVIDER_FAILURE_WITH_OUTPUT";
 
 /** User turn in a text-model conversation. */
 export interface UserMessage {
@@ -314,6 +340,8 @@ export interface AssistantMessage {
   model: string;
   responseModel?: string; // Concrete `chunk.model` when different from the requested `model` (e.g. OpenRouter `auto` -> `anthropic/...`)
   responseId?: string; // Provider-specific response/message identifier when the upstream API exposes one
+  providerReplay?: ProviderReplayState; // Opaque provider state carried into a compatible later request.
+  turnId?: string; // Runtime-assigned stable turn identity when the provider does not expose one
   diagnostics?: AssistantMessageDiagnostic[]; // Redacted provider/runtime diagnostics for failures and recoveries.
   usage: Usage;
   stopReason: StopReason;
@@ -465,6 +493,8 @@ export interface OpenAICompletionsCompat {
   zaiToolStream?: boolean;
   /** Whether the provider supports the `strict` field in tool definitions. Default: true. */
   supportsStrictMode?: boolean;
+  /** Whether the provider supports JSON Schema through `response_format`. Default: false for unknown compatible endpoints. */
+  supportsJsonSchemaResponseFormat?: boolean;
   /** Cache control convention for prompt caching. "anthropic" applies Anthropic-style `cache_control` markers to the system prompt, last tool definition, and last user/assistant text content. */
   cacheControlFormat?: "anthropic";
   /** Whether to send known session-affinity headers (`session_id`, `x-client-request-id`, `x-session-affinity`) from `options.sessionId` when caching is enabled. Default: false. */

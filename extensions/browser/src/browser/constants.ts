@@ -32,6 +32,13 @@ export const DEFAULT_BROWSER_TAB_CLEANUP_IDLE_MINUTES = 120;
 export const DEFAULT_BROWSER_TAB_CLEANUP_MAX_TABS_PER_SESSION = 8;
 /** Default interval for tab cleanup sweeps. */
 export const DEFAULT_BROWSER_TAB_CLEANUP_SWEEP_MINUTES = 5;
+/**
+ * Age after which a tracked tab whose browser stays unreachable is retired
+ * instead of retried forever. Rows only reach this branch when cleanup already
+ * failed to prove ownership, and a browser that returns after this long almost
+ * always carries a fresh instance fingerprint, which retires the row anyway.
+ */
+export const BROWSER_TAB_UNREACHABLE_RETIRE_MS = 24 * 60 * 60 * 1_000;
 /** Default maximum AI snapshot text size. */
 export const DEFAULT_AI_SNAPSHOT_MAX_CHARS = 40_000;
 /** Default maximum AI snapshot text size in efficient mode. */

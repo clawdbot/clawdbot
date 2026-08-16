@@ -18,7 +18,7 @@ import { formatConnectionFlagReminder, getNodesTheme, runNodesCommand } from "./
 import { formatPermissions, parseNodeList, parsePairingList } from "./format.js";
 import { renderPendingPairingRequestsTable } from "./pairing-render.js";
 import {
-  callGatewayCli,
+  callNodesGatewayCli,
   callNodeDiagnosticsGatewayCli,
   nodesCallOpts,
   resolveNodeDiagnosticsId,
@@ -80,7 +80,12 @@ function formatNodeVersions(node: {
   return parts.length > 0 ? parts.join(" · ") : null;
 }
 
-function formatPathEnv(raw?: string): string | null {
+function isWindowsNodePlatform(platform?: string): boolean {
+  const normalized = normalizeOptionalLowercaseString(platform) ?? "";
+  return normalized === "win32" || normalized === "windows";
+}
+
+function formatPathEnv(raw?: string, platform?: string): string | null {
   if (typeof raw !== "string") {
     return null;
   }
@@ -88,9 +93,12 @@ function formatPathEnv(raw?: string): string | null {
   if (!trimmed) {
     return null;
   }
-  const parts = trimmed.split(":").filter(Boolean);
+  const delimiter = isWindowsNodePlatform(platform) ? ";" : ":";
+  const parts = trimmed.split(delimiter).filter(Boolean);
   const display =
-    parts.length <= 3 ? trimmed : `${parts.slice(0, 2).join(":")}:…:${parts.slice(-1)[0]}`;
+    parts.length <= 3
+      ? trimmed
+      : `${parts.slice(0, 2).join(delimiter)}${delimiter}…${delimiter}${parts.slice(-1)[0]}`;
   return shortenHomeInString(display);
 }
 
@@ -223,8 +231,16 @@ function mergePairedNodesWithEffectiveNodes(
 
 async function tryReadNodeList(opts: NodesRpcOpts): Promise<NodeListNode[] | null> {
   try {
-    return parseNodeList(await callGatewayCli("node.list", opts, {}));
-  } catch {
+    return parseNodeList(await callNodeDiagnosticsGatewayCli("node.list", opts, {}));
+  } catch (error) {
+    // Best-effort enrichment may degrade to pairing-only rows, but never
+    // silently: without this notice the table looks authoritative while
+    // omitting connected/commands state. Stderr keeps --json output clean.
+    defaultRuntime.error(
+      getNodesTheme().muted(
+        `live node view unavailable (${formatErrorMessage(error)}); showing paired-only data`,
+      ),
+    );
     return null;
   }
 }
@@ -248,26 +264,17 @@ export function registerNodesStatusCommands(nodes: Command) {
           const tableWidth = getTerminalTableWidth();
           const now = Date.now();
           const nodesLocal = parseNodeList(result);
-          const lastConnectedById =
-            sinceMs !== undefined
-              ? new Map(
-                  parsePairingList(await callGatewayCli("node.pair.list", opts, {})).paired.map(
-                    (entry) => [entry.nodeId, entry],
-                  ),
-                )
-              : null;
           const filtered = nodesLocal.filter((n) => {
             if (connectedOnly && !n.connected) {
               return false;
             }
             if (sinceMs !== undefined) {
-              const paired = lastConnectedById?.get(n.nodeId);
-              const lastConnectedAtMs =
-                typeof paired?.lastConnectedAtMs === "number"
-                  ? paired.lastConnectedAtMs
-                  : typeof n.connectedAtMs === "number"
-                    ? n.connectedAtMs
-                    : undefined;
+              // The gateway records lastConnectedAtMs on every node.list row
+              // (max of stored pairing history and live connection); joining a
+              // second pairing-scoped RPC re-derived that fact and made
+              // --last-connected fail for read-scoped callers. connectedAtMs
+              // covers gateways predating the recorded field.
+              const lastConnectedAtMs = n.lastConnectedAtMs ?? n.connectedAtMs;
               if (typeof lastConnectedAtMs !== "number") {
                 return false;
               }
@@ -298,7 +305,7 @@ export function registerNodesStatusCommands(nodes: Command) {
           const rows = filtered.map((n) => {
             const perms = formatPermissions(n.permissions);
             const versions = formatNodeVersions(n);
-            const pathEnv = formatPathEnv(n.pathEnv);
+            const pathEnv = formatPathEnv(n.pathEnv, n.platform);
             const client = formatClientLabel(n);
             const lastActive = formatLastActive(now, n.lastActiveAtMs);
             const detailParts = [
@@ -518,15 +525,17 @@ export function registerNodesStatusCommands(nodes: Command) {
         await runNodesCommand("list", async () => {
           const connectedOnly = Boolean(opts.connected);
           const sinceMs = parseSinceMs(opts.lastConnected, "Invalid --last-connected");
-          const result = await callGatewayCli("node.pair.list", opts, {});
+          const result = await callNodesGatewayCli("node.pair.list", opts, {});
           const { pending, paired } = parsePairingList(result);
           const { heading, muted, warn } = getNodesTheme();
           const tableWidth = getTerminalTableWidth();
           const now = Date.now();
           const hasFilters = connectedOnly || sinceMs !== undefined;
-          const pendingRows = hasFilters ? [] : pending;
+          // Pending requests carry no connection state to filter on; hiding
+          // them under --connected printed "Pending: 0" while requests waited.
+          const pendingRows = pending;
           const effectiveNodes = hasFilters
-            ? parseNodeList(await callGatewayCli("node.list", opts, {}))
+            ? parseNodeList(await callNodeDiagnosticsGatewayCli("node.list", opts, {}))
             : await tryReadNodeList(opts);
           const effectivePairedRows = mergePairedNodesWithEffectiveNodes(paired, effectiveNodes);
           const filteredPaired = effectivePairedRows.filter((node) => {
@@ -552,7 +561,9 @@ export function registerNodesStatusCommands(nodes: Command) {
             return true;
           });
           const filteredLabel =
-            hasFilters && filteredPaired.length !== paired.length ? ` (of ${paired.length})` : "";
+            hasFilters && filteredPaired.length !== effectivePairedRows.length
+              ? ` (of ${effectivePairedRows.length})`
+              : "";
           if (opts.json) {
             defaultRuntime.writeJson({
               pending: pendingRows,

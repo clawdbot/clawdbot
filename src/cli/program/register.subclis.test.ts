@@ -59,6 +59,15 @@ const { registerPluginsCli, registerPluginCliCommandsFromValidatedConfig } = vi.
 const { registerChannelsCli } = vi.hoisted(() => ({
   registerChannelsCli: vi.fn(async () => undefined),
 }));
+const { registerResumeCli, resumeAction } = vi.hoisted(() => {
+  const action = vi.fn();
+  return {
+    registerResumeCli: vi.fn((program: Command) => {
+      program.command("resume").action(action);
+    }),
+    resumeAction: action,
+  };
+});
 const { addGatewayRunCommand, gatewayRunAction, registerGatewayCli } = vi.hoisted(() => {
   const runAction = vi.fn();
   return {
@@ -83,6 +92,7 @@ vi.mock("../capability-cli.js", () => ({ registerCapabilityCli }));
 vi.mock("../exec-approvals-cli.js", () => ({ registerExecApprovalsCli }));
 vi.mock("../plugins-cli.js", () => ({ registerPluginsCli }));
 vi.mock("../channels-cli.js", () => ({ registerChannelsCli }));
+vi.mock("../resume-cli.js", () => ({ registerResumeCli }));
 vi.mock("../../plugins/cli.js", () => ({ registerPluginCliCommandsFromValidatedConfig }));
 vi.mock("./private-qa-cli.js", async () => {
   const actual = await vi.importActual<typeof import("./private-qa-cli.js")>("./private-qa-cli.js");
@@ -127,6 +137,8 @@ describe("registerSubCliCommands", () => {
     registerPluginsCli.mockClear();
     registerPluginCliCommandsFromValidatedConfig.mockClear();
     registerChannelsCli.mockClear();
+    registerResumeCli.mockClear();
+    resumeAction.mockClear();
     addGatewayRunCommand.mockClear();
     gatewayRunAction.mockClear();
     registerGatewayCli.mockClear();
@@ -202,6 +214,17 @@ describe("registerSubCliCommands", () => {
 
     expect(registerCapabilityCli).toHaveBeenCalledTimes(1);
     expect(inferAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("registers the resume placeholder and dispatches through its lazy registrar", async () => {
+    const program = createRegisteredProgram(["node", "openclaw", "resume"], "openclaw");
+
+    expect(program.commands.map((cmd) => cmd.name())).toEqual(["resume", "completion"]);
+
+    await program.parseAsync(["resume"], { from: "user" });
+
+    expect(registerResumeCli).toHaveBeenCalledTimes(1);
+    expect(resumeAction).toHaveBeenCalledTimes(1);
   });
 
   it("registers the exec-approvals placeholder and dispatches through the approvals registrar", async () => {

@@ -1,5 +1,7 @@
 // Provider-specific media stream frame parsing and serialization.
 
+import { canonicalizeVoiceCallMediaBase64 } from "../media-base64.js";
+
 /** Normalized inbound media stream frame. */
 type StreamFrame =
   | { kind: "start"; streamId: string; providerCallId: string }
@@ -59,27 +61,17 @@ function readRecordField(
     : undefined;
 }
 
-/** Normalize base64/base64url padding differences for validation. */
-function normalizeBase64ForCompare(value: string): string {
-  return value.replace(/=+$/u, "").replace(/-/gu, "+").replace(/_/gu, "/");
-}
-
-/** Return true when a payload round-trips as base64. */
-function isValidBase64Payload(value: string): boolean {
-  const buffer = Buffer.from(value, "base64");
-  return normalizeBase64ForCompare(buffer.toString("base64")) === normalizeBase64ForCompare(value);
-}
-
 /** Parse a common provider media frame. */
 function parseMediaFrame(msg: Record<string, unknown>): StreamFrame {
   const mediaData = readRecordField(msg, "media");
   const payload = typeof mediaData?.payload === "string" ? mediaData.payload : undefined;
-  if (!payload || !isValidBase64Payload(payload)) {
+  const canonicalPayload = payload ? canonicalizeVoiceCallMediaBase64(payload) : undefined;
+  if (!canonicalPayload) {
     return { kind: "ignored" };
   }
   return {
     kind: "media",
-    payloadBase64: payload,
+    payloadBase64: canonicalPayload,
     timestampMs: parseTimestampMs(mediaData?.timestamp),
     track: typeof mediaData?.track === "string" ? mediaData.track : undefined,
   };

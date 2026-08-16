@@ -28,7 +28,7 @@ import {
 } from "../../../src/config/config.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import { startGatewayServer } from "../../../src/gateway/server.js";
-import { getFreeGatewayPort } from "../../../src/gateway/test-helpers.e2e.js";
+import { getGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.e2e.js";
 import { captureEnv, setTestEnvValue } from "../../../src/test-utils/env.js";
 import {
   canRunPlaywrightChromium,
@@ -78,9 +78,24 @@ async function waitForTextContaining(
 function appHtml(appModuleUrl: string): string {
   return `<!doctype html>
 <meta charset="utf-8" />
+<style>
+  :root {
+    --color-background-primary: #f6f5f3;
+    --color-text-primary: #17171a;
+    --app-accent: #ff4f4f;
+  }
+  #theme-surface {
+    background: var(--color-background-primary);
+    color: var(--color-text-primary);
+    border-left: 4px solid var(--app-accent);
+  }
+</style>
+<div id="theme-surface">Host-themed surface</div>
 <button id="call-app">Call app tool</button>
 <button id="call-model">Call model tool</button>
 <button id="read-resource">Read resource</button>
+<button id="update-context">Update context</button>
+<button id="send-message">Send message</button>
 <button id="request-teardown">Request teardown</button>
 <output id="initialized">pending</output>
 <output id="capabilities"></output>
@@ -90,15 +105,44 @@ function appHtml(appModuleUrl: string): string {
 <output id="app-tool"></output>
 <output id="model-tool"></output>
 <output id="resource"></output>
+<output id="context-update"></output>
+<output id="message"></output>
+<output id="teardown"></output>
 <output id="isolation"></output>
+<output id="host-theme"></output>
+<output id="host-variables"></output>
+<output id="computed-theme"></output>
 <script type="module">
-import { App, McpUiResourceTeardownResultSchema } from ${JSON.stringify(appModuleUrl)};
+import {
+  App,
+  McpUiResourceTeardownResultSchema,
+  applyDocumentTheme,
+  applyHostStyleVariables,
+} from ${JSON.stringify(appModuleUrl)};
 const write = (id, value) => { document.getElementById(id).textContent = value; };
 try { void window.top.document; write("isolation", "failed"); } catch { write("isolation", "isolated"); }
 const app = new App({ name: "OpenClaw conformance fixture", version: "1.0.0" });
+const applyHostContext = () => {
+  const context = app.getHostContext();
+  if (context?.theme) applyDocumentTheme(context.theme);
+  if (context?.styles?.variables) applyHostStyleVariables(context.styles.variables);
+  const surface = getComputedStyle(document.getElementById("theme-surface"));
+  write("host-theme", context?.theme ?? "missing");
+  write("host-variables", JSON.stringify(context?.styles?.variables ?? {}));
+  write("computed-theme", JSON.stringify({
+    background: surface.backgroundColor,
+    color: surface.color,
+    accent: surface.borderLeftColor,
+  }));
+};
+app.onhostcontextchanged = applyHostContext;
 app.ontoolinput = ({ arguments: args }) => write("input", JSON.stringify(args ?? {}));
 app.ontoolresult = (value) => write("result", JSON.stringify(value.structuredContent ?? value));
-app.onteardown = async () => ({});
+app.onteardown = async () => {
+  write("teardown", "received");
+  console.info("mcp-conformance-teardown-received");
+  return {};
+};
 app.onerror = (error) => console.error("mcp-conformance-app", error);
 document.getElementById("call-app").onclick = async () => {
   try {
@@ -116,8 +160,24 @@ document.getElementById("read-resource").onclick = async () => {
     write("resource", JSON.stringify(value));
   } catch (error) { write("resource", "denied:" + error); }
 };
+document.getElementById("update-context").onclick = async () => {
+  try {
+    await app.updateModelContext({ content: [{ type: "text", text: "selected item 42" }] });
+    write("context-update", "accepted");
+  } catch (error) { write("context-update", "denied:" + error); }
+};
+document.getElementById("send-message").onclick = async () => {
+  try {
+    const value = await app.sendMessage({
+      role: "user",
+      content: [{ type: "text", text: "summarize selection" }],
+    });
+    write("message", value.isError ? "denied" : "accepted");
+  } catch (error) { write("message", "denied:" + error); }
+};
 document.getElementById("request-teardown").onclick = () => app.requestTeardown();
 await app.connect();
+applyHostContext();
 write("capabilities", JSON.stringify(app.getHostCapabilities() ?? {}));
 write("ping", JSON.stringify(await app.request(
   { method: "ping", params: {} },
@@ -223,11 +283,30 @@ async function mountControlUiHost(page: Page): Promise<void> {
 <script type="module">
 import { GatewayBrowserClient } from "/src/api/gateway.ts";
 import "/src/components/mcp-app-view-registration.ts";
+import { WIDGET_PROMPT_EVENT } from "/src/components/mcp-app-security.ts";
 window.mcpConformanceGatewayBrowserClient = GatewayBrowserClient;
+document.addEventListener(WIDGET_PROMPT_EVENT, (event) => {
+  window.mcpConformancePrompt = event.detail.text;
+});
+window.mcpConformanceUnmount = async () => {
+  const mount = document.getElementById("mount");
+  const view = window.mcpConformanceView;
+  if (!mount || !view) return;
+  const frame = view.shadowRoot?.querySelector("iframe");
+  await view.teardown();
+  if (frame?.isConnected) throw new Error("MCP App frame remained mounted");
+  console.info("mcp-conformance-frame-detached");
+  mount.replaceChildren();
+};
 </script>`,
     });
   });
-  await page.goto(`${controlUiServer.baseUrl}mcp-conformance`);
+  await page.goto(`${controlUiServer.baseUrl}mcp-conformance`, { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(
+    () => Reflect.get(window, "mcpConformanceGatewayBrowserClient") !== undefined,
+    undefined,
+    { timeout: 30_000 },
+  );
   await page.evaluate(
     async (params) => {
       const GatewayBrowserClient = Reflect.get(
@@ -247,28 +326,52 @@ window.mcpConformanceGatewayBrowserClient = GatewayBrowserClient;
         url: params.gatewayUrl,
         token: params.authValue,
         onHello: () => resolveHello(),
-        onClose: (info: { reason: string }) =>
-          rejectHello(new Error(`Gateway connection closed: ${info.reason}`)),
+        onClose: (info: { code: number; reason: string; error?: unknown; willRetry: boolean }) => {
+          if (!info.willRetry) {
+            rejectHello(new Error(`Gateway connection closed: ${JSON.stringify(info)}`));
+          }
+        },
       });
       client.start();
       await Promise.race([
         connected,
         new Promise((_, reject) => {
-          setTimeout(() => reject(new Error("Gateway connection timed out")), 10_000);
+          setTimeout(() => reject(new Error("Gateway connection timed out")), 60_000);
         }),
       ]);
       const view = document.createElement("mcp-app-view");
+      const root = document.documentElement;
+      const themeListeners = new Set<() => void>();
+      const setTheme = (theme: "light" | "dark") => {
+        root.dataset.themeMode = theme;
+        root.style.setProperty("--card", theme === "light" ? "#ffffff" : "#161920");
+        root.style.setProperty("--text", theme === "light" ? "#403c35" : "#d4d4d8");
+        for (const listener of themeListeners) {
+          listener();
+        }
+      };
+      setTheme("dark");
       Reflect.set(view, "context", {
         gateway: {
           snapshot: { client },
           connection: { gatewayUrl: params.gatewayUrl },
+        },
+        theme: {
+          subscribe(listener: () => void) {
+            themeListeners.add(listener);
+            return () => themeListeners.delete(listener);
+          },
         },
       });
       view.sessionKey = params.sessionKey;
       view.viewId = params.viewId;
       view.title = "Conformance app";
       document.getElementById("mount")?.appendChild(view);
-      Object.assign(window, { mcpConformanceClient: client, mcpConformanceView: view });
+      Object.assign(window, {
+        mcpConformanceClient: client,
+        mcpConformanceView: view,
+        mcpConformanceSetTheme: setTheme,
+      });
     },
     {
       gatewayUrl: `ws://127.0.0.1:${gatewayPort}`,
@@ -310,6 +413,7 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
       "OPENCLAW_SKIP_CHANNELS",
       "OPENCLAW_SKIP_CRON",
       "OPENCLAW_SKIP_PROVIDERS",
+      "OPENCLAW_TEST_MINIMAL_GATEWAY",
       "OPENCLAW_BUNDLED_PLUGINS_DIR",
     ]);
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mcp-app-conformance-"));
@@ -317,10 +421,10 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
     const configPath = path.join(stateDir, "openclaw.json");
     const fixturePath = path.join(tempRoot, "fixture-server.mjs");
     await fs.mkdir(path.join(tempRoot, "empty-plugins"), { recursive: true });
-    controlUiServer = await startControlUiE2eServer();
+    controlUiServer = await startControlUiE2eServer(undefined, { source: true });
     const appEntryPath = require.resolve("@modelcontextprotocol/ext-apps/app-with-deps");
     const appModuleSource = await fs.readFile(appEntryPath, "utf8");
-    const appAssetPort = await getFreeGatewayPort();
+    const appAssetPort = await getGatewayE2ePortBlock();
     const fixtureAssetServer = createHttpServer((request, response) => {
       if (request.url !== "/app.js") {
         response.writeHead(404).end();
@@ -342,9 +446,9 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
     const resourceOrigin = new URL(appModuleUrl).origin;
     const controlUiOrigin = new URL(controlUiServer.baseUrl).origin;
     await writeFixtureServer(fixturePath, appHtml(appModuleUrl), resourceOrigin);
-    gatewayPort = await getFreeGatewayPort();
+    gatewayPort = await getGatewayE2ePortBlock();
     do {
-      sandboxPort = await getFreeGatewayPort();
+      sandboxPort = await getGatewayE2ePortBlock();
     } while (sandboxPort === gatewayPort);
     const cfg: OpenClawConfig = {
       gateway: {
@@ -365,6 +469,7 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
     setTestEnvValue("OPENCLAW_SKIP_CHANNELS", "1");
     setTestEnvValue("OPENCLAW_SKIP_CRON", "1");
     setTestEnvValue("OPENCLAW_SKIP_PROVIDERS", "1");
+    setTestEnvValue("OPENCLAW_TEST_MINIMAL_GATEWAY", "1");
     setTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(tempRoot, "empty-plugins"));
     clearConfigCache();
     clearRuntimeConfigSnapshot();
@@ -420,7 +525,7 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
     }
   }, 120_000);
 
-  it("drives the authenticated Control UI bridge and read-only standalone host", async () => {
+  it("drives the authenticated Control UI and ticketed standalone bridges", async () => {
     const controlContext = await browser.newContext({ permissions: ["local-network-access"] });
     openContexts.add(controlContext);
     const controlPage = await controlContext.newPage();
@@ -449,6 +554,109 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
     await waitForTextContaining(app.locator("#result"), "initial-result");
     await waitForTextContaining(app.locator("#capabilities"), "serverTools");
     await waitForTextContaining(app.locator("#capabilities"), "serverResources");
+    await waitForTextContaining(app.locator("#capabilities"), "updateModelContext");
+    await waitForText(app.locator("#ping"), "{}");
+    await waitForText(app.locator("#isolation"), "isolated");
+    await waitForText(app.locator("#host-theme"), "dark");
+    await waitForTextContaining(
+      app.locator("#host-variables"),
+      '"--color-background-primary":"#161920"',
+    );
+    await waitForTextContaining(app.locator("#host-variables"), '"--color-text-primary":"#d4d4d8"');
+    await waitForText(
+      app.locator("#computed-theme"),
+      JSON.stringify({
+        background: "rgb(22, 25, 32)",
+        color: "rgb(212, 212, 216)",
+        accent: "rgb(255, 79, 79)",
+      }),
+    );
+    await controlPage.evaluate(() => {
+      const setTheme = Reflect.get(window, "mcpConformanceSetTheme") as
+        | ((theme: "light" | "dark") => void)
+        | undefined;
+      setTheme?.("light");
+    });
+    await waitForText(app.locator("#host-theme"), "light");
+    await waitForTextContaining(
+      app.locator("#host-variables"),
+      '"--color-background-primary":"#ffffff"',
+    );
+    await waitForTextContaining(app.locator("#host-variables"), '"--color-text-primary":"#403c35"');
+    await waitForText(
+      app.locator("#computed-theme"),
+      JSON.stringify({
+        background: "rgb(255, 255, 255)",
+        color: "rgb(64, 60, 53)",
+        accent: "rgb(255, 79, 79)",
+      }),
+    );
+    await app.locator("#call-app").click();
+    await waitForTextContaining(app.locator("#app-tool"), "companion-called");
+    await app.locator("#call-model").click();
+    await waitForTextContaining(app.locator("#model-tool"), "denied:");
+    await app.locator("#read-resource").click();
+    await waitForTextContaining(app.locator("#resource"), "resource-ok");
+    const confirmedPrompts: string[] = [];
+    controlPage.on("dialog", async (dialog) => {
+      confirmedPrompts.push(dialog.message());
+      await dialog.accept();
+    });
+    await app.locator("#update-context").click();
+    await waitForText(app.locator("#context-update"), "accepted");
+    await app.locator("#send-message").click();
+    await waitForText(app.locator("#message"), "accepted");
+    await expect
+      .poll(() => controlPage.evaluate(() => Reflect.get(window, "mcpConformancePrompt") as string))
+      .toBe("summarize selection");
+    expect(confirmedPrompts).toEqual(["Confirm:\n\nsummarize selection"]);
+    expect(runtime.pendingMcpAppModelContext).toMatchObject({ text: "selected item 42" });
+
+    const standaloneUrl = await requestStandaloneUrl(controlPage);
+    await controlPage.evaluate(async () => {
+      const unmount = Reflect.get(window, "mcpConformanceUnmount") as
+        | (() => Promise<void>)
+        | undefined;
+      await unmount?.();
+    });
+    const teardownDiagnostic = browserDiagnostics.findIndex((entry) =>
+      entry.includes("mcp-conformance-teardown-received"),
+    );
+    const detachedDiagnostic = browserDiagnostics.findIndex((entry) =>
+      entry.includes("mcp-conformance-frame-detached"),
+    );
+    expect(teardownDiagnostic).toBeGreaterThanOrEqual(0);
+    expect(detachedDiagnostic).toBeGreaterThan(teardownDiagnostic);
+    await expect.poll(() => controlPage.frames().length).toBe(1);
+
+    const standaloneContext = await browser.newContext({ permissions: ["local-network-access"] });
+    openContexts.add(standaloneContext);
+    const authorizationHeaders: string[] = [];
+    const requestUrls: string[] = [];
+    const referrers: string[] = [];
+    const standaloneDiagnostics: string[] = [];
+    standaloneContext.on("request", (request) => {
+      requestUrls.push(request.url());
+      const authorization = request.headers().authorization;
+      if (authorization) {
+        authorizationHeaders.push(authorization);
+      }
+      const referrer = request.headers().referer;
+      if (referrer) {
+        referrers.push(referrer);
+      }
+    });
+    const standalonePage = await standaloneContext.newPage();
+    standalonePage.on("console", (message) => standaloneDiagnostics.push(message.text()));
+    const absoluteStandaloneUrl = `http://127.0.0.1:${gatewayPort}${standaloneUrl}`;
+    const ticket = standaloneUrl.split("#")[1] ?? "";
+    await standalonePage.goto(absoluteStandaloneUrl);
+    app = await findAppFrame(standalonePage);
+    await waitForText(app.locator("#input"), '{"city":"Paris"}');
+    await waitForTextContaining(app.locator("#result"), "initial-result");
+    await waitForTextContaining(app.locator("#capabilities"), "serverTools");
+    await waitForTextContaining(app.locator("#capabilities"), "serverResources");
+    await waitForTextContaining(app.locator("#capabilities"), "updateModelContext", false);
     await waitForText(app.locator("#ping"), "{}");
     await waitForText(app.locator("#isolation"), "isolated");
     await app.locator("#call-app").click();
@@ -457,61 +665,35 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
     await waitForTextContaining(app.locator("#model-tool"), "denied:");
     await app.locator("#read-resource").click();
     await waitForTextContaining(app.locator("#resource"), "resource-ok");
-
-    const standaloneUrl = await requestStandaloneUrl(controlPage);
-    await controlPage.evaluate(() => Reflect.get(window, "mcpConformanceView")?.remove());
-
-    const standaloneContext = await browser.newContext({ permissions: ["local-network-access"] });
-    openContexts.add(standaloneContext);
-    const authorizationHeaders: string[] = [];
-    standaloneContext.on("request", (request) => {
-      const authorization = request.headers().authorization;
-      if (authorization) {
-        authorizationHeaders.push(authorization);
-      }
-    });
-    const standalonePage = await standaloneContext.newPage();
-    const absoluteStandaloneUrl = `http://127.0.0.1:${gatewayPort}${standaloneUrl}`;
-    await standalonePage.goto(absoluteStandaloneUrl);
-    app = await findAppFrame(standalonePage);
-    await waitForText(app.locator("#input"), '{"city":"Paris"}');
-    await waitForTextContaining(app.locator("#result"), "initial-result");
-    await waitForTextContaining(app.locator("#capabilities"), "serverTools", false);
-    await waitForTextContaining(app.locator("#capabilities"), "serverResources", false);
-    await waitForText(app.locator("#ping"), "{}");
-    await waitForText(app.locator("#isolation"), "isolated");
-    await app.locator("#call-app").click();
-    await waitForTextContaining(app.locator("#app-tool"), "denied:");
-    await app.locator("#read-resource").click();
-    await waitForTextContaining(app.locator("#resource"), "denied:");
-    expect(authorizationHeaders).toHaveLength(1);
-    expect(authorizationHeaders[0]).toMatch(/^MCP-App v1\./u);
-    expect(authorizationHeaders).not.toContain(`Bearer ${authValue}`);
+    expect(authorizationHeaders.length).toBeGreaterThanOrEqual(3);
+    expect(authorizationHeaders.every((value) => value.startsWith("MCP-App v1."))).toBe(true);
+    expect(authorizationHeaders.some((value) => value === `Bearer ${authValue}`)).toBe(false);
+    expect(ticket).not.toBe("");
+    expect(requestUrls.some((value) => value.includes(ticket))).toBe(false);
+    expect(referrers.some((value) => value.includes(ticket))).toBe(false);
+    expect(standaloneDiagnostics.some((value) => value.includes(ticket))).toBe(false);
 
     await app.locator("#request-teardown").click();
     await expect.poll(() => standalonePage.frames().length).toBe(1);
     await standalonePage.reload();
     app = await findAppFrame(standalonePage);
     await waitForTextContaining(app.locator("#result"), "initial-result");
+    await app.locator("#call-app").click();
+    await waitForTextContaining(app.locator("#app-tool"), "companion-called");
 
     const tampered = `${absoluteStandaloneUrl.slice(0, -1)}${absoluteStandaloneUrl.endsWith("a") ? "b" : "a"}`;
-    await standalonePage.goto(tampered);
-    await standalonePage.reload();
-    await waitForText(standalonePage.locator(".error"), "MCP App ticket was rejected");
+    const tamperedPage = await standaloneContext.newPage();
+    await tamperedPage.goto(tampered);
+    await tamperedPage.reload();
+    await waitForText(tamperedPage.locator(".error"), "MCP App ticket was rejected");
+    await tamperedPage.close();
 
     const lease = getMcpAppViewLease(viewId, runtime);
     if (!lease) {
       throw new Error("MCP App view lease missing");
     }
-    const expiresAtMs = Date.now() + 2_000;
-    lease.expiresAtMs = expiresAtMs;
-    const expiring = await requestStandaloneUrl(controlPage);
-    const expiringUrl = `http://127.0.0.1:${gatewayPort}${expiring}`;
-    await new Promise((resolve) => {
-      setTimeout(resolve, Math.max(0, expiresAtMs - Date.now() + 50));
-    });
-    await standalonePage.goto(expiringUrl);
-    await standalonePage.reload();
+    lease.expiresAtMs = Date.now() - 1;
+    await app.locator("#call-app").click();
     await waitForText(standalonePage.locator(".error"), "MCP App ticket was rejected");
   }, 90_000);
 });

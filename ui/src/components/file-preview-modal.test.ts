@@ -257,6 +257,11 @@ describe("openclaw-file-preview-modal", () => {
         filteredFileCount: "{count}/{total} arquivos",
         noMatches: "Nenhum arquivo corresponde.",
         navigate: "navegar",
+        kind: {
+          text: "Texto",
+          shell: "Shell",
+          file: "Arquivo",
+        },
       },
     });
 
@@ -269,5 +274,24 @@ describe("openclaw-file-preview-modal", () => {
     ).toBe("Arquivos de suporte");
     expect(shadowText(modal)).toContain("2 arquivos");
     expect(shadowText(modal)).toContain("Fechar");
+  });
+
+  it("localizes generic file-kind chips", async () => {
+    i18n.registerTranslation("pt-BR", {
+      filePreview: {
+        kind: {
+          text: "Texto",
+          shell: "Shell",
+          file: "Arquivo",
+        },
+      },
+    });
+    await i18n.setLocale("pt-BR");
+
+    const modal = await renderPreview({
+      activePath: "filters/auto-senders.txt",
+    });
+
+    expect(modal.shadowRoot?.querySelector(".chip.accent")?.textContent).toBe("Texto");
   });
 });

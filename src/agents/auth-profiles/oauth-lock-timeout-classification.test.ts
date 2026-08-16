@@ -9,7 +9,8 @@ import {
   buildRefreshContentionError,
   isGlobalRefreshLockTimeoutError,
 } from "./oauth-refresh-lock-errors.js";
-import { resolveAuthStorePath, resolveOAuthRefreshLockPath } from "./paths.js";
+import { resolveOAuthRefreshLockPath } from "./paths.js";
+import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 
 function createLockTimeoutError(lockPath: string): FileLockTimeoutError {
   return Object.assign(new Error(`file lock timeout for ${lockPath.slice(0, -5)}`), {
@@ -23,7 +24,9 @@ describe("OAuth refresh lock timeout classification", () => {
     const profileId = "openai:default";
     const provider = "openai";
     const refreshLockPath = resolveOAuthRefreshLockPath(provider, profileId);
-    const authStoreLockPath = resolveAuthStorePath("/tmp/openclaw-oauth-lock-timeout/agent");
+    const authStoreLockPath = resolveAuthProfileDatabasePath(
+      "/tmp/openclaw-oauth-lock-timeout/agent",
+    );
 
     expect(
       isGlobalRefreshLockTimeoutError(

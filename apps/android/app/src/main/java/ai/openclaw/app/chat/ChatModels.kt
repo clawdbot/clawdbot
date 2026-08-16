@@ -1,4 +1,6 @@
 package ai.openclaw.app.chat
+
+import ai.openclaw.app.gateway.SessionObserverDigest
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -24,18 +26,74 @@ data class ChatMessage(
   val content: List<ChatMessageContent>,
   val timestampMs: Long?,
   val idempotencyKey: String? = null,
+  /** Canonical transcript-tree identity supplied by chat.history. */
+  val entryId: String? = null,
+  val provenance: ChatMessageProvenance? = null,
+  val transcriptMarker: ChatTranscriptMarker? = null,
+)
+
+data class ChatMessageProvenance(
+  val kind: String,
+  val sourceTool: String? = null,
+)
+
+data class ChatTranscriptMarker(
+  val kind: String,
+  val id: String? = null,
+  val tokensBefore: Double? = null,
+  val tokensAfter: Double? = null,
+)
+
+/** One selectable transcript branch returned by sessions.branches.list. */
+data class SessionBranch(
+  val leafEntryId: String,
+  val headline: String,
+  val messageCount: Int,
+  val updatedAt: String?,
+  val active: Boolean,
+)
+
+data class SessionRewindResult(
+  val editorText: String?,
+  val editorAttachments: List<SessionEditorAttachment>,
+)
+
+data class SessionForkResult(
+  val sessionKey: String,
+  val editorText: String?,
+  val editorAttachments: List<SessionEditorAttachment>,
+)
+
+data class SessionEditorAttachment(
+  val mimeType: String,
+  val data: String,
+)
+
+data class ChatTranscriptAnchorState(
+  val sessionKey: String,
+  val newestItemId: String?,
+  val completedEndedAt: Long?,
+  val completedNewestItemId: String?,
 )
 
 /**
- * One content part in a chat message; binary parts carry base64 plus their MIME metadata.
+ * One content part in a chat message; media carries either bounded base64 or a managed artifact reference.
  */
 data class ChatMessageContent(
   val type: String = "text",
   val text: String? = null,
   val mimeType: String? = null,
   val fileName: String? = null,
+  val artifactId: String? = null,
+  val url: String? = null,
+  val openUrl: String? = null,
+  val alt: String? = null,
+  val width: Int? = null,
+  val height: Int? = null,
+  val sizeBytes: Long? = null,
   val base64: String? = null,
   val durationMs: Long? = null,
+  val playback: String? = null,
   val widget: ChatWidgetPreview? = null,
 )
 
@@ -58,7 +116,29 @@ data class ChatPendingToolCall(
   val args: kotlinx.serialization.json.JsonObject? = null,
   val startedAtMs: Long,
   val isError: Boolean? = null,
+  val liveDiff: ChatDiffStat? = null,
 )
+
+data class ChatDiffStat(
+  val added: Int,
+  val removed: Int,
+  val files: Int? = null,
+)
+
+data class ChatSubagentActivity(
+  val id: String,
+  val status: String,
+  val snippet: String?,
+  val diffStat: ChatDiffStat?,
+  val terminalSummary: String?,
+  val error: String?,
+  val startedAtMs: Long,
+  val endedAtMs: Long?,
+  val childSessionKey: String?,
+) {
+  val isWorking: Boolean
+    get() = status == "queued" || status == "running"
+}
 
 enum class ChatPlanStepStatus {
   Pending,
@@ -139,20 +219,40 @@ internal val defaultChatThinkingLevelSelection =
     isGatewayProvided = false,
   )
 
+internal data class ChatActiveRunPresentation(
+  val count: Int = 0,
+  val runId: String? = null,
+  val clockKey: String? = null,
+  val outputTokens: Long? = null,
+)
+
 /**
  * Stable session selector row; [key] is the gateway session key used in chat requests.
  */
 data class ChatSessionEntry(
   val key: String,
   val updatedAtMs: Long?,
+  val sessionId: String? = null,
   val ownerAgentId: String? = null,
+  val classification: String? = null,
+  val accountId: String? = null,
+  val peerKind: String? = null,
+  val isMain: Boolean? = null,
+  val isBackground: Boolean? = null,
+  val hasClassificationMetadata: Boolean =
+    classification != null || accountId != null || peerKind != null || isMain != null || isBackground != null,
   val displayName: String? = null,
+  val derivedTitle: String? = null,
   val label: String? = null,
   val category: String? = null,
   val pinned: Boolean? = null,
   val archived: Boolean? = null,
   val unread: Boolean? = null,
   val lastReadAt: Long? = null,
+  val agentStatus: ChatSessionAgentStatus? = null,
+  val hasAgentStatusMetadata: Boolean = agentStatus != null,
+  val observerDigest: SessionObserverDigest? = null,
+  val hasObserverDigestMetadata: Boolean = observerDigest != null,
   val lastActivityAt: Long? = null,
   val totalTokens: Long? = null,
   val totalTokensFresh: Boolean? = null,
@@ -165,6 +265,29 @@ data class ChatSessionEntry(
   val hasContextUsageMetadata: Boolean = totalTokens != null || totalTokensFresh != null || contextTokens != null,
   val hasActiveRun: Boolean? = null,
   val activeRunIds: List<String>? = null,
+  val hasActiveRunMetadata: Boolean = hasActiveRun != null || activeRunIds != null,
+  val parentSessionKey: String? = null,
+  val spawnedBy: String? = null,
+  val hasActiveSubagentRun: Boolean? = null,
+  val subagentRunState: String? = null,
+  val swarmGroupId: String? = null,
+  val swarmPhase: String? = null,
+  val swarmPhaseRank: Int? = null,
+  val swarmLog: String? = null,
+  val status: String? = null,
+  val lastRunError: String? = null,
+  val startedAt: Long? = null,
+  val endedAt: Long? = null,
+  val runtimeMs: Long? = null,
+  val outputTokens: Long? = null,
+  val hasRunMetadata: Boolean =
+    status != null || startedAt != null || endedAt != null || runtimeMs != null || outputTokens != null,
+)
+
+data class ChatSessionAgentStatus(
+  val note: String,
+  val expiresAt: Long,
+  val attention: String? = null,
 )
 
 /** Local fallback for server-side `sessions.list` search over cached entries. */

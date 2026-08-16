@@ -1,6 +1,12 @@
 // Slack tests cover provider.interop plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import { createSlackBoltApp, resolveSlackBoltInterop } from "./provider-support.js";
+import { WebSocketServer } from "ws";
+import {
+  createSlackBoltApp,
+  gracefulStopSlackApp,
+  resolveSlackBoltInterop,
+  startSlackSocketAndWaitForDisconnect,
+} from "./provider-support.js";
 
 describe("resolveSlackBoltInterop", () => {
   function FakeApp() {}
@@ -356,7 +362,133 @@ describe("createSlackBoltApp", () => {
     ]);
   });
 
-  it("passes Socket Mode ping/pong options through Slack's public receiver API", () => {
+  it("cancels a pending native reconnect when the app is stopped and started again", async () => {
+    vi.useFakeTimers();
+    try {
+      const slackBoltModule = await import("@slack/bolt");
+      const { app, receiver } = createSlackBoltApp({
+        interop: resolveSlackBoltInterop({
+          defaultImport: slackBoltModule.default,
+          namespaceImport: slackBoltModule,
+        }),
+        slackMode: "socket",
+        token: "xoxb-test",
+        appToken: "xapp-test",
+        slackWebhookPath: "/slack/events",
+        clientOptions: {},
+      });
+      if (!receiver || typeof receiver !== "object") {
+        throw new Error("expected a Socket Mode receiver");
+      }
+      const client = Reflect.get(receiver, "client");
+      if (!client || typeof client !== "object") {
+        throw new Error("expected a Socket Mode client");
+      }
+      const start = vi.fn(async () => {
+        Reflect.set(client, "shuttingDown", false);
+      });
+      Reflect.set(client, "start", start);
+      const delayReconnectAttempt = Reflect.get(client, "delayReconnectAttempt");
+      if (typeof delayReconnectAttempt !== "function") {
+        throw new Error("expected a native reconnect scheduler");
+      }
+
+      void delayReconnectAttempt.call(client, start);
+      await gracefulStopSlackApp(app);
+      await app.start();
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(start).toHaveBeenCalledTimes(1);
+      await gracefulStopSlackApp(app);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("recovers a transient error and close through one real SDK socket lifecycle", async () => {
+    const socketServer = new WebSocketServer({ port: 0 });
+    await new Promise<void>((resolve) => {
+      socketServer.once("listening", resolve);
+    });
+    const address = socketServer.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected a TCP Socket Mode test server");
+    }
+    let connectionAttempts = 0;
+    let peakActiveConnections = 0;
+    socketServer.on("connection", (socket) => {
+      connectionAttempts += 1;
+      peakActiveConnections = Math.max(peakActiveConnections, socketServer.clients.size);
+      socket.send(JSON.stringify({ type: "hello", num_connections: socketServer.clients.size }));
+    });
+
+    const slackBoltModule = await import("@slack/bolt");
+    const { app, receiver } = createSlackBoltApp({
+      interop: resolveSlackBoltInterop({
+        defaultImport: slackBoltModule.default,
+        namespaceImport: slackBoltModule,
+      }),
+      slackMode: "socket",
+      token: "xoxb-test",
+      appToken: "xapp-test",
+      slackWebhookPath: "/slack/events",
+      clientOptions: {
+        fetch: async () =>
+          new Response(
+            JSON.stringify({
+              ok: true,
+              url: `ws://127.0.0.1:${address.port}`,
+            }),
+            { headers: { "content-type": "application/json" } },
+          ),
+      },
+    });
+    if (!receiver || typeof receiver !== "object") {
+      throw new Error("expected a Socket Mode receiver");
+    }
+    const client = Reflect.get(receiver, "client");
+    if (!client || typeof client !== "object") {
+      throw new Error("expected a Socket Mode client");
+    }
+    Reflect.set(client, "clientPingTimeoutMS", 20);
+    const appStart = vi.spyOn(app, "start");
+    const abortController = new AbortController();
+    const lifecycle = startSlackSocketAndWaitForDisconnect({
+      app,
+      abortSignal: abortController.signal,
+    });
+    let lifecycleSettled = false;
+    const lifecycleOutcome = lifecycle.then((value) => {
+      lifecycleSettled = true;
+      return value;
+    });
+
+    try {
+      await vi.waitFor(() => expect(socketServer.clients.size).toBe(1));
+      Reflect.get(client, "emit").call(client, "error", new Error("transient transport error"));
+      for (const socket of socketServer.clients) {
+        socket.terminate();
+      }
+      await vi.waitFor(() => expect(connectionAttempts).toBe(2));
+      await vi.waitFor(() => expect(socketServer.clients.size).toBe(1));
+
+      expect(appStart).toHaveBeenCalledTimes(1);
+      expect(peakActiveConnections).toBe(1);
+      expect(lifecycleSettled).toBe(false);
+    } finally {
+      abortController.abort();
+      await lifecycleOutcome;
+      await gracefulStopSlackApp(app);
+      for (const socket of socketServer.clients) {
+        socket.terminate();
+      }
+      await new Promise<void>((resolve, reject) => {
+        socketServer.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it("uses Slack's fixed Socket Mode receiver policy", () => {
     const clientOptions = { teamId: "T1" };
     const { receiver } = createSlackBoltApp({
       interop: {
@@ -369,11 +501,6 @@ describe("createSlackBoltApp", () => {
       appToken: "xapp-test",
       slackWebhookPath: "/slack/events",
       clientOptions,
-      socketMode: {
-        clientPingTimeout: 20_000,
-        serverPingTimeout: 45_000,
-        pingPongLoggingEnabled: true,
-      },
     });
 
     const receiverArgs = (receiver as unknown as FakeSocketModeReceiver).args;
@@ -383,9 +510,7 @@ describe("createSlackBoltApp", () => {
     expect(receiverArgs).toEqual({
       appToken: "xapp-test",
       autoReconnectEnabled: true,
-      clientPingTimeout: 20_000,
-      serverPingTimeout: 45_000,
-      pingPongLoggingEnabled: true,
+      clientPingTimeout: 15_000,
       logger: receiverLogger,
       installerOptions: {
         clientOptions,

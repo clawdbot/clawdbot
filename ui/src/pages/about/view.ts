@@ -6,6 +6,7 @@ import { icons } from "../../components/icons.ts";
 import {
   canonicalLobsterLook,
   LOBSTER_PET_PALETTES,
+  lobsterLookStyle,
   renderLobsterSvg,
 } from "../../components/lobster-pet.ts";
 import {
@@ -17,6 +18,7 @@ import {
 import "../../components/tooltip.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
+import { formatRelativeTimestamp } from "../../lib/format.ts";
 import "../../styles/about.css";
 import { brandIcons } from "./brand-icons.ts";
 
@@ -102,6 +104,27 @@ function renderUnavailable() {
   return html`<span class="muted">${t("aboutPage.unavailable")}</span>`;
 }
 
+// Always-relative commit age; the exact localized timestamp lives on hover
+// (title) so the row stays compact for any artifact age.
+function renderCommitAge(commitAt: string | null) {
+  if (!commitAt) {
+    return nothing;
+  }
+  const timestamp = Date.parse(commitAt);
+  if (!Number.isFinite(timestamp)) {
+    return nothing;
+  }
+  const exact = new Intl.DateTimeFormat(i18n.getLocale(), {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(timestamp));
+  return html`
+    <time class="about-commit__age" dir="auto" datetime=${commitAt} title=${exact}
+      >${formatRelativeTimestamp(timestamp, { fallback: "" })}</time
+    >
+  `;
+}
+
 function renderCommit(props: AboutProps) {
   const commit = props.buildInfo.commit;
   if (!commit) {
@@ -111,10 +134,11 @@ function renderCommit(props: AboutProps) {
   return html`
     <span class="about-commit">
       <code dir="ltr" title=${commit}>${commit.slice(0, SHORT_COMMIT_LENGTH)}</code>
+      ${renderCommitAge(props.buildInfo.commitAt)}
       <openclaw-tooltip .content=${label}>
         <button
           type="button"
-          class="btn btn--icon"
+          class="about-commit__copy"
           aria-label=${label}
           aria-busy=${props.copyState === "copying" ? "true" : nothing}
           ?disabled=${props.copyState === "copying"}
@@ -123,9 +147,7 @@ function renderCommit(props: AboutProps) {
           <span aria-hidden="true">${props.copyState === "copied" ? icons.check : icons.copy}</span>
         </button>
       </openclaw-tooltip>
-      <span class="about-sr-only" role="status" aria-live="polite"
-        >${copyStatus(props.copyState)}</span
-      >
+      <span class="sr-only" role="status" aria-live="polite">${copyStatus(props.copyState)}</span>
     </span>
   `;
 }
@@ -142,7 +164,7 @@ function renderHero(props: AboutProps) {
       <button
         type="button"
         class="about-hero__clawd ${props.clawdWaving ? "about-hero__clawd--wave" : ""}"
-        style=${`--lob-shell:${look.palette.shell};--lob-claw:${look.palette.claw}`}
+        style=${lobsterLookStyle(look)}
         aria-label=${t("aboutPage.waveHello")}
         @click=${props.onPokeClawd}
       >
@@ -175,7 +197,11 @@ function renderHero(props: AboutProps) {
 export function renderAbout(props: AboutProps) {
   const buildDate = formatControlUiBuildDate(props.buildInfo.builtAt, i18n.getLocale());
   const buildFacts = html`
-    <dl class="settings-kv" role="group" aria-label=${t("aboutPage.artifactDetails")}>
+    <dl
+      class="settings-kv about-build-grid"
+      role="group"
+      aria-label=${t("aboutPage.artifactDetails")}
+    >
       <dt>${t("aboutPage.version")}</dt>
       <dd>
         ${props.buildInfo.version

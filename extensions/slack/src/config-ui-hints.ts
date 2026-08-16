@@ -1,5 +1,4 @@
 import { createChannelConfigUiHints } from "openclaw/plugin-sdk/channel-core";
-// Slack helper module supports config ui hints behavior.
 import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
 export const slackChannelConfigUiHints = {
@@ -7,17 +6,13 @@ export const slackChannelConfigUiHints = {
     label: "Slack",
     help: "Slack channel provider configuration for bot/app tokens, streaming behavior, and DM policy controls. Keep token handling and thread behavior explicit to avoid noisy workspace interactions.",
   },
-  enterpriseOrgInstall: {
-    label: "Slack Enterprise Grid Org Install",
-    help: 'Enable only for an Enterprise Grid org-wide bot installation. OpenClaw verifies the token with Slack auth.test at startup; DMs must be disabled or use dmPolicy="open" with allowFrom=["*"].',
-  },
-  identity: {
+  postAs: {
     label: "Slack Identity",
     help: 'Select "bot" (default) for the classic Slack app/bot identity or "user" to post as the authorizing human through a user token while the app carries event transport.',
   },
   ...createChannelConfigUiHints({
     channelLabel: "Slack",
-    dmPolicy: { channelKey: "slack", includeLegacyNestedPolicy: true },
+    dmPolicy: { channelKey: "slack" },
     configWrites: true,
     mentionPatterns: {
       targetDescription: "Slack channel IDs",
@@ -26,6 +21,23 @@ export const slackChannelConfigUiHints = {
     },
     nativeCommands: true,
     implicitMentions: true,
+    streaming: {
+      "": 'Unified Slack stream preview mode: "off" | "partial" | "block" | "progress" (default). Legacy boolean/streamMode keys are auto-mapped.',
+      mode: 'Canonical Slack preview mode: "off" | "partial" | "block" | "progress" (default).',
+      chunkMode: 'Chunking mode for outbound Slack text delivery: "length" (default) or "newline".',
+      "block.enabled":
+        'Enable chunked block-style Slack preview delivery when channels.slack.streaming.mode="block".',
+      "block.coalesce": "Merge streamed Slack block replies before final delivery.",
+      nativeTransport:
+        "Enable native Slack text streaming (chat.startStream/chat.appendStream/chat.stopStream) when channels.slack.streaming.mode is partial (default: true). Native streaming and Slack assistant thread status require a reply thread target; top-level DMs can still use draft post-and-edit preview streaming.",
+      "preview.toolProgress":
+        "Show tool/progress activity in the live draft preview message (default: true). Set false to hide interim tool updates while the draft preview stays active.",
+      "preview.commandText":
+        'Command/exec detail in preview tool-progress lines: "status" is the safe default; "raw" opts into command text.',
+      "progress.nativeTaskCards":
+        'Slack native task-card progress updates when channels.slack.streaming.mode="progress" and streaming.nativeTransport is enabled. Set false to fall back to the Block Kit progress card. Default: true.',
+    },
+    progress: { labels: "openclaw" },
   }),
   allowBots: {
     label: "Slack Allow Bot Messages",
@@ -50,22 +62,6 @@ export const slackChannelConfigUiHints = {
   "botLoopProtection.cooldownSeconds": {
     label: "Slack Bot Loop Cooldown Seconds",
     help: "How long to suppress the bot pair after it exceeds the budget. Default: 60.",
-  },
-  socketMode: {
-    label: "Slack Socket Mode Transport",
-    help: "Slack Socket Mode transport tuning passed to the Slack SDK. Use only when investigating ping/pong timeout or stale websocket behavior.",
-  },
-  "socketMode.clientPingTimeout": {
-    label: "Slack Socket Mode Pong Timeout",
-    help: "Milliseconds the Slack SDK waits for a pong after its client ping before treating the websocket as stale (OpenClaw default: 15000). Increase on hosts with event-loop starvation or slow network scheduling.",
-  },
-  "socketMode.serverPingTimeout": {
-    label: "Slack Socket Mode Server Ping Timeout",
-    help: "Milliseconds the Slack SDK waits for Slack server pings before treating the websocket as stale.",
-  },
-  "socketMode.pingPongLoggingEnabled": {
-    label: "Slack Socket Mode Ping/Pong Logging",
-    help: "Enable Slack SDK ping/pong transport logs while debugging Socket Mode websocket health.",
   },
   relay: {
     label: "Slack Relay Mode",
@@ -99,13 +95,9 @@ export const slackChannelConfigUiHints = {
     label: "Slack User Token Read Only",
     help: "When true, treat configured Slack user token usage as read-only helper behavior where possible. Keep enabled if you only need supplemental reads without user-context writes.",
   },
-  "capabilities.interactiveReplies": {
-    label: "Slack Interactive Replies",
-    help: "Enable agent-authored Slack interactive reply directives (`[[slack_buttons: ...]]`, `[[slack_select: ...]]`). Default: false.",
-  },
   execApprovals: {
     label: "Slack Exec Approvals",
-    help: "Slack-native exec approval routing and approver authorization. When unset, OpenClaw auto-enables DM-first native approvals if approvers can be resolved for this workspace account.",
+    help: "Slack-native exec approval routing and approver authorization. When unset, OpenClaw auto-enables DM-first native approvals if approvers can be resolved for this Slack account.",
   },
   presenceEvents: {
     label: "Slack Presence Events",
@@ -115,9 +107,17 @@ export const slackChannelConfigUiHints = {
     label: "Slack Presence Event Mode",
     help: '"off" disables polling; "auto" covers DMs, MPIMs, and recent threads with up to 8 observed people; "on" also covers larger threads and top-level channels.',
   },
+  "presenceEvents.prompt": {
+    label: "Slack Presence Event Prompt",
+    help: "Replace the default greeting guidance appended after presence facts. Use an empty string to omit event-specific guidance and let workspace instructions such as AGENTS.md govern behavior. Maximum: 20,000 characters.",
+  },
   "channels.*.presenceEvents.mode": {
     label: "Slack Channel Presence Event Mode",
     help: 'Override presence events for one Slack channel. Use "on" to include large threads or top-level channel sessions.',
+  },
+  "channels.*.presenceEvents.prompt": {
+    label: "Slack Channel Presence Event Prompt",
+    help: "Override the account-level presence-event prompt for one Slack channel. Maximum: 20,000 characters.",
   },
   "execApprovals.enabled": {
     label: "Slack Exec Approvals Enabled",
@@ -138,70 +138,6 @@ export const slackChannelConfigUiHints = {
   "execApprovals.target": {
     label: "Slack Exec Approval Target",
     help: 'Controls where Slack approval prompts are sent: "dm" sends to approver DMs (default), "channel" sends to the originating Slack chat/thread, and "both" sends to both. Channel delivery exposes the command text to the chat, so only use it in trusted channels.',
-  },
-  streaming: {
-    label: "Slack Streaming Mode",
-    help: 'Unified Slack stream preview mode: "off" | "partial" | "block" | "progress". Legacy boolean/streamMode keys are auto-mapped.',
-  },
-  "streaming.mode": {
-    label: "Slack Streaming Mode",
-    help: 'Canonical Slack preview mode: "off" | "partial" | "block" | "progress".',
-  },
-  "streaming.chunkMode": {
-    label: "Slack Chunk Mode",
-    help: 'Chunking mode for outbound Slack text delivery: "length" (default) or "newline".',
-  },
-  "streaming.block.enabled": {
-    label: "Slack Block Streaming Enabled",
-    help: 'Enable chunked block-style Slack preview delivery when channels.slack.streaming.mode="block".',
-  },
-  "streaming.block.coalesce": {
-    label: "Slack Block Streaming Coalesce",
-    help: "Merge streamed Slack block replies before final delivery.",
-  },
-  "streaming.nativeTransport": {
-    label: "Slack Native Streaming",
-    help: "Enable native Slack text streaming (chat.startStream/chat.appendStream/chat.stopStream) when channels.slack.streaming.mode is partial (default: true). Native streaming and Slack assistant thread status require a reply thread target; top-level DMs can still use draft post-and-edit preview streaming.",
-  },
-  "streaming.preview.toolProgress": {
-    label: "Slack Draft Tool Progress",
-    help: "Show tool/progress activity in the live draft preview message (default: true). Set false to hide interim tool updates while the draft preview stays active.",
-  },
-  "streaming.preview.commandText": {
-    label: "Slack Draft Command Text",
-    help: 'Command/exec detail in preview tool-progress lines: "raw" preserves released behavior; "status" shows only the tool label.',
-  },
-  "streaming.progress.label": {
-    label: "Slack Progress Label",
-    help: 'Initial progress draft title. Use "auto" for built-in single-word labels, a custom string, or false to hide the title.',
-  },
-  "streaming.progress.labels": {
-    label: "Slack Progress Label Pool",
-    help: 'Candidate labels for streaming.progress.label="auto". Leave unset to use OpenClaw built-in progress labels.',
-  },
-  "streaming.progress.maxLines": {
-    label: "Slack Progress Max Lines",
-    help: "Maximum number of compact progress lines to keep below the draft label (default: 8).",
-  },
-  "streaming.progress.maxLineChars": {
-    label: "Slack Progress Max Line Chars",
-    help: "Maximum characters per compact progress line before truncation (default: 120). Prose cuts at word boundaries; commands and paths keep useful suffixes.",
-  },
-  "streaming.progress.render": {
-    label: "Slack Progress Renderer",
-    help: 'Progress draft renderer: "text" uses one portable text body; "rich" renders structured Slack Block Kit fields with the same text fallback.',
-  },
-  "streaming.progress.nativeTaskCards": {
-    label: "Slack Native Progress Task Cards",
-    help: 'Opt in to Slack native task-card progress updates when channels.slack.streaming.mode="progress" and streaming.nativeTransport is enabled. Default: false.',
-  },
-  "streaming.progress.toolProgress": {
-    label: "Slack Progress Tool Lines",
-    help: "Show compact tool/progress lines in progress draft mode (default: true). Set false to keep only the label until final delivery.",
-  },
-  "streaming.progress.commandText": {
-    label: "Slack Progress Command Text",
-    help: 'Command/exec detail in progress draft lines: "raw" preserves released behavior; "status" shows only the tool label.',
   },
   "thread.historyScope": {
     label: "Slack Thread History Scope",

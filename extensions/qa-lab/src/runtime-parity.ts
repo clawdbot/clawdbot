@@ -1,7 +1,11 @@
 import {
-  listSessionEntries,
   loadTranscriptEventsSync,
+  resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  loadSqliteTrajectoryRuntimeEvents,
+  type SqliteTrajectoryRuntimeEventForTest,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 // Qa Lab plugin module implements runtime parity behavior.
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -14,23 +18,30 @@ import {
   scanGatewayLogSentinels,
   type GatewayLogSentinelFinding,
 } from "./gateway-log-sentinel.js";
+import { discardIgnoredResponseBody } from "./ignored-response-body.js";
 import * as parity from "./parity-shared.js";
+import {
+  buildRuntimeParityCacheDiagnostics,
+  type RuntimeParityCacheDiagnostics,
+} from "./runtime-parity-cache-diagnostics.js";
+import type { RuntimeParityUsage } from "./runtime-parity-usage.js";
+import { readRawQaSessionStore } from "./suite-runtime-agent-session.js";
 
+export type { RuntimeParityUsage } from "./runtime-parity-usage.js";
+
+// These are the canonical QA comparison cells, not the extensible product
+// AgentHarness registry. Broader harness coverage needs its own explicit lane.
 export type RuntimeId = "openclaw" | "codex";
+
+type RuntimeParityStatus = "pass" | "fail" | "skip";
+
+const CANONICAL_RUNTIME_IDS = ["openclaw", "codex"] as const satisfies readonly RuntimeId[];
 
 export type RuntimeParityToolCall = {
   tool: string;
   argsHash: string;
   resultHash: string;
   errorClass?: string;
-};
-
-export type RuntimeParityUsage = {
-  inputTokens: number;
-  outputTokens: number;
-  totalTokens: number;
-  cacheRead?: number;
-  cacheWrite?: number;
 };
 
 export type RuntimeParityUsagePolicy =
@@ -41,14 +52,36 @@ export type RuntimeParityCell = {
   runtime: RuntimeId;
   transcriptBytes: string;
   toolCalls: RuntimeParityToolCall[];
+  providerPlanToolCalls?: RuntimeParityToolCall[];
   finalText: string;
   usage: RuntimeParityUsage;
+  cacheDiagnostics?: RuntimeParityCacheDiagnostics;
   wallClockMs: number;
+  bootstrapWallClockMs?: number;
   transportErrorClass?: string;
   runtimeErrorClass?: string;
   bootStateLines: string[];
   sentinelFindings?: GatewayLogSentinelFinding[];
+  modelSwitchEvidence?: Record<string, unknown>;
 };
+
+type RuntimeParityResultCell = RuntimeParityCell & {
+  status: RuntimeParityStatus;
+  details?: string;
+};
+
+// Runtime-tool fixtures reserve this prefix for tracked harness limitations.
+// Matching only that explicit skip keeps unexpected coverage loss blocking.
+const KNOWN_HARNESS_GAP_DETAILS_PREFIX = "known-harness-gap ";
+
+function isKnownHarnessGapSkip(
+  cell: Pick<RuntimeParityResultCell, "details" | "status"> | undefined,
+) {
+  return (
+    cell?.status === "skip" &&
+    cell.details?.trimStart().startsWith(KNOWN_HARNESS_GAP_DETAILS_PREFIX) === true
+  );
+}
 
 export type RuntimeParityDrift =
   | "none"
@@ -61,10 +94,7 @@ export type RuntimeParityDrift =
 export type RuntimeParityResult = {
   scenarioId: string;
   runtimeParityUsage?: RuntimeParityUsagePolicy;
-  cells: {
-    openclaw: RuntimeParityCell;
-    codex: RuntimeParityCell;
-  };
+  cells: Record<RuntimeId, RuntimeParityResultCell>;
   drift: RuntimeParityDrift;
   driftDetails?: string;
 };
@@ -86,8 +116,8 @@ export function resolveRuntimeParityUsagePolicy(value: unknown): RuntimeParityUs
 }
 
 export type RuntimeParityScenarioExecution = {
-  scenarioStatus: "pass" | "fail";
-  scenarioDetails?: string;
+  status: RuntimeParityStatus;
+  details?: string;
   cell: RuntimeParityCell;
 };
 
@@ -101,10 +131,18 @@ export function runtimeParityCellStatus(
 }
 
 export function isRuntimeParityResultPass(result: RuntimeParityResult) {
+  if (result.drift === "failure-mode") {
+    return false;
+  }
+  const cells = CANONICAL_RUNTIME_IDS.map((runtime) => result.cells[runtime]);
+  const knownHarnessGapSkips = cells.filter((cell) => isKnownHarnessGapSkip(cell));
   return (
-    result.drift !== "failure-mode" &&
-    isRuntimeParityCellPassable(result.cells.openclaw) &&
-    isRuntimeParityCellPassable(result.cells.codex)
+    knownHarnessGapSkips.length <= 1 &&
+    cells.every(
+      (cell) =>
+        isRuntimeParityCellPassable(cell) &&
+        (cell.status === "pass" || isKnownHarnessGapSkip(cell)),
+    )
   );
 }
 
@@ -117,6 +155,7 @@ type QaSuiteScenarioLike = {
   details?: string;
   status: "pass" | "fail" | "skip";
   steps?: Array<{ details?: string; status?: "pass" | "fail" | "skip" }>;
+  modelSwitchEvidence?: Record<string, unknown>;
 };
 
 type RuntimeParityCaptureParams = {
@@ -124,14 +163,17 @@ type RuntimeParityCaptureParams = {
   gateway: QaGatewayLike;
   scenarioResult: QaSuiteScenarioLike;
   wallClockMs: number;
+  bootstrapWallClockMs?: number;
   agentId?: string;
   mockBaseUrl?: string;
 };
 
 type RuntimeParitySessionEntry = {
+  createdAt?: number;
   sessionId?: string;
   sessionFile?: string;
   updatedAt?: number;
+  heartbeatIsolatedBaseSessionKey?: string;
   spawnedBy?: string;
   parentSessionKey?: string;
   spawnDepth?: number;
@@ -156,8 +198,22 @@ type RuntimeParityMockRequestSnapshot = {
   toolOutput?: string;
 };
 
-type RuntimeParityPendingToolCall = RuntimeParityToolCall & {
+type RuntimeParityObservedToolCall = RuntimeParityToolCall & {
+  callId?: string;
+  hasArguments?: boolean;
+  hasResult?: boolean;
+};
+
+type RuntimeParityPendingToolCall = RuntimeParityObservedToolCall & {
   _resolved: boolean;
+};
+
+type RuntimeParityCaptureSources = {
+  sessions: Array<{
+    transcriptBytes: string;
+    trajectoryToolCalls: RuntimeParityObservedToolCall[];
+  }>;
+  transcriptBytes: string;
 };
 
 const DEFAULT_AGENT_ID = "qa";
@@ -166,6 +222,7 @@ const HEARTBEAT_TRANSCRIPT_PROMPT = "[OpenClaw heartbeat poll]";
 const HEARTBEAT_TASK_PROMPT_PREFIX =
   "Run the following periodic tasks (only those due based on their intervals):";
 const TOOL_RESULT_MISSING_ERROR_CLASS = "tool-result-missing";
+const RUNTIME_PARITY_SESSION_KEY_DETAIL_PREFIX = "RUNTIME_PARITY_SESSION_KEY=";
 const BOOT_STATE_LINE_RE =
   /\b(?:FailoverError|No API key found|Codex app-server|auth profile|runtime policy|restart mode:|plugin|doctor)\b/i;
 const TOOL_RESULT_ERROR_RE = /\b(?:error|failed|failure|timeout|denied|enoent|not found)\b/i;
@@ -186,9 +243,14 @@ function readUsageTotals(raw: unknown): RuntimeParityUsage {
     readFiniteNumber(usage.outputTokens) ??
     readFiniteNumber(usage.output_tokens) ??
     0;
-  const cacheRead = readFiniteNumber(usage.cacheRead) ?? readFiniteNumber(usage.cache_read_tokens);
-  const cacheWrite =
-    readFiniteNumber(usage.cacheWrite) ?? readFiniteNumber(usage.cache_write_tokens);
+  const cacheTelemetryUnavailable =
+    isMessageRecord(usage.cacheTelemetry) && usage.cacheTelemetry.state === "unavailable";
+  const cacheRead = cacheTelemetryUnavailable
+    ? undefined
+    : (readFiniteNumber(usage.cacheRead) ?? readFiniteNumber(usage.cache_read_tokens));
+  const cacheWrite = cacheTelemetryUnavailable
+    ? undefined
+    : (readFiniteNumber(usage.cacheWrite) ?? readFiniteNumber(usage.cache_write_tokens));
   const componentTotal = inputTokens + outputTokens + (cacheRead ?? 0) + (cacheWrite ?? 0);
   const totalTokens =
     readFiniteNumber(usage.total) ??
@@ -202,6 +264,26 @@ function readUsageTotals(raw: unknown): RuntimeParityUsage {
     ...(cacheRead !== undefined ? { cacheRead } : {}),
     ...(cacheWrite !== undefined ? { cacheWrite } : {}),
   };
+}
+
+function readAssistantUsage(message: Record<string, unknown>): RuntimeParityUsage {
+  const usage = readUsageTotals(message.usage ?? null);
+  if (!isMessageRecord(message.usage) || isMessageRecord(message.usage.cacheTelemetry)) {
+    return usage;
+  }
+  const provider = readNonEmptyString(message.provider)?.toLowerCase();
+  const api = readNonEmptyString(message.api)?.toLowerCase();
+  if (
+    (provider === "ollama" || api === "ollama") &&
+    usage.cacheRead === 0 &&
+    usage.cacheWrite === 0
+  ) {
+    // Transcripts written before cacheTelemetry was added contain Ollama's
+    // required placeholder zeros. Explicit current provenance always wins.
+    delete usage.cacheRead;
+    delete usage.cacheWrite;
+  }
+  return usage;
 }
 
 function addUsage(target: RuntimeParityUsage, next: RuntimeParityUsage) {
@@ -404,7 +486,9 @@ function classifyToolResultError(params: {
   return undefined;
 }
 
-function finalizeToolCallOrder(ordered: RuntimeParityPendingToolCall[]): RuntimeParityToolCall[] {
+function finalizeToolCallOrder(
+  ordered: RuntimeParityPendingToolCall[],
+): RuntimeParityObservedToolCall[] {
   return ordered.map(({ _resolved, ...toolCall }) =>
     _resolved
       ? toolCall
@@ -415,7 +499,9 @@ function finalizeToolCallOrder(ordered: RuntimeParityPendingToolCall[]): Runtime
   );
 }
 
-function resolveToolCallOrder(records: RuntimeParityTranscriptRecord[]): RuntimeParityToolCall[] {
+function resolveToolCallOrder(
+  records: RuntimeParityTranscriptRecord[],
+): RuntimeParityObservedToolCall[] {
   const ordered: RuntimeParityPendingToolCall[] = [];
   const byId = new Map<string, number>();
   const unresolvedByTool = new Map<string, number[]>();
@@ -471,6 +557,9 @@ function resolveToolCallOrder(records: RuntimeParityTranscriptRecord[]): Runtime
             tool: call.tool,
             argsHash: parity.stableHash(call.args),
             resultHash: parity.stableHash(null),
+            callId: call.id,
+            hasArguments: true,
+            hasResult: false,
             _resolved: false,
           }) - 1;
         if (call.id) {
@@ -482,7 +571,7 @@ function resolveToolCallOrder(records: RuntimeParityTranscriptRecord[]): Runtime
     if (record.role === "user" || record.role === "tool" || record.role === "toolResult") {
       for (const result of extractToolResults(record.message)) {
         const pendingIndex = matchPendingIndex(result);
-        const nextValue: RuntimeParityToolCall = {
+        const nextValue: RuntimeParityObservedToolCall = {
           tool:
             result.tool ??
             (pendingIndex !== undefined ? ordered[pendingIndex]?.tool : undefined) ??
@@ -492,6 +581,10 @@ function resolveToolCallOrder(records: RuntimeParityTranscriptRecord[]): Runtime
               ? (ordered[pendingIndex]?.argsHash ?? parity.stableHash(null))
               : parity.stableHash(null),
           resultHash: parity.stableHash(result.result),
+          callId: pendingIndex !== undefined ? ordered[pendingIndex]?.callId : result.id,
+          hasArguments:
+            pendingIndex !== undefined ? ordered[pendingIndex]?.hasArguments === true : false,
+          hasResult: true,
           ...(result.errorClass ? { errorClass: result.errorClass } : {}),
         };
         if (pendingIndex === undefined || !ordered[pendingIndex]) {
@@ -576,6 +669,220 @@ function resolveToolCallOrderFromMockRequests(
   }
 
   return finalizeToolCallOrder(ordered);
+}
+
+function trajectoryToolCallId(data: Record<string, unknown>) {
+  return (
+    normalizeToolCallId(data.toolCallId) ??
+    normalizeToolCallId(data.itemId) ??
+    normalizeToolCallId(data.id)
+  );
+}
+
+function trajectoryToolResultValue(data: Record<string, unknown>) {
+  if (Object.hasOwn(data, "result")) {
+    return data.result;
+  }
+  if (Object.hasOwn(data, "output")) {
+    return data.output;
+  }
+  if (Object.hasOwn(data, "contentItems")) {
+    return data.contentItems;
+  }
+  return {
+    ...(Object.hasOwn(data, "status") ? { status: data.status } : {}),
+    ...(Object.hasOwn(data, "success") ? { success: data.success } : {}),
+  };
+}
+
+function isTrajectoryToolResultError(data: Record<string, unknown>) {
+  if (data.isError === true || data.success === false) {
+    return true;
+  }
+  const status = readNonEmptyString(data.status)?.toLowerCase();
+  return (
+    status === "blocked" ||
+    status === "cancelled" ||
+    status === "declined" ||
+    status === "error" ||
+    status === "failed"
+  );
+}
+
+function resolveTrajectoryToolCallOrder(
+  events: readonly SqliteTrajectoryRuntimeEventForTest[],
+): RuntimeParityObservedToolCall[] {
+  const ordered: Array<{
+    call: RuntimeParityObservedToolCall;
+    resolved: boolean;
+  }> = [];
+
+  const matchPendingIndex = (data: Record<string, unknown>, tool?: string) => {
+    const id = trajectoryToolCallId(data);
+    if (id) {
+      const idMatch = ordered.findIndex((pending) => pending.call.callId === id);
+      if (idMatch >= 0) {
+        return idMatch;
+      }
+      return undefined;
+    }
+    const toolMatch = ordered.findIndex(
+      (pending) => !pending.resolved && (!tool || pending.call.tool === tool),
+    );
+    if (toolMatch >= 0) {
+      return toolMatch;
+    }
+    return undefined;
+  };
+
+  for (const event of events) {
+    const data = event.data ?? {};
+    if (event.type === "tool.call") {
+      const tool = readNonEmptyString(data.name) ?? "unknown";
+      ordered.push({
+        call: {
+          tool,
+          argsHash: parity.stableHash(data.arguments ?? null),
+          resultHash: parity.stableHash(null),
+          callId: trajectoryToolCallId(data),
+          hasArguments: true,
+          hasResult: false,
+        },
+        resolved: false,
+      });
+      continue;
+    }
+    if (event.type !== "tool.result") {
+      continue;
+    }
+    const tool = readNonEmptyString(data.name);
+    const pendingIndex = matchPendingIndex(data, tool);
+    const pendingCall = pendingIndex !== undefined ? ordered[pendingIndex]?.call : undefined;
+    const nextValue: RuntimeParityObservedToolCall = {
+      tool: tool ?? pendingCall?.tool ?? "unknown",
+      argsHash: pendingCall?.argsHash ?? parity.stableHash(null),
+      resultHash: parity.stableHash(trajectoryToolResultValue(data)),
+      callId: trajectoryToolCallId(data) ?? pendingCall?.callId,
+      hasArguments: pendingCall?.hasArguments === true,
+      hasResult: true,
+      ...(isTrajectoryToolResultError(data) ? { errorClass: "tool-result-error" } : {}),
+    };
+    if (pendingIndex === undefined) {
+      ordered.push({
+        call: nextValue,
+        resolved: true,
+      });
+      continue;
+    }
+    ordered[pendingIndex] = {
+      ...ordered[pendingIndex],
+      call: nextValue,
+      resolved: true,
+    };
+  }
+
+  for (const pending of ordered) {
+    if (!pending.resolved) {
+      pending.call.errorClass ??= TOOL_RESULT_MISSING_ERROR_CLASS;
+    }
+  }
+  return ordered.map((pending) => pending.call);
+}
+
+function mergeRuntimeParityToolCalls(params: {
+  transcriptToolCalls: RuntimeParityObservedToolCall[];
+  trajectoryToolCalls: RuntimeParityObservedToolCall[];
+}): RuntimeParityObservedToolCall[] {
+  if (params.trajectoryToolCalls.length === 0) {
+    return params.transcriptToolCalls;
+  }
+  if (params.transcriptToolCalls.length === 0) {
+    return params.trajectoryToolCalls;
+  }
+
+  const transcript = params.transcriptToolCalls;
+  const trajectory = params.trajectoryToolCalls;
+  const callsMatch = (
+    transcriptCall: RuntimeParityObservedToolCall,
+    trajectoryCall: RuntimeParityObservedToolCall,
+  ) => {
+    if (transcriptCall.callId && trajectoryCall.callId) {
+      return transcriptCall.callId === trajectoryCall.callId;
+    }
+    if (transcriptCall.callId || trajectoryCall.callId) {
+      return false;
+    }
+    return (
+      transcriptCall.tool === trajectoryCall.tool &&
+      transcriptCall.argsHash === trajectoryCall.argsHash
+    );
+  };
+  const mergeMatchingCalls = (
+    transcriptCall: RuntimeParityObservedToolCall,
+    trajectoryCall: RuntimeParityObservedToolCall,
+  ): RuntimeParityObservedToolCall => {
+    const invocation = transcriptCall.hasArguments ? transcriptCall : trajectoryCall;
+    const completion = transcriptCall.hasResult ? transcriptCall : trajectoryCall;
+    return {
+      tool: invocation.tool,
+      argsHash: invocation.argsHash,
+      resultHash: completion.resultHash,
+      callId: transcriptCall.callId ?? trajectoryCall.callId,
+      hasArguments: invocation.hasArguments,
+      hasResult: completion.hasResult,
+      ...(completion.errorClass ? { errorClass: completion.errorClass } : {}),
+    };
+  };
+  const sharedSuffixLengths = Array.from({ length: transcript.length + 1 }, () =>
+    Array<number>(trajectory.length + 1).fill(0),
+  );
+  for (let transcriptIndex = transcript.length - 1; transcriptIndex >= 0; transcriptIndex -= 1) {
+    for (let trajectoryIndex = trajectory.length - 1; trajectoryIndex >= 0; trajectoryIndex -= 1) {
+      sharedSuffixLengths[transcriptIndex]![trajectoryIndex] = callsMatch(
+        transcript[transcriptIndex]!,
+        trajectory[trajectoryIndex]!,
+      )
+        ? 1 + sharedSuffixLengths[transcriptIndex + 1]![trajectoryIndex + 1]!
+        : Math.max(
+            sharedSuffixLengths[transcriptIndex + 1]![trajectoryIndex]!,
+            sharedSuffixLengths[transcriptIndex]![trajectoryIndex + 1]!,
+          );
+    }
+  }
+
+  const merged: RuntimeParityObservedToolCall[] = [];
+  let transcriptIndex = 0;
+  let trajectoryIndex = 0;
+  while (transcriptIndex < transcript.length && trajectoryIndex < trajectory.length) {
+    const transcriptCall = transcript[transcriptIndex]!;
+    const trajectoryCall = trajectory[trajectoryIndex]!;
+    if (callsMatch(transcriptCall, trajectoryCall)) {
+      merged.push(mergeMatchingCalls(transcriptCall, trajectoryCall));
+      transcriptIndex += 1;
+      trajectoryIndex += 1;
+      continue;
+    }
+    if (
+      sharedSuffixLengths[transcriptIndex + 1]![trajectoryIndex]! >=
+      sharedSuffixLengths[transcriptIndex]![trajectoryIndex + 1]!
+    ) {
+      merged.push(transcriptCall);
+      transcriptIndex += 1;
+      continue;
+    }
+    merged.push(trajectoryCall);
+    trajectoryIndex += 1;
+  }
+  return [...merged, ...transcript.slice(transcriptIndex), ...trajectory.slice(trajectoryIndex)];
+}
+
+function removeRuntimeParityToolCallIdentity(
+  toolCalls: RuntimeParityObservedToolCall[],
+): RuntimeParityToolCall[] {
+  return toolCalls.map(
+    ({ callId: _callId, hasArguments: _hasArguments, hasResult: _hasResult, ...toolCall }) =>
+      toolCall,
+  );
 }
 
 function classifyScenarioError(details: string | undefined): string | undefined {
@@ -722,7 +1029,7 @@ function aggregateUsage(records: RuntimeParityTranscriptRecord[]): RuntimeParity
     if (record.role !== "assistant") {
       continue;
     }
-    const usage = readUsageTotals(record.message.usage ?? null);
+    const usage = readAssistantUsage(record.message);
     addUsage(totals, usage);
   }
   return totals;
@@ -791,35 +1098,12 @@ function hasProvenTerminalImageResult(scenarioResult: QaSuiteScenarioLike) {
 const PROVEN_TERMINAL_IMAGE_RESULT_HASH = parity.stableHash({ kind: "media", status: "success" });
 
 function resolveRuntimeParityToolCalls(params: {
-  mockToolCalls: RuntimeParityToolCall[] | null;
   transcriptToolCalls: RuntimeParityToolCall[];
   terminalImageResultProven?: boolean;
 }): RuntimeParityToolCall[] {
-  const mockImageCalls = (params.mockToolCalls ?? []).filter(
-    (toolCall) => toolCall.tool === "image_generate",
-  );
-  const transcriptImageCalls = params.transcriptToolCalls.filter(
-    (toolCall) => toolCall.tool === "image_generate",
-  );
-  const imageCaptureIsUnambiguous = parity.hasSingleDistinctLeftToolCallShape(
-    mockImageCalls,
-    transcriptImageCalls,
-  );
-  let selected: RuntimeParityToolCall[];
-  if (!params.mockToolCalls) {
-    selected = params.transcriptToolCalls;
-  } else if (
-    hasMissingToolResult(params.mockToolCalls) &&
-    !hasMissingToolResult(params.transcriptToolCalls) &&
-    parity.compareCapturedToolCallShape(params.mockToolCalls, params.transcriptToolCalls) ===
-      undefined
-  ) {
-    selected = params.transcriptToolCalls;
-  } else {
-    selected = params.mockToolCalls;
-  }
+  let selected = params.transcriptToolCalls;
   const imageCalls = selected.filter((toolCall) => toolCall.tool === "image_generate");
-  if (params.terminalImageResultProven && imageCaptureIsUnambiguous && imageCalls.length === 1) {
+  if (params.terminalImageResultProven && imageCalls.length === 1) {
     selected = selected.map((toolCall) => {
       if (
         toolCall.tool !== "image_generate" ||
@@ -873,8 +1157,10 @@ function summarizeSentinelErrorClass(findings: readonly GatewayLogSentinelFindin
 function classifyRuntimeParityCells(params: {
   openclaw: RuntimeParityCell;
   codex: RuntimeParityCell;
-  openclawScenarioStatus: "pass" | "fail";
-  codexScenarioStatus: "pass" | "fail";
+  openclawStatus: RuntimeParityStatus;
+  codexStatus: RuntimeParityStatus;
+  openclawDetails?: string;
+  codexDetails?: string;
 }): Pick<RuntimeParityResult, "drift" | "driftDetails"> {
   if (
     isHardFailureRuntimeError(params.openclaw.runtimeErrorClass) ||
@@ -901,18 +1187,43 @@ function classifyRuntimeParityCells(params: {
     };
   }
 
+  const openclawKnownHarnessGap = isKnownHarnessGapSkip({
+    status: params.openclawStatus,
+    details: params.openclawDetails,
+  });
+  const codexKnownHarnessGap = isKnownHarnessGapSkip({
+    status: params.codexStatus,
+    details: params.codexDetails,
+  });
   if (
-    params.openclawScenarioStatus === "fail" ||
-    params.codexScenarioStatus === "fail" ||
+    openclawKnownHarnessGap !== codexKnownHarnessGap &&
+    (openclawKnownHarnessGap ? params.codexStatus : params.openclawStatus) === "pass" &&
+    isRuntimeParityCellPassable(params.openclaw) &&
+    isRuntimeParityCellPassable(params.codex)
+  ) {
+    const skippedRuntime = openclawKnownHarnessGap ? "openclaw" : "codex";
+    return {
+      drift: "structural",
+      driftDetails: `known harness gap in ${skippedRuntime} runtime; paired runtime passed`,
+    };
+  }
+
+  if (
+    params.openclawStatus !== "pass" ||
+    params.codexStatus !== "pass" ||
     !isRuntimeParityCellPassable(params.openclaw) ||
     !isRuntimeParityCellPassable(params.codex)
   ) {
     return {
       drift: "failure-mode",
       driftDetails:
-        params.openclawScenarioStatus === params.codexScenarioStatus
-          ? "at least one runtime failed"
-          : `scenario status differs (${params.openclawScenarioStatus} vs ${params.codexScenarioStatus})`,
+        params.openclawStatus === params.codexStatus
+          ? params.openclawStatus === "skip"
+            ? "both canonical runtime-pair cells skipped"
+            : params.openclawStatus === "fail"
+              ? "both canonical runtime-pair cells failed"
+              : "at least one runtime failed"
+          : `runtime-pair cell status differs (${params.openclawStatus} vs ${params.codexStatus})`,
     };
   }
 
@@ -976,62 +1287,117 @@ function runtimeParitySessionEnv(stateDir: string): NodeJS.ProcessEnv {
   return { ...process.env, OPENCLAW_STATE_DIR: stateDir };
 }
 
-function readRuntimeParitySessionEntries(params: {
-  stateDir: string;
-  agentId: string;
-}): RuntimeParitySessionCandidate[] {
-  try {
-    const entries = listSessionEntries({
-      agentId: params.agentId,
-      env: runtimeParitySessionEnv(params.stateDir),
-    })
-      .filter(({ entry }) => readNonEmptyString(entry.sessionId))
-      .map(({ entry, sessionKey }) => ({
-        entry: entry as RuntimeParitySessionEntry,
-        sessionKey,
-      }));
-    const rootEntries = entries.filter(({ entry }) => isRuntimeParityRootSession(entry));
-    const candidates = rootEntries.length > 0 ? rootEntries : entries;
-    return candidates.toSorted(
-      (left, right) => (right.entry.updatedAt ?? 0) - (left.entry.updatedAt ?? 0),
-    );
-  } catch {
-    return [];
-  }
-}
-
-async function loadRuntimeParityTranscripts(params: {
+async function readRuntimeParitySessionEntries(params: {
   gateway: QaGatewayLike;
   agentId: string;
-}): Promise<string> {
-  const stateDir = `${params.gateway.tempRoot}/state`;
-  const sessionEntries = readRuntimeParitySessionEntries({
-    stateDir,
-    agentId: params.agentId,
+  preferredSessionKeys?: ReadonlySet<string>;
+}): Promise<RuntimeParitySessionCandidate[]> {
+  // This feeds release evidence: after bounded FTS-settle retries, a persistent
+  // store failure must fail capture instead of becoming an empty false green.
+  const store = await readRawQaSessionStore(
+    { gateway: params.gateway },
+    { agentId: params.agentId },
+  );
+  const entries = Object.entries(store)
+    .filter(([, entry]) => readNonEmptyString(entry.sessionId))
+    .map(([sessionKey, entry]) => ({
+      entry: entry as RuntimeParitySessionEntry,
+      sessionKey,
+    }))
+    .filter(({ entry }) => !readNonEmptyString(entry.heartbeatIsolatedBaseSessionKey));
+  const selectedEntries = params.preferredSessionKeys
+    ? entries.filter(({ sessionKey }) => params.preferredSessionKeys?.has(sessionKey))
+    : entries;
+  const rootEntries = selectedEntries.filter(({ entry }) => isRuntimeParityRootSession(entry));
+  const candidates = rootEntries.length > 0 ? rootEntries : selectedEntries;
+  return candidates.toSorted((left, right) => {
+    const leftCreatedAt = left.entry.createdAt ?? left.entry.updatedAt ?? 0;
+    const rightCreatedAt = right.entry.createdAt ?? right.entry.updatedAt ?? 0;
+    return leftCreatedAt - rightCreatedAt || left.sessionKey.localeCompare(right.sessionKey);
   });
-  const transcripts: string[] = [];
+}
+
+async function loadRuntimeParityCaptureSources(params: {
+  gateway: QaGatewayLike;
+  agentId: string;
+  preferredSessionKeys?: readonly string[];
+}): Promise<RuntimeParityCaptureSources> {
+  const stateDir = `${params.gateway.tempRoot}/state`;
+  const env = runtimeParitySessionEnv(stateDir);
+  const storePath = resolveStorePath(undefined, { agentId: params.agentId, env });
+  const sessionEntries = await readRuntimeParitySessionEntries({
+    gateway: params.gateway,
+    agentId: params.agentId,
+    ...(params.preferredSessionKeys?.length
+      ? { preferredSessionKeys: new Set(params.preferredSessionKeys) }
+      : {}),
+  });
+  const sessions: RuntimeParityCaptureSources["sessions"] = [];
   for (const { entry, sessionKey } of sessionEntries) {
     const sessionId = readNonEmptyString(entry.sessionId);
     if (!sessionId) {
       continue;
     }
+    let transcriptBytes = "";
     try {
       const events = loadTranscriptEventsSync({
         agentId: params.agentId,
-        env: runtimeParitySessionEnv(stateDir),
+        env,
         sessionId,
         sessionKey,
       });
-      const transcript = events.map((event) => JSON.stringify(event)).join("\n");
-      if (transcript.trim().length > 0 && !isHeartbeatOnlyRuntimeTranscript(transcript)) {
-        transcripts.push(transcript.trimEnd());
-        break;
+      transcriptBytes = events
+        .map((event) => JSON.stringify(event))
+        .join("\n")
+        .trimEnd();
+      if (transcriptBytes && isHeartbeatOnlyRuntimeTranscript(transcriptBytes)) {
+        continue;
       }
     } catch {
       // Ignore missing transcript files so failed cells still render.
     }
+    let trajectoryToolCalls: RuntimeParityObservedToolCall[] = [];
+    try {
+      const trajectoryEvents = await loadSqliteTrajectoryRuntimeEvents({
+        agentId: params.agentId,
+        env,
+        sessionId,
+        storePath,
+      });
+      trajectoryToolCalls = resolveTrajectoryToolCallOrder(trajectoryEvents);
+    } catch {
+      // Transcript evidence remains authoritative when diagnostics are unavailable.
+    }
+    if (transcriptBytes || trajectoryToolCalls.length > 0) {
+      sessions.push({ transcriptBytes, trajectoryToolCalls });
+    }
   }
-  return transcripts.join("\n");
+  return {
+    sessions,
+    transcriptBytes: sessions
+      .map((session) => session.transcriptBytes)
+      .filter(Boolean)
+      .join("\n"),
+  };
+}
+
+function runtimeParitySessionKeysFromScenarioResult(result: QaSuiteScenarioLike) {
+  const sessionKeys = new Set<string>();
+  const detailBlocks = [result.details, ...(result.steps ?? []).map((step) => step.details)];
+  for (const detailBlock of detailBlocks) {
+    for (const line of detailBlock?.split(/\r?\n/u) ?? []) {
+      if (!line.startsWith(RUNTIME_PARITY_SESSION_KEY_DETAIL_PREFIX)) {
+        continue;
+      }
+      const sessionKey = readNonEmptyString(
+        line.slice(RUNTIME_PARITY_SESSION_KEY_DETAIL_PREFIX.length),
+      );
+      if (sessionKey) {
+        sessionKeys.add(sessionKey);
+      }
+    }
+  }
+  return [...sessionKeys];
 }
 
 async function loadRuntimeParityMockToolCalls(
@@ -1052,6 +1418,7 @@ async function loadRuntimeParityMockToolCalls(
     let payload: unknown;
     try {
       if (!response.ok) {
+        await discardIgnoredResponseBody(response);
         return null;
       }
       payload = await response.json();
@@ -1082,12 +1449,22 @@ export async function captureRuntimeParityCell(
   params: RuntimeParityCaptureParams,
 ): Promise<RuntimeParityCell> {
   const agentId = params.agentId ?? DEFAULT_AGENT_ID;
-  const transcriptBytes = await loadRuntimeParityTranscripts({
+  const { sessions, transcriptBytes } = await loadRuntimeParityCaptureSources({
     gateway: params.gateway,
     agentId,
+    preferredSessionKeys: runtimeParitySessionKeysFromScenarioResult(params.scenarioResult),
   });
   const transcriptRecords = buildTranscriptRecords(transcriptBytes);
-  const transcriptToolCalls = resolveToolCallOrder(transcriptRecords);
+  // Runtime-tool fixtures split happy and failure paths across root sessions.
+  // Resolve each session separately so repeated tool-call ids cannot cross-link.
+  const runtimeToolCalls = removeRuntimeParityToolCallIdentity(
+    sessions.flatMap((session) =>
+      mergeRuntimeParityToolCalls({
+        transcriptToolCalls: resolveToolCallOrder(buildTranscriptRecords(session.transcriptBytes)),
+        trajectoryToolCalls: session.trajectoryToolCalls,
+      }),
+    ),
+  );
   const parentPrompts = transcriptRecords
     .filter((record) => record.role === "user")
     .map((record) => extractAssistantText(record.message))
@@ -1106,49 +1483,76 @@ export async function captureRuntimeParityCell(
   // Retry passes retain first-attempt diagnostics; only terminal failures may
   // classify that historical text as the cell's runtime error.
   const scenarioErrorClass =
-    params.scenarioResult.status === "pass"
-      ? undefined
-      : classifyScenarioError(params.scenarioResult.details);
+    params.scenarioResult.status === "fail"
+      ? classifyScenarioError(params.scenarioResult.details)
+      : undefined;
   const sentinelErrorClass = summarizeSentinelErrorClass(sentinelFindings);
   const terminalImageResultProven = hasProvenTerminalImageResult(params.scenarioResult);
   return {
     runtime: params.runtime,
     transcriptBytes,
     toolCalls: resolveRuntimeParityToolCalls({
-      mockToolCalls,
-      transcriptToolCalls,
+      transcriptToolCalls: runtimeToolCalls,
       terminalImageResultProven,
     }),
+    ...(mockToolCalls ? { providerPlanToolCalls: mockToolCalls } : {}),
     finalText: extractFinalAssistantText(transcriptRecords),
     usage: aggregateUsage(transcriptRecords),
+    cacheDiagnostics: buildRuntimeParityCacheDiagnostics(
+      transcriptRecords
+        .filter((record) => record.role === "assistant")
+        .map((record) => readAssistantUsage(record.message)),
+    ),
     wallClockMs: params.wallClockMs,
+    ...(params.bootstrapWallClockMs === undefined
+      ? {}
+      : { bootstrapWallClockMs: params.bootstrapWallClockMs }),
     ...(scenarioErrorClass || sentinelErrorClass
       ? { runtimeErrorClass: scenarioErrorClass ?? sentinelErrorClass }
       : {}),
     bootStateLines: extractBootStateLines(gatewayLogs),
     ...(sentinelFindings.length > 0 ? { sentinelFindings } : {}),
+    ...(params.scenarioResult.modelSwitchEvidence
+      ? { modelSwitchEvidence: params.scenarioResult.modelSwitchEvidence }
+      : {}),
   };
 }
 
 export async function runRuntimeParityScenario(params: {
   scenarioId: string;
   runtimeParityUsage?: RuntimeParityUsagePolicy;
+  runtimePair?: readonly [RuntimeId, RuntimeId];
   runCell: (runtime: RuntimeId) => Promise<RuntimeParityScenarioExecution>;
 }): Promise<RuntimeParityResult> {
-  const openclaw = await params.runCell("openclaw");
-  const codex = await params.runCell("codex");
+  const [firstRuntime, secondRuntime] = params.runtimePair ?? CANONICAL_RUNTIME_IDS;
+  if (firstRuntime === secondRuntime) {
+    throw new Error("Runtime parity must compare two different runtimes.");
+  }
+  const first = await params.runCell(firstRuntime);
+  const second = await params.runCell(secondRuntime);
+  const [openclaw, codex] = firstRuntime === "openclaw" ? [first, second] : [second, first];
   const drift = classifyRuntimeParityCells({
     openclaw: openclaw.cell,
     codex: codex.cell,
-    openclawScenarioStatus: openclaw.scenarioStatus,
-    codexScenarioStatus: codex.scenarioStatus,
+    openclawStatus: openclaw.status,
+    codexStatus: codex.status,
+    openclawDetails: openclaw.details,
+    codexDetails: codex.details,
   });
   return {
     scenarioId: params.scenarioId,
     runtimeParityUsage: resolveRuntimeParityUsagePolicy(params.runtimeParityUsage),
     cells: {
-      openclaw: openclaw.cell,
-      codex: codex.cell,
+      openclaw: {
+        ...openclaw.cell,
+        status: openclaw.status,
+        ...(openclaw.details ? { details: openclaw.details } : {}),
+      },
+      codex: {
+        ...codex.cell,
+        status: codex.status,
+        ...(codex.details ? { details: codex.details } : {}),
+      },
     },
     drift: drift.drift,
     ...(drift.driftDetails ? { driftDetails: drift.driftDetails } : {}),

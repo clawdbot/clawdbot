@@ -5,7 +5,7 @@
  */
 import { z, type ZodRawShape, type ZodTypeAny } from "zod";
 import { ToolPolicySchema } from "../../config/zod-schema.agent-runtime.js";
-import { DmPolicySchema } from "../../config/zod-schema.core.js";
+import { DmPolicySchema, MentionPatternsPolicySchema } from "../../config/zod-schema.core.js";
 import { validateJsonSchemaValue } from "../../plugins/schema-validator.js";
 import type { JsonSchemaObject } from "../../shared/json-schema.types.js";
 import { parseConfigPathArrayIndex } from "../../shared/path-array-index.js";
@@ -42,12 +42,27 @@ export const ChannelGroupEntrySchema = z
   })
   .strict();
 
+type ChannelGroupEntryField = keyof typeof ChannelGroupEntrySchema.shape;
+
 /** Extend the canonical group/room policy shape with channel-owned fields. */
-export function buildGroupEntrySchema<T extends ZodRawShape = Record<never, never>>(
-  extraShape?: T,
-) {
-  return ChannelGroupEntrySchema.extend(extraShape ?? ({} as T));
+export function buildGroupEntrySchema<
+  T extends ZodRawShape = Record<never, never>,
+  const TOmit extends readonly ChannelGroupEntryField[] = [],
+>(extraShape?: T, options?: { omit?: TOmit }) {
+  const omitted = new Set<ChannelGroupEntryField>(options?.omit ?? []);
+  const baseShape = Object.fromEntries(
+    Object.entries(ChannelGroupEntrySchema.shape).filter(
+      ([key]) => !omitted.has(key as ChannelGroupEntryField),
+    ),
+  ) as Omit<typeof ChannelGroupEntrySchema.shape, TOmit[number]>;
+  return z.object({ ...baseShape, ...(extraShape ?? ({} as T)) }).strict();
 }
+
+/** Shared mention-policy schemas. IRC retains its shipped string-array form. */
+export const ChannelMentionPatternsSchemas = {
+  canonical: MentionPatternsPolicySchema,
+  stringArray: z.array(z.string()),
+} as const;
 
 /** Build the common nested DM config block used by channel account schemas. */
 export function buildNestedDmConfigSchema(extraShape?: ZodRawShape) {

@@ -5,17 +5,16 @@ import { enableCompileCache, getCompileCacheDir } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { expectDefined } from "@openclaw/normalization-core";
-import { isTerminalInteractiveRespawnArgv } from "./cli/respawn-policy.js";
+import {
+  isTerminalInteractiveRespawnArgv,
+  shouldKeepNativeHookRelayInProcess,
+} from "./cli/respawn-policy.js";
 import { attachChildProcessBridge } from "./process/child-process-bridge.js";
 import {
   runRespawnChildWithSignalBridge,
   type RespawnChildRuntime,
 } from "./process/respawn-child-runner.js";
 
-// Node 24.0-24.14 can deadlock during ESM module loading when compile cache is
-// enabled on Windows npm-global installs. Keep the skip scoped to that platform.
-const MIN_COMPILE_CACHE_NODE_24_MINOR = 15;
 const COMPILE_CACHE_DISABLED_RESPAWNED_ENV = "OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED";
 
 export function resolveEntryInstallRoot(entryFile: string): string {
@@ -39,38 +38,13 @@ function isNodeCompileCacheRequested(env: NodeJS.ProcessEnv | undefined): boolea
   return env?.NODE_COMPILE_CACHE !== undefined && !isNodeCompileCacheDisabled(env);
 }
 
-function isNodeVersionAffectedByCompileCacheDeadlock(nodeVersion: string | undefined): boolean {
-  if (!nodeVersion) {
-    return false;
-  }
-  const match = nodeVersion.match(/^(\d+)\.(\d+)/);
-  if (!match) {
-    return false;
-  }
-  const major = Number.parseInt(expectDefined(match[1], "compile-cache major version capture"), 10);
-  const minor = Number.parseInt(expectDefined(match[2], "compile-cache minor version capture"), 10);
-  if (major !== 24) {
-    return false;
-  }
-  return minor < MIN_COMPILE_CACHE_NODE_24_MINOR;
-}
-
 function shouldEnableOpenClawCompileCache(params: {
   env?: NodeJS.ProcessEnv;
   installRoot: string;
-  nodeVersion?: string;
-  platform?: NodeJS.Platform;
 }): boolean {
-  if (isNodeCompileCacheDisabled(params.env)) {
-    return false;
-  }
-  if (
-    (params.platform ?? process.platform) === "win32" &&
-    isNodeVersionAffectedByCompileCacheDeadlock(params.nodeVersion ?? process.versions.node)
-  ) {
-    return false;
-  }
-  return !isSourceCheckoutInstallRoot(params.installRoot);
+  return (
+    !isNodeCompileCacheDisabled(params.env) && !isSourceCheckoutInstallRoot(params.installRoot)
+  );
 }
 
 function sanitizeCompileCachePathSegment(value: string): string {
@@ -141,15 +115,15 @@ function buildOpenClawCompileCacheRespawnPlan(params: {
   installRoot: string;
   argv?: string[];
   compileCacheDir?: string;
-  nodeVersion?: string;
   platform?: NodeJS.Platform;
 }): OpenClawCompileCacheRespawnPlan | undefined {
   const env = params.env ?? process.env;
-  const needsDisabledCompileCacheRespawn =
-    isSourceCheckoutInstallRoot(params.installRoot) ||
-    ((params.platform ?? process.platform) === "win32" &&
-      isNodeVersionAffectedByCompileCacheDeadlock(params.nodeVersion ?? process.versions.node));
-  if (!needsDisabledCompileCacheRespawn) {
+  const argv = params.argv ?? process.argv;
+  const platform = params.platform ?? process.platform;
+  if (shouldKeepNativeHookRelayInProcess(argv, platform)) {
+    return undefined;
+  }
+  if (!isSourceCheckoutInstallRoot(params.installRoot)) {
     return undefined;
   }
   if (env[COMPILE_CACHE_DISABLED_RESPAWNED_ENV] === "1") {
@@ -166,22 +140,17 @@ function buildOpenClawCompileCacheRespawnPlan(params: {
   delete nextEnv.NODE_COMPILE_CACHE;
   return {
     command: params.execPath ?? process.execPath,
-    args: [
-      ...(params.execArgv ?? process.execArgv),
-      params.currentFile,
-      ...(params.argv ?? process.argv).slice(2),
-    ],
+    args: [...(params.execArgv ?? process.execArgv), params.currentFile, ...argv.slice(2)],
     env: nextEnv,
-    detachForProcessTree:
-      (params.platform ?? process.platform) !== "win32" &&
-      !isTerminalInteractiveRespawnArgv(params.argv ?? process.argv),
+    detachForProcessTree: platform !== "win32" && !isTerminalInteractiveRespawnArgv(argv),
   };
 }
 
-export function respawnWithoutOpenClawCompileCacheIfNeeded(params: {
+export async function respawnWithoutOpenClawCompileCacheIfNeeded(params: {
   currentFile: string;
   installRoot: string;
-}): boolean {
+  prepareWriteError?: () => Promise<(message: string) => void>;
+}): Promise<boolean> {
   const plan = buildOpenClawCompileCacheRespawnPlan({
     currentFile: params.currentFile,
     installRoot: params.installRoot,
@@ -190,7 +159,18 @@ export function respawnWithoutOpenClawCompileCacheIfNeeded(params: {
   if (!plan) {
     return false;
   }
-  runOpenClawCompileCacheRespawnPlan(plan);
+  const writeError = await params.prepareWriteError?.();
+  runOpenClawCompileCacheRespawnPlan(
+    plan,
+    writeError
+      ? {
+          spawn,
+          attachChildProcessBridge,
+          exit: process.exit.bind(process) as (code?: number) => never,
+          writeError,
+        }
+      : undefined,
+  );
   return true;
 }
 
@@ -236,7 +216,6 @@ export function enableOpenClawCompileCache(params: {
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.entryCompileCacheTestApi")] = {
     buildOpenClawCompileCacheRespawnPlan,
-    isNodeVersionAffectedByCompileCacheDeadlock,
     isSourceCheckoutInstallRoot,
     resolveOpenClawCompileCacheDirectory,
     runOpenClawCompileCacheRespawnPlan,

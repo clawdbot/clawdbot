@@ -1,7 +1,8 @@
 // Daemon response tests cover normalized daemon command response shapes.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { GatewayService } from "../../daemon/service.js";
 import { defaultRuntime } from "../../runtime.js";
-import { createDaemonActionContext } from "./response.js";
+import { createDaemonActionContext, installDaemonServiceAndEmit } from "./response.js";
 
 describe("daemon action JSON hints", () => {
   afterEach(() => {
@@ -50,5 +51,102 @@ describe("daemon action JSON hints", () => {
         ],
       }),
     );
+  });
+});
+
+describe("daemon install verification", () => {
+  function createInstallParams(
+    isLoaded: GatewayService["isLoaded"],
+    onVerified?: () => Promise<void>,
+  ) {
+    const service = {
+      label: "systemd user",
+      loadedText: "enabled",
+      notLoadedText: "disabled",
+      isLoaded,
+    } as GatewayService;
+    return {
+      serviceNoun: "Gateway",
+      service,
+      warnings: [],
+      emit: vi.fn(),
+      fail: vi.fn(),
+      install: vi.fn(async () => {}),
+      onVerified,
+    };
+  }
+
+  it("fails install when service-manager verification throws", async () => {
+    const params = createInstallParams(
+      vi.fn(async () => {
+        throw new Error("manager access denied");
+      }),
+    );
+
+    await installDaemonServiceAndEmit(params);
+
+    expect(params.fail).toHaveBeenCalledWith(
+      "Gateway install verification failed: Error: manager access denied",
+      undefined,
+    );
+    expect(params.emit).not.toHaveBeenCalled();
+  });
+
+  it("fails install when the service is not loaded after installation", async () => {
+    const params = createInstallParams(vi.fn(async () => false));
+
+    await installDaemonServiceAndEmit(params);
+
+    expect(params.fail).toHaveBeenCalledWith(
+      "Gateway install verification failed: service is not enabled.",
+    );
+    expect(params.emit).not.toHaveBeenCalled();
+  });
+
+  it("emits success only after the service-manager verification succeeds", async () => {
+    const params = createInstallParams(vi.fn(async () => true));
+
+    await installDaemonServiceAndEmit(params);
+
+    expect(params.fail).not.toHaveBeenCalled();
+    expect(params.emit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ok: true,
+        result: "installed",
+        service: expect.objectContaining({ loaded: true }),
+      }),
+    );
+  });
+
+  it("runs onVerified after verification succeeds and before the success emit", async () => {
+    const onVerified = vi.fn(async () => {});
+    const params = createInstallParams(
+      vi.fn(async () => true),
+      onVerified,
+    );
+
+    await installDaemonServiceAndEmit(params);
+
+    expect(onVerified).toHaveBeenCalledTimes(1);
+    expect(params.fail).not.toHaveBeenCalled();
+    expect(params.emit).toHaveBeenCalledWith(
+      expect.objectContaining({ ok: true, result: "installed" }),
+    );
+  });
+
+  it("fails with no success emit when onVerified throws", async () => {
+    const params = createInstallParams(
+      vi.fn(async () => true),
+      async () => {
+        throw new Error("post-check boom");
+      },
+    );
+
+    await installDaemonServiceAndEmit(params);
+
+    expect(params.fail).toHaveBeenCalledWith(
+      "Gateway post-install check failed: Error: post-check boom",
+    );
+    expect(params.emit).not.toHaveBeenCalled();
   });
 });

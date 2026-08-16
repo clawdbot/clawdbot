@@ -1,7 +1,8 @@
 /** Best-effort durable signal log for session state changes. */
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import type { Insertable, Selectable } from "kysely";
-import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { DmScope } from "../config/types.base.js";
 import {
@@ -88,22 +89,8 @@ function normalizeOptionalSqliteNumber(
   return value === undefined ? undefined : normalizeSqliteNumber(value);
 }
 
-function parsePayload(value: string | null): Record<string, unknown> | undefined {
-  if (!value) {
-    return undefined;
-  }
-  try {
-    const parsed: unknown = JSON.parse(value);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 function rowToSessionStateEvent(row: SessionStateEventRow): SessionStateEventRecord {
-  const payload = parsePayload(row.payload_json);
+  const payload = row.payload_json ? safeParseJsonRecord(row.payload_json) : undefined;
   return {
     sequence: normalizeSqliteNumber(row.sequence) ?? 0,
     sessionKey: row.session_key,
@@ -623,7 +610,7 @@ export function handleSessionStateSessionDeleted(
 
 function sessionExists(sessionKey: string, env?: NodeJS.ProcessEnv): boolean {
   try {
-    return Boolean(loadSessionEntry({ sessionKey, clone: false, env }));
+    return Boolean(loadSessionEntryReadOnly({ sessionKey, clone: false, env }));
   } catch {
     return false;
   }
@@ -787,6 +774,28 @@ export function recordSessionGoalChanged(params: {
     ...(params.actor?.id ? { actorId: params.actor.id } : {}),
     summary: params.summary,
     ...(watcherSessionKey ? { watcherSessionKeys: [watcherSessionKey] } : {}),
+  });
+}
+
+/** Record the child's own creation fact when its durable stamp identifies an actor. */
+export function recordSessionCreated(params: {
+  sessionKey: string;
+  entry: SessionEntry;
+  agentId?: string;
+}): void {
+  const actor = params.entry.createdActor;
+  if (!actor) {
+    return;
+  }
+  recordSessionStateEvent({
+    sessionKey: params.sessionKey,
+    sessionId: params.entry.sessionId,
+    agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
+    kind: "created",
+    actorType: actor.type,
+    ...(actor.id ? { actorId: actor.id } : {}),
+    dedupeKey: `created:${params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey)}:${params.sessionKey}:${params.entry.sessionId}`,
+    summary: "session created",
   });
 }
 

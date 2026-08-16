@@ -24,6 +24,10 @@ describe("config secret refs schema", () => {
   it("accepts top-level secrets sources and model apiKey refs", () => {
     const result = validateConfigObjectRaw({
       secrets: {
+        egressProxy: {
+          enabled: true,
+          bypassHosts: ["pinned.example.com"],
+        },
         providers: {
           default: { source: "env" },
           filemain: {
@@ -31,15 +35,15 @@ describe("config secret refs schema", () => {
             path: "~/.openclaw/secrets.json",
             mode: "json",
             timeoutMs: 10_000,
-            allowInsecurePath: true,
           },
           vault: {
             source: "exec",
             command: "/usr/local/bin/openclaw-secret-resolver",
             args: ["resolve"],
-            allowSymlinkCommand: true,
           },
+          store: { source: "store" },
         },
+        defaults: { store: "store" },
       },
       models: {
         providers: {
@@ -48,11 +52,36 @@ describe("config secret refs schema", () => {
             apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
             models: [{ id: "gpt-5", name: "gpt-5" }],
           },
+          stored: {
+            baseUrl: "https://stored.example.test/v1",
+            apiKey: { source: "store", provider: "store", id: "STORED_API_KEY" },
+            models: [{ id: "fixture", name: "fixture" }],
+          },
         },
       },
     });
 
     expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.secrets?.egressProxy).toEqual({
+        enabled: true,
+        bypassHosts: ["pinned.example.com"],
+      });
+    }
+  });
+
+  it("rejects empty secret egress bypass hosts", () => {
+    const result = validateConfigObjectRaw({
+      secrets: { egressProxy: { enabled: false, bypassHosts: [""] } },
+    });
+
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects store refs outside the env-name grammar", () => {
+    expect(
+      validateOpenAiApiKeyRef({ source: "store", provider: "default", id: "lowercase" }).ok,
+    ).toBe(false);
   });
 
   it("accepts openai-chatgpt-responses as a model api value", () => {
@@ -113,8 +142,8 @@ describe("config secret refs schema", () => {
                 passphrase: { source: "exec", provider: "vault", id: "media/audio/passphrase" },
               },
             },
-            models: [{ provider: "openai", model: "gpt-4o-mini-transcribe" }],
           },
+          models: [{ provider: "openai", model: "gpt-4o-mini-transcribe" }],
         },
       },
     });

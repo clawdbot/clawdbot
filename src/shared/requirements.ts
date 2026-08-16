@@ -162,24 +162,22 @@ function evaluateRequirements(
   });
   const missingConfig = configChecks.filter((check) => !check.satisfied).map((check) => check.path);
 
-  // `always` keeps diagnostics visible while making runtime eligibility unconditional.
-  const missing = params.always
-    ? { bins: [], anyBins: [], env: [], config: [], os: [] }
-    : {
-        bins: missingBins,
-        anyBins: missingAnyBins,
-        env: missingEnv,
-        config: missingConfig,
-        os: missingOs,
-      };
+  // `always` bypasses runtime requirements, but OS remains a hard compatibility boundary.
+  const missing = {
+    bins: params.always ? [] : missingBins,
+    anyBins: params.always ? [] : missingAnyBins,
+    env: params.always ? [] : missingEnv,
+    config: params.always ? [] : missingConfig,
+    os: missingOs,
+  };
 
   const eligible =
-    params.always ||
-    (missing.bins.length === 0 &&
-      missing.anyBins.length === 0 &&
-      missing.env.length === 0 &&
-      missing.config.length === 0 &&
-      missing.os.length === 0);
+    missing.os.length === 0 &&
+    (params.always ||
+      (missing.bins.length === 0 &&
+        missing.anyBins.length === 0 &&
+        missing.env.length === 0 &&
+        missing.config.length === 0));
 
   return { missing, eligible, configChecks };
 }

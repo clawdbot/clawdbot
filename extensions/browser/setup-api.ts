@@ -4,8 +4,10 @@
  */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isRecord } from "./src/record-shared.js";
+import {
+  isRecord,
+  normalizeOptionalLowercaseString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 function listContainsBrowser(value: unknown): boolean {
   return (

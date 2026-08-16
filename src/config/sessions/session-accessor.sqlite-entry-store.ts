@@ -11,37 +11,50 @@ import {
   prepareSessionConversation,
   upsertConversationIdentity,
 } from "./session-accessor.sqlite-conversation.js";
-import { normalizeSqliteNumber } from "./session-accessor.sqlite-normalize.js";
+import {
+  publishSessionEntryCacheInvalidation,
+  trackSessionEntryCacheWrite,
+} from "./session-accessor.sqlite-entry-cache.js";
+import {
+  clearSessionCollaborationForKey,
+  deleteSessionDeliveryArtifacts,
+  deleteSessionNodeArtifacts,
+  rehomeLegacySessionNodeArtifacts,
+} from "./session-accessor.sqlite-node-artifacts.js";
 import { resolveSessionEntryProvenanceRow } from "./session-accessor.sqlite-provenance.js";
+import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
 import {
   cloneSessionEntry,
   getSessionKysely,
   normalizeSqliteSessionKey,
 } from "./session-accessor.sqlite-scope.js";
 import {
-  bindSqliteSessionRoot,
-  normalizeSqliteSessionEntryTimestamp,
+  bindSessionNode,
+  bindSessionRoot,
+  normalizeSessionEntryTimestamp,
 } from "./session-accessor.sqlite-session-row.js";
 import {
-  normalizeSqliteStatus,
-  parseSqliteSessionEntryJson as parseSessionEntryRow,
+  hasValidSessionEntryIdentity,
+  parseSessionEntryJson as parseSessionEntryRow,
 } from "./session-accessor.sqlite-status.js";
+import { readTranscriptMutationStateInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import {
-  readTranscriptMutationStateInTransaction,
-  writeSessionRoute,
-} from "./session-accessor.sqlite-transcript-state.js";
+  assertCanonicalSessionEntryLineageWrite,
+  assertCanonicalSqliteSessionKeysCurrent,
+  assertCanonicalSessionKeyWriteMatchesDatabase,
+  canonicalSessionKeyMigrationRequiredError,
+} from "./session-canonical-key.js";
+import { parseSqliteSessionEntryRecord } from "./session-entry-json.js";
+import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import {
-  foldedSessionKeyAliasCandidates,
-  normalizeStoreSessionKey,
-  resolveSessionEntryCandidates,
+  collectSessionEntryLookupKeys,
+  resolveDeliveryProvenCanonicalSessionKey,
 } from "./store-entry.js";
+export { collectSessionEntryLookupKeys } from "./store-entry.js";
 import type { SessionEntry } from "./types.js";
 
-// Canonical owner for session_entries row selection, alias snapshots, and writes.
-
-type OpenClawAgentDatabaseReader = Pick<OpenClawAgentDatabase, "db">;
-
-type SessionEntryRow = Selectable<OpenClawAgentKyselyDatabase["session_entries"]>;
+type OpenClawAgentDatabaseReader = Pick<OpenClawAgentDatabase, "agentId" | "db">;
+type SessionEntryRow = Selectable<OpenClawAgentKyselyDatabase["session_nodes"]>;
 export type ResolvedSessionEntryRow = {
   entry: SessionEntry;
   legacyKeys: string[];
@@ -56,6 +69,39 @@ type SqliteLifecycleTargetSnapshot = {
   rows: Array<{ entry: SessionEntry; sessionKey: string }>;
 };
 
+export function parseReadableSqliteSessionEntryRow(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  row: Pick<SessionEntryRow, "current_session_id" | "entry_json" | "session_key" | "updated_at">,
+): SessionEntry | null {
+  const record = parseSqliteSessionEntryRecord(row);
+  if (record) {
+    const entry = projectCanonicalSessionEntryShape(record);
+    if (resolveDeliveryProvenCanonicalSessionKey(row.session_key, entry) !== row.session_key) {
+      throw canonicalSessionKeyMigrationRequiredError(
+        `non-canonical persisted row resolves to session key ${row.session_key}`,
+      );
+    }
+    return entry;
+  }
+  const retainedWindow =
+    row.entry_json === "{}"
+      ? executeSqliteQueryTakeFirstSync(
+          database.db,
+          getSessionKysely(database.db)
+            .selectFrom("session_windows")
+            .select("session_id")
+            .where("session_id", "=", row.current_session_id)
+            .where("session_key", "=", row.session_key),
+        )
+      : undefined;
+  if (retainedWindow) {
+    return null;
+  }
+  throw canonicalSessionKeyMigrationRequiredError(
+    `invalid persisted session row requires repair for ${row.session_key}`,
+  );
+}
+
 class SqliteSessionMutationConflictError extends Error {
   constructor(operationLabel: string) {
     super(`SQLite session state changed while preparing ${operationLabel}`);
@@ -63,7 +109,7 @@ class SqliteSessionMutationConflictError extends Error {
   }
 }
 
-export function readSqliteSessionIdentitySnapshot(
+export function readSessionIdentitySnapshot(
   database: OpenClawAgentDatabase,
   sessionKeys: Iterable<string>,
 ): Map<string, SessionEntry> {
@@ -77,13 +123,21 @@ export function readSqliteSessionIdentitySnapshot(
   return snapshot;
 }
 
-export function createSqliteSessionIdentitySnapshot(
+export function createSessionIdentitySnapshot(
   rows: readonly { entry: SessionEntry; sessionKey: string }[],
 ): Map<string, SessionEntry> {
   return new Map(rows.map((row) => [row.sessionKey, cloneSessionEntry(row.entry)]));
 }
 
 export function readSessionEntryRow(
+  database: OpenClawAgentDatabaseReader,
+  sessionKey: string,
+): ResolvedSessionEntryRow | undefined {
+  assertCanonicalSqliteSessionKeysCurrent(database);
+  return readSessionEntryRowUnchecked(database, sessionKey);
+}
+
+function readSessionEntryRowUnchecked(
   database: OpenClawAgentDatabaseReader,
   sessionKey: string,
 ): ResolvedSessionEntryRow | undefined {
@@ -95,36 +149,25 @@ export function readSessionEntryRow(
   const rows = executeSqliteQuerySync(
     database.db,
     db
-      .selectFrom("session_entries")
+      .selectFrom("session_nodes")
       .selectAll()
       .where("session_key", "in", lookupKeys)
       .orderBy("session_key", "asc"),
   ).rows;
-  const entries = new Map<string, ResolvedSessionEntryRow>();
+  let selected: ResolvedSessionEntryRow | undefined;
   for (const row of rows) {
-    const entry = parseSessionEntryRow(row);
-    if (!entry) {
+    const entry = parseReadableSqliteSessionEntryRow(database, row);
+    if (!entry || row.session_key !== sessionKey.trim()) {
       continue;
     }
-    entries.set(row.session_key, { entry, legacyKeys: [], row });
+    selected = { entry, legacyKeys: [], row };
   }
-  const resolved = resolveSessionEntryCandidates({
-    entries: [...entries].map(([candidateKey, value]) => ({
-      entry: value.entry,
-      sessionKey: candidateKey,
-    })),
-    sessionKey,
-  });
-  if (!resolved.existing) {
-    return undefined;
-  }
-  const selected = entries.get(resolved.existing.sessionKey);
-  return selected ? { ...selected, legacyKeys: resolved.legacyKeys } : undefined;
+  return selected;
 }
 
 // Async updaters prepare against this complete selection. Capturing alias rows
 // prevents the commit phase from deleting a concurrently changed legacy key.
-export function readSqliteSessionEntrySelectionSnapshot(
+export function readSessionEntrySelectionSnapshot(
   database: OpenClawAgentDatabase,
   sessionKey: string,
   exact: boolean,
@@ -142,7 +185,7 @@ export function readSqliteSessionEntrySelectionSnapshot(
   };
 }
 
-export function assertSqliteSessionEntrySelectionUnchanged(
+export function assertSessionEntrySelectionUnchanged(
   expected: SqliteSessionEntrySelectionSnapshot,
   current: SqliteSessionEntrySelectionSnapshot,
   operationLabel: string,
@@ -158,33 +201,6 @@ export function assertSqliteSessionEntrySelectionUnchanged(
   }
 }
 
-export function collectSessionEntryLookupKeys(
-  database: OpenClawAgentDatabaseReader,
-  sessionKey: string,
-): string[] {
-  const trimmedKey = sessionKey.trim();
-  if (!trimmedKey) {
-    return [];
-  }
-  const normalizedKey = normalizeStoreSessionKey(trimmedKey);
-  const lookupKeys = new Set([
-    trimmedKey,
-    normalizedKey,
-    ...foldedSessionKeyAliasCandidates(normalizedKey),
-  ]);
-  const db = getSessionKysely(database.db);
-  const rows = executeSqliteQuerySync(
-    database.db,
-    db.selectFrom("session_entries").select("session_key").orderBy("session_key", "asc"),
-  ).rows;
-  for (const row of rows) {
-    if (normalizeStoreSessionKey(row.session_key) === normalizedKey) {
-      lookupKeys.add(row.session_key);
-    }
-  }
-  return [...lookupKeys].filter(Boolean);
-}
-
 export function readExactSessionEntryRow(
   database: OpenClawAgentDatabaseReader,
   sessionKey: string,
@@ -192,25 +208,53 @@ export function readExactSessionEntryRow(
   const db = getSessionKysely(database.db);
   const row = executeSqliteQueryTakeFirstSync(
     database.db,
-    db.selectFrom("session_entries").selectAll().where("session_key", "=", sessionKey),
+    db.selectFrom("session_nodes").selectAll().where("session_key", "=", sessionKey),
   );
   if (!row) {
     return undefined;
   }
-  const entry = parseSessionEntryRow(row);
+  const entry = parseReadableSqliteSessionEntryRow(database, row);
   return entry ? { entry, legacyKeys: [], row } : undefined;
 }
 
-export function readSqliteSessionEntryStore(
+export function readExactSessionEntryJsonForCanonicalRepair(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  sessionKey: string,
+): string | undefined {
+  const db = getSessionKysely(database.db);
+  return executeSqliteQueryTakeFirstSync(
+    database.db,
+    db.selectFrom("session_nodes").select("entry_json").where("session_key", "=", sessionKey),
+  )?.entry_json;
+}
+
+export function readExactSessionEntryRowValidated(
+  database: OpenClawAgentDatabaseReader,
+  sessionKey: string,
+): ResolvedSessionEntryRow | undefined {
+  assertCanonicalSqliteSessionKeysCurrent(database);
+  return readExactSessionEntryRow(database, sessionKey);
+}
+
+export function readSessionEntryStore(
   database: OpenClawAgentDatabase,
+  options: { allowCanonicalRepair?: boolean } = {},
 ): Record<string, SessionEntry> {
+  if (options.allowCanonicalRepair !== true) {
+    assertCanonicalSqliteSessionKeysCurrent(database);
+  }
   const db = getSessionKysely(database.db);
   const rows = executeSqliteQuerySync(
     database.db,
-    db.selectFrom("session_entries").select(["session_key", "entry_json"]).orderBy("session_key"),
+    db
+      .selectFrom("session_nodes")
+      .select(["current_session_id", "entry_json", "session_key", "updated_at"])
+      .orderBy("session_key"),
   ).rows;
   const store: Record<string, SessionEntry> = {};
   for (const row of rows) {
+    // Doctor lifecycle projection supplies its separately hydrated expected entry for rejected
+    // raw rows; ordinary exact reads still fail loud before a write can replace one.
     const entry = parseSessionEntryRow(row);
     if (entry) {
       store[row.session_key] = entry;
@@ -219,40 +263,59 @@ export function readSqliteSessionEntryStore(
   return store;
 }
 
-export function readSqliteSessionEntryCount(database: OpenClawAgentDatabase): number {
+export function readSessionEntryCount(database: OpenClawAgentDatabase): number {
   const db = getSessionKysely(database.db);
-  const row = executeSqliteQueryTakeFirstSync(
+  const rows = executeSqliteQuerySync(
     database.db,
-    db.selectFrom("session_entries").select((eb) => eb.fn.countAll<number>().as("entry_count")),
-  );
-  const count = row?.entry_count;
-  return count === undefined || count === null ? 0 : normalizeSqliteNumber(count);
+    db.selectFrom("session_nodes").select("entry_json"),
+  ).rows;
+  return rows.reduce((count, row) => count + (parseSessionEntryRow(row) ? 1 : 0), 0);
 }
 
-export function resolveSqliteLifecyclePrimaryEntry(
+export function readSessionEntryKeys(database: OpenClawAgentDatabaseReader): string[] {
+  const db = getSessionKysely(database.db);
+  return executeSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("session_nodes")
+      .select(["entry_json", "session_key"])
+      .orderBy("session_key", "asc"),
+  ).rows.flatMap((row) => (parseSessionEntryRow(row) ? [row.session_key] : []));
+}
+
+export function resolveLifecyclePrimaryEntry(
   database: OpenClawAgentDatabase,
   target: { canonicalKey: string; storeKeys: string[] },
+  options: { allowCanonicalMove?: boolean } = {},
 ): { key: string; entry: SessionEntry } | undefined {
-  let freshest: { key: string; entry: SessionEntry } | undefined;
-  for (const key of target.storeKeys) {
-    const row = readExactSessionEntryRow(database, key.trim());
-    if (!row) {
-      continue;
-    }
-    if (!freshest || (row.entry.updatedAt ?? 0) > (freshest.entry.updatedAt ?? 0)) {
-      freshest = { key, entry: row.entry };
-    }
+  const rows = target.storeKeys.flatMap((key) => {
+    const sessionKey = key.trim();
+    const row = readExactSessionEntryRow(database, sessionKey);
+    return row ? [{ key: sessionKey, entry: row.entry }] : [];
+  });
+  if (rows.length > 1) {
+    throw canonicalSessionKeyMigrationRequiredError(
+      `duplicate rows resolve to canonical session key ${target.canonicalKey}`,
+    );
   }
-  return freshest ?? undefined;
+  const [row] = rows;
+  if (row && row.key !== target.canonicalKey && options.allowCanonicalMove !== true) {
+    throw canonicalSessionKeyMigrationRequiredError(
+      `non-canonical persisted row resolves to session key ${target.canonicalKey}`,
+    );
+  }
+  return row;
 }
 
-export function readSqliteLifecycleTargetSnapshot(
+export function readLifecycleTargetSnapshot(
   database: OpenClawAgentDatabase,
   target: { canonicalKey: string; storeKeys: string[] },
+  options: { allowCanonicalMove?: boolean } = {},
 ): SqliteLifecycleTargetSnapshot {
-  const normalized = normalizeSqliteLifecycleTarget(target);
+  assertCanonicalSqliteSessionKeysCurrent(database);
+  const normalized = normalizeLifecycleTarget(target);
   return {
-    primary: resolveSqliteLifecyclePrimaryEntry(database, normalized),
+    primary: resolveLifecyclePrimaryEntry(database, normalized, options),
     rows: normalized.storeKeys.flatMap((sessionKey) => {
       const row = readExactSessionEntryRow(database, sessionKey);
       return row ? [{ entry: cloneSessionEntry(row.entry), sessionKey }] : [];
@@ -260,7 +323,7 @@ export function readSqliteLifecycleTargetSnapshot(
   };
 }
 
-export function assertSqliteLifecycleTargetSnapshotUnchanged(
+export function assertLifecycleTargetSnapshotUnchanged(
   expected: SqliteLifecycleTargetSnapshot,
   current: SqliteLifecycleTargetSnapshot,
   operationLabel: string,
@@ -273,10 +336,7 @@ export function assertSqliteLifecycleTargetSnapshotUnchanged(
   }
 }
 
-export function normalizeSqliteLifecycleTarget(target: {
-  canonicalKey: string;
-  storeKeys: string[];
-}): {
+export function normalizeLifecycleTarget(target: { canonicalKey: string; storeKeys: string[] }): {
   canonicalKey: string;
   storeKeys: string[];
 } {
@@ -287,29 +347,135 @@ export function normalizeSqliteLifecycleTarget(target: {
   };
 }
 
-export function deleteSqliteSessionEntryRows(
+export function deleteSessionEntryRows(
   database: OpenClawAgentDatabase,
   sessionKey: string,
+  options: { deleteOwnedWindows?: boolean; deliveryCleanupKeys?: readonly string[] } = {},
 ): void {
   const db = getSessionKysely(database.db);
+  const windows = executeSqliteQuerySync(
+    database.db,
+    db.selectFrom("session_windows").select("session_id").where("session_key", "=", sessionKey),
+  ).rows;
+  const survivingNodes = executeSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("session_nodes")
+      .select(["current_session_id", "entry_json", "session_key"])
+      .where("session_key", "!=", sessionKey)
+      .orderBy("session_key", "asc"),
+  ).rows;
+  for (const window of windows) {
+    const survivingNode = survivingNodes.find((node) => {
+      if (node.current_session_id === window.session_id) {
+        return true;
+      }
+      const entry = parseSessionEntryRow(node);
+      return entry ? collectSessionStateIdsForEntry(entry).includes(window.session_id) : false;
+    });
+    if (survivingNode) {
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .updateTable("session_windows")
+          .set({ session_key: survivingNode.session_key })
+          .where("session_id", "=", window.session_id),
+      );
+    }
+  }
+  if (options.deleteOwnedWindows) {
+    deleteSessionDeliveryArtifacts(database, sessionKey, options.deliveryCleanupKeys);
+    deleteSessionNodeArtifacts(database, sessionKey);
+    executeSqliteQuerySync(
+      database.db,
+      db.deleteFrom("session_nodes").where("session_key", "=", sessionKey),
+    );
+    publishSessionEntryCacheInvalidation(database);
+    return;
+  }
+  const remainingWindow = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("session_windows")
+      .select(["session_id", "updated_at"])
+      .where("session_key", "=", sessionKey)
+      .orderBy("updated_at", "desc")
+      .orderBy("session_id", "asc")
+      .limit(1),
+  );
+  if (remainingWindow) {
+    deleteSessionNodeArtifacts(database, sessionKey);
+    clearSqliteSessionEntryPreservingWindows(database, {
+      sessionId: remainingWindow.session_id,
+      sessionKey,
+      updatedAt: remainingWindow.updated_at,
+    });
+    publishSessionEntryCacheInvalidation(database);
+    return;
+  }
   executeSqliteQuerySync(
     database.db,
-    db.deleteFrom("session_routes").where("session_key", "=", sessionKey),
+    db.deleteFrom("session_nodes").where("session_key", "=", sessionKey),
+  );
+  publishSessionEntryCacheInvalidation(database);
+}
+
+/** Remove the logical entry while retaining its node-owned transcript windows. */
+function clearSqliteSessionEntryPreservingWindows(
+  database: OpenClawAgentDatabase,
+  params: { sessionId: string; sessionKey: string; updatedAt: number },
+): void {
+  const db = getSessionKysely(database.db);
+  const cleared = {
+    current_session_id: params.sessionId,
+    entry_json: "{}",
+    entry_valid: -1,
+    updated_at: params.updatedAt,
+    status: null,
+    created_at: null,
+    created_via: null,
+    created_actor_type: null,
+    created_actor_id: null,
+    project_id: null,
+    parent_session_key: null,
+    spawned_by: null,
+    fork_source_session_key: null,
+    fork_source_session_id: null,
+    fork_source_entry_id: null,
+    label: null,
+    display_name: null,
+    category: null,
+    icon: null,
+    pinned_at: null,
+    archived_at: null,
+    last_read_at: null,
+    last_interaction_at: null,
+    last_activity_at: null,
+  } as const;
+  executeSqliteQuerySync(
+    database.db,
+    db
+      .insertInto("session_nodes")
+      .values({ session_key: params.sessionKey, ...cleared })
+      .onConflict((conflict) => conflict.column("session_key").doUpdateSet(cleared)),
   );
   executeSqliteQuerySync(
     database.db,
-    db.deleteFrom("session_entries").where("session_key", "=", sessionKey),
+    db
+      .updateTable("session_nodes")
+      .set({ entry_valid: -1 })
+      .where("session_key", "=", params.sessionKey),
   );
 }
 
-export function deleteSqliteLifecycleTargetRows(
+export function deleteLifecycleTargetRows(
   database: OpenClawAgentDatabase,
   target: { canonicalKey: string; storeKeys: string[] },
 ): void {
   for (const sessionKey of uniqueStrings([target.canonicalKey, ...target.storeKeys])) {
     const trimmed = sessionKey.trim();
     if (trimmed) {
-      deleteSqliteSessionEntryRows(database, trimmed);
+      deleteSessionEntryRows(database, trimmed);
     }
   }
 }
@@ -343,14 +509,14 @@ function sqliteLifecycleTargetMatchesExpectedEntry(
   target: { canonicalKey: string; storeKeys: string[] },
   expectedEntry: SessionEntry | undefined,
 ): boolean {
-  const current = resolveSqliteLifecyclePrimaryEntry(database, target)?.entry;
+  const current = resolveLifecyclePrimaryEntry(database, target)?.entry;
   if (!current || !expectedEntry) {
     return current === expectedEntry;
   }
   return sqliteSessionEntriesEqual(current, expectedEntry);
 }
 
-export function assertSqliteLifecycleTargetUnchanged(
+export function assertLifecycleTargetUnchanged(
   database: OpenClawAgentDatabase,
   target: { canonicalKey: string; storeKeys: string[] },
   expectedEntry: SessionEntry | undefined,
@@ -366,6 +532,7 @@ export function deleteLegacySessionEntryRows(
   database: OpenClawAgentDatabase,
   legacyKeys: string[],
   sessionKey: string,
+  options: { rehomeMembers?: boolean } = {},
 ): void {
   if (legacyKeys.length === 0) {
     return;
@@ -375,36 +542,97 @@ export function deleteLegacySessionEntryRows(
     if (legacyKey === sessionKey) {
       continue;
     }
+    rehomeSessionWindows(database, sessionKey, [legacyKey]);
+    rehomeLegacySessionNodeArtifacts(database, legacyKey, sessionKey, options);
     executeSqliteQuerySync(
       database.db,
-      db.deleteFrom("session_routes").where("session_key", "=", legacyKey),
+      db.deleteFrom("session_nodes").where("session_key", "=", legacyKey),
     );
-    executeSqliteQuerySync(
-      database.db,
-      db.deleteFrom("session_entries").where("session_key", "=", legacyKey),
-    );
+    publishSessionEntryCacheInvalidation(database);
   }
+}
+
+/** Move retained generations to the canonical node before removing key aliases. */
+export function rehomeSessionWindows(
+  database: OpenClawAgentDatabase,
+  canonicalKey: string,
+  previousKeys: Iterable<string>,
+): void {
+  const legacyKeys = uniqueStrings([...previousKeys].map((key) => key.trim())).filter(
+    (key) => key && key !== canonicalKey,
+  );
+  if (legacyKeys.length === 0) {
+    return;
+  }
+  const db = getSessionKysely(database.db);
+  executeSqliteQuerySync(
+    database.db,
+    db
+      .updateTable("session_windows")
+      .set({ session_key: canonicalKey })
+      .where("session_key", "in", legacyKeys),
+  );
 }
 
 export function writeSessionEntry(
   database: OpenClawAgentDatabase,
   sessionKey: string,
   entry: SessionEntry,
+  options: {
+    allowStoredAliases?: boolean;
+    preserveNodeSuggestions?: boolean;
+    previousEntry?: SessionEntry | null;
+  } = {},
 ): void {
   const db = getSessionKysely(database.db);
-  const normalizedEntry = normalizeSqliteSessionEntryTimestamp(entry);
+  if (!options.allowStoredAliases) {
+    assertCanonicalSessionKeyWriteMatchesDatabase(database, sessionKey);
+    assertCanonicalSessionEntryLineageWrite(database, entry);
+    if (resolveDeliveryProvenCanonicalSessionKey(sessionKey, entry) !== sessionKey) {
+      throw canonicalSessionKeyMigrationRequiredError(
+        `refusing non-canonical session key write ${sessionKey}`,
+      );
+    }
+  }
+  const normalizedEntry = normalizeSessionEntryTimestamp(entry);
+  if (!hasValidSessionEntryIdentity(normalizedEntry)) {
+    throw new Error("Refusing invalid SQLite session entry identity");
+  }
   const updatedAt = normalizedEntry.updatedAt;
-  const previousEntry = readExactSessionEntryRow(database, sessionKey)?.entry;
+  // Doctor validated the raw rejected row before entering the transaction and passes its
+  // hydrated snapshot explicitly; re-reading it through the runtime parser must stay fail-closed.
+  const canonicalPreviousRow =
+    options.allowStoredAliases && options.previousEntry !== undefined
+      ? undefined
+      : readExactSessionEntryRow(database, sessionKey);
+  const canonicalPreviousEntry =
+    canonicalPreviousRow?.entry ??
+    (options.allowStoredAliases && options.previousEntry !== undefined
+      ? (options.previousEntry ?? undefined)
+      : undefined);
+  const previousEntry =
+    options.previousEntry === undefined
+      ? canonicalPreviousEntry
+      : (options.previousEntry ?? undefined);
+  // The lifecycle-selected entry owns visibility copy-forward semantics.
+  if (previousEntry && previousEntry.sessionId !== normalizedEntry.sessionId) {
+    delete normalizedEntry.visibility;
+  }
+  // Collaboration rows belong to the exact canonical node being overwritten,
+  // which can differ from the selected alias during canonicalization.
+  if (canonicalPreviousEntry && canonicalPreviousEntry.sessionId !== normalizedEntry.sessionId) {
+    // Doctor merges duplicate logical nodes; suggestions are owned by session_key,
+    // not by the transcript generation being replaced. Membership remains winner-only.
+    clearSessionCollaborationForKey(database, sessionKey, {
+      clearSuggestions: options.preserveNodeSuggestions !== true,
+    });
+  }
   // Registry writes snapshot the current transcript watermark so recovery can
   // distinguish same-millisecond transcript writes before and after this row.
   const transcriptObservedAt =
     readTranscriptMutationStateInTransaction(database, normalizedEntry.sessionId).updatedAt ??
     updatedAt;
-  const boundSessionRoot = bindSqliteSessionRoot({
-    entry: normalizedEntry,
-    sessionKey,
-    updatedAt,
-  });
+  const boundSessionRoot = bindSessionRoot({ entry: normalizedEntry, sessionKey, updatedAt });
   const conversation = prepareSessionConversation({
     entry: normalizedEntry,
     sessionScope: boundSessionRoot.session_scope,
@@ -424,14 +652,57 @@ export function writeSessionEntry(
     entry: normalizedEntry,
     previousEntry,
   });
+  const sessionNode = bindSessionNode({ entry: normalizedEntry, sessionKey, updatedAt });
+  const writeGeneration = trackSessionEntryCacheWrite(database, () => {
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .insertInto("session_nodes")
+        .values(sessionNode)
+        .onConflict((conflict) =>
+          conflict.column("session_key").doUpdateSet({
+            current_session_id: sessionNode.current_session_id,
+            entry_json: sessionNode.entry_json,
+            entry_valid: sessionNode.entry_valid,
+            updated_at: sessionNode.updated_at,
+            status: sessionNode.status,
+            created_at: sessionNode.created_at,
+            created_via: sessionNode.created_via,
+            created_actor_type: sessionNode.created_actor_type,
+            created_actor_id: sessionNode.created_actor_id,
+            project_id: sessionNode.project_id,
+            parent_session_key: sessionNode.parent_session_key,
+            spawned_by: sessionNode.spawned_by,
+            fork_source_session_key: sessionNode.fork_source_session_key,
+            fork_source_session_id: sessionNode.fork_source_session_id,
+            fork_source_entry_id: sessionNode.fork_source_entry_id,
+            label: sessionNode.label,
+            display_name: sessionNode.display_name,
+            category: sessionNode.category,
+            icon: sessionNode.icon,
+            pinned_at: sessionNode.pinned_at,
+            archived_at: sessionNode.archived_at,
+            last_read_at: sessionNode.last_read_at,
+            last_interaction_at: sessionNode.last_interaction_at,
+            last_activity_at: sessionNode.last_activity_at,
+          }),
+        ),
+    );
+    executeSqliteQuerySync(
+      database.db,
+      db.updateTable("session_nodes").set({ entry_valid: 1 }).where("session_key", "=", sessionKey),
+    );
+  });
   executeSqliteQuerySync(
     database.db,
     db
-      .insertInto("sessions")
+      .insertInto("session_windows")
       .values(sessionRow)
       .onConflict((conflict) =>
         conflict.column("session_id").doUpdateSet({
           session_key: sessionKey,
+          previous_session_id: sessionRow.previous_session_id,
+          reason: sessionRow.reason,
           session_scope: sessionRow.session_scope,
           transcript_observed_at: transcriptObservedAt,
           session_entry_provenance: sessionRow.session_entry_provenance,
@@ -463,31 +734,7 @@ export function writeSessionEntry(
       updatedAt,
     });
   }
-  writeSessionRoute(database, {
-    sessionId: sessionRow.session_id,
-    sessionKey,
-    updatedAt,
-  });
-  executeSqliteQuerySync(
-    database.db,
-    db
-      .insertInto("session_entries")
-      .values({
-        session_key: sessionKey,
-        session_id: normalizedEntry.sessionId,
-        entry_json: JSON.stringify(normalizedEntry),
-        updated_at: updatedAt,
-        status: normalizeSqliteStatus(normalizedEntry.status),
-      })
-      .onConflict((conflict) =>
-        conflict.column("session_key").doUpdateSet({
-          session_id: normalizedEntry.sessionId,
-          entry_json: JSON.stringify(normalizedEntry),
-          updated_at: updatedAt,
-          status: normalizeSqliteStatus(normalizedEntry.status),
-        }),
-      ),
-  );
+  publishSessionEntryCacheInvalidation(database, sessionNode, writeGeneration);
 }
 
 /** Resolves the parent fork decision using SQLite transcript rows when totals are stale. */

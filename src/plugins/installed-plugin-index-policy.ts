@@ -13,6 +13,7 @@ export function resolveCompatRegistryVersion(): string {
       deprecated: record.deprecated,
       warningStarts: record.warningStarts,
       removeAfter: record.removeAfter,
+      removalGate: record.removalGate,
       replacement: record.replacement,
     })),
   );

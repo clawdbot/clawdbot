@@ -104,50 +104,7 @@ describeTelegramDispatch("dispatchTelegramMessage status-reactions", () => {
     );
   });
 
-  it("uses configured doneHoldMs when clearing Telegram status reactions after reply", async () => {
-    vi.useFakeTimers();
-    const reactionApi = vi.fn(async () => true);
-    const statusReactionController = createStatusReactionController();
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
-      return { queuedFinal: true };
-    });
-    deliverReplies.mockResolvedValue({ delivered: true });
-
-    try {
-      await dispatchWithContext({
-        context: createContext({
-          reactionApi: reactionApi as never,
-          removeAckAfterReply: true,
-          statusReactionController: statusReactionController as never,
-        }),
-        cfg: {
-          messages: {
-            statusReactions: {
-              timing: {
-                doneHoldMs: 250,
-              },
-            },
-          },
-        },
-        streamMode: "off",
-      });
-
-      expect(statusReactionController.setDone).toHaveBeenCalledTimes(1);
-      expect(statusReactionController.restoreInitial).not.toHaveBeenCalled();
-      expect(reactionApi).not.toHaveBeenCalledWith(123, 456, []);
-
-      await vi.advanceTimersByTimeAsync(249);
-      expect(reactionApi).not.toHaveBeenCalledWith(123, 456, []);
-
-      await vi.advanceTimersByTimeAsync(1);
-      expect(reactionApi).toHaveBeenCalledWith(123, 456, []);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("restores the initial Telegram status reaction after reply when removeAckAfterReply is disabled", async () => {
+  it("restores the initial Telegram status reaction after reply", async () => {
     const reactionApi = vi.fn(async () => true);
     const statusReactionController = createStatusReactionController();
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
@@ -159,7 +116,6 @@ describeTelegramDispatch("dispatchTelegramMessage status-reactions", () => {
     await dispatchWithContext({
       context: createContext({
         reactionApi: reactionApi as never,
-        removeAckAfterReply: false,
         statusReactionController: statusReactionController as never,
       }),
       streamMode: "off",
@@ -173,89 +129,28 @@ describeTelegramDispatch("dispatchTelegramMessage status-reactions", () => {
     expect(reactionApi).not.toHaveBeenCalledWith(123, 456, []);
   });
 
-  it("uses configured errorHoldMs to clear Telegram status reactions after an error fallback", async () => {
-    vi.useFakeTimers();
-    const reactionApi = vi.fn(async () => true);
-    const statusReactionController = createStatusReactionController();
-    dispatchReplyWithBufferedBlockDispatcher.mockRejectedValue(new Error("dispatcher exploded"));
-    deliverReplies.mockResolvedValue({ delivered: true });
-
-    try {
-      await dispatchWithContext({
-        context: createContext({
-          reactionApi: reactionApi as never,
-          removeAckAfterReply: true,
-          statusReactionController: statusReactionController as never,
-        }),
-        cfg: {
-          messages: {
-            statusReactions: {
-              timing: {
-                errorHoldMs: 320,
-              },
-            },
-          },
-        },
-        streamMode: "off",
-      });
-
-      expect(statusReactionController.setError).toHaveBeenCalledTimes(1);
-      expect(statusReactionController.setDone).not.toHaveBeenCalled();
-      expect(statusReactionController.restoreInitial).not.toHaveBeenCalled();
-      expect(reactionApi).not.toHaveBeenCalledWith(123, 456, []);
-
-      await vi.advanceTimersByTimeAsync(319);
-      expect(reactionApi).not.toHaveBeenCalledWith(123, 456, []);
-
-      await vi.advanceTimersByTimeAsync(1);
-      expect(reactionApi).toHaveBeenCalledWith(123, 456, []);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("restores the initial Telegram status reaction after an error when no final reply is sent", async () => {
-    vi.useFakeTimers();
     const reactionApi = vi.fn(async () => true);
     const statusReactionController = createStatusReactionController();
     dispatchReplyWithBufferedBlockDispatcher.mockRejectedValue(new Error("dispatcher exploded"));
     deliverReplies.mockResolvedValue({ delivered: false });
 
-    try {
-      await dispatchWithContext({
-        context: createContext({
-          reactionApi: reactionApi as never,
-          removeAckAfterReply: true,
-          statusReactionController: statusReactionController as never,
-        }),
-        cfg: {
-          messages: {
-            statusReactions: {
-              timing: {
-                errorHoldMs: 320,
-              },
-            },
-          },
-        },
-        streamMode: "off",
-      });
+    await dispatchWithContext({
+      context: createContext({
+        reactionApi: reactionApi as never,
+        statusReactionController: statusReactionController as never,
+      }),
+      streamMode: "off",
+    });
 
+    await vi.waitFor(() => {
       expect(statusReactionController.setError).toHaveBeenCalledTimes(1);
-      expect(statusReactionController.restoreInitial).not.toHaveBeenCalled();
-      expect(reactionApi).not.toHaveBeenCalledWith(123, 456, []);
-
-      await vi.advanceTimersByTimeAsync(319);
-      expect(statusReactionController.restoreInitial).not.toHaveBeenCalled();
-
-      await vi.advanceTimersByTimeAsync(1);
       expect(statusReactionController.restoreInitial).toHaveBeenCalledTimes(1);
-      expect(reactionApi).not.toHaveBeenCalledWith(123, 456, []);
-    } finally {
-      vi.useRealTimers();
-    }
+    });
+    expect(reactionApi).not.toHaveBeenCalledWith(123, 456, []);
   });
 
-  it("restores the initial Telegram status reaction after an error fallback when removeAckAfterReply is disabled", async () => {
+  it("restores the initial Telegram status reaction after an error fallback", async () => {
     const reactionApi = vi.fn(async () => true);
     const statusReactionController = createStatusReactionController();
     dispatchReplyWithBufferedBlockDispatcher.mockRejectedValue(new Error("dispatcher exploded"));
@@ -264,7 +159,6 @@ describeTelegramDispatch("dispatchTelegramMessage status-reactions", () => {
     await dispatchWithContext({
       context: createContext({
         reactionApi: reactionApi as never,
-        removeAckAfterReply: false,
         statusReactionController: statusReactionController as never,
       }),
       streamMode: "off",

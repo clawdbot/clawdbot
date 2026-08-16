@@ -15,6 +15,7 @@ import {
 } from "./doctor-workspace-status.js";
 
 const mocks = vi.hoisted(() => ({
+  listAgentIds: vi.fn<(_cfg: OpenClawConfig) => string[]>(() => ["default"]),
   resolveAgentWorkspaceDir: vi.fn(),
   resolveDefaultAgentId: vi.fn(),
   buildPluginRegistrySnapshotReport: vi.fn(),
@@ -24,8 +25,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
+  listAgentIds: (cfg: OpenClawConfig) => mocks.listAgentIds(cfg),
   resolveAgentWorkspaceDir: (...args: unknown[]) => mocks.resolveAgentWorkspaceDir(...args),
-  resolveDefaultAgentId: (...args: unknown[]) => mocks.resolveDefaultAgentId(...args),
+  tryResolveDefaultAgentId: (...args: unknown[]) => mocks.resolveDefaultAgentId(...args),
 }));
 
 vi.mock("../plugins/status.js", () => ({
@@ -35,12 +37,24 @@ vi.mock("../plugins/status.js", () => ({
     mocks.buildPluginCompatibilityWarnings(...args),
 }));
 
-vi.mock("../tasks/task-flow-runtime-internal.js", () => ({
-  listTaskFlowRecords: () => mocks.listTaskFlowRecords(),
+vi.mock("../tasks/task-flow-registry.store.sqlite.js", () => ({
+  loadTaskFlowRegistryStateFromSqliteReadOnly: () => ({
+    flows: new Map(
+      mocks.listTaskFlowRecords().map((flow) => [(flow as { flowId: string }).flowId, flow]),
+    ),
+  }),
 }));
 
-vi.mock("../tasks/runtime-internal.js", () => ({
-  listTasksForFlowId: (flowId: string) => mocks.listTasksForFlowId(flowId),
+vi.mock("../tasks/task-registry.store.sqlite.js", () => ({
+  loadTaskRegistryStateFromSqliteReadOnly: () => ({
+    tasks: new Map(
+      mocks
+        .listTaskFlowRecords()
+        .flatMap((flow) => mocks.listTasksForFlowId((flow as { flowId: string }).flowId))
+        .map((task) => [(task as { taskId: string }).taskId, task]),
+    ),
+    deliveryStates: new Map(),
+  }),
 }));
 
 async function runNoteWorkspaceStatusForTest(
@@ -55,6 +69,7 @@ async function runNoteWorkspaceStatusForTest(
 ) {
   const cfg: OpenClawConfig = opts?.cfg ?? {};
   mocks.resolveDefaultAgentId.mockReturnValue("default");
+  mocks.listAgentIds.mockReturnValue(["default"]);
   mocks.resolveAgentWorkspaceDir.mockReturnValue("/workspace");
   mocks.buildPluginRegistrySnapshotReport.mockReturnValue({
     workspaceDir: "/workspace",
@@ -85,7 +100,7 @@ describe("noteWorkspaceStatus", () => {
           }),
         ],
         typedHooks: [
-          createTypedHook({ pluginId: "legacy-plugin", hookName: "before_agent_start" }),
+          createTypedHook({ pluginId: "legacy-plugin", hookName: "before_prompt_build" }),
         ],
       }),
     );
@@ -230,9 +245,7 @@ describe("noteWorkspaceStatus", () => {
         ],
       }),
     });
-    mocks.buildPluginCompatibilityWarnings.mockReturnValue([
-      "legacy-plugin still uses legacy before_agent_start",
-    ]);
+    mocks.buildPluginCompatibilityWarnings.mockReturnValue(["legacy-plugin is hook-only"]);
     mocks.listTaskFlowRecords.mockReturnValue([
       {
         flowId: "flow-123",
@@ -258,7 +271,7 @@ describe("noteWorkspaceStatus", () => {
         severity: "warning",
         path: "plugins",
         requirement: "plugin-compatibility",
-        message: "legacy-plugin still uses legacy before_agent_start",
+        message: "legacy-plugin is hook-only",
       }),
       expect.objectContaining({
         checkId: "core/doctor/workspace-status",
@@ -437,11 +450,9 @@ describe("noteWorkspaceStatus", () => {
           hookCount: 1,
         }),
       ],
-      typedHooks: [createTypedHook({ pluginId: "legacy-plugin", hookName: "before_agent_start" })],
+      typedHooks: [createTypedHook({ pluginId: "legacy-plugin", hookName: "before_prompt_build" })],
     });
-    const noteSpy = await runNoteWorkspaceStatusForTest(loadResult, [
-      "legacy-plugin still uses legacy before_agent_start",
-    ]);
+    const noteSpy = await runNoteWorkspaceStatusForTest(loadResult, ["legacy-plugin is hook-only"]);
     try {
       expect(mocks.buildPluginRegistrySnapshotReport).toHaveBeenCalledWith({
         config: {},
@@ -460,7 +471,7 @@ describe("noteWorkspaceStatus", () => {
       );
       expect(compatibilityCalls).toHaveLength(1);
       const [body] = expectDefined(compatibilityCalls[0], "(compatibilityCalls)[0] test invariant");
-      expect(body).toContain("legacy-plugin still uses legacy before_agent_start");
+      expect(body).toContain("legacy-plugin is hook-only");
     } finally {
       noteSpy.mockRestore();
     }
@@ -493,5 +504,33 @@ describe("noteWorkspaceStatus", () => {
     } finally {
       noteSpy.mockRestore();
     }
+  });
+
+  it("labels workspace diagnostics for the affected secondary agent", () => {
+    mocks.buildPluginRegistrySnapshotReport.mockClear();
+    mocks.listAgentIds.mockReturnValue(["default", "secondary"]);
+    mocks.resolveAgentWorkspaceDir.mockImplementation((_cfg, agentId) => `/${agentId}`);
+    mocks.buildPluginRegistrySnapshotReport.mockImplementation(({ workspaceDir }) => ({
+      workspaceDir,
+      ...createPluginLoadResult({
+        plugins: [],
+        diagnostics:
+          workspaceDir === "/secondary"
+            ? [{ level: "error", pluginId: "broken", message: "load failed" }]
+            : [],
+      }),
+    }));
+    mocks.buildPluginCompatibilityWarnings.mockReturnValue([]);
+    mocks.listTaskFlowRecords.mockReturnValue([]);
+
+    const findings = collectWorkspaceStatusHealthFindings({});
+
+    expect(mocks.buildPluginRegistrySnapshotReport).toHaveBeenCalledTimes(2);
+    expect(findings).toEqual([
+      expect.objectContaining({
+        message: 'Agent "secondary": load failed',
+        path: "plugins.entries.broken",
+      }),
+    ]);
   });
 });

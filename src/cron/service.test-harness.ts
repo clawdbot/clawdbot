@@ -30,12 +30,31 @@ export function createNoopLogger(): NoopLogger {
 export function createCronStoreHarness(options?: { prefix?: string }) {
   let fixtureRoot = "";
   let caseId = 0;
+  const stores = new Map<string, string>();
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), options?.prefix ?? "openclaw-cron-"));
   });
 
+  async function cleanupStore(storePath: string, dir: string) {
+    if (!stores.has(storePath)) {
+      return;
+    }
+    await saveCronStore(storePath, { version: 1, jobs: [] });
+    await fs.rm(dir, { recursive: true, force: true });
+    stores.delete(storePath);
+  }
+
+  afterEach(async () => {
+    for (const [storePath, dir] of stores) {
+      await cleanupStore(storePath, dir);
+    }
+  });
+
   afterAll(async () => {
+    for (const [storePath, dir] of stores) {
+      await cleanupStore(storePath, dir);
+    }
     if (!fixtureRoot) {
       return;
     }
@@ -45,9 +64,11 @@ export function createCronStoreHarness(options?: { prefix?: string }) {
   async function makeStorePath() {
     const dir = path.join(fixtureRoot, `case-${caseId++}`);
     await fs.mkdir(dir, { recursive: true });
+    const storePath = path.join(dir, "cron", "jobs.json");
+    stores.set(storePath, dir);
     return {
-      storePath: path.join(dir, "cron", "jobs.json"),
-      cleanup: async () => {},
+      storePath,
+      cleanup: async () => await cleanupStore(storePath, dir),
     };
   }
 
@@ -216,16 +237,6 @@ export async function withCronServiceStateForTest<T>(
   }
 }
 
-export function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
-
 export function createMockCronStateForJobs(params: {
   jobs: CronJob[];
   nowMs?: number;
@@ -248,11 +259,13 @@ export function createMockCronStateForJobs(params: {
     op: Promise.resolve(),
     warnedDisabled: false,
     warnedInvalidPersistedJobKeys: new Set<string>(),
+    reportedUnavailableReaperAgentIds: new Set<string>(),
     pendingQuarantineConfigJobs: [],
     lastQuarantineFailureWarnKey: null,
     deps: {
       storePath: "/mock/path",
       cronEnabled: true,
+      defaultAgentId: "main",
       nowMs: () => nowMs,
       enqueueSystemEvent: () => {},
       requestHeartbeat: () => {},

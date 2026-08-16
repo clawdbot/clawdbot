@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { collectSmallModelRiskFindings } from "./audit-extra.summary.js";
+import { collectAuditModelRefs } from "./audit-model-refs.js";
 
 function requireFirstSmallModelFinding(
   findings: ReturnType<typeof collectSmallModelRiskFindings>,
@@ -15,6 +16,54 @@ function requireFirstSmallModelFinding(
 }
 
 describe("security audit small-model risk findings", () => {
+  it("reports canonical paths for agent model references", () => {
+    expect(
+      collectAuditModelRefs({
+        agents: {
+          entries: {
+            simple: { model: "ollama/mistral-8b" },
+            structured: {
+              model: {
+                primary: "ollama/gemma-4b",
+                fallbacks: ["ollama/phi-3b"],
+              },
+            },
+          },
+        },
+      } satisfies OpenClawConfig),
+    ).toEqual([
+      { id: "ollama/mistral-8b", source: "agents.entries.simple.model" },
+      { id: "ollama/gemma-4b", source: "agents.entries.structured.model.primary" },
+      { id: "ollama/phi-3b", source: "agents.entries.structured.model.fallbacks" },
+    ]);
+  });
+
+  it("preserves agent policy context for canonical model source paths", () => {
+    const finding = requireFirstSmallModelFinding(
+      collectSmallModelRiskFindings({
+        cfg: {
+          agents: {
+            entries: {
+              ops: {
+                default: true,
+                model: { primary: "ollama/mistral-8b" },
+                tools: { deny: ["web_search", "web_fetch", "browser"] },
+              },
+            },
+          },
+          tools: { web: { search: { enabled: true }, fetch: { enabled: true } } },
+          browser: { enabled: true },
+        } satisfies OpenClawConfig,
+        env: {},
+      }),
+      "agent policy context",
+    );
+
+    expect(finding.severity).toBe("info");
+    expect(finding.detail).toContain("@ agents.entries.ops.model.primary");
+    expect(finding.detail).toContain("web=[off]");
+  });
+
   it("scores small-model risk by tool/sandbox exposure", () => {
     const cases: Array<{
       name: string;

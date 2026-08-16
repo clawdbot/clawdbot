@@ -9,7 +9,6 @@ import {
   emitTrustedDiagnosticEventWithPrivateData,
   emitTrustedSkillUsedDiagnosticEvent,
   emitTrustedSecurityEvent,
-  formatDiagnosticTraceparentForPropagation,
   hasPendingInternalDiagnosticEvent,
   isInternalDiagnosticEventMetadata,
   isDiagnosticsEnabled,
@@ -19,13 +18,21 @@ import {
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
   waitForDiagnosticEventsDrained,
+  type DiagnosticEventMetadata,
   type DiagnosticEventPrivateData,
   type DiagnosticEventPayload,
 } from "./diagnostic-events.js";
+import { isCoreSemanticRunProgressDiagnosticMetadata } from "./diagnostic-semantic-run-progress.js";
 import {
   createDiagnosticTraceContext,
+  formatDiagnosticTraceparent,
   runWithDiagnosticTraceContext,
 } from "./diagnostic-trace-context.js";
+import {
+  type DiagnosticTracePropagationBridge,
+  formatPropagatedDiagnosticTraceparent,
+  registerDiagnosticTracePropagationBridge,
+} from "./diagnostic-trace-propagation.js";
 
 describe("diagnostic-events", () => {
   beforeEach(() => {
@@ -238,54 +245,113 @@ describe("diagnostic-events", () => {
     expect(isInternalDiagnosticEventMetadata({ trusted: false })).toBe(false);
   });
 
-  it("formats traceparent for propagation only from dispatcher-trusted metadata", () => {
-    const trace = createDiagnosticTraceContext({
+  it("prepares trusted events synchronously without cloning private data", async () => {
+    const diagnosticTrace = createDiagnosticTraceContext({
       traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
       spanId: "00f067aa0ba902b7",
       traceFlags: "01",
     });
-    const traceparents: Array<string | undefined> = [];
-    onInternalDiagnosticEvent((event, metadata) => {
-      traceparents.push(formatDiagnosticTraceparentForPropagation(event, metadata));
+    const exportedTrace = createDiagnosticTraceContext({
+      traceId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      spanId: "bbbbbbbbbbbbbbbb",
+      traceFlags: "00",
     });
+    const prepared: string[] = [];
+    let privateDataReads = 0;
+    const bridge: DiagnosticTracePropagationBridge<
+      DiagnosticEventPayload,
+      DiagnosticEventMetadata
+    > = {
+      shouldPrepareEvent(event) {
+        return event.type === "model.call.started";
+      },
+      prepareEvent(event) {
+        prepared.push(event.type);
+      },
+      resolveTraceContext(traceContext) {
+        expect(traceContext).toBe(diagnosticTrace);
+        return exportedTrace;
+      },
+    };
+    registerDiagnosticTracePropagationBridge(bridge);
 
-    emitDiagnosticEvent({
-      type: "message.queued",
-      source: "plugin",
-      trace,
-    });
+    emitTrustedDiagnosticEventWithPrivateData(
+      {
+        type: "model.call.started",
+        runId: "run-1",
+        callId: "call-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        trace: diagnosticTrace,
+      },
+      {
+        modelContent: {
+          get inputMessages() {
+            privateDataReads += 1;
+            return ["secret prompt"];
+          },
+        },
+      },
+    );
+    expect(privateDataReads).toBe(0);
     emitTrustedDiagnosticEvent({
-      type: "model.usage",
-      usage: { total: 1 },
-      trace,
+      type: "model.call.completed",
+      runId: "run-1",
+      callId: "call-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      durationMs: 1,
+      trace: diagnosticTrace,
     });
 
-    expect(traceparents).toEqual([undefined, `00-${trace.traceId}-${trace.spanId}-01`]);
-    expect(formatDiagnosticTraceparentForPropagation({ trace }, { trusted: true })).toBeUndefined();
-    expect(
-      formatDiagnosticTraceparentForPropagation(
-        { trace },
-        { trusted: false, trustedTraceContext: true },
-      ),
-    ).toBeUndefined();
+    expect(prepared).toEqual(["model.call.started"]);
+    expect(formatDiagnosticTraceparent(diagnosticTrace)).toBe(
+      `00-${diagnosticTrace.traceId}-${diagnosticTrace.spanId}-01`,
+    );
+    expect(formatPropagatedDiagnosticTraceparent(diagnosticTrace)).toBe(
+      `00-${exportedTrace.traceId}-${exportedTrace.spanId}-00`,
+    );
+    await waitForDiagnosticEventsDrained();
+    expect(privateDataReads).toBe(0);
   });
 
-  it("shares diagnostic state across duplicate module instances", async () => {
-    const events: string[] = [];
-    onDiagnosticEvent((event) => {
-      events.push(event.type);
+  it("does not fall back to diagnostic ids when an active propagation bridge misses", () => {
+    const diagnosticTrace = createDiagnosticTraceContext({
+      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+      spanId: "00f067aa0ba902b7",
+      traceFlags: "01",
+    });
+    registerDiagnosticTracePropagationBridge({
+      resolveTraceContext: () => undefined,
+    });
+
+    expect(formatDiagnosticTraceparent(diagnosticTrace)).toBe(
+      `00-${diagnosticTrace.traceId}-${diagnosticTrace.spanId}-01`,
+    );
+    expect(formatPropagatedDiagnosticTraceparent(diagnosticTrace)).toBeUndefined();
+  });
+
+  it("shares semantic provenance across duplicate module instances", async () => {
+    const events: Array<{ coreSemantic: boolean; type: string }> = [];
+    onInternalDiagnosticEvent((event, metadata) => {
+      events.push({
+        coreSemantic: isCoreSemanticRunProgressDiagnosticMetadata(metadata),
+        type: event.type,
+      });
     });
 
     vi.resetModules();
-    const duplicateModule = (await import(
-      /* @vite-ignore */ new URL("./diagnostic-events.ts?duplicate", import.meta.url).href
-    )) as typeof import("./diagnostic-events.js");
-    duplicateModule.emitDiagnosticEvent({
-      type: "message.queued",
-      source: "plugin",
+    const duplicateSemanticProgress = await import(
+      /* @vite-ignore */ new URL("./diagnostic-semantic-run-progress.ts?duplicate", import.meta.url)
+        .href
+    );
+    duplicateSemanticProgress.emitCoreSemanticRunProgressDiagnosticEvent({
+      runId: "duplicate-semantic-run",
+      reason: "model_call:semantic_result",
     });
+    await waitForDiagnosticEventsDrained();
 
-    expect(events).toEqual(["message.queued"]);
+    expect(events).toEqual([{ coreSemantic: true, type: "run.progress" }]);
   });
 
   it("does not expose mutable diagnostic state on the obsolete global symbol", async () => {
@@ -630,6 +696,46 @@ describe("diagnostic-events", () => {
     expect(events).toHaveLength(250);
   });
 
+  it("does not extend a drain barrier for events queued after it starts", async () => {
+    const callIds: string[] = [];
+    onDiagnosticEvent((event) => {
+      if (event.type === "model.call.started") {
+        callIds.push(event.callId);
+      }
+    });
+
+    emitDiagnosticEvent({
+      type: "model.call.started",
+      runId: "run-before-barrier",
+      callId: "before-barrier",
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+    const drained = waitForDiagnosticEventsDrained();
+    for (let index = 0; index < 250; index += 1) {
+      emitDiagnosticEvent({
+        type: "model.call.started",
+        runId: `run-after-${index}`,
+        callId: `after-${index}`,
+        provider: "openai",
+        model: "gpt-5.4",
+      });
+    }
+
+    await drained;
+
+    expect(callIds).toHaveLength(100);
+    expect(callIds[0]).toBe("before-barrier");
+    expect(
+      hasPendingInternalDiagnosticEvent(
+        (event) => event.type === "model.call.started" && event.callId === "after-249",
+      ),
+    ).toBe(true);
+
+    await waitForDiagnosticEventsDrained();
+    expect(callIds).toHaveLength(251);
+  });
+
   it("reports pending async diagnostic events before they drain", async () => {
     emitTrustedDiagnosticEvent({
       type: "tool.execution.error",
@@ -731,19 +837,34 @@ describe("diagnostic-events", () => {
     ).toBe(true);
   });
 
-  it("preserves trusted terminal tool diagnostics when the async queue is full", async () => {
+  it("preserves trusted lifecycle terminals when the async queue is full", async () => {
     const events: DiagnosticEventPayload[] = [];
     onInternalDiagnosticEvent((event) => {
       events.push(event);
     });
+    const model = {
+      runId: "run-model",
+      callId: "call-model",
+      provider: "openai",
+      model: "gpt-5.4",
+    };
+    const harness = { runId: "run-harness", harnessId: "harness" };
+    const terminalEvents: Array<Parameters<typeof emitTrustedDiagnosticEvent>[0]> = [
+      { type: "tool.execution.completed", toolName: "exec", durationMs: 1 },
+      { type: "tool.execution.error", toolName: "exec", durationMs: 1, errorCategory: "test" },
+      { type: "model.call.completed", ...model, durationMs: 1 },
+      { type: "model.call.error", ...model, durationMs: 1, errorCategory: "test" },
+      { type: "harness.run.completed", ...harness, durationMs: 1, outcome: "completed" },
+      {
+        type: "harness.run.error",
+        ...harness,
+        durationMs: 1,
+        phase: "resolve",
+        errorCategory: "test",
+      },
+    ];
 
-    emitTrustedDiagnosticEvent({
-      type: "tool.execution.completed",
-      runId: "run-saturation-first",
-      toolName: "exec",
-      toolCallId: "call-saturation-first",
-      durationMs: 1,
-    });
+    emitTrustedDiagnosticEvent(terminalEvents[0]!);
 
     for (let index = 0; index < 9_999; index += 1) {
       emitDiagnosticEvent({
@@ -754,52 +875,26 @@ describe("diagnostic-events", () => {
         model: "gpt-5.4",
       });
     }
-
-    emitTrustedDiagnosticEvent({
-      type: "tool.execution.error",
-      runId: "run-saturation-second",
-      toolName: "exec",
-      toolCallId: "call-saturation-second",
-      durationMs: 1,
-      errorCategory: "test",
-    });
+    for (const terminalEvent of terminalEvents.slice(1)) {
+      emitTrustedDiagnosticEvent(terminalEvent);
+    }
 
     expect(
       hasPendingInternalDiagnosticEvent(
-        (event, metadata) =>
-          metadata.trusted &&
-          event.type === "tool.execution.error" &&
-          event.toolCallId === "call-saturation-second",
+        (event, metadata) => metadata.trusted && event.type === "harness.run.error",
       ),
     ).toBe(true);
 
     await waitForDiagnosticEventsDrained();
 
+    for (const terminalEvent of terminalEvents) {
+      expect(events).toContainEqual(expect.objectContaining(terminalEvent));
+    }
     expect(
-      events
-        .filter(
-          (
-            event,
-          ): event is Extract<
-            DiagnosticEventPayload,
-            { type: "tool.execution.completed" | "tool.execution.error" }
-          > => event.type === "tool.execution.completed" || event.type === "tool.execution.error",
-        )
-        .map((event) => ({
-          type: event.type,
-          toolCallId: event.toolCallId,
-        })),
-    ).toEqual([
-      {
-        type: "tool.execution.completed",
-        toolCallId: "call-saturation-first",
-      },
-      {
-        type: "tool.execution.error",
-        toolCallId: "call-saturation-second",
-      },
-    ]);
-    expect(events.filter((event) => event.type === "model.call.started")).toHaveLength(9_998);
+      events.filter(
+        (event) => event.type === "model.call.started" && event.runId.startsWith("saturation-run-"),
+      ),
+    ).toHaveLength(9_994);
   });
 
   it("emits a bounded summary when async diagnostics are dropped at saturation", async () => {

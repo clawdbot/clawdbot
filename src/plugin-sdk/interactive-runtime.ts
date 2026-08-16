@@ -13,8 +13,6 @@ export type {
   InteractiveReplyBlock,
   InteractiveReplyButton,
   InteractiveReplyOption,
-  InteractiveReplySelectBlock,
-  InteractiveReplyTextBlock,
   LegacyInteractiveReply,
   LegacyInteractiveReplyBlock,
   LegacyInteractiveReplyButton,
@@ -39,9 +37,11 @@ export type {
   MessagePresentationTableCell,
   MessagePresentationTextBlock,
   MessagePresentationTone,
+  ModelPickerAction,
   ReplyPayloadDelivery,
   ReplyPayloadDeliveryPin,
 } from "../interactive/payload.js";
+export type { ModelPickerCapabilityProfile } from "../model-picker/capabilities.js";
 export {
   hasInteractiveReplyBlocks,
   hasLegacyInteractiveReplyBlocks,

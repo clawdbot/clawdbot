@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { enforceEmbeddingMaxInputTokens } from "./embedding-chunk-limits.js";
 import { estimateUtf8Bytes } from "./embedding-input-limits.js";
-import type { EmbeddingProvider } from "./embeddings.js";
+import type { EmbeddingProvider } from "./embeddings.types.js";
 
 function createProvider(maxInputTokens: number): EmbeddingProvider {
   return {
@@ -73,6 +73,8 @@ describe("embedding chunk limits", () => {
     const input = {
       startLine: 1,
       endLine: 1,
+      entryStartLine: 1,
+      entryEndLine: 4,
       text: "x".repeat(9000),
       hash: "ignored",
     };
@@ -83,6 +85,7 @@ describe("embedding chunk limits", () => {
     expectChunksWithinUtf8Bytes(out, 8192);
     expectChunksLineRange(out, 1, 1);
     expectChunksHaveHashes(out);
+    expect(out.every((chunk) => chunk.entryStartLine === 1 && chunk.entryEndLine === 4)).toBe(true);
   });
 
   it("does not split inside surrogate pairs (emoji)", () => {

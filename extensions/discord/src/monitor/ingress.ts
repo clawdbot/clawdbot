@@ -1,12 +1,16 @@
 // Discord plugin module owns raw gateway-message durable ingress and replay draining.
 import { GatewayDispatchEvents, type APIMessage } from "discord-api-types/v10";
 import {
-  createChannelIngressDrain,
-  DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
+  createChannelIngressError,
+  createChannelIngressMonitor,
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
   type ChannelIngressQueue,
+  type ChannelIngressMonitorDeliveryResult,
+  type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { danger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeNullableString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Client } from "../internal/discord.js";
 import { mapGatewayDispatchData } from "../internal/gateway-dispatch.js";
 import { getDiscordRuntime } from "../runtime.js";
@@ -14,10 +18,6 @@ import type { DiscordMessageEvent } from "./listeners.js";
 
 const DISCORD_INGRESS_PAYLOAD_VERSION = 1;
 const DISCORD_INGRESS_DRAIN_INTERVAL_MS = 1_000;
-const DISCORD_INGRESS_COMPLETED_TTL_MS = 30 * 24 * 60 * 60_000;
-const DISCORD_INGRESS_COMPLETED_MAX_ENTRIES = 5_000;
-const DISCORD_INGRESS_FAILED_TTL_MS = 30 * 24 * 60 * 60_000;
-const DISCORD_INGRESS_FAILED_MAX_ENTRIES = 5_000;
 
 type DiscordIngressPayload = {
   version: 1;
@@ -25,18 +25,11 @@ type DiscordIngressPayload = {
   rawMessage: APIMessage;
 };
 
-export type DiscordIngressLifecycle = {
-  abortSignal: AbortSignal;
-  onAdopted: () => void | Promise<void>;
-  onDeferred: () => void;
-  onAdoptionFinalizing: () => void;
-  onAbandoned: () => void | Promise<void>;
-};
+type DiscordIngressBody = Omit<DiscordIngressPayload, "version">;
 
-export type DiscordIngressDispatchResult =
-  | { kind: "completed" }
-  | { kind: "deferred" }
-  | { kind: "failed-retryable"; error: unknown };
+export type DiscordIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
+
+export type DiscordIngressDispatchResult = ChannelIngressMonitorDeliveryResult;
 
 type DiscordIngressDispatch = (
   event: DiscordMessageEvent,
@@ -49,16 +42,7 @@ type DiscordIngressMonitor = {
   stop: () => Promise<void>;
 };
 
-class DiscordIngressPayloadError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "DiscordIngressPayloadError";
-  }
-}
-
-function nonEmptyString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
+const DiscordIngressPayloadError = createChannelIngressError("DiscordIngressPayloadError");
 
 function inspectDiscordMessage(rawMessage: unknown): { eventId: string; laneKey: string } {
   if (!rawMessage || typeof rawMessage !== "object" || Array.isArray(rawMessage)) {
@@ -76,23 +60,28 @@ function inspectDiscordMessage(rawMessage: unknown): { eventId: string; laneKey:
   return { eventId, laneKey: `channel:${channelId}` };
 }
 
-function parseClaimedMessage(payload: unknown, claimedId: string): APIMessage {
+function decodeDiscordIngressPayload(
+  payload: DiscordIngressPayload,
+  claimedId: string,
+): { version: unknown; body: DiscordIngressBody } {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     throw new DiscordIngressPayloadError("Discord ingress payload must be an object");
   }
   const candidate = payload as Partial<DiscordIngressPayload>;
-  if (candidate.version !== DISCORD_INGRESS_PAYLOAD_VERSION) {
-    throw new DiscordIngressPayloadError("Discord ingress payload version is unsupported");
+  try {
+    inspectDiscordMessage(candidate.rawMessage);
+  } catch (error) {
+    throw new DiscordIngressPayloadError(`Discord ingress payload ${claimedId} is invalid`, {
+      cause: error,
+    });
   }
-  const facts = inspectDiscordMessage(candidate.rawMessage);
-  if (facts.eventId !== claimedId) {
-    throw new DiscordIngressPayloadError("Discord message id changed after durable admission");
-  }
-  return candidate.rawMessage as APIMessage;
-}
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return {
+    version: candidate.version,
+    body: {
+      receivedAt: candidate.receivedAt as number,
+      rawMessage: candidate.rawMessage as APIMessage,
+    },
+  };
 }
 
 function isDiscordAuthenticationFailure(error: unknown): boolean {
@@ -121,27 +110,28 @@ export function createDiscordIngressMonitor(params: {
     getDiscordRuntime().state.openChannelIngressQueue<DiscordIngressPayload>({
       accountId: params.accountId,
     });
-  const shutdown = new AbortController();
-  const drain = createChannelIngressDrain<DiscordIngressPayload>({
+  const monitor = createChannelIngressMonitor<
+    APIMessage,
+    DiscordIngressBody,
+    DiscordIngressPayload
+  >({
     queue,
-    abortSignal: shutdown.signal,
-    retryPolicy: {
-      maxAttempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-      deadLetterMinAgeMs: DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
+    inspect: inspectDiscordMessage,
+    payload: {
+      version: DISCORD_INGRESS_PAYLOAD_VERSION,
+      serialize: (rawMessage, { receivedAt }) => ({ receivedAt, rawMessage }),
+      deserialize: (body) => body.rawMessage,
+      encode: ({ body }) => ({ version: DISCORD_INGRESS_PAYLOAD_VERSION, ...body }),
+      decode: (payload, { claim }) => decodeDiscordIngressPayload(payload, claim.id),
+      createClaimError: (kind) =>
+        new DiscordIngressPayloadError(
+          kind === "invalid-version"
+            ? "Discord ingress payload version is unsupported"
+            : "Discord message identity changed after durable admission",
+        ),
     },
-    resolveNonRetryableFailure: (error) => {
-      if (error instanceof DiscordIngressPayloadError) {
-        return { reason: "invalid-event", message: error.message };
-      }
-      if (isDiscordAuthenticationFailure(error)) {
-        return { reason: "authentication-failed", message: errorText(error) };
-      }
-      return null;
-    },
-    onLog: (message) => params.runtime.error?.(danger(`discord ingress: ${message}`)),
-    dispatchClaimedEvent: async (claimed, lifecycle) => {
-      const rawMessage = parseClaimedMessage(claimed.payload, claimed.id);
-      // Gateway mapping is intentionally delayed until after the durable claim.
+    // Gateway mapping is intentionally delayed until after the durable claim.
+    deliver: async (rawMessage, lifecycle) => {
       const event = mapGatewayDispatchData(
         params.client,
         GatewayDispatchEvents.MessageCreate,
@@ -149,83 +139,39 @@ export function createDiscordIngressMonitor(params: {
       ) as DiscordMessageEvent;
       return await params.dispatch(event, lifecycle);
     },
+    pollIntervalMs: DISCORD_INGRESS_DRAIN_INTERVAL_MS,
+    retention: {
+      // Discord previously pruned before every enqueue rather than on a timed cadence.
+      pruneIntervalMs: 0,
+      completedMaxEntries: 5_000,
+      failedMaxEntries: 5_000,
+    },
+    appendRetryDelaysMs: [0],
+    drain: {
+      retryPolicy: {
+        maxAttempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
+        deadLetterMinAgeMs: 0,
+      },
+      resolveNonRetryableFailure: (error) => {
+        if (error instanceof DiscordIngressPayloadError) {
+          return { reason: "invalid-event", message: error.message };
+        }
+        if (isDiscordAuthenticationFailure(error)) {
+          return { reason: "authentication-failed", message: formatErrorMessage(error) };
+        }
+        return null;
+      },
+      onLog: (message) => params.runtime.error?.(danger(`discord ingress: ${message}`)),
+    },
+    onError: (error) =>
+      params.runtime.error?.(danger(`discord ingress drain failed: ${formatErrorMessage(error)}`)),
   });
-  let running = false;
-  let drainRequested = false;
-  let drainTask: Promise<void> | undefined;
-  let drainTimer: ReturnType<typeof setInterval> | undefined;
-
-  const requestDrain = (): void => {
-    if (!running || shutdown.signal.aborted) {
-      return;
-    }
-    drainRequested = true;
-    if (drainTask) {
-      return;
-    }
-    drainTask = (async () => {
-      while (drainRequested && !shutdown.signal.aborted) {
-        if (!running) {
-          break;
-        }
-        drainRequested = false;
-        await drain.drainOnce();
-      }
-    })()
-      .catch((error: unknown) => {
-        params.runtime.error?.(danger(`discord ingress drain failed: ${errorText(error)}`));
-      })
-      .finally(() => {
-        drainTask = undefined;
-        if (running && drainRequested && !shutdown.signal.aborted) {
-          requestDrain();
-        }
-      });
-  };
 
   return {
     accept: async (rawMessage) => {
-      const facts = inspectDiscordMessage(rawMessage);
-      await queue.prune({
-        completedTtlMs: DISCORD_INGRESS_COMPLETED_TTL_MS,
-        completedMaxEntries: DISCORD_INGRESS_COMPLETED_MAX_ENTRIES,
-        failedTtlMs: DISCORD_INGRESS_FAILED_TTL_MS,
-        failedMaxEntries: DISCORD_INGRESS_FAILED_MAX_ENTRIES,
-      });
-      const receivedAt = Date.now();
-      await queue.enqueue(
-        facts.eventId,
-        {
-          version: DISCORD_INGRESS_PAYLOAD_VERSION,
-          receivedAt,
-          rawMessage,
-        },
-        { receivedAt, laneKey: facts.laneKey },
-      );
-      requestDrain();
+      await monitor.admit(rawMessage);
     },
-    start: () => {
-      if (running) {
-        return;
-      }
-      running = true;
-      requestDrain();
-      drainTimer = setInterval(requestDrain, DISCORD_INGRESS_DRAIN_INTERVAL_MS);
-      drainTimer.unref?.();
-    },
-    stop: async () => {
-      if (!running && shutdown.signal.aborted) {
-        return;
-      }
-      running = false;
-      if (drainTimer) {
-        clearInterval(drainTimer);
-        drainTimer = undefined;
-      }
-      shutdown.abort();
-      await drainTask;
-      await drain.waitForIdle();
-      drain.dispose();
-    },
+    start: monitor.start,
+    stop: monitor.stop,
   };
 }

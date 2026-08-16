@@ -1,5 +1,6 @@
 // Application-owned browser push subscription lifecycle.
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 
 type WebPushSnapshot = {
@@ -27,10 +28,6 @@ function isWebPushSupported(): boolean {
     "PushManager" in window &&
     "Notification" in window
   );
-}
-
-function webPushError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 export function createWebPushCapability(gateway: ApplicationGateway): WebPushCapability {
@@ -91,7 +88,7 @@ export function createWebPushCapability(gateway: ApplicationGateway): WebPushCap
     publish({ loading: true, error: null });
     operation = action(client)
       .catch((error: unknown) => {
-        publish({ error: webPushError(error) });
+        publish({ error: formatUiError(error) });
       })
       .finally(() => {
         operation = null;
@@ -106,7 +103,7 @@ export function createWebPushCapability(gateway: ApplicationGateway): WebPushCap
   void readExistingSubscription().catch(() => {});
   const stopGateway = gateway.subscribe((gatewaySnapshot) => {
     const client = gatewaySnapshot.client;
-    const connected = gatewaySnapshot.connected && client !== null;
+    const connected = gatewaySnapshot.phase === "connected" && client !== null;
     if (connected && !wasConnected && client) {
       void reconcile(client);
     }

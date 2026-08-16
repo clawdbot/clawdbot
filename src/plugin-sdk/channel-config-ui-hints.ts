@@ -103,6 +103,8 @@ function createChannelProgressUiHints(params: {
   channelLabel: string;
   includeCommentary?: boolean;
   commentaryOrder?: "before-command" | "after-command";
+  labels?: "openclaw";
+  titleWording?: boolean;
 }): HintMap {
   const channelLabel = params.channelLabel;
   const commentaryHint = {
@@ -114,15 +116,18 @@ function createChannelProgressUiHints(params: {
   return {
     "streaming.progress.label": {
       label: `${channelLabel} Progress Label`,
-      help: 'Initial progress draft title. Use "auto" for built-in single-word labels, a custom string, or false to hide the title.',
+      help: `Initial progress ${params.titleWording ? "title" : "draft title"}. Use "auto" for built-in single-word labels, a custom string, or false to hide the title.`,
     },
     "streaming.progress.labels": {
       label: `${channelLabel} Progress Label Pool`,
-      help: 'Candidate labels for streaming.progress.label="auto". Leave unset to use the built-in "Working" label.',
+      help:
+        params.labels === "openclaw"
+          ? 'Candidate labels for streaming.progress.label="auto". Leave unset to use OpenClaw built-in progress labels.'
+          : 'Candidate labels for streaming.progress.label="auto". Leave unset to use the built-in "Working" label.',
     },
     "streaming.progress.maxLines": {
       label: `${channelLabel} Progress Max Lines`,
-      help: "Maximum number of compact progress lines to keep below the draft label (default: 8).",
+      help: `Maximum number of compact progress lines to keep below the ${params.titleWording ? "progress title" : "draft label"} (default: 8).`,
     },
     "streaming.progress.maxLineChars": {
       label: `${channelLabel} Progress Max Line Chars`,
@@ -130,19 +135,56 @@ function createChannelProgressUiHints(params: {
     },
     "streaming.progress.toolProgress": {
       label: `${channelLabel} Progress Tool Lines`,
-      help: "Show compact tool/progress lines in progress draft mode (default: true). Set false to keep only the label until final delivery.",
+      help: params.titleWording
+        ? "Show compact tool/progress lines in progress mode (default: true). Set false to keep only the title until final delivery."
+        : "Show compact tool/progress lines in progress draft mode (default: true). Set false to keep only the label until final delivery.",
     },
     ...(params.includeCommentary && params.commentaryOrder !== "after-command"
       ? commentaryHint
       : {}),
     "streaming.progress.commandText": {
       label: `${channelLabel} Progress Command Text`,
-      help: 'Command/exec detail in progress draft lines: "raw" preserves released behavior; "status" shows only the tool label.',
+      help: `Command/exec detail in progress${params.titleWording ? "" : " draft"} lines: "status" is the safe default; "raw" opts into command text.`,
     },
     ...(params.includeCommentary && params.commentaryOrder === "after-command"
       ? commentaryHint
       : {}),
   };
+}
+
+const STREAMING_HINT_LABELS = {
+  "": "Streaming Mode",
+  mode: "Streaming Mode",
+  chunkMode: "Chunk Mode",
+  "block.enabled": "Block Streaming Enabled",
+  "block.coalesce": "Block Streaming Coalesce",
+  nativeTransport: "Native Streaming",
+  "preview.chunk.minChars": "Draft Chunk Min Chars",
+  "preview.chunk.maxChars": "Draft Chunk Max Chars",
+  "preview.chunk.breakPreference": "Draft Chunk Break Preference",
+  "preview.toolProgress": "Draft Tool Progress",
+  "preview.commandText": "Draft Command Text",
+  "progress.nativeTaskCards": "Native Progress Task Cards",
+} as const;
+
+type StreamingHintKey = keyof typeof STREAMING_HINT_LABELS;
+type StreamingHintValue = string | { label: string; help: string };
+
+function createChannelStreamingUiHints(
+  channelLabel: string,
+  entries: Partial<Record<StreamingHintKey, StreamingHintValue>>,
+): HintMap {
+  return Object.fromEntries(
+    Object.entries(entries).map(([key, value]) => [
+      key ? `streaming.${key}` : "streaming",
+      typeof value === "string"
+        ? {
+            label: `${channelLabel} ${STREAMING_HINT_LABELS[key as StreamingHintKey]}`,
+            help: value,
+          }
+        : value,
+    ]),
+  );
 }
 
 function createChannelRetryUiHints(channelLabel: string): HintMap {
@@ -186,7 +228,10 @@ export function createChannelConfigUiHints(params: {
   progress?: {
     includeCommentary?: boolean;
     commentaryOrder?: "before-command" | "after-command";
+    labels?: "openclaw";
+    titleWording?: boolean;
   };
+  streaming?: Partial<Record<StreamingHintKey, StreamingHintValue>>;
   retry?: boolean;
 }): HintMap {
   return {
@@ -202,6 +247,9 @@ export function createChannelConfigUiHints(params: {
       : {}),
     ...(params.nativeCommands ? createChannelNativeCommandUiHints(params.channelLabel) : {}),
     ...(params.implicitMentions ? createChannelImplicitMentionsUiHints(params.channelLabel) : {}),
+    ...(params.streaming
+      ? createChannelStreamingUiHints(params.channelLabel, params.streaming)
+      : {}),
     ...(params.progress
       ? createChannelProgressUiHints({ channelLabel: params.channelLabel, ...params.progress })
       : {}),

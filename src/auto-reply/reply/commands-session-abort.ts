@@ -166,7 +166,7 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
   );
   await triggerInternalHook(hookEvent);
 
-  const { stopped } = stopSubagentsForRequester({
+  const { stopped, failed } = await stopSubagentsForRequester({
     cfg: params.cfg,
     requesterSessionKey: abortTarget.key ?? params.sessionKey,
   });
@@ -175,7 +175,7 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
     abortOutcome.active && !abortOutcome.aborted ? ("finalizing" as const) : undefined;
   return {
     shouldContinue: false,
-    reply: { text: formatAbortReplyText(stopped, rejectionReason) },
+    reply: { text: formatAbortReplyText(stopped, rejectionReason, failed) },
   };
 };
 

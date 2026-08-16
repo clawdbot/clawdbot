@@ -17,16 +17,22 @@ Use when:
 - after non-trivial code edits, before final/commit/ship
 - reviewing a local branch or PR branch after fixes
 
+Do not require autoreview for a change whose entire diff is prose-only internal notes or `SKILL.md` documentation. Still inspect the diff directly and run the repository's lightweight documentation validation, if any. This exception does not cover user-facing documentation, executable examples, configuration, scripts, generated files, or behavior changes.
+
 ## Contract
 
+- Default output is P0 only: report issues worth blocking the current change
+  because they materially break the normal flow, outcome, or safety boundary.
+  Use `--max-priority P1`, `P2`, or `P3` only when the caller explicitly asks
+  for a wider review.
 - Treat review output as advisory. Never blindly apply it.
 - Verify every finding by reading the real code path and adjacent files.
 - Read dependency docs/source/types when the finding depends on external behavior.
-- Reject unrealistic edge cases, speculative risks, broad rewrites, and fixes that over-complicate the codebase.
-- Prefer small fixes at the right ownership boundary; no refactor unless it clearly improves the bug class.
-- When an accepted finding shows a bug class or repeated pattern, inspect the current PR scope for sibling instances before fixing.
-- Fix the scoped bug class at once when practical; stop at touched surfaces, owner boundaries, and clear follow-up territory.
-- Keep going until structured review returns no accepted/actionable findings only while the work remains inside the original task scope.
+- Reject unrealistic edge cases, speculative risks, unrelated rewrites, and fixes that over-complicate the codebase.
+- Prefer root-cause fixes at the right ownership boundary. A coherent refactor is appropriate when it removes the bug class, duplicate policy, stale paths, or ownership confusion; do not default to a symptom patch.
+- When an accepted finding exposes a bug class or repeated pattern, inspect its owner and relevant sibling implementations before fixing.
+- Fix the same bug class across its owner-boundary neighborhood when practical; stop at unrelated invariants, different owners, and unapproved contract changes.
+- Keep going until structured review returns no accepted/actionable findings only while the work remains inside the authorized architectural and task scope.
 - If a review-triggered fix changes code, rerun focused tests and rerun the structured review helper.
 - For security-audit suppression changes, verify accepted findings remain auditable: suppressed findings stay in structured output, active output keeps an unsuppressible suppression notice, and aggregate findings cannot hide unrelated active risk.
 - Never switch or override the requested review engine/model except for the documented Codex Sol-to-Terra account-access fallback. Capacity, rate-limit, and unrelated failures keep the same engine/model.
@@ -36,7 +42,7 @@ Use when:
 - Tools are useful in review mode. Codex receives the validated bundle in an empty workspace so ignored files and linked-worktree metadata remain unreadable; web search stays available for dependency contracts and upstream docs.
 - Security perspective is always included, but it should not cripple legitimate functionality. Report security findings only when the change creates a concrete, actionable risk or removes an important safety check.
 - Reviewer subprocesses preserve engine authentication and non-credentialed proxy variables needed by headless or restricted-network environments while stripping process-injection, Git override, and credentialed proxy values.
-- Review bundles fail closed before engine invocation when tracked or untracked paths look sensitive or patch text looks secret-like. Obvious synthetic values shaped like `<fixture-prefix>-<credential-field>` remain reviewable, such as `token: "test-token"`, without one-off allowlists. Safe large diffs are scanned in full, sent as one pass while they fit the aggregate prompt limit, then partitioned into complete bounded passes without truncation.
+- Before engine invocation, autoreview runs TruffleHog over temporary snapshots of the exact added, modified, or deleted content under review. It intentionally matches TruffleHog's low-false-positive pre-commit policy (`verified,unknown`); it does not classify arbitrary password-like strings or rescan unchanged history. After that scan passes, locally recognized secret-like values are redacted in place only when they occur exclusively on deleted lines of an entirely removed file; if one of those deleted values also occurs in added, context, or mixed staged/unstaged content, the review fails closed. Install TruffleHog using its official platform-neutral instructions; autoreview fails with that link when the binary is unavailable and never auto-installs it. Repositories should also run TruffleHog in pull-request CI as a backup outside autoreview; repository-local Git hooks are optional. Review bundles still omit security-sensitive paths or files, and explicit prompt and dataset inputs remain checked before engine invocation. Safe large diffs are sent as one pass while they fit the aggregate prompt limit, then partitioned into complete bounded passes without truncation.
 - For regression provenance, keep roles separate: blamed code author, blamed PR author, PR merger/committer, current PR author, and PR/date. If no blamed PR is traceable, use the blamed commit as the provenance: commit SHA, date, and author username. Do not guess a merger or frame missing PR metadata as a separate finding.
 - If the blamed PR was merged by `clawsweeper[bot]` or another automation, identify the human trigger when practical. Check timeline/comments first; if rate-limited, use gitcrawl/cache or public PR HTML. Look for maintainer commands such as `@clawsweeper automerge`, `/landpr`, or labels/status comments that armed automerge. Report `automerge triggered by @login`; if not found, say trigger unknown.
 - Do not invoke built-in `codex review`, nested reviewers, or reviewer panels from inside the review. The helper builds one validated bundle, calls the selected engine once for normal inputs or once per complete bounded chunk for oversized inputs, validates the structured results, and stops.
@@ -50,25 +56,25 @@ Use when:
 
 ## Scope Governor
 
-Autoreview is a closeout gate, not permission to rewrite the task.
+Autoreview is a closeout gate, not permission to change the task's product contract. Define scope by the authorized invariant and its architectural owner, not by the first patch.
 
-Before the first review, freeze a scope baseline: original request or issue, target branch, intended behavior, owner boundary, changed files, and non-test LOC. For inherited or already-bloated branches, use the intended PR diff as the baseline rather than accepting all existing branch drift.
+Before the first review, record a scope baseline: original request or issue, violated invariant, target branch, intended behavior, owner boundary, relevant sibling surfaces, and public/security/product contracts. Record changed files and non-test LOC as measurements, not hard caps. For inherited or already-bloated branches, distinguish the intended architectural fix from unrelated branch drift.
 
 Before patching a finding, classify it:
 
-- **In-scope blocker**: the finding is introduced by the current diff, affects the same owner boundary, and can be fixed without changing the task's contract.
-- **Follow-up**: the finding is real but belongs to an adjacent bug class, sibling surface, cleanup, or broader hardening track.
+- **In-scope blocker**: the finding affects the same violated invariant or owner-boundary neighborhood, including relevant sibling implementations and connected obsolete paths, and can be fixed without changing the task's contract.
+- **Follow-up**: the finding is real but belongs to an unrelated bug class, different owner, independent cleanup, or broader hardening track.
 - **Stop-and-escalate**: the finding requires a new protocol/config/storage/public API contract, a different owner boundary, a release-process change, or a design choice outside the original request.
 
 Stop patching and report the scope break instead of continuing when:
 
-- a narrow PR turns into an architecture change, protocol change, migration, or release-process change;
-- the diff grows past 2x the original files or non-test LOC without explicit approval to expand scope;
+- a task turns into an unauthorized product, protocol, migration, storage, security, or release-process change;
+- added files or production LOC no longer serve the authorized invariant, owner boundary, or meaningful simplification; file counts, initial diff size, and arbitrary LOC multipliers are never automatic stop conditions;
 - two review-triggered patch cycles have not converged; pause and reclassify every remaining finding before another edit;
 - the best fix is "define the canonical contract first" rather than another local inference layer;
 - fixing the accepted finding would make the PR no longer describe the same behavior, issue, or owner boundary.
 
-After the two-cycle pause, continue only when every remaining accepted finding is still an in-scope blocker. Otherwise preserve the useful analysis, identify the smallest safe landed subset if one exists, and open or request a follow-up for the larger fix. Do not keep committing speculative fixes just to satisfy the reviewer.
+After the two-cycle pause, continue only when every remaining accepted finding is still an in-scope blocker. Otherwise preserve the useful analysis, identify a coherent root-cause-safe landed subset if one exists, and open or request a follow-up for unrelated work. Do not land a symptom patch or keep committing speculative fixes just to satisfy the reviewer.
 
 Do not stack or push review-triggered fix commits while scope classification or focused proof is unresolved. Keep exploratory edits local until the cycle is proven in scope; if scope breaks, remove them from the landing lane instead of preserving them as branch history.
 

@@ -13,6 +13,7 @@ type OpenShellPluginConfig = {
   command?: string;
   gateway?: string;
   gatewayEndpoint?: string;
+  workspace?: string;
   from?: string;
   policy?: string;
   providers?: string[];
@@ -28,6 +29,7 @@ export type ResolvedOpenShellPluginConfig = {
   command: string;
   gateway?: string;
   gatewayEndpoint?: string;
+  workspace?: string;
   from: string;
   policy?: string;
   providers: string[];
@@ -66,11 +68,22 @@ function normalizeProviders(value: string[] | undefined): string[] {
 const nonEmptyTrimmedString = (message: string) =>
   z.string({ error: message }).trim().min(1, { error: message });
 
+const openShellWorkspaceName = z
+  .string({ error: "workspace must be a valid OpenShell workspace name" })
+  .trim()
+  .min(1, { error: "workspace must be a valid OpenShell workspace name" })
+  .max(19, { error: "workspace must be at most 19 characters" })
+  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, {
+    error:
+      "workspace must contain lowercase alphanumeric characters or single hyphens and must not start or end with a hyphen",
+  });
+
 const OpenShellPluginConfigSchema = z.strictObject({
   mode: z.enum(["mirror", "remote"], { error: "mode must be one of mirror, remote" }).optional(),
   command: nonEmptyTrimmedString("command must be a non-empty string").optional(),
   gateway: nonEmptyTrimmedString("gateway must be a non-empty string").optional(),
   gatewayEndpoint: nonEmptyTrimmedString("gatewayEndpoint must be a non-empty string").optional(),
+  workspace: openShellWorkspaceName.optional(),
   from: nonEmptyTrimmedString("from must be a non-empty string").optional(),
   policy: nonEmptyTrimmedString("policy must be a non-empty string").optional(),
   providers: z
@@ -155,6 +168,7 @@ export function resolveOpenShellPluginConfig(value: unknown): ResolvedOpenShellP
       command: DEFAULT_COMMAND,
       gateway: undefined,
       gatewayEndpoint: undefined,
+      workspace: undefined,
       from: DEFAULT_SOURCE,
       policy: undefined,
       providers: [],
@@ -178,6 +192,7 @@ export function resolveOpenShellPluginConfig(value: unknown): ResolvedOpenShellP
     command: cfg.command ?? DEFAULT_COMMAND,
     gateway: cfg.gateway,
     gatewayEndpoint: cfg.gatewayEndpoint,
+    workspace: cfg.workspace,
     from: cfg.from ?? DEFAULT_SOURCE,
     policy: cfg.policy,
     providers: normalizeProviders(cfg.providers),

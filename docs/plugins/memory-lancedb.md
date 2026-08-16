@@ -33,7 +33,7 @@ but only one plugin owns the active memory slot at a time.
 
 <Note>
 LanceDB's `memory_recall` does not receive the protected private transcript
-authorization used by `memorySearch.rememberAcrossConversations`. Use LanceDB's
+authorization used by `memory.search.rememberAcrossConversations`. Use LanceDB's
 `autoRecall` or its `memory_recall` tool through
 [advanced Active Memory](/concepts/active-memory#lancedb-memory).
 `openclaw doctor` reports when Remember across conversations is unavailable
@@ -191,17 +191,17 @@ local server returns context-length errors.
 
 ## Recall and capture limits
 
-| Setting           | Default | Range                        | Applies to                                                 |
-| ----------------- | ------- | ---------------------------- | ---------------------------------------------------------- |
-| `recallMaxChars`  | `1000`  | 100-10000                    | Text sent to the embedding API for recall.                 |
-| `captureMaxChars` | `500`   | 100-10000                    | Message length eligible for auto-capture.                  |
-| `customTriggers`  | `[]`    | 0-50 items, each <=100 chars | Literal phrases that make auto-capture consider a message. |
+| Setting           | Default | Range                       | Applies to                                                 |
+| ----------------- | ------- | --------------------------- | ---------------------------------------------------------- |
+| `recallMaxChars`  | `1000`  | 100-10000                   | Text sent to the embedding API for recall.                 |
+| `captureMaxChars` | `500`   | 100-10000                   | Message length eligible for auto-capture.                  |
+| `customTriggers`  | `[]`    | 0-50 items, each ≤100 chars | Literal phrases that make auto-capture consider a message. |
 
 `recallMaxChars` bounds the `before_prompt_build` auto-recall query, the
-`memory_recall` tool, the `memory_forget` query path, and `openclaw ltm
-search`. Auto-recall embeds the latest user message from the turn and falls
-back to the full prompt only when no user message is present, keeping channel
-metadata and large prompt blocks out of the embedding request.
+`memory_recall` tool, the `memory_forget` query path, and `openclaw ltm search`.
+Auto-recall embeds the latest user message from the turn and falls back to the
+full prompt only when no user message is present, keeping channel metadata and
+large prompt blocks out of the embedding request.
 
 `captureMaxChars` gates whether a user message from the turn's `agent_end`
 event is short enough to be considered for auto-capture; it does not affect
@@ -217,8 +217,8 @@ and caps at 3 captured memories per agent turn.
 
 Every memory is owned by one agent. Recall, duplicate detection, capture,
 listing, raw queries, and deletion all enforce that owner before returning or
-mutating rows. An agent with `memorySearch.enabled: false` (in `agents.list[]`
-or via `agents.defaults`) also gets none of the `memory_recall`, `memory_store`,
+mutating rows. An agent with `memory.search.enabled: false` in its `agents.entries.*`
+entry, or one inheriting a disabled top-level search, also gets none of the `memory_recall`, `memory_store`,
 or `memory_forget` tools and does not participate in automatic recall or
 capture, even when the plugin-level `autoRecall`/`autoCapture` flags are on.
 

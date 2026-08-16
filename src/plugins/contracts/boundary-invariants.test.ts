@@ -15,34 +15,35 @@ const tsFilesCache = new Map<string, string[]>();
 const BUNDLED_TYPED_HOOK_REGISTRATION_FILES = [
   "extensions/acpx/index.ts",
   "extensions/active-memory/index.ts",
+  "extensions/clickclack/src/discussions/register.ts",
   "extensions/codex/index.ts",
   "extensions/diffs/src/plugin.ts",
   "extensions/discord/subagent-hooks-api.ts",
   "extensions/feishu/subagent-hooks-api.ts",
   "extensions/matrix/subagent-hooks-api.ts",
+  "extensions/memory-core/index.ts",
   "extensions/memory-core/src/dreaming.ts",
   "extensions/memory-lancedb/index.ts",
   "extensions/onepassword/index.ts",
-  "extensions/thread-ownership/index.ts",
   "extensions/workboard/index.ts",
 ] as const;
 const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
   "extensions/acpx/index.ts": ["reply_dispatch"],
-  "extensions/active-memory/index.ts": ["before_prompt_build"],
+  "extensions/active-memory/index.ts": ["agent_end", "before_model_resolve", "before_prompt_build"],
+  "extensions/clickclack/src/discussions/register.ts": ["before_tool_call"],
   "extensions/codex/index.ts": ["after_compaction", "inbound_claim", "session_end"],
   "extensions/diffs/src/plugin.ts": ["before_prompt_build"],
   "extensions/discord/subagent-hooks-api.ts": [
     "gateway_start",
     "subagent_delivery_target",
     "subagent_ended",
-    "subagent_progress",
   ],
   "extensions/feishu/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],
   "extensions/matrix/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],
   "extensions/memory-core/src/dreaming.ts": ["before_agent_reply", "gateway_start", "gateway_stop"],
+  "extensions/memory-core/index.ts": ["before_agent_reply", "before_prompt_build"],
   "extensions/memory-lancedb/index.ts": ["agent_end", "before_prompt_build", "session_end"],
   "extensions/onepassword/index.ts": ["before_tool_call", "tool_result_persist"],
-  "extensions/thread-ownership/index.ts": ["message_received", "message_sending"],
   "extensions/workboard/index.ts": ["subagent_ended"],
 } as const satisfies Record<
   (typeof BUNDLED_TYPED_HOOK_REGISTRATION_FILES)[number],
@@ -67,11 +68,6 @@ const BUNDLED_LIVE_CONFIG_HOOK_GUARDS = {
     "resolveEffectiveEnableState(",
     '"onepassword"',
     "api.runtime.config?.current",
-  ],
-  "extensions/thread-ownership/index.ts": [
-    "resolveLivePluginConfigObject(",
-    '"thread-ownership"',
-    "api.runtime.config?.current?.() ?? api.config",
   ],
 } as const satisfies Record<string, readonly string[]>;
 const BUNDLED_LIVE_CONFIG_PROVIDER_GUARDS = {
@@ -377,12 +373,6 @@ describe("plugin contract boundary invariants", () => {
       const source = readRepoSource(file);
       return /extensions\/\$\{|\.\.\/\.\.\/\.\.\/\.\.\/extensions\//u.test(source);
     });
-    expect(offenders).toStrictEqual([]);
-  });
-
-  it("keeps bundled plugin production code off legacy before_agent_start hooks", () => {
-    const files = listTsFiles("extensions", { excludeTests: true });
-    const offenders = files.filter((file) => readRepoSource(file).includes("before_agent_start"));
     expect(offenders).toStrictEqual([]);
   });
 

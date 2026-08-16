@@ -1,13 +1,13 @@
 // Imported by loader.test.ts to keep its mocked suite in one Vitest module graph.
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import { createHookRunner } from "./hooks.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import {
   EMPTY_PLUGIN_SCHEMA,
-  makeTempDir,
+  makePluginLoaderTempDir,
   mkdirSafe,
   useNoBundledPlugins,
   writePlugin,
@@ -19,76 +19,218 @@ import {
   createSetupEntryChannelPluginFixture,
   globalAfterEach0,
   globalAfterAll1,
+  updatePluginManifest,
 } from "./loader.test-harness.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 
 afterEach(globalAfterEach0);
 afterAll(globalAfterAll1);
 
+function writeFixtureText(rootDir: string, relativePath: string, body: string) {
+  const filePath = path.join(rootDir, relativePath);
+  mkdirSafe(path.dirname(filePath));
+  fs.writeFileSync(filePath, body, "utf-8");
+}
+
+function writeFixtureJson(rootDir: string, relativePath: string, value: unknown) {
+  writeFixtureText(rootDir, relativePath, JSON.stringify(value, null, 2));
+}
+
+function pluginManifest(id: string, channels?: string[]) {
+  return {
+    id,
+    configSchema: EMPTY_PLUGIN_SCHEMA,
+    ...(channels ? { channels } : {}),
+  };
+}
+
+function channelPluginSource(params: {
+  pluginId: string;
+  channelId?: string;
+  label: string;
+  docsPath: string;
+  blurb: string;
+}) {
+  const channelId = params.channelId ?? params.pluginId;
+  return `module.exports = { id: ${JSON.stringify(params.pluginId)}, register(api) {
+    api.registerChannel({
+      plugin: {
+        id: ${JSON.stringify(channelId)},
+        meta: {
+          id: ${JSON.stringify(channelId)},
+          label: ${JSON.stringify(params.label)},
+          selectionLabel: ${JSON.stringify(params.label)},
+          docsPath: ${JSON.stringify(params.docsPath)},
+          blurb: ${JSON.stringify(params.blurb)},
+        },
+        capabilities: { chatTypes: ["direct"] },
+        config: {
+          listAccountIds: () => [],
+          resolveAccount: () => ({ accountId: "default" }),
+        },
+        outbound: { deliveryMode: "direct" },
+      },
+    });
+  } };`;
+}
+
+function createSetupFailureFixture(params: {
+  id: string;
+  channelId?: string;
+  setupEntrySource: string;
+}) {
+  const pluginDir = makePluginLoaderTempDir();
+  writeFixtureJson(pluginDir, "package.json", {
+    name: `@openclaw/${params.id}`,
+    openclaw: {
+      extensions: ["./index.cjs"],
+      setupEntry: "./setup-entry.cjs",
+    },
+  });
+  writeFixtureJson(
+    pluginDir,
+    "openclaw.plugin.json",
+    pluginManifest(params.id, [params.channelId ?? params.id]),
+  );
+  writeFixtureText(
+    pluginDir,
+    "index.cjs",
+    `module.exports = { id: ${JSON.stringify(params.id)}, register() {} };`,
+  );
+  writeFixtureText(pluginDir, "setup-entry.cjs", params.setupEntrySource);
+  return pluginDir;
+}
+
+const THROWING_SETUP_ENTRY_SOURCE = `module.exports = {
+  kind: "bundled-channel-setup-entry",
+  loadSetupPlugin: () => { throw new Error("boom: setup plugin missing"); },
+};`;
+
+function loadSetupPlugins(params: { paths: string[]; ids: string[]; enabled?: boolean }) {
+  return loadOpenClawPlugins({
+    cache: false,
+    channelPluginLoadIntent: "setup",
+    config: {
+      plugins: {
+        ...(params.enabled === undefined ? {} : { enabled: params.enabled }),
+        load: { paths: params.paths },
+        allow: params.ids,
+      },
+    },
+  });
+}
+
+type SetupEntryScenario = {
+  name: string;
+  fixture: Parameters<typeof createSetupEntryChannelPluginFixture>[0];
+  loadOptions?: {
+    setupIntent?: boolean;
+    setupOnly?: boolean;
+    scopePlugin?: boolean;
+    disableEntry?: boolean;
+  };
+  expectFullLoaded: boolean;
+  expectSetupLoaded: boolean;
+  expectedChannelSetups?: number;
+  expectedChannels: number;
+  expectedSetupSecretId?: string;
+  expectSetupRuntimeLoaded?: boolean;
+  expectBundledFullRuntimeLoaded?: boolean;
+};
+
+type BuiltArtifactScenario = {
+  id: string;
+  origin: "bundled" | "workspace";
+  sourceEntry: string;
+  sourceBody: string;
+  artifactLocation: "core" | "package";
+  artifactEntry: string;
+  artifactBody: string;
+  packageBeforeManifest?: boolean;
+  packageEntry?: string;
+};
+
+function loadBuiltArtifactScenario(scenario: BuiltArtifactScenario) {
+  const repoRoot = makePluginLoaderTempDir();
+  const pluginDir =
+    scenario.origin === "bundled"
+      ? path.join(repoRoot, "extensions", scenario.id)
+      : makePluginLoaderTempDir();
+  const packageManifest = scenario.packageEntry
+    ? { openclaw: { extensions: [scenario.packageEntry] } }
+    : undefined;
+  if (scenario.packageBeforeManifest && packageManifest) {
+    writeFixtureJson(pluginDir, "package.json", packageManifest);
+  }
+  writeFixtureJson(pluginDir, "openclaw.plugin.json", pluginManifest(scenario.id));
+  if (!scenario.packageBeforeManifest && packageManifest) {
+    writeFixtureJson(pluginDir, "package.json", packageManifest);
+  }
+  writeFixtureText(pluginDir, scenario.sourceEntry, scenario.sourceBody);
+  const artifactDir =
+    scenario.artifactLocation === "core"
+      ? path.join(repoRoot, "dist-runtime", "extensions", scenario.id)
+      : path.join(pluginDir, "dist");
+  writeFixtureText(artifactDir, scenario.artifactEntry, scenario.artifactBody);
+
+  const load = () =>
+    loadOpenClawPlugins({
+      cache: false,
+      preferBuiltPluginArtifacts: true,
+      ...(scenario.origin === "bundled" ? { onlyPluginIds: [scenario.id] } : {}),
+      config: {
+        plugins: {
+          allow: [scenario.id],
+          ...(scenario.origin === "workspace" ? { load: { paths: [pluginDir] } } : {}),
+          entries: { [scenario.id]: { enabled: true } },
+        },
+      },
+    });
+  const registry =
+    scenario.origin === "bundled"
+      ? withEnv(
+          {
+            OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(repoRoot, "extensions"),
+            OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+          },
+          load,
+        )
+      : load();
+  return registry.plugins.find((entry) => entry.id === scenario.id)?.status;
+}
+
 describe("loadOpenClawPlugins", () => {
   it("setup-loads a trusted global channel plugin when the caller scopes to it", () => {
     useNoBundledPlugins();
-    const marker = path.join(makeTempDir(), "trusted-global-channel-imported.txt");
+    const marker = path.join(makePluginLoaderTempDir(), "trusted-global-channel-imported.txt");
     withStateDir((stateDir) => {
       const globalDir = path.join(stateDir, "extensions", "trusted-global-channel");
       mkdirSafe(globalDir);
-      fs.writeFileSync(
-        path.join(globalDir, "index.cjs"),
+      writeFixtureText(
+        globalDir,
+        "index.cjs",
         `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "loaded", "utf-8");
-  module.exports = {
-    id: "trusted-global-channel",
-    register(api) {
-      api.registerChannel({
-        plugin: {
-          id: "trusted-global-channel",
-          meta: {
-            id: "trusted-global-channel",
-            label: "Trusted Global Channel",
-            selectionLabel: "Trusted Global Channel",
-            docsPath: "/channels/trusted-global-channel",
-            blurb: "trusted global setup gate",
-          },
-          capabilities: { chatTypes: ["direct"] },
-          config: {
-            listAccountIds: () => [],
-            resolveAccount: () => ({ accountId: "default" }),
-          },
-          outbound: { deliveryMode: "direct" },
+${channelPluginSource({
+  pluginId: "trusted-global-channel",
+  label: "Trusted Global Channel",
+  docsPath: "/channels/trusted-global-channel",
+  blurb: "trusted global setup gate",
+})}`,
+      );
+      writeFixtureJson(
+        globalDir,
+        "openclaw.plugin.json",
+        pluginManifest("trusted-global-channel", ["trusted-global-channel"]),
+      );
+      writeFixtureJson(globalDir, "package.json", {
+        name: "@openclaw/trusted-global-channel",
+        version: "0.0.0-test",
+        main: "./index.cjs",
+        openclaw: {
+          extensions: ["./index.cjs"],
         },
       });
-    },
-  };`,
-        "utf-8",
-      );
-      fs.writeFileSync(
-        path.join(globalDir, "openclaw.plugin.json"),
-        JSON.stringify(
-          {
-            id: "trusted-global-channel",
-            configSchema: EMPTY_PLUGIN_SCHEMA,
-            channels: ["trusted-global-channel"],
-          },
-          null,
-          2,
-        ),
-        "utf-8",
-      );
-      fs.writeFileSync(
-        path.join(globalDir, "package.json"),
-        JSON.stringify(
-          {
-            name: "@openclaw/trusted-global-channel",
-            version: "0.0.0-test",
-            main: "./index.cjs",
-            openclaw: {
-              extensions: ["./index.cjs"],
-            },
-          },
-          null,
-          2,
-        ),
-        "utf-8",
-      );
 
       const scopedSetupRegistry = loadOpenClawPlugins({
         cache: false,
@@ -116,34 +258,20 @@ describe("loadOpenClawPlugins", () => {
 
   it("does not setup-load an auto-enabled config-origin channel plugin without explicit trust", () => {
     useNoBundledPlugins();
-    const marker = path.join(makeTempDir(), "auto-enabled-load-path-channel-imported.txt");
+    const marker = path.join(
+      makePluginLoaderTempDir(),
+      "auto-enabled-load-path-channel-imported.txt",
+    );
     const plugin = writePlugin({
       id: "auto-enabled-load-path-channel",
       filename: "auto-enabled-load-path-channel.cjs",
       body: `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "loaded", "utf-8");
-  module.exports = {
-    id: "auto-enabled-load-path-channel",
-    register(api) {
-      api.registerChannel({
-        plugin: {
-          id: "auto-enabled-load-path-channel",
-          meta: {
-            id: "auto-enabled-load-path-channel",
-            label: "Auto Enabled Load Path Channel",
-            selectionLabel: "Auto Enabled Load Path Channel",
-            docsPath: "/channels/auto-enabled-load-path-channel",
-            blurb: "auto-enabled load-path setup gate",
-          },
-          capabilities: { chatTypes: ["direct"] },
-          config: {
-            listAccountIds: () => [],
-            resolveAccount: () => ({ accountId: "default" }),
-          },
-          outbound: { deliveryMode: "direct" },
-        },
-      });
-    },
-  };`,
+${channelPluginSource({
+  pluginId: "auto-enabled-load-path-channel",
+  label: "Auto Enabled Load Path Channel",
+  docsPath: "/channels/auto-enabled-load-path-channel",
+  blurb: "auto-enabled load-path setup gate",
+})}`,
     });
     fs.writeFileSync(
       path.join(plugin.dir, "openclaw.plugin.json"),
@@ -195,21 +323,12 @@ describe("loadOpenClawPlugins", () => {
         setupBlurb: "setup entry",
         configured: false,
       },
-      load: ({ pluginDir }: { pluginDir: string }) =>
-        loadOpenClawPlugins({
-          cache: false,
-          config: {
-            plugins: {
-              load: { paths: [pluginDir] },
-              allow: ["setup-entry-test"],
-              entries: {
-                "setup-entry-test": { enabled: false },
-              },
-            },
-          },
-          includeSetupOnlyChannelPlugins: true,
-          onlyPluginIds: ["setup-entry-test"],
-        }),
+      loadOptions: {
+        setupIntent: true,
+        setupOnly: true,
+        scopePlugin: true,
+        disableEntry: true,
+      },
       expectFullLoaded: false,
       expectSetupLoaded: false,
       expectedChannelSetups: 0,
@@ -226,21 +345,12 @@ describe("loadOpenClawPlugins", () => {
         configured: false,
         useBundledSetupEntryContract: true,
       },
-      load: ({ pluginDir }: { pluginDir: string }) =>
-        loadOpenClawPlugins({
-          cache: false,
-          config: {
-            plugins: {
-              load: { paths: [pluginDir] },
-              allow: ["setup-only-bundled-contract-test"],
-              entries: {
-                "setup-only-bundled-contract-test": { enabled: false },
-              },
-            },
-          },
-          includeSetupOnlyChannelPlugins: true,
-          onlyPluginIds: ["setup-only-bundled-contract-test"],
-        }),
+      loadOptions: {
+        setupIntent: true,
+        setupOnly: true,
+        scopePlugin: true,
+        disableEntry: true,
+      },
       expectFullLoaded: false,
       expectSetupLoaded: false,
       expectedChannelSetups: 0,
@@ -256,16 +366,7 @@ describe("loadOpenClawPlugins", () => {
         setupBlurb: "setup runtime",
         configured: false,
       },
-      load: ({ pluginDir }: { pluginDir: string }) =>
-        loadOpenClawPlugins({
-          cache: false,
-          config: {
-            plugins: {
-              load: { paths: [pluginDir] },
-              allow: ["setup-runtime-test"],
-            },
-          },
-        }),
+      loadOptions: { setupIntent: true },
       expectFullLoaded: false,
       expectSetupLoaded: true,
       expectedChannels: 1,
@@ -281,16 +382,7 @@ describe("loadOpenClawPlugins", () => {
         configured: false,
         useBundledSetupEntryContract: true,
       },
-      load: ({ pluginDir }: { pluginDir: string }) =>
-        loadOpenClawPlugins({
-          cache: false,
-          config: {
-            plugins: {
-              load: { paths: [pluginDir] },
-              allow: ["setup-runtime-bundled-contract-test"],
-            },
-          },
-        }),
+      loadOptions: { setupIntent: true },
       expectFullLoaded: true,
       expectSetupLoaded: true,
       expectedChannels: 1,
@@ -307,16 +399,7 @@ describe("loadOpenClawPlugins", () => {
         useBundledSetupEntryContract: true,
         splitBundledSetupSecrets: true,
       },
-      load: ({ pluginDir }: { pluginDir: string }) =>
-        loadOpenClawPlugins({
-          cache: false,
-          config: {
-            plugins: {
-              load: { paths: [pluginDir] },
-              allow: ["setup-runtime-bundled-contract-secrets-test"],
-            },
-          },
-        }),
+      loadOptions: { setupIntent: true },
       expectFullLoaded: true,
       expectSetupLoaded: true,
       expectedChannels: 1,
@@ -332,57 +415,16 @@ describe("loadOpenClawPlugins", () => {
         setupBlurb: "setup runtime bundled contract runtime",
         configured: false,
         useBundledSetupEntryContract: true,
-        bundledSetupRuntimeMarker: path.join(makeTempDir(), "setup-runtime-applied.txt"),
+        bundledSetupRuntimeMarker: path.join(
+          makePluginLoaderTempDir(),
+          "setup-runtime-applied.txt",
+        ),
       },
-      load: ({ pluginDir }: { pluginDir: string }) =>
-        loadOpenClawPlugins({
-          cache: false,
-          config: {
-            plugins: {
-              load: { paths: [pluginDir] },
-              allow: ["setup-runtime-bundled-contract-runtime-test"],
-            },
-          },
-        }),
+      loadOptions: { setupIntent: true },
       expectFullLoaded: true,
       expectSetupLoaded: true,
       expectedChannels: 1,
       expectSetupRuntimeLoaded: true,
-    },
-    {
-      name: "runs bundled setupEntry setup-runtime registrations before deferred full loads",
-      fixture: {
-        id: "setup-runtime-bundled-route-test",
-        label: "Setup Runtime Bundled Route Test",
-        packageName: "@openclaw/setup-runtime-bundled-route-test",
-        fullBlurb: "full entry should defer while configured",
-        setupBlurb: "setup runtime route",
-        configured: true,
-        startupDeferConfiguredChannelFullLoadUntilAfterListen: true,
-        useBundledSetupEntryContract: true,
-        bundledSetupRuntimeRoutePath: "/setup-runtime-route",
-      },
-      load: ({ pluginDir }: { pluginDir: string }) =>
-        loadOpenClawPlugins({
-          cache: false,
-          preferSetupRuntimeForChannelPlugins: true,
-          config: {
-            channels: {
-              "setup-runtime-bundled-route-test": {
-                enabled: true,
-                token: "configured",
-              },
-            },
-            plugins: {
-              load: { paths: [pluginDir] },
-              allow: ["setup-runtime-bundled-route-test"],
-            },
-          },
-        }),
-      expectFullLoaded: false,
-      expectSetupLoaded: true,
-      expectedChannels: 1,
-      expectedSetupRuntimeRoutePath: "/setup-runtime-route",
     },
     {
       name: "merges bundled runtime plugin into setup-runtime channel loads",
@@ -395,93 +437,36 @@ describe("loadOpenClawPlugins", () => {
         configured: false,
         useBundledFullEntryContract: true,
         useBundledSetupEntryContract: true,
-        bundledFullRuntimeMarker: path.join(makeTempDir(), "bundled-runtime-applied.txt"),
+        bundledFullRuntimeMarker: path.join(
+          makePluginLoaderTempDir(),
+          "bundled-runtime-applied.txt",
+        ),
       },
-      load: ({ pluginDir }: { pluginDir: string }) =>
-        loadOpenClawPlugins({
-          cache: false,
-          config: {
-            plugins: {
-              load: { paths: [pluginDir] },
-              allow: ["setup-runtime-bundled-runtime-merge-test"],
-            },
-          },
-        }),
+      loadOptions: { setupIntent: true },
       expectFullLoaded: true,
       expectSetupLoaded: true,
       expectedChannels: 1,
       expectBundledFullRuntimeLoaded: true,
     },
     {
-      name: "preserves external setupEntry runtime setter for deferred configured channel loads",
+      name: "defaults ordinary unconfigured channel loads to the full runtime",
       fixture: {
-        id: "setup-runtime-external-deferred-test",
-        label: "Setup Runtime External Deferred Test",
-        packageName: "@openclaw/setup-runtime-external-deferred-test",
-        fullBlurb: "full entry should defer while configured",
-        setupBlurb: "setup runtime external deferred",
-        configured: true,
-        startupDeferConfiguredChannelFullLoadUntilAfterListen: true,
-        bundledSetupRuntimeMarker: path.join(makeTempDir(), "external-setup-runtime-applied.txt"),
+        id: "setup-runtime-default-full-test",
+        label: "Setup Runtime Default Full Test",
+        packageName: "@openclaw/setup-runtime-default-full-test",
+        fullBlurb: "ordinary full runtime",
+        setupBlurb: "setup runtime should not load by default",
+        configured: false,
       },
-      load: ({ pluginDir }: { pluginDir: string }) =>
-        loadOpenClawPlugins({
-          cache: false,
-          preferSetupRuntimeForChannelPlugins: true,
-          config: {
-            channels: {
-              "setup-runtime-external-deferred-test": {
-                enabled: true,
-                token: "configured",
-              },
-            },
-            plugins: {
-              load: { paths: [pluginDir] },
-              allow: ["setup-runtime-external-deferred-test"],
-            },
-          },
-        }),
-      expectFullLoaded: false,
-      expectSetupLoaded: true,
-      expectedChannels: 1,
-      expectSetupRuntimeLoaded: true,
-    },
-    {
-      name: "does not prefer setupEntry for configured channel loads without startup opt-in",
-      fixture: {
-        id: "setup-runtime-not-preferred-test",
-        label: "Setup Runtime Not Preferred Test",
-        packageName: "@openclaw/setup-runtime-not-preferred-test",
-        fullBlurb: "full entry should still load without explicit startup opt-in",
-        setupBlurb: "setup runtime not preferred",
-        configured: true,
-      },
-      load: ({ pluginDir }: { pluginDir: string }) =>
-        loadOpenClawPlugins({
-          cache: false,
-          preferSetupRuntimeForChannelPlugins: true,
-          config: {
-            channels: {
-              "setup-runtime-not-preferred-test": {
-                enabled: true,
-                token: "configured",
-              },
-            },
-            plugins: {
-              load: { paths: [pluginDir] },
-              allow: ["setup-runtime-not-preferred-test"],
-            },
-          },
-        }),
       expectFullLoaded: true,
       expectSetupLoaded: false,
       expectedChannels: 1,
     },
-  ])(
+  ] satisfies SetupEntryScenario[])(
     "$name",
     ({
       fixture,
-      load,
+      loadOptions,
       expectFullLoaded,
       expectSetupLoaded,
       expectedChannelSetups,
@@ -489,10 +474,21 @@ describe("loadOpenClawPlugins", () => {
       expectedSetupSecretId,
       expectSetupRuntimeLoaded,
       expectBundledFullRuntimeLoaded,
-      expectedSetupRuntimeRoutePath,
-    }) => {
+    }: SetupEntryScenario) => {
       const built = createSetupEntryChannelPluginFixture(fixture);
-      const registry = load({ pluginDir: built.pluginDir });
+      const registry = loadOpenClawPlugins({
+        cache: false,
+        ...(loadOptions?.setupIntent ? { channelPluginLoadIntent: "setup" as const } : {}),
+        config: {
+          plugins: {
+            load: { paths: [built.pluginDir] },
+            allow: [fixture.id],
+            ...(loadOptions?.disableEntry ? { entries: { [fixture.id]: { enabled: false } } } : {}),
+          },
+        },
+        ...(loadOptions?.setupOnly ? { includeSetupOnlyChannelPlugins: true } : {}),
+        ...(loadOptions?.scopePlugin ? { onlyPluginIds: [fixture.id] } : {}),
+      });
 
       expect(fs.existsSync(built.fullMarker)).toBe(expectFullLoaded);
       expect(fs.existsSync(built.setupMarker)).toBe(expectSetupLoaded);
@@ -520,19 +516,11 @@ describe("loadOpenClawPlugins", () => {
           ),
         ).toBe(true);
       }
-      if (expectedSetupRuntimeRoutePath) {
-        expect(
-          registry.httpRoutes.some(
-            (route) =>
-              route.pluginId === fixture.id && route.path === expectedSetupRuntimeRoutePath,
-          ),
-        ).toBe(true);
-      }
     },
   );
 
   it("applies the bundled runtime setter before loading the merged setup-runtime plugin", () => {
-    const runtimeMarker = path.join(makeTempDir(), "setup-runtime-before-load.txt");
+    const runtimeMarker = path.join(makePluginLoaderTempDir(), "setup-runtime-before-load.txt");
     const built = createSetupEntryChannelPluginFixture({
       id: "setup-runtime-order-test",
       label: "Setup Runtime Order Test",
@@ -546,14 +534,9 @@ describe("loadOpenClawPlugins", () => {
       requireBundledFullRuntimeBeforeLoad: true,
     });
 
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      config: {
-        plugins: {
-          load: { paths: [built.pluginDir] },
-          allow: ["setup-runtime-order-test"],
-        },
-      },
+    const registry = loadSetupPlugins({
+      paths: [built.pluginDir],
+      ids: ["setup-runtime-order-test"],
     });
 
     expect(registry.plugins.find((entry) => entry.id === "setup-runtime-order-test")?.status).toBe(
@@ -579,14 +562,9 @@ describe("loadOpenClawPlugins", () => {
       body: `module.exports = { id: "setup-runtime-helper-test", register() {} };`,
     });
 
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      config: {
-        plugins: {
-          load: { paths: [built.pluginDir, helperPlugin.file] },
-          allow: ["setup-runtime-error-test", "setup-runtime-helper-test"],
-        },
-      },
+    const registry = loadSetupPlugins({
+      paths: [built.pluginDir, helperPlugin.file],
+      ids: ["setup-runtime-error-test", "setup-runtime-helper-test"],
     });
 
     expect(registry.plugins.find((entry) => entry.id === "setup-runtime-error-test")?.status).toBe(
@@ -607,8 +585,7 @@ describe("loadOpenClawPlugins", () => {
       packageName: "@openclaw/setup-runtime-route-error-test",
       fullBlurb: "full runtime plugin",
       setupBlurb: "setup runtime route",
-      configured: true,
-      startupDeferConfiguredChannelFullLoadUntilAfterListen: true,
+      configured: false,
       useBundledSetupEntryContract: true,
       bundledSetupRuntimeRoutePath: "/setup-runtime-route-error",
       bundledSetupRuntimeRegisterError: "broken setup-runtime registrar",
@@ -619,21 +596,9 @@ describe("loadOpenClawPlugins", () => {
       body: `module.exports = { id: "setup-runtime-route-helper-test", register() {} };`,
     });
 
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      preferSetupRuntimeForChannelPlugins: true,
-      config: {
-        channels: {
-          "setup-runtime-route-error-test": {
-            enabled: true,
-            token: "configured",
-          },
-        },
-        plugins: {
-          load: { paths: [built.pluginDir, helperPlugin.file] },
-          allow: ["setup-runtime-route-error-test", "setup-runtime-route-helper-test"],
-        },
-      },
+    const registry = loadSetupPlugins({
+      paths: [built.pluginDir, helperPlugin.file],
+      ids: ["setup-runtime-route-error-test", "setup-runtime-route-helper-test"],
     });
 
     expect(
@@ -657,28 +622,15 @@ describe("loadOpenClawPlugins", () => {
       packageName: "@openclaw/setup-runtime-late-route-test",
       fullBlurb: "full runtime plugin",
       setupBlurb: "setup runtime route",
-      configured: true,
-      startupDeferConfiguredChannelFullLoadUntilAfterListen: true,
+      configured: false,
       useBundledSetupEntryContract: true,
       bundledSetupRuntimeRoutePath: "/setup-runtime-sync-route",
       bundledSetupRuntimeLateRoutePath: "/setup-runtime-late-route",
     });
 
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      preferSetupRuntimeForChannelPlugins: true,
-      config: {
-        channels: {
-          "setup-runtime-late-route-test": {
-            enabled: true,
-            token: "configured",
-          },
-        },
-        plugins: {
-          load: { paths: [built.pluginDir] },
-          allow: ["setup-runtime-late-route-test"],
-        },
-      },
+    const registry = loadSetupPlugins({
+      paths: [built.pluginDir],
+      ids: ["setup-runtime-late-route-test"],
     });
 
     await Promise.resolve();
@@ -692,7 +644,7 @@ describe("loadOpenClawPlugins", () => {
   });
 
   it("rejects mismatched bundled runtime entry ids before applying setup-runtime setters", () => {
-    const runtimeMarker = path.join(makeTempDir(), "setup-runtime-mismatch.txt");
+    const runtimeMarker = path.join(makePluginLoaderTempDir(), "setup-runtime-mismatch.txt");
     const built = createSetupEntryChannelPluginFixture({
       id: "setup-runtime-mismatch-test",
       bundledFullEntryId: "wrong-runtime-id",
@@ -706,14 +658,9 @@ describe("loadOpenClawPlugins", () => {
       bundledFullRuntimeMarker: runtimeMarker,
     });
 
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      config: {
-        plugins: {
-          load: { paths: [built.pluginDir] },
-          allow: ["setup-runtime-mismatch-test"],
-        },
-      },
+    const registry = loadSetupPlugins({
+      paths: [built.pluginDir],
+      ids: ["setup-runtime-mismatch-test"],
     });
 
     expect(
@@ -727,7 +674,7 @@ describe("loadOpenClawPlugins", () => {
   });
 
   it("rejects mismatched bundled setup export ids before loading setup-runtime entry code", () => {
-    const runtimeMarker = path.join(makeTempDir(), "setup-runtime-mismatch.txt");
+    const runtimeMarker = path.join(makePluginLoaderTempDir(), "setup-runtime-mismatch.txt");
     const built = createSetupEntryChannelPluginFixture({
       id: "setup-export-mismatch-test",
       bundledSetupEntryId: "wrong-setup-id",
@@ -741,14 +688,9 @@ describe("loadOpenClawPlugins", () => {
       bundledFullRuntimeMarker: runtimeMarker,
     });
 
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      config: {
-        plugins: {
-          load: { paths: [built.pluginDir] },
-          allow: ["setup-export-mismatch-test"],
-        },
-      },
+    const registry = loadSetupPlugins({
+      paths: [built.pluginDir],
+      ids: ["setup-export-mismatch-test"],
     });
 
     expect(
@@ -764,61 +706,13 @@ describe("loadOpenClawPlugins", () => {
 
   it("isolates loadSetupPlugin errors as per-plugin diagnostics instead of crashing registry load", () => {
     useNoBundledPlugins();
-    const pluginDir = makeTempDir();
-
-    // Plugin whose setup-entry uses the bundled contract but loadSetupPlugin() throws
-    fs.writeFileSync(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify(
-        {
-          name: "@openclaw/setup-entry-throws-test",
-          openclaw: {
-            extensions: ["./index.cjs"],
-            setupEntry: "./setup-entry.cjs",
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: "setup-entry-throws-test",
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-          channels: ["setup-entry-throws-test"],
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    // index.cjs: full entry (should NOT be reached if setup-entry is used)
-    fs.writeFileSync(
-      path.join(pluginDir, "index.cjs"),
-      `module.exports = { id: "setup-entry-throws-test", register() {} };`,
-      "utf-8",
-    );
-    // setup-entry.cjs: bundled contract whose loadSetupPlugin throws
-    fs.writeFileSync(
-      path.join(pluginDir, "setup-entry.cjs"),
-      `module.exports = {
-    kind: "bundled-channel-setup-entry",
-    loadSetupPlugin: () => { throw new Error("boom: setup plugin missing"); },
-  };`,
-      "utf-8",
-    );
-
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      config: {
-        plugins: {
-          load: { paths: [pluginDir] },
-          allow: ["setup-entry-throws-test"],
-        },
-      },
+    const pluginDir = createSetupFailureFixture({
+      id: "setup-entry-throws-test",
+      setupEntrySource: THROWING_SETUP_ENTRY_SOURCE,
+    });
+    const registry = loadSetupPlugins({
+      paths: [pluginDir],
+      ids: ["setup-entry-throws-test"],
     });
 
     // The registry load should NOT crash; the error should be recorded as a
@@ -832,84 +726,28 @@ describe("loadOpenClawPlugins", () => {
 
   it("keeps healthy sibling channel plugins loadable when a setup entry throws", () => {
     useNoBundledPlugins();
-    const brokenDir = makeTempDir();
-
-    fs.writeFileSync(
-      path.join(brokenDir, "package.json"),
-      JSON.stringify(
-        {
-          name: "@openclaw/setup-entry-throws-sibling-test",
-          openclaw: {
-            extensions: ["./index.cjs"],
-            setupEntry: "./setup-entry.cjs",
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(brokenDir, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: "setup-entry-throws-sibling-test",
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-          channels: ["broken-chat"],
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(brokenDir, "index.cjs"),
-      `module.exports = { id: "setup-entry-throws-sibling-test", register() {} };`,
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(brokenDir, "setup-entry.cjs"),
-      `module.exports = {
-    kind: "bundled-channel-setup-entry",
-    loadSetupPlugin: () => { throw new Error("boom: setup plugin missing"); },
-  };`,
-      "utf-8",
-    );
+    const brokenDir = createSetupFailureFixture({
+      id: "setup-entry-throws-sibling-test",
+      channelId: "broken-chat",
+      setupEntrySource: THROWING_SETUP_ENTRY_SOURCE,
+    });
 
     const healthy = writePlugin({
       id: "healthy-channel",
       filename: "healthy-channel.cjs",
-      body: `module.exports = { id: "healthy-channel", register(api) {
-    api.registerChannel({
-      plugin: {
-        id: "healthy-chat",
-        meta: {
-          id: "healthy-chat",
-          label: "Healthy Chat",
-          selectionLabel: "Healthy Chat",
-          docsPath: "/channels/healthy-chat",
-          blurb: "healthy sibling channel",
-        },
-        capabilities: { chatTypes: ["direct"] },
-        config: {
-          listAccountIds: () => [],
-          resolveAccount: () => ({ accountId: "default" }),
-        },
-        outbound: { deliveryMode: "direct" },
-      }
-    });
-  } };`,
+      body: channelPluginSource({
+        pluginId: "healthy-channel",
+        channelId: "healthy-chat",
+        label: "Healthy Chat",
+        docsPath: "/channels/healthy-chat",
+        blurb: "healthy sibling channel",
+      }),
     });
 
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      config: {
-        plugins: {
-          enabled: true,
-          load: { paths: [brokenDir, healthy.file] },
-          allow: ["setup-entry-throws-sibling-test", "healthy-channel"],
-        },
-      },
+    const registry = loadSetupPlugins({
+      paths: [brokenDir, healthy.file],
+      ids: ["setup-entry-throws-sibling-test", "healthy-channel"],
+      enabled: true,
     });
 
     const healthyMeta = registry.channels.find((entry) => entry.plugin.id === "healthy-chat")
@@ -930,47 +768,9 @@ describe("loadOpenClawPlugins", () => {
 
   it("records a diagnostic when registerChannel throws in the setup-entry path", () => {
     useNoBundledPlugins();
-    const brokenDir = makeTempDir();
-
-    fs.writeFileSync(
-      path.join(brokenDir, "package.json"),
-      JSON.stringify(
-        {
-          name: "@openclaw/register-channel-throws-test",
-          openclaw: {
-            extensions: ["./index.cjs"],
-            setupEntry: "./setup-entry.cjs",
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(brokenDir, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: "register-channel-throws-test",
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-          channels: ["register-channel-throws-test"],
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(brokenDir, "index.cjs"),
-      `module.exports = { id: "register-channel-throws-test", register() {} };`,
-      "utf-8",
-    );
-    // setup-entry.cjs: loadSetupPlugin succeeds, but the returned plugin
-    // has a nested throwing getter on config.listAccountIds that triggers
-    // inside registerChannel -> normalizeRegisteredChannelPlugin.
-    fs.writeFileSync(
-      path.join(brokenDir, "setup-entry.cjs"),
-      `const configObj = {
+    const brokenDir = createSetupFailureFixture({
+      id: "register-channel-throws-test",
+      setupEntrySource: `const configObj = {
     resolveAccount: () => ({ accountId: "default" }),
   };
   Object.defineProperty(configObj, "listAccountIds", {
@@ -994,43 +794,24 @@ describe("loadOpenClawPlugins", () => {
       outbound: { deliveryMode: "direct" },
     }),
   };`,
-      "utf-8",
-    );
+    });
 
     const healthy = writePlugin({
       id: "healthy-after-register-throw",
       filename: "healthy-after-register-throw.cjs",
-      body: `module.exports = { id: "healthy-after-register-throw", register(api) {
-    api.registerChannel({
-      plugin: {
-        id: "healthy-after-register-throw-chat",
-        meta: {
-          id: "healthy-after-register-throw-chat",
-          label: "Healthy After Register Throw",
-          selectionLabel: "Healthy After Register Throw",
-          docsPath: "/channels/healthy-after-register-throw",
-          blurb: "survives sibling registerChannel throw",
-        },
-        capabilities: { chatTypes: ["direct"] },
-        config: {
-          listAccountIds: () => [],
-          resolveAccount: () => ({ accountId: "default" }),
-        },
-        outbound: { deliveryMode: "direct" },
-      }
-    });
-  } };`,
+      body: channelPluginSource({
+        pluginId: "healthy-after-register-throw",
+        channelId: "healthy-after-register-throw-chat",
+        label: "Healthy After Register Throw",
+        docsPath: "/channels/healthy-after-register-throw",
+        blurb: "survives sibling registerChannel throw",
+      }),
     });
 
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      config: {
-        plugins: {
-          enabled: true,
-          load: { paths: [brokenDir, healthy.file] },
-          allow: ["register-channel-throws-test", "healthy-after-register-throw"],
-        },
-      },
+    const registry = loadSetupPlugins({
+      paths: [brokenDir, healthy.file],
+      ids: ["register-channel-throws-test", "healthy-after-register-throw"],
+      enabled: true,
     });
 
     // The broken plugin should be recorded as a diagnostic, not crash the loop.
@@ -1054,199 +835,79 @@ describe("loadOpenClawPlugins", () => {
   });
 
   it("prefers built bundled plugin artifacts over source TS when requested", () => {
-    const repoRoot = makeTempDir();
-    const sourceDir = path.join(repoRoot, "extensions", "startup-artifact-test");
-    const runtimeDir = path.join(repoRoot, "dist-runtime", "extensions", "startup-artifact-test");
-    mkdirSafe(sourceDir);
-    mkdirSafe(runtimeDir);
-    fs.writeFileSync(
-      path.join(sourceDir, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: "startup-artifact-test",
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(sourceDir, "index.ts"),
-      'throw new Error("source TS should not load during gateway startup");\n',
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(runtimeDir, "index.js"),
-      'module.exports = { id: "startup-artifact-test", register() {} };\n',
-      "utf-8",
-    );
-
-    const registry = withEnv(
-      {
-        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(repoRoot, "extensions"),
-        OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-      },
-      () =>
-        loadOpenClawPlugins({
-          cache: false,
-          preferBuiltPluginArtifacts: true,
-          onlyPluginIds: ["startup-artifact-test"],
-          config: {
-            plugins: {
-              allow: ["startup-artifact-test"],
-              entries: {
-                "startup-artifact-test": {
-                  enabled: true,
-                },
-              },
-            },
-          },
-        }),
-    );
-
-    expect(registry.plugins.find((entry) => entry.id === "startup-artifact-test")?.status).toBe(
-      "loaded",
-    );
+    expect(
+      loadBuiltArtifactScenario({
+        id: "startup-artifact-test",
+        origin: "bundled",
+        sourceEntry: "index.ts",
+        sourceBody: 'throw new Error("source TS should not load during gateway startup");\n',
+        artifactLocation: "core",
+        artifactEntry: "index.js",
+        artifactBody: 'module.exports = { id: "startup-artifact-test", register() {} };\n',
+      }),
+    ).toBe("loaded");
   });
 
   it("prefers package-local dist artifacts for bundled source checkout plugins", () => {
-    const repoRoot = makeTempDir();
-    const sourceDir = path.join(repoRoot, "extensions", "startup-package-artifact-test");
-    const runtimeDir = path.join(sourceDir, "dist");
-    mkdirSafe(sourceDir);
-    mkdirSafe(runtimeDir);
-    fs.writeFileSync(
-      path.join(sourceDir, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: "startup-package-artifact-test",
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(sourceDir, "package.json"),
-      JSON.stringify(
-        {
-          openclaw: {
-            extensions: ["./index.ts"],
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(sourceDir, "index.ts"),
-      'throw new Error("source TS should not load during gateway startup");\n',
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(runtimeDir, "index.js"),
-      'module.exports = { id: "startup-package-artifact-test", register() {} };\n',
-      "utf-8",
-    );
-
-    const registry = withEnv(
-      {
-        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(repoRoot, "extensions"),
-        OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-      },
-      () =>
-        loadOpenClawPlugins({
-          cache: false,
-          preferBuiltPluginArtifacts: true,
-          onlyPluginIds: ["startup-package-artifact-test"],
-          config: {
-            plugins: {
-              allow: ["startup-package-artifact-test"],
-              entries: {
-                "startup-package-artifact-test": {
-                  enabled: true,
-                },
-              },
-            },
-          },
-        }),
-    );
-
     expect(
-      registry.plugins.find((entry) => entry.id === "startup-package-artifact-test")?.status,
+      loadBuiltArtifactScenario({
+        id: "startup-package-artifact-test",
+        origin: "bundled",
+        sourceEntry: "index.ts",
+        sourceBody: 'throw new Error("source TS should not load during gateway startup");\n',
+        artifactLocation: "package",
+        artifactEntry: "index.js",
+        artifactBody: 'module.exports = { id: "startup-package-artifact-test", register() {} };\n',
+        packageEntry: "./index.ts",
+      }),
     ).toBe("loaded");
   });
 
   it("ignores built artifacts when the bundled source plugin opts out of core dist", () => {
-    const repoRoot = makeTempDir();
+    const repoRoot = makePluginLoaderTempDir();
     const sourceDir = path.join(repoRoot, "extensions", "source-only-artifact-test");
-    const runtimeDir = path.join(sourceDir, "dist");
     const builtPluginDir = path.join(repoRoot, "dist", "extensions", "source-only-artifact-test");
     mkdirSafe(path.join(repoRoot, ".git"));
     mkdirSafe(path.join(repoRoot, "src"));
-    mkdirSafe(sourceDir);
-    mkdirSafe(runtimeDir);
-    mkdirSafe(builtPluginDir);
-    fs.writeFileSync(path.join(repoRoot, "pnpm-workspace.yaml"), "packages: []\n", "utf-8");
-    fs.writeFileSync(
-      path.join(sourceDir, "openclaw.plugin.json"),
-      JSON.stringify(
-        { id: "source-only-artifact-test", configSchema: EMPTY_PLUGIN_SCHEMA },
-        null,
-        2,
-      ),
-      "utf-8",
+    writeFixtureText(repoRoot, "pnpm-workspace.yaml", "packages: []\n");
+    writeFixtureJson(
+      sourceDir,
+      "openclaw.plugin.json",
+      pluginManifest("source-only-artifact-test"),
     );
-    fs.writeFileSync(
-      path.join(sourceDir, "package.json"),
-      JSON.stringify({
-        openclaw: {
-          extensions: ["./index.ts"],
-          build: { bundledDist: false },
-        },
-      }),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(sourceDir, "index.ts"),
+    writeFixtureJson(sourceDir, "package.json", {
+      openclaw: {
+        extensions: ["./index.ts"],
+        build: { bundledDist: false },
+      },
+    });
+    writeFixtureText(
+      sourceDir,
+      "index.ts",
       'export default { id: "source-only-artifact-test", register() {} };\n',
-      "utf-8",
     );
-    fs.writeFileSync(
-      path.join(runtimeDir, "index.js"),
+    writeFixtureText(
+      sourceDir,
+      "dist/index.js",
       'throw new Error("stale package-local dist should not load");\n',
-      "utf-8",
     );
+    mkdirSafe(builtPluginDir);
     fs.copyFileSync(
       path.join(sourceDir, "openclaw.plugin.json"),
       path.join(builtPluginDir, "openclaw.plugin.json"),
     );
-    fs.writeFileSync(
-      path.join(builtPluginDir, "package.json"),
-      JSON.stringify({ openclaw: { extensions: ["./index.js"] } }),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(builtPluginDir, "index.js"),
+    writeFixtureJson(builtPluginDir, "package.json", {
+      openclaw: { extensions: ["./index.js"] },
+    });
+    writeFixtureText(
+      builtPluginDir,
+      "index.js",
       'throw new Error("stale discovered core dist should not load");\n',
-      "utf-8",
     );
-    const bundledRuntimeDir = path.join(
+    writeFixtureText(
       repoRoot,
-      "dist-runtime",
-      "extensions",
-      "source-only-artifact-test",
-    );
-    mkdirSafe(bundledRuntimeDir);
-    fs.writeFileSync(
-      path.join(bundledRuntimeDir, "index.js"),
+      "dist-runtime/extensions/source-only-artifact-test/index.js",
       'throw new Error("stale core dist should not load");\n',
-      "utf-8",
     );
 
     const config = {
@@ -1262,7 +923,7 @@ describe("loadOpenClawPlugins", () => {
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
       },
       () => {
-        const manifestRegistry = loadPluginManifestRegistry({ config });
+        const manifestRegistry = loadPluginManifestRegistryCore({ config });
         return loadOpenClawPlugins({
           cache: false,
           preferBuiltPluginArtifacts: true,
@@ -1280,231 +941,79 @@ describe("loadOpenClawPlugins", () => {
 
   it("prefers package-local dist artifacts over workspace source TS when requested", () => {
     useNoBundledPlugins();
-    const pluginDir = makeTempDir();
-    const distDir = path.join(pluginDir, "dist");
-    mkdirSafe(distDir);
-    mkdirSafe(path.join(pluginDir, "src"));
-    fs.writeFileSync(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify(
-        {
-          openclaw: {
-            extensions: ["./src/index.mts"],
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: "workspace-artifact-test",
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "src", "index.mts"),
-      'throw new Error("workspace source TS should not load during gateway startup");\n',
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(distDir, "index.mjs"),
-      'export default { id: "workspace-artifact-test", register() {} };\n',
-      "utf-8",
-    );
-
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      preferBuiltPluginArtifacts: true,
-      config: {
-        plugins: {
-          allow: ["workspace-artifact-test"],
-          load: { paths: [pluginDir] },
-          entries: {
-            "workspace-artifact-test": {
-              enabled: true,
-            },
-          },
-        },
-      },
-    });
-
-    expect(registry.plugins.find((entry) => entry.id === "workspace-artifact-test")?.status).toBe(
-      "loaded",
-    );
+    expect(
+      loadBuiltArtifactScenario({
+        id: "workspace-artifact-test",
+        origin: "workspace",
+        sourceEntry: "src/index.mts",
+        sourceBody:
+          'throw new Error("workspace source TS should not load during gateway startup");\n',
+        artifactLocation: "package",
+        artifactEntry: "index.mjs",
+        artifactBody: 'export default { id: "workspace-artifact-test", register() {} };\n',
+        packageBeforeManifest: true,
+        packageEntry: "./src/index.mts",
+      }),
+    ).toBe("loaded");
   });
 
   it("probes supported package-local dist artifact extensions before source TS", () => {
     useNoBundledPlugins();
-    const pluginDir = makeTempDir();
-    const distDir = path.join(pluginDir, "dist");
-    mkdirSafe(distDir);
-    mkdirSafe(path.join(pluginDir, "src"));
-    fs.writeFileSync(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify(
-        {
-          openclaw: {
-            extensions: ["./src/index.ts"],
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: "workspace-artifact-extension-test",
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "src", "index.ts"),
-      'throw new Error("workspace source TS should not load during gateway startup");\n',
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(distDir, "index.mjs"),
-      'export default { id: "workspace-artifact-extension-test", register() {} };\n',
-      "utf-8",
-    );
-
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      preferBuiltPluginArtifacts: true,
-      config: {
-        plugins: {
-          allow: ["workspace-artifact-extension-test"],
-          load: { paths: [pluginDir] },
-          entries: {
-            "workspace-artifact-extension-test": {
-              enabled: true,
-            },
-          },
-        },
-      },
-    });
-
     expect(
-      registry.plugins.find((entry) => entry.id === "workspace-artifact-extension-test")?.status,
+      loadBuiltArtifactScenario({
+        id: "workspace-artifact-extension-test",
+        origin: "workspace",
+        sourceEntry: "src/index.ts",
+        sourceBody:
+          'throw new Error("workspace source TS should not load during gateway startup");\n',
+        artifactLocation: "package",
+        artifactEntry: "index.mjs",
+        artifactBody:
+          'export default { id: "workspace-artifact-extension-test", register() {} };\n',
+        packageBeforeManifest: true,
+        packageEntry: "./src/index.ts",
+      }),
     ).toBe("loaded");
   });
 
   it("does not replace explicit JavaScript entries with package-local dist artifacts", () => {
     useNoBundledPlugins();
-    const pluginDir = makeTempDir();
-    const distDir = path.join(pluginDir, "dist");
-    mkdirSafe(distDir);
-    fs.writeFileSync(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify(
-        {
-          openclaw: {
-            extensions: ["./index.js"],
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: "workspace-explicit-js-test",
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "index.js"),
-      'export default { id: "workspace-explicit-js-test", register() {} };\n',
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(distDir, "index.js"),
-      'throw new Error("explicit JS entry should not be replaced by dist");\n',
-      "utf-8",
-    );
-
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      preferBuiltPluginArtifacts: true,
-      config: {
-        plugins: {
-          allow: ["workspace-explicit-js-test"],
-          load: { paths: [pluginDir] },
-          entries: {
-            "workspace-explicit-js-test": {
-              enabled: true,
-            },
-          },
-        },
-      },
-    });
-
     expect(
-      registry.plugins.find((entry) => entry.id === "workspace-explicit-js-test")?.status,
+      loadBuiltArtifactScenario({
+        id: "workspace-explicit-js-test",
+        origin: "workspace",
+        sourceEntry: "index.js",
+        sourceBody: 'export default { id: "workspace-explicit-js-test", register() {} };\n',
+        artifactLocation: "package",
+        artifactEntry: "index.js",
+        artifactBody: 'throw new Error("explicit JS entry should not be replaced by dist");\n',
+        packageBeforeManifest: true,
+        packageEntry: "./index.js",
+      }),
     ).toBe("loaded");
   });
 
   it("keeps package-local dist artifacts inside the plugin root boundary", () => {
     useNoBundledPlugins();
-    const pluginDir = makeTempDir();
-    const outsideDistDir = makeTempDir();
-    mkdirSafe(path.join(pluginDir, "src"));
-    fs.writeFileSync(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify(
-        {
-          openclaw: {
-            extensions: ["./src/index.mts"],
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
+    const pluginDir = makePluginLoaderTempDir();
+    const outsideDistDir = makePluginLoaderTempDir();
+    writeFixtureJson(pluginDir, "package.json", {
+      openclaw: { extensions: ["./src/index.mts"] },
+    });
+    writeFixtureJson(
+      pluginDir,
+      "openclaw.plugin.json",
+      pluginManifest("workspace-artifact-symlink-test"),
     );
-    fs.writeFileSync(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: "workspace-artifact-symlink-test",
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "src", "index.mts"),
+    writeFixtureText(
+      pluginDir,
+      "src/index.mts",
       'throw new Error("workspace source TS should not load during gateway startup");\n',
-      "utf-8",
     );
-    fs.writeFileSync(
-      path.join(outsideDistDir, "index.mjs"),
+    writeFixtureText(
+      outsideDistDir,
+      "index.mjs",
       'export default { id: "workspace-artifact-symlink-test", register() {} };\n',
-      "utf-8",
     );
     try {
       fs.symlinkSync(outsideDistDir, path.join(pluginDir, "dist"), "dir");
@@ -1534,19 +1043,17 @@ describe("loadOpenClawPlugins", () => {
     expectDiagnosticContaining({ registry, message: "escapes" });
   });
 
-  it("blocks before_prompt_build but preserves legacy model overrides when prompt injection is disabled", async () => {
+  it("blocks before_prompt_build but preserves model resolution overrides when prompt injection is disabled", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "hook-policy",
       filename: "hook-policy.cjs",
       body: `module.exports = { id: "hook-policy", register(api) {
     api.on("before_prompt_build", () => ({ prependContext: "prepend" }));
-    api.on("before_agent_start", () => ({
-      prependContext: "legacy",
-      modelOverride: "demo-legacy-model",
-      providerOverride: "demo-legacy-provider",
+    api.on("before_model_resolve", () => ({
+      modelOverride: "demo-model",
+      providerOverride: "demo-provider",
     }));
-    api.on("before_model_resolve", () => ({ providerOverride: "demo-explicit-provider" }));
   } };`,
     });
 
@@ -1566,15 +1073,12 @@ describe("loadOpenClawPlugins", () => {
     });
 
     expect(registry.plugins.find((entry) => entry.id === "hook-policy")?.status).toBe("loaded");
-    expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual([
-      "before_agent_start",
-      "before_model_resolve",
-    ]);
+    expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual(["before_model_resolve"]);
     const runner = createHookRunner(registry);
-    const legacyResult = await runner.runBeforeAgentStart({ prompt: "hello", messages: [] }, {});
-    expect(legacyResult).toEqual({
-      modelOverride: "demo-legacy-model",
-      providerOverride: "demo-legacy-provider",
+    const result = await runner.runBeforeModelResolve({ prompt: "hello" }, {});
+    expect(result).toEqual({
+      modelOverride: "demo-model",
+      providerOverride: "demo-provider",
     });
     const blockedDiagnostics = registry.diagnostics.filter((diag) =>
       diag.message.includes(
@@ -1582,12 +1086,6 @@ describe("loadOpenClawPlugins", () => {
       ),
     );
     expect(blockedDiagnostics).toHaveLength(1);
-    const constrainedDiagnostics = registry.diagnostics.filter((diag) =>
-      diag.message.includes(
-        "prompt fields constrained by plugins.entries.hook-policy.hooks.allowPromptInjection=false",
-      ),
-    );
-    expect(constrainedDiagnostics).toHaveLength(1);
   });
 
   it("blocks next-turn injections when prompt injection is disabled", () => {
@@ -1637,7 +1135,6 @@ describe("loadOpenClawPlugins", () => {
       filename: "hook-policy-default.cjs",
       body: `module.exports = { id: "hook-policy-default", register(api) {
     api.on("before_prompt_build", () => ({ prependContext: "prepend" }));
-    api.on("before_agent_start", () => ({ prependContext: "legacy" }));
   } };`,
     });
 
@@ -1645,13 +1142,17 @@ describe("loadOpenClawPlugins", () => {
       plugin,
       pluginConfig: {
         allow: ["hook-policy-default"],
+        entries: {
+          "hook-policy-default": {
+            hooks: {
+              allowConversationAccess: true,
+            },
+          },
+        },
       },
     });
 
-    expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual([
-      "before_prompt_build",
-      "before_agent_start",
-    ]);
+    expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual(["before_prompt_build"]);
   });
 
   it("applies configured typed hook timeout overrides", () => {
@@ -1662,7 +1163,6 @@ describe("loadOpenClawPlugins", () => {
       body: `module.exports = { id: "hook-timeouts", register(api) {
     api.on("before_prompt_build", () => ({ prependContext: "prepend" }), { timeoutMs: 5000 });
     api.on("before_model_resolve", () => ({ providerOverride: "demo-provider" }));
-    api.on("before_agent_start", () => ({ modelOverride: "demo-model" }));
   } };`,
     });
 
@@ -1689,8 +1189,157 @@ describe("loadOpenClawPlugins", () => {
     ).toEqual({
       before_prompt_build: 250,
       before_model_resolve: 750,
-      before_agent_start: 250,
     });
+  });
+
+  it.each([
+    {
+      label: "per-hook timeout over the global timeout",
+      hooks: { timeoutMs: 250, timeouts: { after_tool_call: 25 } },
+      expectedTimeoutMs: 25,
+    },
+    {
+      label: "global timeout when no per-hook timeout is configured",
+      hooks: { timeoutMs: 40 },
+      expectedTimeoutMs: 40,
+    },
+  ])("bounds agent tool-result middleware with $label", async ({ hooks, expectedTimeoutMs }) => {
+    useNoBundledPlugins();
+    const pluginId = `tool-result-middleware-timeout-${expectedTimeoutMs}`;
+    const plugin = writePlugin({
+      id: pluginId,
+      filename: `${pluginId}.cjs`,
+      body: `module.exports = { id: ${JSON.stringify(pluginId)}, register(api) {
+    api.registerAgentToolResultMiddleware(() => new Promise(() => {}), {
+      runtimes: ["openclaw"],
+    });
+  } };`,
+    });
+    updatePluginManifest(plugin, {
+      contracts: { agentToolResultMiddleware: ["openclaw"] },
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: [pluginId],
+        entries: {
+          [pluginId]: {
+            hooks,
+          },
+        },
+      },
+    });
+    const middleware = registry.agentToolResultMiddlewares[0];
+    if (!middleware) {
+      throw new Error("expected tool-result middleware registration");
+    }
+
+    vi.useFakeTimers();
+    try {
+      const middlewareRun = middleware.handler(
+        {
+          toolCallId: "call-1",
+          toolName: "exec",
+          args: {},
+          result: { content: [{ type: "text", text: "raw" }], details: {} },
+        },
+        { runtime: "openclaw" },
+      );
+      const outcome = Promise.resolve(middlewareRun).then(
+        () => ({ status: "resolved" as const }),
+        (error: unknown) => ({
+          status: "rejected" as const,
+          message: error instanceof Error ? error.message : String(error),
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(expectedTimeoutMs);
+
+      await expect(outcome).resolves.toEqual({
+        status: "rejected",
+        message: `agent tool result middleware for ${pluginId} timed out after ${expectedTimeoutMs}ms`,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves agent tool-result middleware unbounded when no timeout is configured", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "tool-result-middleware-no-timeout",
+      filename: "tool-result-middleware-no-timeout.cjs",
+      body: `module.exports = { id: "tool-result-middleware-no-timeout", register(api) {
+    api.registerAgentToolResultMiddleware(() => new Promise(() => {}), {
+      runtimes: ["openclaw"],
+    });
+  } };`,
+    });
+    updatePluginManifest(plugin, {
+      contracts: { agentToolResultMiddleware: ["openclaw"] },
+    });
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["tool-result-middleware-no-timeout"] },
+    });
+    const middleware = registry.agentToolResultMiddlewares[0];
+    if (!middleware) {
+      throw new Error("expected tool-result middleware registration");
+    }
+
+    vi.useFakeTimers();
+    try {
+      let settled = false;
+      void Promise.resolve(
+        middleware.handler(
+          {
+            toolCallId: "call-1",
+            toolName: "exec",
+            args: {},
+            result: { content: [{ type: "text", text: "raw" }], details: {} },
+          },
+          { runtime: "openclaw" },
+        ),
+      ).finally(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(settled).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses the registration option when typed hook policy has no timeout", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "after-tool-call-option-timeout",
+      filename: "after-tool-call-option-timeout.cjs",
+      body: `module.exports = { id: "after-tool-call-option-timeout", register(api) {
+    api.on("after_tool_call", () => new Promise(() => {}), { timeoutMs: 30 });
+  } };`,
+    });
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["after-tool-call-option-timeout"] },
+    });
+    const logger = { debug: vi.fn(), error: vi.fn(), warn: vi.fn() };
+    const runner = createHookRunner(registry, { logger });
+
+    vi.useFakeTimers();
+    try {
+      const run = runner.runAfterToolCall({ toolName: "exec", params: {} }, { toolName: "exec" });
+      await vi.advanceTimersByTimeAsync(30);
+
+      await expect(run).resolves.toBeUndefined();
+      expect(logger.error).toHaveBeenCalledWith(
+        "[hooks] after_tool_call handler from after-tool-call-option-timeout failed: timed out after 30ms",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("blocks conversation typed hooks for non-bundled plugins unless explicitly allowed", () => {
@@ -1700,6 +1349,8 @@ describe("loadOpenClawPlugins", () => {
       filename: "conversation-hooks.cjs",
       body: `module.exports = { id: "conversation-hooks", register(api) {
     api.on("before_model_resolve", () => undefined);
+    api.on("agent_turn_prepare", () => undefined);
+    api.on("before_prompt_build", () => undefined);
     api.on("before_agent_reply", () => undefined);
     api.on("llm_input", () => undefined);
     api.on("llm_output", () => undefined);
@@ -1722,7 +1373,7 @@ describe("loadOpenClawPlugins", () => {
         "non-bundled plugins must set plugins.entries.conversation-hooks.hooks.allowConversationAccess=true",
       ),
     );
-    expect(blockedDiagnostics).toHaveLength(7);
+    expect(blockedDiagnostics).toHaveLength(9);
   });
 
   it("allows conversation typed hooks for non-bundled plugins when explicitly enabled", () => {
@@ -1732,6 +1383,8 @@ describe("loadOpenClawPlugins", () => {
       filename: "conversation-hooks-allowed.cjs",
       body: `module.exports = { id: "conversation-hooks-allowed", register(api) {
     api.on("before_model_resolve", () => undefined);
+    api.on("agent_turn_prepare", () => undefined);
+    api.on("before_prompt_build", () => undefined);
     api.on("before_agent_reply", () => undefined);
     api.on("llm_input", () => undefined);
     api.on("llm_output", () => undefined);
@@ -1757,6 +1410,8 @@ describe("loadOpenClawPlugins", () => {
 
     expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual([
       "before_model_resolve",
+      "agent_turn_prepare",
+      "before_prompt_build",
       "before_agent_reply",
       "llm_input",
       "llm_output",
@@ -1766,74 +1421,47 @@ describe("loadOpenClawPlugins", () => {
     ]);
   });
 
-  it("normalizes legacy deactivate typed hooks onto gateway_stop", () => {
+  it("stores only valid before_agent_reply trigger eligibility", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
-      id: "legacy-deactivate-hook",
-      filename: "legacy-deactivate-hook.cjs",
-      body: `module.exports = { id: "legacy-deactivate-hook", register(api) {
-    api.on("deactivate", () => undefined);
+      id: "reply-hook-trigger-eligibility",
+      filename: "reply-hook-trigger-eligibility.cjs",
+      body: `module.exports = { id: "reply-hook-trigger-eligibility", register(api) {
+    api.on("before_agent_reply", () => undefined, { eligibleTriggers: ["heartbeat", "cron", "heartbeat"] });
+    api.on("before_agent_reply", () => undefined);
+    api.on("before_agent_reply", () => undefined, { eligibleTriggers: [] });
+    api.on("before_agent_reply", () => undefined, { eligibleTriggers: ["heartbeat", "unknown"] });
+    api.on("before_agent_reply", () => undefined, { eligibleTriggers: ["manual"] });
+    api.on("before_agent_reply", () => undefined, { eligibleTriggers: "heartbeat" });
+    api.on("before_agent_reply", () => undefined, { eligibleTriggers: Array(1) });
+    api.on("before_agent_reply", () => undefined, { eligibleTriggers: [, "heartbeat"] });
+    api.on("before_tool_call", () => undefined, { eligibleTriggers: ["heartbeat"] });
   } };`,
     });
 
     const registry = loadRegistryFromSinglePlugin({
       plugin,
       pluginConfig: {
-        allow: ["legacy-deactivate-hook"],
+        allow: ["reply-hook-trigger-eligibility"],
         entries: {
-          "legacy-deactivate-hook": {
-            hooks: {
-              timeoutMs: 250,
-            },
+          "reply-hook-trigger-eligibility": {
+            hooks: { allowConversationAccess: true },
           },
         },
       },
     });
 
-    expect(registry.plugins.find((entry) => entry.id === "legacy-deactivate-hook")?.status).toBe(
-      "loaded",
-    );
-    expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual(["gateway_stop"]);
-    expect(registry.typedHooks[0]?.timeoutMs).toBe(250);
-    expect(
-      registry.diagnostics.some(
-        (diag) =>
-          diag.pluginId === "legacy-deactivate-hook" &&
-          diag.message ===
-            'typed hook "deactivate" is deprecated (legacy-deactivate-hook-alias); use "gateway_stop". This compatibility alias will be removed after 2026-08-16.',
-      ),
-    ).toBe(true);
-  });
-
-  it("warns when plugins register deprecated subagent_spawning typed hooks", () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "legacy-subagent-spawning-hook",
-      filename: "legacy-subagent-spawning-hook.cjs",
-      body: `module.exports = { id: "legacy-subagent-spawning-hook", register(api) {
-    api.on("subagent_spawning", () => ({ status: "ok" }));
-  } };`,
-    });
-
-    const registry = loadRegistryFromSinglePlugin({
-      plugin,
-      pluginConfig: {
-        allow: ["legacy-subagent-spawning-hook"],
-      },
-    });
-
-    expect(
-      registry.plugins.find((entry) => entry.id === "legacy-subagent-spawning-hook")?.status,
-    ).toBe("loaded");
-    expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual(["subagent_spawning"]);
-    expect(
-      registry.diagnostics.some(
-        (diag) =>
-          diag.pluginId === "legacy-subagent-spawning-hook" &&
-          diag.message ===
-            'typed hook "subagent_spawning" is deprecated (legacy-subagent-spawning-hook); Core prepares thread-bound subagent bindings through channel session-binding adapters before `subagent_spawned` fires. Use `subagent_spawned` for observation; core session bindings for routing. This compatibility hook will be removed after 2026-08-30.',
-      ),
-    ).toBe(true);
+    expect(registry.typedHooks.map((entry) => entry.eligibleTriggers)).toEqual([
+      ["heartbeat", "cron"],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ]);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

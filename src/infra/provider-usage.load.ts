@@ -9,10 +9,10 @@ import { resolveFetch } from "./fetch.js";
 import { resolveProxyFetchFromEnv } from "./net/proxy-fetch.js";
 import { type ProviderAuth, resolveProviderAuths } from "./provider-usage.auth.js";
 import {
-  DEFAULT_TIMEOUT_MS,
+  PROVIDER_USAGE_TIMEOUT_MS,
   ignoredErrors,
-  resolveProviderUsageDisplayName,
-  withTimeout,
+  providerUsageLabel,
+  raceUsageTimeout,
 } from "./provider-usage.shared.js";
 import type {
   ProviderUsageSnapshot,
@@ -30,7 +30,7 @@ async function fetchProviderUsageSnapshotFallback(params: {
   void params.fetchFn;
   return {
     provider: params.auth.provider,
-    displayName: resolveProviderUsageDisplayName(params.auth.provider),
+    displayName: providerUsageLabel(params.auth.provider) ?? params.auth.provider,
     windows: [],
     error: "Unsupported provider",
   };
@@ -94,7 +94,7 @@ export async function loadProviderUsageSummary(
   opts: UsageSummaryOptions = {},
 ): Promise<UsageSummary> {
   const now = opts.now ?? Date.now();
-  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const timeoutMs = opts.timeoutMs ?? PROVIDER_USAGE_TIMEOUT_MS;
   const config = opts.config ?? getRuntimeConfig();
   const env = opts.env ?? process.env;
   const fetchFn = opts.fetch
@@ -107,12 +107,12 @@ export async function loadProviderUsageSummary(
   const descriptors: ProviderUsagePluginDescriptor[] = opts.providers
     ? opts.providers.map((provider) => ({
         provider,
-        displayName: resolveProviderUsageDisplayName(provider),
+        displayName: providerUsageLabel(provider) ?? provider,
       }))
     : opts.auth
       ? opts.auth.map((auth) => ({
           provider: auth.provider,
-          displayName: resolveProviderUsageDisplayName(auth.provider),
+          displayName: providerUsageLabel(auth.provider) ?? auth.provider,
         }))
       : listProviderUsagePluginDescriptors({
           config,
@@ -122,6 +122,14 @@ export async function loadProviderUsageSummary(
   const displayNames = new Map(
     descriptors.map((descriptor) => [descriptor.provider, descriptor.displayName]),
   );
+  const providerOrder = new Map(descriptors.map(({ provider }, index) => [provider, index]));
+  const failureSnapshot = (provider: UsageProviderId, error: string): ProviderUsageSnapshot => ({
+    provider,
+    displayName: displayNames.get(provider) ?? providerUsageLabel(provider) ?? provider,
+    windows: [],
+    error,
+  });
+  const authFailures: ProviderUsageSnapshot[] = [];
   const auths = await resolveProviderAuths({
     providers: descriptors.map((descriptor) => descriptor.provider),
     auth: opts.auth,
@@ -129,20 +137,17 @@ export async function loadProviderUsageSummary(
     config,
     env,
     skipPluginAuthWithoutCredentialSource: opts.skipPluginAuthWithoutCredentialSource,
+    onError: (provider, error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      authFailures.push(failureSnapshot(provider, message.trim() || "Auth failed"));
+    },
   });
-  if (auths.length === 0) {
+  if (auths.length === 0 && authFailures.length === 0) {
     return { updatedAt: now, providers: [] };
   }
 
   const tasks = auths.map((auth) => {
-    const failureSnapshot = (error: string): ProviderUsageSnapshot => ({
-      provider: auth.provider,
-      displayName:
-        displayNames.get(auth.provider) ?? resolveProviderUsageDisplayName(auth.provider),
-      windows: [],
-      error,
-    });
-    return withTimeout(
+    return raceUsageTimeout(
       fetchProviderUsageSnapshot({
         auth,
         config,
@@ -153,20 +158,18 @@ export async function loadProviderUsageSummary(
         fetchFn,
       }),
       timeoutMs + 1000,
-      {
-        provider: auth.provider,
-        displayName:
-          displayNames.get(auth.provider) ?? resolveProviderUsageDisplayName(auth.provider),
-        windows: [],
-        error: "Timeout",
-      },
+      failureSnapshot(auth.provider, "Timeout"),
     ).catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
-      return failureSnapshot(message.trim() || "Fetch failed");
+      return failureSnapshot(auth.provider, message.trim() || "Fetch failed");
     });
   });
 
-  const snapshots = await Promise.all(tasks);
+  const snapshots = [...(await Promise.all(tasks)), ...authFailures].toSorted(
+    (left, right) =>
+      (providerOrder.get(left.provider) ?? Number.MAX_SAFE_INTEGER) -
+      (providerOrder.get(right.provider) ?? Number.MAX_SAFE_INTEGER),
+  );
   const providers = snapshots.filter((entry) => {
     if (entry.windows.length > 0) {
       return true;

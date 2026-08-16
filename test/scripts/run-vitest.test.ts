@@ -1,18 +1,22 @@
 // Run Vitest tests cover run vitest script behavior.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import nodePath from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
+import {
+  resolveTestProjectsRunnerEnv,
+  resolveTestProjectsRunnerSpawnParams,
+} from "../../scripts/lib/test-projects-delegation.mts";
 import {
   DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
   DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
   TOOLING_EXCLUDED_TESTS,
   VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS,
   installVitestNoOutputWatchdog,
+  resolveBoundedVitestInvocations,
   resolveDefaultVitestNoOutputTimeoutMs,
   resolveDirectNodeVitestArgs,
   resolveExplicitTestFileNoPassArgs,
@@ -21,8 +25,6 @@ import {
   resolveMissingExplicitTestFiles,
   resolveRunVitestSpawnEnv,
   resolveTestProjectsDelegationArgs,
-  resolveTestProjectsRunnerEnv,
-  resolveTestProjectsRunnerSpawnParams,
   resolveVitestCliEntry,
   resolveVitestNoOutputHeartbeatMs,
   resolveVitestNodeArgs,
@@ -30,13 +32,23 @@ import {
   resolveVitestSpawnParams,
   spawnWatchedVitestProcess,
   shouldSuppressVitestStderrLine,
-} from "../../scripts/run-vitest.mjs";
+} from "../../scripts/run-vitest.mts";
+import { forceKillVitestProcessGroup } from "../../scripts/vitest-process-group.mts";
 
 const posixIt = process.platform === "win32" ? it.skip : it;
 // These bounds only guard broken fixtures; readiness and exit are asserted via process signals.
 const LOAD_SENSITIVE_PROCESS_TIMEOUT_MS = process.env.CI ? 30_000 : 15_000;
 
 describe("scripts/run-vitest", () => {
+  it("ends argument failures with the stable failure trailer", () => {
+    const result = spawnSync(process.execPath, [nodePath.resolve("scripts/run-vitest.mjs")], {
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr.trim().split("\n").at(-1)).toBe("[test] FAILED (exit 1)");
+  });
+
   it.each([...VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS.keys(), ...TOOLING_EXCLUDED_TESTS])(
     "keeps hardcoded Vitest path %s valid",
     (referencedPath) => {
@@ -184,6 +196,90 @@ describe("scripts/run-vitest", () => {
     ).toEqual(["extensions/linux-canvas", "src/node-host", "--isolate", "--", "--no-isolate"]);
   });
 
+  it("bounds config-only Gateway server runs in fresh worker processes", () => {
+    const argv = [
+      "run",
+      "--config",
+      "test/vitest/vitest.gateway-server.config.ts",
+      "--reporter=verbose",
+      "--",
+      "-x",
+    ];
+
+    expect(
+      resolveBoundedVitestInvocations(argv, {
+        env: {},
+        gatewayServerTargetChunks: [
+          ["src/gateway/server-a.test.ts"],
+          ["src/gateway/server-b.test.ts"],
+        ],
+      }),
+    ).toEqual([
+      [
+        "run",
+        "--config",
+        "test/vitest/vitest.gateway-server.config.ts",
+        "--reporter=verbose",
+        "src/gateway/server-a.test.ts",
+        "--",
+        "-x",
+      ],
+      [
+        "run",
+        "--config",
+        "test/vitest/vitest.gateway-server.config.ts",
+        "--reporter=verbose",
+        "src/gateway/server-b.test.ts",
+        "--",
+        "-x",
+      ],
+    ]);
+  });
+
+  it("bounds implicit CI runs for absolute Gateway server config paths", () => {
+    expect(
+      resolveBoundedVitestInvocations(
+        ["--config", "/repo/test/vitest/vitest.gateway-server.config.ts"],
+        {
+          env: { CI: "1" },
+          gatewayServerTargetChunks: [
+            ["src/gateway/server-a.test.ts"],
+            ["src/gateway/server-b.test.ts"],
+          ],
+        },
+      ),
+    ).toHaveLength(2);
+  });
+
+  it.each([
+    ["local watch default", ["--config", "test/vitest/vitest.gateway-server.config.ts"]],
+    ["explicit watch", ["watch", "--config", "test/vitest/vitest.gateway-server.config.ts"]],
+    [
+      "explicit target",
+      [
+        "run",
+        "--config",
+        "test/vitest/vitest.gateway-server.config.ts",
+        "src/gateway/server-startup.test.ts",
+      ],
+    ],
+    [
+      "coverage output",
+      ["run", "--config", "test/vitest/vitest.gateway-server.config.ts", "--coverage"],
+    ],
+    ["different config", ["run", "--config", "test/vitest/vitest.gateway-core.config.ts"]],
+  ])("keeps %s as one direct Vitest invocation", (_label, argv) => {
+    expect(
+      resolveBoundedVitestInvocations(argv, {
+        env: {},
+        gatewayServerTargetChunks: [
+          ["src/gateway/server-a.test.ts"],
+          ["src/gateway/server-b.test.ts"],
+        ],
+      }),
+    ).toEqual([argv]);
+  });
+
   it("routes explicit tooling tests through the tooling config", () => {
     expect(resolveImplicitVitestArgs(["run", "test/scripts/run-vitest.test.ts"])).toEqual([
       "run",
@@ -211,7 +307,7 @@ describe("scripts/run-vitest", () => {
   });
 
   it("keeps boundary tests on existing routing", () => {
-    const argv = ["run", "test/web-provider-boundary.test.ts"];
+    const argv = ["run", "test/plugin-extension-import-boundary.test.ts"];
     expect(resolveImplicitVitestArgs(argv)).toBe(argv);
   });
 
@@ -250,11 +346,11 @@ describe("scripts/run-vitest", () => {
       [["run", file], [file]],
       [
         ["run", file, "--reporter=verbose"],
-        [file, "--reporter=verbose"],
+        [file, "--", "--reporter=verbose"],
       ],
       [
         ["--reporter=verbose", "run", file],
-        ["--reporter=verbose", file],
+        [file, "--", "--reporter=verbose"],
       ],
       [
         ["run", file, "--", "--watch"],
@@ -275,21 +371,58 @@ describe("scripts/run-vitest", () => {
     expect(resolveTestProjectsDelegationArgs([file])).toEqual([file]);
     expect(resolveTestProjectsDelegationArgs(["run", file, "--reporter=verbose"])).toEqual([
       file,
+      "--",
       "--reporter=verbose",
     ]);
   });
 
-  it("delegates bare explicit directories and globs to the project router", () => {
+  it("delegates bare explicit directories, globs, and extensionless prefixes", () => {
     expect(resolveTestProjectsDelegationArgs(["test/scripts"])).toEqual(["test/scripts"]);
     expect(
       resolveTestProjectsDelegationArgs(["run", "test/scripts", "--reporter=verbose"]),
-    ).toEqual(["test/scripts", "--reporter=verbose"]);
+    ).toEqual(["test/scripts", "--", "--reporter=verbose"]);
     expect(resolveTestProjectsDelegationArgs(["test/scripts/*.test.ts"])).toEqual([
       "test/scripts/*.test.ts",
     ]);
     expect(resolveTestProjectsDelegationArgs(["src/agents/**/*.ts"])).toBeNull();
     expect(resolveTestProjectsDelegationArgs(["src/**/*.test.ts"])).toBeNull();
     expect(resolveTestProjectsDelegationArgs(["./src"])).toBeNull();
+    const prefix = "extensions/telegram/src/format";
+    expect(resolveTestProjectsDelegationArgs([prefix])).toEqual([prefix]);
+  });
+
+  it("delegates an existing extension root to the project router", () => {
+    const directory = "extensions/codex";
+
+    expect(resolveTestProjectsDelegationArgs([directory])).toEqual([directory]);
+    expect(resolveTestProjectsDelegationArgs(["run", directory, "--reporter=verbose"])).toEqual([
+      directory,
+      "--",
+      "--reporter=verbose",
+    ]);
+  });
+
+  it("keeps extension subdirectories and direct-mode root runs on Vitest", () => {
+    const directory = "extensions/codex";
+
+    expect(resolveTestProjectsDelegationArgs([`${directory}/src`])).toBeNull();
+    expect(
+      resolveTestProjectsDelegationArgs([
+        "--config",
+        "test/vitest/vitest.extension-codex.config.ts",
+        directory,
+      ]),
+    ).toBeNull();
+    expect(resolveTestProjectsDelegationArgs(["--watch", directory])).toBeNull();
+  });
+
+  it("delegates owned agent directories with separate Vitest option values", () => {
+    const directory = "src/agents/embedded-agent-runner/run";
+
+    expect(resolveTestProjectsDelegationArgs([directory])).toEqual([directory]);
+    expect(
+      resolveTestProjectsDelegationArgs([directory, "--sequence.shuffle", "--sequence.seed", "3"]),
+    ).toEqual([directory, "--", "--sequence.shuffle", "--sequence.seed", "3"]);
   });
 
   it("delegates mixed filters when an explicit file target is present", () => {
@@ -320,13 +453,27 @@ describe("scripts/run-vitest", () => {
       ["--run=false", "test/scripts/run-vitest.test.ts"],
       ["--no-run", "test/scripts/run-vitest.test.ts"],
       ["--run", "false", "test/scripts/run-vitest.test.ts"],
-      ["--diff", "scripts/run-vitest.mjs"],
-      ["--testNamePattern", "run", "test/scripts/run-vitest.test.ts"],
-      ["run", "test/scripts/run-vitest.test.ts", "-t", "src"],
     ];
     for (const argv of directArgvCases) {
       expect(resolveTestProjectsDelegationArgs(argv)).toBeNull();
     }
+  });
+
+  it.each([
+    [
+      ["--diff", "scripts/run-vitest.mjs", "test/scripts/run-vitest.test.ts"],
+      ["test/scripts/run-vitest.test.ts", "--", "--diff", "scripts/run-vitest.mjs"],
+    ],
+    [
+      ["--testNamePattern", "run", "test/scripts/run-vitest.test.ts"],
+      ["test/scripts/run-vitest.test.ts", "--", "--testNamePattern", "run"],
+    ],
+    [
+      ["run", "test/scripts/run-vitest.test.ts", "-t", "src"],
+      ["test/scripts/run-vitest.test.ts", "--", "-t", "src"],
+    ],
+  ])("keeps option value %j out of project target classification", (argv, expected) => {
+    expect(resolveTestProjectsDelegationArgs(argv)).toEqual(expected);
   });
 
   it("reports missing explicit test files before Vitest can silently ignore them", () => {
@@ -522,6 +669,7 @@ describe("scripts/run-vitest", () => {
 
     for (const configArg of [
       "--config=test/vitest/vitest.e2e.config.ts",
+      "--config=test/vitest/vitest.tui-pty.config.ts",
       "--config=test/vitest/vitest.gateway.config.ts",
       "--config=./test/vitest/vitest.ui-e2e.config.ts",
       "--config=test/vitest/vitest.full-agentic.config.ts",
@@ -671,89 +819,6 @@ describe("scripts/run-vitest", () => {
     });
   });
 
-  posixIt("cleans delegated test-project children when the wrapper is signaled", async () => {
-    const fixturePath = nodePath.join(
-      os.tmpdir(),
-      `openclaw-run-vitest-delegated-signal-${process.pid}-${Date.now()}.mjs`,
-    );
-    const childPidPath = nodePath.join(
-      os.tmpdir(),
-      `openclaw-run-vitest-delegated-child-${process.pid}-${Date.now()}.pid`,
-    );
-    const descendantPidPath = nodePath.join(
-      os.tmpdir(),
-      `openclaw-run-vitest-delegated-descendant-${process.pid}-${Date.now()}.pid`,
-    );
-
-    fs.writeFileSync(
-      fixturePath,
-      [
-        'import { spawn } from "node:child_process";',
-        'import fs from "node:fs";',
-        'const child = spawn(process.execPath, ["-e", "process.on(\\\'SIGTERM\\\', () => {}); setInterval(() => {}, 1000);"], { stdio: "ignore" });',
-        "fs.writeFileSync(process.env.OPENCLAW_DELEGATED_SIGNAL_CHILD_PID, String(process.pid));",
-        "fs.writeFileSync(process.env.OPENCLAW_DELEGATED_SIGNAL_DESCENDANT_PID, String(child.pid));",
-        "await new Promise(() => {});",
-        "",
-      ].join("\n"),
-    );
-
-    const runner = spawn(
-      process.execPath,
-      [
-        "--input-type=module",
-        "--eval",
-        `import { runTestProjectsDelegation } from ${JSON.stringify(
-          pathToFileURL(nodePath.resolve("scripts/run-vitest.mjs")).href,
-        )}; runTestProjectsDelegation([], process.env, { runnerPath: ${JSON.stringify(fixturePath)} });`,
-      ],
-      {
-        env: {
-          ...process.env,
-          OPENCLAW_DELEGATED_SIGNAL_CHILD_PID: childPidPath,
-          OPENCLAW_DELEGATED_SIGNAL_DESCENDANT_PID: descendantPidPath,
-        },
-        stdio: "ignore",
-      },
-    );
-    let childPid = 0;
-    let descendantPid = 0;
-
-    try {
-      await waitFor(
-        () => fs.existsSync(childPidPath) && fs.existsSync(descendantPidPath),
-        LOAD_SENSITIVE_PROCESS_TIMEOUT_MS,
-      );
-      childPid = Number(fs.readFileSync(childPidPath, "utf8"));
-      descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
-      expect(Number.isInteger(childPid)).toBe(true);
-      expect(Number.isInteger(descendantPid)).toBe(true);
-      expect(isProcessAlive(childPid)).toBe(true);
-      expect(isProcessAlive(descendantPid)).toBe(true);
-
-      expect(runner.pid).toBeGreaterThan(0);
-      process.kill(runner.pid!, "SIGTERM");
-      const result = await waitForClose(runner, LOAD_SENSITIVE_PROCESS_TIMEOUT_MS);
-
-      expect(result).toEqual({ code: null, signal: "SIGTERM" });
-      await waitFor(() => !isProcessAlive(childPid), LOAD_SENSITIVE_PROCESS_TIMEOUT_MS);
-      await waitFor(() => !isProcessAlive(descendantPid), LOAD_SENSITIVE_PROCESS_TIMEOUT_MS);
-    } finally {
-      if (runner.pid && isProcessAlive(runner.pid)) {
-        process.kill(runner.pid, "SIGKILL");
-      }
-      if (childPid && isProcessAlive(childPid)) {
-        process.kill(childPid, "SIGKILL");
-      }
-      if (descendantPid && isProcessAlive(descendantPid)) {
-        process.kill(descendantPid, "SIGKILL");
-      }
-      fs.rmSync(fixturePath, { force: true });
-      fs.rmSync(childPidPath, { force: true });
-      fs.rmSync(descendantPidPath, { force: true });
-    }
-  });
-
   it("spawns vitest in a detached process group on Unix hosts", () => {
     expect(resolveVitestSpawnParams({ PATH: "/usr/bin" }, "darwin")).toEqual({
       env: { PATH: "/usr/bin" },
@@ -781,9 +846,93 @@ describe("scripts/run-vitest", () => {
       expect(await waitForClose(watched.child)).toEqual({ code: null, signal: "SIGTERM" });
     } finally {
       watched.teardown();
-      if (watched.child.pid && isProcessAlive(watched.child.pid)) {
-        process.kill(-watched.child.pid, "SIGKILL");
+      forceKillVitestProcessGroup(watched.child);
+    }
+  });
+
+  posixIt("stops residual process-group descendants before completing", async () => {
+    const descendantPidPath = nodePath.join(
+      os.tmpdir(),
+      `openclaw-run-vitest-residual-${process.pid}-${Date.now()}.pid`,
+    );
+    const watchedEnv = {
+      OPENCLAW_RESIDUAL_PID_PATH: descendantPidPath,
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "5000",
+    };
+    const watched = spawnWatchedVitestProcess({
+      pnpmArgs: [
+        "exec",
+        "node",
+        "-e",
+        [
+          'const { spawn } = require("node:child_process");',
+          'const fs = require("node:fs");',
+          'const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {',
+          '  stdio: "ignore",',
+          "});",
+          "descendant.unref();",
+          'process.once("SIGTERM", () => process.exit(0));',
+          "const pidPath = process.env.OPENCLAW_RESIDUAL_PID_PATH;",
+          "const pendingPath = `${pidPath}.${process.pid}.tmp`;",
+          "fs.writeFileSync(pendingPath, String(descendant.pid));",
+          "fs.renameSync(pendingPath, pidPath);",
+          "setInterval(() => {}, 1000);",
+        ].join("\n"),
+      ],
+      spawnParams: {
+        detached: true,
+        env: watchedEnv,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+      env: watchedEnv,
+    });
+    let descendantPid = 0;
+
+    try {
+      await waitFor(() => fs.existsSync(descendantPidPath), LOAD_SENSITIVE_PROCESS_TIMEOUT_MS);
+      descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
+      expect(Number.isInteger(descendantPid)).toBe(true);
+      expect(isProcessAlive(descendantPid)).toBe(true);
+
+      process.kill(watched.child.pid!, "SIGTERM");
+      const snapshot = await Promise.race([
+        watched.completion.then((result) => {
+          const psArgs =
+            process.platform === "linux" ? ["-eL", "-o", "pgid=,state="] : ["-axo", "pgid=,state="];
+          const stateResult = spawnSync("ps", psArgs, {
+            encoding: "utf8",
+          });
+          const rows = stateResult.stdout
+            .split(/\r?\n/)
+            .filter(Boolean)
+            .map((line) => /^\s*(\d+)\s+(\S+)\s*$/.exec(line));
+          const groupStopped =
+            !stateResult.error &&
+            stateResult.signal === null &&
+            stateResult.stderr.trim() === "" &&
+            stateResult.status === 0 &&
+            rows.every(Boolean) &&
+            rows
+              .filter((row) => Number(row?.[1]) === watched.child.pid)
+              .every((row) => /^[ZX]/.test(row?.[2] ?? ""));
+          return { groupStopped, result };
+        }),
+        delay(LOAD_SENSITIVE_PROCESS_TIMEOUT_MS, undefined, { ref: false }).then(() => {
+          throw new Error("timed out waiting for watched Vitest completion");
+        }),
+      ]);
+
+      expect(snapshot).toEqual({
+        groupStopped: true,
+        result: { code: 0, signal: null },
+      });
+    } finally {
+      watched.teardown();
+      forceKillVitestProcessGroup(watched.child);
+      if (descendantPid && isProcessAlive(descendantPid)) {
+        process.kill(descendantPid, "SIGKILL");
       }
+      fs.rmSync(descendantPidPath, { force: true });
     }
   });
 

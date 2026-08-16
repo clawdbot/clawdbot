@@ -185,6 +185,7 @@ describe("LINE webhook spool", () => {
           activeDeliveries -= 1;
         }
       });
+      const listPending = vi.spyOn(queue, "listPending");
       const spool = createLineWebhookSpool({
         accountId: "default",
         runtime: runtime(),
@@ -203,15 +204,24 @@ describe("LINE webhook spool", () => {
       try {
         await spool.accept({ destination: "destination-1", events: firstBatch });
         await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(8));
-
-        await spool.accept(callback(ninth));
-        // Hold the eight adopted-but-unfinished deliveries across two timer pumps.
         await new Promise<void>((resolve) => {
-          setTimeout(resolve, 1_100);
+          setImmediate(resolve);
         });
+
+        const drainScansBeforeNinth = listPending.mock.calls.length;
+        await spool.accept(callback(ninth));
+        await vi.waitFor(() =>
+          expect(listPending.mock.calls.length).toBeGreaterThan(drainScansBeforeNinth),
+        );
 
         expect(deliver).toHaveBeenCalledTimes(8);
         expect(maxActiveDeliveries).toBe(8);
+        expect(await queue.listPending()).toEqual([
+          expect.objectContaining({
+            id: "message:message-event-concurrency-8",
+            laneKey: "user:user-8",
+          }),
+        ]);
 
         releaseDeliveries();
         await vi.waitFor(() => expect(activeDeliveries).toBe(0));
@@ -247,7 +257,10 @@ describe("LINE webhook spool", () => {
       await vi.waitFor(() => expect(firstDeliver).toHaveBeenCalledTimes(1));
 
       let stopSettled = false;
-      const stopping = first.stop().then(() => {
+      const firstStop = first.stop();
+      const secondStop = first.stop();
+      expect(secondStop).toBe(firstStop);
+      const stopping = firstStop.then(() => {
         stopSettled = true;
       });
       await new Promise<void>((resolve) => {
@@ -274,6 +287,152 @@ describe("LINE webhook spool", () => {
         expect(restartedDeliver).toHaveBeenCalledTimes(1);
       } finally {
         await restarted.stop();
+      }
+    });
+  });
+
+  it("disposes after the active-delivery stop grace expires", async () => {
+    await withQueue(async (queue) => {
+      let releaseDelivery = () => {};
+      const deliveryGate = new Promise<void>((resolve) => {
+        releaseDelivery = resolve;
+      });
+      let lateLifecycle: LineWebhookTurnAdoptionLifecycle | undefined;
+      const firstDeliver = vi.fn(
+        async (
+          _event: webhook.Event,
+          _destination: string,
+          control: { turnAdoptionLifecycle: LineWebhookTurnAdoptionLifecycle },
+        ) => {
+          lateLifecycle = control.turnAdoptionLifecycle;
+          await deliveryGate;
+        },
+      );
+      const firstRuntime = runtime();
+      const first = createLineWebhookSpool({
+        accountId: "default",
+        runtime: firstRuntime,
+        queue,
+        deliver: firstDeliver,
+      });
+      const event = createEvent({ webhookEventId: "event-stop-timeout" });
+
+      first.start();
+      await first.accept(callback(event));
+      await vi.waitFor(() => expect(firstDeliver).toHaveBeenCalledTimes(1));
+
+      vi.useFakeTimers();
+      const stopping = first.stop();
+      let stopSettled = false;
+      void stopping.then(() => {
+        stopSettled = true;
+      });
+      try {
+        await vi.advanceTimersByTimeAsync(4_999);
+        expect(stopSettled).toBe(false);
+        expect(lateLifecycle?.abortSignal.aborted).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        await stopping;
+        expect(firstRuntime.log).toHaveBeenCalledWith(
+          expect.stringContaining("timed out after 5000ms"),
+        );
+        if (!lateLifecycle) {
+          throw new Error("LINE delivery did not expose its adoption lifecycle");
+        }
+        expect(lateLifecycle.abortSignal.aborted).toBe(true);
+        lateLifecycle.onDeferred();
+        await vi.waitFor(async () => expect(await queue.listClaims()).toEqual([]));
+      } finally {
+        vi.useRealTimers();
+      }
+
+      const restartedDeliver = vi.fn(async (_event, _destination, control) => {
+        await control.turnAdoptionLifecycle.onAdopted();
+      });
+      const restarted = createLineWebhookSpool({
+        accountId: "default",
+        runtime: runtime(),
+        queue,
+        deliver: restartedDeliver,
+      });
+      restarted.start();
+      try {
+        await waitForVerdict(queue, "message:message-event-stop-timeout", "completed");
+        expect(restartedDeliver).toHaveBeenCalledTimes(1);
+      } finally {
+        releaseDelivery();
+        await restarted.stop();
+      }
+    });
+  });
+
+  it("waits for claims deferred after an active-delivery stop timeout", async () => {
+    await withQueue(async (queue) => {
+      let releaseDelivery = () => {};
+      const deliveryGate = new Promise<void>((resolve) => {
+        releaseDelivery = resolve;
+      });
+      let deferredLifecycle: LineWebhookTurnAdoptionLifecycle | undefined;
+      let activeLifecycle: LineWebhookTurnAdoptionLifecycle | undefined;
+      const spoolRuntime = runtime();
+      const deliver = vi.fn(
+        async (
+          event: webhook.Event,
+          _destination: string,
+          control: { turnAdoptionLifecycle: LineWebhookTurnAdoptionLifecycle },
+        ) => {
+          if ((event as webhook.MessageEvent).message.id === "message-event-stop-deferred") {
+            deferredLifecycle = control.turnAdoptionLifecycle;
+            control.turnAdoptionLifecycle.onDeferred();
+            return;
+          }
+          activeLifecycle = control.turnAdoptionLifecycle;
+          await deliveryGate;
+        },
+      );
+      const spool = createLineWebhookSpool({
+        accountId: "default",
+        runtime: spoolRuntime,
+        queue,
+        deliver,
+      });
+
+      spool.start();
+      await spool.accept(callback(createEvent({ webhookEventId: "event-stop-active" })));
+      await spool.accept(
+        callback(createEvent({ webhookEventId: "event-stop-deferred", userId: "user-2" })),
+      );
+      await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(2));
+
+      vi.useFakeTimers();
+      const stopping = spool.stop();
+      let stopSettled = false;
+      void stopping.then(() => {
+        stopSettled = true;
+      });
+      try {
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(spoolRuntime.log).toHaveBeenCalledWith(
+          expect.stringContaining("timed out after 5000ms"),
+        );
+        expect(stopSettled).toBe(false);
+
+        if (!deferredLifecycle || !activeLifecycle) {
+          throw new Error("LINE deliveries did not expose their adoption lifecycles");
+        }
+        activeLifecycle.onDeferred();
+        await deferredLifecycle.onAbandoned();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(stopSettled).toBe(false);
+
+        await activeLifecycle.onAbandoned();
+        releaseDelivery();
+        await stopping;
+        expect(stopSettled).toBe(true);
+        expect(await queue.listClaims()).toEqual([]);
+      } finally {
+        releaseDelivery();
+        vi.useRealTimers();
       }
     });
   });
@@ -353,6 +512,7 @@ describe("LINE webhook spool", () => {
 
   it("keeps a completion tombstone and rejects a repeated delivery", async () => {
     await withQueue(async (queue) => {
+      const enqueue = vi.spyOn(queue, "enqueue");
       const event = createEvent({ webhookEventId: "event-duplicate" });
       const deliver = vi.fn(async (_event, _destination, control) => {
         await control.turnAdoptionLifecycle.onAdopted();
@@ -369,8 +529,9 @@ describe("LINE webhook spool", () => {
         await waitForVerdict(queue, "message:message-event-duplicate", "completed");
 
         await spool.accept(callback(event));
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 600);
+        await expect(enqueue.mock.results.at(-1)?.value).resolves.toMatchObject({
+          kind: "completed",
+          duplicate: true,
         });
 
         expect(deliver).toHaveBeenCalledTimes(1);
@@ -382,6 +543,7 @@ describe("LINE webhook spool", () => {
 
   it("deduplicates a redelivered message id even when webhookEventId changes", async () => {
     await withQueue(async (queue) => {
+      const enqueue = vi.spyOn(queue, "enqueue");
       const deliver = vi.fn(async (_event, _destination, control) => {
         await control.turnAdoptionLifecycle.onAdopted();
       });
@@ -401,8 +563,9 @@ describe("LINE webhook spool", () => {
         await spool.accept(
           callback(createEvent({ webhookEventId: "delivery-b", messageId: "shared-message" })),
         );
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 600);
+        await expect(enqueue.mock.results.at(-1)?.value).resolves.toMatchObject({
+          kind: "completed",
+          duplicate: true,
         });
 
         expect(deliver).toHaveBeenCalledTimes(1);

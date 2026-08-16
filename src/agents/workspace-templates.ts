@@ -21,7 +21,7 @@ let cachedTemplateDir: string | undefined;
 let resolvingTemplateDir: Promise<string> | undefined;
 
 /** Resolves the primary workspace-template directory from package, cwd, or fallback paths. */
-export async function resolveWorkspaceTemplateDir(opts?: {
+async function resolveWorkspaceTemplateDir(opts?: {
   cwd?: string;
   argv1?: string;
   moduleUrl?: string;

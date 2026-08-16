@@ -4,16 +4,17 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExecApprovalDecision, ExecApprovalRequestPayload } from "../infra/exec-approvals.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import {
   closeOpenClawStateDatabase,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import {
   ExecApprovalManager,
+  InvalidApprovalIdError,
   type OperatorApprovalLifecycleEvent,
 } from "./exec-approval-manager.js";
 import { getOperatorApprovalDetailed, resolveOperatorApproval } from "./operator-approval-store.js";
@@ -216,6 +217,32 @@ describe("ExecApprovalManager", () => {
     expect(manager.getLiveSnapshot(record.id)).toMatchObject({ decision: "allow-once" });
     runTimer(cleanupTimers[1]);
     expect(manager.getLiveSnapshot(record.id)).toBeNull();
+  });
+
+  it("never projects an allowed decision without its live local record", () => {
+    const timers = installTimerMocks();
+    const manager = new ExecApprovalManager({
+      validateAgentRuntimeDelegatedAuthority: () => true,
+    });
+    const record = manager.create({ command: "echo ok" }, 60_000, "approval-live-projection");
+    record.agentRuntimeDelegatedAuthority = {
+      kind: "local",
+      operationalRunInstance: { instanceId: "instance-live", runId: "run-live" },
+      lifecycleGeneration: "generation-live",
+      claimId: "claim-live",
+    };
+    void manager.register(record, 60_000);
+    expect(manager.resolve(record.id, "allow-always")).toBe(true);
+    expect(manager.projectDecisionIfActive(record.id, "allow-always")).toBe("allow-always");
+
+    runTimer(timers.find((timer) => timer.delay === 15_000));
+    expect(manager.projectDecisionIfActive(record.id, "allow-always")).toBeNull();
+    expect(new ExecApprovalManager().projectDecisionIfActive(record.id, "allow-always")).toBeNull();
+
+    const unbound = manager.create({ command: "echo ok" }, 60_000, "approval-unbound");
+    void manager.register(unbound, 60_000);
+    expect(manager.resolve(unbound.id, "allow-always")).toBe(true);
+    expect(manager.projectDecisionIfActive(unbound.id, "allow-always")).toBe("allow-always");
   });
 
   it("clamps oversized approval timers instead of letting Node fire them immediately", () => {
@@ -584,17 +611,46 @@ describe("ExecApprovalManager", () => {
     await expect(decisionPromise).resolves.toBe("deny");
   });
 
-  it("preserves a protocol-valid provided approval id byte-for-byte", async () => {
-    const { manager, databaseOptions } = createPersistentManager();
-    const id = "\uFEFF";
-    const record = manager.create({ command: "echo exact" }, 60_000, id);
-    const decisionPromise = manager.register(record, 60_000);
+  it.each([
+    ["two-phase exec UUID", "12345678-1234-1234-1234-123456789abc"],
+    ["plugin approval UUID", "plugin:12345678-1234-1234-1234-123456789abc"],
+    ["system-agent approval UUID", "system-agent:12345678-1234-1234-1234-123456789abc"],
+    ["node system.run replay UUID", "abcdefab-1234-5678-9abc-123456789abc"],
+    ["leading dash", "-approval-123"],
+    ["128-character id", "a".repeat(128)],
+  ])("preserves a safe explicit %s byte-for-byte", (_label, id) => {
+    const manager = new ExecApprovalManager();
 
-    expect(record.id).toBe(id);
-    expect(manager.lookupApprovalId(id)).toEqual({ kind: "exact", id });
-    expect(getOperatorApproval({ id, databaseOptions })).toMatchObject({ id, status: "pending" });
-    manager.resolveDetailed(id, "deny", { kind: "system", id: null });
-    await expect(decisionPromise).resolves.toBe("deny");
+    expect(manager.create({ command: "echo exact" }, 60_000, id).id).toBe(id);
+  });
+
+  it.each([[undefined], [null], [""]])("generates an id for an empty id sentinel (%s)", (id) => {
+    const manager = new ExecApprovalManager();
+
+    expect(manager.create({ command: "echo generated" }, 60_000, id).id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+  });
+
+  it.each([
+    ["URL dot segment", "."],
+    ["URL parent segment", ".."],
+    ["ANSI escape", "approval-\u001b[31mred"],
+    ["ASCII control", "approval-\u0000hidden"],
+    ["Unicode control", "approval-\u202Ehidden"],
+    ["lone surrogate", "approval-\ud800hidden"],
+    ["whitespace", "approval unsafe"],
+    ["trailing line feed", "approval-safe\n"],
+    ["trailing carriage return", "approval-safe\r"],
+    ["trailing line separator", "approval-safe\u2028"],
+    ["trailing paragraph separator", "approval-safe\u2029"],
+    ["overlong value", "a".repeat(129)],
+  ])("rejects an explicit approval id containing an %s", (_label, id) => {
+    const manager = new ExecApprovalManager();
+
+    expect(() => manager.create({ command: "echo unsafe" }, 60_000, id)).toThrow(
+      InvalidApprovalIdError,
+    );
   });
 
   it("rejects unrenderable persistent plugin requests before creating a row or waiter", () => {
@@ -988,6 +1044,90 @@ describe("ExecApprovalManager", () => {
     expect(getOperatorApproval({ id: record.id, databaseOptions })).toMatchObject({
       decision: "allow-once",
       consumedAtMs: null,
+    });
+  });
+
+  it("cancels a parked waiter when delegated authority closes", async () => {
+    let active = true;
+    const manager = new ExecApprovalManager<{ command: string }>({
+      validateAgentRuntimeDelegatedAuthority: () => active,
+    });
+    const record = manager.create({ command: "echo ok" }, 60_000, "approval-closed-wait");
+    record.agentRuntimeDelegatedAuthority = {
+      kind: "local",
+      operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
+      lifecycleGeneration: "generation-1",
+      claimId: "claim-1",
+    };
+    void manager.register(record, 60_000);
+    active = false;
+
+    await expect(manager.awaitDecision(record.id)).resolves.toBeNull();
+    expect(manager.getSnapshot(record.id)).toMatchObject({
+      status: "cancelled",
+      terminalReason: "run-aborted",
+    });
+  });
+
+  it("denies stale non-deny resolution and retained allow-once redemption", () => {
+    let active = true;
+    const manager = new ExecApprovalManager<{ command: string }>({
+      validateAgentRuntimeDelegatedAuthority: () => active,
+    });
+    const bind = (id: string) => {
+      const record = manager.create({ command: "echo ok" }, 60_000, id);
+      record.agentRuntimeDelegatedAuthority = {
+        kind: "local" as const,
+        operationalRunInstance: { instanceId: `instance-${id}`, runId: id },
+        lifecycleGeneration: "generation-1",
+        claimId: `claim-${id}`,
+      };
+      void manager.register(record, 60_000);
+      return record;
+    };
+
+    const stalePending = bind("approval-closed-resolve");
+    active = false;
+    expect(
+      manager.resolveDetailed(stalePending.id, "allow-once", { kind: "device", id: "ui" }),
+    ).toMatchObject({ outcome: "already-resolved", retry: "conflict" });
+    expect(manager.getSnapshot(stalePending.id)).toMatchObject({ status: "cancelled" });
+
+    active = true;
+    const retained = bind("approval-closed-consume");
+    expect(manager.resolve(retained.id, "allow-once", "ui")).toBe(true);
+    active = false;
+    expect(manager.projectDecisionIfActive(retained.id, "allow-once")).toBeNull();
+    expect(manager.consumeAllowOnce(retained.id)).toBe(false);
+  });
+
+  it("keeps delegated authority independent from optional audit evidence", () => {
+    let active = true;
+    const manager = new ExecApprovalManager<{ command: string }>({
+      validateAgentRuntimeDelegatedAuthority: () => active,
+    });
+    const record = manager.create({ command: "echo ok" }, 60_000, "approval-audit-independent");
+    record.agentRuntimeDelegatedAuthority = {
+      kind: "local",
+      operationalRunInstance: { instanceId: "instance-audit", runId: "run-audit" },
+      lifecycleGeneration: "generation-1",
+      claimId: "claim-audit",
+    };
+    record.executionIdentityToken = {
+      tokenVersion: 1,
+      createdAt: 1,
+      runId: "run-audit",
+      contextId: "context-audit",
+      executionId: "execution-audit",
+    };
+    void manager.register(record, 60_000);
+
+    delete record.executionIdentityToken;
+    expect(manager.forceDenyIfDelegatedAuthorityClosed(record.id)).toBeNull();
+    expect(manager.getSnapshot(record.id)?.resolvedAtMs).toBeUndefined();
+    active = false;
+    expect(manager.forceDenyIfDelegatedAuthorityClosed(record.id)).toMatchObject({
+      outcome: "denied",
     });
   });
 });

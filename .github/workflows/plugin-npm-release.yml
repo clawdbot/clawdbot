@@ -1,5 +1,5 @@
 name: Plugin NPM Release
-run-name: ${{ github.event_name == 'workflow_dispatch' && (inputs.preflight_only && format('Plugin NPM Preflight [{0}] {1}', inputs.npm_dist_tag, inputs.ref) || format('Plugin NPM Release [{0}] {1}', inputs.npm_dist_tag, inputs.ref)) || format('Plugin NPM Release [default] {0}', github.sha) }}
+run-name: ${{ github.event_name == 'workflow_dispatch' && (inputs.preflight_only && inputs.trusted_publisher_preflight && format('Plugin NPM Trusted Publisher Preflight [{0}] {1}', inputs.npm_dist_tag, inputs.ref) || inputs.preflight_only && format('Plugin NPM Artifact Preflight [{0}] {1}', inputs.npm_dist_tag, inputs.ref) || format('Plugin NPM Release [{0}] {1}', inputs.npm_dist_tag, inputs.ref)) || format('Plugin NPM Release [default] {0}', github.sha) }}
 
 on:
   push:
@@ -9,15 +9,22 @@ on:
       - ".github/workflows/plugin-npm-release.yml"
       - "extensions/**"
       - "package.json"
+      - "packages/normalization-core/**"
+      - "scripts/generate-npm-package-lock.mjs"
+      - "scripts/generate-npm-package-lock.mts"
       - "scripts/lib/npm-publish-plan.mjs"
+      - "scripts/lib/npm-json-output.mts"
+      - "scripts/lib/release-version.mjs"
       - "scripts/lib/plugin-npm-package-manifest.mjs"
+      - "scripts/lib/plugin-npm-package-manifest.mts"
+      - "scripts/lib/tsx-cli-shim.mjs"
       - "scripts/lib/plugin-npm-release.ts"
       - "scripts/lib/actions-artifact-archive.mjs"
       - "scripts/plugin-npm-publish.sh"
       - "scripts/plugin-publication-artifact.mjs"
       - "scripts/plugin-npm-release-check.ts"
       - "scripts/plugin-npm-release-plan.ts"
-      - "scripts/verify-plugin-npm-published-runtime.mjs"
+      - "scripts/verify-plugin-npm-published-runtime.mts"
   workflow_dispatch:
     inputs:
       publish_scope:
@@ -45,6 +52,11 @@ on:
         required: true
         default: false
         type: boolean
+      trusted_publisher_preflight:
+        description: During preflight_only, verify npm trusted-publisher OIDC exchange instead of packing artifacts
+        required: true
+        default: false
+        type: boolean
       npm_dist_tag:
         description: Optional npm dist-tag override
         required: true
@@ -60,7 +72,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.15.0"
+  NODE_VERSION: "24.16.0"
 
 jobs:
   preview_plugins_npm:
@@ -77,7 +89,7 @@ jobs:
       all_matrix: ${{ steps.plan.outputs.all_matrix }}
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
@@ -92,6 +104,7 @@ jobs:
         env:
           NPM_DIST_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.npm_dist_tag || 'default' }}
           PREFLIGHT_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only || false }}
+          TRUSTED_PUBLISHER_PREFLIGHT: ${{ github.event_name == 'workflow_dispatch' && inputs.trusted_publisher_preflight || false }}
           PUBLISH_SCOPE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_scope || '' }}
           RELEASE_PLUGINS: ${{ github.event_name == 'workflow_dispatch' && inputs.plugins || '' }}
           RELEASE_PUBLISH_RUN_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id || '' }}
@@ -100,6 +113,10 @@ jobs:
           WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
+          if [[ "${TRUSTED_PUBLISHER_PREFLIGHT}" == "true" && "${PREFLIGHT_ONLY}" != "true" ]]; then
+            echo "trusted_publisher_preflight requires preflight_only=true." >&2
+            exit 1
+          fi
           if [[ "${PREFLIGHT_ONLY}" == "true" ]]; then
             if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]] || [[ ! "${WORKFLOW_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
               echo "Plugin npm preflight must run from a trusted main workflow revision." >&2
@@ -282,7 +299,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
 
@@ -311,21 +328,32 @@ jobs:
 
   preview_plugin_pack:
     needs: preview_plugins_npm
-    if: needs.preview_plugins_npm.outputs.has_candidates == 'true' || (github.event_name == 'workflow_dispatch' && inputs.preflight_only && needs.preview_plugins_npm.outputs.has_selection == 'true')
+    if: (needs.preview_plugins_npm.outputs.has_candidates == 'true' && !(github.event_name == 'workflow_dispatch' && inputs.preflight_only)) || (github.event_name == 'workflow_dispatch' && inputs.preflight_only && !inputs.trusted_publisher_preflight && needs.preview_plugins_npm.outputs.has_selection == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: read
     strategy:
       fail-fast: false
       matrix:
-        plugin: ${{ fromJson(github.event_name == 'workflow_dispatch' && inputs.preflight_only && needs.preview_plugins_npm.outputs.all_matrix || needs.preview_plugins_npm.outputs.matrix) }}
+        plugin: ${{ fromJson(github.event_name == 'workflow_dispatch' && inputs.preflight_only && !inputs.trusted_publisher_preflight && needs.preview_plugins_npm.outputs.all_matrix || needs.preview_plugins_npm.outputs.matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           ref: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
           fetch-depth: 1
+
+      - name: Checkout trusted packaging tooling
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ github.workflow_sha }}
+          path: .release-tooling
+          fetch-depth: 1
+          sparse-checkout: |
+            packages/normalization-core
+            scripts
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -336,12 +364,12 @@ jobs:
       - name: Preview publish command
         env:
           OPENCLAW_PLUGIN_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag == 'extended-stable' && inputs.npm_dist_tag || '' }}
-        run: bash scripts/plugin-npm-publish.sh --dry-run "${{ matrix.plugin.packageDir }}"
+        run: bash .release-tooling/scripts/plugin-npm-publish.sh --repo-root "$GITHUB_WORKSPACE" --dry-run "${{ matrix.plugin.packageDir }}"
 
       - name: Preview npm pack contents
         env:
           OPENCLAW_PLUGIN_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag == 'extended-stable' && inputs.npm_dist_tag || '' }}
-        run: bash scripts/plugin-npm-publish.sh --pack-dry-run "${{ matrix.plugin.packageDir }}"
+        run: bash .release-tooling/scripts/plugin-npm-publish.sh --repo-root "$GITHUB_WORKSPACE" --pack-dry-run "${{ matrix.plugin.packageDir }}"
 
       - name: Prepare immutable npm preflight artifact
         id: preflight_artifact
@@ -372,28 +400,31 @@ jobs:
 
           OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD=0 \
             OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR="${artifact_dir}" \
-            bash scripts/plugin-npm-publish.sh --pack "${PACKAGE_DIR}" > "${pack_output}"
+            bash .release-tooling/scripts/plugin-npm-publish.sh \
+              --repo-root "$GITHUB_WORKSPACE" \
+              --pack "${PACKAGE_DIR}" > "${pack_output}"
 
-          node - "${pack_output}" "${pack_json}" <<'NODE'
-          const fs = require("node:fs");
+          node --import tsx --input-type=module - "${pack_output}" "${pack_json}" <<'NODE'
+          import fs from "node:fs";
+          import { resolveNpmJsonEntries } from "./.release-tooling/scripts/lib/npm-json-output.mts";
+
           const raw = fs.readFileSync(process.argv[2], "utf8").trim();
           let pack;
-          for (let index = raw.lastIndexOf("["); index >= 0; index = raw.lastIndexOf("[", index - 1)) {
+          for (let index = raw.length - 1; index >= 0; index -= 1) {
+            if (raw[index] !== "[" && raw[index] !== "{") continue;
             try {
               const candidate = JSON.parse(raw.slice(index));
-              if (Array.isArray(candidate)) {
-                pack = candidate;
+              const entries = resolveNpmJsonEntries(candidate);
+              if (entries.length > 0) {
+                pack = entries;
                 break;
               }
             } catch {
               // npm can print bundled-dependency summaries before its JSON result.
             }
-            if (index === 0) {
-              break;
-            }
           }
           if (!pack) {
-            throw new Error("npm pack did not emit a JSON array.");
+            throw new Error("npm pack did not emit package JSON.");
           }
           fs.writeFileSync(process.argv[3], `${JSON.stringify(pack, null, 2)}\n`);
           NODE
@@ -574,7 +605,7 @@ jobs:
   verify_plugin_npm_preflight:
     name: Preflight plugin npm package (${{ matrix.plugin.packageName }})
     needs: [preview_plugins_npm, preview_plugin_pack]
-    if: ${{ github.event_name == 'workflow_dispatch' && ((inputs.preflight_only && needs.preview_plugins_npm.outputs.has_selection == 'true') || (!inputs.preflight_only && needs.preview_plugins_npm.outputs.has_candidates == 'true')) }}
+    if: ${{ github.event_name == 'workflow_dispatch' && ((inputs.preflight_only && !inputs.trusted_publisher_preflight && needs.preview_plugins_npm.outputs.has_selection == 'true') || (!inputs.preflight_only && needs.preview_plugins_npm.outputs.has_candidates == 'true')) }}
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -582,10 +613,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        plugin: ${{ fromJson(inputs.preflight_only && needs.preview_plugins_npm.outputs.all_matrix || needs.preview_plugins_npm.outputs.matrix) }}
+        plugin: ${{ fromJson(inputs.preflight_only && !inputs.trusted_publisher_preflight && needs.preview_plugins_npm.outputs.all_matrix || needs.preview_plugins_npm.outputs.matrix) }}
     steps:
       - name: Checkout trusted npm preflight tooling
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           ref: ${{ github.workflow_sha }}
@@ -986,6 +1017,50 @@ jobs:
             echo "- Publication: **not attempted**"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  trusted_publisher_preflight:
+    name: Trusted publisher OIDC exchange
+    needs: preview_plugins_npm
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only && inputs.trusted_publisher_preflight && needs.preview_plugins_npm.outputs.has_selection == 'true' }}
+    runs-on: ubuntu-latest
+    environment: npm-release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout trusted OIDC preflight tooling
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+
+      - name: Setup trusted Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Verify npm trusted-publisher exchange
+        env:
+          PLUGIN_MATRIX: ${{ needs.preview_plugins_npm.outputs.all_matrix }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { preflightNpmTrustedPublisher } from "./scripts/npm-trusted-publisher-preflight.mjs";
+
+          let selection;
+          try {
+            selection = JSON.parse(process.env.PLUGIN_MATRIX);
+          } catch {
+            throw new Error("Plugin npm selection is not valid JSON.");
+          }
+          if (!Array.isArray(selection) || selection.length === 0) {
+            throw new Error("Plugin npm selection must be a non-empty array.");
+          }
+          for (const entry of selection) {
+            await preflightNpmTrustedPublisher(entry?.packageName);
+          }
+          NODE
+
   publish_plugins_npm:
     needs:
       [
@@ -1007,14 +1082,14 @@ jobs:
         plugin: ${{ fromJson(needs.preview_plugins_npm.outputs.matrix) }}
     steps:
       - name: Checkout trusted publication tooling
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           ref: ${{ github.workflow_sha }}
           fetch-depth: 1
 
       - name: Setup trusted Node
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -1200,13 +1275,14 @@ jobs:
 
       - name: Checkout OIDC publication target
         if: steps.publication_evidence.outputs.publish_route == 'npm-oidc'
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           ref: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
+          path: .publication-target
           fetch-depth: 1
 
-      - name: Setup OIDC publication target
+      - name: Setup trusted OIDC packaging dependencies
         if: steps.publication_evidence.outputs.publish_route == 'npm-oidc'
         uses: ./.github/actions/setup-node-env
         with:
@@ -1233,14 +1309,14 @@ jobs:
         env:
           OPENCLAW_NPM_PUBLISH_AUTH_MODE: trusted-publisher
           OPENCLAW_PLUGIN_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag == 'extended-stable' && inputs.npm_dist_tag || '' }}
-        run: bash scripts/plugin-npm-publish.sh --publish "${{ matrix.plugin.packageDir }}"
+        run: bash scripts/plugin-npm-publish.sh --repo-root .publication-target --publish "${{ matrix.plugin.packageDir }}"
 
       - name: Verify OIDC published runtime
         if: steps.publication_evidence.outputs.publish_route == 'npm-oidc'
         env:
           PACKAGE_NAME: ${{ matrix.plugin.packageName }}
           PACKAGE_VERSION: ${{ matrix.plugin.version }}
-        run: node scripts/verify-plugin-npm-published-runtime.mjs "${PACKAGE_NAME}@${PACKAGE_VERSION}"
+        run: node --import tsx scripts/verify-plugin-npm-published-runtime.mts "${PACKAGE_NAME}@${PACKAGE_VERSION}"
 
       - name: Check bootstrap npm package version
         id: bootstrap_npm_package_version
@@ -1339,14 +1415,14 @@ jobs:
         env:
           PACKAGE_NAME: ${{ steps.publication_evidence.outputs.package_name }}
           PACKAGE_VERSION: ${{ steps.publication_evidence.outputs.package_version }}
-        run: node scripts/verify-plugin-npm-published-runtime.mjs "${PACKAGE_NAME}@${PACKAGE_VERSION}"
+        run: node --import tsx scripts/verify-plugin-npm-published-runtime.mts "${PACKAGE_NAME}@${PACKAGE_VERSION}"
 
       - name: Verify immutable npm readback runtime
         if: steps.publication_evidence.outputs.publish_route == 'npm-readback'
         env:
           PACKAGE_NAME: ${{ steps.publication_evidence.outputs.package_name }}
           PACKAGE_VERSION: ${{ steps.publication_evidence.outputs.package_version }}
-        run: node scripts/verify-plugin-npm-published-runtime.mjs "${PACKAGE_NAME}@${PACKAGE_VERSION}"
+        run: node --import tsx scripts/verify-plugin-npm-published-runtime.mts "${PACKAGE_NAME}@${PACKAGE_VERSION}"
 
       - name: Record Meta trusted publisher checkpoint
         if: steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap'
@@ -1377,7 +1453,7 @@ jobs:
         plugin: ${{ fromJson(needs.preview_plugins_npm.outputs.all_matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           ref: ${{ needs.preview_plugins_npm.outputs.ref_revision }}

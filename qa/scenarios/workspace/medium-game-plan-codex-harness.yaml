@@ -5,9 +5,9 @@ scenario:
   surface: workspace
   coverage:
     primary:
-      - workspace.planning
+      - openai.codex-harness-planning
     secondary:
-      - models.codex-cli
+      - openai.codex-harness-codex-cli
   plugins:
     - codex
   objective: Verify the Codex app-server harness can plan and build a medium-complex self-contained browser game.
@@ -68,10 +68,10 @@ flow:
             message:
               expr: "`expected live primary model ${config.requiredModel}, got ${env.primaryModel}`"
         - assert:
-            expr: "env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME === config.harnessRuntime"
+            expr: "env.runtimeId === config.harnessRuntime"
             message:
-              expr: "`expected suite runtime ${config.harnessRuntime}, got ${env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME}`"
-      detailsExpr: "`provider=${selected?.provider} model=${selected?.model} runtime=${env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME}`"
+              expr: "`expected suite runtime ${config.harnessRuntime}, got ${env.runtimeId}`"
+      detailsExpr: "`provider=${selected?.provider} model=${selected?.model} runtime=${env.runtimeId}`"
     - name: builds the medium game artifact
       actions:
         - call: reset

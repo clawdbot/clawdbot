@@ -12,6 +12,7 @@ function collectProviderApiKeyAssignment(params: {
   pathPrefix: string;
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
+  contract: Record<string, unknown>;
   active?: boolean;
   inactiveReason?: string;
 }): void {
@@ -28,6 +29,7 @@ function collectProviderApiKeyAssignment(params: {
       ownerId: "tts",
       requiredForGateway: false,
       disposition: "isolate",
+      contract: params.contract,
     },
     apply: (value) => {
       params.providerConfig.apiKey = value;
@@ -56,6 +58,7 @@ export function collectTtsApiKeyAssignments(params: {
         pathPrefix: params.pathPrefix,
         defaults: params.defaults,
         context: params.context,
+        contract: params.tts,
         active: params.active,
         inactiveReason: params.inactiveReason,
       });

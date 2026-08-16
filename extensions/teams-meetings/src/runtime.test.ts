@@ -1,7 +1,9 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { resolveTeamsMeetingsConfig } from "./config.js";
+import { teamsMeetingsConfig } from "./config.js";
 import { TeamsMeetingsRuntime } from "./runtime.js";
+
+const resolveTeamsMeetingsConfig = teamsMeetingsConfig.resolveConfig;
 
 const URL =
   "https://teams.microsoft.com/l/meetup-join/19%3ameeting_runtime%40thread.v2/0?context=%7b%22Tid%22%3a%22one%22%7d";
@@ -57,9 +59,10 @@ function runtimeHarness(options?: { tabOpen?: boolean }) {
           cameraOff: true,
           ...(sessionConflict && fn.includes("const allowSessionAdoption = false")
             ? {
-                manualActionRequired: true,
-                manualActionReason: "teams-session-conflict",
-                manualActionMessage: "This Teams tab is owned by another active meeting session.",
+                manualAction: {
+                  reason: "teams-session-conflict",
+                  message: "This Teams tab is owned by another active meeting session.",
+                },
               }
             : {}),
           url: tabUrl,
@@ -105,12 +108,13 @@ describe("Microsoft Teams meeting session flow", () => {
         defaultMode: "transcribe",
         chrome: { waitForInCallMs: 1 },
       }),
-      fullConfig: {},
+      fullConfig: { agents: { list: [{ id: "operator", default: true }] } },
       runtime: harness.runtime,
       logger,
     });
 
     const first = await runtime.join({ url: URL, mode: "transcribe" });
+    expect(first.session.agentId).toBe("operator");
     expect(first.session.chrome?.health).toMatchObject({ inCall: true, cameraOff: true });
 
     const reused = await runtime.join({

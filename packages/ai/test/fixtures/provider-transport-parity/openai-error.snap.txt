@@ -1,0 +1,71 @@
+{
+  "provider": {
+    "eventTrace": [
+      {
+        "type": "error",
+        "reason": "error"
+      }
+    ],
+    "terminal": {
+      "role": "assistant",
+      "content": [],
+      "api": "openai-completions",
+      "provider": "openai",
+      "model": "gpt-5.5",
+      "usage": {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "totalTokens": 0,
+        "cost": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 0
+        }
+      },
+      "stopReason": "error"
+    },
+    "errorFields": {
+      "errorMessage": "429: {\"code\":\"rate_limit_exceeded\",\"type\":\"rate_limit_error\"}"
+    }
+  },
+  "transport": {
+    "eventTrace": [
+      {
+        "type": "error",
+        "reason": "error"
+      }
+    ],
+    "terminal": {
+      "role": "assistant",
+      "content": [],
+      "api": "openai-completions",
+      "provider": "openai",
+      "model": "gpt-5.5",
+      "usage": {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "totalTokens": 0,
+        "cost": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 0
+        }
+      },
+      "stopReason": "error"
+    },
+    "errorFields": {
+      "errorMessage": "synthetic OpenAI rejection",
+      "errorCode": "rate_limit_exceeded",
+      "errorType": "rate_limit_error",
+      "errorBody": "{\"code\":\"rate_limit_exceeded\",\"type\":\"rate_limit_error\"}"
+    }
+  }
+}

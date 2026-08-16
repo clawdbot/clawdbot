@@ -1,26 +1,22 @@
 // iMessage plugin module owns raw-row durable admission and replay.
 import {
-  createChannelIngressDrain,
-  DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
-  DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-  type ChannelIngressDrain,
+  createChannelIngressError,
+  createChannelIngressMonitor,
   type ChannelIngressQueue,
+  type ChannelIngressMonitorDeliveryResult,
+  type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { asSafeIntegerInRange } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getIMessageRuntime } from "../runtime.js";
 import { parseIMessageNotification } from "./parse-notification.js";
 import type { IMessagePayload } from "./types.js";
 
 const IMESSAGE_INGRESS_PAYLOAD_VERSION = 1;
 const IMESSAGE_INGRESS_DRAIN_INTERVAL_MS = 1_000;
-const IMESSAGE_INGRESS_PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
-// Match or exceed the retired GUID guard's 4h / 10k persistent window.
-const IMESSAGE_INGRESS_COMPLETED_TTL_MS = 4 * 60 * 60 * 1_000;
-const IMESSAGE_INGRESS_COMPLETED_MAX_ENTRIES = 10_000;
-const IMESSAGE_INGRESS_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const IMESSAGE_INGRESS_FAILED_MAX_ENTRIES = 1_000;
 
 type IMessageIngressPayload = {
   version: number;
@@ -30,18 +26,18 @@ type IMessageIngressPayload = {
   catchup?: boolean;
 };
 
-export type IMessageIngressLifecycle = {
-  abortSignal: AbortSignal;
-  onAdopted: () => void | Promise<void>;
-  onDeferred: () => void;
-  onAdoptionFinalizing: () => void;
-  onAbandoned: () => void | Promise<void>;
+type IMessageIngressBody = Omit<IMessageIngressPayload, "version">;
+
+type IMessageIngressRaw = {
+  raw: unknown;
+  catchup?: boolean;
+  receivedAt?: number;
+  message?: IMessagePayload;
 };
 
-type IMessageIngressDispatchResult =
-  | { kind: "completed" }
-  | { kind: "deferred" }
-  | { kind: "failed-retryable"; error: unknown };
+export type IMessageIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
+
+type IMessageIngressDispatchResult = ChannelIngressMonitorDeliveryResult;
 
 type IMessageIngressFacts = {
   eventId: string;
@@ -57,16 +53,7 @@ type IMessageIngressDispatch = (
   provenance?: { catchup?: boolean },
 ) => Promise<IMessageIngressDispatchResult | void> | IMessageIngressDispatchResult | void;
 
-class IMessageIngressPayloadError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "IMessageIngressPayloadError";
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+const IMessageIngressPayloadError = createChannelIngressError("IMessageIngressPayloadError");
 
 function rawMessageRecord(raw: unknown): Record<string, unknown> | null {
   if (!isRecord(raw)) {
@@ -76,8 +63,7 @@ function rawMessageRecord(raw: unknown): Record<string, unknown> | null {
 }
 
 function rawRowid(raw: unknown): number | null {
-  const rowid = rawMessageRecord(raw)?.id;
-  return typeof rowid === "number" && Number.isSafeInteger(rowid) && rowid >= 0 ? rowid : null;
+  return asSafeIntegerInRange(rawMessageRecord(raw)?.id, { min: 0 }) ?? null;
 }
 
 /** Read only stable transport metadata; payload normalization waits for dispatch. */
@@ -104,27 +90,37 @@ function inspectIMessageIngress(raw: unknown): IMessageIngressFacts {
   };
 }
 
-function parseClaimedIMessageIngress(payload: IMessageIngressPayload, eventId: string) {
-  if (
-    payload.version !== IMESSAGE_INGRESS_PAYLOAD_VERSION ||
-    typeof payload.receivedAt !== "number" ||
-    !Number.isFinite(payload.receivedAt)
-  ) {
+function decodeIMessageIngressPayload(
+  payload: IMessageIngressPayload,
+  eventId: string,
+): { version: unknown; body: IMessageIngressBody } {
+  if (typeof payload.receivedAt !== "number" || !Number.isFinite(payload.receivedAt)) {
     throw new IMessageIngressPayloadError(`iMessage ingress payload ${eventId} is invalid.`);
   }
-  let facts: IMessageIngressFacts;
-  try {
-    facts = inspectIMessageIngress(payload.raw);
-  } catch (error) {
-    throw new IMessageIngressPayloadError(`iMessage ingress payload ${eventId} is invalid.`, {
-      cause: error,
-    });
-  }
-  const message = parseIMessageNotification(payload.raw);
-  if (!message || facts.eventId !== eventId) {
+  return {
+    version: payload.version,
+    body: {
+      receivedAt: payload.receivedAt,
+      raw: payload.raw,
+      ...(payload.catchup ? { catchup: true } : {}),
+    },
+  };
+}
+
+function deserializeIMessageIngress(
+  body: IMessageIngressBody,
+  eventId: string,
+): IMessageIngressRaw {
+  const message = parseIMessageNotification(body.raw);
+  if (!message) {
     throw new IMessageIngressPayloadError(`iMessage ingress payload ${eventId} is invalid.`);
   }
-  return message;
+  return {
+    raw: body.raw,
+    receivedAt: body.receivedAt,
+    message,
+    ...(body.catchup ? { catchup: true } : {}),
+  };
 }
 
 function isIMessageAuthenticationFailure(error: unknown): boolean {
@@ -158,74 +154,11 @@ type IMessageDurableIngress = {
   waitForIdle: () => Promise<void>;
 };
 
-export function buildIMessageFlushIngressLifecycle(
-  lifecycles: readonly IMessageIngressLifecycle[],
-): {
-  lifecycle: IMessageIngressLifecycle | undefined;
-  settle: () => Promise<void>;
-  abandon: () => Promise<void>;
-} {
-  const first = lifecycles[0];
-  if (!first) {
-    return { lifecycle: undefined, settle: async () => {}, abandon: async () => {} };
-  }
-  let handedOff = false;
-  const adoptAll = async () => {
-    for (const lifecycle of lifecycles) {
-      await lifecycle.onAdopted();
-    }
-  };
-  const abandonAll = async () => {
-    for (const lifecycle of lifecycles) {
-      await lifecycle.onAbandoned();
-    }
-  };
-  return {
-    lifecycle: {
-      abortSignal:
-        lifecycles.length === 1
-          ? first.abortSignal
-          : AbortSignal.any(lifecycles.map((lifecycle) => lifecycle.abortSignal)),
-      onAdopted: async () => {
-        handedOff = true;
-        await adoptAll();
-      },
-      onDeferred: () => {
-        handedOff = true;
-        for (const lifecycle of lifecycles) {
-          lifecycle.onDeferred();
-        }
-      },
-      onAdoptionFinalizing: () => {
-        for (const lifecycle of lifecycles) {
-          lifecycle.onAdoptionFinalizing();
-        }
-      },
-      onAbandoned: async () => {
-        handedOff = true;
-        await abandonAll();
-      },
-    },
-    // Gated/no-dispatch turns still consumed every raw row in the flush.
-    settle: async () => {
-      if (!handedOff) {
-        handedOff = true;
-        await adoptAll();
-      }
-    },
-    abandon: async () => {
-      if (!handedOff) {
-        handedOff = true;
-        await abandonAll();
-      }
-    },
-  };
-}
-
 export function createIMessageDurableIngress(options: {
   accountId: string;
   queue?: ChannelIngressQueue<IMessageIngressPayload>;
   dispatch: IMessageIngressDispatch;
+  dispatchPriority?: IMessageIngressDispatch;
   runtime: Pick<RuntimeEnv, "error" | "log">;
   onDurableEnqueue?: (facts: IMessageIngressFacts) => void | Promise<void>;
   onDurableEnqueueFailure?: (rowid: number | null, error: unknown) => void | Promise<void>;
@@ -238,14 +171,87 @@ export function createIMessageDurableIngress(options: {
     });
   const now = options.now ?? Date.now;
   const dispatchAdmissionQueue = new KeyedAsyncQueue();
-  let drain: ChannelIngressDrain | undefined;
-  const getDrain = () => {
-    drain ??= createChannelIngressDrain<IMessageIngressPayload>({
-      queue,
-      retryPolicy: {
-        maxAttempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-        deadLetterMinAgeMs: DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
-      },
+  const priorityDispatchQueue = new KeyedAsyncQueue();
+  const monitor = createChannelIngressMonitor<
+    IMessageIngressRaw,
+    IMessageIngressBody,
+    IMessageIngressPayload
+  >({
+    queue,
+    inspect: (event, context) => {
+      try {
+        return inspectIMessageIngress(event.raw);
+      } catch (error) {
+        if (context.phase === "claim") {
+          throw new IMessageIngressPayloadError(
+            `iMessage ingress payload ${context.claimedId} is invalid.`,
+            { cause: error },
+          );
+        }
+        throw error;
+      }
+    },
+    payload: {
+      version: IMESSAGE_INGRESS_PAYLOAD_VERSION,
+      serialize: (event, { receivedAt }) => ({
+        receivedAt,
+        raw: event.raw,
+        ...(event.catchup ? { catchup: true } : {}),
+      }),
+      deserialize: (body, { claim }) => deserializeIMessageIngress(body, claim.id),
+      encode: ({ body }) => ({ version: IMESSAGE_INGRESS_PAYLOAD_VERSION, ...body }),
+      decode: (payload, { claim }) => decodeIMessageIngressPayload(payload, claim.id),
+      createClaimError: (_kind, claim) =>
+        new IMessageIngressPayloadError(`iMessage ingress payload ${claim.id} is invalid.`),
+    },
+    deliver: async (event, lifecycle, record) => {
+      if (!event.message || event.receivedAt === undefined) {
+        throw new IMessageIngressPayloadError(`iMessage ingress payload ${record.id} is invalid.`);
+      }
+      const message = event.message;
+      const receivedAt = event.receivedAt;
+      if (lifecycle.abortSignal.aborted) {
+        throw lifecycle.abortSignal.reason;
+      }
+      // Only a priority handler that proves ownership may bypass the chat lane.
+      // Unrelated polls and reactions fall through and retain ordinary ordering.
+      const priorityResult = await priorityDispatchQueue.enqueue(
+        record.laneKey ?? record.id,
+        async () =>
+          await options.dispatchPriority?.(
+            message,
+            lifecycle,
+            receivedAt,
+            event.catchup ? { catchup: true } : {},
+          ),
+      );
+      if (priorityResult) {
+        return priorityResult;
+      }
+      return await dispatchAdmissionQueue.enqueue(record.laneKey ?? record.id, async () => {
+        return await options.dispatch(
+          message,
+          lifecycle,
+          receivedAt,
+          event.catchup ? { catchup: true } : {},
+        );
+      });
+    },
+    pollIntervalMs: IMESSAGE_INGRESS_DRAIN_INTERVAL_MS,
+    // Match or exceed the retired GUID guard's 4h / 10k persistent window.
+    retention: {
+      completedTtlMs: 4 * 60 * 60 * 1_000,
+      completedMaxEntries: 10_000,
+      failedMaxEntries: 1_000,
+    },
+    appendRetryDelaysMs: [0],
+    onDurableAdmission: async (event) => {
+      await options.onDurableEnqueue?.(inspectIMessageIngress(event.raw));
+    },
+    onAdmissionFailure: async (event, error) => {
+      await options.onDurableEnqueueFailure?.(rawRowid(event.raw), error);
+    },
+    drain: {
       // Rows retain their per-chat lane in durable state. Claims use a unique
       // core lane so a deferred debounce entry cannot block the later rows it
       // must merge with; this short queue preserves chat order until debounce
@@ -253,133 +259,27 @@ export function createIMessageDurableIngress(options: {
       deriveLaneKey: (record) => `${record.laneKey ?? "event"}:${record.id}`,
       resolveNonRetryableFailure: resolveIMessageIngressNonRetryableFailure,
       onLog: (message) => options.runtime.log?.(`imessage ${message}`),
-      dispatchClaimedEvent: async (record, lifecycle) =>
-        await dispatchAdmissionQueue.enqueue(record.laneKey ?? record.id, async () => {
-          const message = parseClaimedIMessageIngress(record.payload, record.id);
-          if (lifecycle.abortSignal.aborted) {
-            throw lifecycle.abortSignal.reason;
-          }
-          return await options.dispatch(
-            message,
-            lifecycle,
-            record.payload.receivedAt,
-            record.payload.catchup ? { catchup: true } : {},
-          );
-        }),
-    });
-    return drain;
-  };
-  let running = false;
-  let requested = false;
-  let pumping: Promise<void> | undefined;
-  let pollTimer: ReturnType<typeof setInterval> | undefined;
-  let lastPrunedAt = Number.NEGATIVE_INFINITY;
-  let admissionTail = Promise.resolve();
-
-  const pruneIfDue = async () => {
-    const currentTime = now();
-    if (currentTime - lastPrunedAt < IMESSAGE_INGRESS_PRUNE_INTERVAL_MS) {
-      return;
-    }
-    await queue.prune({
-      completedTtlMs: IMESSAGE_INGRESS_COMPLETED_TTL_MS,
-      completedMaxEntries: IMESSAGE_INGRESS_COMPLETED_MAX_ENTRIES,
-      failedTtlMs: IMESSAGE_INGRESS_FAILED_TTL_MS,
-      failedMaxEntries: IMESSAGE_INGRESS_FAILED_MAX_ENTRIES,
-      now: currentTime,
-    });
-    lastPrunedAt = currentTime;
-  };
-
-  const runPump = async () => {
-    try {
-      for (;;) {
-        requested = false;
-        await pruneIfDue();
-        const activeDrain = getDrain();
-        const { started } = await activeDrain.drainOnce();
-        await activeDrain.waitForIdle();
-        if (!running || (!requested && started === 0)) {
-          break;
-        }
-      }
-    } catch (error) {
-      options.runtime.error?.(`imessage: ingress drain failed: ${formatErrorMessage(error)}`);
-    } finally {
-      pumping = undefined;
-      if (running && requested) {
-        requestDrain();
-      }
-    }
-  };
-
-  const requestDrain = () => {
-    requested = true;
-    if (!running || pumping) {
-      return;
-    }
-    pumping = runPump();
-  };
-
-  const receive = async (raw: unknown, receiveOpts?: { catchup?: boolean }) => {
-    const admission = admissionTail.then(async () => {
-      const rowid = rawRowid(raw);
-      try {
-        const facts = inspectIMessageIngress(raw);
-        await pruneIfDue();
-        const receivedAt = now();
-        await queue.enqueue(
-          facts.eventId,
-          {
-            version: IMESSAGE_INGRESS_PAYLOAD_VERSION,
-            receivedAt,
-            raw,
-            ...(receiveOpts?.catchup ? { catchup: true } : {}),
-          },
-          { receivedAt, laneKey: facts.laneKey },
-        );
-        await options.onDurableEnqueue?.(facts);
-        requestDrain();
-      } catch (error) {
-        await options.onDurableEnqueueFailure?.(rowid, error);
-        throw error;
-      }
-    });
-    admissionTail = admission.catch(() => undefined);
-    return await admission;
-  };
+    },
+    now,
+    onError: (error) =>
+      options.runtime.error?.(`imessage: ingress drain failed: ${formatErrorMessage(error)}`),
+  });
+  let stopTask: Promise<void> | undefined;
 
   return {
-    receive,
-    start: () => {
-      if (running) {
-        return;
-      }
-      running = true;
-      requestDrain();
-      pollTimer = setInterval(requestDrain, IMESSAGE_INGRESS_DRAIN_INTERVAL_MS);
-      pollTimer.unref?.();
+    receive: async (raw, receiveOpts) => {
+      await monitor.admit({ raw, ...(receiveOpts?.catchup ? { catchup: true } : {}) });
     },
-    stop: async () => {
-      if (pollTimer) {
-        clearInterval(pollTimer);
-        pollTimer = undefined;
-      }
-      await admissionTail;
-      // Source shutdown happens first. Drain every durably accepted row into
-      // its deferred owner before disposing claim lifecycles; later restart is
-      // then only for genuinely unadopted work.
-      requestDrain();
-      await pumping;
-      running = false;
-      await drain?.waitForIdle();
-      drain?.dispose();
-      drain = undefined;
+    start: monitor.start,
+    stop: () => {
+      stopTask ??= (async () => {
+        // iMessage debounce must own every accepted claim before disposal so a
+        // restart replays only rows that were never handed to a flush.
+        await monitor.waitForIdle();
+        await monitor.stop();
+      })();
+      return stopTask;
     },
-    waitForIdle: async () => {
-      await admissionTail;
-      await pumping;
-      await drain?.waitForIdle();
-    },
+    waitForIdle: monitor.waitForIdle,
   };
 }

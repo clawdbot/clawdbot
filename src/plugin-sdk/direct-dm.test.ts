@@ -9,6 +9,7 @@ import {
   dispatchInboundDirectDmWithRuntime,
   resolveInboundDirectDmAccessWithRuntime,
 } from "./channel-inbound.js";
+import { resolveStableChannelMessageIngress } from "./channel-ingress-runtime.js";
 
 const baseCfg = {
   commands: { useAccessGroups: true },
@@ -75,7 +76,7 @@ function createDirectDmRuntime() {
   };
 }
 
-describe("plugin-sdk/direct-dm", () => {
+describe("channel-inbound direct-message helpers", () => {
   it("resolves inbound DM access and command auth through one helper", async () => {
     const result = await resolveInboundDirectDmAccessWithRuntime({
       cfg: baseCfg,
@@ -245,8 +246,16 @@ describe("plugin-sdk/direct-dm", () => {
     const { recordInboundSession, dispatchReplyWithBufferedBlockDispatcher, runtime } =
       createDirectDmRuntime();
     const deliver = vi.fn(async () => {});
+    const channelIngress = await resolveStableChannelMessageIngress({
+      channelId: "nostr",
+      accountId: "default",
+      subject: { stableId: "sender-1" },
+      conversation: { kind: "direct", id: "sender-1" },
+      dmPolicy: "open",
+    });
 
     const result = await dispatchInboundDirectDmWithRuntime({
+      channelIngress,
       cfg: {
         session: { store: { type: "jsonl" } },
       } as never,

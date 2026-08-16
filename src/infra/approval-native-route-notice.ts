@@ -29,6 +29,11 @@ export function resolveApprovalRoutedElsewhereNoticeText(
   )}, not this chat.`;
 }
 
+/** Builds the recovery notice when no channel account uniquely owns the approval. */
+export function resolveAmbiguousApprovalRouteNoticeText(): string {
+  return "Approval required, but multiple channel accounts can handle this request. Open the Control UI or terminal UI to approve it.";
+}
+
 /** Builds the fallback slash-command notice when native approval delivery fails. */
 export function resolveApprovalDeliveryFailedNoticeText(params: {
   approvalId: string;

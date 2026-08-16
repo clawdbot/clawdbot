@@ -100,6 +100,7 @@ export async function removeChannelConfigWizard(
         options,
       }),
       runtime,
+      1,
     );
 
     if (choice.kind === "done") {
@@ -114,6 +115,7 @@ export async function removeChannelConfigWizard(
         initialValue: false,
       }),
       runtime,
+      1,
     );
     if (!confirmed) {
       continue;

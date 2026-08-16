@@ -13,8 +13,10 @@ export type SkillWorkshopRevisionRequest = (
 export type SkillWorkshopRenderContext = {
   context: SkillWorkshopPageContext;
   workshopAgentName: string;
-  onRevisionRequest?: SkillWorkshopRevisionRequest;
+  onEvaluate: (proposalId: string) => void;
+  onRevisionSubmit: (proposalId: string) => void;
   selfLearning: SkillWorkshopSelfLearning | null;
   onSelfLearningToggle: (enabled: boolean) => void;
   onHistoryScan: () => void;
+  onRetry: () => void;
 };

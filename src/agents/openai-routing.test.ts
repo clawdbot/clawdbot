@@ -36,6 +36,62 @@ describe("OpenAI runtime routing policy", () => {
     ).toBe(true);
   });
 
+  it.each([
+    ["thinking", { thinking: "xhigh" }],
+    ["fastMode", { fastMode: true }],
+    ["fast_mode", { fast_mode: true }],
+    ["fastAutoOnSeconds", { fastMode: "auto", fastAutoOnSeconds: 30 }],
+    ["fast_auto_on_seconds", { fastMode: "auto", fast_auto_on_seconds: 30 }],
+    ["fastSeconds", { fastMode: "auto", fastSeconds: 30 }],
+    ["fast_seconds", { fastMode: "auto", fast_seconds: 30 }],
+  ])("keeps Codex for model-scoped %s controls", (_label, params) => {
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.6-sol": {
+              params,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveOpenAIImplicitAgentRuntime({
+        provider: "openai",
+        modelId: "gpt-5.6-sol",
+        config,
+        env: {},
+      }),
+    ).toBe("codex");
+  });
+
+  it.each([
+    ["provider-native thinking", { thinking: { type: "enabled", budget_tokens: 2_048 } }],
+    ["invalid fast mode", { fastMode: { enabled: true } }],
+    ["invalid fast cutoff", { fastAutoOnSeconds: "30" }],
+  ])("keeps %s values on the OpenClaw runtime", (_label, params) => {
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.6-sol": { params },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveOpenAIImplicitAgentRuntime({
+        provider: "openai",
+        modelId: "gpt-5.6-sol",
+        config,
+        env: {},
+      }),
+    ).toBe("openclaw");
+  });
+
   it("maps provider route facts onto a closed implicit runtime", () => {
     expect(
       resolveOpenAIImplicitAgentRuntime({ provider: "openai", modelId: "gpt-5.6", env: {} }),
@@ -114,6 +170,40 @@ describe("OpenAI runtime routing policy", () => {
         config,
       }),
     ).toBe("openai");
+  });
+
+  it("uses the configured fixed-store owner for agent-scoped request parameters", () => {
+    const config = {
+      session: { store: "/stores/shared.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "research" } },
+        entries: {
+          ops: {},
+          research: { params: { store: false } },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      resolveOpenAIImplicitAgentRuntime({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        config,
+        sessionKey: "global",
+        env: {},
+      }),
+    ).toBe("openclaw");
+    expect(() =>
+      resolveOpenAIImplicitAgentRuntime({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        config,
+        agentId: "ops",
+        sessionKey: "global",
+        env: {},
+      }),
+    ).toThrow(/belongs to "research"/);
   });
 
   it("honors explicit model runtime policy before the OpenAI base URL default", () => {

@@ -1,12 +1,15 @@
+import { execFileSync } from "node:child_process";
 // Release Candidate Checklist tests cover release candidate checklist script behavior.
-import { readFileSync } from "node:fs";
-import { dirname } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import {
   buildReleaseCandidateState,
   buildPublishCommand,
   buildTelegramArtifactInputs,
+  assertPlannedReleaseTagIsAbsent,
   candidateCumulativeShippedPullRequests,
   candidateParallelsArgs,
   candidateParallelsShellCommand,
@@ -14,6 +17,8 @@ import {
   isDirectReleaseCandidateExecution,
   parseArgs,
   parseRunIdFromDispatchOutput,
+  preflightCorePackageTarballs,
+  preflightDependencyTarballs,
   reconcileReleaseCandidateState,
   releaseBranchForTag,
   resolveArtifactName,
@@ -24,9 +29,14 @@ import {
   validateCandidateReleaseNotes,
   validateFullManifest,
   validateNpmPreflightRunSource,
+  validateParallelsRegistryPackageArtifact,
   validatePreflightManifest,
+  validateTrustedToolingPin,
   validateWindowsSourceRelease,
-} from "../../scripts/release-candidate-checklist.mjs";
+} from "../../scripts/release-candidate-checklist.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), init);
@@ -52,8 +62,8 @@ describe("release candidate checklist", () => {
 
     expect(
       isDirectReleaseCandidateExecution(
-        "/tmp/openclaw-release-tooling/checkout/scripts/release-candidate-checklist.mjs",
-        "/private/tmp/openclaw-release-tooling/checkout/scripts/release-candidate-checklist.mjs",
+        "/tmp/openclaw-release-tooling/checkout/scripts/release-candidate-checklist.mts",
+        "/private/tmp/openclaw-release-tooling/checkout/scripts/release-candidate-checklist.mts",
         realpath,
       ),
     ).toBe(true);
@@ -69,14 +79,12 @@ describe("release candidate checklist", () => {
       toolingSha: "b".repeat(40),
     });
     const resumed = reconcileReleaseCandidateState(
-      JSON.parse(
-        JSON.stringify({
-          ...expected,
-          phase: "waiting",
-          fullReleaseRunId: "111",
-          npmPreflightRunId: "222",
-        }),
-      ),
+      structuredClone({
+        ...expected,
+        phase: "waiting",
+        fullReleaseRunId: "111",
+        npmPreflightRunId: "222",
+      }),
       expected,
     );
 
@@ -85,6 +93,19 @@ describe("release candidate checklist", () => {
       fullReleaseRunId: "111",
       npmPreflightRunId: "222",
     });
+  });
+
+  it("treats the release tag as a planned post-validation identity", () => {
+    const options = parseArgs(["--tag", "v2026.7.1-beta.4", "--target-sha", "a".repeat(40)]);
+
+    expect(options.targetSha).toBe("a".repeat(40));
+    expect(() => assertPlannedReleaseTagIsAbsent("v2026.7.1-beta.4", () => true)).toThrow(
+      "already exists",
+    );
+    expect(() => assertPlannedReleaseTagIsAbsent("v2026.7.1-beta.4", () => false)).not.toThrow();
+    expect(() => parseArgs(["--tag", "v2026.7.1-beta.4", "--target-sha", "not-a-sha"])).toThrow(
+      "--target-sha must be a full lowercase commit SHA",
+    );
   });
 
   it("rejects stale or conflicting release candidate state", () => {
@@ -182,11 +203,11 @@ describe("release candidate checklist", () => {
         targetTrackedStatus: "",
         toolingSha: "b".repeat(40),
         trustedToolingSha: "b".repeat(40),
-        toolingTrackedStatus: " M scripts/release-candidate-checklist.mjs",
+        toolingTrackedStatus: " M scripts/release-candidate-checklist.mts",
         workflowRef: "main",
       }),
     ).toThrow("clean tracked tooling checkout");
-    const source = readFileSync("scripts/release-candidate-checklist.mjs", "utf8");
+    const source = readFileSync("scripts/release-candidate-checklist.mts", "utf8");
     expect(source).toContain('const TOOLING_ROOT = fileURLToPath(new URL("../", import.meta.url))');
     expect(source).toContain('mkdtempSync(join(tmpdir(), "openclaw-release-tooling-"))');
     expect(source).toContain(
@@ -196,15 +217,46 @@ describe("release candidate checklist", () => {
     expect(source).toContain("`+refs/heads/${workflowRef}:${remoteRef}`");
     expect(source).toContain('"worktree", "add", "--detach", toolingRoot, trustedToolingSha');
     expect(source).toContain(
-      '[join(toolingRoot, "scripts/release-candidate-checklist.mjs"), ...argv]',
+      '["--import", "tsx", join(toolingRoot, "scripts/release-candidate-checklist.mts"), ...argv]',
     );
+    expect(source).toContain("[TRUSTED_TOOLING_SHA_ENV]: trustedToolingSha");
     expect(source).toContain("cwd: targetRoot");
     expect(source).toContain('"worktree", "remove", "--force", toolingRoot');
     expect(source).toContain(
-      "const trustedToolingSha = fetchTrustedWorkflowSha(options.workflowRef, TOOLING_ROOT)",
+      "const latestTrustedToolingSha = fetchTrustedWorkflowSha(options.workflowRef, TOOLING_ROOT)",
     );
     expect(source).toContain('targetHeadSha: gitRevParse("HEAD", targetRoot)');
     expect(source).toContain("toolingTrackedStatus: gitTrackedStatus(TOOLING_ROOT)");
+  });
+
+  it("keeps the exact pinned trusted tooling valid when main advances", () => {
+    const isAncestor = vi.fn(() => true);
+
+    expect(
+      validateTrustedToolingPin({
+        toolingSha: "a".repeat(40),
+        pinnedToolingSha: "a".repeat(40),
+        latestTrustedToolingSha: "b".repeat(40),
+        isAncestor,
+      }),
+    ).toBe("a".repeat(40));
+    expect(isAncestor).toHaveBeenCalledWith("a".repeat(40), "b".repeat(40));
+    expect(() =>
+      validateTrustedToolingPin({
+        toolingSha: "a".repeat(40),
+        pinnedToolingSha: "b".repeat(40),
+        latestTrustedToolingSha: "b".repeat(40),
+        isAncestor: () => true,
+      }),
+    ).toThrow("does not match pinned tooling");
+    expect(() =>
+      validateTrustedToolingPin({
+        toolingSha: "a".repeat(40),
+        pinnedToolingSha: "a".repeat(40),
+        latestTrustedToolingSha: "c".repeat(40),
+        isAncestor: () => false,
+      }),
+    ).toThrow("pinned release candidate tooling");
   });
 
   it("validates the exact tag changelog before dispatching the release matrix", () => {
@@ -225,7 +277,7 @@ describe("release candidate checklist", () => {
       repository: "openclaw/openclaw",
       tag: "v2026.7.1-beta.3",
     });
-    const source = readFileSync("scripts/release-candidate-checklist.mjs", "utf8");
+    const source = readFileSync("scripts/release-candidate-checklist.mts", "utf8");
     const validationIndex = source.indexOf(
       "const releaseNotesCheck = validateCandidateReleaseNotes",
     );
@@ -306,7 +358,38 @@ describe("release candidate checklist", () => {
         targetSha,
         isAncestor: () => true,
       }),
-    ).toThrow("duplicate contribution record PR rows: #123");
+    ).toThrow("duplicate contribution record PR #123");
+  });
+
+  it("rejects canonical provenance whose unique total does not match the PR rows", () => {
+    const targetSha = "b".repeat(40);
+    const changelog = [
+      "# Changelog",
+      "",
+      "## 2026.7.1",
+      "",
+      "### Highlights",
+      "",
+      "- User-facing notes.",
+      "",
+      "### Complete contribution record",
+      "",
+      `This audited record covers the complete base..${targetSha} history: 1 in-range PR + 1 retained seed-only PR = 2 unique PRs.`,
+      "",
+      "#### Pull requests",
+      "",
+      "- **PR #123** fix: example.",
+    ].join("\n");
+
+    expect(() =>
+      validateCandidateChangelogProvenance({
+        changelog,
+        version: "2026.7.1",
+        tag: "v2026.7.1-beta.3",
+        targetSha,
+        isAncestor: () => true,
+      }),
+    ).toThrow("contribution record row count 1 != 2");
   });
 
   it("uses numbered historical record rows and skips Unreleased baseline rows", () => {
@@ -335,6 +418,27 @@ describe("release candidate checklist", () => {
     ].join("\n");
 
     expect([...candidateCumulativeShippedPullRequests(changelog, "test baseline")]).toEqual([2]);
+  });
+
+  it("rejects duplicate historical contribution record rows without exact provenance", () => {
+    const changelog = [
+      "# Changelog",
+      "",
+      "## 2026.6.11",
+      "",
+      "### Complete contribution record",
+      "",
+      "This audited record covers the complete base..HEAD history: 1 merged PR.",
+      "",
+      "#### Pull requests",
+      "",
+      "- **PR #2** fix: shipped.",
+      "- **PR #2** fix: duplicate.",
+    ].join("\n");
+
+    expect(() => candidateCumulativeShippedPullRequests(changelog, "test baseline")).toThrow(
+      "test baseline section 2026.6.11 contains duplicate contribution record PR #2",
+    );
   });
 
   it("validates cumulative shipped baseline exclusion metadata", () => {
@@ -474,6 +578,79 @@ describe("release candidate checklist", () => {
     ).toBe("full");
   });
 
+  it("defaults beta and alpha Parallels to postpublish confidence", () => {
+    const beta = parseArgs(["--tag", "v2026.5.14-beta.3"]);
+    const alpha = parseArgs([
+      "--tag",
+      "v2026.5.14-alpha.2",
+      "--workflow-ref",
+      "tideclaw/alpha/2026-07-10-1200Z",
+      "--npm-dist-tag",
+      "alpha",
+    ]);
+
+    for (const options of [beta, alpha]) {
+      expect(options.releaseProfile).toBe("beta");
+      expect(options.parallelsMode).toBe("auto");
+      expect(options.skipParallels).toBe(true);
+      expect(options.parallelsSkipReason).toBe("deferred to postpublish release:beta-smoke");
+    }
+  });
+
+  it("supports explicit and profile-default Parallels execution", () => {
+    const beta = parseArgs(["--tag", "v2026.5.14-beta.3", "--run-parallels"]);
+    const stable = parseArgs(["--tag", "v2026.5.14", "--windows-node-tag", "v0.6.3"]);
+    const full = parseArgs([
+      "--tag",
+      "v2026.5.14",
+      "--windows-node-tag",
+      "v0.6.3",
+      "--release-profile",
+      "full",
+    ]);
+
+    expect(beta).toMatchObject({
+      parallelsMode: "run",
+      parallelsSkipReason: "",
+      skipParallels: false,
+    });
+    for (const options of [stable, full]) {
+      expect(options.parallelsMode).toBe("auto");
+      expect(options.skipParallels).toBe(false);
+      expect(options.parallelsSkipReason).toBe("");
+    }
+  });
+
+  it("supports an explicit Parallels skip without changing persisted state shape", () => {
+    const options = parseArgs([
+      "--tag",
+      "v2026.5.14",
+      "--windows-node-tag",
+      "v0.6.3",
+      "--skip-parallels",
+    ]);
+    const state = buildReleaseCandidateState(options, {
+      targetSha: "a".repeat(40),
+      toolingSha: "b".repeat(40),
+    });
+
+    expect(options).toMatchObject({
+      parallelsMode: "skip",
+      parallelsSkipReason: "operator skipped --skip-parallels",
+      skipParallels: true,
+    });
+    expect(state.skipParallels).toBe(true);
+    expect(state).not.toHaveProperty("parallelsMode");
+    expect(state).not.toHaveProperty("parallelsSkipReason");
+    expect(state).not.toHaveProperty("runParallels");
+  });
+
+  it("rejects conflicting Parallels modes", () => {
+    expect(() =>
+      parseArgs(["--tag", "v2026.5.14-beta.3", "--run-parallels", "--skip-parallels"]),
+    ).toThrow("--run-parallels and --skip-parallels cannot be combined");
+  });
+
   it("runs Parallels against the exact prepared candidate tarball", () => {
     expect(candidateParallelsArgs(".artifacts/preflight/openclaw.tgz", [], "/trusted")).toEqual([
       "exec",
@@ -502,6 +679,8 @@ describe("release candidate checklist", () => {
         ".artifacts/preflight/openclaw.tgz",
         [".artifacts/preflight/openclaw-ai.tgz"],
         "/trusted",
+        [".artifacts/preflight/openclaw-codex.tgz"],
+        "macOS 26.5 Node 24",
       ),
     ).toEqual([
       "exec",
@@ -511,8 +690,95 @@ describe("release candidate checklist", () => {
       ".artifacts/preflight/openclaw.tgz",
       "--dependency-tarball",
       ".artifacts/preflight/openclaw-ai.tgz",
+      "--registry-package-tarball",
+      ".artifacts/preflight/openclaw-codex.tgz",
+      "--macos-snapshot-hint",
+      "macOS 26.5 Node 24",
       "--json",
     ]);
+  });
+
+  it("accepts repeatable candidate registry package artifacts", () => {
+    expect(
+      parseArgs([
+        "--tag",
+        "v2026.7.1-beta.3",
+        "--parallels-registry-package-artifact",
+        "/tmp/codex-artifact",
+        "--parallels-registry-package-artifact",
+        "/tmp/matrix-artifact",
+      ]).parallelsRegistryPackageArtifactDirs,
+    ).toEqual(["/tmp/codex-artifact", "/tmp/matrix-artifact"]);
+  });
+
+  it("binds Parallels registry packages to plugin preflight manifests", () => {
+    const artifactDir = tempDirs.make("openclaw-plugin-preflight-");
+    const tarballName = "openclaw-codex-2026.7.1-beta.3.tgz";
+    const tarballPath = join(artifactDir, tarballName);
+    const sourceDir = join(artifactDir, "source");
+    const packageDir = join(sourceDir, "package");
+    mkdirSync(packageDir, { recursive: true });
+    writeFileSync(
+      join(packageDir, "package.json"),
+      `${JSON.stringify({ name: "@openclaw/codex", version: "2026.7.1-beta.3" })}\n`,
+    );
+    execFileSync("tar", ["-czf", tarballPath, "-C", sourceDir, "package"]);
+    rmSync(sourceDir, { force: true, recursive: true });
+    const tarballSha256 = createHash("sha256").update(readFileSync(tarballPath)).digest("hex");
+    const manifestPath = join(artifactDir, "plugin-publication-manifest.json");
+    const manifest = {
+      schema: "openclaw.plugin-publication-artifact/v1",
+      schemaVersion: 1,
+      targetSha: "candidate-sha",
+      package: { name: "@openclaw/codex", version: "2026.7.1-beta.3" },
+      artifact: {
+        name: "plugin-npm-package-codex",
+        tarball: tarballName,
+        sha256: tarballSha256,
+      },
+    };
+    writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`);
+
+    expect(
+      validateParallelsRegistryPackageArtifact(artifactDir, {
+        targetSha: "candidate-sha",
+        targetVersion: "2026.7.1-beta.3",
+      }),
+    ).toMatchObject({
+      artifactName: "plugin-npm-package-codex",
+      packageName: "@openclaw/codex",
+      packageVersion: "2026.7.1-beta.3",
+      tarballPath,
+      tarballSha256,
+    });
+    mkdirSync(packageDir, { recursive: true });
+    writeFileSync(
+      join(packageDir, "package.json"),
+      `${JSON.stringify({ name: "@openclaw/matrix", version: "2026.7.1-beta.3" })}\n`,
+    );
+    execFileSync("tar", ["-czf", tarballPath, "-C", sourceDir, "package"]);
+    rmSync(sourceDir, { force: true, recursive: true });
+    const mismatchedSha256 = createHash("sha256").update(readFileSync(tarballPath)).digest("hex");
+    writeFileSync(
+      manifestPath,
+      `${JSON.stringify({
+        ...manifest,
+        artifact: { ...manifest.artifact, sha256: mismatchedSha256 },
+      })}\n`,
+    );
+    expect(() =>
+      validateParallelsRegistryPackageArtifact(artifactDir, {
+        targetSha: "candidate-sha",
+        targetVersion: "2026.7.1-beta.3",
+      }),
+    ).toThrow("tarball identity mismatch");
+    writeFileSync(manifestPath, `${JSON.stringify({ ...manifest, targetSha: "other-sha" })}\n`);
+    expect(() =>
+      validateParallelsRegistryPackageArtifact(artifactDir, {
+        targetSha: "candidate-sha",
+        targetVersion: "2026.7.1-beta.3",
+      }),
+    ).toThrow("artifact identity is invalid");
   });
 
   it("requires exact dependency tarball metadata in npm preflight manifests", () => {
@@ -555,6 +821,103 @@ describe("release candidate checklist", () => {
         params,
       ),
     ).toThrow("invalid dependency tarball metadata");
+  });
+
+  it("prefers the complete core package tarball set with legacy manifest fallback", () => {
+    const legacyTarball = {
+      packageName: "@openclaw/ai",
+      packageVersion: "2026.7.1-beta.3",
+      tarballName: "openclaw-ai-2026.7.1-beta.3.tgz",
+      tarballSha256: "ai-sha",
+    };
+    const gatewayProtocolTarball = {
+      packageName: "@openclaw/gateway-protocol",
+      packageVersion: "2026.7.1-beta.3",
+      tarballName: "openclaw-gateway-protocol-2026.7.1-beta.3.tgz",
+      tarballSha256: "protocol-sha",
+    };
+
+    expect(
+      preflightCorePackageTarballs({
+        corePackageTarballs: [legacyTarball, gatewayProtocolTarball],
+        dependencyTarballs: [legacyTarball],
+      }),
+    ).toEqual([legacyTarball, gatewayProtocolTarball]);
+    expect(preflightCorePackageTarballs({ dependencyTarballs: [legacyTarball] })).toEqual([
+      legacyTarball,
+    ]);
+    expect(() =>
+      preflightCorePackageTarballs({
+        corePackageTarballs: null,
+        dependencyTarballs: [legacyTarball],
+      }),
+    ).toThrow("missing dependency tarball metadata");
+  });
+
+  it("passes only root dependency tarballs to Parallels with legacy fallback", () => {
+    const aiTarball = {
+      packageName: "@openclaw/ai",
+      packageVersion: "2026.7.1-beta.3",
+      tarballName: "openclaw-ai-2026.7.1-beta.3.tgz",
+      tarballSha256: "ai-sha",
+    };
+    const gatewayProtocolTarball = {
+      packageName: "@openclaw/gateway-protocol",
+      packageVersion: "2026.7.1-beta.3",
+      tarballName: "openclaw-gateway-protocol-2026.7.1-beta.3.tgz",
+      tarballSha256: "protocol-sha",
+    };
+    const gatewayClientTarball = {
+      packageName: "@openclaw/gateway-client",
+      packageVersion: "2026.7.1-beta.3",
+      tarballName: "openclaw-gateway-client-2026.7.1-beta.3.tgz",
+      tarballSha256: "client-sha",
+    };
+    const corePackageTarballs = [aiTarball, gatewayProtocolTarball, gatewayClientTarball];
+
+    expect(
+      preflightDependencyTarballs({
+        corePackageTarballs,
+        dependencyTarballs: [aiTarball],
+      }),
+    ).toEqual([aiTarball]);
+    expect(preflightDependencyTarballs({ corePackageTarballs })).toEqual(corePackageTarballs);
+    const manifest = {
+      releaseTag: "v2026.7.1-beta.3",
+      releaseSha: "candidate-sha",
+      npmDistTag: "beta",
+      tarballName: "openclaw-2026.7.1-beta.3.tgz",
+      tarballSha256: "root-sha",
+      corePackageTarballs,
+      dependencyTarballs: [aiTarball],
+    };
+    const params = {
+      tag: manifest.releaseTag,
+      targetSha: manifest.releaseSha,
+      npmDistTag: manifest.npmDistTag,
+    };
+    expect(() => validatePreflightManifest(manifest, params)).not.toThrow();
+    expect(() =>
+      validatePreflightManifest(
+        {
+          ...manifest,
+          dependencyTarballs: [
+            {
+              ...aiTarball,
+              tarballName: gatewayProtocolTarball.tarballName,
+              tarballSha256: gatewayProtocolTarball.tarballSha256,
+            },
+          ],
+        },
+        params,
+      ),
+    ).toThrow("does not match the core package manifest");
+    expect(() =>
+      preflightDependencyTarballs({
+        corePackageTarballs,
+        dependencyTarballs: null,
+      }),
+    ).toThrow("missing dependency tarball metadata");
   });
 
   it("trusts the npm workflow SHA while binding the candidate through its manifest", () => {
@@ -604,7 +967,7 @@ describe("release candidate checklist", () => {
     expect(releaseBranchForTag("v2026.7.1-1")).toBe("release/2026.7.1");
     expect(releaseBranchForTag("v2026.7.1-alpha.4")).toBe("");
 
-    const source = readFileSync("scripts/release-candidate-checklist.mjs", "utf8");
+    const source = readFileSync("scripts/release-candidate-checklist.mts", "utf8");
     expect(source).toContain("target_context_ref: targetContextRef");
   });
 
@@ -647,6 +1010,7 @@ describe("release candidate checklist", () => {
       duplicateOption("--windows-node-tag", "v0.6.3", "v0.6.4"),
       duplicateFlag("--skip-dispatch"),
       duplicateFlag("--skip-local-generated-check"),
+      duplicateFlag("--run-parallels"),
       duplicateFlag("--skip-parallels"),
       duplicateFlag("--skip-telegram"),
       duplicateOption("--telegram-provider-mode", "mock-openai", "live-frontier"),
@@ -727,7 +1091,7 @@ describe("release candidate checklist", () => {
   });
 
   it("binds SHA-pinned full validation evidence through its manifest", () => {
-    const source = readFileSync("scripts/release-candidate-checklist.mjs", "utf8");
+    const source = readFileSync("scripts/release-candidate-checklist.mts", "utf8");
 
     expect(source).toContain("allowShaPinnedWorkflowRef: true");
     expect(source).toContain(
@@ -785,6 +1149,8 @@ describe("release candidate checklist", () => {
         "111",
         "--npm-preflight-run",
         "222",
+        "--plugin-sdk-api-acknowledgement",
+        "a1b2c3d4",
         "--skip-dispatch",
       ]),
       workflowRef: "main",
@@ -795,6 +1161,7 @@ describe("release candidate checklist", () => {
     expect(command).toContain("'full_release_validation_run_id=111'");
     expect(command).toContain("'full_release_validation_run_attempt=2'");
     expect(command).toContain("'preflight_run_id=222'");
+    expect(command).toContain("'plugin_sdk_api_acknowledgement=a1b2c3d4'");
     expect(command).toContain("'tag=v2026.5.14-beta.3'");
     expect(command).toContain("'plugin_publish_scope=all-publishable'");
     expect(command).toContain("'--ref' 'main'");
@@ -811,6 +1178,12 @@ describe("release candidate checklist", () => {
     for (const input of emittedInputs) {
       expect(workflow.on.workflow_dispatch.inputs).toHaveProperty(input);
     }
+  });
+
+  it("validates Plugin SDK acknowledgement digests", () => {
+    expect(() =>
+      parseArgs(["--tag", "v2026.5.14-beta.3", "--plugin-sdk-api-acknowledgement", "ABC"]),
+    ).toThrow("8-character lowercase digest");
   });
 
   it("requires and carries an exact Windows Node tag for stable release candidates", () => {

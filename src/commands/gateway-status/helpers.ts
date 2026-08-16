@@ -1,7 +1,7 @@
+import { parseStrictInteger } from "@openclaw/normalization-core/number-coercion";
 /** Shared helpers for gateway status target selection, auth, summaries, and probe rendering. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
-import { parseTimeoutMsWithFallback } from "../../cli/parse-timeout.js";
 import { resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../../config/types.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
@@ -9,9 +9,8 @@ import { resolveGatewayProbeSurfaceAuth } from "../../gateway/auth-surface-resol
 import { isLoopbackHost } from "../../gateway/net.js";
 import type { GatewayProbeCapability, GatewayProbeResult } from "../../gateway/probe.js";
 import { inspectBestEffortPrimaryTailnetIPv4 } from "../../infra/network-discovery-display.js";
-import { parseStrictInteger } from "../../infra/parse-finite-number.js";
 
-const MISSING_SCOPE_PATTERN = /\bmissing scope:\s*[a-z0-9._-]+/i;
+const LEGACY_MISSING_SCOPE_PATTERN = /\bmissing scope:\s*[a-z0-9._-]+/i;
 
 type TargetKind = "explicit" | "configRemote" | "localLoopback" | "sshTunnel";
 
@@ -67,11 +66,6 @@ function parseIntOrNull(value: unknown): number | null {
     return null;
   }
   return parseStrictInteger(s) ?? null;
-}
-
-/** Parses CLI timeout input with the gateway-status fallback rules. */
-export function parseTimeoutMs(raw: unknown, fallbackMs: number): number {
-  return parseTimeoutMsWithFallback(raw, fallbackMs);
 }
 
 function normalizeWsUrl(value: string): string | null {
@@ -228,7 +222,8 @@ export function extractConfigSummary(snapshotUnknown: unknown): GatewayConfigSum
   const remoteTokenConfigured = hasConfiguredSecretInput(remote.token, secretDefaults);
   const remotePasswordConfigured = hasConfiguredSecretInput(remote.password, secretDefaults);
 
-  const wideAreaEnabled = typeof wideArea.enabled === "boolean" ? wideArea.enabled : null;
+  const wideAreaEnabled =
+    typeof wideArea.domain === "string" ? wideArea.domain.trim().length > 0 : null;
 
   return {
     path,
@@ -296,7 +291,10 @@ export function isScopeLimitedProbeFailure(probe: GatewayProbeResult): boolean {
   if (probe.ok || probe.connectLatencyMs == null) {
     return false;
   }
-  return MISSING_SCOPE_PATTERN.test(probe.error ?? "");
+  if (probe.missingScopeErrorDetails) {
+    return probe.missingScopeErrorDetails.missingScope === "operator.read";
+  }
+  return LEGACY_MISSING_SCOPE_PATTERN.test(probe.error ?? "");
 }
 
 /** Returns true when the gateway connection was established but a later probe failed. */

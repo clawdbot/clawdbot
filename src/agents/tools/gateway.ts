@@ -30,8 +30,9 @@ import {
   type DeviceIdentity,
 } from "../../infra/device-identity.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { readPositiveIntegerParam, readStringParam } from "./common.js";
+import { readPositiveIntegerParam, readToolStringParam } from "./common.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import { getGatewaySessionSpawnContext } from "./gateway-session-spawn-context.js";
 
 /** Optional gateway connection overrides accepted by agent tools. */
 export type GatewayCallOptions = {
@@ -45,8 +46,8 @@ type GatewayOverrideTarget = "local" | "remote";
 /** Reads common gateway options from tool parameters while preserving explicit token whitespace. */
 export function readGatewayCallOptions(params: Record<string, unknown>): GatewayCallOptions {
   return {
-    gatewayUrl: readStringParam(params, "gatewayUrl", { trim: false }),
-    gatewayToken: readStringParam(params, "gatewayToken", { trim: false }),
+    gatewayUrl: readToolStringParam(params, "gatewayUrl", { trim: false }),
+    gatewayToken: readToolStringParam(params, "gatewayToken", { trim: false }),
     timeoutMs: readPositiveIntegerParam(params, "timeoutMs"),
   };
 }
@@ -214,6 +215,8 @@ const APPROVAL_RUNTIME_METHODS = new Set<string>([
 ]);
 
 const AGENT_RUNTIME_IDENTITY_METHODS = new Set<string>([
+  "exec.approval.request",
+  "plugin.approval.request",
   "wake",
   "cron.list",
   "cron.get",
@@ -290,7 +293,7 @@ function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
   method: string;
   callParams: unknown;
   opts: GatewayCallOptions;
-  target: GatewayOverrideTarget;
+  approvalRuntimeToken: string | undefined;
 }): DeviceIdentity | undefined {
   const isApprovalRuntimeMethod = APPROVAL_RUNTIME_METHODS.has(params.method);
   const isNodeApprovalReplay = isApprovalReplayNodeSystemRun(params.method, params.callParams);
@@ -298,6 +301,14 @@ function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
     return undefined;
   }
   if (isApprovalRuntimeMethod && trimToUndefined(params.opts.gatewayUrl) !== undefined) {
+    return undefined;
+  }
+  if (params.approvalRuntimeToken !== undefined) {
+    // The approval-runtime token already proves this is the local approval bridge, and
+    // the gateway grants record visibility from it. Sending the shared device identity
+    // too would put the connect back under that device's paired role/scope baseline,
+    // so an operator paired before operator.approvals existed can never reach the
+    // prompt that would re-pair it. Same rule as the operator approvals client.
     return undefined;
   }
   try {
@@ -311,12 +322,6 @@ function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
       return identity;
     }
     const identity = loadOrCreateDeviceIdentity();
-    // Approval registration and wait can use separate gateway connections.
-    // Reject loadOrCreate's unpersisted fallback so both sides bind the same id.
-    const persistedIdentity = loadDeviceIdentityIfPresent();
-    if (persistedIdentity?.deviceId !== identity.deviceId) {
-      throw new Error("device identity is not persisted");
-    }
     return identity;
   } catch (error) {
     if (isNodeApprovalReplay) {
@@ -327,9 +332,6 @@ function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
         ].join(" "),
         { cause: error },
       );
-    }
-    if (params.target === "local") {
-      return undefined;
     }
     throw new Error(
       [
@@ -371,8 +373,22 @@ async function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
     }
     throw new Error("agent gateway calls require the trusted local gateway context");
   }
+  if (identity.signedAgentRuntimeIdentityToken) {
+    return identity.signedAgentRuntimeIdentityToken;
+  }
+  if (!identity.operationalRunInstance) {
+    if (optionalLocalIdentity && !params.required) {
+      return undefined;
+    }
+    throw new Error("trusted operational run instance required for this gateway call");
+  }
   try {
-    return await mintAgentRuntimeIdentityToken(identity);
+    const sessionSpawnContext = getGatewaySessionSpawnContext();
+    return await mintAgentRuntimeIdentityToken({
+      ...identity,
+      operationalRunInstance: identity.operationalRunInstance,
+      ...(sessionSpawnContext ? { sessionSpawnContext } : {}),
+    });
   } catch (error) {
     if (optionalLocalIdentity && !params.required) {
       return undefined;
@@ -385,6 +401,7 @@ export async function resolveMessageActionAgentRuntimeIdentityToken(params: {
   opts: GatewayCallOptions;
   target: "local" | "remote";
   turnCapability?: string;
+  turnCapabilitySessionKey?: string;
   runId?: string;
   sessionId?: string;
   sourceReplyFinal?: boolean;
@@ -410,11 +427,13 @@ export async function resolveMessageActionAgentRuntimeIdentityToken(params: {
   if (usesUntrustedGatewayContext && !terminalSourceReply) {
     return undefined;
   }
+  const turnCapabilitySessionKey =
+    normalizeOptionalString(params.turnCapabilitySessionKey) ?? identity.sessionKey;
   const messageActionContext = resolveMessageActionTurnCapability({
     token: params.turnCapability,
     agentId: identity.agentId,
     runId: params.runId,
-    sessionKey: identity.sessionKey,
+    sessionKey: turnCapabilitySessionKey,
     sessionId: params.sessionId,
   });
   if (!messageActionContext) {
@@ -437,6 +456,12 @@ export async function resolveMessageActionAgentRuntimeIdentityToken(params: {
     // process owns the durable receipt and sends no source authority over RPC.
     return undefined;
   }
+  if (!identity.operationalRunInstance) {
+    if (terminalSourceReply) {
+      throw new Error("terminal source reply requires a trusted operational run instance");
+    }
+    return undefined;
+  }
   const resolvedMessageActionContext = terminalSourceReply
     ? {
         ...messageActionContext,
@@ -450,6 +475,8 @@ export async function resolveMessageActionAgentRuntimeIdentityToken(params: {
       };
   return await mintAgentRuntimeIdentityToken({
     ...identity,
+    sessionKey: turnCapabilitySessionKey,
+    operationalRunInstance: identity.operationalRunInstance,
     messageActionContext: resolvedMessageActionContext,
   });
 }
@@ -479,9 +506,9 @@ function isStaleGatewayNodeInvokeTurnSourceRejection(error: unknown): boolean {
     return false;
   }
   const details = asNullableRecord(requestError.details);
-  // A dispatched command may have acted before returning an error. Never turn
-  // version fallback into a duplicate invocation when the Gateway says so.
-  if (details?.nodeCommandDispatched === true) {
+  // Only explicit pre-dispatch provenance makes a second invoke safe. Older
+  // gateways without this fact must fail rather than risk duplicate execution.
+  if (details?.nodeCommandDispatched !== false) {
     return false;
   }
   const message = formatErrorMessage(error);
@@ -537,7 +564,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     method,
     callParams,
     opts,
-    target: gateway.target,
+    approvalRuntimeToken,
   });
   const callOptions = {
     url: gateway.url,

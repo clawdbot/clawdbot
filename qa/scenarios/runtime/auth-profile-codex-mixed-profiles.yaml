@@ -5,10 +5,10 @@ scenario:
   surface: runtime
   coverage:
     primary:
-      - runtime.codex-plugin.auth
+      - openai.codex-oauth-profiles-codex-plugin-auth
     secondary:
-      - auth-profiles.provider-selection
-      - runtime.doctor-repair
+      - agent-runtime.auth-profile-selection-provider-selection
+      - openai.codex-oauth-profiles-doctor-repair
   objective: Verify doctor repairs mixed legacy Codex OAuth and OpenAI API-key profiles into canonical SQLite state and the Codex auth bridge sends the selected OAuth profile to App Server.
   successCriteria:
     - The selected auth profile id is openai:qa-oauth.

@@ -14,7 +14,7 @@ vi.mock("./ddg-client.js", () => ({
 
 describe("duckduckgo web search provider", () => {
   let createDuckDuckGoWebSearchProvider: typeof import("./ddg-search-provider.js").createDuckDuckGoWebSearchProvider;
-  let ddgClientTesting: typeof import("./ddg-client.js").testing;
+  let runActualDuckDuckGoSearch: typeof import("./ddg-client.js").runDuckDuckGoSearch;
 
   afterAll(() => {
     vi.doUnmock("./ddg-client.js");
@@ -23,7 +23,7 @@ describe("duckduckgo web search provider", () => {
 
   beforeAll(async () => {
     ({ createDuckDuckGoWebSearchProvider } = await import("./ddg-search-provider.js"));
-    ({ testing: ddgClientTesting } =
+    ({ runDuckDuckGoSearch: runActualDuckDuckGoSearch } =
       await vi.importActual<typeof import("./ddg-client.js")>("./ddg-client.js"));
     await import("../index.js");
   });
@@ -32,6 +32,31 @@ describe("duckduckgo web search provider", () => {
     runDuckDuckGoSearch.mockReset();
     runDuckDuckGoSearch.mockImplementation(async (params: Record<string, unknown>) => params);
   });
+
+  async function runHtmlSearch(query: string, html: string) {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(html, {
+        headers: { "content-type": "text/html" },
+      }),
+    );
+    try {
+      return await runActualDuckDuckGoSearch({ query, cacheTtlMinutes: 0 });
+    } finally {
+      fetchMock.mockRestore();
+    }
+  }
+
+  function readSearchResults(payload: Record<string, unknown>) {
+    if (!Array.isArray(payload.results)) {
+      throw new Error("Expected DuckDuckGo search results");
+    }
+    return payload.results as Array<{
+      title: string;
+      url: string;
+      snippet: string;
+      siteName?: string;
+    }>;
+  }
 
   it("exposes keyless metadata and enables the plugin in config", () => {
     const provider = createDuckDuckGoWebSearchProvider();
@@ -105,6 +130,66 @@ describe("duckduckgo web search provider", () => {
     expect(runDuckDuckGoSearch).not.toHaveBeenCalled();
   });
 
+  it("forwards caller cancellation without starting an already canceled search", async () => {
+    const tool = createDuckDuckGoWebSearchProvider().createTool({ config: {} });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+    const active = new AbortController();
+
+    await tool.execute({ query: "duckduckgo cancellation forwarding" }, { signal: active.signal });
+
+    expect(runDuckDuckGoSearch).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: active.signal }),
+    );
+    runDuckDuckGoSearch.mockClear();
+    const canceled = new AbortController();
+    canceled.abort(new Error("DuckDuckGo caller canceled"));
+
+    await expect(
+      tool.execute({ query: "duckduckgo pre-canceled" }, { signal: canceled.signal }),
+    ).rejects.toThrow("DuckDuckGo caller canceled");
+    expect(runDuckDuckGoSearch).not.toHaveBeenCalled();
+  });
+
+  it("aborts an in-flight DuckDuckGo request without caching its result", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (_url, init) =>
+        await new Promise<Response>((_resolve, reject) => {
+          if (!init?.signal) {
+            reject(new Error("DuckDuckGo request lost caller cancellation"));
+            return;
+          }
+          init.signal.addEventListener("abort", () => reject(init.signal?.reason as Error), {
+            once: true,
+          });
+        }),
+    );
+    const controller = new AbortController();
+    const result = runActualDuckDuckGoSearch({
+      query: "duckduckgo in-flight cancellation",
+      signal: controller.signal,
+    });
+
+    try {
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+      controller.abort(new Error("DuckDuckGo request canceled in flight"));
+      await expect(result).rejects.toThrow("DuckDuckGo request canceled in flight");
+      expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+      fetchMock.mockResolvedValueOnce(
+        new Response('<a class="result__a" href="https://example.com">Example</a>', {
+          headers: { "content-type": "text/html" },
+        }),
+      );
+
+      await runActualDuckDuckGoSearch({ query: "duckduckgo in-flight cancellation" });
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
   it("bounds successful DuckDuckGo HTML bodies without using response.text()", async () => {
     const streamed = createStreamingResponse({
       chunkCount: 32,
@@ -113,14 +198,22 @@ describe("duckduckgo web search provider", () => {
       headers: { "Content-Type": "text/html" },
     });
     const textSpy = vi.spyOn(streamed.response, "text").mockRejectedValue(new Error("unbounded"));
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(streamed.response);
 
-    await expect(ddgClientTesting.readDuckDuckGoHtmlResponse(streamed.response)).rejects.toThrow(
-      "DuckDuckGo search: text response exceeds 16777216 bytes",
-    );
+    try {
+      await expect(
+        runActualDuckDuckGoSearch({
+          query: "duckduckgo bounded response",
+          cacheTtlMinutes: 0,
+        }),
+      ).rejects.toThrow("DuckDuckGo search: text response exceeds 16777216 bytes");
 
-    expect(streamed.getReadCount()).toBeLessThan(32);
-    expect(streamed.wasCanceled()).toBe(true);
-    expect(textSpy).not.toHaveBeenCalled();
+      expect(streamed.getReadCount()).toBeLessThan(32);
+      expect(streamed.wasCanceled()).toBe(true);
+      expect(textSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 
   it("reads region from plugin config and normalizes empty values away", () => {
@@ -193,68 +286,84 @@ describe("duckduckgo web search provider", () => {
     ).toBe("off");
   });
 
-  it("decodes direct and redirect urls plus common html entities", () => {
-    expect(
-      ddgClientTesting.decodeDuckDuckGoUrl(
-        "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fsearch%3Fq%3Dclaw",
-      ),
-    ).toBe("https://example.com/search?q=claw");
-    expect(ddgClientTesting.decodeDuckDuckGoUrl("https://example.com")).toBe("https://example.com");
-    expect(ddgClientTesting.decodeHtmlEntities("Fish &amp; Chips&nbsp;&hellip; &#39;ok&#39;")).toBe(
-      "Fish & Chips ... 'ok'",
+  it("keeps invalid numeric entities intact in returned results", async () => {
+    const payload = await runHtmlSearch(
+      "duckduckgo invalid numeric entities",
+      `
+        <a class="result__a" href="https://example.com/entities">
+          Result &#99999999; Hex &#x110000; Smile &#128512;
+        </a>
+        <a class="result__snippet">Bad &#55296; &#xD800; &#xDFFF;</a>
+      `,
     );
+    const [result] = readSearchResults(payload);
+
+    expect(result?.title).toContain("Result &#99999999; Hex &#x110000; Smile 😀");
+    // Surrogate-range entities would become lone UTF-16 surrogates; preserve their source text.
+    expect(result?.snippet).toContain("Bad &#55296; &#xD800; &#xDFFF;");
   });
 
-  it("leaves out-of-range numeric html entities intact instead of throwing", () => {
-    expect(() => ddgClientTesting.decodeHtmlEntities("Result &#99999999; end")).not.toThrow();
-    expect(ddgClientTesting.decodeHtmlEntities("Result &#99999999; end")).toBe(
-      "Result &#99999999; end",
+  it("does not double-decode escaped entities in returned results", async () => {
+    const payload = await runHtmlSearch(
+      "duckduckgo escaped entities",
+      `
+        <a class="result__a" href="https://example.com/escaping">
+          How to escape &amp;lt; in HTML
+        </a>
+        <a class="result__snippet">a&amp;#39;b and a&#x26;amp;b</a>
+      `,
     );
-    expect(ddgClientTesting.decodeHtmlEntities("Hex &#x110000; tail")).toBe("Hex &#x110000; tail");
-    // Surrogate-range entities would decode to lone UTF-16 surrogates; keep them intact.
-    expect(ddgClientTesting.decodeHtmlEntities("Bad &#55296; end")).toBe("Bad &#55296; end");
-    expect(ddgClientTesting.decodeHtmlEntities("Bad &#xD800; end")).toBe("Bad &#xD800; end");
-    expect(ddgClientTesting.decodeHtmlEntities("Bad &#xDFFF; end")).toBe("Bad &#xDFFF; end");
-    // A valid supplementary-plane entity still decodes.
-    expect(ddgClientTesting.decodeHtmlEntities("Smile &#128512;")).toBe("Smile 😀");
+    const [result] = readSearchResults(payload);
+
+    // Decoding &amp; first would turn the literal "&lt;" into "<" and corrupt the result.
+    expect(result?.title).toContain("How to escape &lt; in HTML");
+    expect(result?.title).not.toContain("How to escape < in HTML");
+    expect(result?.snippet).toContain("a&#39;b and a&amp;b");
   });
 
-  it("does not double-decode escaped entities (decodes &amp; last)", () => {
-    // A result whose text literally shows "&lt;" arrives double-encoded as
-    // "&amp;lt;". Decoding &amp; first would re-decode it into "<", corrupting
-    // the snippet; &amp; must be decoded last.
-    expect(ddgClientTesting.decodeHtmlEntities("How to escape &amp;lt; in HTML")).toBe(
-      "How to escape &lt; in HTML",
+  it("returns results when href appears before class", async () => {
+    const payload = await runHtmlSearch(
+      "duckduckgo href ordering",
+      `
+        <a href="https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com" class="result__a">
+          Example &amp; Co
+        </a>
+        <a class="result__snippet">Fast&nbsp;search &hellip; with details</a>
+        <a class="result__a" href="https://example.org/direct">Direct result</a>
+        <a class="result__snippet">Second snippet</a>
+      `,
     );
-    expect(ddgClientTesting.decodeHtmlEntities("a&amp;#39;b")).toBe("a&#39;b");
-    expect(ddgClientTesting.decodeHtmlEntities("a&#x26;amp;b")).toBe("a&amp;b");
+    const results = readSearchResults(payload);
+
+    expect(results).toHaveLength(2);
+    expect(results[0]).toMatchObject({ url: "https://example.com", siteName: "example.com" });
+    expect(results[0]?.title).toContain("Example & Co");
+    expect(results[0]?.snippet).toContain("Fast search ... with details");
+    expect(results[1]).toMatchObject({
+      url: "https://example.org/direct",
+      siteName: "example.org",
+    });
+    expect(results[1]?.title).toContain("Direct result");
+    expect(results[1]?.snippet).toContain("Second snippet");
   });
 
-  it("parses results when href appears before class", () => {
-    const html = `
-      <a href="https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com" class="result__a">
-        Example &amp; Co
-      </a>
-      <a class="result__snippet">Fast&nbsp;search &hellip; with details</a>
-      <a class="result__a" href="https://example.org/direct">Direct result</a>
-      <a class="result__snippet">Second snippet</a>
-    `;
+  it("keeps inline result markup from splitting returned words", async () => {
+    const payload = await runHtmlSearch(
+      "duckduckgo inline result markup",
+      `
+        <a class="result__a" href="https://example.com/cafe">Caf<b>é</b> guide</a>
+        <a class="result__snippet">Find the best caf<b>é</b> near you.</a>
+      `,
+    );
+    const [result] = readSearchResults(payload);
 
-    expect(ddgClientTesting.parseDuckDuckGoHtml(html)).toEqual([
-      {
-        title: "Example & Co",
-        url: "https://example.com",
-        snippet: "Fast search ... with details",
-      },
-      {
-        title: "Direct result",
-        url: "https://example.org/direct",
-        snippet: "Second snippet",
-      },
-    ]);
+    expect(result?.title).toContain("Café guide");
+    expect(result?.title).not.toContain("Caf é");
+    expect(result?.url).toBe("https://example.com/cafe");
+    expect(result?.snippet).toContain("Find the best café near you.");
   });
 
-  it("detects bot challenge pages without flagging ordinary result snippets", () => {
+  it("rejects bot challenge pages without flagging ordinary result snippets", async () => {
     const challengeHtml = `
       <html>
         <body>
@@ -270,15 +379,13 @@ describe("duckduckgo web search provider", () => {
       <a class="result__snippet">A fun coding challenge for interview prep.</a>
     `;
 
-    expect(ddgClientTesting.isBotChallenge(challengeHtml)).toBe(true);
-    expect(ddgClientTesting.parseDuckDuckGoHtml(challengeHtml)).toStrictEqual([]);
-    expect(ddgClientTesting.isBotChallenge(normalHtml)).toBe(false);
-    expect(ddgClientTesting.parseDuckDuckGoHtml(normalHtml)).toEqual([
-      {
-        title: "Coding Challenge",
-        url: "https://example.com/challenge",
-        snippet: "A fun coding challenge for interview prep.",
-      },
-    ]);
+    await expect(runHtmlSearch("duckduckgo bot challenge", challengeHtml)).rejects.toThrow(
+      "DuckDuckGo returned a bot-detection challenge.",
+    );
+    const normalPayload = await runHtmlSearch("duckduckgo ordinary challenge result", normalHtml);
+    const [result] = readSearchResults(normalPayload);
+    expect(result?.url).toBe("https://example.com/challenge");
+    expect(result?.title).toContain("Coding Challenge");
+    expect(result?.snippet).toContain("A fun coding challenge for interview prep.");
   });
 });

@@ -5,8 +5,6 @@ import { describe, expect, it, vi } from "vitest";
 import { buildCliRespawnPlan, runCliRespawnPlan } from "./entry.respawn.js";
 
 const EXPERIMENTAL_WARNING_FLAG = "--disable-warning=ExperimentalWarning";
-const BUNDLED_CA_FLAG = "--use-bundled-ca";
-const OPENSSL_CA_FLAG = "--use-openssl-ca";
 const OPENCLAW_NODE_EXTRA_CA_CERTS_READY = "OPENCLAW_NODE_EXTRA_CA_CERTS_READY";
 const OPENCLAW_NODE_OPTIONS_READY = "OPENCLAW_NODE_OPTIONS_READY";
 
@@ -35,6 +33,18 @@ describe("buildCliRespawnPlan", () => {
         env: {},
         execArgv: [],
         autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+      }),
+    ).toBeNull();
+  });
+
+  it("does not detach native hook relays through a startup respawn", () => {
+    expect(
+      buildCliRespawnPlan({
+        argv: ["node", "openclaw", "hooks", "relay", "--relay-id", "relay-1"],
+        env: {},
+        execArgv: [],
+        autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+        platform: "linux",
       }),
     ).toBeNull();
   });
@@ -91,7 +101,7 @@ describe("buildCliRespawnPlan", () => {
     expect(respawnPlan.detachForProcessTree).toBe(false);
   });
 
-  it("uses the file-backed CA store for one-shot macOS commands", () => {
+  it("preserves macOS system CA trust through one-shot warning respawns", () => {
     const plan = buildCliRespawnPlan({
       argv: ["node", "openclaw", "cron", "list", "--json"],
       env: { NODE_USE_SYSTEM_CA: "1" },
@@ -103,13 +113,12 @@ describe("buildCliRespawnPlan", () => {
     const respawnPlan = expectCliRespawnPlan(plan);
     expect(respawnPlan.argv).toEqual([
       EXPERIMENTAL_WARNING_FLAG,
-      OPENSSL_CA_FLAG,
       "openclaw",
       "cron",
       "list",
       "--json",
     ]);
-    expect(respawnPlan.env.NODE_USE_SYSTEM_CA).toBe("0");
+    expect(respawnPlan.env.NODE_USE_SYSTEM_CA).toBe("1");
   });
 
   it.each([
@@ -127,50 +136,7 @@ describe("buildCliRespawnPlan", () => {
     ).toBeNull();
   });
 
-  it.each([
-    ["the command line", ["--use-system-ca"], undefined],
-    ["NODE_OPTIONS", [], "--use-system-ca"],
-    ["quoted NODE_OPTIONS", [], '"--use-system-ca"'],
-    ["single-quoted NODE_OPTIONS", [], "'--use-system-ca'"],
-  ] as const)(
-    "keeps an explicit macOS system CA runtime flag from %s",
-    (_label, execArgv, nodeOptions) => {
-      const plan = buildCliRespawnPlan({
-        argv: ["node", "openclaw", "cron", "list", "--json"],
-        env: { NODE_OPTIONS: nodeOptions, NODE_USE_SYSTEM_CA: "1" },
-        execArgv: [...execArgv],
-        autoNodeExtraCaCerts: undefined,
-        platform: "darwin",
-      });
-
-      const respawnPlan = expectCliRespawnPlan(plan);
-      expect(respawnPlan.argv).not.toContain(OPENSSL_CA_FLAG);
-      expect(respawnPlan.env.NODE_USE_SYSTEM_CA).toBe("1");
-    },
-  );
-
-  it.each([
-    ["the command line", [BUNDLED_CA_FLAG], undefined],
-    ["NODE_OPTIONS", [], BUNDLED_CA_FLAG],
-    ["quoted NODE_OPTIONS", [], `"${BUNDLED_CA_FLAG}"`],
-  ] as const)(
-    "preserves an explicit bundled CA selection from %s",
-    (_label, execArgv, nodeOptions) => {
-      const plan = buildCliRespawnPlan({
-        argv: ["node", "openclaw", "cron", "list", "--json"],
-        env: { NODE_OPTIONS: nodeOptions, NODE_USE_SYSTEM_CA: "1" },
-        execArgv: [...execArgv],
-        autoNodeExtraCaCerts: undefined,
-        platform: "darwin",
-      });
-
-      const respawnPlan = expectCliRespawnPlan(plan);
-      expect(respawnPlan.argv).not.toContain(OPENSSL_CA_FLAG);
-      expect(respawnPlan.env.NODE_USE_SYSTEM_CA).toBe("0");
-    },
-  );
-
-  it("does not respawn again after selecting the macOS file-backed CA store", () => {
+  it("does not respawn one-shot commands only to change CA trust", () => {
     expect(
       buildCliRespawnPlan({
         argv: ["node", "openclaw", "cron", "list", "--json"],
@@ -178,7 +144,7 @@ describe("buildCliRespawnPlan", () => {
           NODE_USE_SYSTEM_CA: "1",
           [OPENCLAW_NODE_OPTIONS_READY]: "1",
         },
-        execArgv: [OPENSSL_CA_FLAG, EXPERIMENTAL_WARNING_FLAG],
+        execArgv: [EXPERIMENTAL_WARNING_FLAG],
         autoNodeExtraCaCerts: undefined,
         platform: "darwin",
       }),
@@ -250,7 +216,7 @@ describe("buildCliRespawnPlan", () => {
     expect(respawnPlan.detachForProcessTree).toBe(false);
   });
 
-  it("normalizes duplicated Windows node.exe argv before respawning", () => {
+  it("normalizes a duplicated Windows node.exe launcher prefix before respawning", () => {
     const scriptPath =
       "C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\\openclaw\\openclaw.mjs";
     const plan = buildCliRespawnPlan({
@@ -258,7 +224,6 @@ describe("buildCliRespawnPlan", () => {
         "C:\\Program Files\\nodejs\\node.exe",
         "C:\\Program Files\\nodejs\\node.exe",
         scriptPath,
-        "node.exe",
         "dashboard",
         "--no-open",
       ],
@@ -270,6 +235,27 @@ describe("buildCliRespawnPlan", () => {
 
     const respawnPlan = expectCliRespawnPlan(plan);
     expect(respawnPlan.argv).toEqual(["--stack-size=8192", scriptPath, "dashboard", "--no-open"]);
+  });
+
+  it("preserves post-script node.exe arguments after normalizing the launcher prefix", () => {
+    const scriptPath =
+      "C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\\openclaw\\openclaw.mjs";
+    const plan = buildCliRespawnPlan({
+      argv: [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "C:\\Program Files\\nodejs\\node.exe",
+        scriptPath,
+        "node.exe",
+        "status",
+      ],
+      env: {},
+      execArgv: [],
+      execPath: "C:\\Program Files\\nodejs\\node.exe",
+      platform: "win32",
+    });
+
+    const respawnPlan = expectCliRespawnPlan(plan);
+    expect(respawnPlan.argv).toEqual(["--stack-size=8192", scriptPath, "node.exe", "status"]);
   });
 
   it("does not respawn on Windows when stack size is already configured", () => {
@@ -368,52 +354,5 @@ describe("runCliRespawnPlan", () => {
 
     expect(exit).toHaveBeenCalledWith(0);
     expect(writeError).not.toHaveBeenCalled();
-  });
-
-  it("force-kills a signaled respawn child that does not exit", () => {
-    vi.useFakeTimers();
-    const child = new EventEmitter() as ChildProcess;
-    const kill = vi.fn<(signal?: NodeJS.Signals) => boolean>(() => true);
-    child.kill = kill as ChildProcess["kill"];
-    const spawn = vi.fn(() => child);
-    const exit = vi.fn();
-    let onSignal: ((signal: NodeJS.Signals) => void) | undefined;
-
-    try {
-      runCliRespawnPlan(
-        {
-          command: "/usr/bin/node",
-          argv: ["/repo/openclaw/dist/entry.js", "tui"],
-          env: {},
-          detachForProcessTree: false,
-        },
-        {
-          spawn: spawn as unknown as typeof import("node:child_process").spawn,
-          attachChildProcessBridge: vi.fn((_child, options) => {
-            onSignal = options?.onSignal;
-            return { detach: vi.fn() };
-          }),
-          exit: exit as unknown as (code?: number) => never,
-          writeError: vi.fn(),
-        },
-      );
-
-      onSignal?.("SIGTERM");
-      vi.advanceTimersByTime(1_000);
-
-      expect(kill).toHaveBeenCalledWith("SIGTERM");
-      expect(exit).not.toHaveBeenCalled();
-
-      vi.advanceTimersByTime(1_000);
-
-      expect(kill).toHaveBeenCalledWith(process.platform === "win32" ? "SIGTERM" : "SIGKILL");
-      expect(exit).not.toHaveBeenCalled();
-
-      child.emit("exit", null, "SIGKILL");
-
-      expect(exit).toHaveBeenCalledWith(1);
-    } finally {
-      vi.useRealTimers();
-    }
   });
 });

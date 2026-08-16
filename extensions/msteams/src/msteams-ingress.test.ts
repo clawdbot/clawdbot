@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMSTeamsIngress } from "./msteams-ingress.js";
+import { MSTEAMS_REQUEST_TIMEOUT_MS } from "./request-timeout.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
 type IngressQueue = NonNullable<Parameters<typeof createMSTeamsIngress>[0]["queue"]>;
@@ -165,6 +166,7 @@ describe("Microsoft Teams durable ingress", () => {
 
   it("keeps a completion tombstone and rejects a post-completion duplicate", async () => {
     await withQueue(async (queue) => {
+      const enqueue = vi.spyOn(queue, "enqueue");
       const dispatch = vi.fn(async (_activity, lifecycle) => {
         await lifecycle.onAdopted();
       });
@@ -175,8 +177,9 @@ describe("Microsoft Teams durable ingress", () => {
         await ingress.accept(incoming);
         await waitForVerdict(queue, "activity-duplicate", "completed");
         await ingress.accept(incoming);
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 600);
+        await expect(enqueue.mock.results.at(-1)?.value).resolves.toMatchObject({
+          kind: "completed",
+          duplicate: true,
         });
         expect(dispatch).toHaveBeenCalledTimes(1);
       } finally {
@@ -187,6 +190,7 @@ describe("Microsoft Teams durable ingress", () => {
 
   it("deduplicates a concrete Bot Framework redelivery by activity.id", async () => {
     await withQueue(async (queue) => {
+      const enqueue = vi.spyOn(queue, "enqueue");
       const dispatch = vi.fn(async (_activity, lifecycle) => {
         await lifecycle.onAdopted();
       });
@@ -198,8 +202,9 @@ describe("Microsoft Teams durable ingress", () => {
         await ingress.accept(first);
         await waitForVerdict(queue, "bot-framework-redelivery", "completed");
         await ingress.accept(redelivery);
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 600);
+        await expect(enqueue.mock.results.at(-1)?.value).resolves.toMatchObject({
+          kind: "completed",
+          duplicate: true,
         });
         expect(dispatch).toHaveBeenCalledTimes(1);
         expect(dispatch.mock.calls[0]?.[0]).toMatchObject({ text: "original" });
@@ -343,20 +348,31 @@ describe("Microsoft Teams durable ingress", () => {
           active -= 1;
         }
       });
+      const listPending = vi.spyOn(queue, "listPending");
       const ingress = makeIngress(queue, dispatch);
       ingress.start();
       try {
-        for (let index = 0; index < 9; index += 1) {
+        for (let index = 0; index < 8; index += 1) {
           await ingress.accept(
             activity({ id: `activity-concurrency-${index}`, conversationId: `lane-${index}` }),
           );
         }
         await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(8));
         await new Promise<void>((resolve) => {
-          setTimeout(resolve, 600);
+          setImmediate(resolve);
         });
+
+        const drainScansBeforeNinth = listPending.mock.calls.length;
+        await ingress.accept(activity({ id: "activity-concurrency-8", conversationId: "lane-8" }));
+        await vi.waitFor(() =>
+          expect(listPending.mock.calls.length).toBeGreaterThan(drainScansBeforeNinth),
+        );
+
         expect(dispatch).toHaveBeenCalledTimes(8);
         expect(maxActive).toBe(8);
+        expect(await queue.listPending()).toEqual([
+          expect.objectContaining({ id: "activity-concurrency-8", laneKey: "lane-8" }),
+        ]);
 
         releaseDeliveries?.();
         await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(9));
@@ -374,7 +390,9 @@ describe("Microsoft Teams durable ingress", () => {
       const deliveryGate = new Promise<void>((resolve) => {
         releaseDelivery = resolve;
       });
+      let deliverySignal: AbortSignal | undefined;
       const ingress = makeIngress(queue, async (_activity, lifecycle) => {
+        deliverySignal = lifecycle.abortSignal;
         await lifecycle.onAdopted();
         await deliveryGate;
       });
@@ -390,10 +408,75 @@ describe("Microsoft Teams durable ingress", () => {
         setTimeout(resolve, 50);
       });
       expect(stopped).toBe(false);
+      expect(deliverySignal?.aborted).toBe(false);
 
       releaseDelivery?.();
       await stopping;
       expect(stopped).toBe(true);
     });
+  });
+
+  it("returns after aborting a non-cooperative delivery at the stop grace", async () => {
+    vi.useFakeTimers();
+    try {
+      await withQueue(async (queue) => {
+        let markDeliveryStarted!: () => void;
+        const deliveryStarted = new Promise<void>((resolve) => {
+          markDeliveryStarted = resolve;
+        });
+        let deliverySignal: AbortSignal | undefined;
+        const ingress = makeIngress(queue, async (_activity, lifecycle) => {
+          deliverySignal = lifecycle.abortSignal;
+          markDeliveryStarted();
+          await new Promise<void>(() => {});
+        });
+        ingress.start();
+        await ingress.accept(activity({ id: "activity-stop-timeout" }));
+        await deliveryStarted;
+
+        const stopping = ingress.stop();
+        expect(deliverySignal?.aborted).toBe(false);
+        await vi.advanceTimersByTimeAsync(MSTEAMS_REQUEST_TIMEOUT_MS);
+        await stopping;
+
+        expect(deliverySignal?.aborted).toBe(true);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps stop terminal and shares its grace task", async () => {
+    vi.useFakeTimers();
+    try {
+      await withQueue(async (queue) => {
+        let markDeliveryStarted!: () => void;
+        const deliveryStarted = new Promise<void>((resolve) => {
+          markDeliveryStarted = resolve;
+        });
+        const dispatch = vi.fn(async () => {
+          markDeliveryStarted();
+          await new Promise<void>(() => {});
+        });
+        const ingress = makeIngress(queue, dispatch);
+        ingress.start();
+        await ingress.accept(activity({ id: "activity-terminal-stop" }));
+        await deliveryStarted;
+
+        const firstStop = ingress.stop();
+        expect(ingress.stop()).toBe(firstStop);
+        ingress.start();
+        await ingress.accept(activity({ id: "activity-after-stop-start" }));
+        await vi.advanceTimersByTimeAsync(MSTEAMS_REQUEST_TIMEOUT_MS);
+        await firstStop;
+
+        expect(dispatch).toHaveBeenCalledTimes(1);
+        expect((await queue.listPending()).map((entry) => entry.id)).toContain(
+          "activity-after-stop-start",
+        );
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

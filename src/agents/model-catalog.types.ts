@@ -3,7 +3,9 @@
  * Used by discovery, browsing, visibility, and provider-auth code so renderers
  * and filters agree on stable model metadata.
  */
+import type { ModelCatalogStatus } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { ModelApi, ModelCompatConfig, ModelMediaInputConfig } from "../config/types.models.js";
+import type { ProviderCatalogOutcome } from "../plugins/provider-catalog-outcome.js";
 
 /** Input modalities a catalog entry can advertise. */
 export type ModelInputType = "text" | "image" | "audio" | "video" | "document";
@@ -13,6 +15,8 @@ export type ModelCatalogEntry = {
   id: string;
   name: string;
   provider: string;
+  /** Provider-owned strongest-first picker order; internal and never projected to clients. */
+  providerOrder?: number;
   alias?: string;
   api?: ModelApi;
   /** Private transport provenance for route matching; never project directly to clients. */
@@ -24,12 +28,20 @@ export type ModelCatalogEntry = {
   params?: Record<string, unknown>;
   compat?: ModelCompatConfig;
   mediaInput?: ModelMediaInputConfig;
+  status?: ModelCatalogStatus;
+  statusReason?: string;
+  replaces?: string[];
+  replacedBy?: string;
 };
 
 /** Logical catalog rows plus the physical variants used for route selection. */
 export type ModelCatalogSnapshot = {
   entries: ModelCatalogEntry[];
   routeVariants: ModelCatalogEntry[];
+  /** Provider-owned outcome of each live catalog request in this generation. */
+  providerOutcomes?: readonly ProviderCatalogOutcome[];
+  /** Static provider-hook rows captured alongside the full lifecycle generation. */
+  staticEntries?: ModelCatalogEntry[];
   /**
    * `false` only when this snapshot came from a degraded load (discovery threw,
    * static or empty fallback). Absent/`true` means authoritative — consumers that

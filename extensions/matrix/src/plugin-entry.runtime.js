@@ -17,19 +17,19 @@ function readPackageJson(packageRoot) {
   }
 }
 
-function normalizeLowercaseStringOrEmpty(value) {
+function lowercaseStringOrEmptyWithoutTrim(value) {
   return typeof value === "string" ? value.toLowerCase() : "";
 }
 
 function hasTrustedOpenClawRootIndicator(packageRoot, packageJson) {
   const packageExports = packageJson?.exports ?? {};
-  if (!Object.hasOwn(packageExports, "./plugin-sdk")) {
+  if (!Object.hasOwn(packageExports, "./plugin-sdk/core")) {
     return false;
   }
   const hasCliEntryExport = Object.hasOwn(packageExports, "./cli-entry");
   const hasOpenClawBin =
     (typeof packageJson?.bin === "string" &&
-      normalizeLowercaseStringOrEmpty(packageJson.bin).includes("openclaw")) ||
+      lowercaseStringOrEmptyWithoutTrim(packageJson.bin).includes("openclaw")) ||
     (typeof packageJson?.bin === "object" &&
       packageJson.bin !== null &&
       typeof packageJson.bin.openclaw === "string");

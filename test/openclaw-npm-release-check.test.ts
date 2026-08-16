@@ -8,7 +8,8 @@ import {
   LOCAL_BUILD_METADATA_DIST_PATHS,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
 } from "../scripts/lib/package-dist-inventory.ts";
-import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../scripts/lib/workspace-bootstrap-smoke.mjs";
+import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../scripts/lib/workspace-bootstrap-smoke.mts";
+import { assertPreparedOpenClawAiDependency } from "../scripts/openclaw-npm-prepublish-verify.ts";
 import {
   compareReleaseVersions,
   collectControlUiPackErrors,
@@ -29,10 +30,46 @@ import {
 } from "../scripts/openclaw-npm-release-check.ts";
 
 const REQUIRED_PACKED_PATHS = [
-  "npm-shrinkwrap.json",
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
 ] as const;
+
+describe("prepared OpenClaw AI dependency", () => {
+  it("requires the packed root to depend on the exact prepared AI version", () => {
+    expect(() =>
+      assertPreparedOpenClawAiDependency({
+        aiManifest: { name: "@openclaw/ai", version: "2026.7.2" },
+        rootManifest: {
+          name: "openclaw",
+          version: "2026.7.1",
+          dependencies: { "@openclaw/ai": "2026.7.2" },
+        },
+      }),
+    ).toThrow("Prepared root and @openclaw/ai tarballs must both be version 2026.7.2.");
+
+    expect(() =>
+      assertPreparedOpenClawAiDependency({
+        aiManifest: { name: "@openclaw/ai", version: "2026.7.2" },
+        rootManifest: {
+          name: "openclaw",
+          version: "2026.7.2",
+          dependencies: { "@openclaw/ai": "2026.7.1" },
+        },
+      }),
+    ).toThrow("Prepared root tarball must depend on exact @openclaw/ai@2026.7.2.");
+
+    expect(() =>
+      assertPreparedOpenClawAiDependency({
+        aiManifest: { name: "@openclaw/ai", version: "2026.7.2" },
+        rootManifest: {
+          name: "openclaw",
+          version: "2026.7.2",
+          dependencies: { "@openclaw/ai": "2026.7.2" },
+        },
+      }),
+    ).not.toThrow();
+  });
+});
 
 describe("workspace template package paths", () => {
   it("keeps the runtime heartbeat template in the npm pack guard", () => {
@@ -507,6 +544,28 @@ describe("parseNpmPackJsonOutput", () => {
     ]);
   });
 
+  it("parses npm 12 name-keyed pack output", () => {
+    expect(
+      parseNpmPackJsonOutput(
+        '{"openclaw":{"filename":"openclaw.tgz","files":[{"path":"dist/control-ui/index.html"}]}}',
+      ),
+    ).toEqual([
+      {
+        filename: "openclaw.tgz",
+        files: [{ path: "dist/control-ui/index.html" }],
+      },
+    ]);
+  });
+
+  it("parses trailing npm 12 output after lifecycle logs", () => {
+    const stdout = [
+      "> openclaw@2026.7.2 prepack",
+      '{"openclaw":{"filename":"openclaw.tgz","files":[]}}',
+    ].join("\n");
+
+    expect(parseNpmPackJsonOutput(stdout)).toEqual([{ filename: "openclaw.tgz", files: [] }]);
+  });
+
   it("parses the trailing JSON payload after npm lifecycle logs", () => {
     const stdout = [
       'npm warn Unknown project config "node-linker".',
@@ -814,36 +873,6 @@ describe("collectReleasePackageMetadataErrors", () => {
     ).toStrictEqual([]);
   });
 
-  it("rejects node-llama-cpp as a peer dependency", () => {
-    expect(
-      collectReleasePackageMetadataErrors({
-        name: "openclaw",
-        description: "Multi-channel AI gateway with extensible messaging integrations",
-        license: "MIT",
-        repository: { url: "git+https://github.com/openclaw/openclaw.git" },
-        bin: { openclaw: "openclaw.mjs" },
-        peerDependencies: { "node-llama-cpp": "3.18.1" },
-        peerDependenciesMeta: { "node-llama-cpp": { optional: true } },
-      }),
-    ).toEqual([
-      'package.json peerDependencies["node-llama-cpp"] must be omitted; keep it optional.',
-      'package.json peerDependenciesMeta["node-llama-cpp"] must be omitted; keep it optional.',
-    ]);
-  });
-
-  it("rejects node-llama-cpp as a direct runtime dependency", () => {
-    expect(
-      collectReleasePackageMetadataErrors({
-        name: "openclaw",
-        description: "Multi-channel AI gateway with extensible messaging integrations",
-        license: "MIT",
-        repository: { url: "git+https://github.com/openclaw/openclaw.git" },
-        bin: { openclaw: "openclaw.mjs" },
-        dependencies: { "node-llama-cpp": "3.18.1" },
-      }),
-    ).toContain('package.json dependencies["node-llama-cpp"] must be omitted; keep it optional.');
-  });
-
   it("rejects local fs-safe dependency specs for npm release", () => {
     expect(
       collectReleasePackageMetadataErrors({
@@ -856,21 +885,6 @@ describe("collectReleasePackageMetadataErrors", () => {
       }),
     ).toContain(
       'package.json dependencies["@openclaw/fs-safe"] must use a published semver range before npm release; found "link:../fs-safe".',
-    );
-  });
-
-  it("rejects node-llama-cpp as an optional dependency", () => {
-    expect(
-      collectReleasePackageMetadataErrors({
-        name: "openclaw",
-        description: "Multi-channel AI gateway with extensible messaging integrations",
-        license: "MIT",
-        repository: { url: "git+https://github.com/openclaw/openclaw.git" },
-        bin: { openclaw: "openclaw.mjs" },
-        optionalDependencies: { "node-llama-cpp": "3.18.1" },
-      }),
-    ).toContain(
-      'package.json optionalDependencies["node-llama-cpp"] must be omitted; keep it operator-installed.',
     );
   });
 });

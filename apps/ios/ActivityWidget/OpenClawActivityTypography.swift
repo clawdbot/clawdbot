@@ -1,6 +1,10 @@
 import SwiftUI
 
 enum OpenClawActivityType {
+    static var eyebrow: Font {
+        body(size: 8).weight(.bold)
+    }
+
     static var subheadSemiBold: Font {
         display(size: 15, weight: .semibold)
     }

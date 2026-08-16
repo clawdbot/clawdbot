@@ -32,32 +32,29 @@ describe("process supervisor run registry", () => {
     const registry = createRunRegistry();
     addRunningRecord(registry, { runId: "r1", sessionId: "s1", startedAtMs: 1 });
 
-    const first = registry.finalize("r1", {
+    registry.finalize("r1", {
       reason: "overall-timeout",
       exitCode: null,
       exitSignal: "SIGKILL",
     });
-    const second = registry.finalize("r1", {
+    expect(registry.get("r1")).toMatchObject({
+      state: "exited",
+      terminationReason: "overall-timeout",
+      exitCode: null,
+      exitSignal: "SIGKILL",
+    });
+
+    registry.finalize("r1", {
       reason: "manual-cancel",
       exitCode: 0,
       exitSignal: null,
     });
-
-    if (!first) {
-      throw new Error("missing first finalize result");
-    }
-    expect(first.firstFinalize).toBe(true);
-    expect(first.record.terminationReason).toBe("overall-timeout");
-    expect(first.record.exitCode).toBeNull();
-    expect(first.record.exitSignal).toBe("SIGKILL");
-
-    if (!second) {
-      throw new Error("missing second finalize result");
-    }
-    expect(second.firstFinalize).toBe(false);
-    expect(second.record.terminationReason).toBe("overall-timeout");
-    expect(second.record.exitCode).toBeNull();
-    expect(second.record.exitSignal).toBe("SIGKILL");
+    expect(registry.get("r1")).toMatchObject({
+      state: "exited",
+      terminationReason: "overall-timeout",
+      exitCode: null,
+      exitSignal: "SIGKILL",
+    });
   });
 
   it("prunes oldest exited records once retention cap is exceeded", () => {

@@ -25,22 +25,34 @@ type CreateTaskSuggestionResult =
   | { status: "created"; suggestion: TaskSuggestion; evictedPendingTaskIds: string[] }
   | { status: "full" };
 
-function evictTaskSuggestion(): string | null | undefined {
-  for (const [taskId, record] of suggestions) {
-    if (record.status === "accepted" || record.status === "dismissed") {
-      retainedSuggestionBytes -= retainedBytesForSuggestion(record.suggestion);
-      suggestions.delete(taskId);
-      return null;
+function planTaskSuggestionEvictions(
+  suggestionBytes: number,
+): Array<[string, TaskSuggestionRecord]> | null {
+  let projectedCount = suggestions.size + 1;
+  let projectedBytes = retainedSuggestionBytes + suggestionBytes + 1;
+  const planned: Array<[string, TaskSuggestionRecord]> = [];
+  // Accepted replay is best-effort and evicted before unseen pending work;
+  // completed entries must not displace suggestions awaiting operator action.
+  for (const status of ["dismissed", "accepted", "pending"] as const) {
+    for (const [taskId, record] of suggestions) {
+      if (
+        projectedCount <= MAX_TASK_SUGGESTIONS &&
+        projectedBytes <= MAX_TASK_SUGGESTION_RETAINED_BYTES
+      ) {
+        return planned;
+      }
+      if (record.status !== status) {
+        continue;
+      }
+      planned.push([taskId, record]);
+      projectedCount -= 1;
+      projectedBytes -= retainedBytesForSuggestion(record.suggestion);
     }
   }
-  for (const [taskId, record] of suggestions) {
-    if (record.status === "pending") {
-      retainedSuggestionBytes -= retainedBytesForSuggestion(record.suggestion);
-      suggestions.delete(taskId);
-      return taskId;
-    }
-  }
-  return undefined;
+  return projectedCount <= MAX_TASK_SUGGESTIONS &&
+    projectedBytes <= MAX_TASK_SUGGESTION_RETAINED_BYTES
+    ? planned
+    : null;
 }
 
 /** Records one suggestion without starting work. IDs intentionally vanish on restart. */
@@ -49,28 +61,26 @@ export function createTaskSuggestion(
 ): CreateTaskSuggestionResult {
   const suggestion: TaskSuggestion = {
     id: `task_${randomUUID()}`,
-    title: params.title,
-    prompt: params.prompt,
-    tldr: params.tldr,
+    title: params.title.trim(),
+    prompt: params.prompt.trim(),
+    tldr: params.tldr.trim(),
     cwd: params.cwd,
     sessionKey: params.sessionKey,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     createdAt: Date.now(),
   };
   const suggestionBytes = retainedBytesForSuggestion(suggestion);
+  const plannedEvictions = planTaskSuggestionEvictions(suggestionBytes);
+  if (!plannedEvictions) {
+    return { status: "full" };
+  }
   const evictedPendingTaskIds: string[] = [];
-  while (
-    suggestions.size >= MAX_TASK_SUGGESTIONS ||
-    retainedSuggestionBytes + suggestionBytes + 1 > MAX_TASK_SUGGESTION_RETAINED_BYTES
-  ) {
-    const evictedTaskId = evictTaskSuggestion();
-    if (evictedTaskId === undefined) {
-      // All retained tasks are in-flight acceptances. Reject new work instead
-      // of losing either its UI card or an acceptance's idempotency result.
-      return { status: "full" };
-    }
-    if (evictedTaskId) {
-      evictedPendingTaskIds.push(evictedTaskId);
+  // Commit only a complete plan; failed admissions must not discard state.
+  for (const [taskId, record] of plannedEvictions) {
+    retainedSuggestionBytes -= retainedBytesForSuggestion(record.suggestion);
+    suggestions.delete(taskId);
+    if (record.status === "pending") {
+      evictedPendingTaskIds.push(taskId);
     }
   }
   suggestions.set(suggestion.id, { status: "pending", suggestion });

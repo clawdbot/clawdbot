@@ -112,14 +112,14 @@ describe("runCapability auto audio entries", () => {
   it("skips OpenAI audio auto-selection when only ChatGPT OAuth is available", async () => {
     const modelAuth = await import("../agents/model-auth.js");
     const hasAvailableAuthForProvider = vi.mocked(modelAuth.hasAvailableAuthForProvider);
-    const resolveApiKeyForProvider = vi.mocked(modelAuth.resolveApiKeyForProvider);
+    const resolveApiKeyForProviderCore = vi.mocked(modelAuth.resolveApiKeyForProviderCore);
     hasAvailableAuthForProvider.mockImplementation(async (params) => {
       if (params.provider === "openai") {
         return params.modelApi === undefined;
       }
       return params.provider === "mistral";
     });
-    resolveApiKeyForProvider.mockImplementation(async (params) => ({
+    resolveApiKeyForProviderCore.mockImplementation(async (params) => ({
       apiKey: `${params.provider}-key`,
       source: "test",
       mode: "api-key",
@@ -190,8 +190,8 @@ describe("runCapability auto audio entries", () => {
     } finally {
       hasAvailableAuthForProvider.mockReset();
       hasAvailableAuthForProvider.mockResolvedValue(true);
-      resolveApiKeyForProvider.mockReset();
-      resolveApiKeyForProvider.mockResolvedValue({
+      resolveApiKeyForProviderCore.mockReset();
+      resolveApiKeyForProviderCore.mockResolvedValue({
         apiKey: "test-key",
         source: "test",
         mode: "api-key",
@@ -201,8 +201,8 @@ describe("runCapability auto audio entries", () => {
 
   it("passes workspaceDir to auto-selected audio provider execution auth", async () => {
     const modelAuth = await import("../agents/model-auth.js");
-    const resolveApiKeyForProvider = vi.mocked(modelAuth.resolveApiKeyForProvider);
-    resolveApiKeyForProvider.mockClear();
+    const resolveApiKeyForProviderCore = vi.mocked(modelAuth.resolveApiKeyForProviderCore);
+    resolveApiKeyForProviderCore.mockClear();
 
     await withAudioFixture("openclaw-auto-audio-workspace-auth", async ({ ctx, media, cache }) => {
       const result = await runCapability({
@@ -231,7 +231,7 @@ describe("runCapability auto audio entries", () => {
       expect(requireCapabilityOutput(result, 0).text).toBe("workspace test-key");
     });
 
-    expect(resolveApiKeyForProvider).toHaveBeenCalledWith(
+    expect(resolveApiKeyForProviderCore).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "openai",
         agentDir: "/tmp/openclaw-agent",
@@ -381,6 +381,15 @@ describe("runCapability auto audio entries", () => {
       cfgExtra: {
         tools: {
           media: {
+            models: [
+              {
+                provider: "openai",
+                model: "whisper-1",
+                prompt: "entry prompt",
+                language: "de",
+                capabilities: ["audio"],
+              },
+            ],
             audio: {
               enabled: false,
             },
@@ -402,9 +411,7 @@ describe("runCapability auto audio entries", () => {
       cfgExtra: {
         tools: {
           media: {
-            audio: {
-              models: [{ provider: "openai", model: "whisper-1" }],
-            },
+            models: [{ provider: "openai", model: "whisper-1", capabilities: ["audio"] }],
           },
         },
       },
@@ -432,14 +439,6 @@ describe("runCapability auto audio entries", () => {
               language: "fr",
               _requestPromptOverride: "Focus on names",
               _requestLanguageOverride: "en",
-              models: [
-                {
-                  provider: "openai",
-                  model: "whisper-1",
-                  prompt: "entry prompt",
-                  language: "de",
-                },
-              ],
             },
           },
         },
@@ -463,10 +462,10 @@ describe("runCapability auto audio entries", () => {
       cfgExtra: {
         tools: {
           media: {
+            models: [{ provider: "openai", model: "whisper-1", capabilities: ["audio"] }],
             audio: {
               enabled: true,
               language: "ru",
-              models: [{ provider: "openai", model: "whisper-1" }],
             },
           },
         },

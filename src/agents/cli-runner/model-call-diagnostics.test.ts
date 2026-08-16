@@ -7,7 +7,7 @@ import {
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPrivateData,
 } from "../../infra/diagnostic-events.js";
-import type { CliOutput } from "../cli-output.js";
+import type { CliOutput } from "../cli-output-contracts.js";
 import { createClaudeCliModelCallDiagnostics } from "./model-call-diagnostics.js";
 import type { PreparedCliRunContext } from "./types.js";
 
@@ -25,12 +25,7 @@ function createContext(): PreparedCliRunContext {
           otel: {
             enabled: true,
             traces: true,
-            captureContent: {
-              enabled: true,
-              inputMessages: true,
-              outputMessages: true,
-              systemPrompt: true,
-            },
+            captureContent: true,
           },
         },
       },

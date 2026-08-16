@@ -1,115 +1,29 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveTeamsMeetingsConfig } from "./config.js";
-import {
-  testTeamsMeetingListening,
-  testTeamsMeetingSpeech,
-  type TeamsMeetingsProbeContext,
-} from "./runtime-probes.js";
+import { describe, expect, it, vi } from "vitest";
+import { teamsMeetingsConfig } from "./config.js";
+import { testTeamsMeetingListening } from "./runtime-probes.js";
 import type { TeamsMeetingsSession } from "./transports/types.js";
 
 const URL = "https://teams.microsoft.com/l/meetup-join/19%3ameeting_probe%40thread.v2/0";
-
-afterEach(() => {
-  vi.useRealTimers();
-});
+type TeamsMeetingsProbeContext = Parameters<typeof testTeamsMeetingListening>[0];
 
 describe("Microsoft Teams meeting runtime probes", () => {
-  it("uses the per-request speech verification timeout", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    const session = {
-      agentId: "main",
-      chrome: { health: { inCall: true, lastOutputBytes: 0 } },
-      id: "teams-1",
-      mode: "agent",
-      transport: "chrome",
-    } as TeamsMeetingsSession;
-    const refreshHealth = vi.fn();
-    const context = {
-      config: resolveTeamsMeetingsConfig({ chrome: { joinTimeoutMs: 30_000 } }),
-      hasHealthHandle: () => true,
-      isReusable: () => false,
-      join: vi.fn(async () => ({ session, spoken: true })),
-      list: () => [],
-      refreshCaptionHealth: async () => {},
-      refreshHealth,
-      resolveAgentId: () => "main",
-    } satisfies TeamsMeetingsProbeContext;
-
-    const pending = testTeamsMeetingSpeech(context, {
-      mode: "agent",
-      timeoutMs: 150,
-      url: URL,
-    });
-    await vi.advanceTimersByTimeAsync(200);
-    const result = await pending;
-
-    expect(result.speechOutputTimedOut).toBe(true);
-    expect(refreshHealth).toHaveBeenCalledTimes(2);
-    expect(Date.now()).toBe(200);
-  });
-
-  it("bounds a blocked caption refresh by the per-request listening timeout", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
+  it("waits for listening when Chrome launched without a tracked target", async () => {
     const session = {
       agentId: "main",
       chrome: { health: { inCall: true }, launched: true },
-      id: "teams-listen-1",
+      id: "teams-listen",
       mode: "transcribe",
       transport: "chrome",
     } as TeamsMeetingsSession;
-    const refreshCaptionHealth = vi.fn(
-      (_session: TeamsMeetingsSession, _timeoutMs: number) => new Promise<void>(() => {}),
-    );
-    const context = {
-      config: resolveTeamsMeetingsConfig({ chrome: { joinTimeoutMs: 30_000 } }),
-      hasHealthHandle: () => true,
-      isReusable: () => false,
-      join: vi.fn(async () => ({ session, spoken: false })),
-      list: () => [],
-      refreshCaptionHealth,
-      refreshHealth: () => {},
-      resolveAgentId: () => "main",
-    } satisfies TeamsMeetingsProbeContext;
-
-    const pending = testTeamsMeetingListening(context, {
-      mode: "transcribe",
-      timeoutMs: 300,
-      url: URL,
+    const refreshCaptionHealth = vi.fn(async () => {
+      session.chrome!.health = {
+        ...session.chrome!.health,
+        manualAction: { reason: "teams-admission-required", message: "Waiting" },
+      };
     });
-    await vi.advanceTimersByTimeAsync(350);
-    const result = await pending;
-
-    expect(result.listenTimedOut).toBe(true);
-    expect(refreshCaptionHealth).toHaveBeenCalledWith(session, 300);
-    expect(Date.now()).toBe(350);
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("refreshes captions before a short listening timeout expires", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    const session = {
-      agentId: "main",
-      chrome: { health: { inCall: true }, launched: true },
-      id: "teams-listen-2",
-      mode: "transcribe",
-      transport: "chrome",
-    } as TeamsMeetingsSession;
-    const refreshCaptionHealth = vi.fn(
-      async (_session: TeamsMeetingsSession, _timeoutMs: number) => {
-        session.chrome!.health = {
-          ...session.chrome!.health,
-          lastCaptionText: "Caption already waiting",
-          manualActionRequired: true,
-          transcriptLines: 1,
-        };
-      },
-    );
     const context = {
-      config: resolveTeamsMeetingsConfig({ chrome: { joinTimeoutMs: 30_000 } }),
-      hasHealthHandle: () => true,
+      config: teamsMeetingsConfig.resolveConfig({}),
+      hasHealthHandle: () => false,
       isReusable: () => false,
       join: vi.fn(async () => ({ session, spoken: false })),
       list: () => [],
@@ -124,53 +38,10 @@ describe("Microsoft Teams meeting runtime probes", () => {
       url: URL,
     });
 
-    expect(result.listenVerified).toBe(true);
-    expect(result.manualActionRequired).toBe(true);
-    expect(refreshCaptionHealth).toHaveBeenCalledTimes(1);
-    expect(Date.now()).toBe(0);
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("does not accept caption progress that arrives after the listening deadline", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    const session = {
-      agentId: "main",
-      chrome: { health: { inCall: true }, launched: true },
-      id: "teams-listen-late",
-      mode: "transcribe",
-      transport: "chrome",
-    } as TeamsMeetingsSession;
-    const context = {
-      config: resolveTeamsMeetingsConfig({ chrome: { joinTimeoutMs: 30_000 } }),
-      hasHealthHandle: () => true,
-      isReusable: () => false,
-      join: vi.fn(async () => ({ session, spoken: false })),
-      list: () => [],
-      refreshCaptionHealth: async (_session: TeamsMeetingsSession, timeoutMs: number) => {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, timeoutMs + 50);
-        });
-        session.chrome!.health = {
-          ...session.chrome!.health,
-          lastCaptionText: "Too late",
-          transcriptLines: 1,
-        };
-      },
-      refreshHealth: () => {},
-      resolveAgentId: () => "main",
-    } satisfies TeamsMeetingsProbeContext;
-
-    const pending = testTeamsMeetingListening(context, {
-      mode: "transcribe",
-      timeoutMs: 300,
-      url: URL,
-    });
-    await vi.advanceTimersByTimeAsync(400);
-
-    await expect(pending).resolves.toMatchObject({
-      listenTimedOut: true,
-      listenVerified: false,
+    expect(refreshCaptionHealth).toHaveBeenCalledOnce();
+    expect(result.manualAction).toEqual({
+      reason: "teams-admission-required",
+      message: "Waiting",
     });
   });
 });

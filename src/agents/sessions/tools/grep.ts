@@ -3,7 +3,6 @@
  *
  * Searches files with ripgrep/local operations, optional context, and bounded output rendering.
  */
-import type { ChildProcess } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
@@ -75,7 +74,7 @@ export interface GrepToolOptions {
 
 function formatGrepCall(
   args: { pattern: string; path?: string; glob?: string; limit?: number } | undefined,
-  theme: typeof import("../../modes/interactive/theme/theme.js").theme,
+  theme: typeof import("../../modes/interactive/theme/theme.js").interactiveAgentTheme,
 ): string {
   const pattern = str(args?.pattern);
   const rawPath = str(args?.path);
@@ -103,7 +102,7 @@ function formatGrepResult(
     details?: GrepToolDetails;
   },
   options: ToolRenderResultOptions,
-  theme: typeof import("../../modes/interactive/theme/theme.js").theme,
+  theme: typeof import("../../modes/interactive/theme/theme.js").interactiveAgentTheme,
   showImages: boolean,
 ): string {
   const matchLimit = result.details?.matchLimitReached;
@@ -160,7 +159,12 @@ export function createGrepToolDefinition(
         // Keep cancellation live from the first await through async result formatting.
         // Settlement owns listener cleanup; spawned children stop without waiting for close.
         let settled = false;
-        let child: ChildProcess | undefined;
+        let child:
+          | {
+              nodeChildProcess: { killed: boolean };
+              kill: () => void;
+            }
+          | undefined;
         let childClosed = false;
         let rl: ReturnType<typeof createInterface> | undefined;
         let killedDueToLimit = false;
@@ -178,7 +182,7 @@ export function createGrepToolDefinition(
           return true;
         };
         const stopChild = (dueToLimit = false) => {
-          if (child && !childClosed && !child.killed) {
+          if (child && !childClosed && !child.nodeChildProcess.killed) {
             killedDueToLimit = dueToLimit;
             child.kill();
           }
@@ -267,7 +271,7 @@ export function createGrepToolDefinition(
               reject: false,
               stdio: ["ignore", "pipe", "pipe"],
             });
-            releaseChildProcessOutputAfterExit(spawnedChild);
+            releaseChildProcessOutputAfterExit(spawnedChild.nodeChildProcess);
             child = spawnedChild;
             rl = createInterface({ input: spawnedChild.stdout });
             let stderr = "";
@@ -276,7 +280,10 @@ export function createGrepToolDefinition(
             let linesTruncated = false;
             const outputLines: string[] = [];
 
-            spawnedChild.stderr?.on("data", (chunk) => {
+            // Decode stderr as UTF-8 at the stream so pipe chunk boundaries
+            // cannot split multibyte characters into U+FFFD replacement noise.
+            spawnedChild.stderr?.setEncoding("utf8");
+            spawnedChild.stderr?.on("data", (chunk: string) => {
               stderr = appendBoundedTextTail(stderr, chunk);
             });
             const onStreamError = (stream: "stdout" | "stderr", error: Error) => {
@@ -324,7 +331,7 @@ export function createGrepToolDefinition(
             // Collect matches during streaming, then format them after rg exits.
             const matches: Array<{ filePath: string; lineNumber: number; lineText?: string }> = [];
             rl.on("line", (line) => {
-              if (!line.trim() || matchCount >= effectiveLimit) {
+              if (!line.trim() || matchLimitReached) {
                 return;
               }
               let event: {
@@ -342,24 +349,26 @@ export function createGrepToolDefinition(
               }
               if (event.type === "match") {
                 matchCount++;
+                // Observe one extra match before stopping so exactly N matches stay complete.
+                if (matchCount > effectiveLimit) {
+                  matchLimitReached = true;
+                  stopChild(true);
+                  return;
+                }
                 const filePath = event.data?.path?.text;
                 const lineNumber = event.data?.line_number;
                 const lineText = event.data?.lines?.text;
                 if (filePath && typeof lineNumber === "number") {
                   matches.push({ filePath, lineNumber, lineText });
                 }
-                if (matchCount >= effectiveLimit) {
-                  matchLimitReached = true;
-                  stopChild(true);
-                }
               }
             });
 
-            spawnedChild.on("error", (error) => {
+            spawnedChild.nodeChildProcess.on("error", (error) => {
               childClosed = true;
               settle(() => reject(new Error(`Failed to run ripgrep: ${error.message}`)));
             });
-            spawnedChild.on("close", (code) => {
+            spawnedChild.nodeChildProcess.on("close", (code) => {
               childClosed = true;
               void (async () => {
                 if (settled) {

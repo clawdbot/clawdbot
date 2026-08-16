@@ -42,21 +42,19 @@ afterEach(() => {
 });
 
 describe("plugin contract registry scoped retries", () => {
-  it("retries provider loads after a transient plugin-scoped runtime error", async () => {
+  it("retries when a manifest-declared provider has no runtime entry", async () => {
     const loadBundledCapabilityRuntimeRegistry = vi
       .fn()
       .mockReturnValueOnce(
         createMockRuntimeRegistry({
           plugin: {
             id: "arcee",
-            status: "error",
-            error: "transient arcee load failure",
-            providerIds: [],
+            status: "loaded",
+            providerIds: ["arcee"],
             webFetchProviderIds: [],
             webSearchProviderIds: [],
             migrationProviderIds: [],
           },
-          diagnostics: [{ pluginId: "arcee", message: "transient arcee load failure" }],
         }),
       )
       .mockReturnValueOnce(

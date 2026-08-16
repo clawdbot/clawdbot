@@ -23,7 +23,7 @@ Effective policy is the **stricter** of `tools.exec.*` and approvals
 defaults: approvals can only tighten config-derived security/ask, never
 loosen them. If an approvals field is omitted, the `tools.exec` value is
 used. Host exec also uses local approvals state on that machine - a
-host-local `ask: "always"` in the execution host approvals file keeps
+host-local `ask: "always"` in the execution host approvals document keeps
 prompting even if session or config defaults request `ask: "on-miss"`.
 </Note>
 
@@ -51,14 +51,14 @@ Exec approvals are enforced locally on the execution host:
 
 ## Inspecting the effective policy
 
-| Command                                                          | What it shows                                                                          |
-| ---------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `openclaw approvals get` / `--gateway` / `--node <id\|name\|ip>` | Requested policy, host policy sources, and the effective result.                       |
-| `openclaw exec-policy show`                                      | Local-machine merged view.                                                             |
-| `openclaw exec-policy set` / `preset`                            | Synchronize the local requested policy with the local host approvals file in one step. |
+| Command                                                          | What it shows                                                                              |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `openclaw approvals get` / `--gateway` / `--node <id\|name\|ip>` | Requested policy, host policy sources, and the effective result.                           |
+| `openclaw exec-policy show`                                      | Local-machine merged view.                                                                 |
+| `openclaw exec-policy set` / `preset`                            | Synchronize the local requested policy with the local host approvals document in one step. |
 
 <Note>
-Per-session `/exec` overrides are not included. Run `/exec` in the relevant session to inspect its current defaults. See [session overrides](/tools/exec#session-overrides-exec).
+Per-session `/exec` overrides are not included. Run `/exec` in the relevant session to inspect its current defaults. See [session overrides](/tools/exec#session-overrides-%2Fexec).
 </Note>
 
 Full CLI reference (flags, JSON output, allowlist add/remove): [Approvals CLI](/cli/approvals).
@@ -79,24 +79,31 @@ message as a fallback.
 
 ## Settings and storage
 
-Approvals live in a local JSON file on the execution host. When
-`OPENCLAW_STATE_DIR` is set, the file follows that state directory;
+Approvals live in the shared SQLite state database on the execution host. When
+`OPENCLAW_STATE_DIR` is set, the database follows that state directory;
 otherwise it uses the default OpenClaw state directory:
 
 ```text
-$OPENCLAW_STATE_DIR/exec-approvals.json
+$OPENCLAW_STATE_DIR/state/openclaw.sqlite#exec_approvals_config
 # otherwise
-~/.openclaw/exec-approvals.json
+~/.openclaw/state/openclaw.sqlite#exec_approvals_config
 ```
+
+The `#exec_approvals_config` suffix is a display locator for the singleton
+SQLite row, not part of the database filename. The row keeps the JSON document
+shown below as its authoritative value, so CLI and Gateway compare-and-swap
+hashes remain stable.
 
 The default approval socket follows the same root:
 `$OPENCLAW_STATE_DIR/exec-approvals.sock`, or
 `~/.openclaw/exec-approvals.sock` when the variable is unset.
 
 State directories are independent trust scopes. When `OPENCLAW_STATE_DIR`
-points somewhere else, OpenClaw never imports or archives
-`~/.openclaw/exec-approvals.json`; configure approvals separately for the
-custom state directory. Doctor also imports legacy
+points somewhere else, OpenClaw never imports or archives approvals from the
+default state directory; configure approvals separately for the custom state
+directory. After upgrading from a file-backed release, stop the Gateway and run
+`openclaw doctor --fix` once to import the active state directory's retired
+`exec-approvals.json`. Doctor also imports legacy
 `plugin-binding-approvals.json` only when it belongs to the active state
 directory.
 
@@ -125,10 +132,13 @@ Example schema:
         {
           "id": "B0C8C0B3-2C2D-4F8A-9A3C-5A4B3C2D1E0F",
           "pattern": "~/Projects/**/bin/rg",
+          "argPattern": "sha256:argv:...",
           "source": "allow-always",
           "lastUsedAt": 1737150000000,
-          "lastUsedCommand": "rg -n TODO",
           "lastResolvedPath": "/Users/user/Projects/.../bin/rg"
+        },
+        {
+          "pattern": "~/Projects/**/bin/git"
         }
       ]
     }
@@ -150,8 +160,8 @@ Example schema:
 | `auto`      | Use allowlist policy, run deterministic matches directly, and send approval misses through OpenClaw's native auto reviewer before falling back to a human approval route. |
 | `full`      | Run host exec without approval prompts.                                                                                                                                   |
 
-Legacy `tools.exec.security` / `tools.exec.ask` remain supported and still
-apply wherever `mode` is unset at that scope.
+Doctor migrates the retired persisted `tools.exec.security` / `tools.exec.ask`
+pair to `tools.exec.mode`.
 
 ### `exec.security`
 
@@ -221,22 +231,21 @@ executable.
 </ParamField>
 
 Set globally under `tools.exec.commandHighlighting` or per agent under
-`agents.list[].tools.exec.commandHighlighting`.
+`agents.entries.*.tools.exec.commandHighlighting`.
 
 ## YOLO mode (no-approval)
 
 To run host exec without approval prompts, open **both** policy layers:
 requested exec policy in OpenClaw config (`tools.exec.*`) **and**
-host-local approvals policy in the execution host approvals file.
+host-local approvals policy in the execution host approvals document.
 
 Omitted `askFallback` defaults to `deny`. Set host `askFallback` to `full`
 explicitly when a no-UI approval prompt should fall back to allow.
 
-| Layer                 | YOLO setting               |
-| --------------------- | -------------------------- |
-| `tools.exec.security` | `full` on `gateway`/`node` |
-| `tools.exec.ask`      | `off`                      |
-| Host `askFallback`    | `full`                     |
+| Layer              | YOLO setting               |
+| ------------------ | -------------------------- |
+| `tools.exec.mode`  | `full` on `gateway`/`node` |
+| Host `askFallback` | `full`                     |
 
 <Warning>
 **Important distinctions:**
@@ -267,12 +276,11 @@ If you want a more conservative setup, tighten OpenClaw exec policy back to
   <Step title="Set the requested config policy">
     ```bash
     openclaw config set tools.exec.host gateway
-    openclaw config set tools.exec.security full
-    openclaw config set tools.exec.ask off
+    openclaw config set tools.exec.mode full
     openclaw gateway restart
     ```
   </Step>
-  <Step title="Match the host approvals file">
+  <Step title="Match the host approvals document">
     ```bash
     openclaw approvals set --stdin <<'EOF'
     {
@@ -297,22 +305,19 @@ openclaw exec-policy preset yolo
 Updates both local `tools.exec.host/security/ask` and the local approvals
 file defaults (including `askFallback: "full"`). It is intentionally
 local-only. To change gateway-host or node-host approvals remotely, use
-`openclaw approvals set --gateway` or `openclaw approvals set --node
-<id|name|ip>`.
+`openclaw approvals set --gateway` or
+`openclaw approvals set --node <id|name|ip>`.
 
 Other built-in presets: `cautious` (`host=gateway`, `security=allowlist`,
 `ask=on-miss`, `askFallback=deny`) and `deny-all` (`host=gateway`,
 `security=deny`, `ask=off`, `askFallback=deny`). Apply the same way:
 `openclaw exec-policy preset cautious`.
 
-To set individual fields instead of a full preset, use
-`openclaw exec-policy set --host <auto|sandbox|gateway|node> --security
-<deny|allowlist|full> --ask <off|on-miss|always> --ask-fallback
-<deny|allowlist|full>` with any subset of those flags.
+To set individual fields instead of a full preset, use `openclaw exec-policy set --host <auto|sandbox|gateway|node> --security <deny|allowlist|full> --ask <off|on-miss|always> --ask-fallback <deny|allowlist|full>` with any subset of those flags.
 
 ### Node host
 
-Apply the same approvals file on the node instead:
+Apply the same approvals document on the node instead:
 
 ```bash
 openclaw approvals set --node <id|name|ip> --stdin <<'EOF'
@@ -340,11 +345,11 @@ EOF
 
 - `/exec security=full ask=off` changes only the current session.
 - `/elevated full` is a break-glass shortcut that skips exec approvals only
-  when both the requested policy and the host approvals file resolve to
+  when both the requested policy and the host approvals document resolve to
   `security: "full"` and `ask: "off"`. A stricter host file, such as `ask:
 "always"`, still prompts.
 
-If the host approvals file stays stricter than config, the stricter host
+If the host approvals document stays stricter than config, the stricter host
 policy still wins.
 
 ## Allowlist (per agent)
@@ -403,18 +408,22 @@ argv matching. Prefer the UI or approval flow to regenerate those entries
 instead of hand-editing the encoded value. If OpenClaw cannot parse argv
 for a command segment, entries with `argPattern` do not match.
 
+Generated `allow-always` entries are argv-bound. New generated entries include
+`argPattern`; older generated path-only entries are ignored and need a fresh
+approval. For a manual path-only rule, omit both `source` and `argPattern`.
+
 Each allowlist entry supports:
 
-| Field              | Meaning                                              |
-| ------------------ | ---------------------------------------------------- |
-| `pattern`          | Resolved binary path glob or bare command-name glob  |
-| `argPattern`       | Optional ECMAScript argv regex; omitted is path-only |
-| `id`               | Stable opaque ID; generated as a UUID when absent    |
-| `source`           | Entry source, such as `allow-always`                 |
-| `commandText`      | Legacy plaintext input; discarded during load        |
-| `lastUsedAt`       | Last-used timestamp                                  |
-| `lastUsedCommand`  | Last command that matched                            |
-| `lastResolvedPath` | Last resolved binary path                            |
+| Field              | Meaning                                                                  |
+| ------------------ | ------------------------------------------------------------------------ |
+| `pattern`          | Resolved binary path glob or bare command-name glob                      |
+| `argPattern`       | ECMAScript argv regex or generated exact-argv hash; omitted is path-only |
+| `id`               | Stable opaque ID; generated as a UUID when absent                        |
+| `source`           | Generated entry source, such as `allow-always`; omit for manual entries  |
+| `commandText`      | Legacy plaintext input; discarded during load                            |
+| `lastUsedAt`       | Last-used timestamp                                                      |
+| `lastUsedCommand`  | Last command that matched; omitted for generated hashed argv entries     |
+| `lastResolvedPath` | Last resolved binary path                                                |
 
 ## Auto-allow skill CLIs
 
@@ -448,7 +457,7 @@ shows last-used metadata per pattern so you can keep the list tidy.
 The target selector chooses **Gateway** (local approvals) or a **Node**.
 Nodes must advertise `system.execApprovals.get/set` (macOS app or headless
 node host). If a node does not advertise exec approvals yet, edit its
-local approvals file directly.
+local approvals document directly.
 
 Some node hosts, including the Windows companion, own a different approval
 policy format. Control UI shows these host-native policies read-only. Use the

@@ -2,16 +2,24 @@ title: Matrix generated images deliver as real image attachments while streaming
 scenario:
   id: matrix-room-generated-image-delivery
   surface: channels
+  plugins:
+    - openai
   coverage:
     primary:
-      - channels.media-rich-content
+      - matrix.media-and-rich-content
+  gatewayConfigPatch:
+    agents:
+      defaults:
+        mediaModels:
+          image:
+            primary: openai/gpt-image-1
   execution:
-    profiles: { "matrix:all": 52, "matrix:media": 1 }
     kind: flow
     channel: matrix
     timeoutMs: 180000
     retryCount: 0
     config:
+      requiredChannelDriver: live
       matrixConfigOverrides:
         streaming: quiet
       matrixTopology:
@@ -28,7 +36,17 @@ scenario:
             requireMention: true
 
 flow:
-  module: ./live-transports/matrix/scenarios/scenario-runtime-media.js
-  call: runGeneratedImageDeliveryScenario
-  args:
-    - expr: "scenarioContext"
+  steps:
+    - name: Matrix generated images deliver as real image attachments while streaming
+      actions:
+        - call: ensureImageGenerationConfigured
+          args:
+            - ref: env
+        - set: scenarioModule
+          value:
+            expr: "await qaImport('./live-transports/matrix/scenarios/scenario-runtime-media.js')"
+        - call: scenarioModule.runGeneratedImageDeliveryScenario
+          args:
+            - expr: "scenarioContext"
+          saveAs: result
+      detailsExpr: "result.details ?? (result.artifacts ? JSON.stringify(result.artifacts, null, 2) : undefined)"

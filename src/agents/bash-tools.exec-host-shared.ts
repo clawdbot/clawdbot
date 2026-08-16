@@ -28,6 +28,7 @@ import { registerExecApprovalFollowupRuntimeHandoff } from "./bash-tools.exec-ap
 import { sendExecApprovalFollowup } from "./bash-tools.exec-approval-followup.js";
 import {
   type ExecApprovalRegistration,
+  isExecApprovalRunAbortedError,
   resolveRegisteredExecApprovalDecision,
 } from "./bash-tools.exec-approval-request.js";
 import { buildApprovalPendingMessage } from "./bash-tools.exec-runtime.js";
@@ -98,6 +99,7 @@ type RegisteredExecApprovalRequestContext = {
 /** Destination and context for async exec approval follow-up delivery. */
 type ExecApprovalFollowupTarget = {
   approvalId: string;
+  agentId?: string;
   sessionKey?: string;
   /** Session UUID active when the approval was requested. Lets the followup be
    *  dropped if `/new` or `/reset` rebinds the session key to a new session. */
@@ -254,7 +256,10 @@ export async function resolveApprovalDecisionOrUndefined(params: {
       approvalId: params.approvalId,
       preResolvedDecision: params.preResolvedDecision,
     });
-  } catch {
+  } catch (error) {
+    if (isExecApprovalRunAbortedError(error)) {
+      throw error;
+    }
     params.onFailure();
     return undefined;
   }
@@ -355,6 +360,7 @@ export function buildExecApprovalFollowupTarget(
 ): ExecApprovalFollowupTarget {
   return {
     approvalId: params.approvalId,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionKey: params.sessionKey,
     expectedSessionId: params.expectedSessionId,
     sessionStore: params.sessionStore,
@@ -428,7 +434,7 @@ export function buildHeadlessExecApprovalDeniedMessage(params: {
   ask: ExecAsk;
   askFallback: ExecApprovalsResolved["agent"]["askFallback"];
 }): string {
-  const runLabel = params.trigger === "cron" ? "Cron runs" : "Headless runs";
+  const runLabel = params.trigger === "cron" ? "Automation runs" : "Headless runs";
   return [
     `exec denied: ${runLabel} cannot wait for interactive exec approval.`,
     `Effective host exec policy: security=${params.security} ask=${params.ask} askFallback=${params.askFallback}`,
@@ -456,9 +462,11 @@ export async function sendExecApprovalFollowupResult(
           approvalId: target.approvalId,
           sessionKey: target.sessionKey,
           bashElevated: target.bashElevated,
+          resultText,
         });
   await send({
     approvalId: target.approvalId,
+    ...(target.agentId ? { agentId: target.agentId } : {}),
     sessionKey: target.sessionKey,
     expectedSessionId: target.expectedSessionId,
     sessionStore: target.sessionStore,

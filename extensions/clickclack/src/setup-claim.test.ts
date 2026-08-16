@@ -28,6 +28,29 @@ function requestBodyJson(init: RequestInit | undefined): unknown {
   return JSON.parse(body);
 }
 
+function claimResponse(extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    token: "test-token",
+    bot: {
+      id: "usr_bot",
+      handle: "openclaw",
+      display_name: "OpenClaw",
+    },
+    workspace: {
+      id: "wsp_1",
+      route_id: "clickclack",
+      slug: "default",
+      name: "ClickClack",
+    },
+    defaults: {
+      defaultTo: "channel:general",
+      allowFrom: ["*"],
+      agentActivity: true,
+    },
+    ...extra,
+  };
+}
+
 describe("ClickClack setup-code claim", () => {
   it("claims over guarded HTTPS without bearer authentication", async () => {
     const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
@@ -54,7 +77,7 @@ describe("ClickClack setup-code claim", () => {
 
     await expect(
       claimClickClackSetupCode({
-        baseUrl: "https://clickclack.example",
+        claimUrl: "https://clickclack.example/api/bot-setup-codes/claim",
         code: "ABCD-EFGH-JKMP",
         fetch: fetchMock as unknown as typeof fetch,
       }),
@@ -90,7 +113,83 @@ describe("ClickClack setup-code claim", () => {
     expect(headers.get("Content-Type")).toBe("application/json");
   });
 
-  it("pins the validated private address when claiming over HTTP", async () => {
+  it("accepts a matching v1 contract with a path-mounted API base", async () => {
+    const apiBaseUrl = "https://api.clickclack.example/services/clickclack";
+    const claimUrl = `${apiBaseUrl}/api/bot-setup-codes/claim`;
+    const fetchMock = vi.fn(async () =>
+      Response.json(
+        claimResponse({
+          contract_version: 1,
+          api_base_url: apiBaseUrl,
+        }),
+      ),
+    );
+
+    await expect(
+      claimClickClackSetupCode({
+        claimUrl,
+        expectedClaimUrl: claimUrl,
+        code: "ABCD-EFGH-JKMP",
+        fetch: fetchMock as unknown as typeof fetch,
+      }),
+    ).resolves.toMatchObject({
+      contract_version: 1,
+      api_base_url: apiBaseUrl,
+      token: "test-token",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      claimUrl,
+      expect.objectContaining({ method: "POST", redirect: "manual" }),
+    );
+  });
+
+  it("rejects incomplete, unsupported, and mismatched v1 metadata", async () => {
+    const claimUrl = "https://api.clickclack.example/services/clickclack/api/bot-setup-codes/claim";
+    const fetchMock = vi.fn();
+    for (const [response, message] of [
+      [claimResponse(), "legacy response"],
+      [
+        claimResponse({
+          contract_version: 2,
+          api_base_url: "https://api.clickclack.example/services/clickclack",
+        }),
+        "invalid v1 contract metadata",
+      ],
+      [
+        claimResponse({
+          contract_version: 1,
+          api_base_url: "https://other.example/services/clickclack",
+        }),
+        "does not match the claim URL",
+      ],
+      [
+        claimResponse({
+          contract_version: 1,
+          api_base_url: "https://api.clickclack.example/services/clickclack?invalid=1",
+        }),
+        "response.api_base_url is invalid",
+      ],
+      [
+        claimResponse({
+          contract_version: 1,
+          api_base_url: "http://10.0.0.5/services/clickclack",
+        }),
+        "must use HTTPS unless it is on loopback",
+      ],
+    ] as const) {
+      fetchMock.mockResolvedValueOnce(Response.json(response));
+      await expect(
+        claimClickClackSetupCode({
+          claimUrl,
+          expectedClaimUrl: claimUrl,
+          code: "ABCD-EFGH-JKMP",
+          fetch: fetchMock as unknown as typeof fetch,
+        }),
+      ).rejects.toThrow(message);
+    }
+  });
+
+  it("pins the validated loopback address when claiming over HTTP", async () => {
     const server = createServer((_request, response) => {
       response.setHeader("Content-Type", "application/json");
       response.end(
@@ -116,7 +215,7 @@ describe("ClickClack setup-code claim", () => {
     try {
       await expect(
         claimClickClackSetupCode({
-          baseUrl: `http://localhost:${port}`,
+          claimUrl: `http://localhost:${port}/api/bot-setup-codes/claim`,
           code: "ABCD-EFGH-JKMP",
           lookupFn,
         }),
@@ -132,20 +231,18 @@ describe("ClickClack setup-code claim", () => {
     }
   });
 
-  it("rejects public HTTP claims before sending a request", async () => {
+  it("rejects non-loopback HTTP claims before sending a request", async () => {
     const fetchMock = vi.fn();
 
-    for (const address of ["93.184.216.34", "198.18.0.1"]) {
+    for (const address of ["10.0.0.5", "93.184.216.34", "198.18.0.1"]) {
       await expect(
         claimClickClackSetupCode({
-          baseUrl: "http://clickclack.example",
+          claimUrl: "http://clickclack.example/api/bot-setup-codes/claim",
           code: "ABCD-EFGH-JKMP",
           fetch: fetchMock as unknown as typeof fetch,
           lookupFn: createLookupFn(address),
         }),
-      ).rejects.toThrow(
-        "ClickClack setup codes require HTTPS unless the server is on a private or loopback network.",
-      );
+      ).rejects.toThrow("ClickClack setup codes require HTTPS unless the server is on loopback.");
     }
 
     expect(fetchMock).not.toHaveBeenCalled();
@@ -159,7 +256,7 @@ describe("ClickClack setup-code claim", () => {
     try {
       const claim = expect(
         claimClickClackSetupCode({
-          baseUrl: "http://clickclack.internal",
+          claimUrl: "http://clickclack.internal/api/bot-setup-codes/claim",
           code: "ABCD-EFGH-JKMP",
           fetch: fetchMock as unknown as typeof fetch,
           lookupFn,
@@ -186,7 +283,7 @@ describe("ClickClack setup-code claim", () => {
 
     await expect(
       claimClickClackSetupCode({
-        baseUrl: "https://clickclack.example",
+        claimUrl: "https://clickclack.example/api/bot-setup-codes/claim",
         code: "ABCD-EFGH-JKMP",
         fetch: fetchMock as unknown as typeof fetch,
       }),

@@ -36,7 +36,6 @@ export {
   createMoonshotThinkingWrapper,
   createPlainTextToolCallCompatWrapper,
   createToolStreamWrapper,
-  createZaiToolStreamWrapper,
   defaultToolStreamExtraParams,
   isOpenAICompatibleThinkingEnabled,
   type ProviderStreamWrapperFactory,
@@ -131,13 +130,15 @@ export function buildProviderStreamFamilyHooks(
           // before payload-shape and context-management compatibility rewrites.
           let nextStreamFn = createOpenAIAttributionHeadersWrapper(ctx.streamFn);
 
-          if (hasFastModeParam(ctx.extraParams)) {
+          const serviceTier = resolveOpenAIServiceTier(ctx.extraParams);
+          // Payload/transport tier stays authoritative, then an explicit tier, then fast's default.
+          // Skip fast for valid config so its payload hook cannot install priority first.
+          if (!serviceTier && hasFastModeParam(ctx.extraParams)) {
             nextStreamFn = createOpenAIFastModeWrapper(nextStreamFn, () =>
               resolveOpenAIFastMode(ctx.extraParams),
             );
           }
 
-          const serviceTier = resolveOpenAIServiceTier(ctx.extraParams);
           if (serviceTier) {
             nextStreamFn = createOpenAIServiceTierWrapper(nextStreamFn, serviceTier);
           }
@@ -220,7 +221,6 @@ export { createMinimaxFastModeWrapper } from "../llm/providers/stream-wrappers/m
 export {
   createOpenAIAttributionHeadersWrapper,
   createCodexNativeWebSearchWrapper,
-  createOpenAIDefaultTransportWrapper,
   createOpenAIFastModeWrapper,
   createOpenAIReasoningCompatibilityWrapper,
   createOpenAIResponsesContextManagementWrapper,

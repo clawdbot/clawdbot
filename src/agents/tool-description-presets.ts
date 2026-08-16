@@ -2,23 +2,52 @@
 // descriptions when a longer contextual description is assembled elsewhere.
 export const EXEC_TOOL_DISPLAY_SUMMARY = "Run shell now.";
 export const PROCESS_TOOL_DISPLAY_SUMMARY = "Inspect/control exec sessions.";
-export const CRON_TOOL_DISPLAY_SUMMARY = "Schedule reminders, cron, wake events.";
+export const CRON_TOOL_DISPLAY_SUMMARY = "Schedule reminders, automations, wake events.";
 export const SESSIONS_LIST_TOOL_DISPLAY_SUMMARY = "List visible sessions; filters/previews.";
 export const SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY = "Read sanitized session history.";
 export const SESSIONS_SEARCH_TOOL_DISPLAY_SUMMARY = "Search past session transcripts.";
 export const SESSIONS_SEND_TOOL_DISPLAY_SUMMARY = "Run same-Gateway session/agent.";
 export const SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY = "Spawn subagent or ACP session.";
 export const SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY = "Spawn subagent session.";
+export const AGENTS_WAIT_TOOL_DISPLAY_SUMMARY = "Wait for collector subagents.";
 export const SESSION_STATUS_TOOL_DISPLAY_SUMMARY = "Show session status/model/usage.";
 export const UPDATE_PLAN_TOOL_DISPLAY_SUMMARY = "Track short work plan.";
 export const ASK_USER_TOOL_DISPLAY_SUMMARY = "Ask the user and wait for an answer.";
-export const SPAWN_TASK_TOOL_DISPLAY_SUMMARY = "Suggest follow-up work for operator approval.";
+export const SUGGEST_TASK_TOOL_DISPLAY_SUMMARY = "Suggest follow-up work for operator approval.";
 export const DISMISS_TASK_TOOL_DISPLAY_SUMMARY = "Withdraw a pending task suggestion.";
+
+// Mirrors plugin-sdk SessionToolsVisibility; kept local because importing that
+// module here would close an agents<->plugin-sdk madge cycle. Call sites pass
+// the policy union, so a new mode fails compilation at every consumer.
+type SessionVisibilityScope = "self" | "tree" | "agent" | "all";
+
+// Single source for model-facing session-visibility scope wording; every tool
+// description or warning that explains visibility renders through this so the
+// prose cannot drift from the session-visibility checker (openclaw#114797).
+const SESSION_VISIBILITY_SCOPE_COPY = {
+  self: "current session only",
+  tree: "current session + own spawn subtree; reads also cover any watched same-agent group sessions",
+  agent: "all sessions of this agent",
+  all: "all sessions, cross-agent per tools.agentToAgent",
+} satisfies Record<SessionVisibilityScope, string>;
+
+export function describeSessionVisibilityScope(
+  visibility: SessionVisibilityScope,
+  options?: { spawnRestricted?: boolean },
+): string {
+  // Sandboxed sessions under the "spawned" clamp list/read only spawned rows,
+  // so the tree watched-read clause would promise reads that context denies.
+  if (options?.spawnRestricted && visibility === "tree") {
+    return "current session + own spawn subtree (sandbox: spawned sessions only)";
+  }
+  return SESSION_VISIBILITY_SCOPE_COPY[visibility];
+}
 
 /** Describes the sessions_list tool for model-facing instructions. */
 export function describeSessionsListTool(): string {
   return [
     "List visible sessions; filter kind/label/agentId/search/activity/archive.",
+    "Preview recent messages inline via includeLastMessage/messageLimit; includeDerivedTitles adds derived titles.",
     "Use before history/send target selection.",
   ].join(" ");
 }
@@ -54,7 +83,15 @@ export function describeSessionsSendTool(): string {
 export function describeSessionsSpawnTool(options?: {
   acpAvailable?: boolean;
   threadAvailable?: boolean;
+  swarmEnabled?: boolean;
+  sessionToolsVisibility?: SessionVisibilityScope;
+  spawnRestricted?: boolean;
 }): string {
+  // Callers that resolve the effective visibility get it rendered as fact;
+  // without it the copy must keep the "default" hedge instead of asserting tree.
+  const visibilityLine = options?.sessionToolsVisibility
+    ? `Session listing/addressing obeys \`tools.sessions.visibility\` (${options.sessionToolsVisibility}: ${describeSessionVisibilityScope(options.sessionToolsVisibility, { spawnRestricted: options.spawnRestricted })}).`
+    : `Session listing/addressing obeys \`tools.sessions.visibility\` (\`tree\` default: ${describeSessionVisibilityScope("tree")}).`;
   const runtimeDescription =
     options?.acpAvailable === false
       ? 'Spawn clean child; default `runtime="subagent"`.'
@@ -66,23 +103,26 @@ export function describeSessionsSpawnTool(options?: {
   const completionGuidance = options?.threadAvailable
     ? sessionCompletionGuidance
     : "After spawn, do non-overlap work while run result returns.";
-  const baseDescription = [
+  return [
     runtimeDescription,
     options?.threadAvailable
       ? '`mode="run"` one-shot; `mode="session"` persistent/thread-bound only on supporting requester channel.'
       : '`mode="run"` one-shot background.',
+    "`agentId` targets a configured agent (see agents_list); `model` overrides its model; `cleanup` delete|keep hidden child session; `sandbox` inherit|require.",
+    '`visible=true`: persistent sidebar dashboard session; use when the user asks to create/open a thread; subagent only; omit `mode` (no `mode="run"`), `thread`, `thinking`, `lightContext`, `attachments`, `attachAs`; inherits the caller tool-policy ceiling; may check out a git worktree via `worktree`/`worktreeName`/`worktreeBaseRef`.',
+    visibilityLine,
+    ...(options?.swarmEnabled
+      ? [
+          "`collect=true` (swarm): parallel fan-out collector children; structured result per `outputSchema`; `groupId` groups a batch; await with agents_wait.",
+        ]
+      : []),
     "Inherits parent workspace. Native task arrives as first `[Subagent Task]`.",
+    ...(options?.acpAvailable === false
+      ? []
+      : ['`runtime="acp"` ids: codex, claude, gemini, opencode, or configured ACP.']),
     'Native transcript needed: `context="fork"`; else omit/isolated.',
     "Use fresh child for sidecar/parallel batch reads, multi-step search, data collection; avoid quick lookup/single read unless policy prefers.",
     completionGuidance,
-  ];
-  if (options?.acpAvailable === false) {
-    return baseDescription.join(" ");
-  }
-  return [
-    ...baseDescription.slice(0, 3),
-    '`runtime="acp"` ids: codex, claude, gemini, opencode, or configured ACP.',
-    ...baseDescription.slice(3),
   ].join(" ");
 }
 
@@ -97,13 +137,13 @@ export function describeSessionStatusTool(): string {
 
 /** Describes the update_plan tool for model-facing instructions. */
 export function describeUpdatePlanTool(): string {
-  return "Use for multi-step work. Send the full list each call; keep statuses current and exactly one `in_progress` until done.";
+  return "Maintain a user-visible work plan: ordered steps, each pending/in_progress/completed. Use for multi-step work. Send the full list each call; keep statuses current and exactly one `in_progress` until done.";
 }
 
 /** Describes the ask_user tool and its decision-only use policy. */
 export function describeAskUserTool(): string {
   return [
-    "Ask the human user 1-3 structured questions and wait for their answer.",
+    "Ask the human user 1-3 structured questions and wait for their answer; `multiSelect` allows picking several options and `timeoutSeconds` bounds the wait.",
     "Use only when blocked on a decision genuinely theirs that cannot be resolved from the request, code, or sensible defaults; never ask whether to proceed or confirm a plan.",
     "Prefer one question. Put the recommended option first and suffix its label with ` (Recommended)`.",
     "Do not include an Other option; free text is added automatically.",

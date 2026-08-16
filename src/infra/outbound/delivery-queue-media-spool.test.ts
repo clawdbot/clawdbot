@@ -42,6 +42,13 @@ const {
   stageQueuePayloadMedia,
 } = await import("./delivery-queue-media-spool.js");
 const { enqueueDelivery, loadPendingDeliveries } = await import("./delivery-queue-storage.js");
+const { upsertDeliveryQueueEntry } = await import("../delivery-queue-sqlite.js");
+const {
+  LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
+  OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
+  OUTBOUND_DELIVERY_QUEUE_NAME,
+  OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
+} = await import("./delivery-queue-media-staging.js");
 
 const DAY_MS = 24 * 60 * 60_000;
 const ARTIFACT_A = "00000000-0000-4000-8000-000000000001.ogg";
@@ -99,6 +106,43 @@ describe("retention", () => {
     expect(await exists(orphan)).toBe(false);
     // Grace protects stage-before-row-commit and bounds crash leftovers.
     expect(await exists(fresh)).toBe(true);
+  });
+
+  it("retains media from every outbound migration namespace in one inventory", async () => {
+    const queueNames = [
+      OUTBOUND_DELIVERY_QUEUE_NAME,
+      LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
+      OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
+      OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
+    ];
+    const retained = await Promise.all(
+      queueNames.map(async (queueName, index) => {
+        const artifact = await seedArtifact(
+          `00000000-0000-4000-8000-${String(index + 10).padStart(12, "0")}.ogg`,
+          30 * DAY_MS,
+        );
+        const entry = {
+          id: `retained-${index}`,
+          enqueuedAt: Date.now(),
+          retryCount: 0,
+          payloads: [{ mediaUrl: artifact }],
+        };
+        upsertDeliveryQueueEntry({
+          queueName,
+          entry,
+          stateDir,
+        });
+        return artifact;
+      }),
+    );
+    const orphan = await seedArtifact(ARTIFACT_B, 30 * DAY_MS);
+
+    await pruneOrphanedDeliveryQueueMedia({ stateDir });
+
+    await expect(
+      Promise.all(retained.map(async (artifact) => await exists(artifact))),
+    ).resolves.toEqual([true, true, true, true]);
+    expect(await exists(orphan)).toBe(false);
   });
 
   it("reclaims stale partial writes but ignores foreign files and symlinks", async () => {

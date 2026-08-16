@@ -1,5 +1,7 @@
 // Defines user-facing config field help text for docs and UI surfaces.
 import { describeTalkSilenceTimeoutDefaults } from "./talk-defaults.js";
+import { CLOUD_WORKER_FIELD_HELP } from "./zod-schema.cloud-workers.js";
+import { DESKTOP_FIELD_HELP } from "./zod-schema.desktop.js";
 
 export const CORE_FIELD_HELP: Record<string, string> = {
   "channels.discord.activities":
@@ -8,31 +10,11 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "OAuth2 client secret for the Discord application that hosts Activities. Keep this value secret; DISCORD_CLIENT_SECRET is used when this field is unset.",
   "channels.discord.activities.applicationId":
     "Optional Discord application ID for Activities. Defaults to the bot application ID learned from Discord at gateway startup.",
-  meta: "Metadata fields automatically maintained by OpenClaw to record write/version history for this config file. Keep these values system-managed and avoid manual edits unless debugging migration history.",
-  "meta.lastTouchedVersion": "Auto-set when OpenClaw writes the config.",
-  "meta.lastTouchedAt": "ISO timestamp of the last config write (auto-set).",
-  marketplaces:
-    "Marketplace feed and local package source profile settings. Feeds provide package selection and governance metadata, while sources define the local source names that install candidates may reference.",
-  "marketplaces.feeds":
-    "Named marketplace feed profiles. The default public profile can be used as shipped, and deployments can add or override profiles to point OpenClaw at their effective feed endpoint.",
-  "marketplaces.feeds.*.url":
-    "HTTPS URL for the marketplace feed profile. Remote feed documents cannot introduce new registry domains or credentials; they only reference locally configured sources by name.",
-  "marketplaces.feeds.*.verification":
-    "Feed authenticity policy. Use unsigned only as an explicit local opt-in for self-hosted feeds. Use signed to name locally trusted publisher public keys before refresh enforcement consumes verified envelopes.",
-  "marketplaces.feeds.*.verification.mode":
-    'Feed verification mode: "unsigned" for explicit unsigned opt-in, or "signed" for local direct-key verification once refresh enforcement is wired.',
-  "marketplaces.feeds.*.verification.keys":
-    "Trusted publisher public keys for signed feed envelopes. These non-secret local trust anchors belong in source-profile config; remote feed documents cannot introduce or rotate them by themselves.",
-  "marketplaces.feeds.*.verification.keys[].keyId":
-    "Stable publisher key identifier expected in a signed feed envelope signature.",
-  "marketplaces.feeds.*.verification.keys[].publicKey":
-    "Ed25519 publisher public key for feed envelope verification, encoded as PEM or raw base64url. Feed signing private keys are publisher-side secrets managed outside this config; do not reuse platform signing identities or certificates here.",
-  "marketplaces.feeds.*.verification.threshold":
-    "Optional number of trusted signatures required for a signed feed. Defaults to one in the later refresh enforcement slice.",
-  "marketplaces.sources":
-    "Named package source profiles that feed entries can reference using sourceRef. Keep credentials and registry endpoints local so remote feeds cannot bootstrap trust roots.",
-  "marketplaces.sources.*.type":
-    "Package source profile type: npm, clawhub, or git. This slice validates sourceRef names only; registry and host endpoints are added when installer resolution can enforce them.",
+  meta: "Backward-readable compatibility metadata retained so older binaries can refuse unsafe config downgrades.",
+  "meta.lastTouchedVersion": "OpenClaw version that most recently wrote this config.",
+  "meta.migrations": "Bounded compatibility markers for completed config migrations.",
+  "meta.migrations.modelPolicyAllowlist":
+    "Records that legacy model-map restrictions were preserved or evaluated.",
   env: "Environment import and override settings used to supply runtime variables to the gateway process. Use this section to control shell-env loading and explicit variable injection behavior.",
   "env.shellEnv":
     "Shell environment import controls for loading variables from your login shell during startup. Keep this enabled when you depend on profile-defined secrets or PATH customizations.",
@@ -42,32 +24,39 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Maximum time in milliseconds allowed for shell environment resolution before fallback behavior applies. Use tighter timeouts for faster startup, or increase when shell initialization is heavy.",
   "env.vars":
     "Explicit key/value environment variable overrides merged into runtime process environment for OpenClaw. Use this for deterministic env configuration instead of relying only on shell profile side effects.",
+  secrets:
+    "Secret reference providers, shared-store behavior, and optional subprocess egress protection.",
+  "secrets.egressProxy":
+    "Gateway-owned loopback proxy that replaces shared-store secret sentinels only at outbound request time. Restart the Gateway after changing this startup-scoped section.",
+  "secrets.egressProxy.enabled":
+    "Enables secret egress substitution for Gateway-hosted agent subprocesses. Default: false.",
+  "secrets.egressProxy.bypassHosts":
+    "Exact hostnames that use authenticated blind CONNECT tunnels for certificate-pinned clients. Sentinels remain ciphertext and will fail vendor authentication instead of exposing plaintext.",
   wizard:
-    "Setup wizard state tracking fields that record the most recent guided setup run details. Keep these fields for observability and troubleshooting of setup flows across upgrades.",
-  "wizard.lastRunAt":
-    "ISO timestamp for when the setup wizard most recently completed on this host. Use this to confirm setup recency during support and operational audits.",
-  "wizard.lastRunVersion":
-    "OpenClaw version recorded at the time of the most recent wizard run on this config. Use this when diagnosing behavior differences across version-to-version setup changes.",
-  "wizard.lastRunCommit":
-    "Source commit identifier recorded for the last wizard execution in development builds. Use this to correlate setup behavior with exact source state during debugging.",
-  "wizard.lastRunCommand":
-    "Command invocation recorded for the latest wizard run to preserve execution context. Use this to reproduce setup steps when verifying setup regressions.",
-  "wizard.lastRunMode":
-    'Wizard execution mode recorded as "local" or "remote" for the most recent setup flow. Use this to understand whether setup targeted direct local runtime or remote gateway topology.',
+    "User-owned setup preferences. Machine-owned wizard history and acknowledgement state live in the shared state database.",
+  "wizard.accessMode":
+    'Discovery consent for guided setup: "full" scans silently while "guarded" asks before inspecting local applications.',
+  "wizard.appRecommendations":
+    "Controls whether guided setup may use installed-application labels to recommend relevant plugins and skills.",
+  "wizard.lastRunAt": "Timestamp of the last successfully committed wizard run.",
+  "wizard.lastRunVersion": "OpenClaw version used by the last wizard run.",
+  "wizard.lastRunCommit": "Source commit used by the last development wizard run.",
+  "wizard.lastRunCommand": "Command that invoked the last wizard run.",
+  "wizard.lastRunMode": 'Whether the last wizard run targeted "local" or "remote" setup.',
   "wizard.localModelLeanAutoModel":
-    "System-managed model reference indicating that inference onboarding enabled the global lean-model surface. A later verified route uses this marker to remove only the onboarding-owned setting; a model changed outside onboarding hands ownership back to the user.",
+    "Model reference whose lean-mode setting remains owned by onboarding.",
   "wizard.securityAcknowledgedAt":
-    "ISO timestamp for when the setup security acknowledgement was accepted on this config. Setup uses this to avoid repeating the acknowledgement on later wizard runs.",
-  audit:
+    "Timestamp of the setup security acknowledgement, committed with the target config.",
+  "logging.audit":
     "Bounded metadata-only audit history for operator review. Run and tool records are enabled by default; message lifecycle metadata is a separate privacy-sensitive opt-in. The background writer is best-effort rather than a lossless compliance archive.",
-  "audit.enabled":
+  "logging.audit.enabled":
     "Records new run, tool, and enabled message audit events. Default: true. Disabling event inserts does not immediately delete existing records; retained rows remain queryable until they expire.",
-  "audit.messages":
-    'Controls content-free message lifecycle records: "off" (default), "direct" for known direct conversations only, or "all" for direct, group, channel, and unknown conversation kinds. Both audit.enabled and audit.messages are startup-scoped; restart the Gateway after changing either setting.',
+  "logging.audit.executionIdentity":
+    "Retains bounded execution-identity attribution for exact-run inspection. Default: false. Requires logging.audit.enabled; restart the Gateway after changing it.",
+  "logging.audit.messages":
+    'Controls content-free message lifecycle records: "off" (default), "direct" for known direct conversations only, or "all" for direct, group, channel, and unknown conversation kinds. Both logging.audit.enabled and logging.audit.messages are startup-scoped; restart the Gateway after changing either setting.',
   diagnostics:
     "Diagnostics controls for targeted tracing, telemetry export, and cache inspection during debugging. Keep baseline diagnostics minimal in production and enable deeper signals only when investigating issues.",
-  "diagnostics.memoryPressureSnapshot":
-    "Whether critical memory pressure automatically captures a redacted stability snapshot. Default: false. Enable only when this host can tolerate the extra file-system scan and snapshot write during critical memory pressure.",
   "diagnostics.otel":
     "OpenTelemetry export settings for traces, metrics, and logs emitted by gateway components. Use this when integrating with centralized observability backends and distributed tracing pipelines.",
   "diagnostics.cacheTrace":
@@ -81,16 +70,9 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "logging.consoleLevel":
     'Console-specific log threshold: "silent", "fatal", "error", "warn", "info", "debug", or "trace" for terminal output control. Use this to keep local console quieter while retaining richer file logging if needed.',
   "logging.consoleStyle":
-    'Console output format style: "pretty", "compact", or "json" based on operator and ingestion needs. Use json for machine parsing pipelines and pretty/compact for human-first terminal workflows.',
-  "logging.redactSensitive":
-    'Sensitive log/transcript redaction mode: "off" disables general log and transcript masking, while "tools" redacts sensitive tool/config payload fields in those sinks. Safety-boundary UI, tool, and diagnostic payloads may still redact even when this is "off".',
+    'Console output format style: "pretty" or "json". Use json for machine parsing pipelines and pretty for human-first terminal workflows.',
   "logging.redactPatterns":
     "Additional custom redact regex patterns applied to log output, persisted transcript text, and safety-boundary UI/tool/diagnostic payloads before emission. Use this to mask org-specific tokens and identifiers not covered by built-in redaction rules.",
-  cli: "CLI presentation controls for local command output behavior such as banner and tagline style. Use this section to keep startup output aligned with operator preference without changing runtime behavior.",
-  "cli.banner":
-    "CLI startup banner controls for title/version line and tagline style behavior. Keep banner enabled for fast version/context checks, then tune tagline mode to your preferred noise level.",
-  "cli.banner.taglineMode":
-    'Controls tagline style in the CLI startup banner: "random" (default) picks from the rotating tagline pool, "default" always shows the neutral default tagline, and "off" hides tagline text while keeping the banner version line.',
   update:
     "Update-channel and startup-check behavior for keeping OpenClaw runtime versions current. Use conservative channels in production and more experimental channels only in controlled environments.",
   "update.channel":
@@ -99,29 +81,10 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Check for npm updates when the gateway starts, including read-only extended-stable hints (default: true).",
   "update.auto.enabled":
     "Enable background auto-update for stable and beta package installs; extended-stable never auto-applies (default: false).",
-  "update.auto.stableDelayHours":
-    "Minimum delay before stable-channel auto-apply starts (default: 6).",
-  "update.auto.stableJitterHours":
-    "Extra stable-channel rollout spread window in hours (default: 12).",
-  "update.auto.betaCheckIntervalHours": "How often beta-channel checks run in hours (default: 1).",
   cloudWorkers:
     "Opt-in cloud worker profiles for disposable remote environments. When this section is omitted or has no profiles, cloud worker creation remains unavailable and existing gateway/node status behavior is unchanged.",
-  "cloudWorkers.profiles":
-    "Named cloud worker profiles. Each profile selects a worker provider registered by a plugin and carries provider-owned settings plus optional stored lifetime policy.",
-  "cloudWorkers.profiles.*":
-    "One cloud worker profile selected by name when creating an environment. Keep provider credentials in supported references rather than embedding secret material in this block.",
-  "cloudWorkers.profiles.*.provider":
-    "Worker provider id registered by a plugin. The configured plugin must expose this id before the gateway can provision environments from the profile.",
-  "cloudWorkers.profiles.*.install":
-    'Worker installation method: "bundle" (default) transfers the gateway\'s content-hashed installed build and supports released, development, and unreleased versions; "npm" installs the exact gateway version and is available only when that version is released.',
-  "cloudWorkers.profiles.*.settings":
-    "Provider-owned settings validated by the selected plugin. Use SecretRef objects for secret-bearing values; opaque settings do not gain automatic secret resolution.",
-  "cloudWorkers.profiles.*.lifetime":
-    "Stored environment lifetime policy. This first cloud-worker slice records these values as data; automatic idle and maximum-lifetime enforcement lands in later lifecycle work.",
-  "cloudWorkers.profiles.*.lifetime.idleTimeoutMinutes":
-    "Positive inactivity interval in minutes after which later lifecycle policy may reclaim an idle environment. Omit to leave idle cleanup unspecified.",
-  "cloudWorkers.profiles.*.lifetime.maxLifetimeMinutes":
-    "Positive maximum environment lifetime in minutes for later lifecycle enforcement. Omit to leave the maximum lifetime unspecified.",
+  ...CLOUD_WORKER_FIELD_HELP,
+  ...DESKTOP_FIELD_HELP,
   gateway:
     "Gateway runtime surface for bind mode, auth, control UI, remote transport, and operational safety controls. Keep conservative defaults unless you intentionally expose the gateway beyond trusted local interfaces.",
   "gateway.port":
@@ -136,10 +99,14 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Control UI hosting settings including enablement, pathing, and browser-origin/auth hardening behavior. Keep UI exposure minimal and pair with strong auth controls before internet-facing deployments.",
   "gateway.controlUi.enabled":
     "Enables serving the gateway Control UI from the gateway HTTP process when true. Keep enabled for local administration, and disable when an external control surface replaces it.",
+  "gateway.cliAgents":
+    "Experimental Control UI discovery for external CLI session engines exposed by the Gateway session catalog. Keep disabled unless operators should be able to start those engines from the new-session model picker.",
+  "gateway.cliAgents.enabled":
+    "Shows catalog-backed CLI agents in the Control UI new-session model picker when true (default: false). Only catalogs that advertise session creation are listed, and the picker stays hidden when the Gateway does not advertise session catalog support.",
   "gateway.terminal":
     "Operator terminal served to Control UI and mobile clients: a PTY-backed shell on the gateway host, restricted to admin-scope operator sessions. It starts in the target agent's workspace and is refused for fully-sandboxed agents (sandbox.mode 'all') rather than handing back an unconfined host shell.",
   "gateway.terminal.enabled":
-    "Enables the operator terminal for admin-scope clients when true (default: false). This exposes a browser/mobile shell with the gateway process environment, so enable it only for trusted operator deployments. Changing this restarts the gateway so connected clients reload with the correct terminal availability and content-security policy.",
+    "Enables the operator terminal for admin-scope clients (default: true). This exposes a browser/mobile shell with the gateway process environment; set false to opt out on deployments where admin operators should not get a host shell. Changing this restarts the gateway so connected clients reload with the correct terminal availability and content-security policy.",
   "gateway.terminal.shell":
     "Shell executable the operator terminal launches. Leave unset to use the host login shell ($SHELL on Unix, %ComSpec% on Windows), or pin an explicit interpreter for a consistent operator environment.",
   "gateway.terminal.detachedSessionTimeoutSeconds":
@@ -150,10 +117,18 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     'Gateway auth mode: "none", "token", "password", or "trusted-proxy" depending on your edge architecture. Use token/password for direct exposure, and trusted-proxy only behind hardened identity-aware proxies.',
   "gateway.auth.allowTailscale":
     "Allows trusted Tailscale identity paths to satisfy gateway auth checks when configured. Use this only when your tailnet identity posture is strong and operator workflows depend on it.",
+  "gateway.auth.identityScopes":
+    "Maps verified trusted-proxy or Tailscale identities to connection-only operator scope grants. Email keys match case-insensitively; grants augment device scopes before the connection scope cap is applied.",
   "gateway.auth.rateLimit":
     "Login/auth attempt throttling controls to reduce credential brute-force risk at the gateway boundary. Keep enabled in exposed environments and tune thresholds to your traffic baseline.",
   "gateway.auth.trustedProxy":
     "Trusted-proxy auth header mapping for upstream identity providers that inject user claims. Use only with known proxy CIDRs and strict header allowlists to prevent spoofed identity headers.",
+  "gateway.auth.trustedProxy.deviceAutoApprove":
+    "Optional policy for automatically approving new Control UI and WebChat device identities after trusted-proxy authentication. Existing-device scope upgrades always remain manual.",
+  "gateway.auth.trustedProxy.deviceAutoApprove.enabled":
+    "Automatically approves new browser device identities after the reverse proxy authenticates an allowed user. Default: false. Enable only when the proxy identity boundary is strong enough to replace manual device pairing.",
+  "gateway.auth.trustedProxy.deviceAutoApprove.scopes":
+    "Maximum scopes granted to auto-approved browser devices. Requested scopes are capped to this list; requests without scopes receive this list. Explicitly listing operator.admin lets every proxy-authenticated user auto-approve full admin and makes scope-less requests receive full admin automatically; it also triggers a critical security audit finding and Gateway startup warning.",
   "gateway.trustedProxies":
     "CIDR/IP allowlist of upstream proxies permitted to provide forwarded client identity headers. Keep this list narrow so untrusted hops cannot impersonate users.",
   "gateway.allowRealIpFallback":
@@ -164,14 +139,6 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Explicit gateway-level tool allowlist when you want a narrow set of tools available at runtime. Use this for locked-down environments where tool scope must be tightly controlled.",
   "gateway.tools.deny":
     "Explicit gateway-level tool denylist to block risky tools even if lower-level policies allow them. Use deny rules for emergency response and defense-in-depth hardening.",
-  "gateway.handshakeTimeoutMs":
-    "Pre-auth Gateway WebSocket handshake timeout in milliseconds. Use higher values on loaded or low-powered hosts where local clients can connect during startup warmup. OPENCLAW_HANDSHAKE_TIMEOUT_MS still takes precedence.",
-  "gateway.channelHealthCheckMinutes":
-    "Interval in minutes for automatic channel health probing and status updates. Use lower intervals for faster detection, or higher intervals to reduce periodic probe noise.",
-  "gateway.channelStaleEventThresholdMinutes":
-    "How many minutes a connected channel can go without provider-proven transport activity before the health monitor treats it as a stale socket and triggers a restart. Default: 30.",
-  "gateway.channelMaxRestartsPerHour":
-    "Maximum number of health-monitor-initiated channel restarts allowed within a rolling one-hour window. Once hit, further restarts are skipped until the window expires. Default: 10.",
   "gateway.tailscale":
     "Tailscale integration settings for Serve/Funnel exposure and lifecycle handling on gateway start/exit. Keep off unless your deployment intentionally relies on Tailscale ingress.",
   "gateway.tailscale.mode":
@@ -237,8 +204,6 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Realtime provider speaker voice name override for browser or Gateway-owned Talk sessions.",
   "talk.realtime.speakerVoiceId":
     "Realtime provider speaker voice id override for browser or Gateway-owned Talk sessions.",
-  "talk.realtime.voice":
-    "Deprecated realtime provider voice override. Use talk.realtime.speakerVoice.",
   "talk.realtime.instructions":
     "Additional system instructions appended to OpenClaw's built-in realtime Talk prompt. Use this for voice style, tone, and other provider-facing realtime behavior while keeping agent-consult guidance intact.",
   "talk.realtime.mode": "Talk execution mode: realtime, stt-tts, or transcription.",
@@ -261,11 +226,11 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "talk.consultFastMode":
     "Use this to set true or false fast mode for the regular agent run behind Talk realtime consults.",
   "talk.speechLocale":
-    'BCP 47 locale id for Talk speech recognition on device nodes, for example "ru-RU". Leave unset to use each device default.',
+    'BCP 47 locale id for Talk speech recognition on device nodes and the iOS system-voice fallback, for example "ru-RU". Leave unset to use each device default.',
   "talk.interruptOnSpeech":
     "If true (default), stop assistant speech when the user starts speaking in Talk mode. Keep enabled for conversational turn-taking.",
   "talk.silenceTimeoutMs": `Milliseconds of user silence before Talk mode finalizes and sends the current transcript. Leave unset to keep the platform default pause window (${describeTalkSilenceTimeoutDefaults()}).`,
-  acp: "ACP runtime controls for enabling dispatch, selecting backends, constraining allowed agent targets, and tuning streamed turn projection behavior.",
+  acp: "ACP runtime controls for enabling dispatch, selecting backends, constraining allowed agent targets, and selecting streamed turn projection behavior.",
   "acp.enabled":
     "Global ACP feature gate. Keep disabled unless ACP runtime + policy are configured.",
   "acp.dispatch.enabled":
@@ -278,118 +243,104 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Fallback ACP target agent id used when ACP spawns do not specify an explicit target.",
   "acp.allowedAgents":
     "Allowlist of ACP target agent ids permitted for ACP runtime sessions. Empty means no additional allowlist restriction.",
-  "acp.maxConcurrentSessions":
-    "Maximum concurrently active ACP sessions across this gateway process.",
   "acp.stream":
     "ACP streaming projection controls for chunk sizing, metadata visibility, and deduped delivery behavior.",
-  "acp.stream.coalesceIdleMs":
-    "Coalescer idle flush window in milliseconds for ACP streamed text before block replies are emitted.",
-  "acp.stream.maxChunkChars":
-    "Maximum chunk size for ACP streamed block projection before splitting into multiple block replies.",
   "acp.stream.repeatSuppression":
     "When true (default), suppress repeated ACP status/tool projection lines in a turn while keeping raw ACP events unchanged.",
   "acp.stream.deliveryMode":
     "ACP delivery style: live streams projected output incrementally, final_only buffers all projected ACP output until terminal turn events.",
-  "acp.stream.hiddenBoundarySeparator":
-    "Separator inserted before next visible assistant text when hidden ACP tool lifecycle events occurred (none|space|newline|paragraph). Default: paragraph.",
-  "acp.stream.maxOutputChars":
-    "Maximum assistant output characters projected per ACP turn before truncation notice is emitted.",
-  "acp.stream.maxSessionUpdateChars":
-    "Maximum characters for projected ACP session/update lines (tool/status updates).",
   "acp.stream.tagVisibility":
     "Per-sessionUpdate visibility overrides for ACP projection (for example usage_update, available_commands_update).",
-  "acp.runtime.ttlMinutes":
-    "Idle runtime TTL in minutes for ACP session workers before eligible cleanup.",
   "acp.runtime.installCommand":
     "Optional operator install/setup command shown by `/acp install` and `/acp doctor` when ACP backend wiring is missing.",
-  commitments:
-    "Inferred follow-up commitment controls for automatically detecting check-ins from conversation turns and delivering them through heartbeat runs.",
-  "commitments.enabled":
-    "Enable hidden LLM extraction, storage, and heartbeat delivery for inferred follow-up commitments. Default: false.",
-  "commitments.maxPerDay":
-    "Maximum inferred follow-up commitments delivered per agent session in a rolling day. Default: 3.",
-  "agents.list.*.skills":
-    "Optional allowlist of skills for this agent. If omitted, the agent inherits agents.defaults.skills when set; otherwise skills stay unrestricted. Set [] for no skills. An explicit list fully replaces inherited defaults instead of merging with them.",
-  "agents.list[].skills":
+  surfaces:
+    "Per-surface message policy overrides keyed by the resolved delivery surface id. Use this only when one deployed surface needs stricter silent-reply handling than the agent default.",
+  "surfaces.*.silentReply":
+    "Overrides silent-reply policy for one resolved delivery surface. Unset fields inherit agents.defaults.silentReply; use narrow surface ids so internal or group-specific behavior does not spill into other destinations.",
+  "agents.entries.*.skills":
     "Optional allowlist of skills for this agent. If omitted, the agent inherits agents.defaults.skills when set; otherwise skills stay unrestricted. Set [] for no skills. An explicit list fully replaces inherited defaults instead of merging with them.",
   agents:
-    "Agent runtime configuration root covering defaults and explicit agent entries used for routing and execution context. Keep this section explicit so model/tool behavior stays predictable across multi-agent workflows.",
+    "Agent runtime configuration root. Root siblings own infrastructure and cross-agent defaults; agents.defaults owns agent-loop behavior; agent entries may override either where supported.",
+  "agents.ownership":
+    'Durable multi-agent ownership generation marker. "explicit" means ambient channels, heartbeat, system-agent consults, Talk, cron, and bare CLI operations must resolve a surface-specific owner or fail closed. OpenClaw stamps this automatically when creating or migrating a fleet; omit it for a sole agent.',
   "agents.defaults":
-    "Shared default settings inherited by agents unless overridden per entry in agents.list. Use defaults to enforce consistent baseline behavior and reduce duplicated per-agent configuration.",
+    "Shared default settings inherited by agents unless overridden per entry in agents.entries. Use defaults to enforce consistent baseline behavior and reduce duplicated per-agent configuration.",
   "agents.defaults.skills":
-    "Optional default skill allowlist inherited by agents that omit agents.list[].skills. Omit for unrestricted skills, set [] to give inheriting agents no skills, and remember explicit agents.list[].skills replaces this default instead of merging with it.",
+    "Optional default skill allowlist inherited by agents that omit agents.entries.*.skills. Omit for unrestricted skills, set [] to give inheriting agents no skills, and remember explicit agents.entries.*.skills replaces this default instead of merging with it.",
   "agents.defaults.subagents.delegationMode":
     'Prompt-only sub-agent delegation strength. "suggest" keeps the default guidance; "prefer" strongly instructs the main agent to delegate anything more involved than a direct reply via sessions_spawn.',
-  "agents.list[].subagents.delegationMode":
+  "agents.entries.*.subagents.delegationMode":
     "Per-agent override for sub-agent delegation strength. Use this for coordinator agents that should stay responsive and push non-trivial work into spawned sub-agents.",
-  "agents.list[].contextInjection":
+  "agents.entries.*.contextInjection":
     "Per-agent override for when workspace bootstrap files are injected into this agent's system prompt. Omit to inherit agents.defaults.contextInjection.",
-  "agents.list[].bootstrapMaxChars":
+  "agents.entries.*.bootstrapMaxChars":
     "Per-agent override for max characters of each workspace bootstrap file injected into this agent's system prompt. Omit to inherit agents.defaults.bootstrapMaxChars.",
-  "agents.list[].bootstrapTotalMaxChars":
+  "agents.entries.*.bootstrapTotalMaxChars":
     "Per-agent override for max total characters across all workspace bootstrap files injected into this agent's system prompt. Omit to inherit agents.defaults.bootstrapTotalMaxChars.",
-  "agents.list[].experimental":
+  "agents.entries.*.experimental":
     "Per-agent experimental flags. Omitted fields inherit agents.defaults.experimental.",
-  "agents.list[].experimental.localModelLean":
+  "agents.entries.*.experimental.localModelLean":
     "Per-agent override for lean local-model mode. Enable it for one smaller local-model agent without trimming tools from every agent.",
   "agents.defaults.contextLimits":
     "Focused per-agent-context budget defaults for selected high-volume excerpts and injected prompt blocks. Use this to tune bounded read/injection sizes without reopening any unbounded call paths.",
   "agents.defaults.contextLimits.memoryGetMaxChars":
     "Default max characters returned by memory_get before truncation metadata and continuation notice are added. Increase to approximate older larger excerpts, but keep it bounded.",
-  "agents.defaults.contextLimits.memoryGetDefaultLines":
-    "Default memory_get line window used when requests omit lines. This controls how many source lines are selected before the max-char cap is applied.",
-  "agents.defaults.contextLimits.toolResultMaxChars":
-    "Advanced ceiling for a single live tool result before truncation. Leave unset to use the model-context auto cap; explicit values affect both persisted live tool-result writes and overflow-recovery truncation heuristics.",
   "agents.defaults.contextLimits.postCompactionMaxChars":
     "Default max characters retained from AGENTS.md during post-compaction context refresh injection. Lower this to make compaction recovery cheaper, or raise it for agents that depend on longer startup guidance.",
-  "agents.list":
+  "agents.entries":
     "Explicit list of configured agents with IDs and optional overrides for model, tools, identity, and workspace. Keep IDs stable over time so bindings, approvals, and session routing remain deterministic.",
-  "agents.list[].skillsLimits":
+  "agents.entries.*.skillsLimits":
     "Optional per-agent overrides for skills subsystem budgets. Use this when an agent needs a different skills prompt budget without introducing a second generic context-limits path.",
-  "agents.list[].skillsLimits.maxSkillsPromptChars":
+  "agents.entries.*.skillsLimits.maxSkillsPromptChars":
     "Per-agent override for the skills prompt character budget. This extends the existing skills.limits.maxSkillsPromptChars path instead of routing the same budget through contextLimits.",
-  "agents.list[].contextLimits":
+  "agents.entries.*.contextLimits":
     "Optional per-agent overrides for the focused context budget knobs. Omitted fields inherit agents.defaults.contextLimits.",
-  "agents.list[].contextLimits.memoryGetMaxChars":
+  "agents.entries.*.contextLimits.memoryGetMaxChars":
     "Per-agent override for the default memory_get max character budget.",
-  "agents.list[].contextLimits.memoryGetDefaultLines":
-    "Per-agent override for the default memory_get line window when lines is omitted.",
-  "agents.list[].contextLimits.toolResultMaxChars":
-    "Per-agent advanced ceiling for the live tool-result max character budget. Omit to inherit defaults or the model-context auto cap.",
-  "agents.list[].contextLimits.postCompactionMaxChars":
+  "agents.entries.*.contextLimits.postCompactionMaxChars":
     "Per-agent override for the post-compaction AGENTS.md excerpt budget.",
-  "agents.list[].thinkingDefault":
+  "agents.entries.*.thinkingDefault":
     "Optional per-agent default thinking level. Overrides agents.defaults.thinkingDefault for this agent when no per-message or session override is set.",
-  "agents.list[].reasoningDefault":
+  "agents.entries.*.reasoningDefault":
     "Optional per-agent default reasoning visibility (on|off|stream). Applies when no per-message or session reasoning override is set.",
-  "agents.list[].fastModeDefault":
+  "agents.entries.*.fastModeDefault":
     'Optional per-agent default for fast mode ("auto", true, or false). Applies when no per-message or session fast-mode override is set.',
-  "agents.list[].runtime":
+  "agents.defaults.fastModeDefault":
+    'Default fast-mode policy for the agent loop ("auto", true, or false). Individual agent entries override it.',
+  "agents.entries.*.runtime":
     "Optional runtime descriptor for this agent. Use embedded for default OpenClaw execution or acp for external ACP harness defaults.",
-  "agents.list[].runtime.type":
+  "agents.entries.*.runtime.type":
     'Runtime type for this agent: "embedded" (default OpenClaw runtime) or "acp" (ACP harness defaults).',
-  "agents.list[].runtime.acp":
+  "agents.entries.*.runtime.acp":
     "ACP runtime defaults for this agent when runtime.type=acp. Binding-level ACP overrides still take precedence per conversation.",
-  "agents.list[].runtime.acp.agent":
+  "agents.entries.*.runtime.acp.agent":
     "Optional ACP harness agent id to use for this OpenClaw agent (for example codex, claude, cursor, gemini, openclaw).",
-  "agents.list[].runtime.acp.backend":
+  "agents.entries.*.runtime.acp.backend":
     "Optional ACP backend override for this agent's ACP sessions (falls back to global acp.backend).",
-  "agents.list[].runtime.acp.mode":
+  "agents.entries.*.runtime.acp.mode":
     "Optional ACP session mode default for this agent (persistent or oneshot).",
-  "agents.list[].runtime.acp.cwd":
+  "agents.entries.*.runtime.acp.cwd":
     "Optional default working directory for this agent's ACP sessions.",
-  "agents.list[].identity.avatar":
+  "agents.entries.*.identity.avatar":
     "Avatar image path (relative to the agent workspace only) or a remote URL/data URL.",
-  "agents.defaults.heartbeat.suppressToolErrorWarnings":
-    "Suppress tool error warning payloads during heartbeat runs.",
-  "agents.list[].heartbeat.suppressToolErrorWarnings":
-    "Suppress tool error warning payloads during heartbeat runs.",
   "agents.defaults.heartbeat.timeoutSeconds":
     "Maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to use agents.defaults.timeoutSeconds when set, otherwise the heartbeat cadence capped at 600 seconds.",
-  "agents.list[].heartbeat.timeoutSeconds":
+  "agents.defaults.heartbeat.agentId":
+    "Agent that owns ambient heartbeat runs when no per-agent heartbeat configuration exists. Leave unset to preserve configured-default routing.",
+  "agents.entries.*.heartbeat.timeoutSeconds":
     "Per-agent maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to inherit the merged heartbeat timeout, then agents.defaults.timeoutSeconds when set, otherwise the heartbeat cadence capped at 600 seconds.",
-  "agents.defaults.heartbeat.skipWhenBusy":
-    "When true, defer heartbeat turns on this agent's extra busy lanes: its own session-keyed subagent or nested command work. Cron lanes always defer heartbeat turns.",
-  "agents.list[].heartbeat.skipWhenBusy":
-    "Per-agent override that defers heartbeat turns on that agent's extra busy lanes: its own session-keyed subagent or nested command work. Cron lanes always defer heartbeat turns.",
+  "agents.defaults.systemAgent":
+    "Target settings for ambient OpenClaw system-agent and Custodian inference.",
+  "agents.defaults.systemAgent.agentId":
+    "Agent whose model and credentials own ambient system-agent and Custodian consults. Delegated consults still use their requesting agent.",
+  "agents.defaults.authInheritance":
+    "Upgrade compatibility owner for the inherited credential store until credentials are relocated per agent.",
+  "agents.defaults.authInheritance.agentId":
+    "Agent whose legacy credential store remains the inheritance source after default-marker retirement. Written automatically during upgrade when the former owner was not main.",
+  "agents.defaults.sessionStore":
+    "Upgrade compatibility owner for retired main-agent rows and fixed legacy session stores.",
+  "agents.defaults.sessionStore.agentId":
+    "Agent that owns retired main-agent rows or unscoped rows in a fixed legacy session store after default-marker retirement. Written automatically during upgrade when the former owner was not main or the sole agent.",
+  "talk.agentId":
+    "Agent that owns Talk sessions created without an explicit agent-scoped session key.",
 };

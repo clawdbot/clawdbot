@@ -1,12 +1,16 @@
 // Normalization Core tests cover string normalization behavior.
 import { describe, expect, it } from "vitest";
 import {
+  filterStringEntries,
   normalizeAtHashSlug,
+  normalizeCsvOrLooseStringList,
   normalizeHyphenSlug,
+  normalizeOptionalTrimmedStringList,
   normalizeSortedUniqueStringEntries,
   normalizeSortedUniqueTrimmedStringList,
   normalizeStringEntries,
   normalizeStringEntriesLower,
+  normalizeTrimmedStringList,
   normalizeUniqueSingleOrTrimmedStringList,
   normalizeUniqueStringEntries,
   normalizeUniqueStringEntriesLower,
@@ -16,6 +20,18 @@ import {
 } from "./string-normalization.js";
 
 describe("normalization-core/string-normalization", () => {
+  it.each([
+    { value: undefined, expected: [] },
+    { value: "value", expected: [] },
+    { value: { 0: "value" }, expected: [] },
+    {
+      value: ["", "  ", 1, "first", null, "first", Object("boxed"), "last\n"],
+      expected: ["", "  ", "first", "first", "last\n"],
+    },
+  ])("filters runtime strings from $value", ({ value, expected }) => {
+    expect(filterStringEntries(value)).toEqual(expected);
+  });
+
   it("normalizes mixed allow-list entries", () => {
     expect(normalizeStringEntries([" a ", 42, "", "  ", "z"])).toEqual(["a", "42", "z"]);
     expect(normalizeStringEntries([" ok ", null, { toString: () => " obj " }])).toEqual([
@@ -57,6 +73,23 @@ describe("normalization-core/string-normalization", () => {
   it("normalizes unique trimmed string lists", () => {
     expect(normalizeUniqueTrimmedStringList([" b ", "a", "b", "", "a"])).toEqual(["b", "a"]);
     expect(normalizeUniqueTrimmedStringList("b")).toEqual([]);
+  });
+
+  it("normalizes array-backed trimmed string lists", () => {
+    const values = [" first ", "", 42, " second ", null];
+    expect(normalizeTrimmedStringList(values)).toEqual(["first", "second"]);
+    expect(normalizeTrimmedStringList("first")).toEqual([]);
+    expect(normalizeOptionalTrimmedStringList(values)).toEqual(["first", "second"]);
+    expect(normalizeOptionalTrimmedStringList(["", 42])).toBeUndefined();
+  });
+
+  it.each([
+    { value: " first, second, , first ", expected: ["first", "second", "first"] },
+    { value: [" first ", 42, "", "  ", 7], expected: ["first", "42", "7"] },
+    { value: null, expected: [] },
+    { value: { value: "first" }, expected: [] },
+  ])("normalizes CSV or loose string-list input", ({ value, expected }) => {
+    expect(normalizeCsvOrLooseStringList(value)).toEqual(expected);
   });
 
   it("normalizes sorted unique trimmed string lists", () => {

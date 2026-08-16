@@ -6,12 +6,12 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateSessionsUsageParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { parseSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
-  resolveSessionFilePath,
+  resolveSessionFilePathCore,
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -21,7 +21,6 @@ import {
   resolveTimezone,
   resolveTimeZoneDayStartMs,
 } from "../../infra/format-time/format-datetime.js";
-import { loadProviderUsageSummary } from "../../infra/provider-usage.js";
 import {
   addCostUsageTotals,
   createEmptyCostUsageTotals,
@@ -57,17 +56,27 @@ import type {
   SessionsUsageAggregates,
   SessionsUsageResult,
 } from "../../shared/usage-types.js";
+import {
+  sessionDeliveryChannel,
+  sessionDeliveryOrigin,
+} from "../../utils/delivery-context.shared.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { listGatewayAgentsBasic } from "../agent-list.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
   resolveSessionStoreAgentId,
   resolveStoredSessionKeyForAgentStore,
 } from "../session-store-key.js";
-import { loadCombinedSessionStoreForGateway, loadSessionEntry } from "../session-utils.js";
+import {
+  loadCombinedSessionStoreForGatewayCore,
+  loadGatewaySessionEntryReadOnly,
+} from "../session-utils.js";
+import { loadUsageStatusStaleWhileRevalidate } from "./models-auth-status-usage-cache.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
-const COST_USAGE_CACHE_TTL_MS = 30_000;
-const COST_USAGE_CACHE_MAX = 256;
+const USAGE_CACHE_TTL_MS = 30_000;
+const USAGE_CACHE_MAX = 256;
 const USAGE_AGENT_LOAD_CONCURRENCY = 12;
 
 async function runUsageAgentTasks<T>(tasks: Array<() => Promise<T>>): Promise<T[]> {
@@ -103,59 +112,205 @@ type DateParts = { year: number; monthIndex: number; day: number };
 
 const MAX_CONSECUTIVE_SKIPPED_TIME_ZONE_DAYS = 1;
 
-type CostUsageCacheEntry = {
-  summary?: CostUsageSummary;
+type UsageCacheEntry<T extends object> = {
+  configRef?: object;
+  value?: T;
   updatedAt?: number;
-  inFlight?: Promise<CostUsageSummary>;
+  inFlight?: Promise<T>;
 };
 
-const costUsageCache = new Map<string, CostUsageCacheEntry>();
+const costUsageCache = new Map<string, UsageCacheEntry<CostUsageSummary>>();
+const sessionsUsageCache = new Map<string, UsageCacheEntry<SessionsUsageResult>>();
 
-function findCostUsageCacheEvictionKey(): string | undefined {
-  for (const [key, entry] of costUsageCache) {
-    // Prefer evicting settled entries so duplicate callers can still join active loads.
-    if (!entry.inFlight) {
-      return key;
-    }
-  }
-  return costUsageCache.keys().next().value;
+class SessionsUsageInvalidRequestError extends Error {}
+
+type ResolvedSessionUsageTarget = {
+  entry: SessionEntry | undefined;
+  agentId: string;
+  sessionId: string;
+  sessionFile: string;
+};
+
+function resolveSessionUsageTarget(
+  key: string,
+  config: OpenClawConfig,
+  agentIdHint?: string,
+): ResolvedSessionUsageTarget | undefined {
+  const { canonicalKey, entry, storePath } = loadGatewaySessionEntryReadOnly(
+    key,
+    agentIdHint ? { agentId: agentIdHint } : undefined,
+  );
+  const parsed = parseAgentSessionKey(key);
+  const agentId =
+    parsed?.agentId ?? agentIdHint ?? resolveSessionAgentId({ config, sessionKey: key });
+  const sessionId = entry?.sessionId ?? parsed?.rest ?? key;
+  const sessionFile = entry
+    ? resolveExistingUsageSessionFile({
+        agentId,
+        sessionId,
+        sessionTarget: {
+          agentId,
+          sessionId,
+          sessionKey: canonicalKey,
+          storePath,
+        },
+      })
+    : resolveExistingUsageSessionFile({
+        agentId,
+        sessionId,
+        sessionFile: resolveSessionFilePathCore(
+          sessionId,
+          undefined,
+          resolveSessionFilePathOptions({ storePath, agentId }),
+        ),
+      });
+  return sessionFile ? { entry, agentId, sessionId, sessionFile } : undefined;
 }
 
-// Keep the cache bounded while preserving in-flight request coalescing when a
-// settled entry is available to evict.
-function setCostUsageCache(cacheKey: string, entry: CostUsageCacheEntry): void {
-  if (!costUsageCache.has(cacheKey) && costUsageCache.size >= COST_USAGE_CACHE_MAX) {
-    const evictKey = findCostUsageCacheEvictionKey();
-    if (evictKey !== undefined) {
-      costUsageCache.delete(evictKey);
+function setUsageCache<T extends object>(
+  cache: Map<string, UsageCacheEntry<T>>,
+  cacheKey: string,
+  entry: UsageCacheEntry<T>,
+): void {
+  if (!cache.has(cacheKey) && cache.size >= USAGE_CACHE_MAX) {
+    let evictionKey = cache.keys().next().value;
+    // Preserve active loads whenever a settled entry can be evicted instead.
+    for (const [key, candidate] of cache) {
+      if (!candidate.inFlight) {
+        evictionKey = key;
+        break;
+      }
+    }
+    if (evictionKey !== undefined) {
+      cache.delete(evictionKey);
     }
   }
-  costUsageCache.set(cacheKey, entry);
+  cache.set(cacheKey, entry);
+}
+
+async function loadUsageResultCached<T extends object>(params: {
+  cache: Map<string, UsageCacheEntry<T>>;
+  cacheKey: string;
+  configRef?: object;
+  load: () => Promise<T>;
+  isComplete?: (value: T) => boolean;
+}): Promise<T> {
+  const { cache, cacheKey, configRef } = params;
+  const candidate = cache.get(cacheKey);
+  const cached =
+    configRef === undefined || candidate?.configRef === configRef ? candidate : undefined;
+  if (cached?.value && cached.updatedAt && Date.now() - cached.updatedAt < USAGE_CACHE_TTL_MS) {
+    return cached.value;
+  }
+  if (cached?.inFlight) {
+    return cached.value && cached.updatedAt ? cached.value : await cached.inFlight;
+  }
+
+  const entry: UsageCacheEntry<T> = cached ?? { ...(configRef && { configRef }) };
+  const inFlight = params
+    .load()
+    .then((value) => {
+      if (cache.get(cacheKey) !== entry) {
+        return value;
+      }
+      if (params.isComplete?.(value) ?? true) {
+        entry.value = value;
+        entry.updatedAt = Date.now();
+      } else if (!entry.value) {
+        // Partial snapshots serve cold callers without masking the next refresh.
+        entry.value = value;
+        delete entry.updatedAt;
+      }
+      return value;
+    })
+    .catch((error: unknown) => {
+      if (entry.value) {
+        return entry.value;
+      }
+      throw error;
+    })
+    .finally(() => {
+      const current = cache.get(cacheKey);
+      if (current === entry && current.inFlight === inFlight) {
+        current.inFlight = undefined;
+      }
+    });
+
+  entry.inFlight = inFlight;
+  setUsageCache(cache, cacheKey, entry);
+  return entry.value && entry.updatedAt ? entry.value : await inFlight;
+}
+
+function usageDayBucketCacheKey(dayBucket: UsageDailyBucket | undefined): string {
+  return dayBucket
+    ? dayBucket.mode === "time-zone"
+      ? `time-zone:${dayBucket.timeZone}`
+      : `utc-offset:${dayBucket.utcOffsetMinutes}`
+    : "gateway";
+}
+
+type SessionsUsageCacheKeyParams = {
+  configRef: object;
+  agentId?: string;
+  agentScope?: "all";
+  startMs: number;
+  endMs: number;
+  includeUntimestamped?: boolean;
+  dayBucket?: UsageDailyBucket;
+  limit: number;
+  groupingMode: UsageGroupingMode;
+  specificKey: string | null;
+  includeContextWeight: boolean;
+};
+
+// Every normalized query axis that can change response bytes belongs in this
+// key; the 30s TTL mirrors usage.cost and keeps dashboard refreshes coherent.
+function sessionsUsageCacheKey(params: SessionsUsageCacheKeyParams): string {
+  return JSON.stringify([
+    params.agentScope === "all" ? "all" : `agent:${params.agentId}`,
+    params.startMs,
+    params.endMs,
+    params.includeUntimestamped === true,
+    usageDayBucketCacheKey(params.dayBucket),
+    params.limit,
+    params.groupingMode,
+    params.specificKey,
+    params.includeContextWeight,
+  ]);
+}
+
+async function loadSessionsUsageResultCached(
+  params: SessionsUsageCacheKeyParams & {
+    load: () => Promise<SessionsUsageResult>;
+  },
+): Promise<SessionsUsageResult> {
+  return await loadUsageResultCached({
+    cache: sessionsUsageCache,
+    cacheKey: sessionsUsageCacheKey(params),
+    configRef: params.configRef,
+    load: params.load,
+    // Incomplete lower-cache snapshots must not acquire the outer freshness TTL.
+    isComplete: (result) => !result.cacheStatus || result.cacheStatus.status === "fresh",
+  });
 }
 
 function resolveSessionUsageFileOrRespond(
   key: string,
   respond: RespondFn,
   config: OpenClawConfig,
-): {
-  config: OpenClawConfig;
-  entry: SessionEntry | undefined;
-  agentId: string | undefined;
-  sessionId: string;
-  sessionFile: string;
-} | null {
-  const { entry, storePath } = loadSessionEntry(key);
-
-  // For discovered sessions (not in store), try using key as sessionId directly
-  const parsed = parseAgentSessionKey(key);
-  const agentId = parsed?.agentId;
-  const rawSessionId = parsed?.rest ?? key;
-  const sessionId = entry?.sessionId ?? rawSessionId;
-  let sessionFile: string;
+): (ResolvedSessionUsageTarget & { config: OpenClawConfig }) | null {
+  const sessionOwner = resolveRequestedSessionAgentId(config, key);
+  if (!sessionOwner.ok) {
+    respond(false, undefined, sessionOwner.error);
+    return null;
+  }
+  let resolved: ResolvedSessionUsageTarget | undefined;
   try {
-    const pathOpts = resolveSessionFilePathOptions({ storePath, agentId });
-    sessionFile = resolveSessionFilePath(sessionId, entry, pathOpts);
+    resolved = resolveSessionUsageTarget(key, config, sessionOwner.agentId);
   } catch {
+    resolved = undefined;
+  }
+  if (!resolved) {
     respond(
       false,
       undefined,
@@ -163,8 +318,7 @@ function resolveSessionUsageFileOrRespond(
     );
     return null;
   }
-
-  return { config, entry, agentId, sessionId, sessionFile };
+  return { config, ...resolved };
 }
 
 const parseDateParts = (raw: unknown): DateParts | undefined => {
@@ -368,21 +522,6 @@ const getDateParts = (date: Date, interpretation: DateInterpretation): DateParts
   };
 };
 
-/**
- * Parse a date string (YYYY-MM-DD) to start-of-day timestamp based on interpretation mode.
- * Returns undefined if invalid.
- */
-const parseDateToMs = (
-  raw: unknown,
-  interpretation: DateInterpretation = { mode: "utc" },
-): number | undefined => {
-  const parts = parseDateParts(raw);
-  if (!parts) {
-    return undefined;
-  }
-  return datePartsToStartMs(parts, interpretation);
-};
-
 const formatDateLabel = (ms: number, interpretation: DateInterpretation): string => {
   const parts = getDateParts(new Date(ms), interpretation);
   return formatDateParts(parts.year, parts.monthIndex, parts.day);
@@ -479,6 +618,11 @@ const resolveDateRange = (
 
   const startDateParts = parseDateParts(params.startDate);
   const endDateParts = parseDateParts(params.endDate);
+  // Explicit date windows are atomic. A single boundary must not silently
+  // fall through to the unrelated default 30-day range.
+  if ((startDateParts === undefined) !== (endDateParts === undefined)) {
+    return { ok: false, error: "startDate and endDate must be provided together" };
+  }
 
   if (startDateParts && endDateParts) {
     const startMs = datePartsToStartMs(startDateParts, interpretation);
@@ -513,6 +657,24 @@ const resolveDateRange = (
   // Default to last 30 days
   return resolveTrailingDays(todayDateParts, 30, interpretation);
 };
+
+function resolveUsageDateRangeOrRespond(
+  params: Parameters<typeof resolveDateRange>[0],
+  respond: RespondFn,
+): { interpretation: DateInterpretation; range: DateRange } | null {
+  const interpretation = resolveDateInterpretation(params);
+  if (!interpretation.ok) {
+    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, interpretation.error));
+    return null;
+  }
+
+  const range = resolveDateRange(params, interpretation.value);
+  if (!range.ok) {
+    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, range.error));
+    return null;
+  }
+  return { interpretation: interpretation.value, range: range.value };
+}
 
 type DiscoveredSessionWithAgent = DiscoveredSession & { agentId: string };
 type UsageGroupingMode = "instance" | "family";
@@ -620,14 +782,6 @@ function resolveUsageFamilySessionIds(entry: SessionEntry | undefined, currentSe
   return addUniqueSessionIds([], [currentSessionId, ...(entry?.usageFamilySessionIds ?? [])]);
 }
 
-function resolveUsageFamilyKey(params: {
-  key: string;
-  entry: SessionEntry | undefined;
-  sessionId: string;
-}): string {
-  return params.entry?.usageFamilyKey ?? params.key ?? params.sessionId;
-}
-
 function maybeMergeFamilyEntry(params: {
   mergedEntries: MergedEntry[];
   base: MergedEntry;
@@ -643,24 +797,13 @@ function maybeMergeFamilyEntry(params: {
     params.base.sessionId,
   );
   // Family rows keep historical transcript ids so usage survives session resets.
-  const sessionFamilyKey = resolveUsageFamilyKey({
-    key: params.base.key,
-    entry: params.base.storeEntry,
-    sessionId: params.base.sessionId,
-  });
   params.mergedEntries.push({
     ...params.base,
     scope: "family",
-    sessionFamilyKey,
+    sessionFamilyKey: params.base.storeEntry?.usageFamilyKey ?? params.base.key,
     currentSessionId: params.base.sessionId,
     includedSessionIds,
   });
-}
-
-function createEmptySessionCostSummary(): SessionCostSummary {
-  return {
-    ...createEmptyCostUsageTotals(),
-  };
 }
 
 function mergeSessionUsageInto(target: SessionCostSummary, source: SessionCostSummary): void {
@@ -686,11 +829,11 @@ function mergeSessionUsageInto(target: SessionCostSummary, source: SessionCostSu
     target.activityDates = Array.from(activityDates).toSorted();
   }
 
-  target.dailyBreakdown = mergeDailyRows(target.dailyBreakdown, source.dailyBreakdown, [
+  target.dailyBreakdown = mergeUsageRows(target.dailyBreakdown, source.dailyBreakdown, [
     "tokens",
     "cost",
   ]);
-  target.dailyMessageCounts = mergeDailyRows(target.dailyMessageCounts, source.dailyMessageCounts, [
+  target.dailyMessageCounts = mergeUsageRows(target.dailyMessageCounts, source.dailyMessageCounts, [
     "total",
     "user",
     "assistant",
@@ -698,12 +841,12 @@ function mergeSessionUsageInto(target: SessionCostSummary, source: SessionCostSu
     "toolResults",
     "errors",
   ]);
-  target.utcQuarterHourMessageCounts = mergeQuarterRows(
+  target.utcQuarterHourMessageCounts = mergeUsageRows(
     target.utcQuarterHourMessageCounts,
     source.utcQuarterHourMessageCounts,
     ["total", "user", "assistant", "toolCalls", "toolResults", "errors"],
   );
-  target.utcQuarterHourTokenUsage = mergeQuarterRows(
+  target.utcQuarterHourTokenUsage = mergeUsageRows(
     target.utcQuarterHourTokenUsage,
     source.utcQuarterHourTokenUsage,
     ["input", "output", "cacheRead", "cacheWrite", "totalTokens", "totalCost"],
@@ -716,36 +859,14 @@ function mergeSessionUsageInto(target: SessionCostSummary, source: SessionCostSu
   target.latency = mergeLatency(target.latency, source.latency);
 }
 
-function mergeDailyRows<T extends { date: string }>(
+function mergeUsageRows<T extends { date: string; quarterIndex?: number }>(
   left: T[] | undefined,
   right: T[] | undefined,
   fields: Array<keyof T>,
 ): T[] | undefined {
   const map = new Map<string, T>();
   for (const row of [...(left ?? []), ...(right ?? [])]) {
-    const existing = map.get(row.date);
-    if (!existing) {
-      map.set(row.date, { ...row });
-      continue;
-    }
-    for (const field of fields) {
-      existing[field] = (((existing[field] as number | undefined) ?? 0) +
-        ((row[field] as number | undefined) ?? 0)) as T[keyof T];
-    }
-  }
-  return map.size > 0
-    ? Array.from(map.values()).toSorted((a, b) => a.date.localeCompare(b.date))
-    : undefined;
-}
-
-function mergeQuarterRows<T extends { date: string; quarterIndex: number }>(
-  left: T[] | undefined,
-  right: T[] | undefined,
-  fields: Array<keyof T>,
-): T[] | undefined {
-  const map = new Map<string, T>();
-  for (const row of [...(left ?? []), ...(right ?? [])]) {
-    const key = `${row.date}:${row.quarterIndex}`;
+    const key = row.quarterIndex === undefined ? row.date : `${row.date}:${row.quarterIndex}`;
     const existing = map.get(key);
     if (!existing) {
       map.set(key, { ...row });
@@ -758,7 +879,7 @@ function mergeQuarterRows<T extends { date: string; quarterIndex: number }>(
   }
   return map.size > 0
     ? Array.from(map.values()).toSorted(
-        (a, b) => a.date.localeCompare(b.date) || a.quarterIndex - b.quarterIndex,
+        (a, b) => a.date.localeCompare(b.date) || (a.quarterIndex ?? 0) - (b.quarterIndex ?? 0),
       )
     : undefined;
 }
@@ -812,7 +933,7 @@ function mergeModelUsage(
         provider: entry.provider,
         model: entry.model,
         count: 0,
-        totals: createEmptySessionCostSummary(),
+        totals: createEmptyCostUsageTotals(),
       } as SessionModelUsage);
     existing.count += entry.count;
     addCostUsageTotals(existing.totals, entry.totals);
@@ -897,78 +1018,33 @@ async function loadCostUsageSummaryCached(params: {
   agentId?: string;
   agentScope?: "all";
 }): Promise<CostUsageSummary> {
-  const dayBucketKey = params.dayBucket
-    ? params.dayBucket.mode === "time-zone"
-      ? `time-zone:${params.dayBucket.timeZone}`
-      : `utc-offset:${params.dayBucket.utcOffsetMinutes}`
-    : "gateway";
-  const cacheKey = `${params.agentScope === "all" ? "all" : `agent:${params.agentId ?? "__default__"}`}:${params.startMs}-${params.endMs}:${dayBucketKey}`;
-  const now = Date.now();
-  const cached = costUsageCache.get(cacheKey);
-  if (
-    cached?.summary &&
-    cached.updatedAt &&
-    now - cached.updatedAt < COST_USAGE_CACHE_TTL_MS &&
-    cached.summary.cacheStatus?.status !== "refreshing"
-  ) {
-    return cached.summary;
-  }
-
-  if (cached?.inFlight) {
-    if (cached.summary) {
-      return cached.summary;
-    }
-    return await cached.inFlight;
-  }
-
-  const entry: CostUsageCacheEntry = cached ?? {};
-  const inFlight = (
-    params.agentScope === "all"
-      ? loadAllAgentCostUsageSummary({
-          startMs: params.startMs,
-          endMs: params.endMs,
-          dayBucket: params.dayBucket,
-          config: params.config,
-        })
-      : loadCostUsageSummaryFromCache({
-          startMs: params.startMs,
-          endMs: params.endMs,
-          dayBucket: params.dayBucket,
-          config: params.config,
-          agentId: params.agentId,
-          requestRefresh: true,
-          refreshMode: "background",
-        })
-  )
-    .then((summary) => {
-      setCostUsageCache(cacheKey, {
-        summary,
-        updatedAt: summary.cacheStatus?.status === "refreshing" ? undefined : Date.now(),
-      });
-      return summary;
-    })
-    .catch((err: unknown) => {
-      if (entry.summary) {
-        // Serve the stale summary if background refresh fails; callers asked for usage, not repair.
-        return entry.summary;
-      }
-      throw err;
-    })
-    .finally(() => {
-      const current = costUsageCache.get(cacheKey);
-      if (current?.inFlight === inFlight) {
-        current.inFlight = undefined;
-        setCostUsageCache(cacheKey, current);
-      }
-    });
-
-  entry.inFlight = inFlight;
-  setCostUsageCache(cacheKey, entry);
-
-  if (entry.summary) {
-    return entry.summary;
-  }
-  return await inFlight;
+  const allAgents = params.agentScope === "all";
+  const agentId = allAgents
+    ? undefined
+    : normalizeAgentId(params.agentId ?? resolveSessionAgentId({ config: params.config }));
+  const dayBucketKey = usageDayBucketCacheKey(params.dayBucket);
+  const cacheKey = `${allAgents ? "all" : `agent:${agentId}`}:${params.startMs}-${params.endMs}:${dayBucketKey}`;
+  return await loadUsageResultCached({
+    cache: costUsageCache,
+    cacheKey,
+    load: () =>
+      allAgents
+        ? loadAllAgentCostUsageSummary({
+            startMs: params.startMs,
+            endMs: params.endMs,
+            dayBucket: params.dayBucket,
+            config: params.config,
+          })
+        : loadCostUsageSummaryFromCache({
+            startMs: params.startMs,
+            endMs: params.endMs,
+            dayBucket: params.dayBucket,
+            config: params.config,
+            agentId: expectDefined(agentId, "non-aggregate usage agent id"),
+            requestRefresh: true,
+            refreshMode: "background",
+          }),
+  });
 }
 
 async function loadAllAgentCostUsageSummary(params: {
@@ -977,6 +1053,8 @@ async function loadAllAgentCostUsageSummary(params: {
   dayBucket?: UsageDailyBucket;
   config: OpenClawConfig;
 }): Promise<CostUsageSummary> {
+  // Same agent universe as discoverAllSessionsForUsage: enumerating configured
+  // ids only would list system-agent sessions whose cost never reaches totals.
   const agentIds = listGatewayAgentsBasic(params.config).agents.map((agent) =>
     normalizeAgentId(agent.id),
   );
@@ -1048,115 +1126,63 @@ function mergeUsageCacheStatus(
 
 // Exposed for unit tests (kept as a single export to avoid widening the public API surface).
 export const testApi = {
-  parseDateParts,
-  parseUtcOffsetToMinutes,
-  resolveDateInterpretation,
-  parseDateToMs,
-  parseDays,
   resolveDateRange,
-  discoverAllSessionsForUsage,
   loadCostUsageSummaryCached,
   costUsageCache,
+  sessionsUsageCache,
 };
-export { testApi as __test };
 
 export type { SessionUsageEntry, SessionsUsageAggregates, SessionsUsageResult };
 
 export const usageHandlers: GatewayRequestHandlers = {
-  "usage.status": async ({ respond }) => {
-    const summary = await loadProviderUsageSummary();
+  "usage.status": async ({ respond, context }) => {
+    const summary = await loadUsageStatusStaleWhileRevalidate({
+      config: context.getRuntimeConfig(),
+    });
     respond(true, summary, undefined);
   },
   "usage.cost": async ({ respond, params, context }) => {
-    const dateInterpretationResolution = resolveDateInterpretation({
-      mode: params?.mode,
-      utcOffset: params?.utcOffset,
-      timeZone: params?.timeZone,
-    });
-    if (!dateInterpretationResolution.ok) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, dateInterpretationResolution.error),
-      );
+    const dateRange = resolveUsageDateRangeOrRespond(params ?? {}, respond);
+    if (!dateRange) {
       return;
     }
-    const dateInterpretation = dateInterpretationResolution.value;
-    const dateRange = resolveDateRange(
-      {
-        startDate: params?.startDate,
-        endDate: params?.endDate,
-        days: params?.days,
-        range: params?.range,
-        mode: params?.mode,
-        utcOffset: params?.utcOffset,
-        timeZone: params?.timeZone,
-      },
-      dateInterpretation,
-    );
-    if (!dateRange.ok) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, dateRange.error));
-      return;
-    }
+    const { interpretation: dateInterpretation, range } = dateRange;
     const config = context.getRuntimeConfig();
-    const { startMs, endMs } = dateRange.value;
+    const { startMs, endMs } = range;
     const agentId = normalizeOptionalString(params?.agentId);
     const agentScope = params?.agentScope === "all" && !agentId ? "all" : undefined;
+    let effectiveAgentId = agentId;
+    if (!agentScope && !effectiveAgentId) {
+      const requestedAgent = resolveRequestedSessionAgentId(config, "main");
+      if (!requestedAgent.ok) {
+        respond(false, undefined, requestedAgent.error);
+        return;
+      }
+      effectiveAgentId = requestedAgent.agentId;
+    }
     const summary = await loadCostUsageSummaryCached({
       startMs,
       endMs,
       dayBucket: resolveDayBucket(dateInterpretation),
       config,
-      agentId,
+      agentId: effectiveAgentId,
       agentScope,
     });
     respond(true, summary, undefined);
   },
   "sessions.usage": async ({ respond, params, context }) => {
-    if (!validateSessionsUsageParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid sessions.usage params: ${formatValidationErrors(validateSessionsUsageParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateSessionsUsageParams, "sessions.usage", respond)) {
       return;
     }
 
     const p = params;
-    const dateInterpretationResolution = resolveDateInterpretation({
-      mode: p.mode,
-      utcOffset: p.utcOffset,
-      timeZone: p.timeZone,
-    });
-    if (!dateInterpretationResolution.ok) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, dateInterpretationResolution.error),
-      );
+    const dateRange = resolveUsageDateRangeOrRespond(p, respond);
+    if (!dateRange) {
       return;
     }
-    const dateInterpretation = dateInterpretationResolution.value;
-    const dateRange = resolveDateRange(
-      {
-        startDate: p.startDate,
-        endDate: p.endDate,
-        range: p.range,
-        mode: p.mode,
-        utcOffset: p.utcOffset,
-        timeZone: p.timeZone,
-      },
-      dateInterpretation,
-    );
-    if (!dateRange.ok) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, dateRange.error));
-      return;
-    }
+    const { interpretation: dateInterpretation, range } = dateRange;
     const config = context.getRuntimeConfig();
-    const { startMs, endMs, includeUntimestamped } = dateRange.value;
+    const { startMs, endMs, includeUntimestamped } = range;
     const dayBucket = resolveDayBucket(dateInterpretation);
     const limit = typeof p.limit === "number" && Number.isFinite(p.limit) ? p.limit : 50;
     const includeContextWeight = p.includeContextWeight ?? false;
@@ -1174,495 +1200,536 @@ export const usageHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const specificKeyAgentId = specificKey ? parseAgentSessionKey(specificKey)?.agentId : undefined;
-    if (
-      requestedAgentId &&
-      specificKeyAgentId &&
-      normalizeAgentId(requestedAgentId) !== specificKeyAgentId
-    ) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId"),
-      );
+    const specificSessionOwner = specificKey
+      ? resolveRequestedSessionAgentId(config, specificKey, requestedAgentId)
+      : undefined;
+    if (specificSessionOwner && !specificSessionOwner.ok) {
+      respond(false, undefined, specificSessionOwner.error);
+      return;
+    }
+    const implicitAgent =
+      !requestedAllAgents && !specificSessionOwner?.agentId && !requestedAgentId
+        ? resolveRequestedSessionAgentId(config, "main")
+        : undefined;
+    if (implicitAgent && !implicitAgent.ok) {
+      respond(false, undefined, implicitAgent.error);
       return;
     }
     const effectiveAgentId = requestedAllAgents
       ? undefined
-      : normalizeAgentId(requestedAgentId ?? specificKeyAgentId ?? resolveDefaultAgentId(config));
+      : normalizeAgentId(
+          specificSessionOwner?.agentId ?? requestedAgentId ?? implicitAgent?.agentId,
+        );
     const groupingMode: UsageGroupingMode =
       p.groupBy === "family" || p.includeHistorical === true ? "family" : "instance";
 
-    // Load session store for named sessions
-    const sessionStoreOpts = effectiveAgentId ? { agentId: effectiveAgentId } : {};
-    const { storePath, store } = loadCombinedSessionStoreForGateway(config, sessionStoreOpts);
-    const scopedStore = effectiveAgentId
-      ? filterSessionStoreByAgent({
-          config,
-          store,
-          agentId: effectiveAgentId,
-        })
-      : store;
-    const now = Date.now();
-
-    const mergedEntries: MergedEntry[] = [];
-
-    // Optimization: If a specific key is requested, skip full directory scan
-    if (specificKey) {
-      const scopedSpecificKey = resolveStoredSessionKeyForAgentStore({
-        cfg: config,
-        agentId: effectiveAgentId ?? resolveDefaultAgentId(config),
-        sessionKey: specificKey,
-      });
-      const scopedParsed = parseAgentSessionKey(scopedSpecificKey);
-      const agentIdFromKey =
-        scopedParsed?.agentId ?? effectiveAgentId ?? resolveDefaultAgentId(config);
-      const keyRest = scopedParsed?.rest ?? specificKey;
-
-      // Prefer the store entry when available, even if the caller provides a discovered key
-      // (`agent:<id>:<sessionId>`) for a session that now has a canonical store key.
-      const storeBySessionId = buildStoreBySessionId(scopedStore);
-
-      const storeMatch = scopedStore[scopedSpecificKey]
-        ? { key: scopedSpecificKey, entry: scopedStore[scopedSpecificKey] }
-        : scopedStore[specificKey]
-          ? { key: specificKey, entry: scopedStore[specificKey] }
-          : null;
-      const storeByIdMatch =
-        storeBySessionId.get(keyRest) ??
-        (keyRest !== specificKey ? storeBySessionId.get(specificKey) : undefined) ??
-        null;
-      const resolvedStoreKey = storeMatch?.key ?? storeByIdMatch?.key ?? scopedSpecificKey;
-      const storeEntry = storeMatch?.entry ?? storeByIdMatch?.entry;
-      const sessionId = storeEntry?.sessionId ?? keyRest;
-
-      // Resolve the session file path
-      let sessionFile: string | undefined;
-      try {
-        const pathOpts = resolveSessionFilePathOptions({
-          storePath: storePath !== "(multiple)" ? storePath : undefined,
-          agentId: agentIdFromKey,
-        });
-        sessionFile = resolveExistingUsageSessionFile({
-          sessionId,
-          sessionEntry: storeEntry,
-          sessionFile: resolveSessionFilePath(sessionId, storeEntry, pathOpts),
-          agentId: agentIdFromKey,
-        });
-      } catch {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `Invalid session reference: ${specificKey}`),
-        );
-        return;
-      }
-
-      if (sessionFile) {
-        try {
-          const stats = fs.statSync(sessionFile);
-          if (stats.isFile()) {
-            maybeMergeFamilyEntry({
-              mergedEntries,
-              groupingMode,
-              base: {
-                key: resolvedStoreKey,
-                agentId: agentIdFromKey,
-                sessionId,
-                sessionFile,
-                label: storeEntry?.label,
-                updatedAt: storeEntry?.updatedAt ?? stats.mtimeMs,
-                storeEntry,
-              },
-            });
-          }
-        } catch {
-          // File doesn't exist - no results for this key
-        }
-      }
-    } else {
-      // Full discovery for list view
-      const discoveredSessions = await discoverAllSessionsForUsage({
-        config,
-        ...(effectiveAgentId ? { agentId: effectiveAgentId } : {}),
+    let result: SessionsUsageResult;
+    try {
+      result = await loadSessionsUsageResultCached({
+        configRef: config,
+        ...(effectiveAgentId ? { agentId: effectiveAgentId } : { agentScope: "all" }),
         startMs,
         endMs,
-      });
+        includeUntimestamped,
+        dayBucket,
+        limit,
+        groupingMode,
+        specificKey,
+        includeContextWeight,
+        load: async () => {
+          // Load session store for named sessions only on a result-cache miss.
+          const sessionStoreOpts = effectiveAgentId ? { agentId: effectiveAgentId } : {};
+          const { store } = loadCombinedSessionStoreForGatewayCore(config, sessionStoreOpts);
+          const scopedStore = effectiveAgentId
+            ? filterSessionStoreByAgent({
+                config,
+                store,
+                agentId: effectiveAgentId,
+              })
+            : store;
+          const now = Date.now();
 
-      // Build a map of sessionId -> store entry for quick lookup
-      const storeBySessionId = buildStoreBySessionId(scopedStore);
-      const storeFamilySessionIds = new Set<string>();
-      if (groupingMode === "family") {
-        for (const entry of Object.values(scopedStore)) {
-          for (const sessionId of entry?.usageFamilySessionIds ?? []) {
-            storeFamilySessionIds.add(sessionId);
-          }
-        }
-      }
+          const mergedEntries: MergedEntry[] = [];
 
-      for (const discovered of discoveredSessions) {
-        const storeMatch = storeBySessionId.get(discovered.sessionId);
-        if (storeMatch) {
-          // Named session from store
-          maybeMergeFamilyEntry({
-            mergedEntries,
-            groupingMode,
-            base: {
-              key: storeMatch.key,
-              agentId: discovered.agentId,
-              sessionId: discovered.sessionId,
-              sessionFile: discovered.sessionFile,
-              label: storeMatch.entry.label,
-              updatedAt: storeMatch.entry.updatedAt ?? discovered.mtime,
-              storeEntry: storeMatch.entry,
-            },
-          });
-        } else {
-          if (groupingMode === "family" && storeFamilySessionIds.has(discovered.sessionId)) {
-            // The current store row will load this historical transcript through included ids.
-            continue;
-          }
-          // Unnamed session - use session ID as key, no label
-          mergedEntries.push({
-            // Keep agentId in the key so the dashboard can attribute sessions and later fetch logs.
-            key: `agent:${discovered.agentId}:${discovered.sessionId}`,
-            agentId: discovered.agentId,
-            sessionId: discovered.sessionId,
-            sessionFile: discovered.sessionFile,
-            label: undefined, // No label for unnamed sessions
-            updatedAt: discovered.mtime,
-            scope: "instance",
-          });
-        }
-      }
-    }
+          // Optimization: If a specific key is requested, skip full directory scan
+          if (specificKey) {
+            const scopedSpecificKey = resolveStoredSessionKeyForAgentStore({
+              cfg: config,
+              agentId:
+                effectiveAgentId ??
+                expectDefined(specificSessionOwner?.agentId, "specific session owner"),
+              sessionKey: specificKey,
+            });
+            const scopedParsed = parseAgentSessionKey(scopedSpecificKey);
+            const agentIdFromKey =
+              scopedParsed?.agentId ??
+              effectiveAgentId ??
+              expectDefined(specificSessionOwner?.agentId, "specific session owner");
+            const keyRest = scopedParsed?.rest ?? specificKey;
 
-    // Sort by most recent first
-    mergedEntries.sort((a, b) => b.updatedAt - a.updatedAt);
+            // Prefer the store entry when available, even if the caller provides a discovered key
+            // (`agent:<id>:<sessionId>`) for a session that now has a canonical store key.
+            const storeBySessionId = buildStoreBySessionId(scopedStore);
 
-    // Load usage for each session
-    const sessions: SessionUsageEntry[] = [];
-    const aggregateTotals = createEmptyCostUsageTotals();
-    const aggregateMessages: SessionMessageCounts = {
-      total: 0,
-      user: 0,
-      assistant: 0,
-      toolCalls: 0,
-      toolResults: 0,
-      errors: 0,
-    };
-    const toolAggregateMap = new Map<string, number>();
-    const byModelMap = new Map<string, SessionModelUsage>();
-    const byProviderMap = new Map<string, SessionModelUsage>();
-    const byAgentMap = new Map<string, CostUsageSummary["totals"]>();
-    const byChannelMap = new Map<string, CostUsageSummary["totals"]>();
-    const dailyAggregateMap = new Map<
-      string,
-      {
-        date: string;
-        tokens: number;
-        cost: number;
-        messages: number;
-        toolCalls: number;
-        errors: number;
-      }
-    >();
-    const latencyTotals = {
-      count: 0,
-      sum: 0,
-      min: Number.POSITIVE_INFINITY,
-      max: 0,
-      p95Max: 0,
-    };
-    const dailyLatencyMap = new Map<
-      string,
-      { date: string; count: number; sum: number; min: number; max: number; p95Max: number }
-    >();
-    const modelDailyMap = new Map<string, SessionDailyModelUsage>();
-    let cacheStatus: UsageCacheStatus | undefined;
+            const storeMatch = scopedStore[scopedSpecificKey]
+              ? { key: scopedSpecificKey, entry: scopedStore[scopedSpecificKey] }
+              : scopedStore[specificKey]
+                ? { key: specificKey, entry: scopedStore[specificKey] }
+                : null;
+            const storeByIdMatch =
+              storeBySessionId.get(keyRest) ??
+              (keyRest !== specificKey ? storeBySessionId.get(specificKey) : undefined) ??
+              null;
+            const resolvedStoreKey = storeMatch?.key ?? storeByIdMatch?.key ?? scopedSpecificKey;
+            const storeEntry = storeMatch?.entry ?? storeByIdMatch?.entry;
+            const sessionId = storeEntry?.sessionId ?? keyRest;
 
-    const usageByEntryIndex: Array<SessionCostSummary | null> = Array.from(
-      { length: mergedEntries.length },
-      () => null,
-    );
+            // Stored sessions are canonical SQLite targets. JSONL discovery remains only for
+            // sessions without a store row, so retired locators cannot redirect live state.
+            let resolved: ResolvedSessionUsageTarget | undefined;
+            try {
+              resolved = resolveSessionUsageTarget(resolvedStoreKey, config, agentIdFromKey);
+              if (
+                !resolved ||
+                resolved.agentId !== agentIdFromKey ||
+                resolved.sessionId !== sessionId
+              ) {
+                throw new Error("session target mismatch");
+              }
+            } catch {
+              throw new SessionsUsageInvalidRequestError(
+                `Invalid session reference: ${specificKey}`,
+              );
+            }
+            const { sessionFile } = resolved;
 
-    // Group every included session (visible + hidden) by agent so the usage-cost
-    // cache is read and parsed at most once per agent. Loading each session
-    // individually re-reads and re-parses the whole cache file, so RSS spikes
-    // in proportion to `limit` on every dashboard connect (issue #100041).
-    const sessionsByAgent = new Map<
-      string | undefined,
-      Array<{ entryIndex: number; sessionId: string; sessionFile: string }>
-    >();
-    for (const [entryIndex, merged] of mergedEntries.entries()) {
-      for (const includedSessionId of merged.includedSessionIds ?? [merged.sessionId]) {
-        const includedSessionFile =
-          includedSessionId === merged.sessionId
-            ? merged.sessionFile
-            : resolveExistingUsageSessionFile({
-                sessionId: includedSessionId,
-                agentId: merged.agentId,
+            let updatedAt: number | undefined;
+            if (parseSqliteSessionFileMarker(sessionFile)) {
+              updatedAt = storeEntry?.updatedAt ?? now;
+            } else {
+              try {
+                const stats = fs.statSync(sessionFile);
+                if (stats.isFile()) {
+                  updatedAt = storeEntry?.updatedAt ?? stats.mtimeMs;
+                }
+              } catch {
+                // File doesn't exist - no results for this key
+              }
+            }
+            if (updatedAt !== undefined) {
+              maybeMergeFamilyEntry({
+                mergedEntries,
+                groupingMode,
+                base: {
+                  key: resolvedStoreKey,
+                  agentId: agentIdFromKey,
+                  sessionId,
+                  sessionFile,
+                  label: storeEntry?.label,
+                  updatedAt,
+                  storeEntry,
+                },
               });
-        if (!includedSessionFile) {
-          continue;
-        }
-        const agentSessions = sessionsByAgent.get(merged.agentId) ?? [];
-        agentSessions.push({
-          entryIndex,
-          sessionId: includedSessionId,
-          sessionFile: includedSessionFile,
-        });
-        sessionsByAgent.set(merged.agentId, agentSessions);
+            }
+          } else {
+            // Full discovery for list view
+            const discoveredSessions = await discoverAllSessionsForUsage({
+              config,
+              ...(effectiveAgentId ? { agentId: effectiveAgentId } : {}),
+              startMs,
+              endMs,
+            });
+
+            // Build a map of sessionId -> store entry for quick lookup
+            const storeBySessionId = buildStoreBySessionId(scopedStore);
+            const storeFamilySessionIds = new Set<string>();
+            if (groupingMode === "family") {
+              for (const entry of Object.values(scopedStore)) {
+                for (const sessionId of entry?.usageFamilySessionIds ?? []) {
+                  storeFamilySessionIds.add(sessionId);
+                }
+              }
+            }
+
+            for (const discovered of discoveredSessions) {
+              const storeMatch = storeBySessionId.get(discovered.sessionId);
+              if (storeMatch) {
+                // Named session from store
+                maybeMergeFamilyEntry({
+                  mergedEntries,
+                  groupingMode,
+                  base: {
+                    key: storeMatch.key,
+                    agentId: discovered.agentId,
+                    sessionId: discovered.sessionId,
+                    sessionFile: discovered.sessionFile,
+                    label: storeMatch.entry.label,
+                    updatedAt: storeMatch.entry.updatedAt ?? discovered.mtime,
+                    storeEntry: storeMatch.entry,
+                  },
+                });
+              } else {
+                if (groupingMode === "family" && storeFamilySessionIds.has(discovered.sessionId)) {
+                  // The current store row will load this historical transcript through included ids.
+                  continue;
+                }
+                // Unnamed session - use session ID as key, no label
+                mergedEntries.push({
+                  // Keep agentId in the key so the dashboard can attribute sessions and later fetch logs.
+                  key: `agent:${discovered.agentId}:${discovered.sessionId}`,
+                  agentId: discovered.agentId,
+                  sessionId: discovered.sessionId,
+                  sessionFile: discovered.sessionFile,
+                  label: undefined, // No label for unnamed sessions
+                  updatedAt: discovered.mtime,
+                  scope: "instance",
+                });
+              }
+            }
+          }
+
+          // Sort by most recent first
+          mergedEntries.sort((a, b) => b.updatedAt - a.updatedAt);
+
+          // Load usage for each session
+          const sessions: SessionUsageEntry[] = [];
+          const aggregateTotals = createEmptyCostUsageTotals();
+          const aggregateMessages: SessionMessageCounts = {
+            total: 0,
+            user: 0,
+            assistant: 0,
+            toolCalls: 0,
+            toolResults: 0,
+            errors: 0,
+          };
+          const toolAggregateMap = new Map<string, number>();
+          const byModelMap = new Map<string, SessionModelUsage>();
+          const byProviderMap = new Map<string, SessionModelUsage>();
+          const byAgentMap = new Map<string, CostUsageSummary["totals"]>();
+          const byChannelMap = new Map<string, CostUsageSummary["totals"]>();
+          const dailyAggregateMap = new Map<
+            string,
+            {
+              date: string;
+              tokens: number;
+              cost: number;
+              messages: number;
+              toolCalls: number;
+              errors: number;
+            }
+          >();
+          const latencyTotals = {
+            count: 0,
+            sum: 0,
+            min: Number.POSITIVE_INFINITY,
+            max: 0,
+            p95Max: 0,
+          };
+          const dailyLatencyMap = new Map<
+            string,
+            { date: string; count: number; sum: number; min: number; max: number; p95Max: number }
+          >();
+          const modelDailyMap = new Map<string, SessionDailyModelUsage>();
+          let cacheStatus: UsageCacheStatus | undefined;
+
+          const usageByEntryIndex: Array<SessionCostSummary | null> = Array.from(
+            { length: mergedEntries.length },
+            () => null,
+          );
+
+          // Group every included session (visible + hidden) by agent so the usage-cost
+          // cache is read and parsed at most once per agent. Loading each session
+          // individually re-reads and re-parses the whole cache file, so RSS spikes
+          // in proportion to `limit` on every dashboard connect (issue #100041).
+          const sessionsByAgent = new Map<
+            string,
+            Array<{ entryIndex: number; sessionId: string; sessionFile: string }>
+          >();
+          for (const [entryIndex, merged] of mergedEntries.entries()) {
+            for (const includedSessionId of merged.includedSessionIds ?? [merged.sessionId]) {
+              const includedSessionFile =
+                includedSessionId === merged.sessionId
+                  ? merged.sessionFile
+                  : resolveExistingUsageSessionFile({
+                      sessionId: includedSessionId,
+                      agentId: merged.agentId,
+                    });
+              if (!includedSessionFile) {
+                continue;
+              }
+              const agentSessions = sessionsByAgent.get(merged.agentId) ?? [];
+              agentSessions.push({
+                entryIndex,
+                sessionId: includedSessionId,
+                sessionFile: includedSessionFile,
+              });
+              sessionsByAgent.set(merged.agentId, agentSessions);
+            }
+          }
+
+          const agentLoads = await runUsageAgentTasks(
+            Array.from(sessionsByAgent.entries()).map(([agentId, agentSessions]) => async () => ({
+              agentSessions,
+              loaded: await loadSessionCostSummariesFromCache({
+                sessions: agentSessions,
+                config,
+                agentId,
+                startMs,
+                endMs,
+                includeUntimestamped,
+                dayBucket,
+              }),
+            })),
+          );
+          for (const { agentSessions, loaded } of agentLoads) {
+            cacheStatus = mergeUsageCacheStatus(cacheStatus, loaded.cacheStatus);
+            for (const [index, summary] of loaded.summaries.entries()) {
+              if (!summary) {
+                continue;
+              }
+              const session = expectDefined(agentSessions[index], "agent sessions entry at index");
+              const merged = expectDefined(
+                mergedEntries[session.entryIndex],
+                "merged entries entry at session.entry index",
+              );
+              const usage: SessionCostSummary =
+                usageByEntryIndex[session.entryIndex] ?? createEmptyCostUsageTotals();
+              usage.sessionId = merged.sessionId;
+              usage.sessionFile = merged.sessionFile;
+              mergeSessionUsageInto(usage, summary);
+              usageByEntryIndex[session.entryIndex] = usage;
+            }
+          }
+
+          // Track session-level aggregates across every matched session, so profile
+          // stats stay correct when the row list is truncated by `limit`.
+          let longestSessionDurationMs = 0;
+          let activeSessionCount = 0;
+
+          for (const [entryIndex, merged] of mergedEntries.entries()) {
+            const agentId = merged.agentId;
+            // A cold or stale cache intentionally yields null until its background refresh completes.
+            const usage = usageByEntryIndex[entryIndex] ?? null;
+
+            if (usage) {
+              addCostUsageTotals(aggregateTotals, usage);
+              longestSessionDurationMs = Math.max(longestSessionDurationMs, usage.durationMs ?? 0);
+              // Discovery admits transcripts modified after endMs (they can still hold
+              // in-range activity), so count only sessions whose filtered usage does.
+              if (usage.firstActivity !== undefined || (usage.messageCounts?.total ?? 0) > 0) {
+                activeSessionCount += 1;
+              }
+            }
+
+            const channel = sessionDeliveryChannel(merged.storeEntry);
+            const chatType =
+              merged.storeEntry?.chatType ?? sessionDeliveryOrigin(merged.storeEntry)?.chatType;
+
+            if (usage) {
+              if (usage.messageCounts) {
+                aggregateMessages.total += usage.messageCounts.total;
+                aggregateMessages.user += usage.messageCounts.user;
+                aggregateMessages.assistant += usage.messageCounts.assistant;
+                aggregateMessages.toolCalls += usage.messageCounts.toolCalls;
+                aggregateMessages.toolResults += usage.messageCounts.toolResults;
+                aggregateMessages.errors += usage.messageCounts.errors;
+              }
+
+              if (usage.toolUsage) {
+                for (const tool of usage.toolUsage.tools) {
+                  toolAggregateMap.set(
+                    tool.name,
+                    (toolAggregateMap.get(tool.name) ?? 0) + tool.count,
+                  );
+                }
+              }
+
+              if (usage.modelUsage) {
+                for (const entry of usage.modelUsage) {
+                  const modelKey = `${entry.provider ?? "unknown"}::${entry.model ?? "unknown"}`;
+                  const modelExisting =
+                    byModelMap.get(modelKey) ??
+                    ({
+                      provider: entry.provider,
+                      model: entry.model,
+                      count: 0,
+                      totals: createEmptyCostUsageTotals(),
+                    } as SessionModelUsage);
+                  modelExisting.count += entry.count;
+                  addCostUsageTotals(modelExisting.totals, entry.totals);
+                  byModelMap.set(modelKey, modelExisting);
+
+                  const providerKey = entry.provider ?? "unknown";
+                  const providerExisting =
+                    byProviderMap.get(providerKey) ??
+                    ({
+                      provider: entry.provider,
+                      model: undefined,
+                      count: 0,
+                      totals: createEmptyCostUsageTotals(),
+                    } as SessionModelUsage);
+                  providerExisting.count += entry.count;
+                  addCostUsageTotals(providerExisting.totals, entry.totals);
+                  byProviderMap.set(providerKey, providerExisting);
+                }
+              }
+
+              mergeUsageLatency(latencyTotals, usage.latency);
+              mergeUsageDailyLatency(dailyLatencyMap, usage.dailyLatency);
+
+              if (usage.dailyModelUsage) {
+                for (const entry of usage.dailyModelUsage) {
+                  const key = `${entry.date}::${entry.provider ?? "unknown"}::${entry.model ?? "unknown"}`;
+                  const existing =
+                    modelDailyMap.get(key) ??
+                    ({
+                      date: entry.date,
+                      provider: entry.provider,
+                      model: entry.model,
+                      tokens: 0,
+                      cost: 0,
+                      count: 0,
+                    } as SessionDailyModelUsage);
+                  existing.tokens += entry.tokens;
+                  existing.cost += entry.cost;
+                  existing.count += entry.count;
+                  modelDailyMap.set(key, existing);
+                }
+              }
+
+              if (agentId) {
+                const agentTotals = byAgentMap.get(agentId) ?? createEmptyCostUsageTotals();
+                addCostUsageTotals(agentTotals, usage);
+                byAgentMap.set(agentId, agentTotals);
+              }
+
+              if (channel) {
+                const channelTotals = byChannelMap.get(channel) ?? createEmptyCostUsageTotals();
+                addCostUsageTotals(channelTotals, usage);
+                byChannelMap.set(channel, channelTotals);
+              }
+
+              if (usage.dailyBreakdown) {
+                for (const day of usage.dailyBreakdown) {
+                  const daily = dailyAggregateMap.get(day.date) ?? {
+                    date: day.date,
+                    tokens: 0,
+                    cost: 0,
+                    messages: 0,
+                    toolCalls: 0,
+                    errors: 0,
+                  };
+                  daily.tokens += day.tokens;
+                  daily.cost += day.cost;
+                  dailyAggregateMap.set(day.date, daily);
+                }
+              }
+
+              if (usage.dailyMessageCounts) {
+                for (const day of usage.dailyMessageCounts) {
+                  const daily = dailyAggregateMap.get(day.date) ?? {
+                    date: day.date,
+                    tokens: 0,
+                    cost: 0,
+                    messages: 0,
+                    toolCalls: 0,
+                    errors: 0,
+                  };
+                  daily.messages += day.total;
+                  daily.toolCalls += day.toolCalls;
+                  daily.errors += day.errors;
+                  dailyAggregateMap.set(day.date, daily);
+                }
+              }
+            }
+
+            if (entryIndex < limit) {
+              sessions.push({
+                key: merged.key,
+                label: merged.label,
+                sessionId: merged.sessionId,
+                scope: merged.scope ?? "instance",
+                sessionFamilyKey: merged.sessionFamilyKey,
+                currentSessionId: merged.currentSessionId,
+                includedSessionIds: merged.includedSessionIds,
+                historicalInstanceCount: merged.includedSessionIds?.length,
+                updatedAt: merged.updatedAt,
+                agentId,
+                channel,
+                chatType,
+                origin: sessionDeliveryOrigin(merged.storeEntry),
+                modelOverride: merged.storeEntry?.modelOverride,
+                providerOverride: merged.storeEntry?.providerOverride,
+                modelProvider: merged.storeEntry?.modelProvider,
+                model: merged.storeEntry?.model,
+                usage,
+                contextWeight: includeContextWeight
+                  ? (merged.storeEntry?.systemPromptReport ?? null)
+                  : undefined,
+              });
+            }
+          }
+
+          const tail = buildUsageAggregateTail({
+            byChannelMap,
+            latencyTotals,
+            dailyLatencyMap,
+            modelDailyMap,
+            dailyMap: dailyAggregateMap,
+          });
+
+          const aggregates: SessionsUsageAggregates = {
+            sessionCount: activeSessionCount,
+            ...(longestSessionDurationMs > 0 ? { longestSessionDurationMs } : {}),
+            messages: aggregateMessages,
+            tools: {
+              totalCalls: Array.from(toolAggregateMap.values()).reduce(
+                (sum, count) => sum + count,
+                0,
+              ),
+              uniqueTools: toolAggregateMap.size,
+              tools: Array.from(toolAggregateMap.entries())
+                .map(([name, count]) => ({ name, count }))
+                .toSorted((a, b) => b.count - a.count),
+            },
+            byModel: Array.from(byModelMap.values()).toSorted((a, b) => {
+              const costDiff = (b.totals?.totalCost ?? 0) - (a.totals?.totalCost ?? 0);
+              if (costDiff !== 0) {
+                return costDiff;
+              }
+              return (b.totals?.totalTokens ?? 0) - (a.totals?.totalTokens ?? 0);
+            }),
+            byProvider: Array.from(byProviderMap.values()).toSorted((a, b) => {
+              const costDiff = (b.totals?.totalCost ?? 0) - (a.totals?.totalCost ?? 0);
+              if (costDiff !== 0) {
+                return costDiff;
+              }
+              return (b.totals?.totalTokens ?? 0) - (a.totals?.totalTokens ?? 0);
+            }),
+            byAgent: Array.from(byAgentMap.entries())
+              .map(([id, totals]) => ({ agentId: id, totals }))
+              .toSorted((a, b) => (b.totals?.totalCost ?? 0) - (a.totals?.totalCost ?? 0)),
+            ...tail,
+          };
+
+          return {
+            updatedAt: now,
+            startDate: formatDateLabel(startMs, dateInterpretation),
+            endDate: formatDateLabel(endMs, dateInterpretation),
+            sessions,
+            totals: aggregateTotals,
+            aggregates,
+            cacheStatus,
+          };
+        },
+      });
+    } catch (err) {
+      if (err instanceof SessionsUsageInvalidRequestError) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, err.message));
+        return;
       }
+      throw err;
     }
-
-    const agentLoads = await runUsageAgentTasks(
-      Array.from(sessionsByAgent.entries()).map(([agentId, agentSessions]) => async () => ({
-        agentSessions,
-        loaded: await loadSessionCostSummariesFromCache({
-          sessions: agentSessions,
-          config,
-          agentId,
-          startMs,
-          endMs,
-          includeUntimestamped,
-          dayBucket,
-        }),
-      })),
-    );
-    for (const { agentSessions, loaded } of agentLoads) {
-      cacheStatus = mergeUsageCacheStatus(cacheStatus, loaded.cacheStatus);
-      for (const [index, summary] of loaded.summaries.entries()) {
-        if (!summary) {
-          continue;
-        }
-        const session = expectDefined(agentSessions[index], "agent sessions entry at index");
-        const merged = expectDefined(
-          mergedEntries[session.entryIndex],
-          "merged entries entry at session.entry index",
-        );
-        const usage = usageByEntryIndex[session.entryIndex] ?? createEmptySessionCostSummary();
-        usage.sessionId = merged.sessionId;
-        usage.sessionFile = merged.sessionFile;
-        mergeSessionUsageInto(usage, summary);
-        usageByEntryIndex[session.entryIndex] = usage;
-      }
-    }
-
-    // Track session-level aggregates across every matched session, so profile
-    // stats stay correct when the row list is truncated by `limit`.
-    let longestSessionDurationMs = 0;
-    let activeSessionCount = 0;
-
-    for (const [entryIndex, merged] of mergedEntries.entries()) {
-      const agentId = merged.agentId;
-      // A cold or stale cache intentionally yields null until its background refresh completes.
-      const usage = usageByEntryIndex[entryIndex] ?? null;
-
-      if (usage) {
-        addCostUsageTotals(aggregateTotals, usage);
-        longestSessionDurationMs = Math.max(longestSessionDurationMs, usage.durationMs ?? 0);
-        // Discovery admits transcripts modified after endMs (they can still hold
-        // in-range activity), so count only sessions whose filtered usage does.
-        if (usage.firstActivity !== undefined || (usage.messageCounts?.total ?? 0) > 0) {
-          activeSessionCount += 1;
-        }
-      }
-
-      const channel = merged.storeEntry?.channel ?? merged.storeEntry?.origin?.provider;
-      const chatType = merged.storeEntry?.chatType ?? merged.storeEntry?.origin?.chatType;
-
-      if (usage) {
-        if (usage.messageCounts) {
-          aggregateMessages.total += usage.messageCounts.total;
-          aggregateMessages.user += usage.messageCounts.user;
-          aggregateMessages.assistant += usage.messageCounts.assistant;
-          aggregateMessages.toolCalls += usage.messageCounts.toolCalls;
-          aggregateMessages.toolResults += usage.messageCounts.toolResults;
-          aggregateMessages.errors += usage.messageCounts.errors;
-        }
-
-        if (usage.toolUsage) {
-          for (const tool of usage.toolUsage.tools) {
-            toolAggregateMap.set(tool.name, (toolAggregateMap.get(tool.name) ?? 0) + tool.count);
-          }
-        }
-
-        if (usage.modelUsage) {
-          for (const entry of usage.modelUsage) {
-            const modelKey = `${entry.provider ?? "unknown"}::${entry.model ?? "unknown"}`;
-            const modelExisting =
-              byModelMap.get(modelKey) ??
-              ({
-                provider: entry.provider,
-                model: entry.model,
-                count: 0,
-                totals: createEmptyCostUsageTotals(),
-              } as SessionModelUsage);
-            modelExisting.count += entry.count;
-            addCostUsageTotals(modelExisting.totals, entry.totals);
-            byModelMap.set(modelKey, modelExisting);
-
-            const providerKey = entry.provider ?? "unknown";
-            const providerExisting =
-              byProviderMap.get(providerKey) ??
-              ({
-                provider: entry.provider,
-                model: undefined,
-                count: 0,
-                totals: createEmptyCostUsageTotals(),
-              } as SessionModelUsage);
-            providerExisting.count += entry.count;
-            addCostUsageTotals(providerExisting.totals, entry.totals);
-            byProviderMap.set(providerKey, providerExisting);
-          }
-        }
-
-        mergeUsageLatency(latencyTotals, usage.latency);
-        mergeUsageDailyLatency(dailyLatencyMap, usage.dailyLatency);
-
-        if (usage.dailyModelUsage) {
-          for (const entry of usage.dailyModelUsage) {
-            const key = `${entry.date}::${entry.provider ?? "unknown"}::${entry.model ?? "unknown"}`;
-            const existing =
-              modelDailyMap.get(key) ??
-              ({
-                date: entry.date,
-                provider: entry.provider,
-                model: entry.model,
-                tokens: 0,
-                cost: 0,
-                count: 0,
-              } as SessionDailyModelUsage);
-            existing.tokens += entry.tokens;
-            existing.cost += entry.cost;
-            existing.count += entry.count;
-            modelDailyMap.set(key, existing);
-          }
-        }
-
-        if (agentId) {
-          const agentTotals = byAgentMap.get(agentId) ?? createEmptyCostUsageTotals();
-          addCostUsageTotals(agentTotals, usage);
-          byAgentMap.set(agentId, agentTotals);
-        }
-
-        if (channel) {
-          const channelTotals = byChannelMap.get(channel) ?? createEmptyCostUsageTotals();
-          addCostUsageTotals(channelTotals, usage);
-          byChannelMap.set(channel, channelTotals);
-        }
-
-        if (usage.dailyBreakdown) {
-          for (const day of usage.dailyBreakdown) {
-            const daily = dailyAggregateMap.get(day.date) ?? {
-              date: day.date,
-              tokens: 0,
-              cost: 0,
-              messages: 0,
-              toolCalls: 0,
-              errors: 0,
-            };
-            daily.tokens += day.tokens;
-            daily.cost += day.cost;
-            dailyAggregateMap.set(day.date, daily);
-          }
-        }
-
-        if (usage.dailyMessageCounts) {
-          for (const day of usage.dailyMessageCounts) {
-            const daily = dailyAggregateMap.get(day.date) ?? {
-              date: day.date,
-              tokens: 0,
-              cost: 0,
-              messages: 0,
-              toolCalls: 0,
-              errors: 0,
-            };
-            daily.messages += day.total;
-            daily.toolCalls += day.toolCalls;
-            daily.errors += day.errors;
-            dailyAggregateMap.set(day.date, daily);
-          }
-        }
-      }
-
-      if (entryIndex < limit) {
-        sessions.push({
-          key: merged.key,
-          label: merged.label,
-          sessionId: merged.sessionId,
-          scope: merged.scope ?? "instance",
-          sessionFamilyKey: merged.sessionFamilyKey,
-          currentSessionId: merged.currentSessionId,
-          includedSessionIds: merged.includedSessionIds,
-          historicalInstanceCount: merged.includedSessionIds?.length,
-          updatedAt: merged.updatedAt,
-          agentId,
-          channel,
-          chatType,
-          origin: merged.storeEntry?.origin,
-          modelOverride: merged.storeEntry?.modelOverride,
-          providerOverride: merged.storeEntry?.providerOverride,
-          modelProvider: merged.storeEntry?.modelProvider,
-          model: merged.storeEntry?.model,
-          usage,
-          contextWeight: includeContextWeight
-            ? (merged.storeEntry?.systemPromptReport ?? null)
-            : undefined,
-        });
-      }
-    }
-
-    const tail = buildUsageAggregateTail({
-      byChannelMap,
-      latencyTotals,
-      dailyLatencyMap,
-      modelDailyMap,
-      dailyMap: dailyAggregateMap,
-    });
-
-    const aggregates: SessionsUsageAggregates = {
-      sessionCount: activeSessionCount,
-      ...(longestSessionDurationMs > 0 ? { longestSessionDurationMs } : {}),
-      messages: aggregateMessages,
-      tools: {
-        totalCalls: Array.from(toolAggregateMap.values()).reduce((sum, count) => sum + count, 0),
-        uniqueTools: toolAggregateMap.size,
-        tools: Array.from(toolAggregateMap.entries())
-          .map(([name, count]) => ({ name, count }))
-          .toSorted((a, b) => b.count - a.count),
-      },
-      byModel: Array.from(byModelMap.values()).toSorted((a, b) => {
-        const costDiff = (b.totals?.totalCost ?? 0) - (a.totals?.totalCost ?? 0);
-        if (costDiff !== 0) {
-          return costDiff;
-        }
-        return (b.totals?.totalTokens ?? 0) - (a.totals?.totalTokens ?? 0);
-      }),
-      byProvider: Array.from(byProviderMap.values()).toSorted((a, b) => {
-        const costDiff = (b.totals?.totalCost ?? 0) - (a.totals?.totalCost ?? 0);
-        if (costDiff !== 0) {
-          return costDiff;
-        }
-        return (b.totals?.totalTokens ?? 0) - (a.totals?.totalTokens ?? 0);
-      }),
-      byAgent: Array.from(byAgentMap.entries())
-        .map(([id, totals]) => ({ agentId: id, totals }))
-        .toSorted((a, b) => (b.totals?.totalCost ?? 0) - (a.totals?.totalCost ?? 0)),
-      ...tail,
-    };
-
-    const result: SessionsUsageResult = {
-      updatedAt: now,
-      startDate: formatDateLabel(startMs, dateInterpretation),
-      endDate: formatDateLabel(endMs, dateInterpretation),
-      sessions,
-      totals: aggregateTotals,
-      aggregates,
-      cacheStatus,
-    };
-
     respond(true, result, undefined);
   },
   "sessions.usage.timeseries": async ({ respond, params, context }) => {

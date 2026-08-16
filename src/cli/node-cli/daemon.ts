@@ -1,5 +1,4 @@
 // Node-host daemon lifecycle commands for install, status, start, stop, and restart.
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { colorize } from "../../../packages/terminal-core/src/theme.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
@@ -17,6 +16,12 @@ import {
   buildPlatformServiceStartHints,
 } from "../../daemon/runtime-hints.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
+import {
+  isSystemdUserServiceAvailable,
+  readSystemdUserLingerStatus,
+  resolveSystemdUserServiceAccount,
+} from "../../daemon/systemd.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
@@ -33,10 +38,10 @@ import {
   failIfNixDaemonInstallMode,
   filterDaemonEnv,
   formatRuntimeStatus,
-  parsePort,
   resolveRuntimeStatusColor,
 } from "../daemon-cli/shared.js";
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
+import { resolveNodeGatewayOptions } from "./gateway-options.js";
 
 type NodeDaemonInstallOptions = {
   host?: string;
@@ -78,28 +83,30 @@ function buildNodeRuntimeHints(env: NodeJS.ProcessEnv = process.env): string[] {
   });
 }
 
-function resolveNodeDefaults(
-  opts: NodeDaemonInstallOptions,
-  config: Awaited<ReturnType<typeof loadNodeHostConfig>>,
-) {
-  // CLI flags override node-host config; missing values fall back to loopback Gateway defaults.
-  const savedHost = config?.gateway?.host || "127.0.0.1";
-  const host = normalizeOptionalString(opts.host) || savedHost;
-  const retargeted = opts.host !== undefined || opts.port !== undefined;
-  const portOverride = parsePort(opts.port);
-  if (opts.port !== undefined && portOverride === null) {
-    return { host, port: null, retargeted, endpointChanged: false };
+/**
+ * Warns (does NOT auto-enable) when systemd user lingering is disabled.
+ * The installed user-level node service stops when the last SSH session ends
+ * unless `loginctl enable-linger <user>` has been run. Read-only: this never
+ * changes host state, matching the operator-consent policy used elsewhere.
+ */
+async function warnIfSystemdUserLingerDisabled(warn: (message: string) => void): Promise<void> {
+  if (process.platform !== "linux") {
+    return;
   }
-  const savedPort = config?.gateway?.port ?? 18789;
-  const port = portOverride ?? savedPort;
-  const endpointChanged =
-    (opts.host !== undefined && host !== savedHost) ||
-    (opts.port !== undefined && port !== savedPort);
-  const explicitContextPath = opts.contextPath !== undefined;
-  const contextPath =
-    normalizeOptionalString(opts.contextPath) ||
-    (explicitContextPath || retargeted ? undefined : config?.gateway?.contextPath);
-  return { host, port, contextPath, retargeted, endpointChanged };
+  if (!(await isSystemdUserServiceAvailable())) {
+    return;
+  }
+  const user = resolveSystemdUserServiceAccount(process.env);
+  if (!user) {
+    return;
+  }
+  const status = await readSystemdUserLingerStatus({ env: process.env, user });
+  if (!status || status.linger === "yes") {
+    return;
+  }
+  warn(
+    `Systemd lingering is disabled for ${status.user}. The node service will stop when you log out. Run: sudo loginctl enable-linger ${status.user}`,
+  );
 }
 
 export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
@@ -109,13 +116,17 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   }
 
   const config = await loadNodeHostConfig();
-  const { host, port, contextPath, endpointChanged } = resolveNodeDefaults(opts, config);
+  const { host, port, contextPath, tls, tlsFingerprint } = resolveNodeGatewayOptions(opts, config);
   if (!Number.isFinite(port ?? Number.NaN) || (port ?? 0) <= 0 || (port ?? 0) > 65_535) {
     fail(
       opts.port !== undefined
         ? formatInvalidPortOption("--port")
         : formatInvalidConfigPort("node.gateway.port"),
     );
+    return;
+  }
+  if (opts.tls === false && opts.tlsFingerprint !== undefined) {
+    fail("--no-tls cannot be combined with --tls-fingerprint");
     return;
   }
 
@@ -126,14 +137,22 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   }
 
   const service = resolveNodeService();
+  const warn = (message: string) => {
+    if (json) {
+      warnings.push(message);
+    } else {
+      defaultRuntime.log(message);
+    }
+  };
   let loaded;
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch (err) {
-    fail(`Node service check failed: ${String(err)}`);
+    fail(`Node service check failed: ${formatErrorMessage(err)}`);
     return;
   }
   if (loaded && !opts.force) {
+    await warnIfSystemdUserLingerDisabled(warn);
     emit({
       ok: true,
       result: "already-installed",
@@ -148,19 +167,14 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     return;
   }
 
-  const tlsFingerprint =
-    normalizeOptionalString(opts.tlsFingerprint) ||
-    (endpointChanged ? undefined : config?.gateway?.tlsFingerprint);
-  const inheritedTls = endpointChanged ? undefined : config?.gateway?.tls;
-  const tls = Boolean(opts.tls) || Boolean(tlsFingerprint) || Boolean(inheritedTls);
   const { programArguments, workingDirectory, environment, environmentValueSources, description } =
     await buildNodeInstallPlan({
       env: process.env,
       host,
       port: port ?? 18789,
       contextPath,
-      tls,
-      tlsFingerprint: tlsFingerprint || undefined,
+      tls: Boolean(tls),
+      tlsFingerprint,
       nodeId: opts.nodeId,
       displayName: opts.displayName,
       installedAppsSharing: opts.shareInstalledApps,
@@ -173,13 +187,6 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
         }
       },
     });
-  const warn = (message: string) => {
-    if (json) {
-      warnings.push(message);
-    } else {
-      defaultRuntime.log(message);
-    }
-  };
 
   await installDaemonServiceAndEmit({
     serviceNoun: "Node",
@@ -198,6 +205,14 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
         environmentValueSources,
         description,
       });
+    },
+    // Run the linger diagnostic only on the verified-success path: placing it
+    // in `install` (before service-load verification) would let a linger
+    // warning accompany a failed install or verification, misdirecting the
+    // operator (see #107033 review). The already-installed short-circuit
+    // above warns separately.
+    onVerified: async () => {
+      await warnIfSystemdUserLingerDisabled(warn);
     },
   });
 }
@@ -241,12 +256,27 @@ export async function runNodeDaemonStop(opts: NodeDaemonLifecycleOptions = {}) {
 export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   const json = Boolean(opts.json);
   const service = resolveNodeService();
-  const [loaded, command, runtime] = await Promise.all([
-    service.isLoaded({ env: process.env }).catch(() => false),
+  let loaded: boolean;
+  try {
+    loaded = await service.isLoaded({ env: process.env });
+  } catch (error) {
+    const message = `Node service check failed: ${formatErrorMessage(error)}`;
+    if (json) {
+      defaultRuntime.writeJson({ error: message });
+    } else {
+      defaultRuntime.error(message);
+    }
+    defaultRuntime.exit(1);
+    return;
+  }
+  const [command, runtime] = await Promise.all([
     service.readCommand(process.env).catch(() => null),
-    service
-      .readRuntime(process.env)
-      .catch((err: unknown): GatewayServiceRuntime => ({ status: "unknown", detail: String(err) })),
+    service.readRuntime(process.env).catch(
+      (err: unknown): GatewayServiceRuntime => ({
+        status: "unknown",
+        detail: formatErrorMessage(err),
+      }),
+    ),
   ]);
 
   const payload = {

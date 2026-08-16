@@ -4,7 +4,9 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
+import type { StatusSummary } from "../status/types.js";
 import { VERSION } from "../version.js";
+import { buildBackupStatusValue, readBackupFreshness } from "./backup-health.js";
 import type { HealthSummary } from "./health.js";
 import {
   buildStatusOverviewRowsFromSurface,
@@ -28,51 +30,11 @@ import {
   type StatusMemoryStateResolvers,
 } from "./status.command-sections.js";
 import type { MemoryPluginStatus, MemoryStatusSnapshot } from "./status.scan.shared.js";
-import type { StatusSummary } from "./status.types.js";
-
-function readModelPricingHealth(params: {
-  health?: HealthSummary;
-  surface: StatusOverviewSurface;
-}): HealthSummary["modelPricing"] | undefined {
-  if (params.health?.modelPricing) {
-    return params.health.modelPricing;
-  }
-  // Fast status can receive model pricing through the gateway probe before deep health is requested.
-  const probeHealth = params.surface.gatewayProbe?.health;
-  if (!probeHealth || typeof probeHealth !== "object") {
-    return undefined;
-  }
-  const modelPricing = (probeHealth as { modelPricing?: unknown }).modelPricing;
-  if (!modelPricing || typeof modelPricing !== "object") {
-    return undefined;
-  }
-  const state = (modelPricing as { state?: unknown }).state;
-  if (state !== "ok" && state !== "degraded" && state !== "disabled") {
-    return undefined;
-  }
-  return modelPricing as HealthSummary["modelPricing"];
-}
-
-function buildModelPricingOverviewValue(params: {
-  health?: HealthSummary["modelPricing"];
-  ok: (value: string) => string;
-  warn: (value: string) => string;
-  muted: (value: string) => string;
-}): string | null {
-  const health = params.health;
-  if (!health) {
-    return null;
-  }
-  if (health.state !== "degraded") {
-    return null;
-  }
-  const detail = health.detail ? ` · ${health.detail}` : "";
-  return params.warn(`warning · optional pricing refresh degraded${detail}`);
-}
 
 /** Builds the default `openclaw status` overview rows from scan, health, memory, and session inputs. */
 export function buildStatusCommandOverviewRows(
   params: {
+    env: NodeJS.ProcessEnv;
     opts: {
       deep?: boolean;
     };
@@ -110,7 +72,7 @@ export function buildStatusCommandOverviewRows(
   const degradedSecretsValue =
     degradedSecretOwners.length > 0
       ? params.warn(
-          `${degradedSecretOwners.length} unavailable · ${degradedSecretOwners
+          `${degradedSecretOwners.length} degraded · ${degradedSecretOwners
             .map((owner) => `${owner.ownerKind}:${owner.ownerId}`)
             .join(", ")}`,
         )
@@ -159,16 +121,23 @@ export function buildStatusCommandOverviewRows(
     ok: params.ok,
     warn: params.warn,
   });
-  const modelPricingValue = buildModelPricingOverviewValue({
-    health: readModelPricingHealth({
-      health: params.health,
-      surface: params.surface,
-    }),
-    ok: params.ok,
-    warn: params.warn,
-    muted: params.muted,
-  });
-
+  const hostDesktop = params.summary.hostDesktop ?? {
+    enabled: false,
+    state: "disabled" as const,
+    port: 5900,
+  };
+  const hostDesktopValue =
+    hostDesktop.state === "disabled"
+      ? params.muted("disabled")
+      : hostDesktop.state === "managed"
+        ? hostDesktop.managedState === "running"
+          ? `managed · running · display :${hostDesktop.display} · 127.0.0.1:${hostDesktop.port} · security VncAuth`
+          : hostDesktop.managedState === "failed"
+            ? `managed · failed: ${hostDesktop.error}`
+            : hostDesktop.managedState === "unknown"
+              ? "managed · runtime state unavailable"
+              : `managed · ${hostDesktop.managedState === "not-started" ? "not started" : "starting"}`
+        : `${hostDesktop.state} · 127.0.0.1:${hostDesktop.port}${hostDesktop.security ? ` · security ${hostDesktop.security}` : ""}`;
   return buildStatusOverviewRowsFromSurface({
     surface: params.surface,
     decorateOk: params.ok,
@@ -179,17 +148,24 @@ export function buildStatusCommandOverviewRows(
     updateValue: params.updateValue,
     agentsValue,
     suffixRows: [
-      ...(modelPricingValue ? [{ Item: "Model pricing", Value: modelPricingValue }] : []),
       ...(params.updateRestartValue
         ? [{ Item: "Update restart", Value: params.updateRestartValue }]
         : []),
       { Item: "Memory", Value: memoryValue },
+      { Item: "Host desktop", Value: hostDesktopValue },
       ...(degradedSecretsValue ? [{ Item: "Degraded secrets", Value: degradedSecretsValue }] : []),
       ...(degradedPluginsValue ? [{ Item: "Degraded plugins", Value: degradedPluginsValue }] : []),
       { Item: "Plugin compatibility", Value: pluginCompatibilityValue },
       { Item: "Probes", Value: probesValue },
       { Item: "Events", Value: eventsValue },
       { Item: "Tasks", Value: tasksValue },
+      {
+        Item: "Backups",
+        Value: buildBackupStatusValue({
+          freshness: readBackupFreshness(params.env),
+          formatTimeAgo: params.formatTimeAgo,
+        }),
+      },
       { Item: "Heartbeat", Value: heartbeatValue },
       ...(lastHeartbeatValue ? [{ Item: "Last heartbeat", Value: lastHeartbeatValue }] : []),
       {

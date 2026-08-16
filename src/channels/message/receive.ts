@@ -3,6 +3,7 @@
  *
  * Models ack/nack policy and idempotent receive state transitions for inbound events.
  */
+import { formatErrorMessage } from "../../infra/errors.js";
 import type { ChannelMessageReceiveAckPolicy } from "./types.js";
 
 /** Public alias for channel receive acknowledgement policy names. */
@@ -46,10 +47,6 @@ function shouldAckMessageAfterStage(policy: MessageAckPolicy, stage: MessageAckS
       return false;
   }
   return false;
-}
-
-function normalizeAckErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 /** Creates a receive context with idempotent ack and explicit nack state transitions. */
@@ -97,7 +94,7 @@ export function createMessageReceiveContext<TMessage>(params: {
       nackInFlight = (async () => {
         await params.onNack?.(error);
         ctx.ackState = "nacked";
-        ctx.nackErrorMessage = normalizeAckErrorMessage(error);
+        ctx.nackErrorMessage = formatErrorMessage(error);
       })();
       try {
         await nackInFlight;

@@ -8,10 +8,15 @@ import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import type { DiagnosticTracePropagationBridge as DiagnosticTracePropagationBridgeContract } from "../infra/diagnostic-trace-propagation.js";
 import type { SecurityAuditFinding } from "../security/audit.types.js";
 import type { PluginLogger } from "./logger-types.js";
 
 type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin;
+type DiagnosticTracePropagationBridge = DiagnosticTracePropagationBridgeContract<
+  DiagnosticEventPayload,
+  DiagnosticEventMetadata
+>;
 
 type PluginInteractiveHandlerResult = {
   handled?: boolean;
@@ -86,11 +91,34 @@ export type OpenClawPluginCliRegistrar = (ctx: OpenClawPluginCliContext) => void
  * advertising it at the root CLI level, provide descriptors that cover every
  * top-level command root registered by that plugin CLI surface.
  */
-export type OpenClawPluginCliCommandDescriptor = {
+type OpenClawPluginCliCommandDescriptor = {
   name: string;
   description: string;
   hasSubcommands: boolean;
 };
+
+/** Root-command metadata that is available before a plugin registrar is activated. */
+export type OpenClawPluginCliRootCommandDescriptor = OpenClawPluginCliCommandDescriptor & {
+  machineOutput?: (params: { argv: readonly string[]; stdoutIsTTY: boolean }) => boolean;
+};
+
+type OpenClawPluginRootCliRegistrationOptions = {
+  /** Omit or pass an empty path for root commands. */
+  parentPath?: readonly [];
+  commands?: readonly string[];
+  descriptors?: readonly OpenClawPluginCliRootCommandDescriptor[];
+};
+
+/** Backward-compatible registration shape for dynamic root or nested paths. */
+type OpenClawPluginLegacyCliRegistrationOptions = {
+  parentPath?: readonly string[];
+  commands?: readonly string[];
+  descriptors?: readonly OpenClawPluginCliCommandDescriptor[];
+};
+
+export type OpenClawPluginCliRegistrationOptions =
+  | OpenClawPluginRootCliRegistrationOptions
+  | OpenClawPluginLegacyCliRegistrationOptions;
 
 export type OpenClawPluginNodeCliFeatureOptions = {
   /** Explicit node feature command names owned under `openclaw nodes`. */
@@ -166,6 +194,11 @@ export type OpenClawPluginNodeInvokePolicyContext = {
     connId?: string;
     scopes?: string[];
   } | null;
+  risk?: {
+    level: "ordinary" | "high";
+    /** Stable, content-free family name; never include user or action arguments. */
+    family: string;
+  };
   approvals?: OpenClawPluginNodeInvokePolicyApprovalRuntime;
   invokeNode: (input?: {
     params?: unknown;
@@ -192,7 +225,7 @@ export type OpenClawPluginNodeInvokePolicy = {
   commands: string[];
   /**
    * Platforms where these node-handled commands should be allowlisted by default.
-   * Omit for commands that require explicit `gateway.nodes.allowCommands`.
+   * Omit for commands that require explicit `gateway.nodes.commands.allow`.
    */
   defaultPlatforms?: Array<"ios" | "android" | "macos" | "windows" | "linux" | "unknown">;
   /**
@@ -205,6 +238,13 @@ export type OpenClawPluginNodeInvokePolicy = {
    * when an iOS node reports BACKGROUND_UNAVAILABLE.
    */
   foregroundRestrictedOnIos?: boolean;
+  /**
+   * Classify exact command arguments before the policy handler or node transport runs.
+   * Throwing rejects the invocation before dispatch.
+   */
+  classifyRisk?: (
+    ctx: Pick<OpenClawPluginNodeInvokePolicyContext, "command" | "params">,
+  ) => NonNullable<OpenClawPluginNodeInvokePolicyContext["risk"]>;
   handle: (
     ctx: OpenClawPluginNodeInvokePolicyContext,
   ) => Promise<OpenClawPluginNodeInvokePolicyResult> | OpenClawPluginNodeInvokePolicyResult;
@@ -262,6 +302,7 @@ export type OpenClawPluginServiceContext = {
         privateData: DiagnosticEventPrivateData,
       ) => void,
     ) => () => void;
+    registerTracePropagationBridge?: (bridge: DiagnosticTracePropagationBridge) => () => void;
   };
 };
 

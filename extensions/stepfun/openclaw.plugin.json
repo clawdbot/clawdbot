@@ -73,9 +73,9 @@
             "contextWindow": 262144,
             "maxTokens": 65536,
             "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
+              "input": 0.1,
+              "output": 0.3,
+              "cacheRead": 0.02,
               "cacheWrite": 0
             }
           }
@@ -157,8 +157,8 @@
       }
     },
     "discovery": {
-      "stepfun": "static",
-      "stepfun-plan": "static"
+      "stepfun": "refreshable",
+      "stepfun-plan": "refreshable"
     }
   },
   "providerAuthChoices": [

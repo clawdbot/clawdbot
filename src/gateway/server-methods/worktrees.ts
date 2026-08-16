@@ -1,5 +1,3 @@
-import fsSync from "node:fs";
-import fs from "node:fs/promises";
 import {
   ErrorCodes,
   errorShape,
@@ -10,7 +8,6 @@ import {
   validateWorktreesRemoveParams,
   validateWorktreesRestoreParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { createManagedWorktreeOwnerProtection } from "../../agents/worktrees/owner-protection.js";
 import {
   managedWorktrees,
@@ -18,8 +15,10 @@ import {
   WorktreeSnapshotError,
 } from "../../agents/worktrees/service.js";
 import type { ManagedWorktreeService } from "../../agents/worktrees/service.js";
+import { resolveRecordedProjectRoot } from "../../projects/project-registry.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { resolveWorkspacePathContainment } from "./workspace-path-containment.js";
 
 type WorktreeService = Pick<
   ManagedWorktreeService,
@@ -37,31 +36,23 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
         invalidParams(respond);
         return;
       }
-      try {
-        respond(true, { worktrees: await service.list() }, undefined);
-      } catch (error) {
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
-      }
+      respond(true, { worktrees: await service.list() }, undefined);
     },
     "worktrees.create": async ({ params, respond }) => {
       if (!validateWorktreesCreateParams(params)) {
         invalidParams(respond);
         return;
       }
-      try {
-        respond(
-          true,
-          await service.create({
-            repoRoot: params.repoRoot,
-            name: params.name,
-            baseRef: params.baseRef,
-            ownerKind: "manual",
-          }),
-          undefined,
-        );
-      } catch (error) {
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
-      }
+      respond(
+        true,
+        await service.create({
+          repoRoot: params.repoRoot,
+          name: params.name,
+          baseRef: params.baseRef,
+          ownerKind: "manual",
+        }),
+        undefined,
+      );
     },
     "worktrees.remove": async ({ params, respond }) => {
       if (!validateWorktreesRemoveParams(params)) {
@@ -98,69 +89,62 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
         invalidParams(respond);
         return;
       }
-      try {
-        respond(true, await service.restore({ id: params.id }), undefined);
-      } catch (error) {
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
-      }
+      respond(true, await service.restore({ id: params.id }), undefined);
     },
     "worktrees.branches": async ({ params, respond, context, client }) => {
       if (!validateWorktreesBranchesParams(params)) {
         invalidParams(respond);
         return;
       }
-      // Write scope may only enumerate configured agent workspaces; arbitrary
-      // host paths stay behind the same admin bar as sessions.create cwd.
+      let repoRoot = params.repoRoot;
       const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
       if (!scopes.includes(ADMIN_SCOPE)) {
-        const cfg = context.getRuntimeConfig();
-        const requested = await fs.realpath(params.repoRoot).catch(() => null);
-        const allowed =
-          requested !== null &&
-          listAgentIds(cfg).some((agentId) => {
-            try {
-              return fsSync.realpathSync(resolveAgentWorkspaceDir(cfg, agentId)) === requested;
-            } catch {
-              return false;
-            }
-          });
-        if (!allowed) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `worktrees.branches outside configured agent workspaces requires gateway scope: ${ADMIN_SCOPE}`,
-            ),
-          );
-          return;
+        const containment = await resolveWorkspacePathContainment(
+          params.repoRoot,
+          context.getRuntimeConfig(),
+        );
+        if (!containment) {
+          const projectRoot = await resolveRecordedProjectRoot(params.repoRoot);
+          if (!projectRoot) {
+            respond(
+              false,
+              undefined,
+              errorShape(
+                ErrorCodes.INVALID_REQUEST,
+                `worktrees.branches outside configured agent workspaces requires gateway scope: ${ADMIN_SCOPE}`,
+              ),
+            );
+            return;
+          }
+          // The stored project row is the authorization boundary, so write-scoped clients
+          // may inspect its canonical repo root without workspace containment.
+          repoRoot = projectRoot;
+        } else {
+          repoRoot = containment.path;
         }
       }
-      try {
-        respond(true, await service.listRepositoryBranches(params.repoRoot), undefined);
-      } catch (error) {
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
-      }
+      const result = params.includeRepositoryStatus
+        ? await service.listRepositoryBranches(repoRoot, {
+            includeRepositoryStatus: true,
+          })
+        : await service.listRepositoryBranches(repoRoot);
+      respond(true, result, undefined);
     },
     "worktrees.gc": async ({ params, respond, context }) => {
       if (!validateWorktreesGcParams(params)) {
         invalidParams(respond);
         return;
       }
-      try {
-        const cfg = context.getRuntimeConfig();
-        const limits = resolveWorktreeCleanupLimits(cfg.worktrees);
-        respond(
-          true,
-          await service.gc({
-            limits,
-            shouldProtectOwner: createManagedWorktreeOwnerProtection(cfg),
-          }),
-          undefined,
-        );
-      } catch (error) {
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
-      }
+      const cfg = context.getRuntimeConfig();
+      const limits = resolveWorktreeCleanupLimits();
+      respond(
+        true,
+        await service.gc({
+          limits,
+          shouldProtectOwner: createManagedWorktreeOwnerProtection(cfg),
+        }),
+        undefined,
+      );
     },
   };
 }

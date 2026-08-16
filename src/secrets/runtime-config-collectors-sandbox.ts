@@ -1,8 +1,9 @@
 /** Collects agent-scoped sandbox SSH SecretRefs during runtime preparation. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { listAgentEntriesWithSource, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { resolveSandboxScope } from "../agents/sandbox/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { runtimeSandboxSecretOwnerId } from "./runtime-sandbox-secret-owner.js";
 import {
   collectRuntimeSecretInputAssignment,
@@ -16,12 +17,13 @@ const SANDBOX_SSH_SECRET_KEYS = ["identityData", "certificateData", "knownHostsD
 
 type SandboxSshSecretKey = (typeof SANDBOX_SSH_SECRET_KEYS)[number];
 
-function sandboxSecretOwner(agentId: string): SecretAssignmentOwner {
+function sandboxSecretOwner(agentId: string, contract: unknown): SecretAssignmentOwner {
   return {
     ownerKind: "capability",
     ownerId: runtimeSandboxSecretOwnerId(agentId),
     requiredForGateway: false,
     disposition: "isolate",
+    contract,
   };
 }
 
@@ -65,31 +67,29 @@ export function collectAgentSandboxAssignments(params: {
   const defaultsSandbox = isRecord(defaultsAgent?.sandbox) ? defaultsAgent.sandbox : undefined;
   const defaultsSsh = isRecord(defaultsSandbox?.ssh) ? defaultsSandbox.ssh : undefined;
   const defaultsBackend = normalizeOptionalLowercaseString(defaultsSandbox?.backend) ?? "docker";
-  const rawList = Array.isArray(agents.list) ? agents.list : [];
-  const configuredAgents: Array<{ entry: Record<string, unknown>; index: number }> = [];
-  rawList.forEach((entry, index) => {
-    if (isRecord(entry)) {
-      configuredAgents.push({ entry, index });
-    }
-  });
-  const candidates: Array<{
-    entry: Record<string, unknown> | undefined;
-    index: number | undefined;
-  }> = configuredAgents.length > 0 ? configuredAgents : [{ entry: undefined, index: undefined }];
+  const candidates = listAgentEntriesWithSource(params.config).map(({ entry, source }) => ({
+    entry,
+    entryId: entry.id,
+    agentPath:
+      source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list.${source.index}`,
+  }));
   const activeDefaultKeys = new Set<SandboxSshSecretKey>();
   const seenAgentIds = new Set<string>();
 
   for (const candidate of candidates) {
     const rawAgent = candidate.entry;
-    const agentId = normalizeAgentId(
-      typeof rawAgent?.id === "string" ? rawAgent.id : DEFAULT_AGENT_ID,
-    );
+    const rawAgentValue: unknown = rawAgent;
+    if (!isRecord(rawAgentValue)) {
+      continue;
+    }
+    const rawAgentRecord = rawAgentValue;
+    const agentId = normalizeAgentId(candidate.entryId);
     if (seenAgentIds.has(agentId)) {
       continue;
     }
     seenAgentIds.add(agentId);
 
-    const sandbox = isRecord(rawAgent?.sandbox) ? rawAgent.sandbox : undefined;
+    const sandbox = isRecord(rawAgentRecord.sandbox) ? rawAgentRecord.sandbox : undefined;
     const ssh = isRecord(sandbox?.ssh) ? sandbox.ssh : undefined;
     const backend =
       normalizeOptionalLowercaseString(sandbox?.backend) ??
@@ -103,8 +103,8 @@ export function collectAgentSandboxAssignments(params: {
             ? (defaultsSandbox.scope as "agent" | "session" | "shared")
             : undefined,
       perSession:
-        typeof sandbox?.perSession === "boolean"
-          ? sandbox.perSession
+        typeof sandbox?.["perSession"] === "boolean"
+          ? sandbox["perSession"]
           : typeof defaultsSandbox?.perSession === "boolean"
             ? defaultsSandbox.perSession
             : undefined,
@@ -113,7 +113,11 @@ export function collectAgentSandboxAssignments(params: {
     // sandbox is disabled, so SSH lifecycle credentials stay materialized while
     // SSH remains the configured backend.
     const active = backend === "ssh";
-    const owner = sandboxSecretOwner(agentId);
+    const owner = sandboxSecretOwner(agentId, {
+      defaults: defaultsSandbox,
+      override: sandbox,
+      agentEnabled: rawAgentRecord["enabled"],
+    });
 
     for (const key of SANDBOX_SSH_SECRET_KEYS) {
       const hasAgentOverride = Boolean(ssh && Object.hasOwn(ssh, key));
@@ -122,7 +126,7 @@ export function collectAgentSandboxAssignments(params: {
           collectAssignment({
             target: ssh,
             key,
-            path: `agents.list.${candidate.index}.sandbox.ssh.${key}`,
+            path: `${candidate.agentPath}.sandbox.ssh.${key}`,
             defaults: params.defaults,
             context: params.context,
             active,
@@ -134,7 +138,7 @@ export function collectAgentSandboxAssignments(params: {
         collectAssignment({
           target: ssh,
           key,
-          path: `agents.list.${candidate.index}.sandbox.ssh.${key}`,
+          path: `${candidate.agentPath}.sandbox.ssh.${key}`,
           defaults: params.defaults,
           context: params.context,
           active: false,
@@ -181,7 +185,9 @@ export function collectAgentSandboxAssignments(params: {
       context: params.context,
       active,
       inactiveReason: "no enabled agent uses the sandbox SSH material.",
-      owner: sandboxSecretOwner(DEFAULT_AGENT_ID),
+      owner: sandboxSecretOwner(resolveDefaultAgentId(params.config), {
+        defaults: defaultsSandbox,
+      }),
     });
   }
 }

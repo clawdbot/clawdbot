@@ -2,7 +2,6 @@
 import crypto from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveUserPath } from "../utils.js";
 import { createCacheTrace } from "./cache-trace.js";
 
 describe("createCacheTrace", () => {
@@ -43,18 +42,17 @@ describe("createCacheTrace", () => {
     expect(trace).toBeNull();
   });
 
-  it("honors diagnostics cache trace config and expands file paths", () => {
+  it("uses the fixed cache trace path under the state directory", () => {
     const lines: string[] = [];
     const trace = createCacheTrace({
       cfg: {
         diagnostics: {
           cacheTrace: {
             enabled: true,
-            filePath: "~/.openclaw/logs/cache-trace.jsonl",
           },
         },
       },
-      env: {},
+      env: { OPENCLAW_STATE_DIR: "/tmp/openclaw-cache-trace" },
       writer: {
         filePath: "memory",
         write: (line) => lines.push(line),
@@ -63,7 +61,7 @@ describe("createCacheTrace", () => {
     });
 
     expect(typeof trace?.recordStage).toBe("function");
-    expect(trace?.filePath).toBe(resolveUserPath("~/.openclaw/logs/cache-trace.jsonl"));
+    expect(trace?.filePath).toBe("/tmp/openclaw-cache-trace/logs/cache-trace.jsonl");
 
     trace?.recordStage("session:loaded", {
       messages: [],
@@ -80,8 +78,6 @@ describe("createCacheTrace", () => {
         diagnostics: {
           cacheTrace: {
             enabled: true,
-            includePrompt: true,
-            includeSystem: true,
           },
         },
       },
@@ -120,7 +116,6 @@ describe("createCacheTrace", () => {
         diagnostics: {
           cacheTrace: {
             enabled: true,
-            includeSystem: true,
           },
         },
       },
@@ -226,6 +221,14 @@ describe("createCacheTrace", () => {
             },
           ],
         },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "visible" }],
+          providerReplay: {
+            type: "openai-responses-compaction",
+            data: "opaque-cache-trace-compaction",
+          },
+        },
       ] as unknown as [],
     });
 
@@ -253,30 +256,11 @@ describe("createCacheTrace", () => {
         safe: "keep-me",
         tokenCount: 42,
       },
-      images: [
-        {
-          type: "image",
-          mimeType: "image/png",
-          data: "<redacted>",
-          bytes: 4,
-          sha256: crypto.createHash("sha256").update("QUJDRA==").digest("hex"),
-        },
-      ],
+      images: "<redacted>",
     });
     expect((event.options as { diagnosticText?: string }).diagnosticText).not.toBe(bareGithubKey);
     expect((event.options as { diagnosticText?: string }).diagnosticText).not.toContain(
       bareGithubKey,
-    );
-
-    const optionsImages = (
-      ((event.options as { images?: unknown[] } | undefined)?.images ?? []) as Array<
-        Record<string, unknown>
-      >
-    )[0];
-    expect(optionsImages?.data).toBe("<redacted>");
-    expect(optionsImages?.bytes).toBe(4);
-    expect(optionsImages?.sha256).toBe(
-      crypto.createHash("sha256").update("QUJDRA==").digest("hex"),
     );
 
     const firstMessage = ((event.messages as Array<Record<string, unknown>> | undefined) ?? [])[0];
@@ -298,6 +282,8 @@ describe("createCacheTrace", () => {
     expect(source.bytes).toBe(6);
     expect(source.sha256).toBe(crypto.createHash("sha256").update("U0VDUkVU").digest("hex"));
     const serialized = JSON.stringify(event);
+    expect(serialized).not.toContain("providerReplay");
+    expect(serialized).not.toContain("opaque-cache-trace-compaction");
     expect(serialized).not.toContain(bareAwsKey);
     expect(serialized).not.toContain(bareGoogleKey);
     expect(serialized).not.toContain(bareGithubKey);

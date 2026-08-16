@@ -5,7 +5,8 @@ import type { CronJob, ModelAuthStatusResult } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import { t } from "../i18n/index.ts";
-import { isCronJobActiveFailure } from "../lib/cron-status.ts";
+import { isCronJobActiveFailure, isCronJobRunning } from "../lib/cron-status.ts";
+import { clampText } from "../lib/format.ts";
 import { isMonitoredAuthProvider } from "../lib/model-auth.ts";
 import type { IconName } from "./icons.ts";
 import type { SidebarAttentionKind } from "./sidebar-attention-dismissals.ts";
@@ -13,6 +14,8 @@ import type { SidebarAttentionKind } from "./sidebar-attention-dismissals.ts";
 // A cron job counts as overdue when its next planned run is this far in the
 // past; mirrors the threshold the Overview attention list used.
 const CRON_OVERDUE_GRACE_MS = 300_000;
+// Per-job cap so a stack-trace-sized lastError cannot balloon the tooltip.
+const CRON_ERROR_MAX_LENGTH = 200;
 
 type SidebarAttentionAction =
   | { kind: "navigate"; routeId: NavigationRouteId }
@@ -23,6 +26,8 @@ export type SidebarAttentionItem = {
   severity: "error" | "warning";
   icon: IconName;
   label: string;
+  // Multi-line tooltip body; "\n" separates lines rendered via pre-line.
+  detail?: string;
   action: SidebarAttentionAction;
   // Sorted identities of the entities behind the chip. A dismissal stores
   // this signature so the chip stays hidden only while the same incident set
@@ -39,11 +44,13 @@ export type SidebarAttentionItem = {
 export function buildSidebarAttentionItems(params: {
   cronJobs: readonly CronJob[];
   modelAuthStatus: ModelAuthStatusResult | null;
+  modelAuthAgentId?: string | null;
   approvalQueue: readonly ExecApprovalRequest[];
   now: number;
 }): SidebarAttentionItem[] {
   const items: SidebarAttentionItem[] = [];
   const signatureOf = (ids: readonly string[]) => ids.toSorted().join("\n");
+  const cronJobName = (job: CronJob) => job.name?.trim() || job.id;
 
   if (params.approvalQueue.length > 0) {
     const count = params.approvalQueue.length;
@@ -66,6 +73,15 @@ export function buildSidebarAttentionItems(params: {
       severity: "error",
       icon: "clock",
       label: t("attention.cronFailed", { count: String(failedCron.length) }),
+      detail: failedCron
+        .map((job) => {
+          const errorText = [job.state?.lastError, job.state?.lastErrorReason]
+            .map((value) => value?.trim())
+            .find((value): value is string => Boolean(value));
+          const resolvedError = errorText ?? t("attention.cronErrorUnknown");
+          return `${cronJobName(job)}: ${clampText(resolvedError, CRON_ERROR_MAX_LENGTH)}`;
+        })
+        .join("\n"),
       action: { kind: "navigate", routeId: "cron" },
       signature: signatureOf(failedCron.map((job) => job.id)),
     });
@@ -73,6 +89,7 @@ export function buildSidebarAttentionItems(params: {
   const overdueCron = params.cronJobs.filter(
     (job) =>
       job.enabled &&
+      !isCronJobRunning(job) &&
       job.state?.nextRunAtMs != null &&
       params.now - job.state.nextRunAtMs > CRON_OVERDUE_GRACE_MS,
   );
@@ -82,6 +99,7 @@ export function buildSidebarAttentionItems(params: {
       severity: "warning",
       icon: "clock",
       label: t("attention.cronOverdue", { count: String(overdueCron.length) }),
+      detail: overdueCron.map(cronJobName).join("\n"),
       action: { kind: "navigate", routeId: "cron" },
       // nextRunAtMs is the incident identity: stable while a job stays stuck,
       // new once it runs again and later goes overdue anew — so a fresh
@@ -95,6 +113,7 @@ export function buildSidebarAttentionItems(params: {
     (provider) => provider.status === "expired" || provider.status === "missing",
   );
   if (expired.length > 0) {
+    const providerSignature = signatureOf(expired.map((provider) => provider.provider));
     items.push({
       kind: "modelAuthExpired",
       severity: "error",
@@ -103,7 +122,11 @@ export function buildSidebarAttentionItems(params: {
         providers: expired.map((provider) => provider.displayName).join(", "),
       }),
       action: { kind: "navigate", routeId: "model-providers" },
-      signature: signatureOf(expired.map((provider) => provider.provider)),
+      // Auth status is agent-scoped. Prefix its owner so dismissing one agent's
+      // missing credential cannot hide the same provider warning for another.
+      signature: params.modelAuthAgentId
+        ? `agent:${params.modelAuthAgentId}\n${providerSignature}`
+        : providerSignature,
     });
   }
   return items;

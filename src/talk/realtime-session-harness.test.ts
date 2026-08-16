@@ -45,6 +45,98 @@ function makeBridge(overrides: Partial<RealtimeVoiceBridge> = {}): RealtimeVoice
 }
 
 describe("realtime voice session harness", () => {
+  it.each(["completed", "cancelled", "failed", "incomplete"] as const)(
+    "settles one output span and turn for %s responses",
+    (status) => {
+      const harness = createHarness();
+      harness.recordOutputAudio(Buffer.from([1, 2]));
+      const outcome =
+        status === "failed" || status === "incomplete"
+          ? ({ status, responseId: `resp-${status}`, message: `${status} message` } as const)
+          : ({ status, responseId: `resp-${status}` } as const);
+
+      expect(harness.finishResponse(outcome).ok).toBe(true);
+      expect(harness.finishResponse(outcome)).toEqual({ ok: false, reason: "no_active_turn" });
+      expect(harness.talk.recentEvents.map((event) => event.type)).toEqual(
+        status === "failed" || status === "incomplete"
+          ? [
+              "turn.started",
+              "output.audio.started",
+              "output.audio.delta",
+              "output.audio.done",
+              "session.error",
+              "turn.ended",
+            ]
+          : [
+              "turn.started",
+              "output.audio.started",
+              "output.audio.delta",
+              "output.audio.done",
+              status === "cancelled" ? "turn.cancelled" : "turn.ended",
+            ],
+      );
+    },
+  );
+
+  it("uses a legacy terminal event only when no typed outcome settled that response", () => {
+    let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
+    const onResponseDone = vi.fn();
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "test",
+      label: "Test",
+      isConfigured: () => true,
+      createBridge: (request) => {
+        callbacks = request;
+        return makeBridge();
+      },
+    };
+    const harness = createHarness();
+    harness.createBridge({
+      provider,
+      providerConfig: {},
+      audioSink: { sendAudio: vi.fn() },
+      onResponseDone,
+    });
+    callbacks?.onEvent?.({ direction: "server", type: "response.created", responseId: "resp-1" });
+    callbacks?.onResponseDone?.({ status: "completed", responseId: "resp-1" });
+    callbacks?.onEvent?.({ direction: "server", type: "response.done", responseId: "resp-1" });
+
+    expect(onResponseDone).toHaveBeenCalledOnce();
+    expect(harness.talk.recentEvents.filter((event) => event.type === "turn.ended")).toHaveLength(
+      1,
+    );
+
+    callbacks?.onEvent?.({ direction: "server", type: "response.created", responseId: "resp-2" });
+    callbacks?.onEvent?.({ direction: "server", type: "response.cancelled", responseId: "resp-2" });
+    expect(onResponseDone).toHaveBeenLastCalledWith({
+      status: "cancelled",
+      responseId: "resp-2",
+    });
+  });
+
+  it("does not let a delayed duplicate terminal event settle a newer turn", () => {
+    let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "test",
+      label: "Test",
+      isConfigured: () => true,
+      createBridge: (request) => {
+        callbacks = request;
+        return makeBridge();
+      },
+    };
+    const harness = createHarness();
+    harness.createBridge({ provider, providerConfig: {}, audioSink: { sendAudio: vi.fn() } });
+    callbacks?.onEvent?.({ direction: "server", type: "response.created", responseId: "resp-old" });
+    callbacks?.onResponseDone?.({ status: "completed", responseId: "resp-old" });
+    callbacks?.onEvent?.({ direction: "server", type: "response.created", responseId: "resp-new" });
+    callbacks?.onEvent?.({ direction: "server", type: "response.done", responseId: "resp-old" });
+
+    expect(harness.talk.activeTurnId).toBeDefined();
+    expect(harness.talk.recentEvents.filter((event) => event.type === "turn.ended")).toHaveLength(
+      1,
+    );
+  });
   it("keeps shared Talk events ordered across input, output, and turn completion", () => {
     const harness = createHarness();
 
@@ -62,6 +154,28 @@ describe("realtime voice session harness", () => {
       "turn.ended",
     ]);
     expect(harness.talk.recentEvents.map((event) => event.seq)).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  it("honors a caller-specific recent Talk event limit", () => {
+    const harness = createHarness({
+      talk: {
+        sessionId: "limited-session",
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+        provider: "test",
+        maxRecentEvents: 2,
+      },
+    });
+
+    harness.emit({ type: "session.started", payload: {} });
+    harness.emit({ type: "session.ready", payload: {} });
+    harness.emit({ type: "session.closed", payload: {}, final: true });
+
+    expect(harness.talk.recentEvents.map((event) => event.type)).toEqual([
+      "session.ready",
+      "session.closed",
+    ]);
   });
 
   it("suppresses input through queued output playback plus the echo tail", () => {
@@ -118,6 +232,15 @@ describe("realtime voice session harness", () => {
       responseStyle: "brief",
     });
     expect(deliver).toHaveBeenCalledWith("answer:first\nsecond");
+  });
+
+  it("detects assistant transcript echo without enabling audio suppression", () => {
+    const harness = createHarness({ transcriptLookbackMs: 12_000 });
+
+    harness.recordTranscript("assistant", "I found the shopping list");
+
+    expect(harness.isLikelyAssistantEchoTranscript("I found the shopping list")).toBe(true);
+    expect(harness.recordInputAudio(Buffer.from([1, 2]))).toBe(true);
   });
 
   it("flushes transport output when provider barge-in does not clear it", () => {

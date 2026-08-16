@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "../bus-state.js";
 import { createQaChannelTransport } from "../qa-channel-transport.js";
 import { createQaTransportAdapter } from "../qa-transport-registry.js";
-import { listQaScenariosForExecutionProfile } from "../scenario-catalog.js";
+import type { QaTransportAdapter } from "../qa-transport.js";
 
 const { createDiscord, createMatrix, createSlack, createTelegram, createWhatsApp } = vi.hoisted(
   () => ({
@@ -55,30 +55,20 @@ const factories = [
 ] as const;
 
 describe("live transport adapter factories", () => {
-  it("selects Slack generic defaults from the YAML adapter profile", () => {
-    expect(
-      listQaScenariosForExecutionProfile("slack:adapter").map((scenario) => scenario.id),
-    ).toEqual([
-      "channel-chat-baseline",
-      "channel-canary",
-      "channel-mention-gating",
-      "channel-top-level-reply-shape",
-      "thread-follow-up",
-      "thread-isolation",
-    ]);
+  it("opts only the disposable Matrix adapter into same-channel parallelism", () => {
+    expect(matrixQaAdapterFactory.isolatesInstances).toBe(true);
+    expect(discordQaAdapterFactory.isolatesInstances).toBeUndefined();
+    expect(slackQaAdapterFactory.isolatesInstances).toBeUndefined();
+    expect(telegramQaAdapterFactory.isolatesInstances).toBeUndefined();
+    expect(whatsappQaAdapterFactory.isolatesInstances).toBeUndefined();
   });
 
-  it("selects WhatsApp DM-safe defaults from the YAML adapter profile", () => {
-    expect(
-      listQaScenariosForExecutionProfile("whatsapp:adapter").map((scenario) => scenario.id),
-    ).toEqual([
-      "dm-chat-baseline",
-      "channel-canary",
-      "channel-dm-group-routing",
-      "channel-mention-gating",
-      "channel-top-level-reply-shape",
-      "whatsapp-help-command",
-    ]);
+  it("declares module-flow support only for adapters that prepare module context", () => {
+    expect(discordQaAdapterFactory.supportsModuleFlows).toBe(true);
+    expect(matrixQaAdapterFactory.supportsModuleFlows).toBe(true);
+    expect(slackQaAdapterFactory.supportsModuleFlows).toBe(true);
+    expect(whatsappQaAdapterFactory.supportsModuleFlows).toBe(true);
+    expect(telegramQaAdapterFactory.supportsModuleFlows).toBeUndefined();
   });
 
   it.each([
@@ -92,7 +82,10 @@ describe("live transport adapter factories", () => {
     async (channelId, create) => {
       const adapterOptions = { sutAccountId: `${channelId}-sut` };
       const state = createQaBusState();
-      const adapter = createQaChannelTransport(state);
+      const adapter: QaTransportAdapter = createQaChannelTransport(state);
+      if (channelId !== "telegram") {
+        adapter.prepareFlow = async () => ({});
+      }
       create.mockResolvedValueOnce(adapter);
       const created = await createQaTransportAdapter(
         {
@@ -110,6 +103,10 @@ describe("live transport adapter factories", () => {
         expect.objectContaining({
           adapterOptions,
           channelId,
+          credentials: {
+            acquire: expect.any(Function),
+            startHeartbeat: expect.any(Function),
+          },
           driver: "live",
           messages: expect.objectContaining({
             addInboundMessage: expect.any(Function),

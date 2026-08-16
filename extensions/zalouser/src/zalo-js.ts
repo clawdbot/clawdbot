@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 // Zalouser plugin module implements zalo js behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
@@ -101,13 +102,6 @@ type AccountInfoResponse = Awaited<ReturnType<API["fetchAccountInfo"]>>;
 function normalizeProfile(profile?: string | null): string {
   const trimmed = profile?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : "default";
-}
-
-function toErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return String(error);
 }
 
 function clampTextStyles(
@@ -860,7 +854,10 @@ function extractGroupMembersFromInfo(
   return members;
 }
 
-function toInboundMessage(message: Message, ownUserId?: string): ZaloInboundMessage | null {
+export function normalizeZaloInboundMessage(
+  message: Message,
+  ownUserId?: string,
+): ZaloInboundMessage | null {
   const data = message.data;
   const isGroup = message.type === ThreadType.Group;
   const senderId = toNumberId(data.uidFrom);
@@ -1285,7 +1282,7 @@ export async function sendZaloTextMessage(
       } catch (error) {
         return {
           ok: false,
-          error: toErrorMessage(error),
+          error: formatErrorMessage(error),
           receipt: createZalouserSendReceipt({ threadId: trimmedThreadId, kind: "unknown" }),
         };
       }
@@ -1332,6 +1329,10 @@ async function resolveOwnUserId(api: API): Promise<string> {
   return "";
 }
 
+export async function resolveZaloOwnUserId(profileInput?: string | null): Promise<string> {
+  return await withZaloApi(profileInput, resolveOwnUserId);
+}
+
 export async function sendZaloReaction(params: {
   profile?: string | null;
   threadId: string;
@@ -1366,7 +1367,7 @@ export async function sendZaloReaction(params: {
       { shouldPersist: (result) => result.ok },
     );
   } catch (error) {
-    return { ok: false, error: toErrorMessage(error) };
+    return { ok: false, error: formatErrorMessage(error) };
   }
 }
 
@@ -1444,7 +1445,7 @@ export async function sendZaloLink(
   } catch (error) {
     return {
       ok: false,
-      error: toErrorMessage(error),
+      error: formatErrorMessage(error),
       receipt: createZalouserSendReceipt({ threadId: trimmedThreadId, kind: "card" }),
     };
   }
@@ -1586,7 +1587,7 @@ export async function startZaloQrLogin(params: {
       } catch (error) {
         const current = activeQrLogins.get(profile);
         if (current && current.id === login.id) {
-          current.error = toErrorMessage(error);
+          current.error = formatErrorMessage(error);
         }
       }
     })();
@@ -1713,7 +1714,7 @@ export async function startZaloListener(params: {
   accountId: string;
   profile?: string | null;
   abortSignal: AbortSignal;
-  onMessage: (message: ZaloInboundMessage) => void;
+  onMessage: (message: Message) => void | Promise<void>;
   onError: (error: Error) => void;
 }): Promise<{ stop: () => void }> {
   const profile = normalizeProfile(params.profile);
@@ -1725,10 +1726,7 @@ export async function startZaloListener(params: {
     );
   }
 
-  const { api, ownUserId } = await withZaloApi(profile, async (apiLocal) => ({
-    api: apiLocal,
-    ownUserId: await resolveOwnUserId(apiLocal),
-  }));
+  const api = await withZaloApi(profile, async (apiLocal) => apiLocal);
   let stopped = false;
   let watchdogTimer: ReturnType<typeof setInterval> | null = null;
   let lastWatchdogTickAt = Date.now();
@@ -1761,11 +1759,9 @@ export async function startZaloListener(params: {
     if (incoming.isSelf) {
       return;
     }
-    const normalized = toInboundMessage(incoming, ownUserId);
-    if (!normalized) {
-      return;
-    }
-    params.onMessage(normalized);
+    void Promise.resolve(params.onMessage(incoming)).catch((error: unknown) => {
+      failListener(error instanceof Error ? error : new Error(String(error)));
+    });
   };
 
   const failListener = (error: Error) => {

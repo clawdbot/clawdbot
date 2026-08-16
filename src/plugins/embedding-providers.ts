@@ -1,9 +1,14 @@
+import { CORE_EMBEDDING_PROVIDERS, getCoreEmbeddingProvider } from "./core-embedding-providers.js";
 /** Registry for plugin-contributed embedding providers. */
 import type {
   EmbeddingProviderAdapter,
   RegisteredEmbeddingProvider,
 } from "./embedding-provider-types.js";
-import { openAICompatibleEmbeddingProviderAdapter } from "./openai-compatible-embedding-provider.js";
+import {
+  assertDirectPluginRegistrationReplacement,
+  requireActivePluginRegistry,
+  resolveDirectPluginRegistrationOwner,
+} from "./runtime.js";
 
 export type {
   EmbeddingInput,
@@ -17,28 +22,11 @@ export type {
   RegisteredEmbeddingProvider,
 } from "./embedding-provider-types.js";
 
-const EMBEDDING_PROVIDERS_KEY = Symbol.for("openclaw.embeddingProviders");
-const CORE_EMBEDDING_PROVIDERS: RegisteredEmbeddingProvider[] = [
-  {
-    adapter: openAICompatibleEmbeddingProviderAdapter,
-    ownerPluginId: "core",
-  },
-];
-
-function getEmbeddingProviders(): Map<string, RegisteredEmbeddingProvider> {
-  // The registry is global so tests and lazy-loaded plugin modules share one provider table.
-  const globalStore = globalThis as Record<PropertyKey, unknown>;
-  const existing = globalStore[EMBEDDING_PROVIDERS_KEY];
-  if (existing instanceof Map) {
-    return existing as Map<string, RegisteredEmbeddingProvider>;
-  }
-  const created = new Map<string, RegisteredEmbeddingProvider>();
-  globalStore[EMBEDDING_PROVIDERS_KEY] = created;
-  return created;
-}
-
-function getCoreEmbeddingProvider(id: string): RegisteredEmbeddingProvider | undefined {
-  return CORE_EMBEDDING_PROVIDERS.find((entry) => entry.adapter.id === id);
+function getEmbeddingProviders(): RegisteredEmbeddingProvider[] {
+  return requireActivePluginRegistry().embeddingProviders.map((entry) => ({
+    adapter: entry.provider,
+    ownerPluginId: entry.pluginId || undefined,
+  }));
 }
 
 /** Registers an embedding provider adapter for plugin and built-in memory callers. */
@@ -51,28 +39,46 @@ export function registerEmbeddingProvider(
     if (adapter !== coreEntry.adapter) {
       throw new Error(`embedding provider already registered: ${adapter.id} (owner: core)`);
     }
-    getEmbeddingProviders().delete(adapter.id);
+    const registry = requireActivePluginRegistry();
+    registry.embeddingProviders = registry.embeddingProviders.filter(
+      (entry) => entry.provider.id !== adapter.id,
+    );
     return;
   }
 
-  getEmbeddingProviders().set(adapter.id, {
-    adapter,
-    ownerPluginId: options?.ownerPluginId,
-  });
+  const registry = requireActivePluginRegistry();
+  const pluginId = resolveDirectPluginRegistrationOwner(options?.ownerPluginId) ?? "";
+  const existingIndex = registry.embeddingProviders.findIndex(
+    (entry) => entry.provider.id === adapter.id,
+  );
+  if (existingIndex !== -1) {
+    assertDirectPluginRegistrationReplacement(
+      registry.embeddingProviders[existingIndex]?.pluginId || undefined,
+      `embedding provider ${adapter.id}`,
+    );
+  }
+  const entry = { pluginId, provider: adapter, source: "runtime" };
+  if (existingIndex === -1) {
+    registry.embeddingProviders.push(entry);
+  } else {
+    registry.embeddingProviders.splice(existingIndex, 1, entry);
+  }
 }
 
 /** Looks up the registered embedding provider entry, including owner metadata. */
 export function getRegisteredEmbeddingProvider(
   id: string,
 ): RegisteredEmbeddingProvider | undefined {
-  return getCoreEmbeddingProvider(id) ?? getEmbeddingProviders().get(id);
+  return (
+    getCoreEmbeddingProvider(id) ?? getEmbeddingProviders().find((entry) => entry.adapter.id === id)
+  );
 }
 /** Lists registered embedding providers with core defaults merged first. */
 export function listRegisteredEmbeddingProviders(): RegisteredEmbeddingProvider[] {
   const merged = new Map<string, RegisteredEmbeddingProvider>(
     CORE_EMBEDDING_PROVIDERS.map((entry) => [entry.adapter.id, entry]),
   );
-  for (const entry of getEmbeddingProviders().values()) {
+  for (const entry of getEmbeddingProviders()) {
     if (!merged.has(entry.adapter.id)) {
       merged.set(entry.adapter.id, entry);
     }
@@ -80,7 +86,7 @@ export function listRegisteredEmbeddingProviders(): RegisteredEmbeddingProvider[
   return Array.from(merged.values());
 } /** Replaces non-core embedding providers while preserving registration metadata. */
 export function restoreRegisteredEmbeddingProviders(entries: RegisteredEmbeddingProvider[]): void {
-  getEmbeddingProviders().clear();
+  clearEmbeddingProviders();
   for (const entry of entries) {
     registerEmbeddingProvider(entry.adapter, {
       ownerPluginId: entry.ownerPluginId,
@@ -90,5 +96,5 @@ export function restoreRegisteredEmbeddingProviders(entries: RegisteredEmbedding
 
 /** Clears non-core embedding providers from the process registry. */
 export function clearEmbeddingProviders(): void {
-  getEmbeddingProviders().clear();
+  requireActivePluginRegistry().embeddingProviders.length = 0;
 }

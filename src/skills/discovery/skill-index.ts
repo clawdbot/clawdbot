@@ -38,7 +38,7 @@ function isSkillRuntimeVisible(entry: SkillEntry): boolean {
   return entry.exposure?.includeInRuntimeRegistry ?? true;
 }
 
-function isSkillPromptVisible(entry: SkillEntry): boolean {
+export function isSkillPromptVisible(entry: SkillEntry): boolean {
   if (entry.exposure) {
     return entry.exposure.includeInAvailableSkillsPrompt ?? true;
   }

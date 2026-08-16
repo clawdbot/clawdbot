@@ -15,60 +15,6 @@
   padding: var(--space-3) var(--space-4) 0;
 }
 
-/* ---------- hub tabs ---------- */
-
-/* Hub tab strips (plugins + sessions hubs) are page-level navigation, not
-   filters: quiet text tabs on a hairline track with an accent indicator, so
-   they read differently from the segmented filter pills inside the pages.
-   Track/indicator come from wa-tab-group's shadow machinery. */
-wa-tab-group.hub-tabs {
-  --track-color: color-mix(in srgb, var(--border) 60%, transparent);
-  --indicator-color: var(--accent);
-}
-
-wa-tab-group.hub-tabs::part(body) {
-  display: none;
-}
-
-wa-tab-group.hub-tabs::part(tabs) {
-  gap: var(--space-2);
-}
-
-wa-tab.hub-tab {
-  font-size: var(--control-ui-text-sm);
-  font-weight: 550;
-  color: var(--muted);
-  transition: color var(--duration-normal) var(--ease-out);
-}
-
-/* Neutralize wa-tab's stock 1em padding; keep a slim nav-tab hit area. */
-wa-tab.hub-tab::part(base) {
-  padding: var(--space-1) var(--space-2) var(--space-2);
-  gap: 6px;
-  font: inherit;
-  color: inherit;
-}
-
-wa-tab.hub-tab:hover {
-  color: var(--text);
-}
-
-wa-tab.hub-tab[active] {
-  color: var(--text-strong);
-}
-
-wa-tab.hub-tab:focus-visible {
-  outline: none;
-  border-radius: var(--radius-sm);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
-}
-
-/* Web Awesome also draws its stock focus ring on the inner base part;
-   without this reset both rings render at once. */
-wa-tab.hub-tab:focus-visible::part(base) {
-  outline: none;
-}
-
 /* ---------- toolbar ---------- */
 
 .plugins-toolbar {
@@ -137,7 +83,7 @@ wa-tab.hub-tab:focus-visible::part(base) {
  * expand/collapse the pre-migration skill groups had (cfg-object pattern). */
 .skills-group__summary {
   align-items: center;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   list-style: none;
 }
 
@@ -232,7 +178,7 @@ wa-tab.hub-tab:focus-visible::part(base) {
 }
 
 .plugins-item--clickable {
-  cursor: pointer;
+  cursor: var(--cursor-action);
   transition: background var(--duration-fast) var(--ease-out);
 }
 
@@ -250,12 +196,56 @@ wa-tab.hub-tab:focus-visible::part(base) {
   color: inherit;
   font: inherit;
   text-align: left;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .plugins-item__detail-button:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
+}
+
+.clawhub-skill-result__button {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.clawhub-skill-result__copy {
+  display: grid;
+  min-width: 0;
+}
+
+.clawhub-skill-result__copy:first-child {
+  grid-column: 1 / -1;
+}
+
+.clawhub-skill-icon {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--brand-logo-chip-bg);
+  object-fit: contain;
+}
+
+.clawhub-skill-detail__identity {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.clawhub-skill-icon--detail {
+  width: 56px;
+  height: 56px;
+  flex-basis: 56px;
+}
+
+.clawhub-skill-icon--profile {
+  border-radius: var(--radius-full);
+  object-fit: cover;
 }
 
 .plugins-version {
@@ -472,6 +462,223 @@ h3.plugins-subheader {
   color: var(--danger);
 }
 
+.plugins-row-message--warning {
+  --plugins-policy-review-indent: calc(24px + var(--space-3));
+
+  align-items: stretch;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) 0 0;
+  border-top: 1px solid color-mix(in srgb, var(--warn) 28%, var(--border));
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--control-ui-text-sm);
+  white-space: normal;
+}
+
+.plugins-policy-review__header {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-3);
+}
+
+.plugins-policy-review__header > div {
+  display: grid;
+  gap: 1px;
+}
+
+.plugins-policy-review__icon {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  color: var(--warn);
+}
+
+.plugins-policy-review__icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.plugins-policy-review__header strong {
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-md);
+  line-height: 1.3;
+}
+
+.plugins-policy-review__header span {
+  color: var(--muted);
+}
+
+.plugins-policy-review__findings-panel {
+  display: grid;
+  gap: var(--space-1);
+  margin-left: var(--plugins-policy-review-indent);
+}
+
+.plugins-policy-review__findings-heading {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.plugins-policy-review__findings {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plugins-policy-review__findings li {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-2);
+  padding: 0;
+  color: var(--text);
+}
+
+.plugins-policy-review__findings li::before {
+  width: 7px;
+  height: 7px;
+  margin-top: 6px;
+  border-radius: var(--radius-full);
+  background: var(--warn);
+  content: "";
+  justify-self: center;
+}
+
+.plugins-policy-review__findings li + li {
+  margin-top: var(--space-2);
+}
+
+.plugins-policy-review__finding-content {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.plugins-policy-review__severity {
+  font-size: var(--control-ui-text-xs);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.plugins-policy-review__severity--info {
+  color: var(--muted);
+}
+
+.plugins-policy-review__severity--warn {
+  color: var(--warn);
+}
+
+.plugins-policy-review__severity--critical {
+  color: var(--danger);
+}
+
+.plugins-policy-review__details {
+  margin-left: var(--plugins-policy-review-indent);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.plugins-policy-review__details summary {
+  display: flex;
+  width: fit-content;
+  min-height: 44px;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: var(--cursor-action);
+  font-weight: 600;
+  list-style: none;
+}
+
+.plugins-policy-review__details summary::-webkit-details-marker {
+  display: none;
+}
+
+.plugins-policy-review__details summary::marker {
+  content: "";
+}
+
+.plugins-policy-review__details-chevron {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  color: var(--muted);
+  transition: transform var(--duration-fast) var(--ease-in-out);
+}
+
+.plugins-policy-review__details-chevron svg {
+  width: 18px;
+  height: 18px;
+}
+
+.plugins-policy-review__details[open] .plugins-policy-review__details-chevron {
+  transform: rotate(90deg);
+}
+
+.plugins-policy-review__details summary:hover {
+  color: var(--text);
+}
+
+.plugins-policy-review__details summary:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.plugins-policy-review__details-body {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 0;
+}
+
+.plugins-policy-review__details-body ul {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plugins-policy-review__details-body li {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+
+.plugins-policy-review__details code {
+  font-size: inherit;
+}
+
+.plugins-policy-review__scope {
+  margin: 0 0 0 var(--plugins-policy-review-indent);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.plugins-policy-review__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  padding: var(--space-2) 0 0 var(--plugins-policy-review-indent);
+  border-top: 1px solid color-mix(in srgb, var(--warn) 20%, var(--border));
+}
+
+.plugins-policy-review__actions .btn {
+  flex: 0 0 auto;
+  min-height: 44px;
+}
+
 .plugins-row-message .btn {
   flex: 0 0 auto;
   color: var(--text-strong);
@@ -528,19 +735,6 @@ h3.plugins-subheader {
 
 .plugins-search-state--error {
   color: var(--danger);
-}
-
-/* ---------- detail overlay ---------- */
-
-.plugins-detail-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  background: color-mix(in srgb, var(--bg) 62%, transparent);
-  backdrop-filter: blur(6px);
 }
 
 .plugins-detail {
@@ -713,10 +907,6 @@ h3.plugins-subheader {
 }
 
 @media (max-width: 560px) {
-  .plugins-detail-backdrop {
-    padding: 10px;
-  }
-
   .plugins-remove-confirm {
     flex-wrap: wrap;
     white-space: normal;
@@ -725,5 +915,14 @@ h3.plugins-subheader {
   .plugins-row-message {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .plugins-row-message--warning {
+    padding: var(--space-2) 0 0;
+  }
+
+  .plugins-policy-review__actions,
+  .plugins-policy-review__actions .btn {
+    flex: 1 1 0;
   }
 }

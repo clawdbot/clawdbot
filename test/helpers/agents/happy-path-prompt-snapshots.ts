@@ -59,7 +59,7 @@ const CODEX_YOLO_PERMISSION_INSTRUCTIONS = [
 ].join("\n");
 const HAPPY_PATH_TOOL_NAMES = new Set([
   "nodes",
-  "cron",
+  "automations",
   "message",
   "heartbeat_respond",
   "tts",
@@ -240,13 +240,6 @@ const CODEX_WORKSPACE_BOOTSTRAP_CONTEXT_FILES = [
   },
 ] as const;
 
-const CODEX_WORKSPACE_THREAD_DEVELOPER_CONTEXT_FILES = [
-  {
-    path: path.join(WORKSPACE_DIR, "TOOLS.md"),
-    content: "<TOOLS.md contents will be here>",
-  },
-] as const;
-
 const CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_CONTEXT_FILES = [
   {
     path: path.join(WORKSPACE_DIR, "IDENTITY.md"),
@@ -268,7 +261,7 @@ const CODEX_HEARTBEAT_CONTEXT_FILE = {
 } as const;
 
 const CODEX_WORKSPACE_BOOTSTRAP_PROMPT_CONTEXT = [
-  "OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively. TOOLS.md is provided as inherited Codex developer instructions. SOUL.md, IDENTITY.md, and USER.md are provided as turn-scoped collaboration instructions so native Codex subagents do not inherit them. HEARTBEAT.md is handled by heartbeat collaboration-mode guidance. Those files are not repeated here.",
+  "OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively. SOUL.md, IDENTITY.md, and USER.md are provided as turn-scoped collaboration instructions so native Codex subagents do not inherit them. HEARTBEAT.md is handled by heartbeat collaboration-mode guidance. Those files are not repeated here.",
   "",
   "# Project Context",
   "",
@@ -276,21 +269,6 @@ const CODEX_WORKSPACE_BOOTSTRAP_PROMPT_CONTEXT = [
   "",
   ...CODEX_WORKSPACE_BOOTSTRAP_CONTEXT_FILES.flatMap((file) => [
     `## ${file.path}`,
-    "",
-    file.content,
-    "",
-  ]),
-]
-  .join("\n")
-  .trim();
-
-const CODEX_WORKSPACE_THREAD_DEVELOPER_INSTRUCTIONS = [
-  "## OpenClaw Workspace Instructions",
-  "",
-  "OpenClaw loaded these workspace instruction files from the active agent workspace. Internalize and follow them accordingly.",
-  "",
-  ...CODEX_WORKSPACE_THREAD_DEVELOPER_CONTEXT_FILES.flatMap((file) => [
-    `### ${file.path}`,
     "",
     file.content,
     "",
@@ -338,6 +316,7 @@ const baseConfig: OpenClawConfig = {
         every: "30m",
       },
     },
+    entries: { main: { default: true } },
   },
 };
 
@@ -850,7 +829,9 @@ function renderModelBoundPromptLayers(params: {
     "",
     "### Tools: Dynamic Tool Catalog",
     "",
-    `Full JSON: \`${params.scenario.toolSnapshotFile}\``,
+    params.scenario.toolSnapshotFile === "codex-dynamic-tools.telegram-direct.json"
+      ? `Full JSON: \`${params.scenario.toolSnapshotFile}\``
+      : `Full tool overrides: \`${params.scenario.toolSnapshotFile}\` (base: \`codex-dynamic-tools.telegram-direct.json\`)`,
     "",
   ];
 }
@@ -902,7 +883,6 @@ function renderScenarioSnapshot(
     appServer,
     config: CODEX_PROMPT_SNAPSHOT_THREAD_CONFIG,
     promptText: codexTurnPromptText,
-    developerInstructionAdditions: CODEX_WORKSPACE_THREAD_DEVELOPER_INSTRUCTIONS,
     turnScopedDeveloperInstructions: CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_INSTRUCTIONS,
     heartbeatCollaborationInstructions:
       scenario.trigger === "heartbeat" ? CODEX_HEARTBEAT_COLLABORATION_INSTRUCTIONS : undefined,
@@ -921,7 +901,7 @@ function renderScenarioSnapshot(
     "",
     ...scenario.notes.map((note) => `- ${note}`),
     "- This captures the OpenClaw-owned Codex app-server inputs and reconstructs the stable Codex model/permission layers from committed Codex prompt fixtures.",
-    "- This also simulates Codex workspace bootstrap routing: `TOOLS.md` as inherited developer instructions, `SOUL.md`, `IDENTITY.md`, and `USER.md` as turn-scoped collaboration instructions, `MEMORY.md` in turn input, and `HEARTBEAT.md` as a heartbeat-only file pointer.",
+    "- This also simulates Codex workspace bootstrap routing: `AGENTS.md` through native project-doc discovery, `SOUL.md`, `IDENTITY.md`, and `USER.md` as turn-scoped collaboration instructions, `MEMORY.md` in turn input, and `HEARTBEAT.md` as a heartbeat-only file pointer.",
     "",
     "## Scenario Metadata",
     "",
@@ -941,8 +921,6 @@ function renderScenarioSnapshot(
         simulatedWorkspaceBootstrapFiles: CODEX_WORKSPACE_BOOTSTRAP_CONTEXT_FILES.map(
           (file) => file.path,
         ),
-        simulatedWorkspaceDeveloperInstructionFiles:
-          CODEX_WORKSPACE_THREAD_DEVELOPER_CONTEXT_FILES.map((file) => file.path),
         simulatedWorkspaceTurnScopedDeveloperInstructionFiles:
           CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_CONTEXT_FILES.map((file) => file.path),
         simulatedHeartbeatWorkspaceFile: CODEX_HEARTBEAT_CONTEXT_FILE.path,
@@ -994,6 +972,17 @@ function renderReadme(scenarios: PromptScenario[]): string {
     "The workspace bootstrap simulation includes dummy workspace contents so prompt reviewers can see how OpenClaw routes stable profile files into Codex developer instructions, keeps `MEMORY.md` in turn input, and points heartbeat turns at `HEARTBEAT.md` without inlining it. `AGENTS.md` is intentionally not repeated here because Codex loads it natively.",
     "",
     "The tool catalog is pinned to the canonical happy-path OpenClaw tools so optional locally installed plugin tools do not create fixture churn.",
+    "",
+    "The Telegram JSON is the complete shared tool catalog. Discord and heartbeat JSON fixtures contain readable, complete replacements for their changed top-level tools or namespaces; their `base` field points to the Telegram catalog.",
+    "",
+    "Materialize the complete, formatted tool catalog for a scenario with:",
+    "",
+    markdownFence(
+      "sh",
+      "node --import tsx scripts/generate-prompt-snapshots.ts --materialize discord-group",
+    ),
+    "",
+    "Replace `discord-group` with `heartbeat-turn` to inspect the complete heartbeat catalog.",
     "",
     "The Codex model prompt fixture is generated from the same Codex model catalog/cache shape that the Codex runtime uses for remote model metadata. Regenerate it from Codex's runtime cache or, when present, a local Codex checkout with:",
     "",

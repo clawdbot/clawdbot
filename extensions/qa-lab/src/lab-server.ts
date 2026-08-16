@@ -18,6 +18,7 @@ import {
   writeQaRequestBodyLimitError,
 } from "./bus-server.js";
 import { createQaBusState, type QaBusState } from "./bus-state.js";
+import { toQaError } from "./errors.js";
 import {
   QaEvidenceGalleryError,
   buildQaEvidenceGalleryModel,
@@ -51,12 +52,22 @@ import type {
 import type { QaRunnerModelOption } from "./model-catalog.runtime.js";
 import { createQaChannelGatewayConfig } from "./qa-channel-transport.js";
 import {
+  qaTransportSupportsModuleFlows,
+  type QaTransportAdapterFactory,
+} from "./qa-transport-registry.js";
+import {
   createIdleQaRunnerSnapshot,
   createQaRunOutputDir,
   normalizeQaRunSelection,
+  resolveQaLabRunPlan,
 } from "./run-config.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
+import { readQaScorecardTaxonomyReport } from "./scorecard-taxonomy.js";
 import { runQaSelfCheckAgainstState, type QaSelfCheckResult } from "./self-check.js";
+import {
+  readQaSuiteFailedOrSkippedScenarioCountFromFile,
+  resolveQaReportOnlyOptionalScenarioNames,
+} from "./suite-summary.js";
 
 type QaLabBootstrapDefaults = {
   conversationKind: "direct" | "channel";
@@ -210,10 +221,6 @@ function createQaLabConfig(baseUrl: string): OpenClawConfig {
   return createQaChannelGatewayConfig({ baseUrl });
 }
 
-function normalizeQaLabCleanupError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(formatErrorMessage(error));
-}
-
 function detectQaEvidenceArtifactContentType(filePath: string): string {
   const lower = filePath.toLowerCase();
   if (lower.endsWith(".png")) {
@@ -300,10 +307,60 @@ export async function startQaLabServer(
   let latestReport: QaLabLatestReport | null = null;
   let latestScenarioRun: QaLabScenarioRun | null = null;
   const scenarioCatalog = readQaBootstrapScenarioCatalog();
+  const scorecardReport = readQaScorecardTaxonomyReport(scenarioCatalog.scenarios);
+  const runnerChannels = [
+    ...new Set(
+      scenarioCatalog.scenarios
+        .map((scenario) => scenario.execution.channel)
+        .filter((channel): channel is string => Boolean(channel)),
+    ),
+  ].toSorted();
   const bootstrapDefaults = createBootstrapDefaults(params?.autoKickoffTarget);
   let runnerModelOptions: QaRunnerModelOption[] = [];
   let runnerModelCatalogStatus: "loading" | "ready" | "failed" = "loading";
-  let runnerSnapshot = createIdleQaRunnerSnapshot(scenarioCatalog.scenarios);
+  const resolveServerRunPlan = async (
+    selection: ReturnType<typeof normalizeQaRunSelection>,
+    adapterFactories?: readonly QaTransportAdapterFactory[],
+  ) => {
+    const crabline =
+      selection.channelDriver === "crabline" ? await import("@openclaw/crabline") : undefined;
+    return resolveQaLabRunPlan({
+      selection,
+      scenarios: scenarioCatalog.scenarios,
+      scorecardReport,
+      defaultChannel:
+        crabline?.OPENCLAW_CRABLINE_DEFAULT_CHANNEL ??
+        (selection.channelDriver === "qa-channel" ? "qa-channel" : undefined),
+      ...(crabline
+        ? {
+            supportsChannel: (channel: string) => {
+              try {
+                crabline.resolveOpenClawCrablineChannelDriverSelection({ channel });
+                return true;
+              } catch {
+                return false;
+              }
+            },
+          }
+        : adapterFactories
+          ? {
+              supportsChannel: (channel: string) =>
+                adapterFactories.some((factory) =>
+                  factory.matches({ channelId: channel, driver: "live" }),
+                ),
+              resolveModuleFlowSupport: (channel?: string) =>
+                channel
+                  ? qaTransportSupportsModuleFlows(adapterFactories, {
+                      channelId: channel,
+                      driver: "live",
+                    })
+                  : false,
+            }
+          : {}),
+    });
+  };
+  let runnerSnapshot = createIdleQaRunnerSnapshot(scorecardReport.profiles);
+  runnerSnapshot.plan = await resolveServerRunPlan(runnerSnapshot.selection);
   let activeSuiteRun: Promise<void> | null = null;
   let controlUiProxyTarget = params?.controlUiProxyTarget?.trim()
     ? new URL(params.controlUiProxyTarget)
@@ -431,6 +488,8 @@ export async function startQaLabServer(
             runnerCatalog: {
               status: runnerModelCatalogStatus,
               real: runnerModelOptions,
+              profiles: scorecardReport.profiles,
+              channels: runnerChannels,
             },
           });
           return;
@@ -527,7 +586,7 @@ export async function startQaLabServer(
             return;
           }
           fs.createReadStream(artifactFile)
-            .on("error", (error) => res.destroy(normalizeQaLabCleanupError(error)))
+            .on("error", (error) => res.destroy(toQaError(error)))
             .pipe(res);
           return;
         }
@@ -681,56 +740,154 @@ export async function startQaLabServer(
             writeError(res, 409, "QA suite run already in progress");
             return;
           }
-          const selection = normalizeQaRunSelection(
-            await readQaJsonBody(req),
-            scenarioCatalog.scenarios,
-          );
+          let selection: ReturnType<typeof normalizeQaRunSelection>;
+          let plan: ReturnType<typeof resolveQaLabRunPlan>;
+          let adapterFactories: readonly QaTransportAdapterFactory[] | undefined;
+          try {
+            selection = normalizeQaRunSelection(
+              await readQaJsonBody(req),
+              scenarioCatalog.scenarios,
+              scorecardReport.profiles,
+            );
+            adapterFactories =
+              selection.channelDriver === "live"
+                ? (await import("./live-transports/cli.js")).listLiveTransportQaAdapterFactories()
+                : undefined;
+            plan = await resolveServerRunPlan(selection, adapterFactories);
+          } catch (error) {
+            writeError(res, 400, error);
+            return;
+          }
+          if (plan.status === "invalid") {
+            writeJson(res, 400, {
+              error: plan.errors.join(" "),
+              plan,
+            });
+            return;
+          }
+          if (activeSuiteRun) {
+            writeError(res, 409, "QA suite run already in progress");
+            return;
+          }
           state.reset();
           latestReport = null;
-          latestScenarioRun = null;
           const startedAt = new Date().toISOString();
+          latestScenarioRun = withQaLabRunCounts({
+            kind: "suite",
+            status: "running",
+            startedAt,
+            scenarios: plan.selectedScenarios.map((scenario) => ({
+              id: scenario.id,
+              name: scenario.title,
+              status: "pending",
+            })),
+          });
           runnerSnapshot = {
             status: "running",
             selection,
+            plan,
             startedAt,
             finishedAt: undefined,
             artifacts: null,
             error: null,
           };
           activeSuiteRun = (async () => {
+            // Keep generated artifacts visible when authenticated verdict validation fails.
+            let artifacts: ReturnType<typeof createIdleQaRunnerSnapshot>["artifacts"] = null;
             try {
-              const { runQaFlowSuite } = await import("./suite.js");
-              const result = await runQaFlowSuite({
+              const [{ runQaSuite }, channelDriverSelection] = await Promise.all([
+                import("./suite-launch.runtime.js"),
+                selection.channelDriver === "crabline" && selection.channel
+                  ? import("@openclaw/crabline").then((module) =>
+                      module.resolveOpenClawCrablineChannelDriverSelection({
+                        channel: selection.channel!,
+                      }),
+                    )
+                  : Promise.resolve(undefined),
+              ]);
+              const runtimeResult = await runQaSuite({
                 lab: labHandle ?? undefined,
                 startLab: startQaLabServer,
+                controlUiEnabled: true,
+                repoRoot,
                 outputDir: createQaRunOutputDir(repoRoot),
+                channelDriver: selection.channelDriver,
+                ...(adapterFactories ? { adapterFactories } : {}),
+                ...(selection.channelDriver === "live" && selection.channel
+                  ? { channelId: selection.channel }
+                  : {}),
+                ...(channelDriverSelection ? { channelDriverSelection } : {}),
+                evidenceMode: selection.evidenceMode,
                 providerMode: selection.providerMode,
                 primaryModel: selection.primaryModel,
                 alternateModel: selection.alternateModel,
-                scenarioIds: selection.scenarioIds,
+                fastMode: selection.fastMode,
+                scenarioIds: plan.selectedScenarios.map((scenario) => scenario.id),
+                ...(selection.runtimePair ? { runtimePair: selection.runtimePair } : {}),
               });
-              runnerSnapshot = {
-                status: "completed",
-                selection,
-                startedAt,
-                finishedAt: new Date().toISOString(),
-                artifacts: {
-                  outputDir: result.outputDir,
-                  evidencePath: result.evidencePath,
-                  reportPath: result.reportPath,
-                  summaryPath: result.summaryPath,
-                  watchUrl: result.watchUrl,
+              const result = runtimeResult.result;
+              const finishedAt = new Date().toISOString();
+              artifacts = {
+                outputDir: result.outputDir,
+                evidencePath: result.evidencePath,
+                reportPath: result.reportPath,
+                summaryPath: result.summaryPath,
+                watchUrl:
+                  "watchUrl" in result && typeof result.watchUrl === "string"
+                    ? result.watchUrl
+                    : (labHandle?.baseUrl ?? publicBaseUrl),
+              };
+              latestReport = {
+                outputPath: result.reportPath,
+                markdown: result.report,
+                generatedAt: finishedAt,
+              };
+              const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
+                result.summaryPath,
+                {
+                  optionalScenarioNames: plan.explicitScenarioSelection
+                    ? undefined
+                    : resolveQaReportOnlyOptionalScenarioNames(scenarioCatalog.scenarios),
                 },
-                error: null,
+              );
+              runnerSnapshot = {
+                status: blockingScenarioCount > 0 ? "failed" : "completed",
+                selection,
+                plan,
+                startedAt,
+                finishedAt,
+                artifacts,
+                error:
+                  blockingScenarioCount > 0
+                    ? `QA suite reported ${blockingScenarioCount} failed or skipped scenario(s).`
+                    : null,
               };
             } catch (error) {
+              const finishedAt = new Date().toISOString();
+              const message = formatErrorMessage(error);
+              latestScenarioRun = withQaLabRunCounts({
+                kind: "suite",
+                status: "completed",
+                startedAt,
+                finishedAt,
+                scenarios: (latestScenarioRun?.scenarios ?? []).map((scenario) =>
+                  scenario.status === "pending" || scenario.status === "running"
+                    ? Object.assign({}, scenario, {
+                        status: "fail" as const,
+                        details: message,
+                        finishedAt,
+                      })
+                    : scenario,
+                ),
+              });
               runnerSnapshot = {
                 status: "failed",
                 selection,
+                plan,
                 startedAt,
-                finishedAt: new Date().toISOString(),
-                artifacts: null,
-                error: formatErrorMessage(error),
+                finishedAt,
+                artifacts,
+                error: message,
               };
             } finally {
               activeSuiteRun = null;
@@ -738,6 +895,7 @@ export async function startQaLabServer(
           })();
           writeJson(res, 202, {
             ok: true,
+            plan,
             runner: runnerSnapshot,
           });
           return;
@@ -790,13 +948,20 @@ export async function startQaLabServer(
   const stopLabServerResources = async (): Promise<Error | undefined> => {
     runnerModelCatalogAbort?.abort();
     await runnerModelCatalogPromise?.catch(() => undefined);
+    let cleanupError: Error | undefined;
+    // Gateway shutdown can flush completed work through this server, so the
+    // bus must remain reachable until the gateway has fully stopped.
+    try {
+      await gateway?.stop();
+    } catch (error) {
+      cleanupError = toQaError(error);
+    }
     const results = await Promise.allSettled([
-      Promise.resolve().then(() => gateway?.stop()),
-      Promise.resolve().then(() => (serverListening ? closeQaHttpServer(server) : undefined)),
+      serverListening ? closeQaHttpServer(server, state) : undefined,
       Promise.resolve().then(releaseCaptureStore),
     ]);
     const failed = results.find((result) => result.status === "rejected");
-    return failed ? normalizeQaLabCleanupError(failed.reason) : undefined;
+    return cleanupError ?? (failed ? toQaError(failed.reason) : undefined);
   };
 
   try {

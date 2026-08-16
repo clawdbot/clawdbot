@@ -7,11 +7,7 @@ import {
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  buildIMessageFlushIngressLifecycle,
-  createIMessageDurableIngress,
-  type IMessageIngressLifecycle,
-} from "./ingress.js";
+import { createIMessageDurableIngress } from "./ingress.js";
 
 type IMessageIngressQueue = NonNullable<
   Parameters<typeof createIMessageDurableIngress>[0]["queue"]
@@ -58,14 +54,12 @@ function runtime() {
   return { error: vi.fn(), log: vi.fn() };
 }
 
-function lifecycle() {
-  return {
-    abortSignal: new AbortController().signal,
-    onAdopted: vi.fn(async () => {}),
-    onDeferred: vi.fn(),
-    onAdoptionFinalizing: vi.fn(),
-    onAbandoned: vi.fn(async () => {}),
-  } satisfies IMessageIngressLifecycle;
+function deferred() {
+  let resolve = () => {};
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }
 
 afterEach(() => {
@@ -99,6 +93,172 @@ describe("iMessage durable ingress", () => {
         expect(onDurableEnqueueFailure).toHaveBeenCalledWith(101, appendError);
         expect(dispatch).not.toHaveBeenCalled();
       } finally {
+        await ingress.stop();
+      }
+    });
+  });
+
+  it("notifies the source when inspection fails before durable append", async () => {
+    await withQueue(async (queue) => {
+      const onDurableEnqueueFailure = vi.fn();
+      const ingress = createIMessageDurableIngress({
+        accountId: "default",
+        queue,
+        dispatch: vi.fn(),
+        runtime: runtime(),
+        onDurableEnqueueFailure,
+      });
+
+      try {
+        await expect(ingress.receive(rawRow({ guid: undefined }))).rejects.toThrow(
+          "missing its stable GUID",
+        );
+        expect(onDurableEnqueueFailure).toHaveBeenCalledWith(101, expect.any(Error));
+        expect(await queue.listPending({ limit: "all" })).toHaveLength(0);
+      } finally {
+        await ingress.stop();
+      }
+    });
+  });
+
+  it("serializes durable cursor advancement before admitting the next row", async () => {
+    await withQueue(async (queue) => {
+      const cursorGate = deferred();
+      const cursorStarted = deferred();
+      let currentTime = 1_000;
+      const onDurableEnqueue = vi.fn(async () => {
+        cursorStarted.resolve();
+        await cursorGate.promise;
+      });
+      const ingress = createIMessageDurableIngress({
+        accountId: "default",
+        queue,
+        dispatch: vi.fn(),
+        runtime: runtime(),
+        onDurableEnqueue,
+        now: () => currentTime,
+      });
+
+      try {
+        const first = ingress.receive(rawRow());
+        await cursorStarted.promise;
+        currentTime = 2_000;
+        const second = ingress.receive(rawRow({ id: 102, guid: "GUID-102" }));
+        await Promise.resolve();
+
+        expect((await queue.listPending({ limit: "all" })).map((record) => record.id)).toEqual([
+          "GUID-101",
+        ]);
+        currentTime = 9_000;
+        cursorGate.resolve();
+        await Promise.all([first, second]);
+        expect(onDurableEnqueue).toHaveBeenCalledTimes(2);
+        expect(
+          (await queue.listPending({ limit: "all" })).map((record) => record.payload.receivedAt),
+        ).toEqual([1_000, 2_000]);
+      } finally {
+        cursorGate.resolve();
+        await ingress.stop();
+      }
+    });
+  });
+
+  it("lets an approval poll vote overtake the conversation turn awaiting it", async () => {
+    await withQueue(async (queue) => {
+      const firstStarted = deferred();
+      const releaseFirst = deferred();
+      const voteStarted = deferred();
+      const dispatch = vi.fn(async (message: { id?: number | null }) => {
+        if (message.id === 101) {
+          firstStarted.resolve();
+          await releaseFirst.promise;
+        } else if (message.id === 102) {
+          voteStarted.resolve();
+        }
+        return { kind: "completed" } as const;
+      });
+      const ingress = createIMessageDurableIngress({
+        accountId: "default",
+        queue,
+        dispatch,
+        dispatchPriority: async (message) => {
+          if (message.id !== 102) {
+            return undefined;
+          }
+          voteStarted.resolve();
+          return { kind: "completed" } as const;
+        },
+        runtime: runtime(),
+      });
+      ingress.start();
+      try {
+        await ingress.receive(rawRow());
+        await firstStarted.promise;
+        await ingress.receive(
+          rawRow({
+            id: 102,
+            guid: "GUID-102",
+            poll: { kind: "vote", original_guid: "POLL-1", vote: { option_id: "deny" } },
+          }),
+        );
+        await expect(
+          Promise.race([
+            voteStarted.promise.then(() => true),
+            new Promise<boolean>((resolve) => {
+              setTimeout(() => resolve(false), 1_000);
+            }),
+          ]),
+        ).resolves.toBe(true);
+      } finally {
+        releaseFirst.resolve();
+        await ingress.stop();
+      }
+    });
+  });
+
+  it("keeps an unowned poll vote behind the earlier conversation turn", async () => {
+    await withQueue(async (queue) => {
+      const firstStarted = deferred();
+      const releaseFirst = deferred();
+      const unrelatedChecked = deferred();
+      const dispatch = vi.fn(async (message: { id?: number | null }) => {
+        if (message.id === 101) {
+          firstStarted.resolve();
+          await releaseFirst.promise;
+        }
+        return { kind: "completed" } as const;
+      });
+      const ingress = createIMessageDurableIngress({
+        accountId: "default",
+        queue,
+        dispatch,
+        dispatchPriority: async (message) => {
+          if (message.id === 102) {
+            unrelatedChecked.resolve();
+          }
+          return undefined;
+        },
+        runtime: runtime(),
+      });
+      ingress.start();
+      try {
+        await ingress.receive(rawRow());
+        await firstStarted.promise;
+        await ingress.receive(
+          rawRow({
+            id: 102,
+            guid: "GUID-102",
+            poll: { kind: "vote", original_guid: "OTHER-POLL", vote: { option_id: "alpha" } },
+          }),
+        );
+        await unrelatedChecked.promise;
+        expect(dispatch.mock.calls.some(([message]) => message.id === 102)).toBe(false);
+
+        releaseFirst.resolve();
+        await ingress.waitForIdle();
+        expect(dispatch.mock.calls.some(([message]) => message.id === 102)).toBe(true);
+      } finally {
+        releaseFirst.resolve();
         await ingress.stop();
       }
     });
@@ -273,6 +433,35 @@ describe("iMessage durable ingress", () => {
     });
   });
 
+  it("dead-letters a persisted row whose inspected identity is malformed", async () => {
+    await withQueue(async (queue) => {
+      await queue.enqueue(
+        "GUID-missing",
+        {
+          version: 1,
+          receivedAt: Date.now(),
+          raw: rawRow({ guid: undefined }),
+        },
+        { laneKey: "chat:42" },
+      );
+      const ingress = createIMessageDurableIngress({
+        accountId: "default",
+        queue,
+        dispatch: vi.fn(),
+        runtime: runtime(),
+      });
+      ingress.start();
+      try {
+        await ingress.waitForIdle();
+        expect((await queue.enqueue("GUID-missing", {} as IMessageIngressPayload)).kind).toBe(
+          "failed",
+        );
+      } finally {
+        await ingress.stop();
+      }
+    });
+  });
+
   it("dead-letters permanent Full Disk Access failures", async () => {
     await withQueue(async (queue) => {
       const ingress = createIMessageDurableIngress({
@@ -292,27 +481,5 @@ describe("iMessage durable ingress", () => {
         await ingress.stop();
       }
     });
-  });
-
-  it("fans merged adoption to every constituent claim", async () => {
-    const first = lifecycle();
-    const second = lifecycle();
-    const merged = buildIMessageFlushIngressLifecycle([first, second]);
-
-    await merged.lifecycle?.onAdopted();
-
-    expect(first.onAdopted).toHaveBeenCalledTimes(1);
-    expect(second.onAdopted).toHaveBeenCalledTimes(1);
-  });
-
-  it("completes every constituent claim when a flush has no dispatch", async () => {
-    const first = lifecycle();
-    const second = lifecycle();
-    const merged = buildIMessageFlushIngressLifecycle([first, second]);
-
-    await merged.settle();
-
-    expect(first.onAdopted).toHaveBeenCalledTimes(1);
-    expect(second.onAdopted).toHaveBeenCalledTimes(1);
   });
 });

@@ -9,8 +9,8 @@ type AdmissionCloseReason = "restart-signal fence" | "restart drain" | "suspend 
 type AdmissionReopenReason = "restart-signal fence" | "suspend phase";
 
 export class GatewayDrainingError extends Error {
-  constructor() {
-    super("Gateway is draining; new tasks are not accepted");
+  constructor(message = "Gateway is draining; new tasks are not accepted") {
+    super(message);
     this.name = "GatewayDrainingError";
   }
 }
@@ -18,6 +18,7 @@ export class GatewayDrainingError extends Error {
 type GatewayRootWorkAdmission = {
   references: number;
   released: boolean;
+  retiredByReset?: true;
 };
 
 type GatewayWorkAdmissionState = {
@@ -141,7 +142,11 @@ function clearRestartSignalFence(): boolean {
   GATEWAY_WORK_ADMISSION_STATE.restartSignalPending = false;
   GATEWAY_WORK_ADMISSION_STATE.restartSignalGeneration += 1;
   resolveSuspendOpenWaiters();
-  logAdmissionReopened("restart-signal fence");
+  if (GATEWAY_WORK_ADMISSION_STATE.suspendPhase === "accepting") {
+    logAdmissionReopened("restart-signal fence");
+  } else {
+    admissionLog.info("restart-signal fence cleared; suspension remains closed");
+  }
   return true;
 }
 
@@ -269,6 +274,22 @@ export function tryBeginGatewayRootWorkAdmission(): GatewayRootWorkAdmissionLeas
   return createGatewayRootWorkAdmission();
 }
 
+/**
+ * Admits only the exact predecessor-bound restart selected by the RPC router.
+ * The held root preserves signal-to-drain ordering without reopening suspension.
+ */
+export function tryBeginGatewayPreparedRestartRootWorkAdmission(): GatewayRootWorkAdmissionLease | null {
+  if (
+    GATEWAY_WORK_ADMISSION_STATE.restartDraining ||
+    GATEWAY_WORK_ADMISSION_STATE.restartSignalPending ||
+    GATEWAY_WORK_ADMISSION_STATE.suspendPhase !== "prepared" ||
+    GATEWAY_WORK_ADMISSION_STATE.activeRootWork.size > 0
+  ) {
+    return null;
+  }
+  return createGatewayRootWorkAdmission();
+}
+
 /** Independent detached work counts separately even when launched by an admitted parent. */
 function tryBeginGatewayIndependentRootWorkAdmission(): GatewayRootWorkAdmissionLease | null {
   if (
@@ -302,7 +323,7 @@ export async function runWithGatewayIndependentRootWorkAdmission<T>(
 ): Promise<T> {
   while (true) {
     if (GATEWAY_WORK_ADMISSION_STATE.restartDraining) {
-      throw new Error("gateway is draining for restart");
+      throw new GatewayDrainingError("gateway is draining for restart");
     }
     const admission = tryBeginGatewayIndependentRootWorkAdmission();
     if (admission) {
@@ -317,6 +338,12 @@ export async function runWithGatewayIndependentRootWorkAdmission<T>(
     });
   }
 }
+
+/** Re-admits preserved work whose inherited root was retired before it could run. */
+export const runWithGatewayRootWorkReadmission = <T>(run: () => Promise<T>): Promise<T> =>
+  GATEWAY_WORK_ADMISSION_STATE.currentRootWork.getStore()?.retiredByReset
+    ? runWithGatewayIndependentRootWorkAdmission(run)
+    : run();
 
 /**
  * Detaches required follow-up from the current admitted transaction.
@@ -447,6 +474,7 @@ export function resetGatewayWorkAdmission(): void {
   // Retire their ALS records so surviving chains must re-enter admission.
   for (const admission of GATEWAY_WORK_ADMISSION_STATE.activeRootWork) {
     admission.references = 0;
+    admission.retiredByReset = true;
     admission.released = true;
   }
   GATEWAY_WORK_ADMISSION_STATE.activeRootWork.clear();

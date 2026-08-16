@@ -65,6 +65,50 @@ describe("docsSearchCommand", () => {
     expect(init).toMatchObject({ headers: { Accept: "application/json" } });
   });
 
+  it("emits one JSON object for search results", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          results: [
+            {
+              title: "CLI reference",
+              link: "https://docs.openclaw.ai/cli",
+              snippet: "Command-line usage",
+            },
+          ],
+        }),
+      ),
+    );
+    const runtime = makeRuntime();
+
+    await docsSearchCommand(["cli"], runtime, { json: true });
+
+    expect(runtime.log).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
+      query: "cli",
+      results: [
+        {
+          title: "CLI reference",
+          link: "https://docs.openclaw.ai/cli",
+          snippet: "Command-line usage",
+        },
+      ],
+    });
+  });
+
+  it("emits one JSON object for the docs homepage", async () => {
+    const runtime = makeRuntime();
+
+    await docsSearchCommand([], runtime, { json: true });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
+      query: null,
+      url: "https://docs.openclaw.ai/",
+      results: [],
+    });
+  });
+
   it("cancels non-OK docs search response bodies and fails loudly", async () => {
     let cancelled = false;
     const response = new Response(
@@ -102,6 +146,25 @@ describe("docsSearchCommand", () => {
       "Docs search failed: Docs search response is malformed JSON",
     );
     expect(runtime.error).toHaveBeenCalledTimes(1);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("reports docs search responses with invalid UTF-8 bytes as malformed", async () => {
+    const body = new Uint8Array([
+      ...new TextEncoder().encode('{"results":[{"title":"Plugin allow'),
+      0xff,
+      ...new TextEncoder().encode('list","link":"https://docs.openclaw.ai/plugins/allowlist"}]}'),
+    ]);
+    fetchMock.mockResolvedValueOnce(
+      new Response(body, { headers: { "Content-Type": "application/json" } }),
+    );
+    const runtime = makeRuntime();
+
+    await docsSearchCommand(["plugin"], runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Docs search failed: Docs search response is malformed JSON",
+    );
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 

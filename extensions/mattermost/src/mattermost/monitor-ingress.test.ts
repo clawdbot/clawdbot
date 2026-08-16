@@ -1,17 +1,14 @@
-// Mattermost durable ingress tests cover append, recovery, tombstones, and merged adoption.
+// Mattermost durable ingress tests cover append, recovery, and tombstones.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  buildMattermostFlushIngressLifecycle,
-  createMattermostIngressMonitor,
-  type MattermostIngressLifecycle,
-} from "./monitor-ingress.js";
+import { createMattermostIngressMonitor } from "./monitor-ingress.js";
 
 type MattermostIngressQueue = NonNullable<
   Parameters<typeof createMattermostIngressMonitor>[0]["queue"]
@@ -76,31 +73,6 @@ async function withQueue<T>(fn: (queue: MattermostIngressQueue) => Promise<T>): 
   return await withStateDir(async (stateDir) => await fn(createQueue(stateDir, "default")));
 }
 
-function createDeferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolvePromise = () => {};
-  const promise = new Promise<void>((resolve) => {
-    resolvePromise = resolve;
-  });
-  return { promise, resolve: resolvePromise };
-}
-
-function testLifecycle() {
-  const calls = {
-    adopted: vi.fn(async () => {}),
-    deferred: vi.fn(),
-    finalizing: vi.fn(),
-    abandoned: vi.fn(async () => {}),
-  };
-  const lifecycle: MattermostIngressLifecycle = {
-    abortSignal: new AbortController().signal,
-    onAdopted: calls.adopted,
-    onDeferred: calls.deferred,
-    onAdoptionFinalizing: calls.finalizing,
-    onAbandoned: calls.abandoned,
-  };
-  return { calls, lifecycle };
-}
-
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
@@ -161,8 +133,8 @@ describe("Mattermost durable ingress", () => {
       const dispatchBBeforeRestart = vi.fn<MattermostIngressDispatch>(async () => undefined);
       const monitorA = startMonitor(queueA, dispatchA, "account-a");
       const monitorBBeforeRestart = startMonitor(queueB, dispatchBBeforeRestart, "account-b");
-      const admissionStored = createDeferred();
-      const releaseAdmission = createDeferred();
+      const admissionStored = createDeferred<void>();
+      const releaseAdmission = createDeferred<void>();
       const enqueueB = queueB.enqueue.bind(queueB);
       queueB.enqueue = async (...args) => {
         const result = await enqueueB(...args);
@@ -383,11 +355,14 @@ describe("Mattermost durable ingress", () => {
         }
         return await enqueue(...args);
       };
-      const ingress = startMonitor(queue, vi.fn());
+      const dispatch = vi.fn();
+      const ingress = startMonitor(queue, dispatch);
       try {
         // Two transient failures absorb into the bounded retry.
         await ingress.receive(postedEvent({ postId: "post-retry" }));
-        expect(await queue.listPending({ limit: "all" })).toHaveLength(1);
+        await ingress.waitForIdle();
+        expect(failures).toBe(0);
+        expect(dispatch).toHaveBeenCalledOnce();
 
         // A persistent failure escalates so the websocket can tear down loudly.
         failures = Number.POSITIVE_INFINITY;
@@ -483,39 +458,5 @@ describe("Mattermost durable ingress", () => {
         await monitor.stop();
       }
     });
-  });
-});
-
-describe("Mattermost merged ingress lifecycle", () => {
-  it("fans adoption out to every constituent claim", async () => {
-    const first = testLifecycle();
-    const second = testLifecycle();
-    const merged = buildMattermostFlushIngressLifecycle([
-      { turnAdoptionLifecycle: first.lifecycle },
-      { turnAdoptionLifecycle: second.lifecycle },
-    ]);
-
-    merged.lifecycle?.onDeferred();
-    await merged.lifecycle?.onAdopted();
-    await merged.settle();
-
-    expect(first.calls.deferred).toHaveBeenCalledTimes(1);
-    expect(second.calls.deferred).toHaveBeenCalledTimes(1);
-    expect(first.calls.adopted).toHaveBeenCalledTimes(1);
-    expect(second.calls.adopted).toHaveBeenCalledTimes(1);
-  });
-
-  it("completes all claims when a gated flush never dispatches", async () => {
-    const first = testLifecycle();
-    const second = testLifecycle();
-    const merged = buildMattermostFlushIngressLifecycle([
-      { turnAdoptionLifecycle: first.lifecycle },
-      { turnAdoptionLifecycle: second.lifecycle },
-    ]);
-
-    await merged.settle();
-
-    expect(first.calls.adopted).toHaveBeenCalledTimes(1);
-    expect(second.calls.adopted).toHaveBeenCalledTimes(1);
   });
 });

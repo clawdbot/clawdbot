@@ -29,6 +29,8 @@ type MonitorFeishuOpts = {
  */
 export type FeishuStatusSink = (patch: {
   connected?: boolean;
+  lifecycle?: "ready" | "recovering" | "blocked";
+  terminalDisconnect?: boolean;
   lastConnectedAt?: number | null;
   lastEventAt?: number | null;
   lastTransportActivityAt?: number | null;
@@ -82,7 +84,7 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
     }
 
     // Probe sequentially so large multi-account startups do not burst Feishu's bot-info endpoint.
-    const { botOpenId, botName } = await fetchBotIdentityForMonitor(account, {
+    const { botOpenId, botName, source } = await fetchBotIdentityForMonitor(account, {
       runtime: opts.runtime,
       abortSignal: opts.abortSignal,
     });
@@ -99,7 +101,7 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
         channelRuntime: opts.channelRuntime,
         runtime: opts.runtime,
         abortSignal: opts.abortSignal,
-        botOpenIdSource: { kind: "prefetched", botOpenId, botName },
+        botOpenIdSource: { kind: "prefetched", botOpenId, botName, source },
         ...(opts.statusSink ? { statusSink: opts.statusSink } : {}),
       }),
     );

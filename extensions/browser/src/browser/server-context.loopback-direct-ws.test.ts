@@ -171,7 +171,7 @@ describe("browser server-context loopback direct WebSocket profiles", () => {
     const state = makeState("openclaw");
     state.resolved.ssrfPolicy = {
       dangerouslyAllowPrivateNetwork: false,
-      hostnameAllowlist: ["browserless.example.com"],
+      allowedHostnames: ["browserless.example.com"],
     };
     state.resolved.profiles.openclaw = {
       cdpUrl: "ws://10.0.0.42:18800/devtools/browser/SESSION?token=abc",

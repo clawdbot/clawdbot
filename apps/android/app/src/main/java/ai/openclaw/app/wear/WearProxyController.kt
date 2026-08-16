@@ -32,19 +32,30 @@ internal data class WearProxyAgent(
   val emoji: String?,
 )
 
+internal data class WearProxyModel(
+  val ref: String,
+  val name: String,
+)
+
 internal class WearProxyController(
   private val requestGateway: suspend (method: String, params: JsonObject) -> JsonElement,
   private val isGatewayConnected: () -> Boolean,
   private val gatewayStatusText: () -> String,
+  private val hasOperatorAdminScope: () -> Boolean = { false },
   private val activeAgentId: () -> String? = { null },
   private val activeSessionKey: () -> String? = { null },
   private val selectedModelRef: () -> String? = { null },
   private val agents: () -> List<WearProxyAgent> = { emptyList() },
   private val selectGatewayAgent: suspend (agentId: String) -> Boolean = { false },
+  private val models: () -> List<WearProxyModel> = { emptyList() },
+  private val selectSessionModel: suspend (sessionKey: String, modelRef: String) -> Boolean = { _, _ -> false },
   private val connectGateway: suspend () -> Unit = {},
   private val disconnectGateway: suspend () -> Unit = {},
+  private val loadAgentPulse: suspend (sessionKey: String?) -> JsonObject = {
+    throw WearProxyGatewayException("unavailable", "Agent Pulse is unavailable")
+  },
   private val startRealtimeTalk:
-    suspend (nodeId: String, sessionKey: String, attemptId: String, language: String?) -> WearRealtimeTalkSnapshot? = { _, _, _, _ -> null },
+    suspend (nodeId: String, sessionKey: String, attemptId: String, language: String?, attemptScopedAudio: Boolean) -> WearRealtimeTalkSnapshot? = { _, _, _, _, _ -> null },
   private val stopRealtimeTalk: suspend (nodeId: String, attemptId: String) -> WearRealtimeTalkSnapshot? = { _, _ -> null },
 ) {
   suspend fun handle(
@@ -55,9 +66,12 @@ internal class WearProxyController(
       val result =
         when (request.method) {
           WearRpcMethod.ProxyStatus -> proxyStatus(request.params)
+          WearRpcMethod.AgentPulse -> agentPulse(request.params)
           WearRpcMethod.SessionsList -> listSessions(request.params)
           WearRpcMethod.AgentsList -> listAgents(request.params)
           WearRpcMethod.AgentsSelect -> selectAgent(request.params)
+          WearRpcMethod.ModelsList -> listModels(request.params)
+          WearRpcMethod.ModelsSelect -> selectModel(request.params)
           WearRpcMethod.GatewayConnect -> gatewayConnect(request.params)
           WearRpcMethod.GatewayDisconnect -> gatewayDisconnect(request.params)
           WearRpcMethod.ChatHistory -> chatHistory(request.params)
@@ -77,12 +91,18 @@ internal class WearProxyController(
       failure(request.requestId, code = "unavailable", message = "Phone gateway request failed")
     }
 
+  private suspend fun agentPulse(params: JsonObject): JsonObject {
+    params.requireOnly("sessionKey")
+    val sessionKey = params.optionalStringParam("sessionKey", MAX_SESSION_KEY_CHARS)
+    return loadAgentPulse(sessionKey)
+  }
+
   private suspend fun talkStart(
     sourceNodeId: String,
     params: JsonObject,
   ): JsonElement {
     if (sourceNodeId.isBlank()) throw WearProxyInvalidRequest("Missing Watch node")
-    params.requireOnly("sessionKey", "attemptId", "language")
+    params.requireOnly("sessionKey", "attemptId", "language", "attemptScopedAudio")
     val sessionKey = params.stringParam("sessionKey", MAX_SESSION_KEY_CHARS)
     val attemptId = params.stringParam("attemptId", MAX_ATTEMPT_ID_CHARS)
     val language =
@@ -91,8 +111,9 @@ internal class WearProxyController(
         ?.lowercase(Locale.ROOT)
         ?.takeIf { value -> value.length == 2 && value.all { it in 'a'..'z' } }
         ?: if ("language" in params) throw WearProxyInvalidRequest("Invalid language") else null
+    val attemptScopedAudio = params.optionalBooleanParam("attemptScopedAudio") ?: false
     val snapshot =
-      startRealtimeTalk(sourceNodeId, sessionKey, attemptId, language)
+      startRealtimeTalk(sourceNodeId, sessionKey, attemptId, language, attemptScopedAudio)
         ?: throw WearProxyGatewayException("action_rejected", "Real-Time Talk is unavailable")
     return WearRealtimeTalkCodec.encode(snapshot)
   }
@@ -118,12 +139,14 @@ internal class WearProxyController(
       put(
         "capabilities",
         buildJsonArray {
-          WearProxyCapability.entries.forEach { capability -> add(JsonPrimitive(capability.wireValue)) }
+          WearProxyCapability.entries
+            .filter { capability -> capability != WearProxyCapability.ModelControls || hasOperatorAdminScope() }
+            .forEach { capability -> add(JsonPrimitive(capability.wireValue)) }
         },
       )
       activeAgentId()?.takeIf(String::isNotBlank)?.let { put("activeAgentId", it.takeCodePoints(MAX_AGENT_ID_CHARS)) }
       activeSessionKey()?.takeIf(String::isNotBlank)?.let { put("activeSessionKey", it.takeCodePoints(MAX_SESSION_KEY_CHARS)) }
-      selectedModelRef()?.takeIf(String::isNotBlank)?.let { put("selectedModelRef", it.takeCodePoints(MAX_MODEL_REF_CHARS)) }
+      canonicalModelRef(selectedModelRef())?.let { put("selectedModelRef", it) }
     }
   }
 
@@ -175,6 +198,69 @@ internal class WearProxyController(
     }
     return buildJsonObject { put("activeAgentId", agentId) }
   }
+
+  private fun listModels(params: JsonObject): JsonObject {
+    params.requireOnly("selectedModelRef")
+    val selected =
+      canonicalModelRef(params.optionalStringParam("selectedModelRef", MAX_MODEL_REF_CHARS))
+        ?: canonicalModelRef(selectedModelRef())
+    val availableModels = availableModels()
+    // The Watch picker moves one adjacent model at a time and reloads after each choice.
+    // Centering keeps both directions reachable without exceeding the message cap.
+    val selectedIndex = availableModels.indexOfFirst { (ref) -> ref == selected }
+    val boundedModels =
+      if (availableModels.size <= MAX_MODEL_COUNT || selectedIndex < 0) {
+        availableModels.take(MAX_MODEL_COUNT)
+      } else {
+        val start =
+          (selectedIndex - MAX_MODEL_COUNT / 2)
+            .coerceIn(0, availableModels.size - MAX_MODEL_COUNT)
+        availableModels.subList(start, start + MAX_MODEL_COUNT)
+      }
+    return buildJsonObject {
+      put(
+        "models",
+        buildJsonArray {
+          boundedModels.forEach { (ref, model) ->
+            add(
+              buildJsonObject {
+                put("ref", ref)
+                put("name", model.name.takeCodePoints(MAX_MODEL_NAME_CHARS))
+              },
+            )
+          }
+        },
+      )
+    }
+  }
+
+  private suspend fun selectModel(params: JsonObject): JsonObject {
+    params.requireOnly("sessionKey", "modelRef")
+    val sessionKey = params.stringParam("sessionKey", MAX_SESSION_KEY_CHARS)
+    val modelRef =
+      canonicalModelRef(params.stringParam("modelRef", MAX_MODEL_REF_CHARS))
+        ?: throw WearProxyInvalidRequest("Invalid modelRef")
+    if (availableModels().none { (ref) -> ref == modelRef }) {
+      throw WearProxyGatewayException("not_found", "Model is no longer available")
+    }
+    if (!selectSessionModel(sessionKey, modelRef)) {
+      throw WearProxyGatewayException("action_rejected", "Model could not be changed")
+    }
+    return buildJsonObject {
+      put("sessionKey", sessionKey)
+      put("selectedModelRef", modelRef)
+    }
+  }
+
+  private fun availableModels(): List<Pair<String, WearProxyModel>> =
+    models()
+      .mapNotNull { model -> canonicalModelRef(model.ref)?.let { ref -> ref to model } }
+      .distinctBy { (ref) -> ref }
+
+  private fun canonicalModelRef(value: String?): String? =
+    value
+      ?.trim()
+      ?.takeIf { ref -> ref.isNotEmpty() && ref.codePointCount() <= MAX_MODEL_REF_CHARS }
 
   private suspend fun gatewayConnect(params: JsonObject): JsonObject {
     params.requireOnly()
@@ -315,7 +401,9 @@ internal class WearProxyController(
     const val MAX_AGENT_ID_CHARS = 200
     const val MAX_AGENT_NAME_CHARS = 200
     const val MAX_AGENT_EMOJI_CHARS = 32
+    const val MAX_MODEL_COUNT = 50
     const val MAX_MODEL_REF_CHARS = 200
+    const val MAX_MODEL_NAME_CHARS = 200
     const val MAX_SESSION_LABEL_CHARS = 200
     const val MAX_EVENT_TEXT_CHARS = 2_000
     const val MAX_ERROR_CODE_CHARS = 64
@@ -367,6 +455,8 @@ private fun projectHistory(source: JsonObject): JsonObject =
     copyLong(source, "nextOffset")
     copyLong(source, "totalMessages")
     copyBoolean(source, "hasMore")
+    ((source["sessionInfo"] as? JsonObject)?.providerQualifiedModelRef() ?: source.providerQualifiedModelRef())
+      ?.let { put("selectedModelRef", it) }
     val inFlight = source["inFlightRun"] as? JsonObject
     if (inFlight != null) {
       put(
@@ -395,6 +485,7 @@ private fun projectSession(
     copyBoolean(source, "pinned")
     copyBoolean(source, "unread")
     copyBoolean(source, "hasActiveRun")
+    source.providerQualifiedModelRef()?.let { put("modelRef", it) }
   }
 }
 
@@ -503,11 +594,24 @@ private fun JsonObject.optionalIntParam(
   return value
 }
 
+private fun JsonObject.optionalBooleanParam(name: String): Boolean? {
+  if (name !in this) return null
+  return this[name].booleanPrimitiveOrNull()
+    ?: throw WearProxyInvalidRequest("Invalid $name")
+}
+
 private fun JsonElement.asObject(method: String): JsonObject = this as? JsonObject ?: throw WearProxyGatewayException("invalid_response", "$method returned an invalid response")
 
 private fun JsonElement?.asArrayOrNull(): JsonArray? = this as? JsonArray
 
 private fun JsonObject.stringOrNull(name: String): String? = (this[name] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+
+private fun JsonObject.providerQualifiedModelRef(): String? {
+  val model = stringOrNull("model")?.trim()?.takeIf(String::isNotEmpty) ?: return null
+  val provider = stringOrNull("modelProvider")?.trim()?.takeIf(String::isNotEmpty)
+  val ref = if (provider == null || model.startsWith("$provider/")) model else "$provider/$model"
+  return ref.takeIf { it.codePointCount() <= MAX_PROJECTED_MODEL_REF_CHARS }
+}
 
 private fun JsonElement?.booleanPrimitiveOrNull(): Boolean? = (this as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull
 
@@ -565,6 +669,7 @@ private fun String.takeUtf8Bytes(maxBytes: Int): String {
 
 private const val MAX_SESSION_KEY_CHARS = 512
 private const val MAX_PROJECTED_AGENT_ID_CHARS = 200
+private const val MAX_PROJECTED_MODEL_REF_CHARS = 200
 private const val MAX_RUN_ID_CHARS = 128
 private const val MAX_IDEMPOTENCY_KEY_CHARS = 128
 private const val MAX_SESSION_LABEL_CHARS = 200

@@ -105,6 +105,36 @@ describe("install.ps1 failure handling", () => {
     const scriptWithoutEntryPoint = source.replace(ENTRYPOINT_RE, "");
     const cases = [
       {
+        name: "openclaw-native-command-exit",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          "function Get-OpenClawCommandPath { return (Get-Process -Id $PID).Path }",
+          "$caught = $false",
+          "try {",
+          "  Invoke-OpenClawCommand -NoLogo -NoProfile -Command 'exit 17'",
+          "} catch {",
+          "  if ($_.Exception.Message -notmatch 'failed with exit code 17') { throw }",
+          "  $caught = $true",
+          "}",
+          "if (-not $caught) { throw 'nonzero native exit was accepted' }",
+          "",
+        ].join("\n"),
+      },
+      {
+        name: "doctor-failure-output",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          "function Invoke-OpenClawCommand { throw 'doctor failed' }",
+          "$output = @(Run-Doctor *>&1 | ForEach-Object { $_.ToString() })",
+          '$text = $output -join "`n"',
+          "if ($text -match 'Migration complete') { throw 'doctor failure reported success' }",
+          "if ($text -notmatch 'Migration failed') { throw \"missing warning: $text\" }",
+          "",
+        ].join("\n"),
+      },
+      {
         name: "node-versions",
         source: [
           scriptWithoutEntryPoint,
@@ -269,6 +299,7 @@ describe("install.ps1 failure handling", () => {
           '  if ($OperationTimeoutSeconds -ne 30) { throw "OperationTimeoutSeconds=$OperationTimeoutSeconds" }',
           "  if ($Uri -eq 'https://nodejs.org/dist/index.json') {",
           "    return @(",
+          "      [pscustomobject]@{ version = 'v26.5.0'; files = @('win-arm64-zip', 'win-x64-zip') },",
           "      [pscustomobject]@{ version = 'v24.17.0'; files = @('win-arm64-zip', 'win-x64-zip') }",
           "    )",
           "  }",
@@ -281,7 +312,7 @@ describe("install.ps1 failure handling", () => {
           "  }",
           "}",
           "$nodeDownload = Resolve-PortableNodeDownload",
-          "if ($nodeDownload.Name -ne 'node-v24.17.0-win-arm64.zip') { throw \"NodeName=$($nodeDownload.Name)\" }",
+          "if ($nodeDownload.Name -ne 'node-v26.5.0-win-arm64.zip') { throw \"NodeName=$($nodeDownload.Name)\" }",
           "$gitDownload = Resolve-PortableGitDownload",
           "if ($gitDownload.Name -ne 'MinGit-2.54.0-arm64.zip') { throw \"GitName=$($gitDownload.Name)\" }",
           "",
@@ -583,7 +614,7 @@ describe("install.ps1 failure handling", () => {
     expect(checkNodeBody).toContain(
       "SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x is required",
     );
-    expect(source).toContain("Please install Node.js 24.15+ manually:");
+    expect(source).toContain("Please install Node.js 26 manually:");
   });
 
   runIfPowerShell("accepts only supported Node versions", () => {
@@ -633,12 +664,8 @@ describe("install.ps1 failure handling", () => {
     expect(npmInstallBody).toContain('$freshnessArgs = @("--min-release-age=0")');
     expect(npmInstallBody).toContain("Remove-Item Env:NPM_CONFIG_BEFORE");
     expect(npmInstallBody).toContain("Remove-Item Env:NPM_CONFIG_MIN_RELEASE_AGE");
-    expect(npmInstallBody).toContain('$env:NODE_LLAMA_CPP_SKIP_DOWNLOAD = "1"');
     expect(npmInstallBody).toContain("$env:NPM_CONFIG_LOGLEVEL = $prevLogLevel");
     expect(npmInstallBody).toContain("$env:NPM_CONFIG_BEFORE = $prevBefore");
-    expect(npmInstallBody).toContain(
-      "$env:NODE_LLAMA_CPP_SKIP_DOWNLOAD = $prevNodeLlamaSkipDownload",
-    );
     expect(npmInstallBody).toContain(
       "Write-NpmInstallFailureDetails -Output $npmOutput -CacheRoots $npmDebugLogRoots",
     );
@@ -654,6 +681,19 @@ describe("install.ps1 failure handling", () => {
     expect(ensurePnpmBody).not.toContain("NPM_CONFIG_SCRIPT_SHELL");
     expect(npmInstallBody).not.toContain("NPM_CONFIG_SCRIPT_SHELL");
     expect(gitInstallBody).not.toContain("NPM_CONFIG_SCRIPT_SHELL");
+  });
+
+  it("rejects a git checkout without a commit before updating it", () => {
+    const guardBody = extractFunctionBody(source, "Assert-GitCheckoutHasCommit");
+    const gitInstallBody = extractFunctionBody(source, "Install-OpenClawFromGit");
+
+    expect(guardBody).toContain('"--git-dir=$gitDir"');
+    expect(guardBody).toContain('"--work-tree=$RepoDir"');
+    expect(guardBody).toContain('rev-parse --verify --quiet "HEAD^{commit}"');
+    expect(guardBody).toContain("Git checkout has no commit");
+    expect(guardBody).not.toContain("Remove-Item");
+    expect(guardBody).not.toContain("Move-Item");
+    expect(gitInstallBody).toContain("Assert-GitCheckoutHasCommit -RepoDir $RepoDir");
   });
 
   it("runs Windows command shims from a Windows-local cwd", () => {
@@ -925,7 +965,6 @@ describe("install.ps1 failure handling", () => {
     expect(gitInstallBody).toContain('$env:PNPM_CONFIG_WORKSPACE_CONCURRENCY = "1"');
     expect(gitInstallBody).toContain('$env:PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN = "false"');
     expect(gitInstallBody).toContain('$env:PNPM_CONFIG_SIDE_EFFECTS_CACHE = "false"');
-    expect(gitInstallBody).toContain('$env:NODE_LLAMA_CPP_POSTINSTALL = "skip"');
     expect(gitInstallBody).toContain("$installSucceeded = ($LASTEXITCODE -eq 0)");
     expect(gitInstallBody).toContain("clearing node_modules and retrying once");
     expect(gitInstallBody).toContain("Remove-Item -Recurse -Force node_modules");
@@ -935,6 +974,8 @@ describe("install.ps1 failure handling", () => {
     expect(gitInstallBody).toContain(
       "$env:NODE_OPTIONS = Resolve-NodeOptionsWithMinOldSpace -NodeOptions $prevNodeOptions -MinOldSpaceMb 8192",
     );
+    expect(gitInstallBody).toMatch(/& \$pnpmCommand ui:build\s+if \(\$LASTEXITCODE -ne 0\)/);
+    expect(gitInstallBody).not.toContain("if (-not (& $pnpmCommand ui:build))");
     expect(nodeOptionsBody).toContain("--max-old-space-size=$MinOldSpaceMb");
     expect(nodeOptionsBody).toContain("[Math]::Max");
     expect(gitInstallBody).toContain("& $pnpmCommand build");
@@ -945,7 +986,6 @@ describe("install.ps1 failure handling", () => {
     expect(gitInstallBody).toContain(
       "$env:PNPM_CONFIG_WORKSPACE_CONCURRENCY = $prevPnpmWorkspaceConcurrency",
     );
-    expect(gitInstallBody).toContain("$env:NODE_LLAMA_CPP_POSTINSTALL = $prevNodeLlamaPostinstall");
     expect(gitInstallBody).toContain("Add-ToUserPath $binDir");
     expect(gitInstallBody).toContain('Write-Host "[!] pnpm build failed for the Git checkout"');
     expect(gitInstallBody).toContain('$entryPath = Join-Path $RepoDir "dist\\\\entry.js"');

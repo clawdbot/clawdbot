@@ -21,6 +21,7 @@ export type GatewayRelayEvent = {
       args?: unknown;
       forced?: boolean;
     }
+  | { type?: "toolCallCancelled"; callId?: string }
   | { type?: "toolResult"; callId?: string }
   | { type?: "error"; message?: string }
   | { type?: "close"; reason?: string }

@@ -12,10 +12,12 @@ export async function upsertAuthProfileWithLock(params: {
   profileId: string;
   credential: AuthProfileCredential;
   agentDir?: string;
+  stateDir?: string;
 }): Promise<AuthProfileStore | null> {
   const credential = normalizeAuthProfileCredential(params.credential);
   return await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
+    stateDir: params.stateDir,
     saveOptions: {
       filterExternalAuthProfiles: false,
       syncExternalCli: false,
@@ -25,4 +27,16 @@ export async function upsertAuthProfileWithLock(params: {
       return true;
     },
   });
+}
+
+/** Upserts an auth profile under the store lock, failing when the store cannot be written. */
+export async function upsertAuthProfileWithLockOrThrow(
+  params: Parameters<typeof upsertAuthProfileWithLock>[0],
+): Promise<void> {
+  const updated = await upsertAuthProfileWithLock(params);
+  if (!updated) {
+    throw new Error(
+      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
+    );
+  }
 }

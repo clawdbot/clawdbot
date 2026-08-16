@@ -136,9 +136,7 @@ function assertMockModelConfig() {
   const provider = cfg.models?.providers?.openai;
   const defaultModel = cfg.agents?.defaults?.model?.primary;
   const defaultRuntime = cfg.agents?.defaults?.models?.[expectedModelRef]?.agentRuntime?.id;
-  const agent = Array.isArray(cfg.agents?.list)
-    ? (cfg.agents.list.find((entry) => entry?.id === "main") ?? cfg.agents.list[0])
-    : undefined;
+  const agent = cfg.agents?.entries?.main;
   const agentModel = agent?.model?.primary;
   const agentRuntime = agent?.models?.[expectedModelRef]?.agentRuntime?.id;
   if (provider?.baseUrl !== expectedBaseUrl) {
@@ -160,12 +158,12 @@ function assertMockModelConfig() {
   if (defaultRuntime !== "openclaw") {
     throw new Error(`mock default runtime was not preserved; got ${defaultRuntime}`);
   }
-  if (agent && agentModel !== expectedModelRef) {
+  if (agentModel !== expectedModelRef) {
     throw new Error(
       `mock agent model was not preserved; expected ${expectedModelRef}, got ${agentModel}`,
     );
   }
-  if (agent && agentRuntime !== "openclaw") {
+  if (agentRuntime !== "openclaw") {
     throw new Error(`mock agent runtime was not preserved; got ${agentRuntime}`);
   }
 }

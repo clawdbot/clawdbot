@@ -1,4 +1,6 @@
 import type { AppBridge } from "@modelcontextprotocol/ext-apps/app-bridge";
+import { t } from "../i18n/index.ts";
+import { resolveSandboxHostUrl } from "./sandbox-host.ts";
 
 type McpAppHostCapabilities = ConstructorParameters<typeof AppBridge>[2];
 export type McpAppHostSandboxCsp = NonNullable<
@@ -8,6 +10,7 @@ export type McpAppHostSandboxCsp = NonNullable<
 /** Bubbling event handled by the owning chat pane through its normal send path. */
 export const WIDGET_PROMPT_EVENT = "openclaw-widget-prompt";
 export type WidgetPromptEventDetail = { text: string };
+export const MCP_APP_VIEW_EXPIRED_EVENT = "openclaw-mcp-app-view-expired";
 
 const WIDGET_PROMPT_MAX_CHARS = 4_000;
 const WIDGET_PROMPT_RATE_WINDOW_MS = 60_000;
@@ -20,7 +23,8 @@ function resolveWidgetPromptText(raw: unknown): string | null {
     return null;
   }
   const text = raw.trim();
-  if (!text || text.length > WIDGET_PROMPT_MAX_CHARS || text.startsWith("/")) {
+  const isHostCommand = text.startsWith("/") || text.startsWith("!");
+  if (!text || text.length > WIDGET_PROMPT_MAX_CHARS || isHostCommand) {
     return null;
   }
   return text;
@@ -97,6 +101,7 @@ export function dispatchWidgetPrompt(
 export function buildMcpAppHostCapabilities(
   csp?: McpAppHostSandboxCsp,
   supportsMessage = false,
+  supportsUpdateModelContext = false,
 ): McpAppHostCapabilities {
   return {
     openLinks: {},
@@ -104,6 +109,7 @@ export function buildMcpAppHostCapabilities(
     serverTools: {},
     sandbox: { csp: csp ?? {} },
     ...(supportsMessage ? { message: { text: {} } } : {}),
+    ...(supportsUpdateModelContext ? { updateModelContext: { text: {} } } : {}),
   };
 }
 
@@ -114,43 +120,12 @@ export function resolveMcpAppSandboxUrl(
   gatewayUrl: string,
   hostOrigin: string,
 ): string {
-  if (!Number.isInteger(sandboxPort) || sandboxPort < 1 || sandboxPort > 65535) {
-    throw new Error("MCP App sandbox port is invalid");
-  }
-  const gateway = new URL(gatewayUrl || hostOrigin, hostOrigin);
-  if (gateway.protocol === "ws:") {
-    gateway.protocol = "http:";
-  } else if (gateway.protocol === "wss:") {
-    gateway.protocol = "https:";
-  }
-  if (gateway.protocol !== "http:" && gateway.protocol !== "https:") {
-    throw new Error("MCP App sandbox URL is invalid");
-  }
-  const activeGatewayOrigin = gateway.origin;
-  const base = sandboxOrigin ? new URL(sandboxOrigin) : new URL(activeGatewayOrigin);
-  if (sandboxOrigin) {
-    if (
-      base.origin !== sandboxOrigin.replace(/\/$/u, "") ||
-      base.username !== "" ||
-      base.password !== ""
-    ) {
-      throw new Error("MCP App sandbox URL is invalid");
-    }
-  } else {
-    base.port = String(sandboxPort);
-  }
-  base.pathname = "/";
-  base.search = "";
-  base.hash = "";
-  const resolved = new URL(value, base);
-  if (
-    (base.protocol !== "http:" && base.protocol !== "https:") ||
-    base.origin === new URL(hostOrigin).origin ||
-    base.origin === activeGatewayOrigin ||
-    resolved.origin !== base.origin ||
-    resolved.pathname !== "/mcp-app-sandbox"
-  ) {
-    throw new Error("MCP App sandbox URL is invalid");
-  }
-  return resolved.href;
+  return resolveSandboxHostUrl(
+    value,
+    sandboxPort,
+    sandboxOrigin,
+    gatewayUrl,
+    hostOrigin,
+    t("mcpApp.errors.invalidSandboxUrl"),
+  );
 }

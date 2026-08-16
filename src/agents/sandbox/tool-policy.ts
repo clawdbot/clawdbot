@@ -8,7 +8,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAgentConfig } from "../agent-scope.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../glob-pattern.js";
-import { expandToolGroups, normalizeToolName } from "../tool-policy.js";
+import { expandToolGroups, normalizeToolPolicyName } from "../tool-policy.js";
 import { DEFAULT_TOOL_ALLOW, DEFAULT_TOOL_DENY } from "./constants.js";
 import type {
   SandboxToolPolicy,
@@ -39,7 +39,10 @@ function pickConfiguredList(params: { agent?: string[]; global?: string[] }): {
   if (Array.isArray(params.agent)) {
     return {
       values: params.agent,
-      source: buildSource({ scope: "agent", key: "agents.list[].tools.sandbox.tools.allow" }),
+      source: buildSource({
+        scope: "agent",
+        key: "agents.entries.*.tools.sandbox.tools.allow",
+      }),
     };
   }
   if (Array.isArray(params.global)) {
@@ -61,7 +64,10 @@ function pickConfiguredDeny(params: { agent?: string[]; global?: string[] }): {
   if (Array.isArray(params.agent)) {
     return {
       values: params.agent,
-      source: buildSource({ scope: "agent", key: "agents.list[].tools.sandbox.tools.deny" }),
+      source: buildSource({
+        scope: "agent",
+        key: "agents.entries.*.tools.sandbox.tools.deny",
+      }),
     };
   }
   if (Array.isArray(params.global)) {
@@ -85,7 +91,7 @@ function pickConfiguredAlsoAllow(params: { agent?: string[]; global?: string[] }
       values: params.agent,
       source: buildSource({
         scope: "agent",
-        key: "agents.list[].tools.sandbox.tools.alsoAllow",
+        key: "agents.entries.*.tools.sandbox.tools.alsoAllow",
       }),
     };
   }
@@ -151,13 +157,13 @@ function filterDefaultDenyForExplicitAllows(params: {
   }
   const allowPatterns = compileGlobPatterns({
     raw: expandToolGroups(params.explicitAllowPatterns),
-    normalize: normalizeToolName,
+    normalize: normalizeToolPolicyName,
   });
   if (allowPatterns.length === 0) {
     return [...params.deny];
   }
   return params.deny.filter(
-    (toolName) => !matchesAnyGlobPattern(normalizeToolName(toolName), allowPatterns),
+    (toolName) => !matchesAnyGlobPattern(normalizeToolPolicyName(toolName), allowPatterns),
   );
 }
 
@@ -191,15 +197,15 @@ export function classifyToolAgainstSandboxToolPolicy(name: string, policy?: Sand
     };
   }
 
-  const normalized = normalizeToolName(name);
+  const normalized = normalizeToolPolicyName(name);
   const deny = compileGlobPatterns({
     raw: expandToolGroups(policy.deny ?? []),
-    normalize: normalizeToolName,
+    normalize: normalizeToolPolicyName,
   });
   const blockedByDeny = matchesAnyGlobPattern(normalized, deny);
   const allow = compileGlobPatterns({
     raw: expandToolGroups(policy.allow ?? []),
-    normalize: normalizeToolName,
+    normalize: normalizeToolPolicyName,
   });
   const blockedByAllow =
     !blockedByDeny && allow.length > 0 && !matchesAnyGlobPattern(normalized, allow);

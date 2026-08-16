@@ -4,23 +4,48 @@ import type { ModelProviderConfig } from "../../config/config.js";
 import { discoverModels } from "../agent-model-discovery.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
 
-vi.mock("../../plugins/provider-runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("../../plugins/provider-runtime.js")>(
-    "../../plugins/provider-runtime.js",
-  );
-  return {
-    ...actual,
-    applyProviderResolvedTransportWithPlugin: () => undefined,
-    buildProviderUnknownModelHintWithPlugin: () => undefined,
-    normalizeProviderTransportWithPlugin: () => undefined,
-    normalizeProviderResolvedModelWithPlugin: () => undefined,
-    prepareProviderDynamicModel: async () => {},
-    runProviderDynamicModel: () => undefined,
-  };
-});
+vi.mock("../../plugins/provider-runtime.js", () => ({
+  applyProviderResolvedTransportWithPlugin: () => undefined,
+  buildProviderUnknownModelHintWithPlugin: () => undefined,
+  normalizeProviderResolvedModelWithPlugin: () => undefined,
+  normalizeProviderTransportWithPlugin: () => undefined,
+  prepareProviderDynamicModel: async () => {},
+  resolveExternalAuthProfilesWithPlugins: () => [],
+  runProviderDynamicModel: () => undefined,
+  shouldPreferProviderRuntimeResolvedModel: () => false,
+}));
+
+vi.mock("../auth-profiles.js", () => ({
+  ensureAuthProfileStore: () => ({ version: 1, profiles: {} }),
+  resolveAuthProfileOrder: () => [],
+}));
+
+vi.mock("./model.static-catalog.js", () => ({
+  resolveBundledProviderStaticCatalogModel: () => undefined,
+  resolveBundledStaticCatalogModel: () => undefined,
+  resolveManifestModelCatalogProviderAliasMetadata: ({
+    provider,
+    modelId,
+    cfg,
+  }: {
+    provider: string;
+    modelId?: string;
+    cfg?: { models?: { providers?: Record<string, { baseUrl?: string }> } };
+  }) => ({
+    provider:
+      provider === "azure-openai-responses" && modelId === "gpt-5.3-codex-spark"
+        ? "openai"
+        : provider,
+    ...(provider === "azure-openai-responses" &&
+    modelId !== "gpt-5.3-codex-spark" &&
+    cfg?.models?.providers?.[provider]?.baseUrl
+      ? { transport: { api: "azure-openai-responses" as const } }
+      : {}),
+  }),
+}));
 
 vi.mock("../model-suppression.js", () => ({
-  shouldSuppressBuiltInModel: ({
+  shouldSuppressBuiltInModelCore: ({
     provider,
     id,
     baseUrl,
@@ -55,13 +80,38 @@ vi.mock("../model-suppression.js", () => ({
   },
 }));
 
+vi.mock("../prepared-model-runtime.js", async () => {
+  const discovery = await import("../agent-model-discovery.js");
+  const createSnapshot = (input: {
+    agentDir: string;
+    config?: OpenClawConfig;
+    workspaceDir?: string;
+  }) => ({
+    createStores: () => {
+      const authStorage = discovery.discoverAuthStorage(input.agentDir);
+      const modelRegistry = discovery.discoverModels(authStorage, input.agentDir, {
+        ...(input.config ? { config: input.config } : {}),
+        ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+      });
+      if (!("fork" in modelRegistry)) {
+        Object.assign(modelRegistry, { fork: () => modelRegistry });
+      }
+      return { authStorage, modelRegistry };
+    },
+  });
+  return {
+    getPreparedModelRuntimeSnapshot: createSnapshot,
+    loadPreparedModelRuntimeSnapshot: async (input: Parameters<typeof createSnapshot>[0]) =>
+      createSnapshot(input),
+  };
+});
+
 vi.mock("../agent-model-discovery.js", () => ({
   discoverAuthStorage: vi.fn(() => ({ mocked: true })),
   discoverModels: vi.fn(() => ({ find: vi.fn(() => null) })),
 }));
 
 import type { OpenClawConfig } from "../../config/config.js";
-import { resetModelDiscoveryCacheForTest } from "./model-discovery-cache.test-support.js";
 import {
   expectResolvedForwardCompatFallbackResult,
   expectUnknownModelErrorResult,
@@ -76,7 +126,6 @@ import {
 } from "./model.test-harness.js";
 
 beforeEach(() => {
-  resetModelDiscoveryCacheForTest();
   resetMockDiscoverModels(discoverModels);
 });
 

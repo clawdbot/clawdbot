@@ -26,12 +26,12 @@ const {
 } = await import("./auth-profiles/sqlite.js");
 const {
   captureAuthProfileStorePersistenceSnapshot,
-  clearRuntimeAuthProfileStoreSnapshots,
   getRuntimeAuthProfileStoreSnapshot,
-  replaceRuntimeAuthProfileStoreSnapshots,
   saveAuthProfileStore,
   saveAuthProfileStoreIfPersistenceSnapshotMatches,
 } = await import("./auth-profiles/store.js");
+const { clearRuntimeAuthProfileStoreSnapshots, replaceRuntimeAuthProfileStoreSnapshots } =
+  await import("./auth-profiles/runtime-snapshots.js");
 const { closeOpenClawAgentDatabasesForTest } = await import("../state/openclaw-agent-db.js");
 const { closeOpenClawStateDatabaseForTest } = await import("../state/openclaw-state-db.js");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

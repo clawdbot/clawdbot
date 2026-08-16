@@ -2,13 +2,13 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { ProtocolSchemas } from "../packages/gateway-protocol/src/schema/protocol-schemas.js";
 import {
   MIN_NODE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
-  ProtocolSchemas,
-} from "../packages/gateway-protocol/src/schema.js";
+} from "../packages/gateway-protocol/src/version.js";
 import { listCoreGatewayMethodNames } from "../src/gateway/methods/core-descriptors.js";
-import { extractGatewayEventNames } from "./check-protocol-event-coverage.mjs";
+import { extractGatewayEventNames } from "./check-protocol-event-coverage.mts";
 
 type JsonSchema = {
   type?: string | string[];
@@ -52,7 +52,15 @@ const schemaNames = new Map<string, string>([
   ["Question", "Question"],
   ["QuestionAnswers", "QuestionAnswers"],
   ["QuestionRecord", "QuestionRecord"],
+  ["QuestionGetResult", "QuestionGetResult"],
   ["QuestionListResult", "QuestionListResult"],
+  ["SessionObserverPlanProgress", "SessionObserverPlanProgress"],
+  ["SessionObserverDigest", "SessionObserverDigest"],
+  ["WorkerDesktopObserveParams", "WorkerDesktopObserveParams"],
+  ["WorkerDesktopObserveResult", "WorkerDesktopObserveResult"],
+  ["WorkerDesktopLaunchParams", "WorkerDesktopLaunchParams"],
+  ["WorkerDesktopLaunchResult", "WorkerDesktopLaunchResult"],
+  ["ProjectsListResult", "ProjectsListResult"],
 ]);
 
 const androidEnums: EnumSpec[] = [
@@ -71,6 +79,7 @@ const androidEnums: EnumSpec[] = [
     ["Motion", "motion"],
     ["CallLog", "callLog"],
     ["VoiceWake", "voiceWake"],
+    ["MobileUI", "mobileUI"],
   ]),
   enumSpec("OpenClawCanvasCommand", "canvas.", [
     ["Present", "present"],
@@ -126,6 +135,10 @@ const androidEnums: EnumSpec[] = [
     ["Pedometer", "pedometer"],
   ]),
   enumSpec("OpenClawCallLogCommand", "callLog.", [["Search", "search"]]),
+  enumSpec("OpenClawMobileUiCommand", "mobile.ui.", [
+    ["Observe", "observe"],
+    ["Act", "act"],
+  ]),
 ];
 
 function enumSpec(

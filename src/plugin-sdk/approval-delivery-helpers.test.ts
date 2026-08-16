@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createApproverRestrictedNativeApprovalAdapter,
   createApproverRestrictedNativeApprovalCapability,
+  createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes,
   createChannelApprovalCapability,
   splitChannelApprovalCapability,
 } from "./approval-delivery-helpers.js";
@@ -430,6 +431,87 @@ describe("createApproverRestrictedNativeApprovalCapability", () => {
     expect(legacy.describeExecApprovalSetup).toBe(describeExecApprovalSetup);
     expect(legacy.describePluginApprovalSetup).toBeUndefined();
   });
+
+  it("assembles forwarding-routed capabilities without replacing channel auth results", () => {
+    const authResult = { authorized: true } as const;
+    const authorizeActorAction = vi.fn(() => authResult);
+    const render = { exec: { buildPendingPayload: vi.fn() } };
+    const routed = createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes({
+      channel: "example",
+      channelLabel: "Example",
+      authorizeActorAction,
+      routing: {
+        defaultForwardingMode: "session",
+        isTransportEnabled: () => true,
+        listAccountIds: () => ["default"],
+        resolveDefaultAccountId: () => "default",
+        normalizeTo: (to) => to.trim().toLowerCase() || null,
+        resolveApprovers: () => ["owner"],
+      },
+      render,
+    });
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "both",
+          targets: [{ channel: "example", to: "Origin" }],
+        },
+      },
+    } as never;
+    const request = {
+      id: "approval-1",
+      request: {
+        command: "pwd",
+        turnSourceChannel: "example",
+        turnSourceTo: "Origin",
+      },
+      createdAtMs: 0,
+      expiresAtMs: 10_000,
+    } as never;
+
+    expect(
+      routed.capability.authorizeActorAction?.({
+        cfg,
+        accountId: "default",
+        senderId: "owner",
+        action: "approve",
+        approvalKind: "exec",
+      }),
+    ).toBe(authResult);
+    expect(routed.capability.render).toBe(render);
+    expect(
+      routed.capability.getActionAvailabilityState?.({
+        cfg,
+        accountId: "default",
+        action: "approve",
+        approvalKind: "exec",
+      }),
+    ).toEqual({ kind: "enabled" });
+    expect(
+      routed.capability.native?.describeDeliveryCapabilities({
+        cfg,
+        accountId: "default",
+        approvalKind: "exec",
+        request,
+      }),
+    ).toEqual({
+      enabled: true,
+      preferredSurface: "origin",
+      supportsOriginSurface: true,
+      supportsApproverDmSurface: true,
+      notifyOriginWhenDmOnly: true,
+    });
+    expect(
+      routed.capability.delivery?.shouldSuppressForwardingFallback?.({
+        cfg,
+        approvalKind: "exec",
+        target: { channel: "example", to: "ORIGIN", source: "target" },
+        request,
+      }),
+    ).toBe(true);
+    expect(routed.routing.isNativeApprovalHandlerConfigured({ cfg })).toBe(true);
+  });
 });
 
 describe("createChannelApprovalCapability", () => {
@@ -475,27 +557,6 @@ describe("createChannelApprovalCapability", () => {
       nativeRuntime,
       render,
       native,
-    });
-  });
-
-  it("keeps the deprecated approvals alias as a compatibility shim", () => {
-    const delivery = { hasConfiguredDmRoute: vi.fn() };
-
-    expect(
-      createChannelApprovalCapability({
-        approvals: { delivery },
-      }),
-    ).toEqual({
-      authorizeActorAction: undefined,
-      getActionAvailabilityState: undefined,
-      getExecInitiatingSurfaceState: undefined,
-      resolveApproveCommandBehavior: undefined,
-      describeExecApprovalSetup: undefined,
-      describePluginApprovalSetup: undefined,
-      delivery,
-      nativeRuntime: undefined,
-      render: undefined,
-      native: undefined,
     });
   });
 });

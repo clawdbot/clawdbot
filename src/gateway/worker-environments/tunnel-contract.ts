@@ -1,7 +1,30 @@
 import type { SpawnResult } from "../../process/exec.js";
-import type { WorkerWorkspaceReconciliationJournalAdapter } from "./workspace-reconcile.js";
+import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
+import type { NodeWorkerWorkspaceTransferInput } from "../../worker/node-workspace-transfer-protocol.js";
+import type {
+  WorkerWorkspaceApplyResult,
+  WorkerWorkspaceReconciliationJournalAdapter,
+} from "./workspace-reconcile.js";
 
 export type WorkerTunnelStatus = "stopped" | "connecting" | "connected" | "reconnecting";
+
+export class WorkerTunnelOwnerDisconnectedError extends Error {
+  constructor() {
+    super("Worker tunnel owner is no longer connected");
+    this.name = "WorkerTunnelOwnerDisconnectedError";
+  }
+}
+
+export class WorkerRunnerUnavailableError extends Error {
+  readonly code = "runner-offline";
+
+  constructor() {
+    super(
+      "The device runner is offline. Reconnect it, retry later, or bring the session back to this gateway.",
+    );
+    this.name = "WorkerRunnerUnavailableError";
+  }
+}
 
 export type WorkerTunnelRequest = {
   environmentId: string;
@@ -10,9 +33,12 @@ export type WorkerTunnelRequest = {
 
 export type WorkerWorkspaceCommand = {
   argv: readonly string[];
+  transportRetry: "idempotent" | "never";
+  onDispatchReady?: () => void;
   input?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
+  transfer?: NodeWorkerWorkspaceTransferInput;
 };
 
 export type WorkerWorkspaceSyncRequest = {
@@ -32,6 +58,10 @@ export type WorkerWorkspaceReconcileRequest = {
   remoteWorkspaceDir: string;
   baseManifestRef: string;
   journal: WorkerWorkspaceReconciliationJournalAdapter;
+  stagedResult?: {
+    ref: string;
+    record(ref: string): void;
+  };
 };
 
 export type WorkerWorkspaceReconcileResult = {
@@ -41,6 +71,13 @@ export type WorkerWorkspaceReconcileResult = {
   verifyStable(): Promise<void>;
   /** Re-read the accepted local result after the remote stability fence. */
   verifyLocalStable(): Promise<void>;
+  /** Apply the prepared candidate locally without making it restart-authoritative. */
+  applyPreparedStagedResult?(): Promise<void>;
+  /** Return the accepted local manifest and any keep-local conflicts after apply. */
+  getAppliedWorkspaceResult?(): WorkerWorkspaceApplyResult | undefined;
+  /** Publish the verified candidate for restart recovery. */
+  publishStagedResult?(): Promise<void>;
+  discardPreparedStagedResult?(): Promise<void>;
 };
 
 export type WorkerWorkspaceQuiescence = {
@@ -50,10 +87,18 @@ export type WorkerWorkspaceQuiescence = {
   resume(): Promise<void>;
 };
 
+type WorkerTurnLaunchRequest = {
+  plan: WorkerLaunchPlan;
+  placementGeneration: number;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  onDispatchReady?: () => void;
+};
+
 export type WorkerTunnelHandle = {
   environmentId: string;
   ownerEpoch: number;
-  remoteSocketPath: string;
+  launchTurn(request: WorkerTurnLaunchRequest): Promise<SpawnResult>;
   runWorkspaceCommand(command: WorkerWorkspaceCommand): Promise<SpawnResult>;
   quiesceWorkspace(remoteWorkspaceDir: string): Promise<WorkerWorkspaceQuiescence>;
   syncWorkspace(request: WorkerWorkspaceSyncRequest): Promise<WorkerWorkspaceSyncResult>;

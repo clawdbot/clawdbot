@@ -159,8 +159,9 @@ describe("PDF document extractor", () => {
       .mockResolvedValueOnce({ text: "", images: [] });
     const extractor = createPdfDocumentExtractor();
 
-    await extractor.extract(request({ pageNumbers: [3, 2, 0, 1], maxPages: 2 }));
+    const result = await extractor.extract(request({ pageNumbers: [3, 2, 0, 1], maxPages: 2 }));
 
+    expect(result).toEqual({ text: "", images: [] });
     expect(pdfDocument.extract).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({ mode: "text", pages: [2, 1] }),
@@ -175,6 +176,24 @@ describe("PDF document extractor", () => {
     );
   });
 
+  it("rejects selected pages outside the PDF page count before extraction", async () => {
+    pdfDocument.pageCount = 1;
+    pdfDocument.extract.mockResolvedValueOnce({ text: "", images: [] });
+    const extractor = createPdfDocumentExtractor();
+
+    await expect(extractor.extract(request({ pageNumbers: [2] }))).rejects.toThrow(
+      "No requested PDF pages exist in this 1-page document.",
+    );
+    expect(pdfDocument.extract).not.toHaveBeenCalled();
+    expect(pdfDocument.destroy).toHaveBeenCalledTimes(1);
+
+    await expect(extractor.extract(request({ pageNumbers: [] }))).resolves.toEqual({
+      text: "",
+      images: [],
+    });
+    expect(pdfDocument.destroy).toHaveBeenCalledTimes(2);
+  });
+
   it("reports image fallback failures and returns extracted text", async () => {
     const onImageExtractionError = vi.fn();
     const failure = new Error("render failed");
@@ -187,6 +206,27 @@ describe("PDF document extractor", () => {
 
     expect(result).toEqual({ text: "short", images: [] });
     expect(onImageExtractionError).toHaveBeenCalledWith(failure);
+    expect(pdfDocument.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { label: "empty", text: "", reportError: true },
+    { label: "whitespace-only", text: " \t\n", reportError: false },
+  ])("surfaces image fallback failures for $label PDF text", async ({ text, reportError }) => {
+    const { PdfBudgetError } = await vi.importActual<typeof import("clawpdf")>("clawpdf");
+    const onImageExtractionError = vi.fn();
+    const failure = new PdfBudgetError("renderPixels", 100);
+    pdfDocument.extract.mockResolvedValueOnce({ text, images: [] }).mockRejectedValueOnce(failure);
+    const overrides = reportError ? { onImageExtractionError } : {};
+
+    await expect(createPdfDocumentExtractor().extract(request(overrides))).rejects.toMatchObject({
+      message: "PDF image extraction failed with no extractable text.",
+      cause: failure,
+    });
+    expect(onImageExtractionError).toHaveBeenCalledTimes(reportError ? 1 : 0);
+    if (reportError) {
+      expect(onImageExtractionError).toHaveBeenCalledWith(failure);
+    }
     expect(pdfDocument.destroy).toHaveBeenCalledTimes(1);
   });
 });

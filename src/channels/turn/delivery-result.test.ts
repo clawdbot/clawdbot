@@ -1,6 +1,15 @@
 // Delivery result tests cover channel turn delivery result normalization.
 import { describe, expect, it } from "vitest";
-import { createChannelDeliveryResultFromReceipt } from "./delivery-result.js";
+import {
+  createChannelDeliveryResultFromReceipt,
+  createChannelPartialDeliveryError,
+  isChannelPartialDeliveryError,
+} from "./delivery-result.js";
+import {
+  hasFinalChannelTurnDispatch,
+  hasVisibleChannelTurnDispatch,
+  resolveChannelTurnDispatchCounts,
+} from "./dispatch-result.js";
 
 describe("createChannelDeliveryResultFromReceipt", () => {
   it("keeps legacy messageIds while attaching the receipt", () => {
@@ -52,6 +61,73 @@ describe("createChannelDeliveryResultFromReceipt", () => {
     ).toEqual({
       receipt,
       visibleReplySent: false,
+    });
+  });
+});
+
+describe("channel partial delivery errors", () => {
+  it("carries nested provider facts and top-level visibility markers", () => {
+    const cause = new Error("final edit failed");
+    const error = createChannelPartialDeliveryError(cause, {
+      content: "accepted preview",
+      messageIds: ["provider-1"],
+      visibleReplySent: true,
+    });
+
+    expect(error).toMatchObject({
+      cause,
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      sentBeforeError: true,
+      visibleReplySent: true,
+      deliveryResult: {
+        content: "accepted preview",
+        messageIds: ["provider-1"],
+        visibleReplySent: true,
+      },
+    });
+    expect(isChannelPartialDeliveryError(error)).toBe(true);
+  });
+
+  it("recognizes the documented structural envelope", () => {
+    expect(
+      isChannelPartialDeliveryError({
+        code: "CHANNEL_PARTIAL_DELIVERY",
+        deliveryResult: { visibleReplySent: true },
+      }),
+    ).toBe(true);
+    expect(
+      isChannelPartialDeliveryError({
+        code: "CHANNEL_PARTIAL_DELIVERY",
+        deliveryResult: { visibleReplySent: false },
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("channel turn dispatch results", () => {
+  it("normalizes visible dispatch checks", () => {
+    expect(hasVisibleChannelTurnDispatch(undefined)).toBe(false);
+    expect(
+      hasVisibleChannelTurnDispatch({
+        queuedFinal: false,
+        counts: { tool: 1, block: 0, final: 0 },
+      }),
+    ).toBe(true);
+    expect(
+      hasVisibleChannelTurnDispatch(undefined, {
+        observedReplyDelivery: true,
+      }),
+    ).toBe(true);
+    expect(
+      hasFinalChannelTurnDispatch({
+        queuedFinal: false,
+        counts: { tool: 1, block: 0, final: 0 },
+      }),
+    ).toBe(false);
+    expect(resolveChannelTurnDispatchCounts(undefined)).toEqual({
+      tool: 0,
+      block: 0,
+      final: 0,
     });
   });
 });

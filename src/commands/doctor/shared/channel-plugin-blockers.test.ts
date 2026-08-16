@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import * as manifestRegistry from "../../../plugins/manifest-registry.js";
+import { clearPluginMetadataLifecycleCaches } from "../../../plugins/plugin-metadata-lifecycle.js";
 import {
   channelPluginBlockerHitToHealthFinding,
   collectConfiguredChannelPluginBlockerWarnings,
@@ -11,16 +12,60 @@ import {
   scanConfiguredChannelPluginBlockers,
 } from "./channel-plugin-blockers.js";
 
+function createPackageChannelEnv(channelId: string, envVars: string[]) {
+  return {
+    id: channelId,
+    configuredState: { env: { anyOf: envVars } },
+  };
+}
+
+function plugin(
+  id: string,
+  options: {
+    origin?: "bundled" | "config" | "global" | "workspace";
+    channelId?: string;
+    enabledByDefault?: boolean;
+    [key: string]: unknown;
+  } = {},
+) {
+  const { origin = "global", channelId = id, enabledByDefault = false, ...metadata } = options;
+  const rootDir = `/plugins/${id}`;
+  return {
+    id,
+    origin,
+    channels: [channelId],
+    providers: [],
+    cliBackends: [],
+    skills: [],
+    hooks: [],
+    enabledByDefault,
+    rootDir,
+    source: `${rootDir}/index.ts`,
+    manifestPath: `${rootDir}/openclaw.plugin.json`,
+    ...metadata,
+  };
+}
+
+function mockManifestPlugins(plugins: unknown[]) {
+  vi.spyOn(manifestRegistry, "loadPluginManifestRegistryCore").mockReturnValue({
+    plugins,
+    diagnostics: [],
+  } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistryCore>);
+}
+
 describe("channel plugin blockers", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    clearPluginMetadataLifecycleCaches();
   });
 
-  it("returns no blockers when config and manifest env have no channel surfaces", () => {
-    const registrySpy = vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [],
-      diagnostics: [],
-    });
+  it("returns no blockers when config and package env have no channel surfaces", () => {
+    const registrySpy = vi
+      .spyOn(manifestRegistry, "loadPluginManifestRegistryCore")
+      .mockReturnValue({
+        plugins: [],
+        diagnostics: [],
+      });
 
     const hits = scanConfiguredChannelPluginBlockers({
       channels: {
@@ -35,17 +80,7 @@ describe("channel plugin blockers", () => {
   });
 
   it("reports external channel plugins that are installed but not explicitly enabled", () => {
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [
-        {
-          id: "discord",
-          origin: "global",
-          channels: ["discord"],
-          enabledByDefault: false,
-        },
-      ],
-      diagnostics: [],
-    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+    mockManifestPlugins([plugin("discord")]);
 
     const hits = scanConfiguredChannelPluginBlockers({
       channels: {
@@ -81,10 +116,12 @@ describe("channel plugin blockers", () => {
   });
 
   it("uses provided manifest records without loading the registry", () => {
-    const registrySpy = vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [],
-      diagnostics: [],
-    });
+    const registrySpy = vi
+      .spyOn(manifestRegistry, "loadPluginManifestRegistryCore")
+      .mockReturnValue({
+        plugins: [],
+        diagnostics: [],
+      });
 
     const hits = scanConfiguredChannelPluginBlockers(
       {
@@ -126,17 +163,7 @@ describe("channel plugin blockers", () => {
   });
 
   it("reports blockers for enabled-only channel intent", () => {
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [
-        {
-          id: "discord",
-          origin: "global",
-          channels: ["discord"],
-          enabledByDefault: false,
-        },
-      ],
-      diagnostics: [],
-    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+    mockManifestPlugins([plugin("discord")]);
 
     const hits = scanConfiguredChannelPluginBlockers({
       plugins: {
@@ -159,17 +186,7 @@ describe("channel plugin blockers", () => {
   });
 
   it("normalizes explicit channel ids before matching plugin owners", () => {
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [
-        {
-          id: "discord",
-          origin: "global",
-          channels: ["discord"],
-          enabledByDefault: false,
-        },
-      ],
-      diagnostics: [],
-    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+    mockManifestPlugins([plugin("discord")]);
 
     const hits = scanConfiguredChannelPluginBlockers({
       channels: {
@@ -189,17 +206,7 @@ describe("channel plugin blockers", () => {
   });
 
   it("accepts plugins.allow as explicit trust for external channel plugins", () => {
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [
-        {
-          id: "discord",
-          origin: "global",
-          channels: ["discord"],
-          enabledByDefault: false,
-        },
-      ],
-      diagnostics: [],
-    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+    mockManifestPlugins([plugin("discord")]);
 
     const hits = scanConfiguredChannelPluginBlockers({
       plugins: {
@@ -217,17 +224,7 @@ describe("channel plugin blockers", () => {
   });
 
   it("diagnoses trust from the pre-auto-enable config", () => {
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [
-        {
-          id: "discord",
-          origin: "global",
-          channels: ["discord"],
-          enabledByDefault: false,
-        },
-      ],
-      diagnostics: [],
-    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+    mockManifestPlugins([plugin("discord")]);
 
     const channels = {
       discord: {
@@ -258,29 +255,19 @@ describe("channel plugin blockers", () => {
   });
 
   it("uses effective config for preferOver fallback disablement", () => {
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [
-        {
-          id: "legacy-chat",
-          origin: "bundled",
-          channels: ["legacy-chat"],
-          enabledByDefault: true,
-        },
-        {
-          id: "modern-chat",
-          origin: "config",
-          channels: ["legacy-chat"],
-          enabledByDefault: false,
-          channelConfigs: {
-            "legacy-chat": {
-              schema: { type: "object" },
-              preferOver: ["legacy-chat"],
-            },
+    mockManifestPlugins([
+      plugin("legacy-chat", { origin: "bundled", enabledByDefault: true }),
+      plugin("modern-chat", {
+        origin: "config",
+        channelId: "legacy-chat",
+        channelConfigs: {
+          "legacy-chat": {
+            schema: { type: "object" },
+            preferOver: ["legacy-chat"],
           },
         },
-      ],
-      diagnostics: [],
-    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+      }),
+    ]);
 
     const channels = {
       "legacy-chat": {
@@ -311,29 +298,19 @@ describe("channel plugin blockers", () => {
   });
 
   it("diagnoses an env-only channel whose preferred external owner lacks trust", () => {
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [
-        {
-          id: "telegram",
-          origin: "bundled",
-          channels: ["telegram"],
-          enabledByDefault: true,
-        },
-        {
-          id: "modern-telegram",
-          origin: "config",
-          channels: ["telegram"],
-          enabledByDefault: false,
-          channelConfigs: {
-            telegram: {
-              schema: { type: "object" },
-              preferOver: ["telegram"],
-            },
+    mockManifestPlugins([
+      plugin("telegram", { origin: "bundled", enabledByDefault: true }),
+      plugin("modern-telegram", {
+        origin: "config",
+        channelId: "telegram",
+        channelConfigs: {
+          telegram: {
+            schema: { type: "object" },
+            preferOver: ["telegram"],
           },
         },
-      ],
-      diagnostics: [],
-    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+      }),
+    ]);
 
     const hits = scanConfiguredChannelPluginBlockers(
       {
@@ -359,21 +336,12 @@ describe("channel plugin blockers", () => {
     ]);
   });
 
-  it("diagnoses an external-only manifest env channel that lacks source trust", () => {
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [
-        {
-          id: "discord",
-          origin: "global",
-          channels: ["discord"],
-          channelEnvVars: {
-            discord: ["DISCORD_BOT_TOKEN"],
-          },
-          enabledByDefault: false,
-        },
-      ],
-      diagnostics: [],
-    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+  it("diagnoses an external-only package env channel that lacks source trust", () => {
+    mockManifestPlugins([
+      plugin("discord", {
+        packageChannel: createPackageChannelEnv("discord", ["DISCORD_BOT_TOKEN"]),
+      }),
+    ]);
 
     const hits = scanConfiguredChannelPluginBlockers(
       {
@@ -398,27 +366,63 @@ describe("channel plugin blockers", () => {
     ]);
   });
 
-  it("keeps manifest env trust diagnostics scoped to the declaring owner", () => {
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [
-        {
-          id: "bundled-chat",
-          origin: "bundled",
-          channels: ["shared-chat"],
-          enabledByDefault: true,
+  it("suppresses ambient-only package env blockers for gateway startup", () => {
+    mockManifestPlugins([
+      plugin("discord", {
+        packageChannel: createPackageChannelEnv("discord", ["DISCORD_FAKE_TEST_TRIGGER"]),
+      }),
+    ]);
+
+    expect(
+      scanConfiguredChannelPluginBlockers(
+        {},
+        { DISCORD_FAKE_TEST_TRIGGER: "configured" } as NodeJS.ProcessEnv,
+        {},
+        { ambientEnvTriggers: "suppress" },
+      ),
+    ).toStrictEqual([]);
+  });
+
+  it("requires every package channel allOf environment variable", () => {
+    mockManifestPlugins([
+      plugin("irc", {
+        packageChannel: {
+          id: "irc",
+          configuredState: { env: { allOf: ["IRC_HOST", "IRC_NICK"] } },
         },
-        {
-          id: "external-chat",
-          origin: "config",
-          channels: ["shared-chat"],
-          channelEnvVars: {
-            "shared-chat": ["EXTERNAL_CHAT_TOKEN"],
-          },
-          enabledByDefault: false,
-        },
-      ],
-      diagnostics: [],
-    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+      }),
+    ]);
+
+    expect(
+      scanConfiguredChannelPluginBlockers({}, { IRC_HOST: "configured" } as NodeJS.ProcessEnv),
+    ).toStrictEqual([]);
+    expect(
+      scanConfiguredChannelPluginBlockers({}, {
+        IRC_HOST: "configured",
+        IRC_NICK: "configured",
+      } as NodeJS.ProcessEnv),
+    ).toEqual([
+      {
+        channelId: "irc",
+        pluginId: "irc",
+        reason: "missing explicit enablement",
+      },
+    ]);
+  });
+
+  it("keeps package env trust diagnostics scoped to the declaring owner", () => {
+    mockManifestPlugins([
+      plugin("bundled-chat", {
+        origin: "bundled",
+        channelId: "shared-chat",
+        enabledByDefault: true,
+      }),
+      plugin("external-chat", {
+        origin: "config",
+        channelId: "shared-chat",
+        packageChannel: createPackageChannelEnv("shared-chat", ["EXTERNAL_CHAT_TOKEN"]),
+      }),
+    ]);
 
     const hits = scanConfiguredChannelPluginBlockers(
       {
@@ -466,30 +470,20 @@ describe("channel plugin blockers", () => {
     ).toBe(true);
   });
 
-  it("accepts an available co-owner for the same manifest env trigger", () => {
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [
-        {
-          id: "bundled-chat",
-          origin: "bundled",
-          channels: ["shared-chat"],
-          channelEnvVars: {
-            "shared-chat": ["SHARED_CHAT_TOKEN"],
-          },
-          enabledByDefault: true,
-        },
-        {
-          id: "external-chat",
-          origin: "config",
-          channels: ["shared-chat"],
-          channelEnvVars: {
-            "shared-chat": ["SHARED_CHAT_TOKEN"],
-          },
-          enabledByDefault: false,
-        },
-      ],
-      diagnostics: [],
-    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+  it("accepts an available co-owner for the same package env trigger", () => {
+    mockManifestPlugins([
+      plugin("bundled-chat", {
+        origin: "bundled",
+        channelId: "shared-chat",
+        packageChannel: createPackageChannelEnv("shared-chat", ["SHARED_CHAT_TOKEN"]),
+        enabledByDefault: true,
+      }),
+      plugin("external-chat", {
+        origin: "config",
+        channelId: "shared-chat",
+        packageChannel: createPackageChannelEnv("shared-chat", ["SHARED_CHAT_TOKEN"]),
+      }),
+    ]);
 
     const hits = scanConfiguredChannelPluginBlockers({}, {
       SHARED_CHAT_TOKEN: "configured",
@@ -498,30 +492,19 @@ describe("channel plugin blockers", () => {
     expect(hits).toStrictEqual([]);
   });
 
-  it("deduplicates global plugin disablement across manifest env triggers", () => {
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [
-        {
-          id: "first-chat",
-          origin: "config",
-          channels: ["shared-chat"],
-          channelEnvVars: {
-            "shared-chat": ["FIRST_CHAT_TOKEN"],
-          },
-          enabledByDefault: false,
-        },
-        {
-          id: "second-chat",
-          origin: "config",
-          channels: ["shared-chat"],
-          channelEnvVars: {
-            "shared-chat": ["SECOND_CHAT_TOKEN"],
-          },
-          enabledByDefault: false,
-        },
-      ],
-      diagnostics: [],
-    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+  it("deduplicates global plugin disablement across package env triggers", () => {
+    mockManifestPlugins([
+      plugin("first-chat", {
+        origin: "config",
+        channelId: "shared-chat",
+        packageChannel: createPackageChannelEnv("shared-chat", ["FIRST_CHAT_TOKEN"]),
+      }),
+      plugin("second-chat", {
+        origin: "config",
+        channelId: "shared-chat",
+        packageChannel: createPackageChannelEnv("shared-chat", ["SECOND_CHAT_TOKEN"]),
+      }),
+    ]);
 
     const hits = scanConfiguredChannelPluginBlockers(
       {
@@ -544,27 +527,15 @@ describe("channel plugin blockers", () => {
     ]);
   });
 
-  it("does not report unrelated blocked owners for a manifest env trigger", () => {
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [
-        {
-          id: "triggered-chat",
-          origin: "config",
-          channels: ["shared-chat"],
-          channelEnvVars: {
-            "shared-chat": ["TRIGGERED_CHAT_TOKEN"],
-          },
-          enabledByDefault: false,
-        },
-        {
-          id: "unrelated-chat",
-          origin: "config",
-          channels: ["shared-chat"],
-          enabledByDefault: false,
-        },
-      ],
-      diagnostics: [],
-    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+  it("does not report unrelated blocked owners for a package env trigger", () => {
+    mockManifestPlugins([
+      plugin("triggered-chat", {
+        origin: "config",
+        channelId: "shared-chat",
+        packageChannel: createPackageChannelEnv("shared-chat", ["TRIGGERED_CHAT_TOKEN"]),
+      }),
+      plugin("unrelated-chat", { origin: "config", channelId: "shared-chat" }),
+    ]);
 
     const hits = scanConfiguredChannelPluginBlockers({}, {
       TRIGGERED_CHAT_TOKEN: "configured",
@@ -579,21 +550,13 @@ describe("channel plugin blockers", () => {
     ]);
   });
 
-  it("ignores manifest env mappings for channels the plugin does not own", () => {
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [
-        {
-          id: "external-chat",
-          origin: "config",
-          channels: ["external-chat"],
-          channelEnvVars: {
-            discord: ["EXTERNAL_CHAT_TOKEN"],
-          },
-          enabledByDefault: false,
-        },
-      ],
-      diagnostics: [],
-    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+  it("ignores package env mappings for channels the plugin does not own", () => {
+    mockManifestPlugins([
+      plugin("external-chat", {
+        origin: "config",
+        packageChannel: createPackageChannelEnv("discord", ["EXTERNAL_CHAT_TOKEN"]),
+      }),
+    ]);
 
     const hits = scanConfiguredChannelPluginBlockers({}, {
       EXTERNAL_CHAT_TOKEN: "configured",
@@ -602,21 +565,13 @@ describe("channel plugin blockers", () => {
     expect(hits).toStrictEqual([]);
   });
 
-  it("diagnoses a manifest env channel whose bundled owner is opt-in", () => {
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [
-        {
-          id: "twitch",
-          origin: "bundled",
-          channels: ["twitch"],
-          channelEnvVars: {
-            twitch: ["OPENCLAW_TWITCH_ACCESS_TOKEN"],
-          },
-          enabledByDefault: false,
-        },
-      ],
-      diagnostics: [],
-    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+  it("diagnoses a package env channel whose bundled owner is opt-in", () => {
+    mockManifestPlugins([
+      plugin("twitch", {
+        origin: "bundled",
+        packageChannel: createPackageChannelEnv("twitch", ["OPENCLAW_TWITCH_ACCESS_TOKEN"]),
+      }),
+    ]);
 
     const hits = scanConfiguredChannelPluginBlockers({}, {
       OPENCLAW_TWITCH_ACCESS_TOKEN: "configured",
@@ -635,20 +590,12 @@ describe("channel plugin blockers", () => {
   });
 
   it("includes both actions for a bundled opt-in owner under a restrictive allowlist", () => {
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [
-        {
-          id: "twitch",
-          origin: "bundled",
-          channels: ["twitch"],
-          channelEnvVars: {
-            twitch: ["OPENCLAW_TWITCH_ACCESS_TOKEN"],
-          },
-          enabledByDefault: false,
-        },
-      ],
-      diagnostics: [],
-    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+    mockManifestPlugins([
+      plugin("twitch", {
+        origin: "bundled",
+        packageChannel: createPackageChannelEnv("twitch", ["OPENCLAW_TWITCH_ACCESS_TOKEN"]),
+      }),
+    ]);
 
     const hits = scanConfiguredChannelPluginBlockers(
       {
@@ -673,21 +620,12 @@ describe("channel plugin blockers", () => {
     ]);
   });
 
-  it("keeps manifest env blockers when another channel is explicitly configured", () => {
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [
-        {
-          id: "discord",
-          origin: "global",
-          channels: ["discord"],
-          channelEnvVars: {
-            discord: ["DISCORD_BOT_TOKEN"],
-          },
-          enabledByDefault: false,
-        },
-      ],
-      diagnostics: [],
-    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+  it("keeps package env blockers when another channel is explicitly configured", () => {
+    mockManifestPlugins([
+      plugin("discord", {
+        packageChannel: createPackageChannelEnv("discord", ["DISCORD_BOT_TOKEN"]),
+      }),
+    ]);
 
     const hits = scanConfiguredChannelPluginBlockers(
       {
@@ -723,21 +661,12 @@ describe("channel plugin blockers", () => {
     ]);
   });
 
-  it("honors explicit channel disablement over manifest env triggers", () => {
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [
-        {
-          id: "discord",
-          origin: "global",
-          channels: ["discord"],
-          channelEnvVars: {
-            discord: ["DISCORD_BOT_TOKEN"],
-          },
-          enabledByDefault: false,
-        },
-      ],
-      diagnostics: [],
-    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+  it("honors explicit channel disablement over package env triggers", () => {
+    mockManifestPlugins([
+      plugin("discord", {
+        packageChannel: createPackageChannelEnv("discord", ["DISCORD_BOT_TOKEN"]),
+      }),
+    ]);
 
     const hits = scanConfiguredChannelPluginBlockers(
       {
@@ -768,23 +697,10 @@ describe("channel plugin blockers", () => {
   });
 
   it("accepts an auto-enabled bundled owner under a restrictive source allowlist", () => {
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [
-        {
-          id: "telegram-plugin",
-          origin: "bundled",
-          channels: ["telegram"],
-          enabledByDefault: false,
-        },
-        {
-          id: "untrusted-telegram",
-          origin: "config",
-          channels: ["telegram"],
-          enabledByDefault: false,
-        },
-      ],
-      diagnostics: [],
-    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+    mockManifestPlugins([
+      plugin("telegram-plugin", { origin: "bundled", channelId: "telegram" }),
+      plugin("untrusted-telegram", { origin: "config", channelId: "telegram" }),
+    ]);
 
     const channels = {
       telegram: {
@@ -814,17 +730,7 @@ describe("channel plugin blockers", () => {
   });
 
   it("preserves explicit external trust across an auto-materialized allowlist", () => {
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [
-        {
-          id: "discord",
-          origin: "global",
-          channels: ["discord"],
-          enabledByDefault: false,
-        },
-      ],
-      diagnostics: [],
-    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+    mockManifestPlugins([plugin("discord")]);
 
     const sourceConfig: OpenClawConfig = {
       channels: {
@@ -855,17 +761,9 @@ describe("channel plugin blockers", () => {
   });
 
   it("preserves explicit workspace trust across an auto-materialized allowlist", () => {
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [
-        {
-          id: "workspace-chat",
-          origin: "workspace",
-          channels: ["workspace-chat"],
-          enabledByDefault: false,
-        },
-      ],
-      diagnostics: [],
-    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+    mockManifestPlugins([
+      plugin("workspace-chat", { origin: "workspace", channelId: "workspace-chat" }),
+    ]);
 
     const sourceConfig: OpenClawConfig = {
       channels: {
@@ -896,17 +794,7 @@ describe("channel plugin blockers", () => {
   });
 
   it("accepts an env-auto-enabled bundled owner absent from the source config", () => {
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [
-        {
-          id: "telegram",
-          origin: "bundled",
-          channels: ["telegram"],
-          enabledByDefault: false,
-        },
-      ],
-      diagnostics: [],
-    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+    mockManifestPlugins([plugin("telegram", { origin: "bundled", channelId: "telegram" })]);
 
     const hits = scanConfiguredChannelPluginBlockers(
       {
@@ -931,17 +819,7 @@ describe("channel plugin blockers", () => {
   });
 
   it("reports external channel plugins omitted from a restrictive allowlist", () => {
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [
-        {
-          id: "discord",
-          origin: "global",
-          channels: ["discord"],
-          enabledByDefault: false,
-        },
-      ],
-      diagnostics: [],
-    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+    mockManifestPlugins([plugin("discord")]);
 
     const hits = scanConfiguredChannelPluginBlockers({
       plugins: {
@@ -968,23 +846,10 @@ describe("channel plugin blockers", () => {
   });
 
   it("keeps blocker reasons scoped to each external owner", () => {
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [
-        {
-          id: "denied-chat",
-          origin: "config",
-          channels: ["shared-chat"],
-          enabledByDefault: false,
-        },
-        {
-          id: "untrusted-chat",
-          origin: "config",
-          channels: ["shared-chat"],
-          enabledByDefault: false,
-        },
-      ],
-      diagnostics: [],
-    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+    mockManifestPlugins([
+      plugin("denied-chat", { origin: "config", channelId: "shared-chat" }),
+      plugin("untrusted-chat", { origin: "config", channelId: "shared-chat" }),
+    ]);
 
     const hits = scanConfiguredChannelPluginBlockers({
       plugins: {
@@ -1012,17 +877,7 @@ describe("channel plugin blockers", () => {
   });
 
   it("reports a single channel owner blocked by plugins.deny", () => {
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [
-        {
-          id: "discord",
-          origin: "global",
-          channels: ["discord"],
-          enabledByDefault: false,
-        },
-      ],
-      diagnostics: [],
-    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+    mockManifestPlugins([plugin("discord")]);
 
     const hits = scanConfiguredChannelPluginBlockers({
       plugins: {
@@ -1048,17 +903,9 @@ describe("channel plugin blockers", () => {
   });
 
   it("accepts workspace channel owners activated through a plugin slot", () => {
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [
-        {
-          id: "workspace-chat",
-          origin: "workspace",
-          channels: ["workspace-chat"],
-          enabledByDefault: false,
-        },
-      ],
-      diagnostics: [],
-    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+    mockManifestPlugins([
+      plugin("workspace-chat", { origin: "workspace", channelId: "workspace-chat" }),
+    ]);
 
     const hits = scanConfiguredChannelPluginBlockers({
       plugins: {
@@ -1078,17 +925,7 @@ describe("channel plugin blockers", () => {
   });
 
   it("still evaluates configured channels when plugins are disabled globally", () => {
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [
-        {
-          id: "slack",
-          origin: "bundled",
-          channels: ["slack"],
-          enabledByDefault: true,
-        },
-      ],
-      diagnostics: [],
-    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+    mockManifestPlugins([plugin("slack", { origin: "bundled", enabledByDefault: true })]);
 
     const hits = scanConfiguredChannelPluginBlockers({
       plugins: {
@@ -1115,23 +952,10 @@ describe("channel plugin blockers", () => {
   });
 
   it("ignores ambient channel env when reporting plugin blockers", () => {
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [
-        {
-          id: "slack",
-          origin: "bundled",
-          channels: ["slack"],
-          enabledByDefault: true,
-        },
-        {
-          id: "telegram",
-          origin: "bundled",
-          channels: ["telegram"],
-          enabledByDefault: true,
-        },
-      ],
-      diagnostics: [],
-    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+    mockManifestPlugins([
+      plugin("slack", { origin: "bundled", enabledByDefault: true }),
+      plugin("telegram", { origin: "bundled", enabledByDefault: true }),
+    ]);
 
     const hits = scanConfiguredChannelPluginBlockers(
       {
@@ -1159,30 +983,20 @@ describe("channel plugin blockers", () => {
   });
 
   it("does not report a disabled bundled owner when a configured external plugin owns the channel", () => {
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [
-        {
-          id: "feishu",
-          origin: "bundled",
-          channels: ["feishu"],
-          enabledByDefault: true,
-        },
-        {
-          id: "openclaw-lark",
-          origin: "config",
-          channels: ["feishu"],
-          enabledByDefault: false,
-          channelConfigs: {
-            feishu: {
-              schema: {
-                type: "object",
-              },
+    mockManifestPlugins([
+      plugin("feishu", { origin: "bundled", enabledByDefault: true }),
+      plugin("openclaw-lark", {
+        origin: "config",
+        channelId: "feishu",
+        channelConfigs: {
+          feishu: {
+            schema: {
+              type: "object",
             },
           },
         },
-      ],
-      diagnostics: [],
-    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+      }),
+    ]);
 
     const hits = scanConfiguredChannelPluginBlockers({
       plugins: {
@@ -1208,30 +1022,20 @@ describe("channel plugin blockers", () => {
   });
 
   it("reports each blocked owner when no channel owner is active", () => {
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [
-        {
-          id: "feishu",
-          origin: "bundled",
-          channels: ["feishu"],
-          enabledByDefault: true,
-        },
-        {
-          id: "openclaw-lark",
-          origin: "config",
-          channels: ["feishu"],
-          enabledByDefault: false,
-          channelConfigs: {
-            feishu: {
-              schema: {
-                type: "object",
-              },
+    mockManifestPlugins([
+      plugin("feishu", { origin: "bundled", enabledByDefault: true }),
+      plugin("openclaw-lark", {
+        origin: "config",
+        channelId: "feishu",
+        channelConfigs: {
+          feishu: {
+            schema: {
+              type: "object",
             },
           },
         },
-      ],
-      diagnostics: [],
-    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+      }),
+    ]);
 
     const hits = scanConfiguredChannelPluginBlockers({
       plugins: {
@@ -1264,4 +1068,3 @@ describe("channel plugin blockers", () => {
     ]);
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

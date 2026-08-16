@@ -1,10 +1,14 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { resolveStorePath } from "../config/sessions/paths.js";
-import { appendTranscriptEvent, loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import {
+  appendTranscriptEvent,
+  loadSessionEntryReadOnly,
+  resolveSessionTranscriptRuntimeTarget,
+} from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { buildChannelInboundEventContext } from "./inbound-event/context.js";
+import { buildHostChannelInboundEventContext } from "./inbound-event/context.js";
 import { createChannelInboundEnvelopeBuilder } from "./inbound-event/envelope.js";
-import { dispatchChannelInboundTurn } from "./turn/kernel.js";
+import { dispatchRoutedChannelTurn } from "./turn/lifecycle.js";
 
 export const DEFAULT_CHANNEL_FEEDBACK_REFLECTION_COOLDOWN_MS = 300_000;
 const MAX_RESPONSE_CHARS = 500;
@@ -17,8 +21,10 @@ export async function recordChannelFeedbackEvent(params: {
   sessionKey: string;
   event: Parameters<typeof appendTranscriptEvent>[1];
 }): Promise<boolean> {
-  const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
-  const entry = loadSessionEntry({
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
+    agentId: params.agentId,
+  });
+  const entry = loadSessionEntryReadOnly({
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     storePath,
@@ -26,15 +32,13 @@ export async function recordChannelFeedbackEvent(params: {
   if (!entry?.sessionId) {
     return false;
   }
-  await appendTranscriptEvent(
-    {
-      agentId: params.agentId,
-      sessionId: entry.sessionId,
-      sessionKey: params.sessionKey,
-      storePath,
-    },
-    params.event,
-  );
+  const target = await resolveSessionTranscriptRuntimeTarget({
+    agentId: params.agentId,
+    sessionId: entry.sessionId,
+    sessionKey: params.sessionKey,
+    storePath,
+  });
+  await appendTranscriptEvent(target, params.event);
   return true;
 }
 
@@ -129,7 +133,8 @@ export async function runChannelFeedbackReflection(params: {
     timestamp,
   });
   const target = `conversation:${params.conversationId}`;
-  const ctxPayload = buildChannelInboundEventContext({
+  const ctxPayload = buildHostChannelInboundEventContext({
+    channelIngress: "unsupported",
     channel: params.channel,
     accountId: params.accountId,
     messageId: `feedback-reflection:${timestamp}`,
@@ -148,7 +153,7 @@ export async function runChannelFeedbackReflection(params: {
     access: { commands: { authorized: false } },
   });
   const responses: string[] = [];
-  await dispatchChannelInboundTurn({
+  await dispatchRoutedChannelTurn({
     cfg: params.cfg,
     channel: params.channel,
     accountId: params.accountId,
@@ -182,7 +187,7 @@ export async function runChannelFeedbackReflection(params: {
   return {
     status: "complete",
     learning: parsed.learning,
-    storePath: resolveStorePath(params.cfg.session?.store, { agentId: params.agentId }),
+    storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId: params.agentId }),
     followUp: parsed.followUp,
     userMessage: parsed.userMessage,
     responseLength: response.trim().length,

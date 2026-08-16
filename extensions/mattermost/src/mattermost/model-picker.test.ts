@@ -2,7 +2,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  normalizeSessionDeliveryState,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import {
@@ -232,7 +235,7 @@ describe("Mattermost model picker", () => {
           providerOverride: "anthropic",
           modelOverride: "claude-sonnet-4-5",
           chatType: "channel",
-          channel: "channel-1",
+          delivery: normalizeSessionDeliveryState({ context: { channel: "channel-1" } }),
           sessionId: "parent-session",
           updatedAt: 1,
         },
@@ -244,7 +247,9 @@ describe("Mattermost model picker", () => {
         entry: {
           parentSessionKey,
           chatType: "channel",
-          channel: "child-with-explicit-parent",
+          delivery: normalizeSessionDeliveryState({
+            context: { channel: "child-with-explicit-parent" },
+          }),
           sessionId: "child-session",
           updatedAt: 2,
         },
@@ -257,7 +262,7 @@ describe("Mattermost model picker", () => {
           providerOverride: "openai",
           modelOverride: "gpt-5",
           chatType: "channel",
-          channel: "direct-1",
+          delivery: normalizeSessionDeliveryState({ context: { channel: "direct-1" } }),
           sessionId: "direct-session",
           updatedAt: 3,
         },

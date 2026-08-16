@@ -270,21 +270,11 @@ export function resolveRuntimeWebProviders<TEntry>(
   params: Omit<ResolvePluginWebProvidersParams, "activate" | "cache" | "mode">,
   deps: ResolveWebProviderRuntimeDeps<TEntry>,
 ): TEntry[] {
-  const runtimeRegistry = getLoadedRuntimePluginRegistry({
-    env: params.env,
-    workspaceDir: params.workspaceDir,
-    requiredPluginIds: params.onlyPluginIds,
-  });
-  const hasExplicitEmptyScope =
-    params.onlyPluginIds !== undefined && params.onlyPluginIds.length === 0;
-  const runtimeProviders = resolveRuntimeRegistryWebProviders({
-    hasExplicitEmptyScope,
-    mapRegistryProviders: deps.mapRegistryProviders,
-    onlyPluginIds: params.onlyPluginIds,
-    registry: runtimeRegistry,
-  });
-  if (runtimeProviders?.shouldReturn) {
-    return runtimeProviders.providers;
-  }
+  // Do not treat the active registry's provider set as authoritative here: it can
+  // be non-empty while still missing manifest-declared candidates that never load
+  // at startup (for example an npm-installed Brave plugin with BRAVE_API_KEY set,
+  // whose manifest uses activation.onStartup=false). resolvePluginWebProviders
+  // reuses the active registry only when it covers every declared candidate, and
+  // otherwise runs the same scoped load the explicitly-configured path uses.
   return resolvePluginWebProviders(params, deps);
 }

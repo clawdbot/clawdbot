@@ -46,6 +46,23 @@ describe("irc config schema", () => {
     expect(config.nick).toBe("openclaw-bot");
   });
 
+  it("accepts configWrites at channel and account level", () => {
+    const config = expectValidConfig(
+      parseIrcConfig({
+        configWrites: false,
+        accounts: {
+          work: {
+            host: "irc.libera.chat",
+            configWrites: true,
+          },
+        },
+      }),
+    );
+
+    expect(config.configWrites).toBe(false);
+    expect(config.accounts?.work?.configWrites).toBe(true);
+  });
+
   it('rejects dmPolicy="open" without allowFrom "*"', () => {
     const issues = expectInvalidConfig(
       parseIrcConfig({

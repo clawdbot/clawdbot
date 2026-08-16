@@ -1,4 +1,3 @@
-// Codex tests cover commands plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,13 +7,24 @@ import {
   resolveDefaultAgentDir,
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
+import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "openclaw/plugin-sdk/model-session-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+// Codex tests cover commands plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
+import {
+  consumeCodexAppServerLiveThread,
+  ensureCodexAppServerClientRuntime,
+  isCodexAppServerLiveThreadClaimed,
+  retainCodexAppServerLiveThread,
+} from "./app-server/client-runtime.js";
+import type { CodexAppServerClient } from "./app-server/client.js";
 import type { CodexComputerUseStatus } from "./app-server/computer-use.js";
 import type { CodexAppServerStartOptions } from "./app-server/config.js";
+import { codexNativeSubagentMonitorRuntime } from "./app-server/native-subagent-monitor.js";
 import type { JsonValue } from "./app-server/protocol.js";
 import type { CodexAppServerThreadBinding } from "./app-server/session-binding.js";
 import {
@@ -23,13 +33,16 @@ import {
   testCodexAppServerBindingStore,
 } from "./app-server/session-binding.test-helpers.js";
 import { resetSharedCodexAppServerClientForTests } from "./app-server/shared-client.js";
+import { createClientHarness } from "./app-server/test-support.js";
+import { CODEX_APP_SERVER_VERSION } from "./app-server/version.js";
 import { codexDiagnosticsFeedbackState } from "./command-diagnostics-state.js";
-import { handleCodexCommand } from "./command-dispatch.js";
+import { handleCodexCommand as dispatchCodexCommand } from "./command-dispatch.js";
 import type { CodexCommandDepsOverride } from "./command-handlers.js";
 import type {
   CodexPluginsConfigBlock,
   CodexPluginsManagementIO,
 } from "./command-plugins-management.js";
+import { codexConversationBindingRuntime } from "./conversation-binding.js";
 
 type CodexPluginConfigEntry = NonNullable<CodexPluginsConfigBlock["plugins"]>[string];
 
@@ -113,6 +126,20 @@ function createDeps(overrides: Partial<CodexCommandDeps> = {}): CodexCommandDeps
   };
 }
 
+function runCommand(
+  args: string,
+  deps: Partial<CodexCommandDeps> = {},
+  context: Partial<PluginCommandContext> = {},
+  options: Omit<Parameters<typeof dispatchCodexCommand>[1], "deps"> = {},
+) {
+  return dispatchCodexCommand(createContext(args, undefined, context), {
+    ...options,
+    deps: createDeps(deps),
+  });
+}
+
+const handleCodexCommand = dispatchCodexCommand;
+
 function createThreadResumeResponse(params: {
   threadId: string;
   cwd?: string;
@@ -125,7 +152,7 @@ function createThreadResumeResponse(params: {
     thread: {
       id: params.threadId,
       sessionId: params.threadId,
-      cliVersion: "0.139.0",
+      cliVersion: CODEX_APP_SERVER_VERSION,
       createdAt: 1,
       updatedAt: 1,
       cwd,
@@ -168,7 +195,7 @@ function supervisedTestBinding(threadId = "thread-supervised"): CodexAppServerTh
 
 async function createLockedSessionContextOverrides(
   sessionKey = "agent:main:test:locked",
-): Promise<Pick<PluginCommandContext, "config" | "sessionKey">> {
+): Promise<{ config: PluginCommandContext["config"]; sessionKey: string }> {
   const storePath = path.join(tempDir, "locked-sessions.json");
   await upsertSessionEntry({
     storePath,
@@ -183,6 +210,30 @@ async function createLockedSessionContextOverrides(
   return {
     config: { session: { store: storePath } },
     sessionKey,
+  };
+}
+
+async function createCodexRuntimeContextOverrides(
+  sessionKey = "agent:main:test:codex-compact",
+): Promise<{
+  config: PluginCommandContext["config"];
+  sessionKey: string;
+  sessionTarget: NonNullable<PluginCommandContext["sessionTarget"]>;
+}> {
+  const storePath = path.join(tempDir, "codex-runtime-sessions.json");
+  await upsertSessionEntry({
+    storePath,
+    sessionKey,
+    entry: {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      agentHarnessId: "codex",
+    },
+  });
+  return {
+    config: { session: { store: storePath } },
+    sessionKey,
+    sessionTarget: { agentId: "main", sessionId: "session-1", sessionKey, storePath },
   };
 }
 
@@ -287,12 +338,7 @@ function codexRateLimitPayload(params: {
   };
 }
 
-function requireRecord(value: unknown, message: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(message);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "message");
 
 function mockCall(mockFn: ReturnType<typeof vi.fn>, callIndex = 0): ReadonlyArray<unknown> {
   const call = mockFn.mock.calls[callIndex];
@@ -387,7 +433,7 @@ describe("codex command", () => {
   });
 
   it("renders the top-level Codex menu as portable native slash commands", async () => {
-    const result = await handleCodexCommand(createContext(""), { deps: createDeps() });
+    const result = await runCommand("");
 
     expectResultTextContains(result, "/codex plugins menu");
     expect(buttonCommands(result)).toEqual([
@@ -403,9 +449,7 @@ describe("codex command", () => {
   it("routes /codex plugins menu to the Codex-owned plugin picker", async () => {
     const codexPluginsManagementIo = inMemoryCodexPluginsIO();
 
-    const result = await handleCodexCommand(createContext("plugins menu"), {
-      deps: createDeps({ codexPluginsManagementIo }),
-    });
+    const result = await runCommand("plugins menu", { codexPluginsManagementIo });
 
     expectResultTextContains(result, "/codex plugins enable");
     expect(buttonCommands(result)).toContain("/codex plugins list");
@@ -420,12 +464,102 @@ describe("codex command", () => {
       },
     });
 
-    const result = await handleCodexCommand(createContext("plugins list"), {
-      deps: createDeps({ codexPluginsManagementIo }),
-    });
+    const result = await runCommand("plugins list", { codexPluginsManagementIo });
 
     expectResultTextContains(result, "ON   google-calendar");
     expectResultTextContains(result, "openclaw.json");
+  });
+
+  it("routes owner-only plugin discovery through the native command boundary with its workspace", async () => {
+    const codexPluginsManagementIo = inMemoryCodexPluginsIO({}, { enabled: false });
+    const codexControlRequest = vi.fn(async () => ({
+      marketplaces: [
+        {
+          name: "company-tools",
+          path: "/company/.agents/plugins/marketplace.json",
+          plugins: [
+            {
+              id: "security-review@company-tools",
+              name: "security-review",
+              installed: false,
+              enabled: false,
+            },
+          ],
+        },
+      ],
+      marketplaceLoadErrors: [],
+      featuredPluginIds: [],
+    }));
+
+    const result = await runCommand(
+      "plugins available",
+      { codexPluginsManagementIo, codexControlRequest },
+      {},
+      { pluginConfig: { appServer: { defaultWorkspaceDir: "/company" } } },
+    );
+
+    expectResultTextContains(result, "security-review@company-tools");
+    expect(codexControlRequest).toHaveBeenCalledWith(
+      { appServer: { defaultWorkspaceDir: "/company" } },
+      "plugin/list",
+      { cwds: ["/company"] },
+      expect.objectContaining({ config: {}, sessionId: "session-1" }),
+    );
+
+    codexControlRequest.mockClear();
+    const denied = await runCommand(
+      "plugins available",
+      { codexPluginsManagementIo, codexControlRequest },
+      { senderIsOwner: false, gatewayClientScopes: ["operator.write"] },
+    );
+    expectResultTextContains(denied, "Only an owner or operator.admin");
+    expect(codexControlRequest).not.toHaveBeenCalled();
+  });
+
+  it("never sends a paired-node workspace to the gateway Codex app-server", async () => {
+    const codexPluginsManagementIo = inMemoryCodexPluginsIO({}, { enabled: false });
+    const codexControlRequest = vi.fn(async () => ({
+      marketplaces: [],
+      marketplaceLoadErrors: [],
+      featuredPluginIds: [],
+    }));
+
+    await runCommand(
+      "plugins available",
+      { codexPluginsManagementIo, codexControlRequest },
+      {
+        getCurrentConversationBinding: async () => ({
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: "/plugin",
+          channel: "test",
+          accountId: "default",
+          conversationId: "conversation",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-cli-node-session",
+            version: 1,
+            nodeId: "paired-node",
+            sessionId: "remote-session",
+            cwd: "/remote/node/private-workspace",
+          },
+        }),
+      },
+      { pluginConfig: { appServer: { defaultWorkspaceDir: "/gateway/workspace" } } },
+    );
+
+    expect(codexControlRequest).toHaveBeenCalledWith(
+      { appServer: { defaultWorkspaceDir: "/gateway/workspace" } },
+      "plugin/list",
+      { cwds: ["/gateway/workspace"] },
+      expect.anything(),
+    );
+    expect(codexControlRequest).not.toHaveBeenCalledWith(
+      expect.anything(),
+      "plugin/list",
+      expect.objectContaining({ cwds: ["/remote/node/private-workspace"] }),
+      expect.anything(),
+    );
   });
 
   it("enables and disables Codex sub-plugins through the /codex plugins command surface", async () => {
@@ -437,14 +571,14 @@ describe("codex command", () => {
       },
     });
 
-    const disabled = await handleCodexCommand(createContext("plugins disable google-calendar"), {
-      deps: createDeps({ codexPluginsManagementIo }),
+    const disabled = await runCommand("plugins disable google-calendar", {
+      codexPluginsManagementIo,
     });
     expectResultTextContains(disabled, "google-calendar: disabled in openclaw.json");
     expect(codexPluginsManagementIo.current()["google-calendar"]?.enabled).toBe(false);
 
-    const enabled = await handleCodexCommand(createContext("plugins enable google-calendar"), {
-      deps: createDeps({ codexPluginsManagementIo }),
+    const enabled = await runCommand("plugins enable google-calendar", {
+      codexPluginsManagementIo,
     });
     expectResultTextContains(enabled, "google-calendar: enabled in openclaw.json");
     expect(codexPluginsManagementIo.currentConfig().enabled).toBe(true);
@@ -496,6 +630,376 @@ describe("codex command", () => {
     });
   });
 
+  it("publishes manual resume ownership on its responding physical client before returning", async () => {
+    const harness = createClientHarness();
+    ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
+    const response = createThreadResumeResponse({ threadId: "thread-owned-resume" });
+    const codexControlRequest = vi.fn(
+      async (
+        _pluginConfig: unknown,
+        _method: string,
+        _params: unknown,
+        options?: {
+          onResponse?: (value: unknown, client: CodexAppServerClient) => Promise<void>;
+        },
+      ) => {
+        await options?.onResponse?.(response, harness.client);
+        return response;
+      },
+    );
+
+    try {
+      const result = await runCommand("resume thread-owned-resume", { codexControlRequest });
+
+      expect(result.text).toContain("Attached this OpenClaw session");
+      await expect(
+        testCodexAppServerBindingStore.read({
+          kind: "session",
+          agentId: "main",
+          sessionId: "session-1",
+        }),
+      ).resolves.toMatchObject({
+        threadId: "thread-owned-resume",
+        clientId: harness.client.getInstanceId(),
+      });
+      await expect(
+        consumeCodexAppServerLiveThread(harness.client, "thread-owned-resume"),
+      ).resolves.toEqual(expect.objectContaining({ release: expect.any(Function) }));
+    } finally {
+      harness.client.close();
+    }
+  });
+
+  it("unsubscribes a manually resumed thread when its idle owner cannot be published", async () => {
+    const harness = createClientHarness();
+    ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
+    const request = vi.spyOn(harness.client, "request").mockResolvedValue({} as never);
+    const oldestRelease = vi.fn(async () => {
+      throw new Error("oldest thread could not be unsubscribed");
+    });
+    await retainCodexAppServerLiveThread(harness.client, "thread-oldest", oldestRelease);
+    for (let index = 1; index < 63; index += 1) {
+      await retainCodexAppServerLiveThread(harness.client, `thread-idle-${index}`);
+    }
+    await retainCodexAppServerLiveThread(harness.client, "thread-existing");
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-1",
+    };
+    await writeTestBinding(identity, {
+      threadId: "thread-existing",
+      clientId: harness.client.getInstanceId(),
+      cwd: "/repo",
+    });
+    const response = createThreadResumeResponse({ threadId: "thread-overflow" });
+    const codexControlRequest = vi.fn(
+      async (
+        _pluginConfig: unknown,
+        _method: string,
+        _params: unknown,
+        options?: {
+          onResponse?: (value: unknown, client: CodexAppServerClient) => Promise<void>;
+        },
+      ) => {
+        await options?.onResponse?.(response, harness.client);
+        return response;
+      },
+    );
+
+    try {
+      const result = await runCommand("resume thread-overflow", { codexControlRequest });
+
+      expect(result.text).toContain("lost its native subscription owner");
+      expect(oldestRelease).toHaveBeenCalledOnce();
+      expect(request).toHaveBeenCalledExactlyOnceWith(
+        "thread/unsubscribe",
+        { threadId: "thread-overflow" },
+        expect.objectContaining({ timeoutMs: expect.any(Number) }),
+      );
+      await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+        threadId: "thread-existing",
+      });
+      await expect(
+        consumeCodexAppServerLiveThread(harness.client, "thread-existing"),
+      ).resolves.toEqual(expect.objectContaining({ release: expect.any(Function) }));
+    } finally {
+      harness.client.close();
+    }
+  });
+
+  it.each([false, true])(
+    "migrates manual resume ownership across physical clients (old release fails: %s)",
+    async (rejectOldRelease) => {
+      const previous = createClientHarness();
+      const replacement = createClientHarness();
+      ensureCodexAppServerClientRuntime(previous.client, { agentDir: tempDir });
+      ensureCodexAppServerClientRuntime(replacement.client, { agentDir: tempDir });
+      const identity = {
+        kind: "session" as const,
+        agentId: "main",
+        sessionId: "session-1",
+      };
+      await writeTestBinding(identity, {
+        threadId: "thread-manual-migration",
+        clientId: previous.client.getInstanceId(),
+        cwd: "/repo",
+      });
+      const operations: string[] = [];
+      const ownerDuringRelease: Array<string | undefined> = [];
+      vi.spyOn(previous.client, "request").mockImplementation(async (method) => {
+        operations.push(`previous:${method}`);
+        ownerDuringRelease.push((await testCodexAppServerBindingStore.read(identity))?.clientId);
+        if (rejectOldRelease) {
+          throw new Error("previous manual owner unsubscribe failed");
+        }
+        return {} as never;
+      });
+      vi.spyOn(replacement.client, "request").mockImplementation(async (method) => {
+        operations.push(`replacement:${method}`);
+        return {} as never;
+      });
+      await expect(
+        retainCodexAppServerLiveThread(previous.client, "thread-manual-migration"),
+      ).resolves.toBe(true);
+      const sharedClientRuntime = await import("./app-server/shared-client.js");
+      const retainPreviousClient = vi
+        .spyOn(sharedClientRuntime, "retainSharedCodexAppServerClientByInstanceId")
+        .mockImplementation((clientId) =>
+          clientId === previous.client.getInstanceId()
+            ? { client: previous.client, release: vi.fn() }
+            : undefined,
+        );
+      const response = createThreadResumeResponse({ threadId: "thread-manual-migration" });
+      const codexControlRequest = vi.fn(
+        async (
+          _pluginConfig: unknown,
+          _method: string,
+          _params: unknown,
+          options?: {
+            onResponse?: (value: unknown, client: CodexAppServerClient) => Promise<void>;
+          },
+        ) => {
+          await options?.onResponse?.(response, replacement.client);
+          return response;
+        },
+      );
+
+      try {
+        const result = await runCommand("resume thread-manual-migration", { codexControlRequest });
+
+        expect(result.text).toContain(
+          rejectOldRelease
+            ? "previous manual owner unsubscribe failed"
+            : "Attached this OpenClaw session",
+        );
+        expect(operations).toEqual(
+          rejectOldRelease
+            ? ["previous:thread/unsubscribe", "replacement:thread/unsubscribe"]
+            : ["previous:thread/unsubscribe"],
+        );
+        expect(ownerDuringRelease).toEqual([previous.client.getInstanceId()]);
+        await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+          threadId: "thread-manual-migration",
+          clientId: rejectOldRelease
+            ? previous.client.getInstanceId()
+            : replacement.client.getInstanceId(),
+        });
+        const survivingClient = rejectOldRelease ? previous.client : replacement.client;
+        const obsoleteClient = rejectOldRelease ? replacement.client : previous.client;
+        await expect(
+          consumeCodexAppServerLiveThread(survivingClient, "thread-manual-migration"),
+        ).resolves.toEqual(expect.objectContaining({ release: expect.any(Function) }));
+        await expect(
+          consumeCodexAppServerLiveThread(obsoleteClient, "thread-manual-migration"),
+        ).resolves.toBeUndefined();
+      } finally {
+        retainPreviousClient.mockRestore();
+        previous.client.close();
+        replacement.client.close();
+      }
+    },
+  );
+
+  it("preserves known native config ownership when manually resuming the same thread", async () => {
+    const harness = createClientHarness();
+    ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-1",
+    };
+    await writeTestBinding(identity, {
+      threadId: "thread-known-resume",
+      clientId: harness.client.getInstanceId(),
+      cwd: "/repo",
+      dynamicToolsFingerprint: "known-dynamic-tools",
+      pluginAppsFingerprint: "known-plugin-apps",
+    });
+    const release = vi.fn(async () => undefined);
+    await retainCodexAppServerLiveThread(
+      harness.client,
+      "thread-known-resume",
+      release,
+      "known-native-config",
+      "priority",
+    );
+    const response = createThreadResumeResponse({ threadId: "thread-known-resume" });
+    const codexControlRequest = vi.fn(
+      async (
+        _pluginConfig: unknown,
+        _method: string,
+        _params: unknown,
+        options?: {
+          onResponse?: (value: unknown, client: CodexAppServerClient) => Promise<void>;
+        },
+      ) => {
+        await options?.onResponse?.(response, harness.client);
+        return response;
+      },
+    );
+
+    try {
+      await expect(
+        runCommand("resume thread-known-resume", { codexControlRequest }),
+      ).resolves.toMatchObject({
+        text: "Attached this OpenClaw session to Codex thread thread-known-resume.",
+      });
+      await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+        dynamicToolsFingerprint: "known-dynamic-tools",
+        pluginAppsFingerprint: "known-plugin-apps",
+      });
+      await expect(
+        consumeCodexAppServerLiveThread(
+          harness.client,
+          "thread-known-resume",
+          "known-native-config",
+        ),
+      ).resolves.toEqual(
+        expect.objectContaining({
+          configFingerprint: "known-native-config",
+          serviceTier: "priority",
+        }),
+      );
+      expect(release).not.toHaveBeenCalled();
+    } finally {
+      harness.client.close();
+    }
+  });
+
+  it.each([
+    { label: "the same", existingThreadId: "thread-active-resume" },
+    { label: "a different", existingThreadId: "thread-existing-resume" },
+  ])(
+    "refuses an active native child while the source session owns $label thread",
+    async ({ existingThreadId }) => {
+      const harness = createClientHarness();
+      ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
+      const response = createThreadResumeResponse({ threadId: "thread-active-resume" });
+      const request = vi.spyOn(harness.client, "request").mockImplementation(async (method) => {
+        if (method === "thread/resume") {
+          return response as never;
+        }
+        if (method === "thread/unsubscribe") {
+          return {} as never;
+        }
+        throw new Error(`unexpected Codex method ${method}`);
+      });
+      const parent = codexNativeSubagentMonitorRuntime.register({
+        client: harness.client,
+        parentThreadId: "thread-parent",
+      });
+      const identity = {
+        kind: "session" as const,
+        agentId: "main",
+        sessionId: "session-1",
+      };
+      await writeTestBinding(identity, {
+        threadId: existingThreadId,
+        clientId: harness.client.getInstanceId(),
+        cwd: "/repo",
+      });
+      if (existingThreadId !== "thread-active-resume") {
+        await retainCodexAppServerLiveThread(harness.client, existingThreadId);
+      }
+      harness.send({
+        method: "thread/started",
+        params: {
+          thread: {
+            id: "thread-active-resume",
+            parentThreadId: "thread-parent",
+            source: {
+              subAgent: {
+                thread_spawn: {
+                  parent_thread_id: "thread-parent",
+                  depth: 1,
+                  agent_path: "thread-active-resume",
+                },
+              },
+            },
+          },
+        },
+      });
+      await vi.waitFor(() =>
+        expect(isCodexAppServerLiveThreadClaimed(harness.client, "thread-active-resume")).toBe(
+          true,
+        ),
+      );
+      const codexControlRequest = vi.fn(
+        async (
+          _pluginConfig: unknown,
+          _method: string,
+          _params: unknown,
+          options?: {
+            onResponse?: (value: unknown, client: CodexAppServerClient) => Promise<void>;
+          },
+        ) => {
+          const resumed = await harness.client.request("thread/resume", {
+            threadId: "thread-active-resume",
+            excludeTurns: true,
+          });
+          await options?.onResponse?.(resumed, harness.client);
+          return response;
+        },
+      );
+
+      try {
+        const result = await runCommand("resume thread-active-resume", { codexControlRequest });
+
+        expect(result.text).toContain("lost its native subscription owner");
+        expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/resume"]);
+        expect(isCodexAppServerLiveThreadClaimed(harness.client, "thread-active-resume")).toBe(
+          true,
+        );
+        await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+          threadId: existingThreadId,
+        });
+        await expect(
+          retainCodexAppServerLiveThread(harness.client, "thread-active-resume"),
+        ).resolves.toBe(false);
+        if (existingThreadId !== "thread-active-resume") {
+          const previousOwnership = await consumeCodexAppServerLiveThread(
+            harness.client,
+            existingThreadId,
+          );
+          expect(previousOwnership).toEqual(
+            expect.objectContaining({ release: expect.any(Function) }),
+          );
+          await expect(
+            retainCodexAppServerLiveThread(
+              harness.client,
+              existingThreadId,
+              previousOwnership?.release,
+            ),
+          ).resolves.toBe(true);
+        }
+      } finally {
+        parent.unregister();
+        harness.client.close();
+      }
+    },
+  );
+
   it("serializes manual resume with other session binding owners", async () => {
     const identity = {
       kind: "session" as const,
@@ -514,9 +1018,7 @@ describe("codex command", () => {
       return response;
     });
 
-    const command = handleCodexCommand(createContext("resume thread-123"), {
-      deps: createDeps({ codexControlRequest }),
-    });
+    const command = runCommand("resume thread-123", { codexControlRequest });
     await vi.waitFor(() => expect(codexControlRequest).toHaveBeenCalledTimes(1));
     const competingOwner = testCodexAppServerBindingStore.withLease(identity, async () => {
       order.push("competing-owner");
@@ -533,6 +1035,26 @@ describe("codex command", () => {
     });
     await competingOwner;
     expect(order).toEqual(["resume-start", "resume-done", "competing-owner"]);
+  });
+
+  it("rejects manual resume of a thread owned by another OpenClaw session", async () => {
+    const otherIdentity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-other",
+    };
+    await writeTestBinding(otherIdentity, { threadId: "thread-owned", cwd: "/other" });
+    const codexControlRequest = vi.fn(async () =>
+      createThreadResumeResponse({ threadId: "thread-owned" }),
+    );
+
+    const result = await runCommand("resume thread-owned", { codexControlRequest });
+
+    expect(result.text).toContain("owned by another OpenClaw session");
+    expect(codexControlRequest).not.toHaveBeenCalled();
+    await expect(testCodexAppServerBindingStore.read(otherIdentity)).resolves.toMatchObject({
+      threadId: "thread-owned",
+    });
   });
 
   it("reclaims an unloaded plugin's stale generation before attaching a thread", async () => {
@@ -947,9 +1469,7 @@ describe("codex command", () => {
       },
     }));
 
-    const result = await handleCodexCommand(createContext("sessions --host mb-m5 bridge"), {
-      deps: createDeps({ listCodexCliSessionsOnNode }),
-    });
+    const result = await runCommand("sessions --host mb-m5 bridge", { listCodexCliSessionsOnNode });
 
     expect(result.text).toContain("Codex CLI sessions on mb-m5 / mb-m5:");
     expect(result.text).toContain("019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd");
@@ -972,9 +1492,7 @@ describe("codex command", () => {
       },
     }));
 
-    await handleCodexCommand(createContext("sessions --host mb-m5 --limit +05 bridge"), {
-      deps: createDeps({ listCodexCliSessionsOnNode }),
-    });
+    await runCommand("sessions --host mb-m5 --limit +05 bridge", { listCodexCliSessionsOnNode });
 
     expect(listCodexCliSessionsOnNode).toHaveBeenCalledWith({
       requestedNode: "mb-m5",
@@ -986,8 +1504,8 @@ describe("codex command", () => {
   it("rejects partial Codex CLI session limits before node dispatch", async () => {
     const listCodexCliSessionsOnNode = vi.fn();
 
-    const result = await handleCodexCommand(createContext("sessions --host mb-m5 --limit 5x"), {
-      deps: createDeps({ listCodexCliSessionsOnNode }),
+    const result = await runCommand("sessions --host mb-m5 --limit 5x", {
+      listCodexCliSessionsOnNode,
     });
 
     expect(result.text).toBe("Usage: /codex sessions --host <node> [filter] [--limit <n>]");
@@ -997,8 +1515,8 @@ describe("codex command", () => {
   it("rejects fractional Codex CLI session limits before node dispatch", async () => {
     const listCodexCliSessionsOnNode = vi.fn();
 
-    const result = await handleCodexCommand(createContext("sessions --host mb-m5 --limit 5.5"), {
-      deps: createDeps({ listCodexCliSessionsOnNode }),
+    const result = await runCommand("sessions --host mb-m5 --limit 5.5", {
+      listCodexCliSessionsOnNode,
     });
 
     expect(result.text).toBe("Usage: /codex sessions --host <node> [filter] [--limit <n>]");
@@ -1556,9 +2074,7 @@ describe("codex command", () => {
         },
       });
 
-    const result = await handleCodexCommand(createContext("account"), {
-      deps: createDeps({ safeCodexControlRequest }),
-    });
+    const result = await runCommand("account", { safeCodexControlRequest });
 
     expect(result.text).toContain("Account: codex@example.com");
     expect(result.text).toContain("Codex is available.");
@@ -1580,9 +2096,7 @@ describe("codex command", () => {
       .mockResolvedValueOnce({ ok: false as const, error: unsafe })
       .mockResolvedValueOnce({ ok: false as const, error: unsafe });
 
-    const result = await handleCodexCommand(createContext("account"), {
-      deps: createDeps({ safeCodexControlRequest }),
-    });
+    const result = await runCommand("account", { safeCodexControlRequest });
 
     expect(result.text).toContain(
       "&lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09 \uff20here",
@@ -1629,9 +2143,7 @@ describe("codex command", () => {
         },
       });
 
-    const result = await handleCodexCommand(createContext("account"), {
-      deps: createDeps({ safeCodexControlRequest }),
-    });
+    const result = await runCommand("account", { safeCodexControlRequest });
 
     expect(result.text).toContain("Codex is paused until ");
     expect(result.text).toContain("Your weekly Codex usage limit is reached.");
@@ -1702,9 +2214,7 @@ describe("codex command", () => {
         }),
       });
 
-    const result = await handleCodexCommand(createContext("account", undefined, { config }), {
-      deps: createDeps({ safeCodexControlRequest }),
-    });
+    const result = await runCommand("account", { safeCodexControlRequest }, { config });
 
     expect(result.text).toContain("Subscription  personal-email@gmail.com");
     expect(result.text).toContain("\n  Weekly 63% \u00b7 Short-term 12%");
@@ -1769,9 +2279,7 @@ describe("codex command", () => {
         }),
       });
 
-    const result = await handleCodexCommand(createContext("account", undefined, { config }), {
-      deps: createDeps({ safeCodexControlRequest }),
-    });
+    const result = await runCommand("account", { safeCodexControlRequest }, { config });
 
     expect(result.text).toContain(
       "\n  1. personal-email@gmail.com   ChatGPT subscription   — active now",
@@ -1834,9 +2342,7 @@ describe("codex command", () => {
         }),
       });
 
-    const result = await handleCodexCommand(createContext("account", undefined, { config }), {
-      deps: createDeps({ safeCodexControlRequest }),
-    });
+    const result = await runCommand("account", { safeCodexControlRequest }, { config });
 
     expect(result.text).toContain(
       "\n  1. personal-email@gmail.com   ChatGPT subscription   — active now",
@@ -2024,9 +2530,7 @@ describe("codex command", () => {
         }),
       });
 
-    const result = await handleCodexCommand(createContext("account", undefined, { config }), {
-      deps: createDeps({ safeCodexControlRequest }),
-    });
+    const result = await runCommand("account", { safeCodexControlRequest }, { config });
 
     expect(result.text).toContain("Now using: api-key-backup");
     expect(result.text).toContain("subscription rate-limited");
@@ -2091,9 +2595,7 @@ describe("codex command", () => {
         }),
       });
 
-    const result = await handleCodexCommand(createContext("account", undefined, { config }), {
-      deps: createDeps({ safeCodexControlRequest }),
-    });
+    const result = await runCommand("account", { safeCodexControlRequest }, { config });
 
     expect(result.text).toContain(
       "\n  1. fresh-email@example.com   ChatGPT subscription   — active now",
@@ -2146,9 +2648,7 @@ describe("codex command", () => {
         error: "usage data unavailable",
       });
 
-    const result = await handleCodexCommand(createContext("account", undefined, { config }), {
-      deps: createDeps({ safeCodexControlRequest }),
-    });
+    const result = await runCommand("account", { safeCodexControlRequest }, { config });
 
     expect(result.text).toContain("\n  1. fresh-key   API key   — active now");
     expect(result.text).not.toContain("stale-key   API key   — active now");
@@ -2209,9 +2709,7 @@ describe("codex command", () => {
         error: "subscription limits unavailable",
       });
 
-    const result = await handleCodexCommand(createContext("account", undefined, { config }), {
-      deps: createDeps({ safeCodexControlRequest }),
-    });
+    const result = await runCommand("account", { safeCodexControlRequest }, { config });
 
     // With all credentials expired, no profile is active — the display shows
     // "no working credential" and both profiles are labelled "sign-in expired".
@@ -2235,9 +2733,7 @@ describe("codex command", () => {
       .mockResolvedValueOnce({ ok: true as const, value: { account: { id: unsafe } } })
       .mockResolvedValueOnce({ ok: true as const, value: [] });
 
-    const result = await handleCodexCommand(createContext("account"), {
-      deps: createDeps({ safeCodexControlRequest }),
-    });
+    const result = await runCommand("account", { safeCodexControlRequest });
 
     expect(result.text).toContain(
       "&lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09 \uff20here",
@@ -2256,21 +2752,19 @@ describe("codex command", () => {
       })
       .mockResolvedValueOnce({ ok: true, value: [] });
 
-    await expect(
-      handleCodexCommand(createContext("account"), {
-        deps: createDeps({ safeCodexControlRequest }),
-      }),
-    ).resolves.toEqual({
+    await expect(runCommand("account", { safeCodexControlRequest })).resolves.toEqual({
       text: ["Account: Amazon Bedrock", "Rate limits: none returned"].join("\n\n"),
     });
   });
 
-  it("starts compaction for the attached Codex thread", async () => {
+  it("compacts the current session through the host runtime", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
+    const runtime = await createCodexRuntimeContextOverrides();
     const identity = {
       kind: "session",
       agentId: "main",
       sessionId: "session-1",
+      sessionKey: runtime.sessionKey,
     } as const;
     await writeTestBinding(identity, {
       threadId: "thread-123",
@@ -2288,18 +2782,101 @@ describe("codex command", () => {
     });
     const codexControlRequest = vi.fn(async () => undefined);
     const deps = createDeps({ codexControlRequest });
+    const compactCurrent = vi.fn(async () => ({
+      compacted: true,
+      tokensBefore: 900,
+      tokensAfter: 321,
+    }));
 
     await expect(
-      handleCodexCommand(createContext("compact", sessionFile), { deps }),
+      handleCodexCommand(
+        createContext("compact", sessionFile, {
+          ...runtime,
+          runtimeContext: { compactCurrent },
+        }),
+        { deps },
+      ),
     ).resolves.toEqual({
-      text: "Started Codex compaction for thread thread-123.",
+      text: "Compacted Codex session (321 tokens after).",
     });
-    expect(codexControlRequest).toHaveBeenCalledWith(
-      undefined,
-      CODEX_CONTROL_METHODS.compact,
-      { threadId: "thread-123" },
-      expect.objectContaining({ config: {} }),
+    expect(compactCurrent).toHaveBeenCalledOnce();
+    expect(codexControlRequest).not.toHaveBeenCalled();
+  });
+
+  it("rejects a Codex binding on a non-Codex session runtime", async () => {
+    const sessionKey = "agent:main:test:mixed-runtime";
+    const storePath = path.join(tempDir, "mixed-runtime-sessions.json");
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        agentHarnessId: "openclaw",
+      },
+    });
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1", sessionKey },
+      { threadId: "thread-codex", cwd: "/repo" },
     );
+    const compactCurrent = vi.fn(async () => ({ compacted: true, tokensAfter: 321 }));
+
+    const result = await handleCodexCommand(
+      createContext("compact", undefined, {
+        config: { session: { store: storePath } },
+        sessionKey,
+        sessionTarget: { agentId: "main", sessionId: "session-1", sessionKey, storePath },
+        runtimeContext: { compactCurrent },
+      }),
+      { deps: createDeps() },
+    );
+
+    expect(result.text).toContain("not using the Codex runtime");
+    expect(compactCurrent).not.toHaveBeenCalled();
+  });
+
+  it("rejects a conversation-bound thread that differs from the current session", async () => {
+    const runtime = await createCodexRuntimeContextOverrides();
+    await writeTestBinding(
+      {
+        kind: "session",
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: runtime.sessionKey,
+      },
+      { threadId: "thread-session", clientId: "client-session", cwd: "/repo" },
+    );
+    await writeTestBinding(
+      { kind: "conversation", bindingId: "binding-data-1" },
+      { threadId: "thread-conversation", clientId: "client-conversation", cwd: "/repo" },
+    );
+    const compactCurrent = vi.fn(async () => ({ compacted: true, tokensAfter: 321 }));
+
+    const result = await handleCodexCommand(
+      createContext("compact", undefined, {
+        ...runtime,
+        runtimeContext: { compactCurrent },
+        getCurrentConversationBinding: async () => ({
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: "/plugin",
+          channel: "test",
+          accountId: "default",
+          conversationId: "conversation",
+          boundAt: 1,
+          data: {
+            kind: "codex-app-server-session",
+            version: 2,
+            bindingId: "binding-data-1",
+            workspaceDir: "/repo",
+          },
+        }),
+      }),
+      { deps: createDeps() },
+    );
+
+    expect(result.text).toContain("conversation-bound thread differs");
+    expect(compactCurrent).not.toHaveBeenCalled();
   });
 
   it("starts review with the generated app-server target shape", async () => {
@@ -2326,18 +2903,32 @@ describe("codex command", () => {
   });
 
   it("starts supervised compact and review actions through the native user-home connection", async () => {
+    const runtime = await createCodexRuntimeContextOverrides();
     await writeTestBinding(
-      { kind: "session", agentId: "main", sessionId: "session-1" },
+      {
+        kind: "session",
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: runtime.sessionKey,
+      },
       supervisedTestBinding(),
     );
     const codexControlRequest = vi.fn(async () => undefined);
     const pluginConfig = { supervision: { enabled: true } };
     const deps = createDeps({ codexControlRequest });
 
-    await handleCodexCommand(createContext("compact"), { deps, pluginConfig });
-    await handleCodexCommand(createContext("review"), { deps, pluginConfig });
+    await handleCodexCommand(
+      createContext("compact", undefined, {
+        ...runtime,
+        runtimeContext: {
+          compactCurrent: async () => ({ compacted: true, tokensAfter: 321 }),
+        },
+      }),
+      { deps, pluginConfig },
+    );
+    await handleCodexCommand(createContext("review", undefined, runtime), { deps, pluginConfig });
 
-    expect(codexControlRequest).toHaveBeenCalledTimes(2);
+    expect(codexControlRequest).toHaveBeenCalledTimes(1);
     for (let callIndex = 0; callIndex < codexControlRequest.mock.calls.length; callIndex += 1) {
       expect(mockArg(codexControlRequest, callIndex, 3)).toMatchObject({
         authProfileId: null,
@@ -2367,15 +2958,29 @@ describe("codex command", () => {
     expect(codexControlRequest).not.toHaveBeenCalled();
   });
 
-  it("escapes started thread-action ids before chat display", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
+  it("escapes compaction failure reasons before chat display", async () => {
+    const runtime = await createCodexRuntimeContextOverrides();
     await writeTestBinding(
-      { kind: "session", agentId: "main", sessionId: "session-1" },
-      { threadId: "thread-123 <@U123>", cwd: "/repo" },
+      {
+        kind: "session",
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: runtime.sessionKey,
+      },
+      { threadId: "thread-123", cwd: "/repo" },
     );
-    const result = await handleCodexCommand(createContext("compact", sessionFile), {
-      deps: createDeps(),
-    });
+    const result = await handleCodexCommand(
+      createContext("compact", undefined, {
+        ...runtime,
+        runtimeContext: {
+          compactCurrent: async () => ({
+            compacted: false,
+            reason: "thread-123 <@U123>",
+          }),
+        },
+      }),
+      { deps: createDeps() },
+    );
 
     expect(result.text).toContain("thread-123 &lt;\uff20U123&gt;");
     expect(result.text).not.toContain("<@U123>");
@@ -2437,9 +3042,7 @@ describe("codex command", () => {
         "Computer Use live test failed after 2 attempts: list_apps timed out Startup is allowed because computerUse.strictReadiness is false.",
     }));
 
-    const result = await handleCodexCommand(createContext("computer-use status"), {
-      deps: createDeps({ readCodexComputerUseStatus }),
-    });
+    const result = await runCommand("computer-use status", { readCodexComputerUseStatus });
 
     expectResultTextContains(result, "Computer Use: not ready");
     expectResultTextContains(result, "Live test: failed (2 attempts, 60000ms)");
@@ -2456,9 +3059,7 @@ describe("codex command", () => {
       message: "Computer Use is ready @here.",
     }));
 
-    const result = await handleCodexCommand(createContext("computer-use status"), {
-      deps: createDeps({ readCodexComputerUseStatus }),
-    });
+    const result = await runCommand("computer-use status", { readCodexComputerUseStatus });
 
     expect(result.text).toContain("Plugin: &lt;\uff20U123&gt; (installed)");
     expect(result.text).toContain(
@@ -2486,9 +3087,7 @@ describe("codex command", () => {
         "Computer Use is installed, but the computer-use plugin is disabled. Run /codex computer-use install or enable computerUse.autoInstall to re-enable it.",
     }));
 
-    const result = await handleCodexCommand(createContext("computer-use status"), {
-      deps: createDeps({ readCodexComputerUseStatus }),
-    });
+    const result = await runCommand("computer-use status", { readCodexComputerUseStatus });
 
     expectResultTextContains(result, "Plugin: computer-use (installed, disabled)");
   });
@@ -2521,9 +3120,7 @@ describe("codex command", () => {
   it("shows help when Computer Use option values are missing", async () => {
     const installCodexComputerUse = vi.fn(async () => computerUseReadyStatus());
 
-    const result = await handleCodexCommand(createContext("computer-use install --source"), {
-      deps: createDeps({ installCodexComputerUse }),
-    });
+    const result = await runCommand("computer-use install --source", { installCodexComputerUse });
 
     expectResultTextContains(result, "Usage: /codex computer-use");
     expect(installCodexComputerUse).not.toHaveBeenCalled();
@@ -2590,8 +3187,9 @@ describe("codex command", () => {
     const readCodexComputerUseStatus = vi.fn(async () => computerUseReadyStatus());
     const installCodexComputerUse = vi.fn(async () => computerUseReadyStatus());
 
-    const result = await handleCodexCommand(createContext("computer-use status install"), {
-      deps: createDeps({ readCodexComputerUseStatus, installCodexComputerUse }),
+    const result = await runCommand("computer-use status install", {
+      readCodexComputerUseStatus,
+      installCodexComputerUse,
     });
 
     expectResultTextContains(result, "Usage: /codex computer-use");
@@ -2599,14 +3197,39 @@ describe("codex command", () => {
     expect(installCodexComputerUse).not.toHaveBeenCalled();
   });
 
-  it("explains compaction when no Codex thread is attached", async () => {
+  it("requires a Codex thread binding before host compaction", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
+    const runtime = await createCodexRuntimeContextOverrides();
+    const compactCurrent = vi.fn(async () => ({ compacted: true, tokensAfter: 321 }));
 
     await expect(
-      handleCodexCommand(createContext("compact", sessionFile), { deps: createDeps() }),
+      handleCodexCommand(
+        createContext("compact", sessionFile, {
+          ...runtime,
+          runtimeContext: { compactCurrent },
+        }),
+        { deps: createDeps() },
+      ),
     ).resolves.toEqual({
       text: "No Codex thread is attached to this OpenClaw session yet.",
     });
+    expect(compactCurrent).not.toHaveBeenCalled();
+  });
+
+  it("rejects host compaction without a complete captured session target", async () => {
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      { threadId: "thread-123", cwd: "/repo" },
+    );
+    const compactCurrent = vi.fn(async () => ({ compacted: true, tokensAfter: 321 }));
+
+    const result = await handleCodexCommand(
+      createContext("compact", undefined, { runtimeContext: { compactCurrent } }),
+      { deps: createDeps() },
+    );
+
+    expect(result.text).toContain("not bound to a complete session identity");
+    expect(compactCurrent).not.toHaveBeenCalled();
   });
 
   it("asks before sending diagnostics feedback for the attached Codex thread", async () => {
@@ -4143,11 +4766,7 @@ describe("codex command", () => {
     );
     const codexControlRequest = vi.fn();
 
-    await expect(
-      handleCodexCommand(createContext("goal __proto__"), {
-        deps: createDeps({ codexControlRequest }),
-      }),
-    ).resolves.toEqual({
+    await expect(runCommand("goal __proto__", { codexControlRequest })).resolves.toEqual({
       text: "Usage: /codex goal [status|set <objective>|pause|resume|block|complete|clear]",
     });
     expect(codexControlRequest).not.toHaveBeenCalled();
@@ -4240,8 +4859,14 @@ describe("codex command", () => {
 
   it("returns sanitized command failures instead of leaking app-server errors", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
+    const runtime = await createCodexRuntimeContextOverrides();
     await writeTestBinding(
-      { kind: "session", agentId: "main", sessionId: "session-1" },
+      {
+        kind: "session",
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: runtime.sessionKey,
+      },
       { threadId: "thread-123", cwd: "/repo" },
     );
     const failure = () => {
@@ -4262,14 +4887,24 @@ describe("codex command", () => {
       ["mcp", createDeps({ codexControlRequest: vi.fn(failure) })],
       ["skills", createDeps({ codexControlRequest: vi.fn(failure) })],
       ["resume thread-123", createDeps({ codexControlRequest: vi.fn(failure) })],
-      ["compact", createDeps({ codexControlRequest: vi.fn(failure) })],
       ["review", createDeps({ codexControlRequest: vi.fn(failure) })],
       ["stop", createDeps({ stopCodexConversationTurn: vi.fn(failure) })],
       ["steer keep going", createDeps({ steerCodexConversationTurn: vi.fn(failure) })],
       ["model gpt-5.4", createDeps({ setCodexConversationModel: vi.fn(failure) })],
     ] as const) {
-      expectSanitizedFailure(await handleCodexCommand(createContext(args, sessionFile), { deps }));
+      expectSanitizedFailure(
+        await handleCodexCommand(createContext(args, sessionFile, runtime), { deps }),
+      );
     }
+    expectSanitizedFailure(
+      await handleCodexCommand(
+        createContext("compact", sessionFile, {
+          ...runtime,
+          runtimeContext: { compactCurrent: vi.fn(failure) },
+        }),
+        { deps: createDeps() },
+      ),
+    );
   });
 
   it("records an approved Codex bind intent without starting a thread", async () => {
@@ -4697,12 +5332,207 @@ describe("codex command", () => {
 
   it("detaches the current conversation and clears the Codex app-server thread binding", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    const clearBinding = vi.fn(async () => true);
-    const detachConversationBinding = vi.fn(async () => ({ removed: true }));
+    const ownershipOrder: string[] = [];
+    const identity = { kind: "conversation" as const, bindingId: "binding-data-1" };
+    const harness = createClientHarness();
+    ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
+    const releaseNativeThread = vi
+      .spyOn(harness.client, "request")
+      .mockImplementation(async (method) => {
+        if (method !== "thread/unsubscribe") {
+          throw new Error(`unexpected Codex method ${method}`);
+        }
+        ownershipOrder.push("native-release");
+        return {} as never;
+      });
+    await retainCodexAppServerLiveThread(harness.client, "thread-detached");
+    const clearBinding = vi.fn(
+      async (...args: Parameters<typeof testCodexAppServerBindingStore.mutate>) => {
+        ownershipOrder.push("native-clear");
+        return await testCodexAppServerBindingStore.mutate(...args);
+      },
+    );
+    const detachConversationBinding = vi.fn(async () => {
+      ownershipOrder.push("public");
+      return { removed: true };
+    });
+    await writeTestBinding(identity, {
+      threadId: "thread-detached",
+      clientId: harness.client.getInstanceId(),
+      cwd: "/repo",
+    });
+    const sharedClientRuntime = await import("./app-server/shared-client.js");
+    const retainClient = vi
+      .spyOn(sharedClientRuntime, "retainSharedCodexAppServerClientByInstanceId")
+      .mockReturnValue({ client: harness.client, release: vi.fn() });
 
-    await expect(
-      handleCodexCommand(
-        createContext("detach", sessionFile, {
+    try {
+      await expect(
+        handleCodexCommand(
+          createContext("detach", sessionFile, {
+            detachConversationBinding,
+            getCurrentConversationBinding: async () => ({
+              bindingId: "binding-1",
+              pluginId: "codex",
+              pluginRoot: "/plugin",
+              channel: "test",
+              accountId: "default",
+              conversationId: "conversation",
+              boundAt: 1,
+              data: {
+                kind: "codex-app-server-session",
+                version: 2,
+                bindingId: "binding-data-1",
+                workspaceDir: "/repo",
+              },
+            }),
+          }),
+          {
+            deps: createDeps({
+              bindingStore: { ...testCodexAppServerBindingStore, mutate: clearBinding },
+            }),
+          },
+        ),
+      ).resolves.toEqual({
+        text: "Detached this conversation from Codex.",
+      });
+      expect(detachConversationBinding).toHaveBeenCalled();
+      expect(clearBinding).toHaveBeenCalledWith(identity, {
+        kind: "clear",
+        threadId: "thread-detached",
+      });
+      expect(releaseNativeThread).toHaveBeenCalledWith(
+        "thread/unsubscribe",
+        { threadId: "thread-detached" },
+        expect.objectContaining({ timeoutMs: expect.any(Number) }),
+      );
+      expect(ownershipOrder).toEqual(["native-release", "native-clear", "public"]);
+    } finally {
+      retainClient.mockRestore();
+      harness.client.close();
+    }
+  });
+
+  it.each([
+    {
+      label: "an incognito source bound into an ordinary destination",
+      sourceSessionKey: "agent:main:dashboard:incognito-source",
+      destinationSessionKey: "agent:main:discord:ordinary-destination",
+      unsubscribes: true,
+    },
+    {
+      label: "an ordinary source bound into an incognito destination",
+      sourceSessionKey: "agent:main:discord:ordinary-source",
+      destinationSessionKey: "agent:main:dashboard:incognito-destination",
+      unsubscribes: false,
+    },
+    {
+      label: "a missing source bound into an incognito destination",
+      sourceSessionKey: undefined,
+      destinationSessionKey: "agent:main:dashboard:incognito-destination",
+      unsubscribes: false,
+    },
+  ])(
+    "retires untracked detach ownership from $label using its source session",
+    async ({ sourceSessionKey, destinationSessionKey, unsubscribes }) => {
+      const identity = { kind: "conversation" as const, bindingId: "binding-mixed-session" };
+      await writeTestBinding(identity, {
+        threadId: "thread-mixed-session",
+        clientId: "client-mixed-session",
+        cwd: "/repo",
+      });
+      const request = vi.fn(async () => ({}));
+      const releaseClient = vi.fn();
+      const sharedClientRuntime = await import("./app-server/shared-client.js");
+      const retainClient = vi
+        .spyOn(sharedClientRuntime, "retainSharedCodexAppServerClientByInstanceId")
+        .mockReturnValue({
+          client: { request } as unknown as CodexAppServerClient,
+          release: releaseClient,
+        });
+      const detachConversationBinding = vi.fn(async () => ({ removed: true }));
+
+      try {
+        await expect(
+          handleCodexCommand(
+            createContext("detach", undefined, {
+              sessionKey: destinationSessionKey,
+              detachConversationBinding,
+              getCurrentConversationBinding: async () => ({
+                bindingId: "binding-public",
+                pluginId: "codex",
+                pluginRoot: "/plugin",
+                channel: "test",
+                accountId: "default",
+                conversationId: "conversation",
+                boundAt: 1,
+                data: {
+                  kind: "codex-app-server-session",
+                  version: 2,
+                  bindingId: identity.bindingId,
+                  workspaceDir: "/repo",
+                  ...(sourceSessionKey
+                    ? {
+                        source: {
+                          agentId: "main",
+                          sessionId: "session-source",
+                          sessionKey: sourceSessionKey,
+                          threadId: "thread-source",
+                        },
+                      }
+                    : {}),
+                },
+              }),
+            }),
+            { deps: createDeps() },
+          ),
+        ).resolves.toEqual({ text: "Detached this conversation from Codex." });
+
+        if (unsubscribes) {
+          expect(request).toHaveBeenCalledExactlyOnceWith(
+            "thread/unsubscribe",
+            { threadId: "thread-mixed-session" },
+            expect.objectContaining({ timeoutMs: expect.any(Number) }),
+          );
+        } else {
+          expect(request).not.toHaveBeenCalled();
+        }
+        expect(releaseClient).toHaveBeenCalledOnce();
+        expect(detachConversationBinding).toHaveBeenCalledOnce();
+        await expect(testCodexAppServerBindingStore.read(identity)).resolves.toBeUndefined();
+      } finally {
+        retainClient.mockRestore();
+      }
+    },
+  );
+
+  it("preserves the public conversation binding when native retirement fails", async () => {
+    const identity = { kind: "conversation" as const, bindingId: "binding-data-1" };
+    const harness = createClientHarness();
+    ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
+    await writeTestBinding(identity, {
+      threadId: "thread-detached",
+      clientId: harness.client.getInstanceId(),
+      cwd: "/repo",
+    });
+    const detachConversationBinding = vi.fn(async () => ({ removed: true }));
+    const releaseNativeThread = vi
+      .spyOn(harness.client, "request")
+      .mockImplementation(async (method) => {
+        if (method !== "thread/unsubscribe") {
+          throw new Error(`unexpected Codex method ${method}`);
+        }
+        throw new Error("Codex native thread subscription could not be released");
+      });
+    await retainCodexAppServerLiveThread(harness.client, "thread-detached");
+    const sharedClientRuntime = await import("./app-server/shared-client.js");
+    const retainClient = vi
+      .spyOn(sharedClientRuntime, "retainSharedCodexAppServerClientByInstanceId")
+      .mockReturnValue({ client: harness.client, release: vi.fn() });
+
+    try {
+      const result = await handleCodexCommand(
+        createContext("detach", undefined, {
           detachConversationBinding,
           getCurrentConversationBinding: async () => ({
             bindingId: "binding-1",
@@ -4715,25 +5545,330 @@ describe("codex command", () => {
             data: {
               kind: "codex-app-server-session",
               version: 2,
-              bindingId: "binding-data-1",
+              bindingId: identity.bindingId,
               workspaceDir: "/repo",
+            },
+          }),
+        }),
+        { deps: createDeps() },
+      );
+
+      expect(result.text).toContain("native thread subscription could not be released");
+      expect(releaseNativeThread).toHaveBeenCalledOnce();
+      expect(detachConversationBinding).not.toHaveBeenCalled();
+      await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+        threadId: "thread-detached",
+        clientId: harness.client.getInstanceId(),
+        cwd: "/repo",
+      });
+      await expect(
+        consumeCodexAppServerLiveThread(harness.client, "thread-detached"),
+      ).resolves.toEqual(expect.objectContaining({ release: expect.any(Function) }));
+    } finally {
+      retainClient.mockRestore();
+      harness.client.close();
+    }
+  });
+
+  it.each([
+    {
+      label: "returns false",
+      throws: false,
+      message: "changed while detaching",
+    },
+    {
+      label: "throws",
+      throws: true,
+      message: "native durable binding clear failed",
+    },
+  ])(
+    "preserves the public conversation when durable native clear $label",
+    async ({ throws, message }) => {
+      const identity = { kind: "conversation" as const, bindingId: "binding-clear-failure" };
+      const harness = createClientHarness();
+      ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
+      const releaseNativeThread = vi
+        .spyOn(harness.client, "request")
+        .mockResolvedValue({} as never);
+      await retainCodexAppServerLiveThread(harness.client, "thread-clear-failure");
+      const originalBinding = {
+        threadId: "thread-clear-failure",
+        clientId: harness.client.getInstanceId(),
+        cwd: tempDir,
+        conversationStartId: "start-clear-failure",
+      } satisfies CodexAppServerThreadBinding;
+      await writeTestBinding(identity, originalBinding);
+      const mutate = vi.fn(
+        async (...args: Parameters<typeof testCodexAppServerBindingStore.mutate>) => {
+          if (args[1].kind === "clear") {
+            if (throws) {
+              throw new Error("native durable binding clear failed");
+            }
+            return false;
+          }
+          return await testCodexAppServerBindingStore.mutate(...args);
+        },
+      );
+      const detachConversationBinding = vi.fn(async () => ({ removed: true }));
+      const sharedClientRuntime = await import("./app-server/shared-client.js");
+      const retainClient = vi
+        .spyOn(sharedClientRuntime, "retainSharedCodexAppServerClientByInstanceId")
+        .mockReturnValue({ client: harness.client, release: vi.fn() });
+
+      try {
+        const result = await handleCodexCommand(
+          createContext("detach", undefined, {
+            detachConversationBinding,
+            getCurrentConversationBinding: async () => ({
+              bindingId: "binding-public-clear-failure",
+              pluginId: "codex",
+              pluginRoot: tempDir,
+              channel: "test",
+              accountId: "default",
+              conversationId: "conversation",
+              boundAt: 1,
+              data: {
+                kind: "codex-app-server-session",
+                version: 2,
+                bindingId: identity.bindingId,
+                workspaceDir: tempDir,
+                start: { id: originalBinding.conversationStartId },
+              },
+            }),
+          }),
+          {
+            deps: createDeps({
+              bindingStore: { ...testCodexAppServerBindingStore, mutate },
+            }),
+          },
+        );
+
+        expect(result.text).toContain(message);
+        expect(releaseNativeThread).toHaveBeenCalledOnce();
+        expect(mutate).toHaveBeenCalledOnce();
+        expect(detachConversationBinding).not.toHaveBeenCalled();
+        await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject(
+          originalBinding,
+        );
+      } finally {
+        retainClient.mockRestore();
+        harness.client.close();
+      }
+    },
+  );
+
+  it("resumes the original native thread after public conversation detachment fails", async () => {
+    const identity = { kind: "conversation" as const, bindingId: "binding-detach-recovery" };
+    const harness = createClientHarness();
+    ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
+    const operations: string[] = [];
+    const request = vi
+      .spyOn(harness.client, "request")
+      .mockImplementation(async (method, params) => {
+        operations.push(method);
+        if (method === "thread/unsubscribe") {
+          return {} as never;
+        }
+        if (method === "thread/resume") {
+          return createThreadResumeResponse({
+            threadId: "thread-original-context",
+            cwd: tempDir,
+          }) as never;
+        }
+        if (method === "turn/start") {
+          queueMicrotask(() => {
+            harness.send({
+              method: "turn/completed",
+              params: {
+                threadId: "thread-original-context",
+                turn: {
+                  id: "turn-original-context",
+                  status: "completed",
+                  items: [{ type: "agentMessage", id: "answer", text: "Original context kept" }],
+                },
+              },
+            });
+          });
+          return { turn: { id: "turn-original-context" } } as never;
+        }
+        throw new Error(`unexpected Codex method ${method}: ${JSON.stringify(params)}`);
+      });
+    await retainCodexAppServerLiveThread(harness.client, "thread-original-context");
+    const originalBinding = {
+      threadId: "thread-original-context",
+      clientId: harness.client.getInstanceId(),
+      cwd: tempDir,
+      conversationStartId: "start-original-context",
+      historyCoveredThrough: "2026-01-01T00:00:00.000Z",
+    } satisfies CodexAppServerThreadBinding;
+    await writeTestBinding(identity, originalBinding);
+    const publicBinding = {
+      bindingId: "binding-public-original-context",
+      pluginId: "codex",
+      pluginRoot: tempDir,
+      channel: "test",
+      accountId: "default",
+      conversationId: "conversation",
+      boundAt: 1,
+      data: {
+        kind: "codex-app-server-session" as const,
+        version: 2 as const,
+        bindingId: identity.bindingId,
+        workspaceDir: tempDir,
+        start: { id: originalBinding.conversationStartId },
+      },
+    };
+    const detachConversationBinding = vi.fn(async () => {
+      throw new Error("public conversation binding store write failed");
+    });
+    const mutate = vi.fn(
+      async (...args: Parameters<typeof testCodexAppServerBindingStore.mutate>) =>
+        await testCodexAppServerBindingStore.mutate(...args),
+    );
+    const sharedClientRuntime = await import("./app-server/shared-client.js");
+    const retainClient = vi
+      .spyOn(sharedClientRuntime, "retainSharedCodexAppServerClientByInstanceId")
+      .mockReturnValue({ client: harness.client, release: vi.fn() });
+    const acquireClient = vi
+      .spyOn(sharedClientRuntime, "getLeasedSharedCodexAppServerClient")
+      .mockResolvedValue(harness.client);
+    const resolvePublic = vi
+      .spyOn(getSessionBindingService(), "resolveByConversation")
+      .mockReturnValue({ bindingId: publicBinding.bindingId } as never);
+
+    try {
+      const result = await handleCodexCommand(
+        createContext("detach", undefined, {
+          detachConversationBinding,
+          getCurrentConversationBinding: async () => publicBinding,
+        }),
+        {
+          deps: createDeps({
+            bindingStore: { ...testCodexAppServerBindingStore, mutate },
+          }),
+        },
+      );
+
+      expect(result.text).toContain("public conversation binding store write failed");
+      expect(operations).toEqual(["thread/unsubscribe"]);
+      expect(mutate.mock.calls.map(([, mutation]) => mutation.kind)).toEqual(["clear", "set"]);
+      expect(mutate).toHaveBeenLastCalledWith(identity, {
+        kind: "set",
+        binding: originalBinding,
+        if: { kind: "absent" },
+      });
+      await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject(
+        originalBinding,
+      );
+
+      await expect(
+        codexConversationBindingRuntime.handleInboundClaim(
+          {
+            content: "continue original task",
+            bodyForAgent: "continue original task",
+            channel: "test",
+            isGroup: false,
+            commandAuthorized: true,
+            senderIsOwner: true,
+          },
+          { channelId: "test", pluginBinding: publicBinding },
+          { bindingStore: testCodexAppServerBindingStore, timeoutMs: 500 },
+        ),
+      ).resolves.toEqual({
+        handled: true,
+        reply: { text: "Original context kept" },
+      });
+      expect(operations).toEqual(["thread/unsubscribe", "thread/resume", "turn/start"]);
+      expect(request.mock.calls.find(([method]) => method === "thread/resume")?.[1]).toMatchObject({
+        threadId: originalBinding.threadId,
+      });
+      expect(request.mock.calls.find(([method]) => method === "turn/start")?.[1]).toMatchObject({
+        threadId: originalBinding.threadId,
+        cwd: originalBinding.cwd,
+      });
+      await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+        threadId: originalBinding.threadId,
+        conversationStartId: originalBinding.conversationStartId,
+        historyCoveredThrough: originalBinding.historyCoveredThrough,
+      });
+    } finally {
+      resolvePublic.mockRestore();
+      acquireClient.mockRestore();
+      retainClient.mockRestore();
+      harness.client.close();
+    }
+  });
+
+  it.each([
+    { label: "returns false", throws: false },
+    { label: "throws", throws: true },
+  ])("shows actionable thread recovery when public detach rollback $label", async ({ throws }) => {
+    const identity = { kind: "conversation" as const, bindingId: "binding-rollback-failure" };
+    const harness = createClientHarness();
+    ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
+    const releaseNativeThread = vi.spyOn(harness.client, "request").mockResolvedValue({} as never);
+    await retainCodexAppServerLiveThread(harness.client, "thread-rollback-failure");
+    await writeTestBinding(identity, {
+      threadId: "thread-rollback-failure",
+      clientId: harness.client.getInstanceId(),
+      cwd: tempDir,
+    });
+    const mutate = vi.fn(
+      async (...args: Parameters<typeof testCodexAppServerBindingStore.mutate>) => {
+        if (args[1].kind === "set") {
+          if (throws) {
+            throw new Error("native durable binding restore failed");
+          }
+          return false;
+        }
+        return await testCodexAppServerBindingStore.mutate(...args);
+      },
+    );
+    const detachConversationBinding = vi.fn(async () => {
+      throw new Error("public conversation binding store write failed");
+    });
+    const sharedClientRuntime = await import("./app-server/shared-client.js");
+    const retainClient = vi
+      .spyOn(sharedClientRuntime, "retainSharedCodexAppServerClientByInstanceId")
+      .mockReturnValue({ client: harness.client, release: vi.fn() });
+
+    try {
+      const result = await handleCodexCommand(
+        createContext("detach", undefined, {
+          detachConversationBinding,
+          getCurrentConversationBinding: async () => ({
+            bindingId: "binding-public-rollback-failure",
+            pluginId: "codex",
+            pluginRoot: tempDir,
+            channel: "test",
+            accountId: "default",
+            conversationId: "conversation",
+            boundAt: 1,
+            data: {
+              kind: "codex-app-server-session",
+              version: 2,
+              bindingId: identity.bindingId,
+              workspaceDir: tempDir,
             },
           }),
         }),
         {
           deps: createDeps({
-            bindingStore: { ...testCodexAppServerBindingStore, mutate: clearBinding },
+            bindingStore: { ...testCodexAppServerBindingStore, mutate },
           }),
         },
-      ),
-    ).resolves.toEqual({
-      text: "Detached this conversation from Codex.",
-    });
-    expect(detachConversationBinding).toHaveBeenCalled();
-    expect(clearBinding).toHaveBeenCalledWith(
-      { kind: "conversation", bindingId: "binding-data-1" },
-      { kind: "clear" },
-    );
+      );
+
+      expect(result.text).toContain("native thread thread-rollback-failure could not be restored");
+      expect(result.text).toContain("/codex resume thread-rollback-failure");
+      expect(releaseNativeThread).toHaveBeenCalledOnce();
+      expect(detachConversationBinding).toHaveBeenCalledOnce();
+      expect(mutate.mock.calls.map(([, mutation]) => mutation.kind)).toEqual(["clear", "set"]);
+      await expect(testCodexAppServerBindingStore.read(identity)).resolves.toBeUndefined();
+    } finally {
+      retainClient.mockRestore();
+      harness.client.close();
+    }
   });
 
   it("rejects malformed detach commands before clearing bindings", async () => {
@@ -5008,6 +6143,38 @@ describe("codex command", () => {
     );
     expect(result.text).not.toContain("<@U123>");
     expect(result.text).not.toContain("[trusted](https://evil)");
+  });
+
+  it("reports a conversation-bound model without an OpenClaw session identity", async () => {
+    await writeTestBinding(
+      { kind: "conversation", bindingId: "binding-data-1" },
+      { threadId: "thread-conversation", cwd: "/repo", model: "bound-model" },
+    );
+
+    const result = await handleCodexCommand(
+      createContext("model", undefined, {
+        sessionId: undefined,
+        sessionKey: undefined,
+        getCurrentConversationBinding: async () => ({
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: "/plugin",
+          channel: "test",
+          accountId: "default",
+          conversationId: "conversation",
+          boundAt: 1,
+          data: {
+            kind: "codex-app-server-session",
+            version: 2,
+            bindingId: "binding-data-1",
+            workspaceDir: tempDir,
+          },
+        }),
+      }),
+      { deps: createDeps() },
+    );
+
+    expect(result).toEqual({ text: "Codex model: bound-model" });
   });
 
   it("rejects malformed model commands before persisting the model", async () => {

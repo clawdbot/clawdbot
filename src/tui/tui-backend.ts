@@ -7,6 +7,7 @@ import type {
   SessionsPatchParams,
   SessionsPatchResult,
   TaskSuggestion,
+  TaskSuggestionsAcceptParams,
   TaskSuggestionsAcceptResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { ResponseUsageMode, SessionInfo, SessionScope } from "./tui-types.js";
@@ -33,8 +34,11 @@ export type TuiApprovalDecision = "allow-once" | "allow-always" | "deny";
 
 type TuiTaskSuggestionActionCapabilities = {
   canAccept: boolean;
+  canAcceptModes: boolean;
   canDismiss: boolean;
 };
+
+export type TuiTaskSuggestionAcceptMode = NonNullable<TaskSuggestionsAcceptParams["mode"]>;
 
 export type TuiPluginApproval = {
   id: string;
@@ -87,6 +91,7 @@ export type TuiSessionList = {
       | "thinkingLevels"
       | "fastMode"
       | "verboseLevel"
+      | "traceLevel"
       | "reasoningLevel"
       | "model"
       | "contextTokens"
@@ -133,6 +138,7 @@ export type TuiAgentsList = {
   scope: SessionScope;
   agents: Array<{
     id: string;
+    kind?: "agent" | "system";
     name?: string;
   }>;
 };
@@ -180,6 +186,7 @@ export type TuiBackend = {
   };
   onEvent?: (evt: TuiEvent) => void;
   onConnected?: () => void;
+  onConnectError?: (error: Error) => void;
   onDisconnected?: (reason: string) => void;
   onGap?: (info: { expected: number; received: number }) => void;
   start: () => void;
@@ -209,7 +216,14 @@ export type TuiBackend = {
   resolvePluginApproval?: (id: string, decision: TuiApprovalDecision) => Promise<{ ok?: boolean }>;
   getTaskSuggestionActionCapabilities?: () => TuiTaskSuggestionActionCapabilities;
   listTaskSuggestions?: () => Promise<TaskSuggestion[]>;
-  acceptTaskSuggestion?: (taskId: string) => Promise<TaskSuggestionsAcceptResult>;
+  listCloudWorkerProfiles?: () => Promise<string[]>;
+  acceptTaskSuggestion?: (
+    taskId: string,
+    mode?: TuiTaskSuggestionAcceptMode,
+    cloudProfileId?: string,
+  ) => Promise<TaskSuggestionsAcceptResult>;
   dismissTaskSuggestion?: (taskId: string) => Promise<{ taskId: string; dismissed: boolean }>;
-  runGoalCommand?: (opts: TuiGoalCommandOptions) => Promise<{ text: string }>;
+  runGoalCommand?: (
+    opts: TuiGoalCommandOptions,
+  ) => Promise<{ text: string; continuationPrompt?: string }>;
 };

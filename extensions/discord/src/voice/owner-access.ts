@@ -10,25 +10,20 @@ export function resolveDiscordVoiceAccess(params: {
 }): {
   admissionAllowFrom: string[];
   ownerAllowFrom: string[];
-  ownerAllowAll: boolean;
 } {
   const commandOwnerAllowFrom = resolveDiscordCommandOwnerAllowFrom(params.cfg);
   if (commandOwnerAllowFrom) {
-    const allowAll = commandOwnerAllowFrom.includes("*");
     return {
       admissionAllowFrom: commandOwnerAllowFrom,
       ownerAllowFrom: commandOwnerAllowFrom,
-      ownerAllowAll: allowAll,
     };
   }
   const admissionAllowFrom =
     resolveDiscordAccountAllowFrom({ cfg: params.cfg, accountId: params.accountId }) ??
     params.discordConfig.allowFrom ??
-    params.discordConfig.dm?.allowFrom ??
     [];
   return {
     admissionAllowFrom,
     ownerAllowFrom: [],
-    ownerAllowAll: false,
   };
 }

@@ -84,11 +84,12 @@ cat ~/.openclaw/openclaw.json
 `openclaw doctor --fix`. They share the same Doctor rule registry, but they do
 not select or act on rules in the same way:
 
-| Mode                     | Prompts   | Writes config/state     | Output                 | Use it for                      |
-| ------------------------ | --------- | ----------------------- | ---------------------- | ------------------------------- |
-| `openclaw doctor`        | yes       | no                      | friendly health report | a human checking status         |
-| `openclaw doctor --fix`  | sometimes | yes, with repair policy | friendly repair log    | applying approved repairs       |
-| `openclaw doctor --lint` | no        | no                      | structured findings    | CI, preflight, and review gates |
+| Mode                     | Prompts   | Writes config/state     | Output                 | Use it for                       |
+| ------------------------ | --------- | ----------------------- | ---------------------- | -------------------------------- |
+| `openclaw doctor`        | yes       | no                      | friendly health report | a human checking status          |
+| `openclaw doctor --json` | no        | no                      | JSON advisory report   | machine-readable operator checks |
+| `openclaw doctor --fix`  | sometimes | yes, with repair policy | friendly repair log    | applying approved repairs        |
+| `openclaw doctor --lint` | no        | no                      | structured findings    | CI, preflight, and review gates  |
 
 Default `doctor --lint` runs the broad-safe automation profile: checks that are
 static, local, and useful in CI or preflight output. It skips opt-in checks that
@@ -134,13 +135,15 @@ Exit codes:
 | `1`  | one or more findings met the selected threshold          |
 | `2`  | command/runtime failure before findings could be emitted |
 
+These threshold-based exit codes belong to explicit `--lint` mode, with or without `--json`. Bare `openclaw doctor --json` preserves ordinary Doctor's advisory exit `0` after producing its payload; machine consumers should read `ok` and `findings`. Fatal errors before output remain nonzero.
+
 Flags:
 
 - `--severity-min info|warning|error` (default `warning`): controls both what prints and what causes a non-zero exit.
 - `--all`: runs every registered lint check, including opt-in checks excluded from the default automation set.
 - `--only <id>` (repeatable): run only the named check id(s); an unknown id is reported as an error finding.
 - `--skip <id>` (repeatable): exclude a check while keeping the rest of the run active.
-- `--json`, `--severity-min`, `--all`, `--only`, and `--skip` require `--lint`; plain `openclaw doctor` and `--fix` runs reject them.
+- `--severity-min`, `--all`, `--only`, and `--skip` require `--lint`. Bare `--json` is allowed for an advisory machine-readable report; `--fix` rejects it unless another machine mode owns the output.
 
 ## What it does (summary)
 
@@ -155,15 +158,17 @@ Flags:
   <Accordion title="Config and migrations">
     - Config normalization for legacy value shapes.
     - Talk config migration from legacy flat `talk.*` fields into `talk.provider` + `talk.providers.<provider>`.
-    - Browser migration checks for legacy Chrome extension configs and Chrome MCP readiness.
+    - Browser migration checks for legacy Chrome extension configs, owned native-bootstrap registration drift, and Chrome MCP readiness.
     - OpenCode provider override warnings (`models.providers.opencode` / `opencode-zen` / `opencode-go`).
     - Legacy OpenAI Codex provider/profile migration (`openai-codex` → `openai`) and shadowing warnings for stale `models.providers.openai-codex`.
     - OAuth TLS prerequisites check for OpenAI Codex OAuth profiles.
     - Plugin/tool allowlist warnings when `plugins.allow` is restrictive but tool policy still asks for wildcard or plugin-owned tools.
     - Legacy on-disk state migration (sessions/agent dir/WhatsApp auth).
+    - Retired QMD memory config and derived workspace cleanup; see [Migrating from QMD](/concepts/memory-builtin#migrating-from-qmd).
     - Legacy plugin manifest contract key migration (`speechProviders`, `realtimeTranscriptionProviders`, `realtimeVoiceProviders`, `mediaUnderstandingProviders`, `imageGenerationProviders`, `videoGenerationProviders`, `webFetchProviders`, `webSearchProviders` → `contracts`).
     - Legacy cron store migration (`jobId`, `schedule.cron`, top-level delivery/payload fields, payload `provider`, `notify: true` webhook fallback jobs).
-    - Codex CLI runtime pin repair (`agentRuntime.id: "codex-cli"` → `"codex"`) across `agents.defaults`, `agents.list[]`, and `models.providers.*` (including per-model entries).
+    - Legacy workspace `TOOLS.md` migration into the `## Tools` section of `AGENTS.md`, with the original archived under the state directory before removal.
+    - Codex CLI runtime pin repair (`agentRuntime.id: "codex-cli"` → `"codex"`) across `agents.defaults`, `agents.entries.*`, and `models.providers.*` (including per-model entries).
     - Stale plugin config cleanup when plugins are enabled; when `plugins.enabled=false`, stale plugin references are preserved as inert containment config.
 
   </Accordion>
@@ -202,7 +207,7 @@ Flags:
     - Workspace bootstrap file size check (truncation/near-limit warnings for context files).
     - Skills readiness check for the default agent; reports allowed skills with missing bins, env, config, or OS requirements, and `--fix` can disable unavailable skills in `skills.entries`.
     - Shell completion status check and auto-install/upgrade.
-    - Memory search embedding provider readiness check (local model, remote API key, or QMD binary).
+    - Memory search embedding provider readiness check (local model or remote API key).
     - Source install checks (pnpm workspace mismatch, missing UI assets, missing tsx binary).
     - Writes updated config + wizard metadata.
 
@@ -267,8 +272,14 @@ That stages grounded durable candidates into the short-term dreaming store while
     | `session.threadBindings.ttlHours`, `channels.<id>.threadBindings.ttlHours` (and per-account)      | `...threadBindings.idleHours`                                               |
     | legacy `talk.voiceId`/`talk.voiceAliases`/`talk.modelId`/`talk.outputFormat`/`talk.apiKey`        | `talk.provider` + `talk.providers.<provider>`                               |
     | legacy top-level realtime Talk selectors (`talk.mode`/`talk.transport`/`talk.brain`/`talk.model`/`talk.voice`) | `talk.realtime`                                                              |
-    | `messages.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`)                             | `messages.tts.providers.<provider>`                                          |
-    | `messages.tts.provider: "edge"` / `messages.tts.providers.edge`                                  | `messages.tts.provider: "microsoft"` / `messages.tts.providers.microsoft`   |
+    | `messages.tts`                                                                                  | top-level `tts`                                                              |
+    | `messages.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`)                             | `tts.providers.<provider>`                                                   |
+    | `messages.tts.provider: "edge"` / `messages.tts.providers.edge`                                  | `tts.provider: "microsoft"` / `tts.providers.microsoft`                    |
+    | `tools.exec.security` + `tools.exec.ask`                                                         | `tools.exec.mode`                                                            |
+    | `session.idleMinutes`                                                                            | `session.reset.idleMinutes`                                                  |
+    | `messages.responsePrefix` with explicit channel blocks                                           | copied to configured channel/account `responsePrefix`; global fallback retained for implicit/custom channels |
+    | `web.enabled`                                                                                    | `channels.whatsapp.enabled`                                                  |
+    | `meta.lastTouchedAt`, hook installs, cron store, bundled discovery, global TTS prefs path            | shared SQLite state                                                       |
     | TTS speaker fields `voice`/`voiceName`/`voiceId`                                                 | `speakerVoice`/`speakerVoiceId`                                              |
     | `channels.<id>.tts.<provider>` / `channels.<id>.accounts.<accountId>.tts.<provider>` (all channels except Discord)                                          | `...tts.providers.<provider>`                                                |
     | `channels.<id>.voice.tts.<provider>` / `channels.<id>.accounts.<accountId>.voice.tts.<provider>` (all channels, including Discord)                          | `...voice.tts.providers.<provider>`                                          |
@@ -280,9 +291,38 @@ That stages grounded durable candidates into the short-term dreaming store while
     | `plugins.entries.voice-call.config.streaming.openaiApiKey`/`sttModel`/`silenceDurationMs`/`vadThreshold` | `plugins.entries.voice-call.config.streaming.providers.openai.*`             |
     | `models.providers.*.api: "openai"`                                                               | `"openai-completions"` (gateway startup also skips providers whose `api` is a future/unknown enum value rather than failing closed) |
     | `browser.ssrfPolicy.allowPrivateNetwork`                                                         | `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork`                          |
-    | `browser.profiles.*.driver: "extension"`                                                         | `"existing-session"`                                                          |
+    | `browser.profiles.*.driver: "extension"` with a stale `cdpUrl`                                  | driver preserved; stale relay URL removed                                     |
     | `browser.relayBindHost`                                                                          | removed (legacy Chrome extension relay setting)                             |
     | `mcp.servers.*.type` (CLI-native aliases)                                                        | `mcp.servers.*.transport`                                                    |
+    | `mcp.servers.*.disabled`                                                                         | inverse `mcp.servers.*.enabled`                                              |
+    | MCP timeout aliases `connectTimeout`/`connect_timeout`/`timeout`                                 | `connectionTimeoutMs`/`requestTimeoutMs`                                    |
+    | MCP snake-case server fields                                                                     | camelCase MCP server fields                                                   |
+    | `tools.media.image/audio/video.models`                                                           | capability-tagged `tools.media.models`                                        |
+    | `tools.media.asyncCompletion`                                                                    | removed                                                                       |
+    | `tools.message.allowCrossContextSend`                                                            | `tools.message.crossContext`                                                  |
+    | media model `deepgram` options                                                                   | `providerOptions.deepgram`                                                    |
+    | `talk.realtime.voice`, Discord realtime `voice`                                                 | `speakerVoice`                                                                |
+    | `agents.defaults.pdfMaxBytesMb`                                                                  | `agents.defaults.pdfMaxMb`                                                    |
+    | `tools.exec.timeoutSec`                                                                          | `tools.exec.timeoutSeconds`                                                   |
+    | `browser.ssrfPolicy.hostnameAllowlist`                                                           | wildcard-aware `browser.ssrfPolicy.allowedHostnames`                          |
+    | sandbox browser `enableNoVnc`                                                                    | `noVncEnabled`                                                                |
+    | root `media`                                                                                     | `attachments`                                                                |
+    | channel/account `heartbeat` visibility blocks                                                   | `heartbeatVisibility`                                                         |
+    | `channels.slack.identity`                                                                        | `channels.slack.postAs`                                                       |
+    | root `audit`                                                                                     | `logging.audit`                                                               |
+    | `gateway.nodes.skills.enabled`                                                                   | `gateway.nodes.allowSkills`                                                   |
+    | `gateway.nodes.allowCommands`/`denyCommands`                                                    | `gateway.nodes.commands.allow`/`deny`                                         |
+    | generation model defaults                                                                       | `agents.defaults.mediaModels.{image,video,music}`                              |
+    | retired final-layout tuning knobs                                                               | built-in default behavior                                                     |
+    | `channels.whatsapp.messagePrefix` and legacy `messages.messagePrefix`                            | `channels.whatsapp.responsePrefix`                                            |
+    | `channels.whatsapp.ackReaction`                                                                  | global `messages.ackReaction` and `ackReactionScope` where translatable        |
+    | `cron.failureDestination`                                                                        | destination fields on `cron.failureAlert`                                     |
+    | `gateway.controlUi.chatMessageMaxWidth`, presentation-only `ui.prefs` keys                       | removed (text scale, chat width, and live sidebar activity are browser-local) |
+    | `agents.list`                                                                                    | keyed `agents.entries`                                                        |
+    | top-level `defaultModel`                                                                         | `agents.defaults.model`                                                      |
+    | `messages.messagePrefix`                                                                         | `channels.whatsapp.responsePrefix`                                            |
+    | `session.maintenance.pruneDays`, `session.resetByType.dm`                                        | `session.maintenance.pruneAfter`, `session.resetByType.direct`               |
+    | top-level `tui`                                                                                  | removed (the TUI footer uses the compact default)                            |
     | `plugins.entries.codex.config.codexDynamicToolsProfile`                                          | removed (Codex app-server always keeps Codex-native workspace tools native) |
     | `commands.modelsWrite`                                                                           | removed (`/models add` is deprecated)                                       |
     | `agents.defaults/list[].silentReplyRewrite`, `surfaces.*.silentReplyRewrite`                     | removed (exact `NO_REPLY` is no longer rewritten to visible fallback text)  |
@@ -290,14 +330,15 @@ That stages grounded durable candidates into the short-term dreaming store while
     | `agents.defaults/list[].embeddedPi`                                                              | `embeddedAgent`                                                              |
     | `agents.defaults/list[].sandbox.perSession`                                                      | `sandbox.scope`                                                              |
     | `agents.defaults.llm`                                                                             | removed (use `models.providers.<id>.timeoutSeconds` for slow model/provider timeouts, kept below the agent/run timeout ceiling) |
-    | top-level `memorySearch`                                                                         | `agents.defaults.memorySearch`                                              |
+    | top-level `memorySearch`, `agents.defaults.memorySearch`                                         | `memory.search`                                                             |
+    | `agents.entries.*.memorySearch`                                                                     | `agents.entries.*.memory.search`                                               |
     | `memorySearch.provider: "auto"`                                                                  | `"openai"`                                                                    |
     | `memorySearch.store.path` (any level)                                                            | removed (memory indexes live in each agent database)                       |
     | top-level `heartbeat`                                                                            | `agents.defaults.heartbeat` / `channels.defaults.heartbeat`                 |
     | `plugins.openai-codex` policy ids                                                                | `plugins.openai`                                                             |
     | `tools.web.x_search.apiKey`                                                                      | `plugins.entries.xai.config.webSearch.apiKey`                               |
     | `session.maintenance.rotateBytes`, `session.parentForkMaxTokens`                                 | removed (deprecated)                                                        |
-    | `diagnostics.memoryPressureBundle`                                                               | `diagnostics.memoryPressureSnapshot`                                        |
+    | Runtime and channel tuning knobs retired in 2026.7                                               | removed (built-in production defaults apply)                               |
 
     <Note>
       The `plugins.entries.voice-call.config.*` rows above are normalized by
@@ -315,10 +356,18 @@ That stages grounded durable candidates into the short-term dreaming store while
 
   </Accordion>
   <Accordion title="2b. OpenCode provider overrides">
-    If you have added `models.providers.opencode`, `opencode-zen`, or `opencode-go` manually, it overrides the built-in OpenCode catalog from `openclaw/plugin-sdk/llm`. That can force models onto the wrong API or zero out costs. Doctor warns so you can remove the override and restore per-model API routing + costs.
+    If you have added `models.providers.opencode`, `opencode-zen`, or `opencode-go` manually while the matching official external plugin is installed and enabled, it overrides that plugin-provided catalog. That can force models onto the wrong API or zero out costs. Doctor warns so you can remove the override and restore per-model API routing + costs. Without the matching plugin, the entry remains a valid standalone custom provider.
   </Accordion>
   <Accordion title="2c. Browser migration and Chrome MCP readiness">
-    If your browser config still points at the removed Chrome extension path, doctor normalizes it to the current host-local Chrome MCP attach model (`browser.profiles.*.driver: "extension"` → `"existing-session"`; `browser.relayBindHost` removed).
+    If an extension-driver profile still carries a retired relay `cdpUrl`, doctor removes that URL while preserving `driver: "extension"`; the current extension relay owns its endpoint. Doctor also removes the retired `browser.relayBindHost` setting.
+
+    Doctor warns while `browser.extensionRelay.allowLegacyAuth` is enabled. Upgrade paired Chrome extensions and external CDP clients to Browser Relay Authentication v2, then set the flag to `false`. V2 clients do not downgrade to legacy authentication.
+
+    When a stable Chrome extension copy and owned native-host registration already
+    exist, doctor reports registration drift. `openclaw doctor --fix` may repair
+    that owned registration, but it never installs the host for every OpenClaw
+    user and never overwrites a foreign same-name manifest or launcher. Use
+    `openclaw browser extension install` for the initial setup.
 
     Doctor also audits the host-local Chrome MCP path when you use `defaultProfile: "user"` or a configured `existing-session` profile:
 
@@ -348,7 +397,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     - Existing provider/model runtime policy is preserved unless the repaired legacy model ref needs Codex routing to keep the old auth path.
     - Existing model fallback lists are preserved with their legacy entries rewritten; copied per-model settings move from the legacy key to the canonical `openai/*` key.
     - Persisted session `modelProvider`/`providerOverride`, `model`/`modelOverride`, fallback notices, and auth-profile pins are repaired across all discovered agent session stores.
-    - Doctor separately repairs stale `agentRuntime.id: "codex-cli"` pins (a distinct legacy runtime id) to `"codex"` across `agents.defaults`, `agents.list[]`, and `models.providers.*` model entries.
+    - Doctor separately repairs stale `agentRuntime.id: "codex-cli"` pins (a distinct legacy runtime id) to `"codex"` across `agents.defaults`, `agents.entries.*`, and `models.providers.*` model entries.
     - `/codex ...` means "control or bind a native Codex conversation from chat."
     - `/acp ...` or `runtime: "acp"` means "use the external ACP/acpx adapter."
 
@@ -365,15 +414,18 @@ That stages grounded durable candidates into the short-term dreaming store while
     - Sessions store + transcripts: from `~/.openclaw/sessions/` to `~/.openclaw/agents/<agentId>/sessions/`
     - Agent dir: from `~/.openclaw/agent/` to `~/.openclaw/agents/<agentId>/agent/`
     - WhatsApp auth state (Baileys): from legacy `~/.openclaw/credentials/*.json` (except `oauth.json`) to `~/.openclaw/credentials/whatsapp/<accountId>/...` (default account id: `default`)
+    - Signed device identity: from `~/.openclaw/identity/device.json` into the `primary` `device_identities` row in `state/openclaw.sqlite`; the separate device-auth file is left untouched
 
     These migrations are best-effort and idempotent; doctor emits warnings when it leaves any legacy folders behind as backups. The Gateway/CLI also auto-migrates the legacy sessions + agent dir on startup so history/auth/models land in the per-agent path without a manual doctor run. WhatsApp auth is intentionally only migrated via `openclaw doctor`. Talk provider/provider-map normalization compares by structural equality, so key-order-only diffs no longer trigger repeat no-op `doctor --fix` changes.
+
+    When an explicit roster no longer contains `main`, OpenClaw migrates durable `agent:main:*` SQLite rows only if the replacement owner is unambiguous: the sole roster member or the configured upgrade owner in `agents.defaults.sessionStore.agentId`. The explicit owner works for both per-agent and fixed session stores; fixed-store runtime ownership remains scoped to that physical store. Conflicting canonical or alias rows are preserved during startup and reported with a Doctor hint. `openclaw doctor --fix` first imports any legacy JSON session store, then keeps the winning canonical claim and renames each losing claim to `agent:<owner>:legacy-main-conflict-<n>` in its original database. Quarantine changes only the key; the entry and full transcript remain available for inspection or archival.
 
   </Accordion>
   <Accordion title="3a. Legacy plugin manifest migrations">
     Doctor scans all installed plugin manifests for deprecated top-level capability keys (`speechProviders`, `realtimeTranscriptionProviders`, `realtimeVoiceProviders`, `mediaUnderstandingProviders`, `imageGenerationProviders`, `videoGenerationProviders`, `webFetchProviders`, `webSearchProviders`). When found, it offers to move them into the `contracts` object and rewrite the manifest file in-place. This migration is idempotent; if `contracts` already has the same values, the legacy key is removed without duplicating data.
   </Accordion>
   <Accordion title="3b. Legacy cron store migrations">
-    Doctor also checks the cron job store (`~/.openclaw/cron/jobs.json` by default, or `cron.store` when overridden) for old job shapes that the scheduler still accepts for compatibility.
+    Doctor also checks the legacy cron job store (`~/.openclaw/cron/jobs.json`) for old job shapes before importing canonical rows into SQLite.
 
     Current cron cleanups include:
 
@@ -382,11 +434,11 @@ That stages grounded durable candidates into the short-term dreaming store while
     - top-level payload fields (`message`, `model`, `thinking`, ...) → `payload`
     - top-level delivery fields (`deliver`, `channel`, `to`, `provider`, ...) → `delivery`
     - payload `provider` delivery aliases → explicit `delivery.channel`
-    - legacy `notify: true` webhook fallback jobs → explicit webhook delivery from `cron.webhook` when set; announce jobs keep their chat delivery and get `delivery.completionDestination`. When `cron.webhook` is unset, the inert top-level `notify` marker is removed for no-target jobs (existing delivery, including announce, is preserved) since runtime delivery never reads it.
+    - legacy `notify: true` webhook fallback jobs → explicit webhook delivery from the retired raw `cron.webhook` value when valid; announce jobs keep their chat delivery and get `delivery.completionDestination`. Doctor then removes the old config key. Without a usable legacy webhook, the inert top-level `notify` marker is removed for no-target jobs (existing delivery, including announce, is preserved) since runtime delivery never reads it.
 
-    The Gateway also sanitizes malformed cron rows at load time so valid jobs keep running. Raw malformed rows are copied to `jobs-quarantine.json` next to the active store before removal from `jobs.json`; doctor reports quarantined rows so you can review or repair them manually.
+    The Gateway also sanitizes malformed cron rows at load time so valid jobs keep running. Malformed rows are quarantined in the shared SQLite state database in the same transaction that removes them from active scheduling; doctor reports those records and imports any `jobs-quarantine.json` sidecars left by older releases.
 
-    Gateway startup normalizes the runtime projection and ignores the top-level `notify` marker, but leaves the persisted cron config for doctor repair. When `cron.webhook` is unset, doctor removes the inert marker for jobs with no migration target (`delivery.mode` none/absent, an unusable webhook target, or existing announce/chat delivery), leaving existing delivery untouched, so repeated `doctor --fix` runs no longer re-warn about the same job. If `cron.webhook` is set but not a valid HTTP(S) URL, doctor still warns and leaves the marker so you can fix the URL.
+    Gateway startup normalizes the runtime projection and ignores the top-level `notify` marker, but leaves persisted cron state for doctor repair. Doctor removes inert markers for jobs with no migration target (`delivery.mode` none/absent, an unusable legacy webhook target, or existing announce/chat delivery), leaving existing delivery untouched, so repeated `doctor --fix` runs no longer re-warn about the same job.
 
     On Linux, doctor also warns when the user's crontab still invokes legacy `~/.openclaw/bin/ensure-whatsapp.sh`. That host-local script is not maintained by current OpenClaw and can write false `Gateway inactive` messages to `~/.openclaw/logs/whatsapp-health.log` when cron cannot reach the systemd user bus. Remove the stale crontab entry with `crontab -e`; use `openclaw channels status --probe`, `openclaw doctor`, and `openclaw gateway status` for current health checks.
 
@@ -521,9 +573,8 @@ That stages grounded durable candidates into the short-term dreaming store while
     Doctor runs a health check and offers to restart the gateway when it looks unhealthy.
   </Accordion>
   <Accordion title="13b. Memory search readiness">
-    Doctor checks whether the configured memory search embedding provider is ready for the default agent. The behavior depends on the configured backend and provider:
+    Doctor checks whether the configured memory search embedding provider is ready for the default agent. The behavior depends on the configured provider:
 
-    - **QMD backend**: probes whether the `qmd` binary is available and startable. If not, prints fix guidance including `npm install -g @tobilu/qmd` (or the Bun equivalent) and a manual binary path option.
     - **Explicit local provider**: checks for a local model file or a recognized remote/downloadable model URL. If missing, suggests switching to a remote provider.
     - **Explicit remote provider** (`openai`, `voyage`, etc.): verifies an API key is present in the environment or auth store. Prints actionable fix hints if missing.
     - **Legacy auto provider**: treats `memorySearch.provider: "auto"` as OpenAI, checks OpenAI readiness, and `doctor --fix` rewrites it to `provider: "openai"`.
@@ -546,6 +597,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     - `openclaw doctor --fix` applies recommended fixes without prompts (`--repair` is an alias).
     - `openclaw doctor --fix --force` overwrites custom supervisor configs.
     - `OPENCLAW_SERVICE_REPAIR_POLICY=external` keeps doctor read-only for gateway service lifecycle. It still reports service health and runs non-service repairs, but skips service install/start/restart/bootstrap, supervisor config rewrites, and legacy service cleanup because an external supervisor owns that lifecycle.
+    - On macOS, a same-label system LaunchDaemon blocks user LaunchAgent install, start, restart, and bootstrap repair. Doctor reports the system owner and stops service recovery; `--force` does not bypass this ownership boundary. See [Existing system LaunchDaemons](/gateway#existing-system-launchdaemons).
     - On Linux, doctor does not rewrite command/entrypoint metadata while the matching systemd gateway unit is active. It also ignores inactive non-legacy extra gateway-like units during the duplicate-service scan so companion service files do not create cleanup noise.
     - If token auth requires a token and `gateway.auth.token` is SecretRef-managed, doctor service install/repair validates the SecretRef but does not persist resolved plaintext token values into supervisor service environment metadata.
     - Doctor detects managed `.env`/SecretRef-backed service environment values that older LaunchAgent, systemd, or Windows Scheduled Task installs embedded inline and rewrites the service metadata so those values load from the runtime source instead of the supervisor definition.

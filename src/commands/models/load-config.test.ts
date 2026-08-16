@@ -88,6 +88,15 @@ describe("models load-config", () => {
     expect(mocks.setRuntimeConfigSnapshot).toHaveBeenCalledWith(resolvedConfig, sourceConfig);
   });
 
+  it("can read core model config without loading plugin schemas", async () => {
+    const sourceConfig = { models: { providers: {} } };
+    mockResolvedConfigFlow({ sourceConfig, diagnostics: [] });
+
+    await loadModelsConfig({ commandName: "models status", skipPluginValidation: true });
+
+    expect(mocks.getRuntimeConfig).toHaveBeenCalledWith({ skipPluginValidation: true });
+  });
+
   it("does not reread config when no source snapshot is pinned", async () => {
     mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
     mocks.getRuntimeConfigSourceSnapshot.mockReturnValue(null);

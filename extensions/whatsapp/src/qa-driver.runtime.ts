@@ -2,13 +2,18 @@
 import type { ConnectionState, proto, WAMessage } from "baileys";
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import {
+  asBoolean,
+  isRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
   describeReplyContext,
   extractContextInfo,
   extractLocationData,
   extractText,
+  findMessageSection,
 } from "./inbound/extract.js";
 import { resolveInboundMediaMimetype } from "./inbound/media-mimetype.js";
-import { normalizeMessageContent } from "./inbound/runtime-api.js";
 import { createWebSendApi } from "./inbound/send-api.js";
 import type { ActiveWebSendOptions } from "./inbound/types.js";
 import { isWhatsAppGroupJid } from "./normalize-target.js";
@@ -73,14 +78,16 @@ type WhatsAppQaDriverSendReactionOptions = {
   participant?: string;
 };
 
+type WhatsAppQaDriverSendResult = Promise<{ messageId?: string }>;
+
 export type WhatsAppQaDriverSession = {
-  close: () => Promise<void>;
-  getObservedMessages: () => WhatsAppQaDriverObservedMessage[];
-  sendContact: (
+  close(): Promise<void>;
+  getObservedMessages(): WhatsAppQaDriverObservedMessage[];
+  sendContact(
     to: string,
     contact: { displayName: string; vcard: string },
-  ) => Promise<{ messageId?: string }>;
-  sendLocation: (
+  ): WhatsAppQaDriverSendResult;
+  sendLocation(
     to: string,
     location: {
       address?: string;
@@ -88,39 +95,39 @@ export type WhatsAppQaDriverSession = {
       degreesLongitude: number;
       name?: string;
     },
-  ) => Promise<{ messageId?: string }>;
-  sendMedia: (
+  ): WhatsAppQaDriverSendResult;
+  sendMedia(
     to: string,
     text: string,
     mediaBuffer: Buffer,
     mediaType: string,
     options?: WhatsAppQaDriverSendMediaOptions,
-  ) => Promise<{ messageId?: string }>;
-  sendPoll: (
+  ): WhatsAppQaDriverSendResult;
+  sendPoll(
     to: string,
     poll: { maxSelections?: number; options: string[]; question: string },
-  ) => Promise<{ messageId?: string }>;
-  sendReaction: (
+  ): WhatsAppQaDriverSendResult;
+  sendReaction(
     chatJid: string,
     messageId: string,
     emoji: string,
     options: WhatsAppQaDriverSendReactionOptions,
-  ) => Promise<{ messageId?: string }>;
-  sendSticker: (
+  ): WhatsAppQaDriverSendResult;
+  sendSticker(
     to: string,
     stickerBuffer: Buffer,
     options?: { mimetype?: string },
-  ) => Promise<{ messageId?: string }>;
-  sendText: (
+  ): WhatsAppQaDriverSendResult;
+  sendText(
     to: string,
     text: string,
     options?: WhatsAppQaDriverSendTextOptions,
-  ) => Promise<{ messageId?: string }>;
-  waitForMessage: (params: {
+  ): WhatsAppQaDriverSendResult;
+  waitForMessage(params: {
     match: (message: WhatsAppQaDriverObservedMessage) => boolean;
     observedAfter?: Date;
     timeoutMs: number;
-  }) => Promise<WhatsAppQaDriverObservedMessage>;
+  }): Promise<WhatsAppQaDriverObservedMessage>;
 };
 
 type MessageUpsertEvent = {
@@ -136,135 +143,76 @@ type Waiter = {
   timeout: NodeJS.Timeout;
 };
 
-type PendingNotificationsWaiter = {
+type VoidWaiter = {
   reject: (error: Error) => void;
   resolve: () => void;
   timeout: NodeJS.Timeout;
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object");
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function readBoolean(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
-}
-
-function findMessageSection(
-  message: unknown,
-  sectionNames: readonly string[],
-): Record<string, unknown> | undefined {
-  if (!isRecord(message)) {
-    return undefined;
-  }
-  const queue: Array<{ depth: number; value: Record<string, unknown> }> = [
-    { depth: 0, value: message },
-  ];
-  const seen = new Set<Record<string, unknown>>();
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (!current || seen.has(current.value)) {
-      continue;
-    }
-    seen.add(current.value);
-    for (const sectionName of sectionNames) {
-      const section = current.value[sectionName];
-      if (isRecord(section)) {
-        return section;
-      }
-    }
-    if (current.depth >= 4) {
-      continue;
-    }
-    for (const wrapperName of [
-      "botInvokeMessage",
-      "documentWithCaptionMessage",
-      "ephemeralMessage",
-      "groupMentionedMessage",
-      "viewOnceMessage",
-      "viewOnceMessageV2",
-      "viewOnceMessageV2Extension",
-    ]) {
-      const wrapper = current.value[wrapperName];
-      if (isRecord(wrapper) && isRecord(wrapper.message)) {
-        queue.push({ depth: current.depth + 1, value: wrapper.message });
-      }
-    }
-  }
-  return undefined;
-}
-
-function readReaction(message: unknown): WhatsAppQaDriverObservedReaction | undefined {
-  const reaction = findMessageSection(message, ["reactionMessage"]);
+function readReaction(
+  message: proto.IMessage | null | undefined,
+): WhatsAppQaDriverObservedReaction | undefined {
+  const reaction = findMessageSection(message ?? undefined, ["reactionMessage"])?.value;
   if (!reaction) {
     return undefined;
   }
-  const emoji = readString(reaction.text) ?? "";
+  const emoji = normalizeOptionalString(reaction.text) ?? "";
   const key = isRecord(reaction.key) ? reaction.key : undefined;
   return {
     emoji,
-    fromMe: readBoolean(key?.fromMe),
-    messageId: readString(key?.id),
-    participant: readString(key?.participant),
+    fromMe: asBoolean(key?.fromMe),
+    messageId: normalizeOptionalString(key?.id),
+    participant: normalizeOptionalString(key?.participant),
   };
 }
 
-function readPoll(message: unknown): WhatsAppQaDriverObservedPoll | undefined {
-  const poll = findMessageSection(message, [
+function readPoll(
+  message: proto.IMessage | null | undefined,
+): WhatsAppQaDriverObservedPoll | undefined {
+  const poll = findMessageSection(message ?? undefined, [
     "pollCreationMessage",
     "pollCreationMessageV2",
     "pollCreationMessageV3",
-  ]);
+    "pollCreationMessageV5",
+  ])?.value;
   if (!poll) {
     return undefined;
   }
   const rawOptions = Array.isArray(poll.options) ? poll.options : [];
   const options = rawOptions
-    .map((option) => (isRecord(option) ? readString(option.optionName) : undefined))
+    .map((option) => (isRecord(option) ? normalizeOptionalString(option.optionName) : undefined))
     .filter((option): option is string => Boolean(option));
   return {
     options,
-    question: readString(poll.name),
+    question: normalizeOptionalString(poll.name),
   };
 }
 
-function readMedia(message: unknown):
+function readMedia(message: proto.IMessage | null | undefined):
   | {
       fileName?: string;
       mediaType?: string;
     }
   | undefined {
-  const normalizedMessage = isRecord(message)
-    ? normalizeMessageContent(message as proto.IMessage)
-    : undefined;
-  const mediaSections = [
+  const media = findMessageSection(message ?? undefined, [
     "imageMessage",
     "videoMessage",
+    "ptvMessage",
     "audioMessage",
     "documentMessage",
     "stickerMessage",
-  ];
-  for (const sectionName of mediaSections) {
-    const section = findMessageSection(normalizedMessage ?? message, [sectionName]);
-    if (!section) {
-      continue;
-    }
-    const mediaMessage = { [sectionName]: section } as proto.IMessage;
-    return {
-      fileName: readString(section.fileName),
-      mediaType: resolveInboundMediaMimetype(mediaMessage),
-    };
-  }
-  return undefined;
+  ]);
+  return media
+    ? {
+        fileName: normalizeOptionalString(media.value.fileName),
+        mediaType: resolveInboundMediaMimetype({ [media.name]: media.value } as proto.IMessage),
+      }
+    : undefined;
 }
 
 function readQuotedMessage(message: WAMessage): WhatsAppQaDriverQuotedMessage | undefined {
   const contextInfo = extractContextInfo(message.message ?? undefined);
-  const replyContext = describeReplyContext(message.message as proto.IMessage | undefined);
+  const replyContext = describeReplyContext(message.message ?? undefined);
   if (!contextInfo && !replyContext) {
     return undefined;
   }
@@ -286,7 +234,7 @@ function normalizeObservedMessage(
     return null;
   }
   const extractedText = extractText(message.message ?? undefined);
-  const location = extractLocationData(message.message as proto.IMessage | undefined);
+  const location = extractLocationData(message.message ?? undefined);
   const locationText = location ? formatLocationText(location) : undefined;
   const text = [extractedText, locationText].filter(Boolean).join("\n").trim() || undefined;
   const reaction = readReaction(message.message);
@@ -328,18 +276,6 @@ function normalizeObservedMessage(
   };
 }
 
-function closeSocket(sock: Awaited<ReturnType<typeof createWaSocket>>) {
-  const maybeEnd = (sock as unknown as { end?: (error?: Error) => void }).end;
-  if (typeof maybeEnd === "function") {
-    maybeEnd.call(sock);
-    return;
-  }
-  const maybeClose = (sock.ws as unknown as { close?: () => void } | undefined)?.close;
-  if (typeof maybeClose === "function") {
-    maybeClose.call(sock.ws);
-  }
-}
-
 function createConnectionClosedError(update: ConnectionUpdateEvent) {
   const reason = update.lastDisconnect?.error;
   const status = getStatusCode(reason);
@@ -355,42 +291,34 @@ export async function startWhatsAppQaDriverSession(params: {
 }): Promise<WhatsAppQaDriverSession> {
   const sock = await createWaSocket(false, false, { authDir: params.authDir });
   const observedMessages: WhatsAppQaDriverObservedMessage[] = [];
-  const pendingNotificationsWaiters: PendingNotificationsWaiter[] = [];
-  const waiters: Waiter[] = [];
+  const waiters = new Set<Waiter>();
+  let pendingNotificationsWaiter: VoidWaiter | undefined;
   let closed = false;
   let closedError: Error | undefined;
   let receivedPendingNotifications = false;
 
   const removeWaiter = (waiter: Waiter) => {
-    const index = waiters.indexOf(waiter);
-    if (index >= 0) {
-      waiters.splice(index, 1);
-    }
+    waiters.delete(waiter);
     clearTimeout(waiter.timeout);
   };
 
-  const removePendingNotificationsWaiter = (waiter: PendingNotificationsWaiter) => {
-    const index = pendingNotificationsWaiters.indexOf(waiter);
-    if (index >= 0) {
-      pendingNotificationsWaiters.splice(index, 1);
-    }
-    clearTimeout(waiter.timeout);
-  };
-
-  const markPendingNotificationsReceived = () => {
-    if (receivedPendingNotifications) {
+  const settlePendingNotifications = (error?: Error) => {
+    const waiter = pendingNotificationsWaiter;
+    if (!waiter) {
       return;
     }
-    receivedPendingNotifications = true;
-    for (const waiter of pendingNotificationsWaiters.slice()) {
-      removePendingNotificationsWaiter(waiter);
+    pendingNotificationsWaiter = undefined;
+    clearTimeout(waiter.timeout);
+    if (error) {
+      waiter.reject(error);
+    } else {
       waiter.resolve();
     }
   };
 
   const observe = (message: WhatsAppQaDriverObservedMessage) => {
     observedMessages.push(message);
-    for (const waiter of waiters.slice()) {
+    for (const waiter of waiters) {
       if (!waiter.predicate(message)) {
         continue;
       }
@@ -410,7 +338,8 @@ export async function startWhatsAppQaDriverSession(params: {
 
   const onConnectionUpdate = (event: ConnectionUpdateEvent) => {
     if (event.receivedPendingNotifications === true) {
-      markPendingNotificationsReceived();
+      receivedPendingNotifications = true;
+      settlePendingNotifications();
     }
     if (event.connection === "close") {
       closeSessionResources(createConnectionClosedError(event));
@@ -418,14 +347,8 @@ export async function startWhatsAppQaDriverSession(params: {
   };
 
   const removeMessageListener = () => {
-    const evWithOff = sock.ev as unknown as {
-      off?: (
-        event: string,
-        listener: ((event: ConnectionUpdateEvent) => void) | ((event: MessageUpsertEvent) => void),
-      ) => void;
-    };
-    evWithOff.off?.("messages.upsert", onMessagesUpsert);
-    evWithOff.off?.("connection.update", onConnectionUpdate);
+    sock.ev.off("messages.upsert", onMessagesUpsert);
+    sock.ev.off("connection.update", onConnectionUpdate);
   };
 
   const closeSessionResources = (waiterError?: Error) => {
@@ -434,20 +357,15 @@ export async function startWhatsAppQaDriverSession(params: {
     }
     closed = true;
     closedError = waiterError;
-    for (const waiter of pendingNotificationsWaiters.slice()) {
-      removePendingNotificationsWaiter(waiter);
-      if (waiterError) {
-        waiter.reject(waiterError);
-      }
-    }
-    for (const waiter of waiters.slice()) {
+    settlePendingNotifications(waiterError);
+    for (const waiter of waiters) {
       removeWaiter(waiter);
       if (waiterError) {
         waiter.reject(waiterError);
       }
     }
     removeMessageListener();
-    closeSocket(sock);
+    void sock.end(undefined);
   };
 
   sock.ev.on("messages.upsert", onMessagesUpsert);
@@ -465,11 +383,11 @@ export async function startWhatsAppQaDriverSession(params: {
           return;
         }
         const timeoutMs = params.connectionTimeoutMs ?? 45_000;
-        const waiter: PendingNotificationsWaiter = {
+        const waiter: VoidWaiter = {
           resolve,
           reject,
           timeout: setTimeout(() => {
-            removePendingNotificationsWaiter(waiter);
+            pendingNotificationsWaiter = undefined;
             reject(
               new Error(
                 `timed out after ${timeoutMs}ms waiting for WhatsApp QA driver pending notifications`,
@@ -477,7 +395,7 @@ export async function startWhatsAppQaDriverSession(params: {
             );
           }, timeoutMs),
         };
-        pendingNotificationsWaiters.push(waiter);
+        pendingNotificationsWaiter = waiter;
       });
     }
   } catch (error) {
@@ -503,53 +421,28 @@ export async function startWhatsAppQaDriverSession(params: {
     getObservedMessages() {
       return [...observedMessages];
     },
-    async sendContact(to, contact) {
-      const result = await sendApi.sendContact(to, contact);
-      return {
-        messageId: result.messageId,
-      };
+    sendContact(to, contact) {
+      return toMessageIdResult(sendApi.sendContact(to, contact));
     },
-    async sendLocation(to, location) {
-      const result = await sendApi.sendLocation(to, location);
-      return {
-        messageId: result.messageId,
-      };
+    sendLocation(to, location) {
+      return toMessageIdResult(sendApi.sendLocation(to, location));
     },
-    async sendMedia(to, text, mediaBuffer, mediaType, options) {
-      const result = await sendApi.sendMessage(to, text, mediaBuffer, mediaType, options);
-      return {
-        messageId: result.messageId,
-      };
+    sendMedia(to, text, mediaBuffer, mediaType, options) {
+      return toMessageIdResult(sendApi.sendMessage(to, text, mediaBuffer, mediaType, options));
     },
-    async sendPoll(to, poll) {
-      const result = await sendApi.sendPoll(to, poll);
-      return {
-        messageId: result.messageId,
-      };
+    sendPoll(to, poll) {
+      return toMessageIdResult(sendApi.sendPoll(to, poll));
     },
-    async sendReaction(chatJid, messageId, emoji, options) {
-      const result = await sendApi.sendReaction(
-        chatJid,
-        messageId,
-        emoji,
-        options.fromMe,
-        options.participant,
+    sendReaction(chatJid, messageId, emoji, options) {
+      return toMessageIdResult(
+        sendApi.sendReaction(chatJid, messageId, emoji, options.fromMe, options.participant),
       );
-      return {
-        messageId: result.messageId,
-      };
     },
-    async sendSticker(to, stickerBuffer, options) {
-      const result = await sendApi.sendSticker(to, stickerBuffer, options);
-      return {
-        messageId: result.messageId,
-      };
+    sendSticker(to, stickerBuffer, options) {
+      return toMessageIdResult(sendApi.sendSticker(to, stickerBuffer, options));
     },
-    async sendText(to, text, options) {
-      const result = await sendApi.sendMessage(to, text, undefined, undefined, options);
-      return {
-        messageId: result.messageId,
-      };
+    sendText(to, text, options) {
+      return toMessageIdResult(sendApi.sendMessage(to, text, undefined, undefined, options));
     },
     async waitForMessage(paramsLocal) {
       const predicate = (message: WhatsAppQaDriverObservedMessage) =>
@@ -573,8 +466,15 @@ export async function startWhatsAppQaDriverSession(params: {
             reject(new Error("timed out waiting for WhatsApp QA driver message"));
           }, paramsLocal.timeoutMs),
         };
-        waiters.push(waiter);
+        waiters.add(waiter);
       });
     },
   };
+}
+
+async function toMessageIdResult(
+  pending: Promise<{ messageId?: string }>,
+): Promise<{ messageId?: string }> {
+  const { messageId } = await pending;
+  return { messageId };
 }

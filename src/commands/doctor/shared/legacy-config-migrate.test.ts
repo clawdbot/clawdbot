@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
+import type { LegacyConfigMigrationContext } from "../../../config/legacy.shared.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import { legacyCodexProviderIdentityKey } from "./codex-route-model-ref.js";
 import { pruneBindingsForMissingAgents } from "./legacy-config-binding-repair.js";
@@ -14,7 +15,10 @@ function repairBindingsForTest(config: OpenClawConfig) {
   return { config: pruneBindingsForMissingAgents(config, changes), changes };
 }
 
-function migrateLegacyConfigForTest(raw: unknown): {
+function migrateLegacyConfigForTest(
+  raw: unknown,
+  context?: LegacyConfigMigrationContext,
+): {
   config: OpenClawConfig | null;
   changes: string[];
 } {
@@ -24,11 +28,23 @@ function migrateLegacyConfigForTest(raw: unknown): {
   const next = structuredClone(raw) as Record<string, unknown>;
   const changes: string[] = [];
   for (const migration of LEGACY_CONFIG_MIGRATIONS) {
-    migration.apply(next, changes);
+    migration.apply(next, changes, context);
   }
-  return changes.length === 0
-    ? { config: null, changes }
-    : { config: next as OpenClawConfig, changes };
+  const visibleChanges = changes.filter(
+    (change) => change !== "Moved agents.list → keyed agents.entries.",
+  );
+  const agents = next.agents as Record<string, unknown> | undefined;
+  const entries = agents?.entries as Record<string, Record<string, unknown>> | undefined;
+  if (agents && entries) {
+    Object.defineProperty(agents, "list", {
+      configurable: true,
+      enumerable: false,
+      value: Object.entries(entries).map(([id, entry]) => Object.assign({ id }, entry)),
+    });
+  }
+  return visibleChanges.length === 0
+    ? { config: null, changes: visibleChanges }
+    : { config: next as OpenClawConfig, changes: visibleChanges };
 }
 
 function expectMigrationChangesToIncludeFragments(changes: string[], fragments: string[]): void {
@@ -37,6 +53,29 @@ function expectMigrationChangesToIncludeFragments(changes: string[], fragments: 
   );
   expect(unmatchedFragments).toStrictEqual([]);
 }
+
+describe("legacy session typing config migrate", () => {
+  it("moves session typingMode to agent defaults", () => {
+    const res = migrateLegacyConfigForTest({ session: { typingMode: "thinking" } });
+
+    expect(res.config?.agents?.defaults?.typingMode).toBe("thinking");
+    expect(res.config?.session).toEqual({});
+    expect(res.changes).toContain("Moved session.typingMode → agents.defaults.typingMode.");
+  });
+
+  it("preserves session typing precedence over an existing agent default", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: { defaults: { typingMode: "message" } },
+      session: { typingMode: "thinking" },
+    });
+
+    expect(res.config?.agents?.defaults?.typingMode).toBe("thinking");
+    expect(res.config?.session).toEqual({});
+    expect(res.changes).toContain(
+      "Moved session.typingMode → agents.defaults.typingMode (replaced the previously shadowed agent default).",
+    );
+  });
+});
 
 describe("compatibility binding repair migrate", () => {
   it("prunes bindings for missing agents when agents.list is valid", () => {
@@ -51,6 +90,37 @@ describe("compatibility binding repair migrate", () => {
     } as OpenClawConfig);
 
     expect(res.config.bindings).toEqual([{ agentId: "alpha", match: { channel: "discord" } }]);
+    expect(res.changes).toContain("Removed 1 binding that referenced missing agents.list ids.");
+  });
+
+  it("preserves exact main bindings because the implicit main agent always exists", () => {
+    const res = repairBindingsForTest({
+      agents: {
+        list: [{ id: "alpha" }],
+      },
+      bindings: [
+        { agentId: "main", match: { channel: "discord" } },
+        { agentId: "MAIN", match: { channel: "discord" } },
+        { agentId: "ghost", match: { channel: "discord" } },
+      ],
+    } as OpenClawConfig);
+
+    expect(res.config.bindings).toEqual([{ agentId: "main", match: { channel: "discord" } }]);
+    expect(res.changes).toContain("Removed 2 bindings that referenced missing agents.list ids.");
+  });
+
+  it("preserves normalized main bindings when the agent is explicitly listed", () => {
+    const res = repairBindingsForTest({
+      agents: {
+        list: [{ id: "MAIN" }],
+      },
+      bindings: [
+        { agentId: "MAIN", match: { channel: "discord" } },
+        { agentId: "ghost", match: { channel: "discord" } },
+      ],
+    } as OpenClawConfig);
+
+    expect(res.config.bindings).toEqual([{ agentId: "MAIN", match: { channel: "discord" } }]);
     expect(res.changes).toContain("Removed 1 binding that referenced missing agents.list ids.");
   });
 
@@ -132,6 +202,53 @@ describe("legacy MCP server config migrate", () => {
       "Moved nodeHost.mcp.servers.example.disabled true → enabled false.",
     ]);
   });
+
+  it("moves MCP workingDirectory aliases to cwd with canonical values winning", () => {
+    const raw = {
+      mcp: {
+        servers: {
+          legacy: { command: "example-mcp", workingDirectory: "/legacy" },
+          canonical: { command: "example-mcp", cwd: "/canonical", workingDirectory: "/legacy" },
+        },
+      },
+      nodeHost: {
+        mcp: {
+          servers: {
+            legacy: { command: "example-mcp", workingDirectory: "/node-legacy" },
+          },
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "mcp.servers",
+          message: expect.stringContaining("use camelCase spellings and cwd"),
+        }),
+        expect.objectContaining({
+          path: "nodeHost.mcp.servers",
+          message: expect.stringContaining("use camelCase spellings and cwd"),
+        }),
+      ]),
+    );
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.mcp?.servers).toEqual({
+      legacy: { command: "example-mcp", cwd: "/legacy" },
+      canonical: { command: "example-mcp", cwd: "/canonical" },
+    });
+    expect(res.config?.nodeHost?.mcp?.servers?.legacy).toEqual({
+      command: "example-mcp",
+      cwd: "/node-legacy",
+    });
+    expect(res.changes).toEqual([
+      "Canonicalized legacy aliases in mcp.servers.legacy.",
+      "Canonicalized legacy aliases in mcp.servers.canonical.",
+      "Canonicalized legacy aliases in nodeHost.mcp.servers.legacy.",
+    ]);
+    expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
+  });
 });
 
 describe("legacy memory search config migrate", () => {
@@ -168,18 +285,18 @@ describe("legacy memory search config migrate", () => {
     });
 
     expect((res.config as Record<string, unknown> | undefined)?.memorySearch).toBeUndefined();
-    expect(res.config?.agents?.defaults?.memorySearch?.store).toEqual({
+    expect(res.config?.memory?.search?.store).toEqual({
       fts: { tokenizer: "trigram" },
       vector: { enabled: false },
     });
-    expect(res.config?.agents?.list?.[0]?.memorySearch?.store).toEqual({
+    expect(res.config?.agents?.list?.[0]?.memory?.search?.store).toEqual({
       vector: { enabled: true },
     });
     expect(res.changes).toContain(
-      "Removed agents.defaults.memorySearch.store.path; memory indexes now use each agent database.",
+      "Removed memory.search.store.path; memory indexes now use each agent database.",
     );
     expect(res.changes).toContain(
-      "Removed agents.list[0].memorySearch.store.path; memory indexes now use each agent database.",
+      "Removed agents.list[0].memory.search.store.path; memory indexes now use each agent database.",
     );
   });
 
@@ -922,7 +1039,7 @@ describe("legacy memory search config migrate", () => {
     );
   });
 
-  it("rewrites top-level legacy auto provider after moving memorySearch into agent defaults", () => {
+  it("rewrites top-level legacy auto provider after moving memorySearch into memory.search", () => {
     const raw = {
       memorySearch: {
         provider: "auto",
@@ -937,14 +1054,14 @@ describe("legacy memory search config migrate", () => {
 
     const res = migrateLegacyConfigForTest(raw);
 
-    expect(res.config?.agents?.defaults?.memorySearch).toEqual({
+    expect(res.config?.memory?.search).toEqual({
       provider: "openai",
       model: "text-embedding-3-small",
     });
     expect(res.config).not.toHaveProperty("memorySearch");
     expect(res.changes).toEqual([
-      "Moved memorySearch → agents.defaults.memorySearch.",
-      'Moved agents.defaults.memorySearch.provider from legacy "auto" to "openai".',
+      "Moved legacy memorySearch defaults → memory.search.",
+      'Moved memory.search.provider from legacy "auto" to "openai".',
     ]);
   });
 
@@ -974,18 +1091,23 @@ describe("legacy memory search config migrate", () => {
     };
 
     expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual([
-      "agents.defaults.memorySearch.provider",
+      "agents.defaults.memorySearch",
+      "agents.list",
+      "agents.list",
       "agents.list",
     ]);
 
     const res = migrateLegacyConfigForTest(raw);
 
-    expect(res.config?.agents?.defaults?.memorySearch?.provider).toBe("openai");
-    expect(res.config?.agents?.list?.[0]?.memorySearch?.provider).toBe("openai");
-    expect(res.config?.agents?.list?.[1]?.memorySearch?.provider).toBe("openai-compatible");
+    expect(res.config?.memory?.search?.provider).toBe("openai");
+    expect(res.config?.agents?.list?.[0]?.memory?.search?.provider).toBe("openai");
+    expect(res.config?.agents?.list?.[1]?.memory?.search?.provider).toBe("openai-compatible");
     expect(res.changes).toEqual([
-      'Moved agents.defaults.memorySearch.provider from legacy "auto" to "openai".',
-      'Moved agents.list.0.memorySearch.provider from legacy "auto" to "openai".',
+      "Moved legacy memorySearch defaults → memory.search.",
+      "Moved agents.list.0.memorySearch → agents.list.0.memory.search.",
+      "Moved agents.list.1.memorySearch → agents.list.1.memory.search.",
+      'Moved memory.search.provider from legacy "auto" to "openai".',
+      'Moved agents.list.0.memory.search.provider from legacy "auto" to "openai".',
     ]);
   });
 });
@@ -1082,6 +1204,7 @@ describe("legacy agent system prompt override config migrate", () => {
     expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual([
       "agents.defaults.systemPromptOverride",
       "agents.list",
+      "agents.list",
     ]);
 
     const res = migrateLegacyConfigForTest(raw);
@@ -1121,7 +1244,7 @@ describe("profile configured tool section migrate", () => {
     expect(res.config).toBeNull();
     expect(res.changes).toEqual([]);
     expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).not.toContain("tools");
-    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).not.toContain("agents.list");
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toContain("agents.list");
   });
 
   it("does not add missing grants to an unrelated allowlist", () => {
@@ -1274,7 +1397,7 @@ describe("profile configured tool section migrate", () => {
 
     expect(res.config).toBeNull();
     expect(res.changes).toEqual([]);
-    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).not.toContain("agents.list");
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toContain("agents.list");
   });
 
   it("does not report inherited top-level profile provider allowlists as fixable", () => {
@@ -1423,9 +1546,11 @@ describe("legacy agent model timeout migrate", () => {
     expect(defaultSubagents.model).toEqual({
       primary: "openai/gpt-5.4",
     });
-    expect(defaults.imageGenerationModel).toEqual({
-      primary: "openrouter/openai/gpt-5.4-image-2",
-      timeoutMs: 180_000,
+    expect(defaults.mediaModels).toEqual({
+      image: {
+        primary: "openrouter/openai/gpt-5.4-image-2",
+        timeoutMs: 180_000,
+      },
     });
     expect(defaults.pdfModel).toEqual({
       primary: "openai/gpt-5.5",
@@ -1442,6 +1567,7 @@ describe("legacy agent model timeout migrate", () => {
       "Removed agents.defaults.subagents.model.timeoutMs; agent model config only selects models.",
       "Removed agents.list.0.model.timeoutMs; agent model config only selects models.",
       "Removed agents.list.0.subagents.model.timeoutMs; agent model config only selects models.",
+      "Moved agents.defaults.imageGenerationModel → agents.defaults.mediaModels.image.",
     ]);
   });
 });
@@ -1486,71 +1612,189 @@ describe("legacy session parent fork migrate", () => {
   });
 });
 
-describe("legacy diagnostics memory pressure snapshot migrate", () => {
-  it("renames the boolean toggle", () => {
+describe("legacy diagnostics OTel protocol migrate", () => {
+  it("removes unsupported grpc protocol and disables enabled telemetry", () => {
     const res = migrateLegacyConfigForTest({
       diagnostics: {
-        enabled: true,
-        memoryPressureBundle: false,
-      },
-    });
-
-    expect(res.config?.diagnostics).toEqual({
-      enabled: true,
-      memoryPressureSnapshot: false,
-    });
-    expect(res.changes).toStrictEqual([
-      "Moved diagnostics.memoryPressureBundle → memoryPressureSnapshot.",
-    ]);
-  });
-
-  it("preserves the renamed toggle when both keys are present", () => {
-    const res = migrateLegacyConfigForTest({
-      diagnostics: {
-        memoryPressureBundle: false,
-        memoryPressureSnapshot: true,
-      },
-    });
-
-    expect(res.config?.diagnostics).toEqual({
-      memoryPressureSnapshot: true,
-    });
-    expect(res.changes).toStrictEqual([
-      "Removed diagnostics.memoryPressureBundle (memoryPressureSnapshot already set).",
-    ]);
-  });
-
-  it("moves nested enabled to the renamed boolean", () => {
-    const res = migrateLegacyConfigForTest({
-      diagnostics: {
-        enabled: true,
-        memoryPressureBundle: {
-          enabled: false,
+        otel: {
+          enabled: true,
+          endpoint: "http://otel-collector:4317",
+          protocol: "grpc",
         },
       },
     });
 
-    expect(res.config?.diagnostics).toEqual({
-      enabled: true,
-      memoryPressureSnapshot: false,
+    expect(res.config?.diagnostics?.otel).toEqual({
+      enabled: false,
+      endpoint: "http://otel-collector:4317",
     });
     expect(res.changes).toStrictEqual([
-      "Moved diagnostics.memoryPressureBundle → memoryPressureSnapshot.",
+      'Removed unsupported diagnostics.otel.protocol "grpc"; use "http/protobuf" with an OTLP/HTTP collector.',
+      "Disabled diagnostics.otel.enabled because legacy grpc configs with OTLP signals cannot export telemetry; re-enable it after choosing an OTLP/HTTP collector.",
     ]);
   });
 
-  it("moves empty object form to the renamed default boolean", () => {
+  it("keeps enabled stdout-only logs when removing grpc protocol", () => {
     const res = migrateLegacyConfigForTest({
       diagnostics: {
-        memoryPressureBundle: {},
+        otel: {
+          enabled: true,
+          traces: false,
+          metrics: false,
+          logs: true,
+          logsExporter: "stdout",
+          protocol: "grpc",
+        },
       },
     });
 
-    expect(res.config?.diagnostics).toEqual({
-      memoryPressureSnapshot: true,
+    expect(res.config?.diagnostics?.otel).toEqual({
+      enabled: true,
+      traces: false,
+      metrics: false,
+      logs: true,
+      logsExporter: "stdout",
     });
     expect(res.changes).toStrictEqual([
-      "Moved diagnostics.memoryPressureBundle → memoryPressureSnapshot.",
+      'Removed unsupported diagnostics.otel.protocol "grpc"; use "http/protobuf" with an OTLP/HTTP collector.',
+    ]);
+  });
+
+  it("uses resolved interpolated stdout-only logging without replacing the authored reference", () => {
+    const authored = {
+      diagnostics: {
+        otel: {
+          enabled: true,
+          traces: false,
+          metrics: false,
+          logs: true,
+          logsExporter: "${OTEL_LOGS_EXPORTER}",
+          protocol: "grpc",
+        },
+      },
+    };
+    const resolved = {
+      diagnostics: {
+        otel: {
+          enabled: true,
+          traces: false,
+          metrics: false,
+          logs: true,
+          logsExporter: "stdout",
+          protocol: "grpc",
+        },
+      },
+    };
+
+    const res = migrateLegacyConfigForTest(authored, {
+      authoredRaw: authored,
+      resolvedRaw: resolved,
+    });
+
+    expect(res.config?.diagnostics?.otel).toEqual({
+      enabled: true,
+      traces: false,
+      metrics: false,
+      logs: true,
+      logsExporter: "${OTEL_LOGS_EXPORTER}",
+    });
+  });
+
+  it.each(["otlp", "both"])("disables enabled %s log export", (logsExporter) => {
+    const res = migrateLegacyConfigForTest({
+      diagnostics: {
+        otel: {
+          enabled: true,
+          traces: false,
+          metrics: false,
+          logs: true,
+          logsExporter,
+          protocol: "grpc",
+        },
+      },
+    });
+
+    expect(res.config?.diagnostics?.otel?.enabled).toBe(false);
+  });
+
+  it("keeps telemetry enabled when no signals are enabled", () => {
+    const res = migrateLegacyConfigForTest({
+      diagnostics: {
+        otel: {
+          enabled: true,
+          traces: false,
+          metrics: false,
+          logs: false,
+          protocol: "grpc",
+        },
+      },
+    });
+
+    expect(res.config?.diagnostics?.otel).toEqual({
+      enabled: true,
+      traces: false,
+      metrics: false,
+      logs: false,
+    });
+  });
+
+  it("repairs a config-interpolated grpc protocol using the resolved value", () => {
+    const authored = {
+      diagnostics: {
+        otel: {
+          enabled: true,
+          traces: false,
+          metrics: false,
+          logs: true,
+          logsExporter: "stdout",
+          protocol: "${OTEL_PROTOCOL}",
+        },
+      },
+    };
+    const resolved = {
+      diagnostics: {
+        otel: {
+          enabled: true,
+          traces: false,
+          metrics: false,
+          logs: true,
+          logsExporter: "stdout",
+          protocol: "grpc",
+        },
+      },
+    };
+
+    const res = migrateLegacyConfigForTest(authored, {
+      authoredRaw: authored,
+      resolvedRaw: resolved,
+    });
+
+    expect(res.config?.diagnostics?.otel).toEqual({
+      enabled: true,
+      traces: false,
+      metrics: false,
+      logs: true,
+      logsExporter: "stdout",
+    });
+  });
+
+  it("only removes grpc protocol when telemetry was already disabled", () => {
+    const res = migrateLegacyConfigForTest({
+      diagnostics: {
+        otel: {
+          enabled: false,
+          endpoint: "http://otel-collector:4317",
+          protocol: "grpc",
+        },
+      },
+    });
+
+    expect(res.config?.diagnostics?.otel).toEqual({
+      enabled: false,
+      endpoint: "http://otel-collector:4317",
+    });
+    expect(res.changes).toStrictEqual([
+      'Removed unsupported diagnostics.otel.protocol "grpc"; use "http/protobuf" with an OTLP/HTTP collector.',
     ]);
   });
 });
@@ -1652,7 +1896,9 @@ describe("legacy thread binding spawn migrate", () => {
       },
     });
 
-    expect(res.config?.channels?.discord?.threadBindings).toEqual({
+    expect(
+      (res.config?.channels?.discord as { threadBindings?: unknown } | undefined)?.threadBindings,
+    ).toEqual({
       enabled: true,
       spawnSessions: true,
     });
@@ -1678,7 +1924,8 @@ describe("legacy thread binding spawn migrate", () => {
     });
 
     expect(
-      res.config?.channels?.discord?.accounts?.work?.threadBindings as Record<string, unknown>,
+      (res.config?.channels?.discord?.accounts?.work as { threadBindings?: unknown } | undefined)
+        ?.threadBindings as Record<string, unknown>,
     ).toEqual({
       spawnSessions: false,
     });
@@ -1786,7 +2033,7 @@ describe("legacy migrate audio transcription", () => {
     expect(res.config).toBeNull();
   });
 
-  it("does not rewrite removed routing.transcribeAudio migrations when new config exists", () => {
+  it("consolidates existing per-capability media config without reviving removed routing keys", () => {
     const res = migrateLegacyConfigForTest({
       routing: {
         transcribeAudio: {
@@ -1802,8 +2049,12 @@ describe("legacy migrate audio transcription", () => {
       },
     });
 
-    expect(res.changes).toStrictEqual([]);
-    expect(res.config).toBeNull();
+    expect(res.changes).toStrictEqual([
+      "Consolidated tools.media image/audio/video model settings into capability-tagged tools.media.models entries.",
+    ]);
+    expect(res.config?.tools?.media).toEqual({
+      models: [{ command: "existing", type: "cli", capabilities: ["audio"] }],
+    });
   });
 
   it("drops invalid audio.transcription payloads", () => {
@@ -1818,7 +2069,7 @@ describe("legacy migrate audio transcription", () => {
     expect(findLegacyConfigIssues(raw)).toEqual([
       {
         path: "audio.transcription",
-        message: "Use tools.media.audio.models instead.",
+        message: "Use a capability-tagged tools.media.models entry instead.",
       },
     ]);
     const res = migrateLegacyConfigForTest(raw);
@@ -1841,16 +2092,62 @@ describe("legacy migrate audio transcription", () => {
     expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual(["audio.transcription"]);
     const res = migrateLegacyConfigForTest(raw);
 
-    expect(res.changes).toStrictEqual(["Moved audio.transcription → tools.media.audio.models."]);
+    expect(res.changes).toStrictEqual(["Moved audio.transcription → tools.media.models."]);
     expect(res.config).not.toHaveProperty("audio");
-    expect(res.config?.tools?.media?.audio?.models).toEqual([
+    expect(res.config?.tools?.media?.models).toEqual([
       {
         type: "cli",
         command: "whisper-cli",
-        args: ["--model", "small", "{{MediaPath}}", "--input={{MediaPath}}"],
+        args: ["--model", "small", "{{AttachmentPath}}", "--input={{AttachmentPath}}"],
         timeoutSeconds: 30,
+        capabilities: ["audio"],
       },
     ]);
+    expect(res.config?.tools?.media?.audio).toEqual({
+      enabled: true,
+      preferredModel: "cli:whisper-cli",
+    });
+  });
+
+  it("keeps audio.transcription when the shared list only has unrelated capabilities", () => {
+    const res = migrateLegacyConfigForTest({
+      audio: { transcription: { command: ["whisper-cli", "{input}"] } },
+      tools: {
+        media: {
+          models: [{ provider: "openai", model: "vision", capabilities: ["image"] }],
+        },
+      },
+    });
+
+    expect(res.config?.tools?.media?.models).toEqual([
+      { provider: "openai", model: "vision", capabilities: ["image"] },
+      {
+        type: "cli",
+        command: "whisper-cli",
+        args: ["{{AttachmentPath}}"],
+        capabilities: ["audio"],
+      },
+    ]);
+  });
+
+  it("keeps audio.transcription when the legacy audio list has only incompatible models", () => {
+    const res = migrateLegacyConfigForTest({
+      audio: { transcription: { command: ["whisper-cli", "{input}"] } },
+      tools: {
+        media: {
+          audio: {
+            models: [{ provider: "openai", model: "vision", capabilities: ["image"] }],
+          },
+        },
+      },
+    });
+
+    expect(res.config?.tools?.media?.models).toContainEqual({
+      type: "cli",
+      command: "whisper-cli",
+      args: ["{{AttachmentPath}}"],
+      capabilities: ["audio"],
+    });
   });
 });
 
@@ -2002,7 +2299,10 @@ describe("legacy migrate sandbox scope aliases", () => {
             fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.5"],
           },
           models: {
-            "anthropic/claude-opus-4-7": { alias: "Opus" },
+            "anthropic/claude-opus-4-7": {
+              alias: "Opus",
+              agentRuntime: { id: "auto", mode: "strict" },
+            },
           },
         },
         list: [
@@ -2020,6 +2320,7 @@ describe("legacy migrate sandbox scope aliases", () => {
       "Removed agents.defaults.agentRuntime; runtime is now provider/model scoped.",
       "Moved agents.list.0.agentRuntime.id claude-cli to matching anthropic model runtime policy.",
       "Removed agents.list.0.agentRuntime; runtime is now provider/model scoped.",
+      "Copied the legacy default model map to agents.defaults.modelPolicy.allow.",
     ]);
     expect(res.config?.agents?.defaults).toEqual({
       model: {
@@ -2029,11 +2330,14 @@ describe("legacy migrate sandbox scope aliases", () => {
       models: {
         "anthropic/claude-opus-4-7": {
           alias: "Opus",
-          agentRuntime: { id: "claude-cli" },
+          agentRuntime: { id: "claude-cli", mode: "strict" },
         },
         "anthropic/claude-sonnet-4-6": {
           agentRuntime: { id: "claude-cli" },
         },
+      },
+      modelPolicy: {
+        allow: ["anthropic/claude-opus-4-7", "anthropic/claude-sonnet-4-6"],
       },
     });
     expect(res.config?.agents?.list?.[0]).toEqual({
@@ -2062,12 +2366,14 @@ describe("legacy migrate sandbox scope aliases", () => {
 
     expect(res.changes).toStrictEqual([
       "Removed agents.defaults.agentRuntime; runtime is now provider/model scoped.",
+      "Copied the legacy default model map to agents.defaults.modelPolicy.allow.",
     ]);
     expect(res.config?.agents?.defaults).toEqual({
       model: "anthropic/claude-opus-4-7",
       models: {
         "anthropic/claude-opus-4-7": { agentRuntime: { id: "openclaw" } },
       },
+      modelPolicy: { allow: ["anthropic/claude-opus-4-7"] },
     });
   });
 
@@ -2211,6 +2517,177 @@ describe("legacy migrate sandbox scope aliases", () => {
 
     expect(res.changes).toStrictEqual([]);
     expect(res.config).toBeNull();
+  });
+
+  it("disables the default sandbox browser network without granting inherited egress", () => {
+    const raw = {
+      agents: {
+        defaults: {
+          sandbox: {
+            browser: {
+              enabled: true,
+              network: " NONE ",
+              autoStart: false,
+            },
+          },
+        },
+        entries: {
+          main: { default: true },
+          inherited: {
+            sandbox: {
+              browser: {
+                enabled: true,
+                headless: true,
+              },
+            },
+          },
+          isolated: {
+            sandbox: {
+              browser: {
+                network: "isolated-browser-net",
+              },
+            },
+          },
+          blankEnabled: {
+            sandbox: {
+              browser: {
+                enabled: true,
+                network: "   ",
+              },
+            },
+          },
+          blankInherited: {
+            sandbox: {
+              browser: {
+                network: "",
+              },
+            },
+          },
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual([
+      "agents.defaults.sandbox.browser.network",
+    ]);
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.changes).toStrictEqual([
+      'Disabled agents.entries.inherited.sandbox.browser because it inherited unsupported browser network "none".',
+      "Set agents.entries.isolated.sandbox.browser.enabled to true to preserve its explicit supported network while disabling the unsupported default browser network.",
+      "Set agents.entries.blankInherited.sandbox.browser.enabled to true to preserve its explicit supported network while disabling the unsupported default browser network.",
+      'Disabled agents.defaults.sandbox.browser and moved its unsupported network "none" → "openclaw-sandbox-browser".',
+    ]);
+    expect(res.config?.agents?.defaults?.sandbox?.browser).toEqual({
+      enabled: false,
+      network: "openclaw-sandbox-browser",
+      autoStart: false,
+    });
+    expect(res.config?.agents?.entries?.inherited?.sandbox?.browser).toEqual({
+      enabled: false,
+      headless: true,
+    });
+    expect(res.config?.agents?.entries?.isolated?.sandbox?.browser).toEqual({
+      enabled: true,
+      network: "isolated-browser-net",
+    });
+    expect(res.config?.agents?.entries?.blankEnabled?.sandbox?.browser).toEqual({
+      enabled: true,
+      network: "   ",
+    });
+    expect(res.config?.agents?.entries?.blankInherited?.sandbox?.browser).toEqual({
+      enabled: true,
+      network: "",
+    });
+    expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
+  });
+
+  it("disables explicit per-agent network none in keyed rosters", () => {
+    const raw = {
+      agents: {
+        entries: {
+          main: {
+            default: true,
+            sandbox: {
+              browser: {
+                enabled: true,
+                network: "none",
+                headless: true,
+              },
+            },
+          },
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual(["agents.entries"]);
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.changes).toStrictEqual([
+      'Disabled agents.entries.main.sandbox.browser and moved its unsupported network "none" → "openclaw-sandbox-browser".',
+    ]);
+    expect(res.config?.agents?.entries?.main?.sandbox?.browser).toEqual({
+      enabled: false,
+      network: "openclaw-sandbox-browser",
+      headless: true,
+    });
+    expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
+  });
+
+  it("disables explicit per-agent network none in legacy list rosters", () => {
+    const raw = {
+      agents: {
+        list: [
+          {
+            id: "legacy",
+            default: true,
+            sandbox: {
+              browser: {
+                network: "NONE",
+                autoStart: false,
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw)).toContainEqual({
+      path: "agents.list",
+      message: expect.stringContaining('sandbox.browser.network = "none"'),
+    });
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.changes).toStrictEqual([
+      'Disabled agents.list.0.sandbox.browser and moved its unsupported network "none" → "openclaw-sandbox-browser".',
+    ]);
+    expect(res.config?.agents?.entries?.legacy?.sandbox?.browser).toEqual({
+      enabled: false,
+      network: "openclaw-sandbox-browser",
+      autoStart: false,
+    });
+    expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
+  });
+
+  it("leaves supported sandbox browser networks unchanged", () => {
+    const raw = {
+      agents: {
+        entries: {
+          main: {
+            default: true,
+            sandbox: {
+              browser: {
+                enabled: true,
+                network: "openclaw-sandbox-browser",
+              },
+            },
+          },
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw)).toEqual([]);
+    expect(migrateLegacyConfigForTest(raw)).toEqual({ config: null, changes: [] });
   });
 });
 
@@ -2600,20 +3077,18 @@ describe("legacy bundled provider discovery migrate", () => {
     expect(res.changes).toContain("Rewrote plugins.slots openai-codex references to openai.");
   });
 
-  it("sets compat mode for existing restrictive plugin allowlists", () => {
+  it("leaves restrictive plugin allowlists for the machine-state migration", () => {
     const res = migrateLegacyConfigForTest({
       plugins: {
         allow: ["telegram"],
       },
     });
 
-    expect(res.config?.plugins?.bundledDiscovery).toBe("compat");
-    expect(res.changes).toStrictEqual([
-      'Set plugins.bundledDiscovery="compat" to preserve legacy bundled provider discovery for this restrictive plugins.allow config.',
-    ]);
+    expect(res.config).toBeNull();
+    expect(res.changes).toStrictEqual([]);
   });
 
-  it("does not override explicit bundled discovery mode", () => {
+  it("strips explicit bundled discovery mode after machine-state capture", () => {
     const res = migrateLegacyConfigForTest({
       plugins: {
         allow: ["telegram"],
@@ -2621,129 +3096,81 @@ describe("legacy bundled provider discovery migrate", () => {
       },
     });
 
-    expect(res.config).toBeNull();
-    expect(res.changes).toStrictEqual([]);
+    expect(res.config).toEqual({ plugins: { allow: ["telegram"] } });
+    expect(res.changes).toStrictEqual([
+      "Applied tier-eval tranche retirements; canonical settings and built-in defaults now apply.",
+    ]);
   });
 });
 
 describe("legacy migrate heartbeat config", () => {
-  it("moves top-level heartbeat into agents.defaults.heartbeat", () => {
-    const res = migrateLegacyConfigForTest({
-      heartbeat: {
-        model: "anthropic/claude-3-5-haiku-20241022",
-        every: "30m",
+  it.each([
+    [
+      "moves top-level heartbeat into agents.defaults.heartbeat",
+      { heartbeat: { model: "anthropic/claude-3-5-haiku-20241022", every: "30m" } },
+      "agents",
+      { model: "anthropic/claude-sonnet-4-6", every: "30m" },
+      [
+        "Moved heartbeat → agents.defaults.heartbeat.",
+        'Upgraded config.agents.defaults.heartbeat.model from "anthropic/claude-3-5-haiku-20241022" to "anthropic/claude-sonnet-4-6".',
+      ],
+    ],
+    [
+      "moves top-level heartbeat visibility into channels.defaults.heartbeat",
+      { heartbeat: { showOk: true, showAlerts: false, useIndicator: false } },
+      "channels",
+      { showOk: true, showAlerts: false, useIndicator: false },
+      ["Moved heartbeat visibility → channels.defaults.heartbeat."],
+    ],
+    [
+      "keeps explicit agents.defaults.heartbeat values when merging top-level heartbeat",
+      {
+        heartbeat: { model: "anthropic/claude-3-5-haiku-20241022", every: "30m" },
+        agents: { defaults: { heartbeat: { every: "1h", target: "telegram" } } },
       },
-    });
-
-    expect(res.changes).toStrictEqual([
-      "Moved heartbeat → agents.defaults.heartbeat.",
-      'Upgraded config.agents.defaults.heartbeat.model from "anthropic/claude-3-5-haiku-20241022" to "anthropic/claude-sonnet-4-6".',
-    ]);
-    expect(res.config?.agents?.defaults?.heartbeat).toEqual({
-      model: "anthropic/claude-sonnet-4-6",
-      every: "30m",
-    });
-    expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
-  });
-
-  it("moves top-level heartbeat visibility into channels.defaults.heartbeat", () => {
-    const res = migrateLegacyConfigForTest({
-      heartbeat: {
-        showOk: true,
-        showAlerts: false,
-        useIndicator: false,
+      "agents",
+      { every: "1h", target: "telegram", model: "anthropic/claude-sonnet-4-6" },
+      [
+        "Merged heartbeat → agents.defaults.heartbeat (filled missing fields from legacy; kept explicit agents.defaults values).",
+        'Upgraded config.agents.defaults.heartbeat.model from "anthropic/claude-3-5-haiku-20241022" to "anthropic/claude-sonnet-4-6".',
+      ],
+    ],
+    [
+      "keeps explicit channels.defaults.heartbeat values when merging top-level heartbeat visibility",
+      {
+        heartbeat: { showOk: true, showAlerts: true },
+        channels: { defaults: { heartbeat: { showOk: false, useIndicator: false } } },
       },
-    });
-
-    expect(res.changes).toStrictEqual([
-      "Moved heartbeat visibility → channels.defaults.heartbeat.",
-    ]);
-    expect(res.config?.channels?.defaults?.heartbeat).toEqual({
-      showOk: true,
-      showAlerts: false,
-      useIndicator: false,
-    });
-    expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
-  });
-
-  it("keeps explicit agents.defaults.heartbeat values when merging top-level heartbeat", () => {
-    const res = migrateLegacyConfigForTest({
-      heartbeat: {
-        model: "anthropic/claude-3-5-haiku-20241022",
-        every: "30m",
-      },
-      agents: {
-        defaults: {
-          heartbeat: {
-            every: "1h",
-            target: "telegram",
-          },
+      "channels",
+      { showOk: false, showAlerts: true, useIndicator: false },
+      [
+        "Merged heartbeat visibility → channels.defaults.heartbeat (filled missing fields from legacy; kept explicit channels.defaults values).",
+      ],
+    ],
+    [
+      "preserves agents.defaults.heartbeat precedence over top-level heartbeat legacy key",
+      {
+        agents: { defaults: { heartbeat: { every: "1h", target: "telegram" } } },
+        heartbeat: {
+          every: "30m",
+          target: "discord",
+          model: "anthropic/claude-3-5-haiku-20241022",
         },
       },
-    });
+      "agents",
+      { every: "1h", target: "telegram", model: "anthropic/claude-sonnet-4-6" },
+      undefined,
+    ],
+  ] as const)("%s", (_name, raw, owner, heartbeat, expectedChanges) => {
+    const res = migrateLegacyConfigForTest(raw);
+    const defaults = (res.config?.[owner] as { defaults?: { heartbeat?: unknown } } | undefined)
+      ?.defaults;
 
-    expect(res.changes).toStrictEqual([
-      "Merged heartbeat → agents.defaults.heartbeat (filled missing fields from legacy; kept explicit agents.defaults values).",
-      'Upgraded config.agents.defaults.heartbeat.model from "anthropic/claude-3-5-haiku-20241022" to "anthropic/claude-sonnet-4-6".',
-    ]);
-    expect(res.config?.agents?.defaults?.heartbeat).toEqual({
-      every: "1h",
-      target: "telegram",
-      model: "anthropic/claude-sonnet-4-6",
-    });
+    expect(defaults?.heartbeat).toEqual(heartbeat);
     expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
-  });
-
-  it("keeps explicit channels.defaults.heartbeat values when merging top-level heartbeat visibility", () => {
-    const res = migrateLegacyConfigForTest({
-      heartbeat: {
-        showOk: true,
-        showAlerts: true,
-      },
-      channels: {
-        defaults: {
-          heartbeat: {
-            showOk: false,
-            useIndicator: false,
-          },
-        },
-      },
-    });
-
-    expect(res.changes).toStrictEqual([
-      "Merged heartbeat visibility → channels.defaults.heartbeat (filled missing fields from legacy; kept explicit channels.defaults values).",
-    ]);
-    expect(res.config?.channels?.defaults?.heartbeat).toEqual({
-      showOk: false,
-      showAlerts: true,
-      useIndicator: false,
-    });
-    expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
-  });
-
-  it("preserves agents.defaults.heartbeat precedence over top-level heartbeat legacy key", () => {
-    const res = migrateLegacyConfigForTest({
-      agents: {
-        defaults: {
-          heartbeat: {
-            every: "1h",
-            target: "telegram",
-          },
-        },
-      },
-      heartbeat: {
-        every: "30m",
-        target: "discord",
-        model: "anthropic/claude-3-5-haiku-20241022",
-      },
-    });
-
-    expect(res.config?.agents?.defaults?.heartbeat).toEqual({
-      every: "1h",
-      target: "telegram",
-      model: "anthropic/claude-sonnet-4-6",
-    });
-    expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
+    if (expectedChanges) {
+      expect(res.changes).toStrictEqual(expectedChanges);
+    }
   });
 
   it("drops blocked prototype keys when migrating top-level heartbeat", () => {
@@ -2776,136 +3203,112 @@ describe("legacy migrate heartbeat config", () => {
 });
 
 describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
-  it("seeds allowedOrigins for bind=lan with no existing controlUi config", () => {
-    const res = migrateLegacyConfigForTest({
-      gateway: {
-        bind: "lan",
-        auth: { mode: "token", token: "tok" },
-      },
-    });
-    expect(res.config?.gateway?.controlUi?.allowedOrigins).toEqual([
-      "http://localhost:18789",
-      "http://127.0.0.1:18789",
-    ]);
-    expect(res.changes).toStrictEqual([
-      'Seeded gateway.controlUi.allowedOrigins ["http://localhost:18789","http://127.0.0.1:18789"] for bind=lan. Required since v2026.2.26. Add other machine origins to gateway.controlUi.allowedOrigins if needed.',
-    ]);
-  });
+  const defaultOrigins = ["http://localhost:18789", "http://127.0.0.1:18789"] as const;
+  const defaultSeedChange =
+    'Seeded gateway.controlUi.allowedOrigins ["http://localhost:18789","http://127.0.0.1:18789"] for bind=lan. Required since v2026.2.26. Add other machine origins to gateway.controlUi.allowedOrigins if needed.';
 
-  it("seeds allowedOrigins using configured port", () => {
-    const res = migrateLegacyConfigForTest({
-      gateway: {
-        bind: "lan",
-        port: 9000,
-        auth: { mode: "token", token: "tok" },
-      },
-    });
-    expect(res.config?.gateway?.controlUi?.allowedOrigins).toEqual([
-      "http://localhost:9000",
-      "http://127.0.0.1:9000",
-    ]);
-  });
-
-  it("seeds allowedOrigins including custom bind host for bind=custom", () => {
-    const res = migrateLegacyConfigForTest({
-      gateway: {
+  it.each([
+    [
+      "seeds allowedOrigins for bind=lan with no existing controlUi config",
+      { bind: "lan", auth: { mode: "token", token: "tok" } },
+      defaultOrigins,
+      [defaultSeedChange],
+      undefined,
+      undefined,
+    ],
+    [
+      "seeds allowedOrigins using configured port",
+      { bind: "lan", port: 9000, auth: { mode: "token", token: "tok" } },
+      ["http://localhost:9000", "http://127.0.0.1:9000"],
+      undefined,
+      undefined,
+      undefined,
+    ],
+    [
+      "seeds allowedOrigins including custom bind host for bind=custom",
+      {
         bind: "custom",
         customBindHost: "192.168.1.100",
         auth: { mode: "token", token: "tok" },
       },
-    });
-    expect(res.config?.gateway?.controlUi?.allowedOrigins).toEqual([
-      "http://localhost:18789",
-      "http://127.0.0.1:18789",
-      "http://192.168.1.100:18789",
-    ]);
-  });
-
-  it("does not overwrite existing allowedOrigins — returns null (no migration needed)", () => {
-    // When allowedOrigins already exists, the migration is a no-op.
-    // applyLegacyDoctorMigrations returns next=null when changes.length===0, so config is null.
-    const res = migrateLegacyConfigForTest({
-      gateway: {
-        bind: "lan",
-        auth: { mode: "token", token: "tok" },
-        controlUi: { allowedOrigins: ["https://control.example.com"] },
-      },
-    });
-    expect(res.config).toBeNull();
-    expect(res.changes).toStrictEqual([]);
-  });
-
-  it("does not migrate when dangerouslyAllowHostHeaderOriginFallback is set — returns null", () => {
-    const res = migrateLegacyConfigForTest({
-      gateway: {
-        bind: "lan",
-        auth: { mode: "token", token: "tok" },
-        controlUi: { dangerouslyAllowHostHeaderOriginFallback: true },
-      },
-    });
-    expect(res.config).toBeNull();
-    expect(res.changes).toStrictEqual([]);
-  });
-
-  it("seeds allowedOrigins when existing entries are blank strings", () => {
-    const res = migrateLegacyConfigForTest({
-      gateway: {
+      [...defaultOrigins, "http://192.168.1.100:18789"],
+      undefined,
+      undefined,
+      undefined,
+    ],
+    [
+      "seeds allowedOrigins when existing entries are blank strings",
+      {
         bind: "lan",
         auth: { mode: "token", token: "tok" },
         controlUi: { allowedOrigins: ["", "   "] },
       },
-    });
-    expect(res.config?.gateway?.controlUi?.allowedOrigins).toEqual([
-      "http://localhost:18789",
-      "http://127.0.0.1:18789",
-    ]);
-    expect(res.changes).toStrictEqual([
-      'Seeded gateway.controlUi.allowedOrigins ["http://localhost:18789","http://127.0.0.1:18789"] for bind=lan. Required since v2026.2.26. Add other machine origins to gateway.controlUi.allowedOrigins if needed.',
-    ]);
-  });
-
-  it("does not migrate loopback bind — returns null", () => {
-    const res = migrateLegacyConfigForTest({
-      gateway: {
-        bind: "loopback",
-        auth: { mode: "token", token: "tok" },
-      },
-    });
-    expect(res.config).toBeNull();
-    expect(res.changes).toStrictEqual([]);
-  });
-
-  it("preserves existing controlUi fields when seeding allowedOrigins", () => {
-    const res = migrateLegacyConfigForTest({
-      gateway: {
+      defaultOrigins,
+      [defaultSeedChange],
+      undefined,
+      undefined,
+    ],
+    [
+      "preserves existing controlUi fields when seeding allowedOrigins",
+      {
         bind: "lan",
         auth: { mode: "token", token: "tok" },
         controlUi: { basePath: "/app" },
       },
-    });
-    expect(res.config?.gateway?.controlUi?.basePath).toBe("/app");
-    expect(res.config?.gateway?.controlUi?.allowedOrigins).toEqual([
-      "http://localhost:18789",
-      "http://127.0.0.1:18789",
-    ]);
+      defaultOrigins,
+      undefined,
+      undefined,
+      "/app",
+    ],
+    [
+      "seeds allowedOrigins for non-loopback host aliases before normalizing bind",
+      { bind: "0.0.0.0", auth: { mode: "token", token: "tok" } },
+      defaultOrigins,
+      [defaultSeedChange, 'Normalized gateway.bind "0.0.0.0" → "lan".'],
+      "lan",
+      undefined,
+    ],
+  ] as const)("%s", (_name, gateway, origins, expectedChanges, expectedBind, expectedBasePath) => {
+    const res = migrateLegacyConfigForTest({ gateway });
+
+    expect(res.config?.gateway?.controlUi?.allowedOrigins).toEqual(origins);
+    if (expectedChanges) {
+      expect(res.changes).toStrictEqual(expectedChanges);
+    }
+    if (expectedBind) {
+      expect(res.config?.gateway?.bind).toBe(expectedBind);
+    }
+    if (expectedBasePath) {
+      expect(res.config?.gateway?.controlUi?.basePath).toBe(expectedBasePath);
+    }
   });
 
-  it("seeds allowedOrigins for non-loopback host aliases before normalizing bind", () => {
-    const res = migrateLegacyConfigForTest({
-      gateway: {
-        bind: "0.0.0.0",
+  it.each([
+    [
+      "does not overwrite existing allowedOrigins — returns null (no migration needed)",
+      {
+        bind: "lan",
         auth: { mode: "token", token: "tok" },
+        controlUi: { allowedOrigins: ["https://control.example.com"] },
       },
-    });
-    expect(res.config?.gateway?.bind).toBe("lan");
-    expect(res.config?.gateway?.controlUi?.allowedOrigins).toEqual([
-      "http://localhost:18789",
-      "http://127.0.0.1:18789",
-    ]);
-    expect(res.changes).toStrictEqual([
-      'Seeded gateway.controlUi.allowedOrigins ["http://localhost:18789","http://127.0.0.1:18789"] for bind=lan. Required since v2026.2.26. Add other machine origins to gateway.controlUi.allowedOrigins if needed.',
-      'Normalized gateway.bind "0.0.0.0" → "lan".',
-    ]);
+    ],
+    [
+      "does not migrate when dangerouslyAllowHostHeaderOriginFallback is set — returns null",
+      {
+        bind: "lan",
+        auth: { mode: "token", token: "tok" },
+        controlUi: { dangerouslyAllowHostHeaderOriginFallback: true },
+      },
+    ],
+    [
+      "does not migrate loopback bind — returns null",
+      { bind: "loopback", auth: { mode: "token", token: "tok" } },
+    ],
+  ] as const)("%s", (_name, gateway) => {
+    const res = migrateLegacyConfigForTest({ gateway });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toStrictEqual([]);
   });
 
   it("does not seed allowedOrigins for loopback host aliases", () => {
@@ -2918,6 +3321,60 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
     expect(res.config?.gateway?.bind).toBe("loopback");
     expect(res.config?.gateway?.controlUi).toBeUndefined();
     expect(res.changes).toStrictEqual(['Normalized gateway.bind "localhost" → "loopback".']);
+  });
+});
+
+describe("gateway.port out-of-range repair migrate", () => {
+  it.each([
+    ["removes gateway.port above TCP max and records a change", 65_536, false],
+    ["removes gateway.port zero and records a change", 0, false],
+    ["preserves valid gateway.port values", 65_535, true],
+    ["leaves gateway.port set to 1 (valid minimum) untouched", 1, true],
+  ] as const)("%s", (_name, port, valid) => {
+    const res = migrateLegacyConfigForTest({ gateway: { port } });
+
+    if (valid) {
+      expect(res.config).toBeNull();
+      expect(res.changes).toEqual([]);
+      return;
+    }
+    expect(res.changes).toStrictEqual([
+      `Removed out-of-range gateway.port (${port}). Valid TCP ports are 1–65535; the gateway will use the default port 18789.`,
+    ]);
+    expect(res.config).not.toHaveProperty("gateway");
+  });
+
+  it("preserves other gateway keys when removing the port", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { port: 65_536, bind: "loopback" },
+    });
+
+    expect(res.config?.gateway).toEqual({ bind: "loopback" });
+    expect(res.changes.length).toBeGreaterThan(0);
+  });
+
+  it("seeds non-loopback Control UI origins with the fallback port", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { port: 65_536, bind: "lan" },
+    });
+
+    expect(res.config?.gateway).toMatchObject({
+      bind: "lan",
+      controlUi: {
+        allowedOrigins: ["http://localhost:18789", "http://127.0.0.1:18789"],
+      },
+    });
+  });
+
+  it("is idempotent for out-of-range values", () => {
+    const first = migrateLegacyConfigForTest({
+      gateway: { port: 65_536 },
+    });
+    expect(first.changes.length).toBe(1);
+    expect(first.config).not.toHaveProperty("gateway");
+
+    const second = migrateLegacyConfigForTest(first.config);
+    expect(second.changes).toStrictEqual([]);
   });
 });
 
@@ -2943,7 +3400,7 @@ describe("legacy model compat migrate", () => {
     expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toContain("agents");
     const res = migrateLegacyConfigForTest(raw);
 
-    expect(res.config?.agents?.defaults?.imageGenerationModel).toEqual({
+    expect(res.config?.agents?.defaults?.mediaModels?.image).toEqual({
       primary: "xai/grok-imagine-image-quality",
       fallbacks: ["xai/grok-imagine-image"],
     });
@@ -3002,6 +3459,7 @@ describe("legacy model compat migrate", () => {
               "xai/grok-4-fast-reasoning",
               "openai/gpt-4o-transcribe",
               "openai/gpt-4o-mini-tts",
+              "openai/constructor",
             ],
           },
           models: {
@@ -3036,15 +3494,15 @@ describe("legacy model compat migrate", () => {
     });
 
     expect(res.config?.agents?.defaults?.imageModel).toBe("anthropic/claude-haiku-4-5");
-    expect(res.config?.agents?.defaults?.imageGenerationModel).toEqual({
+    expect(res.config?.agents?.defaults?.mediaModels?.image).toEqual({
       primary: "github-copilot/claude-sonnet-4.6",
       fallbacks: ["github-copilot/gpt-5.4-mini"],
     });
-    expect(res.config?.agents?.defaults?.musicGenerationModel).toBe(
+    expect(res.config?.agents?.defaults?.mediaModels?.music).toBe(
       "vercel-ai-gateway/anthropic/claude-opus-4-6",
     );
     expect(res.config?.agents?.defaults?.pdfModel).toBe("anthropic/claude-sonnet-4-6");
-    expect(res.config?.agents?.defaults?.videoGenerationModel).toBe("anthropic/claude-opus-4-10");
+    expect(res.config?.agents?.defaults?.mediaModels?.video).toBe("anthropic/claude-opus-4-10");
     expect(res.config?.agents?.defaults?.model).toEqual({
       primary: "anthropic/claude-opus-4-7@anthropic:work",
       fallbacks: [
@@ -3075,6 +3533,7 @@ describe("legacy model compat migrate", () => {
         "xai/grok-4.3",
         "openai/gpt-4o-transcribe",
         "openai/gpt-4o-mini-tts",
+        "openai/constructor",
       ],
     });
     expect(res.config?.agents?.defaults?.workspace).toBe("/tmp/claude-3-sonnet");
@@ -3130,6 +3589,155 @@ describe("legacy model compat migrate", () => {
       'config.plugins.entries.lossless-claw.config.summaryModel from "anthropic/claude-3-5-sonnet" to "anthropic/claude-sonnet-4-6"',
       'config.channels.modelByChannel.telegram.* from "anthropic/claude-opus-4-5" to "anthropic/claude-opus-4-7"',
     ]);
+  });
+
+  it("normalizes persisted model aliases across nested selections and provider catalogs", () => {
+    const retired = "google/gemini-3-pro-preview";
+    const canonical = "google/gemini-3.1-pro-preview";
+    const raw = {
+      agents: {
+        defaults: {
+          model: retired,
+          utilityModel: retired,
+          imageModel: retired,
+          voiceModel: retired,
+          pdfModel: retired,
+          mediaModels: {
+            image: retired,
+            video: { primary: retired, fallbacks: [retired] },
+            music: retired,
+          },
+          heartbeat: { model: retired },
+          subagents: { model: { primary: retired, fallbacks: [retired] } },
+          compaction: { model: retired, memoryFlush: { model: retired } },
+          models: { [retired]: { alias: "Gemini" } },
+        },
+        entries: {
+          ops: {
+            model: retired,
+            utilityModel: retired,
+            heartbeat: { model: retired },
+            subagents: { model: retired },
+            models: { [retired]: { alias: "Ops Gemini" } },
+          },
+        },
+      },
+      models: {
+        providers: {
+          google: { models: [{ id: "gemini-3-pro-preview", name: "Gemini" }] },
+          myproxy: {
+            models: [{ id: "google/gemini-3-pro-preview", name: "Gemini proxy" }],
+          },
+          openai: { models: [{ id: "gpt-4o", name: "GPT-4o" }] },
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual(
+      expect.arrayContaining(["agents", "models"]),
+    );
+    const res = migrateLegacyConfigForTest(raw);
+    const defaults = res.config?.agents?.defaults;
+    expect(defaults).toMatchObject({
+      model: canonical,
+      utilityModel: canonical,
+      imageModel: canonical,
+      voiceModel: canonical,
+      pdfModel: canonical,
+      mediaModels: {
+        image: canonical,
+        video: { primary: canonical, fallbacks: [canonical] },
+        music: canonical,
+      },
+      heartbeat: { model: canonical },
+      subagents: { model: { primary: canonical, fallbacks: [canonical] } },
+      compaction: { model: canonical, memoryFlush: { model: canonical } },
+      models: { [canonical]: { alias: "Gemini" } },
+    });
+    expect(res.config?.agents?.entries?.ops).toMatchObject({
+      model: canonical,
+      utilityModel: canonical,
+      heartbeat: { model: canonical },
+      subagents: { model: canonical },
+      models: { [canonical]: { alias: "Ops Gemini" } },
+    });
+    expect(res.config?.models?.providers?.google?.models?.[0]?.id).toBe("gemini-3.1-pro-preview");
+    expect(res.config?.models?.providers?.myproxy?.models?.[0]?.id).toBe(canonical);
+    expect(res.config?.models?.providers?.openai?.models?.[0]?.id).toBe("gpt-5.5");
+  });
+
+  it("canonicalizes persisted OpenAI GPT-5.6 aliases without affecting GitHub Copilot", () => {
+    const copilot = "github-copilot/gpt-5.6";
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6@openai:work" },
+          modelPolicy: { allow: ["openai/gpt-5.6", copilot] },
+          models: {
+            "openai/gpt-5.6": { alias: "GPT" },
+            "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
+            [copilot]: { alias: "Copilot GPT" },
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: { models: [{ id: "gpt-5.6", name: "GPT alias" }] },
+          "github-copilot": { models: [{ id: "gpt-5.6", name: "Copilot GPT" }] },
+        },
+      },
+    });
+    const defaults = res.config?.agents?.defaults;
+    expect(defaults).toMatchObject({
+      model: { primary: "openai/gpt-5.6-sol@openai:work" },
+      modelPolicy: { allow: ["openai/gpt-5.6-sol", copilot] },
+    });
+    expect(defaults?.models).toEqual({
+      "openai/gpt-5.6-sol": { alias: "GPT", agentRuntime: { id: "openclaw" } },
+      [copilot]: { alias: "Copilot GPT" },
+    });
+    expect(res.config?.models?.providers?.openai?.models?.[0]?.id).toBe("gpt-5.6-sol");
+    expect(res.config?.models?.providers?.["github-copilot"]?.models?.[0]?.id).toBe("gpt-5.6");
+  });
+
+  it("merges provider catalog rows that normalize to an explicitly canonical id", () => {
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          google: {
+            models: [
+              {
+                id: "gemini-3-pro-preview",
+                name: "Retired alias",
+                maxTokens: 65_536,
+                cost: { input: 1 },
+              },
+              {
+                id: "gemini-3.1-pro-preview",
+                name: "Canonical",
+                cost: { output: 2 },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.config?.models?.providers?.google?.models).toEqual([
+      {
+        id: "gemini-3.1-pro-preview",
+        name: "Canonical",
+        maxTokens: 65_536,
+        cost: { output: 2, input: 1 },
+      },
+    ]);
+    expect(res.changes).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(
+          'Merged config.models.providers.google.models.0 into model id "gemini-3.1-pro-preview"; kept canonical values for conflicting fields: name.',
+        ),
+      ]),
+    );
   });
 
   it("deep-merges colliding retired model refs and reports only unequal fields", () => {
@@ -3392,6 +4000,7 @@ describe("legacy model compat migrate", () => {
     });
     expect(res.config?.models?.providers?.vllm?.models?.[0]?.reasoning).toBe(true);
     expect(res.changes).toStrictEqual([
+      "Copied the legacy default model map to agents.defaults.modelPolicy.allow.",
       'Moved agents.defaults.models."vllm/Qwen/Qwen3-8B".params.qwenThinkingFormat to models.providers.vllm.models[0].compat.thinkingFormat ("qwen-chat-template").',
     ]);
   });
@@ -3423,6 +4032,7 @@ describe("legacy model compat migrate", () => {
       },
     ]);
     expect(res.changes).toStrictEqual([
+      "Copied the legacy default model map to agents.defaults.modelPolicy.allow.",
       'Moved agents.defaults.models."VLLM/Qwen/Qwen3-8B".params.qwenThinkingFormat to models.providers.vllm.models[0].compat.thinkingFormat ("qwen-chat-template").',
     ]);
   });
@@ -3454,6 +4064,7 @@ describe("legacy model compat migrate", () => {
       },
     ]);
     expect(res.changes).toStrictEqual([
+      "Copied the legacy default model map to agents.defaults.modelPolicy.allow.",
       'Moved agents.defaults.models."vllm/Qwen/Qwen3-8B".params.qwen_thinking_format to models.providers.vllm.models[0].compat.thinkingFormat ("qwen").',
     ]);
   });
@@ -3493,6 +4104,7 @@ describe("legacy model compat migrate", () => {
     });
     expect(res.config?.models?.providers?.vllm?.models?.[0]?.reasoning).toBe(true);
     expect(res.changes).toStrictEqual([
+      "Copied the legacy default model map to agents.defaults.modelPolicy.allow.",
       'Removed agents.defaults.models."vllm/Qwen/Qwen3-8B".params.qwenThinkingFormat; models.providers.vllm.models[0].compat.thinkingFormat is already "qwen-chat-template".',
     ]);
   });
@@ -3528,6 +4140,7 @@ describe("legacy model compat migrate", () => {
       },
     ]);
     expect(res.changes).toStrictEqual([
+      "Copied the legacy default model map to agents.defaults.modelPolicy.allow.",
       'Moved agents.defaults.models."vllm/Qwen/Qwen3-8B".params.qwenThinkingFormat to models.providers.vllm.models[0].compat.thinkingFormat ("qwen-chat-template").',
     ]);
   });
@@ -3914,8 +4527,23 @@ describe("legacy model compat migrate", () => {
       },
     });
 
-    expect(res.config).toBeNull();
-    expect(res.changes).toStrictEqual([]);
+    expect(res.config).toMatchObject({
+      agents: {
+        defaults: {
+          modelPolicy: { allow: ["vllm/Qwen/Qwen3-8B"] },
+          models: {
+            "vllm/Qwen/Qwen3-8B": {
+              params: { qwenThinkingFormat: "chat-template" },
+            },
+          },
+        },
+      },
+      meta: { migrations: { modelPolicyAllowlist: true } },
+      models: { providers: { vllm: { models: "malformed" } } },
+    });
+    expect(res.changes).toStrictEqual([
+      "Copied the legacy default model map to agents.defaults.modelPolicy.allow.",
+    ]);
   });
 
   it("leaves malformed vLLM provider ancestors untouched during legacy Qwen migration", () => {
@@ -3938,8 +4566,23 @@ describe("legacy model compat migrate", () => {
       },
     });
 
-    expect(res.config).toBeNull();
-    expect(res.changes).toStrictEqual([]);
+    expect(res.config).toMatchObject({
+      agents: {
+        defaults: {
+          modelPolicy: { allow: ["vllm/Qwen/Qwen3-8B"] },
+          models: {
+            "vllm/Qwen/Qwen3-8B": {
+              params: { qwenThinkingFormat: "chat-template" },
+            },
+          },
+        },
+      },
+      meta: { migrations: { modelPolicyAllowlist: true } },
+      models: { providers: { vllm: "malformed" } },
+    });
+    expect(res.changes).toStrictEqual([
+      "Copied the legacy default model map to agents.defaults.modelPolicy.allow.",
+    ]);
   });
 
   it("reports legacy vLLM Qwen thinking params before doctor fix", () => {
@@ -4088,16 +4731,18 @@ describe("legacy flat memory search field migrate", () => {
     );
     const res = migrateLegacyConfigForTest(raw);
 
-    expect(res.config?.agents?.defaults?.memorySearch).toEqual({
+    expect(res.config?.memory?.search).toEqual({
       enabled: true,
-      chunking: { tokens: 800, overlap: 100 },
       query: { maxResults: 5 },
     });
-    expect(res.changes).toStrictEqual([
-      "Moved agents.defaults.memorySearch.chunkSize → agents.defaults.memorySearch.chunking.tokens.",
-      "Moved agents.defaults.memorySearch.chunkOverlap → agents.defaults.memorySearch.chunking.overlap.",
-      "Moved agents.defaults.memorySearch.maxResults → agents.defaults.memorySearch.query.maxResults.",
-    ]);
+    expect(res.changes).toEqual(
+      expect.arrayContaining([
+        "Moved memory.search.chunkSize → memory.search.chunking.tokens.",
+        "Moved memory.search.chunkOverlap → memory.search.chunking.overlap.",
+        "Moved memory.search.maxResults → memory.search.query.maxResults.",
+        "Removed retired runtime tuning knobs; built-in defaults now apply.",
+      ]),
+    );
   });
 
   it("moves a top-level legacy object and keeps explicit canonical values", () => {
@@ -4119,17 +4764,19 @@ describe("legacy flat memory search field migrate", () => {
     });
 
     expect(res.config).not.toHaveProperty("memorySearch");
-    expect(res.config?.agents?.defaults?.memorySearch).toEqual({
+    expect(res.config?.memory?.search).toEqual({
       enabled: true,
-      chunking: { tokens: 1200, overlap: 100 },
       query: { maxResults: 9 },
     });
-    expect(res.changes).toEqual([
-      "Merged memorySearch → agents.defaults.memorySearch (filled missing fields from legacy; kept explicit agents.defaults values).",
-      "Removed agents.defaults.memorySearch.chunkSize (agents.defaults.memorySearch.chunking.tokens already set).",
-      "Moved agents.defaults.memorySearch.chunkOverlap → agents.defaults.memorySearch.chunking.overlap.",
-      "Removed agents.defaults.memorySearch.maxResults (agents.defaults.memorySearch.query.maxResults already set).",
-    ]);
+    expect(res.changes).toEqual(
+      expect.arrayContaining([
+        "Moved legacy memorySearch defaults → memory.search.",
+        "Removed memory.search.chunkSize (memory.search.chunking.tokens already set).",
+        "Moved memory.search.chunkOverlap → memory.search.chunking.overlap.",
+        "Removed memory.search.maxResults (memory.search.query.maxResults already set).",
+        "Removed retired runtime tuning knobs; built-in defaults now apply.",
+      ]),
+    );
   });
 
   it("moves per-agent flat fields independently", () => {
@@ -4142,16 +4789,16 @@ describe("legacy flat memory search field migrate", () => {
       },
     });
 
-    expect(res.config?.agents?.list?.[0]?.memorySearch).toEqual({
-      chunking: { tokens: 500 },
-    });
-    expect(res.config?.agents?.list?.[1]?.memorySearch).toEqual({
-      chunking: { overlap: 50 },
+    expect(res.config?.agents?.list?.[0]?.memory?.search).toBeUndefined();
+    expect(res.config?.agents?.list?.[1]?.memory?.search).toEqual({
       query: { maxResults: 10 },
     });
+    expect(res.changes).toContain(
+      "Removed retired runtime tuning knobs; built-in defaults now apply.",
+    );
   });
 
-  it("is a no-op for canonical memory search fields", () => {
+  it("removes retired canonical memory search chunking fields", () => {
     const raw = {
       agents: {
         defaults: {
@@ -4163,8 +4810,16 @@ describe("legacy flat memory search field migrate", () => {
       },
     };
 
-    expect(findLegacyConfigIssues(raw)).toEqual([]);
-    expect(migrateLegacyConfigForTest(raw)).toEqual({ config: null, changes: [] });
+    expect(findLegacyConfigIssues(raw)).toEqual([
+      expect.objectContaining({ path: "agents.defaults.memorySearch" }),
+    ]);
+    const res = migrateLegacyConfigForTest(raw);
+    expect(res.config?.memory?.search).toEqual({
+      query: { maxResults: 5 },
+    });
+    expect(res.changes).toContain(
+      "Removed retired runtime tuning knobs; built-in defaults now apply.",
+    );
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

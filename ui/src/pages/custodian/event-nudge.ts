@@ -1,4 +1,7 @@
-import type { GatewayEventFrame } from "../../api/gateway.ts";
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { html } from "lit";
+import { GatewayRequestError, type GatewayEventFrame } from "../../api/gateway.ts";
+import { t } from "../../i18n/index.ts";
 
 export type CustodianEventNudge = {
   severity: 1 | 2 | 3;
@@ -6,6 +9,124 @@ export type CustodianEventNudge = {
   channelLabel?: string;
   message: string;
 };
+
+export type CustodianSendDelivery = "unsent" | "sent" | "received";
+export type CustodianSendOutcome = "sent" | "rejected" | "unknown";
+
+export function classifyCustodianSendFailure(
+  error: unknown,
+  delivery: CustodianSendDelivery,
+): CustodianSendOutcome {
+  if (delivery === "received") {
+    return "sent";
+  }
+  if (error instanceof GatewayRequestError || delivery === "unsent") {
+    return "rejected";
+  }
+  return "unknown";
+}
+
+export function questionUncertainty(previous: boolean, outcome: CustodianSendOutcome): boolean {
+  if (outcome === "sent") {
+    return false;
+  }
+  return outcome === "unknown" ? true : previous;
+}
+
+export function shouldConsumeNudge(
+  current: CustodianEventNudge | null,
+  finished: CustodianEventNudge,
+  outcome: CustodianSendOutcome,
+): boolean {
+  return (
+    outcome !== "rejected" &&
+    current !== null &&
+    current.severity === finished.severity &&
+    current.message === finished.message
+  );
+}
+
+export function reconcileCustodianEventNudge(
+  current: CustodianEventNudge | null,
+  pending: CustodianEventNudge | null,
+  event: Pick<GatewayEventFrame, "event" | "payload">,
+): [CustodianEventNudge | null, CustodianEventNudge | null] {
+  if (event.event !== "health") {
+    return [current, pending];
+  }
+  const next = classifyCustodianEventNudge(event);
+  if (!pending) {
+    return [next, null];
+  }
+  return [next, pending];
+}
+
+function eventNudgeText(nudge: CustodianEventNudge): string {
+  if (nudge.kind === "config-reload") {
+    return t("custodian.nudge.configReload");
+  }
+  const channel = nudge.channelLabel ?? t("custodian.nudge.channelFallback");
+  if (nudge.kind === "channel-auth") {
+    return t("custodian.nudge.channelAuth", { channel });
+  }
+  if (nudge.kind === "channel-disconnected") {
+    return t("custodian.nudge.channelDisconnected", { channel });
+  }
+  return t("custodian.nudge.channelDegraded", { channel });
+}
+
+export function renderCustodianEventNudge(params: {
+  nudge: CustodianEventNudge;
+  disabled: boolean;
+  onSend: () => void;
+  onDismiss: () => void;
+}) {
+  return html`<div class="custodian__nudge" role="status">
+    <button
+      class="custodian__nudge-action"
+      type="button"
+      ?disabled=${params.disabled}
+      @click=${params.onSend}
+    >
+      ${eventNudgeText(params.nudge)}
+    </button>
+    <button
+      class="custodian__nudge-dismiss"
+      type="button"
+      aria-label=${t("custodian.nudge.dismiss")}
+      @click=${params.onDismiss}
+    >
+      ×
+    </button>
+  </div>`;
+}
+
+export function renderCustodianChannelOnboardingNudge(params: {
+  onOpenChannels: () => void;
+  onDismiss: () => void;
+}) {
+  return html`<div class="custodian__nudge custodian__nudge--channel-onboarding" role="status">
+    <div class="custodian__nudge-copy">
+      <strong>${t("custodian.nudge.channelSetupTitle")}</strong>
+      <span>${t("custodian.nudge.channelSetupBody")}</span>
+    </div>
+    <button
+      class="btn btn--sm primary custodian__nudge-cta"
+      type="button"
+      @click=${params.onOpenChannels}
+    >
+      ${t("custodian.nudge.channelSetupAction")}
+    </button>
+    <button
+      class="custodian__nudge-dismiss"
+      type="button"
+      aria-label=${t("custodian.nudge.channelSetupDismiss")}
+      @click=${params.onDismiss}
+    >
+      ×
+    </button>
+  </div>`;
+}
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -22,12 +143,6 @@ const CHANNEL_AUTH_STATUS_KEYS = [
   "signingSecretStatus",
   "userTokenStatus",
 ] as const;
-
-function asRecord(value: unknown): UnknownRecord | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as UnknownRecord)
-    : null;
-}
 
 function hasUnavailableAuth(account: UnknownRecord): boolean {
   return CHANNEL_AUTH_STATUS_KEYS.some((key) => account[key] === "configured_unavailable");
@@ -164,7 +279,7 @@ function classifyHealth(payload: unknown): CustodianEventNudge | null {
 }
 
 /** Only Gateway health failures produce presence nudges; success/info events stay silent. */
-export function classifyCustodianEventNudge(
+function classifyCustodianEventNudge(
   event: Pick<GatewayEventFrame, "event" | "payload">,
 ): CustodianEventNudge | null {
   return event.event === "health" ? classifyHealth(event.payload) : null;

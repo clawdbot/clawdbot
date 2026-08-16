@@ -1,11 +1,11 @@
-import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery-owner-release.js";
-import { isMainRestartRecoveryCandidate } from "../../agents/main-session-recovery-state.js";
+import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
+import { isMainRestartRecoveryCandidate } from "../../agents/main-session-recovery/main-session-recovery-state.js";
 import {
   claimMainSessionRecoveryOwner,
   releaseMainSessionRecoveryOwner,
   type MainSessionRecoveryPendingTarget,
   type MainSessionRecoveryOwnerLease,
-} from "../../agents/main-session-recovery-store.js";
+} from "../../agents/main-session-recovery/main-session-recovery-store.js";
 // Decides whether an inbound turn may start, queue, or abort a reply run.
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -24,20 +24,22 @@ import {
 import {
   createReplyOperation,
   expireStaleReplyOperation,
+  isReplyRunSuccessorAdmissionBlocked,
   isReplyRunEvidenceStale,
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS,
   replyRunRegistry,
   ReplyRunAlreadyActiveError,
   ReplyRunFollowupAdmissionBlockedError,
+  ReplyRunSuccessorAdmissionBlockedError,
+  registerReplyOperationSuccessorBarrier,
   retainReplyOperationUntilComplete,
   runAfterReplyOperationClear,
   type ReplyOperation,
+  type ReplyTurnKind,
   waitForReplyRunFollowupAdmission,
+  waitForReplyRunSuccessorAdmission,
 } from "./reply-run-registry.js";
-
-/** Kinds of turns that compete for one reply run slot per session. */
-type ReplyTurnKind = "visible" | "heartbeat" | "queued_followup";
 
 /** Admission result for a reply turn attempting to own the session run slot. */
 type ReplyTurnAdmission =
@@ -57,11 +59,22 @@ const lifecycleAdmissionByOperation = new WeakMap<ReplyOperation, SessionWorkAdm
 async function releaseReplyRecoveryOwner(
   lease: MainSessionRecoveryOwnerLease | undefined,
 ): Promise<MainSessionRecoveryPendingTarget | undefined> {
+  if (!lease) {
+    return undefined;
+  }
+  let settleDeferredRelease: (
+    pending: MainSessionRecoveryPendingTarget | undefined,
+  ) => void = () => {};
+  const deferredRelease = new Promise<MainSessionRecoveryPendingTarget | undefined>((resolve) => {
+    settleDeferredRelease = resolve;
+  });
   try {
-    return await releaseMainSessionRecoveryOwner(lease);
+    return await releaseMainSessionRecoveryOwner(lease, {
+      onDeferredSuccess: settleDeferredRelease,
+    });
   } catch (error) {
     log.warn(`failed to release main-session recovery reply owner: ${formatErrorMessage(error)}`);
-    return undefined;
+    return await deferredRelease;
   }
 }
 
@@ -123,6 +136,7 @@ type ReplyTurnAdmissionParams = {
   kind: ReplyTurnKind;
   resetTriggered: boolean;
   routeThreadId?: string | number;
+  originatingLeafEntryId?: string | null;
   /**
    * Move this already-held operation into sessionKey's run slot instead of
    * creating a new one. Used when a native command turn (admitted under its
@@ -173,6 +187,29 @@ async function admitReplyTurnWithWaitSignal(
   while (true) {
     if (isAbortSignalAborted(params.upstreamAbortSignal)) {
       return { status: "skipped", reason: "aborted" };
+    }
+    if (isReplyRunSuccessorAdmissionBlocked(params.sessionKey)) {
+      if (params.kind === "heartbeat") {
+        return { status: "skipped", reason: "active-run" };
+      }
+      const successorAdmission = await waitForAdmission(() =>
+        waitForReplyRunSuccessorAdmission(
+          params.sessionKey,
+          params.kind === "visible" ? null : waitTimeoutMs,
+          { signal: params.upstreamAbortSignal },
+        ),
+      );
+      if (!successorAdmission.settled) {
+        return {
+          status: "skipped",
+          reason: isAbortSignalAborted(params.upstreamAbortSignal) ? "aborted" : "active-run",
+        };
+      }
+      sessionId = successorAdmission.sessionId ?? sessionId;
+      if (expectedSessionId && successorAdmission.sessionId) {
+        expectedSessionId = successorAdmission.sessionId;
+      }
+      continue;
     }
     try {
       const storePath = params.storePath;
@@ -254,6 +291,9 @@ async function admitReplyTurnWithWaitSignal(
           })
         : undefined;
       try {
+        if (isReplyRunSuccessorAdmissionBlocked(params.sessionKey)) {
+          throw new ReplyRunSuccessorAdmissionBlockedError(params.sessionKey);
+        }
         if (
           storePath &&
           !params.resetTriggered &&
@@ -294,8 +334,10 @@ async function admitReplyTurnWithWaitSignal(
           operation = createReplyOperation({
             sessionKey: params.sessionKey,
             sessionId,
+            turnKind: params.kind,
             resetTriggered: params.resetTriggered,
             routeThreadId: params.routeThreadId,
+            originatingLeafEntryId: params.originatingLeafEntryId,
             upstreamAbortSignal: params.upstreamAbortSignal,
             respectFollowupAdmissionBarrier:
               params.kind === "queued_followup" || params.kind === "heartbeat",
@@ -333,10 +375,21 @@ async function admitReplyTurnWithWaitSignal(
         // idempotent), so both identities free on operation clear.
         retainReplyOperationUntilComplete(operation);
         lifecycleAdmissionByOperation.set(operation, admission);
+        let recoveryOwnerRelease: Promise<MainSessionRecoveryPendingTarget | undefined> | undefined;
+        const releaseRecoveryOwner = () =>
+          (recoveryOwnerRelease ??= releaseReplyRecoveryOwner(recoveryOwnerLease));
+        if (recoveryOwnerLease) {
+          registerReplyOperationSuccessorBarrier({
+            operation,
+            sessionId: recoveryOwnerLease.sessionId,
+            sessionKeys: [params.sessionKey, recoveryOwnerLease.sessionKey],
+            start: releaseRecoveryOwner,
+          });
+        }
         runAfterReplyOperationClear(operation, () => {
           lifecycleAdmissionByOperation.delete(operation);
           // Keep reset/delete behind durable owner release and its writer lock.
-          void releaseReplyRecoveryOwner(recoveryOwnerLease).then((pendingTarget) => {
+          void releaseRecoveryOwner().then((pendingTarget) => {
             admission.release();
             scheduleMainSessionRecoveryPendingTarget(pendingTarget);
           });
@@ -353,6 +406,12 @@ async function admitReplyTurnWithWaitSignal(
       }
       if (error instanceof QueuedFollowupLifecycleInvalidatedError) {
         return { status: "skipped", reason: "lifecycle-invalidated" };
+      }
+      if (error instanceof ReplyRunSuccessorAdmissionBlockedError) {
+        if (params.kind === "heartbeat") {
+          return { status: "skipped", reason: "active-run" };
+        }
+        continue;
       }
       if (error instanceof ReplyRunFollowupAdmissionBlockedError) {
         if (params.kind === "heartbeat") {
@@ -381,6 +440,11 @@ async function admitReplyTurnWithWaitSignal(
         throw error;
       }
       const activeOperation = replyRunRegistry.get(params.sessionKey);
+      if (params.kind === "visible" && activeOperation?.turnKind === "heartbeat") {
+        // Background heartbeats must yield before queue policy can steer this
+        // user turn into the heartbeat's model run and lose its visible reply.
+        activeOperation.supersede();
+      }
       if (params.kind === "visible" && expireVisibleStaleOperation(activeOperation)) {
         continue;
       }

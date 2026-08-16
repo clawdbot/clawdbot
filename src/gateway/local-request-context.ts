@@ -1,18 +1,35 @@
+import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
+import { listAgentIds } from "../agents/agent-scope.js";
 // Local embedded Gateway request context.
 // Lets local agent paths reuse Gateway server methods without starting a server.
-import { loadManifestModelCatalog, loadModelCatalogSnapshot } from "../agents/model-catalog.js";
 import type { CliDeps } from "../cli/deps.types.js";
+import {
+  tryGetLegacyDefaultAgentId,
+  tryResolveLegacyCompatibilityAgentId,
+} from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { CronService } from "../cron/service.js";
+import { resolveCronJobsStorePath } from "../cron/store.js";
+import { getChildLogger } from "../logging/logger.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
-import { createChatRunEntry, type ChatRunEntry } from "./server-chat-state.js";
+import { createChatRunState } from "./server-chat-state.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import { registerGatewayModelCatalogPrivateAccess } from "./server-model-catalog-auth.js";
+import {
+  loadGatewayModelCatalog,
+  loadGatewayModelCatalogSnapshot,
+  loadPreparedGatewayModelCatalogSnapshot,
+  readPreparedGatewayModelCatalog,
+  readPreparedGatewayModelCatalogOwnerSnapshot,
+} from "./server-model-catalog.js";
 
 // Embedded/local agent calls need enough GatewayRequestContext to reuse server
 // methods without starting the full gateway. Unsupported subsystems fail loudly
@@ -40,10 +57,14 @@ const unavailableCron: GatewayCronServiceContract = {
   update: async () => cronUnavailable(),
   updateWithPrecondition: async () => cronUnavailable(),
   remove: async () => cronUnavailable(),
+  removeStaleJobFamily: async () => cronUnavailable(),
+  removeAgentJobsTransactional: async () => cronUnavailable(),
   run: async () => cronUnavailable(),
   enqueueRun: async () => cronUnavailable(),
   getJob: () => undefined,
   readJob: async () => undefined,
+  readScratch: async (): Promise<never> => cronUnavailable(),
+  writeScratch: async () => cronUnavailable(),
   getDefaultAgentId: () => undefined,
   wake: () => ({ ok: false, reason: "unwakeable-session-key" }),
 };
@@ -53,41 +74,74 @@ function createLocalGatewayRequestContext(
   params: LocalGatewayRequestContextParams,
 ): GatewayRequestContext {
   const logGateway = createSubsystemLogger("gateway/local");
-  const sessionEvents = new Set<string>();
-  const chatRuns = new Map<string, ChatRunEntry>();
-  const chatRunBuffers: GatewayRequestContext["chatRunBuffers"] = new Map();
-  const chatRunPlanSnapshots: NonNullable<GatewayRequestContext["chatRunPlanSnapshots"]> =
-    new Map();
-  const chatDeltaSentAt: GatewayRequestContext["chatDeltaSentAt"] = new Map();
-  const chatDeltaLastBroadcastLen: GatewayRequestContext["chatDeltaLastBroadcastLen"] = new Map();
-  const chatDeltaLastBroadcastText: GatewayRequestContext["chatDeltaLastBroadcastText"] = new Map();
-  const agentDeltaSentAt: GatewayRequestContext["agentDeltaSentAt"] = new Map();
-  const bufferedAgentEvents: GatewayRequestContext["bufferedAgentEvents"] = new Map();
-  // Clear every per-run buffer variant together; streamed assistant/thinking
-  // deltas share the client run id prefix but are tracked under separate keys.
-  const clearChatRunState = (runId: string) => {
-    chatRunBuffers.delete(runId);
-    chatRunPlanSnapshots.delete(runId);
-    chatDeltaSentAt.delete(runId);
-    chatDeltaLastBroadcastLen.delete(runId);
-    chatDeltaLastBroadcastText.delete(runId);
-    for (const key of [runId, `${runId}:assistant`, `${runId}:thinking`]) {
-      agentDeltaSentAt.delete(key);
-      bufferedAgentEvents.delete(key);
-    }
+  const cron: GatewayCronServiceContract = {
+    ...unavailableCron,
+    removeAgentJobsTransactional: async (agentId, commit) => {
+      const cfg = params.getRuntimeConfig();
+      const storePath = resolveCronJobsStorePath();
+      const service = new CronService({
+        storePath,
+        cronEnabled: cfg.cron?.enabled !== false,
+        cronConfig: cfg.cron,
+        log: getChildLogger({ module: "cron", storeKey: storePath }),
+        defaultAgentId: tryResolveLegacyCompatibilityAgentId(cfg),
+        legacyDefaultAgentId: tryGetLegacyDefaultAgentId(cfg),
+        resolveDefaultAgentId: () =>
+          tryResolveLegacyCompatibilityAgentId(params.getRuntimeConfig()),
+        isAgentAvailable: (id) =>
+          !isAgentDeletionBlocked(id) &&
+          listAgentIds(params.getRuntimeConfig()).some(
+            (configuredId) => normalizeAgentId(configuredId) === id,
+          ),
+        enqueueSystemEvent: () => false,
+        requestHeartbeat: () => {},
+        runIsolatedAgentJob: async () => {
+          throw new Error("Cron execution is unavailable in local embedded agent gateway context.");
+        },
+      });
+      try {
+        return await service.removeAgentJobsTransactional(agentId, commit);
+      } finally {
+        service.stop();
+      }
+    },
   };
+  const sessionEvents = new Set<string>();
+  const chatRunState = createChatRunState();
+  const loadCatalogSnapshot: GatewayRequestContext["loadGatewayModelCatalogSnapshot"] = (
+    loadParams,
+  ) => loadGatewayModelCatalogSnapshot({ ...loadParams, getConfig: params.getRuntimeConfig });
+  registerGatewayModelCatalogPrivateAccess(loadCatalogSnapshot, {
+    loadDeferred: (loadParams) =>
+      loadPreparedGatewayModelCatalogSnapshot({
+        ...loadParams,
+        getConfig: params.getRuntimeConfig,
+      }),
+    readPrepared: (loadParams) =>
+      readPreparedGatewayModelCatalogOwnerSnapshot({
+        ...loadParams,
+        getConfig: params.getRuntimeConfig,
+      }),
+  });
   return {
     deps: params.deps,
-    cron: unavailableCron,
+    cron,
     cronStorePath: "",
     getRuntimeConfig: params.getRuntimeConfig,
     notifyPluginMetadataChanged: () => {},
     resolveTerminalLaunchPolicy: () => ({ ok: false, block: { kind: "disabled" } }),
     isTerminalEnabled: () => false,
-    loadGatewayModelCatalog: async () =>
-      loadManifestModelCatalog({ config: params.getRuntimeConfig() }),
-    loadGatewayModelCatalogSnapshot: async ({ readOnly } = {}) =>
-      loadModelCatalogSnapshot({ config: params.getRuntimeConfig(), readOnly }),
+    loadGatewayModelCatalog: (loadParams) =>
+      loadGatewayModelCatalog({
+        ...loadParams,
+        getConfig: params.getRuntimeConfig,
+      }),
+    loadGatewayModelCatalogSnapshot: loadCatalogSnapshot,
+    readPreparedGatewayModelCatalog: (loadParams) =>
+      readPreparedGatewayModelCatalog({ ...loadParams, getConfig: params.getRuntimeConfig }),
+    readChatMetadata: async () => {
+      throw new Error("Chat metadata is unavailable in local embedded agent gateway context.");
+    },
     getHealthCache: () => null,
     refreshHealthSnapshot: async () =>
       ({}) as Awaited<ReturnType<GatewayRequestContext["refreshHealthSnapshot"]>>,
@@ -102,34 +156,14 @@ function createLocalGatewayRequestContext(
     nodeSubscribe: () => {},
     nodeUnsubscribe: () => {},
     nodeUnsubscribeAll: () => {},
-    hasConnectedTalkNode: () => false,
+    hasConnectedTalkNode: async () => false,
     nodeRegistry: new NodeRegistry(),
     agentRunSeq: new Map(),
     chatAbortControllers: new Map(),
     chatQueuedTurns: new Map(),
-    chatAbortedRuns: new Map(),
-    chatRunBuffers,
-    chatRunPlanSnapshots,
-    chatDeltaSentAt,
-    chatDeltaLastBroadcastLen,
-    chatDeltaLastBroadcastText,
-    agentDeltaSentAt,
-    bufferedAgentEvents,
-    clearChatRunState,
-    addChatRun: (sessionId, entry) => {
-      chatRuns.set(sessionId, createChatRunEntry(entry));
-    },
-    removeChatRun: (sessionId, clientRunId, sessionKey) => {
-      const entry = chatRuns.get(sessionId);
-      if (!entry || entry.clientRunId !== clientRunId) {
-        return undefined;
-      }
-      if (sessionKey !== undefined && entry.sessionKey !== sessionKey) {
-        return undefined;
-      }
-      chatRuns.delete(sessionId);
-      return entry;
-    },
+    chatRunState,
+    addChatRun: chatRunState.registry.add,
+    removeChatRun: chatRunState.registry.remove,
     subscribeSessionEvents: (connId) => {
       sessionEvents.add(connId);
     },

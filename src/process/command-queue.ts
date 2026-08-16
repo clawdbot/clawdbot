@@ -1,11 +1,12 @@
 // Command queue serializes and limits process execution for shared command lanes.
+import { AsyncLocalStorage } from "node:async_hooks";
+import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { formatErrorMessage, readErrorName } from "../infra/errors.js";
 import {
   diagnosticLogger as diag,
   logLaneDequeue,
   logLaneEnqueue,
 } from "../logging/diagnostic-runtime.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { clampPositiveTimerTimeoutMs } from "../shared/number-coercion.js";
 import type { CommandQueueEnqueueOptions } from "./command-queue.types.js";
 import {
   GatewayDrainingError,
@@ -13,9 +14,32 @@ import {
   isGatewayWorkAdmissionClosed,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
+  runWithGatewayRootWorkReadmission,
 } from "./gateway-work-admission.js";
 export { GatewayDrainingError } from "./gateway-work-admission.js";
+import {
+  canAdmitInGroup,
+  type CommandLaneBlockReason,
+  type CommandLaneGroupSpec,
+  drainGroupSiblings,
+  getGroupRegistry,
+  getLaneGroup,
+  getMemberActiveCount,
+  installCommandLaneGroup,
+  type LaneGroupState,
+  resolveLaneBlockReason,
+  validateCommandLaneGroupSpec,
+} from "./command-queue.capacity-groups.js";
+import {
+  type ActiveTaskWaiter,
+  type CommandLaneTaskMarker,
+  getQueueState,
+  type LaneState,
+  normalizeLane,
+  type QueueEntry,
+} from "./command-queue.state.js";
 import { CommandLane } from "./lanes.js";
+export type { CommandLaneTaskMarker } from "./command-queue.state.js";
 /**
  * Dedicated error type thrown when a queued command is rejected because
  * its lane was cleared.  Callers that fire-and-forget enqueued tasks can
@@ -76,39 +100,6 @@ export function isCommandLaneTaskTimeoutError(err: unknown, lane?: string): bool
 // low-risk parallelism (e.g. cron jobs) without interleaving stdin / logs for
 // the main auto-reply workflow.
 
-export type CommandLaneTaskMarker = Readonly<{
-  lane: string;
-  taskId: number;
-  generation: number;
-}>;
-
-type QueueEntry = {
-  task: (marker: CommandLaneTaskMarker) => Promise<unknown>;
-  resolve: (value: unknown) => void;
-  reject: (reason?: unknown) => void;
-  enqueuedAt: number;
-  sequence: number;
-  priority: number;
-  warnAfterMs: number;
-  queuedAheadAtEnqueue: number;
-  activeAheadAtEnqueue: number;
-  taskTimeoutMs?: number;
-  taskTimeoutProgressAtMs?: () => number | undefined;
-  taskTimeoutAbortSignal?: AbortSignal;
-  taskTimeoutAbortGraceMs?: number;
-  taskTimeoutReleaseSignal?: AbortSignal;
-  onWait?: (waitMs: number, queuedAhead: number) => void;
-};
-
-type LaneState = {
-  lane: string;
-  queue: QueueEntry[];
-  activeTaskIds: Set<number>;
-  maxConcurrent: number;
-  draining: boolean;
-  generation: number;
-};
-
 export type CommandLaneSnapshot = {
   lane: string;
   queuedCount: number;
@@ -116,12 +107,20 @@ export type CommandLaneSnapshot = {
   maxConcurrent: number;
   draining: boolean;
   generation: number;
-};
-
-type ActiveTaskWaiter = {
-  activeTaskIds: Set<number>;
-  resolve: (value: { drained: boolean }) => void;
-  timeout?: ReturnType<typeof setTimeout>;
+  /** Group this lane belongs to, if any. */
+  group?: string;
+  /** Sum of active tasks across every member of the group. Always derived. */
+  groupActive?: number;
+  /** Hard aggregate cap shared by the group's members. */
+  groupBudget?: number;
+  /** Slots within the budget this lane may always claim. */
+  reservedForLane?: number;
+  /**
+   * Why this lane cannot start more work right now, or null if it can.
+   * `lane` is the lane's own maxConcurrent; the other two are group-imposed and
+   * are invisible to a lane-local view — see `noteLaneWaitIfBusy`.
+   */
+  blockedBy?: CommandLaneBlockReason;
 };
 
 function isExpectedNonErrorLaneFailure(err: unknown): boolean {
@@ -138,82 +137,32 @@ function isQuietProbeLane(lane: string): boolean {
   );
 }
 
-/**
- * Keep queue runtime state on globalThis so every bundled entry/chunk shares
- * the same lanes, counters, and draining flag in production builds.
- */
-const COMMAND_QUEUE_STATE_KEY = Symbol.for("openclaw.commandQueueState");
-
-function getQueueState() {
-  const state = resolveGlobalSingleton(COMMAND_QUEUE_STATE_KEY, () => ({
-    lanes: new Map<string, LaneState>(),
-    activeTaskWaiters: new Set<ActiveTaskWaiter>(),
-    nextTaskId: 1,
-    nextQueueSequence: 1,
-  }));
-  // Schema migration: the singleton may have been created by an older code
-  // version (e.g. v2026.4.2) that did not include `activeTaskWaiters`.  After
-  // a SIGUSR1 in-process restart the new code inherits the stale object via
-  // `resolveGlobalSingleton` because the Symbol key already exists on
-  // globalThis.  Patch the missing field so all downstream consumers see a
-  // valid Set instead of `undefined`.
-  if (!state.activeTaskWaiters) {
-    state.activeTaskWaiters = new Set<ActiveTaskWaiter>();
-  }
-  if (!state.nextQueueSequence) {
-    state.nextQueueSequence = 1;
-  }
-  let maxQueueSequence = state.nextQueueSequence - 1;
-  for (const lane of state.lanes.values()) {
-    for (const [index, entry] of (
-      lane.queue as Array<
-        QueueEntry & {
-          activeAheadAtEnqueue?: number;
-          priority?: number;
-          queuedAheadAtEnqueue?: number;
-          sequence?: number;
-        }
-      >
-    ).entries()) {
-      if (typeof entry.priority !== "number") {
-        entry.priority = 0;
-      }
-      if (typeof entry.sequence !== "number") {
-        entry.sequence = state.nextQueueSequence++;
-      } else {
-        maxQueueSequence = Math.max(maxQueueSequence, entry.sequence);
-      }
-      if (typeof entry.queuedAheadAtEnqueue !== "number") {
-        entry.queuedAheadAtEnqueue = index;
-      }
-      if (typeof entry.activeAheadAtEnqueue !== "number") {
-        entry.activeAheadAtEnqueue = lane.activeTaskIds.size;
-      }
-    }
-  }
-  if (state.nextQueueSequence <= maxQueueSequence) {
-    state.nextQueueSequence = maxQueueSequence + 1;
-  }
-  return state;
-}
-
-function normalizeLane(lane: string): string {
-  return lane.trim() || CommandLane.Main;
-}
-
 function getLaneDepth(state: LaneState): number {
   return state.queue.length + state.activeTaskIds.size;
 }
 
 function createCommandLaneSnapshot(state: LaneState): CommandLaneSnapshot {
-  return {
+  const snapshot: CommandLaneSnapshot = {
     lane: state.lane,
     queuedCount: state.queue.length,
     activeCount: state.activeTaskIds.size,
     maxConcurrent: state.maxConcurrent,
     draining: state.draining,
     generation: state.generation,
+    blockedBy: resolveLaneBlockReason(state.lane),
   };
+  const group = getLaneGroup(state.lane);
+  if (group) {
+    let groupActive = 0;
+    for (const member of group.members) {
+      groupActive += getMemberActiveCount(member);
+    }
+    snapshot.group = group.group;
+    snapshot.groupActive = groupActive;
+    snapshot.groupBudget = group.budget;
+    snapshot.reservedForLane = group.reservations.get(state.lane) ?? 0;
+  }
+  return snapshot;
 }
 
 function getLaneState(lane: string): LaneState {
@@ -240,6 +189,27 @@ function completeTask(state: LaneState, taskId: number, taskGeneration: number):
   }
   state.activeTaskIds.delete(taskId);
   return true;
+}
+
+function retireIdleScopedCommandLane(state: LaneState): void {
+  if (
+    state.draining ||
+    state.activeTaskIds.size > 0 ||
+    state.queue.length > 0 ||
+    state.maxConcurrent !== 1 ||
+    (!state.lane.startsWith("session:") &&
+      !state.lane.startsWith("nested:") &&
+      !state.lane.startsWith("context-engine-turn-maintenance:"))
+  ) {
+    return;
+  }
+
+  const lanes = getQueueState().lanes;
+  // A completed generation may race a recreated lane. Only retire the exact
+  // idle scoped state after its pump has released the draining guard.
+  if (lanes.get(state.lane) === state) {
+    lanes.delete(state.lane);
+  }
 }
 
 function hasPendingActiveTasks(taskIds: Set<number>): boolean {
@@ -450,7 +420,11 @@ function drainLane(lane: string) {
 
   const pump = () => {
     try {
-      while (state.activeTaskIds.size < state.maxConcurrent && state.queue.length > 0) {
+      while (
+        state.activeTaskIds.size < state.maxConcurrent &&
+        state.queue.length > 0 &&
+        canAdmitInGroup(lane)
+      ) {
         const entry = state.queue.shift() as QueueEntry;
         const waitedMs = Date.now() - entry.enqueuedAt;
         if (waitedMs >= entry.warnAfterMs) {
@@ -483,6 +457,8 @@ function drainLane(lane: string) {
                 `lane task done: lane=${lane} durationMs=${Date.now() - startTime} active=${state.activeTaskIds.size} queued=${state.queue.length}`,
               );
               pump();
+              // Freed capacity belongs to the group, not to this lane.
+              drainGroupSiblings(lane, drainLane);
             }
             entry.resolve(result);
           } catch (err) {
@@ -490,7 +466,8 @@ function drainLane(lane: string) {
             const isProbeLane = isQuietProbeLane(lane);
             if (!isProbeLane && !isExpectedNonErrorLaneFailure(err)) {
               diag.error(
-                `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error="${String(err)}"`,
+                `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error="${formatErrorMessage(err)}"`,
+                { errorName: readErrorName(err) || undefined },
               );
             } else if (!isProbeLane) {
               diag.debug(
@@ -500,6 +477,9 @@ function drainLane(lane: string) {
             if (completedCurrentGeneration) {
               notifyActiveTaskWaiters();
               pump();
+              // A failed task releases group capacity exactly like a successful
+              // one; siblings must be woken on both paths.
+              drainGroupSiblings(lane, drainLane);
             }
             entry.reject(err);
           }
@@ -507,6 +487,7 @@ function drainLane(lane: string) {
       }
     } finally {
       state.draining = false;
+      retireIdleScopedCommandLane(state);
     }
   };
 
@@ -523,6 +504,70 @@ export function markGatewayDraining(): void {
 
 export function isGatewayDraining(): boolean {
   return isGatewayWorkAdmissionClosed();
+}
+
+/**
+ * Apply lane concurrencies and group definitions as ONE transaction.
+ *
+ * `setCommandLaneConcurrency` drains the instant a lane goes positive, and
+ * gateway publication is sequential — so applying lanes one at a time can widen
+ * a member and let it dispatch BEFORE its group exists, admitting work above
+ * the budget the group was meant to enforce. Suppressing drains until every
+ * lane max and every group definition is installed closes that window; a single
+ * commit-time drain pass then dispatches under the final configuration.
+ *
+ * Callers must route grouped lanes through here rather than the per-lane
+ * setter, which cannot know about a group that does not exist yet.
+ */
+export function publishLaneConfiguration(config: {
+  lanes?: Readonly<Record<string, number>>;
+  groups?: Readonly<Record<string, CommandLaneGroupSpec>>;
+  /** Groups to remove as part of the same transaction. */
+  clearGroups?: readonly string[];
+}): void {
+  // Phase 0 — validate EVERYTHING before mutating anything. Validating inside
+  // the install loop would leave already-widened lanes behind on a throw:
+  // governed by no group, and dispatching their preserved queue on the next
+  // unrelated drain trigger. Rejection must be a no-op, not a partial apply.
+  const validated: LaneGroupState[] = [];
+  for (const [group, spec] of Object.entries(config.groups ?? {})) {
+    validated.push(validateCommandLaneGroupSpec(group, spec));
+  }
+
+  const touched = new Set<string>();
+  // Phase 1 — install state with dispatch suppressed. Nothing may start here.
+  for (const [rawLane, maxConcurrent] of Object.entries(config.lanes ?? {})) {
+    const lane = normalizeLane(rawLane);
+    const state = getLaneState(lane);
+    const minConcurrent = isQuietProbeLane(lane) ? 1 : 0;
+    state.maxConcurrent = Math.max(minConcurrent, Math.floor(maxConcurrent));
+    touched.add(lane);
+  }
+  for (const group of config.clearGroups ?? []) {
+    const { groups, groupByLane } = getGroupRegistry();
+    const existing = groups.get(group);
+    if (existing) {
+      for (const member of existing.members) {
+        groupByLane.delete(member);
+        touched.add(member);
+      }
+      groups.delete(group);
+    }
+  }
+  for (const next of validated) {
+    installCommandLaneGroup(next);
+    for (const member of next.members) {
+      touched.add(member);
+    }
+  }
+  // Phase 2 — commit. Group membership and budgets are now final, so every
+  // admission decision in this pass sees the configuration the caller intended.
+  for (const lane of touched) {
+    const state = getQueueState().lanes.get(lane);
+    if (state && state.maxConcurrent > 0 && state.queue.length > 0 && !state.draining) {
+      drainLane(lane);
+    }
+  }
 }
 
 export function setCommandLaneConcurrency(lane: string, maxConcurrent: number) {
@@ -545,12 +590,13 @@ export function enqueueCommandInLane<T>(
   if (isGatewaySubordinateWorkAdmissionClosed()) {
     return Promise.reject(new GatewayDrainingError());
   }
+  const runInAsyncContext = AsyncLocalStorage.snapshot();
   const cleaned = normalizeLane(lane);
   const warnAfterMs = opts?.warnAfterMs ?? 2_000;
   const state = getLaneState(cleaned);
   return new Promise<T>((resolve, reject) => {
     enqueueLaneEntry(state, {
-      task: (marker) => task(marker),
+      task: (marker) => runInAsyncContext(runWithGatewayRootWorkReadmission, () => task(marker)),
       resolve: (value) => resolve(value as T),
       reject,
       enqueuedAt: Date.now(),
@@ -584,14 +630,30 @@ export function getCommandLaneSnapshot(lane: string = CommandLane.Main): Command
   const resolved = normalizeLane(lane);
   const state = getQueueState().lanes.get(resolved);
   if (!state) {
-    return {
+    // The lane may not exist yet (first enqueue) or may have been retired while
+    // idle, but it can still be a configured group member — and a caller asking
+    // "can this lane start work?" needs the group answer, not a bare default.
+    const group = getLaneGroup(resolved);
+    const empty: CommandLaneSnapshot = {
       lane: resolved,
       queuedCount: 0,
       activeCount: 0,
       maxConcurrent: 1,
       draining: false,
       generation: 0,
+      blockedBy: resolveLaneBlockReason(resolved),
     };
+    if (group) {
+      let groupActive = 0;
+      for (const member of group.members) {
+        groupActive += getMemberActiveCount(member);
+      }
+      empty.group = group.group;
+      empty.groupActive = groupActive;
+      empty.groupBudget = group.budget;
+      empty.reservedForLane = group.reservations.get(resolved) ?? 0;
+    }
+    return empty;
   }
   return createCommandLaneSnapshot(state);
 }
@@ -612,12 +674,6 @@ export function isCommandLaneTaskMarkerCurrent(marker: CommandLaneTaskMarker | u
   }
   const state = getQueueState().lanes.get(normalizeLane(marker.lane));
   return state?.generation === marker.generation && state.activeTaskIds.has(marker.taskId);
-}
-
-export function getCommandLaneSnapshots(): CommandLaneSnapshot[] {
-  return Array.from(getQueueState().lanes.values(), createCommandLaneSnapshot).toSorted((a, b) =>
-    a.lane.localeCompare(b.lane),
-  );
 }
 
 export function getTotalQueueSize() {
@@ -660,6 +716,8 @@ export function resetCommandLane(lane: string = CommandLane.Main): number {
   if (state.queue.length > 0) {
     drainLane(cleaned);
   }
+  // Clearing activeTaskIds released group capacity; siblings may now admit.
+  drainGroupSiblings(cleaned, drainLane);
   notifyActiveTaskWaiters();
   return released;
 }

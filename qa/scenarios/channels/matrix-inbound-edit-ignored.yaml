@@ -4,9 +4,8 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.message-actions
+      - matrix.message-send-read-edit-delete
   execution:
-    profiles: { "matrix:all": 49, "matrix:transport": 48 }
     kind: flow
     channel: matrix
     timeoutMs: 8000

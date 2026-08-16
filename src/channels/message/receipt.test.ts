@@ -36,7 +36,7 @@ describe("createMessageReceiptFromOutboundResults", () => {
     ]);
   });
 
-  it("uses alternate platform ids when messageId is unavailable", () => {
+  it("uses legacy WhatsApp platform ids when no adapter receipt exists", () => {
     const receipt = createMessageReceiptFromOutboundResults({
       results: [{ channel: "whatsapp", messageId: "", toJid: "jid-1" }],
       sentAt: 123,
@@ -44,6 +44,47 @@ describe("createMessageReceiptFromOutboundResults", () => {
 
     expect(receipt.primaryPlatformMessageId).toBe("jid-1");
     expect(receipt.platformMessageIds).toEqual(["jid-1"]);
+  });
+
+  it.each([
+    {
+      label: "Synology Chat destination IDs",
+      result: { channel: "synology-chat", messageId: "", chatId: "42" },
+      receiptMetadata: { threadId: "42" },
+    },
+    {
+      label: "iMessage bridge placeholders",
+      result: { channel: "imessage", messageId: "ok" },
+      receiptMetadata: { replyToId: "source-1" },
+    },
+    {
+      label: "Slack suppression sentinels",
+      result: { channel: "slack", messageId: "suppressed", channelId: "" },
+      receiptMetadata: {},
+    },
+    {
+      label: "Twitch skip sentinels",
+      result: { channel: "twitch", messageId: "skipped" },
+      receiptMetadata: {},
+    },
+  ])("does not fabricate platform ids from $label", ({ result, receiptMetadata }) => {
+    const adapterReceipt = {
+      platformMessageIds: [],
+      parts: [],
+      sentAt: 123,
+      ...receiptMetadata,
+    };
+    const receipt = createMessageReceiptFromOutboundResults({
+      results: [{ ...result, receipt: adapterReceipt }],
+    });
+
+    expect(receipt).toMatchObject({
+      ...receiptMetadata,
+      platformMessageIds: [],
+      parts: [],
+      sentAt: 123,
+    });
+    expect(receipt.primaryPlatformMessageId).toBeUndefined();
   });
 
   it("preserves nested platform receipts before falling back to delivery ids", () => {

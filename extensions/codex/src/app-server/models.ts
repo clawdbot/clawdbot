@@ -2,14 +2,14 @@
  * Lists and normalizes models exposed by the Codex app-server `model/list`
  * endpoint, including pagination and shared-client lease handling.
  */
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   CodexAppServerAuthRequirement,
   resolveCodexAppServerAuthProfileIdForAgent,
 } from "./auth-bridge.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
-import { readCodexModelListResponse } from "./protocol-validators.js";
+import { assertCodexModelListResponse } from "./protocol-validators.js";
 import type { CodexModel, CodexReasoningEffortOption } from "./protocol.js";
 
 /** Normalized model metadata returned by the Codex app-server model listing helper. */
@@ -138,55 +138,44 @@ async function requestModelListPage(
 
 /** Parses a raw Codex app-server model/list response into OpenClaw's normalized shape. */
 export function readModelListResult(value: unknown): CodexAppServerModelListResult {
-  const response = readCodexModelListResponse(value);
-  if (!response) {
-    return { models: [] };
-  }
-  const models = response.data
-    .map((entry) => readCodexModel(entry))
-    .filter((entry): entry is CodexAppServerModel => entry !== undefined);
+  const response = assertCodexModelListResponse(value);
+  const models = response.data.map((entry) => readCodexModel(entry));
   const nextCursor = response.nextCursor ?? undefined;
   return { models, ...(nextCursor ? { nextCursor } : {}) };
 }
 
-function readCodexModel(value: CodexModel): CodexAppServerModel | undefined {
-  const id = readNonEmptyString(value.id);
-  const model = readNonEmptyString(value.model) ?? id;
+function readCodexModel(value: CodexModel): CodexAppServerModel {
+  const id = normalizeOptionalString(value.id);
+  const model = normalizeOptionalString(value.model);
   if (!id || !model) {
-    return undefined;
+    throw new Error(
+      "Invalid Codex app-server model/list response: model id and name must be non-empty strings",
+    );
   }
   return {
     id,
     model,
-    ...(readNonEmptyString(value.displayName)
-      ? { displayName: readNonEmptyString(value.displayName) }
+    ...(normalizeOptionalString(value.displayName)
+      ? { displayName: normalizeOptionalString(value.displayName) }
       : {}),
-    ...(readNonEmptyString(value.description)
-      ? { description: readNonEmptyString(value.description) }
+    ...(normalizeOptionalString(value.description)
+      ? { description: normalizeOptionalString(value.description) }
       : {}),
     hidden: value.hidden,
     isDefault: value.isDefault,
     inputModalities: value.inputModalities,
     supportedReasoningEfforts: readReasoningEfforts(value.supportedReasoningEfforts),
-    ...(readNonEmptyString(value.defaultReasoningEffort)
-      ? { defaultReasoningEffort: readNonEmptyString(value.defaultReasoningEffort) }
+    ...(normalizeOptionalString(value.defaultReasoningEffort)
+      ? { defaultReasoningEffort: normalizeOptionalString(value.defaultReasoningEffort) }
       : {}),
   };
 }
 
 function readReasoningEfforts(value: CodexReasoningEffortOption[]): string[] {
   const efforts = value
-    .map((entry) => readNonEmptyString(entry.reasoningEffort))
+    .map((entry) => normalizeOptionalString(entry.reasoningEffort))
     .filter((entry): entry is string => entry !== undefined);
   return uniqueStrings(efforts);
-}
-
-function readNonEmptyString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
 }
 
 function normalizeMaxPages(value: unknown): number {

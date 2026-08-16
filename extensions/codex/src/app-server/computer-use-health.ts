@@ -3,9 +3,9 @@ import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { CodexAppServerClient } from "./client.js";
 import {
   killStaleComputerUseMcpChildren,
-  runCodexComputerUseLiveTest,
   type CodexComputerUseRepairStatus,
-} from "./computer-use.js";
+} from "./computer-use-process-repair.js";
+import { runCodexComputerUseLiveTest } from "./computer-use.js";
 import type { ResolvedCodexComputerUseConfig } from "./config.js";
 
 type ComputerUseHealthMonitor = {

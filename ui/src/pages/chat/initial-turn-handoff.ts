@@ -1,13 +1,19 @@
+import type {
+  ApplicationInitialUserMessage,
+  ApplicationInitialUserMessageHandoff,
+} from "../../app/initial-user-message-handoff.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
-import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import {
-  markLocalRecoveryItem,
-  markVolatileQueuedMessage,
+  getChatAttachmentDataUrl,
+  releaseChatAttachmentPayloads,
+} from "./attachment-payload-store.ts";
+import {
+  keepVolatileQueuedMessage,
   readChatQueueForScope,
   type ChatQueueScopedSessionHost,
-  writeChatQueueForScope,
 } from "./chat-queue.ts";
+import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
 const INITIAL_TURN_HANDOFF_TTL_MS = 60_000;
 
@@ -37,6 +43,49 @@ export function prepareInitialTurnHandoff(sessionKey: string, item: ChatQueueIte
   pending = { item, sessionKey, timer };
 }
 
+/** Hands the accepted first prompt to chat before transcript persistence catches up. */
+export function prepareInitialUserMessageHandoff(
+  handoff: ApplicationInitialUserMessageHandoff,
+  sessionKey: string,
+  item: Pick<ChatQueueItem, "attachments" | "createdAt" | "text">,
+  owner: object,
+  identity: { runId?: string; messageSeq?: number } = {},
+): void {
+  const runId = identity.runId?.trim();
+  if (!runId) {
+    return;
+  }
+  const durableAttachments = item.attachments?.map((attachment) => {
+    const dataUrl = getChatAttachmentDataUrl(attachment);
+    return dataUrl ? { ...attachment, dataUrl, previewUrl: dataUrl } : attachment;
+  });
+  const messageSequence =
+    typeof identity.messageSeq === "number" &&
+    Number.isSafeInteger(identity.messageSeq) &&
+    identity.messageSeq > 0
+      ? identity.messageSeq
+      : undefined;
+  const message: ApplicationInitialUserMessage = {
+    role: "user",
+    content: buildUserChatMessageContentBlocks(item.text, durableAttachments, {
+      renderInlineImageDataUrls: true,
+    }),
+    timestamp: item.createdAt,
+    __openclaw: {
+      idempotencyKey: `${runId}:user`,
+      ...(messageSequence === undefined ? {} : { seq: messageSequence }),
+    },
+  };
+  // This bounded process-local handoff owns the original inline bytes until
+  // the pane projection adopts the matching authoritative row.
+  handoff.prepare({
+    message,
+    owner,
+    sessionKey,
+    pendingRunId: runId,
+  });
+}
+
 function consumeInitialTurnHandoff(sessionKey: string): ChatQueueItem | null {
   if (!pending || !areUiSessionKeysEquivalent(pending.sessionKey, sessionKey)) {
     return null;
@@ -56,9 +105,7 @@ export function admitInitialTurnHandoff(
   }
   const queue = readChatQueueForScope(host, sessionKey, item.agentId);
   if (!queue.some((entry) => entry.id === item.id)) {
-    writeChatQueueForScope(host, sessionKey, [...queue, item], item.agentId);
+    keepVolatileQueuedMessage(host, sessionKey, item, item.agentId, { retryable: true });
   }
-  markLocalRecoveryItem(host, item.id);
-  markVolatileQueuedMessage(host, item.id);
   return true;
 }

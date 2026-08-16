@@ -1,3 +1,4 @@
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 // Setup command registration: system-agent chat for configured systems, onboarding otherwise.
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
@@ -14,17 +15,17 @@ import type { RuntimeEnv } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { hasExplicitOptions } from "../command-options.js";
 import { isUnconfiguredConfigSource } from "../fresh-install-config.js";
-import { parsePort } from "../shared/parse-port.js";
+import { parseGatewayPortOption } from "../gateway-port-option.js";
 import {
   pickOnboardAuthOptionValues,
   registerOnboardAuthOptions,
   resolveInstallDaemonFlag,
+  resolveTailscaleResetOnExitFlag,
+  validateOnboardAuthOptionValues,
 } from "./register.onboard.js";
 
 const SYSTEM_AGENT_OPTION_NAMES = new Set(["message", "yes", "json"]);
-
-const optionalString = (value: unknown): string | undefined =>
-  typeof value === "string" ? value : undefined;
+const BASELINE_OPTION_NAMES = new Set(["baseline", "workspace", "json"]);
 
 type SetupRoute = "onboarding" | "system-agent";
 
@@ -54,16 +55,43 @@ function hasExplicitOnboardingOption(command: Command): boolean {
   });
 }
 
+function listUnsupportedBaselineOptions(command: Command): string[] {
+  const optionsByName = new Map<string, (typeof command.options)[number]>();
+  for (const option of command.options) {
+    const name = option.attributeName();
+    if (BASELINE_OPTION_NAMES.has(name) || command.getOptionValueSource(name) !== "cli") {
+      continue;
+    }
+    const existing = optionsByName.get(name);
+    const valueIsNegated = command.getOptionValue(name) === false;
+    if (!existing || option.negate === valueIsNegated) {
+      optionsByName.set(name, option);
+    }
+  }
+  return [...optionsByName.values()]
+    .map((option) => option.long ?? option.short ?? option.flags)
+    .toSorted();
+}
+
 async function isConfiguredInstance(): Promise<boolean> {
   const { readConfigFileSnapshot } = await import("../../config/config.js");
   const snapshot = await readConfigFileSnapshot();
   if (!snapshot.exists) {
     return false;
   }
-  if (!snapshot.valid) {
+  if (!snapshot.valid || snapshot.sourceConfig.gateway?.mode === "remote") {
     return true;
   }
-  return !isUnconfiguredConfigSource(snapshot.sourceConfig);
+  if (isUnconfiguredConfigSource(snapshot.sourceConfig)) {
+    return false;
+  }
+  // Inference commits before installation finishes; pending local setup must
+  // resume onboarding instead of opening a chat against an unfinished Gateway.
+  const { readLocalOnboardingStateForConfig } =
+    await import("../../state/local-onboarding-state.js");
+  return (
+    readLocalOnboardingStateForConfig(snapshot.path, snapshot.sourceConfig)?.status !== "pending"
+  );
 }
 
 async function runSystemAgentEntry(
@@ -74,7 +102,7 @@ async function runSystemAgentEntry(
     await import("../../commands/system-agent-with-inference.js");
   await runSystemAgentWithInference(
     {
-      message: optionalString(options.message),
+      message: readStringValue(options.message),
       yes: Boolean(options.yes),
       json: Boolean(options.json),
     },
@@ -88,32 +116,46 @@ async function runOnboardingEntry(
   runtime: RuntimeEnv,
 ): Promise<void> {
   if (options.baseline) {
+    const unsupportedOptions = listUnsupportedBaselineOptions(commandRuntime);
+    if (unsupportedOptions.length > 0) {
+      runtime.error(`--baseline cannot be combined with: ${unsupportedOptions.join(", ")}.`);
+      runtime.exit(1);
+      return;
+    }
     const { setupCommand } = await import("../../commands/setup.js");
-    await setupCommand({ workspace: optionalString(options.workspace) }, runtime);
+    await setupCommand(
+      { workspace: readStringValue(options.workspace), json: Boolean(options.json) },
+      runtime,
+    );
+    return;
+  }
+  if (!validateOnboardAuthOptionValues(options, runtime)) {
     return;
   }
   const installDaemon = resolveInstallDaemonFlag(commandRuntime);
-  const gatewayPort = parsePort(options.gatewayPort);
+  const tailscaleResetOnExit = resolveTailscaleResetOnExitFlag(commandRuntime);
+  const gatewayPort = parseGatewayPortOption(options.gatewayPort, "--gateway-port");
   const { setupWizardCommand } = await import("../../commands/onboard.js");
   await setupWizardCommand(
     {
-      workspace: optionalString(options.workspace),
+      workspace: readStringValue(options.workspace),
       nonInteractive: Boolean(options.nonInteractive),
       acceptRisk: Boolean(options.acceptRisk),
       classic: Boolean(options.classic),
+      tui: Boolean(options.tui),
       flow: options.flow as "quickstart" | "advanced" | "manual" | "import" | undefined,
       mode: options.mode as "local" | "remote" | undefined,
       ...pickOnboardAuthOptionValues(options),
       reset: Boolean(options.reset),
       resetScope: options.resetScope as ResetScope | undefined,
-      gatewayPort: gatewayPort ?? undefined,
+      gatewayPort,
       gatewayBind: options.gatewayBind as GatewayBind | undefined,
       gatewayAuth: options.gatewayAuth as GatewayAuthChoice | undefined,
-      gatewayToken: optionalString(options.gatewayToken),
-      gatewayTokenRefEnv: optionalString(options.gatewayTokenRefEnv),
-      gatewayPassword: optionalString(options.gatewayPassword),
+      gatewayToken: readStringValue(options.gatewayToken),
+      gatewayTokenRefEnv: readStringValue(options.gatewayTokenRefEnv),
+      gatewayPassword: readStringValue(options.gatewayPassword),
       tailscale: options.tailscale as TailscaleMode | undefined,
-      tailscaleResetOnExit: Boolean(options.tailscaleResetOnExit),
+      tailscaleResetOnExit,
       installDaemon,
       daemonRuntime: options.daemonRuntime as GatewayDaemonRuntime | undefined,
       skipChannels: Boolean(options.skipChannels),
@@ -125,11 +167,11 @@ async function runOnboardingEntry(
       suppressGatewayTokenOutput: Boolean(options.suppressGatewayTokenOutput),
       skipHooks: Boolean(options.skipHooks),
       nodeManager: options.nodeManager as NodeManagerChoice | undefined,
-      importFrom: optionalString(options.importFrom),
-      importSource: optionalString(options.importSource),
+      importFrom: readStringValue(options.importFrom),
+      importSource: readStringValue(options.importSource),
       importSecrets: Boolean(options.importSecrets),
-      remoteUrl: optionalString(options.remoteUrl),
-      remoteToken: optionalString(options.remoteToken),
+      remoteUrl: readStringValue(options.remoteUrl),
+      remoteToken: readStringValue(options.remoteToken),
       json: Boolean(options.json),
     },
     runtime,
@@ -177,6 +219,7 @@ export function registerSetupCommand(program: Command): void {
     .option("--reset-scope <scope>", "Reset scope: config|config+creds+sessions|full")
     .option("--non-interactive", "Run onboarding without prompts", false)
     .option("--classic", "Use the classic multi-step setup wizard", false)
+    .option("--tui", "Use the terminal hatch instead of the browser handoff", false)
     .option(
       "--accept-risk",
       "Acknowledge that agents are powerful and full system access is risky (required for --non-interactive)",
@@ -199,6 +242,7 @@ export function registerSetupCommand(program: Command): void {
     .option("--gateway-password <password>", "Gateway password (password auth)")
     .option("--tailscale <mode>", "Tailscale: off|serve|funnel")
     .option("--tailscale-reset-on-exit", "Reset tailscale serve/funnel on exit")
+    .option("--no-tailscale-reset-on-exit", "Keep tailscale serve/funnel after exit")
     .option("--install-daemon", "Install gateway service")
     .option("--no-install-daemon", "Skip gateway service install")
     .option("--skip-daemon", "Skip gateway service install")

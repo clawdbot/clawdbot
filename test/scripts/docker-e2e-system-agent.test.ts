@@ -8,9 +8,11 @@ function readScript(pathname: string): string {
 
 describe("OpenClaw Docker E2E scripts", () => {
   it("keeps first-run checks wired to packaged CLI and OpenClaw behavior", () => {
+    const shell = readScript("scripts/e2e/system-agent-first-run-docker.sh");
     const source = readScript("test/e2e/qa-lab/runtime/system-agent-first-run-docker-client.ts");
     const spec = readScript("scripts/e2e/system-agent-first-run-spec.json");
 
+    expect(shell).toContain('-e "OPENCLAW_SUPERVISOR_MODE=external"');
     expect(source).toContain("../../../../dist/cli/run-main.js");
     expect(source).toContain("../../../../dist/system-agent/setup-inference.js");
     expect(source).toContain("shouldStartOnboardingForFreshInstall");
@@ -32,10 +34,14 @@ describe("OpenClaw Docker E2E scripts", () => {
     expect(source).toContain("expected one fuzzy setup planner prompt");
     expect(source).toContain("OpenClaw did not enable Discord");
     expect(source).toContain("OpenClaw did not write Discord token SecretRef");
+    expect(source).toContain(
+      "(OPENCLAW_SUPERVISOR_MODE=external). Use that supervisor to start the gateway.",
+    );
+    expect(source).toContain("OpenClaw setup probed systemd before honoring external supervision");
     expect(source).toContain("OpenClaw first-run Docker E2E passed");
     expect(spec).toContain('"auditOperations"');
     expect(spec).toContain('"openclaw.setup"');
-    expect(spec).toContain('"model": "claude-cli/claude-opus-4-8"');
+    expect(spec).toContain('"model": "claude-cli/claude-opus-5"');
     expect(spec).toContain('"planner": true');
     expect(source).toContain('const DISCORD_CREDENTIAL_ENV = ["DISCORD", "BOT", "TOKEN"]');
     expect(spec).toContain("config set-ref channels.discord.token env {discordEnv}");

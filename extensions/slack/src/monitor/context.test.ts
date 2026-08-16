@@ -2,7 +2,8 @@
 import type { App } from "@slack/bolt";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setSlackRuntime } from "../runtime.js";
 import { createSlackMonitorContext } from "./context.js";
 import type { SlackEventScope } from "./event-scope.js";
 
@@ -11,6 +12,8 @@ function createTestContext(params?: {
   groupDmEnabled?: boolean;
   groupDmChannels?: string[];
   appClient?: App["client"];
+  apiAppId?: string;
+  channelsConfig?: Record<string, { enabled?: boolean }>;
 }) {
   return createSlackMonitorContext({
     cfg: {
@@ -23,8 +26,9 @@ function createTestContext(params?: {
     runtime: {} as RuntimeEnv,
     botUserId: "U_BOT",
     botId: "B_BOT",
+    identityHealth: { lifecycle: "ready", lastError: null },
     teamId: "T_EXPECTED",
-    apiAppId: "A_EXPECTED",
+    apiAppId: params?.apiAppId ?? "A_EXPECTED",
     historyLimit: 0,
     sessionScope: "per-sender",
     mainKey: "main",
@@ -35,6 +39,7 @@ function createTestContext(params?: {
     groupDmEnabled: params?.groupDmEnabled ?? false,
     groupDmChannels: params?.groupDmChannels ?? [],
     defaultRequireMention: true,
+    channelsConfig: params?.channelsConfig,
     groupPolicy: "allowlist",
     useAccessGroups: true,
     reactionMode: "off",
@@ -52,9 +57,18 @@ function createTestContext(params?: {
     typingReaction: "",
     ackReactionScope: "group-mentions",
     mediaMaxBytes: 20 * 1024 * 1024,
-    removeAckAfterReply: false,
   });
 }
+
+function createEnterpriseEventScope(teamId: string): SlackEventScope {
+  return {
+    teamId,
+    client: {} as SlackEventScope["client"],
+  };
+}
+
+beforeEach(() => setSlackRuntime(null as never));
+afterEach(() => setSlackRuntime(null as never));
 
 describe("createSlackMonitorContext shouldDropMismatchedSlackEvent", () => {
   it("drops mismatched top-level app/team identifiers", () => {
@@ -88,6 +102,44 @@ describe("createSlackMonitorContext shouldDropMismatchedSlackEvent", () => {
       }),
     ).toBe(false);
   });
+
+  it("reads updated identity fields and mismatch guards after auth recovery", () => {
+    const ctx = createTestContext();
+
+    ctx.installationIdentity = {
+      kind: "enterprise",
+      apiAppId: "A_ENTERPRISE",
+      enterpriseId: "E_ENTERPRISE",
+    };
+    ctx.teamId = "";
+    ctx.apiAppId = "A_ENTERPRISE";
+
+    expect(ctx.installationIdentity).toEqual({
+      kind: "enterprise",
+      apiAppId: "A_ENTERPRISE",
+      enterpriseId: "E_ENTERPRISE",
+    });
+    expect(ctx.teamId).toBe("");
+    expect(ctx.apiAppId).toBe("A_ENTERPRISE");
+    expect(ctx.shouldDropMismatchedSlackEvent({ api_app_id: "A_EXPECTED" })).toBe(true);
+
+    ctx.installationIdentity = {
+      kind: "workspace",
+      apiAppId: "A_RECOVERED",
+      teamId: "T_RECOVERED",
+    };
+    ctx.teamId = "T_RECOVERED";
+    ctx.apiAppId = "A_RECOVERED";
+
+    expect(ctx.teamId).toBe("T_RECOVERED");
+    expect(ctx.apiAppId).toBe("A_RECOVERED");
+    expect(
+      ctx.shouldDropMismatchedSlackEvent({
+        api_app_id: "A_RECOVERED",
+        team_id: "T_WRONG",
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("createSlackMonitorContext isChannelAllowed", () => {
@@ -100,31 +152,74 @@ describe("createSlackMonitorContext isChannelAllowed", () => {
     expect(ctx.isChannelAllowed({ channelId: "G456", channelType: "mpim" })).toBe(true);
     expect(ctx.isChannelAllowed({ channelId: "G999", channelType: "mpim" })).toBe(false);
   });
+
+  it("matches workspace-qualified channel and group DM policies", () => {
+    const ctx = createTestContext({
+      groupDmEnabled: true,
+      groupDmChannels: ["team:T11111111:channel:G01234567"],
+      channelsConfig: {
+        "team:T11111111:channel:C01234567": { enabled: true },
+        "team:T22222222:channel:C01234567": { enabled: false },
+      },
+    });
+
+    expect(
+      ctx.isChannelAllowed({
+        teamId: "T11111111",
+        channelId: "C01234567",
+        channelType: "channel",
+      }),
+    ).toBe(true);
+    expect(
+      ctx.isChannelAllowed({
+        teamId: "T22222222",
+        channelId: "C01234567",
+        channelType: "channel",
+      }),
+    ).toBe(false);
+    expect(
+      ctx.isChannelAllowed({
+        teamId: "T11111111",
+        channelId: "G01234567",
+        channelType: "mpim",
+      }),
+    ).toBe(true);
+    expect(
+      ctx.isChannelAllowed({
+        teamId: "T22222222",
+        channelId: "G01234567",
+        channelType: "mpim",
+      }),
+    ).toBe(false);
+  });
 });
 
-describe("createSlackMonitorContext resolveSlackSystemEventSessionKey", () => {
+describe("createSlackMonitorContext resolveSlackSystemEventRoute", () => {
   it("routes threaded interaction events to the Slack thread session", () => {
     const ctx = createTestContext();
 
     expect(
-      ctx.resolveSlackSystemEventSessionKey({
+      ctx.resolveSlackSystemEventRoute({
         channelId: "C_THREAD",
         channelType: "channel",
         senderId: "U_CLICKER",
         threadTs: "1712345678.123456",
       }),
-    ).toBe("agent:main:slack:channel:c_thread:thread:1712345678.123456");
+    ).toEqual({
+      agentId: "main",
+      sessionKey: "agent:main:slack:channel:c_thread:thread:1712345678.123456",
+    });
   });
 
   it("routes channel-less direct interactions to the sender session", () => {
     const ctx = createTestContext({ dmScope: "per-channel-peer" });
 
     expect(
-      ctx.resolveSlackSystemEventSessionKey({
+      ctx.resolveSlackSystemEventRoute({
         channelType: "im",
         senderId: "U_SHORTCUT",
       }),
-    ).toBe("agent:main:slack:direct:u_shortcut");
+    ).toEqual({ agentId: "main", sessionKey: "agent:main:slack:direct:u_shortcut" });
   });
 
   it("routes typeless system events through an event-carried mpDM type", () => {
@@ -132,11 +227,51 @@ describe("createSlackMonitorContext resolveSlackSystemEventSessionKey", () => {
     ctx.rememberSlackChannelType("C0MPDM42", "mpim");
 
     expect(
-      ctx.resolveSlackSystemEventSessionKey({
+      ctx.resolveSlackSystemEventRoute({
         channelId: "C0MPDM42",
         senderId: "U_ACTOR",
       }),
-    ).toBe("agent:main:slack:group:c0mpdm42");
+    ).toEqual({ agentId: "main", sessionKey: "agent:main:slack:group:c0mpdm42" });
+  });
+
+  it("partitions enterprise channel system events by workspace", () => {
+    const ctx = createTestContext();
+    const resolveForTeam = (teamId: string) =>
+      ctx.resolveSlackSystemEventRoute({
+        channelId: "C_SHARED",
+        channelType: "channel",
+        senderId: "U_ACTOR",
+        eventScope: createEnterpriseEventScope(teamId),
+      });
+
+    expect(resolveForTeam("T111")).toEqual({
+      agentId: "main",
+      sessionKey: "agent:main:slack:channel:team:t111:channel:c_shared",
+    });
+    expect(resolveForTeam("T222")).toEqual({
+      agentId: "main",
+      sessionKey: "agent:main:slack:channel:team:t222:channel:c_shared",
+    });
+  });
+
+  it("partitions enterprise main DM system events by workspace", () => {
+    const ctx = createTestContext({ dmScope: "main" });
+    const resolveForTeam = (teamId: string) =>
+      ctx.resolveSlackSystemEventRoute({
+        channelId: "D_SHARED",
+        channelType: "im",
+        senderId: "U_SHARED",
+        eventScope: createEnterpriseEventScope(teamId),
+      });
+
+    expect(resolveForTeam("T111")).toEqual({
+      agentId: "main",
+      sessionKey: "agent:main:main:account:default:team:t111",
+    });
+    expect(resolveForTeam("T222")).toEqual({
+      agentId: "main",
+      sessionKey: "agent:main:main:account:default:team:t222",
+    });
   });
 });
 
@@ -167,10 +302,7 @@ describe("createSlackMonitorContext channel metadata cache", () => {
   it("isolates remembered types by enterprise team scope", async () => {
     const createScope = (teamId: string): SlackEventScope =>
       ({
-        apiAppId: "A_EXPECTED",
-        enterpriseId: "E_EXPECTED",
         teamId,
-        isEnterpriseInstall: true,
         client: {
           conversations: { info: vi.fn().mockRejectedValue(new Error("missing_scope")) },
         },
@@ -235,5 +367,207 @@ describe("createSlackMonitorContext channel metadata cache", () => {
     const before = usersInfo.mock.calls.length;
     await expect(ctx.resolveUserName("U0KEEP")).resolves.toEqual({ name: "name-U0KEEP" });
     expect(usersInfo).toHaveBeenCalledTimes(before);
+  });
+});
+
+describe("createSlackMonitorContext Agent View state", () => {
+  it("records Agent View in the account context without runtime state", async () => {
+    const ctx = createTestContext();
+
+    await expect(ctx.isSlackAgentView()).resolves.toBe(false);
+    await ctx.recordSlackAgentView();
+    await expect(ctx.isSlackAgentView()).resolves.toBe(true);
+  });
+
+  it("persists and restores Agent View through plugin state", async () => {
+    const stored = new Map<string, { experience: "agent"; observedAt: number }>();
+    const register = vi.fn(
+      async (key: string, value: { experience: "agent"; observedAt: number }) => {
+        stored.set(key, value);
+      },
+    );
+    const lookup = vi.fn(async (key: string) => stored.get(key));
+    const openKeyedStore = vi.fn(() => ({ register, lookup }));
+    setSlackRuntime({
+      state: { openKeyedStore },
+      logging: { getChildLogger: () => ({ warn: vi.fn() }) },
+    } as never);
+
+    const first = createTestContext();
+    await first.recordSlackAgentView();
+    const restarted = createTestContext();
+
+    const stateKey = JSON.stringify(["workspace", "default", "T_EXPECTED", "A_EXPECTED"]);
+    expect(register).toHaveBeenCalledWith(stateKey, {
+      experience: "agent",
+      observedAt: expect.any(Number),
+    });
+    expect(openKeyedStore).toHaveBeenCalledWith({
+      namespace: "agent-view-workspaces",
+      maxEntries: 4096,
+    });
+    await expect(restarted.isSlackAgentView()).resolves.toBe(true);
+    expect(lookup).toHaveBeenCalledWith(stateKey);
+
+    const replacementApp = createTestContext({ apiAppId: "A_REPLACEMENT" });
+    await expect(replacementApp.isSlackAgentView()).resolves.toBe(false);
+    expect(lookup).toHaveBeenCalledWith(
+      JSON.stringify(["workspace", "default", "T_EXPECTED", "A_REPLACEMENT"]),
+    );
+  });
+
+  it("persists managed view roots without enabling unrelated DM threads", async () => {
+    const stored = new Map<
+      string,
+      { experience: "agent" | "managed-thread"; observedAt: number }
+    >();
+    const register = vi.fn(
+      async (
+        key: string,
+        value: { experience: "agent" | "managed-thread"; observedAt: number },
+      ) => {
+        stored.set(key, value);
+      },
+    );
+    const lookup = vi.fn(async (key: string) => stored.get(key));
+    const openKeyedStore = vi.fn(() => ({ register, lookup }));
+    setSlackRuntime({
+      state: { openKeyedStore },
+      logging: { getChildLogger: () => ({ warn: vi.fn() }) },
+    } as never);
+
+    const first = createTestContext();
+    await first.recordSlackManagedViewThread("D123", "10.000");
+    const restarted = createTestContext();
+
+    await expect(restarted.isSlackManagedViewThread("D123", "10.000")).resolves.toBe(true);
+    await expect(restarted.isSlackManagedViewThread("D123", "20.000")).resolves.toBe(false);
+
+    const stateKey = JSON.stringify([
+      "thread",
+      "default",
+      "T_EXPECTED",
+      "A_EXPECTED",
+      "D123",
+      "10.000",
+    ]);
+    expect(register).toHaveBeenCalledWith(stateKey, {
+      experience: "managed-thread",
+      observedAt: expect.any(Number),
+    });
+    expect(openKeyedStore).toHaveBeenCalledWith({
+      namespace: "agent-view-threads",
+      maxEntries: 4096,
+    });
+    expect(lookup).toHaveBeenCalledWith(stateKey);
+  });
+
+  it("retries opening managed view state after a transient failure", async () => {
+    const register = vi.fn(async () => undefined);
+    const openKeyedStore = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw new Error("sqlite unavailable");
+      })
+      .mockImplementation(() => ({ register, lookup: vi.fn() }));
+    setSlackRuntime({
+      state: { openKeyedStore },
+      logging: { getChildLogger: () => ({ warn: vi.fn() }) },
+    } as never);
+    const ctx = createTestContext();
+
+    await ctx.recordSlackManagedViewThread("D123", "10.000");
+    await ctx.recordSlackManagedViewThread("D123", "10.000");
+
+    expect(openKeyedStore).toHaveBeenCalledTimes(2);
+    expect(register).toHaveBeenCalledOnce();
+  });
+
+  it("retries managed view persistence after a transient write failure", async () => {
+    const register = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("sqlite busy"))
+      .mockResolvedValue(undefined);
+    setSlackRuntime({
+      state: { openKeyedStore: vi.fn(() => ({ register, lookup: vi.fn() })) },
+      logging: { getChildLogger: () => ({ warn: vi.fn() }) },
+    } as never);
+    const ctx = createTestContext();
+
+    await ctx.recordSlackManagedViewThread("D123", "10.000");
+    await ctx.recordSlackManagedViewThread("D123", "10.000");
+
+    expect(register).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache negative managed view root lookups", async () => {
+    const lookup = vi.fn(async () => undefined);
+    setSlackRuntime({
+      state: { openKeyedStore: vi.fn(() => ({ register: vi.fn(), lookup })) },
+      logging: { getChildLogger: () => ({ warn: vi.fn() }) },
+    } as never);
+    const ctx = createTestContext();
+
+    await expect(ctx.isSlackManagedViewThread("D123", "10.000")).resolves.toBe(false);
+    await expect(ctx.isSlackManagedViewThread("D123", "10.000")).resolves.toBe(false);
+
+    expect(lookup).toHaveBeenCalledTimes(2);
+  });
+
+  it("evicts the oldest managed view root from the bounded memory cache", async () => {
+    const lookup = vi.fn(async () => ({
+      experience: "managed-thread" as const,
+      observedAt: Date.now(),
+    }));
+    setSlackRuntime({
+      state: { openKeyedStore: vi.fn(() => ({ register: vi.fn(), lookup })) },
+      logging: { getChildLogger: () => ({ warn: vi.fn() }) },
+    } as never);
+    const ctx = createTestContext();
+
+    await ctx.isSlackManagedViewThread("D123", "oldest");
+    for (let index = 0; index < 4096; index += 1) {
+      await ctx.isSlackManagedViewThread("D123", `thread-${index}`);
+    }
+    await ctx.isSlackManagedViewThread("D123", "oldest");
+
+    expect(lookup).toHaveBeenCalledTimes(4098);
+  });
+
+  it("does not persist Agent View without a stable Slack app identity", async () => {
+    const register = vi.fn();
+    const lookup = vi.fn();
+    setSlackRuntime({
+      state: { openKeyedStore: vi.fn(() => ({ register, lookup })) },
+      logging: { getChildLogger: () => ({ warn: vi.fn() }) },
+    } as never);
+
+    const ctx = createTestContext({ apiAppId: "" });
+    await ctx.recordSlackAgentView();
+    await ctx.recordSlackManagedViewThread("D123", "10.000");
+    await expect(ctx.isSlackAgentView()).resolves.toBe(true);
+    await expect(ctx.isSlackManagedViewThread("D123", "10.000")).resolves.toBe(true);
+    expect(register).not.toHaveBeenCalled();
+
+    const restarted = createTestContext({ apiAppId: "" });
+    await expect(restarted.isSlackAgentView()).resolves.toBe(false);
+    await expect(restarted.isSlackManagedViewThread("D123", "10.000")).resolves.toBe(false);
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it("keeps event-derived Agent View when persistent state cannot open", async () => {
+    setSlackRuntime({
+      state: {
+        openKeyedStore: vi.fn(() => {
+          throw new Error("sqlite unavailable");
+        }),
+      },
+      logging: { getChildLogger: () => ({ warn: vi.fn() }) },
+    } as never);
+    const ctx = createTestContext();
+
+    await ctx.recordSlackAgentView();
+
+    await expect(ctx.isSlackAgentView()).resolves.toBe(true);
   });
 });

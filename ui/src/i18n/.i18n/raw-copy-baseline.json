@@ -5,6 +5,13 @@
       "count": 1,
       "kind": "object-property",
       "name": "label",
+      "path": "ui/src/app/app-shell-view.ts",
+      "text": "device scope upgrade banner"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
       "path": "ui/src/app/lazy-custom-element.ts",
       "text": "approval page"
     },
@@ -27,6 +34,20 @@
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/app/lazy-custom-element.ts",
+      "text": "custodian panel"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/lazy-custom-element.ts",
+      "text": "desktop panel"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/lazy-custom-element.ts",
       "text": "terminal panel"
     },
     {
@@ -42,6 +63,41 @@
       "name": "text",
       "path": "ui/src/components/app-topbar.ts",
       "text": "OpenClaw"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/components/board/board-view.test-support.ts",
+      "text": "Alpha status"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/components/board/board-view.test-support.ts",
+      "text": "Beta chart"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/components/board/board-view.test-support.ts",
+      "text": "Main"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/components/board/board-view.test-support.ts",
+      "text": "Operations"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/components/board/board-view.test-support.ts",
+      "text": "Queue depth"
     },
     {
       "count": 1,
@@ -68,15 +124,22 @@
       "count": 2,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/components/lobster-pet.ts",
+      "path": "ui/src/components/lobster-pet-look.ts",
       "text": "z"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/components/lobster-pet.ts",
+      "path": "ui/src/components/lobster-pet-look.ts",
       "text": "Z"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "alt",
+      "path": "ui/src/components/login-gate.ts",
+      "text": "OpenClaw"
     },
     {
       "count": 1,
@@ -119,13 +182,6 @@
       "name": "text",
       "path": "ui/src/components/settings-sidebar.ts",
       "text": "esc"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/components/sidebar-update-card.ts",
-      "text": "· v"
     },
     {
       "count": 1,
@@ -328,34 +384,6 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/agents/memory/view.ts",
-      "text": "assistant"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/agents/memory/view.ts",
-      "text": "chats"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/agents/memory/view.ts",
-      "text": "Full vault breakdown:"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/agents/memory/view.ts",
-      "text": "Imported chats clustered around"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/agents/memory/view.ts",
       "text": "memory-wiki"
     },
     {
@@ -364,34 +392,6 @@
       "name": "text",
       "path": "ui/src/pages/agents/memory/view.ts",
       "text": "plugins.entries.memory-wiki.enabled = true"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/agents/memory/view.ts",
-      "text": "Selected section:"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/agents/memory/view.ts",
-      "text": "Showing the first chunk of this page"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/agents/memory/view.ts",
-      "text": "user ·"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/agents/memory/view.ts",
-      "text": "Vault ·"
     },
     {
       "count": 2,
@@ -460,78 +460,22 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
-      "text": "Compacting context..."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
-      "text": "Context compacted"
-    },
-    {
-      "count": 2,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
-      "text": "Enter"
-    },
-    {
-      "count": 2,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
-      "text": "Esc"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
-      "text": "Replying to"
-    },
-    {
-      "count": 2,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
-      "text": "Tab"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-message.ts",
+      "path": "ui/src/pages/chat/components/chat-message-timestamp.ts",
       "text": "% ctx"
     },
     {
-      "count": 2,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-message.ts",
-      "text": "JSON"
-    },
-    {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/chat/components/chat-message.ts",
+      "path": "ui/src/pages/chat/components/chat-message-timestamp.ts",
       "text": "R"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/chat/components/chat-message.ts",
+      "path": "ui/src/pages/chat/components/chat-message-timestamp.ts",
       "text": "W"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-thread.ts",
-      "text": "pinned"
     },
     {
       "count": 1,
@@ -566,6 +510,13 @@
       "kind": "html-attribute",
       "name": "placeholder",
       "path": "ui/src/pages/config/view.ts",
+      "text": "48rem"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/pages/config/view.ts",
       "text": "https://tweakcn.com/editor/theme?theme=... or amethyst-haze"
     },
     {
@@ -584,13 +535,6 @@
     },
     {
       "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/cron/view-runs.ts",
-      "text": "ms"
-    },
-    {
-      "count": 1,
       "kind": "html-attribute",
       "name": "placeholder",
       "path": "ui/src/pages/cron/view.ts",
@@ -605,10 +549,10 @@
     },
     {
       "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/custodian/custodian-page.ts",
-      "text": "OC"
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/cron/view.ts",
+      "text": "last"
     },
     {
       "count": 1,
@@ -621,8 +565,15 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/nodes/view-exec-approvals.ts",
+      "path": "ui/src/pages/devices/view-exec-approvals.ts",
       "text": "exec host=gateway/node"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/model-providers/default-models-view.ts",
+      "text": "i"
     },
     {
       "count": 4,
@@ -644,6 +595,13 @@
       "name": "text",
       "path": "ui/src/pages/skill-workshop/view.ts",
       "text": "v"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/skills/view.test-support.ts",
+      "text": "Skill description"
     },
     {
       "count": 1,

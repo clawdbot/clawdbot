@@ -31,6 +31,20 @@ vi.mock("../llm/stream.js", () => ({
   completeSimple: hoisted.completeMock,
 }));
 
+vi.mock("./sessions/model-registry-runtime.js", () => ({
+  getModelRegistryRuntime: () => {
+    const apiRegistry = {};
+    return {
+      apiRegistry,
+      llmRuntime: {
+        registry: apiRegistry,
+        completeSimple: (...args: unknown[]) => hoisted.completeMock(...args),
+        streamSimple: vi.fn(),
+      },
+    };
+  },
+}));
+
 vi.mock("./embedded-agent-runner/model.js", () => ({
   resolveModel: hoisted.resolveModelMock,
   resolveModelAsync: hoisted.resolveModelAsyncMock,
@@ -45,7 +59,8 @@ vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal)
   getCurrentPluginMetadataSnapshot: hoisted.getCurrentPluginMetadataSnapshotMock,
 }));
 
-vi.mock("./simple-completion-transport.js", () => ({
+vi.mock("@openclaw/ai/transports", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/ai/transports")>()),
   prepareModelForSimpleCompletion: hoisted.prepareModelForSimpleCompletionMock,
 }));
 
@@ -55,8 +70,8 @@ vi.mock("./model-auth.js", () => ({
     (auth: { source: string; mode: string }, provider: string) =>
       `No API key resolved for provider "${provider}" (auth mode: ${auth.mode}, checked: ${auth.source}).`,
   ),
-  getApiKeyForModel: hoisted.getApiKeyForModelMock,
-  resolveApiKeyForProvider: hoisted.getApiKeyForModelMock,
+  getApiKeyForModelCore: hoisted.getApiKeyForModelMock,
+  resolveApiKeyForProviderCore: hoisted.getApiKeyForModelMock,
   applyLocalNoAuthHeaderOverride: hoisted.applyLocalNoAuthHeaderOverrideMock,
 }));
 
@@ -463,7 +478,7 @@ describe("prepareSimpleCompletionModel", () => {
     expect(result.model.baseUrl).toBe("https://api.copilot.enterprise.example");
   });
 
-  it("returns error when getApiKeyForModel throws", async () => {
+  it("returns error when getApiKeyForModelCore throws", async () => {
     hoisted.getApiKeyForModelMock.mockRejectedValueOnce(new Error("Profile not found: copilot"));
 
     const result = await prepareSimpleCompletionModel({
@@ -626,11 +641,10 @@ describe("prepareSimpleCompletionModel", () => {
     );
   });
 
-  it("can preserve asynchronous provider model discovery", async () => {
+  it("uses asynchronous provider model discovery", async () => {
     // Use a standalone mock so the default beforeEach delegation from
     // resolveModelAsyncMock → resolveModelMock does not pollute call
-    // history. The point of the test is that when useAsyncModelResolution
-    // is true, only the async resolver is invoked.
+    // history. Only the async resolver should be invoked.
     const resolveModelAsync = vi.fn().mockResolvedValue({
       model: {
         provider: "anthropic",
@@ -649,7 +663,6 @@ describe("prepareSimpleCompletionModel", () => {
       cfg: undefined,
       provider: "anthropic",
       modelId: "claude-opus-4-6",
-      useAsyncModelResolution: true,
       modelResolver: resolveModelAsync,
     });
 
@@ -880,7 +893,11 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
       },
     });
 
-    expect(hoisted.prepareModelForSimpleCompletionMock).toHaveBeenCalledWith({ model, cfg });
+    expect(hoisted.prepareModelForSimpleCompletionMock).toHaveBeenCalledWith({
+      apiRegistry: expect.anything(),
+      model,
+      cfg,
+    });
     expect(hoisted.completeMock).toHaveBeenCalledWith(
       preparedModel,
       {

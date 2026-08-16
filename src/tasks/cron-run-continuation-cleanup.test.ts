@@ -10,15 +10,20 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../config/config.js", () => ({ getRuntimeConfig: () => ({}) }));
-vi.mock("../config/sessions/paths.js", () => ({ resolveStorePath: () => "/tmp/sessions.json" }));
+vi.mock("../config/sessions/paths.js", () => ({
+  resolveSessionStorePathCore: () => "/tmp/sessions.json",
+}));
 vi.mock("../config/sessions/session-accessor.js", () => ({
   deleteSessionEntryLifecycle: mocks.deleteEntry,
   loadSessionEntry: mocks.loadEntry,
 }));
 vi.mock("../infra/agent-events.js", () => ({
   getAgentEventLifecycleGeneration: () => "current-generation",
+  isAgentEventLifecycleGenerationCurrent: (generation: string) =>
+    generation === "current-generation",
+  registerAgentEventLifecycleRotationHandler: vi.fn(),
 }));
-vi.mock("../infra/session-delivery-queue.js", () => ({
+vi.mock("../infra/session-delivery-queue-storage.js", () => ({
   loadPendingSessionDeliveries: mocks.loadPendingSessionDeliveries,
 }));
 vi.mock("./task-status-access.js", () => ({

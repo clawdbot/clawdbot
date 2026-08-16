@@ -12,15 +12,24 @@ const SCRIPT_PATH = path.resolve(
 describe("scripts/test-live-codex-harness-docker.sh", () => {
   it("mounts cache and npm tool dirs outside the bind-mounted Docker home", () => {
     const script = fs.readFileSync(SCRIPT_PATH, "utf8");
+    const authHelper = fs.readFileSync(
+      path.resolve(import.meta.dirname, "../../scripts/lib/live-docker-auth.sh"),
+      "utf8",
+    );
 
     expect(script).toContain('DOCKER_CACHE_CONTAINER_DIR="/tmp/openclaw-cache"');
     expect(script).toContain('DOCKER_CLI_TOOLS_CONTAINER_DIR="/tmp/openclaw-npm-global"');
-    expect(script).toContain("openclaw_live_codex_harness_is_ci()");
-    expect(script).toContain("openclaw_live_is_ci");
+    expect(script).toContain("openclaw_live_init_cli_tools_dir");
+    expect(script).toContain("openclaw_live_init_cache_home_dir");
+    expect(authHelper).toContain("openclaw_live_is_ci");
     expect(script).toContain('-e XDG_CACHE_HOME="$DOCKER_CACHE_CONTAINER_DIR"');
     expect(script).toContain('-e NPM_CONFIG_PREFIX="$DOCKER_CLI_TOOLS_CONTAINER_DIR"');
-    expect(script).toContain('openclaw_live_prepare_bind_dir_for_container_user "$CLI_TOOLS_DIR"');
-    expect(script).toContain('openclaw_live_prepare_bind_dir_for_container_user "$CACHE_HOME_DIR"');
+    expect(authHelper).toContain(
+      'openclaw_live_prepare_bind_dir_for_container_user "$CLI_TOOLS_DIR"',
+    );
+    expect(authHelper).toContain(
+      'openclaw_live_prepare_bind_dir_for_container_user "$CACHE_HOME_DIR"',
+    );
     expect(script).toContain("openclaw_live_uses_managed_bind_dirs");
     expect(script).toContain('-v "$CACHE_HOME_DIR":"$DOCKER_CACHE_CONTAINER_DIR"');
     expect(script).toContain('-v "$CLI_TOOLS_DIR":"$DOCKER_CLI_TOOLS_CONTAINER_DIR"');
@@ -52,8 +61,13 @@ describe("scripts/test-live-codex-harness-docker.sh", () => {
 
   it("keeps API-key runs on the ephemeral Docker home", () => {
     const script = fs.readFileSync(SCRIPT_PATH, "utf8");
+    const authHelper = fs.readFileSync(
+      path.resolve(import.meta.dirname, "../../scripts/lib/live-docker-auth.sh"),
+      "utf8",
+    );
 
-    expect(script).toContain('DOCKER_USER="$(id -u):$(id -g)"');
+    expect(script).toContain("openclaw_live_init_managed_home");
+    expect(authHelper).toContain('DOCKER_USER="$(id -u):$(id -g)"');
     expect(script).toContain("if openclaw_live_uses_managed_bind_dirs; then");
     expect(script).toContain('if [[ "$CODEX_HARNESS_AUTH_MODE" == "api-key" ]]; then');
     expect(script).toContain('if [[ -z "${DOCKER_HOME_DIR:-}" ]]; then');
@@ -87,17 +101,26 @@ describe("scripts/test-live-codex-harness-docker.sh", () => {
     );
   });
 
-  it("forwards the live Codex bind provider override into Docker", () => {
+  it("forwards the live Codex bind controls into Docker", () => {
     const script = fs.readFileSync(SCRIPT_PATH, "utf8");
 
     expect(script).toContain(
       '-e OPENCLAW_LIVE_CODEX_BIND_PROVIDER="${OPENCLAW_LIVE_CODEX_BIND_PROVIDER:-}"',
+    );
+    expect(script).toContain(
+      '-e OPENCLAW_LIVE_CODEX_BIND_REQUEST_TIMEOUT_MS="${OPENCLAW_LIVE_CODEX_BIND_REQUEST_TIMEOUT_MS:-}"',
+    );
+    expect(script).toContain(
+      '-e OPENCLAW_LIVE_CODEX_BIND_TIMEOUT_MS="${OPENCLAW_LIVE_CODEX_BIND_TIMEOUT_MS:-}"',
     );
   });
 
   it("forwards bounded resume stress controls into Docker", () => {
     const script = fs.readFileSync(SCRIPT_PATH, "utf8");
 
+    expect(script).toContain(
+      '-e OPENCLAW_LIVE_CODEX_HARNESS_MULTI_SESSION_PROBE="${OPENCLAW_LIVE_CODEX_HARNESS_MULTI_SESSION_PROBE:-0}"',
+    );
     expect(script).toContain(
       '-e OPENCLAW_LIVE_CODEX_HARNESS_RESUME_STRESS="${OPENCLAW_LIVE_CODEX_HARNESS_RESUME_STRESS:-0}"',
     );

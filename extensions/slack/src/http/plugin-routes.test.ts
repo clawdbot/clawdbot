@@ -73,6 +73,31 @@ describe("registerSlackPluginHttpRoutes", () => {
     expect(paths).toEqual(["/slack/events"]);
   });
 
+  it("registers a shared account webhook path only once", () => {
+    const registerHttpRoute = vi.fn();
+    const api = createApi(
+      {
+        channels: {
+          slack: {
+            webhookPath: "/slack/events",
+            accounts: {
+              default: { webhookPath: "/slack/events" },
+              ops: { webhookPath: "/slack/events" },
+            },
+          },
+        },
+      },
+      registerHttpRoute,
+    );
+
+    registerSlackPluginHttpRoutes(api);
+
+    expect(registerHttpRoute).toHaveBeenCalledOnce();
+    expect(registerHttpRoute).toHaveBeenCalledWith(
+      expect.objectContaining({ path: "/slack/events" }),
+    );
+  });
+
   it("dispatches through the shared Slack HTTP handler registry", async () => {
     const routeHandler = vi.fn();
     const unregister = registerSlackHttpHandler({

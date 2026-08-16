@@ -6,7 +6,12 @@ import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import type { OpenClawSkillMetadata, SkillEntry } from "../types.js";
 import { createSyntheticSourceInfo } from "./skill-contract.js";
-import { buildWorkspaceSkillsPrompt } from "./workspace.js";
+import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
+
+const buildWorkspaceSkillsPrompt = (
+  workspaceDir: string,
+  opts?: Parameters<typeof buildSkillSnapshot>[1],
+): string => buildSkillSnapshot(workspaceDir, opts).prompt;
 
 vi.mock("./plugin-skills.js", () => ({
   resolvePluginSkillDirs: () => [],
@@ -173,6 +178,25 @@ describe("buildWorkspaceSkillsPrompt", () => {
         config: { skills: { entries: { alias: { enabled: false } } } },
       }),
     );
+    expect(prompt).not.toContain("alias-skill");
+  });
+
+  it("uses the canonical skillKey for session overrides while filtering agents by skill name", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    const prompt = withEnv({ HOME: workspaceDir, PATH: "" }, () =>
+      buildWorkspaceSkillsPrompt(workspaceDir, {
+        entries: [
+          createSkillEntry({
+            name: "alias-skill",
+            metadata: { skillKey: "canonical-alias" },
+          }),
+        ],
+        managedSkillsDir: path.join(workspaceDir, ".managed"),
+        skillFilter: ["alias-skill"],
+        skillOverrides: { "canonical-alias": false },
+      }),
+    );
+
     expect(prompt).not.toContain("alias-skill");
   });
 });

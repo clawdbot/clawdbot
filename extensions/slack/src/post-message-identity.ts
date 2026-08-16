@@ -3,6 +3,7 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
+  normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   SlackBasePostMessagePayload,
@@ -24,16 +25,6 @@ type SlackWebApiErrorData = {
   };
 };
 
-function normalizeSlackScopeList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.flatMap((scope) => {
-    const normalized = normalizeOptionalString(scope);
-    return normalized ? [normalized] : [];
-  });
-}
-
 function getSlackWebApiErrorData(err: unknown): SlackWebApiErrorData | undefined {
   if (!(err instanceof Error)) {
     return undefined;
@@ -53,8 +44,8 @@ function isSlackCustomizeScopeError(err: unknown): boolean {
     return true;
   }
   const scopes = [
-    ...normalizeSlackScopeList(data?.response_metadata?.scopes),
-    ...normalizeSlackScopeList(data?.response_metadata?.acceptedScopes),
+    ...normalizeTrimmedStringList(data?.response_metadata?.scopes),
+    ...normalizeTrimmedStringList(data?.response_metadata?.acceptedScopes),
   ].map((scope) => normalizeLowercaseStringOrEmpty(scope));
   return scopes.includes("chat:write.customize");
 }

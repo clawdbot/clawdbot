@@ -1,46 +1,38 @@
+import { isContextOverflow } from "@openclaw/ai/internal/runtime";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { buildContextEngineRuntimeSettings } from "../../../context-engine/runtime-settings.js";
-import type { ContextEngine, ContextEngineSessionTarget } from "../../../context-engine/types.js";
+import type { ContextEngine } from "../../../context-engine/types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
-import { resolveProcessToolScopeKey } from "../../agent-tools.js";
-import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
+import type { AssistantMessage } from "../../../llm/types.js";
+import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../../agent-compaction-constants.js";
+import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import {
   extractObservedOverflowTokenCount,
   isCompactionFailureError,
   isLikelyContextOverflowError,
 } from "../../embedded-agent-helpers.js";
-import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
-import {
-  compactContextEngineWithSafetyTimeout,
-  resolveCompactionTimeoutMs,
-} from "../compaction-safety-timeout.js";
-import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { log } from "../logger.js";
+import {
+  getProviderPromptState,
+  markLastProviderPromptContextRejected,
+} from "../provider-prompt-state.js";
+import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   resolveLiveToolResultMaxChars,
   sessionLikelyHasOversizedToolResults,
   truncateOversizedToolResultsInActiveTarget,
 } from "../tool-result-truncation.js";
-import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
-import { createCompactionDiagId } from "./helpers.js";
-import type { RunEmbeddedAgentParams } from "./params.js";
 import {
-  buildContextEngineCompactionSessionTarget,
+  compactEmbeddedRunForRecovery,
+  type EmbeddedRunCompactionRecoveryInput,
+} from "./compaction-runtime.js";
+import { createRunRecoveryDiagId } from "./helpers.js";
+import {
   isNoRealConversationCompactionNoop,
   resetNoRealConversationTokenSnapshot,
 } from "./session-bootstrap.js";
-import type { EmbeddedRunAttemptResult } from "./types.js";
-
-const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
 
 type CompactResult = Awaited<ReturnType<ContextEngine["compact"]>>;
-
-type ActiveSession = {
-  id: string;
-  file: string;
-  target?: ContextEngineSessionTarget;
-};
 
 type EmbeddedRunOverflowRecoveryOutcome =
   | { action: "none" }
@@ -52,50 +44,18 @@ type EmbeddedRunOverflowRecoveryOutcome =
       userText: string;
     };
 
-export async function recoverEmbeddedRunOverflow(input: {
-  runParams: RunEmbeddedAgentParams;
-  state: EmbeddedRunContextRecoveryState;
-  contextEngine: ContextEngine;
-  contextTokenBudget?: number;
-  genericCompactionRecoveryAllowed: boolean;
-  aborted: boolean;
-  signalOwnedInterruption: boolean;
-  promptError: unknown;
-  assistantErrorText?: string;
-  attempt: EmbeddedRunAttemptResult;
-  attemptCompactionCount: number;
-  runtimeAuthPlan: Parameters<typeof buildEmbeddedCompactionRuntimeContext>[0]["runtimeAuthPlan"];
-  resolvedSessionKey: string;
-  sessionAgentId: string;
-  agentDir: string;
-  workspaceDir: string;
-  provider: string;
-  modelId: string;
-  harnessRuntime: string;
-  thinkLevel: Parameters<typeof buildEmbeddedCompactionRuntimeContext>[0]["thinkLevel"];
-  authProfileId?: string;
-  authProfileIdSource: "auto" | "user";
-  resolveContextEnginePluginId: () => string | undefined;
-  buildRuntimeSettings: (settings: {
-    tokenBudget?: number | null;
-    degradedReason?: string | null;
-  }) => ReturnType<typeof buildContextEngineRuntimeSettings>;
-  onCompactionHookMessages: (payload: {
-    phase: "before" | "after";
-    messages: string[];
-  }) => Promise<void>;
-  runOwnsCompactionBeforeHook: (reason: string) => Promise<void>;
-  runOwnsCompactionAfterHook: (
-    reason: string,
-    result: CompactResult,
-    previousSessionId?: string,
-  ) => Promise<void>;
-  adoptCompactionTranscript: (result: CompactResult) => Promise<string | undefined>;
-  getActiveSession: () => ActiveSession;
-  prepareCurrentTranscriptRetry: () => void;
-  prepareCompactedTranscriptRetry: () => Promise<void>;
-  armPostCompactionGuard: () => void;
-}): Promise<EmbeddedRunOverflowRecoveryOutcome> {
+export async function recoverEmbeddedRunOverflow(
+  input: EmbeddedRunCompactionRecoveryInput & {
+    aborted: boolean;
+    signalOwnedInterruption: boolean;
+    promptError: unknown;
+    assistantErrorText?: string;
+    assistantOverflowCandidate?: AssistantMessage;
+    toolResultPromptProjectionState: ToolResultPromptProjectionState;
+    attemptCompactionCount: number;
+    prepareCurrentTranscriptRetry: () => void;
+  },
+): Promise<EmbeddedRunOverflowRecoveryOutcome> {
   const contextOverflowError =
     !input.aborted && !input.signalOwnedInterruption
       ? (() => {
@@ -107,6 +67,17 @@ export async function recoverEmbeddedRunOverflow(input: {
             // A non-overflow prompt failure must not inherit a stale assistant
             // error from the previous transcript leaf.
             return null;
+          }
+          if (
+            input.assistantOverflowCandidate &&
+            input.contextTokenBudget !== undefined &&
+            isContextOverflow(input.assistantOverflowCandidate, input.contextTokenBudget)
+          ) {
+            return {
+              text:
+                input.assistantOverflowCandidate.errorMessage?.trim() || "Context window exceeded",
+              source: "assistantError" as const,
+            };
           }
           if (input.assistantErrorText && isLikelyContextOverflowError(input.assistantErrorText)) {
             return { text: input.assistantErrorText, source: "assistantError" as const };
@@ -122,8 +93,14 @@ export async function recoverEmbeddedRunOverflow(input: {
     return { action: "none" };
   }
 
+  const providerPromptRejection =
+    contextOverflowError.source === "assistantError" ||
+    projectAgentRunAttemptTerminal(input.attempt.terminal).promptErrorSource === "prompt"
+      ? markLastProviderPromptContextRejected(getProviderPromptState(input.runParams.runId))
+      : undefined;
+
   const runParams = input.runParams;
-  const overflowDiagId = createCompactionDiagId();
+  const overflowDiagId = createRunRecoveryDiagId();
   const errorText = contextOverflowError.text;
   const observedOverflowTokens = extractObservedOverflowTokenCount(errorText);
   const preflightRecovery = input.attempt.preflightRecovery;
@@ -146,6 +123,7 @@ export async function recoverEmbeddedRunOverflow(input: {
       `observedTokens=${observedOverflowTokens ?? "unknown"} ` +
       `preflightEstimatedTokens=${preflightEstimatedPromptTokens ?? "unknown"} ` +
       `compactionTokens=${overflowTokenCountForCompaction ?? "unknown"} ` +
+      `providerPayloadBytes=${providerPromptRejection?.byteWeight ?? "unknown"} ` +
       `error=${truncateUtf16Safe(errorText, 200)}`,
   );
 
@@ -185,93 +163,15 @@ export async function recoverEmbeddedRunOverflow(input: {
     let previousSessionId: string | undefined;
     await input.runOwnsCompactionBeforeHook("overflow recovery");
     try {
-      const sessionBeforeCompaction = input.getActiveSession();
-      const overflowCompactionRuntimeContext = {
-        ...buildEmbeddedCompactionRuntimeContext({
-          sessionKey: runParams.sessionKey,
-          messageChannel: runParams.messageChannel,
-          messageProvider: runParams.messageProvider,
-          clientCaps: runParams.clientCaps,
-          chatType: runParams.chatType,
-          agentAccountId: runParams.agentAccountId,
-          currentChannelId: runParams.currentChannelId,
-          currentThreadTs: runParams.currentThreadTs,
-          currentMessageId: runParams.currentMessageId,
-          authProfileId: input.authProfileId,
-          authProfileIdSource: input.authProfileIdSource,
-          runtimeAuthPlan: input.runtimeAuthPlan,
-          workspaceDir: input.workspaceDir,
-          agentDir: input.agentDir,
-          config: runParams.config,
-          skillsSnapshot: runParams.skillsSnapshot,
-          senderId: runParams.senderId,
-          provider: input.provider,
-          modelId: input.modelId,
-          harnessRuntime: input.harnessRuntime,
-          modelSelectionLocked: runParams.modelSelectionLocked,
-          modelFallbacksOverride: runParams.modelFallbacksOverride,
-          thinkLevel: input.thinkLevel,
-          reasoningLevel: runParams.reasoningLevel,
-          bashElevated: runParams.bashElevated,
-          extraSystemPrompt: runParams.extraSystemPrompt,
-          sourceReplyDeliveryMode: runParams.sourceReplyDeliveryMode,
-          ownerNumbers: runParams.ownerNumbers,
-          activeProcessSessions: listActiveProcessSessionReferences({
-            scopeKey: resolveProcessToolScopeKey({
-              sessionKey: runParams.sandboxSessionKey?.trim() || runParams.sessionKey,
-              sessionId: sessionBeforeCompaction.id,
-              agentId: input.sessionAgentId,
-            }),
-          }),
-        }),
-        ...resolveContextEngineCapabilities({
-          config: runParams.config,
-          sessionKey: runParams.sessionKey,
-          agentId: input.sessionAgentId,
-          contextEnginePluginId: input.resolveContextEnginePluginId(),
-          purpose: "context-engine.overflow-compaction",
-        }),
-        onCompactionHookMessages: input.onCompactionHookMessages,
-        ...(input.attempt.promptCache ? { promptCache: input.attempt.promptCache } : {}),
-        runId: runParams.runId,
+      const compaction = await compactEmbeddedRunForRecovery(input, {
+        tokenBudget: input.contextTokenBudget,
         trigger: "overflow",
-        ...(overflowTokenCountForCompaction !== undefined
-          ? { currentTokenCount: overflowTokenCountForCompaction }
-          : {}),
         diagId: overflowDiagId,
         attempt: input.state.overflowCompactionAttempts,
         maxAttempts: MAX_OVERFLOW_COMPACTION_ATTEMPTS,
-      };
-      const overflowCompactionRuntimeSettings = input.buildRuntimeSettings({
-        tokenBudget: input.contextTokenBudget,
-        degradedReason: "context_overflow",
+        currentTokenCount: overflowTokenCountForCompaction,
       });
-      compactResult = await compactContextEngineWithSafetyTimeout(
-        input.contextEngine,
-        {
-          sessionId: sessionBeforeCompaction.id,
-          sessionKey: input.resolvedSessionKey,
-          agentId: input.sessionAgentId,
-          sessionTarget: buildContextEngineCompactionSessionTarget({
-            agentId: input.sessionAgentId,
-            config: runParams.config,
-            sessionFile: sessionBeforeCompaction.file,
-            sessionId: sessionBeforeCompaction.id,
-            sessionKey: input.resolvedSessionKey,
-            sessionTarget: sessionBeforeCompaction.target,
-          }),
-          tokenBudget: input.contextTokenBudget,
-          ...(overflowTokenCountForCompaction !== undefined
-            ? { currentTokenCount: overflowTokenCountForCompaction }
-            : {}),
-          force: true,
-          compactionTarget: "budget",
-          runtimeContext: overflowCompactionRuntimeContext,
-          runtimeSettings: overflowCompactionRuntimeSettings,
-        },
-        resolveCompactionTimeoutMs(runParams.config),
-        runParams.abortSignal,
-      );
+      compactResult = compaction.result;
       if (compactResult.ok && compactResult.compacted) {
         previousSessionId = await input.adoptCompactionTranscript(compactResult);
         const sessionAfterCompaction = input.getActiveSession();
@@ -282,10 +182,11 @@ export async function recoverEmbeddedRunOverflow(input: {
           sessionTarget: sessionAfterCompaction.target,
           sessionFile: sessionAfterCompaction.file,
           reason: "compaction",
-          runtimeContext: overflowCompactionRuntimeContext,
-          runtimeSettings: overflowCompactionRuntimeSettings,
+          runtimeContext: compaction.runtimeContext,
+          runtimeSettings: compaction.runtimeSettings,
           config: runParams.config,
           agentId: input.sessionAgentId,
+          contextEngineAgentId: input.contextEngineAgentId,
         });
       }
     } catch (compactErr) {
@@ -315,13 +216,14 @@ export async function recoverEmbeddedRunOverflow(input: {
     }
 
     if (compactResult.compacted) {
-      await input.adoptCompactionTranscript(compactResult);
       const tokensAfter = compactResult.result?.tokensAfter;
       if (typeof tokensAfter === "number" && Number.isFinite(tokensAfter) && tokensAfter >= 0) {
         input.state.lastCompactionTokensAfter = Math.floor(tokensAfter);
       }
       if (preflightRecovery?.route === "compact_then_truncate") {
         const sessionAfterCompaction = input.getActiveSession();
+        // Recovery must preserve stored rows and branch from the frozen provider projection.
+        // Rewriting in place erases audit history and can persist bytes the provider never saw.
         const truncResult = await truncateOversizedToolResultsInActiveTarget({
           scope: {
             sessionId: sessionAfterCompaction.id,
@@ -332,11 +234,9 @@ export async function recoverEmbeddedRunOverflow(input: {
           contextWindowTokens: input.contextTokenBudget,
           maxCharsOverride: resolveLiveToolResultMaxChars({
             contextWindowTokens: input.contextTokenBudget,
-            cfg: runParams.config,
-            agentId: input.sessionAgentId,
           }),
-          config: runParams.config,
           protectTrailingToolResults: true,
+          projectionState: input.toolResultPromptProjectionState,
         });
         if (truncResult.truncated) {
           log.info(
@@ -366,8 +266,6 @@ export async function recoverEmbeddedRunOverflow(input: {
   if (!input.state.toolResultTruncationAttempted) {
     const toolResultMaxChars = resolveLiveToolResultMaxChars({
       contextWindowTokens: input.contextTokenBudget,
-      cfg: runParams.config,
-      agentId: input.sessionAgentId,
     });
     const hasOversized = input.attempt.messagesSnapshot
       ? sessionLikelyHasOversizedToolResults({
@@ -383,6 +281,8 @@ export async function recoverEmbeddedRunOverflow(input: {
           `(contextWindow=${input.contextTokenBudget} tokens)`,
       );
       const session = input.getActiveSession();
+      // Recovery must preserve stored rows and branch from the frozen provider projection.
+      // Rewriting in place erases audit history and can persist bytes the provider never saw.
       const truncResult = await truncateOversizedToolResultsInActiveTarget({
         scope: {
           sessionId: session.id,
@@ -392,8 +292,8 @@ export async function recoverEmbeddedRunOverflow(input: {
         },
         contextWindowTokens: input.contextTokenBudget,
         maxCharsOverride: toolResultMaxChars,
-        config: runParams.config,
         protectTrailingToolResults: preflightRecovery?.route === "compact_then_truncate",
+        projectionState: input.toolResultPromptProjectionState,
       });
       if (truncResult.truncated) {
         log.info(

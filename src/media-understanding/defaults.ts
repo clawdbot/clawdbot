@@ -5,6 +5,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { providerSupportsCapability } from "../../packages/media-understanding-common/src/provider-supports.js";
 import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { buildMediaUnderstandingManifestMetadataRegistry } from "./manifest-metadata.js";
 import {
   normalizeMediaExecutionProviderId,
@@ -37,10 +38,7 @@ function cacheConfigRegistry(
     !configRegistryCache.has(key) &&
     configRegistryCache.size >= MAX_CONFIG_REGISTRY_CACHE_ENTRIES
   ) {
-    const oldestKey = configRegistryCache.keys().next().value;
-    if (oldestKey) {
-      configRegistryCache.delete(oldestKey);
-    }
+    pruneMapToMaxSize(configRegistryCache, MAX_CONFIG_REGISTRY_CACHE_ENTRIES - 1);
   }
   configRegistryCache.set(key, registry);
   return registry;

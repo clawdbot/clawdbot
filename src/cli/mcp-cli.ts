@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringifiedOptionalString,
@@ -12,32 +13,37 @@ import { Command } from "commander";
 import { buildBundleMcpToolsFromCatalog } from "../agents/agent-bundle-mcp-materialize.js";
 import { createSessionMcpRuntime } from "../agents/agent-bundle-mcp-runtime.js";
 import {
-  buildMcpHttpFetch,
-  withoutMcpAuthorizationHeader,
-  withSameOriginMcpHttpHeaders,
-} from "../agents/mcp-http-fetch.js";
-import {
-  clearMcpOAuthCredentials,
-  readMcpOAuthCredentialsStatus,
-  runMcpOAuthLogin,
-  type McpOAuthCredentialsStatus,
-} from "../agents/mcp-oauth.js";
-import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
-import { parseConfigValue } from "../auto-reply/reply/config-value.js";
-import {
-  listConfiguredMcpServers,
   setConfiguredMcpServer,
   unsetConfiguredMcpServer,
   updateConfiguredMcpServer,
   updateConfiguredMcpServerTools,
-} from "../config/mcp-config.js";
+} from "../agents/mcp-config-mutation.js";
+import { operatorMcpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
+import { readMcpOAuthStoreReadOnly } from "../agents/mcp-oauth-store.js";
+import {
+  clearMcpOAuthCredentials,
+  completeMcpOAuthAuthorization,
+  countMcpOAuthPrincipals,
+  readMcpOAuthCredentialsStatus,
+  startMcpOAuthAuthorization,
+  type McpOAuthPrincipalStatus,
+} from "../agents/mcp-oauth.js";
+import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
+import { parseConfigValue } from "../auto-reply/reply/config-value.js";
+import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import {
+  startOAuthLoopbackCallbackServer,
+  type OAuthLoopbackCallbackServer,
+} from "../infra/oauth-loopback-callback.js";
+import { resolveEnvironmentValue } from "../infra/process-env.js";
 import { serveOpenClawChannelMcp } from "../mcp/channel-server.js";
 import { defaultRuntime } from "../runtime.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { formatCliCommand } from "./command-format.js";
 import { resolveGatewayAuthOptions } from "./gateway-secret-options.js";
+import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
 function fail(message: string): never {
@@ -49,6 +55,8 @@ function fail(message: string): never {
 function printJson(value: unknown): void {
   defaultRuntime.writeJson(value);
 }
+
+const MCP_OAUTH_CALLBACK_TIMEOUT_MS = 5 * 60 * 1000;
 
 function parseCsvList(value: string | undefined): string[] | undefined {
   if (!value) {
@@ -110,52 +118,21 @@ function parseOAuthConfig(opts: {
   return Object.keys(oauth).length > 0 ? oauth : undefined;
 }
 
-async function clearMcpOAuthCredentialsForConfiguredServer(
-  name: string,
-  server: unknown,
-): Promise<void> {
-  const resolved = resolveMcpTransportConfig(name, server);
-  if (resolved?.kind === "http") {
-    await clearMcpOAuthCredentials({ serverName: name, serverUrl: resolved.url });
-  }
-}
-
-function hasOAuthAuth(server: unknown): boolean {
-  return (
-    typeof server === "object" && server !== null && "auth" in server && server.auth === "oauth"
-  );
-}
-
-async function clearStaleMcpOAuthCredentialsForReplacement(params: {
-  name: string;
-  previous: unknown;
-  next: unknown;
-}): Promise<void> {
-  // Replacing an OAuth HTTP server should not leave credentials bound to the old URL.
-  if (!hasOAuthAuth(params.previous)) {
-    return;
-  }
-  const previousResolved = resolveMcpTransportConfig(params.name, params.previous);
-  if (previousResolved?.kind !== "http") {
-    return;
-  }
-  const nextResolved = hasOAuthAuth(params.next)
-    ? resolveMcpTransportConfig(params.name, params.next)
-    : undefined;
-  if (nextResolved?.kind === "http" && nextResolved.url === previousResolved.url) {
-    return;
-  }
-  await clearMcpOAuthCredentials({
-    serverName: params.name,
-    serverUrl: previousResolved.url,
-  });
-}
-
 function setOptionalField(target: Record<string, unknown>, key: string, value: unknown): void {
   if (value !== undefined) {
     target[key] = value;
   }
 }
+
+/** Documented `mcp status --json` shape: legacy booleans stay additive to `state`. */
+type McpStatusAuthStatusJson = McpOAuthPrincipalStatus & {
+  hasTokens: boolean;
+  requiresAuthorization: boolean;
+  hasClientInformation: boolean;
+  hasCodeVerifier: boolean;
+  hasDiscoveryState: boolean;
+  hasLastAuthorizationUrl: boolean;
+};
 
 type McpStatusEntry = {
   name: string;
@@ -168,7 +145,8 @@ type McpStatusEntry = {
   connectionTimeoutMs?: number;
   supportsParallelToolCalls?: boolean;
   auth?: unknown;
-  authStatus?: McpOAuthCredentialsStatus;
+  authStatus?: McpStatusAuthStatusJson;
+  connectedPrincipals?: number;
   toolFilter?: unknown;
   codex?: unknown;
 };
@@ -196,12 +174,6 @@ const SENSITIVE_HEADER_NAMES = new Set([
 
 const SENSITIVE_KEY_PATTERN =
   /(?:^|[_-])(api[_-]?key|authorization|bearer|password|secret|token)$/i;
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 function issue(level: McpDoctorIssue["level"], message: string): McpDoctorIssue {
   return { level, message };
@@ -264,19 +236,6 @@ function executableCandidates(command: string): string[] {
   return [command, ...extensions.map((extension) => `${command}${extension.toLowerCase()}`)];
 }
 
-function resolveEffectivePath(env: Record<string, string> | undefined): string {
-  if (!env) {
-    return process.env.PATH ?? "";
-  }
-  if (typeof env.PATH === "string") {
-    return env.PATH;
-  }
-  if (process.platform === "win32" && typeof env.Path === "string") {
-    return env.Path;
-  }
-  return process.env.PATH ?? "";
-}
-
 async function commandExists(
   command: string,
   cwd: unknown,
@@ -287,7 +246,9 @@ async function commandExists(
   if (hasPathSeparator) {
     return isExecutable(resolveConfiguredPath(command, cwd));
   }
-  const pathEntries = resolveEffectivePath(env)
+  const configuredPath =
+    process.platform === "win32" ? resolveEnvironmentValue(env, "PATH") : env?.PATH;
+  const pathEntries = (configuredPath ?? process.env.PATH ?? "")
     .split(path.delimiter)
     .map((entry) => entry.trim() || ".");
   for (const pathEntry of pathEntries) {
@@ -333,24 +294,25 @@ async function collectMcpDoctorIssues(params: {
     }
     if (resolved?.kind === "http") {
       if (server.auth === "oauth") {
-        const authStatus = await readMcpOAuthCredentialsStatus({
-          serverName: name,
-          serverUrl: resolved.url,
-        });
-        if (authStatus.requiresAuthorization) {
-          issues.push(
-            issue(
-              "warning",
-              `OAuth credentials require additional authorization; run ${formatCliCommand(`openclaw mcp login ${name}`)}`,
-            ),
+        if (asRecord(server.oauth)?.identity !== "per-requester") {
+          const authStatus = await readMcpOAuthCredentialsStatus(
+            operatorMcpOAuthIdentity(name, resolved.url),
           );
-        } else if (!authStatus.hasTokens) {
-          issues.push(
-            issue(
-              "warning",
-              `OAuth credentials are not authorized; run ${formatCliCommand(`openclaw mcp login ${name}`)}`,
-            ),
-          );
+          if (authStatus.state === "requires-authorization") {
+            issues.push(
+              issue(
+                "warning",
+                `OAuth credentials require additional authorization; run ${formatCliCommand(`openclaw mcp login ${name}`)}`,
+              ),
+            );
+          } else if (authStatus.state !== "authorized") {
+            issues.push(
+              issue(
+                "warning",
+                `OAuth credentials are not authorized; run ${formatCliCommand(`openclaw mcp login ${name}`)}`,
+              ),
+            );
+          }
         }
         const headers = asRecord(server.headers);
         if (headers && "Authorization" in headers) {
@@ -445,6 +407,21 @@ async function probeMcpServerIssue(params: {
   }
 }
 
+function countConnectedMcpPrincipals(
+  name: string,
+  server: Record<string, unknown>,
+): number | undefined {
+  const resolved = resolveMcpTransportConfig(name, server);
+  if (
+    server.auth !== "oauth" ||
+    resolved?.kind !== "http" ||
+    asRecord(server.oauth)?.identity !== "per-requester"
+  ) {
+    return undefined;
+  }
+  return countMcpOAuthPrincipals(operatorMcpOAuthIdentity(name, resolved.url));
+}
+
 async function buildMcpStatusEntries(
   servers: Record<string, Record<string, unknown>>,
 ): Promise<McpStatusEntry[]> {
@@ -469,11 +446,27 @@ async function buildMcpStatusEntries(
       if (server.auth) {
         entry.auth = server.auth;
       }
-      if (server.auth === "oauth" && resolved?.kind === "http") {
-        entry.authStatus = await readMcpOAuthCredentialsStatus({
-          serverName: name,
-          serverUrl: resolved.url,
-        });
+      if (
+        server.auth === "oauth" &&
+        resolved?.kind === "http" &&
+        asRecord(server.oauth)?.identity !== "per-requester"
+      ) {
+        const identity = operatorMcpOAuthIdentity(name, resolved.url);
+        // Documented `mcp status --json` contract: the six legacy authStatus
+        // booleans stay for existing scripts; `state` is the additive shape.
+        const store = readMcpOAuthStoreReadOnly(identity.storeKey);
+        entry.authStatus = {
+          hasTokens: Boolean(store.tokens),
+          requiresAuthorization:
+            store.pendingAuthorizationChallenge?.requiresAuthorization === true,
+          hasClientInformation: Boolean(store.clientInformation),
+          hasCodeVerifier: Boolean(store.codeVerifier),
+          hasDiscoveryState: Boolean(store.discoveryState),
+          hasLastAuthorizationUrl: Boolean(store.lastAuthorizationUrl),
+          ...(await readMcpOAuthCredentialsStatus(identity)),
+        };
+      } else {
+        entry.connectedPrincipals = countConnectedMcpPrincipals(name, server);
       }
       return entry;
     }),
@@ -547,28 +540,66 @@ function buildMcpProbeConfig(params: {
   };
 }
 
+const DEFAULT_MCP_PROBE_INITIALIZE_TIMEOUT_MS = 5_000;
+
+function applyMcpProbeInitializeTimeout(server: Record<string, unknown>): Record<string, unknown> {
+  if (
+    typeof server.connectionTimeoutMs === "number" &&
+    Number.isFinite(server.connectionTimeoutMs) &&
+    server.connectionTimeoutMs > 0
+  ) {
+    return server;
+  }
+  return {
+    ...server,
+    connectionTimeoutMs: DEFAULT_MCP_PROBE_INITIALIZE_TIMEOUT_MS,
+  };
+}
+
+function resolveMcpProbeIssue(params: {
+  result: ReturnType<typeof formatMcpProbeResult>;
+  servers: Record<string, Record<string, unknown>>;
+  path: string;
+}): string | undefined {
+  if (params.result.diagnostics.length > 0) {
+    const first = expectDefined(params.result.diagnostics[0], "diagnostics entry at 0");
+    return `MCP probe failed for "${first.serverName}" in ${params.path}: ${first.message}`;
+  }
+  for (const [name, server] of Object.entries(params.servers)) {
+    if (server.enabled !== false && !params.result.servers[name]) {
+      return `MCP probe did not connect to "${name}" in ${params.path}.`;
+    }
+  }
+  return undefined;
+}
+
+function failOnMcpProbeIssues(params: Parameters<typeof resolveMcpProbeIssue>[0]): void {
+  const probeIssue = resolveMcpProbeIssue(params);
+  if (probeIssue) {
+    fail(probeIssue);
+  }
+}
+
 async function probeMcpServersOrFail(params: {
   config: OpenClawConfig;
   servers: Record<string, Record<string, unknown>>;
   path: string;
 }): Promise<ReturnType<typeof formatMcpProbeResult>> {
+  const probeServers = Object.fromEntries(
+    Object.entries(params.servers).map(([name, server]) => [
+      name,
+      applyMcpProbeInitializeTimeout(server),
+    ]),
+  );
   const runtime = createSessionMcpRuntime({
     sessionId: "openclaw-cli-mcp-probe",
     workspaceDir: process.cwd(),
-    cfg: buildMcpProbeConfig({ config: params.config, servers: params.servers }),
+    cfg: buildMcpProbeConfig({ config: params.config, servers: probeServers }),
     manifestRegistry: { plugins: [] },
   });
   try {
     const result = formatMcpProbeResult(await runtime.getCatalog());
-    if (result.diagnostics.length > 0) {
-      const first = expectDefined(result.diagnostics[0], "diagnostics entry at 0");
-      fail(`MCP probe failed for "${first.serverName}" in ${params.path}: ${first.message}`);
-    }
-    for (const name of Object.keys(params.servers)) {
-      if (!result.servers[name]) {
-        fail(`MCP probe did not connect to "${name}" in ${params.path}.`);
-      }
-    }
+    failOnMcpProbeIssues({ result, servers: params.servers, path: params.path });
     return result;
   } finally {
     await runtime.dispose();
@@ -638,7 +669,8 @@ export function registerMcpCli(program: Command) {
         printJson(loaded.mcpServers);
         return;
       }
-      const names = Object.keys(loaded.mcpServers).toSorted();
+      const entries = Object.entries(loaded.mcpServers).toSorted(([a], [b]) => a.localeCompare(b));
+      const names = entries.map(([name]) => name);
       if (names.length === 0) {
         defaultRuntime.log(
           `No OpenClaw-managed MCP servers configured in ${loaded.path}. Add one with ${formatCliCommand('openclaw mcp set <name> \'{"command":"uvx","args":["context7-mcp"]}\'')}.`,
@@ -647,8 +679,13 @@ export function registerMcpCli(program: Command) {
         return;
       }
       defaultRuntime.log(`OpenClaw-managed MCP servers (${loaded.path}):`);
-      for (const name of names) {
-        defaultRuntime.log(`- ${name}`);
+      for (const [name, server] of entries) {
+        const connectedPrincipals = countConnectedMcpPrincipals(name, server);
+        const connected =
+          connectedPrincipals === undefined
+            ? ""
+            : ` (${connectedPrincipals} connected principal${connectedPrincipals === 1 ? "" : "s"})`;
+        defaultRuntime.log(`- ${name}${connected}`);
       }
       defaultRuntime.log("");
       defaultRuntime.log(OPENCLAW_MCP_REGISTRY_SCOPE_NOTE);
@@ -705,14 +742,21 @@ export function registerMcpCli(program: Command) {
       for (const entry of status) {
         const transport = entry.enabled ? (entry.transport ?? "invalid") : "disabled";
         const auth = entry.auth === "oauth" ? " oauth" : "";
-        const oauth = entry.authStatus?.requiresAuthorization
-          ? " authorization-required"
-          : entry.authStatus?.hasTokens
-            ? " authorized"
-            : "";
+        const oauth =
+          entry.authStatus?.state === "requires-authorization"
+            ? " authorization-required"
+            : entry.authStatus?.state === "authorized"
+              ? " authorized"
+              : "";
         const filters = entry.toolFilter ? " tool-filtered" : "";
         const parallel = entry.supportsParallelToolCalls ? " parallel" : "";
-        defaultRuntime.log(`- ${entry.name}: ${transport}${auth}${oauth}${filters}${parallel}`);
+        const connected =
+          entry.connectedPrincipals === undefined
+            ? ""
+            : ` ${entry.connectedPrincipals}-principal${entry.connectedPrincipals === 1 ? "" : "s"}-connected`;
+        defaultRuntime.log(
+          `- ${entry.name}: ${transport}${auth}${oauth}${connected}${filters}${parallel}`,
+        );
         if (opts.verbose) {
           defaultRuntime.log(`  launch: ${entry.launch ?? "n/a"}`);
           defaultRuntime.log(
@@ -720,7 +764,9 @@ export function registerMcpCli(program: Command) {
           );
           if (entry.auth === "oauth") {
             defaultRuntime.log(
-              `  oauth: tokens=${entry.authStatus?.hasTokens ? "yes" : "no"} authorization=${entry.authStatus?.requiresAuthorization ? "required" : entry.authStatus?.hasTokens ? "ready" : "missing"} client=${entry.authStatus?.hasClientInformation ? "yes" : "no"}`,
+              entry.connectedPrincipals === undefined
+                ? `  oauth: ${entry.authStatus?.state ?? "unauthenticated"}`
+                : `  oauth: per-requester, connected principals: ${entry.connectedPrincipals}`,
             );
           }
           if (entry.toolFilter) {
@@ -765,16 +811,23 @@ export function registerMcpCli(program: Command) {
         const result = formatMcpProbeResult(await runtime.getCatalog());
         if (opts.json) {
           printJson(result);
-          return;
+        } else {
+          defaultRuntime.log(`MCP probe (${loaded.path}):`);
+          for (const [serverName, server] of Object.entries(result.servers)) {
+            defaultRuntime.log(
+              `- ${serverName}: ${server.tools} tools${server.resources ? ", resources" : ""}${server.prompts ? ", prompts" : ""}`,
+            );
+          }
+          for (const diagnostic of result.diagnostics) {
+            defaultRuntime.log(`! ${diagnostic.serverName}: ${diagnostic.message}`);
+          }
         }
-        defaultRuntime.log(`MCP probe (${loaded.path}):`);
-        for (const [serverName, server] of Object.entries(result.servers)) {
-          defaultRuntime.log(
-            `- ${serverName}: ${server.tools} tools${server.resources ? ", resources" : ""}${server.prompts ? ", prompts" : ""}`,
-          );
-        }
-        for (const diagnostic of result.diagnostics) {
-          defaultRuntime.log(`! ${diagnostic.serverName}: ${diagnostic.message}`);
+        const probeIssue = resolveMcpProbeIssue({ result, servers, path: loaded.path });
+        if (probeIssue) {
+          defaultRuntime.error(probeIssue);
+          if (!requestExitAfterOneShotOutput(defaultRuntime, 1)) {
+            defaultRuntime.exit(1);
+          }
         }
       } finally {
         await runtime.dispose();
@@ -969,11 +1022,20 @@ export function registerMcpCli(program: Command) {
         if (opts.parallel) {
           server.supportsParallelToolCalls = true;
         }
-        setOptionalField(server, "timeout", parsePositiveNumberOption(opts.timeout, "--timeout"));
+        const requestTimeoutSeconds = parsePositiveNumberOption(opts.timeout, "--timeout");
         setOptionalField(
           server,
-          "connectTimeout",
-          parsePositiveNumberOption(opts.connectTimeout, "--connect-timeout"),
+          "requestTimeoutMs",
+          requestTimeoutSeconds === undefined ? undefined : requestTimeoutSeconds * 1_000,
+        );
+        const connectionTimeoutSeconds = parsePositiveNumberOption(
+          opts.connectTimeout,
+          "--connect-timeout",
+        );
+        setOptionalField(
+          server,
+          "connectionTimeoutMs",
+          connectionTimeoutSeconds === undefined ? undefined : connectionTimeoutSeconds * 1_000,
         );
         const include = parseCsvList(opts.include);
         const exclude = parseCsvList(opts.exclude);
@@ -988,7 +1050,6 @@ export function registerMcpCli(program: Command) {
         if (!loaded.ok) {
           fail(loaded.error);
         }
-        const current = loaded.mcpServers[name];
         const shouldProbe =
           opts.probe !== false && server.enabled !== false && server.auth !== "oauth";
         if (shouldProbe) {
@@ -1002,11 +1063,6 @@ export function registerMcpCli(program: Command) {
         if (!result.ok) {
           fail(result.error);
         }
-        await clearStaleMcpOAuthCredentialsForReplacement({
-          name,
-          previous: current,
-          next: server,
-        });
         defaultRuntime.log(`Saved MCP server "${name}" to ${result.path}.`);
         if (server.auth === "oauth") {
           defaultRuntime.log(
@@ -1026,20 +1082,10 @@ export function registerMcpCli(program: Command) {
       if (parsed.error) {
         fail(parsed.error);
       }
-      const loaded = await listConfiguredMcpServers();
-      if (!loaded.ok) {
-        fail(loaded.error);
-      }
-      const current = loaded.mcpServers[name];
       const result = await setConfiguredMcpServer({ name, server: parsed.value });
       if (!result.ok) {
         fail(result.error);
       }
-      await clearStaleMcpOAuthCredentialsForReplacement({
-        name,
-        previous: current,
-        next: parsed.value,
-      });
       defaultRuntime.log(`Saved MCP server "${name}" to ${result.path}.`);
     });
 
@@ -1137,7 +1183,6 @@ export function registerMcpCli(program: Command) {
           );
         }
         const next = { ...current };
-        const clearOAuthCredentials = opts.clearAuth;
         if (opts.enable) {
           delete next.enabled;
         }
@@ -1157,17 +1202,23 @@ export function registerMcpCli(program: Command) {
           }
         }
         if (opts.clearTimeouts) {
-          delete next.timeout;
-          delete next.connectTimeout;
-          delete next.connect_timeout;
           delete next.requestTimeoutMs;
           delete next.connectionTimeoutMs;
         }
-        setOptionalField(next, "timeout", parsePositiveNumberOption(opts.timeout, "--timeout"));
+        const requestTimeoutSeconds = parsePositiveNumberOption(opts.timeout, "--timeout");
         setOptionalField(
           next,
-          "connectTimeout",
-          parsePositiveNumberOption(opts.connectTimeout, "--connect-timeout"),
+          "requestTimeoutMs",
+          requestTimeoutSeconds === undefined ? undefined : requestTimeoutSeconds * 1_000,
+        );
+        const connectionTimeoutSeconds = parsePositiveNumberOption(
+          opts.connectTimeout,
+          "--connect-timeout",
+        );
+        setOptionalField(
+          next,
+          "connectionTimeoutMs",
+          connectionTimeoutSeconds === undefined ? undefined : connectionTimeoutSeconds * 1_000,
         );
         if (opts.parallel === true) {
           next.supportsParallelToolCalls = true;
@@ -1225,9 +1276,6 @@ export function registerMcpCli(program: Command) {
           if (!result.ok) {
             fail(result.error);
           }
-          if (clearOAuthCredentials) {
-            await clearMcpOAuthCredentialsForConfiguredServer(name, current);
-          }
           defaultRuntime.log(`Removed disabled MCP override for "${name}" in ${result.path}.`);
           return;
         }
@@ -1242,9 +1290,6 @@ export function registerMcpCli(program: Command) {
           fail(
             `No MCP server named "${name}" in ${result.path}. Run ${formatCliCommand("openclaw mcp list")} to see configured servers.`,
           );
-        }
-        if (clearOAuthCredentials) {
-          await clearMcpOAuthCredentialsForConfiguredServer(name, current);
         }
         defaultRuntime.log(`Updated MCP server "${name}" in ${result.path}.`);
       },
@@ -1266,6 +1311,11 @@ export function registerMcpCli(program: Command) {
           `No MCP server named "${name}" in ${loaded.path}. Run ${formatCliCommand("openclaw mcp list")} to see configured servers.`,
         );
       }
+      if (asRecord(server.oauth)?.identity === "per-requester") {
+        fail(
+          `MCP server "${name}" uses per-requester OAuth. Senders connect from the channel via the MCP connect flow.`,
+        );
+      }
       if (server.auth !== "oauth") {
         fail(`MCP server "${name}" is not configured with auth: "oauth".`);
       }
@@ -1276,32 +1326,63 @@ export function registerMcpCli(program: Command) {
       if (!resolved || resolved.kind !== "http") {
         fail(`MCP server "${name}" needs a valid HTTP transport for OAuth login.`);
       }
-      const result = await runMcpOAuthLogin({
-        serverName: name,
-        serverUrl: resolved.url,
-        config: server.oauth as Record<string, string> | undefined,
-        authorizationCode: opts.code,
-        fetchFn: withSameOriginMcpHttpHeaders({
-          fetchFn: buildMcpHttpFetch({
-            sslVerify: resolved.sslVerify,
-            clientCert: resolved.clientCert,
-            clientKey: resolved.clientKey,
-            resourceUrl: resolved.url,
-            timeoutMs: resolved.requestTimeoutMs,
-          }),
-          headers: withoutMcpAuthorizationHeader(resolved.headers),
-          resourceUrl: resolved.url,
-        }),
-        onAuthorizationUrl: (url) => {
-          defaultRuntime.log(`Open this URL to authorize "${name}":`);
-          defaultRuntime.log(url.toString());
-          defaultRuntime.log(
-            `After approval, run ${formatCliCommand(`openclaw mcp login ${name} --code <code>`)}.`,
-          );
-        },
-      });
-      if (result === "authorized") {
+      const identity = operatorMcpOAuthIdentity(name, resolved.url);
+      if (opts.code) {
+        await completeMcpOAuthAuthorization(identity, resolved, {
+          code: opts.code,
+        });
         defaultRuntime.log(`MCP OAuth credentials saved for "${name}".`);
+        return;
+      }
+
+      let callbackServer: OAuthLoopbackCallbackServer | undefined;
+      const manualCommand = formatCliCommand(`openclaw mcp login ${name} --code <code>`);
+      try {
+        const session = await startMcpOAuthAuthorization(identity, resolved, {});
+        if (session.status === "authorized") {
+          defaultRuntime.log(`MCP OAuth credentials saved for "${name}".`);
+          return;
+        }
+        if (session.state.length >= 16) {
+          try {
+            callbackServer = await startOAuthLoopbackCallbackServer({
+              redirectUrl: session.redirectUrl,
+              expectedState: session.state,
+              timeoutMs: MCP_OAUTH_CALLBACK_TIMEOUT_MS,
+            });
+          } catch (error) {
+            defaultRuntime.log(
+              `Could not start the local OAuth callback (${formatErrorMessage(error)}).`,
+            );
+          }
+        }
+        defaultRuntime.log(`Open this URL to authorize "${name}":`);
+        defaultRuntime.log(session.authorizationUrl);
+        if (callbackServer) {
+          defaultRuntime.log("Waiting for the browser to return to OpenClaw...");
+          defaultRuntime.log(`If the callback cannot reach this terminal, run ${manualCommand}.`);
+        } else {
+          defaultRuntime.log(`After approval, run ${manualCommand}.`);
+        }
+        if (!callbackServer) {
+          return;
+        }
+
+        let callback;
+        try {
+          callback = await callbackServer.waitForCallback();
+        } catch (error) {
+          fail(`${formatErrorMessage(error)}. Complete login manually with ${manualCommand}.`);
+        }
+        if (callback.type === "oauth_error") {
+          fail(`OAuth authorization did not complete. Retry login or use ${manualCommand}.`);
+        }
+        await completeMcpOAuthAuthorization(identity, resolved, {
+          code: callback.code,
+        });
+        defaultRuntime.log(`MCP OAuth credentials saved for "${name}".`);
+      } finally {
+        await callbackServer?.close();
       }
     });
 
@@ -1320,14 +1401,16 @@ export function registerMcpCli(program: Command) {
           `No MCP server named "${name}" in ${loaded.path}. Run ${formatCliCommand("openclaw mcp list")} to see configured servers.`,
         );
       }
+      if (asRecord(server.oauth)?.identity === "per-requester") {
+        fail(
+          `MCP server "${name}" uses per-requester OAuth. Remove or replace the server to clear requester credentials.`,
+        );
+      }
       const resolved = resolveMcpTransportConfig(name, server);
       if (!resolved || resolved.kind !== "http") {
         fail(`MCP server "${name}" needs a valid HTTP transport for OAuth logout.`);
       }
-      await clearMcpOAuthCredentials({
-        serverName: name,
-        serverUrl: resolved.url,
-      });
+      await clearMcpOAuthCredentials(operatorMcpOAuthIdentity(name, resolved.url));
       defaultRuntime.log(`MCP OAuth credentials cleared for "${name}".`);
     });
 
@@ -1348,11 +1431,6 @@ export function registerMcpCli(program: Command) {
     .description("Remove one OpenClaw-managed MCP server")
     .argument("<name>", "MCP server name")
     .action(async (name: string) => {
-      const loaded = await listConfiguredMcpServers();
-      if (!loaded.ok) {
-        fail(loaded.error);
-      }
-      const current = loaded.mcpServers[name];
       const result = await unsetConfiguredMcpServer({ name });
       if (!result.ok) {
         fail(result.error);
@@ -1361,9 +1439,6 @@ export function registerMcpCli(program: Command) {
         fail(
           `No MCP server named "${name}" in ${result.path}. Run ${formatCliCommand("openclaw mcp list")} to see configured servers.`,
         );
-      }
-      if (current) {
-        await clearMcpOAuthCredentialsForConfiguredServer(name, current);
       }
       defaultRuntime.log(`Removed MCP server "${name}" from ${result.path}.`);
     });

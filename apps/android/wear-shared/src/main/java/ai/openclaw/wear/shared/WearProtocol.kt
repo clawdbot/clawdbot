@@ -12,13 +12,15 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import java.nio.charset.CharacterCodingException
+import java.security.MessageDigest
 
 object WearProtocol {
   const val VERSION = 1
   const val REQUEST_PATH = "/openclaw/wear/v1/request"
   const val RESPONSE_PATH = "/openclaw/wear/v1/response"
   const val EVENT_PATH = "/openclaw/wear/v1/event"
-  const val REALTIME_AUDIO_CHANNEL_PATH = "/openclaw/wear/v1/realtime/audio"
+  const val LEGACY_REALTIME_AUDIO_CHANNEL_PATH = "/openclaw/wear/v1/realtime/audio"
+  const val REALTIME_AUDIO_CHANNEL_PATH_PREFIX = "/openclaw/wear/v1/realtime/audio/"
   const val PHONE_CAPABILITY = "openclaw_phone_proxy_v1"
   const val WATCH_CAPABILITY = "openclaw_wear_companion_v1"
 
@@ -28,9 +30,42 @@ object WearProtocol {
   const val MAX_REALTIME_AUDIO_FRAME_BYTES = 8 * 1024
   const val REALTIME_AUDIO_SAMPLE_RATE_HZ = 24_000
   const val REALTIME_AUDIO_FRAME_MILLIS = 20
+  const val RPC_REQUEST_TIMEOUT_MILLIS = 10_000L
+
+  // The Watch opens the audio channel before sending talk.start. Keep the
+  // pending phone-side channel through that RPC deadline plus setup margin.
+  const val REALTIME_AUDIO_PENDING_CHANNEL_TIMEOUT_MILLIS = RPC_REQUEST_TIMEOUT_MILLIS + 5_000L
 
   // Bound recursive JSON parsing at the untrusted Data Layer boundary.
   const val MAX_JSON_DEPTH = 32
+
+  fun realtimeAudioChannelPath(attemptId: String): String {
+    require(attemptId.isNotBlank())
+    val digest = MessageDigest.getInstance("SHA-256").digest(attemptId.encodeToByteArray())
+    return buildString(REALTIME_AUDIO_CHANNEL_PATH_PREFIX.length + digest.size * 2) {
+      append(REALTIME_AUDIO_CHANNEL_PATH_PREFIX)
+      digest.forEach { byte ->
+        val value = byte.toInt() and 0xff
+        append(LOWER_HEX[value ushr 4])
+        append(LOWER_HEX[value and 0x0f])
+      }
+    }
+  }
+
+  fun isRealtimeAudioChannelPath(path: String): Boolean {
+    if (path == LEGACY_REALTIME_AUDIO_CHANNEL_PATH) return true
+    return isAttemptScopedRealtimeAudioChannelPath(path)
+  }
+
+  fun isAttemptScopedRealtimeAudioChannelPath(path: String): Boolean {
+    if (!path.startsWith(REALTIME_AUDIO_CHANNEL_PATH_PREFIX)) return false
+    val token = path.substring(REALTIME_AUDIO_CHANNEL_PATH_PREFIX.length)
+    return token.length == REALTIME_AUDIO_ATTEMPT_TOKEN_CHARS &&
+      token.all { char -> char in '0'..'9' || char in 'a'..'f' }
+  }
+
+  private const val REALTIME_AUDIO_ATTEMPT_TOKEN_CHARS = 64
+  private const val LOWER_HEX = "0123456789abcdef"
 }
 
 enum class WearProxyCapability(
@@ -38,7 +73,10 @@ enum class WearProxyCapability(
 ) {
   AgentControls(wireValue = "agent-controls"),
   GatewayControls(wireValue = "gateway-controls"),
+  ModelControls(wireValue = "model-controls"),
   SessionSelectionLookup(wireValue = "session-selection-lookup"),
+  AgentPulse(wireValue = "agent-pulse"),
+  AttemptScopedRealtimeAudio(wireValue = "attempt-scoped-realtime-audio"),
   ;
 
   companion object {
@@ -46,10 +84,25 @@ enum class WearProxyCapability(
   }
 }
 
+enum class WearConnectionFailure(
+  val wireValue: String,
+) {
+  GatewayOffline(wireValue = "gateway_offline"),
+  Incompatible(wireValue = "incompatible"),
+  ;
+
+  companion object {
+    fun fromWireValue(value: String?): WearConnectionFailure? = entries.firstOrNull { failure -> failure.wireValue == value }
+  }
+}
+
 @Serializable
 enum class WearRpcMethod {
   @SerialName("proxy.status")
   ProxyStatus,
+
+  @SerialName("agent.pulse")
+  AgentPulse,
 
   @SerialName("sessions.list")
   SessionsList,
@@ -59,6 +112,12 @@ enum class WearRpcMethod {
 
   @SerialName("agents.select")
   AgentsSelect,
+
+  @SerialName("models.list")
+  ModelsList,
+
+  @SerialName("models.select")
+  ModelsSelect,
 
   @SerialName("gateway.connect")
   GatewayConnect,

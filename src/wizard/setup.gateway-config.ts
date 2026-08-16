@@ -19,7 +19,6 @@ import {
   maybeAddTailnetOriginToControlUiAllowedOrigins,
   TAILSCALE_EXPOSURE_OPTIONS,
 } from "../gateway/gateway-config-prompts.shared.js";
-import { DEFAULT_DANGEROUS_NODE_COMMANDS } from "../gateway/node-command-policy.js";
 import { findTailscaleBinary } from "../infra/tailscale.js";
 import { resolveSecretInputModeForEnvSelection } from "../plugins/provider-auth-mode.js";
 import { promptSecretRefForSetup } from "../plugins/provider-auth-ref.js";
@@ -121,6 +120,7 @@ export async function configureGatewayForSetup(
               hint: t("wizard.gateway.bindCustomHint"),
             },
           ],
+          initialValue: quickstartGateway.bind,
         });
 
   let customBindHost = quickstartGateway.customBindHost;
@@ -150,7 +150,7 @@ export async function configureGatewayForSetup(
             },
             { value: "password", label: t("common.password") },
           ],
-          initialValue: "token",
+          initialValue: quickstartGateway.authMode,
         })) as GatewayAuthChoice);
 
   const tailscaleMode: GatewayWizardSettings["tailscaleMode"] =
@@ -159,6 +159,7 @@ export async function configureGatewayForSetup(
       : await prompter.select<GatewayWizardSettings["tailscaleMode"]>({
           message: t("wizard.gateway.tailscaleExposure"),
           options: getLocalizedTailscaleExposureOptions(),
+          initialValue: quickstartGateway.tailscaleMode,
         });
 
   // Detect Tailscale binary before proceeding with serve/funnel setup.
@@ -174,12 +175,12 @@ export async function configureGatewayForSetup(
     }
   }
 
-  let tailscaleResetOnExit = flow === "quickstart" ? quickstartGateway.tailscaleResetOnExit : false;
+  let tailscaleResetOnExit = quickstartGateway.tailscaleResetOnExit;
   if (tailscaleMode !== "off" && flow !== "quickstart") {
     await prompter.note(t("wizard.gatewayTailscale.docsNote"), "Tailscale");
     tailscaleResetOnExit = await prompter.confirm({
       message: t("wizard.gateway.tailscaleReset"),
-      initialValue: false,
+      initialValue: tailscaleResetOnExit,
     });
   }
 
@@ -208,11 +209,10 @@ export async function configureGatewayForSetup(
       value: quickstartGateway.token,
       defaults: nextConfig.secrets?.defaults,
     }).ref;
-    const tokenMode =
-      flow === "quickstart" && opts.secretInputMode !== "ref" // pragma: allowlist secret
-        ? quickstartTokenRef
-          ? "ref"
-          : "plaintext"
+    const tokenMode = quickstartTokenRef
+      ? "ref"
+      : flow === "quickstart" && opts.secretInputMode !== "ref" // pragma: allowlist secret
+        ? "plaintext"
         : await resolveSecretInputModeForEnvSelection({
             prompter,
             explicitMode: opts.secretInputMode,
@@ -225,7 +225,7 @@ export async function configureGatewayForSetup(
             },
           });
     if (tokenMode === "ref") {
-      if (flow === "quickstart" && quickstartTokenRef) {
+      if (quickstartTokenRef) {
         gatewayTokenInput = quickstartTokenRef;
         gatewayToken = await resolveSetupSecretInputString({
           config: nextConfig,
@@ -281,8 +281,13 @@ export async function configureGatewayForSetup(
   }
 
   if (authMode === "password") {
+    const existingPassword = normalizeSecretInputString(quickstartGateway.password);
+    const existingPasswordRef = resolveSecretInputRef({
+      value: quickstartGateway.password,
+      defaults: nextConfig.secrets?.defaults,
+    }).ref;
     let password: SecretInput | undefined =
-      flow === "quickstart" && quickstartGateway.password ? quickstartGateway.password : undefined;
+      flow === "quickstart" ? quickstartGateway.password : (existingPasswordRef ?? undefined);
     if (!password) {
       const selectedMode = await resolveSecretInputModeForEnvSelection({
         prompter,
@@ -306,13 +311,25 @@ export async function configureGatewayForSetup(
         });
         password = resolved.ref;
       } else {
-        password = normalizeWizardTextInput(
-          await prompter.text({
-            message: t("wizard.gateway.passwordPrompt"),
-            validate: validateGatewayPasswordInput,
-            sensitive: true,
-          }),
-        );
+        let passwordInput: string | undefined;
+        if (existingPassword) {
+          const keep = await prompter.confirm({
+            message: t("wizard.gateway.existingPasswordConfirm", {
+              password: maskApiKey(existingPassword),
+            }),
+            initialValue: true,
+          });
+          passwordInput = keep ? existingPassword : undefined;
+        }
+        password =
+          passwordInput ??
+          normalizeWizardTextInput(
+            await prompter.text({
+              message: t("wizard.gateway.passwordPrompt"),
+              validate: validateGatewayPasswordInput,
+              sensitive: true,
+            }),
+          );
       }
     }
     nextConfig = {
@@ -355,23 +372,6 @@ export async function configureGatewayForSetup(
     },
   };
 
-  if (
-    flow === "quickstart" &&
-    bind === "loopback" &&
-    nextConfig.gateway?.controlUi?.allowInsecureAuth === undefined
-  ) {
-    nextConfig = {
-      ...nextConfig,
-      gateway: {
-        ...nextConfig.gateway,
-        controlUi: {
-          ...nextConfig.gateway?.controlUi,
-          allowInsecureAuth: true,
-        },
-      },
-    };
-  }
-
   nextConfig = ensureControlUiAllowedOriginsForNonLoopbackBind(nextConfig, {
     requireControlUiEnabled: true,
   }).config;
@@ -380,27 +380,6 @@ export async function configureGatewayForSetup(
     tailscaleMode,
     tailscaleBin,
   });
-
-  // If this is a new gateway setup (no existing gateway settings), start with a
-  // denylist for high-risk node commands. Users can arm these temporarily via
-  // /phone arm ... (phone-control plugin).
-  if (
-    !quickstartGateway.hasExisting &&
-    nextConfig.gateway?.nodes?.denyCommands === undefined &&
-    nextConfig.gateway?.nodes?.allowCommands === undefined &&
-    nextConfig.gateway?.nodes?.browser === undefined
-  ) {
-    nextConfig = {
-      ...nextConfig,
-      gateway: {
-        ...nextConfig.gateway,
-        nodes: {
-          ...nextConfig.gateway?.nodes,
-          denyCommands: [...DEFAULT_DANGEROUS_NODE_COMMANDS],
-        },
-      },
-    };
-  }
 
   return {
     nextConfig,

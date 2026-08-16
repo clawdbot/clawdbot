@@ -5,13 +5,13 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { loadBundledPluginPublicSurface } from "../plugin-sdk/test-helpers/public-surface-loader.js";
 import type {
   PluginOrigin,
   PluginWebFetchProviderEntry,
   PluginWebSearchProviderEntry,
 } from "../plugins/types.js";
 import { getPath, setPathCreateStrict } from "./path-utils.js";
-import { canonicalizeSecretTargetCoverageId } from "./target-registry-test-helpers.js";
 
 const COVERAGE_WEB_PROVIDER_PLUGIN_IDS = vi.hoisted(() => ({
   search: [
@@ -28,6 +28,7 @@ const COVERAGE_WEB_PROVIDER_PLUGIN_IDS = vi.hoisted(() => ({
   ],
   fetch: ["firecrawl"],
 }));
+const COVERAGE_CHANNEL_CONTRACTS = vi.hoisted(() => new Map<string, object>());
 
 vi.mock("../plugins/capability-provider-runtime.js", () => ({
   resolvePluginCapabilityProviders: () => [],
@@ -37,10 +38,9 @@ vi.mock("../plugins/installed-plugin-index-records.js", () => ({
   loadInstalledPluginIndexInstallRecordsSync: () => ({}),
 }));
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
-  loadPluginMetadataSnapshot: () => {
-    throw new Error("runtime coverage expects bundled channel secret contracts");
-  },
+vi.mock("./channel-contract-api.js", () => ({
+  loadChannelSecretContractApi: ({ channelId }: { channelId: string }) =>
+    COVERAGE_CHANNEL_CONTRACTS.get(channelId),
 }));
 
 vi.mock("./runtime-web-tools-manifest.runtime.js", () => ({
@@ -276,6 +276,15 @@ function loadCoverageRegistryEntries(): SecretRegistryEntry[] {
 }
 
 const COVERAGE_REGISTRY_ENTRIES = loadCoverageRegistryEntries();
+const COVERAGE_BUNDLED_CHANNEL_IDS = [
+  ...new Set(
+    COVERAGE_REGISTRY_ENTRIES.flatMap((entry) => {
+      const [scope, channelId] = entry.id.split(".");
+      return scope === "channels" && channelId && channelId !== "qqbot" ? [channelId] : [];
+    }),
+  ),
+];
+
 const DEBUG_COVERAGE_BATCHES = process.env.OPENCLAW_DEBUG_RUNTIME_COVERAGE === "1";
 const RUNTIME_COVERAGE_TEST_TIMEOUT_MS = 240_000;
 const COVERAGE_CONFIG_PLUGIN_SOURCE_DIRS = new Map([
@@ -286,10 +295,6 @@ const COVERAGE_LOADABLE_PLUGIN_ORIGINS =
   buildCoverageLoadablePluginOrigins(COVERAGE_REGISTRY_ENTRIES);
 const PLUGIN_OWNED_OPENCLAW_COVERAGE_EXCLUSIONS = new Set([
   "channels.googlechat.accounts.*.serviceAccount",
-  // Doctor migrates legacy web search config into plugin-owned webSearch config.
-  "tools.web.search.apiKey",
-  "tools.web.search.*.apiKey",
-  "tools.web.fetch.firecrawl.apiKey",
 ]);
 
 let applyResolvedAssignments: typeof import("./runtime-shared.js").applyResolvedAssignments;
@@ -355,8 +360,7 @@ function toConcretePathSegments(pathPattern: string, wildcardToken = "sample"): 
 }
 
 function resolveCoverageEnvId(entry: SecretRegistryEntry, fallbackEnvId: string): string {
-  return entry.id === "plugins.entries.firecrawl.config.webFetch.apiKey" ||
-    entry.id === "tools.web.fetch.firecrawl.apiKey"
+  return entry.id === "plugins.entries.firecrawl.config.webFetch.apiKey"
     ? "FIRECRAWL_API_KEY"
     : fallbackEnvId;
 }
@@ -374,7 +378,7 @@ function toCoverageEnvRefId(prefix: string, id: string): string {
 }
 
 function resolveCoverageResolvedPath(entry: SecretRegistryEntry): string {
-  return canonicalizeSecretTargetCoverageId(entry.id);
+  return entry.id;
 }
 
 function resolveCoverageWildcardToken(index: number): string {
@@ -438,7 +442,7 @@ function resolveCoverageBatchKey(entry: SecretRegistryEntry): string {
   if (entry.id.startsWith("agents.defaults.")) {
     return entry.id;
   }
-  if (entry.id.startsWith("agents.list[].")) {
+  if (entry.id.startsWith("agents.entries.*.")) {
     return entry.id;
   }
   if (entry.id.startsWith("gateway.auth.")) {
@@ -468,8 +472,8 @@ function resolveCoverageBatchKey(entry: SecretRegistryEntry): string {
     const scope = segments[2] === "accounts" ? "accounts" : "root";
     return `channels.${channelId}.${scope}`;
   }
-  if (entry.id.startsWith("messages.tts.providers.")) {
-    return "messages.tts.providers";
+  if (entry.id.startsWith("tts.providers.")) {
+    return "tts.providers";
   }
   if (entry.id.startsWith("models.providers.")) {
     return "models.providers";
@@ -512,25 +516,23 @@ function logCoverageBatch(label: string, batch: readonly SecretRegistryEntry[]):
   );
 }
 
-function batchNeedsRuntimeWebTools(batch: readonly SecretRegistryEntry[]): boolean {
-  return batch.some(
-    (entry) =>
-      entry.id.startsWith("tools.web.") ||
-      (entry.id.startsWith("plugins.entries.") &&
-        (entry.id.includes(".config.webSearch.") || entry.id.includes(".config.webFetch."))),
+function isRuntimeWebCredentialTarget(entry: SecretRegistryEntry): boolean {
+  if (!entry.id.endsWith(".apiKey")) {
+    return false;
+  }
+  return (
+    entry.id.startsWith("tools.web.") ||
+    (entry.id.startsWith("plugins.entries.") &&
+      (entry.id.includes(".config.webSearch.") || entry.id.includes(".config.webFetch.")))
   );
 }
 
+function batchNeedsRuntimeWebTools(batch: readonly SecretRegistryEntry[]): boolean {
+  return batch.some(isRuntimeWebCredentialTarget);
+}
+
 function batchUsesRuntimeWebToolsOnly(batch: readonly SecretRegistryEntry[]): boolean {
-  return (
-    batch.length > 0 &&
-    batch.every(
-      (entry) =>
-        entry.id.startsWith("tools.web.") ||
-        (entry.id.startsWith("plugins.entries.") &&
-          (entry.id.includes(".config.webSearch.") || entry.id.includes(".config.webFetch."))),
-    )
-  );
+  return batch.length > 0 && batch.every(isRuntimeWebCredentialTarget);
 }
 
 function collectOpenClawCoverageEntries(options: {
@@ -575,7 +577,7 @@ function applyConfigForOpenClawTarget(
       addCoveragePluginLoadPath(config, pluginId);
     }
   }
-  if (entry.id === "agents.defaults.memorySearch.remote.apiKey") {
+  if (entry.id === "memory.search.remote.apiKey") {
     setPathCreateStrict(config, ["agents", "list", "0", "id"], "sample-agent");
   }
   if (entry.id === "gateway.auth.password") {
@@ -896,34 +898,48 @@ function toCoverageBatchCase(batch: SecretRegistryEntry[]) {
 
 describe("secrets runtime target coverage", () => {
   beforeAll(async () => {
-    const [sharedRuntime, resolver, configCollectors, authCollectors, runtimeWebTools] =
-      await Promise.all([
-        import("./runtime-shared.js"),
-        import("./resolve.js"),
-        import("./runtime-config-collectors.js"),
-        import("./runtime-auth-collectors.js"),
-        import("./runtime-web-tools.js"),
-      ]);
+    const [
+      sharedRuntime,
+      resolver,
+      configCollectors,
+      authCollectors,
+      runtimeWebTools,
+      channelContracts,
+      officialExternalChannelContract,
+    ] = await Promise.all([
+      import("./runtime-shared.js"),
+      import("./resolve.js"),
+      import("./runtime-config-collectors.js"),
+      import("./runtime-auth-collectors.js"),
+      import("./runtime-web-tools.js"),
+      Promise.all(
+        COVERAGE_BUNDLED_CHANNEL_IDS.map(
+          async (channelId) =>
+            [
+              channelId,
+              await loadBundledPluginPublicSurface<object>({
+                pluginId: channelId,
+                artifactBasename: "secret-contract-api.js",
+              }),
+            ] as const,
+        ),
+      ),
+      import("./official-external-channel-secret-contract.js"),
+    ]);
+    for (const [channelId, contract] of channelContracts) {
+      COVERAGE_CHANNEL_CONTRACTS.set(channelId, contract);
+    }
+    const qqbotContract =
+      officialExternalChannelContract.loadOfficialExternalChannelSecretContractApi("qqbot");
+    if (!qqbotContract) {
+      throw new Error("missing coverage contract for official QQBot channel");
+    }
+    COVERAGE_CHANNEL_CONTRACTS.set("qqbot", qqbotContract);
     ({ applyResolvedAssignments, createResolverContext } = sharedRuntime);
     ({ resolveSecretRefValues } = resolver);
     ({ collectConfigAssignments } = configCollectors);
     ({ collectAuthStoreAssignments } = authCollectors);
     ({ resolveRuntimeWebTools } = runtimeWebTools);
-
-    const googleChatBatch = OPENCLAW_CORE_COVERAGE_BATCHES.find((batch) =>
-      batch.some((entry) => entry.id === "channels.googlechat.serviceAccount"),
-    );
-    if (googleChatBatch) {
-      await expectOpenClawCoverageBatchResolved("openclaw.json core", googleChatBatch);
-    }
-    const webProviderBatch = OPENCLAW_PLUGIN_COVERAGE_BATCHES.find((batch) =>
-      batch.some((entry) => entry.id.includes(".config.webSearch.")),
-    );
-    if (webProviderBatch) {
-      // Warm the shared plugin snapshot once; individual target assertions then
-      // measure resolution work instead of one-time manifest discovery.
-      await expectOpenClawCoverageBatchResolved("openclaw.json plugins", webProviderBatch);
-    }
   });
 
   describe("openclaw.json core and channel registry targets", () => {

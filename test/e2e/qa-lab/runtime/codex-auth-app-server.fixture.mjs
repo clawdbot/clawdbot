@@ -9,6 +9,10 @@ const requestLog = process.env.OPENCLAW_QA_CODEX_AUTH_APP_SERVER_LOG;
 if (!requestLog) {
   throw new Error("missing OPENCLAW_QA_CODEX_AUTH_APP_SERVER_LOG");
 }
+const appServerVersion = process.env.OPENCLAW_QA_CODEX_APP_SERVER_VERSION;
+if (!appServerVersion) {
+  throw new Error("missing OPENCLAW_QA_CODEX_APP_SERVER_VERSION");
+}
 
 runFakeCodexAppServer({
   requestLog,
@@ -18,8 +22,8 @@ runFakeCodexAppServer({
       sendResult(
         createFakeInitializeResponse({
           name: "openclaw-qa-codex-auth",
-          version: "0.143.0",
-          userAgent: "openclaw/0.143.0 (test)",
+          version: appServerVersion,
+          userAgent: `openclaw/${appServerVersion} (test)`,
         }),
       ),
     "account/login/start": ({ params, sendResult }) => sendResult({ type: params?.type }),
@@ -54,7 +58,7 @@ runFakeCodexAppServer({
           params,
           threadId: "thread-qa-codex-auth",
           sessionId: "session-qa-codex-auth",
-          version: "0.143.0",
+          version: appServerVersion,
         }),
       ),
     "turn/start": ({ notify, params, sendResult }) => {

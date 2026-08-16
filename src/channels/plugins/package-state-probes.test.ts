@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginChannelCatalogEntry } from "../../plugins/channel-catalog-registry.js";
 import {
+  collectBundledChannelPackageStateLoadFailures,
   hasBundledChannelPackageState,
   listBundledChannelIdsForPackageState,
 } from "./package-state-probes.js";
@@ -13,6 +14,7 @@ const listChannelCatalogEntriesMock = vi.hoisted(() => vi.fn());
 const isBundledSourceOverlayPathMock = vi.hoisted(() =>
   vi.fn((_params: { sourcePath: string }) => false),
 );
+const probeLogWarnMock = vi.hoisted(() => vi.fn());
 const tempDirs: string[] = [];
 
 vi.mock("../../plugins/channel-catalog-registry.js", () => ({
@@ -21,6 +23,16 @@ vi.mock("../../plugins/channel-catalog-registry.js", () => ({
 vi.mock("../../plugins/bundled-source-overlays.js", () => ({
   isBundledSourceOverlayPath: isBundledSourceOverlayPathMock,
 }));
+vi.mock("../../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => ({
+      ...actual.createSubsystemLogger(subsystem),
+      warn: probeLogWarnMock,
+    }),
+  };
+});
 
 function makeBundledChannelCatalogEntry(params: {
   pluginId: string;
@@ -52,6 +64,7 @@ beforeEach(() => {
   listChannelCatalogEntriesMock.mockReset();
   isBundledSourceOverlayPathMock.mockReset();
   isBundledSourceOverlayPathMock.mockReturnValue(false);
+  probeLogWarnMock.mockReset();
 });
 
 afterEach(() => {
@@ -295,6 +308,49 @@ describe("channel package-state probes", () => {
         cfg: {},
       }),
     ).toBe(true);
+  });
+
+  it("reports a missing built package-state artifact as not found, not a boundary escape", () => {
+    // Reproduces a rebuild window: the catalog root is the built plugin dir while
+    // `dist/extensions/<id>` has not been re-emitted yet.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-state-missing-"));
+    tempDirs.push(root);
+    const builtRoot = path.join(root, "dist", "extensions", "matrix");
+    fs.mkdirSync(builtRoot, { recursive: true });
+
+    listChannelCatalogEntriesMock.mockReturnValue([
+      {
+        pluginId: "matrix",
+        origin: "bundled",
+        rootDir: builtRoot,
+        channel: {
+          id: "matrix",
+          persistedAuthState: {
+            specifier: "./auth-presence",
+            exportName: "hasAnyMatrixAuth",
+          },
+        },
+      } satisfies PluginChannelCatalogEntry,
+    ]);
+
+    expect(
+      hasBundledChannelPackageState({
+        metadataKey: "persistedAuthState",
+        channelId: "matrix",
+        cfg: {},
+      }),
+    ).toBe(false);
+    const warning = String(probeLogWarnMock.mock.calls.at(0)?.[0] ?? "");
+    expect(warning).toContain("failed to load persistedAuthState checker for matrix");
+    expect(warning).toContain(`plugin module path not found: ${builtRoot}`);
+    expect(warning).not.toContain("escapes plugin root");
+    expect(collectBundledChannelPackageStateLoadFailures()).toEqual([
+      {
+        detail: expect.stringContaining(`plugin module path not found: ${builtRoot}`),
+        metadataKey: "persistedAuthState",
+        pluginId: "matrix",
+      },
+    ]);
   });
 
   it("tries dist-runtime package-state probes before falling back to source", () => {

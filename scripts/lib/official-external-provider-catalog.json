@@ -191,6 +191,63 @@
       }
     },
     {
+      "name": "@openclaw/byteplus-provider",
+      "description": "OpenClaw BytePlus provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "byteplus",
+          "label": "BytePlus"
+        },
+        "providers": [
+          {
+            "id": "byteplus",
+            "aliases": [
+              "byteplus-plan"
+            ],
+            "name": "BytePlus",
+            "docs": "/concepts/model-providers#byteplus-international",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "BYTEPLUS_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "byteplus-api-key",
+                "choiceLabel": "BytePlus API key",
+                "groupId": "byteplus",
+                "groupLabel": "BytePlus",
+                "groupHint": "API key",
+                "optionKey": "byteplusApiKey",
+                "cliFlag": "--byteplus-api-key",
+                "cliOption": "--byteplus-api-key <key>",
+                "cliDescription": "BytePlus API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          }
+        ],
+        "contracts": {
+          "videoGenerationProviders": [
+            "byteplus"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/byteplus-provider",
+          "npmSpec": "@openclaw/byteplus-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
       "name": "@openclaw/cerebras-provider",
       "description": "OpenClaw Cerebras provider plugin.",
       "source": "official",
@@ -415,6 +472,69 @@
       }
     },
     {
+      "name": "@openclaw/comfy-provider",
+      "description": "OpenClaw ComfyUI provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "comfy",
+          "label": "ComfyUI"
+        },
+        "providers": [
+          {
+            "id": "comfy",
+            "name": "ComfyUI",
+            "docs": "/providers/comfy",
+            "categories": [
+              "local",
+              "cloud",
+              "media"
+            ],
+            "envVars": [
+              "COMFY_API_KEY",
+              "COMFY_CLOUD_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "cloud-api-key",
+                "choiceId": "comfy-cloud-api-key",
+                "choiceLabel": "Comfy Cloud API key",
+                "choiceHint": "Required for cloud workflows",
+                "groupId": "comfy",
+                "groupLabel": "ComfyUI",
+                "groupHint": "Local or cloud workflows",
+                "optionKey": "comfyApiKey",
+                "cliFlag": "--comfy-api-key",
+                "cliOption": "--comfy-api-key <key>",
+                "cliDescription": "Comfy Cloud API key",
+                "onboardingScopes": [
+                  "image-generation"
+                ]
+              }
+            ]
+          }
+        ],
+        "contracts": {
+          "imageGenerationProviders": [
+            "comfy"
+          ],
+          "musicGenerationProviders": [
+            "comfy"
+          ],
+          "videoGenerationProviders": [
+            "comfy"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/comfy-provider",
+          "npmSpec": "@openclaw/comfy-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
       "name": "@openclaw/deepinfra-provider",
       "description": "OpenClaw DeepInfra provider plugin.",
       "source": "official",
@@ -468,7 +588,7 @@
           "mediaUnderstandingProviders": [
             "deepinfra"
           ],
-          "memoryEmbeddingProviders": [
+          "embeddingProviders": [
             "deepinfra"
           ],
           "imageGenerationProviders": [
@@ -740,6 +860,172 @@
       }
     },
     {
+      "name": "@openclaw/mistral-provider",
+      "description": "OpenClaw Mistral provider plugin",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "mistral",
+          "label": "Mistral"
+        },
+        "providerEndpoints": [
+          {
+            "endpointClass": "mistral-public",
+            "hosts": ["api.mistral.ai"]
+          }
+        ],
+        "providers": [
+          {
+            "id": "mistral",
+            "name": "Mistral",
+            "docs": "/providers/mistral",
+            "categories": ["cloud", "llm"],
+            "envVars": ["MISTRAL_API_KEY"],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "mistral-api-key",
+                "choiceLabel": "Mistral API key",
+                "groupId": "mistral",
+                "groupLabel": "Mistral AI",
+                "groupHint": "API key",
+                "optionKey": "mistralApiKey",
+                "cliFlag": "--mistral-api-key",
+                "cliOption": "--mistral-api-key <key>",
+                "cliDescription": "Mistral API key",
+                "onboardingScopes": ["text-inference"]
+              }
+            ]
+          }
+        ],
+        "contracts": {
+          "embeddingProviders": ["mistral"],
+          "mediaUnderstandingProviders": ["mistral"],
+          "realtimeTranscriptionProviders": ["mistral"]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/mistral-provider",
+          "npmSpec": "@openclaw/mistral-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/novita-provider",
+      "description": "OpenClaw NovitaAI provider plugin",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "novita",
+          "label": "NovitaAI"
+        },
+        "providerEndpoints": [
+          {
+            "endpointClass": "novita-native",
+            "hosts": ["api.novita.ai"]
+          }
+        ],
+        "providers": [
+          {
+            "id": "novita",
+            "aliases": ["novita-ai", "novitaai"],
+            "name": "NovitaAI",
+            "docs": "/providers/novita",
+            "categories": ["cloud", "llm"],
+            "envVars": ["NOVITA_API_KEY"],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "novita-api-key",
+                "choiceLabel": "NovitaAI API key",
+                "choiceHint": "OpenAI-compatible NovitaAI endpoint",
+                "groupId": "novita",
+                "groupLabel": "NovitaAI",
+                "groupHint": "OpenAI-compatible NovitaAI endpoint",
+                "optionKey": "novitaApiKey",
+                "cliFlag": "--novita-api-key",
+                "cliOption": "--novita-api-key <key>",
+                "cliDescription": "NovitaAI API key",
+                "onboardingScopes": ["text-inference"]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/novita-provider",
+          "npmSpec": "@openclaw/novita-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/opencode-provider",
+      "description": "OpenClaw OpenCode Zen provider plugin",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "opencode",
+          "label": "OpenCode Zen"
+        },
+        "providerEndpoints": [
+          {
+            "endpointClass": "opencode-native",
+            "hostSuffixes": [
+              "opencode.ai"
+            ]
+          }
+        ],
+        "providers": [
+          {
+            "id": "opencode",
+            "name": "OpenCode Zen",
+            "docs": "/providers/opencode",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "OPENCODE_API_KEY",
+              "OPENCODE_ZEN_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "opencode-zen",
+                "choiceLabel": "OpenCode Zen catalog",
+                "groupId": "opencode",
+                "groupLabel": "OpenCode",
+                "groupHint": "Shared API key for Zen + Go catalogs",
+                "optionKey": "opencodeZenApiKey",
+                "cliFlag": "--opencode-zen-api-key",
+                "cliOption": "--opencode-zen-api-key <key>",
+                "cliDescription": "OpenCode API key (Zen catalog)",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          }
+        ],
+        "contracts": {
+          "mediaUnderstandingProviders": [
+            "opencode"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/opencode-provider",
+          "npmSpec": "@openclaw/opencode-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
       "name": "@openclaw/groq-provider",
       "description": "OpenClaw Groq media-understanding provider.",
       "source": "official",
@@ -901,6 +1187,69 @@
           "npmSpec": "@openclaw/kimi-provider",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.6.8"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/opencode-go-provider",
+      "description": "OpenClaw OpenCode Go provider plugin",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "opencode-go",
+          "label": "OpenCode Go"
+        },
+        "providerEndpoints": [
+          {
+            "endpointClass": "opencode-native",
+            "hostSuffixes": [
+              "opencode.ai"
+            ]
+          }
+        ],
+        "providers": [
+          {
+            "id": "opencode-go",
+            "name": "OpenCode Go",
+            "docs": "/providers/opencode-go",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "OPENCODE_API_KEY",
+              "OPENCODE_ZEN_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "opencode-go",
+                "choiceLabel": "OpenCode Go catalog",
+                "groupId": "opencode",
+                "groupLabel": "OpenCode",
+                "groupHint": "Shared API key for Zen + Go catalogs",
+                "optionKey": "opencodeGoApiKey",
+                "cliFlag": "--opencode-go-api-key",
+                "cliOption": "--opencode-go-api-key <key>",
+                "cliDescription": "OpenCode API key (Go catalog)",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          }
+        ],
+        "contracts": {
+          "mediaUnderstandingProviders": [
+            "opencode-go"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/opencode-go-provider",
+          "npmSpec": "@openclaw/opencode-go-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
         }
       }
     },
@@ -1529,6 +1878,198 @@
       }
     },
     {
+      "name": "@openclaw/vydra-provider",
+      "description": "OpenClaw Vydra media provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "vydra",
+          "label": "Vydra"
+        },
+        "providers": [
+          {
+            "id": "vydra",
+            "name": "Vydra",
+            "docs": "/providers/vydra",
+            "categories": [
+              "cloud",
+              "media"
+            ],
+            "envVars": [
+              "VYDRA_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "vydra-api-key",
+                "choiceLabel": "Vydra API key",
+                "groupId": "vydra",
+                "groupLabel": "Vydra",
+                "groupHint": "Image, video, and speech",
+                "optionKey": "vydraApiKey",
+                "cliFlag": "--vydra-api-key",
+                "cliOption": "--vydra-api-key <key>",
+                "cliDescription": "Vydra API key",
+                "onboardingScopes": [
+                  "image-generation"
+                ]
+              }
+            ]
+          }
+        ],
+        "contracts": {
+          "speechProviders": [
+            "vydra"
+          ],
+          "imageGenerationProviders": [
+            "vydra"
+          ],
+          "videoGenerationProviders": [
+            "vydra"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/vydra-provider",
+          "npmSpec": "@openclaw/vydra-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/xiaomi-provider",
+      "description": "OpenClaw Xiaomi provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "xiaomi",
+          "label": "Xiaomi"
+        },
+        "providerEndpoints": [
+          {
+            "endpointClass": "xiaomi-native",
+            "hosts": [
+              "api.xiaomimimo.com",
+              "token-plan-ams.xiaomimimo.com",
+              "token-plan-cn.xiaomimimo.com",
+              "token-plan-sgp.xiaomimimo.com"
+            ]
+          }
+        ],
+        "providers": [
+          {
+            "id": "xiaomi",
+            "name": "Xiaomi",
+            "docs": "/providers/xiaomi",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "XIAOMI_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "xiaomi-api-key",
+                "choiceLabel": "Xiaomi API key (Pay-as-you-go)",
+                "choiceHint": "Endpoint: api.xiaomimimo.com/v1",
+                "groupId": "xiaomi",
+                "groupLabel": "Xiaomi",
+                "groupHint": "Pay-as-you-go / Token Plan",
+                "optionKey": "xiaomiApiKey",
+                "cliFlag": "--xiaomi-api-key",
+                "cliOption": "--xiaomi-api-key <key>",
+                "cliDescription": "Xiaomi MiMo pay-as-you-go API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          },
+          {
+            "id": "xiaomi-token-plan",
+            "name": "Xiaomi Token Plan",
+            "docs": "/providers/xiaomi",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "XIAOMI_TOKEN_PLAN_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "token-plan-ams",
+                "choiceId": "xiaomi-token-plan-ams",
+                "choiceLabel": "Xiaomi Token Plan (Europe)",
+                "choiceHint": "Endpoint preset: token-plan-ams.xiaomimimo.com/v1",
+                "groupId": "xiaomi",
+                "groupLabel": "Xiaomi",
+                "groupHint": "Pay-as-you-go / Token Plan",
+                "optionKey": "xiaomiTokenPlanApiKey",
+                "cliFlag": "--xiaomi-token-plan-api-key",
+                "cliOption": "--xiaomi-token-plan-api-key <key>",
+                "cliDescription": "Xiaomi MiMo Token Plan API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              },
+              {
+                "method": "token-plan-cn",
+                "choiceId": "xiaomi-token-plan-cn",
+                "choiceLabel": "Xiaomi Token Plan (China)",
+                "choiceHint": "Endpoint preset: token-plan-cn.xiaomimimo.com/v1",
+                "groupId": "xiaomi",
+                "groupLabel": "Xiaomi",
+                "groupHint": "Pay-as-you-go / Token Plan",
+                "optionKey": "xiaomiTokenPlanApiKey",
+                "cliFlag": "--xiaomi-token-plan-api-key",
+                "cliOption": "--xiaomi-token-plan-api-key <key>",
+                "cliDescription": "Xiaomi MiMo Token Plan API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              },
+              {
+                "method": "token-plan-sgp",
+                "choiceId": "xiaomi-token-plan-sgp",
+                "choiceLabel": "Xiaomi Token Plan (Singapore)",
+                "choiceHint": "Endpoint preset: token-plan-sgp.xiaomimimo.com/v1",
+                "groupId": "xiaomi",
+                "groupLabel": "Xiaomi",
+                "groupHint": "Pay-as-you-go / Token Plan",
+                "optionKey": "xiaomiTokenPlanApiKey",
+                "cliFlag": "--xiaomi-token-plan-api-key",
+                "cliOption": "--xiaomi-token-plan-api-key <key>",
+                "cliDescription": "Xiaomi MiMo Token Plan API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          }
+        ],
+        "contracts": {
+          "speechProviders": [
+            "xiaomi"
+          ],
+          "usageProviders": [
+            "xiaomi",
+            "xiaomi-token-plan"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/xiaomi-provider",
+          "npmSpec": "@openclaw/xiaomi-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
       "name": "@openclaw/zai-provider",
       "description": "OpenClaw Z.AI provider plugin",
       "source": "official",
@@ -1656,6 +2197,160 @@
           "npmSpec": "@openclaw/zai-provider",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.6.9"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/synthetic-provider",
+      "description": "OpenClaw Synthetic provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "synthetic",
+          "label": "Synthetic"
+        },
+        "providers": [
+          {
+            "id": "synthetic",
+            "name": "Synthetic",
+            "docs": "/providers/synthetic",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "SYNTHETIC_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "synthetic-api-key",
+                "choiceLabel": "Synthetic API key",
+                "groupId": "synthetic",
+                "groupLabel": "Synthetic",
+                "groupHint": "Anthropic-compatible (multi-model)",
+                "optionKey": "syntheticApiKey",
+                "cliFlag": "--synthetic-api-key",
+                "cliOption": "--synthetic-api-key <key>",
+                "cliDescription": "Synthetic API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/synthetic-provider",
+          "npmSpec": "@openclaw/synthetic-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/voyage-provider",
+      "description": "OpenClaw Voyage embedding provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "voyage",
+          "label": "Voyage"
+        },
+        "providers": [
+          {
+            "id": "voyage",
+            "name": "Voyage",
+            "docs": "/reference/memory-config",
+            "categories": [
+              "cloud"
+            ],
+            "envVars": [
+              "VOYAGE_API_KEY"
+            ]
+          }
+        ],
+        "contracts": {
+          "embeddingProviders": [
+            "voyage"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/voyage-provider",
+          "npmSpec": "@openclaw/voyage-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/volcengine-provider",
+      "description": "OpenClaw Volcengine provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "volcengine",
+          "label": "Volcengine"
+        },
+        "providers": [
+          {
+            "id": "volcengine",
+            "aliases": [
+              "volcengine-plan"
+            ],
+            "name": "Volcengine",
+            "docs": "/providers/volcengine",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "VOLCANO_ENGINE_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "volcengine-api-key",
+                "choiceLabel": "Volcano Engine API key",
+                "groupId": "volcengine",
+                "groupLabel": "Volcano Engine",
+                "groupHint": "API key",
+                "optionKey": "volcengineApiKey",
+                "cliFlag": "--volcengine-api-key",
+                "cliOption": "--volcengine-api-key <key>",
+                "cliDescription": "Volcano Engine API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          },
+          {
+            "id": "volcengine-plan",
+            "name": "Volcengine Plan",
+            "docs": "/providers/volcengine",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "VOLCANO_ENGINE_API_KEY"
+            ]
+          }
+        ],
+        "contracts": {
+          "speechProviders": [
+            "volcengine"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/volcengine-provider",
+          "npmSpec": "@openclaw/volcengine-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
         }
       }
     },

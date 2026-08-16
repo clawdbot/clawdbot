@@ -177,6 +177,7 @@ export function registerAgentsCommands(program: Command): void {
           "agentDir",
           "bind",
           "nonInteractive",
+          "json",
         ]);
         const agentsAddCommand = await loadAgentsAddCommand();
         await agentsAddCommand(

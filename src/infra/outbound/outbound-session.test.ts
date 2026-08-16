@@ -42,7 +42,7 @@ function firstMockArg(
 }
 
 vi.mock("../../config/sessions/inbound.runtime.js", () => ({
-  resolveStorePath: mocks.resolveStorePath,
+  resolveSessionStorePathCore: mocks.resolveStorePath,
   updateSessionLastRoute: mocks.updateSessionLastRoute,
 }));
 
@@ -434,18 +434,6 @@ describe("resolveOutboundSessionRoute", () => {
         from: "fallbackchat:channel:abc",
         to: "channel:abc",
         chatType: "channel",
-      },
-    },
-    {
-      name: "Legacy parser-only plugin chat type fallback",
-      cfg: baseConfig,
-      channel: "legacyparser",
-      target: "team-ops",
-      expected: {
-        sessionKey: "agent:main:legacyparser:group:team-ops",
-        from: "legacyparser:group:team-ops",
-        to: "channel:team-ops",
-        chatType: "group",
       },
     },
   ] satisfies NamedRouteCase[])("$name", async ({ name: _name, ...params }) => {

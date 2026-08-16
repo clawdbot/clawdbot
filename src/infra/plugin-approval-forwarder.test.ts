@@ -427,6 +427,7 @@ describe("plugin approval forwarding", () => {
       await registerPendingApproval(forwarder, deliver);
 
       await forwarder.handlePluginApprovalResolved!(makePluginResolved());
+      await flushPendingDelivery();
       expect(deliver).toHaveBeenCalled();
       const text = firstDeliveredPayload(deliver)?.text ?? "";
       expect(text).toContain("Plugin approval");

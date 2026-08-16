@@ -1,5 +1,5 @@
 ---
-summary: "How OpenClaw handles local file access safely, and why the optional fs-safe Python helper is off by default"
+summary: "How OpenClaw handles local file access safely, and why optional fs-safe native acceleration is off by default"
 read_when:
   - Changing file access, archive extraction, workspace storage, or plugin filesystem helpers
 title: "Secure file operations"
@@ -9,35 +9,34 @@ OpenClaw uses [`@openclaw/fs-safe`](https://github.com/openclaw/fs-safe) for sec
 
 It is a **library guardrail** for trusted OpenClaw code that receives untrusted path names, not a sandbox. Host filesystem permissions, OS users, containers, and the agent/tool policy still define the real blast radius.
 
-## Default: no Python helper
+## Default: JavaScript fallback
 
-OpenClaw sets the fs-safe POSIX Python helper to **off** by default:
+OpenClaw sets fs-safe's optional native helper to **off** by default:
 
-- the gateway should not spawn a persistent Python sidecar unless an operator opts in;
-- most installs do not need the extra parent-directory mutation hardening;
-- disabling Python keeps runtime behavior predictable across desktop, Docker, CI, and bundled-app environments.
+- native platform packages are optional and may be absent from minimal installs;
+- the guarded JavaScript paths support OpenClaw's normal filesystem operations;
+- disabling native loading keeps runtime behavior deterministic across desktop, Docker, CI, and bundled-app environments.
 
 OpenClaw only changes the _default_. An explicit setting always wins:
 
 ```bash
-# Default OpenClaw behavior: Node-only fs-safe fallbacks.
-OPENCLAW_FS_SAFE_PYTHON_MODE=off
+# Default OpenClaw behavior: guarded JavaScript fs-safe paths.
+OPENCLAW_FS_SAFE_NATIVE_MODE=off
 
-# Opt into the helper when available, falling back if unavailable.
-OPENCLAW_FS_SAFE_PYTHON_MODE=auto
+# Prefer native primitives when the platform package is installed.
+OPENCLAW_FS_SAFE_NATIVE_MODE=auto
 
-# Fail closed if the helper cannot start.
-OPENCLAW_FS_SAFE_PYTHON_MODE=require
-
-# Optional explicit interpreter path.
-OPENCLAW_FS_SAFE_PYTHON=/usr/bin/python3
+# Fail closed when an operation needs native support and the binding is unavailable.
+OPENCLAW_FS_SAFE_NATIVE_MODE=require
 ```
 
-The generic fs-safe env names also work: `FS_SAFE_PYTHON_MODE` and `FS_SAFE_PYTHON`.
+The generic fs-safe environment name also works: `FS_SAFE_NATIVE_MODE`.
 
-Use `require` (not `auto`) when the helper is part of your security posture; `auto` silently falls back to Node-only behavior if the helper cannot start.
+fs-safe 0.5 temporarily maps the retired `FS_SAFE_PYTHON_MODE` and `OPENCLAW_FS_SAFE_PYTHON_MODE` values to native modes and emits a deprecation warning. Migrate those names before fs-safe 0.6; Python interpreter path settings are no longer used.
 
-## What stays protected without Python
+Use `require` (not `auto`) when native primitives are part of your security posture. `auto` uses the guarded JavaScript implementation when the platform binding is unavailable.
+
+## What stays protected without native acceleration
 
 With the helper off, OpenClaw still gets fs-safe's Node-only guardrails:
 
@@ -51,16 +50,16 @@ With the helper off, OpenClaw still gets fs-safe's Node-only guardrails:
 
 This covers OpenClaw's normal threat model: trusted gateway code handling untrusted model/plugin/channel path input inside a single trusted operator boundary.
 
-## What Python adds
+## What native acceleration adds
 
-On POSIX, the optional helper keeps one persistent Python process and uses fd-relative filesystem operations for parent-directory mutations: rename, remove, mkdir, stat/list, and some write paths.
+The optional platform package provides policy-free filesystem primitives used by fs-safe for create-only writes, guarded hard-link publication, asynchronous sidecar creation, and explicit no-replace rename publication. Linux uses `openat2` and `renameat2`; macOS uses descriptor-relative component checks and `renameatx_np`; Windows uses handle-relative operations and replacement-disabled rename.
 
-That narrows same-UID race windows where another process swaps a parent directory between validation and mutation — defense in depth on hosts where untrusted local processes can modify the same directories OpenClaw operates in.
+The TypeScript layer still owns policy, validation, retries, cleanup, and fallback decisions. Native support narrows filesystem race windows; it does not turn fs-safe into a sandbox.
 
-If your deployment has that risk and Python is guaranteed to exist, set:
+If your deployment requires those native primitives, install the matching optional platform package and set:
 
 ```bash
-OPENCLAW_FS_SAFE_PYTHON_MODE=require
+OPENCLAW_FS_SAFE_NATIVE_MODE=require
 ```
 
 ## Plugin and core guidance

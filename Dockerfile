@@ -13,12 +13,12 @@ ARG OPENCLAW_BUNDLED_PLUGIN_DIR=extensions
 ARG OPENCLAW_DOCKER_BUILD_NODE_OPTIONS="--max-old-space-size=8192"
 ARG OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB=""
 ARG OPENCLAW_DOCKER_BUILD_SKIP_DTS=1
-ARG OPENCLAW_NODE_BOOKWORM_IMAGE="docker.io/library/node:24-bookworm@sha256:8530f76a96d88820d288761f022e318970dda93d01536919fbc16076b7983e63"
-ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="docker.io/library/node:24-bookworm-slim@sha256:242549cd46785b480c832479a730f4f2a20865d61ea2e404fdb2a5c3d3b73ecf"
-ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST="sha256:242549cd46785b480c832479a730f4f2a20865d61ea2e404fdb2a5c3d3b73ecf"
+ARG OPENCLAW_NODE_BOOKWORM_IMAGE="docker.io/library/node:24-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059"
+ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="docker.io/library/node:24-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d"
+ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST="sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d"
 # Keep in sync with .github/actions/setup-node-env/action.yml bun-version.
 # To update: docker buildx imagetools inspect docker.io/oven/bun:<version> and use the manifest-list digest.
-ARG OPENCLAW_BUN_IMAGE="docker.io/oven/bun:1.3.13@sha256:87416c977a612a204eb54ab9f3927023c2a3c971f4f345a01da08ea6262ae30e"
+ARG OPENCLAW_BUN_IMAGE="docker.io/oven/bun:1.3.14@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4"
 
 # Base images are pinned to SHA256 digests for reproducible builds.
 # Dependabot refreshes these blessed digests; release builds consume the
@@ -75,7 +75,8 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY openclaw.mjs ./
 COPY ui/package.json ./ui/package.json
 COPY patches ./patches
-COPY scripts/postinstall-bundled-plugins.mjs scripts/preinstall-package-manager-warning.mjs scripts/npm-runner.mjs scripts/windows-cmd-helpers.mjs scripts/prepare-git-hooks.mjs ./scripts/
+COPY scripts/postinstall-bundled-plugins.mjs scripts/preinstall-package-manager-warning.mjs scripts/windows-cmd-helpers.mjs scripts/prepare-git-hooks.mjs ./scripts/
+COPY scripts/lib/guard-inventory-utils.mjs ./scripts/lib/guard-inventory-utils.mjs
 COPY scripts/lib/package-dist-imports.mjs ./scripts/lib/package-dist-imports.mjs
 
 COPY --from=workspace-deps /out/packages/ ./packages/
@@ -119,6 +120,10 @@ ENV GIT_COMMIT=${GIT_COMMIT} \
     OPENCLAW_BUILD_TIMESTAMP=${OPENCLAW_BUILD_TIMESTAMP}
 
 COPY . .
+
+# The build stage also backs non-root live-test containers. Build contexts preserve
+# host modes, so normalize copied source readability without re-walking installed deps.
+RUN find /app -path /app/node_modules -prune -o -exec chmod a+rX {} +
 
 # Normalize extension paths now so runtime COPY preserves safe modes
 # without adding a second full extensions layer.
@@ -216,12 +221,26 @@ WORKDIR /app
 # so it must be installed explicitly here. Without it `/etc/ssl/certs/`
 # stays empty and every HTTPS outbound dies at TLS handshake with
 # `error setting certificate file`.
+# Apply current Debian point-release security fixes even when the pinned base
+# digest predates them, without waiting for a base-digest refresh.
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
     apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       ca-certificates curl git hostname lsof openssl procps python3 tini && \
     update-ca-certificates
+
+# Keep npm as an operator-facing capability while replacing the base image's
+# bundled CLI dependency tree with the current release. The published package
+# omits its dev tools, so hide their metadata during the script-free refresh.
+RUN npm install --global npm@latest && \
+    npm_dir="$(npm root --global)/npm" && \
+    cp "$npm_dir/package.json" /tmp/npm-package.json && \
+    node -e 'const fs = require("node:fs"); const file = process.argv[1]; const packageJson = JSON.parse(fs.readFileSync(file, "utf8")); delete packageJson.devDependencies; fs.writeFileSync(file, `${JSON.stringify(packageJson, null, 2)}\n`);' "$npm_dir/package.json" && \
+    npm update --prefix "$npm_dir" --omit=dev --ignore-scripts --no-audit --no-fund && \
+    mv /tmp/npm-package.json "$npm_dir/package.json" && \
+    npm cache clean --force
 
 RUN chown node:node /app
 
@@ -259,9 +278,10 @@ RUN install -d -m 0755 "$COREPACK_HOME" && \
 # Legacy alias: OPENCLAW_DOCKER_APT_PACKAGES is still accepted as a fallback.
 ARG OPENCLAW_IMAGE_APT_PACKAGES
 ARG OPENCLAW_DOCKER_APT_PACKAGES=""
+ENV PATH="/home/node/.local/bin:${PATH}"
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
-    packages="${OPENCLAW_IMAGE_APT_PACKAGES-$OPENCLAW_DOCKER_APT_PACKAGES}"; \
+    packages="${OPENCLAW_IMAGE_APT_PACKAGES:-$OPENCLAW_DOCKER_APT_PACKAGES}"; \
     if [ -n "$packages" ]; then \
       apt-get update && \
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $packages; \
@@ -371,10 +391,11 @@ USER node
 #   - Override --bind to "lan" (0.0.0.0) and set auth credentials
 #
 # Built-in probe endpoints for container health checks:
-#   - GET /healthz (liveness) and GET /readyz (readiness)
-#   - aliases: /health and /ready
+#   - GET /healthz (liveness), GET /startupz (startup/traffic admission),
+#     and GET /readyz (channel-aware readiness)
+#   - aliases: /health, /startup, and /ready
 # For external access from host/ingress, override bind to "lan" and set auth.
 HEALTHCHECK --interval=3m --timeout=10s --start-period=15s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD ["node", "dist/docker-healthcheck.js"]
 ENTRYPOINT ["tini", "-s", "--"]
 CMD ["node", "openclaw.mjs", "gateway"]

@@ -7,6 +7,7 @@ import {
 } from "./access-shapes.js";
 import { toolPosturePolicyShapeFinding } from "./agent-tool-shapes.js";
 import { SUPPORTED_POLICY_SECTIONS } from "./policy-constants.js";
+import { routingPolicyShapeFinding } from "./routing-shapes.js";
 import { gatewayPolicyShapeFinding, sandboxPolicyShapeFinding } from "./sandbox-gateway-shapes.js";
 import { scopedPolicyShapeFinding } from "./scoped-policy-shape.js";
 import {
@@ -334,6 +335,13 @@ export function policyContainerShapeFindings(
   });
   if (gatewayFinding !== undefined) {
     return [gatewayFinding];
+  }
+  const routingFinding = routingPolicyShapeFinding(policy.routing, {
+    policyDocName,
+    policyPath,
+  });
+  if (routingFinding !== undefined) {
+    return [routingFinding];
   }
   const agentsFinding = agentsPolicyShapeFinding(policy.agents, {
     policyDocName,

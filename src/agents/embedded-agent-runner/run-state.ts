@@ -11,7 +11,13 @@ import {
   listActiveReplyRunSessionIds,
   resolveActiveReplyRunSessionId,
   type ReplyBackendQueueMessageOptions,
+  type ReplyBackendQueueMessageResult,
+  type ReplyBackendMessageInjection,
 } from "../../auto-reply/reply/reply-run-registry.js";
+import {
+  isAgentEventLifecycleGenerationCurrent,
+  registerAgentEventLifecycleRotationHandler,
+} from "../../infra/agent-events.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 
 /**
@@ -23,9 +29,26 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 export type EmbeddedAgentQueueHandle = {
   kind?: "embedded";
   runId?: string;
-  queueMessage: (text: string, options?: EmbeddedAgentQueueMessageOptions) => Promise<void>;
+  /** Exact authority of the concrete provider/model attempt behind this handle. */
+  toolAuthorityFingerprint?: string;
+  /** Atomically consumes one plain-text answer for this run's pending user-input request. */
+  claimPendingUserInputAnswer?: (
+    text: string,
+    options?: EmbeddedAgentQueueMessageOptions,
+  ) => Promise<boolean>;
+  /** Cancels this run's pending user-input request before an image is queued as a later turn. */
+  cancelPendingUserInput?: (resolvedBy: string) => Promise<boolean>;
+  /** Exact heartbeat owner retained after its reply-operation registration clears. */
+  readonly preemptByVisibleTurn?: () => boolean;
+  queueMessage: (
+    text: string,
+    options?: EmbeddedAgentQueueMessageOptions,
+  ) => Promise<void | EmbeddedAgentQueueMessageResult>;
+  messageInjection?: ReplyBackendMessageInjection;
   isStreaming: () => boolean;
   isStopped?: () => boolean;
+  /** True after this handle has accepted an abort, even while cleanup retains it. */
+  isAborted?: () => boolean;
   isAbortable?: () => boolean;
   isCompacting: () => boolean;
   supportsTranscriptCommitWait?: boolean;
@@ -39,6 +62,8 @@ export type EmbeddedAgentQueueHandle = {
 
 export type EmbeddedAgentQueueMessageOptions = ReplyBackendQueueMessageOptions;
 
+export type EmbeddedAgentQueueMessageResult = ReplyBackendQueueMessageResult;
+
 export type ActiveEmbeddedRunSnapshot = {
   transcriptLeafId: string | null;
   messages?: unknown[];
@@ -47,6 +72,7 @@ export type ActiveEmbeddedRunSnapshot = {
 
 export type EmbeddedRunWaiter = {
   resolve: (ended: boolean) => void;
+  handle?: EmbeddedAgentQueueHandle;
   timer?: NodeJS.Timeout;
 };
 
@@ -63,6 +89,7 @@ const EMBEDDED_RUN_STATE_KEY = Symbol.for("openclaw.embeddedRunState");
 const embeddedRunState = resolveGlobalSingleton(EMBEDDED_RUN_STATE_KEY, () => ({
   activeRuns: new Map<string, EmbeddedAgentQueueHandle>(),
   activeRunsByRunId: new Map<string, EmbeddedAgentQueueHandle>(),
+  activeRunLifecycleGenerations: new WeakMap<EmbeddedAgentQueueHandle, string>(),
   retainedAbortabilityRunIds: new Set<string>(),
   snapshots: new Map<string, ActiveEmbeddedRunSnapshot>(),
   sessionIdsByKey: new Map<string, string>(),
@@ -79,6 +106,12 @@ export const ACTIVE_EMBEDDED_RUNS =
 export const ACTIVE_EMBEDDED_RUNS_BY_RUN_ID =
   embeddedRunState.activeRunsByRunId ??
   (embeddedRunState.activeRunsByRunId = new Map<string, EmbeddedAgentQueueHandle>());
+const ACTIVE_EMBEDDED_RUN_LIFECYCLE_GENERATIONS =
+  embeddedRunState.activeRunLifecycleGenerations ??
+  (embeddedRunState.activeRunLifecycleGenerations = new WeakMap<
+    EmbeddedAgentQueueHandle,
+    string
+  >());
 export const RETAINED_EMBEDDED_RUN_ABORTABILITY_RUN_IDS =
   embeddedRunState.retainedAbortabilityRunIds ??
   (embeddedRunState.retainedAbortabilityRunIds = new Set<string>());
@@ -103,6 +136,71 @@ export const ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE =
 export const EMBEDDED_RUN_WAITERS =
   embeddedRunState.waiters ??
   (embeddedRunState.waiters = new Map<string, Set<EmbeddedRunWaiter>>());
+
+function evictPriorLifecycleEmbeddedRuns(): void {
+  const staleHandles = new Set<EmbeddedAgentQueueHandle>();
+  for (const [sessionId, handle] of ACTIVE_EMBEDDED_RUNS) {
+    const lifecycleGeneration = ACTIVE_EMBEDDED_RUN_LIFECYCLE_GENERATIONS.get(handle);
+    if (lifecycleGeneration && isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
+      continue;
+    }
+    staleHandles.add(handle);
+    if (ACTIVE_EMBEDDED_RUNS.get(sessionId) === handle) {
+      ACTIVE_EMBEDDED_RUNS.delete(sessionId);
+    }
+    ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(sessionId);
+  }
+  for (const [runId, handle] of ACTIVE_EMBEDDED_RUNS_BY_RUN_ID) {
+    const lifecycleGeneration = ACTIVE_EMBEDDED_RUN_LIFECYCLE_GENERATIONS.get(handle);
+    if (lifecycleGeneration && isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
+      continue;
+    }
+    staleHandles.add(handle);
+    // This index only gates the separately owned chat abort controller; absence
+    // is abortable. Keeping it would let stale ownership influence new work.
+    if (ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(runId) === handle) {
+      ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.delete(runId);
+      RETAINED_EMBEDDED_RUN_ABORTABILITY_RUN_IDS.delete(runId);
+    }
+  }
+  for (const [sessionKey, sessionId] of ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY) {
+    if (!ACTIVE_EMBEDDED_RUNS.has(sessionId)) {
+      ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.delete(sessionKey);
+    }
+  }
+  for (const [sessionFile, sessionId] of ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE) {
+    if (!ACTIVE_EMBEDDED_RUNS.has(sessionId)) {
+      ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.delete(sessionFile);
+    }
+  }
+  for (const [sessionId, waiters] of EMBEDDED_RUN_WAITERS) {
+    if (ACTIVE_EMBEDDED_RUNS.has(sessionId)) {
+      continue;
+    }
+    EMBEDDED_RUN_WAITERS.delete(sessionId);
+    for (const waiter of waiters) {
+      if (waiter.timer) {
+        clearTimeout(waiter.timer);
+      }
+      waiter.resolve(true);
+    }
+  }
+  const abortErrors: unknown[] = [];
+  // Remove stale ownership first so synchronous abort callbacks may register a
+  // replacement without the cleanup above erasing that current-generation run.
+  for (const handle of staleHandles) {
+    try {
+      handle.abort("restart");
+    } catch (error) {
+      abortErrors.push(error);
+    }
+  }
+  if (abortErrors.length > 0) {
+    throw new AggregateError(abortErrors, "Failed to abort stale embedded agent runs");
+  }
+}
+
+registerAgentEventLifecycleRotationHandler("embedded-agent-runs", evictPriorLifecycleEmbeddedRuns);
 
 /** Counts active embedded runs while including auto-reply registry runs for shared sessions. */
 export function getActiveEmbeddedRunCount(): number {
@@ -135,6 +233,20 @@ export function listActiveEmbeddedRunSessionIds(): string[] {
       ...listActiveReplyRunSessionIds(),
     ]),
   ].toSorted((a, b) => a.localeCompare(b));
+}
+
+export function setActiveEmbeddedRunLifecycleGeneration(
+  handle: EmbeddedAgentQueueHandle,
+  lifecycleGeneration: string,
+): string {
+  // A delayed re-registration must not transfer an old driver into the new
+  // Gateway lifecycle and suppress orphan recovery again.
+  const existingLifecycleGeneration = ACTIVE_EMBEDDED_RUN_LIFECYCLE_GENERATIONS.get(handle);
+  if (existingLifecycleGeneration !== undefined) {
+    return existingLifecycleGeneration;
+  }
+  ACTIVE_EMBEDDED_RUN_LIFECYCLE_GENERATIONS.set(handle, lifecycleGeneration);
+  return lifecycleGeneration;
 }
 
 /** Resolves the current session id for an active run after resets or compaction. */

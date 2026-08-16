@@ -1,9 +1,13 @@
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
-import type { WorkerSessionTurnClaim } from "./placement-record.js";
+import {
+  resolvePlacementTurnEnvironment,
+  type WorkerSessionTurnClaim,
+} from "./placement-record.js";
 import { getRequired } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
+import { clearWorkerWorkspaceReconciliation } from "./placement-workspace-journal.js";
 
 type WorkspaceResultDatabase = Pick<
   StateDatabase,
@@ -12,7 +16,7 @@ type WorkspaceResultDatabase = Pick<
 
 const query = (db: DatabaseSync) => getNodeSqliteKysely<WorkspaceResultDatabase>(db);
 
-type WorkerWorkspacePendingResult = {
+export type WorkerWorkspacePendingResult = {
   sessionId: string;
   environmentId: string;
   ownerEpoch: number;
@@ -22,6 +26,7 @@ type WorkerWorkspacePendingResult = {
   gatewayInstanceId: string;
   recoveryRequestedAtMs: number | null;
   workspaceAcceptedAtMs: number | null;
+  stagedResultRef: string | null;
 };
 
 export function clearWorkerWorkspacePendingResult(db: DatabaseSync, sessionId: string): void {
@@ -65,37 +70,27 @@ export function insertWorkerWorkspacePendingResult(
   nowMs: number,
   gatewayInstanceId: string,
 ): void {
-  if (claim.owner.kind !== "worker") {
-    throw new Error("Only a worker turn can retain a pending workspace result");
-  }
   const placement = getRequired(db, claim.sessionId);
-  const persisted = placement.turnClaim;
-  if (
-    (placement.state !== "active" && placement.state !== "draining") ||
-    placement.environmentId !== claim.owner.environmentId ||
-    placement.activeOwnerEpoch !== claim.owner.ownerEpoch ||
-    persisted?.owner !== "worker" ||
-    persisted.claimId !== claim.claimId ||
-    persisted.runId !== claim.runId ||
-    persisted.generation !== claim.placementGeneration ||
-    persisted.ownerEpoch !== claim.owner.ownerEpoch
-  ) {
+  const environment = resolvePlacementTurnEnvironment(placement, claim);
+  if (!environment) {
     throw new Error(`Cannot retain stale worker workspace result for ${claim.sessionId}`);
   }
+  const { environmentId, ownerEpoch } = environment;
   const result = executeSqliteQuerySync(
     db,
     query(db)
       .insertInto("worker_workspace_pending_results")
       .values({
         session_id: claim.sessionId,
-        environment_id: claim.owner.environmentId,
-        owner_epoch: claim.owner.ownerEpoch,
+        environment_id: environmentId,
+        owner_epoch: ownerEpoch,
         placement_generation: claim.placementGeneration,
         claim_id: claim.claimId,
         run_id: claim.runId,
         gateway_instance_id: gatewayInstanceId,
         recovery_requested_at_ms: null,
         workspace_accepted_at_ms: null,
+        staged_result_ref: null,
         created_at_ms: nowMs,
       })
       .onConflict((conflict) => conflict.column("session_id").doNothing()),
@@ -112,8 +107,8 @@ export function insertWorkerWorkspacePendingResult(
   ).rows[0];
   if (
     !existing ||
-    existing.environment_id !== claim.owner.environmentId ||
-    existing.owner_epoch !== claim.owner.ownerEpoch ||
+    existing.environment_id !== environmentId ||
+    existing.owner_epoch !== ownerEpoch ||
     existing.placement_generation !== claim.placementGeneration ||
     existing.claim_id !== claim.claimId ||
     existing.run_id !== claim.runId
@@ -127,8 +122,10 @@ function markWorkerWorkspacePendingResultAccepted(
   claim: WorkerSessionTurnClaim,
   nowMs: number,
 ): void {
-  if (claim.owner.kind !== "worker") {
-    throw new Error("Only a worker turn can accept a pending workspace result");
+  const placement = getRequired(db, claim.sessionId);
+  const environment = resolvePlacementTurnEnvironment(placement, claim);
+  if (!environment) {
+    throw new Error(`Cannot accept stale worker workspace result for ${claim.sessionId}`);
   }
   const result = executeSqliteQuerySync(
     db,
@@ -136,8 +133,8 @@ function markWorkerWorkspacePendingResultAccepted(
       .updateTable("worker_workspace_pending_results")
       .set({ workspace_accepted_at_ms: nowMs })
       .where("session_id", "=", claim.sessionId)
-      .where("environment_id", "=", claim.owner.environmentId)
-      .where("owner_epoch", "=", claim.owner.ownerEpoch)
+      .where("environment_id", "=", environment.environmentId)
+      .where("owner_epoch", "=", environment.ownerEpoch)
       .where("placement_generation", "=", claim.placementGeneration)
       .where("claim_id", "=", claim.claimId)
       .where("run_id", "=", claim.runId),
@@ -150,6 +147,8 @@ function markWorkerWorkspacePendingResultAccepted(
 export function createPlacementWorkspaceResultOps(runtime: PlacementStoreRuntime) {
   const { instanceId, now, read, write } = runtime;
   const assertPendingClaim = (db: DatabaseSync, claim: WorkerSessionTurnClaim) => {
+    const placement = getRequired(db, claim.sessionId);
+    const environment = resolvePlacementTurnEnvironment(placement, claim);
     const row = executeSqliteQuerySync(
       db,
       query(db)
@@ -158,10 +157,10 @@ export function createPlacementWorkspaceResultOps(runtime: PlacementStoreRuntime
         .where("session_id", "=", claim.sessionId),
     ).rows[0];
     if (
-      claim.owner.kind !== "worker" ||
+      !environment ||
       !row ||
-      row.environment_id !== claim.owner.environmentId ||
-      row.owner_epoch !== claim.owner.ownerEpoch ||
+      row.environment_id !== environment.environmentId ||
+      row.owner_epoch !== environment.ownerEpoch ||
       row.placement_generation !== claim.placementGeneration ||
       row.claim_id !== claim.claimId ||
       row.run_id !== claim.runId
@@ -191,6 +190,7 @@ export function createPlacementWorkspaceResultOps(runtime: PlacementStoreRuntime
             "gateway_instance_id",
             "recovery_requested_at_ms",
             "workspace_accepted_at_ms",
+            "staged_result_ref",
           ])
           .orderBy("session_id"),
       ).rows.map((row) => ({
@@ -203,6 +203,7 @@ export function createPlacementWorkspaceResultOps(runtime: PlacementStoreRuntime
         gatewayInstanceId: row.gateway_instance_id,
         recoveryRequestedAtMs: row.recovery_requested_at_ms,
         workspaceAcceptedAtMs: row.workspace_accepted_at_ms,
+        stagedResultRef: row.staged_result_ref,
       }));
     },
 
@@ -212,10 +213,40 @@ export function createPlacementWorkspaceResultOps(runtime: PlacementStoreRuntime
       });
     },
 
+    recordStagedWorkspaceResult(claim: WorkerSessionTurnClaim, stagedResultRef: string): void {
+      if (!/^refs\/openclaw\/worker-results\/[A-Za-z0-9-]+$/u.test(stagedResultRef)) {
+        throw new Error("Worker workspace staged result reference is invalid");
+      }
+      write((db) => {
+        const pending = assertPendingClaim(db, claim);
+        if (pending.workspace_accepted_at_ms !== null) {
+          throw new Error(`Cannot restage accepted worker workspace result for ${claim.sessionId}`);
+        }
+        if (pending.staged_result_ref && pending.staged_result_ref !== stagedResultRef) {
+          throw new Error(`Worker workspace result ref changed for ${claim.sessionId}`);
+        }
+        const result = executeSqliteQuerySync(
+          db,
+          query(db)
+            .updateTable("worker_workspace_pending_results")
+            .set({ staged_result_ref: stagedResultRef })
+            .where("session_id", "=", claim.sessionId)
+            .where("claim_id", "=", claim.claimId)
+            .where("run_id", "=", claim.runId),
+        );
+        if (result.numAffectedRows !== 1n) {
+          throw new Error(`Cannot stage stale worker workspace result for ${claim.sessionId}`);
+        }
+      });
+    },
+
     acceptWorkspaceResult(claim: WorkerSessionTurnClaim): void {
       write((db) => {
         assertPendingClaim(db, claim);
         markWorkerWorkspacePendingResultAccepted(db, claim, now());
+        // Keep the applied journal as the crash-safe marker until this fence is
+        // accepted. Recovery then inspects reality instead of replaying a result.
+        clearWorkerWorkspaceReconciliation(db, claim.sessionId);
       });
     },
 

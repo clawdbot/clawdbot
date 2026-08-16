@@ -1,4 +1,6 @@
 // Terminal Core tests cover display-safe path shortening.
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { displayString } from "./display-string.js";
@@ -44,4 +46,30 @@ describe("displayString", () => {
     expect(displayString(`${openclawHome}/state`)).toBe("$OPENCLAW_HOME/state");
     expect(displayString(`${openclawHome}2/state`)).toBe(`${openclawHome}2/state`);
   });
+
+  it.each(["$&", "$`", "$'", "$$"])("keeps %s literal when expanding OPENCLAW_HOME", (pattern) => {
+    const home = path.resolve("test-home", `${pattern}user`);
+    stubHome(home, "~/state");
+
+    expect(displayString(path.join(home, "state", "project"))).toBe(
+      `$OPENCLAW_HOME${path.sep}project`,
+    );
+  });
+
+  it.skipIf(process.platform !== "win32")(
+    "shortens real Windows home casing aliases inside table display text",
+    () => {
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-home-display-"));
+      try {
+        const homeAlias = home.toUpperCase();
+        expect(fs.statSync(homeAlias).isDirectory()).toBe(true);
+        stubHome(home);
+
+        expect(displayString(`Workspace: ${homeAlias}\\project`)).toBe("Workspace: ~\\project");
+        expect(displayString(`İ Workspace: ${homeAlias}\\project`)).toBe("İ Workspace: ~\\project");
+      } finally {
+        fs.rmSync(home, { recursive: true, force: true });
+      }
+    },
+  );
 });

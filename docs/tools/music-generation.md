@@ -14,7 +14,7 @@ OpenRouter.
 
 <Note>
 `music_generate` only appears when at least one music-generation provider is
-available: an explicit `agents.defaults.musicGenerationModel` config, or an
+available: an explicit `agents.defaults.mediaModels.music` config, or an
 auth-configured provider (a set API key, for example).
 </Note>
 
@@ -41,8 +41,10 @@ idempotent direct fallback with just the missing audio.
         {
           agents: {
             defaults: {
-              musicGenerationModel: {
-                primary: "google/lyria-3-clip-preview",
+              mediaModels: {
+                music: {
+                  primary: "google/lyria-3-clip-preview",
+                },
               },
             },
           },
@@ -182,7 +184,7 @@ captures any requested-to-applied mapping.
 </Note>
 
 Provider request timeouts are operator configuration only. OpenClaw uses
-`agents.defaults.musicGenerationModel.timeoutMs` when configured, raises
+`agents.defaults.mediaModels.music.timeoutMs` when configured, raises
 values below 120000ms to 120000ms, and otherwise defaults provider requests
 to 300000ms.
 
@@ -238,9 +240,11 @@ openclaw tasks cancel <taskId>
 {
   agents: {
     defaults: {
-      musicGenerationModel: {
-        primary: "google/lyria-3-clip-preview",
-        fallbacks: ["fal/fal-ai/minimax-music/v2.6", "minimax/music-2.6"],
+      mediaModels: {
+        music: {
+          primary: "google/lyria-3-clip-preview",
+          fallbacks: ["fal/fal-ai/minimax-music/v2.6", "minimax/music-2.6"],
+        },
       },
     },
   },
@@ -252,8 +256,8 @@ openclaw tasks cancel <taskId>
 OpenClaw tries providers in this order:
 
 1. `model` parameter from the tool call (if the agent specifies one).
-2. `musicGenerationModel.primary` from config.
-3. `musicGenerationModel.fallbacks` in order.
+2. `agents.defaults.mediaModels.music.primary` from config.
+3. `agents.defaults.mediaModels.music.fallbacks` in order.
 4. Auto-detection using auth-backed provider defaults only:
    - current default text-model provider first, if it also offers music
      generation;
@@ -263,17 +267,16 @@ OpenClaw tries providers in this order:
 If a provider fails, the next candidate is tried automatically. If all
 fail, the error includes details from each attempt.
 
-Set `agents.defaults.mediaGenerationAutoProviderFallback: false` to use only
-explicit `model`, `primary`, and `fallbacks` entries.
+Automatic fallback across authenticated providers is always enabled. A per-call
+`model` remains authoritative.
 
 ## Provider notes
 
 <AccordionGroup>
   <Accordion title="ComfyUI">
     Workflow-driven and depends on the configured graph plus node mapping
-    for prompt/output fields. The bundled `comfy` plugin plugs into the
-    shared `music_generate` tool through the music-generation provider
-    registry.
+    for prompt/output fields. The `comfy` plugin plugs into the shared
+    `music_generate` tool through the music-generation provider registry.
   </Accordion>
   <Accordion title="fal">
     Uses fal model endpoints through the shared provider auth path. The
@@ -383,7 +386,7 @@ sections are configured.
 
 - [Background tasks](/automation/tasks) — task tracking for detached `music_generate` runs
 - [ComfyUI](/providers/comfy)
-- [Configuration reference](/gateway/config-agents#agent-defaults) — `musicGenerationModel` config
+- [Configuration reference](/gateway/config-agents#agent-defaults) — `agents.defaults.mediaModels.music` config
 - [Google (Gemini)](/providers/google)
 - [MiniMax](/providers/minimax)
 - [Models](/concepts/models) — model configuration and failover

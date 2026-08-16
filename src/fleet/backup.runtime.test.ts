@@ -374,6 +374,35 @@ describe("fleet restore runtime", () => {
     expect(containers.remove).not.toHaveBeenCalled();
   });
 
+  it("rejects an implicitly deep entry before creating output paths", async () => {
+    const source = path.join(root, `deep-${crypto.randomUUID()}`);
+    const deepRelativePath = path.posix.join(
+      "data",
+      ...Array.from({ length: 6 }, (_, index) => `segment-${index}`),
+      "state.txt",
+    );
+    await fs.mkdir(path.join(source, path.dirname(deepRelativePath)), { recursive: true });
+    await fs.mkdir(path.join(source, "auth"));
+    await fs.writeFile(
+      path.join(source, "manifest.json"),
+      JSON.stringify({ schemaVersion: 1, kind: "openclaw-fleet-cell-backup", tenant: "acme" }),
+    );
+    await fs.writeFile(path.join(source, deepRelativePath), "state");
+    const archive = path.join(root, `${path.basename(source)}.tgz`);
+    await tar.c({ gzip: true, file: archive, cwd: source }, [
+      "manifest.json",
+      deepRelativePath,
+      "auth",
+    ]);
+    const containers = containerMock();
+
+    await expect(
+      restoreFleetCell({ ...restoreParams(containers, archive), maxEntries: 5 }),
+    ).rejects.toThrow(/entry limit/iu);
+    expect(containers.remove).not.toHaveBeenCalled();
+    await expect(fs.readdir(path.join(root, "fleet", "restore-tmp"))).resolves.toEqual([]);
+  });
+
   it("rejects an archive without the auth tree before any destructive step", async () => {
     const source = path.join(root, `auth-less-${crypto.randomUUID()}`);
     await fs.mkdir(path.join(source, "data"), { recursive: true });

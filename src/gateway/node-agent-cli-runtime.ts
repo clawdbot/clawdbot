@@ -11,6 +11,8 @@ export async function invokeNodeClaudeCliRun(params: {
   argv: string[];
   stdin: string;
   cwd?: string;
+  env?: Record<string, string>;
+  clearEnv?: string[];
   systemPrompt?: string;
   agentId?: string;
   sessionKey?: string;
@@ -59,11 +61,14 @@ export async function invokeNodeClaudeCliRun(params: {
   return await context.nodeRegistry.invoke({
     nodeId: params.nodeId,
     expectedConnId: node.connId,
+    ...(node.pairingGeneration ? { expectedPairingGeneration: node.pairingGeneration } : {}),
     command: NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
     params: {
       argv: params.argv,
       stdin: params.stdin,
       ...(params.cwd ? { cwd: params.cwd } : {}),
+      ...(params.env ? { env: params.env } : {}),
+      ...(params.clearEnv ? { clearEnv: params.clearEnv } : {}),
       ...(params.systemPrompt !== undefined ? { systemPrompt: params.systemPrompt } : {}),
       ...(params.agentId ? { agentId: params.agentId } : {}),
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),

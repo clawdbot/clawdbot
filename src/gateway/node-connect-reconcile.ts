@@ -2,12 +2,16 @@
 // Computes approved runtime surfaces and pending pairing upgrades on reconnect.
 import type { ConnectParams } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeNodeApprovalSurfaceList } from "../infra/node-pairing-surface.js";
 import type {
-  NodePairingPairedNode,
+  PairedDeviceNode,
   NodePairingRequestInput,
   RequestNodePairingResult,
-} from "../infra/node-pairing.js";
+} from "../infra/device-pairing-node.js";
+import { normalizeNodeApprovalSurfaceList } from "../infra/node-pairing-surface.js";
+import {
+  parseComputerUseCapabilityDescriptor,
+  type ComputerUseCapabilityDescriptor,
+} from "../plugins/computer-use-contract.js";
 import {
   normalizeDeclaredNodeCommands,
   resolveNodePairingCommandAllowlist,
@@ -22,6 +26,7 @@ type NodeConnectPairingReconcileResult = {
   effectiveCaps: string[];
   declaredCommands: string[];
   effectiveCommands: string[];
+  declaredComputerUse?: ComputerUseCapabilityDescriptor;
   declaredPermissions?: Record<string, boolean>;
   effectivePermissions?: Record<string, boolean>;
   pendingPairing?: RequestNodePairingResult;
@@ -119,7 +124,7 @@ function buildNodePairingRequestInput(params: {
 export async function reconcileNodePairingOnConnect(params: {
   cfg: OpenClawConfig;
   connectParams: ConnectParams;
-  pairedNode: NodePairingPairedNode | null;
+  pairedNode: PairedDeviceNode | null;
   reportedClientIp?: string;
   /**
    * Marks the first-surface capability request silent when device pairing was
@@ -145,6 +150,10 @@ export async function reconcileNodePairingOnConnect(params: {
   });
   const declaredCaps = normalizeNodeApprovalSurfaceList(params.connectParams.caps);
   const declaredPermissions = normalizePermissionMap(params.connectParams.permissions);
+  const declaredComputerUse =
+    params.connectParams.computerUse === undefined
+      ? undefined
+      : parseComputerUseCapabilityDescriptor(params.connectParams.computerUse);
 
   if (!params.pairedNode) {
     const pendingPairing = await params.requestPairing(
@@ -167,17 +176,16 @@ export async function reconcileNodePairingOnConnect(params: {
       effectiveCaps: [],
       declaredCommands: declared,
       effectiveCommands: [],
+      ...(declaredComputerUse ? { declaredComputerUse } : {}),
       declaredPermissions,
       effectivePermissions: undefined,
       pendingPairing,
     };
   }
 
-  // Approved commands reconcile against the pairing allowlist: an approved
-  // dangerous surface awaiting arming (e.g. computer.act without an
-  // allowCommands entry) must not read as a pairing upgrade on every
-  // reconnect. Invoke-time policy still gates every call on the runtime
-  // allowlist, so keeping it effective here grants nothing by itself.
+  // Approved commands reconcile against the pairing allowlist. Dangerous
+  // surfaces awaiting persistent enablement must not read as a pairing upgrade
+  // on every reconnect; invoke-time policy still applies the runtime allowlist.
   const approvedCommands = resolveApprovedReconnectCommands({
     pairedCommands: params.pairedNode.commands,
     allowlist: pairingAllowlist,
@@ -224,6 +232,7 @@ export async function reconcileNodePairingOnConnect(params: {
       effectiveCaps: effectiveApprovedDeclaredCaps,
       declaredCommands: declared,
       effectiveCommands: effectiveApprovedDeclaredCommands,
+      ...(declaredComputerUse ? { declaredComputerUse } : {}),
       declaredPermissions,
       effectivePermissions: effectiveApprovedDeclaredPermissions,
       ...(pendingPairing ? { pendingPairing } : {}),
@@ -236,6 +245,7 @@ export async function reconcileNodePairingOnConnect(params: {
     effectiveCaps: declaredCaps,
     declaredCommands: declared,
     effectiveCommands: declared,
+    ...(declaredComputerUse ? { declaredComputerUse } : {}),
     declaredPermissions,
     effectivePermissions: declaredPermissions,
     shouldClearPendingPairings: true,

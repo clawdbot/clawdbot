@@ -2,6 +2,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { fileTypeFromBuffer } from "file-type";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { readRemoteMediaBuffer } from "../media/fetch.js";
 import {
   createImageProcessor,
@@ -18,6 +19,7 @@ import {
   CONTROL_UI_CATALOG_ICON_PATH_PREFIX,
   CONTROL_UI_PLUGIN_ICON_PATH_PREFIX,
 } from "./control-ui-contract.js";
+import { respondNotFound as sendNotFound } from "./control-ui-http-utils.js";
 import { sendMethodNotAllowed } from "./http-common.js";
 import { authorizeGatewayHttpRequestOrReply } from "./http-utils.js";
 
@@ -65,45 +67,47 @@ export function resolvePluginIconRoutePrefix(basePath?: string): string {
   return `${normalizeBasePath(basePath)}${CONTROL_UI_PLUGIN_ICON_PATH_PREFIX}/`;
 }
 
-function parsePluginIconRequest(urlRaw: string | undefined, basePath?: string): string | null {
+type IconRequestPathResolution = { matched: false } | { matched: true; value: string | null };
+
+function parseIconRequestPath(
+  urlRaw: string | undefined,
+  prefix: string,
+  isValid: (value: string) => boolean = Boolean,
+): IconRequestPathResolution {
   if (!urlRaw) {
-    return null;
+    return { matched: false };
   }
   const pathname = new URL(urlRaw, "http://localhost").pathname;
-  const prefix = resolvePluginIconRoutePrefix(basePath);
   if (!pathname.startsWith(prefix)) {
-    return null;
+    return { matched: false };
   }
-  const encodedPluginId = pathname.slice(prefix.length);
-  if (!encodedPluginId || encodedPluginId.includes("/")) {
-    return null;
+  const encodedValue = pathname.slice(prefix.length);
+  if (!encodedValue || encodedValue.includes("/")) {
+    return { matched: true, value: null };
   }
   try {
-    const pluginId = decodeURIComponent(encodedPluginId);
-    return PLUGIN_ID_RE.test(pluginId) ? pluginId : null;
+    const value = decodeURIComponent(encodedValue);
+    return { matched: true, value: isValid(value) ? value : null };
   } catch {
-    return null;
+    return { matched: true, value: null };
   }
 }
 
-function parseCatalogIconRequest(urlRaw: string | undefined, basePath?: string): string | null {
-  if (!urlRaw) {
-    return null;
-  }
-  const pathname = new URL(urlRaw, "http://localhost").pathname;
+function parsePluginIconRequest(
+  urlRaw: string | undefined,
+  basePath?: string,
+): IconRequestPathResolution {
+  return parseIconRequestPath(urlRaw, resolvePluginIconRoutePrefix(basePath), (value) =>
+    PLUGIN_ID_RE.test(value),
+  );
+}
+
+function parseCatalogIconRequest(
+  urlRaw: string | undefined,
+  basePath?: string,
+): IconRequestPathResolution {
   const prefix = `${normalizeBasePath(basePath)}${CONTROL_UI_CATALOG_ICON_PATH_PREFIX}/`;
-  if (!pathname.startsWith(prefix)) {
-    return null;
-  }
-  const encodedIconUrl = pathname.slice(prefix.length);
-  if (!encodedIconUrl || encodedIconUrl.includes("/")) {
-    return null;
-  }
-  try {
-    return decodeURIComponent(encodedIconUrl) || null;
-  } catch {
-    return null;
-  }
+  return parseIconRequestPath(urlRaw, prefix);
 }
 
 function normalizeMimeType(contentType: string | undefined): string | undefined {
@@ -130,13 +134,7 @@ function rememberIcon(
 ): PluginIconCacheEntry {
   cache.delete(cacheKey);
   cache.set(cacheKey, entry);
-  while (cache.size > PLUGIN_ICON_CACHE_MAX_ENTRIES) {
-    const oldest = cache.keys().next();
-    if (oldest.done) {
-      break;
-    }
-    cache.delete(oldest.value);
-  }
+  pruneMapToMaxSize(cache, PLUGIN_ICON_CACHE_MAX_ENTRIES);
   return entry;
 }
 
@@ -242,12 +240,6 @@ async function loadCatalogIcon(params: {
   return result;
 }
 
-function sendNotFound(res: ServerResponse): void {
-  res.statusCode = 404;
-  res.setHeader("content-type", "text/plain; charset=utf-8");
-  res.end("Not Found");
-}
-
 export function clearPluginIconCacheForTest(): void {
   pluginIconCache = new Map();
 }
@@ -264,13 +256,16 @@ export async function handlePluginIconHttpRequest(
     rateLimiter?: AuthRateLimiter;
   },
 ): Promise<boolean> {
-  const pluginId = parsePluginIconRequest(req.url, opts.basePath);
-  const catalogIconUrl = parseCatalogIconRequest(req.url, opts.basePath);
-  if (!pluginId && !catalogIconUrl) {
+  const pluginRequest = parsePluginIconRequest(req.url, opts.basePath);
+  const catalogRequest = parseCatalogIconRequest(req.url, opts.basePath);
+  if (!pluginRequest.matched && !catalogRequest.matched) {
     return false;
   }
-  if (req.method !== "GET") {
-    sendMethodNotAllowed(res, "GET");
+  const pluginId = pluginRequest.matched ? pluginRequest.value : null;
+  const catalogIconUrl = catalogRequest.matched ? catalogRequest.value : null;
+  const method = req.method;
+  if (method !== "GET" && method !== "HEAD") {
+    sendMethodNotAllowed(res, "GET, HEAD");
     return true;
   }
   const requestAuth = await authorizeGatewayHttpRequestOrReply({
@@ -322,6 +317,7 @@ export async function handlePluginIconHttpRequest(
     "default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; sandbox",
   );
   res.setHeader("content-disposition", 'attachment; filename="plugin-icon"');
-  res.end(icon.body);
+  // HEAD uses the same authenticated, cached representation; only its body is omitted.
+  res.end(method === "HEAD" ? undefined : icon.body);
   return true;
 }

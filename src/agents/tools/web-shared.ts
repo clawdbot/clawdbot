@@ -9,8 +9,7 @@ import {
   MAX_TIMER_TIMEOUT_SECONDS,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 export type CacheEntry<T> = {
   value: T;
   expiresAt: number;
@@ -39,7 +38,9 @@ export function resolveCacheTtlMs(value: unknown, fallbackMinutes: number): numb
 }
 
 export function normalizeCacheKey(value: string): string {
-  return normalizeLowercaseStringOrEmpty(value);
+  // Request paths and query values can be case-sensitive; only surrounding
+  // whitespace is non-semantic when callers compose cache keys.
+  return value.trim();
 }
 
 export function readCache<T>(
@@ -72,12 +73,7 @@ export function writeCache<T>(
   if (expiresAt === undefined) {
     return;
   }
-  if (cache.size >= DEFAULT_CACHE_MAX_ENTRIES) {
-    const oldest = cache.keys().next();
-    if (!oldest.done) {
-      cache.delete(oldest.value);
-    }
-  }
+  pruneMapToMaxSize(cache, DEFAULT_CACHE_MAX_ENTRIES - 1);
   cache.set(key, {
     value,
     expiresAt,
@@ -208,7 +204,7 @@ export async function readResponseText(
       ? Math.floor(maxBytesRaw)
       : undefined;
 
-  const body = (res as unknown as { body?: unknown }).body;
+  const body = res.body;
   if (
     maxBytes &&
     body &&

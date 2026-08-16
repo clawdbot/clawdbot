@@ -6,10 +6,10 @@ scenario:
   category: approvals
   coverage:
     primary:
-      - personal.approval-denial
+      - security.approval-policy-approval-denial
     secondary:
-      - runtime.approvals
-      - tools.safety
+      - security.approval-policy-approvals
+      - security.approval-policy-safety
   risk: high
   capabilities:
     - approvals.denial

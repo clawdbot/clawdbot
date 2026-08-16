@@ -1,23 +1,24 @@
-import { readFileSync } from "node:fs";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
-import { COHERE_COMMAND_A_PLUS_MODEL_ID } from "./models.js";
-import { buildCohereProvider } from "./provider-catalog.js";
-import { createCohereCompletionsWrapper } from "./stream.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
+import { COHERE_LIVE_MODEL_DISCOVERY } from "./provider-catalog.js";
+import { wrapCohereProviderStream } from "./stream.js";
 
+const COHERE_COMMAND_A_PLUS_MODEL_ID = "command-a-plus-05-2026";
 const COHERE_COMMAND_A_REASONING_MODEL_ID = "command-a-reasoning-08-2025";
 const COHERE_COMMAND_A_VISION_MODEL_ID = "command-a-vision-07-2025";
 const COHERE_NORTH_MINI_CODE_MODEL_ID = "north-mini-code-1-0";
 
-function readManifest() {
-  return JSON.parse(readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8")) as {
-    providerAuthChoices?: Array<{ choiceId?: string; optionKey?: string; cliFlag?: string }>;
-    setup?: { providers?: Array<{ id?: string; envVars?: string[] }> };
-  };
+function buildCohereProvider() {
+  return buildManifestModelProviderConfig({
+    providerId: "cohere",
+    catalog: manifest.modelCatalog.providers.cohere,
+  });
 }
 
 function requireCohereModel(modelId = COHERE_COMMAND_A_PLUS_MODEL_ID): Model<"openai-completions"> {
@@ -49,11 +50,17 @@ function captureCoherePayload(
     return {} as ReturnType<StreamFn>;
   };
 
-  const wrappedStreamFn = createCohereCompletionsWrapper(baseStreamFn);
+  const model = requireCohereModel(settings?.modelId);
+  const wrappedStreamFn = wrapCohereProviderStream({
+    provider: "cohere",
+    modelId: model.id,
+    model,
+    streamFn: baseStreamFn,
+  });
   if (!wrappedStreamFn) {
     throw new Error("Cohere wrapper did not return a stream function");
   }
-  void wrappedStreamFn(requireCohereModel(settings?.modelId), context, {
+  void wrappedStreamFn(model, context, {
     onPayload: (payload) => {
       captured = payload as Record<string, unknown>;
     },
@@ -78,16 +85,14 @@ describe("Cohere provider plugin", () => {
       kind: "api_key",
       wizard: { choiceId: "cohere-api-key" },
     });
-    expect(readManifest().providerAuthChoices).toEqual([
+    expect(manifest.providerAuthChoices).toEqual([
       expect.objectContaining({
         choiceId: "cohere-api-key",
         optionKey: "cohereApiKey",
         cliFlag: "--cohere-api-key",
       }),
     ]);
-    expect(readManifest().setup?.providers).toEqual([
-      { id: "cohere", envVars: ["COHERE_API_KEY"] },
-    ]);
+    expect(manifest.setup.providers).toEqual([{ id: "cohere", envVars: ["COHERE_API_KEY"] }]);
   });
 
   it("exposes the static Cohere catalog", () => {
@@ -157,6 +162,42 @@ describe("Cohere provider plugin", () => {
         }),
       ],
     });
+  });
+
+  it("normalizes Cohere live catalog rows for chat discovery", () => {
+    expect(COHERE_LIVE_MODEL_DISCOVERY.endpointUrl).toEqual({
+      url: "https://api.cohere.com/v1/models?endpoint=chat&page_size=1000",
+      requireBaseUrl: "https://api.cohere.ai/compatibility/v1",
+    });
+    expect(
+      COHERE_LIVE_MODEL_DISCOVERY.readRows?.({
+        models: [
+          {
+            name: "command-fresh",
+            is_deprecated: false,
+            endpoints: ["chat"],
+            context_length: 256_000,
+          },
+          { name: "command-retired", is_deprecated: true, endpoints: ["chat"] },
+        ],
+      }),
+    ).toEqual([
+      {
+        id: "command-fresh",
+        name: "command-fresh",
+        is_deprecated: false,
+        active: true,
+        endpoints: ["chat"],
+        context_length: 256_000,
+      },
+      {
+        id: "command-retired",
+        name: "command-retired",
+        is_deprecated: true,
+        active: false,
+        endpoints: ["chat"],
+      },
+    ]);
   });
 
   it("uses Cohere's OpenAI-compatible completions payload fields", () => {

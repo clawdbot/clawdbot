@@ -1,10 +1,12 @@
 // Legacy runtime agent config migrations for memory, heartbeat, sandbox, and runtime policy keys.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   isCanonicalToolProviderPolicyKey,
   normalizeToolProviderPolicyKey,
 } from "../../../agents/provider-tool-policy.js";
+import { DEFAULT_SANDBOX_BROWSER_NETWORK } from "../../../agents/sandbox/browser-network.js";
 import { isKnownCoreToolId } from "../../../agents/tool-catalog.js";
 import { isToolAllowedByPolicyName } from "../../../agents/tool-policy-match.js";
 import { resolveToolProfilePolicy } from "../../../agents/tool-policy-shared.js";
@@ -18,24 +20,11 @@ import {
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
 import { isBlockedObjectKey } from "../../../infra/prototype-keys.js";
+import {
+  modelEntryWithRuntimePolicy,
+  selectedCanonicalModelRefsForRuntimePolicy,
+} from "./legacy-runtime-model-policy.js";
 import { listLegacyRuntimeModelProviderAliases } from "./legacy-runtime-model-providers.js";
-
-const AGENT_HEARTBEAT_KEYS = new Set([
-  "every",
-  "activeHours",
-  "model",
-  "session",
-  "includeReasoning",
-  "target",
-  "directPolicy",
-  "to",
-  "accountId",
-  "prompt",
-  "ackMaxChars",
-  "suppressToolErrorWarnings",
-  "lightContext",
-  "isolatedSession",
-]);
 
 const CHANNEL_HEARTBEAT_KEYS = new Set(["showOk", "showAlerts", "useIndicator"]);
 
@@ -53,8 +42,21 @@ const LEGACY_MEMORY_SEARCH_FIELD_MAPPINGS = [
 const MEMORY_SEARCH_RULE: LegacyConfigRule = {
   path: ["memorySearch"],
   message:
-    'top-level memorySearch was moved; use agents.defaults.memorySearch instead. Run "openclaw doctor --fix".',
+    'top-level memorySearch was moved; use memory.search instead. Run "openclaw doctor --fix".',
 };
+
+const AGENT_MEMORY_SEARCH_OWNER_RULES: LegacyConfigRule[] = [
+  {
+    path: ["agents", "defaults", "memorySearch"],
+    message: 'agents.defaults.memorySearch moved to memory.search. Run "openclaw doctor --fix".',
+  },
+  {
+    path: ["agents", "list"],
+    message:
+      'agents.list[].memorySearch moved to agents.list[].memory.search. Run "openclaw doctor --fix".',
+    match: (value) => someAgentList(value, (agent) => agent.memorySearch !== undefined),
+  },
+];
 
 const LEGACY_MEMORY_SEARCH_AUTO_PROVIDER_RULES: LegacyConfigRule[] = [
   {
@@ -64,16 +66,19 @@ const LEGACY_MEMORY_SEARCH_AUTO_PROVIDER_RULES: LegacyConfigRule[] = [
     match: isLegacyMemorySearchAutoProvider,
   },
   {
-    path: ["agents", "defaults", "memorySearch", "provider"],
+    path: ["memory", "search", "provider"],
     message:
-      'agents.defaults.memorySearch.provider = "auto" is legacy; use "openai" explicitly. Run "openclaw doctor --fix".',
+      'memory.search.provider = "auto" is legacy; use "openai" explicitly. Run "openclaw doctor --fix".',
     match: isLegacyMemorySearchAutoProvider,
   },
   {
     path: ["agents", "list"],
     message:
       'agents.list[].memorySearch.provider = "auto" is legacy; use "openai" explicitly. Run "openclaw doctor --fix".',
-    match: hasAgentListLegacyMemorySearchAutoProvider,
+    match: (value) =>
+      someAgentList(value, (agent) =>
+        isLegacyMemorySearchAutoProvider(getAgentMemorySearchRecord(agent)?.provider),
+      ),
   },
 ];
 
@@ -84,30 +89,34 @@ const LEGACY_MEMORY_SEARCH_STORE_PATH_RULES: LegacyConfigRule[] = [
       'memorySearch.store.path is legacy; memory indexes now live in each agent database. Run "openclaw doctor --fix".',
   },
   {
-    path: ["agents", "defaults", "memorySearch", "store", "path"],
+    path: ["memory", "search", "store", "path"],
     message:
-      'agents.defaults.memorySearch.store.path is legacy; memory indexes now live in each agent database. Run "openclaw doctor --fix".',
+      'memory.search.store.path is legacy; memory indexes now live in each agent database. Run "openclaw doctor --fix".',
   },
   {
     path: ["agents", "list"],
     message:
       'agents.list[].memorySearch.store.path is legacy; memory indexes now live in each agent database. Run "openclaw doctor --fix".',
-    match: hasAgentListMemorySearchStorePath,
+    match: (value) =>
+      someAgentList(value, (agent) => hasMemorySearchStorePath(getAgentMemorySearchRecord(agent))),
   },
 ];
 
 const LEGACY_MEMORY_SEARCH_FLAT_KEY_RULES: LegacyConfigRule[] = [
   {
-    path: ["agents", "defaults", "memorySearch"],
+    path: ["memory", "search"],
     message:
-      'agents.defaults.memorySearch uses legacy flat chunkSize, chunkOverlap, or maxResults fields. Run "openclaw doctor --fix".',
+      'memory.search uses legacy flat chunkSize, chunkOverlap, or maxResults fields. Run "openclaw doctor --fix".',
     match: hasLegacyMemorySearchFlatKeys,
   },
   {
     path: ["agents", "list"],
     message:
       'agents.list[].memorySearch uses legacy flat chunkSize, chunkOverlap, or maxResults fields. Run "openclaw doctor --fix".',
-    match: hasAgentListLegacyMemorySearchFlatKeys,
+    match: (value) =>
+      someAgentList(value, (agent) =>
+        hasLegacyMemorySearchFlatKeys(getAgentMemorySearchRecord(agent)),
+      ),
   },
 ];
 
@@ -121,10 +130,21 @@ function hasLegacyMemorySearchFlatKeys(value: unknown): boolean {
   );
 }
 
-function hasAgentListLegacyMemorySearchFlatKeys(value: unknown): boolean {
+function getAgentMemorySearchRecord(agent: unknown): Record<string, unknown> | null {
+  const record = getRecord(agent);
+  return getRecord(record?.memorySearch) ?? getRecord(getRecord(record?.memory)?.search);
+}
+
+function someAgentList(
+  value: unknown,
+  predicate: (agent: Record<string, unknown>) => boolean,
+): boolean {
   return (
     Array.isArray(value) &&
-    value.some((agent) => hasLegacyMemorySearchFlatKeys(getRecord(agent)?.memorySearch))
+    value.some((entry) => {
+      const agent = getRecord(entry);
+      return agent !== null && predicate(agent);
+    })
   );
 }
 
@@ -145,7 +165,31 @@ const LEGACY_SANDBOX_SCOPE_RULES: LegacyConfigRule[] = [
     path: ["agents", "list"],
     message:
       'agents.list[].sandbox.perSession is legacy; use agents.list[].sandbox.scope instead. Run "openclaw doctor --fix".',
-    match: (value) => hasLegacyAgentListSandboxPerSession(value),
+    match: (value) => someAgentList(value, (agent) => hasLegacySandboxPerSession(agent.sandbox)),
+  },
+];
+
+const UNSUPPORTED_SANDBOX_BROWSER_NETWORK_RULES: LegacyConfigRule[] = [
+  {
+    path: ["agents", "defaults", "sandbox", "browser", "network"],
+    message:
+      'agents.defaults.sandbox.browser.network = "none" cannot expose the browser control port. Run "openclaw doctor --fix" to disable the sidecar and restore the dedicated browser network.',
+    match: isUnsupportedSandboxBrowserNetwork,
+  },
+  {
+    path: ["agents", "entries"],
+    message:
+      'agents.entries.*.sandbox.browser.network = "none" cannot expose the browser control port. Run "openclaw doctor --fix" to disable the affected sidecar and restore the dedicated browser network.',
+    match: hasAgentEntriesUnsupportedSandboxBrowserNetwork,
+  },
+  {
+    path: ["agents", "list"],
+    message:
+      'agents.list[].sandbox.browser.network = "none" cannot expose the browser control port. Run "openclaw doctor --fix" to disable the affected sidecar and restore the dedicated browser network.',
+    match: (value) =>
+      someAgentList(value, (agent) =>
+        isUnsupportedSandboxBrowserNetwork(getSandboxBrowserConfig(agent)?.network),
+      ),
   },
 ];
 
@@ -171,13 +215,13 @@ const LEGACY_AGENT_RUNTIME_POLICY_RULES: LegacyConfigRule[] = [
     path: ["agents", "list"],
     message:
       'agents.list[].agentRuntime is ignored; set provider/model runtime policy instead. Run "openclaw doctor --fix".',
-    match: (value) => hasAgentListRuntimePolicy(value),
+    match: (value) => someAgentList(value, (agent) => getRecord(agent.agentRuntime) !== null),
   },
   {
     path: ["agents", "list"],
     message:
       'agents.list[].embeddedHarness is legacy and ignored; set provider/model runtime policy instead. Run "openclaw doctor --fix".',
-    match: (value) => hasLegacyAgentListEmbeddedHarness(value),
+    match: (value) => someAgentList(value, (agent) => getRecord(agent.embeddedHarness) !== null),
   },
 ];
 
@@ -192,7 +236,7 @@ const DEPRECATED_EMBEDDED_AGENT_KEY_RULES: LegacyConfigRule[] = [
     path: ["agents", "list"],
     message:
       'agents.list[].embeddedPi is legacy; use agents.list[].embeddedAgent instead. Run "openclaw doctor --fix".',
-    match: (value) => hasLegacyAgentListEmbeddedAgentKey(value),
+    match: (value) => someAgentList(value, (agent) => getRecord(agent.embeddedPi) !== null),
   },
 ];
 
@@ -222,7 +266,12 @@ const IGNORED_AGENT_MODEL_TIMEOUT_RULES: LegacyConfigRule[] = [
     path: ["agents", "list"],
     message:
       'agents.list[].model.timeoutMs and agents.list[].subagents.model.timeoutMs are ignored; agent model config only selects primary/fallback models. Run "openclaw doctor --fix" to remove them.',
-    match: (value) => hasAgentListModelTimeout(value),
+    match: (value) =>
+      someAgentList(
+        value,
+        (agent) =>
+          hasOwnTimeoutMs(agent.model) || hasOwnTimeoutMs(getRecord(agent.subagents)?.model),
+      ),
   },
 ];
 
@@ -295,13 +344,9 @@ const SYSTEM_PROMPT_OVERRIDE_LEGACY_RULES: LegacyConfigRule[] = [
     path: ["agents", "list"],
     message:
       'agents.list[].systemPromptOverride was removed; OpenClaw owns the generated system prompt. Run "openclaw doctor --fix" to remove it.',
-    match: (value) => hasAgentListSystemPromptOverride(value),
+    match: (value) => someAgentList(value, (agent) => Object.hasOwn(agent, "systemPromptOverride")),
   },
 ];
-
-function sandboxScopeFromPerSession(perSession: boolean): "session" | "shared" {
-  return perSession ? "session" : "shared";
-}
 
 function splitLegacyHeartbeat(legacyHeartbeat: Record<string, unknown>): {
   agentHeartbeat: Record<string, unknown> | null;
@@ -316,10 +361,6 @@ function splitLegacyHeartbeat(legacyHeartbeat: Record<string, unknown>): {
     }
     if (CHANNEL_HEARTBEAT_KEYS.has(key)) {
       channelHeartbeat[key] = value;
-      continue;
-    }
-    if (AGENT_HEARTBEAT_KEYS.has(key)) {
-      agentHeartbeat[key] = value;
       continue;
     }
     agentHeartbeat[key] = value;
@@ -362,57 +403,30 @@ function hasLegacySandboxPerSession(value: unknown): boolean {
   return Boolean(sandbox && Object.hasOwn(sandbox, "perSession"));
 }
 
-function hasLegacyAgentListSandboxPerSession(value: unknown): boolean {
-  if (!Array.isArray(value)) {
-    return false;
-  }
-  return value.some((agent) => hasLegacySandboxPerSession(getRecord(agent)?.sandbox));
-}
-
-function hasLegacyAgentListEmbeddedHarness(value: unknown): boolean {
-  if (!Array.isArray(value)) {
-    return false;
-  }
-  return value.some((agent) => getRecord(getRecord(agent)?.embeddedHarness) !== null);
-}
-
-function hasLegacyAgentListEmbeddedAgentKey(value: unknown): boolean {
-  if (!Array.isArray(value)) {
-    return false;
-  }
-  return value.some((agent) => getRecord(getRecord(agent)?.embeddedPi) !== null);
-}
-
-function hasAgentListRuntimePolicy(value: unknown): boolean {
-  if (!Array.isArray(value)) {
-    return false;
-  }
-  return value.some((agent) => getRecord(getRecord(agent)?.agentRuntime) !== null);
-}
-
-function hasAgentListSystemPromptOverride(value: unknown): boolean {
-  if (!Array.isArray(value)) {
-    return false;
-  }
-  return value.some((agent) => Object.hasOwn(getRecord(agent) ?? {}, "systemPromptOverride"));
-}
-
 function hasOwnTimeoutMs(value: unknown): boolean {
   const record = getRecord(value);
   return Boolean(record && Object.hasOwn(record, "timeoutMs"));
 }
 
-function hasAgentListModelTimeout(value: unknown): boolean {
-  if (!Array.isArray(value)) {
-    return false;
+function migrateAgentDefaultsAndList(
+  raw: Record<string, unknown>,
+  changes: string[],
+  migrateAgent: (agent: Record<string, unknown>, pathLabel: string, changes: string[]) => void,
+): void {
+  const agents = getRecord(raw.agents);
+  const defaults = getRecord(agents?.defaults);
+  if (defaults) {
+    migrateAgent(defaults, "agents.defaults", changes);
   }
-  return value.some((agent) => {
+  if (!Array.isArray(agents?.list)) {
+    return;
+  }
+  for (const [index, agent] of agents.list.entries()) {
     const agentRecord = getRecord(agent);
-    return (
-      hasOwnTimeoutMs(agentRecord?.model) ||
-      hasOwnTimeoutMs(getRecord(agentRecord?.subagents)?.model)
-    );
-  });
+    if (agentRecord) {
+      migrateAgent(agentRecord, `agents.list.${index}`, changes);
+    }
+  }
 }
 
 function migrateLegacyEmbeddedAgentKey(
@@ -443,24 +457,8 @@ function isLegacyMemorySearchAutoProvider(value: unknown): boolean {
   return typeof value === "string" && value.trim().toLowerCase() === "auto";
 }
 
-function hasAgentListLegacyMemorySearchAutoProvider(value: unknown): boolean {
-  if (!Array.isArray(value)) {
-    return false;
-  }
-  return value.some((agent) =>
-    isLegacyMemorySearchAutoProvider(getRecord(getRecord(agent)?.memorySearch)?.provider),
-  );
-}
-
 function hasMemorySearchStorePath(value: unknown): boolean {
   return typeof getRecord(getRecord(value)?.store)?.path === "string";
-}
-
-function hasAgentListMemorySearchStorePath(value: unknown): boolean {
-  return (
-    Array.isArray(value) &&
-    value.some((agent) => hasMemorySearchStorePath(getRecord(agent)?.memorySearch))
-  );
 }
 
 function migrateLegacyMemorySearchFlatKeys(
@@ -522,6 +520,30 @@ function rewriteLegacyMemorySearchAutoProvider(
   changes.push(`Moved ${pathLabel}.provider from legacy "auto" to "openai".`);
 }
 
+function migrateCanonicalMemorySearches(
+  raw: Record<string, unknown>,
+  changes: string[],
+  migrateMemorySearch: (
+    memorySearch: Record<string, unknown> | null,
+    pathLabel: string,
+    changes: string[],
+  ) => void,
+  agentPathStyle: "dot" | "brackets" = "dot",
+): void {
+  migrateMemorySearch(getRecord(getRecord(raw.memory)?.search), "memory.search", changes);
+  const agents = getRecord(raw.agents);
+  if (!Array.isArray(agents?.list)) {
+    return;
+  }
+  for (const [index, agent] of agents.list.entries()) {
+    const pathLabel =
+      agentPathStyle === "brackets"
+        ? `agents.list[${index}].memory.search`
+        : `agents.list.${index}.memory.search`;
+    migrateMemorySearch(getRecord(getRecord(getRecord(agent)?.memory)?.search), pathLabel, changes);
+  }
+}
+
 function migrateLegacySandboxPerSession(
   sandbox: Record<string, unknown>,
   pathLabel: string,
@@ -535,12 +557,128 @@ function migrateLegacySandboxPerSession(
     return;
   }
   if (sandbox.scope === undefined) {
-    sandbox.scope = sandboxScopeFromPerSession(rawPerSession);
+    sandbox.scope = rawPerSession ? "session" : "shared";
     changes.push(`Moved ${pathLabel}.perSession → ${pathLabel}.scope (${String(sandbox.scope)}).`);
   } else {
     changes.push(`Removed ${pathLabel}.perSession (${pathLabel}.scope already set).`);
   }
   delete sandbox.perSession;
+}
+
+function getSandboxBrowserConfig(container: unknown): Record<string, unknown> | null {
+  return getRecord(getRecord(getRecord(container)?.sandbox)?.browser);
+}
+
+function isUnsupportedSandboxBrowserNetwork(value: unknown): boolean {
+  return normalizeOptionalLowercaseString(value) === "none";
+}
+
+function hasAgentEntriesUnsupportedSandboxBrowserNetwork(value: unknown): boolean {
+  const entries = getRecord(value);
+  return Boolean(
+    entries &&
+    Object.entries(entries).some(
+      ([agentId, agent]) =>
+        !isBlockedObjectKey(agentId) &&
+        isUnsupportedSandboxBrowserNetwork(getSandboxBrowserConfig(agent)?.network),
+    ),
+  );
+}
+
+function migrateExplicitUnsupportedSandboxBrowserNetwork(
+  browser: Record<string, unknown>,
+  pathLabel: string,
+  changes: string[],
+): void {
+  if (!isUnsupportedSandboxBrowserNetwork(browser.network)) {
+    return;
+  }
+  browser.enabled = false;
+  browser.network = DEFAULT_SANDBOX_BROWSER_NETWORK;
+  changes.push(
+    `Disabled ${pathLabel} and moved its unsupported network "none" → "${DEFAULT_SANDBOX_BROWSER_NETWORK}".`,
+  );
+}
+
+function migrateAgentBrowserInheritedFromUnsupportedDefault(params: {
+  agent: unknown;
+  pathLabel: string;
+  defaultBrowserEnabled: boolean;
+  changes: string[];
+}): void {
+  const browser = getSandboxBrowserConfig(params.agent);
+  if (!browser) {
+    return;
+  }
+  const hasExplicitNetwork = typeof browser.network === "string";
+  const network = normalizeOptionalLowercaseString(browser.network);
+  if (network === "none") {
+    migrateExplicitUnsupportedSandboxBrowserNetwork(browser, params.pathLabel, params.changes);
+    return;
+  }
+  if (!hasExplicitNetwork && browser.enabled === true) {
+    browser.enabled = false;
+    params.changes.push(
+      `Disabled ${params.pathLabel} because it inherited unsupported browser network "none".`,
+    );
+    return;
+  }
+  if (hasExplicitNetwork && browser.enabled === undefined && params.defaultBrowserEnabled) {
+    browser.enabled = true;
+    params.changes.push(
+      `Set ${params.pathLabel}.enabled to true to preserve its explicit supported network while disabling the unsupported default browser network.`,
+    );
+  }
+}
+
+function migrateUnsupportedSandboxBrowserNetworks(
+  raw: Record<string, unknown>,
+  changes: string[],
+): void {
+  const agents = getRecord(raw.agents);
+  const defaults = getRecord(agents?.defaults);
+  const defaultBrowser = getSandboxBrowserConfig(defaults);
+  const defaultNetworkUnsupported = isUnsupportedSandboxBrowserNetwork(defaultBrowser?.network);
+  const defaultBrowserEnabled = defaultBrowser?.enabled === true;
+  const migrateAgentBrowser = (agent: unknown, pathLabel: string): void => {
+    if (defaultNetworkUnsupported) {
+      migrateAgentBrowserInheritedFromUnsupportedDefault({
+        agent,
+        pathLabel,
+        defaultBrowserEnabled,
+        changes,
+      });
+      return;
+    }
+    const browser = getSandboxBrowserConfig(agent);
+    if (browser) {
+      migrateExplicitUnsupportedSandboxBrowserNetwork(browser, pathLabel, changes);
+    }
+  };
+
+  const entries = getRecord(agents?.entries);
+  if (entries) {
+    for (const [agentId, agent] of Object.entries(entries)) {
+      if (isBlockedObjectKey(agentId)) {
+        continue;
+      }
+      migrateAgentBrowser(agent, `agents.entries.${agentId}.sandbox.browser`);
+    }
+  }
+
+  if (Array.isArray(agents?.list)) {
+    for (const [index, agent] of agents.list.entries()) {
+      migrateAgentBrowser(agent, `agents.list.${index}.sandbox.browser`);
+    }
+  }
+
+  if (defaultBrowser) {
+    migrateExplicitUnsupportedSandboxBrowserNetwork(
+      defaultBrowser,
+      "agents.defaults.sandbox.browser",
+      changes,
+    );
+  }
 }
 
 function removeLegacyAgentRuntimePolicy(
@@ -572,61 +710,6 @@ function resolveLegacyAgentRuntimeIntent(raw: unknown): LegacyAgentRuntimeIntent
     (entry) => entry.cli && normalizeProviderId(entry.runtime) === runtime,
   );
   return alias ? { provider: alias.provider, runtime: alias.runtime } : undefined;
-}
-
-function selectedCanonicalModelRefsForRuntimePolicy(rawModel: unknown, provider: string): string[] {
-  const refs: string[] = [];
-  const addRef = (rawRef: unknown) => {
-    if (typeof rawRef !== "string") {
-      return;
-    }
-    const trimmed = rawRef.trim();
-    const slash = trimmed.indexOf("/");
-    if (slash <= 0 || slash >= trimmed.length - 1) {
-      return;
-    }
-    if (normalizeProviderId(trimmed.slice(0, slash)) !== normalizeProviderId(provider)) {
-      return;
-    }
-    refs.push(trimmed);
-  };
-
-  if (typeof rawModel === "string") {
-    addRef(rawModel);
-    return refs;
-  }
-  const model = getRecord(rawModel);
-  if (!model) {
-    return refs;
-  }
-  addRef(model.primary);
-  if (Array.isArray(model.fallbacks)) {
-    for (const fallback of model.fallbacks) {
-      addRef(fallback);
-    }
-  }
-  return refs;
-}
-
-function modelEntryWithRuntimePolicy(
-  entry: unknown,
-  runtime: string,
-): {
-  changed: boolean;
-  entry: Record<string, unknown>;
-} {
-  const base = getRecord(entry) ? { ...(entry as Record<string, unknown>) } : {};
-  const currentRuntime = getRecord(base.agentRuntime);
-  const currentRuntimeId =
-    typeof currentRuntime?.id === "string" ? currentRuntime.id.trim().toLowerCase() : "";
-  if (currentRuntimeId && currentRuntimeId !== "auto") {
-    return { changed: false, entry: base };
-  }
-  base.agentRuntime = {
-    ...currentRuntime,
-    id: runtime,
-  };
-  return { changed: true, entry: base };
 }
 
 function preserveLegacyWholeAgentRuntimePolicy(
@@ -663,17 +746,24 @@ function preserveLegacyWholeAgentRuntimePolicy(
   );
 }
 
-function removeIgnoredAgentModelTimeout(
-  model: unknown,
+function removeIgnoredAgentModelTimeouts(
+  agent: Record<string, unknown>,
   pathLabel: string,
   changes: string[],
 ): void {
-  const modelRecord = getRecord(model);
-  if (!modelRecord || !Object.hasOwn(modelRecord, "timeoutMs")) {
-    return;
+  for (const [suffix, model] of [
+    ["model", agent.model],
+    ["subagents.model", getRecord(agent.subagents)?.model],
+  ] as const) {
+    const modelRecord = getRecord(model);
+    if (!modelRecord || !Object.hasOwn(modelRecord, "timeoutMs")) {
+      continue;
+    }
+    delete modelRecord.timeoutMs;
+    changes.push(
+      `Removed ${pathLabel}.${suffix}.timeoutMs; agent model config only selects models.`,
+    );
   }
-  delete modelRecord.timeoutMs;
-  changes.push(`Removed ${pathLabel}.timeoutMs; agent model config only selects models.`);
 }
 
 function hasOwnRecordProperty(value: unknown, key: string): boolean {
@@ -838,12 +928,12 @@ function toolProfileConfiguredSectionsNeedExplicitRepair(
   }
   const configuredGrants = configuredGrantsOverride ?? collectConfiguredToolSectionGrants(tools);
   return (
-    scopeToolProfileConfiguredSectionsNeedMigration({
+    collectProfileConfiguredSectionRepairGrants({
       value,
       inheritedProfile,
       inheritedAlsoAllow,
       configuredGrants,
-    }) ||
+    }).length > 0 ||
     byProviderToolProfilesNeedConfiguredSectionMigration(
       tools,
       configuredGrants,
@@ -876,15 +966,6 @@ function collectEffectiveConfiguredToolSectionGrants(
   ]);
 }
 
-function toolProfileAllowRequiresFull(params: {
-  value: unknown;
-  inheritedProfile?: string;
-  inheritedAlsoAllow?: string[];
-  configuredGrants: string[];
-}): boolean {
-  return collectProfileConfiguredSectionRepairGrants(params).length > 0;
-}
-
 function resolveProfileBoundAllowGrants(params: {
   tools: Record<string, unknown>;
   profile: string;
@@ -914,15 +995,6 @@ function resolveProfileBoundAllowGrants(params: {
   return uniqueStrings([...coreAllow, ...pluginAllow, ...params.configuredGrants]);
 }
 
-function scopeToolProfileConfiguredSectionsNeedMigration(params: {
-  value: unknown;
-  inheritedProfile?: string;
-  inheritedAlsoAllow?: string[];
-  configuredGrants: string[];
-}): boolean {
-  return toolProfileAllowRequiresFull(params);
-}
-
 function byProviderToolProfilesNeedConfiguredSectionMigration(
   tools: Record<string, unknown>,
   configuredGrants: string[],
@@ -946,13 +1018,15 @@ function byProviderToolProfilesNeedConfiguredSectionMigration(
       if (!hasProviderProfile) {
         return false;
       }
-      return scopeToolProfileConfiguredSectionsNeedMigration({
-        value: policy,
-        inheritedProfile: inheritedProviderProfile,
-        inheritedAlsoAllow:
-          readOwnToolPolicyGrantList(inheritedProviderPolicy, "alsoAllow") ?? inheritedAlsoAllow,
-        configuredGrants,
-      });
+      return (
+        collectProfileConfiguredSectionRepairGrants({
+          value: policy,
+          inheritedProfile: inheritedProviderProfile,
+          inheritedAlsoAllow:
+            readOwnToolPolicyGrantList(inheritedProviderPolicy, "alsoAllow") ?? inheritedAlsoAllow,
+          configuredGrants,
+        }).length > 0
+      );
     }),
   );
   if (ownProviderNeedsMigration) {
@@ -968,12 +1042,12 @@ function byProviderToolProfilesNeedConfiguredSectionMigration(
   return listInheritedProviderPoliciesWithProfiles(inheritedByProvider).some(
     (inheritedProvider) =>
       !handledProviders.has(inheritedProvider.normalizedKey) &&
-      scopeToolProfileConfiguredSectionsNeedMigration({
+      collectProfileConfiguredSectionRepairGrants({
         value: {},
         inheritedProfile: inheritedProvider.profile,
         inheritedAlsoAllow: readOwnToolPolicyGrantList(inheritedProvider.policy, "alsoAllow"),
         configuredGrants: localConfiguredGrants,
-      }),
+      }).length > 0,
   );
 }
 
@@ -984,9 +1058,10 @@ function addProfileConfiguredSectionGrants(
   inheritedProfile?: string,
   inheritedAlsoAllow?: string[],
   configuredGrantsOverride?: string[],
+  materializeProfile = true,
 ): void {
   const tools = getRecord(value);
-  if (!tools) {
+  if (!tools || !materializeProfile) {
     return;
   }
   const profile = resolveToolProfileForMigration(tools, inheritedProfile);
@@ -1062,13 +1137,13 @@ function addByProviderProfileConfiguredSectionGrants(
       inheritedProviderPolicy,
       "alsoAllow",
     );
-    addProfileConfiguredSectionGrantsWithConfiguredGrants(
+    addProfileConfiguredSectionGrants(
       providerPolicy,
       `${pathLabel}.byProvider.${providerKey}`,
       changes,
-      configuredGrants,
       providerInheritedProfile,
       providerInheritedAlsoAllow,
+      configuredGrants,
       ownsProviderProfile || Boolean(inheritedProviderProfile),
     );
   }
@@ -1082,13 +1157,13 @@ function addByProviderProfileConfiguredSectionGrants(
     }
     const providerPolicy: Record<string, unknown> = {};
     const changeCount = changes.length;
-    addProfileConfiguredSectionGrantsWithConfiguredGrants(
+    addProfileConfiguredSectionGrants(
       providerPolicy,
       `${pathLabel}.byProvider.${inheritedProvider.key}`,
       changes,
-      localConfiguredGrants,
       inheritedProvider.profile,
       readOwnToolPolicyGrantList(inheritedProvider.policy, "alsoAllow"),
+      localConfiguredGrants,
     );
     if (changes.length > changeCount) {
       if (!getRecord(tools.byProvider)) {
@@ -1188,59 +1263,6 @@ function listInheritedProviderPoliciesWithProfiles(
   return entries;
 }
 
-function addProfileConfiguredSectionGrantsWithConfiguredGrants(
-  value: unknown,
-  pathLabel: string,
-  changes: string[],
-  configuredGrants: string[],
-  inheritedProfile?: string,
-  inheritedAlsoAllow?: string[],
-  materializeProfile = true,
-): void {
-  const tools = getRecord(value);
-  if (!tools) {
-    return;
-  }
-  const profile = resolveToolProfileForMigration(tools, inheritedProfile);
-  if (!profile) {
-    return;
-  }
-  if (!materializeProfile) {
-    return;
-  }
-  const repairGrants = collectProfileConfiguredSectionRepairGrants({
-    value: tools,
-    inheritedProfile,
-    inheritedAlsoAllow,
-    configuredGrants,
-  });
-  const allow = readToolPolicyGrantList(tools, "allow");
-  if (repairGrants.length === 0 || allow.length === 0 || profile === "full") {
-    return;
-  }
-  const ownAlsoAllow = readOwnToolPolicyGrantList(tools, "alsoAllow");
-  tools.allow = resolveProfileBoundAllowGrants({
-    tools,
-    profile,
-    allow: uniqueStrings([...allow, ...(ownAlsoAllow ?? [])]),
-    inheritedAlsoAllow,
-    configuredGrants: repairGrants,
-  });
-  changes.push(
-    `Replaced ${pathLabel}.allow entries with profile "${profile}" grants plus explicit configured-section grants.`,
-  );
-  if (ownAlsoAllow) {
-    delete tools.alsoAllow;
-    changes.push(`Merged ${pathLabel}.alsoAllow into ${pathLabel}.allow.`);
-  }
-  if (materializeProfile) {
-    tools.profile = "full";
-    changes.push(
-      `Set ${pathLabel}.profile to "full" so ${pathLabel}.allow controls explicit configured-section grants directly.`,
-    );
-  }
-}
-
 /** Legacy config migration specs for agent/runtime-owned config keys. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
@@ -1320,200 +1342,139 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
     id: "agents.model.timeoutMs-ignored",
     describe: "Remove ignored timeoutMs keys from agent model selection config",
     legacyRules: IGNORED_AGENT_MODEL_TIMEOUT_RULES,
-    apply: (raw, changes) => {
-      const agents = getRecord(raw.agents);
-      const defaults = getRecord(agents?.defaults);
-      if (defaults) {
-        removeIgnoredAgentModelTimeout(defaults.model, "agents.defaults.model", changes);
-        removeIgnoredAgentModelTimeout(
-          getRecord(defaults.subagents)?.model,
-          "agents.defaults.subagents.model",
-          changes,
-        );
-      }
-
-      if (!Array.isArray(agents?.list)) {
-        return;
-      }
-      for (const [index, agent] of agents.list.entries()) {
-        const agentRecord = getRecord(agent);
-        if (!agentRecord) {
-          continue;
-        }
-        removeIgnoredAgentModelTimeout(agentRecord.model, `agents.list.${index}.model`, changes);
-        removeIgnoredAgentModelTimeout(
-          getRecord(agentRecord.subagents)?.model,
-          `agents.list.${index}.subagents.model`,
-          changes,
-        );
-      }
-    },
+    apply: (raw, changes) =>
+      migrateAgentDefaultsAndList(raw, changes, removeIgnoredAgentModelTimeouts),
   }),
   defineLegacyConfigMigration({
     id: "agents.embeddedPi->embeddedAgent",
     describe: "Move legacy embedded agent config key to embeddedAgent",
     legacyRules: DEPRECATED_EMBEDDED_AGENT_KEY_RULES,
-    apply: (raw, changes) => {
-      const agents = getRecord(raw.agents);
-      const defaults = getRecord(agents?.defaults);
-      if (defaults) {
-        migrateLegacyEmbeddedAgentKey(defaults, "agents.defaults", changes);
-      }
-
-      if (!Array.isArray(agents?.list)) {
-        return;
-      }
-      for (const [index, agent] of agents.list.entries()) {
-        const agentRecord = getRecord(agent);
-        if (!agentRecord) {
-          continue;
-        }
-        migrateLegacyEmbeddedAgentKey(agentRecord, `agents.list.${index}`, changes);
-      }
-    },
+    apply: (raw, changes) =>
+      migrateAgentDefaultsAndList(raw, changes, migrateLegacyEmbeddedAgentKey),
   }),
   defineLegacyConfigMigration({
     id: "agents.agentRuntime-ignored",
     describe: "Remove ignored agent-wide runtime policy",
     legacyRules: LEGACY_AGENT_RUNTIME_POLICY_RULES,
-    apply: (raw, changes) => {
-      const agents = getRecord(raw.agents);
-      const defaults = getRecord(agents?.defaults);
-      if (defaults) {
-        removeLegacyAgentRuntimePolicy(defaults, "agents.defaults", changes);
-      }
-
-      if (!Array.isArray(agents?.list)) {
-        return;
-      }
-      for (const [index, agent] of agents.list.entries()) {
-        const agentRecord = getRecord(agent);
-        if (!agentRecord) {
-          continue;
-        }
-        removeLegacyAgentRuntimePolicy(agentRecord, `agents.list.${index}`, changes);
-      }
-    },
+    apply: (raw, changes) =>
+      migrateAgentDefaultsAndList(raw, changes, removeLegacyAgentRuntimePolicy),
   }),
   defineLegacyConfigMigration({
     id: "agents.sandbox.perSession->scope",
     describe: "Move legacy agent sandbox perSession aliases to sandbox.scope",
     legacyRules: LEGACY_SANDBOX_SCOPE_RULES,
+    apply: (raw, changes) =>
+      migrateAgentDefaultsAndList(raw, changes, (agent, pathLabel, agentChanges) => {
+        const sandbox = getRecord(agent.sandbox);
+        if (sandbox) {
+          migrateLegacySandboxPerSession(sandbox, `${pathLabel}.sandbox`, agentChanges);
+        }
+      }),
+  }),
+  defineLegacyConfigMigration({
+    id: "agents.sandbox.browser.network-none",
+    describe: "Disable sandbox browser sidecars that use unsupported network mode none",
+    legacyRules: UNSUPPORTED_SANDBOX_BROWSER_NETWORK_RULES,
+    apply: migrateUnsupportedSandboxBrowserNetworks,
+  }),
+  defineLegacyConfigMigration({
+    id: "memorySearch->memory.search",
+    describe: "Move memory search config to its canonical memory owner",
+    legacyRules: [MEMORY_SEARCH_RULE, ...AGENT_MEMORY_SEARCH_OWNER_RULES],
     apply: (raw, changes) => {
       const agents = getRecord(raw.agents);
       const defaults = getRecord(agents?.defaults);
-      const defaultSandbox = getRecord(defaults?.sandbox);
-      if (defaultSandbox) {
-        migrateLegacySandboxPerSession(defaultSandbox, "agents.defaults.sandbox", changes);
+      const legacyDefaults = getRecord(defaults?.memorySearch);
+      const legacyTopLevel = getRecord(raw.memorySearch);
+      const memory = getRecord(raw.memory);
+      const canonical = getRecord(memory?.search);
+
+      if (legacyDefaults || legacyTopLevel) {
+        const target = structuredClone(canonical ?? {});
+        if (legacyDefaults) {
+          mergeMissing(target, legacyDefaults);
+          delete defaults!.memorySearch;
+        }
+        if (legacyTopLevel) {
+          mergeMissing(target, legacyTopLevel);
+          delete raw.memorySearch;
+        }
+        ensureRecord(raw, "memory").search = target;
+        changes.push(
+          canonical
+            ? "Merged legacy memorySearch defaults → memory.search (kept explicit memory.search values)."
+            : "Moved legacy memorySearch defaults → memory.search.",
+        );
       }
 
       if (!Array.isArray(agents?.list)) {
         return;
       }
-      for (const [index, agent] of agents.list.entries()) {
-        const sandbox = getRecord(getRecord(agent)?.sandbox);
-        if (!sandbox) {
+      for (const [index, rawAgent] of agents.list.entries()) {
+        const agent = getRecord(rawAgent);
+        const legacy = getRecord(agent?.memorySearch);
+        if (!agent || !legacy) {
           continue;
         }
-        migrateLegacySandboxPerSession(sandbox, `agents.list.${index}.sandbox`, changes);
+        const agentMemory = ensureRecord(agent, "memory");
+        const existing = getRecord(agentMemory.search);
+        const target = structuredClone(existing ?? {});
+        mergeMissing(target, legacy);
+        agentMemory.search = target;
+        delete agent.memorySearch;
+        changes.push(
+          existing
+            ? `Merged agents.list.${index}.memorySearch → agents.list.${index}.memory.search (kept explicit memory.search values).`
+            : `Moved agents.list.${index}.memorySearch → agents.list.${index}.memory.search.`,
+        );
       }
-    },
-  }),
-  defineLegacyConfigMigration({
-    id: "memorySearch->agents.defaults.memorySearch",
-    describe: "Move top-level memorySearch to agents.defaults.memorySearch",
-    legacyRules: [MEMORY_SEARCH_RULE],
-    apply: (raw, changes) => {
-      const legacyMemorySearch = getRecord(raw.memorySearch);
-      if (!legacyMemorySearch) {
-        return;
-      }
-
-      mergeLegacyIntoDefaults({
-        raw,
-        rootKey: "agents",
-        fieldKey: "memorySearch",
-        legacyValue: legacyMemorySearch,
-        changes,
-        movedMessage: "Moved memorySearch → agents.defaults.memorySearch.",
-        mergedMessage:
-          "Merged memorySearch → agents.defaults.memorySearch (filled missing fields from legacy; kept explicit agents.defaults values).",
-      });
-      delete raw.memorySearch;
     },
   }),
   defineLegacyConfigMigration({
     id: "memorySearch.flat-fields->nested-fields",
     describe: "Move legacy flat memory search fields to canonical nested fields",
     legacyRules: LEGACY_MEMORY_SEARCH_FLAT_KEY_RULES,
-    apply: (raw, changes) => {
-      const agents = getRecord(raw.agents);
-      migrateLegacyMemorySearchFlatKeys(
-        getRecord(getRecord(agents?.defaults)?.memorySearch),
-        "agents.defaults.memorySearch",
-        changes,
-      );
-
-      if (!Array.isArray(agents?.list)) {
-        return;
-      }
-      for (const [index, agent] of agents.list.entries()) {
-        migrateLegacyMemorySearchFlatKeys(
-          getRecord(getRecord(agent)?.memorySearch),
-          `agents.list.${index}.memorySearch`,
-          changes,
-        );
-      }
-    },
+    apply: (raw, changes) =>
+      migrateCanonicalMemorySearches(raw, changes, migrateLegacyMemorySearchFlatKeys),
   }),
   defineLegacyConfigMigration({
     id: "memorySearch.provider-auto->openai",
     describe: 'Rewrite legacy memorySearch provider "auto" to "openai"',
     legacyRules: LEGACY_MEMORY_SEARCH_AUTO_PROVIDER_RULES,
-    apply: (raw, changes) => {
-      const agents = getRecord(raw.agents);
-      rewriteLegacyMemorySearchAutoProvider(
-        getRecord(getRecord(agents?.defaults)?.memorySearch),
-        "agents.defaults.memorySearch",
-        changes,
-      );
-
-      if (!Array.isArray(agents?.list)) {
-        return;
-      }
-      for (const [index, agent] of agents.list.entries()) {
-        rewriteLegacyMemorySearchAutoProvider(
-          getRecord(getRecord(agent)?.memorySearch),
-          `agents.list.${index}.memorySearch`,
-          changes,
-        );
-      }
-    },
+    apply: (raw, changes) =>
+      migrateCanonicalMemorySearches(raw, changes, rewriteLegacyMemorySearchAutoProvider),
   }),
   defineLegacyConfigMigration({
     id: "memorySearch.store.path->agent-database",
     describe: "Remove legacy memory search sidecar index paths",
     legacyRules: LEGACY_MEMORY_SEARCH_STORE_PATH_RULES,
+    apply: (raw, changes) =>
+      migrateCanonicalMemorySearches(raw, changes, removeLegacyMemorySearchStorePath, "brackets"),
+  }),
+  defineLegacyConfigMigration({
+    id: "session.typingMode->agents.defaults.typingMode",
+    describe: "Move session typing mode to agent defaults",
+    legacyRules: [
+      {
+        path: ["session", "typingMode"],
+        message:
+          'session.typingMode moved to agents.defaults.typingMode. Run "openclaw doctor --fix".',
+      },
+    ],
     apply: (raw, changes) => {
-      removeLegacyMemorySearchStorePath(getRecord(raw.memorySearch), "memorySearch", changes);
-
-      const agents = getRecord(raw.agents);
-      removeLegacyMemorySearchStorePath(
-        getRecord(getRecord(agents?.defaults)?.memorySearch),
-        "agents.defaults.memorySearch",
-        changes,
-      );
-
-      if (!Array.isArray(agents?.list)) {
+      const session = getRecord(raw.session);
+      if (!session || !Object.hasOwn(session, "typingMode")) {
         return;
       }
-      for (const [index, agent] of agents.list.entries()) {
-        removeLegacyMemorySearchStorePath(
-          getRecord(getRecord(agent)?.memorySearch),
-          `agents.list[${index}].memorySearch`,
-          changes,
-        );
-      }
+      const defaults = ensureRecord(ensureRecord(raw, "agents"), "defaults");
+      const replacedDefault = defaults.typingMode !== undefined;
+      defaults.typingMode = session.typingMode;
+      changes.push(
+        replacedDefault
+          ? "Moved session.typingMode → agents.defaults.typingMode (replaced the previously shadowed agent default)."
+          : "Moved session.typingMode → agents.defaults.typingMode.",
+      );
+      delete session.typingMode;
     },
   }),
   defineLegacyConfigMigration({

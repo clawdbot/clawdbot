@@ -13,6 +13,7 @@ import {
 } from "./models.fetch.js";
 import {
   mapLmstudioWireEntry,
+  mapLmstudioWireModelsToConfig,
   normalizeLmstudioConfiguredCatalogEntry,
   normalizeLmstudioProviderConfig,
   resolveLmstudioInferenceBase,
@@ -211,6 +212,128 @@ describe("lmstudio-models", () => {
     });
   });
 
+  it.each([
+    { label: "enabled", supportsTools: true },
+    { label: "disabled", supportsTools: false },
+    { label: "unknown", supportsTools: undefined },
+  ])("preserves $label tool support in configured model metadata", ({ supportsTools }) => {
+    const model = normalizeLmstudioConfiguredCatalogEntry({
+      id: "qwen3-8b-instruct",
+      compat: {
+        ...(supportsTools === undefined ? {} : { supportsTools }),
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["off", "on"],
+        reasoningEffortMap: { off: "off", high: "on" },
+      },
+    });
+
+    expect(model?.compat).toEqual({
+      ...(supportsTools === undefined ? {} : { supportsTools }),
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+      reasoningEffortMap: {
+        off: "none",
+        none: "none",
+        adaptive: "xhigh",
+        max: "xhigh",
+      },
+    });
+  });
+
+  it("preserves every schema-approved configured compatibility field", () => {
+    const compat = {
+      supportsStore: false,
+      supportsPromptCacheKey: false,
+      supportsDeveloperRole: false,
+      supportsReasoningEffort: true,
+      supportsTemperature: false,
+      supportsUsageInStreaming: false,
+      supportsTools: false,
+      supportsStrictMode: false,
+      supportsJsonSchemaResponseFormat: false,
+      requiresStringContent: true,
+      strictMessageKeys: true,
+      visibleReasoningDetailTypes: ["reasoning.summary"],
+      supportedReasoningEfforts: ["low", "high"],
+      reasoningEffortMap: { off: "none", high: "high" },
+      maxTokensField: "max_tokens",
+      thinkingFormat: "qwen",
+      requiresToolResultName: true,
+      requiresAssistantAfterToolResult: true,
+      requiresThinkingAsText: true,
+      requiresReasoningContentOnAssistantMessages: true,
+      toolSchemaProfile: "lmstudio",
+      unsupportedToolSchemaKeywords: ["additionalProperties"],
+      toolCallArgumentsEncoding: "string",
+      requiresOpenAiAnthropicToolPayload: true,
+    };
+
+    expect(
+      normalizeLmstudioConfiguredCatalogEntry({ id: "qwen/qwen3-1.7b", compat })?.compat,
+    ).toEqual(compat);
+  });
+
+  it.each(["openai", "openrouter", "deepseek", "together", "qwen", "qwen-chat-template", "zai"])(
+    "preserves the schema-approved %s thinking format",
+    (thinkingFormat) => {
+      expect(
+        normalizeLmstudioConfiguredCatalogEntry({
+          id: "qwen/qwen3-1.7b",
+          compat: { thinkingFormat },
+        })?.compat,
+      ).toEqual({ thinkingFormat });
+    },
+  );
+
+  it("rejects malformed and unapproved configured compatibility fields", () => {
+    expect(
+      normalizeLmstudioConfiguredCatalogEntry({
+        id: "qwen/qwen3-1.7b",
+        compat: {
+          supportsStore: "false",
+          supportsPromptCacheKey: 1,
+          visibleReasoningDetailTypes: ["reasoning.summary", 1],
+          maxTokensField: "max_output_tokens",
+          thinkingFormat: "unsupported",
+          toolSchemaProfile: 1,
+          unsupportedToolSchemaKeywords: ["additionalProperties", ""],
+          toolCallArgumentsEncoding: false,
+          requiresOpenAiAnthropicToolPayload: "true",
+          unapprovedCompatField: true,
+        },
+      })?.compat,
+    ).toBeUndefined();
+  });
+
+  it.each([
+    { label: "enabled", supportsTools: true },
+    { label: "disabled", supportsTools: false },
+    { label: "unknown", supportsTools: undefined },
+  ])("preserves $label native tool support in runtime and setup models", ({ supportsTools }) => {
+    const entry = {
+      type: "llm" as const,
+      key: "qwen3-8b-instruct",
+      capabilities: {
+        ...(supportsTools === undefined ? {} : { trained_for_tool_use: supportsTools }),
+        reasoning: { allowed_options: ["off", "on"], default: "on" },
+      },
+    };
+    const expectedCompat = {
+      ...(supportsTools === true ? { supportsTools } : {}),
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+      reasoningEffortMap: {
+        off: "none",
+        none: "none",
+        adaptive: "xhigh",
+        max: "xhigh",
+      },
+    };
+
+    expect(mapLmstudioWireEntry(entry)?.compat).toEqual(expectedCompat);
+    expect(mapLmstudioWireModelsToConfig([entry])[0]?.compat).toEqual(expectedCompat);
+  });
+
   it("drops malformed discovered context metadata", () => {
     const model = mapLmstudioWireEntry({
       type: "llm",
@@ -225,6 +348,23 @@ describe("lmstudio-models", () => {
       contextTokens: LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
       maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,
       loaded: false,
+    });
+  });
+
+  it("uses the loaded context as the effective runtime budget", () => {
+    const model = mapLmstudioWireEntry({
+      type: "llm",
+      key: "small-loaded-context",
+      max_context_length: 262_144,
+      loaded_instances: [{ id: "loaded", config: { context_length: 8_192 } }],
+    });
+
+    expect(model).toMatchObject({
+      id: "small-loaded-context",
+      contextWindow: 262_144,
+      contextTokens: 8_192,
+      maxTokens: 8_192,
+      loaded: true,
     });
   });
 
@@ -374,6 +514,7 @@ describe("lmstudio-models", () => {
           adaptive: "xhigh",
           max: "xhigh",
         },
+        supportsTools: true,
       },
       contextWindow: 262144,
       contextTokens: LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
@@ -389,6 +530,47 @@ describe("lmstudio-models", () => {
       contextWindow: SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
       contextTokens: LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
       maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,
+    });
+  });
+
+  it.each([
+    { label: "enabled", supportsTools: true },
+    { label: "disabled", supportsTools: false },
+    { label: "unknown", supportsTools: undefined },
+  ])("preserves $label native tool support in discovered models", async ({ supportsTools }) => {
+    const fetchMock = vi.fn(async (_url: string | URL, _init?: RequestInit) =>
+      jsonResponse({
+        models: [
+          {
+            type: "llm",
+            key: "qwen3-8b-instruct",
+            capabilities: {
+              ...(supportsTools === undefined ? {} : { trained_for_tool_use: supportsTools }),
+              reasoning: { allowed_options: ["off", "on"], default: "on" },
+            },
+          },
+        ],
+      }),
+    );
+
+    const [model] = await discoverLmstudioModels({
+      baseUrl: "http://localhost:1234/v1",
+      apiKey: "lm-token",
+      quiet: true,
+      fetchImpl: asFetch(fetchMock),
+    });
+
+    expect(model?.compat).toEqual({
+      supportsUsageInStreaming: true,
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+      reasoningEffortMap: {
+        off: "none",
+        none: "none",
+        adaptive: "xhigh",
+        max: "xhigh",
+      },
+      ...(supportsTools === true ? { supportsTools } : {}),
     });
   });
 
@@ -424,30 +606,61 @@ describe("lmstudio-models", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it("reports malformed model list JSON with an owned error", async () => {
-    const fetchMock = vi.fn(async () => malformedJsonResponse());
+  it.each([
+    {
+      name: "reports malformed model list JSON with an owned error",
+      responses: () => [malformedJsonResponse()],
+    },
+    {
+      name: "reports wrong-shaped model list payloads with owned errors",
+      responses: () =>
+        [[], { models: {} }, { models: [null] }].map((payload) => jsonResponse(payload)),
+    },
+  ])("$name", async ({ responses }) => {
+    for (const response of responses()) {
+      const result = await fetchLmstudioModels({
+        baseUrl: "http://localhost:1234/v1",
+        fetchImpl: asFetch(vi.fn(async () => response)),
+      });
+      expect(result.reachable).toBe(false);
+      expect((result.error as Error).message).toBe("LM Studio model list: malformed JSON response");
+    }
+  });
+
+  it("keeps valid model records when a reachable catalog includes malformed entries", async () => {
+    const model = {
+      type: "llm",
+      key: "qwen3-8b-instruct",
+      max_context_length: 32_768,
+      loaded_instances: [],
+    };
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({ models: [null, model, [], "invalid-model", 42] }),
+    );
 
     const result = await fetchLmstudioModels({
       baseUrl: "http://localhost:1234/v1",
       fetchImpl: asFetch(fetchMock),
     });
 
-    expect(result.reachable).toBe(false);
-    expect((result.error as Error).message).toBe("LM Studio model list: malformed JSON response");
+    expect(result).toEqual({ reachable: true, status: 200, models: [model] });
   });
 
-  it("reports wrong-shaped model list payloads with owned errors", async () => {
-    for (const payload of [[], { models: {} }, { models: [null] }]) {
-      const fetchMock = vi.fn(async () => jsonResponse(payload));
+  it("discovers valid local models from partially malformed catalogs", async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        models: [null, { type: "llm", key: "qwen3-8b-instruct" }, []],
+      }),
+    );
 
-      const result = await fetchLmstudioModels({
-        baseUrl: "http://localhost:1234/v1",
-        fetchImpl: asFetch(fetchMock),
-      });
+    const models = await discoverLmstudioModels({
+      baseUrl: "http://localhost:1234/v1",
+      apiKey: "lm-token",
+      quiet: true,
+      fetchImpl: asFetch(fetchMock),
+    });
 
-      expect(result.reachable).toBe(false);
-      expect((result.error as Error).message).toBe("LM Studio model list: malformed JSON response");
-    }
+    expect(models).toEqual([expect.objectContaining({ id: "qwen3-8b-instruct" })]);
   });
 
   it("caps oversized direct fetch timeouts before discovering models", async () => {
@@ -502,42 +715,81 @@ describe("lmstudio-models", () => {
     expect(calledUrls).not.toContain("http://localhost:1234/api/v1/models/load");
   });
 
-  it("reloads model when requested context length exceeds the loaded window", async () => {
-    const fetchMock = createModelLoadFetchMock({
+  it.each([
+    {
+      name: "reloads model when requested context length exceeds the loaded window",
       loadedContextLength: 4096,
       maxContextLength: 32768,
-    });
-    vi.stubGlobal("fetch", asFetch(fetchMock));
+      requestedContextLength: 8192,
+      expectedContextLength: 8192,
+    },
+    {
+      name: "reloads model to the clamped default target when already loaded below the default window",
+      loadedContextLength: 4096,
+      maxContextLength: 32768,
+      expectedContextLength: 32768,
+    },
+    {
+      name: "uses requested context length when provided for model load",
+      maxContextLength: 32768,
+      requestedContextLength: 8192,
+      expectedContextLength: 8192,
+    },
+    {
+      name: "omits malformed context lengths before loading models",
+      loadedContextLength: 4096.5,
+      maxContextLength: 32768.5,
+      requestedContextLength: 8192.5,
+      expectedContextLength: LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
+    },
+  ])(
+    "$name",
+    async ({
+      loadedContextLength,
+      maxContextLength,
+      requestedContextLength,
+      expectedContextLength,
+    }) => {
+      const fetchMock = createModelLoadFetchMock({ loadedContextLength, maxContextLength });
+      vi.stubGlobal("fetch", asFetch(fetchMock));
+      await expect(
+        ensureLmstudioModelLoaded({
+          baseUrl: "http://localhost:1234/v1",
+          modelKey: "qwen3-8b-instruct",
+          ...(requestedContextLength === undefined ? {} : { requestedContextLength }),
+        }),
+      ).resolves.toBe("qwen3-8b-instruct");
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expectLoadContextLength(fetchMock, expectedContextLength);
+    },
+  );
 
-    await expect(
-      ensureLmstudioModelLoaded({
-        baseUrl: "http://localhost:1234/v1",
-        modelKey: "qwen3-8b-instruct",
-        requestedContextLength: 8192,
-      }),
-    ).resolves.toBe("qwen3-8b-instruct");
-
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expectLoadContextLength(fetchMock, 8192);
-  });
-
-  it("loads the canonical model key when the requested key is an advertised variant", async () => {
-    const canonicalKey = "gemma-4-e4b-it-ultra-uncensored-heretic";
-    const variantKey = `${canonicalKey}@q4_k_m`;
+  it.each([
+    {
+      name: "loads the canonical model key when the requested key is an advertised variant",
+      canonicalKey: "gemma-4-e4b-it-ultra-uncensored-heretic",
+      requestedKey: "gemma-4-e4b-it-ultra-uncensored-heretic@q4_k_m",
+      advertisedVariant: "gemma-4-e4b-it-ultra-uncensored-heretic@q4_k_m",
+    },
+    {
+      name: "preserves a suffixed key when LM Studio advertises it as the model key",
+      canonicalKey: "local/special-model@q4_k_m",
+      requestedKey: "local/special-model@q4_k_m",
+      advertisedVariant: "local/special-model@q8_0",
+    },
+  ])("$name", async ({ canonicalKey, requestedKey, advertisedVariant }) => {
     const fetchMock = createModelLoadFetchMock({
       key: canonicalKey,
-      variants: [variantKey],
-      selectedVariant: variantKey,
+      variants: [advertisedVariant],
+      selectedVariant: advertisedVariant,
     });
     vi.stubGlobal("fetch", asFetch(fetchMock));
-
     await expect(
       ensureLmstudioModelLoaded({
         baseUrl: "http://localhost:1234/v1",
-        modelKey: variantKey,
+        modelKey: requestedKey,
       }),
     ).resolves.toBe(canonicalKey);
-
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expectLoadModelKey(fetchMock, canonicalKey);
   });
@@ -573,26 +825,6 @@ describe("lmstudio-models", () => {
 
     expect(error).toBeInstanceOf(Error);
     expect(error).toMatchObject({ resolvedModelKey: canonicalKey });
-  });
-
-  it("preserves a suffixed key when LM Studio advertises it as the model key", async () => {
-    const suffixedKey = "local/special-model@q4_k_m";
-    const fetchMock = createModelLoadFetchMock({
-      key: suffixedKey,
-      variants: ["local/special-model@q8_0"],
-      selectedVariant: "local/special-model@q8_0",
-    });
-    vi.stubGlobal("fetch", asFetch(fetchMock));
-
-    await expect(
-      ensureLmstudioModelLoaded({
-        baseUrl: "http://localhost:1234/v1",
-        modelKey: suffixedKey,
-      }),
-    ).resolves.toBe(suffixedKey);
-
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expectLoadModelKey(fetchMock, suffixedKey);
   });
 
   it("reports malformed model load JSON with an owned error", async () => {
@@ -693,24 +925,6 @@ describe("lmstudio-models", () => {
     expect(textSpy).not.toHaveBeenCalled();
   });
 
-  it("reloads model to the clamped default target when already loaded below the default window", async () => {
-    const fetchMock = createModelLoadFetchMock({
-      loadedContextLength: 4096,
-      maxContextLength: 32768,
-    });
-    vi.stubGlobal("fetch", asFetch(fetchMock));
-
-    await expect(
-      ensureLmstudioModelLoaded({
-        baseUrl: "http://localhost:1234/v1",
-        modelKey: "qwen3-8b-instruct",
-      }),
-    ).resolves.toBe("qwen3-8b-instruct");
-
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expectLoadContextLength(fetchMock, 32768);
-  });
-
   it("loads model with clamped context length and merged headers", async () => {
     const fetchMock = createModelLoadFetchMock({ maxContextLength: 32768 });
     vi.stubGlobal("fetch", asFetch(fetchMock));
@@ -749,39 +963,6 @@ describe("lmstudio-models", () => {
     });
     const loadBody = parseJsonRequestBody(loadInit) as { context_length: number };
     expect(loadBody.context_length).not.toBe(LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH);
-  });
-
-  it("uses requested context length when provided for model load", async () => {
-    const fetchMock = createModelLoadFetchMock({ maxContextLength: 32768 });
-    vi.stubGlobal("fetch", asFetch(fetchMock));
-
-    await expect(
-      ensureLmstudioModelLoaded({
-        baseUrl: "http://localhost:1234/v1",
-        modelKey: "qwen3-8b-instruct",
-        requestedContextLength: 8192,
-      }),
-    ).resolves.toBe("qwen3-8b-instruct");
-
-    expectLoadContextLength(fetchMock, 8192);
-  });
-
-  it("omits malformed context lengths before loading models", async () => {
-    const fetchMock = createModelLoadFetchMock({
-      loadedContextLength: 4096.5,
-      maxContextLength: 32768.5,
-    });
-    vi.stubGlobal("fetch", asFetch(fetchMock));
-
-    await expect(
-      ensureLmstudioModelLoaded({
-        baseUrl: "http://localhost:1234/v1",
-        modelKey: "qwen3-8b-instruct",
-        requestedContextLength: 8192.5,
-      }),
-    ).resolves.toBe("qwen3-8b-instruct");
-
-    expectLoadContextLength(fetchMock, LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH);
   });
 
   it("throws when model discovery fails", async () => {

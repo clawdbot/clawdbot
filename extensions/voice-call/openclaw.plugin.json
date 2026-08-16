@@ -1,7 +1,18 @@
 {
   "id": "voice-call",
+  "doctorContract": {
+    "resolveSessionStoreAgentIds": true,
+    "stateMigrations": true
+  },
   "name": "Voice Call",
   "description": "OpenClaw voice-call plugin for Twilio, Telnyx, and Plivo phone calls.",
+  "cliCommands": [
+    {
+      "name": "voicecall",
+      "description": "Voice call utilities",
+      "hasSubcommands": true
+    }
+  ],
   "skills": ["./skills"],
   "commandAliases": [{ "name": "voicecall" }],
   "activation": {
@@ -10,20 +21,6 @@
   },
   "contracts": {
     "tools": ["voice_call"]
-  },
-  "channelEnvVars": {
-    "voice-call": [
-      "TELNYX_API_KEY",
-      "TELNYX_CONNECTION_ID",
-      "TELNYX_PUBLIC_KEY",
-      "TWILIO_ACCOUNT_SID",
-      "TWILIO_AUTH_TOKEN",
-      "TWILIO_FROM_NUMBER",
-      "PLIVO_AUTH_ID",
-      "PLIVO_AUTH_TOKEN",
-      "NGROK_AUTHTOKEN",
-      "NGROK_DOMAIN"
-    ]
   },
   "uiHints": {
     "provider": {
@@ -219,7 +216,7 @@
     },
     "tts.provider": {
       "label": "TTS Provider Override",
-      "help": "Deep-merges with messages.tts (Microsoft is ignored for calls).",
+      "help": "Deep-merges with top-level tts (Microsoft is ignored for calls).",
       "advanced": true
     },
     "tts.providers": {
@@ -236,6 +233,11 @@
     },
     "store": {
       "label": "Call Log Store Path",
+      "advanced": true
+    },
+    "agentId": {
+      "label": "Response Agent ID",
+      "help": "Agent workspace used for voice response generation. Defaults to \"main\".",
       "advanced": true
     },
     "sessionScope": {
@@ -717,8 +719,16 @@
                   "model": {
                     "type": "string"
                   },
-                  "voice": {
+                  "speakerVoice": {
                     "type": "string"
+                  },
+                  "voice": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoice."
+                  },
+                  "voiceId": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoice."
                   },
                   "speed": {
                     "type": "number",
@@ -740,8 +750,16 @@
                   "baseUrl": {
                     "type": "string"
                   },
-                  "voiceId": {
+                  "speakerVoiceId": {
                     "type": "string"
+                  },
+                  "voice": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoiceId."
+                  },
+                  "voiceId": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoiceId."
                   },
                   "modelId": {
                     "type": "string"
@@ -796,8 +814,16 @@
                   "enabled": {
                     "type": "boolean"
                   },
-                  "voice": {
+                  "speakerVoice": {
                     "type": "string"
+                  },
+                  "voice": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoice."
+                  },
+                  "voiceId": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoice."
                   },
                   "lang": {
                     "type": "string"
@@ -834,8 +860,16 @@
                   "enabled": {
                     "type": "boolean"
                   },
-                  "voice": {
+                  "speakerVoice": {
                     "type": "string"
+                  },
+                  "voice": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoice."
+                  },
+                  "voiceId": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoice."
                   },
                   "lang": {
                     "type": "string"
@@ -892,6 +926,10 @@
       },
       "store": {
         "type": "string"
+      },
+      "agentId": {
+        "type": "string",
+        "minLength": 1
       },
       "sessionScope": {
         "type": "string",

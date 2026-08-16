@@ -5,6 +5,7 @@ import {
   createConfigIO,
   readConfigFileSnapshotForWrite,
   replaceConfigFile,
+  resolveConfigSnapshotHash,
 } from "../../config/config.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -14,9 +15,11 @@ import {
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
-import { getActiveSecretsRuntimeSnapshot } from "../../secrets/runtime-state.js";
+import { getActiveSecretsRuntimeSnapshotState } from "../../secrets/runtime-state.js";
+import { isRecord } from "../../utils.js";
 import { resolveEffectiveSharedGatewayAuth, resolveGatewayAuth } from "../auth.js";
-import { buildGatewayReloadPlan } from "../config-reload-plan.js";
+import { invalidateConfigGetResponseCache } from "../config-get-response.js";
+import { buildGatewayReloadPlan, isNoopGatewayReloadPlan } from "../config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "../config-reload-settings.js";
 import { formatControlPlaneActor, type ControlPlaneActor } from "../control-plane-audit.js";
 import { parseRestartRequestParams } from "./restart-request.js";
@@ -94,15 +97,76 @@ export function didSharedGatewayAuthChange(prev: OpenClawConfig, next: OpenClawC
   return prevAuth.mode !== nextAuth.mode || !isDeepStrictEqual(prevAuth.secret, nextAuth.secret);
 }
 
+// Active secrets snapshots own authored leaves, while runtime config can add fixed siblings.
+// Project only matching authored values so stale snapshots cannot drive disconnect decisions.
+function projectAuthoredValuesOntoRuntimeOverlay(params: {
+  source: unknown;
+  activeSource: unknown;
+  active: unknown;
+  fallback: unknown;
+}): unknown {
+  const { source, active } = params;
+  if (active === undefined) {
+    return structuredClone(params.fallback);
+  }
+  if (!isRecord(source) || !isRecord(active)) {
+    return structuredClone(
+      isDeepStrictEqual(source, params.activeSource) ? active : params.fallback,
+    );
+  }
+  const fallback = isRecord(params.fallback) ? params.fallback : {};
+  const activeSource = isRecord(params.activeSource) ? params.activeSource : {};
+  const sourceKeys = new Set(Object.keys(source));
+  return Object.fromEntries([
+    ...Object.entries(fallback).filter(([key]) => !sourceKeys.has(key)),
+    ...Object.keys(source).map((key) => [
+      key,
+      projectAuthoredValuesOntoRuntimeOverlay({
+        source: source[key],
+        activeSource: activeSource[key],
+        active: active[key],
+        fallback: fallback[key],
+      }),
+    ]),
+  ]);
+}
+
 /** Compares against the active secrets-expanded config when one is available. */
 export function didActiveSharedGatewayAuthChange(params: {
   fallbackPrev: OpenClawConfig;
+  fallbackSource?: OpenClawConfig;
   next: OpenClawConfig;
 }): boolean {
-  return didSharedGatewayAuthChange(
-    getActiveSecretsRuntimeSnapshot()?.config ?? params.fallbackPrev,
-    params.next,
-  );
+  const active = getActiveSecretsRuntimeSnapshotState();
+  if (!active) {
+    return didSharedGatewayAuthChange(params.fallbackPrev, params.next);
+  }
+  const currentSourceGateway = (params.fallbackSource ?? active.sourceConfig).gateway;
+  const activeSourceGateway = active.sourceConfig.gateway;
+  const activeGateway = active.config.gateway;
+  const fallbackGateway = params.fallbackPrev.gateway;
+  const selectOwnedGatewayValue = <Key extends "auth" | "tailscale" | "trustedProxies">(
+    key: Key,
+  ): NonNullable<OpenClawConfig["gateway"]>[Key] =>
+    currentSourceGateway && Object.hasOwn(currentSourceGateway, key)
+      ? (projectAuthoredValuesOntoRuntimeOverlay({
+          source: currentSourceGateway[key],
+          activeSource: activeSourceGateway?.[key],
+          active: activeGateway?.[key],
+          fallback: fallbackGateway?.[key],
+        }) as NonNullable<OpenClawConfig["gateway"]>[Key])
+      : fallbackGateway?.[key];
+  const activeSharedAuthConfig: OpenClawConfig = {
+    ...params.fallbackPrev,
+    gateway: {
+      ...fallbackGateway,
+      // Secrets snapshots only own authored leaves; retain runtime-only auth siblings.
+      auth: selectOwnedGatewayValue("auth"),
+      tailscale: selectOwnedGatewayValue("tailscale"),
+      trustedProxies: selectOwnedGatewayValue("trustedProxies"),
+    },
+  };
+  return didSharedGatewayAuthChange(activeSharedAuthConfig, params.next);
 }
 
 function queueSharedGatewayAuthDisconnect(
@@ -130,39 +194,20 @@ function queueSharedGatewayAuthGenerationRefresh(
   });
 }
 
-function isNoopConfigReloadPlan(plan: ReturnType<typeof buildGatewayReloadPlan>): boolean {
-  return (
-    !plan.restartGateway &&
-    plan.hotReasons.length === 0 &&
-    !plan.reloadHooks &&
-    !plan.restartGmailWatcher &&
-    !plan.restartCron &&
-    !plan.restartHeartbeat &&
-    !plan.restartHealthMonitor &&
-    !plan.reloadPlugins &&
-    !plan.disposeMcpRuntimes &&
-    plan.restartChannels.size === 0 &&
-    (plan.restartChannelAccounts?.size ?? 0) === 0
-  );
-}
-
 function resolveConfigRestartRequirement(params: {
   changedPaths: string[];
   nextConfig: OpenClawConfig;
 }): { requiresRestart: boolean; scheduleDirectRestart: boolean } {
   const reloadSettings = resolveGatewayReloadSettings(params.nextConfig);
   const plan = buildGatewayReloadPlan(params.changedPaths, { candidateConfig: params.nextConfig });
-  if (isNoopConfigReloadPlan(plan)) {
+  if (isNoopGatewayReloadPlan(plan)) {
     return { requiresRestart: false, scheduleDirectRestart: false };
   }
   if (reloadSettings.mode === "off") {
     return { requiresRestart: true, scheduleDirectRestart: true };
   }
-  if (reloadSettings.mode === "restart") {
-    return { requiresRestart: true, scheduleDirectRestart: false };
-  }
   if (plan.restartGateway) {
-    return { requiresRestart: true, scheduleDirectRestart: reloadSettings.mode === "hot" };
+    return { requiresRestart: true, scheduleDirectRestart: false };
   }
   return { requiresRestart: false, scheduleDirectRestart: false };
 }
@@ -247,8 +292,12 @@ export async function commitGatewayConfigWrite(params: {
 }> {
   const result = await replaceConfigFile({
     nextConfig: params.nextConfig,
+    // The early RPC hash check is only advisory until this lock-time CAS. Without
+    // it, concurrent writers can both succeed and overwrite each other's config.
+    baseHash: resolveConfigSnapshotHash(params.snapshot) ?? undefined,
     writeOptions: {
       ...params.writeOptions,
+      auditOrigin: "config-rpc",
       runtimeRefresh: {
         ...params.writeOptions.runtimeRefresh,
         includeAuthStoreRefs: false,
@@ -256,6 +305,9 @@ export async function commitGatewayConfigWrite(params: {
     },
     afterWrite: { mode: "auto" },
   });
+  // Watcher acceptance is debounced; clear now so the writer's immediate
+  // follow-up config.get observes the committed bytes before that hook runs.
+  invalidateConfigGetResponseCache();
   return {
     path: resolveGatewayConfigPath(params.snapshot),
     config: result.nextConfig,

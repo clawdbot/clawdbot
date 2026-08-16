@@ -34,6 +34,13 @@ function laneBody(source: string, name: string): string {
 }
 
 describe("Android Fastlane release upload gates", () => {
+  it("publishes Wear releases to the matching form-factor track", () => {
+    const wearTrack = functionBody(readFastfile(), "wear_play_track");
+
+    expect(wearTrack).toContain('"wear:#{play_track}"');
+    expect(wearTrack).not.toContain('"qa"');
+  });
+
   it("preflights and records mobile release refs around Play build upload", () => {
     const fastfile = readFastfile();
     const uploadBuild = functionBody(fastfile, "upload_play_store_build!");
@@ -61,6 +68,9 @@ describe("Android Fastlane release upload gates", () => {
     expect(atomicUpload.match(/client\.commit_current_edit!/g)).toHaveLength(1);
     expect(atomicUpload).toContain("client.validate_current_edit!");
     expect(atomicUpload).toContain("client.abort_current_edit");
+    expect(atomicUpload).toContain("upload_play_listing_assets!");
+    expect(fastfile).toContain("Supply::SCREENSHOT_TYPES.each");
+    expect(fastfile).toContain("%w(phoneScreenshots wearScreenshots)");
     expect(booleanEnv).toContain('["1", "yes", "true", "on"]');
     expect(booleanEnv).toContain('["0", "no", "false", "off"]');
     expect(atomicUpload).toContain(

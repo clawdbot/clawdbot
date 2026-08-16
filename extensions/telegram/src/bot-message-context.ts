@@ -17,6 +17,7 @@ import {
   expandTelegramAllowFromWithAccessGroups,
   resolveTelegramDmAllow,
 } from "./access-groups.js";
+import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
 import { resolveDefaultTelegramAccountId } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
@@ -36,6 +37,7 @@ import {
   extractTelegramForumFlag,
   resolveTelegramForumFlag,
   resolveTelegramBotHasTopicsEnabled,
+  resolveTelegramMessageThreadSpec,
   resolveTelegramThreadSpec,
   shouldUseTelegramDmThreadSession,
 } from "./bot/helpers.js";
@@ -111,7 +113,6 @@ export type TelegramMessageContext = {
   initialTypingCueSent?: boolean;
   ackReactionPromise: Promise<boolean> | null;
   reactionApi: TelegramReactionApi | null;
-  removeAckAfterReply: boolean;
   statusReactionController: TelegramStatusReactionController | null;
   accountId: string;
 };
@@ -127,7 +128,9 @@ export const buildTelegramMessageContext = async ({
   bot,
   cfg,
   account,
+  ownerAgentId,
   historyLimit,
+  dmHistoryLimit,
   groupHistories,
   dmPolicy,
   allowFrom,
@@ -146,7 +149,7 @@ export const buildTelegramMessageContext = async ({
   const chatId = msg.chat.id;
   const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
   const senderId = msg.from?.id ? String(msg.from.id) : "";
-  const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
+  const isDirectMessagesChat = msg.chat.is_direct_messages === true;
   const reactionApi =
     typeof bot.api.setMessageReaction === "function"
       ? bot.api.setMessageReaction.bind(bot.api)
@@ -155,20 +158,21 @@ export const buildTelegramMessageContext = async ({
     typeof bot.api.getChat === "function"
       ? (bot.api.getChat.bind(bot.api) as TelegramGetChat)
       : undefined;
-  const isForum = await resolveTelegramForumFlag({
-    chatId,
-    chatType: msg.chat.type,
-    isGroup,
-    isForum: extractTelegramForumFlag(msg.chat),
-    isTopicMessage: msg.is_topic_message,
-    getChat: getChatApi,
-  });
-  const threadSpec = resolveTelegramThreadSpec({
-    isGroup,
-    isForum,
-    messageThreadId,
-  });
-  const resolvedThreadId = threadSpec.scope === "forum" ? threadSpec.id : undefined;
+  const isForum = isDirectMessagesChat
+    ? false
+    : await resolveTelegramForumFlag({
+        chatId,
+        chatType: msg.chat.type,
+        isGroup,
+        isForum: extractTelegramForumFlag(msg.chat),
+        isTopicMessage: msg.is_topic_message,
+        getChat: getChatApi,
+      });
+  const threadSpec = resolveTelegramMessageThreadSpec(msg, isForum);
+  const resolvedThreadId =
+    threadSpec.scope === "forum" || threadSpec.scope === "direct-messages"
+      ? threadSpec.id
+      : undefined;
   const replyThreadId = threadSpec.id;
   const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
   let topicName: string | undefined;
@@ -176,7 +180,9 @@ export const buildTelegramMessageContext = async ({
     const topicNameCacheScope = resolveTopicNameCacheScope(
       await resolveTelegramMessageContextStorePath({
         cfg,
-        agentId: account.accountId,
+        agentId:
+          ownerAgentId?.trim() ||
+          resolveTelegramAccountOwnerAgentId({ cfg, accountId: account.accountId }),
         sessionRuntime,
       }),
     );
@@ -321,6 +327,9 @@ export const buildTelegramMessageContext = async ({
   }
 
   const sendTyping = async () => {
+    if (threadSpec.scope === "direct-messages") {
+      return;
+    }
     await withTelegramApiErrorLogging({
       operation: "sendChatAction",
       fn: () =>
@@ -333,6 +342,9 @@ export const buildTelegramMessageContext = async ({
   };
 
   const sendRecordVoice = async () => {
+    if (threadSpec.scope === "direct-messages") {
+      return;
+    }
     try {
       await withTelegramApiErrorLogging({
         operation: "sendChatAction",
@@ -402,7 +414,9 @@ export const buildTelegramMessageContext = async ({
   });
   const useDmThreadSession = shouldUseTelegramDmThreadSession({
     dmThreadId,
-    botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(primaryCtx.me),
+    botHasTopicsEnabled:
+      (threadSpec.scope === "dm" && msg.is_topic_message === true) ||
+      resolveTelegramBotHasTopicsEnabled(primaryCtx.me),
   });
   const threadKeys =
     useDmThreadSession && dmThreadId != null
@@ -510,6 +524,7 @@ export const buildTelegramMessageContext = async ({
     bodyText: bodyResult.bodyText,
     historyKey: bodyResult.historyKey ?? "",
     historyLimit,
+    dmHistoryLimit,
     groupHistories,
     groupConfig,
     topicConfig,
@@ -538,7 +553,6 @@ export const buildTelegramMessageContext = async ({
   });
   const ackReactionEmoji =
     ackReaction && isTelegramSupportedReactionEmoji(ackReaction) ? ackReaction : undefined;
-  const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
   const shouldSendAckReaction = Boolean(
     ackReaction &&
     shouldAckReactionGate({
@@ -547,7 +561,6 @@ export const buildTelegramMessageContext = async ({
       isDirect: !isGroup,
       isGroup,
       isMentionableGroup: isGroup,
-      requireMention: Boolean(requireMention),
       canDetectMention: bodyResult.canDetectMention,
       effectiveWasMentioned: bodyResult.effectiveWasMentioned,
       shouldBypassMention: bodyResult.shouldBypassMention,
@@ -562,7 +575,7 @@ export const buildTelegramMessageContext = async ({
   const resolvedStatusReactionEmojis = statusReactionsEnabled
     ? resolveTelegramStatusReactionEmojis({
         initialEmoji: ackReaction,
-        overrides: statusReactionsConfig?.emojis,
+        overrides: undefined,
       })
     : null;
   const statusReactionVariantsByEmoji = resolvedStatusReactionEmojis
@@ -610,7 +623,6 @@ export const buildTelegramMessageContext = async ({
           },
           initialEmoji: ackReaction,
           emojis: resolvedStatusReactionEmojis ?? undefined,
-          timing: statusReactionsConfig?.timing,
           onError: (err) => {
             logVerbose(`telegram status-reaction error for chat ${chatId}: ${String(err)}`);
           },
@@ -663,7 +675,6 @@ export const buildTelegramMessageContext = async ({
     initialTypingCueSent,
     ackReactionPromise,
     reactionApi,
-    removeAckAfterReply,
     statusReactionController,
     accountId: account.accountId,
   };

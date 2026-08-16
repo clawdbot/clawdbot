@@ -1,5 +1,6 @@
 // Msteams plugin module implements token behavior.
 import { isFutureDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MSTeamsConfig } from "../runtime-api.js";
 import { loadMSTeamsDelegatedTokens, saveMSTeamsDelegatedTokens } from "./delegated-state.js";
 import type { MSTeamsDelegatedTokens } from "./oauth.shared.js";
@@ -47,6 +48,18 @@ function resolveAuthType(cfg?: MSTeamsConfig): "secret" | "federated" {
   return "secret";
 }
 
+function resolveFederatedPath(configValue?: string, envValue?: string): string | undefined {
+  // Reject blank settings without trimming a real path: surrounding whitespace
+  // can be part of the certificate filename on the filesystem.
+  if (normalizeOptionalString(configValue)) {
+    return configValue;
+  }
+  if (normalizeOptionalString(envValue)) {
+    return envValue;
+  }
+  return undefined;
+}
+
 // ── hasConfiguredMSTeamsCredentials ────────────────────────────────────────
 
 export function hasConfiguredMSTeamsCredentials(cfg?: MSTeamsConfig): boolean {
@@ -62,7 +75,9 @@ export function hasConfiguredMSTeamsCredentials(cfg?: MSTeamsConfig): boolean {
   );
 
   if (authType === "federated") {
-    const hasCert = Boolean(cfg?.certificatePath || process.env.MSTEAMS_CERTIFICATE_PATH);
+    const hasCert = Boolean(
+      resolveFederatedPath(cfg?.certificatePath, process.env.MSTEAMS_CERTIFICATE_PATH),
+    );
     const hasManagedIdentity =
       cfg?.useManagedIdentity ?? process.env.MSTEAMS_USE_MANAGED_IDENTITY === "true";
 
@@ -95,8 +110,10 @@ export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentia
   }
 
   if (authType === "federated") {
-    const certificatePath =
-      cfg?.certificatePath || process.env.MSTEAMS_CERTIFICATE_PATH || undefined;
+    const certificatePath = resolveFederatedPath(
+      cfg?.certificatePath,
+      process.env.MSTEAMS_CERTIFICATE_PATH,
+    );
 
     const certificateThumbprint =
       cfg?.certificateThumbprint || process.env.MSTEAMS_CERTIFICATE_THUMBPRINT || undefined;

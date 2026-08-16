@@ -1,10 +1,8 @@
-import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { runCommandBuffered } from "../../process/exec.js";
+import { readWorkspaceFileSnapshotWithLimit } from "./workspace-actual-manifest.js";
 import {
-  gitFileMode,
   MAX_RECONCILIATION_FILE_BYTES,
   type WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
@@ -16,12 +14,20 @@ export function localPath(root: string, relative: string): string {
   return path.join(root, ...relative.split("/"));
 }
 
-async function sha256File(filePath: string): Promise<string> {
-  const hash = createHash("sha256");
-  for await (const chunk of createReadStream(filePath)) {
-    hash.update(chunk);
-  }
-  return hash.digest("hex");
+type WorkspaceFileSnapshot =
+  | { type: "file"; mode: number; size: number; sha256: string }
+  | { type: "unsupported" };
+
+export async function readWorkspaceFileSnapshot(
+  root: string,
+  entryPath: string,
+): Promise<WorkspaceFileSnapshot> {
+  const absolute = localPath(root, entryPath);
+  return await readWorkspaceFileSnapshotWithLimit(absolute, MAX_RECONCILIATION_FILE_BYTES, root);
+}
+
+async function readAbsoluteFileSnapshot(absolute: string): Promise<WorkspaceFileSnapshot> {
+  return await readWorkspaceFileSnapshotWithLimit(absolute, MAX_RECONCILIATION_FILE_BYTES);
 }
 
 export async function absoluteEntryMatches(
@@ -35,12 +41,15 @@ export async function absoluteEntryMatches(
   if (entry.type === "symlink") {
     return stats.isSymbolicLink() && (await fs.readlink(absolute)) === entry.target;
   }
+  if (!stats.isFile() || stats.isSymbolicLink()) {
+    return false;
+  }
+  const snapshot = await readAbsoluteFileSnapshot(absolute).catch(() => undefined);
   return (
-    stats.isFile() &&
-    !stats.isSymbolicLink() &&
-    gitFileMode(stats.mode & 0o777) === entry.mode &&
-    stats.size === entry.size &&
-    (await sha256File(absolute)) === entry.sha256
+    snapshot?.type === "file" &&
+    snapshot.mode === entry.mode &&
+    snapshot.size === entry.size &&
+    snapshot.sha256 === entry.sha256
   );
 }
 
@@ -48,7 +57,16 @@ export async function entryMatches(
   root: string,
   entry: WorkerWorkspaceManifestEntry,
 ): Promise<boolean> {
-  return await absoluteEntryMatches(localPath(root, entry.path), entry);
+  if (entry.type === "symlink") {
+    return await absoluteEntryMatches(localPath(root, entry.path), entry);
+  }
+  const snapshot = await readWorkspaceFileSnapshot(root, entry.path).catch(() => undefined);
+  return (
+    snapshot?.type === "file" &&
+    snapshot.mode === entry.mode &&
+    snapshot.size === entry.size &&
+    snapshot.sha256 === entry.sha256
+  );
 }
 
 export async function readWorkspaceTreeFile(params: {
@@ -115,10 +133,16 @@ export async function directoryContainsOnlyJournalPaths(
     }
     const stats = await fs.lstat(localPath(root, child));
     if (stats.isDirectory() && !stats.isSymbolicLink()) {
-      if (!directories.has(child)) {
+      if (
+        !directories.has(child) &&
+        !(await directoryContainsOnlyDerivedWorkspaceEntries(root, child))
+      ) {
         return false;
       }
-      if (!(await directoryContainsOnlyJournalPaths(root, child, paths, directories))) {
+      if (
+        directories.has(child) &&
+        !(await directoryContainsOnlyJournalPaths(root, child, paths, directories))
+      ) {
         return false;
       }
     } else if (!paths.has(child)) {

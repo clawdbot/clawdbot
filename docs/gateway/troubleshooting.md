@@ -348,7 +348,7 @@ Use `error.details.code` from the failed `connect` response to pick the next act
 
 | Detail code                  | Meaning                                                                                                                                                                                      | Recommended action                                                                                                                                                                                                                                                                       |
 | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AUTH_TOKEN_MISSING`         | Client did not send a required shared token.                                                                                                                                                 | Paste/set token in the client and retry. For dashboard paths: `openclaw config get gateway.auth.token` then paste into Control UI settings.                                                                                                                                              |
+| `AUTH_TOKEN_MISSING`         | Client did not send a required shared token.                                                                                                                                                 | On the Gateway host, run `openclaw gateway auth-token --show` in an interactive terminal, paste the output into the client, and retry.                                                                                                                                                   |
 | `AUTH_TOKEN_MISMATCH`        | Shared token did not match gateway auth token.                                                                                                                                               | If `canRetryWithDeviceToken=true`, allow one trusted retry. Cached-token retries reuse stored approved scopes; explicit `deviceToken` / `scopes` callers keep requested scopes. If still failing, run the [token drift recovery checklist](/cli/devices#token-drift-recovery-checklist). |
 | `AUTH_DEVICE_TOKEN_MISMATCH` | Cached per-device token is stale or revoked.                                                                                                                                                 | Rotate/re-approve device token using [devices CLI](/cli/devices), then reconnect.                                                                                                                                                                                                        |
 | `AUTH_SCOPE_MISMATCH`        | Device token is valid, but its approved role/scopes do not cover this connect request.                                                                                                       | Re-pair the device or approve the requested scope contract; do not treat this as shared-token drift.                                                                                                                                                                                     |
@@ -601,11 +601,11 @@ Look for:
 Common signatures:
 
 - `critical memory pressure bundle written` appears shortly before restart → OpenClaw captured a pre-OOM stability bundle. Inspect it with `openclaw gateway stability --bundle latest`.
-- `memory pressure: level=critical ... memoryPressureSnapshot=disabled` appears in gateway logs → OpenClaw detected critical memory pressure, but the pre-OOM stability snapshot is off.
+- `memory pressure: level=critical` appears in gateway logs → OpenClaw detected critical memory pressure and recorded the available in-process memory facts.
 - `Largest session files:` points at a very large redacted transcript path → reduce retained session history, inspect session growth, or move old transcripts out of the active store before restarting.
-- `V8 heap:` used bytes are close to the heap limit → lower prompt/session pressure, reduce concurrent work, or raise the Node heap limit only after confirming the workload is expected.
+- `V8 heap:` used bytes are close to the heap limit → lower prompt/session pressure or reduce concurrent work first. For a managed service, inspect `Gateway heap:` in `openclaw gateway status`; if it says `not set`, regenerate old service metadata with `openclaw gateway install --force`. Ambient shell `NODE_OPTIONS` is intentionally ignored. Use an explicit supervisor-level heap override only after confirming the sustained workload and leaving enough native-memory headroom.
 - `Memory pressure: critical/rss_growth` → memory grew quickly inside one sampling window. Check the latest logs for a large import, runaway tool output, repeated retries, or a batch of queued agent work.
-- Critical memory pressure appears in logs but no bundle exists → this is the default. Set `diagnostics.memoryPressureSnapshot: true` to capture the pre-OOM stability bundle on future critical memory pressure events.
+- Critical memory pressure appears in logs but no bundle exists → capture `openclaw gateway diagnostics export` after the event for the available operational evidence.
 
 The stability bundle is payload-free. It includes operational memory evidence and redacted relative file paths, not message text, webhook bodies, credentials, tokens, cookies, or raw session ids. Attach the diagnostics export to bug reports instead of copying raw logs.
 
@@ -756,15 +756,15 @@ Look for:
 
 - Cron enabled and next wake present.
 - Job run history status (`ok`, `skipped`, `error`).
-- Heartbeat skip reasons (`quiet-hours`, `requests-in-flight`, `cron-in-progress`, `lanes-busy`, `alerts-disabled`, `empty-heartbeat-file`, `no-tasks-due`).
+- Heartbeat skip reasons (`quiet-hours`, `requests-in-flight`, `cron-in-progress`, `alerts-disabled`, `empty-heartbeat-file`).
 
 <AccordionGroup>
   <Accordion title="Common signatures">
     - `cron: scheduler disabled; jobs will not run automatically` → cron disabled.
     - `cron: timer tick failed` → scheduler tick failed; check file/log/runtime errors.
     - `heartbeat skipped` with `reason=quiet-hours` → outside active hours window.
-    - `heartbeat skipped` with `reason=empty-heartbeat-file` → `HEARTBEAT.md` exists but only contains blank, comment, header, fence, or empty-checklist scaffolding, so OpenClaw skips the model call.
-    - `heartbeat skipped` with `reason=no-tasks-due` → `HEARTBEAT.md` contains a `tasks:` block, but none of the tasks are due on this tick.
+    - `heartbeat skipped` with `reason=empty-heartbeat-file` → heartbeat monitor scratch only contains blank, comment, header, fence, or empty-checklist scaffolding, so OpenClaw skips the model call.
+    - `heartbeat skipped` with `reason=no-route` → the default `owner` target has no concrete owner in `commands.ownerAllowFrom` or channel `allowFrom`, the owner cannot resolve to a DM, or no channel is configured. Explicit `last` also needs a session conversation route.
     - `heartbeat: unknown accountId` → invalid account id for heartbeat delivery target.
     - `heartbeat skipped` with `reason=dm-blocked` → heartbeat target resolved to a DM-style destination while `agents.defaults.heartbeat.directPolicy` (or per-agent override) is set to `block`.
 

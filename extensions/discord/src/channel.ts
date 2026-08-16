@@ -24,8 +24,7 @@ import {
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveTargetsWithOptionalToken } from "openclaw/plugin-sdk/target-resolver-runtime";
 import {
-  listEnabledDiscordAccounts,
-  resolveDefaultDiscordAccountId,
+  listDiscordStartupAccountIds,
   resolveDiscordAccount,
   resolveDiscordAccountAllowFrom,
   type ResolvedDiscordAccount,
@@ -81,7 +80,7 @@ import type { DiscordProbe } from "./probe.js";
 import { getDiscordRuntime } from "./runtime.js";
 import { discordSecurityAdapter } from "./security.js";
 import { normalizeExplicitDiscordSessionKey } from "./session-key-normalization.js";
-import { discordSetupAdapter } from "./setup-adapter.js";
+import { discordSetupContract } from "./setup-adapter.js";
 import { createDiscordPluginBase, discordConfigAdapter } from "./shared.js";
 import { collectDiscordStatusIssues } from "./status-issues.js";
 import { parseDiscordTarget } from "./target-parsing.js";
@@ -199,6 +198,12 @@ const discordMessageActions = {
     resolveRuntimeDiscordMessageActions()?.describeMessageTool?.(ctx) ??
     discordMessageActionsImpl.describeMessageTool?.(ctx) ??
     null,
+  requiresTrustedRequesterSender: (
+    ctx: Parameters<NonNullable<ChannelMessageActionAdapter["requiresTrustedRequesterSender"]>>[0],
+  ) =>
+    resolveRuntimeDiscordMessageActions()?.requiresTrustedRequesterSender?.(ctx) ??
+    discordMessageActionsImpl.requiresTrustedRequesterSender?.(ctx) ??
+    false,
   extractToolSend: (
     ctx: Parameters<NonNullable<ChannelMessageActionAdapter["extractToolSend"]>>[0],
   ) =>
@@ -225,28 +230,8 @@ const discordMessageActions = {
   },
 };
 
-function resolveDiscordStartupAccountIds(cfg: OpenClawConfig): string[] {
-  const startupAccountIds = listEnabledDiscordAccounts(cfg)
-    .filter(
-      (candidate) =>
-        resolveConfiguredFromCredentialStatuses(candidate) ??
-        Boolean(normalizeOptionalString(candidate.token)),
-    )
-    .map((candidate) => candidate.accountId);
-  const defaultAccountId = resolveDefaultDiscordAccountId(cfg);
-  // Promote only a gateway-eligible account; otherwise a disabled or unconfigured
-  // default would waste the immediate startup slot while a real bot waits.
-  if (!startupAccountIds.includes(defaultAccountId)) {
-    return startupAccountIds;
-  }
-  return [
-    defaultAccountId,
-    ...startupAccountIds.filter((candidateId) => candidateId !== defaultAccountId),
-  ];
-}
-
 function resolveDiscordStartupDelayMs(cfg: OpenClawConfig, accountId: string): number {
-  const startupAccountIds = resolveDiscordStartupAccountIds(cfg);
+  const startupAccountIds = listDiscordStartupAccountIds(cfg);
   const startupIndex = startupAccountIds.findIndex((candidateId) => candidateId === accountId);
   return startupIndex <= 0 ? 0 : startupIndex * DISCORD_ACCOUNT_STARTUP_STAGGER_MS;
 }
@@ -301,7 +286,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
   createChatChannelPlugin<ResolvedDiscordAccount, DiscordProbe>({
     base: {
       ...createDiscordPluginBase({
-        setup: discordSetupAdapter,
+        setupContract: discordSetupContract,
       }),
       allowlist: {
         ...buildLegacyDmAccountAllowlistAdapter({

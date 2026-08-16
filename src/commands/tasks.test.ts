@@ -12,6 +12,8 @@ import type { TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
 import {
   createTaskRecord as createTaskRecordOrNull,
   getTaskById,
+  markTaskLostById,
+  markTaskTerminalById,
   reloadTaskRegistryFromStore,
 } from "../tasks/task-registry.js";
 import * as taskRegistryMaintenance from "../tasks/task-registry.maintenance.js";
@@ -23,9 +25,12 @@ import {
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
 } from "../tasks/task-runtime.test-helpers.js";
+import type {
+  TaskSystemAuditCode,
+  TaskSystemAuditSeverity,
+} from "../tasks/task-system-audit.types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import type { TaskSystemAuditCode, TaskSystemAuditSeverity } from "./tasks-audit-system.js";
 import {
   tasksAuditCommand,
   tasksCancelCommand,
@@ -79,6 +84,28 @@ function jsonRoundTrip<T>(value: T): T {
   return JSON.parse(serialized) as T;
 }
 
+const UNSAFE_TASK_TERMINAL_TEXT = "\u001b]52;c;Zm9yZ2Vk\u0007\nforged: yes";
+
+function createInspectableTask(params: Partial<Parameters<typeof createTaskRecord>[0]> = {}) {
+  return createTaskRecord({
+    runtime: "cli",
+    ownerKey: "agent:main:main",
+    scopeKind: "session",
+    status: "running",
+    notifyPolicy: "silent",
+    task: "Inspect a background task",
+    ...params,
+  });
+}
+
+function expectSafeTaskOutput(runtime: RuntimeEnv, channel: "log" | "error" = "log") {
+  for (const [line] of vi.mocked(runtime[channel]).mock.calls) {
+    for (const control of ["\u001b", "\u0007", "\n", "\r"]) {
+      expect(String(line)).not.toContain(control);
+    }
+  }
+}
+
 const zeroTaskAuditCounts = {
   delivery_failed: 0,
   inconsistent_timestamps: 0,
@@ -97,31 +124,28 @@ async function writeSessionEntries(
   }
 }
 
+function resetTaskCommandRuntime() {
+  taskRegistryMaintenance.stopTaskRegistryMaintenance();
+  taskRegistryMaintenance.resetTaskRegistryMaintenanceRuntimeForTests();
+  resetConfigRuntimeState();
+  resetDetachedTaskLifecycleRuntimeForTests();
+  resetTaskRegistryDeliveryRuntimeForTests();
+  resetTaskRegistryForTests({ persist: false });
+  resetTaskFlowRegistryForTests({ persist: false });
+  closeOpenClawAgentDatabasesForTest();
+}
+
 async function withTaskCommandStateDir(
   run: (state: OpenClawTestState) => Promise<void>,
 ): Promise<void> {
   await withOpenClawTestState(
     { layout: "state-only", prefix: "openclaw-tasks-command-" },
     async (state) => {
-      taskRegistryMaintenance.stopTaskRegistryMaintenance();
-      taskRegistryMaintenance.resetTaskRegistryMaintenanceRuntimeForTests();
-      resetConfigRuntimeState();
-      resetDetachedTaskLifecycleRuntimeForTests();
-      resetTaskRegistryDeliveryRuntimeForTests();
-      resetTaskRegistryForTests({ persist: false });
-      resetTaskFlowRegistryForTests({ persist: false });
-      closeOpenClawAgentDatabasesForTest();
+      resetTaskCommandRuntime();
       try {
         await run(state);
       } finally {
-        taskRegistryMaintenance.stopTaskRegistryMaintenance();
-        taskRegistryMaintenance.resetTaskRegistryMaintenanceRuntimeForTests();
-        resetConfigRuntimeState();
-        resetDetachedTaskLifecycleRuntimeForTests();
-        resetTaskRegistryDeliveryRuntimeForTests();
-        resetTaskRegistryForTests({ persist: false });
-        resetTaskFlowRegistryForTests({ persist: false });
-        closeOpenClawAgentDatabasesForTest();
+        resetTaskCommandRuntime();
       }
     },
   );
@@ -134,14 +158,7 @@ describe("tasks commands", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    taskRegistryMaintenance.stopTaskRegistryMaintenance();
-    taskRegistryMaintenance.resetTaskRegistryMaintenanceRuntimeForTests();
-    resetConfigRuntimeState();
-    resetDetachedTaskLifecycleRuntimeForTests();
-    resetTaskRegistryDeliveryRuntimeForTests();
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
-    closeOpenClawAgentDatabasesForTest();
+    resetTaskCommandRuntime();
     mocks.callGateway.mockReset();
   });
 
@@ -195,7 +212,9 @@ describe("tasks commands", () => {
       });
 
       const limitedRuntime = createRuntime();
+      const auditStartedAt = Date.now();
       await tasksAuditCommand({ json: true, limit: 1 }, limitedRuntime);
+      const auditFinishedAt = Date.now();
 
       const limitedPayload = readFirstJsonLog(limitedRuntime) as { findings: unknown[] };
       const [limitedFinding] = limitedPayload.findings as Array<{ ageMs?: number }>;
@@ -210,8 +229,8 @@ describe("tasks commands", () => {
         token: runningFlow.flowId,
         flow: jsonRoundTrip(runningFlow),
       });
-      expect(limitedFinding?.ageMs).toBeGreaterThanOrEqual(45 * 60_000);
-      expect(limitedFinding?.ageMs).toBeLessThan(45 * 60_000 + 1_000);
+      expect(limitedFinding?.ageMs).toBeGreaterThanOrEqual(auditStartedAt - runningFlow.updatedAt);
+      expect(limitedFinding?.ageMs).toBeLessThanOrEqual(auditFinishedAt - runningFlow.updatedAt);
     });
   });
 
@@ -389,6 +408,54 @@ describe("tasks commands", () => {
       expect(runtime.exit).not.toHaveBeenCalled();
     });
   });
+
+  it.each(["gateway", "local"] as const)(
+    "sanitizes untrusted %s task cancellation output",
+    async (owner) => {
+      await withTaskCommandStateDir(async () => {
+        const unsafe = UNSAFE_TASK_TERMINAL_TEXT;
+        const gatewayOwned = owner === "gateway";
+        const task = createInspectableTask({
+          runtime: gatewayOwned ? "cron" : "cli",
+          ownerKey: gatewayOwned ? "" : "agent:main:main",
+          scopeKind: gatewayOwned ? "system" : "session",
+          runId: `run${unsafe}`,
+        });
+        if (gatewayOwned) {
+          mocks.callGateway.mockResolvedValueOnce({
+            found: true,
+            cancelled: true,
+            task: {
+              taskId: `${task.taskId}${unsafe}`,
+              runtime: `cron${unsafe}`,
+              runId: task.runId,
+            },
+          });
+        }
+        const runtime = createRuntime();
+        await tasksCancelCommand({ lookup: task.taskId }, runtime);
+        expect(runtime.log).toHaveBeenCalledWith(
+          expect.stringContaining(`Cancelled ${task.taskId}`),
+        );
+        expectSafeTaskOutput(runtime);
+        if (!gatewayOwned) {
+          expect(getTaskById(task.taskId)).toMatchObject({
+            status: "cancelled",
+            runId: `run${unsafe}`,
+          });
+          return;
+        }
+        mocks.callGateway.mockResolvedValueOnce({
+          found: true,
+          cancelled: false,
+          reason: `gateway refused${unsafe}`,
+        });
+        const failureRuntime = createRuntime();
+        await tasksCancelCommand({ lookup: task.taskId }, failureRuntime);
+        expectSafeTaskOutput(failureRuntime, "error");
+      });
+    },
+  );
 
   it("fails ACP task cancellation loudly when the live gateway is unavailable", async () => {
     await withTaskCommandStateDir(async () => {
@@ -680,6 +747,94 @@ describe("tasks commands", () => {
     });
   });
 
+  it("sanitizes every persisted task surface while preserving raw task JSON", async () => {
+    await withTaskCommandStateDir(async () => {
+      const unsafe = UNSAFE_TASK_TERMINAL_TEXT;
+      const task = createInspectableTask({
+        sourceId: `source${unsafe}`,
+        childSessionKey: `agent:main:child${unsafe}`,
+        parentTaskId: `parent${unsafe}`,
+        agentId: `worker${unsafe}`,
+        runId: `run${unsafe}`,
+        label: `label${unsafe}`,
+        task: `prompt${unsafe}`,
+        progressSummary: `progress${unsafe}`,
+        terminalSummary: `summary${unsafe}`,
+      });
+      markTaskLostById({ taskId: task.taskId, endedAt: Date.now(), error: `error${unsafe}` });
+      const showRuntime = createRuntime();
+      const listRuntime = createRuntime();
+      const auditRuntime = createRuntime();
+      await tasksShowCommand({ lookup: task.taskId }, showRuntime);
+      await tasksListCommand({}, listRuntime);
+      await tasksAuditCommand({}, auditRuntime);
+      for (const runtime of [showRuntime, listRuntime, auditRuntime]) {
+        expectSafeTaskOutput(runtime);
+      }
+      const shown = vi
+        .mocked(showRuntime.log)
+        .mock.calls.map(([line]) => String(line))
+        .join("|");
+      for (const field of [
+        "sourceId",
+        "childSessionKey",
+        "parentTaskId",
+        "agentId",
+        "runId",
+        "label",
+        "task",
+        "error",
+        "progressSummary",
+        "terminalSummary",
+      ]) {
+        expect(shown).toContain(`${field}:`);
+      }
+      expect(vi.mocked(listRuntime.log).mock.calls.flat().join("|")).toContain("error");
+      expect(vi.mocked(auditRuntime.log).mock.calls.flat().join("|")).toContain("error");
+      const jsonRuntime = createRuntime();
+      await tasksShowCommand({ lookup: task.taskId, json: true }, jsonRuntime);
+      expect(readFirstJsonLog(jsonRuntime)).toEqual(jsonRoundTrip(getTaskById(task.taskId)));
+      expect(getTaskById(task.taskId)).toMatchObject({
+        runId: `run${unsafe}`,
+        error: `error${unsafe}`,
+      });
+      const lookupRuntime = createRuntime();
+      await tasksShowCommand({ lookup: `missing${unsafe}` }, lookupRuntime);
+      expectSafeTaskOutput(lookupRuntime, "error");
+    });
+  });
+
+  it.each(["failed", "timed_out", "lost"] as const)(
+    "shows the persisted failure reason for %s tasks in list summaries",
+    async (status) => {
+      await withTaskCommandStateDir(async () => {
+        const task = createInspectableTask({
+          runId: `task-list-${status}`,
+          label: "Original task title",
+          progressSummary: "Outdated running progress",
+          terminalSummary: "Generic terminal summary",
+        });
+        const error = `${status}: upstream credentials need attention`;
+        const terminal = { taskId: task.taskId, endedAt: Date.now(), error };
+        if (status === "lost") {
+          markTaskLostById(terminal);
+        } else {
+          markTaskTerminalById({
+            ...terminal,
+            status,
+            terminalSummary: "Generic terminal summary",
+          });
+        }
+        const runtime = createRuntime();
+        await tasksListCommand({}, runtime);
+        const output = vi.mocked(runtime.log).mock.calls.flat().join("|");
+        expect(output).toContain(error);
+        expect(output).not.toContain("Outdated running progress");
+        expect(output).not.toContain("Generic terminal summary");
+      });
+    },
+  );
+
   it("keeps task list summaries within their UTF-16 column limit", async () => {
     await withTaskCommandStateDir(async () => {
       createTaskRecord({
@@ -691,6 +846,8 @@ describe("tasks commands", () => {
         task: "Inspect task summary",
         terminalSummary: `${"y".repeat(78)}🚀xx`,
       });
+      createInspectableTask({ progressSummary: "Fetching provider credentials" });
+      createInspectableTask({ status: "succeeded", label: "Human-readable task title" });
       const runtime = createRuntime();
 
       await tasksListCommand({}, runtime);
@@ -701,6 +858,8 @@ describe("tasks commands", () => {
         .join("\n");
       expect(output).toContain(`${"y".repeat(78)}…`);
       expect(output).not.toContain("🚀");
+      expect(output).toContain("Fetching provider credentials");
+      expect(output).toContain("Human-readable task title");
     });
   });
 

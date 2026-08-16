@@ -26,7 +26,7 @@ import { splitTelegramHtmlChunks } from "./format.js";
 import {
   canonicalizeTelegramPresentationPayload,
   resolveTelegramInteractiveTextFallback,
-  TELEGRAM_PRESENTATION_CAPABILITIES,
+  resolveTelegramPresentationCapabilities,
 } from "./interactive-fallback.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
 import {
@@ -77,6 +77,7 @@ async function resolveTelegramSendContext(params: {
   onDeliveryResult?: Parameters<
     NonNullable<ChannelOutboundAdapter["sendText"]>
   >[0]["onDeliveryResult"];
+  onPlatformSendDispatch?: () => Promise<void>;
   resolveSend: ResolveTelegramSendFn;
 }): Promise<{
   send: TelegramSendFn;
@@ -93,6 +94,7 @@ async function resolveTelegramSendContext(params: {
     silent?: boolean;
     gatewayClientScopes?: readonly string[];
     onDeliveryResult?: TelegramSendOpts["onDeliveryResult"];
+    onPlatformSendDispatch?: TelegramSendOpts["onPlatformSendDispatch"];
   };
 }> {
   const send = await params.resolveSend(params.deps);
@@ -113,6 +115,7 @@ async function resolveTelegramSendContext(params: {
             await params.onDeliveryResult?.(attachChannelToResult("telegram", result));
           }
         : undefined,
+      onPlatformSendDispatch: params.onPlatformSendDispatch,
       ...(params.formatting?.parseMode === "HTML" ? { textMode: "html" as const } : {}),
       tableMode: params.formatting?.tableMode,
     },
@@ -127,6 +130,24 @@ async function resolveTelegramOutboundSendContext(
   return { outboundTo, send, baseOpts };
 }
 
+// Native table rendering requires the account's rich markdown funnel; HTML-mode
+// text stays on the legacy parse_mode sender where table islands never convert.
+function telegramRichTablesEnabled(params: {
+  cfg: NonNullable<TelegramSendOpts>["cfg"];
+  accountId?: string | null;
+  htmlTextMode: boolean;
+}): boolean {
+  if (params.htmlTextMode) {
+    return false;
+  }
+  return (
+    mergeTelegramAccountConfig(
+      params.cfg,
+      params.accountId ?? resolveDefaultTelegramAccountId(params.cfg),
+    ).richMessages === true
+  );
+}
+
 type CreateTelegramOutboundAdapterOptions = {
   resolveSend?: ResolveTelegramSendFn;
   loadSendModule?: LoadTelegramSendModuleFn;
@@ -137,6 +158,133 @@ type CreateTelegramOutboundAdapterOptions = {
   preferFinalAssistantVisibleText?: boolean;
 };
 
+function normalizeTelegramMetadataOnlyPayload(payload: ReplyPayload): ReplyPayload | null {
+  const telegramData = payload.channelData?.telegram as
+    | {
+        buttons?: TelegramInlineButtons;
+        quoteText?: string;
+        reaction?: { emoji?: unknown; replyToId?: unknown; replyToCurrent?: unknown };
+      }
+    | undefined;
+  const text = resolveTelegramInteractiveTextFallback({
+    text: payload.text,
+    interactive: payload.interactive,
+    presentation: payload.presentation,
+  });
+  if (
+    text?.trim() ||
+    resolveSendableOutboundReplyParts(payload).mediaUrls.length > 0 ||
+    payload.location ||
+    payload.audioAsVoice === true ||
+    payload.videoAsNote === true ||
+    payload.presentation ||
+    payload.interactive
+  ) {
+    return payload;
+  }
+  const buttons = resolveTelegramInlineButtons({
+    buttons: telegramData?.buttons,
+    presentation: payload.presentation,
+    interactive: payload.interactive,
+  });
+  const hasQuoteText =
+    typeof telegramData?.quoteText === "string" && Boolean(telegramData.quoteText.trim());
+  const hasReaction =
+    typeof telegramData?.reaction?.emoji === "string" &&
+    Boolean(telegramData.reaction.emoji.trim());
+  if (hasReaction && !buttons?.length && !hasQuoteText) {
+    return payload;
+  }
+  const fallbackText = payload.fallbackText?.text.trim();
+  if (!buttons?.length && !hasQuoteText) {
+    return null;
+  }
+  return fallbackText ? { ...payload, text: fallbackText } : null;
+}
+
+function mergeTelegramFallbackPayloads(source: ReplyPayload, adopter: ReplyPayload): ReplyPayload {
+  const sourceTelegram = source.channelData?.telegram as
+    | { buttons?: TelegramInlineButtons; quoteText?: string }
+    | undefined;
+  const adopterTelegram = adopter.channelData?.telegram as
+    | { buttons?: TelegramInlineButtons; quoteText?: string }
+    | undefined;
+  const buttons = [...(sourceTelegram?.buttons ?? []), ...(adopterTelegram?.buttons ?? [])];
+  const quoteText = sourceTelegram?.quoteText?.trim()
+    ? sourceTelegram.quoteText
+    : adopterTelegram?.quoteText;
+  const telegram =
+    sourceTelegram || adopterTelegram
+      ? {
+          ...adopterTelegram,
+          ...sourceTelegram,
+          ...(buttons.length > 0 ? { buttons } : {}),
+          ...(quoteText ? { quoteText } : {}),
+        }
+      : undefined;
+  return {
+    ...adopter,
+    ...source,
+    fallbackText: adopter.fallbackText,
+    channelData: {
+      ...adopter.channelData,
+      ...source.channelData,
+      ...(telegram ? { telegram } : {}),
+    },
+  };
+}
+
+function normalizeTelegramFallbackPayloadBatch(
+  entries: readonly { index: number; payload: ReplyPayload }[],
+): ReadonlyArray<ReplyPayload | null> {
+  const normalized: Array<ReplyPayload | null> = entries.map((entry) => entry.payload);
+  const positions = new Map(entries.map((entry, position) => [entry.index, position]));
+  for (const [position, entry] of entries.entries()) {
+    const fallback = entry.payload.fallbackText;
+    if (
+      fallback?.replacesPayloadIndex === undefined ||
+      entry.payload.text?.trim() !== fallback.text.trim() ||
+      entry.payload.interactive ||
+      entry.payload.presentation ||
+      resolveSendableOutboundReplyParts(entry.payload).mediaUrls.length > 0 ||
+      entry.payload.location ||
+      entry.payload.audioAsVoice === true ||
+      entry.payload.videoAsNote === true
+    ) {
+      continue;
+    }
+    const channelData = entry.payload.channelData;
+    const channelDataKeys = channelData ? Object.keys(channelData) : [];
+    const telegramData = channelData?.telegram as
+      | {
+          buttons?: TelegramInlineButtons;
+          quoteText?: string;
+          reaction?: unknown;
+        }
+      | undefined;
+    if (
+      channelDataKeys.length !== 1 ||
+      channelDataKeys[0] !== "telegram" ||
+      !telegramData?.buttons?.length ||
+      telegramData.quoteText?.trim() ||
+      telegramData.reaction
+    ) {
+      continue;
+    }
+    const sourcePosition = positions.get(fallback.replacesPayloadIndex);
+    if (sourcePosition === undefined) {
+      continue;
+    }
+    const source = normalized[sourcePosition];
+    if (!source || source.text?.trim() !== fallback.text.trim()) {
+      continue;
+    }
+    normalized[sourcePosition] = mergeTelegramFallbackPayloads(source, entry.payload);
+    normalized[position] = null;
+  }
+  return normalized;
+}
+
 export async function sendTelegramPayloadMessages(params: {
   send: TelegramSendFn;
   sendLocation: TelegramLocationFn;
@@ -145,7 +293,14 @@ export async function sendTelegramPayloadMessages(params: {
   payload: ReplyPayload;
   baseOpts: Omit<NonNullable<TelegramSendOpts>, "buttons" | "mediaUrl" | "quoteText">;
 }): Promise<Awaited<ReturnType<TelegramSendFn>>> {
-  const payload = canonicalizeTelegramPresentationPayload(params.payload);
+  const payload = canonicalizeTelegramPresentationPayload(params.payload, {
+    allowWebAppButtons: parseTelegramTarget(params.to).chatType === "direct",
+    richTables: telegramRichTablesEnabled({
+      cfg: params.baseOpts.cfg,
+      accountId: params.baseOpts.accountId,
+      htmlTextMode: params.baseOpts.textMode === "html",
+    }),
+  });
   const telegramData = payload.channelData?.telegram as
     | {
         buttons?: TelegramInlineButtons;
@@ -231,6 +386,7 @@ export async function sendTelegramPayloadMessages(params: {
     if (typeof replyToMessageId !== "number") {
       throw new Error("Telegram reaction requires a reply target");
     }
+    await params.baseOpts.onPlatformSendDispatch?.();
     const reactionResult = await params.react(params.to, replyToMessageId, reactionEmoji, {
       cfg: params.baseOpts.cfg,
       accountId: params.baseOpts.accountId,
@@ -284,6 +440,9 @@ export function createTelegramOutboundAdapter(
     chunkerMode: "markdown",
     extractMarkdownImages: true,
     textChunkLimit: TELEGRAM_TEXT_CHUNK_LIMIT,
+    preserveMarkdownDetails: ({ cfg, accountId }) =>
+      mergeTelegramAccountConfig(cfg, accountId ?? resolveDefaultTelegramAccountId(cfg))
+        .richMessages === true,
     // Default Telegram delivery reparses this result as Markdown; use its bold
     // and strike delimiters. Rich accounts must keep the agent's HTML islands
     // (<details>, <tg-math-block>, checkbox lists) intact — the blocks emitter
@@ -300,7 +459,17 @@ export function createTelegramOutboundAdapter(
     shouldTreatDeliveredTextAsVisible: options.shouldTreatDeliveredTextAsVisible,
     targetsMatchForReplySuppression: options.targetsMatchForReplySuppression,
     preferFinalAssistantVisibleText: options.preferFinalAssistantVisibleText,
-    presentationCapabilities: TELEGRAM_PRESENTATION_CAPABILITIES,
+    normalizePayload: ({ payload }) => normalizeTelegramMetadataOnlyPayload(payload),
+    normalizePayloadBatch: ({ payloads }) => normalizeTelegramFallbackPayloadBatch(payloads),
+    presentationCapabilities: resolveTelegramPresentationCapabilities({ richMessages: false }),
+    resolvePresentationCapabilities: ({ cfg, accountId, formatting }) =>
+      resolveTelegramPresentationCapabilities({
+        richMessages: telegramRichTablesEnabled({
+          cfg,
+          accountId,
+          htmlTextMode: formatting?.parseMode === "HTML",
+        }),
+      }),
     deliveryCapabilities: {
       pin: true,
       durableFinal: {
@@ -315,8 +484,18 @@ export function createTelegramOutboundAdapter(
         batch: true,
       },
     },
-    renderPresentation: ({ payload, presentation }) =>
-      canonicalizeTelegramPresentationPayload({ ...payload, presentation }),
+    renderPresentation: ({ payload, presentation, ctx }) =>
+      canonicalizeTelegramPresentationPayload(
+        { ...payload, presentation },
+        {
+          allowWebAppButtons: parseTelegramTarget(ctx.to ?? "").chatType === "direct",
+          richTables: telegramRichTablesEnabled({
+            cfg: ctx.cfg,
+            accountId: ctx.accountId,
+            htmlTextMode: ctx.formatting?.parseMode === "HTML",
+          }),
+        },
+      ),
     afterDeliverPayload: ({ cfg, target, payload, results }) => {
       const questionId = questionGatewayRuntime.readAskUserQuestionId(payload);
       const telegramResults = results.filter(
@@ -384,6 +563,7 @@ export function createTelegramOutboundAdapter(
         return await send(outboundTo, params.text, {
           ...baseOpts,
           mediaUrl: params.mediaUrl,
+          ...(params.mediaAccess !== undefined ? { mediaAccess: params.mediaAccess } : {}),
           mediaLocalRoots: params.mediaLocalRoots,
           mediaReadFile: params.mediaReadFile,
           forceDocument: params.forceDocument ?? false,
@@ -404,6 +584,7 @@ export function createTelegramOutboundAdapter(
         payload: params.payload,
         baseOpts: {
           ...baseOpts,
+          ...(params.mediaAccess !== undefined ? { mediaAccess: params.mediaAccess } : {}),
           mediaLocalRoots: params.mediaLocalRoots,
           mediaReadFile: params.mediaReadFile,
           forceDocument: params.forceDocument ?? false,
@@ -420,6 +601,7 @@ export function createTelegramOutboundAdapter(
       silent,
       isAnonymous,
       gatewayClientScopes,
+      onPlatformSendDispatch,
     }) => {
       const outboundTo = normalizeTelegramOutboundTarget(to);
       const { sendPollTelegram } = await loadSendModule();
@@ -430,6 +612,7 @@ export function createTelegramOutboundAdapter(
         silent: silent ?? undefined,
         isAnonymous: isAnonymous ?? undefined,
         gatewayClientScopes,
+        onPlatformSendDispatch,
       });
     },
   };

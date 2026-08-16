@@ -26,7 +26,8 @@ title: "OpenClaw"
 
 <p align="center">
   <strong>Any OS gateway for AI agents across Discord, Google Chat, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo, and more.</strong><br />
-  Send a message, get an agent response from your pocket. Run one Gateway across channel plugins, WebChat, and mobile nodes.
+  Send a message, get an agent response from your pocket. Run one Gateway across channel plugins, WebChat, and mobile nodes.<br />
+  Developed in the open by the <a href="https://openclaw.org">OpenClaw Foundation</a>, a non-profit.
 </p>
 
 <Columns>
@@ -98,7 +99,7 @@ OpenClaw is a **self-hosted gateway** that connects your favorite chat apps — 
 - **Agent-native**: built for coding agents with tool use, sessions, memory, and multi-agent routing
 - **Open source**: MIT licensed, community-driven
 
-**What do you need?** Node 24.15+ (recommended), Node 22 LTS (`22.22.3+`) for compatibility, or Node 25.9+, an API key from your chosen provider, and 5 minutes. For best quality and security, use the strongest latest-generation model available.
+**What do you need?** Node 26 (recommended), or another supported release: Node 22.22.3+, Node 24.15+, or Node 25.9+. You also need an API key from your chosen provider and 5 minutes. For best quality and security, use the strongest latest-generation model available.
 
 ## How it works
 

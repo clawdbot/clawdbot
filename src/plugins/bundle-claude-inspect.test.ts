@@ -75,6 +75,7 @@ describe("Claude bundle plugin inspect integration", () => {
             args: ["hello"],
           },
           "test-sse-server": {
+            type: "sse",
             url: "http://localhost:3000/sse",
           },
         },
@@ -219,10 +220,10 @@ describe("Claude bundle plugin inspect integration", () => {
 
   it.each([
     {
-      name: "inspects MCP runtime support with supported and unsupported servers",
+      name: "inspects MCP runtime support across stdio and HTTP transports",
       kind: "mcp" as const,
-      supportedServerNames: ["test-stdio-server"],
-      unsupportedServerNames: ["test-sse-server"],
+      supportedServerNames: ["test-stdio-server", "test-sse-server"],
+      unsupportedServerNames: [],
       hasSupportedKey: "hasSupportedStdioServer" as const,
     },
     {

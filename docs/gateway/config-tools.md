@@ -20,34 +20,34 @@ sidebarTitle: "Tools and custom providers"
 Local onboarding defaults new local configs to `tools.profile: "coding"` when unset (existing explicit profiles are preserved).
 </Note>
 
-| Profile     | Includes                                                                                                                                                                                                                     |
-| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `minimal`   | `session_status` only                                                                                                                                                                                                        |
-| `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `get_goal`, `create_goal`, `update_goal`, `update_plan`, `skill_workshop`, `image`, `image_generate`, `music_generate`, `video_generate` |
-| `messaging` | `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status`                                                                                                                                    |
-| `full`      | No restriction (same as unset)                                                                                                                                                                                               |
+| Profile     | Includes                                                                                                                                                                                                                                                |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `minimal`   | `session_status` only                                                                                                                                                                                                                                   |
+| `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `get_goal`, `create_goal`, `update_goal`, `update_plan`, `ask_user`, `skill_workshop`, `image`, `image_generate`, `music_generate`, `video_generate`                |
+| `messaging` | `group:messaging`, `sessions`, `sessions_list`, `sessions_history`, `sessions_search`, `conversations_list`, `conversations_send`, `conversations_turn`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status`, `ask_user` |
+| `full`      | No restriction (same as unset)                                                                                                                                                                                                                          |
 
 `coding` and `messaging` also implicitly allow `bundle-mcp` (configured MCP servers).
 
 ### Tool groups
 
-| Group              | Tools                                                                                                                                                 |
-| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `group:runtime`    | `exec`, `process`, `code_execution` (`bash` is accepted as an alias for `exec`)                                                                       |
-| `group:fs`         | `read`, `write`, `edit`, `apply_patch`                                                                                                                |
-| `group:sessions`   | `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status`, `spawn_task`, `dismiss_task` |
-| `group:memory`     | `memory_search`, `memory_get`                                                                                                                         |
-| `group:web`        | `web_search`, `x_search`, `web_fetch`                                                                                                                 |
-| `group:ui`         | `browser`, `canvas`                                                                                                                                   |
-| `group:automation` | `heartbeat_respond`, `cron`, `gateway`                                                                                                                |
-| `group:messaging`  | `message`                                                                                                                                             |
-| `group:nodes`      | `nodes`, `computer`                                                                                                                                   |
-| `group:agents`     | `agents_list`, `get_goal`, `create_goal`, `update_goal`, `update_plan`, `skill_workshop`                                                              |
-| `group:media`      | `image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                                                                  |
-| `group:openclaw`   | All built-in tools above except `read`/`write`/`edit`/`apply_patch`/`exec`/`process`/`canvas` (excludes plugin tools)                                 |
-| `group:plugins`    | Tools owned by loaded plugins, including configured MCP servers exposed through `bundle-mcp`                                                          |
+| Group              | Tools                                                                                                                                                                                                                                                    |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `group:runtime`    | `exec`, `process`, `code_execution` (`bash` is accepted as an alias for `exec`)                                                                                                                                                                          |
+| `group:fs`         | `read`, `write`, `edit`, `apply_patch`                                                                                                                                                                                                                   |
+| `group:sessions`   | `sessions`, `sessions_list`, `sessions_history`, `sessions_search`, `conversations_list`, `conversations_send`, `conversations_turn`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status`, `suggest_task`, `dismiss_task` |
+| `group:memory`     | `memory_search`, `memory_get`                                                                                                                                                                                                                            |
+| `group:web`        | `web_search`, `x_search`, `web_fetch`                                                                                                                                                                                                                    |
+| `group:ui`         | `browser`, `screen`, `dashboard`, `terminal`, `portal`, `canvas`, `show_widget`                                                                                                                                                                          |
+| `group:automation` | `heartbeat_respond`, `cron`, `gateway`                                                                                                                                                                                                                   |
+| `group:messaging`  | `message`                                                                                                                                                                                                                                                |
+| `group:nodes`      | `nodes`, `computer`                                                                                                                                                                                                                                      |
+| `group:agents`     | `agents_list`, `get_goal`, `create_goal`, `update_goal`, `update_plan`, `ask_user`, `skill_workshop`                                                                                                                                                     |
+| `group:media`      | `image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                                                                                                                                                                     |
+| `group:openclaw`   | All built-in tools above except `read`/`write`/`edit`/`apply_patch`/`exec`/`process`/`canvas` (excludes plugin tools)                                                                                                                                    |
+| `group:plugins`    | Tools owned by loaded plugins, including configured MCP servers exposed through `bundle-mcp`                                                                                                                                                             |
 
-`spawn_task` lets a coding agent propose confirmed follow-up work without starting it. The Control UI shows the title and summary as an actionable chip; a Gateway-backed TUI shows an equivalent interactive prompt. Accepting either creates a fresh managed-worktree session and sends the full prompt there while the current turn continues. `dismiss_task` withdraws a still-pending suggestion by the ephemeral `task_id` returned from `spawn_task`.
+`suggest_task` lets a coding agent propose confirmed follow-up work without starting it. The suggestion's project directory must be a git checkout; invalid suggestions, including a non-git directory or blank prompt, are rejected when the tool records them. The Control UI shows the title and summary as an actionable chip; a Gateway-backed TUI shows an equivalent interactive prompt. Accepting a suggestion can start it in a fresh managed worktree (the default), start it locally in a new session in the suggested checkout, send it to a cloud worker profile when one is configured, or deliver it into the source session. OpenClaw sends the full prompt to the selected destination while the current turn continues. `dismiss_task` withdraws a still-pending suggestion by the ephemeral `task_id` returned from `suggest_task`.
 
 The tools are offered only when the initiating operator surface can receive and action Gateway task-suggestion events. Channel sessions and local/embedded TUI sessions do not receive them; channel transports need a portable typed task action before they can safely expose this flow. Suggestions are process-local and disappear when the Gateway restarts. Both tools remain in the `coding` profile and `group:sessions`, so normal `tools.allow` and `tools.deny` policy configures them automatically when the surface supports them.
 
@@ -84,17 +84,23 @@ Without that sandbox-layer entry, the MCP server can still load successfully whi
 
 ### `tools.codeMode`
 
-`tools.codeMode` enables the generic OpenClaw code-mode surface. When enabled
+`tools.codeMode` gates the generic OpenClaw code-mode surface. When engaged
 for a run with tools, normal OpenClaw tools move behind the in-sandbox `tools.*`
 catalog bridge, and MCP tools are available through the generated `MCP`
 namespace. The model normally sees `exec` and `wait`; tools such as `computer`
 whose structured results cannot cross the JSON-only bridge stay direct.
 
+`enabled` defaults to `"auto"`, which engages code mode only for models whose
+catalog entry flags `compat.codeMode: "preferred"`. See
+[Code Mode - automatic per-model activation](/tools/code-mode#automatic-per-model-activation).
+
+To opt out for every run:
+
 ```json5
 {
   tools: {
     codeMode: {
-      enabled: true,
+      enabled: false,
     },
   },
 }
@@ -104,9 +110,12 @@ The shorthand is also accepted:
 
 ```json5
 {
-  tools: { codeMode: true },
+  tools: { codeMode: false },
 }
 ```
+
+`enabled: true` forces code mode on for every tool-capable run, regardless of
+model.
 
 MCP declarations are exposed through the read-only virtual API file surface in
 code mode. Guest code can call `API.list("mcp")` and
@@ -133,7 +142,7 @@ Global tool allow/deny policy (deny wins). Case-insensitive, supports `*` wildca
 ```
 
 <Note>
-`allow` and `alsoAllow` cannot both be set in the same scope (`tools`, `tools.byProvider.<id>`, `agents.list[].tools`) — config validation rejects it. Merge `alsoAllow` entries into `allow`, or drop `allow` and use `profile` + `alsoAllow` instead.
+`allow` and `alsoAllow` cannot both be set in the same scope (`tools`, `tools.byProvider.<id>`, `agents.entries.*.tools`) — config validation rejects it. Merge `alsoAllow` entries into `allow`, or drop `allow` and use `profile` + `alsoAllow` instead.
 </Note>
 
 ### `tools.byProvider`
@@ -145,7 +154,7 @@ Further restrict tools for specific providers or models. Order: base profile →
   tools: {
     profile: "coding",
     byProvider: {
-      "google-antigravity": { profile: "minimal" },
+      anthropic: { profile: "minimal" },
       "openai/gpt-5.4": { allow: ["group:fs", "sessions_list"] },
     },
   },
@@ -154,7 +163,7 @@ Further restrict tools for specific providers or models. Order: base profile →
 
 ### `tools.toolsBySender`
 
-Restricts tools for a specific requester identity. This is defense-in-depth on top of channel access control; sender values must come from the channel adapter, not message text.
+Restricts tools for the current turn's originating requester. This is defense-in-depth on top of channel access control; sender values must come from the channel adapter, not message text. It does not authenticate other content in the model prompt; see [Requester-scoped controls and prompt context](/gateway/security#requester-scoped-controls-and-prompt-context).
 
 ```json5
 {
@@ -170,7 +179,7 @@ Restricts tools for a specific requester identity. This is defense-in-depth on t
 
 Keys use explicit prefixes: `channel:<channelId>:<senderId>`, `id:<senderId>`, `e164:<phone>`, `username:<handle>`, `name:<displayName>`, or `"*"`. Channel ids are canonical OpenClaw ids; aliases such as `teams` normalize to `msteams`. Legacy unprefixed keys are accepted as `id:` only. Matching order is channel+id, id, e164, username, name, then wildcard.
 
-Per-agent `agents.list[].tools.toolsBySender` overrides the global sender match when it matches, even with an empty `{}` policy.
+Per-agent `agents.entries.*.tools.toolsBySender` overrides the global sender match when it matches, even with an empty `{}` policy.
 
 ### `tools.elevated`
 
@@ -190,7 +199,7 @@ Controls elevated exec access outside the sandbox:
 }
 ```
 
-- Per-agent override (`agents.list[].tools.elevated`) can only further restrict.
+- Per-agent override (`agents.entries.*.tools.elevated`) can only further restrict.
 - `/elevated on|off|ask|full` stores state per session; inline directives apply to single message.
 - Elevated `exec` bypasses sandboxing and uses the configured escape path (`gateway` by default, or `node` when the exec target is `node`).
 
@@ -201,7 +210,7 @@ Controls elevated exec access outside the sandbox:
   tools: {
     exec: {
       backgroundMs: 10000,
-      timeoutSec: 1800,
+      timeoutSeconds: 1800,
       cleanupMs: 1800000,
       approvalRunningNoticeMs: 10000,
       notifyOnExit: true,
@@ -220,62 +229,17 @@ Values shown are defaults except `applyPatch.allowModels` (empty/unset by defaul
 
 ### `tools.loopDetection`
 
-Tool-loop safety checks are **disabled by default**. Set `enabled: true` to activate detection. Settings can be defined globally in `tools.loopDetection` and overridden per-agent at `agents.list[].tools.loopDetection`.
+Tool-loop safety checks are **disabled by default**. Set `enabled: true` to activate detection. Settings can be defined globally in `tools.loopDetection` and overridden per-agent at `agents.entries.*.tools.loopDetection`.
 
 ```json5
 {
   tools: {
     loopDetection: {
       enabled: true,
-      historySize: 30,
-      warningThreshold: 10,
-      unknownToolThreshold: 10,
-      criticalThreshold: 20,
-      globalCircuitBreakerThreshold: 30,
-      detectors: {
-        genericRepeat: true,
-        knownPollNoProgress: true,
-        pingPong: true,
-      },
-      postCompactionGuard: {
-        windowSize: 3,
-      },
     },
   },
 }
 ```
-
-<ParamField path="historySize" type="number">
-  Max tool-call history retained for loop analysis.
-</ParamField>
-<ParamField path="warningThreshold" type="number">
-  Repeating no-progress pattern threshold for warnings.
-</ParamField>
-<ParamField path="unknownToolThreshold" type="number">
-  Blocks repeated calls to the same unavailable/unknown tool name after this many misses.
-</ParamField>
-<ParamField path="criticalThreshold" type="number">
-  Higher repeating threshold for blocking critical loops.
-</ParamField>
-<ParamField path="globalCircuitBreakerThreshold" type="number">
-  Hard stop threshold for any no-progress run.
-</ParamField>
-<ParamField path="detectors.genericRepeat" type="boolean">
-  Warn on repeated same-tool/same-args calls.
-</ParamField>
-<ParamField path="detectors.knownPollNoProgress" type="boolean">
-  Warn/block on known poll tools (`process.poll`, `command_status`, etc.).
-</ParamField>
-<ParamField path="detectors.pingPong" type="boolean">
-  Warn/block on alternating no-progress pair patterns.
-</ParamField>
-<ParamField path="postCompactionGuard.windowSize" type="number">
-  Number of attempts after auto-compaction the guard stays armed for; aborts if the agent repeats the same (tool, args, result) inside that window.
-</ParamField>
-
-<Warning>
-If `warningThreshold >= criticalThreshold` or `criticalThreshold >= globalCircuitBreakerThreshold`, validation fails.
-</Warning>
 
 ### `tools.web`
 
@@ -318,37 +282,26 @@ Configures inbound media understanding (image/audio/video):
   tools: {
     media: {
       concurrency: 2,
-      asyncCompletion: {
-        directSend: false, // deprecated: completions stay agent-mediated
-      },
-      audio: {
-        enabled: true,
-        maxBytes: 20971520,
-        scope: {
-          default: "deny",
-          rules: [{ action: "allow", match: { chatType: "direct" } }],
+      models: [
+        { provider: "openai", model: "gpt-4o-mini-transcribe", capabilities: ["audio"] },
+        {
+          type: "cli",
+          command: "whisper",
+          args: ["--model", "base", "{{AttachmentPath}}"],
+          capabilities: ["audio"],
         },
-        models: [
-          { provider: "openai", model: "gpt-4o-mini-transcribe" },
-          { type: "cli", command: "whisper", args: ["--model", "base", "{{MediaPath}}"] },
-        ],
-      },
-      image: {
-        enabled: true,
-        timeoutSeconds: 180,
-        models: [{ provider: "ollama", model: "gemma4:26b", timeoutSeconds: 300 }],
-      },
-      video: {
-        enabled: true,
-        maxBytes: 52428800,
-        models: [{ provider: "google", model: "gemini-3-flash-preview" }],
-      },
+        { provider: "ollama", model: "gemma4:26b", capabilities: ["image"] },
+        { provider: "google", model: "gemini-3-flash-preview", capabilities: ["video"] },
+      ],
+      audio: { enabled: true, preferredModel: "openai/gpt-4o-mini-transcribe" },
+      image: { enabled: true, preferredModel: "ollama/gemma4:26b" },
+      video: { enabled: true },
     },
   },
 }
 ```
 
-`concurrency` (default `2`), `audio.maxBytes` (default 20 MB), and `video.maxBytes` (default 50 MB) are shown at their defaults; `image.maxBytes` defaults to 10 MB. Per-capability request timeout defaults: image/audio `60`s, video `120`s.
+`tools.media.models` is the only configured model list. Every entry declares the capabilities it handles. The optional `preferredModel` selector accepts `provider/model`, a model id, `provider:<id>` for provider-default entries, or `cli:command`; matching entries move to the front of that capability's fallback order. Per-capability prompts, limits, request settings, scope, attachment policy, and audio transcript echo remain defaults for configured and auto-detected models; a model entry can override model-specific fields.
 
 <AccordionGroup>
   <Accordion title="Media model entry fields">
@@ -361,20 +314,16 @@ Configures inbound media understanding (image/audio/video):
     **CLI entry** (`type: "cli"`):
 
     - `command`: executable to run
-    - `args`: templated args (supports `{{MediaPath}}`, `{{Prompt}}`, `{{MaxChars}}`, etc.; `openclaw doctor --fix` migrates deprecated `{input}` placeholders to `{{MediaPath}}`)
+    - `args`: templated args (supports `{{AttachmentPath}}`, `{{AttachmentUrl}}`, `{{AttachmentContentType}}`, `{{AttachmentDir}}`, `{{AttachmentIndex}}`, `{{Prompt}}`, `{{MaxChars}}`, etc.; `openclaw doctor --fix` migrates deprecated `{input}` placeholders to `{{AttachmentPath}}`). The older `{{MediaPath}}`, `{{MediaUrl}}`, `{{MediaType}}`, and `{{MediaDir}}` aliases remain available during their compatibility window but are deprecated.
 
     **Common fields:**
 
-    - `capabilities`: optional list (`image`, `audio`, `video`). Each provider plugin declares its own default capability set; for example the bundled `openai` provider defaults to image+audio, `anthropic`/`minimax` to image, `google` to image+audio+video, and `groq` to audio.
+    - `capabilities`: list containing one or more of `image`, `audio`, and `video`.
     - `prompt`, `maxChars`, `maxBytes`, `timeoutSeconds`, `language`: per-entry overrides.
-    - `tools.media.image.timeoutSeconds` and matching image model `timeoutSeconds` entries also apply when the agent calls the explicit `image` tool. For image understanding, this timeout applies to the request itself and is not reduced by earlier preparation work.
+    - Matching image model `timeoutSeconds` entries also apply when the agent calls the explicit `image` tool. For image understanding, this timeout applies to the request itself and is not reduced by earlier preparation work.
     - Failures fall back to the next entry.
 
     Provider auth follows standard order: `auth-profiles.json` → env vars → `models.providers.*.apiKey`.
-
-    **Async completion fields:**
-
-    - `asyncCompletion.directSend`: deprecated compatibility flag. Completed async media tasks stay requester-session mediated so the agent receives the result, decides how to tell the user, and uses the message tool when source delivery requires it.
 
   </Accordion>
 </AccordionGroup>
@@ -463,25 +412,25 @@ Controls inline attachment support for `sessions_spawn`.
   </Accordion>
 </AccordionGroup>
 
-<a id="toolsexperimental"></a>
+<a id="toolsupdateplan"></a>
 
-### `tools.experimental`
+### `tools.updatePlan`
 
-Experimental built-in tool flags. Default off unless a strict-agentic GPT-5 auto-enable rule applies.
+Kill switch for the structured `update_plan` checklist tool used for non-trivial multi-step work tracking.
 
 ```json5
 {
   tools: {
-    experimental: {
-      planTool: true, // enable experimental update_plan
-    },
+    updatePlan: false, // hide update_plan from every run
   },
 }
 ```
 
-- `planTool`: enables the structured `update_plan` tool for non-trivial multi-step work tracking.
-- Default: `false` unless `agents.defaults.embeddedAgent.executionContract` (or a per-agent override) is set to `"strict-agentic"` for an `openai` provider run against a GPT-5-family model id (this covers OpenAI Codex CLI runs too, since Codex auth/model routing lives under the `openai` provider). Set `true` to force the tool on outside that scope, or `false` to keep it off even for strict-agentic GPT-5 runs.
-- When enabled, the system prompt also adds usage guidance so the model only uses it for substantial work and keeps at most one step `in_progress`.
+- Default: `true` for every provider and model. Set `false` to keep the tool off; there is no model-specific auto-enable rule.
+- The tool description adds usage guidance so the model only uses it for substantial work and keeps at most one step `in_progress`.
+- `tools.deny: ["update_plan"]` also removes the tool, so use whichever surface already carries your tool policy.
+
+Older configs used `tools.experimental.planTool`. Run `openclaw doctor --fix` to move the value to `tools.updatePlan`.
 
 ### `agents.defaults.subagents`
 
@@ -552,8 +501,8 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     - Merge precedence for matching provider IDs:
       - Non-empty agent `models.json` `baseUrl` values win.
       - Non-empty agent `apiKey` values win only when that provider is not SecretRef-managed in current config/auth-profile context.
-      - SecretRef-managed provider `apiKey` values are refreshed from source markers (`ENV_VAR_NAME` for env refs, `secretref-managed` for file/exec refs) instead of persisting resolved secrets.
-      - SecretRef-managed provider header values are refreshed from source markers (`secretref-env:ENV_VAR_NAME` for env refs, `secretref-managed` for file/exec refs).
+      - SecretRef-managed provider `apiKey` values are refreshed from source markers (`ENV_VAR_NAME` for env refs, `secretref-managed` for file/exec/store refs) instead of persisting resolved secrets.
+      - SecretRef-managed provider header values are refreshed from source markers (`secretref-env:ENV_VAR_NAME` for env refs, `secretref-managed` for file/exec/store refs).
       - Empty or missing agent `apiKey`/`baseUrl` fall back to `models.providers` in config.
       - Matching model `contextWindow`/`maxTokens`: the explicit config value wins when present and valid (a positive finite number); otherwise the implicit/generated catalog value is used.
       - Matching model `contextTokens` follows the same explicit-wins-else-implicit rule; use it to limit effective context without changing native model metadata.
@@ -602,11 +551,38 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     - `models.providers.*.models.*.input`: model input modalities. Use `["text"]` for text-only models and `["text", "image"]` for native image/vision models. Image attachments are only injected into agent turns when the selected model is marked image-capable.
     - `models.providers.*.models.*.contextWindow`: native model context window metadata. This overrides provider-level `contextWindow` for that model.
     - `models.providers.*.models.*.contextTokens`: optional runtime context cap. This overrides provider-level `contextTokens`; use it when you want a smaller effective context budget than the model's native `contextWindow`; `openclaw models list` shows both values when they differ.
-    - `models.providers.*.models.*.compat.supportsDeveloperRole`: optional compatibility hint. For `api: "openai-completions"` with a non-empty non-native `baseUrl` (host not `api.openai.com`), OpenClaw forces this to `false` at runtime. Empty/omitted `baseUrl` keeps default OpenAI behavior.
-    - `models.providers.*.models.*.compat.requiresStringContent`: optional compatibility hint for string-only OpenAI-compatible chat endpoints. When `true`, OpenClaw flattens pure text `messages[].content` arrays into plain strings before sending the request.
-    - `models.providers.*.models.*.compat.strictMessageKeys`: optional compatibility hint for strict OpenAI-compatible chat endpoints. When `true`, OpenClaw strips outgoing Chat Completions message objects to `role` and `content` before sending the request.
-    - `models.providers.*.models.*.compat.thinkingFormat`: optional thinking payload hint. Use `"together"` for Together-style `reasoning.enabled`, `"qwen"` for top-level `enable_thinking`, or `"qwen-chat-template"` for `chat_template_kwargs.enable_thinking` on Qwen-family OpenAI-compatible servers that support request-level chat-template kwargs, such as vLLM. Configured vLLM Qwen models expose binary `/think` choices (`off`, `on`) for these formats.
-    - `models.providers.*.models.*.compat.requiresReasoningContentOnAssistantMessages`: optional compatibility hint for DeepSeek-style Chat Completions backends that require prior assistant messages to keep `reasoning_content` on replay. When `true`, OpenClaw preserves that field on outgoing assistant messages. Use this when wiring a custom DeepSeek-compatible proxy that rejects requests after stripped reasoning. Default `false`.
+
+    #### Custom provider capability declarations
+
+    Provider catalogs own `compat` for bundled and catalog-known model routes. Do not copy those flags into config: OpenClaw uses the catalog row when the configured `api` and `baseUrl` still identify that route. `openclaw doctor --fix` removes matching legacy overrides and reports divergent values for review.
+
+    A `compat` block remains supported for a genuinely custom provider, custom model, or catalog model routed to a different endpoint. Set only capabilities verified against that endpoint:
+
+    | Custom-route key | Runtime contract |
+    | --- | --- |
+    | `supportsStore` | Accepts the OpenAI `store` request field. |
+    | `supportsPromptCacheKey` | Accepts OpenAI prompt-cache/session-affinity keys. |
+    | `supportsDeveloperRole` | Accepts `developer` messages instead of requiring `system`. |
+    | `supportsReasoningEffort` | Accepts a reasoning-effort control. |
+    | `supportsTemperature` | Accepts `temperature` for this model and adapter. |
+    | `supportsUsageInStreaming` | Emits usage metadata in streaming responses. |
+    | `supportsTools` | Supports structured tool/function calling. Set `false` to disable tools. |
+    | `supportsStrictMode` | Accepts strict tool schemas. |
+    | `requiresStringContent` | Requires plain-string Chat Completions message content. |
+    | `strictMessageKeys` | Requires outgoing messages to contain only accepted keys. |
+    | `visibleReasoningDetailTypes` | Names reasoning detail block types safe to show in transcripts. |
+    | `supportedReasoningEfforts` | Lists the endpoint's accepted reasoning labels. |
+    | `reasoningEffortMap` | Maps OpenClaw thinking labels to endpoint-specific labels. |
+    | `maxTokensField` | Selects `max_tokens` or `max_completion_tokens`. |
+    | `thinkingFormat` | Selects the endpoint's reasoning payload dialect. |
+    | `requiresToolResultName` | Requires a tool name on tool-result messages. |
+    | `requiresAssistantAfterToolResult` | Requires an assistant message after tool results. |
+    | `requiresThinkingAsText` | Replays reasoning as text rather than structured content. |
+    | `requiresReasoningContentOnAssistantMessages` | Preserves DeepSeek-style `reasoning_content` during replay. |
+    | `toolSchemaProfile` | Selects a tool-schema normalization profile. Custom model entries recognize `llamacpp` and `gemini`. The `llamacpp` profile removes `pattern` and `maxLength` values at or above 2000; built-in `llama-cpp`, `ollama`, and `lmstudio` providers apply the same cleaner automatically. Custom `llama-server` models must select it explicitly. See the llama.cpp example below. |
+    | `unsupportedToolSchemaKeywords` | Removes named JSON Schema keywords rejected by the endpoint before tool schemas are sent. Use this for endpoint-specific gaps beyond a profile's targeted transformations. |
+    | `toolCallArgumentsEncoding` | Selects the endpoint's tool-call argument encoding. |
+    | `requiresOpenAiAnthropicToolPayload` | Converts OpenAI-shaped tool calls to Anthropic-family payloads. |
 
   </Accordion>
   <Accordion title="Amazon Bedrock discovery">
@@ -631,7 +607,7 @@ Interactive custom-provider onboarding infers image input for known vision-model
 
     ```json5
     {
-      env: { CEREBRAS_API_KEY: "sk-..." },
+      env: { vars: { CEREBRAS_API_KEY: "sk-..." } },
       agents: {
         defaults: {
           model: {
@@ -667,7 +643,7 @@ Interactive custom-provider onboarding infers image input for known vision-model
   <Accordion title="Kimi Coding">
     ```json5
     {
-      env: { KIMI_API_KEY: "sk-..." },
+      env: { vars: { KIMI_API_KEY: "sk-..." } },
       agents: {
         defaults: {
           model: { primary: "kimi/kimi-for-coding" },
@@ -678,6 +654,44 @@ Interactive custom-provider onboarding infers image input for known vision-model
     ```
 
     Anthropic-compatible, built-in provider. Shortcut: `openclaw onboard --auth-choice kimi-code-api-key`.
+
+  </Accordion>
+  <Accordion title="Local models (llama.cpp / llama-server)">
+    Point a **custom** `openai-completions` provider at a remote `llama-server` (or another OpenAI-compatible llama.cpp endpoint). The built-in `llama-cpp`, `ollama`, and `lmstudio` providers apply the llama.cpp schema cleaner automatically; a custom endpoint does not. Set `compat.toolSchemaProfile: "llamacpp"` on each model whose llama-server chat template compiles tool arguments into GBNF. The profile removes `pattern` and `maxLength` values at or above 2000, covering the `cron` tool's `trigger.script` limit of 65536. It is a targeted mitigation, not complete compatibility for every JSON Schema constraint or `minLength`.
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          model: { primary: "my-llamacpp/qwen35" },
+        },
+      },
+      models: {
+        mode: "merge",
+        providers: {
+          "my-llamacpp": {
+            baseUrl: "http://127.0.0.1:8080/v1",
+            apiKey: "llamacpp-no-key",
+            api: "openai-completions",
+            models: [
+              {
+                id: "qwen35",
+                name: "Qwen3.5 (llama-server)",
+                contextWindow: 8192,
+                maxTokens: 2048,
+                compat: {
+                  supportsTools: true,
+                  toolSchemaProfile: "llamacpp",
+                },
+              },
+            ],
+          },
+        },
+      },
+    }
+    ```
+
+    On older builds without `toolSchemaProfile`, the broader fallback is `compat.unsupportedToolSchemaKeywords: ["pattern", "patternProperties", "format", "propertyNames", "uniqueItems", "contains", "minContains", "maxContains", "minLength", "maxLength"]`. Unlike the profile, this removes every listed keyword unconditionally.
 
   </Accordion>
   <Accordion title="Local models (LM Studio)">
@@ -724,7 +738,7 @@ Interactive custom-provider onboarding infers image input for known vision-model
   <Accordion title="Moonshot AI (Kimi)">
     ```json5
     {
-      env: { MOONSHOT_API_KEY: "sk-..." },
+      env: { vars: { MOONSHOT_API_KEY: "sk-..." } },
       agents: {
         defaults: {
           model: { primary: "moonshot/kimi-k2.6" },
@@ -778,7 +792,7 @@ Interactive custom-provider onboarding infers image input for known vision-model
   <Accordion title="Synthetic (Anthropic-compatible)">
     ```json5
     {
-      env: { SYNTHETIC_API_KEY: "sk-..." },
+      env: { vars: { SYNTHETIC_API_KEY: "sk-..." } },
       agents: {
         defaults: {
           model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M3" },

@@ -1,6 +1,9 @@
 // Qa Lab plugin module implements coverage report behavior.
-import { normalizeStringEntriesLower } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { QA_SCENARIO_PACKS, type QaSeedScenarioWithSource } from "./scenario-catalog.js";
+import {
+  normalizeOptionalString as stringifyConfigValue,
+  normalizeStringEntriesLower,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import {
   readQaScorecardTaxonomyReport,
   type QaScorecardTaxonomyReport,
@@ -22,7 +25,7 @@ type QaScenarioSearchMatch = QaCoverageScenarioSummary & {
   codeRefs: string[];
   executionKind: QaSeedScenarioWithSource["execution"]["kind"];
   executionPath?: string;
-  runtimeParityTier?: string;
+  runtimePairLane?: string;
   requiredProviderMode?: string;
   requiredProvider?: string;
   requiredModel?: string;
@@ -39,14 +42,6 @@ type QaCoverageIdSummary = {
   scenarios: QaCoverageScenarioReference[];
 };
 
-type QaCoverageScenarioPackSummary = {
-  id: string;
-  title: string;
-  scenarioIds: string[];
-  coverageIds: string[];
-  missingScenarioIds: string[];
-};
-
 type QaCoverageInventory = {
   scenarioCount: number;
   coverageIdCount: number;
@@ -57,7 +52,6 @@ type QaCoverageInventory = {
   missingCoverage: QaCoverageScenarioSummary[];
   byTheme: Record<string, QaCoverageIdSummary[]>;
   bySurface: Record<string, QaCoverageIdSummary[]>;
-  scenarioPacks: QaCoverageScenarioPackSummary[];
   scorecardTaxonomy: QaScorecardTaxonomyReport;
 };
 
@@ -124,7 +118,7 @@ function scenarioSearchText(scenario: QaSeedScenarioWithSource) {
       scenario.surface,
       ...(scenario.surfaces ?? []),
       scenario.category ?? "",
-      scenario.runtimeParityTier ?? "",
+      scenario.runtimePairLane ?? "",
       scenario.risk ?? "",
       scenario.riskLevel ?? "",
       scenario.objective,
@@ -143,10 +137,6 @@ function scenarioSearchText(scenario: QaSeedScenarioWithSource) {
   );
 }
 
-function stringifyConfigValue(value: unknown) {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function summarizeScenarioSearchMatch(scenario: QaSeedScenarioWithSource): QaScenarioSearchMatch {
   const config = scenario.execution.config ?? {};
   return {
@@ -160,7 +150,7 @@ function summarizeScenarioSearchMatch(scenario: QaSeedScenarioWithSource): QaSce
     executionKind: scenario.execution.kind,
     channel: scenario.execution.channel,
     ...(scenario.execution.kind !== "flow" ? { executionPath: scenario.execution.path } : {}),
-    runtimeParityTier: scenario.runtimeParityTier,
+    runtimePairLane: scenario.runtimePairLane,
     requiredProviderMode: stringifyConfigValue(config.requiredProviderMode),
     requiredProvider: stringifyConfigValue(config.requiredProvider),
     requiredModel: stringifyConfigValue(config.requiredModel),
@@ -186,36 +176,6 @@ export function findQaScenarioMatches(
 
 function sortCoverageIds(coverageIds: readonly QaCoverageIdSummary[]) {
   return coverageIds.toSorted((left, right) => left.id.localeCompare(right.id));
-}
-
-function buildScenarioPackSummaries(
-  scenarios: readonly QaSeedScenarioWithSource[],
-): QaCoverageScenarioPackSummary[] {
-  const scenariosById = new Map(scenarios.map((scenario) => [scenario.id, scenario]));
-  return QA_SCENARIO_PACKS.map((pack) => {
-    const coverageIds = new Set<string>();
-    const missingScenarioIds: string[] = [];
-    for (const scenarioId of pack.scenarioIds) {
-      const scenario = scenariosById.get(scenarioId);
-      if (!scenario) {
-        missingScenarioIds.push(scenarioId);
-        continue;
-      }
-      for (const coverageId of [
-        ...(scenario.coverage?.primary ?? []),
-        ...(scenario.coverage?.secondary ?? []),
-      ]) {
-        coverageIds.add(coverageId);
-      }
-    }
-    return {
-      id: pack.id,
-      title: pack.title,
-      scenarioIds: [...pack.scenarioIds],
-      coverageIds: [...coverageIds].toSorted(),
-      missingScenarioIds,
-    };
-  }).toSorted((left, right) => left.id.localeCompare(right.id));
 }
 
 export function buildQaCoverageInventory(
@@ -292,7 +252,6 @@ export function buildQaCoverageInventory(
     missingCoverage,
     byTheme,
     bySurface,
-    scenarioPacks: buildScenarioPackSummaries(scenarios),
     scorecardTaxonomy: readQaScorecardTaxonomyReport(scenarios),
   };
 }
@@ -303,17 +262,6 @@ function pushCoverageIdLines(lines: string[], coverageIds: readonly QaCoverageId
       .map((scenario) => `${scenario.intent}: ${scenario.id} (${scenario.sourcePath})`)
       .join(", ");
     lines.push(`- ${coverage.id}: ${scenarios}`);
-  }
-}
-
-function pushScenarioPackLines(lines: string[], packs: readonly QaCoverageScenarioPackSummary[]) {
-  for (const pack of packs) {
-    const missing =
-      pack.missingScenarioIds.length > 0 ? pack.missingScenarioIds.join(", ") : "none";
-    lines.push(
-      `- ${pack.id} (${pack.title}): ${pack.scenarioIds.length} scenarios; coverage IDs: ${pack.coverageIds.join(", ")}; missing scenarios: ${missing}`,
-    );
-    lines.push(`  - scenarios: ${pack.scenarioIds.join(", ")}`);
   }
 }
 
@@ -393,12 +341,6 @@ export function renderQaCoverageMarkdownReport(inventory: QaCoverageInventory): 
     "",
   ];
 
-  if (inventory.scenarioPacks.length > 0) {
-    lines.push("## Scenario Packs", "");
-    pushScenarioPackLines(lines, inventory.scenarioPacks);
-    lines.push("");
-  }
-
   lines.push("## By Theme", "");
   for (const theme of Object.keys(inventory.byTheme).toSorted()) {
     lines.push(`### ${theme}`, "");
@@ -436,7 +378,7 @@ export function renderQaCoverageMarkdownReport(inventory: QaCoverageInventory): 
 
 function formatOptionalScenarioMetadata(match: QaScenarioSearchMatch) {
   const metadata = [
-    match.runtimeParityTier ? `runtimeParityTier=${match.runtimeParityTier}` : "",
+    match.runtimePairLane ? `runtimePairLane=${match.runtimePairLane}` : "",
     match.requiredProviderMode ? `providerMode=${match.requiredProviderMode}` : "",
     match.requiredProvider ? `provider=${match.requiredProvider}` : "",
     match.requiredModel ? `model=${match.requiredModel}` : "",

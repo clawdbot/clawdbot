@@ -197,11 +197,3 @@ export function setMatrixThreadBindingMaxAgeBySessionKey(params: {
     }),
   );
 }
-
-export function resetMatrixThreadBindingsForTests(): void {
-  for (const { manager } of MANAGERS_BY_ACCOUNT_ID.values()) {
-    manager.stop();
-  }
-  MANAGERS_BY_ACCOUNT_ID.clear();
-  BINDINGS_BY_ACCOUNT_CONVERSATION.clear();
-}

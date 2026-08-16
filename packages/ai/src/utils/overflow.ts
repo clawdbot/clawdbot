@@ -10,7 +10,7 @@ export function isConfiguredContextSizeOverflowError(errorMessage: string): bool
 }
 
 /**
- * Regex patterns to detect context overflow errors from different providers.
+ * Canonical scoped patterns for context overflow errors from different providers.
  *
  * These patterns match error messages returned when the input exceeds
  * the model's context window.
@@ -31,17 +31,20 @@ export function isConfiguredContextSizeOverflowError(errorMessage: string): bool
  * - GitHub Copilot: "prompt token count of X exceeds the limit of Y"
  * - MiniMax: "invalid params, context window exceeds limit"
  * - Kimi For Coding: "Your request exceeded model token limit: X (requested: Y)"
- * - Cerebras: "400/413 status code (no body)"
+ * - Cerebras: "413 status code (no body)"
  * - Mistral: "Prompt contains X tokens ... too large for model with Y maximum context length"
- * - z.ai: Does NOT error, accepts overflow silently - handled via usage.input > contextWindow
+ * - z.ai: May return "tokens in request more than max tokens allowed" (code 1210),
+ *   "Prompt exceeds max length" (code 1261), or accept overflow silently; handled via the
+ *   error patterns or usage.input > contextWindow
  * - Xiaomi MiMo: Truncates input to fill contextWindow exactly, then returns finish_reason "length"
  *   with output=0 (no room left to generate). Detected via stopReason "length" + zero output +
  *   input filling the context window.
  * - Ollama: Some deployments truncate silently, others return errors like "prompt too long; exceeded max context length by X tokens"
  */
-const OVERFLOW_PATTERNS = [
+const ASSISTANT_OVERFLOW_PATTERNS = [
   /prompt is too long/i, // Anthropic token overflow
   /request_too_large/i, // Anthropic request byte-size overflow (HTTP 413)
+  /input length and `?max_tokens`? exceed context limit: [\d,]+ \+ [\d,]+ > [\d,]+/i, // Anthropic direct API
   /input is too long for requested model/i, // Amazon Bedrock
   /exceeds the context window/i, // OpenAI (Completions & Responses API)
   /exceeds (?:the )?(?:model'?s )?maximum context length(?: of [\d,]+ tokens?|\s*\([\d,]+\))/i, // OpenAI-compatible proxies (LiteLLM)
@@ -56,6 +59,8 @@ const OVERFLOW_PATTERNS = [
   /greater than the context length/i, // LM Studio
   /context window exceeds limit/i, // MiniMax
   /exceeded model token limit/i, // Kimi For Coding
+  /tokens? in request more than max tokens? allowed/i, // Z.AI / Zhipu GLM error 1210
+  /prompt exceeds max(?:imum)? length/i, // Z.AI / Zhipu GLM error 1261
   /too large for model with \d+ maximum context length/i, // Mistral
   CONFIGURED_CONTEXT_SIZE_OVERFLOW_RE, // DS4 server
   /model_context_window_exceeded/i, // z.ai non-standard finish_reason surfaced as error text
@@ -63,12 +68,75 @@ const OVERFLOW_PATTERNS = [
   /context[_ ]length[_ ]exceeded/i, // Generic fallback
   /too many tokens/i, // Generic fallback
   /token limit exceeded/i, // Generic fallback
-  /^4(?:00|13)\s*(?:status code)?\s*\(no body\)/i, // Cerebras: 400/413 with no body
+  /^413\s*(?:status code)?\s*\(no body\)/i, // Cerebras: 413 with no body
 ];
+
+const FAILOVER_EXPLICIT_OVERFLOW_PATTERNS = [
+  /request_too_large/i, // Anthropic request byte-size overflow
+  /context_overflow/i,
+  CONFIGURED_CONTEXT_SIZE_OVERFLOW_RE, // DS4 server
+  /invalid_argument[\s\S]*maximum number of tokens/i, // Google/Vertex
+  /request exceeds the maximum size/i, // Anthropic
+  /context length exceeded/i,
+  /maximum context length/i,
+  /prompt is too long/i,
+  /prompt too long/i,
+  /exceeds model context window/i,
+  /model token limit/i,
+  /input exceeds[\s\S]*maximum number of tokens/i,
+  /^(?=[\s\S]*context window)(?=[\s\S]*ran out of (?:room|space))/i, // Codex
+  /request size exceeds[\s\S]*context window/i,
+  /context overflow:/i,
+  /exceed context limit/i,
+  /exceeds the model'?s maximum context/i,
+  /max_tokens[\s\S]*exceed[\s\S]*context/i,
+  /input length[\s\S]*exceed[\s\S]*context/i,
+  /413[\s\S]*too large/i,
+  /context_window_exceeded/i,
+  // FIXED(refactor-06): PR 2 removed the embedded-429 false positive; this is provider overflow.
+  /input length [\d,]+\s+tokens? exceeds the model limit/i,
+  /上下文过长|上下文超出|上下文长度超|超出最大上下文|请压缩上下文/,
+];
+
+const PROVIDER_FALLBACK_OVERFLOW_PATTERNS = [
+  /\binput token count exceeds the maximum number of input tokens\b/i, // AWS Bedrock
+  /\binput is too long for this model\b/i, // AWS Bedrock stream errors
+  /\binput exceeds the maximum number of tokens\b/i, // Google Vertex / Gemini
+  /\bollama error:\s*context length exceeded(?:,\s*too many tokens)?\b/i,
+  /\btotal tokens?.*exceeds? (?:the )?(?:model(?:'s)? )?(?:max|maximum|limit)/i, // Cohere
+  /\b(?:request|prompt) \(\d[\d,]*\s*tokens?\) exceeds (?:the )?available context size\b/i, // llama.cpp
+  /\binput (?:is )?too long for (?:the )?model\b/i,
+];
+
+const CONTEXT_OVERFLOW_PATTERN_SCOPES = {
+  "assistant-error": ASSISTANT_OVERFLOW_PATTERNS,
+  "failover-explicit": FAILOVER_EXPLICIT_OVERFLOW_PATTERNS,
+  "provider-fallback": PROVIDER_FALLBACK_OVERFLOW_PATTERNS,
+  "failover-hint": [
+    /context.*overflow|context window.*(too (?:large|long)|exceed|over|limit|max(?:imum)?|requested|sent|tokens)|prompt.*(too (?:large|long)|exceed|over|limit|max(?:imum)?)|(?:request|input).*(?:context|window|length|token).*(too (?:large|long)|exceed|over|limit|max(?:imum)?)/i,
+  ],
+  "context-window-too-small": [/context window.*(too small|minimum is)/i],
+  "tpm-rate-limit-hint": [/\btpm\b|tokens per minute/i],
+  "rate-limit-hint": [
+    /rate limit|too many requests|requests per (?:minute|hour|day)|quota|throttl|429\b|tokens per day/i,
+  ],
+} as const;
+
+export type ContextOverflowMessageScope = keyof typeof CONTEXT_OVERFLOW_PATTERN_SCOPES;
+
+/** Match one canonical context-overflow wording scope without applying caller policy. */
+export function matchesContextOverflowMessage(
+  errorMessage: string,
+  scope: ContextOverflowMessageScope,
+): boolean {
+  return CONTEXT_OVERFLOW_PATTERN_SCOPES[scope].some((pattern: RegExp) =>
+    pattern.test(errorMessage),
+  );
+}
 
 /**
  * Patterns that indicate non-overflow errors (e.g. rate limiting, server errors).
- * Error messages matching unknown of these are excluded from overflow detection
+ * Error messages matching any of these are excluded from overflow detection
  * even if they also match an OVERFLOW_PATTERN.
  *
  * Example: Bedrock formats throttling errors as "ThrottlingException: Too many tokens,
@@ -88,7 +156,10 @@ function resolveContextInputTokens(message: AssistantMessage): number | undefine
   if (message.usage.contextUsage?.state === "unavailable") {
     return undefined;
   }
-  return message.usage.input + message.usage.cacheRead;
+  // Cache writes are prompt tokens too: providers that report them separately keep
+  // them out of `input`, so omitting the bucket under-counts the context by exactly
+  // that amount. Mirrors the Anthropic lane's `input + cacheRead + cacheWrite`.
+  return message.usage.input + message.usage.cacheRead + message.usage.cacheWrite;
 }
 
 /**
@@ -108,17 +179,19 @@ function resolveContextInputTokens(message: AssistantMessage): number | undefine
  * - Google Gemini: "input token count exceeds the maximum"
  * - xAI (Grok): "maximum prompt length is X but request contains Y"
  * - Groq: "reduce the length of the messages"
- * - Cerebras: 400/413 status code (no body)
+ * - Cerebras: 413 status code (no body)
  * - Mistral: "Prompt contains X tokens ... too large for model with Y maximum context length"
  * - OpenRouter (all backends): "maximum context length is X tokens"
  * - Together AI: "The input (X tokens) is longer than the model's context length (Y tokens)."
  * - llama.cpp: "exceeds the available context size"
  * - LM Studio: "greater than the context length"
  * - Kimi For Coding: "exceeded model token limit: X (requested: Y)"
+ * - z.ai: "tokens in request more than max tokens allowed" or "Prompt exceeds max length"
  *
  * **Unreliable detection:**
  * - z.ai: Sometimes accepts overflow silently (detectable via usage.input > contextWindow),
- *   sometimes returns rate limit errors. Pass contextWindow param to detect silent overflow.
+ *   sometimes returns rate limit errors instead of the explicit overflow error above. Pass
+ *   contextWindow param to detect silent overflow.
  * - Xiaomi MiMo: Truncates input to fit contextWindow then returns stopReason "length" with
  *   output=0. Pass contextWindow param to detect via the "filled context + zero output" signal.
  * - Ollama: May truncate input silently for some setups, but may also return explicit
@@ -133,7 +206,7 @@ function resolveContextInputTokens(message: AssistantMessage): number | undefine
  * 1. Send a request that exceeds the model's context window
  * 2. Check the errorMessage in the response
  * 3. Create a regex pattern that matches the error
- * 4. The pattern should be added to OVERFLOW_PATTERNS in this file, or
+ * 4. The pattern should be added to the appropriate canonical scope in this file, or
  *    check the errorMessage yourself before calling this function
  *
  * @param message - The assistant message to check
@@ -147,7 +220,7 @@ export function isContextOverflow(message: AssistantMessage, contextWindow?: num
     const errorMessage = message.errorMessage;
     // Skip messages matching known non-overflow patterns (e.g. throttling / rate-limit)
     const isNonOverflow = NON_OVERFLOW_PATTERNS.some((p) => p.test(errorMessage));
-    if (!isNonOverflow && OVERFLOW_PATTERNS.some((p) => p.test(errorMessage))) {
+    if (!isNonOverflow && matchesContextOverflowMessage(errorMessage, "assistant-error")) {
       return true;
     }
   }
@@ -162,7 +235,7 @@ export function isContextOverflow(message: AssistantMessage, contextWindow?: num
 
   // Case 3: Length-stop overflow (Xiaomi MiMo style) - server truncates oversized input
   // to fit the context window, leaving no room for output. Returns stopReason "length"
-  // with output=0 and input+cacheRead filling the context window.
+  // with output=0 and the prompt buckets filling the context window.
   if (contextWindow && message.stopReason === "length" && message.usage.output === 0) {
     const inputTokens = resolveContextInputTokens(message);
     if (inputTokens !== undefined && inputTokens >= contextWindow * 0.99) {

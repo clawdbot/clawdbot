@@ -7,10 +7,11 @@ const hoisted = vi.hoisted(() => ({
   applyAgentCompactionSettingsFromConfig: vi.fn(),
   applySystemPromptToSession: vi.fn(),
   buildEmbeddedExtensionFactories: vi.fn(),
-  createAgentSession: vi.fn(),
+  createAgentSessionForEmbeddedRunner: vi.fn(),
   createEmbeddedAgentResourceLoader: vi.fn(),
   createPreparedEmbeddedAgentSettingsManager: vi.fn(),
   getGlobalHookRunner: vi.fn(),
+  installCodeModeRepairHook: vi.fn(),
   installMessageToolOnlyTerminalHook: vi.fn(),
   prepareEmbeddedAttemptClientTools: vi.fn(),
   resolveEffectiveCompactionMode: vi.fn(),
@@ -36,8 +37,8 @@ vi.mock("../../agent-settings.js", () => ({
 vi.mock("../../agent-tool-definition-adapter.js", () => ({
   toToolDefinitions: hoisted.toToolDefinitions,
 }));
-vi.mock("../../sessions/index.js", () => ({
-  createAgentSession: hoisted.createAgentSession,
+vi.mock("../../sessions/sdk.js", () => ({
+  createAgentSessionForEmbeddedRunner: hoisted.createAgentSessionForEmbeddedRunner,
 }));
 vi.mock("../../sessions/tools/tool-definition-wrapper.js", () => ({
   wrapToolDefinition: hoisted.wrapToolDefinition,
@@ -58,6 +59,9 @@ vi.mock("../system-prompt.js", () => ({
 vi.mock("./attempt-client-tools.js", () => ({
   prepareEmbeddedAttemptClientTools: hoisted.prepareEmbeddedAttemptClientTools,
 }));
+vi.mock("./code-mode-repair.js", () => ({
+  installCodeModeRepairHook: hoisted.installCodeModeRepairHook,
+}));
 vi.mock("./message-tool-terminal.js", () => ({
   installMessageToolOnlyTerminalHook: hoisted.installMessageToolOnlyTerminalHook,
 }));
@@ -65,7 +69,7 @@ vi.mock("./tool-activity-heartbeat.js", () => ({
   notifyToolActivity: hoisted.notifyToolActivity,
 }));
 
-import { prepareEmbeddedAttemptAgentSession } from "./attempt-session.js";
+import { prepareEmbeddedAttemptAgentSession } from "./attempt-session-prepare.js";
 
 const attempt = {
   authStorage: { id: "auth" },
@@ -83,7 +87,10 @@ const attempt = {
   workspaceDir: "/workspace",
 } as unknown as EmbeddedRunAttemptParams;
 
-function createInput(options?: { activationError?: Error }) {
+function createInput(options?: {
+  activationError?: Error;
+  codeModeControlsEnabledForRun?: boolean;
+}) {
   const events: string[] = [];
   const settingsManager = { id: "settings" };
   const resourceLoader = {
@@ -98,12 +105,12 @@ function createInput(options?: { activationError?: Error }) {
     }
   });
   const activeSession = {
-    agent: { id: "agent" },
+    agent: { id: "agent", subscribe: vi.fn() },
     setActiveToolsByName,
   } as unknown as AgentSession;
   const sessionManager = { id: "session-manager" };
-  const sessionLockController = {
-    withSessionWriteLock: vi.fn(async (operation: () => unknown) => await operation()),
+  const transcriptLifecycle = {
+    withTranscriptWrite: vi.fn(async (operation: () => unknown) => await operation()),
   };
   const hookRunner = { id: "hooks" };
   const sessionToolAllowlist = [{ name: "read" }];
@@ -129,7 +136,7 @@ function createInput(options?: { activationError?: Error }) {
     sessionToolAllowlist,
     ...clientToolRuntime,
   });
-  hoisted.createAgentSession.mockImplementation(async () => {
+  hoisted.createAgentSessionForEmbeddedRunner.mockImplementation(async () => {
     events.push("create-session");
     return { session: activeSession };
   });
@@ -142,6 +149,9 @@ function createInput(options?: { activationError?: Error }) {
       onDeliveredSourceReply = input.onDeliveredSourceReply;
     },
   );
+  hoisted.installCodeModeRepairHook.mockImplementation(() => {
+    events.push("install-code-mode-repair");
+  });
 
   return {
     activeSession,
@@ -153,7 +163,10 @@ function createInput(options?: { activationError?: Error }) {
       attempt,
       agentCoreThinkingLevel: "high" as const,
       agentDir: "/agent",
-      clientToolPreparation: { deferredDirectoryToolsCallable: false } as never,
+      clientToolPreparation: {
+        codeModeControlsEnabledForRun: options?.codeModeControlsEnabledForRun ?? true,
+        deferredDirectoryToolsCallable: false,
+      } as never,
       effectiveCwd: "/workspace",
       getCurrentAttemptPluginMetadataSnapshot: () => undefined,
       initialSystemPrompt: "system prompt",
@@ -168,7 +181,7 @@ function createInput(options?: { activationError?: Error }) {
       },
       runAbortSignal: new AbortController().signal,
       sessionAgentId: "agent-1",
-      sessionLockController: sessionLockController as never,
+      transcriptLifecycle: transcriptLifecycle as never,
       sessionManager: sessionManager as never,
     },
     onDeliveredSourceReply: () => onDeliveredSourceReply?.(),
@@ -198,13 +211,21 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
       "publish-system-prompt",
       "apply-system-prompt",
       "install-terminal-hook",
+      "install-code-mode-repair",
       "stage:agent-session",
     ]);
     expect(hoisted.applyAgentAutoCompactionGuard).toHaveBeenCalledTimes(2);
     expect(hoisted.applyAgentCompactionSettingsFromConfig).toHaveBeenCalledOnce();
-    expect(hoisted.createAgentSession).toHaveBeenCalledWith(
-      expect.objectContaining({ resourceLoader: fixture.resourceLoader }),
+    expect(hoisted.applyAgentCompactionSettingsFromConfig.mock.invocationCallOrder[0]).toBeLessThan(
+      hoisted.applyAgentAutoCompactionGuard.mock.invocationCallOrder[1] ?? 0,
     );
+    const sessionCall = hoisted.createAgentSessionForEmbeddedRunner.mock.calls[0];
+    expect(sessionCall?.[0]).toMatchObject({ resourceLoader: fixture.resourceLoader });
+    expect(sessionCall?.[1]).toMatchObject({
+      beforeToolBatch: undefined,
+      contextOverflowRecoveryOwner: "caller",
+    });
+    expect(sessionCall?.[0]).not.toHaveProperty("contextOverflowRecoveryOwner");
     expect(fixture.setActiveToolsByName).toHaveBeenCalledWith(fixture.sessionToolAllowlist);
     expect(result).toEqual(
       expect.objectContaining({
@@ -218,6 +239,30 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     expect(result.hasDeliveredSourceReply()).toBe(false);
     fixture.onDeliveredSourceReply();
     expect(result.hasDeliveredSourceReply()).toBe(true);
+  });
+
+  it("does not install Code Mode repair when the run kept direct tools", async () => {
+    const fixture = createInput({ codeModeControlsEnabledForRun: false });
+
+    await prepareEmbeddedAttemptAgentSession(fixture.input);
+
+    expect(hoisted.installCodeModeRepairHook).not.toHaveBeenCalled();
+    expect(fixture.events).not.toContain("install-code-mode-repair");
+  });
+
+  it("leaves overflow recovery with the session when no model budget was resolved", async () => {
+    const fixture = createInput();
+    fixture.input.attempt = {
+      ...fixture.input.attempt,
+      contextTokenBudget: undefined,
+    };
+
+    await prepareEmbeddedAttemptAgentSession(fixture.input);
+
+    expect(hoisted.createAgentSessionForEmbeddedRunner.mock.calls[0]?.[1]).toMatchObject({
+      beforeToolBatch: undefined,
+      contextOverflowRecoveryOwner: "session",
+    });
   });
 
   it("publishes session ownership before activation can fail", async () => {

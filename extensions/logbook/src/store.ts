@@ -2,13 +2,15 @@
 // Uses node:sqlite prepared statements directly (extension-local store, same
 // pattern as memory-core/imessage); the shared Kysely helpers are core-only.
 import { chmodSync, mkdirSync, rmdirSync, rmSync } from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import {
   configureSqliteConnectionPragmas,
   migrateSqliteSchemaToStrict,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { runSqliteImmediateTransactionSync } from "openclaw/plugin-sdk/sqlite-runtime";
+import {
+  openNodeSqliteDatabase,
+  runSqliteImmediateTransactionSync,
+} from "openclaw/plugin-sdk/sqlite-runtime";
 import type {
   LogbookBatch,
   LogbookBatchStatus,
@@ -20,13 +22,7 @@ import type {
   LogbookObservation,
 } from "./types.js";
 
-type SqliteModule = typeof import("node:sqlite");
 type Database = import("node:sqlite").DatabaseSync;
-
-function loadNodeSqlite(): SqliteModule {
-  const req = createRequire(import.meta.url);
-  return req("node:sqlite") as SqliteModule;
-}
 
 const LOGBOOK_SCHEMA_VERSION = 1;
 const LOGBOOK_SQLITE_BUSY_TIMEOUT_MS = 5_000;
@@ -213,9 +209,8 @@ export class LogbookStore {
     this.framesDir = path.join(dataDir, "frames");
     mkdirSync(this.framesDir, { recursive: true, mode: 0o700 });
     chmodSync(this.framesDir, 0o700);
-    const { DatabaseSync } = loadNodeSqlite();
     const dbPath = path.join(dataDir, "logbook.sqlite");
-    const db = new DatabaseSync(dbPath);
+    const db = openNodeSqliteDatabase(dbPath);
     let walMaintenance: ReturnType<typeof configureSqliteConnectionPragmas> | undefined;
     try {
       // WAL/SHM sidecars inherit the main DB file's permissions.

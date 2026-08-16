@@ -6,17 +6,21 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { registerResolvedAgentDir } from "../agents/agent-dir-registry.js";
-import { getRuntimeAuthProfileStoreCredentialMutationToken } from "../agents/auth-profiles/runtime-snapshots.js";
+import { noteCommittedSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  getRuntimeAuthProfileStoreCredentialMutationToken,
+  replaceRuntimeAuthProfileStoreSnapshots,
+} from "../agents/auth-profiles/runtime-snapshots.js";
 import {
   readPersistedAuthProfileStateRaw,
   readPersistedAuthProfileStoreRaw,
+  readPersistedSharedAuthProfileStoreRaw,
   resolveAuthProfileDatabasePath,
   writePersistedAuthProfileStateRaw,
 } from "../agents/auth-profiles/sqlite.js";
 import {
-  clearRuntimeAuthProfileStoreSnapshots,
   getRuntimeAuthProfileStoreSnapshot,
-  replaceRuntimeAuthProfileStoreSnapshots,
   saveAuthProfileStore,
 } from "../agents/auth-profiles/store.js";
 import { testing as storeTesting } from "../agents/auth-profiles/store.test-support.js";
@@ -25,6 +29,10 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import {
   buildTalkTestProviderConfig,
   TALK_TEST_PROVIDER_API_KEY_PATH,
@@ -304,6 +312,8 @@ describe("secrets apply", () => {
     storeTesting.resetRuntimeSnapshotPublisherForTest();
     clearRuntimeAuthProfileStoreSnapshots();
     closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    vi.unstubAllEnvs();
     await fs.rm(fixture.rootDir, { recursive: true, force: true });
   });
 
@@ -343,7 +353,7 @@ describe("secrets apply", () => {
       string,
       unknown
     >;
-    expect(nextAuthJson.openai).toBeUndefined();
+    expect(nextAuthJson.openai).toBeDefined();
 
     const nextEnv = await fs.readFile(fixture.envPath, "utf8");
     expect(nextEnv).not.toContain("sk-openai-plaintext");
@@ -400,6 +410,98 @@ describe("secrets apply", () => {
     };
     expect(nextAuthStore.profiles["openai:default"].key).toBeUndefined();
     expect(nextAuthStore.profiles["openai:default"].keyRef).toBeUndefined();
+  });
+
+  it("keeps shared and implicit agent writes inside the explicitly routed state root", async () => {
+    const ambientStateDir = path.join(fixture.rootDir, "ambient-state");
+    const ambientMainDir = path.join(ambientStateDir, "agents", "main", "agent");
+    const ambientOpsDir = path.join(ambientStateDir, "agents", "ops", "agent");
+    vi.stubEnv("OPENCLAW_STATE_DIR", ambientStateDir);
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "openai:ambient-shared": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-ambient-shared",
+          },
+        },
+      },
+      ambientMainDir,
+      { filterExternalAuthProfiles: false, syncExternalCli: false },
+    );
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "openai:ambient-ops": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-ambient-ops",
+          },
+        },
+      },
+      ambientOpsDir,
+      { filterExternalAuthProfiles: false, syncExternalCli: false },
+    );
+    await writeJsonFile(fixture.configPath, {
+      agents: { entries: { ops: {} } },
+      models: { providers: { openai: createOpenAiProviderConfig() } },
+    });
+    const stateDatabase = openOpenClawStateDatabase({ env: fixture.env }).db;
+    stateDatabase
+      .prepare(
+        `INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
+         VALUES ('auth.sharedStore', ?, 1)`,
+      )
+      .run(JSON.stringify({ location: "state-db" }));
+    stateDatabase
+      .prepare(
+        "INSERT INTO auth_profile_stores (store_key, store_json, updated_at) VALUES (?, ?, 1)",
+      )
+      .run(
+        "shared",
+        JSON.stringify({
+          version: 1,
+          profiles: {
+            "openai:target-shared": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-target-shared",
+            },
+          },
+        }),
+      );
+    noteCommittedSharedAuthStoreOwnership({ location: "state-db" }, fixture.env);
+
+    await runSecretsApply({
+      plan: createPlan({
+        targets: [createOpenAiProviderTarget()],
+        options: createOneWayScrubOptions(),
+      }),
+      env: fixture.env,
+      write: true,
+    });
+
+    expect(readPersistedSharedAuthProfileStoreRaw(fixture.env)).toEqual({
+      version: 1,
+      profiles: {
+        "openai:target-shared": {
+          type: "api_key",
+          provider: "openai",
+        },
+      },
+    });
+    expect(readPersistedAuthProfileStoreRaw(ambientMainDir)).toMatchObject({
+      profiles: { "openai:ambient-shared": { key: "sk-ambient-shared" } },
+    });
+    expect(readPersistedAuthProfileStoreRaw(ambientOpsDir)).toMatchObject({
+      profiles: { "openai:ambient-ops": { key: "sk-ambient-ops" } },
+    });
+    expect(
+      readPersistedAuthProfileStoreRaw(path.join(fixture.stateDir, "agents", "ops", "agent")),
+    ).toBeNull();
   });
 
   it("skips exec SecretRef checks during dry-run unless explicitly allowed", async () => {
@@ -639,7 +741,7 @@ describe("secrets apply", () => {
     const coderStorePath = resolveAuthProfileDatabasePath(coderAgentDir);
     await writeJsonFile(fixture.configPath, {
       agents: {
-        list: [{ id: "coder", agentDir: coderAgentDir }],
+        entries: { coder: { agentDir: coderAgentDir } },
       },
     });
     const plan: SecretsApplyPlan = {
@@ -681,10 +783,11 @@ describe("secrets apply", () => {
     const secondStorePath = resolveAuthProfileDatabasePath(secondAgentDir);
     await writeJsonFile(fixture.configPath, {
       agents: {
-        list: [
-          { id: "first", agentDir: firstAgentDir },
-          { id: "second", agentDir: secondAgentDir },
-        ],
+        ownership: "explicit",
+        entries: {
+          first: { agentDir: firstAgentDir },
+          second: { agentDir: secondAgentDir },
+        },
       },
     });
     const firstState = {
@@ -755,10 +858,11 @@ describe("secrets apply", () => {
       registerResolvedAgentDir({ agentId: "second", agentDir: secondAgentDir });
       await writeJsonFile(fixture.configPath, {
         agents: {
-          list: [
-            { id: "first", agentDir: firstAgentDir },
-            { id: "second", agentDir: secondAgentDir },
-          ],
+          ownership: "explicit",
+          entries: {
+            first: { agentDir: firstAgentDir },
+            second: { agentDir: secondAgentDir },
+          },
         },
       });
       const initialStore: AuthProfileStore = {
@@ -1196,22 +1300,23 @@ describe("secrets apply", () => {
     );
   });
 
-  it("applies array-indexed targets for agent memory search", async () => {
+  it("applies keyed targets for agent memory search", async () => {
     await fs.writeFile(
       fixture.configPath,
       `${JSON.stringify(
         {
           agents: {
-            list: [
-              {
-                id: "main",
-                memorySearch: {
-                  remote: {
-                    apiKey: "sk-memory-plaintext", // pragma: allowlist secret
+            entries: {
+              main: {
+                memory: {
+                  search: {
+                    remote: {
+                      apiKey: "sk-memory-plaintext", // pragma: allowlist secret
+                    },
                   },
                 },
               },
-            ],
+            },
           },
         },
         null,
@@ -1227,9 +1332,9 @@ describe("secrets apply", () => {
       generatedBy: "manual",
       targets: [
         {
-          type: "agents.list[].memorySearch.remote.apiKey",
-          path: "agents.list.0.memorySearch.remote.apiKey",
-          pathSegments: ["agents", "list", "0", "memorySearch", "remote", "apiKey"],
+          type: "agents.entries.*.memory.search.remote.apiKey",
+          path: "agents.entries.main.memory.search.remote.apiKey",
+          pathSegments: ["agents", "entries", "main", "memory", "search", "remote", "apiKey"],
           ref: { source: "env", provider: "default", id: "MEMORY_REMOTE_API_KEY" },
         },
       ],
@@ -1246,16 +1351,21 @@ describe("secrets apply", () => {
       env: fixture.env,
     })) as {
       agents?: {
-        list?: Array<{
-          memorySearch?: {
-            remote?: {
-              apiKey?: unknown;
+        entries?: Record<
+          string,
+          {
+            memory?: {
+              search?: {
+                remote?: {
+                  apiKey?: unknown;
+                };
+              };
             };
-          };
-        }>;
+          }
+        >;
       };
     };
-    expect(nextConfig.agents?.list?.[0]?.memorySearch?.remote?.apiKey).toEqual({
+    expect(nextConfig.agents?.entries?.main?.memory?.search?.remote?.apiKey).toEqual({
       source: "env",
       provider: "default",
       id: "MEMORY_REMOTE_API_KEY",

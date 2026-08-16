@@ -1,5 +1,13 @@
 // Model list status tests cover status column construction and auth/probe summaries.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, type Mock, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  getCurrentPluginMetadataSnapshot,
+  setCurrentPluginMetadataSnapshot,
+} from "../../plugins/current-plugin-metadata-snapshot.js";
+import { clearCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
+import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 
 const mocks = vi.hoisted(() => {
@@ -151,6 +159,7 @@ const mocks = vi.hoisted(() => {
       models: { providers: {} },
       env: { shellEnv: { enabled: true } },
     }),
+    loadModelsConfigArgs: vi.fn(),
     loadProviderUsageSummary: vi.fn().mockResolvedValue(undefined),
     resolveRuntimeSyntheticAuthProviderRefs: vi.fn().mockReturnValue([]),
     resolveProviderSyntheticAuthWithPlugin: vi.fn().mockReturnValue(undefined),
@@ -257,10 +266,7 @@ vi.mock("../../agents/provider-auth-aliases.js", () => ({
   ),
 }));
 vi.mock("../../agents/model-selection-cli.js", () => ({
-  isCliProvider: vi.fn(
-    (provider: string, cfg?: { agents?: { defaults?: { cliBackends?: object } } }) =>
-      Object.hasOwn(cfg?.agents?.defaults?.cliBackends ?? {}, provider),
-  ),
+  isCliProvider: vi.fn((provider: string) => provider === "claude-cli"),
 }));
 vi.mock("../../infra/shell-env.js", () => ({
   getShellEnvAppliedKeys: mocks.getShellEnvAppliedKeys,
@@ -271,7 +277,10 @@ vi.mock("../../config/config.js", async (importOriginal) => ({
   createConfigIO: mocks.createConfigIO,
 }));
 vi.mock("./load-config.js", () => ({
-  loadModelsConfig: vi.fn(async () => mocks.loadConfig()),
+  loadModelsConfig: vi.fn(async (...args: unknown[]) => {
+    mocks.loadModelsConfigArgs(...args);
+    return mocks.loadConfig();
+  }),
 }));
 vi.mock("../../infra/provider-usage.js", () => ({
   formatUsageWindowSummary: vi.fn().mockReturnValue("-"),
@@ -291,8 +300,9 @@ vi.mock("../../agents/harness/runtime-plugin.js", () => ({
 vi.mock("../../cli/update-cli/plugin-payload-validation.js", () => ({
   runPluginPayloadSmokeCheckForManifestRecords: mocks.runPluginPayloadSmokeCheckForManifestRecords,
 }));
-vi.mock("../../agents/model-catalog.js", () => ({
-  loadModelCatalogSnapshot: async (...args: unknown[]) => {
+vi.mock("../../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
+  loadPreparedModelCatalogSnapshot: async (...args: unknown[]) => {
     const entries = await mocks.loadModelCatalog(...args);
     return { entries, routeVariants: mocks.modelCatalogRouteVariants ?? entries };
   },
@@ -341,12 +351,7 @@ function parseFirstJsonLog(runtimeLike: { log: Mock }) {
   return JSON.parse(String(runtimeLike.log.mock.calls[0]?.[0]));
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`${label} was not an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "label-not-object");
 
 function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
   for (const [key, value] of Object.entries(fields)) {
@@ -439,6 +444,7 @@ async function withOpenAIStatusFixture<T>(
     catalog?: unknown[];
     routeVariants?: unknown[];
     utilityModel?: string;
+    modelPolicyAllow?: string[];
   },
   run: () => Promise<T>,
 ): Promise<T> {
@@ -459,6 +465,9 @@ async function withOpenAIStatusFixture<T>(
     agents: {
       defaults: {
         model: { primary: params.primary, fallbacks: params.fallbacks ?? [] },
+        ...(params.modelPolicyAllow
+          ? { modelPolicy: { allow: params.modelPolicyAllow } }
+          : undefined),
         // Route tests target the configured primary/fallback models; keep the
         // derived utility model out unless a test opts in explicitly.
         utilityModel: params.utilityModel ?? "",
@@ -542,6 +551,136 @@ async function withOpenAIStatusFixture<T>(
 }
 
 describe("modelsStatusCommand auth overview", () => {
+  it("shows cooldown reasons and recovery guidance in JSON and text output", async () => {
+    const now = Date.now();
+    const store = mocks.store as typeof mocks.store & {
+      usageStats?: Record<string, { cooldownUntil: number; cooldownReason: "session_expired" }>;
+    };
+    store.usageStats = {
+      "anthropic:default": {
+        cooldownUntil: now + 60_000,
+        cooldownReason: "session_expired",
+      },
+    };
+    mocks.resolveProfileUnusableUntilForDisplay.mockImplementation((_store, profileId) =>
+      profileId === "anthropic:default" ? now + 60_000 : undefined,
+    );
+
+    try {
+      const jsonRuntime = createRuntime();
+      await modelsStatusCommand({ json: true }, jsonRuntime as never);
+      expect(parseFirstJsonLog(jsonRuntime).auth.unusableProfiles).toEqual([
+        expect.objectContaining({
+          profileId: "anthropic:default",
+          kind: "cooldown",
+          reason: "session_expired",
+          recoveryHint:
+            "Re-authenticate with `openclaw models auth login --provider anthropic --profile-id 'anthropic:default'`.",
+        }),
+      ]);
+
+      const textRuntime = createRuntime();
+      await modelsStatusCommand({}, textRuntime as never);
+      const output = (textRuntime.log as Mock).mock.calls
+        .map((call: unknown[]) => String(call[0]))
+        .join("\n");
+      expect(output).toContain("Unavailable auth profiles");
+      expect(output).toContain("anthropic:default (anthropic) cooldown:session_expired");
+      expect(output).toContain("openclaw models auth login --provider anthropic");
+    } finally {
+      delete store.usageStats;
+      mocks.resolveProfileUnusableUntilForDisplay.mockReset().mockReturnValue(undefined);
+    }
+  });
+
+  it("routes legacy Gemini CLI cooldowns to supported Google API-key setup", async () => {
+    const now = Date.now();
+    const profileId = "google-gemini-cli:legacy";
+    const store = mocks.store as typeof mocks.store & {
+      usageStats?: Record<string, { cooldownUntil: number; cooldownReason: "session_expired" }>;
+    };
+    store.profiles[profileId] = {
+      type: "oauth",
+      provider: "google-gemini-cli",
+      access: "legacy-access",
+      refresh: "legacy-refresh",
+      expires: now + 60_000,
+    };
+    store.usageStats = {
+      [profileId]: { cooldownUntil: now + 60_000, cooldownReason: "session_expired" },
+    };
+    mocks.resolveProfileUnusableUntilForDisplay.mockImplementation((_store, candidate) =>
+      candidate === profileId ? now + 60_000 : undefined,
+    );
+
+    try {
+      const statusRuntime = createRuntime();
+      await modelsStatusCommand({ json: true }, statusRuntime as never);
+      const [unusable] = parseFirstJsonLog(statusRuntime).auth.unusableProfiles;
+      expect(unusable).toMatchObject({
+        profileId,
+        provider: "google-gemini-cli",
+        recoveryHint: expect.stringContaining("--provider google`"),
+      });
+      expect(unusable.recoveryHint).not.toContain("--provider google-gemini-cli");
+    } finally {
+      delete store.profiles[profileId];
+      delete store.usageStats;
+      mocks.resolveProfileUnusableUntilForDisplay.mockReset().mockReturnValue(undefined);
+    }
+  });
+
+  it("does not restore over plugin metadata published while status is running", async () => {
+    const originalLoadModelCatalog = mocks.loadModelCatalog.getMockImplementation();
+    const config = mocks.loadConfig();
+    const workspaceDir = "/tmp/openclaw-agent/workspace";
+    const catalogStarted = createDeferred();
+    const releaseCatalog = createDeferred();
+    let replacement: ReturnType<typeof getCurrentPluginMetadataSnapshot> = undefined;
+    clearCurrentPluginMetadataSnapshot();
+    mocks.loadModelCatalog.mockImplementationOnce(async () => {
+      replacement = getCurrentPluginMetadataSnapshot({
+        config,
+        workspaceDir,
+        env: process.env,
+      });
+      catalogStarted.resolve();
+      await releaseCatalog.promise;
+      return [];
+    });
+    const commandPromise = modelsStatusCommand({ json: true }, createRuntime() as never);
+
+    try {
+      await catalogStarted.promise;
+      expect(replacement).toBeDefined();
+      clearPluginMetadataLifecycleCaches();
+      setCurrentPluginMetadataSnapshot(replacement!, {
+        config,
+        workspaceDir,
+        env: process.env,
+      });
+      releaseCatalog.resolve();
+      await commandPromise;
+
+      expect(
+        getCurrentPluginMetadataSnapshot({
+          config,
+          workspaceDir,
+          env: process.env,
+        }),
+      ).toBe(replacement);
+    } finally {
+      releaseCatalog.resolve();
+      await commandPromise.catch(() => {});
+      clearCurrentPluginMetadataSnapshot();
+      if (originalLoadModelCatalog) {
+        mocks.loadModelCatalog.mockImplementation(originalLoadModelCatalog);
+      } else {
+        mocks.loadModelCatalog.mockResolvedValue([]);
+      }
+    }
+  });
+
   it.each([
     [{ probeTimeout: "5000ms" }, "--probe-timeout"],
     [{ probeConcurrency: "2.5" }, "--probe-concurrency"],
@@ -555,6 +694,17 @@ describe("modelsStatusCommand auth overview", () => {
   it("includes masked auth sources in JSON output", async () => {
     await modelsStatusCommand({ json: true }, runtime as never);
     const payload = parseFirstJsonLog(runtime);
+
+    expect(mocks.loadModelsConfigArgs.mock.calls.at(-1)?.[0]).toMatchObject({
+      commandName: "models status",
+      skipPluginValidation: true,
+    });
+    expect(mocks.loadModelCatalog.mock.calls.at(-1)?.[0]).toEqual(
+      expect.objectContaining({
+        providerDiscoveryProviderIds: expect.arrayContaining(["anthropic", "openai"]),
+        readOnly: true,
+      }),
+    );
 
     expectResolveAgentDirCalledFor("main");
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalled();
@@ -597,6 +747,54 @@ describe("modelsStatusCommand auth overview", () => {
     ).toBe(true);
     expect((payload.auth.providersWithOAuth as string[]).some((e) => e.startsWith("openai"))).toBe(
       true,
+    );
+  });
+
+  it("expands nested wildcard policy entries to the models they actually allow", async () => {
+    await withOpenAIStatusFixture(
+      {
+        primary: "clawrouter/anthropic/claude-haiku-4-5",
+        profiles: {},
+        modelPolicyAllow: ["clawrouter/anthropic/*"],
+        catalog: [
+          {
+            provider: "clawrouter",
+            id: "anthropic/claude-haiku-4-5",
+            name: "Claude Haiku",
+          },
+          {
+            provider: "clawrouter",
+            id: "google/gemini-3.5-flash",
+            name: "Gemini Flash",
+          },
+          { provider: "openai", id: "gpt-5.6-sol", name: "GPT-5.6 Sol" },
+        ],
+      },
+      async () => {
+        const localRuntime = createRuntime();
+        await modelsStatusCommand({ json: true }, localRuntime as never);
+
+        expect(parseFirstJsonLog(localRuntime).allowed).toEqual([
+          "clawrouter/anthropic/claude-haiku-4-5",
+        ]);
+      },
+    );
+  });
+
+  it("preserves a restrictive wildcard when the current catalog has no match", async () => {
+    await withOpenAIStatusFixture(
+      {
+        primary: "openai/gpt-5.6-sol",
+        profiles: {},
+        modelPolicyAllow: ["clawrouter/anthropic/*"],
+        catalog: [{ provider: "openai", id: "gpt-5.6-sol", name: "GPT-5.6 Sol" }],
+      },
+      async () => {
+        const localRuntime = createRuntime();
+        await modelsStatusCommand({ json: true }, localRuntime as never);
+
+        expect(parseFirstJsonLog(localRuntime).allowed).toEqual(["clawrouter/anthropic/*"]);
+      },
     );
   });
 
@@ -1215,7 +1413,6 @@ describe("modelsStatusCommand auth overview", () => {
         defaults: {
           model: { primary: "claude-cli/claude-sonnet-4-6", fallbacks: [] },
           models: { "claude-cli/claude-sonnet-4-6": {} },
-          cliBackends: { "claude-cli": {} },
         },
       },
       models: { providers: {} },

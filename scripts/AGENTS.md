@@ -13,15 +13,15 @@ This directory owns local tooling, script wrappers, and generated-artifact helpe
 
 ## Local Heavy-Check Lock
 
-- Respect the local heavy-check lock behavior in `scripts/lib/local-heavy-check-runtime.mjs`.
+- Respect the local heavy-check lock behavior in `scripts/lib/local-heavy-check-runtime.mts`.
 - Do not bypass that lock for real heavy commands just to make a local loop look faster.
 - Metadata-only or explicitly narrow commands may skip the lock when the existing helper logic says that is safe.
 - If you change the lock heuristics, add or update the narrow tests under `test/scripts/`.
 
 ## PR Prepare Gates
 
-- `scripts/pr` serializes review, prepare, and merge operations per PR across linked worktrees; `scripts/pr gc` skips active or indeterminate locks. A successful command return is the trusted synchronous-completion contract: every PR-state-mutating child must be joined before returning, and such work must never daemonize or explicitly escape both the operation group and lock-notification FD. Failed, interrupted, or controller-lost operations stay locked because detached children cannot be disproved; after verifying no child tools remain, use the reported exact-OID `scripts/pr lock-recover` command. Never bypass or delete these refs manually.
-- `scripts/pr prepare-gates` holds the heavy-check lock for its whole local gate block (`scripts/pr-gates-lock.mjs`), so concurrent gate runs across `.worktrees` queue as units instead of dying on child lock timeouts or vitest no-output watchdog kills.
+- `scripts/pr` serializes review, prepare, and merge operations per PR across linked worktrees; `scripts/pr gc` skips active or indeterminate locks. Its subcommand classification table is the canonical wrapper trust boundary: a mismatched local wrapper may run only a classified `advisory` subcommand with `--dev-wrapper` or `OPENCLAW_PR_DEV_WRAPPER=1`; classified `landing` subcommands always require canonical/origin-main wrapper code. A successful command return is the trusted synchronous-completion contract: every PR-state-mutating child must be joined before returning, and such work must never daemonize or explicitly escape both the operation group and lock-notification FD. Release on clean exit requires the leader's completion marker; an escaped descendant that merely holds the notify pipe then produces a loud warned release instead of retention (#124583), while all failure shapes still retain. A failed command auto-releases only while its explicit pre-side-effect validation marker remains active; failures after mutation/tool launch, interruptions, and controller loss stay locked because detached children cannot be disproved. After verifying no child tools remain, use the reported exact-OID `scripts/pr lock-recover` command. Never bypass or delete these refs manually.
+- `scripts/pr prepare-gates` holds the heavy-check lock for its whole local gate block (`scripts/pr-gates-lock.mts`), so concurrent gate runs across `.worktrees` queue as units instead of dying on child lock timeouts or vitest no-output watchdog kills.
 - `OPENCLAW_PR_GATES_REMOTE=testbox` runs the full-suite `pnpm test` gate on a Blacksmith Testbox through `scripts/crabbox-wrapper.mjs` (same delegation as `check:changed`); `pnpm build`/`pnpm check` stay local. The `tbx_` lease id and Actions run URL land in `.local/gates.env` (`REMOTE_GATES_*`) and `.local/prep.md`. Use it for reviewed trusted code when a loaded host makes the local 88-shard run stall-kill; contributor/fork code stays on secretless CI or sanitized AWS unless a maintainer explicitly approves credentialed execution.
 
 ## Generated Outputs

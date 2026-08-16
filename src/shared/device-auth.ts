@@ -6,7 +6,7 @@ export type DeviceAuthEntry = {
   updatedAtMs: number;
 };
 
-/** Versioned on-disk device-auth cache for a gateway device identity. */
+/** Versioned browser-local device-auth cache for a gateway device identity. */
 export type DeviceAuthStore = {
   version: 1;
   deviceId: string;

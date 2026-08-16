@@ -28,6 +28,20 @@ setup, channel pairing, daemon controls, skills, and imports. Run it explicitly
 with `openclaw onboard --classic`; the guided inference picker does not delegate
 into it. After inference passes, OpenClaw can use `open channel wizard for
 <channel>` to hand channel setup that needs secrets to a masked terminal wizard.
+Workspace skills and web search are configured the same conversational way:
+`configure skills` and `configure web search` host those setup flows in the
+chat, and `open search wizard` hands credential entry to the masked terminal
+wizard.
+For a local Gateway, `configure gateway` guides port, bind, auth, and Tailscale
+settings but saves config without restarting; say `restart gateway` afterward,
+or use `open gateway wizard` for masked terminal credential entry and then run
+`openclaw gateway restart`. Remote Gateway mode remains an onboarding or
+`openclaw configure` choice rather than a hosted chat wizard.
+
+After onboarding has created the default agent workspace, `import memory` can
+copy detected local memory into it. This conversational import does not change
+config or import credentials or skills, needs no Gateway restart, and reports
+per-source partial or failed copies honestly.
 To change the model provider or its authentication, exit OpenClaw and run
 `openclaw onboard`; OpenClaw does not open guided or classic provider flows.
 
@@ -38,12 +52,13 @@ the browser through the Control UI. Docs: [Dashboard](/web/dashboard).
 
 ## Locale
 
-The wizard localizes fixed onboarding copy. Resolve order: `OPENCLAW_LOCALE`,
-`LC_ALL`, `LC_MESSAGES`, `LANG`, then English. Supported locales: `en`,
-`zh-CN`, `zh-TW`.
+The wizard localizes fixed onboarding copy. It uses the first nonblank value from
+`OPENCLAW_LOCALE`, `LC_ALL`, `LC_MESSAGES`, and `LANG`, in that order, then
+falls back to English. Supported locales: `en`, `zh-CN`, `zh-TW`.
 
 ```bash
 OPENCLAW_LOCALE=zh-CN openclaw onboard
+OPENCLAW_LOCALE=en openclaw onboard # Explicit English override
 ```
 
 Product names, commands, config keys, URLs, provider IDs, model IDs, and
@@ -64,8 +79,9 @@ openclaw agents add <name>
 The classic wizard includes a web search step where you can pick a provider: Brave,
 DuckDuckGo, Exa, Firecrawl, Gemini, Grok, Kimi, MiniMax Search, Ollama Web
 Search, Perplexity, SearXNG, or Tavily. Some need an API key; others are
-key-free. Configure this later with `openclaw configure --section web`. Docs:
-[Web tools](/tools/web).
+key-free. Configure this later with `openclaw configure --section web`, or say
+`configure web search` in the OpenClaw chat to run the same provider setup
+conversationally. Docs: [Web tools](/tools/web).
 </Tip>
 
 ## Guided default
@@ -76,10 +92,9 @@ Plain `openclaw onboard` follows this path:
 2. Detect configured models, API-key environment variables, supported local AI
    CLIs, and already installed tool-capable models from reachable Ollama or LM
    Studio servers on the Gateway host. This read-only pass never downloads a
-   model. Gemini CLI, Antigravity, Pi, and OpenCode installs are also reported
-   when they cannot serve as the reusable inference route for guided setup.
-   Gemini and Antigravity cannot enforce the tool-free probe; Pi and OpenCode
-   are whole-agent harnesses rather than setup inference routes.
+   model. Pi and OpenCode installs may also be reported for context when they
+   cannot serve as the reusable inference route. Gemini CLI and Antigravity are
+   not offered as detected setup routes.
 3. Test the first detected candidate with a real completion. On failure, show the
    reason and continue to the next usable candidate.
 4. If detection is exhausted, choose OpenAI, Anthropic, xAI (Grok), Google, or
@@ -136,17 +151,20 @@ Local mode (default) walks through these steps:
    provider-specific manual auth), including Custom Provider
    (OpenAI-compatible, OpenAI Responses-compatible, Anthropic-compatible, or
    Unknown auto-detect). Pick a default model.
-   Fresh OpenAI API-key setup defaults to `openai/gpt-5.6` (the bare direct-API
-   id resolves to Sol); fresh ChatGPT/Codex setup defaults to
-   `openai/gpt-5.6-sol`. Re-running setup preserves an existing explicit model,
-   including `openai/gpt-5.5`. Select `openai/gpt-5.5` explicitly if the
+   Fresh OpenAI API-key and ChatGPT/Codex setup default to
+   `openai/gpt-5.6-sol`. The bare direct-API `openai/gpt-5.6` alias remains
+   supported and resolves to Sol. Re-running setup preserves an existing
+   explicit model, including `openai/gpt-5.5`. Select `openai/gpt-5.5` explicitly if the
    account does not expose GPT-5.6.
    Security note: if this agent will run tools or process webhook/hook
    content, prefer the strongest latest-generation model available and keep
    tool policy strict - weaker or older tiers are easier to prompt-inject.
-   For non-interactive runs, `--secret-input-mode ref` stores env-backed refs
-   instead of plaintext API key values; the referenced env var must already
-   be set, or onboarding fails fast. Interactive secret reference mode can
+   For non-interactive runs, `--secret-input-mode ref` stores new credentials
+   as env-backed refs; set the provider env var when adding a credential.
+   Existing resolvable named profiles and their `env`, `file`, `exec`, or `store` refs
+   are reused unchanged without a new credential write or additional provider
+   env var. Previously stored plaintext is not migrated; see
+   [Secrets management](/gateway/secrets). Interactive secret reference mode can
    point at an environment variable or a configured provider ref (`file` or
    `exec`), with a fast preflight check before saving. After model/auth setup,
    the wizard offers an optional live completion test; a failure can return to
@@ -196,9 +214,9 @@ not the full `openclaw onboard` wizard.
 
 What it sets:
 
-- `agents.list[].name`
-- `agents.list[].workspace`
-- `agents.list[].agentDir`
+- `agents.entries.*.name`
+- `agents.entries.*.workspace`
+- `agents.entries.*.agentDir`
 
 Notes:
 

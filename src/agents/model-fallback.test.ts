@@ -1,10 +1,12 @@
-// Covers model fallback ordering, error classification, and auth cooldown behavior.
 import crypto from "node:crypto";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+// Covers model fallback ordering, error classification, and auth cooldown behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TranscriptNotContinuableError } from "../../packages/agent-core/src/errors.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import {
   onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -12,40 +14,52 @@ import {
 } from "../infra/diagnostic-events.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
-import {
-  clearCurrentPluginMetadataSnapshot,
-  setCurrentPluginMetadataSnapshot,
-} from "../plugins/current-plugin-metadata-snapshot.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
+import { GatewayDrainingError } from "../process/gateway-work-admission.js";
+import { AgentRunTerminalOutcomeError } from "./agent-run-terminal-error.js";
+import { AUTH_STORE_VERSION, MINIMAX_CLI_PROFILE_ID } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 import { FailoverError } from "./failover-error.js";
 import { resetFallbackSkipCacheForTest } from "./fallback-skip-cache.test-support.js";
-import { MissingAgentHarnessError } from "./harness/errors.js";
+import {
+  AgentHarnessPreflightError,
+  AgentHarnessSessionSupersededError,
+  MissingAgentHarnessError,
+  recordAgentHarnessPreflightOwner,
+} from "./harness/errors.js";
 import { clearAgentHarnesses, registerAgentHarness } from "./harness/registry.js";
 import type { AgentHarness } from "./harness/types.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
-import {
-  isFallbackSummaryError,
-  resolveModelCandidateChain,
-  runWithImageModelFallback,
-  runWithModelFallback as runWithModelFallbackBase,
-} from "./model-fallback.js";
+import { isFallbackSummaryError } from "./model-fallback-attempt.js";
+import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
+import { runWithImageModelFallback } from "./model-fallback-image.js";
+import { runWithModelFallback as runWithModelFallbackBase } from "./model-fallback-runner.js";
 import { shouldDiscardDeferredSessionSuspension } from "./model-fallback.test-support.js";
 import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
   resolveAgentRunErrorLifecycleFields,
 } from "./run-termination.js";
+import { toSandboxProvisioningError } from "./sandbox/provisioning-error.js";
 import { resolveSessionSuspensionReason } from "./session-suspension.js";
-import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
 
+const emptyManifestPlugins = [] as const;
+
+function resolveFallbackCandidateRoutes(params: Parameters<typeof resolveModelCandidateChain>[0]) {
+  return resolveModelCandidateChain({ manifestPlugins: emptyManifestPlugins, ...params });
+}
+
+function resolveFallbackCandidateRefs(params: Parameters<typeof resolveModelCandidateChain>[0]) {
+  return resolveFallbackCandidateRoutes(params).map(({ provider, model }) => ({ provider, model }));
+}
+
 const testing = {
-  resolveFallbackCandidates: resolveModelCandidateChain,
+  resolveFallbackCandidates: resolveFallbackCandidateRefs,
+  resolveFallbackCandidateRoutes,
   resolveSessionSuspensionReason,
   shouldDiscardDeferredSessionSuspension,
 };
@@ -98,6 +112,36 @@ const authRuntimeMock = vi.hoisted(() => {
     Object.entries(store.profiles)
       .filter(([, profile]) => profile.provider === provider)
       .map(([id]) => id);
+  const resolveAuthProfileEligibility = (params: {
+    store: AuthProfileStore;
+    provider: string;
+    profileId: string;
+  }) => {
+    const credential = params.store.profiles[params.profileId];
+    if (!credential) {
+      return { eligible: false, reasonCode: "profile_missing" as const };
+    }
+    if (credential.provider !== params.provider) {
+      return { eligible: false, reasonCode: "provider_mismatch" as const };
+    }
+    if (credential.type === "api_key") {
+      return credential.key || credential.keyRef
+        ? { eligible: true, reasonCode: "ok" as const }
+        : { eligible: false, reasonCode: "missing_credential" as const };
+    }
+    if (credential.type === "token") {
+      if (!credential.token && !credential.tokenRef) {
+        return { eligible: false, reasonCode: "missing_credential" as const };
+      }
+      if (credential.expires !== undefined && credential.expires <= now()) {
+        return { eligible: false, reasonCode: "expired" as const };
+      }
+      return { eligible: true, reasonCode: "ok" as const };
+    }
+    return credential.access || credential.refresh
+      ? { eligible: true, reasonCode: "ok" as const }
+      : { eligible: false, reasonCode: "missing_credential" as const };
+  };
   const isProfileInCooldown = (
     store: AuthProfileStore,
     profileId: string,
@@ -153,10 +197,11 @@ const authRuntimeMock = vi.hoisted(() => {
       stores.set(keyFor(agentDir), store);
     },
     runtime: {
-      ensureAuthProfileStore: vi.fn((agentDir?: string) => getStore(agentDir)),
+      ensureAuthProfileStore: vi.fn((agentDir?: string, _options?: unknown) => getStore(agentDir)),
       loadAuthProfileStoreForRuntime: vi.fn((agentDir?: string) => getStore(agentDir)),
       resolveAuthProfileOrder: (params: { store: AuthProfileStore; provider: string }) =>
-        getProfileIds(params.store, params.provider),
+        params.store.order?.[params.provider] ?? getProfileIds(params.store, params.provider),
+      resolveAuthProfileEligibility,
       maybeReprobeWhamBlockedProfiles: vi.fn(),
       isProfileInCooldown,
       resolveProfilesUnavailableReason: (params: {
@@ -199,23 +244,36 @@ const authRuntimeMock = vi.hoisted(() => {
   };
 });
 
-vi.mock("./model-fallback-auth.runtime.js", () => authRuntimeMock.runtime);
+vi.mock("./auth-profiles.runtime.js", () => authRuntimeMock.runtime);
 
 const makeCfg = makeModelFallbackCfg;
 let authTempRoot = "";
 let authTempCounter = 0;
-const emptyManifestPlugins = [] as const;
+
+function registerFallbackHarness(id: string): void {
+  registerAgentHarness(
+    {
+      id,
+      label: id,
+      supports: () => ({ supported: true }),
+      runAttempt: vi.fn<AgentHarness["runAttempt"]>(async () => {
+        throw new Error("fallback test should not invoke the registered harness directly");
+      }),
+    },
+    { ownerPluginId: `${id}-test` },
+  );
+}
+
+function createHarnessScopedPreflightError(harnessId: string): AgentHarnessPreflightError {
+  const error = new AgentHarnessPreflightError("Codex approvals denied execution", {
+    scope: "harness",
+  });
+  recordAgentHarnessPreflightOwner(error, harnessId);
+  return error;
+}
 
 const runWithModelFallback: typeof runWithModelFallbackBase = (params) =>
   runWithModelFallbackBase({ manifestPlugins: emptyManifestPlugins, ...params });
-
-beforeAll(() => {
-  setDefaultPluginMetadataSnapshot();
-});
-
-afterAll(() => {
-  clearCurrentPluginMetadataSnapshot();
-});
 
 function resetModelFallbackTestState(): void {
   // Fallback state has process-level caches for skip markers, harnesses, auth,
@@ -232,14 +290,10 @@ function resetModelFallbackTestState(): void {
   resetDiagnosticEventsForTest();
 }
 
-function setDefaultPluginMetadataSnapshot(): void {
-  setCurrentPluginMetadataSnapshot(loadPluginMetadataSnapshot({ config: {}, env: process.env }), {
-    config: {},
-    env: process.env,
-  });
-}
-
-afterEach(resetModelFallbackTestState);
+afterEach(() => {
+  resetModelFallbackTestState();
+  cliBackendsTesting.resetDepsForTest();
+});
 
 beforeEach(() => {
   setLoggerOverride({ level: "silent", consoleLevel: "silent" });
@@ -329,6 +383,7 @@ async function runWithStoredAuth(params: {
   store: AuthProfileStore;
   provider: string;
   run: (provider: string, model: string) => Promise<string>;
+  userLockedAuthProfileId?: string;
 }) {
   const tempDir = await makeAuthTempDir();
   setAuthRuntimeStore(tempDir, params.store);
@@ -338,6 +393,7 @@ async function runWithStoredAuth(params: {
     model: "m1",
     agentDir: tempDir,
     run: params.run,
+    userLockedAuthProfileId: params.userLockedAuthProfileId,
   });
 }
 
@@ -346,12 +402,7 @@ function setAuthRuntimeStore(agentDir: string | undefined, store: AuthProfileSto
   authRuntimeMock.setStore(agentDir, store);
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label");
 
 function requireMockCall(
   mock: { mock: { calls: unknown[][] } },
@@ -660,6 +711,90 @@ describe("runWithModelFallback", () => {
     );
   });
 
+  it("skips same-provider candidates after a TLS certificate failure", async () => {
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new FailoverError("Hostname/IP does not match certificate's altnames", {
+          provider: "openai",
+          model: "gpt-5.5",
+          reason: "tls_certificate",
+          code: "ERR_TLS_CERT_ALTNAME_INVALID",
+        }),
+      )
+      .mockResolvedValueOnce("anthropic success");
+
+    const result = await runWithModelFallback({
+      cfg: makeDiagnosticFallbackConfig(["openai/gpt-5.5-mini", "anthropic/claude-opus-4-6"]),
+      provider: "openai",
+      model: "gpt-5.5",
+      run,
+    });
+
+    expect(result.result).toBe("anthropic success");
+    expect(run.mock.calls).toEqual([
+      ["openai", "gpt-5.5", { isFinalFallbackAttempt: false }],
+      ["anthropic", "claude-opus-4-6", { isFinalFallbackAttempt: true }],
+    ]);
+    expect(result.attempts).toHaveLength(1);
+    expect(result.attempts[0]?.reason).toBe("tls_certificate");
+  });
+
+  it("keeps TLS-failed providers excluded across interleaved fallbacks", async () => {
+    const diagnostics = captureModelFailoverDiagnostics();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new FailoverError("Hostname/IP does not match certificate's altnames", {
+          provider: "openai",
+          model: "gpt-5.5",
+          reason: "tls_certificate",
+          code: "ERR_TLS_CERT_ALTNAME_INVALID",
+        }),
+      )
+      .mockRejectedValueOnce(
+        new FailoverError("overloaded", {
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+          reason: "overloaded",
+        }),
+      )
+      .mockResolvedValueOnce("must not run");
+    let thrown: unknown;
+
+    try {
+      await runWithModelFallback({
+        cfg: makeDiagnosticFallbackConfig(["anthropic/claude-opus-4-6", "openai/gpt-5.5-mini"]),
+        provider: "openai",
+        model: "gpt-5.5",
+        sessionId: "session:tls-provider-exclusion",
+        sessionKey: "agent:test:tls-provider-exclusion",
+        lane: "main",
+        run,
+      });
+    } catch (error) {
+      thrown = error;
+    } finally {
+      diagnostics.stop();
+    }
+
+    expect(isFallbackSummaryError(thrown)).toBe(true);
+    expect(run.mock.calls).toEqual([
+      ["openai", "gpt-5.5", { isFinalFallbackAttempt: false }],
+      ["anthropic", "claude-opus-4-6", { isFinalFallbackAttempt: true }],
+    ]);
+    expect(diagnostics.events).toHaveLength(1);
+    expect(diagnostics.events).toMatchObject([
+      {
+        fromProvider: "openai",
+        fromModel: "gpt-5.5",
+        toProvider: "anthropic",
+        toModel: "claude-opus-4-6",
+        reason: "tls_certificate",
+      },
+    ]);
+  });
+
   it("does not replay CLI max-turn failures on configured fallback models", async () => {
     const failure = new FailoverError(
       "Claude CLI stopped after reaching the maximum number of turns (limit: 1). Tool actions may already have run; verify their effects before retrying.",
@@ -778,6 +913,186 @@ describe("runWithModelFallback", () => {
     }
   });
 
+  it.each([
+    ["provider-owned auth", false],
+    ["harness-owned auth", true],
+  ])(
+    "scopes auth skip markers to the explicit profile for %s",
+    async (_label, harnessOwnedAuth) => {
+      const previous = process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS;
+      process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS = "60000";
+      try {
+        const provider = `scoped-auth-skip-${crypto.randomUUID()}`;
+        if (harnessOwnedAuth) {
+          registerFallbackHarness("codex");
+        }
+        const profileA = `${provider}:a`;
+        const profileB = `${provider}:b`;
+        const cfg = makeCfg({
+          agents: {
+            defaults: {
+              model: {
+                primary: "openai/m1",
+                fallbacks: [`${provider}/m1`, "fallback/ok-model"],
+              },
+            },
+          },
+        });
+        const store: AuthProfileStore = {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            [profileA]: { type: "api_key", provider, key: "key-a" },
+            [profileB]: { type: "api_key", provider, key: "key-b" },
+          },
+        };
+        const agentDir = await makeAuthTempDir();
+        setAuthRuntimeStore(agentDir, store);
+        const run = vi.fn(async (candidateProvider: string, model: string) => {
+          if (candidateProvider === "openai") {
+            throw new FailoverError("primary rate limited", {
+              provider: candidateProvider,
+              model,
+              reason: "rate_limit",
+            });
+          }
+          if (candidateProvider === provider) {
+            throw new FailoverError("explicit profile failed", {
+              provider: candidateProvider,
+              model,
+              reason: "auth",
+            });
+          }
+          return "ok";
+        });
+        const execute = (userLockedAuthProfileId: string) =>
+          runWithModelFallback({
+            cfg,
+            provider: "openai",
+            model: "m1",
+            sessionId: "session:scoped-auth-skip",
+            agentDir,
+            userLockedAuthProfileId,
+            resolveAgentHarnessRuntimeOverride: (candidateProvider) =>
+              harnessOwnedAuth && candidateProvider === provider ? "codex" : undefined,
+            run,
+          });
+
+        await execute(profileA);
+        await execute(profileB);
+        const third = await execute(profileB);
+
+        expect(third.result).toBe("ok");
+        expect(run.mock.calls.map(([candidateProvider]) => candidateProvider)).toEqual([
+          "openai",
+          provider,
+          "fallback",
+          "openai",
+          provider,
+          "fallback",
+          "openai",
+          "fallback",
+        ]);
+        expect(third.attempts.find((attempt) => attempt.provider === provider)?.error).toContain(
+          "recent auth failure",
+        );
+      } finally {
+        if (previous === undefined) {
+          delete process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS;
+        } else {
+          process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS = previous;
+        }
+      }
+    },
+  );
+
+  it("scopes automatic auth skips to the selected profile", async () => {
+    const previous = process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS;
+    process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS = "60000";
+    try {
+      const provider = `automatic-auth-skip-${crypto.randomUUID()}`;
+      const lockedProfile = "openai:locked";
+      const profileA = `${provider}:a`;
+      const profileB = `${provider}:b`;
+      let selectedProfile = profileA;
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/m1",
+              fallbacks: [`${provider}/m1`, "fallback/ok-model"],
+            },
+          },
+        },
+      });
+      const store: AuthProfileStore = {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          [lockedProfile]: { type: "api_key", provider: "openai", key: "key-locked" },
+          [profileA]: { type: "api_key", provider, key: "key-a" },
+          [profileB]: { type: "api_key", provider, key: "key-b" },
+        },
+        order: { [provider]: [profileA, profileB] },
+      };
+      const agentDir = await makeAuthTempDir();
+      setAuthRuntimeStore(agentDir, store);
+      const run = vi.fn(async (candidateProvider: string, model: string) => {
+        if (candidateProvider === "openai") {
+          throw new FailoverError("primary rate limited", {
+            provider: candidateProvider,
+            model,
+            reason: "rate_limit",
+          });
+        }
+        if (candidateProvider === provider) {
+          throw new FailoverError("automatic profile failed", {
+            provider: candidateProvider,
+            model,
+            reason: "auth",
+            profileId: selectedProfile,
+          });
+        }
+        return "ok";
+      });
+      const execute = () =>
+        runWithModelFallback({
+          cfg,
+          provider: "openai",
+          model: "m1",
+          sessionId: "session:pooled-auth-skip",
+          agentDir,
+          userLockedAuthProfileId: lockedProfile,
+          run,
+        });
+
+      await execute();
+      selectedProfile = profileB;
+      store.order = { [provider]: [profileB, profileA] };
+      await execute();
+      const third = await execute();
+
+      expect(third.result).toBe("ok");
+      expect(run.mock.calls.map(([candidateProvider]) => candidateProvider)).toEqual([
+        "openai",
+        provider,
+        "fallback",
+        "openai",
+        provider,
+        "fallback",
+        "openai",
+        "fallback",
+      ]);
+      expect(third.attempts.find((attempt) => attempt.provider === provider)?.error).toContain(
+        "recent auth failure",
+      );
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS;
+      } else {
+        process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS = previous;
+      }
+    }
+  });
+
   it("skips auth store bootstrap when no auth profile sources exist", async () => {
     authSourceCheckMock.hasAnyAuthProfileStoreSource.mockReturnValue(false);
     const run = vi.fn().mockResolvedValueOnce("ok");
@@ -800,7 +1115,7 @@ describe("runWithModelFallback", () => {
     });
   });
 
-  it("resolves primary model aliases before running", () => {
+  it("preserves prepared primary model routes before running", () => {
     const cases = [
       {
         name: "keeps openai gpt-5.4 on provider",
@@ -810,7 +1125,7 @@ describe("runWithModelFallback", () => {
         expected: ["openai", "gpt-5.4"],
       },
       {
-        name: "resolves bare alias",
+        name: "resolves a raw bare alias",
         cfg: makeCfg({
           agents: {
             defaults: {
@@ -829,7 +1144,7 @@ describe("runWithModelFallback", () => {
         expected: ["anthropic", "claude-sonnet-4-6"],
       },
       {
-        name: "resolves slash-form alias before provider parsing",
+        name: "resolves a raw slash-form alias before provider parsing",
         cfg: makeCfg({
           agents: {
             defaults: {
@@ -867,11 +1182,59 @@ describe("runWithModelFallback", () => {
         model: "deepseek-v4-pro",
         expected: ["opencode-go", "deepseek-v4-pro"],
       },
+      {
+        name: "keeps a custom default-provider route when another provider owns the bare alias",
+        cfg: {
+          ...makeProviderOrderFallbackCfg([["cloudflare-ai-gateway", "gemini-2.5-flash-lite"]]),
+          agents: {
+            defaults: {
+              model: {
+                primary: "cloudflare-ai-gateway/gemini-3.1-flash-lite",
+                fallbacks: [],
+              },
+              models: {
+                "cloudflare-ai-gateway/gemini-2.5-flash-lite": {
+                  alias: "cf-gemini-2.5-flash-lite",
+                },
+                "google/gemini-2.5-flash-lite": { alias: "gemini-2.5-flash-lite" },
+              },
+            },
+          },
+        },
+        provider: "cloudflare-ai-gateway",
+        model: "gemini-2.5-flash-lite",
+        requestedRouteResolution: "resolved",
+        expected: ["cloudflare-ai-gateway", "gemini-2.5-flash-lite"],
+      },
+      {
+        name: "keeps a built-in default-provider route when another provider owns the bare alias",
+        cfg: makeCfg({
+          agents: {
+            defaults: {
+              model: {
+                primary: "google/gemini-3.1-pro-preview",
+                fallbacks: [],
+              },
+              models: {
+                "google/gemini-2.5-flash-lite": { alias: "google-flash-lite" },
+                "openrouter/google/gemini-2.5-flash-lite": {
+                  alias: "gemini-2.5-flash-lite",
+                },
+              },
+            },
+          },
+        }),
+        provider: "google",
+        model: "gemini-2.5-flash-lite",
+        requestedRouteResolution: "resolved",
+        expected: ["google", "gemini-2.5-flash-lite"],
+      },
     ] satisfies Array<{
       name: string;
       cfg: OpenClawConfig;
       provider: string;
       model: string;
+      requestedRouteResolution?: "raw" | "resolved";
       expected: [string, string];
     }>;
 
@@ -880,6 +1243,7 @@ describe("runWithModelFallback", () => {
         cfg: testCase.cfg,
         provider: testCase.provider,
         model: testCase.model,
+        requestedRouteResolution: testCase.requestedRouteResolution,
       });
 
       expect(candidates[0], testCase.name).toEqual({
@@ -887,6 +1251,70 @@ describe("runWithModelFallback", () => {
         model: testCase.expected[1],
       });
     }
+  });
+
+  it("carries the route origin for every fallback candidate", () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: ["anthropic/claude-haiku-3-5"],
+          },
+        },
+      },
+    });
+
+    expect(
+      testing.resolveFallbackCandidateRoutes({
+        cfg,
+        provider: "google",
+        model: "gemini-2.5-flash-lite",
+      }),
+    ).toEqual([
+      {
+        provider: "google",
+        model: "gemini-2.5-flash-lite",
+        routeOrigin: "requested",
+        routeResolution: "raw",
+      },
+      {
+        provider: "anthropic",
+        model: "claude-haiku-3-5",
+        routeOrigin: "configured-fallback",
+        routeResolution: "resolved",
+      },
+      {
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        routeOrigin: "configured-primary",
+        routeResolution: "resolved",
+      },
+    ]);
+  });
+
+  it("keeps an unmarked canonical built-in route ahead of a colliding alias", () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: { primary: "google/gemini-3.1-pro-preview", fallbacks: [] },
+          models: {
+            "google/gemini-2.5-flash-lite": { alias: "google-flash-lite" },
+            "openrouter/google/gemini-2.5-flash-lite": {
+              alias: "gemini-2.5-flash-lite",
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      testing.resolveFallbackCandidates({
+        cfg,
+        provider: "google",
+        model: "gemini-2.5-flash-lite",
+      })[0],
+    ).toEqual({ provider: "google", model: "gemini-2.5-flash-lite" });
   });
 
   it("falls back on unrecognized errors when candidates remain", async () => {
@@ -994,36 +1422,6 @@ describe("runWithModelFallback", () => {
   });
 
   it("does not prepare agent harness plugins for forced OpenClaw candidates", async () => {
-    const cfg = makeCfg({
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            agentRuntime: { id: "openclaw" },
-            models: [],
-          },
-        },
-      },
-    });
-    const prepareAgentHarnessRuntime = vi.fn(() => {
-      throw new Error("OpenClaw candidates should not prepare plugin harnesses");
-    });
-    const run = vi.fn().mockResolvedValueOnce("ok");
-
-    const result = await runWithModelFallback({
-      cfg,
-      provider: "openai",
-      model: "gpt-5.5",
-      prepareAgentHarnessRuntime,
-      run,
-    });
-
-    expect(result.result).toBe("ok");
-    expect(prepareAgentHarnessRuntime).not.toHaveBeenCalled();
-    expect(run).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not prepare agent harness plugins for forced OpenClaw runtime candidates", async () => {
     const cfg = makeCfg({
       models: {
         providers: {
@@ -1351,10 +1749,15 @@ describe("runWithModelFallback", () => {
   });
 
   it("prefers a prepared harness over a colliding CLI runtime id", async () => {
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        { id: "codex", pluginId: "test-codex-cli", config: { command: "codex" } },
+      ],
+    });
     const cfg = makeCfg({
       agents: {
         defaults: {
-          cliBackends: { codex: { command: "codex" } },
           model: { primary: "anthropic/claude-sonnet-4-6" },
         },
       },
@@ -1444,9 +1847,6 @@ describe("runWithModelFallback", () => {
     const cfg = makeCfg({
       agents: {
         defaults: {
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           model: {
             primary: "claude-cli/opus",
           },
@@ -1504,22 +1904,27 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
-  it("aborts the fallback chain on embedded session takeover instead of trying every model (#83510)", async () => {
+  it("does not run a second candidate after a canonical hard run timeout", async () => {
     const cfg = makeCfg({
       agents: {
         defaults: {
           model: {
             primary: "openai/gpt-5.4",
-            fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-4.1-mini"],
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
           },
         },
       },
     });
-    const takeoverError = new Error(
-      "session file changed while embedded prompt lock was released: /tmp/session.jsonl",
+    const timeoutError = new AgentRunTerminalOutcomeError(
+      new Error("attempt aborted before prompt submission"),
+      {
+        reason: "hard_timeout",
+        status: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
     );
-    takeoverError.name = "EmbeddedAttemptSessionTakeoverError";
-    const run = vi.fn().mockRejectedValue(takeoverError);
+    const run = vi.fn().mockRejectedValueOnce(timeoutError).mockResolvedValueOnce("too late");
 
     await expect(
       runWithModelFallback({
@@ -1528,11 +1933,11 @@ describe("runWithModelFallback", () => {
         model: "gpt-5.4",
         run,
       }),
-    ).rejects.toBe(takeoverError);
+    ).rejects.toBe(timeoutError);
     expect(run).toHaveBeenCalledTimes(1);
   });
 
-  it("aborts fallback when a provider prompt error carries cleanup session takeover", async () => {
+  it("aborts the fallback chain when the transcript writer claim rebounds", async () => {
     const cfg = makeCfg({
       agents: {
         defaults: {
@@ -1543,14 +1948,227 @@ describe("runWithModelFallback", () => {
         },
       },
     });
-    const cleanupTakeover = new Error(
-      "session file changed while embedded prompt lock was released: /tmp/session.jsonl",
-    );
-    cleanupTakeover.name = "EmbeddedAttemptSessionTakeoverError";
-    const providerFacingError = new Error("provider rejected request: rate limit", {
-      cause: cleanupTakeover,
+    const reboundError = new Error("session writer claim changed before transcript persistence");
+    reboundError.name = "SessionTranscriptWriterClaimReboundError";
+    const run = vi.fn().mockRejectedValue(reboundError);
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-5.4",
+        run,
+      }),
+    ).rejects.toBe(reboundError);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry a superseded harness session generation on fallback models", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-4.1-mini"],
+          },
+        },
+      },
     });
-    providerFacingError.name = "EmbeddedAttemptSessionTakeoverError";
+    const supersededError = new AgentHarnessSessionSupersededError(
+      "Codex session generation is no longer current: session-old",
+    );
+    const run = vi.fn().mockRejectedValue(supersededError);
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-5.4",
+        run,
+      }),
+    ).rejects.toBe(supersededError);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not repeat model-independent harness preflight on fallback models", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-4.1-mini"],
+          },
+        },
+      },
+    });
+    const preflightError = new AgentHarnessPreflightError(
+      "Computer Use live test failed after 2 attempts: thread/start timed out",
+    );
+    const run = vi.fn(async () => {
+      await Promise.resolve();
+      throw preflightError;
+    });
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-5.4",
+        run,
+      }),
+    ).rejects.toBe(preflightError);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns a scoped preflight unchanged when every remaining candidate uses that harness", async () => {
+    registerFallbackHarness("codex");
+    const preflightError = createHarnessScopedPreflightError("codex");
+    const run = vi.fn().mockRejectedValue(preflightError);
+    const onFallbackStep = vi.fn();
+
+    await expect(
+      runWithModelFallback({
+        cfg: makeCfg(),
+        provider: "openai",
+        model: "gpt-5.5",
+        fallbacksOverride: ["openai/gpt-5.4", "openai/gpt-5.3"],
+        resolveAgentHarnessRuntimeOverride: () => "codex",
+        onFallbackStep,
+        run,
+      }),
+    ).rejects.toBe(preflightError);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(onFallbackStep).not.toHaveBeenCalled();
+  });
+
+  it("skips only same-runtime candidates after a scoped preflight", async () => {
+    registerFallbackHarness("codex");
+    const preflightError = createHarnessScopedPreflightError("codex");
+    const run = vi.fn().mockRejectedValueOnce(preflightError).mockResolvedValueOnce("openclaw-ok");
+    const onFallbackStep = vi.fn();
+
+    const result = await runWithModelFallback({
+      cfg: makeCfg(),
+      provider: "openai",
+      model: "gpt-5.5",
+      fallbacksOverride: ["openai/gpt-5.4", "anthropic/claude-sonnet-4-6"],
+      resolveAgentHarnessRuntimeOverride: (provider) =>
+        provider === "openai" ? "codex" : "openclaw",
+      onFallbackStep,
+      run,
+    });
+
+    expect(result.result).toBe("openclaw-ok");
+    expect(run.mock.calls).toEqual([
+      ["openai", "gpt-5.5", { isFinalFallbackAttempt: false }],
+      ["anthropic", "claude-sonnet-4-6", { isFinalFallbackAttempt: true }],
+    ]);
+    expect(onFallbackStep).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        fallbackStepFromModel: "openai/gpt-5.5",
+        fallbackStepToModel: "anthropic/claude-sonnet-4-6",
+        fallbackStepFinalOutcome: "next_fallback",
+      }),
+    );
+  });
+
+  it("preserves a different runtime's host-policy denial", async () => {
+    registerFallbackHarness("codex");
+    const preflightError = createHarnessScopedPreflightError("codex");
+    const hostPolicyError = new Error("exec denied: host=gateway security=deny");
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(preflightError)
+      .mockRejectedValueOnce(hostPolicyError);
+
+    await expect(
+      runWithModelFallback({
+        cfg: makeCfg(),
+        provider: "openai",
+        model: "gpt-5.5",
+        fallbacksOverride: ["anthropic/claude-sonnet-4-6"],
+        resolveAgentHarnessRuntimeOverride: (provider) =>
+          provider === "openai" ? "codex" : "openclaw",
+        run,
+      }),
+    ).rejects.toBe(hostPolicyError);
+    expect(run.mock.calls).toEqual([
+      ["openai", "gpt-5.5", { isFinalFallbackAttempt: false }],
+      ["anthropic", "claude-sonnet-4-6", { isFinalFallbackAttempt: true }],
+    ]);
+  });
+
+  it("keeps an unresolved runtime eligible after a scoped preflight", async () => {
+    const preflightError = createHarnessScopedPreflightError("codex");
+    const run = vi.fn().mockRejectedValueOnce(preflightError).mockResolvedValueOnce("unknown-ok");
+
+    const result = await runWithModelFallback({
+      cfg: undefined,
+      provider: "openai",
+      model: "gpt-5.5",
+      fallbacksOverride: ["anthropic/claude-sonnet-4-6"],
+      resolveAgentHarnessRuntimeOverride: (provider) =>
+        provider === "openai" ? "codex" : undefined,
+      run,
+    });
+
+    expect(result.result).toBe("unknown-ok");
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not spend model fallbacks on sandbox provisioning failures", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-4.1-mini"],
+          },
+        },
+      },
+    });
+    const provisioningError = toSandboxProvisioningError(
+      new Error("Sandbox image not found: openclaw-sandbox:analyst. Build or pull it first."),
+      "docker",
+    );
+    const run = vi.fn().mockRejectedValue(provisioningError);
+    const onError = vi.fn();
+    const onFallbackStep = vi.fn();
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-5.4",
+        run,
+        onError,
+        onFallbackStep,
+      }),
+    ).rejects.toBe(provisioningError);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(onError).not.toHaveBeenCalled();
+    expect(onFallbackStep).not.toHaveBeenCalled();
+  });
+
+  it("aborts fallback when a provider-looking wrapper carries writer claim rebound", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-4.1-mini"],
+          },
+        },
+      },
+    });
+    const writerClaimRebound = new Error(
+      "session writer claim changed before transcript persistence",
+    );
+    writerClaimRebound.name = "SessionTranscriptWriterClaimReboundError";
+    const providerFacingError = new Error("provider rejected request: rate limit", {
+      cause: writerClaimRebound,
+    });
     const run = vi.fn().mockRejectedValue(providerFacingError);
 
     await expect(
@@ -1564,33 +2182,90 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
-  it("aborts the fallback chain on session write-lock timeout instead of trying every model (#83510)", async () => {
+  it("aborts the fallback chain on stale gateway lifecycle errors (#116418)", async () => {
     const cfg = makeCfg({
       agents: {
         defaults: {
           model: {
-            primary: "openai/gpt-5.4",
-            fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-4.1-mini"],
+            primary: "ollama/qwen3:0.6b",
+            fallbacks: ["minimax/MiniMax-M3"],
           },
         },
       },
     });
-    const lockError = new SessionWriteLockTimeoutError({
-      timeoutMs: 10_000,
-      owner: "pid=37121",
-      lockPath: "/tmp/openclaw/session.jsonl.lock",
-    });
-    const run = vi.fn().mockRejectedValue(lockError);
+    const lifecycleError = createAgentRunStaleLifecycleError();
+    const wrappedLifecycleError = new Error("request was aborted", { cause: lifecycleError });
+    wrappedLifecycleError.name = "AbortError";
+    const run = vi.fn().mockRejectedValue(wrappedLifecycleError);
+    const onFallbackStep = vi.fn();
 
     await expect(
       runWithModelFallback({
         cfg,
-        provider: "openai",
-        model: "gpt-5.4",
+        provider: "ollama",
+        model: "qwen3:0.6b",
         run,
+        onFallbackStep,
       }),
-    ).rejects.toBe(lockError);
+    ).rejects.toBe(wrappedLifecycleError);
     expect(run).toHaveBeenCalledTimes(1);
+    expect(onFallbackStep).not.toHaveBeenCalledWith(
+      expect.objectContaining({ decision: "candidate_failed" }),
+    );
+  });
+
+  it.each([
+    ["direct", () => new GatewayDrainingError()],
+    ["cause", () => new Error("session send failed", { cause: new GatewayDrainingError() })],
+    [
+      "aggregate",
+      () =>
+        new AggregateError(
+          [new Error("cleanup failed"), new GatewayDrainingError()],
+          "agent run failed",
+        ),
+    ],
+  ])("aborts fallback on %s gateway drain failures", async (_label, makeError) => {
+    const error = makeError();
+    const run = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce("too late");
+    const onError = vi.fn();
+    const onFallbackStep = vi.fn();
+
+    await expect(
+      runWithModelFallback({
+        cfg: undefined,
+        provider: "openai",
+        model: "gpt-5.6-sol",
+        fallbacksOverride: ["openai/gpt-5.4-mini"],
+        skipAuthProfileRuntime: true,
+        run,
+        onError,
+        onFallbackStep,
+      }),
+    ).rejects.toBe(error);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(onError).not.toHaveBeenCalled();
+    expect(onFallbackStep).not.toHaveBeenCalled();
+  });
+
+  it("still advances after a genuine provider rate limit", async () => {
+    const rateLimit = Object.assign(new Error("rate limit exceeded"), { status: 429 });
+    const run = vi.fn().mockRejectedValueOnce(rateLimit).mockResolvedValueOnce("fallback ok");
+
+    const result = await runWithModelFallback({
+      cfg: undefined,
+      provider: "openai",
+      model: "gpt-5.6-sol",
+      fallbacksOverride: ["openai/gpt-5.4-mini"],
+      skipAuthProfileRuntime: true,
+      run,
+    });
+
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(result.result).toBe("fallback ok");
+    expect(result.provider).toBe("openai");
+    expect(result.model).toBe("gpt-5.4-mini");
+    expect(result.attempts[0]).toMatchObject({ reason: "rate_limit", status: 429 });
   });
 
   it("aborts the fallback chain on transcript continuation failures without candidate_failed attribution", async () => {
@@ -1649,47 +2324,40 @@ describe("runWithModelFallback", () => {
     expect(result.provider).toBe("anthropic");
   });
 
-  it("keeps provider failover metadata authoritative over nested session locks", async () => {
+  it("continues to the next model after a Google invalid-key response (#114784)", async () => {
     const cfg = makeCfg({
       agents: {
         defaults: {
           model: {
-            primary: "openai/gpt-5.4",
+            primary: "google/gemini-3.1-pro-preview",
             fallbacks: ["anthropic/claude-sonnet-4-6"],
           },
         },
       },
     });
-    const lockError = new SessionWriteLockTimeoutError({
-      timeoutMs: 10_000,
-      owner: "pid=37121",
-      lockPath: "/tmp/openclaw/session.jsonl.lock",
-    });
-    const providerError = {
-      status: 429,
-      code: "RESOURCE_EXHAUSTED",
-      message: "upstream quota pressure",
-      cause: lockError,
-    };
-    const run = vi.fn().mockRejectedValueOnce(providerError).mockResolvedValueOnce("fallback ok");
+    const googleInvalidKey = new Error(
+      "Google Generative AI API error (400): API key not valid. Please pass a valid API key. [code=INVALID_ARGUMENT]",
+    );
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(googleInvalidKey)
+      .mockResolvedValueOnce("fallback ok");
 
     const result = await runWithModelFallback({
       cfg,
-      provider: "openai",
-      model: "gpt-5.4",
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
       run,
     });
 
     expect(result.result).toBe("fallback ok");
     expect(result.provider).toBe("anthropic");
-    expect(run).toHaveBeenCalledTimes(2);
     expect(result.attempts[0]).toMatchObject({
-      provider: "openai",
-      model: "gpt-5.4",
-      reason: "rate_limit",
-      status: 429,
-      code: "RESOURCE_EXHAUSTED",
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+      reason: "auth",
     });
+    expect(run).toHaveBeenCalledTimes(2);
   });
 
   it("keeps raw provider schema errors in fallback summaries", async () => {
@@ -1725,7 +2393,7 @@ describe("runWithModelFallback", () => {
         }),
       ),
     );
-    expect(error.name).toBe("FallbackSummaryError");
+    expect(error.name).toBe("FailoverError");
     expect(error.message).toContain(rawError);
     const attempt = error.attempts.find((candidate) => candidate.error === rawError);
     if (!attempt) {
@@ -1833,7 +2501,7 @@ describe("runWithModelFallback", () => {
       }),
     );
     const summary = requireFallbackSummaryError(err);
-    expect(summary.name).toBe("FallbackSummaryError");
+    expect(summary.name).toBe("FailoverError");
     expect(summary.sessionId).toBe("session:browser-42713");
     expect(summary.lane).toBe("answer");
     const cause = requireFailoverError(summary.cause);
@@ -2353,6 +3021,7 @@ describe("runWithModelFallback", () => {
             primary: "openai/gpt-4.1-mini",
             fallbacks: ["anthropic/claude-haiku-3-5", "openrouter/deepseek-chat"],
           },
+          modelPolicy: { allow: ["openai/gpt-4.1-mini"] },
         },
       },
     });
@@ -2604,43 +3273,6 @@ describe("runWithModelFallback", () => {
     expect(result.attempts[0]?.authMode).toBe("oauth");
   });
 
-  it("falls back on OpenRouter API-key budget limit errors", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openrouter/xiaomi/mimo-v2-pro",
-            fallbacks: ["openai/gpt-4.1-mini"],
-          },
-        },
-      },
-    });
-    const run = vi
-      .fn()
-      .mockRejectedValueOnce(
-        Object.assign(
-          new Error("403 API key budget limit exceeded (monthly limit). Contact your org admin."),
-          { status: 403 },
-        ),
-      )
-      .mockResolvedValueOnce("ok");
-
-    const result = await runWithModelFallback({
-      cfg,
-      provider: "openrouter",
-      model: "xiaomi/mimo-v2-pro",
-      run,
-    });
-
-    expect(result.result).toBe("ok");
-    expect(run.mock.calls).toEqual([
-      ["openrouter", "xiaomi/mimo-v2-pro", { isFinalFallbackAttempt: false }],
-      ["openai", "gpt-4.1-mini", { isFinalFallbackAttempt: true }],
-    ]);
-    expect(result.attempts).toHaveLength(1);
-    expect(result.attempts[0]?.reason).toBe("billing");
-  });
-
   it("falls back on model-not-found error shapes", async () => {
     const cases: Array<{
       name: string;
@@ -2764,6 +3396,230 @@ describe("runWithModelFallback", () => {
       expectedReason: "unknown",
     });
   });
+
+  it("attempts an eligible same-provider user lock omitted from cooldown order", async () => {
+    const provider = `locked-cooldown-${crypto.randomUUID()}`;
+    const orderedProfileA = `${provider}:a`;
+    const orderedProfileB = `${provider}:b`;
+    const orderedProfileIds = [orderedProfileA, orderedProfileB];
+    const userLockedAuthProfileId = `${provider}:locked`;
+    const store: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        [orderedProfileA]: { type: "api_key", provider, key: "key-a" },
+        [orderedProfileB]: { type: "api_key", provider, key: "key-b" },
+        [userLockedAuthProfileId]: { type: "api_key", provider, key: "key-locked" },
+        "fallback:default": { type: "api_key", provider: "fallback", key: "fallback-key" },
+      },
+      order: { [provider]: [...orderedProfileIds] },
+      usageStats: {
+        [orderedProfileA]: { cooldownUntil: Date.now() + 60_000 },
+        [orderedProfileB]: { cooldownUntil: Date.now() + 120_000 },
+      },
+    };
+    const run = vi.fn().mockResolvedValue("ok");
+
+    const result = await runWithStoredAuth({
+      cfg: makeProviderFallbackCfg(provider),
+      store,
+      provider,
+      run,
+      userLockedAuthProfileId,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run.mock.calls).toEqual([[provider, "m1", { isFinalFallbackAttempt: false }]]);
+    expect(store.order?.[provider]).toEqual(orderedProfileIds);
+  });
+
+  it("does not skip a provider when only its user-pinned profile is cooling down", async () => {
+    const provider = `pinned-cooldown-${crypto.randomUUID()}`;
+    const pinnedProfileId = `${provider}:pinned`;
+    const backupProfileId = `${provider}:backup`;
+    const store: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        [pinnedProfileId]: { type: "api_key", provider, key: "pinned-key" },
+        [backupProfileId]: { type: "api_key", provider, key: "backup-key" },
+        "fallback:default": { type: "api_key", provider: "fallback", key: "fallback-key" },
+      },
+      order: { [provider]: [backupProfileId] },
+      usageStats: {
+        [pinnedProfileId]: { cooldownUntil: Date.now() + 60_000 },
+      },
+    };
+    const run = vi.fn().mockResolvedValue("ok");
+
+    const result = await runWithStoredAuth({
+      cfg: makeProviderFallbackCfg(provider),
+      store,
+      provider,
+      run,
+      userLockedAuthProfileId: pinnedProfileId,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run.mock.calls).toEqual([[provider, "m1", { isFinalFallbackAttempt: false }]]);
+  });
+
+  it("discovers an exact external CLI user lock before cooldown admission", async () => {
+    const provider = "minimax-portal";
+    const orderedProfileId = "minimax-portal:api";
+    const persistedStore: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        [orderedProfileId]: { type: "api_key", provider, key: "api-key" },
+        "fallback:default": { type: "api_key", provider: "fallback", key: "fallback-key" },
+      },
+      order: { [provider]: [orderedProfileId] },
+      usageStats: {
+        [orderedProfileId]: {
+          disabledUntil: Date.now() + 60_000,
+          disabledReason: "auth",
+        },
+      },
+    };
+    const runtimeStore: AuthProfileStore = {
+      ...persistedStore,
+      profiles: {
+        ...persistedStore.profiles,
+        [MINIMAX_CLI_PROFILE_ID]: {
+          type: "oauth",
+          provider,
+          access: "external-access",
+          refresh: "external-refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+    authRuntimeMock.runtime.ensureAuthProfileStore.mockReturnValueOnce(runtimeStore);
+    const run = vi.fn().mockResolvedValue("ok");
+
+    const result = await runWithStoredAuth({
+      cfg: makeProviderFallbackCfg(provider),
+      store: persistedStore,
+      provider,
+      run,
+      userLockedAuthProfileId: MINIMAX_CLI_PROFILE_ID,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(persistedStore.profiles[MINIMAX_CLI_PROFILE_ID]).toBeUndefined();
+    expect(run.mock.calls).toEqual([[provider, "m1", { isFinalFallbackAttempt: false }]]);
+    const ensureCall = requireMockCall(
+      authRuntimeMock.runtime.ensureAuthProfileStore,
+      0,
+      "ensureAuthProfileStore",
+    );
+    expect(requireRecord(ensureCall[1], "auth store options")).toMatchObject({
+      externalCli: {
+        mode: "scoped",
+        allowKeychainPrompt: false,
+        profileIds: [MINIMAX_CLI_PROFILE_ID],
+      },
+    });
+  });
+
+  it("normalizes a blank user lock before cooldown admission", async () => {
+    const provider = `blank-lock-${crypto.randomUUID()}`;
+    const orderedProfileId = `${provider}:ordered`;
+    const store: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        [orderedProfileId]: { type: "api_key", provider, key: "ordered-key" },
+        "": { type: "api_key", provider, key: "blank-key" },
+        "fallback:default": { type: "api_key", provider: "fallback", key: "fallback-key" },
+      },
+      order: { [provider]: [orderedProfileId] },
+      usageStats: {
+        [orderedProfileId]: {
+          disabledUntil: Date.now() + 60_000,
+          disabledReason: "auth",
+        },
+      },
+    };
+    const run = createFallbackOnlyRun();
+
+    const result = await runWithStoredAuth({
+      cfg: makeProviderFallbackCfg(provider),
+      store,
+      provider,
+      run,
+      userLockedAuthProfileId: "   ",
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run.mock.calls).toEqual([["fallback", "ok-model", { isFinalFallbackAttempt: true }]]);
+    const ensureCall = requireMockCall(
+      authRuntimeMock.runtime.ensureAuthProfileStore,
+      0,
+      "ensureAuthProfileStore",
+    );
+    expect(requireRecord(ensureCall[1], "auth store options")).toMatchObject({
+      externalCli: { mode: "scoped" },
+    });
+    expect(
+      requireRecord(
+        requireRecord(ensureCall[1], "auth store options").externalCli,
+        "external CLI options",
+      ),
+    ).not.toHaveProperty("profileIds");
+  });
+
+  it.each(["cross-provider", "missing", "ineligible"] as const)(
+    "does not bypass cooldown order for a %s user lock",
+    async (kind) => {
+      const provider = `locked-rejected-${kind}-${crypto.randomUUID()}`;
+      const orderedProfileA = `${provider}:a`;
+      const orderedProfileB = `${provider}:b`;
+      const orderedProfileIds = [orderedProfileA, orderedProfileB];
+      const userLockedAuthProfileId =
+        kind === "cross-provider" ? "other:locked" : `${provider}:locked`;
+      const store: AuthProfileStore = {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          [orderedProfileA]: { type: "api_key", provider, key: "key-a" },
+          [orderedProfileB]: { type: "api_key", provider, key: "key-b" },
+          "fallback:default": { type: "api_key", provider: "fallback", key: "fallback-key" },
+        },
+        order: { [provider]: [...orderedProfileIds] },
+        usageStats: {
+          [orderedProfileA]: { cooldownUntil: Date.now() + 60_000 },
+          [orderedProfileB]: { cooldownUntil: Date.now() + 120_000 },
+        },
+      };
+      if (kind === "cross-provider") {
+        store.profiles[userLockedAuthProfileId] = {
+          type: "api_key",
+          provider: "other",
+          key: "other-key",
+        };
+      } else if (kind === "ineligible") {
+        store.profiles[userLockedAuthProfileId] = {
+          type: "token",
+          provider,
+          token: "expired-token",
+          expires: Date.now() - 1,
+        };
+      }
+      const run = createFallbackOnlyRun();
+
+      const result = await runWithStoredAuth({
+        cfg: makeProviderFallbackCfg(provider),
+        store,
+        provider,
+        run,
+        userLockedAuthProfileId,
+      });
+
+      expect(result.result).toBe("ok");
+      expect(run.mock.calls).toEqual([
+        [provider, "m1", { allowTransientCooldownProbe: true, isFinalFallbackAttempt: false }],
+        ["fallback", "ok-model", { isFinalFallbackAttempt: true }],
+      ]);
+      expect(store.order?.[provider]).toEqual(orderedProfileIds);
+    },
+  );
 
   it("does not skip OpenRouter when legacy cooldown markers exist", async () => {
     const provider = "openrouter";
@@ -2931,7 +3787,7 @@ describe("runWithModelFallback", () => {
           }),
         ),
       );
-      expect(error.name).toBe("FallbackSummaryError");
+      expect(error.name).toBe("FailoverError");
       expect(error.soonestCooldownExpiry).toBe(expiry);
     });
   });
@@ -2988,7 +3844,7 @@ describe("runWithModelFallback", () => {
           }),
         ),
       );
-      expect(error.name).toBe("FallbackSummaryError");
+      expect(error.name).toBe("FailoverError");
       expect(error.soonestCooldownExpiry).toBe(relevantExpiry);
     });
   });
@@ -3561,7 +4417,7 @@ describe("runWithModelFallback", () => {
       });
     });
 
-    it("probes alias-resolved primary models during rate-limit cooldowns", async () => {
+    it("probes raw alias targets during rate-limit cooldowns", async () => {
       const { dir } = await makeAuthStoreWithCooldown("anthropic", "rate_limit");
       const cfg = makeCfg({
         agents: {
@@ -4337,92 +5193,56 @@ describe("runWithImageModelFallback", () => {
       ["google", "gemini-2.5-flash-image-preview"],
     ]);
   });
-});
 
-describe("runWithModelFallback preserved prompt errors", () => {
-  it.each([
-    {
-      label: "timeout",
-      promptError: Object.assign(new Error("request timed out"), { name: "TimeoutError" }),
-      expected: { message: "request timed out", reason: "timeout", status: 408 },
-    },
-    {
-      label: "rate limit",
-      promptError: { status: 429, code: "RATE_LIMITED", message: "too many requests" },
-      expected: {
-        message: "too many requests",
-        reason: "rate_limit",
-        status: 429,
-        code: "RATE_LIMITED",
-      },
-    },
-  ])(
-    "falls back with the preserved $label prompt error (#99963)",
-    async ({ promptError, expected }) => {
-      const cfg = makeCfg({
-        agents: {
-          defaults: {
-            model: {
-              primary: "openai/gpt-5.5",
-              fallbacks: ["anthropic/claude-sonnet-4-6"],
-            },
-          },
-        },
-      });
-      const takeoverError = Object.assign(new Error("cleanup takeover"), {
-        name: "EmbeddedAttemptSessionTakeoverError",
-        promptError,
-      });
-      const run = vi.fn().mockRejectedValueOnce(takeoverError).mockResolvedValueOnce("ok");
-      const onError = vi.fn();
-
-      const result = await runWithModelFallback({
-        cfg,
-        provider: "openai",
-        model: "gpt-5.5",
-        run,
-        onError,
-      });
-
-      expect(result.result).toBe("ok");
-      expect(run).toHaveBeenCalledTimes(2);
-      expect(result.attempts[0]).toMatchObject({
-        error: expected.message,
-        reason: expected.reason,
-      });
-      const observedError = onError.mock.calls[0]?.[0]?.error;
-      expect(observedError).toMatchObject({ name: "FailoverError", ...expected });
-      expect(observedError).toHaveProperty("cause", takeoverError);
-    },
-  );
-
-  it("still aborts fallback for a pure takeover error without promptError (regression)", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.5",
-            fallbacks: ["anthropic/claude-sonnet-4-6"],
-          },
-        },
-      },
-    });
-
-    const pureTakeoverError = Object.assign(
-      new Error("session file changed while embedded prompt lock was released"),
-      { name: "EmbeddedAttemptSessionTakeoverError" },
-    );
-    const run = vi.fn().mockRejectedValue(pureTakeoverError);
+  it("keeps harness preflight terminal for image fallbacks", async () => {
+    const preflightError = new AgentHarnessPreflightError("image preflight failed");
+    const run = vi.fn().mockRejectedValue(preflightError);
 
     await expect(
-      runWithModelFallback({
-        cfg,
-        provider: "openai",
-        model: "gpt-5.5",
+      runWithImageModelFallback({
+        cfg: makeCfg({
+          agents: {
+            defaults: {
+              imageModel: {
+                primary: "openai/gpt-image-1",
+                fallbacks: ["google/gemini-2.5-flash-image-preview"],
+              },
+            },
+          },
+        }),
         run,
       }),
-    ).rejects.toBe(pureTakeoverError);
-    expect(run).toHaveBeenCalledTimes(1);
+    ).rejects.toBe(preflightError);
+    expect(run).toHaveBeenCalledOnce();
+  });
+
+  it("preserves caller cancellation without starting an image fallback", async () => {
+    const controller = new AbortController();
+    const reason = new Error("caller cancelled image fallback");
+    const run = vi.fn(async () => {
+      controller.abort(reason);
+      throw Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+    });
+
+    await expect(
+      runWithImageModelFallback({
+        cfg: makeCfg({
+          agents: {
+            defaults: {
+              imageModel: {
+                primary: "openai/gpt-5.4-mini",
+                fallbacks: ["google/gemini-2.5-flash"],
+              },
+            },
+          },
+        }),
+        abortSignal: controller.signal,
+        run,
+      }),
+    ).rejects.toBe(reason);
+
+    expect(run).toHaveBeenCalledOnce();
   });
 });
+
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

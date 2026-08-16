@@ -3,7 +3,6 @@
  *
  * Local callers keep the historic throwing API while agent-core returns explicit Result objects.
  */
-import type { StreamFn as CoreStreamFn } from "../../../../packages/llm-core/src/index.js";
 import type { Model } from "../../../llm/types.js";
 import {
   calculateContextTokens,
@@ -86,7 +85,7 @@ export async function generateSummary(
       customInstructions,
       previousSummary,
       thinkingLevel,
-      streamFn as unknown as CoreStreamFn | undefined,
+      streamFn,
       openClawAgentCoreRuntime,
     ),
   );
@@ -112,7 +111,7 @@ export async function compact(
       customInstructions,
       signal,
       thinkingLevel,
-      streamFn as unknown as CoreStreamFn | undefined,
+      streamFn,
       openClawAgentCoreRuntime,
     ),
   );

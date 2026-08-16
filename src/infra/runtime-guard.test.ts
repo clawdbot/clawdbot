@@ -79,6 +79,7 @@ describe("runtime-guard", () => {
       version: "20.0.0",
       execPath: "/usr/bin/node",
       pathEnv: "/usr/bin",
+      hasNodeSqlite: false,
     };
     expect(() => assertSupportedRuntime(runtime, details)).toThrow("exit");
     expect(runtime.error).toHaveBeenCalledOnce();
@@ -105,12 +106,31 @@ describe("runtime-guard", () => {
       version: "22.22.3",
       execPath: "/usr/bin/node",
       pathEnv: "/usr/bin",
+      hasNodeSqlite: true,
     };
     expect(assertSupportedRuntime(runtime, details)).toBeUndefined();
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
-  it("rejects Bun because it does not provide node:sqlite", () => {
+  it("accepts Bun when the runtime provides node:sqlite", () => {
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+    const details = {
+      kind: "bun" as const,
+      version: "1.4.0",
+      execPath: "/usr/bin/bun",
+      pathEnv: "/usr/bin",
+      hasNodeSqlite: true,
+    };
+    expect(assertSupportedRuntime(runtime, details)).toBeUndefined();
+    expect(runtime.exit).not.toHaveBeenCalled();
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("rejects Bun when it does not provide node:sqlite", () => {
     const runtime = {
       log: vi.fn(),
       error: vi.fn(),
@@ -123,6 +143,7 @@ describe("runtime-guard", () => {
       version: "1.3.14",
       execPath: "/usr/bin/bun",
       pathEnv: "/usr/bin",
+      hasNodeSqlite: false,
     };
 
     expect(() => assertSupportedRuntime(runtime, details)).toThrow("exit");
@@ -150,6 +171,7 @@ describe("runtime-guard", () => {
       version: null,
       execPath: null,
       pathEnv: "(not set)",
+      hasNodeSqlite: false,
     };
 
     expect(() => assertSupportedRuntime(runtime, details)).toThrow("exit");

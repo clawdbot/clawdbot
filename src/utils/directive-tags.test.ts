@@ -205,6 +205,22 @@ describe("parseInlineDirectives", () => {
     expect(result.text).toBe(["~~~python", "    x  =  1", "        y  =  2", "~~~"].join("\n"));
   });
 
+  test.each([
+    [
+      "a false closing marker",
+      ["```python", "value = 'a  b'", "``` not a close", "x = 'c  d'", "```"],
+    ],
+    ["an unclosed fence", ["```python", "value = 'a  b'", "x = 'c  d'"]],
+    ["an indented closing fence", ["```python", "value = 'a  b'", "   ```"]],
+  ])("preserves canonical code fences with %s after removing directives", (_name, lines) => {
+    const code = lines.join("\n");
+    const result = parseInlineDirectives(`[[reply_to_current]]\n[[audio_as_voice]]\n${code}`);
+
+    expect(result.hasReplyTag).toBe(true);
+    expect(result.audioAsVoice).toBe(true);
+    expect(result.text).toBe(code);
+  });
+
   test("normalizes plain text without directives using code-fence awareness", () => {
     const input = "plain  text  with  extra  spaces\n\n```\n    code  preserved\n```";
     const result = parseInlineDirectives(input);

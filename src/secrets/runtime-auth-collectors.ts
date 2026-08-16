@@ -1,4 +1,5 @@
 /** Collects auth-profile and OAuth secret refs for runtime preparation. */
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAuthProfileEligibility } from "../agents/auth-profiles/order.js";
 import { assertNoOAuthSecretRefPolicyViolations } from "../agents/auth-profiles/policy.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles/types.js";
@@ -26,6 +27,22 @@ type TokenCredentialLike = AuthProfileCredential & {
   tokenRef?: unknown;
 };
 
+function resolveAuthProfileOwnerContract(
+  profile: ApiKeyCredentialLike | TokenCredentialLike,
+  context: ResolverContext,
+): unknown {
+  const providerId = normalizeOptionalLowercaseString(profile.provider) ?? profile.provider;
+  const configuredProvider = Object.entries(context.sourceConfig.models?.providers ?? {}).find(
+    ([candidateId]) =>
+      (normalizeOptionalLowercaseString(candidateId) ?? candidateId) === providerId,
+  );
+  return {
+    profile: structuredClone(profile),
+    providerId,
+    configuredProvider,
+  };
+}
+
 function collectAuthStoreSecretInputAssignment(
   params: Parameters<typeof collectRuntimeSecretInputAssignment>[0],
 ): void {
@@ -45,6 +62,7 @@ function collectApiKeyProfileAssignment(params: {
   authAliasLookupParams: ProviderAuthAliasLookupParams;
   context: ResolverContext;
 }): void {
+  const ownerContract = resolveAuthProfileOwnerContract(params.profile, params.context);
   const {
     explicitRef: keyRef,
     inlineRef: inlineKeyRef,
@@ -91,9 +109,13 @@ function collectApiKeyProfileAssignment(params: {
       ownerId: resolveAuthProfileSecretOwnerId(params),
       requiredForGateway: false,
       disposition: "isolate",
+      contract: ownerContract,
     },
     apply: (value) => {
       params.profile.key = String(value);
+    },
+    applyUnavailable: () => {
+      params.profile.key = undefined;
     },
   });
 }
@@ -107,6 +129,7 @@ function collectTokenProfileAssignment(params: {
   authAliasLookupParams: ProviderAuthAliasLookupParams;
   context: ResolverContext;
 }): void {
+  const ownerContract = resolveAuthProfileOwnerContract(params.profile, params.context);
   const {
     explicitRef: tokenRef,
     inlineRef: inlineTokenRef,
@@ -153,9 +176,13 @@ function collectTokenProfileAssignment(params: {
       ownerId: resolveAuthProfileSecretOwnerId(params),
       requiredForGateway: false,
       disposition: "isolate",
+      contract: ownerContract,
     },
     apply: (value) => {
       params.profile.token = String(value);
+    },
+    applyUnavailable: () => {
+      params.profile.token = undefined;
     },
   });
 }

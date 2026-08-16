@@ -111,7 +111,7 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
   );
 }
 
-type CodexAppServerScopedRequest = <T = JsonValue | undefined>(request: {
+export type CodexAppServerScopedRequest = <T = JsonValue | undefined>(request: {
   method: string;
   requestParams?: unknown;
 }) => Promise<T>;
@@ -200,7 +200,7 @@ async function readCodexAccountEmailBestEffort(
  * isolated child) so related reads see the same app-server session. The whole
  * callback re-runs once when the client's start selection changed underneath it.
  */
-async function withCodexAppServerJsonClient<T>(
+export async function withCodexAppServerJsonClient<T>(
   params: {
     timeoutMs?: number;
     timeoutMessage?: string;
@@ -217,7 +217,7 @@ async function withCodexAppServerJsonClient<T>(
     // to the conservative graceful/force-kill window used elsewhere.
     isolatedShutdown?: { exitTimeoutMs?: number; forceKillDelayMs?: number };
   },
-  run: (request: CodexAppServerScopedRequest) => Promise<T>,
+  run: (request: CodexAppServerScopedRequest, client: CodexAppServerClient) => Promise<T>,
 ): Promise<T> {
   const timeoutMs = params.timeoutMs ?? 60_000;
   const timeoutMessage = params.timeoutMessage ?? "codex app-server request timed out";
@@ -273,7 +273,7 @@ async function withCodexAppServerJsonClient<T>(
                 signal: timeoutController.signal,
               });
             };
-            return await run(scopedRequest);
+            return await run(scopedRequest, client);
           } catch (error) {
             if (!isCodexAppServerStartSelectionChangedError(error) || attempt > 0) {
               throw error;

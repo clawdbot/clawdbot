@@ -130,11 +130,10 @@ describe("AppSidebar session catalog pagination", () => {
 
       visibility = "hidden";
       document.dispatchEvent(new Event("visibilitychange"));
-      gateway.publish({ connected: false, reconnecting: true, hello: null });
+      gateway.publish({ phase: "reconnecting", hello: null });
       await sidebar.updateComplete;
       gateway.publish({
-        connected: true,
-        reconnecting: false,
+        phase: "connected",
         hello: {
           features: { methods: ["sessions.catalog.list"] },
         } as ApplicationGatewaySnapshot["hello"],

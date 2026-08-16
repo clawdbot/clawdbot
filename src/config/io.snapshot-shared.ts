@@ -5,9 +5,14 @@ import type { ConfigFileSnapshot, LegacyConfigIssue, OpenClawConfig } from "./ty
 
 export function createConfigFileSnapshot(params: {
   path: string;
+  includedPaths?: readonly string[];
+  includeProvenance?: ConfigFileSnapshot["includeProvenance"];
+  agentRosterIncludeOwned?: boolean;
+  bindingsIncludeOwned?: boolean;
   exists: boolean;
   raw: string | null;
   parsed: unknown;
+  sourceConfigBeforeMigrations?: OpenClawConfig;
   sourceConfig: OpenClawConfig;
   valid: boolean;
   runtimeConfig: OpenClawConfig;
@@ -21,9 +26,30 @@ export function createConfigFileSnapshot(params: {
   const runtimeConfig = asRuntimeConfig(params.runtimeConfig);
   return {
     path: params.path,
+    includedPaths: [...(params.includedPaths ?? [])],
+    ...(params.includeProvenance
+      ? {
+          includeProvenance: params.includeProvenance.map((entry) => ({
+            ...entry,
+            path: [...entry.path],
+            ...(entry.targetPaths ? { targetPaths: [...entry.targetPaths] } : {}),
+          })),
+        }
+      : {}),
+    ...(params.agentRosterIncludeOwned !== undefined
+      ? { agentRosterIncludeOwned: params.agentRosterIncludeOwned }
+      : {}),
+    ...(params.bindingsIncludeOwned !== undefined
+      ? { bindingsIncludeOwned: params.bindingsIncludeOwned }
+      : {}),
     exists: params.exists,
     raw: params.raw,
     parsed: params.parsed,
+    ...(params.sourceConfigBeforeMigrations
+      ? {
+          sourceConfigBeforeMigrations: asResolvedSourceConfig(params.sourceConfigBeforeMigrations),
+        }
+      : {}),
     sourceConfig,
     resolved: sourceConfig,
     valid: params.valid,

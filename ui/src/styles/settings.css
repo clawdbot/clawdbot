@@ -76,12 +76,23 @@
   gap: var(--space-8);
 }
 
+/* An intro belongs to the first section rather than forming a separate block.
+   Keep later sections at the normal --space-8 separation. */
+.settings-page:has(> .settings-page__intro) {
+  gap: var(--space-5);
+}
+
+.settings-page:has(> .settings-page__intro) > .settings-section + .settings-section {
+  margin-top: calc(var(--space-8) - var(--space-5));
+}
+
 /* Table/list-heavy pages (sessions, automations, plugins) need more width. */
 .settings-page--wide {
   max-width: 1120px;
 }
 
 .settings-page__intro {
+  margin: 0;
   font-size: var(--control-ui-text-sm);
   line-height: 1.5;
   color: var(--muted);
@@ -130,6 +141,60 @@
   flex: 0 0 auto;
 }
 
+.settings-section__docs {
+  display: inline-flex;
+  align-items: center;
+}
+
+.settings-section__help-button {
+  display: inline-grid;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--muted) 35%, transparent);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font: 600 var(--control-ui-text-xs) / 1 var(--font-body);
+  cursor: var(--cursor-action);
+}
+
+.settings-section__help-button > span {
+  /* SF's ascent+descent exceed 1em, so a centered line box parks the glyph
+     below the circle's midline; trim to cap bounds for true centering. */
+  display: block;
+  text-box: trim-both cap alphabetic;
+}
+
+.settings-section__help-button:hover,
+.settings-section__help-button:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  color: var(--accent);
+}
+
+.settings-section__help-popover::part(body) {
+  max-width: 280px;
+  padding: var(--space-3) var(--space-4);
+}
+
+.settings-section__help-panel {
+  display: grid;
+  gap: var(--space-2);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+}
+
+.settings-section__help-panel p {
+  margin: 0;
+  color: var(--muted-strong);
+}
+
+.settings-section__help-panel a {
+  width: fit-content;
+  font-weight: 600;
+}
+
 /* ── Group (the only surface) ── */
 
 .settings-group {
@@ -142,6 +207,78 @@
 
 .settings-group--danger {
   border-color: color-mix(in srgb, var(--danger) 35%, var(--border) 65%);
+}
+
+/* ── Advanced tier ──
+ * Lives here rather than config.css because every schema-driven surface
+ * (config pages and the channel detail forms) renders the same split. */
+
+.config-tier-groups {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.config-advanced-divider {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+  padding: 0 var(--space-4) var(--space-2);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 550;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.config-advanced-divider__toggle {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: var(--cursor-action);
+}
+
+.config-advanced-divider__toggle:hover {
+  text-decoration: underline;
+}
+
+.config-advanced-ghost {
+  width: 100%;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--secondary);
+  text-align: left;
+  transition: background var(--duration-fast) ease;
+}
+
+.config-advanced-ghost:hover {
+  background: var(--bg-hover);
+}
+
+.config-advanced-ghost__count {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.config-advanced-ghost__action {
+  color: var(--accent);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 600;
+  flex: 0 0 auto;
 }
 
 /* ── Row ── */
@@ -228,9 +365,18 @@
   justify-content: flex-start;
 }
 
+/* Trailing action rows hold only a button cluster: give it the full row
+   (definite width, see the wrap note on .settings-row__control) so nowrap
+   button labels wrap as whole buttons instead of squeezing into 60%. */
+.settings-row--actions .settings-row__control {
+  width: 100%;
+  max-width: none;
+  flex-wrap: wrap;
+}
+
 /* Label-wrapped toggle row: whole row toggles the switch. */
 .settings-row--toggle {
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .settings-row--toggle:has(wa-switch[disabled]) {
@@ -245,7 +391,7 @@
   font: inherit;
   text-align: left;
   color: inherit;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   transition: background var(--duration-fast) var(--ease-out);
 }
 
@@ -309,6 +455,14 @@ select.settings-select:not([multiple]) {
   min-height: var(--settings-control-height);
   box-sizing: border-box;
   align-items: stretch;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  max-width: 100%;
+  background: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
+  border: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+  border-radius: var(--radius-md);
+  padding: 2px;
 }
 
 .settings-segmented > .settings-segmented__btn {
@@ -328,7 +482,7 @@ select.settings-select:not([multiple]) {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .settings-control__sr-label {
@@ -348,17 +502,6 @@ wa-switch.settings-toggle {
   --wa-form-control-activated-color: var(--accent);
   --wa-color-focus: var(--ring);
   flex: none;
-}
-
-.settings-segmented {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 2px;
-  max-width: 100%;
-  background: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
-  border: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
-  border-radius: var(--radius-md);
-  padding: 2px;
 }
 
 wa-radio-group.settings-segmented::part(form-control-label) {
@@ -384,7 +527,7 @@ wa-radio-group.settings-segmented::part(radios) {
   background: transparent;
   color: var(--muted);
   white-space: nowrap;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   transition:
     color var(--duration-normal) var(--ease-out),
     background var(--duration-normal) var(--ease-out),
@@ -414,6 +557,8 @@ wa-radio-group.settings-segmented::part(radios) {
 
 .settings-input,
 .settings-select {
+  --control-ui-touch-input-size: var(--control-ui-input-text-size);
+
   width: 100%;
   min-width: 0;
   font: inherit;
@@ -426,10 +571,25 @@ wa-radio-group.settings-segmented::part(radios) {
 select.settings-select {
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
+  /* background-color, not the background shorthand: the shorthand resets the
+     .field select chevron longhands (image/repeat/position) and tiles the
+     arrow across Model Providers selects. */
+  background-color: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
   color: var(--text);
   padding: 7px 10px;
   transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+/* Single-value selects draw the themed chevron; the engine's stock arrow
+   ignores the 32px control box and renders misaligned. Multi-select list
+   boxes keep native rendering. */
+select.settings-select:not([multiple]) {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 36px;
+  background-image: var(--select-chevron);
+  background-repeat: no-repeat;
+  background-position: right 10px center;
 }
 
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-select {
@@ -437,13 +597,53 @@ select.settings-select {
   min-width: min(220px, 100%);
 }
 
+/* Permission can replace System default with long hardware labels; keep the
+   paired media pickers aligned instead of letting native intrinsic width win. */
+.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-select--media-device {
+  width: 340px;
+}
+
 /* Lone value inputs share one width so stacked rows in a group read as a
    grid instead of ragged right-aligned fields. A percentage guard cannot work
    here (the shrink-to-fit control resolves 100% circularly); the fixed width
    shrinks via flex because .settings-input/.settings-secret set min-width: 0. */
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-input,
-.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-secret {
+.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-secret,
+.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-phone-presentation {
   width: 340px;
+}
+
+.settings-phone-presentation {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.settings-phone-presentation > .settings-input,
+.settings-phone-presentation > .settings-secret {
+  width: 100%;
+}
+
+.settings-phone-presentation__value {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.settings-row--stacked .settings-row__control > .settings-phone-presentation {
+  flex: 1 1 auto;
+  width: 100%;
+}
+
+/* Number inputs hold short values (ports, counts, limits); the shared 340px
+   text width turns −/+ stepper rows into a stretched bar. */
+.settings-row:not(.settings-row--stacked)
+  .settings-row__control
+  > input[type="number"].settings-input {
+  width: 110px;
+  text-align: center;
 }
 
 /* ── Secret input (inset reveal toggle; no trailing button) ── */
@@ -455,9 +655,28 @@ select.settings-select {
   min-width: 0;
 }
 
-.settings-secret > .settings-input {
+/* Class-agnostic child selectors: the login gate and config form reuse this
+   wrapper around their own input/textarea styling. */
+.settings-secret > input,
+.settings-secret > textarea {
   width: 100%;
+  min-width: 0;
   padding-right: 36px;
+}
+
+/* Stacked rows (config form arrays/maps) give the control full width; the
+   wrapper must grow or the inner 100% resolves against fit-content. */
+.settings-row--stacked .settings-row__control > .settings-secret {
+  flex: 1 1 auto;
+}
+
+/* Multiline secrets (JSON textareas) anchor the eye to the first line. */
+.settings-secret:has(> textarea) {
+  align-items: flex-start;
+}
+
+.settings-secret:has(> textarea) .settings-secret__toggle {
+  top: 6px;
 }
 
 .settings-secret__toggle {
@@ -473,12 +692,17 @@ select.settings-select {
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
+  cursor: var(--cursor-action);
   transition: color var(--duration-fast) var(--ease-out);
 }
 
 .settings-secret__toggle:hover {
   color: var(--text);
+}
+
+.settings-secret__toggle:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .settings-secret__toggle:focus-visible {
@@ -510,7 +734,7 @@ select.settings-select:focus-visible {
 /* ── Web Awesome select ── */
 
 wa-select.settings-select {
-  --wa-form-control-activated-color: var(--accent);
+  --wa-form-control-activated-color: var(--primary);
 }
 
 wa-select.settings-select::part(combobox) {
@@ -520,7 +744,7 @@ wa-select.settings-select::part(combobox) {
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
   color: var(--text);
-  cursor: default;
+  cursor: var(--cursor-action);
   transition: border-color var(--duration-fast) var(--ease-out);
 }
 
@@ -557,7 +781,7 @@ wa-select.settings-select wa-option {
   border-radius: calc(var(--radius-md) - 4px);
   font-size: var(--control-ui-text-md);
   color: var(--text);
-  cursor: default;
+  cursor: var(--cursor-action);
 }
 
 /* The roving "current" option already carries the accent fill; the global
@@ -567,7 +791,60 @@ wa-select.settings-select wa-option:focus-visible {
 }
 
 wa-select.settings-select wa-option:state(current) {
-  color: var(--accent-foreground);
+  color: var(--primary-foreground);
+}
+
+.picker-select__option {
+  color: var(--text);
+}
+
+.picker-select [slot="start"] {
+  display: inline-flex;
+  align-items: center;
+}
+
+.picker-select__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 650;
+}
+
+.picker-select__copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.picker-select__description {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: normal;
+}
+
+.model-picker {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.model-picker__provider-icon {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+}
+
+.model-picker__provider-icon.provider-brand-icon--fallback {
+  font-size: 9px;
+}
+
+.model-picker__custom[hidden] {
+  display: none;
 }
 
 /* Forced colors suppresses the box-shadow ring and accent fill that stand in
@@ -638,6 +915,43 @@ textarea.settings-input {
   background: var(--accent);
 }
 
+.updates-status-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-3);
+}
+
+.updates-commit-list {
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.updates-commit-list__row {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  color: var(--text);
+  font-size: var(--control-ui-text-xs);
+}
+
+.updates-commit-list__row + .updates-commit-list__row {
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.updates-commit-list__row code {
+  color: var(--muted);
+  font-family: var(--mono);
+}
+
+.updates-commit-list__row span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 /* ── Count badge (quiet; genuine counts/alerts only, not status) ── */
 
 .settings-count {
@@ -686,6 +1000,24 @@ textarea.settings-input {
   font-size: var(--control-ui-text-xs);
 }
 
+/* Identity composes existing row controls; these wrappers only keep the
+   avatar/file action and name/save action aligned as one control cluster. */
+.identity-avatar-control,
+.identity-name-control {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.identity-name-control .settings-input {
+  width: min(260px, 38vw);
+}
+
+.identity-error .settings-row__desc {
+  color: var(--danger);
+}
+
 /* ── Mobile ── */
 
 @media (max-width: 640px) {
@@ -702,5 +1034,15 @@ textarea.settings-input {
     width: 100%;
     max-width: 100%;
     flex-wrap: wrap;
+  }
+
+  .settings-row__control:has(> .settings-select--media-device) {
+    flex-wrap: nowrap;
+  }
+
+  .settings-select--media-device {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
   }
 }

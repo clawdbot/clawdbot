@@ -8,7 +8,7 @@ import {
 
 describe("canvas CLI helpers", () => {
   it("parses canvas.snapshot payload", () => {
-    expect(parseCanvasSnapshotPayload({ format: "png", base64: "aGk=" })).toEqual({
+    expect(parseCanvasSnapshotPayload({ format: "png", base64: " a G k \n" })).toEqual({
       format: "png",
       base64: "aGk=",
     });
@@ -24,6 +24,15 @@ describe("canvas CLI helpers", () => {
     "rejects invalid canvas.snapshot format fields",
     (payload) => {
       expect(() => parseCanvasSnapshotPayload(payload)).toThrow(
+        /invalid canvas\.snapshot payload/i,
+      );
+    },
+  );
+
+  it.each(["not-base64!", "S", "Zh==", "Zm9=", "a\0Gk=", 'aGk=" onerror="alert(1)'])(
+    "rejects malformed canvas.snapshot base64 payloads: %s",
+    (base64) => {
+      expect(() => parseCanvasSnapshotPayload({ format: "png", base64 })).toThrow(
         /invalid canvas\.snapshot payload/i,
       );
     },

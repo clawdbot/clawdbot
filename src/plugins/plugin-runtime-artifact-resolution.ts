@@ -1,27 +1,16 @@
 /** Resolves the exact root and entry selected by the plugin runtime loader. */
 import fs from "node:fs";
 import path from "node:path";
+import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+import type { PluginRegistry } from "./registry-types.js";
+import { getActivePluginRegistry, requireActivePluginRegistry } from "./runtime.js";
 
-type ResolvedPluginRuntimeArtifact = { source: string; rootDir: string };
 type PluginRuntimeArtifactEntryKind = "runtime" | "setup";
 
-// Pin one physical path per plugin id and logical entry for this runtime lifecycle.
-// Registry surfaces may disagree on artifact preference, but hooks and tools must
-// share one evaluated module instance so register() runs once.
-const resolvedPluginRuntimeArtifacts = new Map<string, ResolvedPluginRuntimeArtifact>();
-
-function safeRealpathOrResolve(value: string): string {
-  try {
-    return fs.realpathSync(value);
-  } catch {
-    return path.resolve(value);
-  }
-}
-
 export function clearPluginRuntimeArtifactResolutionMemo(): void {
-  resolvedPluginRuntimeArtifacts.clear();
+  getActivePluginRegistry()?.pluginRuntimeArtifacts.clear();
 }
 
 /** Canonical packaged runtime replaces staging-only dist-runtime artifacts. */
@@ -103,7 +92,7 @@ function resolvePackageLocalDistRuntimeArtifact(params: {
   )) {
     const artifactSource = path.join(artifactRoot, artifactRelativePath);
     if (fs.existsSync(artifactSource)) {
-      return safeRealpathOrResolve(artifactSource);
+      return resolveRealpathOrAbsolute(artifactSource);
     }
   }
   return null;
@@ -116,8 +105,8 @@ function resolvePreferredBuiltRuntimeArtifact(params: {
   preferBuiltPluginArtifacts: boolean;
   packageManifest?: OpenClawPackageManifest;
 }): { source: string; rootDir: string } {
-  const rootDir = safeRealpathOrResolve(params.rootDir);
-  const source = safeRealpathOrResolve(params.source);
+  const rootDir = resolveRealpathOrAbsolute(params.rootDir);
+  const source = resolveRealpathOrAbsolute(params.source);
   if (!params.preferBuiltPluginArtifacts) {
     return { source, rootDir };
   }
@@ -158,8 +147,8 @@ function resolvePreferredBuiltRuntimeArtifact(params: {
     const artifactSource = path.join(artifactRoot, artifactRelativePath);
     if (fs.existsSync(artifactSource)) {
       return {
-        source: safeRealpathOrResolve(artifactSource),
-        rootDir: safeRealpathOrResolve(artifactRoot),
+        source: resolveRealpathOrAbsolute(artifactSource),
+        rootDir: resolveRealpathOrAbsolute(artifactRoot),
       };
     }
   }
@@ -175,12 +164,15 @@ export function resolvePluginRuntimeArtifact(params: {
   origin: PluginOrigin;
   preferBuiltPluginArtifacts: boolean;
   packageManifest?: OpenClawPackageManifest;
+  registry?: PluginRegistry;
 }): { source: string; rootDir: string } {
-  const rootDir = resolveCanonicalDistRuntimeSource(safeRealpathOrResolve(params.rootDir));
-  const source = resolveCanonicalDistRuntimeSource(safeRealpathOrResolve(params.source));
+  const rootDir = resolveCanonicalDistRuntimeSource(resolveRealpathOrAbsolute(params.rootDir));
+  const source = resolveCanonicalDistRuntimeSource(resolveRealpathOrAbsolute(params.source));
   const memoKey = JSON.stringify([params.pluginId, rootDir, params.entryKind]);
-  const cached = resolvedPluginRuntimeArtifacts.get(memoKey);
+  const targetRegistry = params.registry ?? requireActivePluginRegistry();
+  const cached = targetRegistry.pluginRuntimeArtifacts.get(memoKey);
   if (cached) {
+    targetRegistry.pluginRuntimeArtifacts.set(memoKey, cached);
     return { ...cached };
   }
 
@@ -189,6 +181,6 @@ export function resolvePluginRuntimeArtifact(params: {
     source: resolveCanonicalDistRuntimeSource(preferred.source),
     rootDir: resolveCanonicalDistRuntimeSource(preferred.rootDir),
   };
-  resolvedPluginRuntimeArtifacts.set(memoKey, resolved);
+  targetRegistry.pluginRuntimeArtifacts.set(memoKey, resolved);
   return { ...resolved };
 }

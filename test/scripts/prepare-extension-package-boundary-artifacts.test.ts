@@ -1,6 +1,5 @@
 // Prepare Extension Package Boundary Artifacts tests cover prepare extension package boundary artifacts script behavior.
 import { spawn } from "node:child_process";
-// Prepare Extension Package Boundary Artifacts tests cover prepare extension package boundary artifacts script behavior.
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
@@ -9,18 +8,24 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  listPluginSdkDeclarationOutputs,
+  pluginSdkEntrypoints,
+} from "../../scripts/lib/plugin-sdk-entries.mjs";
 import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import {
+  computeArtifactInputsDigest,
   createPrefixedOutputWriter,
   isArtifactSetFresh,
   parseMode,
   resolveBoundaryEntryShimRequiredOutputs,
   resolveBoundaryRootShimsTimeoutMs,
+  resolveTsxImportSpecifier,
   runNodeStep,
   runNodeSteps,
   runNodeStepsInParallel,
   signalNodeStep,
-} from "../../scripts/prepare-extension-package-boundary-artifacts.mjs";
+} from "../../scripts/prepare-extension-package-boundary-artifacts.mts";
 import { makeTempDir } from "../helpers/temp-dir.js";
 
 const tempRoots = new Set<string>();
@@ -100,6 +105,33 @@ async function waitForProcessExit(
 }
 
 describe("prepare-extension-package-boundary-artifacts", () => {
+  it("resolves the tsx loader from the selected checkout toolchain", () => {
+    const tsxBinPath = "/primary/node_modules/.bin/tsx";
+    const loaderPath = "/primary/node_modules/tsx/dist/loader.mjs";
+
+    expect(
+      resolveTsxImportSpecifier({
+        resolveTool: (toolName) => {
+          expect(toolName).toBe("tsx");
+          return tsxBinPath;
+        },
+        ensureToolchain: (toolPath) => {
+          expect(toolPath).toBe(tsxBinPath);
+          return "/worktree/node_modules";
+        },
+        createRequireFrom: (filename) => {
+          expect(filename).toBe(tsxBinPath);
+          return {
+            resolve(packageName) {
+              expect(packageName).toBe("tsx");
+              return loaderPath;
+            },
+          };
+        },
+      }),
+    ).toBe(pathToFileURL(loaderPath).href);
+  });
+
   it("prefixes each completed line and flushes the trailing partial line", () => {
     let output = "";
     const writer = createPrefixedOutputWriter("boundary", {
@@ -410,9 +442,8 @@ describe("prepare-extension-package-boundary-artifacts", () => {
       tempRoots.add(rootDir);
       const descendantPidPath = path.join(rootDir, "descendant.pid");
       let descendantPid = 0;
-      let runnerPid = 0;
       const moduleHref = pathToFileURL(
-        path.resolve("scripts/prepare-extension-package-boundary-artifacts.mjs"),
+        path.resolve("scripts/prepare-extension-package-boundary-artifacts.mts"),
       ).href;
       const descendantScript = [
         "const fs = require('node:fs');",
@@ -433,7 +464,7 @@ describe("prepare-extension-package-boundary-artifacts", () => {
       const runner = spawn(process.execPath, ["--input-type=module", "--eval", runnerScript], {
         stdio: "ignore",
       });
-      runnerPid = runner.pid ?? 0;
+      const runnerPid = runner.pid ?? 0;
 
       try {
         descendantPid = Number.parseInt(await waitForFile(descendantPidPath, 10_000), 10);
@@ -531,12 +562,67 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     ).toBe(false);
   });
 
+  it("keeps mtime-stale artifacts fresh when the hash stamp matches the input digest", () => {
+    // Regression: fresh checkouts re-stamp every input mtime, so cache-restored
+    // artifacts must stay fresh by content identity, not build again per CI run.
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-hash-"));
+    tempRoots.add(rootDir);
+    const inputPath = path.join(rootDir, "src", "demo.ts");
+    const stampPath = path.join(rootDir, "dist", ".demo.stamp");
+    const outputPath = path.join(rootDir, "dist", "demo.d.ts");
+    fs.mkdirSync(path.dirname(inputPath), { recursive: true });
+    fs.mkdirSync(path.dirname(stampPath), { recursive: true });
+    fs.writeFileSync(inputPath, "export const demo = 1;\n", "utf8");
+    fs.writeFileSync(outputPath, "export declare const demo = 1;\n", "utf8");
+    fs.writeFileSync(
+      stampPath,
+      `${computeArtifactInputsDigest({ rootDir, inputPaths: ["src"] })}\n`,
+      "utf8",
+    );
+
+    // Simulate checkout: inputs newer than restored outputs, bytes unchanged.
+    fs.utimesSync(stampPath, new Date(1_000), new Date(1_000));
+    fs.utimesSync(outputPath, new Date(1_000), new Date(1_000));
+    const repairTimeMs = Date.now();
+    fs.utimesSync(inputPath, repairTimeMs / 1_000, (repairTimeMs + 0.5) / 1_000);
+    const freshParams = {
+      rootDir,
+      inputPaths: ["src"],
+      outputPaths: ["dist/.demo.stamp", "dist/demo.d.ts"],
+      hashStampPath: "dist/.demo.stamp",
+    };
+
+    vi.useFakeTimers();
+    vi.setSystemTime(repairTimeMs);
+    try {
+      expect(isArtifactSetFresh(freshParams)).toBe(true);
+      // The repaired output must clear the newest input by a whole millisecond.
+      // Matching it exactly leaves no headroom for sub-millisecond write
+      // rounding or lagging metadata, and a CI runner that lands even a
+      // fraction short puts every later invocation back on the full-hash path.
+      expect(fs.statSync(outputPath).mtimeMs).toBeGreaterThanOrEqual(
+        Math.ceil(fs.statSync(inputPath).mtimeMs) + 1,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+
+    fs.appendFileSync(inputPath, "export const demoTwo = 2;\n", "utf8");
+    fs.utimesSync(outputPath, new Date(1_000), new Date(1_000));
+    expect(isArtifactSetFresh(freshParams)).toBe(false);
+
+    // Legacy timestamp stamps never satisfy the hash fallback.
+    fs.writeFileSync(stampPath, `${new Date(5_000).toISOString()}\n`, "utf8");
+    fs.utimesSync(stampPath, new Date(1_000), new Date(1_000));
+    expect(isArtifactSetFresh(freshParams)).toBe(false);
+  });
+
   it("requires generated entry-shim outputs in addition to the freshness stamp", () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-entry-shims-"));
     tempRoots.add(rootDir);
     const inputPath = path.join(rootDir, "scripts", "write-plugin-sdk-entry-dts.ts");
     const stampPath = path.join(rootDir, "dist", "plugin-sdk", ".boundary-entry-shims.stamp");
-    const rootDtsPath = path.join(rootDir, "dist", "plugin-sdk", "index.d.ts");
+    const rootDtsPath = path.join(rootDir, "dist", "plugin-sdk", "core.d.ts");
     const packageDtsPath = path.join(
       rootDir,
       "packages",
@@ -544,7 +630,7 @@ describe("prepare-extension-package-boundary-artifacts", () => {
       "dist",
       "src",
       "plugin-sdk",
-      "index.d.ts",
+      "core.d.ts",
     );
 
     fs.mkdirSync(path.dirname(inputPath), { recursive: true });
@@ -567,8 +653,8 @@ describe("prepare-extension-package-boundary-artifacts", () => {
         inputPaths: ["scripts/write-plugin-sdk-entry-dts.ts"],
         outputPaths: [
           "dist/plugin-sdk/.boundary-entry-shims.stamp",
-          "dist/plugin-sdk/index.d.ts",
-          "packages/plugin-sdk/dist/src/plugin-sdk/index.d.ts",
+          "dist/plugin-sdk/core.d.ts",
+          "packages/plugin-sdk/dist/src/plugin-sdk/core.d.ts",
         ],
       }),
     ).toBe(true);
@@ -581,15 +667,43 @@ describe("prepare-extension-package-boundary-artifacts", () => {
         inputPaths: ["scripts/write-plugin-sdk-entry-dts.ts"],
         outputPaths: [
           "dist/plugin-sdk/.boundary-entry-shims.stamp",
-          "dist/plugin-sdk/index.d.ts",
-          "packages/plugin-sdk/dist/src/plugin-sdk/index.d.ts",
+          "dist/plugin-sdk/core.d.ts",
+          "packages/plugin-sdk/dist/src/plugin-sdk/core.d.ts",
         ],
       }),
     ).toBe(false);
-    expect(resolveBoundaryEntryShimRequiredOutputs({})).toContain("dist/plugin-sdk/index.d.ts");
+    expect(resolveBoundaryEntryShimRequiredOutputs({})).toContain("dist/plugin-sdk/core.d.ts");
     expect(resolveBoundaryEntryShimRequiredOutputs({})).toContain(
-      "packages/plugin-sdk/dist/src/plugin-sdk/index.d.ts",
+      "packages/plugin-sdk/dist/src/plugin-sdk/core.d.ts",
     );
+  });
+
+  it("keeps bundled-private runtime shims in production while gating QA helpers", () => {
+    const productionOutputs = resolveBoundaryEntryShimRequiredOutputs({});
+    const privateQaOutputs = resolveBoundaryEntryShimRequiredOutputs({
+      OPENCLAW_BUILD_PRIVATE_QA: "1",
+    });
+
+    expect(productionOutputs.filter((output) => output.startsWith("dist/plugin-sdk/"))).toEqual(
+      listPluginSdkDeclarationOutputs().toSorted((a, b) => a.localeCompare(b)),
+    );
+    expect(privateQaOutputs.filter((output) => output.startsWith("dist/plugin-sdk/"))).toEqual(
+      listPluginSdkDeclarationOutputs(pluginSdkEntrypoints).toSorted((a, b) => a.localeCompare(b)),
+    );
+
+    expect(productionOutputs).toContain("dist/plugin-sdk/provider-auth-runtime.d.ts");
+    expect(productionOutputs).not.toContain("dist/plugin-sdk/test-fixtures.d.ts");
+    expect(privateQaOutputs).toContain("dist/plugin-sdk/provider-auth-runtime.d.ts");
+    expect(privateQaOutputs).toContain("dist/plugin-sdk/test-fixtures.d.ts");
+    for (const entry of [
+      "channel-contract-testing",
+      "plugin-state-test-runtime",
+      "plugin-test-runtime",
+    ]) {
+      expect(productionOutputs).not.toContain(`dist/plugin-sdk/${entry}.d.ts`);
+      expect(privateQaOutputs).toContain(`dist/plugin-sdk/${entry}.d.ts`);
+      expect(privateQaOutputs).toContain(`packages/plugin-sdk/dist/src/plugin-sdk/${entry}.d.ts`);
+    }
   });
 
   it("parses prep mode and rejects unknown values", () => {

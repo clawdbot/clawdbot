@@ -56,7 +56,7 @@ Common causes:
   shell, and runtime work).
 - `tools.profile: "full"` removes profile restrictions; limit to trusted
   operator-controlled agents.
-- Per-agent `agents.list[].tools` overrides narrow or expand the root profile
+- Per-agent `agents.entries.*.tools` overrides narrow or expand the root profile
   for one agent.
 
 Change the profile, restart or reload the Gateway, then recheck with
@@ -147,7 +147,7 @@ openclaw plugins inspect <plugin-id> --runtime --json
 openclaw plugins enable <plugin-id>
 ```
 
-Reference: [Operator install policy](/tools/skills-config#operator-install-policy-securityinstallpolicy)
+Reference: [Operator install policy](/tools/skills-config#operator-install-policy-security-installpolicy)
 
 ## Plugin present but blocked by suspicious ownership
 
@@ -330,8 +330,7 @@ flowchart TD
 
     - `cron: scheduler disabled; jobs will not run automatically` → cron is disabled.
     - `heartbeat skipped` reason `quiet-hours` → outside configured active hours.
-    - `heartbeat skipped` reason `empty-heartbeat-file` → `HEARTBEAT.md` exists but contains only blank, comment, header, fence, or empty-checklist scaffolding.
-    - `heartbeat skipped` reason `no-tasks-due` → task mode is active but no task interval is due yet.
+    - `heartbeat skipped` reason `empty-heartbeat-file` → heartbeat monitor scratch contains only blank, comment, header, fence, or empty-checklist scaffolding.
     - `heartbeat skipped` reason `alerts-disabled` → `showOk`, `showAlerts`, and `useIndicator` are all off.
     - `requests-in-flight` → main lane busy; heartbeat wake deferred.
     - `unknown accountId` → heartbeat delivery target account does not exist.

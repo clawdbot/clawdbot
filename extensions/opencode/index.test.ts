@@ -1,4 +1,3 @@
-// Opencode tests cover index plugin behavior.
 import { readFileSync } from "node:fs";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -9,17 +8,17 @@ import {
 import { NON_ENV_SECRETREF_MARKER } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { expectPassthroughReplayPolicy } from "openclaw/plugin-sdk/provider-test-contracts";
+// Opencode tests cover index plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { buildOpencodeZenLiveProviderConfig } from "./provider-catalog.js";
+import {
+  buildOpencodeZenLiveProviderConfig,
+  resolveOpencodeZenStarterModel,
+} from "./provider-catalog.js";
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be a record`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-record");
 
 function requireMapEntry<T>(map: Map<string, T>, id: string): T {
   const entry = map.get(id);
@@ -40,10 +39,107 @@ function requireCatalogEntry(entries: readonly unknown[] | null | undefined, id:
   return requireRecord(entry, `supplemental catalog entry ${id}`);
 }
 
+function runtimeCompatFields(value: unknown): Record<string, unknown> | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const { codeMode: _codeMode, ...compat } = requireRecord(value, "model compat");
+  return compat;
+}
+
+const ACTIVE_MODEL_IDS = [
+  "claude-fable-5",
+  "claude-opus-5",
+  "claude-opus-4-7",
+  "claude-opus-4-6",
+  "claude-opus-4-5",
+  "claude-sonnet-5",
+  "claude-sonnet-4-6",
+  "claude-sonnet-4-5",
+  "claude-haiku-4-5",
+  "gemini-3.6-flash",
+  "gemini-3.5-flash-lite",
+  "gemini-3.5-flash",
+  "gemini-3.1-pro",
+  "gemini-3-flash",
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
+  "gpt-5.5-pro",
+  "gpt-5.4",
+  "gpt-5.4-pro",
+  "gpt-5.4-mini",
+  "gpt-5.4-nano",
+  "gpt-5.3-codex-spark",
+  "gpt-5.3-codex",
+  "gpt-5.2",
+  "gpt-5.1",
+  "gpt-5",
+  "gpt-5-nano",
+  "grok-build-0.1",
+  "grok-4.5",
+  "deepseek-v4-pro",
+  "deepseek-v4-flash",
+  "glm-5.2",
+  "glm-5.1",
+  "minimax-m3",
+  "kimi-k3",
+  "kimi-k2.7-code",
+  "kimi-k2.6",
+  "qwen3.6-plus",
+  "qwen3.5-plus",
+  "big-pickle",
+  "deepseek-v4-flash-free",
+  "mimo-v2.5-free",
+  "ling-3.0-tiny-free",
+  "nemotron-3-ultra-free",
+  "north-mini-code-free",
+  "laguna-s-2.1-free",
+  "longcat-2.0-free",
+] as const;
+
+const DEPRECATED_MODEL_IDS = [
+  "claude-opus-4-1",
+  "claude-opus-4-8",
+  "claude-sonnet-4",
+  "glm-5",
+  "gpt-5-codex",
+  "gpt-5.1-codex",
+  "gpt-5.1-codex-max",
+  "gpt-5.1-codex-mini",
+  "gpt-5.2-codex",
+  "gpt-5.5",
+  "kimi-k2.5",
+  "ling-3.0-flash-free",
+  "minimax-m2.5",
+  "minimax-m2.7",
+] as const;
+
+const REPLACED_BY = new Map([
+  ["claude-opus-4-8", "claude-opus-5"],
+  ["gpt-5.5", "gpt-5.6-sol"],
+  ["minimax-m2.7", "minimax-m3"],
+]);
+
 describe("opencode provider plugin", () => {
   beforeEach(() => {
     clearLiveCatalogCacheForTests();
   });
+
+  it("registers only the Zen auth choice from its own provider manifest", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    expect(provider.id).toBe("opencode");
+    expect(provider.envVars).toEqual(["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"]);
+    expect(provider.auth.map((method) => method.id)).toEqual(["api-key"]);
+    expect(provider.auth.map((method) => method.wizard?.choiceId)).toEqual(["opencode-zen"]);
+    expect(provider.auth[0]?.wizard).toMatchObject({
+      choiceLabel: "OpenCode Zen catalog",
+      groupId: "opencode",
+      groupHint: "Shared API key infrastructure for Zen + Go",
+    });
+  });
+
   it("registers image media understanding through the OpenCode plugin", async () => {
     const { mediaProviders } = await registerProviderPlugin({
       plugin,
@@ -82,63 +178,8 @@ describe("opencode provider plugin", () => {
     const provider = await registerSingleProviderPlugin(plugin);
     expect(provider.catalog).toBeDefined();
 
-    const expectedModelIds = [
-      "claude-fable-5",
-      "claude-opus-4-8",
-      "claude-opus-4-7",
-      "claude-opus-4-6",
-      "claude-opus-4-5",
-      "claude-opus-4-1",
-      "claude-sonnet-5",
-      "claude-sonnet-4-6",
-      "claude-sonnet-4-5",
-      "claude-sonnet-4",
-      "claude-haiku-4-5",
-      "gemini-3.5-flash",
-      "gemini-3.1-pro",
-      "gemini-3-flash",
-      "gpt-5.6-sol",
-      "gpt-5.6-terra",
-      "gpt-5.6-luna",
-      "gpt-5.5",
-      "gpt-5.5-pro",
-      "gpt-5.4",
-      "gpt-5.4-pro",
-      "gpt-5.4-mini",
-      "gpt-5.4-nano",
-      "gpt-5.3-codex-spark",
-      "gpt-5.3-codex",
-      "gpt-5.2",
-      "gpt-5.2-codex",
-      "gpt-5.1",
-      "gpt-5.1-codex-max",
-      "gpt-5.1-codex",
-      "gpt-5.1-codex-mini",
-      "gpt-5",
-      "gpt-5-codex",
-      "gpt-5-nano",
-      "grok-build-0.1",
-      "grok-4.5",
-      "deepseek-v4-pro",
-      "deepseek-v4-flash",
-      "glm-5.2",
-      "glm-5.1",
-      "glm-5",
-      "minimax-m3",
-      "minimax-m2.7",
-      "minimax-m2.5",
-      "kimi-k2.7-code",
-      "kimi-k2.6",
-      "kimi-k2.5",
-      "qwen3.6-plus",
-      "qwen3.5-plus",
-      "big-pickle",
-      "deepseek-v4-flash-free",
-      "mimo-v2.5-free",
-      "hy3-free",
-      "nemotron-3-ultra-free",
-      "north-mini-code-free",
-    ];
+    const expectedModelIds = [...ACTIVE_MODEL_IDS, ...DEPRECATED_MODEL_IDS];
+    expect(new Set(expectedModelIds).size).toBe(expectedModelIds.length);
     const models = new Map<string, ProviderRuntimeModel>();
     for (const modelId of expectedModelIds) {
       const model = provider.resolveDynamicModel?.({ modelId } as never);
@@ -147,7 +188,7 @@ describe("opencode provider plugin", () => {
       }
       models.set(model.id, model);
     }
-    expect([...models.keys()]).toEqual(expectedModelIds);
+    expect([...models.keys()].toSorted()).toEqual(expectedModelIds.toSorted());
 
     const supplemental = await provider.augmentModelCatalog?.({
       entries: [...models.values()].map((model) => ({
@@ -156,17 +197,28 @@ describe("opencode provider plugin", () => {
         name: model.name,
       })),
     } as never);
+    const supplementalIds = (supplemental ?? []).map((entry) => entry.id);
+    expect(new Set(supplementalIds).size).toBe(supplementalIds.length);
+    expect(supplementalIds.toSorted()).toEqual(expectedModelIds.toSorted());
     const opus48 = requireCatalogEntry(supplemental, "claude-opus-4-8");
     expect(opus48.provider).toBe("opencode");
     expect(opus48.name).toBe("Claude Opus 4.8");
+    for (const modelId of ACTIVE_MODEL_IDS) {
+      expect(requireCatalogEntry(supplemental, modelId).status).toBeUndefined();
+      expect(requireCatalogEntry(supplemental, modelId).replacedBy).toBeUndefined();
+    }
+    for (const modelId of DEPRECATED_MODEL_IDS) {
+      expect(requireCatalogEntry(supplemental, modelId).status).toBe("deprecated");
+      expect(requireCatalogEntry(supplemental, modelId).replacedBy).toBe(REPLACED_BY.get(modelId));
+    }
 
     const opus46 = requireMapEntry(models, "claude-opus-4-6");
     expect(opus46.api).toBe("anthropic-messages");
     expect(opus46.baseUrl).toBe("https://opencode.ai/zen");
     expect(opus46.input).toEqual(["text", "image"]);
     expect(opus46.reasoning).toBe(true);
-    expect(opus46.contextWindow).toBe(200_000);
-    expect(opus46.maxTokens).toBe(65_536);
+    expect(opus46.contextWindow).toBe(1_000_000);
+    expect(opus46.maxTokens).toBe(128_000);
 
     expect(requireMapEntry(models, "gpt-5.5")).toMatchObject({
       api: "openai-responses",
@@ -180,13 +232,13 @@ describe("opencode provider plugin", () => {
       contextWindow: 1_050_000,
       maxTokens: 128_000,
       cost: {
-        input: 1,
-        output: 6,
-        cacheRead: 0.1,
-        cacheWrite: 1.25,
+        input: 0.2,
+        output: 1.2,
+        cacheRead: 0.02,
+        cacheWrite: 0.25,
         tieredPricing: [
-          { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25, range: [0, 272_000] },
-          { input: 2, output: 9, cacheRead: 0.2, cacheWrite: 2.5, range: [272_000] },
+          { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25, range: [0, 272_000] },
+          { input: 0.4, output: 1.8, cacheRead: 0.04, cacheWrite: 0.5, range: [272_000] },
         ],
       },
       compat: {
@@ -197,7 +249,7 @@ describe("opencode provider plugin", () => {
       name: "GPT-5.6 Terra",
       contextWindow: 1_050_000,
       maxTokens: 128_000,
-      cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 3.125 },
+      cost: { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 2.5 },
     });
     expect(requireMapEntry(models, "gpt-5.6-sol")).toMatchObject({
       name: "GPT-5.6 Sol",
@@ -208,6 +260,18 @@ describe("opencode provider plugin", () => {
     expect(requireMapEntry(models, "gemini-3.5-flash")).toMatchObject({
       api: "google-generative-ai",
       baseUrl: "https://opencode.ai/zen/v1",
+    });
+    expect(requireMapEntry(models, "gemini-3.6-flash")).toMatchObject({
+      name: "Gemini 3.6 Flash",
+      contextWindow: 1_048_576,
+      maxTokens: 65_536,
+      cost: { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 0 },
+    });
+    expect(requireMapEntry(models, "gemini-3.5-flash-lite")).toMatchObject({
+      name: "Gemini 3.5 Flash Lite",
+      contextWindow: 1_048_576,
+      maxTokens: 65_536,
+      cost: { input: 0.3, output: 2.5, cacheRead: 0.03, cacheWrite: 0 },
     });
     expect(requireMapEntry(models, "minimax-m2.7")).toMatchObject({
       api: "openai-completions",
@@ -236,7 +300,7 @@ describe("opencode provider plugin", () => {
     });
     expect(requireMapEntry(models, "grok-4.5")).toMatchObject({
       name: "Grok 4.5",
-      api: "openai-completions",
+      api: "openai-responses",
       baseUrl: "https://opencode.ai/zen/v1",
       input: ["text", "image"],
       contextWindow: 500_000,
@@ -244,22 +308,13 @@ describe("opencode provider plugin", () => {
       cost: {
         input: 2,
         output: 6,
-        cacheRead: 0.5,
+        cacheRead: 0.3,
         cacheWrite: 0,
         tieredPricing: [
-          { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0, range: [0, 200_000] },
-          { input: 4, output: 12, cacheRead: 1, cacheWrite: 0, range: [200_000] },
+          { input: 2, output: 6, cacheRead: 0.3, cacheWrite: 0, range: [0, 200_000] },
+          { input: 4, output: 12, cacheRead: 0.6, cacheWrite: 0, range: [200_000] },
         ],
       },
-    });
-    expect(requireMapEntry(models, "hy3-free")).toMatchObject({
-      name: "Hy3 Free",
-      api: "openai-completions",
-      baseUrl: "https://opencode.ai/zen/v1",
-      input: ["text"],
-      contextWindow: 256_000,
-      maxTokens: 64_000,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     });
     expect(requireMapEntry(models, "kimi-k2.7-code")).toMatchObject({
       name: "Kimi K2.7 Code",
@@ -269,6 +324,16 @@ describe("opencode provider plugin", () => {
       contextWindow: 262_144,
       maxTokens: 262_144,
       cost: { input: 0.95, output: 4, cacheRead: 0.19, cacheWrite: 0 },
+    });
+    expect(requireMapEntry(models, "kimi-k3")).toMatchObject({
+      name: "Kimi K3",
+      api: "openai-completions",
+      baseUrl: "https://opencode.ai/zen/v1",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 1_048_576,
+      maxTokens: 131_072,
+      cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
     });
     expect(requireMapEntry(models, "minimax-m3")).toMatchObject({
       name: "MiniMax M3",
@@ -303,18 +368,76 @@ describe("opencode provider plugin", () => {
     if (!Array.isArray(manifestModels)) {
       throw new Error("expected manifest opencode models");
     }
-    expect(manifestModels.map((model) => requireRecord(model, "manifest model").id)).toEqual([
+    const manifestIds = manifestModels.map((model) => requireRecord(model, "manifest model").id);
+    expect(new Set(manifestIds).size).toBe(manifestIds.length);
+    expect(manifestIds).toEqual([
+      "claude-opus-5",
       "claude-opus-4-8",
+      "claude-sonnet-4",
+      "gpt-5.6-sol",
       "gpt-5.5",
+      "gemini-3.6-flash",
       "gemini-3.1-pro",
+      "minimax-m3",
       "minimax-m2.7",
+      "kimi-k3",
+      "big-pickle",
+      "deepseek-v4-flash-free",
+      "mimo-v2.5-free",
+      "laguna-s-2.1-free",
+      "ling-3.0-flash-free",
+      "nemotron-3-ultra-free",
+      "north-mini-code-free",
+      "ling-3.0-tiny-free",
+      "longcat-2.0-free",
     ]);
+    const manifestClaude48 = requireRecord(
+      manifestModels.find(
+        (model) => requireRecord(model, "manifest model").id === "claude-opus-4-8",
+      ),
+      "manifest claude-opus-4-8",
+    );
+    expect(manifestClaude48).toMatchObject({
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      status: "deprecated",
+      replacedBy: "claude-opus-5",
+    });
+    const manifestGpt55 = requireRecord(
+      manifestModels.find((model) => requireRecord(model, "manifest model").id === "gpt-5.5"),
+      "manifest gpt-5.5",
+    );
+    expect(manifestGpt55).toMatchObject({
+      contextWindow: 1_050_000,
+      status: "deprecated",
+      replacedBy: "gpt-5.6-sol",
+    });
     const manifestMiniMax = requireRecord(
       manifestModels.find((model) => requireRecord(model, "manifest model").id === "minimax-m2.7"),
       "manifest minimax-m2.7",
     );
     expect(manifestMiniMax.api).toBe("openai-completions");
     expect(manifestMiniMax.baseUrl).toBe("https://opencode.ai/zen/v1");
+    expect(manifestMiniMax).toMatchObject({
+      cost: { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0 },
+      status: "deprecated",
+      replacedBy: "minimax-m3",
+    });
+    const manifestKimiK3 = requireRecord(
+      manifestModels.find((model) => requireRecord(model, "manifest model").id === "kimi-k3"),
+      "manifest kimi-k3",
+    );
+    expect(manifestKimiK3).toMatchObject({
+      name: "Kimi K3",
+      api: "openai-completions",
+      provider: "opencode",
+      baseUrl: "https://opencode.ai/zen/v1",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
+      contextWindow: 1_048_576,
+      maxTokens: 131_072,
+    });
   });
 
   it("keeps documented OpenCode Zen example models resolvable", async () => {
@@ -345,6 +468,7 @@ describe("opencode provider plugin", () => {
     if (!Array.isArray(manifestModels)) {
       throw new Error("expected manifest opencode models");
     }
+    const supplemental = await provider.augmentModelCatalog?.({ entries: [] } as never);
 
     for (const manifestModel of manifestModels) {
       const manifestModelRecord = requireRecord(manifestModel, "manifest model");
@@ -362,6 +486,7 @@ describe("opencode provider plugin", () => {
 
     const verifiedCostExamples = new Map([
       ["claude-fable-5", { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 }],
+      ["claude-opus-5", { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 }],
       ["claude-opus-4-8", { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 }],
       ["claude-opus-4-5", { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 }],
       ["claude-opus-4-1", { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 }],
@@ -369,36 +494,36 @@ describe("opencode provider plugin", () => {
       [
         "gpt-5.6-luna",
         {
-          input: 1,
-          output: 6,
-          cacheRead: 0.1,
-          cacheWrite: 1.25,
+          input: 0.2,
+          output: 1.2,
+          cacheRead: 0.02,
+          cacheWrite: 0.25,
           tieredPricing: [
-            { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25, range: [0, 272_000] },
-            { input: 2, output: 9, cacheRead: 0.2, cacheWrite: 2.5, range: [272_000] },
+            { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25, range: [0, 272_000] },
+            { input: 0.4, output: 1.8, cacheRead: 0.04, cacheWrite: 0.5, range: [272_000] },
           ],
         },
       ],
       [
         "gpt-5.6-terra",
         {
-          input: 2.5,
-          output: 15,
-          cacheRead: 0.25,
-          cacheWrite: 3.125,
+          input: 2,
+          output: 12,
+          cacheRead: 0.2,
+          cacheWrite: 2.5,
           tieredPricing: [
             {
-              input: 2.5,
-              output: 15,
-              cacheRead: 0.25,
-              cacheWrite: 3.125,
+              input: 2,
+              output: 12,
+              cacheRead: 0.2,
+              cacheWrite: 2.5,
               range: [0, 272_000],
             },
             {
-              input: 5,
-              output: 22.5,
-              cacheRead: 0.5,
-              cacheWrite: 6.25,
+              input: 4,
+              output: 18,
+              cacheRead: 0.4,
+              cacheWrite: 5,
               range: [272_000],
             },
           ],
@@ -419,9 +544,12 @@ describe("opencode provider plugin", () => {
       ],
       ["gpt-5.4-mini", { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 }],
       ["glm-5.2", { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 }],
-      ["hy3-free", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }],
       ["kimi-k2.7-code", { input: 0.95, output: 4, cacheRead: 0.19, cacheWrite: 0 }],
-      ["minimax-m2.7", { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0.375 }],
+      ["kimi-k3", { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 }],
+      ["laguna-s-2.1-free", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }],
+      ["ling-3.0-flash-free", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }],
+      ["minimax-m2.5", { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0 }],
+      ["minimax-m2.7", { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0 }],
       ["minimax-m3", { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0 }],
     ] as const);
 
@@ -443,7 +571,34 @@ describe("opencode provider plugin", () => {
         provider.resolveDynamicModel?.({ modelId } as never),
         `runtime manifest anchor ${modelId}`,
       );
-      expect(manifestModelRecord.cost).toEqual(runtimeModel.cost);
+      const lifecycleEntry = requireCatalogEntry(supplemental, modelId);
+      expect({
+        api: manifestModelRecord.api ?? manifestProvider.api,
+        baseUrl: manifestModelRecord.baseUrl ?? manifestProvider.baseUrl,
+        reasoning: manifestModelRecord.reasoning,
+        input: manifestModelRecord.input,
+        cost: manifestModelRecord.cost,
+        contextWindow: manifestModelRecord.contextWindow,
+        contextTokens: manifestModelRecord.contextTokens,
+        maxTokens: manifestModelRecord.maxTokens,
+        thinkingLevelMap: manifestModelRecord.thinkingLevelMap,
+        compat: runtimeCompatFields(manifestModelRecord.compat),
+        status: manifestModelRecord.status,
+        replacedBy: manifestModelRecord.replacedBy,
+      }).toEqual({
+        api: runtimeModel.api,
+        baseUrl: runtimeModel.baseUrl,
+        reasoning: runtimeModel.reasoning,
+        input: runtimeModel.input,
+        cost: runtimeModel.cost,
+        contextWindow: runtimeModel.contextWindow,
+        contextTokens: runtimeModel.contextTokens,
+        maxTokens: runtimeModel.maxTokens,
+        thinkingLevelMap: runtimeModel.thinkingLevelMap,
+        compat: runtimeCompatFields(runtimeModel.compat),
+        status: lifecycleEntry.status,
+        replacedBy: lifecycleEntry.replacedBy,
+      });
     }
   });
 
@@ -459,21 +614,9 @@ describe("opencode provider plugin", () => {
       throw new Error("expected OpenCode Zen static provider");
     }
 
-    expect(result.provider.models).toHaveLength(55);
-    expect(result.provider.models.map((model) => model.id)).toContain("claude-opus-4-8");
-    expect(result.provider.models.map((model) => model.id)).toContain("claude-sonnet-5");
-    expect(result.provider.models.map((model) => model.id)).toContain("glm-5.2");
-    expect(result.provider.models.map((model) => model.id)).toContain("grok-4.5");
-    expect(result.provider.models.map((model) => model.id)).toContain("hy3-free");
-    expect(result.provider.models.map((model) => model.id)).toContain("kimi-k2.7-code");
-    expect(result.provider.models.map((model) => model.id)).toContain("minimax-m2.7");
-    expect(result.provider.models.map((model) => model.id)).toContain("minimax-m3");
-    expect(result.provider.models.map((model) => model.id)).toContain("gpt-5.6-luna");
-    expect(result.provider.models.find((model) => model.id === "minimax-m2.7")).toMatchObject({
-      api: "openai-completions",
-      baseUrl: "https://opencode.ai/zen/v1",
-      provider: "opencode",
-    });
+    const modelIds = result.provider.models.map((model) => model.id);
+    expect(new Set(modelIds).size).toBe(modelIds.length);
+    expect(modelIds).toEqual(ACTIVE_MODEL_IDS);
   });
 
   it("exposes the offline catalog fallback through the full provider registration", async () => {
@@ -483,12 +626,9 @@ describe("opencode provider plugin", () => {
       throw new Error("expected registered OpenCode Zen static provider");
     }
 
-    expect(result.provider.models).toHaveLength(55);
-    expect(result.provider.models.map((model) => model.id)).toContain("claude-sonnet-5");
-    expect(result.provider.models.map((model) => model.id)).toContain("gpt-5.6-sol");
-    expect(result.provider.models.map((model) => model.id)).toContain("minimax-m3");
+    expect(result.provider.models.map((model) => model.id)).toEqual(ACTIVE_MODEL_IDS);
     expect(result.provider.models.find((model) => model.id === "grok-4.5")).toMatchObject({
-      api: "openai-completions",
+      api: "openai-responses",
       baseUrl: "https://opencode.ai/zen/v1",
       provider: "opencode",
     });
@@ -532,7 +672,7 @@ describe("opencode provider plugin", () => {
         throw new Error("expected OpenCode Zen provider result");
       }
       expect(result.provider.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
-      expect(result.provider.models.map((model) => model.id)).toContain("claude-opus-4-8");
+      expect(result.provider.models.map((model) => model.id)).toContain("claude-opus-4-7");
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
       fetchMock.mockRestore();
@@ -544,7 +684,13 @@ describe("opencode provider plugin", () => {
       response: new Response(
         JSON.stringify({
           data: [
+            { id: "kimi-k3", object: "model" },
+            { id: "claude-opus-4-7", object: "model" },
             { id: "claude-opus-4-8", object: "model" },
+            { id: "claude-sonnet-4", object: "model" },
+            { id: "gpt-5.5", object: "model" },
+            { id: "minimax-m2.7", object: "model" },
+            { id: "ling-3.0-flash-free", object: "model" },
             { id: "gpt-6-experimental", object: "model" },
           ],
         }),
@@ -566,9 +712,15 @@ describe("opencode provider plugin", () => {
 
     expect(fetchGuard).toHaveBeenCalledTimes(1);
     expect(first.apiKey).toBe("OPENCODE_API_KEY");
-    expect(first.models.map((model) => model.id)).toEqual(["claude-opus-4-8"]);
-    expect(second.models.map((model) => model.id)).toEqual(["claude-opus-4-8"]);
-    const claudeModel = first.models.find((model) => model.id === "claude-opus-4-8");
+    expect(first.models.map((model) => model.id)).toEqual(["kimi-k3", "claude-opus-4-7"]);
+    expect(second.models.map((model) => model.id)).toEqual(["kimi-k3", "claude-opus-4-7"]);
+    expect(first.models.find((model) => model.id === "kimi-k3")).toMatchObject({
+      api: "openai-completions",
+      baseUrl: "https://opencode.ai/zen/v1",
+      contextWindow: 1_048_576,
+      maxTokens: 131_072,
+    });
+    const claudeModel = first.models.find((model) => model.id === "claude-opus-4-7");
     expect(claudeModel).toMatchObject({
       api: "anthropic-messages",
       baseUrl: "https://opencode.ai/zen",
@@ -592,7 +744,7 @@ describe("opencode provider plugin", () => {
       discoveryApiKey: "resolved-opencode-key",
       fetchGuard,
     });
-    expect(unknownOnly.models.map((model) => model.id)).toContain("claude-opus-4-8");
+    expect(unknownOnly.models.map((model) => model.id)).toEqual(ACTIVE_MODEL_IDS);
 
     clearLiveCatalogCacheForTests();
     fetchGuard.mockRejectedValueOnce(new Error("network unavailable"));
@@ -602,8 +754,7 @@ describe("opencode provider plugin", () => {
       fetchGuard,
     });
     expect(fallback.apiKey).toBe("OPENCODE_API_KEY");
-    expect(fallback.models.map((model) => model.id)).toContain("claude-opus-4-8");
-    expect(fallback.models.map((model) => model.id)).toContain("claude-opus-4-6");
+    expect(fallback.models.map((model) => model.id)).toEqual(ACTIVE_MODEL_IDS);
   });
 
   it("keeps live OpenCode Zen discovery caches scoped to discovery credentials", async () => {
@@ -611,13 +762,13 @@ describe("opencode provider plugin", () => {
       .fn()
       .mockResolvedValueOnce({
         response: new Response(
-          JSON.stringify({ data: [{ id: "claude-opus-4-8", object: "model" }] }),
+          JSON.stringify({ data: [{ id: "claude-opus-4-7", object: "model" }] }),
         ),
         finalUrl: "https://opencode.ai/zen/v1/models",
         release: vi.fn(async () => undefined),
       })
       .mockResolvedValueOnce({
-        response: new Response(JSON.stringify({ data: [{ id: "gpt-5.5", object: "model" }] })),
+        response: new Response(JSON.stringify({ data: [{ id: "gpt-5.6-luna", object: "model" }] })),
         finalUrl: "https://opencode.ai/zen/v1/models",
         release: vi.fn(async () => undefined),
       });
@@ -640,11 +791,66 @@ describe("opencode provider plugin", () => {
 
     expect(fetchGuard).toHaveBeenCalledTimes(2);
     expect(first.apiKey).toBe("runtime-a");
-    expect(first.models.map((model) => model.id)).toEqual(["claude-opus-4-8"]);
+    expect(first.models.map((model) => model.id)).toEqual(["claude-opus-4-7"]);
     expect(second.apiKey).toBe("runtime-b");
-    expect(second.models.map((model) => model.id)).toEqual(["gpt-5.5"]);
+    expect(second.models.map((model) => model.id)).toEqual(["gpt-5.6-luna"]);
     expect(secondCached.apiKey).toBe("runtime-c");
-    expect(secondCached.models.map((model) => model.id)).toEqual(["gpt-5.5"]);
+    expect(secondCached.models.map((model) => model.id)).toEqual(["gpt-5.6-luna"]);
+  });
+
+  it.each([
+    [["claude-opus-5"], "opencode/claude-opus-5"],
+    [["gpt-5.6-sol"], undefined],
+  ])("selects only the advertised preferred onboarding model %#", async (modelIds, expected) => {
+    const fetchGuard = vi.fn(async () => ({
+      response: new Response(
+        JSON.stringify({ data: modelIds.map((id) => ({ id, object: "model" })) }),
+      ),
+      finalUrl: "https://opencode.ai/zen/v1/models",
+      release: vi.fn(async () => undefined),
+    }));
+
+    await expect(
+      resolveOpencodeZenStarterModel({
+        apiKey: "resolved-opencode-key",
+        preferredModelRef: "opencode/claude-opus-5",
+        fetchGuard,
+      }),
+    ).resolves.toBe(expected);
+  });
+
+  it.each([
+    ["off", undefined],
+    ["max", "max"],
+  ] as const)("keeps Kimi K3 reasoning %s exact", async (thinkingLevel, expectedEffort) => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const capturedPayloads: Record<string, unknown>[] = [];
+    const baseStreamFn = (_model: unknown, _context: unknown, options: unknown) => {
+      const payload: Record<string, unknown> = {
+        model: "kimi-k3",
+        reasoning_effort: "max",
+      };
+      (options as { onPayload?: (payload: Record<string, unknown>) => void })?.onPayload?.(payload);
+      capturedPayloads.push(payload);
+      return {} as never;
+    };
+    const streamFn = provider.wrapStreamFn?.({
+      streamFn: baseStreamFn as never,
+      providerId: "opencode",
+      modelId: "kimi-k3",
+      thinkingLevel,
+    } as never);
+
+    await streamFn?.(
+      { provider: "opencode", id: "kimi-k3", api: "openai-completions" } as never,
+      {} as never,
+      {},
+    );
+    expect(capturedPayloads).toEqual([
+      expectedEffort === undefined
+        ? { model: "kimi-k3" }
+        : { model: "kimi-k3", reasoning_effort: expectedEffort },
+    ]);
   });
 
   it("canonicalizes stale OpenCode Zen base URLs", async () => {
@@ -759,5 +965,35 @@ describe("opencode provider plugin", () => {
     expect(gpt56LevelIds).not.toContain("minimal");
     expect(gpt56LevelIds).toContain("xhigh");
     expect(gpt56LevelIds).toContain("max");
+
+    expect(
+      resolveThinkingProfile({
+        provider: "opencode",
+        modelId: "kimi-k3",
+        api: "openai-completions",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: ["max"] },
+      }),
+    ).toEqual({ levels: [{ id: "off" }, { id: "max" }], defaultLevel: "off" });
+    expect(
+      resolveThinkingProfile({
+        provider: "opencode",
+        modelId: "grok-4.5",
+        api: "openai-responses",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: ["low", "medium", "high"] },
+      }),
+    ).toEqual({
+      levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }],
+      defaultLevel: "medium",
+    });
+    expect(
+      resolveThinkingProfile({
+        provider: "opencode",
+        modelId: "big-pickle",
+        api: "openai-completions",
+        reasoning: true,
+      }),
+    ).toEqual({ levels: [{ id: "off", label: "always on" }], defaultLevel: "off" });
   });
 });

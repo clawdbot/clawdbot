@@ -5,9 +5,9 @@ scenario:
   surface: runtime
   coverage:
     primary:
-      - runtime.doctor-repair
+      - openai.codex-oauth-profiles-doctor-repair
     secondary:
-      - runtime.codex-plugin.auth
+      - observability.doctor-codex-plugin-auth
   objective: Prove that the real doctor command migrates legacy Codex OAuth stores into canonical per-agent SQLite state.
   successCriteria:
     - OAuth-only legacy stores become canonical openai OAuth profiles in per-agent SQLite.

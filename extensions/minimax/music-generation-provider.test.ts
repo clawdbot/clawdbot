@@ -158,6 +158,129 @@ describe("minimax music generation provider", () => {
     expect(result.metadata).not.toHaveProperty("requestedDurationSeconds");
   });
 
+  it.each([
+    { provider: "minimax", contentType: "application/json", body: '{"error":"denied"}' },
+    {
+      provider: "minimax",
+      contentType: "application/problem+json",
+      body: '{"title":"denied"}',
+    },
+    { provider: "minimax", contentType: "text/html", body: "<html>sign in</html>" },
+    { provider: "minimax", contentType: "audio/mpeg", body: "" },
+    { provider: "minimax-portal", contentType: "application/json", body: '{"error":"denied"}' },
+    {
+      provider: "minimax-portal",
+      contentType: "application/problem+json",
+      body: '{"title":"denied"}',
+    },
+    { provider: "minimax-portal", contentType: "text/html", body: "<html>sign in</html>" },
+    { provider: "minimax-portal", contentType: "audio/mpeg", body: "" },
+  ])(
+    "rejects a successful $contentType download through $provider",
+    async ({ provider: providerId, contentType, body }) => {
+      postJsonRequestMock.mockResolvedValue({
+        response: new Response(
+          JSON.stringify({
+            data: { audio_url: "https://example.com/invalid.mp3" },
+            base_resp: { status_code: 0 },
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+        release: vi.fn(async () => {}),
+      });
+      fetchWithTimeoutMock.mockResolvedValueOnce(
+        new Response(body, { headers: { "content-type": contentType } }),
+      );
+      const provider =
+        providerId === "minimax-portal"
+          ? buildMinimaxPortalMusicGenerationProvider()
+          : buildMinimaxMusicGenerationProvider();
+
+      await expect(
+        provider.generateMusic({
+          provider: providerId,
+          model: "music-2.6",
+          prompt: "invalid download",
+          cfg: {},
+        }),
+      ).rejects.toThrow("MiniMax generated music download: malformed audio response");
+
+      const [guarded] = fetchWithTimeoutGuardedMock.mock.results;
+      const result = guarded ? await guarded.value : undefined;
+      expect(result?.release).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("cancels invalid music responses before releasing their guarded dispatcher", async () => {
+    const cleanupOrder: string[] = [];
+    postJsonRequestMock.mockResolvedValue({
+      response: new Response(
+        JSON.stringify({
+          data: { audio_url: "https://example.com/invalid-open.mp3" },
+          base_resp: { status_code: 0 },
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('{"error":"still streaming"}'));
+          },
+          cancel() {
+            cleanupOrder.push("body canceled");
+          },
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+      finalUrl: "https://example.com/invalid-open.mp3",
+      release: vi.fn(async () => {
+        cleanupOrder.push("dispatcher released");
+      }),
+    });
+
+    await expect(
+      buildMinimaxMusicGenerationProvider().generateMusic({
+        provider: "minimax",
+        model: "music-2.6",
+        prompt: "invalid download",
+        cfg: {},
+      }),
+    ).rejects.toThrow("MiniMax generated music download: malformed audio response");
+    expect(cleanupOrder).toEqual(["body canceled", "dispatcher released"]);
+  });
+
+  it.each([
+    {
+      name: "streamed",
+      contentType: "text/event-stream",
+      body: `data: ${JSON.stringify({ data: { status: 1, audio: "ZE==" }, base_resp: { status_code: 0 } })}\n\n`,
+    },
+    {
+      name: "inline",
+      contentType: "application/json",
+      body: JSON.stringify({ data: { audio: "ZE==" }, base_resp: { status_code: 0 } }),
+    },
+  ])("rejects $name audio outside MiniMax's documented hex format", async (fixture) => {
+    postJsonRequestMock.mockResolvedValue({
+      response: new Response(fixture.body, {
+        headers: { "content-type": fixture.contentType },
+      }),
+      release: vi.fn(async () => {}),
+    });
+
+    await expect(
+      buildMinimaxMusicGenerationProvider().generateMusic({
+        provider: "minimax",
+        model: "",
+        prompt: "short track",
+        cfg: {},
+      }),
+    ).rejects.toThrow("MiniMax music generation returned malformed hex audio");
+  });
+
   it("reports streaming music task failures", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: new Response(

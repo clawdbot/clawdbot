@@ -1,3 +1,5 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   isThinkingLevelSupported,
   resolveSupportedThinkingLevel,
@@ -11,6 +13,32 @@ import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import { resolveAutoAgentHarnessId } from "./harness/support.js";
 import { resolveSessionRuntimeOverrideForProvider } from "./session-runtime-compat.js";
 
+export function hasResolvedThinkingCatalogEntry(params: {
+  catalog?: readonly ThinkingCatalogEntry[];
+  provider: string;
+  model: string;
+}): boolean {
+  const modelId = normalizeOptionalString(params.model);
+  if (!modelId) {
+    return false;
+  }
+  const normalizedProvider = normalizeProviderId(params.provider);
+  const entry = params.catalog?.find(
+    (candidate) =>
+      normalizeProviderId(candidate.provider) === normalizedProvider && candidate.id === modelId,
+  );
+  return entry?.reasoning !== undefined;
+}
+
+export function normalizeThinkingCatalogProviders<T extends ThinkingCatalogEntry>(
+  catalog: readonly T[],
+): T[] {
+  return catalog.map((entry) => {
+    const provider = normalizeProviderId(entry.provider);
+    return provider === entry.provider ? entry : Object.assign({}, entry, { provider });
+  });
+}
+
 /** Convert residual auto policy into the built-in fallback when no registry selection is needed. */
 export function concretizeAgentRuntime(runtime: string): string {
   return runtime === "auto" ? "openclaw" : runtime;
@@ -21,6 +49,8 @@ export function resolveEffectiveAgentRuntime(params: {
   cfg: OpenClawConfig;
   provider: string;
   modelId: string;
+  modelApi?: string | null;
+  modelBaseUrl?: unknown;
   agentId?: string;
   sessionKey?: string;
   sessionEntry?: Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride">;
@@ -35,6 +65,8 @@ export function resolveEffectiveAgentRuntime(params: {
     resolveAgentHarnessPolicy({
       provider: params.provider,
       modelId: params.modelId,
+      modelApi: params.modelApi,
+      modelBaseUrl: params.modelBaseUrl,
       config: params.cfg,
       agentId: params.agentId,
       sessionKey: params.sessionKey,

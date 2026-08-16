@@ -47,6 +47,9 @@ Running `openclaw migrate <provider>` with no other flags plans, previews, and (
 <ParamField path="--from <path>" type="string">
   Override the source state directory. Hermes follows `$HERMES_HOME` and the active profile, then uses the platform default (`~/.hermes` or `%LOCALAPPDATA%\hermes`). Codex defaults to `~/.codex` (or `$CODEX_HOME`), Claude defaults to `~/.claude`.
 </ParamField>
+<ParamField path="--agent <id>" type="string">
+  Import into a configured agent. Omit this only when the configured default agent is the intended owner. Invalid and unknown agent IDs are rejected.
+</ParamField>
 <ParamField path="--include-secrets" type="boolean">
   Import supported credentials without prompting. Interactive apply asks before importing detected auth credentials, with yes selected by default; non-interactive `--yes` requires `--include-secrets` to import them.
 </ParamField>
@@ -65,8 +68,11 @@ Running `openclaw migrate <provider>` with no other flags plans, previews, and (
 <ParamField path="--plugin <name>" type="string">
   Select one Codex plugin install item by plugin name or item id. Repeat the flag to migrate multiple Codex plugins. When omitted, interactive Codex migrations show a native Codex plugin checkbox selector and non-interactive migrations keep all planned plugins. Applies only to source-installed `openai-curated` Codex plugins discovered by the Codex app-server inventory.
 </ParamField>
+<ParamField path="--item <id>" type="string">
+  Select one exact migration item by its plan ID. Repeat the flag to migrate multiple items. For example, `--item auth:openai` limits a Codex migration to the detected OpenAI credential item.
+</ParamField>
 <ParamField path="--verify-plugin-apps" type="boolean">
-  Codex only. Forces a fresh source Codex app-server `app/list` traversal before planning native plugin activation. Off by default to keep migration planning fast.
+  Codex only. Forces a fresh source Codex app-server `app/installed` snapshot read before planning native plugin activation. Off by default to keep migration planning fast.
 </ParamField>
 <ParamField path="--backup-output <path>" type="string">
   Pre-migration backup archive path or directory. Passed through to `openclaw backup create`.
@@ -132,6 +138,16 @@ The bundled Codex provider detects Codex CLI state at `~/.codex` by default, or 
 
 Use this provider when moving to the OpenClaw Codex harness and you want to promote useful personal Codex CLI assets deliberately. Local Codex app-server launches use a per-agent `CODEX_HOME`, so they do not read your personal `~/.codex` by default. The normal process `HOME` is still inherited, so Codex can see shared `$HOME/.agents/*` skills/plugin marketplace entries and subprocesses can find user-home config and tokens.
 
+Codex `auth.json` credentials are sensitive migration inputs. The default
+agent-scoped runtime does not consume a copied or mounted `auth.json` directly;
+import those credentials into the owning agent's OpenClaw auth store explicitly.
+Replace `<agent-id>` with that configured agent's ID:
+
+```bash
+openclaw migrate plan codex --from <codex-home> --agent <agent-id> --include-secrets --item auth:openai
+openclaw migrate apply codex --from <codex-home> --agent <agent-id> --include-secrets --item auth:openai --yes
+```
+
 Running `openclaw migrate codex` in an interactive terminal previews the full plan, then opens checkbox selectors before the final apply confirmation. Skill copy items are prompted first. Use `Toggle all on` or `Toggle all off` for bulk selection. Press Space to toggle rows, or Enter to activate the highlighted row and continue. Planned skills start checked, conflict skills start unchecked, and `Skip for now` skips skill copies for this run while still continuing to plugin selection. When source-installed curated Codex plugins are migratable and `--plugin` was not supplied, migration then prompts for native Codex plugin activation by plugin name. Plugin items start checked unless the target OpenClaw Codex plugin config already has that plugin. Existing target plugins start unchecked and show a conflict hint such as `conflict: plugin exists`; choose `Toggle all off` to migrate no native Codex plugins in that run, or `Skip for now` to stop before applying.
 
 For scripted or exact runs, select one or more skills or plugins explicitly:
@@ -145,18 +161,21 @@ openclaw migrate apply codex --yes --plugin google-calendar
 
 ### What Codex imports
 
+- ChatGPT OAuth or OpenAI API-key credentials from `$CODEX_HOME/auth.json`,
+  imported into the agent's OpenClaw auth store only when `--include-secrets`
+  is set.
 - Consolidated Codex `MEMORY.md` and `memory_summary.md` from
   `$CODEX_HOME/memories`, copied under `memory/imports/codex/` for indexed
   recall. Raw rollout memory is not imported.
 - Codex CLI skill directories under `$CODEX_HOME/skills`, excluding Codex's `.system` cache.
 - Personal AgentSkills under `$HOME/.agents/skills`, copied into the current OpenClaw agent workspace for per-agent ownership.
-- Source-installed `openai-curated` Codex plugins discovered through Codex app-server `plugin/list`. Planning reads `plugin/read` for each enabled installed plugin.
+- Source-installed `openai-curated` Codex plugins discovered through Codex app-server `plugin/installed`. Planning reads `plugin/read` for each enabled installed plugin.
 
 App-backed plugin migration has extra gates:
 
 - App-backed plugins require the source Codex app-server account to be a ChatGPT subscription account. Non-ChatGPT or missing account responses are skipped with `codex_subscription_required`.
-- By default, migration does not call source `app/list`, so app-backed plugins that pass the account gate are planned without source app-accessibility verification, and account-lookup transport failures skip with `codex_account_unavailable`.
-- Pass `--verify-plugin-apps` to force a fresh source `app/list` snapshot and require every owned app to be present, enabled, and accessible before planning native activation. In that mode, account-lookup transport failures fall through to source app-inventory verification. The snapshot is kept in memory for the current process only; it is never written to migration output or target config.
+- By default, migration does not read the source app inventory, so app-backed plugins that pass the account gate are planned without source app-accessibility verification, and account-lookup transport failures skip with `codex_account_unavailable`.
+- Pass `--verify-plugin-apps` to force a fresh source `app/installed` snapshot (with authorized metadata from batched `app/read`) and require every owned app to be present, enabled, and accessible before planning native activation. In that mode, account-lookup transport failures fall through to source app-inventory verification. The snapshot is kept in memory for the current process only; it is never written to migration output or target config.
 
 Disabled plugins, unreadable plugin details, subscription-gated source accounts, and (when `--verify-plugin-apps` is set) missing, disabled, or inaccessible apps become manual skipped items with typed reasons instead of target config entries. Apply calls app-server `plugin/install` for each selected eligible plugin, even if the target app-server already reports that plugin as installed and enabled. Migrated Codex plugins are usable only in sessions that select the native Codex harness; they are not exposed to OpenClaw provider runs, ACP conversation bindings, or other harnesses.
 
@@ -223,13 +242,13 @@ Migration sources are plugins. A plugin declares its provider ids in `openclaw.p
 }
 ```
 
-At runtime the plugin calls `api.registerMigrationProvider(...)`. The provider implements `detect`, `plan`, and `apply`. Core owns CLI orchestration, backup policy, prompts, JSON output, and conflict preflight. Core passes the reviewed plan into `apply(ctx, plan)`, and providers may rebuild the plan only when that argument is absent for compatibility.
+At runtime the plugin calls `api.registerMigrationProvider(...)`. The provider implements `detect`, `plan`, and `apply`. Core owns CLI orchestration, backup policy, prompts, JSON output, and conflict preflight. Core passes the reviewed plan into `apply(ctx, plan)`, and providers may rebuild the plan only when that argument is absent for compatibility. Migration items may set `applyPhase: "after-promotion"` for external activation effects that onboarding must defer until staged local data is durably published. Those providers must declare `deferredApply: { retrySafe: true }` and make each deferred effect safe to replay after an interrupted process; onboarding rejects undeclared deferred effects. An idempotent no-op should return a non-mutating item with `deferredCompletion: true` so recovery can record it as complete. Standalone `openclaw migrate` still applies the complete plan through its normal backup-backed flow.
 
 Provider plugins can use `openclaw/plugin-sdk/migration` for item construction and summary counts, plus `openclaw/plugin-sdk/migration-runtime` for conflict-aware file copies, archive-only report copies, cached config-runtime wrappers, and migration reports.
 
 ## Onboarding integration
 
-Onboarding can offer migration when a provider detects a known source. Both `openclaw onboard --flow import` and `openclaw setup --wizard --import-from hermes` use the same plugin migration provider and still show a preview before applying.
+Onboarding can offer migration when a provider detects a known source. Both `openclaw onboard --flow import` and `openclaw setup --wizard --import-from hermes` use the same plugin migration provider and still show a preview before applying. Unlike standalone migration, the fresh-target onboarding path stages local artifacts and imported credentials, verifies or repairs imported inference inside staging, then promotes workspace and agent state before committing configuration. A mode-`0600` promotion journal lets the next run finish or roll back an interrupted publish, including any deferred external activation, without replaying imported local data.
 
 <Note>
 Onboarding imports require a fresh OpenClaw setup. Reset config, credentials, sessions, and the workspace first if you already have local state. Backup-plus-overwrite or merge imports are feature-gated for existing setups.

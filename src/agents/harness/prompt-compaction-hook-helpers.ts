@@ -6,10 +6,7 @@
  */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import type {
-  PluginHookBeforeAgentStartResult,
-  PluginHookBeforePromptBuildResult,
-} from "../../plugins/types.js";
+import type { PluginHookBeforePromptBuildResult } from "../../plugins/types.js";
 import { joinPresentTextSegments } from "../../shared/text/join-segments.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import { wrapPluginSystemContextSection } from "../hook-system-context-boundary.js";
@@ -22,6 +19,8 @@ const log = createSubsystemLogger("agents/harness");
 type AgentHarnessPromptBuildResult = {
   prompt: string;
   developerInstructions: string;
+  /** Optional per-turn tool restriction requested by before_prompt_build hooks. */
+  toolsAllow?: string[];
   /** Span within prompt containing the original prompt input. */
   promptInputRange?: { start: number; end: number };
 };
@@ -32,25 +31,17 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
   developerInstructions: string;
   messages: unknown[];
   ctx: AgentHarnessHookContext;
-  beforeAgentStartResult?: PluginHookBeforeAgentStartResult;
   bootstrapContextRunKind?: BootstrapContextRunKind;
 }): Promise<AgentHarnessPromptBuildResult> {
   const hookRunner = getGlobalHookRunner();
-  const hasPrecomputedBeforeAgentStartResult = "beforeAgentStartResult" in params;
   // heartbeat_prompt_contribution fires only on heartbeat turns. Harness runtimes
   // (e.g. the Codex app-server) build the prompt through this helper rather than
   // the embedded runner's resolvePromptBuildHookResult, so the hook must run from
   // here too — otherwise it never fires on those runtimes.
-  const isHeartbeatTurn =
-    params.ctx.trigger === "heartbeat" && params.bootstrapContextRunKind !== "commitment-only";
+  const isHeartbeatTurn = params.ctx.trigger === "heartbeat";
   const hasHeartbeatContribution =
     isHeartbeatTurn && Boolean(hookRunner?.hasHooks("heartbeat_prompt_contribution"));
-  if (
-    !hasPrecomputedBeforeAgentStartResult &&
-    !hasHeartbeatContribution &&
-    !hookRunner?.hasHooks("before_prompt_build") &&
-    !hookRunner?.hasHooks("before_agent_start")
-  ) {
+  if (!hasHeartbeatContribution && !hookRunner?.hasHooks("before_prompt_build")) {
     return {
       prompt: params.prompt,
       developerInstructions: params.developerInstructions,
@@ -82,41 +73,23 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
           })
       : undefined;
 
-  // Support the newer before_prompt_build hook plus the deprecated
-  // before_agent_start hook during the prompt-build migration window.
   const promptBuildResult = hookRunner?.hasHooks("before_prompt_build")
     ? await hookRunner.runBeforePromptBuild(promptEvent, hookCtx).catch((error: unknown) => {
         log.warn(`before_prompt_build hook failed: ${String(error)}`);
         return undefined;
       })
     : undefined;
-  // The runner resolves before_agent_start during model selection. Reuse that
-  // result so legacy one-shot hooks do not run twice for the same turn.
-  const beforeAgentStartResult = hasPrecomputedBeforeAgentStartResult
-    ? params.beforeAgentStartResult
-    : hookRunner?.hasHooks("before_agent_start")
-      ? await hookRunner.runBeforeAgentStart(promptEvent, hookCtx).catch((error: unknown) => {
-          log.warn(
-            `deprecated before_agent_start hook failed during prompt build: ${String(error)}`,
-          );
-          return undefined;
-        })
-      : undefined;
-
   const systemPrompt = resolvePromptBuildSystemPrompt({
     developerInstructions: params.developerInstructions,
     promptBuildResult,
-    beforeAgentStartResult,
   });
   const promptPrefix = joinPresentTextSegments([
     heartbeatResult?.prependContext,
     promptBuildResult?.prependContext,
-    beforeAgentStartResult?.prependContext,
   ]);
   const promptSuffix = joinPresentTextSegments([
     heartbeatResult?.appendContext,
     promptBuildResult?.appendContext,
-    beforeAgentStartResult?.appendContext,
   ]);
   const prompt =
     joinPresentTextSegments([promptPrefix, params.prompt, promptSuffix]) ?? params.prompt;
@@ -128,13 +101,14 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
         : 0;
   return {
     prompt,
+    ...(promptBuildResult?.toolsAllow !== undefined
+      ? { toolsAllow: promptBuildResult.toolsAllow }
+      : {}),
     developerInstructions:
       joinPresentTextSegments([
         wrapPluginSystemContextSection(promptBuildResult?.prependSystemContext),
-        wrapPluginSystemContextSection(beforeAgentStartResult?.prependSystemContext),
         systemPrompt,
         wrapPluginSystemContextSection(promptBuildResult?.appendSystemContext),
-        wrapPluginSystemContextSection(beforeAgentStartResult?.appendSystemContext),
       ]) ?? systemPrompt,
     promptInputRange: {
       start: promptInputStart,
@@ -146,13 +120,9 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
 function resolvePromptBuildSystemPrompt(params: {
   developerInstructions: string;
   promptBuildResult?: PluginHookBeforePromptBuildResult;
-  beforeAgentStartResult?: PluginHookBeforeAgentStartResult;
 }): string {
   if (typeof params.promptBuildResult?.systemPrompt === "string") {
     return params.promptBuildResult.systemPrompt;
-  }
-  if (typeof params.beforeAgentStartResult?.systemPrompt === "string") {
-    return params.beforeAgentStartResult.systemPrompt;
   }
   return params.developerInstructions;
 }

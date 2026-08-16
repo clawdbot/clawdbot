@@ -1,14 +1,27 @@
 {
   "name": "@openclaw/imessage",
-  "version": "2026.7.2",
-  "private": true,
+  "version": "2026.8.1",
   "description": "OpenClaw iMessage channel plugin using imsg on a signed-in Mac",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
   "type": "module",
   "dependencies": {
-    "typebox": "1.3.3"
+    "typebox": "1.3.6",
+    "zod": "4.4.3"
   },
   "devDependencies": {
-    "@openclaw/plugin-sdk": "workspace:*"
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.8.1"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
   },
   "openclaw": {
     "extensions": [
@@ -16,10 +29,13 @@
     ],
     "setupEntry": "./setup-entry.ts",
     "setupFeatures": {
-      "legacyStateMigrations": true
+      "configPromotion": true
     },
     "channel": {
       "id": "imessage",
+      "approvalFlags": [
+        "native"
+      ],
       "label": "iMessage",
       "selectionLabel": "iMessage (imsg)",
       "detailLabel": "iMessage",
@@ -30,26 +46,65 @@
         "imsg"
       ],
       "systemImage": "message.fill",
-      "cliAddOptions": [
-        {
-          "flags": "--db-path <path>",
-          "description": "iMessage database path"
-        },
-        {
-          "flags": "--service <service>",
-          "description": "iMessage service (imessage|sms|auto)"
-        },
-        {
-          "flags": "--region <region>",
-          "description": "iMessage region (for SMS)"
-        }
-      ]
+      "setup": {
+        "fields": [
+          {
+            "key": "cliPath",
+            "kind": "string",
+            "cli": {
+              "flags": "--cli-path <path>",
+              "description": "iMessage CLI path"
+            }
+          },
+          {
+            "key": "dbPath",
+            "kind": "string",
+            "cli": {
+              "flags": "--db-path <path>",
+              "description": "iMessage database path"
+            }
+          },
+          {
+            "key": "service",
+            "kind": "choice",
+            "choices": [
+              "imessage",
+              "sms",
+              "auto"
+            ],
+            "cli": {
+              "flags": "--service <service>",
+              "description": "iMessage service"
+            }
+          },
+          {
+            "key": "region",
+            "kind": "string",
+            "cli": {
+              "flags": "--region <region>",
+              "description": "SMS region"
+            }
+          }
+        ]
+      }
+    },
+    "install": {
+      "clawhubSpec": "clawhub:@openclaw/imessage",
+      "npmSpec": "@openclaw/imessage",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.7.2",
+      "allowInvalidConfigRecovery": true
     },
     "compat": {
-      "pluginApi": ">=2026.7.2"
+      "pluginApi": ">=2026.8.1"
     },
     "build": {
-      "openclawVersion": "2026.7.2"
+      "openclawVersion": "2026.8.1",
+      "bundledDist": false
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
     }
   },
   "pluginInspector": {

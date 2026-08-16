@@ -34,7 +34,7 @@ Two runtime families:
   built-in `openclaw` runtime, plus registered plugin harnesses such as
   `codex` and `copilot`.
 - **CLI backends** run a local CLI process while keeping the model ref
-  canonical. For example, `anthropic/claude-opus-4-8` with a model-scoped
+  canonical. For example, `anthropic/claude-opus-5` with a model-scoped
   `agentRuntime.id: "claude-cli"` means "select the Anthropic model, execute
   through Claude CLI." `claude-cli` is not an embedded harness id and must not
   be passed to AgentHarness selection.
@@ -133,7 +133,7 @@ this order:
 
 1. **Model-scoped runtime policy** wins. This lives in a configured provider
    model entry, or in `agents.defaults.models["provider/model"].agentRuntime`
-   / `agents.list[].models["provider/model"].agentRuntime`. A provider
+   / `agents.entries.*.models["provider/model"].agentRuntime`. A provider
    wildcard such as `agents.defaults.models["vllm/*"].agentRuntime` applies
    after exact model policy, so dynamically discovered provider models can
    share one runtime without overriding exact per-model exceptions.
@@ -145,7 +145,7 @@ this order:
 
 Whole-session and whole-agent runtime pins are ignored: `OPENCLAW_AGENT_RUNTIME`,
 session `agentHarnessId`/`agentRuntimeOverride` state, `agents.defaults.agentRuntime`,
-and `agents.list[].agentRuntime`. Run `openclaw doctor --fix` to remove stale
+and `agents.entries.*.agentRuntime`. Run `openclaw doctor --fix` to remove stale
 whole-agent runtime config and convert legacy runtime model refs where intent
 can be preserved.
 
@@ -160,9 +160,9 @@ CLI backend aliases differ from embedded harness ids. Preferred Claude CLI form:
 {
   agents: {
     defaults: {
-      model: "anthropic/claude-opus-4-8",
+      model: "anthropic/claude-opus-5",
       models: {
-        "anthropic/claude-opus-4-8": {
+        "anthropic/claude-opus-5": {
           agentRuntime: { id: "claude-cli" },
         },
       },
@@ -214,9 +214,9 @@ canonical subscription `github-copilot` provider and is **never** selected by
 }
 ```
 
-The harness claims its provider, runtime, CLI session key, and auth profile
-prefix in `extensions/copilot/doctor-contract-api.ts`, which `openclaw doctor`
-auto-loads. For configuration, auth, transcript mirroring, compaction, the
+The plugin manifest declares the harness provider, runtime, CLI session key,
+and auth profile prefix without requiring `openclaw doctor` to load plugin
+code. For configuration, auth, transcript mirroring, compaction, the
 declarative doctor contract, and the broader PI vs Codex vs Copilot SDK
 decision, see [GitHub Copilot agent runtime](/plugins/copilot).
 

@@ -18,7 +18,9 @@ Availability: iPhone app builds are distributed through Apple channels when enab
 - Browses the selected agent's workspace read-only from the Agents surface (Files): directory drill-down, syntax-highlighted text previews, image previews, and share-sheet export. No write operations; previews are size-capped by the gateway.
 - Keeps a small read-only offline cache of recent chat sessions and transcripts per paired gateway: cold opens paint the last known transcript immediately and refresh once the gateway responds, recent chats stay browsable while disconnected, and reset/forget purges the protected local cache.
 - Queues text messages sent while disconnected in a durable per-gateway outbox (up to 50): queued bubbles show in the transcript, flush in order on reconnect with idempotent retries, remain durable until canonical history confirms the send, retry with backoff before surfacing a retry/delete action, and expire instead of sending after 48 hours offline; reset/forget clears the queue with the cache.
-- Chat actions can open the full Sessions screen without leaving Chat and can show or hide assistant reasoning and tool activity. The inline Talk control animates from live microphone or playback level while listening or speaking.
+- Chat is the single text-and-voice surface. Chat actions can open the full Sessions screen without leaving Chat and can show or hide assistant reasoning and tool activity. Tap the microphone for draft dictation, open its menu to record a voice note, or use the inline Talk control for realtime voice; the Talk control animates from live microphone or playback level while listening or speaking.
+- Chat accepts images from the photo picker, camera, Files, paste, and the iOS share sheet. Assistant-generated images render inline from short-lived Gateway artifact URLs, open in a full-screen preview, and remain available after reconnect or history reload without storing image bytes in the transcript cache.
+- **Settings -> OpenClaw** opens a dedicated Gateway settings assistant when the operator connection has `operator.admin` and the Gateway supports `openclaw.chat`. Its setup conversation stays separate from ordinary Chat, redacts secret replies locally, and moves to Chat only after you tap **Open Chat**.
 - Speaks assistant messages on demand: long-press a message in Chat and choose **Listen**. The app plays supported gateway `tts.speak` clips with the configured TTS provider and falls back to on-device speech when gateway audio is unavailable or unplayable. Playback stops on session switch or backgrounding.
 
 ## Requirements
@@ -31,10 +33,12 @@ Availability: iPhone app builds are distributed through Apple channels when enab
 
 ## Quick start (pair + connect)
 
-On first launch the app walks through a short pairing explainer and a
-permissions page (notifications, camera, microphone, photos, contacts,
-calendar, reminders, location). Every grant is optional and can be changed
-later in **Settings** -> **Permissions**, or in the iOS Settings app.
+On first launch the app walks through a short pairing explainer, then Gateway
+setup. It does not present an aggregate permissions page. Optional access is
+requested when you use the related feature, or after you tap **Continue** for
+that permission under **Settings** -> **Permissions** -> **Privacy & Access**.
+**Continue** immediately presents the native iOS authorization prompt. You can
+change granted access later in the iOS Settings app.
 
 1. Start an authenticated Gateway with a route your phone can reach. Tailscale
    Serve is the recommended remote path:
@@ -49,7 +53,7 @@ Gateway has not been configured yet, run `openclaw onboard` first so setup-code
 creation has a token or password auth path.
 
 2. Open the [Control UI](/web/control-ui), select **Nodes**, and click
-   **Pair mobile device** on the **Devices** page. Full access is recommended
+   **Pair device** on the **Devices** page. Full access is recommended
    and selected by default; choose Limited access only when you want to omit
    administrative Gateway controls, then click **Create setup code**.
 
@@ -58,6 +62,14 @@ creation has a token or password auth path.
 
    If the setup code contains both LAN and Tailscale Serve routes, the app
    probes them in order and saves the first reachable endpoint.
+
+   Paired gateways remain in the **Gateways** list. The checkmark identifies
+   the focused gateway; use the bolt control on another row to keep its
+   operator session connected at the same time. Switching focus does not
+   disconnect other enabled gateways. Only the focused gateway receives the
+   iPhone's capability-bearing node session, so camera, screen, location, and
+   other device commands always have one unambiguous owner. iOS may suspend
+   these foreground connections after the app enters the background.
 
 4. The official app connects automatically. If **Pending approval** shows a
    request, review its role and scopes before approving it.

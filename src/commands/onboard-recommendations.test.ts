@@ -97,10 +97,163 @@ describe("onboard recommendations command", () => {
       matches: [],
     }));
 
-    acknowledgeOnboardRecommendationsCommand(runtime, { acknowledge });
+    acknowledgeOnboardRecommendationsCommand({}, runtime, { acknowledge });
 
     expect(acknowledge).toHaveBeenCalledOnce();
     expect(runtime.log).toHaveBeenCalledWith("Onboarding recommendations acknowledged.");
+  });
+
+  it("leaves failed bootstrap installs pending and consumes the other matches", () => {
+    const runtime = makeRuntime();
+    const updatePending = vi.fn(() => ({
+      inventoryHash: "hash",
+      offeredAt: 1,
+      acceptedAt: null,
+      updatedAt: 2,
+      matches: [],
+    }));
+    const matches = [
+      {
+        appLabel: "Chat",
+        candidateId: "chat-plugin",
+        tier: "recommended" as const,
+        reason: "Connects conversations",
+        candidate: {
+          id: "chat-plugin",
+          displayName: "Chat plugin",
+          summary: "Chat",
+          source: "official-channel" as const,
+        },
+      },
+      {
+        appLabel: "Notes",
+        candidateId: "@demo-owner/notes",
+        tier: "optional" as const,
+        reason: "Connects notes",
+        candidate: {
+          id: "@demo-owner/notes",
+          displayName: "Notes skill",
+          summary: "Notes",
+          source: "clawhub-skill" as const,
+        },
+      },
+    ];
+
+    acknowledgeOnboardRecommendationsCommand({ retry: ["@demo-owner/notes"] }, runtime, {
+      read: () => ({
+        inventoryHash: "hash",
+        offeredAt: 1,
+        acceptedAt: null,
+        updatedAt: 1,
+        matches,
+      }),
+      updatePending,
+    });
+
+    expect(updatePending).toHaveBeenCalledWith({
+      matches: [matches[1]],
+      expected: {
+        inventoryHash: "hash",
+        offeredAt: 1,
+        acceptedAt: null,
+        updatedAt: 1,
+        matches,
+      },
+    });
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Onboarding recommendations updated; 1 left pending for retry.",
+    );
+  });
+
+  it("rejects unknown bootstrap retry ids without consuming the offer", () => {
+    const runtime = makeRuntime();
+    const acknowledge = vi.fn();
+    const updatePending = vi.fn();
+
+    acknowledgeOnboardRecommendationsCommand({ retry: ["missing-skill"] }, runtime, {
+      read: () => ({
+        inventoryHash: "hash",
+        offeredAt: 1,
+        acceptedAt: null,
+        updatedAt: 1,
+        matches: [],
+      }),
+      acknowledge,
+      updatePending,
+    });
+
+    expect(runtime.error).toHaveBeenCalledWith("Unknown pending recommendation id: missing-skill");
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(acknowledge).not.toHaveBeenCalled();
+    expect(updatePending).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the pending offer changes before retry persistence", () => {
+    const runtime = makeRuntime();
+    const updatePending = vi.fn(() => null);
+    const match = {
+      appLabel: "Notes",
+      candidateId: "@demo-owner/notes",
+      tier: "optional" as const,
+      reason: "Connects notes",
+      candidate: {
+        id: "@demo-owner/notes",
+        displayName: "Notes skill",
+        summary: "Notes",
+        source: "clawhub-skill" as const,
+      },
+    };
+
+    acknowledgeOnboardRecommendationsCommand({ retry: [match.candidateId] }, runtime, {
+      read: () => ({
+        inventoryHash: "hash",
+        offeredAt: 1,
+        acceptedAt: null,
+        updatedAt: 1,
+        matches: [match],
+      }),
+      updatePending,
+    });
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Stored recommendations changed; read them again before recording retries.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
+
+  it("clears pending bootstrap offers with legacy bare ClawHub ids", () => {
+    const runtime = makeRuntime();
+    const clearPending = vi.fn(() => true);
+
+    onboardRecommendationsCommand({ json: true }, runtime, {
+      read: () => ({
+        inventoryHash: "hash",
+        offeredAt: 1,
+        acceptedAt: null,
+        updatedAt: 1,
+        matches: [
+          {
+            appLabel: "Notes",
+            candidateId: "notes",
+            tier: "optional",
+            reason: "Connects notes",
+            candidate: {
+              id: "notes",
+              displayName: "Notes skill",
+              summary: "Notes",
+              source: "clawhub-skill",
+            },
+          },
+        ],
+      }),
+      clearPending,
+    });
+
+    expect(clearPending).toHaveBeenCalledWith({
+      expected: expect.objectContaining({ inventoryHash: "hash", updatedAt: 1 }),
+    });
+    expect(runtime.log).toHaveBeenCalledWith("[]");
   });
 
   it("clears a stored offer for the next onboarding scan", () => {

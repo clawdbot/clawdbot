@@ -5,11 +5,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
-import { sha256Hex, sha256HexPrefix } from "../infra/crypto-digest.js";
+import { sha256Hex, sha256HexPrefixCore } from "../infra/crypto-digest.js";
+import { syncDirectoryIfSupported } from "../infra/directory-durability.js";
+import { isMissingPathError } from "../infra/errors.js";
 import { withFileLock } from "../infra/file-lock.js";
 import { sameFileIdentity, type FileIdentityStat } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, root as createFsSafeRoot } from "../infra/fs-safe.js";
-import { syncDirectoryBestEffort } from "../infra/sqlite-snapshot.js";
 import {
   MAX_MEMORY_HOST_PUBLIC_EXPORT_BYTES,
   serializeMemoryHostEventExport,
@@ -20,7 +21,6 @@ import { KeyedAsyncQueue } from "./keyed-async-queue.js";
 import { resolveMemoryDreamingWorkspaces } from "./memory-core-host-status.js";
 import {
   isMemoryHostEventArtifactAtIdentity,
-  isMissingPathError,
   isRejectedWorkspaceArtifactPath,
   memoryHostEventExportOwnerContent,
   publishMemoryHostEventArtifact,
@@ -69,8 +69,8 @@ async function resolveMemoryHostEventExportOwner(workspaceDir: string): Promise<
   const requestedStateDir = path.resolve(resolveStateDir());
   await fs.mkdir(requestedStateDir, { recursive: true, mode: 0o700 });
   const stateDir = await fs.realpath(requestedStateDir);
-  const stateHash = sha256HexPrefix(stateDir, 32);
-  const workspaceHash = sha256HexPrefix(path.resolve(workspaceDir), 32);
+  const stateHash = sha256HexPrefixCore(stateDir, 32);
+  const workspaceHash = sha256HexPrefixCore(path.resolve(workspaceDir), 32);
   const exportDirectory = path.posix.join("memory", "events", stateHash);
   return {
     queueKey: `${stateHash}\0${workspaceHash}`,
@@ -304,7 +304,7 @@ async function materializeMemoryHostEventExport(params: {
             mkdir: true,
             mode: 0o600,
           });
-          await syncDirectoryBestEffort(path.dirname(absolutePath));
+          await syncDirectoryIfSupported(path.dirname(absolutePath));
           publishedIdentity = await publishMemoryHostEventArtifact({
             workspaceRoot,
             owner,
@@ -337,7 +337,7 @@ async function materializeMemoryHostEventExport(params: {
           ) {
             return undefined;
           }
-          await syncDirectoryBestEffort(path.dirname(absolutePath));
+          await syncDirectoryIfSupported(path.dirname(absolutePath));
           publishedIdentity = await publishMemoryHostEventArtifact({
             workspaceRoot,
             owner,
@@ -379,7 +379,7 @@ async function materializeMemoryHostEventExport(params: {
           ) {
             return undefined;
           }
-          await syncDirectoryBestEffort(path.dirname(absolutePath));
+          await syncDirectoryIfSupported(path.dirname(absolutePath));
           if (
             !(await rewriteMemoryHostEventArtifactIfUnchanged({
               workspaceRoot,
@@ -390,7 +390,7 @@ async function materializeMemoryHostEventExport(params: {
           ) {
             return undefined;
           }
-          await syncDirectoryBestEffort(path.dirname(absolutePath));
+          await syncDirectoryIfSupported(path.dirname(absolutePath));
           if (
             !(await rewriteMemoryHostEventArtifactIfUnchanged({
               workspaceRoot,
@@ -401,7 +401,7 @@ async function materializeMemoryHostEventExport(params: {
           ) {
             return undefined;
           }
-          await syncDirectoryBestEffort(path.dirname(absolutePath));
+          await syncDirectoryIfSupported(path.dirname(absolutePath));
         } catch (error) {
           if (isWorkspaceWriteUnavailable(error)) {
             return undefined;
@@ -424,7 +424,7 @@ async function materializeMemoryHostEventExport(params: {
           ) {
             return undefined;
           }
-          await syncDirectoryBestEffort(path.dirname(absolutePath));
+          await syncDirectoryIfSupported(path.dirname(absolutePath));
         } catch (error) {
           if (isWorkspaceWriteUnavailable(error)) {
             return undefined;

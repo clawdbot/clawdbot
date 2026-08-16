@@ -22,7 +22,12 @@ vi.mock("./zca-client.js", () => ({
 
 import { setZalouserRuntime } from "./runtime.js";
 import { saveStoredZaloCredentials } from "./session-state.js";
-import { resolveZaloGroupContext, sendZaloTextMessage, startZaloListener } from "./zalo-js.js";
+import {
+  normalizeZaloInboundMessage,
+  resolveZaloGroupContext,
+  sendZaloTextMessage,
+  startZaloListener,
+} from "./zalo-js.js";
 
 type ListenerOn = ReturnType<typeof vi.fn>;
 
@@ -140,7 +145,7 @@ describe("Zalo inbound normalization", () => {
         stop: vi.fn(),
       },
     } as Partial<API>);
-    const received: Array<Record<string, unknown>> = [];
+    const received: Message[] = [];
 
     await withStoredSession({
       profile,
@@ -151,7 +156,9 @@ describe("Zalo inbound normalization", () => {
           accountId: "default",
           profile,
           abortSignal: abortController.signal,
-          onMessage: (message) => received.push(message as unknown as Record<string, unknown>),
+          onMessage: (message) => {
+            received.push(message);
+          },
           onError: vi.fn(),
         });
         const onMessage = findListener(listenerOn, "message");
@@ -162,7 +169,10 @@ describe("Zalo inbound normalization", () => {
       },
     });
 
-    return received;
+    return received
+      .map((message) => normalizeZaloInboundMessage(message, "555444333"))
+      .filter((message): message is NonNullable<typeof message> => message !== null)
+      .map((message) => message as unknown as Record<string, unknown>);
   }
 
   it("extracts quote metadata and implicit mentions", async () => {

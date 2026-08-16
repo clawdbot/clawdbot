@@ -10,14 +10,13 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import {
   clearEmbeddingProviders,
+  createEmptyPluginRegistry,
+  getActivePluginRegistry,
   getRegisteredEmbeddingProvider,
   listRegisteredEmbeddingProviders,
   type RegisteredEmbeddingProvider,
   restoreRegisteredEmbeddingProviders,
-  clearMemoryEmbeddingProviders,
-  listRegisteredMemoryEmbeddingProviders,
-  type RegisteredMemoryEmbeddingProvider,
-  restoreRegisteredMemoryEmbeddingProviders,
+  setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createEmbeddingProvider, resolveEmbeddingProviderIndexIdentity } from "./embeddings.js";
@@ -29,7 +28,7 @@ type CapturedCall = {
 };
 
 let embeddingProvidersSnapshot: RegisteredEmbeddingProvider[];
-let memoryEmbeddingProvidersSnapshot: RegisteredMemoryEmbeddingProvider[];
+let previousPluginRegistry: ReturnType<typeof getActivePluginRegistry>;
 
 function createOptions(config: OpenClawConfig) {
   return {
@@ -43,15 +42,15 @@ function createOptions(config: OpenClawConfig) {
 }
 
 beforeEach(() => {
+  previousPluginRegistry = getActivePluginRegistry();
   embeddingProvidersSnapshot = listRegisteredEmbeddingProviders();
-  memoryEmbeddingProvidersSnapshot = listRegisteredMemoryEmbeddingProviders();
   clearEmbeddingProviders();
-  clearMemoryEmbeddingProviders();
 });
 
 afterEach(() => {
+  clearEmbeddingProviders();
+  setActivePluginRegistry(previousPluginRegistry ?? createEmptyPluginRegistry());
   restoreRegisteredEmbeddingProviders(embeddingProvidersSnapshot);
-  restoreRegisteredMemoryEmbeddingProviders(memoryEmbeddingProvidersSnapshot);
 });
 
 describe("memory-core generic embedding provider bridge", () => {
@@ -140,6 +139,7 @@ describe("memory-core generic embedding provider bridge", () => {
         });
       },
     });
+    setActivePluginRegistry(registry.registry);
 
     expect(getRegisteredEmbeddingProvider("virtual-generic")?.ownerPluginId).toBe(
       "virtual-generic-plugin",
@@ -147,8 +147,6 @@ describe("memory-core generic embedding provider bridge", () => {
     expect(registry.registry.embeddingProviders.map((entry) => entry.provider.id)).toEqual([
       "virtual-generic",
     ]);
-    expect(listRegisteredMemoryEmbeddingProviders()).toEqual([]);
-
     expect(resolveEmbeddingProviderIndexIdentity(createOptions(config))).toEqual({
       provider: { id: "virtual-generic", model: "virtual-model" },
       cacheKeyData: {

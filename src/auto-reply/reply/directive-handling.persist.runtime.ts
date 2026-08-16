@@ -1,2 +1,2 @@
-/** Runtime facade for persisting inline directive state after parsing. */
-export { persistInlineDirectives } from "./directive-handling.persist.js";
+/** Lazy runtime boundary for the shipped model-selection service. */
+export { applySessionModelSelection } from "../../model-picker/apply-session-model-selection.js";

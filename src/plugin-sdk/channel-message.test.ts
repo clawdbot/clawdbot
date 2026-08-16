@@ -2,7 +2,7 @@
  * Tests channel message helper behavior and mocked runtime interactions.
  */
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { defineChannelMessageAdapter as defineCoreChannelMessageAdapter } from "../channels/message/index.js";
+import { defineChannelMessageAdapter as defineCoreChannelMessageAdapter } from "../channels/message/adapter.js";
 import {
   defineChannelMessageAdapter,
   type ChannelMessageDurableFinalAdapter,
@@ -13,9 +13,7 @@ describe("defineChannelMessageAdapter", () => {
     await Promise.all([
       import("openclaw/plugin-sdk/channel-outbound"),
       import("openclaw/plugin-sdk/channel-message"),
-      import("openclaw/plugin-sdk/channel-message-runtime"),
       import("openclaw/plugin-sdk/channel-reply-pipeline"),
-      import("openclaw/plugin-sdk/compat"),
     ] as const);
   let pluginSdkSubpaths: Awaited<ReturnType<typeof loadPluginSdkSubpaths>>;
 
@@ -23,9 +21,8 @@ describe("defineChannelMessageAdapter", () => {
     pluginSdkSubpaths = await loadPluginSdkSubpaths();
   });
 
-  it("keeps new and legacy channel plugin SDK subpaths importable", async () => {
-    const [channelOutbound, channelMessage, channelMessageRuntime, channelReplyPipeline, compat] =
-      pluginSdkSubpaths;
+  it("keeps channel plugin SDK subpaths aligned", async () => {
+    const [channelOutbound, channelMessage, channelReplyPipeline] = pluginSdkSubpaths;
 
     expect(channelOutbound.createChannelMessageReplyPipeline).toBe(
       channelReplyPipeline.createChannelReplyPipeline,
@@ -37,14 +34,7 @@ describe("defineChannelMessageAdapter", () => {
       channelReplyPipeline.createReplyPrefixOptions,
     );
     expect(channelMessage.createTypingCallbacks).toBe(channelReplyPipeline.createTypingCallbacks);
-    expect(channelMessageRuntime.sendDurableMessageBatch).toBe(
-      channelMessage.sendDurableMessageBatch,
-    );
-    expect(channelMessageRuntime.withDurableMessageSendContext).toBe(
-      channelMessage.withDurableMessageSendContext,
-    );
     expect(channelOutbound.defineChannelMessageAdapter).toBe(defineCoreChannelMessageAdapter);
-    expect(compat.createChannelReplyPipeline).toBe(channelReplyPipeline.createChannelReplyPipeline);
   });
 
   it("defaults new message adapters to plugin-owned receive acknowledgement", () => {

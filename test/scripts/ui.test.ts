@@ -6,11 +6,12 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   isDirectScriptExecution,
+  resolveUiBuildEnvironment,
   resolvePnpmSpawnCall,
   resolveSpawnCall,
   shouldUseCmdExeForCommand,
-} from "../../scripts/ui.js";
-
+} from "../../scripts/ui.mts";
+import { normalizeControlUiBuildInfo } from "../../ui/src/build-info-normalizers.ts";
 // writeFileSync creates the file before its content lands, so an existence
 // poll can observe an empty file on loaded runners; wait for bytes instead.
 function readNonEmpty(file: string): string | null {
@@ -55,6 +56,78 @@ async function waitForExit(
 }
 
 describe("scripts/ui windows spawn behavior", () => {
+  it("reuses the runtime identity for the documented standalone UI rebuild", () => {
+    const commit = "0123456789abcdef0123456789abcdef01234567";
+    const firstBuild = normalizeControlUiBuildInfo({
+      version: "2026.8.1",
+      commit,
+      builtAt: "2026-08-14T23:00:00.000Z",
+    });
+
+    const env = resolveUiBuildEnvironment({
+      env: {},
+      now: () => new Date("2026-08-14T23:05:00.000Z"),
+      readBuildInfo: () => firstBuild,
+      readGitCommit: () => commit,
+      readPackageVersion: () => "2026.8.1",
+    });
+    const rebuiltUi = normalizeControlUiBuildInfo({
+      version: "2026.8.1",
+      commit: env.GIT_COMMIT,
+      builtAt: env.OPENCLAW_BUILD_TIMESTAMP,
+      buildId: env.OPENCLAW_CONTROL_UI_BUILD_ID,
+    });
+
+    expect(rebuiltUi).toMatchObject({
+      builtAt: firstBuild.builtAt,
+      buildId: firstBuild.buildId,
+      commit: firstBuild.commit,
+      version: firstBuild.version,
+    });
+  });
+
+  it("does not reuse build info from a different source revision", () => {
+    const env = resolveUiBuildEnvironment({
+      env: {},
+      now: () => new Date("2026-08-14T23:05:00.000Z"),
+      readBuildInfo: () => ({
+        version: "2026.8.1",
+        commit: "a".repeat(40),
+        builtAt: "2026-08-14T23:00:00.000Z",
+      }),
+      readGitCommit: () => "b".repeat(40),
+      readPackageVersion: () => "2026.8.1",
+    });
+
+    expect(env).toMatchObject({
+      GIT_COMMIT: "b".repeat(40),
+      OPENCLAW_BUILD_TIMESTAMP: "2026-08-14T23:05:00.000Z",
+    });
+    expect(env.OPENCLAW_CONTROL_UI_BUILD_ID).toBeUndefined();
+  });
+
+  it("does not reuse non-release build info for a release UI build", () => {
+    const commit = "a".repeat(40);
+    const env = resolveUiBuildEnvironment({
+      env: { OPENCLAW_CONTROL_UI_RELEASE_BUILD: "1" },
+      now: () => new Date("2026-08-14T23:05:00.000Z"),
+      readBuildInfo: () => ({
+        version: "2026.8.1",
+        commit,
+        builtAt: "2026-08-14T23:00:00.000Z",
+        release: false,
+      }),
+      readGitCommit: () => commit,
+      readPackageVersion: () => "2026.8.1",
+    });
+
+    expect(env).toMatchObject({
+      GIT_COMMIT: commit,
+      OPENCLAW_BUILD_TIMESTAMP: "2026-08-14T23:05:00.000Z",
+    });
+    expect(env.OPENCLAW_CONTROL_UI_BUILD_ID).toBeUndefined();
+  });
+
   it("wraps Windows command launchers with cmd.exe without enabling shell mode", () => {
     expect(
       shouldUseCmdExeForCommand("C:\\Users\\dev\\AppData\\Local\\pnpm\\pnpm.CMD", "win32"),
@@ -202,8 +275,8 @@ describe("scripts/ui windows spawn behavior", () => {
     expect(isDirectScriptExecution(junctionScriptPath, realScriptPath, realpath)).toBe(true);
   });
 
-  it("honors build-all no-pnpm mode before requiring a pnpm runner", () => {
-    const result = spawnSync(process.execPath, ["scripts/ui.js", "build", "--help"], {
+  it.each(["--help", "-h"])("keeps no-pnpm build %s informational", (helpFlag) => {
+    const result = spawnSync(process.execPath, ["scripts/ui.js", "build", helpFlag], {
       cwd: path.resolve("."),
       encoding: "utf8",
       env: {
@@ -217,6 +290,22 @@ describe("scripts/ui windows spawn behavior", () => {
     expect(result.status).toBe(0);
     expect(output).not.toContain("Missing UI runner");
     expect(output).toContain("vite");
+    expect(output).not.toContain("Control UI performance");
+  });
+
+  it.each(["check-control-ui-precompressed-assets.mts", "check-control-ui-performance.mts"])(
+    "keeps %s in the canonical build wrapper",
+    (validator) => {
+      expect(fs.readFileSync("scripts/ui.mts", "utf8")).toContain(validator);
+    },
+  );
+
+  it("keeps the package script on the canonical UI build wrapper", () => {
+    const packageJson = JSON.parse(fs.readFileSync("package.json", "utf8")) as {
+      scripts: Record<string, string>;
+    };
+
+    expect(packageJson.scripts["ui:build"]).toBe("node scripts/ui.js build");
   });
 
   it.runIf(process.platform !== "win32").each(["SIGTERM", "SIGHUP"] as const)(

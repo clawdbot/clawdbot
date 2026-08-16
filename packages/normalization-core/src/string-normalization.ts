@@ -1,6 +1,13 @@
 // Normalization Core module implements string normalization behavior.
 import { normalizeOptionalLowercaseString, normalizeOptionalString } from "./string-coerce.js";
 
+/** Retains runtime string entries from arrays without normalizing their contents. */
+export function filterStringEntries(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : [];
+}
+
 /** Coerces entries to strings, trims them, and drops empty results. */
 export function normalizeStringEntries(list?: ReadonlyArray<unknown>) {
   return (list ?? []).map((entry) => normalizeOptionalString(String(entry)) ?? "").filter(Boolean);

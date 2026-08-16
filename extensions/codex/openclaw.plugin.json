@@ -1,12 +1,34 @@
 {
   "id": "codex",
+  "doctorContract": {
+    "configRepair": true,
+    "stateMigrations": true
+  },
+  "sessionRouteStateOwners": [
+    {
+      "id": "codex",
+      "label": "Codex",
+      "providerIds": ["codex", "codex-cli", "openai-codex"],
+      "runtimeIds": ["codex", "codex-cli"],
+      "cliSessionKeys": ["codex-cli"],
+      "authProfilePrefixes": ["codex:", "codex-cli:", "openai-codex:"]
+    }
+  ],
   "name": "Codex",
   "description": "Codex app-server harness and native session catalog.",
+  "cliCommands": [
+    {
+      "name": "codex",
+      "description": "Inspect and branch from Codex sessions through the Gateway",
+      "hasSubcommands": true
+    }
+  ],
   "contracts": {
     "mediaUnderstandingProviders": ["codex"],
     "migrationProviders": ["codex"],
     "tools": [
       "codex_threads",
+      "codex_plugins",
       "codex_endpoint_probe",
       "codex_sessions_list",
       "codex_session_read",
@@ -28,6 +50,7 @@
     "onAgentHarnesses": ["codex"],
     "onCommands": ["codex"],
     "onConfigPaths": [
+      "plugins.entries.codex.config.appServer.transport",
       "plugins.entries.codex.config.sessionCatalog.enabled",
       "plugins.entries.codex.config.supervision.enabled"
     ]
@@ -167,7 +190,7 @@
                 },
                 "marketplaceName": {
                   "type": "string",
-                  "enum": ["openai-curated", "workspace-directory"]
+                  "pattern": "^[A-Za-z0-9_-]+$"
                 },
                 "pluginName": {
                   "type": "string"
@@ -235,8 +258,7 @@
           },
           "homeScope": {
             "type": "string",
-            "enum": ["agent", "user"],
-            "default": "agent"
+            "enum": ["agent", "user"]
           },
           "command": { "type": "string" },
           "args": {

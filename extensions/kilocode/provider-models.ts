@@ -1,17 +1,11 @@
 // Kilocode provider module implements model/runtime integration.
-import { readProviderJsonArrayFieldResponse } from "openclaw/plugin-sdk/provider-http";
+import { buildLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import {
-  fetchWithSsrFGuard,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname,
-} from "openclaw/plugin-sdk/ssrf-runtime";
+import { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asPositiveSafeInteger,
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-
-const log = createSubsystemLogger("kilocode-models");
 
 export const KILOCODE_BASE_URL = "https://api.kilo.ai/api/gateway/";
 export const KILOCODE_DEFAULT_MODEL_ID = "kilo-auto/balanced";
@@ -69,6 +63,7 @@ interface GatewayModelEntry {
     output_modalities?: string[];
   };
   top_provider?: {
+    context_length?: number | null;
     max_completion_tokens?: number | null;
   };
   pricing: GatewayModelPricing;
@@ -117,7 +112,11 @@ function toModelDefinition(entry: GatewayModelEntry): ModelDefinitionConfig {
       cacheRead: toPricePerMillion(entry.pricing.input_cache_read),
       cacheWrite: toPricePerMillion(entry.pricing.input_cache_write),
     },
-    contextWindow: asPositiveSafeInteger(entry.context_length) ?? KILOCODE_DEFAULT_CONTEXT_WINDOW,
+    // The primary provider window bounds real requests; the catalog-wide value can be larger.
+    contextWindow:
+      asPositiveSafeInteger(entry.top_provider?.context_length) ??
+      asPositiveSafeInteger(entry.context_length) ??
+      KILOCODE_DEFAULT_CONTEXT_WINDOW,
     maxTokens:
       asPositiveSafeInteger(entry.top_provider?.max_completion_tokens) ??
       KILOCODE_DEFAULT_MAX_TOKENS,
@@ -160,69 +159,57 @@ function readGatewayModelId(value: unknown): string {
   return typeof id === "string" ? id.trim() : "";
 }
 
-export async function discoverKilocodeModels(): Promise<ModelDefinitionConfig[]> {
-  if (process.env.NODE_ENV === "test" || process.env.VITEST) {
-    return buildStaticCatalog();
+function readGatewayModelRows(body: unknown): readonly unknown[] {
+  const data = (body as { data?: unknown } | undefined)?.data;
+  if (!Array.isArray(data)) {
+    throw new Error("Kilocode model list: malformed JSON response");
   }
+  return data;
+}
 
-  try {
-    const { response, release } = await fetchWithSsrFGuard({
-      url: KILOCODE_MODELS_URL,
-      init: {
-        headers: { Accept: "application/json" },
-      },
-      timeoutMs: DISCOVERY_TIMEOUT_MS,
-      policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(KILOCODE_BASE_URL),
-      auditContext: "kilocode.model_discovery",
-    });
+function projectKilocodeModels(rows: readonly unknown[]): ModelDefinitionConfig[] {
+  const models: ModelDefinitionConfig[] = [];
+  const discoveredIds = new Set<string>();
+  for (const rawEntry of rows) {
+    const id = readGatewayModelId(rawEntry);
     try {
-      if (!response.ok) {
-        log.warn(`Failed to discover models: HTTP ${response.status}, using static catalog`);
-        return buildStaticCatalog();
+      const entry = asGatewayModelEntry(rawEntry);
+      if (
+        !id ||
+        discoveredIds.has(id) ||
+        entry.architecture?.output_modalities?.includes("image")
+      ) {
+        continue;
       }
-
-      const data = await readProviderJsonArrayFieldResponse(
-        response,
-        "Kilocode model list",
-        "data",
-      );
-      if (data.length === 0) {
-        log.warn("No models found from gateway API, using static catalog");
-        return buildStaticCatalog();
-      }
-
-      const models: ModelDefinitionConfig[] = [];
-      const discoveredIds = new Set<string>();
-
-      for (const rawEntry of data) {
-        const id = readGatewayModelId(rawEntry);
-        try {
-          const entry = asGatewayModelEntry(rawEntry);
-          if (!id || discoveredIds.has(id)) {
-            continue;
-          }
-          models.push(toModelDefinition(entry));
-          discoveredIds.add(id);
-        } catch (e) {
-          log.warn(`Skipping malformed model entry "${id}": ${String(e)}`);
-        }
-      }
-
-      const staticModels = buildStaticCatalog();
-      for (const staticModel of staticModels) {
-        if (!discoveredIds.has(staticModel.id)) {
-          models.unshift(staticModel);
-        }
-      }
-
-      return models.length > 0 ? models : buildStaticCatalog();
-    } finally {
-      await release();
+      models.push(toModelDefinition(entry));
+      discoveredIds.add(id);
+    } catch {
+      // A malformed row must not hide a later valid row with the same id.
     }
-  } catch (error) {
-    log.warn(`Discovery failed: ${String(error)}, using static catalog`);
-    return buildStaticCatalog();
   }
+  for (const staticModel of buildStaticCatalog()) {
+    if (!discoveredIds.has(staticModel.id)) {
+      models.unshift(staticModel);
+    }
+  }
+  return models;
+}
+
+export async function discoverKilocodeModels(): Promise<ModelDefinitionConfig[]> {
+  const provider = await buildLiveModelProviderConfig({
+    providerId: "kilocode",
+    endpoint: KILOCODE_MODELS_URL,
+    providerConfig: { baseUrl: KILOCODE_BASE_URL, api: "openai-completions" },
+    models: buildStaticCatalog(),
+    timeoutMs: DISCOVERY_TIMEOUT_MS,
+    ttlMs: 0,
+    readRows: readGatewayModelRows,
+    buildRequestHeaders: () => ({ Accept: "application/json" }),
+    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(KILOCODE_BASE_URL),
+    auditContext: "kilocode.model_discovery",
+    projectRows: projectKilocodeModels,
+  });
+  return provider.models;
 }
 
 export function buildKilocodeModelDefinition(): ModelDefinitionConfig {

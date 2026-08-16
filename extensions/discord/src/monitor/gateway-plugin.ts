@@ -11,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/proxy-capture";
 import { danger, warn } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import * as ws from "ws";
 import * as discordGateway from "../internal/gateway.js";
@@ -78,8 +79,7 @@ function readStringProperty(value: object, key: string): string | undefined {
 }
 
 function readNumberProperty(value: object, key: string): number | undefined {
-  const property = (value as Record<string, unknown>)[key];
-  return typeof property === "number" && Number.isFinite(property) ? property : undefined;
+  return asFiniteNumber((value as Record<string, unknown>)[key]);
 }
 
 function describeDiscordGatewayTransportError(error: Error): DiscordGatewayTransportErrorDetails {
@@ -172,10 +172,12 @@ export function resolveDiscordGatewayIntents(params?: ResolveDiscordGatewayInten
   let intents =
     discordGateway.GatewayIntents.Guilds |
     discordGateway.GatewayIntents.GuildMessages |
-    discordGateway.GatewayIntents.MessageContent |
     discordGateway.GatewayIntents.DirectMessages |
     discordGateway.GatewayIntents.GuildMessageReactions |
     discordGateway.GatewayIntents.DirectMessageReactions;
+  if (intentsConfig?.messageContent !== false) {
+    intents |= discordGateway.GatewayIntents.MessageContent;
+  }
   if (voiceStatesEnabled) {
     intents |= discordGateway.GatewayIntents.GuildVoiceStates;
   }
@@ -389,7 +391,6 @@ export function createDiscordGatewayPlugin(params: {
   const proxy = resolveEffectiveDebugProxyUrl(params.discordConfig?.proxy);
   const debugProxySettings = resolveDebugProxySettings();
   const gatewayInfoTimeoutMs = resolveDiscordGatewayInfoTimeoutMs({
-    configuredTimeoutMs: params.discordConfig?.gatewayInfoTimeoutMs,
     env: process.env,
   });
   let fetchImpl = createDiscordGatewayMetadataFetch(debugProxySettings.enabled);

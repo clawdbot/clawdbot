@@ -2,7 +2,6 @@ export { createExtensionRuntime, loadExtensionFromFactory } from "./loader.js";
 export type { ExtensionErrorListener, ShutdownHandler } from "./runner.js";
 export { ExtensionRunner } from "./runner.js";
 export type {
-  ContextEvent,
   ContextUsage,
   ExtensionAPI,
   ExtensionCommandContextActions,

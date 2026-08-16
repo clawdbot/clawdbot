@@ -4,6 +4,8 @@ export type {
   SessionCatalogCapabilities,
   SessionCatalogDescriptor,
   SessionCatalogHost,
+  SessionCatalogLocator,
+  SessionCatalogPullRequestSummary,
   SessionCatalogSession,
   SessionCatalogTranscriptItem,
   SessionsCatalogArchiveParams,
@@ -15,4 +17,6 @@ export type {
   SessionsCatalogHostEvent,
   SessionsCatalogReadParams,
   SessionsCatalogReadResult,
+  SessionsCatalogStartTerminalParams,
+  SessionsCatalogStartTerminalResult,
 } from "./schema/sessions-catalog.js";

@@ -6,12 +6,17 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  AgentSelectionRequiredError,
+  listAgentIds,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { modelKey, parseModelRef, resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveSessionEntryAccessTarget } from "../config/sessions/session-accessor.js";
-import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { getActivePluginRegistryWorkspaceDirFromState } from "../plugins/runtime-state.js";
 import {
   buildAgentMainSessionKey,
   isAcpSessionKey,
@@ -33,6 +38,7 @@ export {
   authorizeOpenAiCompatibleHttpModelOverride,
   authorizeGatewayHttpRequestOrReply,
   authorizeScopedGatewayHttpRequestOrReply,
+  authorizeScopedUserProfileAvatarHttpRequestOrReply,
   checkGatewayHttpRequestAuth,
   getBearerToken,
   getHeader,
@@ -63,8 +69,23 @@ class GatewaySessionKeyOverrideError extends Error {
   }
 }
 
+class InvalidGatewayModelError extends Error {
+  constructor() {
+    super("Invalid `model`. Use `openclaw` or `openclaw/<agentId>`.");
+    this.name = "InvalidGatewayModelError";
+  }
+}
+
 export function isUnknownGatewayAgentError(err: unknown): err is UnknownGatewayAgentError {
   return err instanceof UnknownGatewayAgentError;
+}
+
+export function isAgentSelectionRequiredError(err: unknown): err is AgentSelectionRequiredError {
+  return err instanceof AgentSelectionRequiredError;
+}
+
+export function isInvalidGatewayModelError(err: unknown): err is InvalidGatewayModelError {
+  return err instanceof InvalidGatewayModelError;
 }
 
 export function isGatewaySessionKeyOverrideError(
@@ -117,6 +138,22 @@ export function resolveAgentIdFromModel(
   return normalizeAgentId(agentId);
 }
 
+/** Checks OpenClaw routing-model syntax without resolving fleet ownership. */
+export function isOpenClawAgentModelId(model: string | undefined): boolean {
+  const raw = model?.trim();
+  if (!raw) {
+    return false;
+  }
+  const lowered = normalizeLowercaseStringOrEmpty(raw);
+  if (lowered === OPENCLAW_MODEL_ID || lowered === OPENCLAW_DEFAULT_MODEL_ID) {
+    return true;
+  }
+  return (
+    /^openclaw[:/][a-z0-9][a-z0-9_-]{0,63}$/i.test(raw) ||
+    /^agent:[a-z0-9][a-z0-9_-]{0,63}$/i.test(raw)
+  );
+}
+
 /** Validates and resolves the `x-openclaw-model` override for OpenAI-compatible requests. */
 export async function resolveOpenAiCompatModelOverride(params: {
   req: IncomingMessage;
@@ -124,7 +161,7 @@ export async function resolveOpenAiCompatModelOverride(params: {
   model: string | undefined;
 }): Promise<{ modelOverride?: string; errorMessage?: string }> {
   const requestModel = params.model?.trim();
-  if (requestModel && !resolveAgentIdFromModel(requestModel)) {
+  if (requestModel && !isOpenClawAgentModelId(requestModel)) {
     return {
       errorMessage: "Invalid `model`. Use `openclaw` or `openclaw/<agentId>`.",
     };
@@ -138,12 +175,14 @@ export async function resolveOpenAiCompatModelOverride(params: {
   const cfg = getRuntimeConfig();
   const defaultModelRef = resolveDefaultModelForAgent({ cfg, agentId: params.agentId });
   const defaultProvider = defaultModelRef.provider;
-  const manifestMetadataSnapshot = loadManifestMetadataSnapshot({
+  const workspaceDir = getActivePluginRegistryWorkspaceDirFromState();
+  const manifestMetadataSnapshot = getCurrentPluginMetadataSnapshot({
     config: cfg,
     env: process.env,
+    ...(workspaceDir ? { workspaceDir } : {}),
   });
   const modelManifestContext = {
-    manifestPlugins: manifestMetadataSnapshot.plugins,
+    manifestPlugins: manifestMetadataSnapshot?.plugins,
   };
   const parsed = parseModelRef(raw, defaultProvider, {
     allowManifestNormalization: true,
@@ -182,6 +221,10 @@ export function resolveAgentIdForRequest(params: {
   model: string | undefined;
 }): string {
   const cfg = getRuntimeConfig();
+  if (params.model?.trim() && !isOpenClawAgentModelId(params.model)) {
+    throw new InvalidGatewayModelError();
+  }
+
   const fromHeader = resolveAgentIdFromHeader(params.req);
   if (fromHeader) {
     assertKnownAgentId(fromHeader, cfg);

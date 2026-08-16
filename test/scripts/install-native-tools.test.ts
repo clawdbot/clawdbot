@@ -9,7 +9,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const installers = [
   {
     script: "scripts/install-xcodegen.sh",
-    url: "https://github.com/yonaskolb/XcodeGen/releases/download/2.45.4/xcodegen.zip",
+    url: "https://github.com/yonaskolb/XcodeGen/releases/download/2.46.0/xcodegen.zip",
   },
   {
     script: "scripts/install-swift-tools.sh",

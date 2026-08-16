@@ -37,7 +37,9 @@ export async function readServiceStatusSummary(
 ): Promise<ServiceStatusSummary> {
   try {
     const state = await readGatewayServiceState(service, { env: process.env, timeoutMs });
-    const layout = await summarizeGatewayServiceLayout(state.command);
+    // Layout is optional enrichment; a broken manifest or inaccessible path
+    // must not erase service-manager evidence that the gateway is running.
+    const layout = await summarizeGatewayServiceLayout(state.command).catch(() => undefined);
     const wrapperPath = normalizeServiceWrapperPath(state.command);
     const managedByOpenClaw = state.installed;
     // A running unmanaged process still counts as installed for status display.

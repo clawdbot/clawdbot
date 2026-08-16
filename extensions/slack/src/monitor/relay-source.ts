@@ -7,10 +7,15 @@ import {
   warn,
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import WebSocket, { type ClientOptions, type RawData } from "ws";
 import type { SlackSendIdentity } from "../send.js";
 import type { SlackMessageEvent } from "../types.js";
+import type { SlackIdentityHealth } from "./enterprise-install.js";
 import { formatUnknownError, SLACK_SOCKET_RECONNECT_POLICY } from "./reconnect-policy.js";
 
 export type SlackRelaySourceConfig = {
@@ -39,6 +44,7 @@ export async function monitorSlackRelaySource(params: {
   acceptRelayEvent: SlackRelayEventAcceptor;
   runtime: RuntimeEnv;
   abortSignal?: AbortSignal;
+  identityHealth: SlackIdentityHealth;
   setStatus?: (next: Record<string, unknown>) => void;
   setIdentity?: (identity: SlackRelayIdentity | undefined) => void;
 }): Promise<void> {
@@ -51,8 +57,7 @@ export async function monitorSlackRelaySource(params: {
       params.setStatus?.({
         connected: true,
         lastConnectedAt: Date.now(),
-        healthState: "healthy",
-        lastError: null,
+        ...params.identityHealth,
       });
       params.runtime.log?.(`slack relay mode connected gateway_id:${params.config.gatewayId}`);
       await runRelayWebSocket({
@@ -71,7 +76,7 @@ export async function monitorSlackRelaySource(params: {
       const delayMs = computeBackoff(SLACK_SOCKET_RECONNECT_POLICY, reconnectAttempts);
       params.setStatus?.({
         connected: false,
-        healthState: "disconnected",
+        lifecycle: "recovering",
         lastDisconnect: { at: Date.now(), error: formatUnknownError(err) },
         lastError: formatUnknownError(err),
       });
@@ -181,7 +186,7 @@ function runRelayWebSocket(params: {
       const closeReason = formatRelayClose(code, reason);
       params.setStatus?.({
         connected: false,
-        healthState: "disconnected",
+        lifecycle: "recovering",
         lastDisconnect: { at: Date.now(), error: closeReason },
       });
       settleReject(new Error(closeReason));
@@ -287,32 +292,19 @@ export function parseRelayFrame(data: RawData): unknown {
   }
 }
 
-function rawDataToString(data: RawData): string {
-  if (typeof data === "string") {
-    return data;
-  }
-  if (Buffer.isBuffer(data)) {
-    return data.toString("utf8");
-  }
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
-  }
-  return Buffer.from(data).toString("utf8");
-}
-
 function extractRelaySlackMessageEvent(
   frame: unknown,
 ): { deliveryId: string; message: SlackMessageEvent; route: SlackRelayRoute } | undefined {
-  const record = asRecord(frame);
+  const record = asOptionalRecord(frame);
   if (!record || record.type !== "slack_event") {
     return undefined;
   }
   const deliveryId = stringValue(record.delivery_id);
-  const routeRecord = asRecord(record.route);
+  const routeRecord = asOptionalRecord(record.route);
   const routeKind = stringValue(routeRecord?.kind);
   const routeKey = stringValue(routeRecord?.key);
-  const payload = asRecord(record.payload);
-  const event = asRecord(payload?.event);
+  const payload = asOptionalRecord(record.payload);
+  const event = asOptionalRecord(payload?.event);
   if (event?.type !== "message" || typeof event.channel !== "string") {
     return undefined;
   }
@@ -332,7 +324,7 @@ function extractRelaySlackMessageEvent(
 function extractRelayHello(
   frame: unknown,
 ): { identity: SlackRelayIdentity | undefined } | undefined {
-  const record = asRecord(frame);
+  const record = asOptionalRecord(frame);
   if (!record || record.type !== "hello") {
     return undefined;
   }
@@ -342,7 +334,8 @@ function extractRelayHello(
 }
 
 function extractRelayIdentity(record: Record<string, unknown>): SlackRelayIdentity | undefined {
-  const identityRecord = asRecord(record.slack_identity) ?? asRecord(record.slackIdentity);
+  const identityRecord =
+    asOptionalRecord(record.slack_identity) ?? asOptionalRecord(record.slackIdentity);
   if (!identityRecord) {
     return undefined;
   }
@@ -387,12 +380,6 @@ function formatRelayClose(code: number, reason: Buffer): string {
   return text
     ? `Slack relay websocket closed (${code} ${text})`
     : `Slack relay websocket closed (${code})`;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function stringValue(value: unknown): string | undefined {

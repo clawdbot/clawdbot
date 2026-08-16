@@ -5,11 +5,14 @@ import {
   errorShape,
   validateSessionsCompactParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
+import { clearAllCliSessions } from "../../agents/cli-session.js";
+import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
+import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
 import {
   resolveSessionWorkStartError,
+  SESSION_TOTAL_TOKENS_VERSION,
   SESSION_LIFECYCLE_CHANGED_ERROR_REASON,
+  type SessionEntry,
 } from "../../config/sessions.js";
 import {
   applySessionPatchProjection,
@@ -18,15 +21,22 @@ import {
   trimSessionTranscriptForManualCompact,
 } from "../../config/sessions/session-accessor.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { getCommandLaneSnapshot } from "../../process/command-queue.js";
 import {
   isCompetingSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import { recordSessionCompacted } from "../../sessions/session-state-events.js";
-import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
-import { migrateAndPruneGatewaySessionStoreKey } from "../session-utils.js";
+import {
+  resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
+  tryResolveSessionCompatibilityOwnerAgentId,
+} from "../session-request-agent.js";
+import {
+  resolveCanonicalGatewaySessionStoreKey,
+  resolveGatewaySessionStoreTargetWithStore,
+} from "../session-utils.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
-import { hasVisibleActiveSessionRun } from "./session-active-runs.js";
+import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import {
   preflightGatewaySessionCompaction,
@@ -35,15 +45,13 @@ import {
 import {
   emitSessionOperation,
   loadAccessorSessionEntryForGatewayTarget,
-  rejectWebchatSessionMutation,
   requireSessionKey,
-  resolveGatewaySessionTargetFromKey,
 } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const sessionCompactHandlers: GatewayRequestHandlers = {
-  "sessions.compact": async ({ params, respond, context, client, isWebchatConnect }) => {
+  "sessions.compact": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateSessionsCompactParams, "sessions.compact", respond)) {
       return;
     }
@@ -52,10 +60,6 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
     if (!key) {
       return;
     }
-    if (rejectWebchatSessionMutation({ action: "compact", client, isWebchatConnect, respond })) {
-      return;
-    }
-
     const maxLines =
       typeof p.maxLines === "number" && Number.isFinite(p.maxLines)
         ? Math.max(1, Math.floor(p.maxLines))
@@ -68,24 +72,27 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
       return;
     }
     const requestedAgentId = requestedAgent.agentId;
-    const { target, storePath } = resolveGatewaySessionTargetFromKey(key, cfg, {
-      agentId: requestedAgentId,
+    const compatibilityDefaultAgentId = tryResolveSessionCompatibilityOwnerAgentId(cfg, key);
+    const target = resolveGatewaySessionStoreTargetWithStore({
+      cfg,
+      key,
+      exactRead: true,
+      ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
     });
+    const storePath = target.storePath;
     // Lock + read in a short critical section; transcript work happens outside.
     // The projection resolver re-runs gateway key migration on the writer
     // snapshot so alias promotion/pruning persists through the accessor.
     let compactPrimaryKey = target.canonicalKey;
     const compactRead = await applySessionPatchProjection({
       agentId: target.agentId,
+      sessionKeys: target.storeKeys,
       storePath,
-      resolveTarget: ({ entries }) => {
-        const snapshot = Object.fromEntries(
-          entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
-        );
-        const { target: migratedTarget, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+      resolveTarget: ({ store }) => {
+        const { target: migratedTarget, primaryKey } = resolveCanonicalGatewaySessionStoreKey({
           cfg,
           key,
-          store: snapshot,
+          store: store as Record<string, SessionEntry>,
           agentId: requestedAgentId,
         });
         compactPrimaryKey = primaryKey;
@@ -124,7 +131,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
           sessionKey: compactTarget.primaryKey,
           agentId: target.agentId,
         },
-        { maxLines, sessionFile: entry.sessionFile },
+        { maxLines },
       );
       if (!trimPreflight.compacted) {
         respond(
@@ -164,16 +171,12 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
     }
 
     const lifecycleRevision = entry.lifecycleRevision;
-    const lifecycleIdentities = [
-      key,
-      target.canonicalKey,
-      compactTarget.primaryKey,
-      sessionId,
-      lifecycleRevision,
-    ];
+    const queueIdentities = [key, target.canonicalKey, compactTarget.primaryKey, sessionId];
+    const lifecycleIdentities = [...queueIdentities, lifecycleRevision];
     let sessionStillCurrent = true;
     let compactionNoopReason: string | undefined;
     let blockedByActiveRun = false;
+    let blockedByQueuedWork = false;
     try {
       await runExclusiveSessionLifecycleMutation({
         scope: storePath,
@@ -216,20 +219,22 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
               sessionId,
             ) ??
               false) ||
-            hasVisibleActiveSessionRun({
+            resolveVisibleActiveSessionRunState({
               context,
               requestedKey: key,
               canonicalKey: target.canonicalKey,
               sessionId,
               agentId: requestedAgentId,
-              defaultAgentId: resolveDefaultAgentId(cfg),
-            });
-          if (blockedByActiveRun) {
-            return;
-          }
-          // Drop work queued against the pre-compaction transcript before its
-          // lifecycle fence commits and no longer exposes queue cleanup.
-          clearSessionQueues([key, target.canonicalKey, compactTarget.primaryKey, sessionId]);
+              defaultAgentId: compatibilityDefaultAgentId,
+            }).active;
+          // Accepted work can live only in its command lane; waiting behind it
+          // while holding the lifecycle fence would deadlock or drop that turn.
+          blockedByQueuedWork =
+            hasPendingFollowupQueueWork(queueIdentities) ||
+            queueIdentities.some(
+              (identity) =>
+                getCommandLaneSnapshot(resolveEmbeddedSessionLane(identity)).queuedCount > 0,
+            );
         },
         run: async () => {
           if (!sessionStillCurrent) {
@@ -254,6 +259,17 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                 reason: compactionNoopReason,
               },
               undefined,
+            );
+            return;
+          }
+          if (blockedByQueuedWork) {
+            respond(
+              false,
+              undefined,
+              errorShape(
+                ErrorCodes.INVALID_REQUEST,
+                `Session ${key} has queued work; retry after it finishes.`,
+              ),
             );
             return;
           }
@@ -301,7 +317,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                 sessionKey: compactTarget.primaryKey,
                 agentId: target.agentId,
               },
-              { maxLines, sessionFile: latestEntry.sessionFile },
+              { maxLines },
             );
             respond(
               true,
@@ -326,9 +342,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
               });
               emitSessionsChanged(context, {
                 sessionKey: target.canonicalKey,
-                ...(target.canonicalKey === "global" && target.agentId
-                  ? { agentId: target.agentId }
-                  : {}),
+                agentId: target.agentId,
                 reason: "compact",
                 compacted: true,
               });
@@ -360,9 +374,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             operation: "compact",
             phase: "start",
             sessionKey: target.canonicalKey,
-            ...(target.canonicalKey === "global" && target.agentId
-              ? { agentId: target.agentId }
-              : {}),
+            agentId: target.agentId,
           });
           const emitCompactionEnd = (completed: boolean, reason?: string) =>
             emitSessionOperation(context, {
@@ -370,9 +382,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
               operation: "compact",
               phase: "end",
               sessionKey: target.canonicalKey,
-              ...(target.canonicalKey === "global" && target.agentId
-                ? { agentId: target.agentId }
-                : {}),
+              agentId: target.agentId,
               completed,
               reason,
             });
@@ -394,10 +404,10 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
           if (result.ok && result.compacted) {
             let persisted: boolean;
             try {
-              // Guarded terminal persist: skip when session ownership rotated
-              // while compaction ran (sessionId/lifecycleRevision/work-start).
+              // Skip terminal persistence when session ownership rotated during compaction.
               const persistProjection = await applySessionPatchProjection({
                 agentId: target.agentId,
+                sessionKeys: [compactTarget.primaryKey],
                 storePath,
                 resolveTarget: () => ({ primaryKey: compactTarget.primaryKey }),
                 project: ({ existingEntry }) => {
@@ -413,6 +423,9 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                   entryToUpdate.updatedAt = Date.now();
                   entryToUpdate.compactionCount =
                     Math.max(0, entryToUpdate.compactionCount ?? 0) + 1;
+                  if (result.compactionKind === "context-engine") {
+                    clearAllCliSessions(entryToUpdate);
+                  }
                   if (
                     result.result?.sessionId &&
                     result.result.sessionId !== entryToUpdate.sessionId
@@ -428,9 +441,11 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                   ) {
                     entryToUpdate.totalTokens = result.result.tokensAfter;
                     entryToUpdate.totalTokensFresh = true;
+                    entryToUpdate.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
                   } else {
                     delete entryToUpdate.totalTokens;
                     delete entryToUpdate.totalTokensFresh;
+                    delete entryToUpdate.totalTokensVersion;
                   }
                   return { ok: true, entry: entryToUpdate };
                 },
@@ -475,9 +490,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
           if (result.ok) {
             emitSessionsChanged(context, {
               sessionKey: target.canonicalKey,
-              ...(target.canonicalKey === "global" && target.agentId
-                ? { agentId: target.agentId }
-                : {}),
+              agentId: target.agentId,
               reason: "compact",
               compacted: result.compacted,
             });

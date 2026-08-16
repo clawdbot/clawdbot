@@ -2,12 +2,13 @@
  * Resolves CLI runtime backends registered by plugins or setup metadata.
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import type { CliBackendConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngineHostCapability } from "../context-engine/types.js";
-import type { CliBackendRuntimeArtifactPolicy } from "../plugins/cli-backend.types.js";
+import type {
+  CliBackendConfig,
+  CliBackendLiveSessionRequirement,
+  CliBackendRuntimeArtifactPolicy,
+} from "../plugins/cli-backend.types.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import {
   resolvePluginSetupCliBackend,
@@ -21,6 +22,7 @@ import type {
   CliBackendPlugin,
   CliBackendNativeToolMode,
   CliBackendSideQuestionToolMode,
+  CliBackendToolAvailabilityEnforcement,
   PluginTextTransforms,
 } from "../plugins/types.js";
 import { mergePluginTextTransforms } from "./plugin-text-transforms.js";
@@ -54,11 +56,15 @@ export type ResolvedCliBackend = {
   autoSelectAuthProfile?: boolean;
   contextEngineHostCapabilities?: readonly ContextEngineHostCapability[];
   ownsNativeCompaction?: boolean;
+  manualCompaction?: CliBackendPlugin["manualCompaction"];
   prepareExecution?: CliBackendPlugin["prepareExecution"];
   resolveExecutionArgs?: CliBackendPlugin["resolveExecutionArgs"];
+  parseJsonlEvent?: CliBackendPlugin["parseJsonlEvent"];
+  toolAvailabilityEnforcement?: CliBackendToolAvailabilityEnforcement;
   nativeToolMode?: CliBackendNativeToolMode;
   sideQuestionToolMode?: CliBackendSideQuestionToolMode;
   runtimeArtifact?: CliBackendRuntimeArtifactPolicy;
+  liveSessionRequirement?: CliBackendLiveSessionRequirement;
 };
 
 type ResolvedCliBackendLiveTest = {
@@ -92,11 +98,15 @@ type FallbackCliBackendPolicy = {
   autoSelectAuthProfile?: boolean;
   contextEngineHostCapabilities?: readonly ContextEngineHostCapability[];
   ownsNativeCompaction?: boolean;
+  manualCompaction?: CliBackendPlugin["manualCompaction"];
   prepareExecution?: CliBackendPlugin["prepareExecution"];
   resolveExecutionArgs?: CliBackendPlugin["resolveExecutionArgs"];
+  parseJsonlEvent?: CliBackendPlugin["parseJsonlEvent"];
+  toolAvailabilityEnforcement?: CliBackendToolAvailabilityEnforcement;
   nativeToolMode?: CliBackendNativeToolMode;
   sideQuestionToolMode?: CliBackendSideQuestionToolMode;
   runtimeArtifact?: CliBackendRuntimeArtifactPolicy;
+  liveSessionRequirement?: CliBackendLiveSessionRequirement;
 };
 
 const FALLBACK_CLI_BACKEND_POLICIES: Record<string, FallbackCliBackendPolicy> = {};
@@ -109,6 +119,27 @@ function normalizeBundleMcpMode(
     return undefined;
   }
   return mode ?? "claude-config-file";
+}
+
+function resolveToolAvailabilityEnforcement(
+  backend: Pick<
+    CliBackendPlugin,
+    "nativeToolMode" | "resolveExecutionArgs" | "toolAvailabilityEnforcement"
+  > & { builtWithOpenClawVersion?: string },
+): CliBackendToolAvailabilityEnforcement | undefined {
+  if (backend.toolAvailabilityEnforcement) {
+    return backend.toolAvailabilityEnforcement;
+  }
+  // v2026.7.2-beta.1 through .3 made selectable + resolveExecutionArgs the
+  // public enforcement contract. Require matching package build provenance so
+  // a new no-op hook cannot be mistaken for that shipped SDK path.
+  const builtWith = backend.builtWithOpenClawVersion?.replace(/^v/u, "");
+  const isShippedBetaContract = /^2026\.7\.2-beta\.[123]$/u.test(builtWith ?? "");
+  return isShippedBetaContract &&
+    backend.nativeToolMode === "selectable" &&
+    backend.resolveExecutionArgs
+    ? "execution-args"
+    : undefined;
 }
 
 function resolveSetupCliBackendPolicy(provider: string): FallbackCliBackendPolicy | undefined {
@@ -136,11 +167,15 @@ function resolveSetupCliBackendPolicy(provider: string): FallbackCliBackendPolic
     autoSelectAuthProfile: entry.backend.autoSelectAuthProfile,
     contextEngineHostCapabilities: entry.backend.contextEngineHostCapabilities,
     ownsNativeCompaction: entry.backend.ownsNativeCompaction,
+    manualCompaction: entry.backend.manualCompaction,
     prepareExecution: entry.backend.prepareExecution,
     resolveExecutionArgs: entry.backend.resolveExecutionArgs,
+    parseJsonlEvent: entry.backend.parseJsonlEvent,
+    toolAvailabilityEnforcement: entry.backend.toolAvailabilityEnforcement,
     nativeToolMode: entry.backend.nativeToolMode,
     sideQuestionToolMode: entry.backend.sideQuestionToolMode,
     runtimeArtifact: entry.backend.runtimeArtifact,
+    liveSessionRequirement: entry.backend.liveSessionRequirement,
   };
 }
 
@@ -150,24 +185,6 @@ function resolveFallbackCliBackendPolicy(provider: string): FallbackCliBackendPo
 
 function normalizeBackendKey(key: string): string {
   return normalizeProviderId(key);
-}
-
-function pickBackendConfig(
-  config: Record<string, CliBackendConfig>,
-  normalizedId: string,
-): CliBackendConfig | undefined {
-  const directKey = Object.keys(config).find(
-    (key) => normalizeOptionalLowercaseString(key) === normalizedId,
-  );
-  if (directKey) {
-    return config[directKey];
-  }
-  for (const [key, entry] of Object.entries(config)) {
-    if (normalizeBackendKey(key) === normalizedId) {
-      return entry;
-    }
-  }
-  return undefined;
 }
 
 function resolveRegisteredBackend(provider: string) {
@@ -331,49 +348,6 @@ export function isCliRuntimeModelBackendForProvider(params: {
   return resolveCliRuntimeModelBackendBinding(params) !== undefined;
 }
 
-function mergeBackendConfig(base: CliBackendConfig, override?: CliBackendConfig): CliBackendConfig {
-  if (!override) {
-    return { ...base };
-  }
-  const baseFresh = base.reliability?.watchdog?.fresh ?? {};
-  const baseResume = base.reliability?.watchdog?.resume ?? {};
-  const baseOutputLimits = base.reliability?.outputLimits ?? {};
-  const overrideFresh = override.reliability?.watchdog?.fresh ?? {};
-  const overrideResume = override.reliability?.watchdog?.resume ?? {};
-  const overrideOutputLimits = override.reliability?.outputLimits ?? {};
-  return {
-    ...base,
-    ...override,
-    args: override.args ?? base.args,
-    env: { ...base.env, ...override.env },
-    modelAliases: { ...base.modelAliases, ...override.modelAliases },
-    clearEnv: uniqueStrings([...(base.clearEnv ?? []), ...(override.clearEnv ?? [])]),
-    sessionIdFields: override.sessionIdFields ?? base.sessionIdFields,
-    sessionArgs: override.sessionArgs ?? base.sessionArgs,
-    resumeArgs: override.resumeArgs ?? base.resumeArgs,
-    reliability: {
-      ...base.reliability,
-      ...override.reliability,
-      outputLimits: {
-        ...baseOutputLimits,
-        ...overrideOutputLimits,
-      },
-      watchdog: {
-        ...base.reliability?.watchdog,
-        ...override.reliability?.watchdog,
-        fresh: {
-          ...baseFresh,
-          ...overrideFresh,
-        },
-        resume: {
-          ...baseResume,
-          ...overrideResume,
-        },
-      },
-    },
-  };
-}
-
 /** Resolves live-test defaults advertised by a CLI backend plugin. */
 export function resolveCliBackendLiveTest(provider: string): ResolvedCliBackendLiveTest | null {
   const normalized = normalizeBackendKey(provider);
@@ -395,7 +369,24 @@ export function resolveCliBackendLiveTest(provider: string): ResolvedCliBackendL
   };
 }
 
-/** Resolves the executable CLI backend config after plugin defaults and user overrides. */
+/** Resolves setup-safe live-session protocol metadata without normalizing runtime config. */
+export function resolveCliBackendLiveSessionRequirement(
+  provider: string,
+): CliBackendLiveSessionRequirement | null {
+  const normalized = normalizeBackendKey(provider);
+  const entry =
+    cliBackendsDeps.resolvePluginSetupCliBackend({ backend: normalized }) ??
+    cliBackendsDeps
+      .resolveRuntimeCliBackends()
+      .find((backend) => normalizeBackendKey(backend.id) === normalized);
+  if (!entry) {
+    return null;
+  }
+  const backend = "backend" in entry ? entry.backend : entry;
+  return backend.liveSessionRequirement ?? null;
+}
+
+/** Resolves the executable CLI backend registered by its owning plugin. */
 export function resolveCliBackendConfig(
   provider: string,
   cfg?: OpenClawConfig,
@@ -408,14 +399,12 @@ export function resolveCliBackendConfig(
     ...(cfg ? { config: cfg } : {}),
   };
   const runtimeTextTransforms = resolveRuntimeTextTransforms();
-  const configured = cfg?.agents?.defaults?.cliBackends ?? {};
-  const override = pickBackendConfig(configured, normalized);
   const registered = resolveRegisteredBackend(normalized);
   if (registered) {
-    const merged = mergeBackendConfig(registered.config, override);
+    const registeredConfig = { ...registered.config };
     const config = registered.normalizeConfig
-      ? registered.normalizeConfig(merged, normalizeContext)
-      : merged;
+      ? registered.normalizeConfig(registeredConfig, normalizeContext)
+      : registeredConfig;
     const command = config.command?.trim();
     if (!command) {
       return null;
@@ -439,80 +428,51 @@ export function resolveCliBackendConfig(
       autoSelectAuthProfile: registered.autoSelectAuthProfile,
       contextEngineHostCapabilities: registered.contextEngineHostCapabilities,
       ownsNativeCompaction: registered.ownsNativeCompaction,
+      manualCompaction: registered.manualCompaction,
       prepareExecution: registered.prepareExecution,
       resolveExecutionArgs: registered.resolveExecutionArgs,
+      parseJsonlEvent: registered.parseJsonlEvent,
+      toolAvailabilityEnforcement: resolveToolAvailabilityEnforcement(registered),
       nativeToolMode: registered.nativeToolMode,
       sideQuestionToolMode: registered.sideQuestionToolMode,
       runtimeArtifact: registered.runtimeArtifact,
+      liveSessionRequirement: registered.liveSessionRequirement,
     };
   }
 
   const fallbackPolicy = resolveFallbackCliBackendPolicy(normalized);
-  if (!override) {
-    if (!fallbackPolicy?.baseConfig) {
-      return null;
-    }
-    const baseConfig = fallbackPolicy.normalizeConfig
-      ? fallbackPolicy.normalizeConfig(fallbackPolicy.baseConfig, normalizeContext)
-      : fallbackPolicy.baseConfig;
-    const command = baseConfig.command?.trim();
-    if (!command) {
-      return null;
-    }
-    return {
-      id: normalized,
-      ...(fallbackPolicy.modelProvider ? { modelProvider: fallbackPolicy.modelProvider } : {}),
-      config: { ...baseConfig, command },
-      bundleMcp: fallbackPolicy.bundleMcp,
-      bundleMcpMode: fallbackPolicy.bundleMcpMode,
-      transformSystemPrompt: fallbackPolicy.transformSystemPrompt,
-      textTransforms: mergePluginTextTransforms(
-        runtimeTextTransforms,
-        fallbackPolicy.textTransforms,
-      ),
-      defaultAuthProfileId: fallbackPolicy.defaultAuthProfileId,
-      authEpochMode: fallbackPolicy.authEpochMode,
-      autoSelectAuthProfile: fallbackPolicy.autoSelectAuthProfile,
-      contextEngineHostCapabilities: fallbackPolicy.contextEngineHostCapabilities,
-      ownsNativeCompaction: fallbackPolicy.ownsNativeCompaction,
-      prepareExecution: fallbackPolicy.prepareExecution,
-      resolveExecutionArgs: fallbackPolicy.resolveExecutionArgs,
-      nativeToolMode: fallbackPolicy.nativeToolMode,
-      sideQuestionToolMode: fallbackPolicy.sideQuestionToolMode,
-      runtimeArtifact: fallbackPolicy.runtimeArtifact,
-    };
+  if (!fallbackPolicy?.baseConfig) {
+    return null;
   }
-  const mergedFallback = fallbackPolicy?.baseConfig
-    ? mergeBackendConfig(fallbackPolicy.baseConfig, override)
-    : override;
-  const config = fallbackPolicy?.normalizeConfig
-    ? fallbackPolicy.normalizeConfig(mergedFallback, normalizeContext)
-    : mergedFallback;
+  const config = fallbackPolicy.normalizeConfig
+    ? fallbackPolicy.normalizeConfig(fallbackPolicy.baseConfig, normalizeContext)
+    : fallbackPolicy.baseConfig;
   const command = config.command?.trim();
   if (!command) {
     return null;
   }
   return {
     id: normalized,
-    ...(fallbackPolicy?.modelProvider ? { modelProvider: fallbackPolicy.modelProvider } : {}),
+    ...(fallbackPolicy.modelProvider ? { modelProvider: fallbackPolicy.modelProvider } : {}),
     config: { ...config, command },
-    bundleMcp: fallbackPolicy?.bundleMcp === true,
-    bundleMcpMode: fallbackPolicy?.bundleMcpMode,
-    transformSystemPrompt: fallbackPolicy?.transformSystemPrompt,
-    textTransforms: mergePluginTextTransforms(
-      runtimeTextTransforms,
-      fallbackPolicy?.textTransforms,
-    ),
-    defaultAuthProfileId: fallbackPolicy?.defaultAuthProfileId,
-    authEpochMode: fallbackPolicy?.authEpochMode,
-    autoSelectAuthProfile: fallbackPolicy?.autoSelectAuthProfile,
-    contextEngineHostCapabilities: fallbackPolicy?.contextEngineHostCapabilities,
-    ownsNativeCompaction: fallbackPolicy?.ownsNativeCompaction,
-    prepareExecution: fallbackPolicy?.prepareExecution,
-    resolveExecutionArgs: fallbackPolicy?.resolveExecutionArgs,
-    nativeToolMode: fallbackPolicy?.nativeToolMode,
-    sideQuestionToolMode: fallbackPolicy?.sideQuestionToolMode,
-    runtimeArtifact: fallbackPolicy?.runtimeArtifact,
+    bundleMcp: fallbackPolicy.bundleMcp,
+    bundleMcpMode: fallbackPolicy.bundleMcpMode,
+    transformSystemPrompt: fallbackPolicy.transformSystemPrompt,
+    textTransforms: mergePluginTextTransforms(runtimeTextTransforms, fallbackPolicy.textTransforms),
+    defaultAuthProfileId: fallbackPolicy.defaultAuthProfileId,
+    authEpochMode: fallbackPolicy.authEpochMode,
+    autoSelectAuthProfile: fallbackPolicy.autoSelectAuthProfile,
+    contextEngineHostCapabilities: fallbackPolicy.contextEngineHostCapabilities,
+    ownsNativeCompaction: fallbackPolicy.ownsNativeCompaction,
+    manualCompaction: fallbackPolicy.manualCompaction,
+    prepareExecution: fallbackPolicy.prepareExecution,
+    resolveExecutionArgs: fallbackPolicy.resolveExecutionArgs,
+    parseJsonlEvent: fallbackPolicy.parseJsonlEvent,
+    toolAvailabilityEnforcement: fallbackPolicy.toolAvailabilityEnforcement,
+    nativeToolMode: fallbackPolicy.nativeToolMode,
+    sideQuestionToolMode: fallbackPolicy.sideQuestionToolMode,
+    runtimeArtifact: fallbackPolicy.runtimeArtifact,
+    liveSessionRequirement: fallbackPolicy.liveSessionRequirement,
   };
 }
 

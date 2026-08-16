@@ -70,10 +70,16 @@ vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
   resolveDebugProxySettings: () => ({ enabled: false }),
 }));
 
-vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
-  danger: (value: string) => value,
-  warn: (value: string) => value,
-}));
+// Suite runs isolate=false: a partial factory here poisons the shared module
+// cache for later files in the worker (#123025), so spread the real module.
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+  return {
+    ...actual,
+    danger: (value: string) => value,
+    warn: (value: string) => value,
+  };
+});
 
 describe("createDiscordGatewayPlugin", () => {
   let createDiscordGatewayPlugin: typeof import("./gateway-plugin.js").createDiscordGatewayPlugin;
@@ -116,6 +122,16 @@ describe("createDiscordGatewayPlugin", () => {
     expect(intents & GatewayIntents.GuildVoiceStates).toBe(0);
   });
 
+  it("omits MessageContent only when explicitly disabled", () => {
+    const defaultIntents = resolveDiscordGatewayIntents();
+    const mentionOnlyIntents = resolveDiscordGatewayIntents({
+      intentsConfig: { messageContent: false },
+    });
+
+    expect(defaultIntents & GatewayIntents.MessageContent).toBe(GatewayIntents.MessageContent);
+    expect(mentionOnlyIntents & GatewayIntents.MessageContent).toBe(0);
+  });
+
   it("lets intents.voiceStates override voice enablement", () => {
     const enabled = resolveDiscordGatewayIntents({
       intentsConfig: { voiceStates: true },
@@ -139,8 +155,7 @@ describe("createDiscordGatewayPlugin", () => {
     expect(intents & GatewayIntents.GuildMembers).toBe(GatewayIntents.GuildMembers);
   });
 
-  it("resolves gateway metadata timeout from config, env, then default", () => {
-    expect(resolveDiscordGatewayInfoTimeoutMs({ configuredTimeoutMs: 45_000 })).toBe(45_000);
+  it("resolves gateway metadata timeout from env, then default", () => {
     expect(
       resolveDiscordGatewayInfoTimeoutMs({
         env: { OPENCLAW_DISCORD_GATEWAY_INFO_TIMEOUT_MS: "25000" },
@@ -247,22 +262,6 @@ describe("createDiscordGatewayPlugin", () => {
         GatewayIntents.DirectMessageReactions,
       reconnect: { maxAttempts: 50 },
     });
-  });
-
-  it("keeps OpenClaw metadata timeout out of gateway options", () => {
-    const plugin = createDiscordGatewayPlugin({
-      discordConfig: { gatewayInfoTimeoutMs: 5_000 },
-      runtime: {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      },
-    });
-
-    expect(
-      (plugin as unknown as { options?: { gatewayInfoTimeoutMs?: number } }).options
-        ?.gatewayInfoTimeoutMs,
-    ).toBeUndefined();
   });
 
   it("emits transport activity for current gateway socket messages", () => {

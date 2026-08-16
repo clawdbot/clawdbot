@@ -1,3 +1,5 @@
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
+
 export interface PromptTemplate {
   name: string;
   description?: string;
@@ -39,11 +41,6 @@ export function parseCommandArgs(argsString: string): string[] {
   return args;
 }
 
-function parseSafeNonNegativeInteger(raw: string): number | undefined {
-  const parsed = Number(raw);
-  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
-}
-
 /**
  * Substitute prompt template placeholders (`$1`, `$@`, `$ARGUMENTS`, `${@:N}`, `${@:N:L}`) with command arguments.
  *
@@ -53,7 +50,7 @@ function parseSafeNonNegativeInteger(raw: string): number | undefined {
 export function substituteArgs(content: string, args: string[]): string {
   let result = content;
   result = result.replace(/\$(\d+)/g, (_, num: string) => {
-    const parsed = parseSafeNonNegativeInteger(num);
+    const parsed = parseStrictNonNegativeInteger(num);
     if (parsed === undefined || parsed <= 0) {
       return "";
     }
@@ -62,7 +59,7 @@ export function substituteArgs(content: string, args: string[]): string {
   result = result.replace(
     /\$\{@:(\d+)(?::(\d+))?\}/g,
     (_, startStr: string, lengthStr?: string) => {
-      const parsedStart = parseSafeNonNegativeInteger(startStr);
+      const parsedStart = parseStrictNonNegativeInteger(startStr);
       if (parsedStart === undefined) {
         return "";
       }
@@ -73,7 +70,7 @@ export function substituteArgs(content: string, args: string[]): string {
         start = 0;
       }
       if (lengthStr) {
-        const length = parseSafeNonNegativeInteger(lengthStr);
+        const length = parseStrictNonNegativeInteger(lengthStr);
         if (length === undefined) {
           return "";
         }
@@ -86,12 +83,4 @@ export function substituteArgs(content: string, args: string[]): string {
   result = result.replace(/\$ARGUMENTS/g, allArgs);
   result = result.replace(/\$@/g, allArgs);
   return result;
-}
-
-/** Format a prompt template invocation using command-style argument substitution. */
-export function formatPromptTemplateInvocation(
-  template: PromptTemplate,
-  args: string[] = [],
-): string {
-  return substituteArgs(template.content, args);
 }

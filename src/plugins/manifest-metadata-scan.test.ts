@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
 import { listOpenClawPluginManifestMetadata } from "./manifest-metadata-scan.js";
+import { loadPluginManifest } from "./manifest.js";
 
 const tempRoots: string[] = [];
 
@@ -60,7 +61,6 @@ describe("listOpenClawPluginManifestMetadata", () => {
             startup: {
               sidecar: false,
               memory: false,
-              deferConfiguredChannelFullLoadUntilAfterListen: false,
               agentHarnesses: [],
             },
             compat: [],
@@ -125,6 +125,60 @@ describe("listOpenClawPluginManifestMetadata", () => {
       manifest: { id: "example" },
       origin: "global",
     });
+  });
+
+  it("preserves identity, capabilities, and config schema without loading plugin runtime", () => {
+    const root = createTempRoot();
+    const home = path.join(root, "home");
+    const pluginDir = path.join(home, ".openclaw", "extensions", "authoring-contract");
+    const manifest = {
+      id: "authoring-contract",
+      name: "Authoring contract",
+      channels: ["authoring-channel"],
+      providers: ["authoring-provider"],
+      contracts: {
+        tools: ["authoring_lookup"],
+      },
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          endpoint: { type: "string" },
+        },
+      },
+    };
+    writeJson(path.join(pluginDir, "openclaw.plugin.json"), manifest);
+
+    const records = listOpenClawPluginManifestMetadata({
+      OPENCLAW_HOME: home,
+      OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "empty-bundled"),
+    });
+
+    expect(records).toContainEqual({
+      pluginDir,
+      manifest,
+      origin: "global",
+    });
+  });
+
+  it.each([
+    {
+      name: "missing identity",
+      manifest: { configSchema: { type: "object" } },
+      error: "plugin manifest requires id",
+    },
+    {
+      name: "missing config schema",
+      manifest: { id: "missing-schema" },
+      error: "plugin manifest requires configSchema",
+    },
+  ])("fails fast on $name", ({ manifest, error }) => {
+    const pluginDir = createTempRoot();
+    writeJson(path.join(pluginDir, "openclaw.plugin.json"), manifest);
+
+    const result = loadPluginManifest(pluginDir, false);
+
+    expect(result).toMatchObject({ ok: false, error });
   });
 
   it("skips oversized plugin manifests to prevent OOM during metadata scan", () => {

@@ -6,7 +6,13 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Value } from "typebox/value";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+  applySessionStoreProjection,
+  replaceSessionEntrySync,
+} from "../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { callGateway as gatewayCall } from "../../gateway/call.js";
+import { createSessionVisibilityChecker } from "../../plugin-sdk/session-visibility.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
 
@@ -30,6 +36,28 @@ function useLoggingConfig(name: string, logging: Record<string, unknown>): void 
   setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
 }
 
+async function writeSessionStore(
+  name: string,
+  entries: Record<string, { sessionId: string; updatedAt: number; archivedAt?: number }>,
+): Promise<string> {
+  if (!tempDir) {
+    throw new Error("tempDir not initialized");
+  }
+  const storePath = path.join(tempDir, name);
+  await applySessionStoreProjection({
+    storePath,
+    skipMaintenance: true,
+    update: (store) => {
+      for (const sessionKey of Object.keys(store)) {
+        delete store[sessionKey];
+      }
+      Object.assign(store, entries);
+      return { persist: true, result: undefined };
+    },
+  });
+  return storePath;
+}
+
 function createHistoryToolWithMessage(content: unknown) {
   return createSessionsHistoryTool({
     config: {},
@@ -51,6 +79,13 @@ function createHistoryToolWithMessage(content: unknown) {
 
 function readHistoryDetails(result: { details: unknown }) {
   return result.details as Record<string, unknown>;
+}
+
+function requireGatewayRequest(requests: CallGatewayRequest[], method: string): CallGatewayRequest {
+  return expectDefined(
+    requests.find((request) => request.method === method),
+    `${method} request test invariant`,
+  );
 }
 
 function readMessageSeq(message: unknown): number | undefined {
@@ -111,6 +146,72 @@ describe("sessions_history redaction", () => {
     );
   });
 
+  it("returns not-found for an unknown explicit key without reading history", async () => {
+    const requests: CallGatewayRequest[] = [];
+    const sessionKey = "agent:main:missing";
+    const tool = createSessionsHistoryTool({
+      config: { tools: { sessions: { visibility: "all" } } },
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        if (request.method === "sessions.resolve") {
+          throw new Error(`No session found: ${sessionKey}`);
+        }
+        return { messages: [] } as T;
+      },
+    });
+
+    const result = await tool.execute("missing-explicit-key", { sessionKey });
+
+    expect(result.details).toEqual({
+      status: "error",
+      error: `No session found: ${sessionKey}`,
+    });
+    expect(requests.map((request) => request.method)).toEqual(["sessions.resolve"]);
+  });
+
+  it("conceals missing explicit keys denied by session visibility", async () => {
+    const requests: CallGatewayRequest[] = [];
+    const tool = createSessionsHistoryTool({
+      agentSessionKey: "agent:main:main",
+      config: { tools: { sessions: { visibility: "self" } } },
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        throw new Error("No session found: agent:main:missing");
+      },
+    });
+
+    const result = await tool.execute("hidden-missing-key", {
+      sessionKey: "agent:main:missing",
+    });
+
+    expect(result.details).toMatchObject({ status: "forbidden" });
+    expect(requests.map((request) => request.method)).toEqual(["sessions.resolve"]);
+  });
+
+  it("returns an empty history for an existing explicit key", async () => {
+    const requests: CallGatewayRequest[] = [];
+    const sessionKey = "agent:main:empty";
+    const tool = createSessionsHistoryTool({
+      config: { tools: { sessions: { visibility: "all" } } },
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        if (request.method === "sessions.resolve") {
+          return { key: sessionKey } as T;
+        }
+        return { messages: [] } as T;
+      },
+    });
+
+    const result = await tool.execute("existing-empty-key", { sessionKey });
+
+    expect(result.details).toMatchObject({
+      sessionKey,
+      messages: [],
+      bytes: 2,
+    });
+    expect(requests.map((request) => request.method)).toEqual(["sessions.resolve", "chat.history"]);
+  });
+
   it("redacts recalled session text even when log redaction is disabled", async () => {
     // Recalled transcript content is model-visible, so it is always redacted
     // even when normal logging redaction is configured off.
@@ -138,42 +239,6 @@ describe("sessions_history redaction", () => {
     expect(serialized).not.toContain("internal-ticket-AbC12345");
     expect(serialized).toContain("intern");
     expect((result.details as { contentRedacted?: unknown }).contentRedacted).toBe(true);
-  });
-
-  it.each([
-    {
-      name: "reports decoded bytes for raw image data",
-      content: [
-        {
-          type: "image",
-          data: Buffer.from([0, 1, 2, 3, 4]).toString("base64"),
-          mimeType: "image/png",
-        },
-      ],
-      expectedBytes: 5,
-    },
-    {
-      name: "replaces stale bytes for empty image data",
-      content: [{ type: "image", data: "", mimeType: "image/png", bytes: 999 }],
-      expectedBytes: 0,
-    },
-    {
-      name: "preserves existing bytes when image data is already omitted",
-      content: [{ type: "image", mimeType: "image/png", bytes: 37, omitted: true }],
-      expectedBytes: 37,
-    },
-  ])("$name", async ({ content, expectedBytes }) => {
-    const tool = createHistoryToolWithMessage(content);
-
-    const result = await tool.execute("call-1", { sessionKey: "main" });
-    const details = readHistoryDetails(result);
-
-    expect(details.messages).toEqual([
-      {
-        role: "user",
-        content: [{ type: "image", mimeType: "image/png", bytes: expectedBytes, omitted: true }],
-      },
-    ]);
   });
 
   it.each([0, 1.5])("rejects invalid limit value %s", async (limit) => {
@@ -227,15 +292,13 @@ describe("sessions_history redaction", () => {
     });
 
     const result = await tool.execute("call-1", { sessionKey: "main", limit: 2 });
+    const request = requireGatewayRequest(requests, "chat.history");
 
-    expect(requests[0]).toMatchObject({
+    expect(request).toMatchObject({
       method: "chat.history",
       params: { sessionKey: "main", limit: 2 },
     });
-    expect(
-      (expectDefined(requests[0], "requests[0] test invariant").params as Record<string, unknown>)
-        .offset,
-    ).toBeUndefined();
+    expect((request.params as Record<string, unknown>).offset).toBeUndefined();
     expect((result.details as Record<string, unknown>).offset).toBeUndefined();
   });
 
@@ -260,7 +323,7 @@ describe("sessions_history redaction", () => {
 
     const result = await tool.execute("call-1", { sessionKey: "main", limit: 2, offset: 0 });
 
-    expect(requests[0]).toMatchObject({
+    expect(requireGatewayRequest(requests, "chat.history")).toMatchObject({
       method: "chat.history",
       params: { sessionKey: "main", limit: 2, offset: 0 },
     });
@@ -295,7 +358,7 @@ describe("sessions_history redaction", () => {
       sessionId: "matching-session",
     });
 
-    expect(requests[0]).toMatchObject({
+    expect(requireGatewayRequest(requests, "chat.history")).toMatchObject({
       method: "chat.history",
       params: {
         sessionKey: "main",
@@ -406,5 +469,210 @@ describe("sessions_history redaction", () => {
       hasMore: true,
       totalMessages: 10,
     });
+  });
+
+  it("honors a scoped incarnation grant through the sandbox visibility clamp", async () => {
+    const requesterSessionKey = "agent:main:clickclack:discussion-proof";
+    const targetSessionKey = "agent:main:main";
+    const expectedSessionId = "main-session-incarnation";
+    const storePath = await writeSessionStore("scoped-grant.json", {
+      [targetSessionKey]: { sessionId: expectedSessionId, updatedAt: 1 },
+    });
+    const requests: CallGatewayRequest[] = [];
+    const unregister = createSessionVisibilityChecker.registerScopedAccessProvider((request) =>
+      request.requesterSessionKey === requesterSessionKey &&
+      request.targetSessionKey === targetSessionKey
+        ? { expectedSessionId }
+        : undefined,
+    );
+    try {
+      const tool = createSessionsHistoryTool({
+        agentSessionKey: requesterSessionKey,
+        sandboxed: true,
+        config: {
+          session: { store: storePath },
+          tools: { sessions: { visibility: "self" } },
+          agents: { defaults: { sandbox: { sessionToolsVisibility: "spawned" } } },
+        } as OpenClawConfig,
+        callGateway: async <T = Record<string, unknown>>(
+          request: CallGatewayRequest,
+        ): Promise<T> => {
+          requests.push(request);
+          if (request.method === "sessions.resolve") {
+            return { key: targetSessionKey } as T;
+          }
+          return { messages: [{ role: "assistant", content: "visible" }] } as T;
+        },
+      });
+
+      const result = await tool.execute("scoped-grant", { sessionKey: targetSessionKey });
+
+      expect(result.details).toMatchObject({
+        sessionKey: targetSessionKey,
+        messages: [{ role: "assistant", content: "visible" }],
+      });
+      expect(requests.map((request) => request.method)).toEqual(["chat.history"]);
+    } finally {
+      unregister();
+    }
+  });
+
+  it("rejects a scoped grant when the target incarnation changes before the read", async () => {
+    const requesterSessionKey = "agent:main:clickclack:discussion-race";
+    const targetSessionKey = "agent:main:main";
+    const expectedSessionId = "old-incarnation";
+    const storePath = await writeSessionStore("scoped-grant-race.json", {
+      [targetSessionKey]: { sessionId: expectedSessionId, updatedAt: 1 },
+    });
+    let grantChecks = 0;
+    const requests: CallGatewayRequest[] = [];
+    const unregister = createSessionVisibilityChecker.registerScopedAccessProvider((request) => {
+      if (
+        request.requesterSessionKey !== requesterSessionKey ||
+        request.targetSessionKey !== targetSessionKey
+      ) {
+        return undefined;
+      }
+      grantChecks += 1;
+      if (grantChecks === 1) {
+        replaceSessionEntrySync(
+          { storePath, sessionKey: targetSessionKey },
+          { sessionId: "replacement-incarnation", updatedAt: 2 },
+        );
+      }
+      return { expectedSessionId };
+    });
+    try {
+      const tool = createSessionsHistoryTool({
+        agentSessionKey: requesterSessionKey,
+        sandboxed: true,
+        config: {
+          session: { store: storePath },
+          tools: { sessions: { visibility: "self" } },
+          agents: { defaults: { sandbox: { sessionToolsVisibility: "spawned" } } },
+        } as OpenClawConfig,
+        callGateway: async <T = Record<string, unknown>>(
+          request: CallGatewayRequest,
+        ): Promise<T> => {
+          requests.push(request);
+          if (request.method === "sessions.resolve") {
+            return { key: targetSessionKey } as T;
+          }
+          return { messages: [] } as T;
+        },
+      });
+
+      await expect(
+        tool.execute("scoped-grant-race", { sessionKey: targetSessionKey }),
+      ).rejects.toThrow(`Session "${targetSessionKey}" changed after access was granted.`);
+      expect(requests.some((request) => request.method === "chat.history")).toBe(false);
+    } finally {
+      unregister();
+    }
+  });
+
+  it("rejects a scoped grant when the target is archived before the read", async () => {
+    const requesterSessionKey = "agent:main:clickclack:discussion-archive-race";
+    const targetSessionKey = "agent:main:main";
+    const expectedSessionId = "main-incarnation";
+    const storePath = await writeSessionStore("scoped-grant-archive-race.json", {
+      [targetSessionKey]: { sessionId: expectedSessionId, updatedAt: 1 },
+    });
+    let grantChecks = 0;
+    const requests: CallGatewayRequest[] = [];
+    const unregister = createSessionVisibilityChecker.registerScopedAccessProvider((request) => {
+      if (
+        request.requesterSessionKey !== requesterSessionKey ||
+        request.targetSessionKey !== targetSessionKey
+      ) {
+        return undefined;
+      }
+      grantChecks += 1;
+      if (grantChecks === 1) {
+        replaceSessionEntrySync(
+          { storePath, sessionKey: targetSessionKey },
+          { sessionId: expectedSessionId, updatedAt: 2, archivedAt: 2 },
+        );
+      }
+      return { expectedSessionId };
+    });
+    try {
+      const tool = createSessionsHistoryTool({
+        agentSessionKey: requesterSessionKey,
+        sandboxed: true,
+        config: {
+          session: { store: storePath },
+          tools: { sessions: { visibility: "self" } },
+          agents: { defaults: { sandbox: { sessionToolsVisibility: "spawned" } } },
+        } as OpenClawConfig,
+        callGateway: async <T = Record<string, unknown>>(
+          request: CallGatewayRequest,
+        ): Promise<T> => {
+          requests.push(request);
+          return { messages: [] } as T;
+        },
+      });
+
+      await expect(
+        tool.execute("scoped-grant-archive-race", { sessionKey: targetSessionKey }),
+      ).rejects.toThrow(`Session "${targetSessionKey}" changed after access was granted.`);
+      expect(requests.some((request) => request.method === "chat.history")).toBe(false);
+    } finally {
+      unregister();
+    }
+  });
+
+  it("carries the persisted fixed-store owner for a bare history key", async () => {
+    const requests: CallGatewayRequest[] = [];
+    const tool = createSessionsHistoryTool({
+      agentSessionKey: "global",
+      config: {
+        session: { store: path.join(tempDir!, "owned-shared.sqlite"), scope: "global" },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
+      },
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        return { messages: [] } as T;
+      },
+    });
+
+    await tool.execute("owned-global", { sessionKey: "global" });
+
+    expect(requests).toContainEqual({
+      method: "chat.history",
+      params: expect.objectContaining({ sessionKey: "global", agentId: "ops" }),
+    });
+  });
+
+  it("resolves current history under the requester instead of the fixed-store owner", async () => {
+    const requests: CallGatewayRequest[] = [];
+    const tool = createSessionsHistoryTool({
+      agentSessionKey: "agent:research:main",
+      requesterAgentIdOverride: "research",
+      config: {
+        session: { store: path.join(tempDir!, "owned-current.sqlite"), scope: "global" },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
+      },
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        return { messages: [] } as T;
+      },
+    });
+
+    await tool.execute("research-current-history", { sessionKey: "current" });
+
+    expect(requests).toContainEqual({
+      method: "chat.history",
+      params: expect.objectContaining({ sessionKey: "agent:research:main", agentId: "research" }),
+    });
+    expect(requests.some((request) => request.method === "sessions.resolve")).toBe(false);
   });
 });

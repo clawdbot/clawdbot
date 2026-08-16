@@ -5,7 +5,7 @@ import { truncateUtf16Safe } from "../../packages/normalization-core/src/utf16-s
 import { validateExternalCodePluginPackageJson } from "../../packages/plugin-package-contract/src/index.ts";
 import { retryClawHubRead } from "../../src/infra/clawhub-retry.js";
 import { runTasksWithConcurrency } from "../../src/utils/run-with-concurrency.js";
-import { readBoundedResponseText } from "./bounded-response.ts";
+import { readBoundedResponseText } from "./bounded-response.mjs";
 import {
   assertPluginReleaseDependencyFreshness,
   collectExtensionPackageJsonCandidates,
@@ -13,6 +13,7 @@ import {
   collectChangedExtensionIdsFromPaths,
   collectPublishablePluginPackageErrors,
   collectRequiredLatestDependencies,
+  isPluginExternalPublicationDeferred,
   assertPluginReleaseVersionFloors,
   parsePluginReleaseArgs,
   resolvePublishablePluginVersion,
@@ -45,6 +46,7 @@ type PluginPackageJson = {
       minGatewayVersion?: string;
     };
     build?: {
+      bundledDist?: boolean;
       openclawVersion?: string;
       pluginSdkVersion?: string;
     };
@@ -115,8 +117,9 @@ const CLAWHUB_SHARED_RELEASE_INPUT_PATHS = [
   "package.json",
   "pnpm-lock.yaml",
   "packages/plugin-package-contract/src/index.ts",
-  "scripts/lib/bounded-response.ts",
+  "scripts/lib/bounded-response.mjs",
   "scripts/lib/npm-publish-plan.mjs",
+  "scripts/lib/release-version.mjs",
   "scripts/lib/plugin-npm-release.ts",
   "scripts/lib/plugin-clawhub-release.ts",
   "scripts/openclaw-npm-release-check.ts",
@@ -279,6 +282,9 @@ export function collectClawHubPublishablePluginPackages(
     }
     const packageName = packageJson.name?.trim() ?? "";
     if (hasSelectedPackageNames && !selectedPackageNames.has(packageName)) {
+      continue;
+    }
+    if (isPluginExternalPublicationDeferred(packageJson)) {
       continue;
     }
     if (packageJson.openclaw?.release?.publishToClawHub !== true) {

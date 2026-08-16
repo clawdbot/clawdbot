@@ -36,7 +36,7 @@ function isQaOpenAiResponsesProviderConfig(config: ModelProviderConfig) {
   );
 }
 
-export function resolveQaBundledPluginSourceDir(params: { repoRoot: string; pluginId: string }) {
+function resolveQaBundledPluginSourceDir(params: { repoRoot: string; pluginId: string }) {
   assertSafeQaBundledPluginId(params.pluginId);
   const candidates = [
     path.join(params.repoRoot, "dist", "extensions", params.pluginId),
@@ -367,6 +367,10 @@ export async function resolveQaRuntimeHostVersion(params: {
   return selected?.version;
 }
 
+export function resolveQaStagedBundledPluginsRoot(params: { repoRoot: string; tempRoot: string }) {
+  return path.join(params.repoRoot, ".artifacts", "qa-runtime", path.basename(params.tempRoot));
+}
+
 export async function createQaBundledPluginsDir(params: {
   repoRoot: string;
   tempRoot: string;
@@ -376,12 +380,7 @@ export async function createQaBundledPluginsDir(params: {
     repoRoot: params.repoRoot,
     allowedPluginIds: params.allowedPluginIds,
   });
-  const stagedRoot = path.join(
-    params.repoRoot,
-    ".artifacts",
-    "qa-runtime",
-    path.basename(params.tempRoot),
-  );
+  const stagedRoot = resolveQaStagedBundledPluginsRoot(params);
   await fs.rm(stagedRoot, { recursive: true, force: true });
   await fs.mkdir(stagedRoot, { recursive: true });
   await fs.copyFile(

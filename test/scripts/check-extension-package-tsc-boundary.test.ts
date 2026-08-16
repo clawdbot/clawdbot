@@ -21,7 +21,14 @@ import {
   resolveCanaryArtifactPaths,
   runNodeStepAsync,
   runNodeStepsWithConcurrency,
-} from "../../scripts/check-extension-package-tsc-boundary.mjs";
+} from "../../scripts/check-extension-package-tsc-boundary.mts";
+import {
+  isProcessAlive,
+  waitForChildClose,
+  waitForDead,
+  waitForFile,
+  waitForPidFile,
+} from "../helpers/process-wait.js";
 
 const tempRoots = new Set<string>();
 
@@ -46,75 +53,6 @@ function createMockPipe() {
   };
   pipe.setEncoding = () => {};
   return pipe;
-}
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
-  const deadlineAt = Date.now() + timeoutMs;
-  while (Date.now() < deadlineAt) {
-    if (fs.existsSync(filePath)) {
-      return;
-    }
-    await sleep(5);
-  }
-  throw new Error(`timeout waiting for ${filePath}`);
-}
-
-// Pid files are written with plain writeFileSync, so an existence poll can
-// observe the open-truncate 0-byte window and parse NaN (the #109140 flake
-// class). Wait until the content parses to a real pid, not just for the file.
-async function waitForPidFile(filePath: string, timeoutMs: number): Promise<number> {
-  const deadlineAt = Date.now() + timeoutMs;
-  while (Date.now() < deadlineAt) {
-    if (fs.existsSync(filePath)) {
-      const pid = Number.parseInt(fs.readFileSync(filePath, "utf8"), 10);
-      if (Number.isInteger(pid) && pid > 0) {
-        return pid;
-      }
-    }
-    await sleep(5);
-  }
-  throw new Error(`timed out waiting for pid in ${filePath}`);
-}
-
-async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
-  const deadlineAt = Date.now() + timeoutMs;
-  while (Date.now() < deadlineAt) {
-    if (!isProcessAlive(pid)) {
-      return;
-    }
-    await sleep(5);
-  }
-  throw new Error(`process still alive: ${pid}`);
-}
-
-function waitForChildClose(
-  child: ReturnType<typeof spawn>,
-  timeoutMs = 5_000,
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error("child did not close before timeout"));
-    }, timeoutMs);
-    child.once("close", (code, signal) => {
-      clearTimeout(timeout);
-      resolve({ code, signal });
-    });
-  });
 }
 
 afterEach(() => {
@@ -705,7 +643,7 @@ describe("check-extension-package-tsc-boundary", () => {
       const childPidPath = path.join(root, "child.pid");
       const readyPath = path.join(root, "child.ready");
       const scriptUrl = pathToFileURL(
-        path.resolve("scripts/check-extension-package-tsc-boundary.mjs"),
+        path.resolve("scripts/check-extension-package-tsc-boundary.mts"),
       ).href;
       let childPid = 0;
       let runner: ReturnType<typeof spawn> | undefined;

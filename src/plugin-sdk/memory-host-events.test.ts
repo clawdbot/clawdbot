@@ -35,6 +35,7 @@ function createDedupe(root: string, overrides?: { ttlMs?: number }) {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   setMaxMemoryHostEventsForTests(undefined);
   resetPluginStateStoreForTests();

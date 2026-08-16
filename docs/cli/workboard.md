@@ -83,6 +83,10 @@ openclaw workboard show 7f4a2c10 --json
 
 Text output prints the compact card line and notes. JSON output returns the full card record, including execution metadata, attempts, comments, links, proof, artifacts, worker logs, protocol state, diagnostics, and automation metadata.
 
+Proof statuses in JSON are worker-reported outcomes. `passed` records the worker's
+self-assessment of the attached command or check; it is not an independent verification
+result.
+
 ## `move`
 
 ```bash

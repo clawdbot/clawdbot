@@ -1,3 +1,8 @@
+import type {
+  QaBusAttachment,
+  QaBusMessage,
+  QaBusSnapshotConversation,
+} from "openclaw/plugin-sdk/qa-channel-protocol";
 import {
   conversationSelectionKey,
   findConversationBySelectionKey,
@@ -6,9 +11,9 @@ import {
 } from "./ui-conversation-key.js";
 import { findScenarioOutcome } from "./ui-render-scenario.js";
 import { badgeHtml, esc, formatIso, formatTime } from "./ui-render-utils.js";
-import type { Attachment, Conversation, Message, SeedScenario, UiState } from "./ui-types.js";
+import type { SeedScenario, UiState } from "./ui-types.js";
 
-function attachmentSourceUrl(attachment: Attachment): string | null {
+function attachmentSourceUrl(attachment: QaBusAttachment): string | null {
   if (attachment.url?.trim()) {
     return attachment.url;
   }
@@ -18,7 +23,7 @@ function attachmentSourceUrl(attachment: Attachment): string | null {
   return null;
 }
 
-function renderMessageAttachments(message: Message): string {
+function renderMessageAttachments(message: QaBusMessage): string {
   const attachments = message.attachments ?? [];
   if (attachments.length === 0) {
     return "";
@@ -69,6 +74,11 @@ function deriveSelectedThread(state: UiState): string | null {
 
 function filteredMessages(state: UiState) {
   const messages = state.snapshot?.messages ?? [];
+  const selectedConversationThreadIds = new Set(
+    (state.snapshot?.threads ?? [])
+      .filter((thread) => threadConversationSelectionKey(thread) === state.selectedConversationKey)
+      .map((thread) => thread.id),
+  );
   return messages.filter((message) => {
     if (
       state.selectedConversationKey &&
@@ -76,30 +86,42 @@ function filteredMessages(state: UiState) {
     ) {
       return false;
     }
-    if (state.selectedThreadId && message.threadId !== state.selectedThreadId) {
-      return false;
+    if (state.selectedThreadId) {
+      return message.threadId === state.selectedThreadId;
     }
-    return true;
+    // External thread ids have no sidebar record, even when the conversation
+    // also owns navigable threads, so keep their messages in the root view.
+    return !message.threadId || !selectedConversationThreadIds.has(message.threadId);
   });
 }
 
 function formatConversationLabel(
-  conversation: Conversation,
-  conversations: Conversation[],
+  conversation: QaBusSnapshotConversation,
+  conversations: QaBusSnapshotConversation[],
 ): string {
   const label = conversation.title || conversation.id;
-  const hasAccountCollision = conversations.some(
+  const sidebarCollisions = conversations.filter(
     (candidate) =>
-      candidate.accountId !== conversation.accountId &&
-      candidate.kind === conversation.kind &&
-      candidate.id === conversation.id,
+      candidate !== conversation &&
+      candidate.id === conversation.id &&
+      (candidate.kind === "direct") === (conversation.kind === "direct"),
   );
-  return hasAccountCollision ? `${label} (${conversation.accountId})` : label;
+  const hasAccountCollision = sidebarCollisions.some(
+    (candidate) => candidate.accountId !== conversation.accountId,
+  );
+  const hasKindCollision = sidebarCollisions.some(
+    (candidate) => candidate.kind !== conversation.kind,
+  );
+  const disambiguators = [
+    ...(hasKindCollision ? [conversation.kind] : []),
+    ...(hasAccountCollision ? [conversation.accountId] : []),
+  ];
+  return disambiguators.length > 0 ? `${label} (${disambiguators.join(", ")})` : label;
 }
 
 export function renderChatView(state: UiState): string {
   const conversations = state.snapshot?.conversations ?? [];
-  const channels = conversations.filter((c) => c.kind === "channel");
+  const channels = conversations.filter((c) => c.kind === "channel" || c.kind === "group");
   const dms = conversations.filter((c) => c.kind === "direct");
   const threads = (state.snapshot?.threads ?? []).filter(
     (thread) =>
@@ -205,6 +227,7 @@ export function renderChatView(state: UiState): string {
             <select id="conversation-kind">
               <option value="direct"${state.composer.conversationKind === "direct" ? " selected" : ""}>DM</option>
               <option value="channel"${state.composer.conversationKind === "channel" ? " selected" : ""}>Channel</option>
+              <option value="group"${state.composer.conversationKind === "group" ? " selected" : ""}>Group</option>
             </select>
             <span>as</span>
             <input id="sender-name" value="${esc(state.composer.senderName)}" placeholder="Name" />
@@ -221,14 +244,14 @@ export function renderChatView(state: UiState): string {
     </div>`;
 }
 
-function messageAvatar(m: Message): { emoji: string; bg: string; role: string } {
+function messageAvatar(m: QaBusMessage): { emoji: string; bg: string; role: string } {
   if (m.direction === "outbound") {
     return { emoji: "\uD83E\uDD80", bg: "#7c6cff", role: "Claw" }; // 🦀
   }
   return { emoji: "\uD83E\uDD9E", bg: "#d97706", role: "Clawfather" }; // 🦞
 }
 
-function renderMessage(m: Message): string {
+function renderMessage(m: QaBusMessage): string {
   const name = m.senderName || m.senderId;
   const avatar = messageAvatar(m);
   const dirClass = m.direction === "inbound" ? "msg-direction-inbound" : "msg-direction-outbound";
@@ -270,7 +293,7 @@ function recentInspectorMessages(state: UiState, limit = 18) {
   return (state.snapshot?.messages ?? []).slice(-limit).toReversed();
 }
 
-function renderInspectorLiveMessage(message: Message): string {
+function renderInspectorLiveMessage(message: QaBusMessage): string {
   const avatar = messageAvatar(message);
   const conversationLabel = message.conversation.title || message.conversation.id;
   const threadLabel = message.threadTitle || message.threadId;
@@ -465,9 +488,7 @@ export function renderEventsView(state: UiState): string {
                   const detail =
                     "thread" in e
                       ? `${e.thread.conversationId}/${e.thread.id}`
-                      : e.message
-                        ? `${e.message.senderId}: ${e.message.text}`
-                        : "";
+                      : `${e.message.senderId}: ${e.message.text}`;
                   return `
                     <div class="event-row">
                       <span class="event-kind">${esc(e.kind)}</span>

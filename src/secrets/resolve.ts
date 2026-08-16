@@ -1,4 +1,4 @@
-/** Resolves SecretRef values from env, file, and exec secret providers. */
+/** Resolves SecretRef values from env, file, exec, and store secret providers. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -16,7 +16,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { FsSafeError, readSecureFile } from "../infra/fs-safe.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import {
-  loadPluginManifestRegistry,
+  loadPluginManifestRegistryCore,
   type PluginManifestRegistry,
 } from "../plugins/manifest-registry.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -46,6 +46,7 @@ import {
   providerResolutionError,
   refResolutionError,
 } from "./resolve-errors.js";
+import { resolveStoreRefs } from "./resolve-store.js";
 import type { SecretRefResolveCache } from "./resolve-types.js";
 import {
   isNonEmptyString,
@@ -99,7 +100,17 @@ function throwUnknownProviderResolutionError(params: {
   if (isSecretResolutionError(params.err)) {
     throw params.err;
   }
+  // fs-safe 0.5 exposes one fail-closed receipt for failed permission inspection,
+  // unavailable ACL data, and indeterminate owner trust. Keep the diagnostic path-free.
+  const isWindowsPathSecurityFailure =
+    process.platform === "win32" &&
+    (params.source === "file" || params.source === "exec") &&
+    params.err instanceof FsSafeError &&
+    params.err.code === "permission-unverified";
   throw providerResolutionError({
+    ...(isWindowsPathSecurityFailure
+      ? { code: "SECRET_PROVIDER_PATH_SECURITY_UNVERIFIABLE" as const }
+      : {}),
     source: params.source,
     provider: params.provider,
     message: formatErrorMessage(params.err),
@@ -126,18 +137,11 @@ function isAbsolutePathname(value: string): boolean {
   );
 }
 
-function resolveResolutionLimits(config: OpenClawConfig): ResolutionLimits {
-  const resolution = config.secrets?.resolution;
+function resolveResolutionLimits(): ResolutionLimits {
   return {
-    maxProviderConcurrency: normalizePositiveInt(
-      resolution?.maxProviderConcurrency,
-      DEFAULT_PROVIDER_CONCURRENCY,
-    ),
-    maxRefsPerProvider: normalizePositiveInt(
-      resolution?.maxRefsPerProvider,
-      DEFAULT_MAX_REFS_PER_PROVIDER,
-    ),
-    maxBatchBytes: normalizePositiveInt(resolution?.maxBatchBytes, DEFAULT_MAX_BATCH_BYTES),
+    maxProviderConcurrency: DEFAULT_PROVIDER_CONCURRENCY,
+    maxRefsPerProvider: DEFAULT_MAX_REFS_PER_PROVIDER,
+    maxBatchBytes: DEFAULT_MAX_BATCH_BYTES,
   };
 }
 
@@ -153,12 +157,16 @@ function resolveConfiguredProvider(params: {
 }): SecretProviderConfig {
   const { ref, config } = params;
   const providerConfig = config.secrets?.providers?.[ref.provider];
+  if (
+    providerConfig?.source !== ref.source &&
+    (ref.source === "env" || ref.source === "store") &&
+    ref.provider === resolveDefaultSecretProviderAlias(config, ref.source)
+  ) {
+    return { source: ref.source };
+  }
   if (!providerConfig) {
-    if (ref.source === "env" && ref.provider === resolveDefaultSecretProviderAlias(config, "env")) {
-      return { source: "env" };
-    }
     throw providerResolutionError({
-      code: "SECRET_PROVIDER_INVALID",
+      code: "SECRET_PROVIDER_NOT_CONFIGURED",
       source: ref.source,
       provider: ref.provider,
       message: `Secret provider "${ref.provider}" is not configured (ref: ${ref.source}:${ref.provider}:${ref.id}).`,
@@ -180,7 +188,7 @@ function resolveConfiguredProvider(params: {
         env: params.env,
         allowWorkspaceScopedSnapshot: true,
       })?.manifestRegistry ??
-      loadPluginManifestRegistry({
+      loadPluginManifestRegistryCore({
         config,
         env: params.env,
       });
@@ -207,7 +215,6 @@ async function assertSecurePath(params: {
   targetPath: string;
   label: string;
   trustedDirs?: string[];
-  allowInsecurePath?: boolean;
   allowReadableByOthers?: boolean;
   allowSymlinkPath?: boolean;
 }): Promise<string> {
@@ -242,10 +249,6 @@ async function assertSecurePath(params: {
       throw new Error(`${params.label} is outside trustedDirs: ${effectivePath}`);
     }
   }
-  if (params.allowInsecurePath) {
-    return effectivePath;
-  }
-
   const perms = await inspectPathPermissions(effectivePath);
   if (!perms.ok) {
     throw new Error(`${params.label} permissions could not be verified: ${effectivePath}`);
@@ -257,8 +260,9 @@ async function assertSecurePath(params: {
   }
 
   if (process.platform === "win32" && perms.source === "unknown") {
-    throw new Error(
-      `${params.label} ACL verification unavailable on Windows for ${effectivePath}. Set allowInsecurePath=true for this provider to bypass this check when the path is trusted.`,
+    throw new FsSafeError(
+      "permission-unverified",
+      `${params.label} ACL verification unavailable on Windows for ${effectivePath}. Move the command to a path whose ACLs OpenClaw can verify; there is no provider-level bypass.`,
     );
   }
 
@@ -292,7 +296,7 @@ async function readFileProviderPayload(params: {
         filePath,
         label: `secrets.providers.${params.providerName}.path`,
         io: { maxBytes, timeoutMs },
-        permissions: { allowInsecure: params.providerConfig.allowInsecurePath },
+        permissions: { allowInsecure: false },
       });
       const text = payload.toString("utf8").replace(/^\uFEFF/, "");
       if (params.providerConfig.mode === "singleValue") {
@@ -525,9 +529,8 @@ async function resolveExecRefs(params: {
       targetPath: commandPath,
       label: `secrets.providers.${params.providerName}.command`,
       trustedDirs: params.providerConfig.trustedDirs,
-      allowInsecurePath: params.providerConfig.allowInsecurePath,
       allowReadableByOthers: true,
-      allowSymlinkPath: params.providerConfig.allowSymlinkCommand,
+      allowSymlinkPath: false,
     });
   } catch (err) {
     throwUnknownProviderResolutionError({
@@ -537,12 +540,11 @@ async function resolveExecRefs(params: {
     });
   }
 
-  const requestPayload = {
+  const input = JSON.stringify({
     protocolVersion: 1,
     provider: params.providerName,
     ids,
-  };
-  const input = JSON.stringify(requestPayload);
+  });
   if (Buffer.byteLength(input, "utf8") > params.limits.maxBatchBytes) {
     throw providerResolutionError({
       code: "SECRET_PROVIDER_INVALID",
@@ -678,6 +680,13 @@ async function resolveProviderRefs(params: {
         cache: params.options.cache,
       });
     }
+    if (params.providerConfig.source === "store") {
+      return resolveStoreRefs({
+        refs: params.refs,
+        providerName: params.providerName,
+        database: { env: params.options.env ?? process.env },
+      });
+    }
     if (params.providerConfig.source === "exec") {
       if (isPluginIntegrationSecretProviderConfig(params.providerConfig)) {
         throw providerResolutionError({
@@ -731,6 +740,11 @@ function normalizeAndGroupSecretRefs(refs: SecretRef[]): ProviderRefGroup[] {
     if (ref.source === "file" && !isValidFileSecretRefId(id)) {
       throw new Error(
         `File secret reference id must be an absolute JSON pointer or "value" (ref: ${ref.source}:${ref.provider}:${id}).`,
+      );
+    }
+    if (ref.source === "store" && !isValidEnvSecretRefId(id)) {
+      throw new Error(
+        `Store secret reference id must match /^[A-Z][A-Z0-9_]{0,127}$/ (ref: ${ref.source}:${ref.provider}:${id}).`,
       );
     }
     if (ref.source === "exec" && !isValidExecSecretRefId(id)) {
@@ -807,7 +821,7 @@ async function resolveSecretRefProviderGroups(params: {
   errorMode: "continue" | "stop";
 }) {
   const groups = normalizeAndGroupSecretRefs(params.refs);
-  const limits = resolveResolutionLimits(params.options.config);
+  const limits = resolveResolutionLimits();
   const errorsByIndex = new Map<number, unknown>();
   const taskResults = await runTasksWithConcurrency({
     tasks: createProviderResolutionTasks({ groups, options: params.options, limits }),

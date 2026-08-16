@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   formatTrajectoryCommandExportSummary: vi.fn(),
   getRuntimeConfig: vi.fn(),
   loadSessionEntryReadOnly: vi.fn(),
+  resolveExplicitStorePath: vi.fn(),
   resolveStorePath: vi.fn(),
 }));
 
@@ -32,9 +33,13 @@ vi.mock("../config/sessions/paths.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/sessions/paths.js")>();
   return {
     ...actual,
-    resolveStorePath: mocks.resolveStorePath,
+    resolveSessionStorePathCore: mocks.resolveStorePath,
   };
 });
+
+vi.mock("./session-store-targets.js", () => ({
+  resolveExplicitSessionStorePathOrExit: mocks.resolveExplicitStorePath,
+}));
 
 function createRuntime(): RuntimeEnv {
   return {
@@ -49,6 +54,9 @@ describe("exportTrajectoryCommand", () => {
     vi.clearAllMocks();
     mocks.getRuntimeConfig.mockReturnValue({});
     mocks.resolveStorePath.mockReturnValue("/tmp/openclaw/sessions.json");
+    mocks.resolveExplicitStorePath.mockImplementation(
+      (params: { storePath: string }) => params.storePath,
+    );
     mocks.loadSessionEntryReadOnly.mockReturnValue(undefined);
     mocks.exportTrajectoryForCommand.mockResolvedValue({
       outputDir: "/tmp/workspace/.openclaw/trajectory-exports/export",
@@ -158,6 +166,13 @@ describe("exportTrajectoryCommand", () => {
 
       expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
       expect(mocks.resolveStorePath).toHaveBeenCalledWith(store, { agentId: "work" });
+      expect(mocks.resolveExplicitStorePath).toHaveBeenCalledWith({
+        storePath: resolvedStore,
+        inputStorePath: store,
+        agentId: "work",
+        runtime,
+        json: undefined,
+      });
       expect(mocks.loadSessionEntryReadOnly).toHaveBeenCalledWith({
         agentId: "work",
         sessionKey: "agent:work:telegram:direct:123",
@@ -229,12 +244,10 @@ describe("exportTrajectoryCommand", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("exports SQLite marker sessions without probing a transcript JSONL file", async () => {
+  it("exports SQLite sessions without probing a transcript JSONL file", async () => {
     const runtime = createRuntime();
-    const sessionFile = "sqlite:main:session-1:/tmp/openclaw/sessions.json";
     mocks.loadSessionEntryReadOnly.mockReturnValue({
       sessionId: "session-1",
-      sessionFile,
       updatedAt: 1,
     });
 
@@ -248,9 +261,14 @@ describe("exportTrajectoryCommand", () => {
 
     expect(mocks.exportTrajectoryForCommand).toHaveBeenCalledWith({
       outputPath: undefined,
-      sessionFile,
       sessionId: "session-1",
       sessionKey: "agent:main:telegram:direct:123",
+      sessionTarget: {
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:telegram:direct:123",
+        storePath: "/tmp/openclaw/sessions.json",
+      },
       workspaceDir: "/tmp/workspace",
     });
     expect(runtime.error).not.toHaveBeenCalled();

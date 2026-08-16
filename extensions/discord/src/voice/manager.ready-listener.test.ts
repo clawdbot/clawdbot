@@ -6,7 +6,7 @@ import {
   DiscordVoiceReadyListener,
   DiscordVoiceResumedListener,
   DiscordVoiceStateUpdateListener,
-} from "./manager.js";
+} from "./voice-runtime.js";
 
 describe("DiscordVoiceReadyListener", () => {
   it("starts auto-join without blocking the ready listener", async () => {

@@ -24,6 +24,3 @@ export function createToolStreamWrapper(
     });
   };
 }
-
-/** @deprecated Z.ai provider-owned stream helper; do not use from third-party plugins. */
-export const createZaiToolStreamWrapper = createToolStreamWrapper;

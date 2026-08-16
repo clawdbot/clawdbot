@@ -2,7 +2,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { Type } from "typebox";
 import { SYSTEM_AGENT_ID } from "../../system-agent/agent-id.js";
-import { jsonResult, readStringParam, type AnyAgentTool } from "./common.js";
+import { jsonResult, readToolStringParam, type AnyAgentTool } from "./common.js";
 import { callInProcessGatewayTool, type InProcessGatewayCaller } from "./in-process-gateway.js";
 
 const OpenClawDelegateSchema = Type.Object({
@@ -28,9 +28,12 @@ type OpenClawDelegateResult = {
   proposalId?: string;
 };
 
-function stableDelegationSessionId(sessionKey: string | undefined): string {
+function stableDelegationSessionId(sessionKey: string | undefined, agentId?: string): string {
   return sessionKey?.trim()
-    ? `delegate-${createHash("sha256").update(sessionKey.trim()).digest("hex").slice(0, 32)}`
+    ? `delegate-${createHash("sha256")
+        .update(`${agentId?.trim() ?? "unknown"}\0${sessionKey.trim()}`)
+        .digest("hex")
+        .slice(0, 32)}`
     : `delegate-${randomUUID()}`;
 }
 
@@ -43,18 +46,21 @@ function createOpenClawDelegateTool(options?: {
   turnSourceThreadId?: string | number;
   callGateway?: InProcessGatewayCaller;
 }): AnyAgentTool {
-  const defaultSessionId = stableDelegationSessionId(options?.agentSessionKey);
+  const defaultSessionId = stableDelegationSessionId(
+    options?.agentSessionKey,
+    options?.requesterAgentId,
+  );
   return {
     name: "openclaw",
     label: "OpenClaw",
     description:
-      "Ask system expert. Config, channels, plugins, agents, models/providers, updates. Writes need human approval.",
+      "Ask system expert. Gateway restart, config, channels, plugins, agents, models/providers, updates. Changes need human approval.",
     parameters: OpenClawDelegateSchema,
     outputSchema: OpenClawDelegateOutputSchema,
     execute: async (_toolCallId, args) => {
       const params = (args ?? {}) as Record<string, unknown>;
-      const message = readStringParam(params, "message", { required: true });
-      const sessionId = readStringParam(params, "sessionId") ?? defaultSessionId;
+      const message = readToolStringParam(params, "message", { required: true });
+      const sessionId = readToolStringParam(params, "sessionId") ?? defaultSessionId;
       const callGateway = options?.callGateway ?? callInProcessGatewayTool;
       const result = await callGateway<OpenClawDelegateResult>("openclaw.chat", {
         sessionId,

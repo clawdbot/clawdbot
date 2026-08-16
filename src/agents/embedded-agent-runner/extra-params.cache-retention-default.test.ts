@@ -1,7 +1,6 @@
 // Coverage for cache-retention defaults and overrides in extra params.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createLlmStreamSimpleMock } from "../../../test/helpers/agents/llm-stream-simple-mock.js";
 import { applyExtraParamsToAgent } from "./extra-params.js";
 import { testing as extraParamsTesting } from "./extra-params.test-support.js";
 import { log } from "./logger.js";
@@ -16,7 +15,7 @@ function applyAndExpectWrapped(params: {
 }) {
   // Wrapping is the observable signal that cache-retention handling was enabled
   // without requiring a real provider stream call.
-  const agent: { streamFn?: StreamFn } = {};
+  const agent: { streamFn?: StreamFn } = { streamFn: vi.fn() as StreamFn };
 
   applyExtraParamsToAgent(
     agent,
@@ -42,8 +41,6 @@ vi.mock("./logger.js", () => ({
     warn: vi.fn(),
   },
 }));
-
-vi.mock("../../llm/stream.js", () => createLlmStreamSimpleMock());
 
 beforeEach(() => {
   vi.mocked(log.warn).mockClear();

@@ -4,15 +4,17 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveManifestContractOwnerPluginId } from "../plugins/plugin-registry.js";
-import { resolveBundledExplicitWebSearchProvidersFromPublicArtifacts } from "../plugins/web-provider-public-artifacts.explicit.js";
 import {
   analyzeCommandSecretAssignmentsFromSnapshot,
   type CommandSecretAssignment,
 } from "./command-config.js";
-import { getPath, setPathExistingStrict } from "./path-utils.js";
+import { setPathExistingStrict } from "./path-utils.js";
 import { resolveSecretRefValue } from "./resolve.js";
 import { createResolverContext } from "./runtime-shared.js";
-import { getActiveSecretsRuntimeEnv, getActiveSecretsRuntimeSnapshot } from "./runtime-state.js";
+import {
+  getActiveSecretsRuntimeEnvState,
+  getActiveSecretsRuntimeSnapshotState,
+} from "./runtime-state.js";
 import { resolveRuntimeWebTools } from "./runtime-web-tools.js";
 import { assertExpectedResolvedSecretValue } from "./secret-value.js";
 import { discoverConfigSecretTargetsByIds } from "./target-registry.js";
@@ -61,45 +63,8 @@ function pluginIdFromRuntimeWebPath(path: string): string | undefined {
   return /^plugins\.entries\.([^.]+)\.config\.(webSearch|webFetch)\.apiKey$/.exec(path)?.[1];
 }
 
-function searchProviderFromDirectWebPath(path: string): string | undefined {
-  return /^tools\.web\.search\.([^.]+)\.apiKey$/.exec(path)?.[1];
-}
-
-function fetchProviderFromDirectWebPath(path: string): string | undefined {
-  return /^tools\.web\.fetch\.([^.]+)\.apiKey$/.exec(path)?.[1];
-}
-
 function isWebCommandSecretPath(path: string): boolean {
-  return (
-    path === "tools.web.search.apiKey" ||
-    /^tools\.web\.(search|fetch)\.[^.]+\.apiKey$/.test(path) ||
-    /^plugins\.entries\.[^.]+\.config\.(webSearch|webFetch)\.apiKey$/.test(path)
-  );
-}
-
-function webSearchProviderUsesSharedSearchCredential(params: {
-  config: OpenClawConfig;
-  provider: string;
-}): boolean {
-  const sentinel = "__openclaw_shared_web_search_probe__";
-  const pluginId = resolveManifestContractOwnerPluginId({
-    contract: "webSearchProviders",
-    value: params.provider,
-    origin: "bundled",
-    config: params.config,
-  });
-  if (!pluginId) {
-    return false;
-  }
-  const providers = resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({
-    onlyPluginIds: [pluginId],
-  });
-  const provider = providers?.find((entry) => entry.id === params.provider);
-  return (
-    provider?.credentialPath === "tools.web.search.apiKey" ||
-    provider?.getCredentialValue({ apiKey: sentinel }) === sentinel ||
-    provider?.getConfiguredCredentialFallback?.(params.config)?.path === "tools.web.search.apiKey"
-  );
+  return /^plugins\.entries\.[^.]+\.config\.(webSearch|webFetch)\.apiKey$/.test(path);
 }
 
 function isProviderOverridePath(params: {
@@ -111,16 +76,6 @@ function isProviderOverridePath(params: {
   if (webSearch) {
     if (params.config.tools?.web?.search?.enabled === false) {
       return false;
-    }
-    if (params.path === "tools.web.search.apiKey") {
-      return webSearchProviderUsesSharedSearchCredential({
-        config: params.config,
-        provider: webSearch,
-      });
-    }
-    const directProvider = searchProviderFromDirectWebPath(params.path);
-    if (directProvider) {
-      return directProvider === webSearch;
     }
     const pluginId = pluginIdFromRuntimeWebPath(params.path);
     if (pluginId && params.path.endsWith(".config.webSearch.apiKey")) {
@@ -139,10 +94,6 @@ function isProviderOverridePath(params: {
   if (webFetch) {
     if (params.config.tools?.web?.fetch?.enabled === false) {
       return false;
-    }
-    const directProvider = fetchProviderFromDirectWebPath(params.path);
-    if (directProvider) {
-      return directProvider === webFetch;
     }
     const pluginId = pluginIdFromRuntimeWebPath(params.path);
     if (pluginId && params.path.endsWith(".config.webFetch.apiKey")) {
@@ -239,110 +190,6 @@ function filterInactiveRefPaths(params: {
   });
 }
 
-function mirrorResolvedProviderCredentialToDirectPath(params: {
-  config: OpenClawConfig;
-  resolvedConfig: OpenClawConfig;
-  contract: "webSearchProviders" | "webFetchProviders";
-  provider: string | undefined;
-  directPathPrefix: string;
-  pluginConfigKey: "webSearch" | "webFetch";
-}): void {
-  const provider = normalizeOptionalString(params.provider);
-  if (!provider) {
-    return;
-  }
-  const pluginId = resolveManifestContractOwnerPluginId({
-    contract: params.contract,
-    value: provider,
-    origin: "bundled",
-    config: params.config,
-  });
-  if (!pluginId) {
-    return;
-  }
-  const directSegments = [...params.directPathPrefix.split("."), provider, "apiKey"];
-  const directValue = getPath(params.config, directSegments);
-  if (directValue === undefined) {
-    return;
-  }
-  // Legacy direct provider targets still exist for command assignment discovery; mirror the
-  // plugin-owned resolved value only when the source config declares that direct path.
-  const resolvedValue = getPath(params.resolvedConfig, [
-    "plugins",
-    "entries",
-    pluginId,
-    "config",
-    params.pluginConfigKey,
-    "apiKey",
-  ]);
-  if (typeof resolvedValue !== "string" || resolvedValue.length === 0) {
-    return;
-  }
-  setPathExistingStrict(params.resolvedConfig, directSegments, resolvedValue);
-}
-
-function mirrorResolvedProviderCredentialToDirectPaths(params: {
-  config: OpenClawConfig;
-  resolvedConfig: OpenClawConfig;
-  providerOverrides: CommandSecretProviderOverrides | undefined;
-}): void {
-  const configuredSearchProvider =
-    normalizeOptionalString(params.providerOverrides?.webSearch) ??
-    normalizeOptionalString(params.config.tools?.web?.search?.provider);
-  const configuredFetchProvider =
-    normalizeOptionalString(params.providerOverrides?.webFetch) ??
-    normalizeOptionalString(params.config.tools?.web?.fetch?.provider);
-  mirrorResolvedProviderCredentialToDirectPath({
-    config: params.config,
-    resolvedConfig: params.resolvedConfig,
-    contract: "webSearchProviders",
-    provider: configuredSearchProvider,
-    directPathPrefix: "tools.web.search",
-    pluginConfigKey: "webSearch",
-  });
-  mirrorResolvedProviderCredentialToDirectPath({
-    config: params.config,
-    resolvedConfig: params.resolvedConfig,
-    contract: "webFetchProviders",
-    provider: configuredFetchProvider,
-    directPathPrefix: "tools.web.fetch",
-    pluginConfigKey: "webFetch",
-  });
-  const webSearch = configuredSearchProvider;
-  if (
-    webSearch &&
-    webSearchProviderUsesSharedSearchCredential({
-      config: params.config,
-      provider: webSearch,
-    }) &&
-    getPath(params.config, ["tools", "web", "search", "apiKey"]) !== undefined
-  ) {
-    const pluginId = resolveManifestContractOwnerPluginId({
-      contract: "webSearchProviders",
-      value: webSearch,
-      origin: "bundled",
-      config: params.config,
-    });
-    const resolvedValue = pluginId
-      ? getPath(params.resolvedConfig, [
-          "plugins",
-          "entries",
-          pluginId,
-          "config",
-          "webSearch",
-          "apiKey",
-        ])
-      : undefined;
-    if (typeof resolvedValue === "string" && resolvedValue.length > 0) {
-      setPathExistingStrict(
-        params.resolvedConfig,
-        ["tools", "web", "search", "apiKey"],
-        resolvedValue,
-      );
-    }
-  }
-}
-
 async function resolveForcedActiveCommandSecretTargets(params: {
   sourceConfig: OpenClawConfig;
   resolvedConfig: OpenClawConfig;
@@ -360,7 +207,7 @@ async function resolveForcedActiveCommandSecretTargets(params: {
   }
   const context = createResolverContext({
     sourceConfig: params.sourceConfig,
-    env: getActiveSecretsRuntimeEnv(),
+    env: getActiveSecretsRuntimeEnvState(),
   });
   const defaults = params.sourceConfig.secrets?.defaults;
   for (const target of discoverConfigSecretTargetsByIds(params.sourceConfig, params.targetIds)) {
@@ -421,7 +268,7 @@ export function resolveCommandSecretsFromActiveRuntimeSnapshot(params: {
   diagnostics: string[];
   inactiveRefPaths: string[];
 }> {
-  const activeSnapshot = getActiveSecretsRuntimeSnapshot();
+  const activeSnapshot = getActiveSecretsRuntimeSnapshotState();
   if (!activeSnapshot) {
     throw new Error("Secrets runtime snapshot is not active.");
   }
@@ -440,7 +287,7 @@ export function resolveCommandSecretsFromActiveRuntimeSnapshot(params: {
 }
 
 async function resolveCommandSecretsFromSnapshot(params: {
-  activeSnapshot: NonNullable<ReturnType<typeof getActiveSecretsRuntimeSnapshot>>;
+  activeSnapshot: NonNullable<ReturnType<typeof getActiveSecretsRuntimeSnapshotState>>;
   commandName: string;
   targetIds: ReadonlySet<string>;
   allowedPaths?: ReadonlySet<string>;
@@ -464,7 +311,7 @@ async function resolveCommandSecretsFromSnapshot(params: {
   const context = hasOverrides
     ? createResolverContext({
         sourceConfig,
-        env: getActiveSecretsRuntimeEnv(),
+        env: getActiveSecretsRuntimeEnvState(),
       })
     : undefined;
   if (context) {
@@ -474,11 +321,6 @@ async function resolveCommandSecretsFromSnapshot(params: {
       context,
     });
   }
-  mirrorResolvedProviderCredentialToDirectPaths({
-    config: sourceConfig,
-    resolvedConfig,
-    providerOverrides: params.providerOverrides,
-  });
   await resolveForcedActiveCommandSecretTargets({
     sourceConfig,
     resolvedConfig,

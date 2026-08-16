@@ -572,10 +572,14 @@ describe("config env vars", () => {
         await fs.writeFile(path.join(stateDir, ".env"), "BRAVE_API_KEY=from-dotenv\n", "utf-8");
 
         const config: OpenClawConfig = {
-          tools: {
-            web: {
-              search: {
-                apiKey: "${BRAVE_API_KEY}",
+          plugins: {
+            entries: {
+              brave: {
+                config: {
+                  webSearch: {
+                    apiKey: "${BRAVE_API_KEY}",
+                  },
+                },
               },
             },
           },
@@ -583,12 +587,24 @@ describe("config env vars", () => {
 
         loadDotEnv({ quiet: true });
         const first = resolveConfigEnvVars(config, process.env) as OpenClawConfig;
-        expect(first.tools?.web?.search?.apiKey).toBe("from-dotenv");
+        expect(
+          (
+            first.plugins?.entries?.brave?.config as
+              | { webSearch?: { apiKey?: unknown } }
+              | undefined
+          )?.webSearch?.apiKey,
+        ).toBe("from-dotenv");
 
         delete process.env.BRAVE_API_KEY;
         loadDotEnv({ quiet: true });
         const second = resolveConfigEnvVars(config, process.env) as OpenClawConfig;
-        expect(second.tools?.web?.search?.apiKey).toBe("from-dotenv");
+        expect(
+          (
+            second.plugins?.entries?.brave?.config as
+              | { webSearch?: { apiKey?: unknown } }
+              | undefined
+          )?.webSearch?.apiKey,
+        ).toBe("from-dotenv");
       });
     });
   });

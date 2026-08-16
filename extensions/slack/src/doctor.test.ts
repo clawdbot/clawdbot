@@ -48,7 +48,7 @@ describe("slack doctor", () => {
       cfg: {
         channels: {
           slack: {
-            identity: "user",
+            postAs: "user",
             userToken: "test-user-token",
             appToken: "test-app-token",
           },
@@ -78,7 +78,7 @@ describe("slack doctor", () => {
       cfg: {
         channels: {
           slack: {
-            identity: "user",
+            postAs: "user",
             userToken: "test-user-token",
             appToken: "test-app-token",
           },
@@ -96,12 +96,12 @@ describe("slack doctor", () => {
   it.each([
     {
       name: "Socket Mode app token",
-      slack: { identity: "user", userToken: "test-user-token" },
+      slack: { postAs: "user", userToken: "test-user-token" },
       expected: "requires appToken for companion-app events",
     },
     {
       name: "HTTP signing secret",
-      slack: { identity: "user", mode: "http", userToken: "test-user-token" },
+      slack: { postAs: "user", mode: "http", userToken: "test-user-token" },
       expected: "requires signingSecret for companion-app events",
     },
   ])("warns when user identity is missing the $name", async ({ slack, expected }) => {
@@ -174,6 +174,19 @@ describe("slack doctor", () => {
     ).toBe(true);
   });
 
+  it("accepts workspace-qualified channel and user ids as stable policy entries", async () => {
+    const warnings = await collectSlackWarnings({
+      allowFrom: ["team:T11111111:user:U01234567"],
+      channels: {
+        "team:T11111111:channel:C01234567": {
+          users: ["team:T11111111:user:U01234567"],
+        },
+      },
+    });
+
+    expect(warnings).toEqual([]);
+  });
+
   it("warns for name-keyed allowlist channels but accepts routed ID forms (#81665)", async () => {
     const warnings = await collectSlackWarnings({
       channels: {
@@ -183,9 +196,11 @@ describe("slack doctor", () => {
         c0al2gdua7k: {},
         "channel:C0AL2GDUA7L": {},
         "channel:c0al2gdua7m": {},
+        "team:T11111111:channel:C0AL2GDUA7S": {},
         D0AL2GDUA7Q: {},
         "channel:d0al2gdua7r": {},
         "channel:dabcdefgh": {},
+        "team:T11111111:channel:D0AL2GDUA7T": {},
         "channel:customers": {},
         "CHANNEL:C0AL2GDUA7N": {},
         "channel:C0al2gdua7p": {},
@@ -208,10 +223,11 @@ describe("slack doctor", () => {
     const dmWarnings = warnings.filter((warning) =>
       warning.includes("is a Slack DM conversation ID"),
     );
-    expect(dmWarnings).toHaveLength(3);
+    expect(dmWarnings).toHaveLength(4);
     expect(dmWarnings[0]).toContain('channels.slack.channels."D0AL2GDUA7Q"');
     expect(dmWarnings[1]).toContain('channels.slack.channels."channel:d0al2gdua7r"');
     expect(dmWarnings[2]).toContain('channels.slack.channels."channel:dabcdefgh"');
+    expect(dmWarnings[3]).toContain('channels.slack.channels."team:T11111111:channel:D0AL2GDUA7T"');
     expect(dmWarnings[0]).toContain("channels.slack.dmPolicy");
   });
 

@@ -70,7 +70,10 @@ vi.mock("./runtime-prepare.runtime.js", () => ({
 
 vi.mock("./runtime-owner-assignments.js", () => ({
   listSecretAssignmentOwners: () => [],
-  resolveAndApplySecretAssignments: async () => [],
+  resolveAndApplySecretAssignments: async () => ({
+    degradedOwners: [],
+    resolvedValues: new Map(),
+  }),
 }));
 
 function loadAuthStoreFromTestFile(agentDir?: string): AuthProfileStore {

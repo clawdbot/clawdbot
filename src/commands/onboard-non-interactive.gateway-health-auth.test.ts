@@ -121,4 +121,14 @@ describe("resolveGatewayHealthProbeToken", () => {
 
     expect(resolved).toEqual({ password: "resolved-password" });
   });
+
+  it("resolves environment-only password auth for the local onboarding health probe", async () => {
+    process.env.OPENCLAW_GATEWAY_PASSWORD = "environment-password"; // pragma: allowlist secret
+
+    const resolved = await resolveGatewayHealthProbeToken({
+      gateway: { auth: { mode: "password" } },
+    } as OpenClawConfig);
+
+    expect(resolved).toEqual({ password: "environment-password" });
+  });
 });

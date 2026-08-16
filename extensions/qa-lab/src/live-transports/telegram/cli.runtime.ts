@@ -1,16 +1,18 @@
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { LiveTransportQaCommandOptions } from "openclaw/plugin-sdk/qa-runtime";
 import type { QaGatewayChildCommand } from "../../gateway-child.js";
 import { runQaFlowSuiteFromRuntime } from "../../suite-launch.runtime.js";
 import type { QaSuiteRoundTripProbe } from "../../suite-round-trip.js";
-import { readQaSuiteFailedScenarioCountFromFile } from "../../suite-summary.js";
+import { readQaSuiteFailedOrSkippedScenarioCountFromFile } from "../../suite-summary.js";
 // Qa Lab plugin module implements cli behavior.
 import { printLiveTransportQaArtifacts } from "../shared/live-artifacts.js";
 import { createTelegramQaTransportAdapter } from "./adapter.runtime.js";
-import { listTelegramQaScenarios, resolveTelegramQaScenarioIds } from "./profiles.js";
 import { resolveTelegramQaRunOptions } from "./run-options.runtime.js";
+import { listTelegramQaScenarios, resolveTelegramQaScenarioIds } from "./scenario-selection.js";
 
 const TELEGRAM_QA_SUT_OPENCLAW_COMMAND_ENV = "OPENCLAW_QA_TELEGRAM_SUT_OPENCLAW_COMMAND";
 const TELEGRAM_QA_SUT_UID_ENV = "OPENCLAW_QA_TELEGRAM_SUT_UID";
@@ -23,8 +25,9 @@ const TELEGRAM_QA_SUT_FORWARDED_ENV_KEYS_ENV = "OPENCLAW_QA_TELEGRAM_SUT_FORWARD
 
 function parseSutId(env: NodeJS.ProcessEnv, key: string) {
   const value = env[key]?.trim();
-  const parsed = value ? Number(value) : Number.NaN;
-  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+  // Match qa-lab CLI numeric flags: reject hex/exponent so UID/GID/timeouts stay decimal.
+  const parsed = value ? parseStrictPositiveInteger(value) : undefined;
+  if (parsed === undefined) {
     throw new Error(`${key} must be a positive integer.`);
   }
   return parsed;
@@ -139,12 +142,16 @@ type TelegramQaSuiteOptions = LiveTransportQaCommandOptions & {
   resolvedScenarioIds?: readonly string[];
   roundTripProbe?: QaSuiteRoundTripProbe;
   sutOpenClawCommand?: QaGatewayChildCommand;
+  mutateConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
 };
 
 export async function runQaTelegramSuite(opts: TelegramQaSuiteOptions) {
   const runOptions = resolveTelegramQaRunOptions(opts);
   if (runOptions.listScenarios) {
-    for (const scenario of listTelegramQaScenarios(runOptions.providerMode)) {
+    for (const scenario of listTelegramQaScenarios({
+      primaryModel: runOptions.primaryModel,
+      providerMode: runOptions.providerMode,
+    })) {
       const defaultLabel = scenario.defaultEnabled ? "default" : "optional";
       const refs =
         scenario.regressionRefs.length > 0 ? ` refs=${scenario.regressionRefs.join(",")}` : "";
@@ -158,6 +165,7 @@ export async function runQaTelegramSuite(opts: TelegramQaSuiteOptions) {
     ? [...opts.resolvedScenarioIds]
     : resolveTelegramQaScenarioIds({
         profile: opts.profile,
+        primaryModel: runOptions.primaryModel,
         providerMode: runOptions.providerMode,
         scenarioIds: runOptions.scenarioIds,
       });
@@ -188,16 +196,18 @@ export async function runQaTelegramSuite(opts: TelegramQaSuiteOptions) {
     roundTripProbe: opts.roundTripProbe,
     scenarioIds,
     sutOpenClawCommand: opts.sutOpenClawCommand,
+    mutateConfig: opts.mutateConfig,
   });
   printLiveTransportQaArtifacts("Telegram QA", {
     report: result.reportPath,
     summary: result.summaryPath,
   });
-  if (!runOptions.allowFailures) {
-    const failedScenarioCount = await readQaSuiteFailedScenarioCountFromFile(result.summaryPath);
-    if (failedScenarioCount > 0) {
-      process.exitCode = 1;
-    }
+  const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
+    result.summaryPath,
+    { requireExecutedScenario: runOptions.allowFailures === true },
+  );
+  if (!runOptions.allowFailures && blockingScenarioCount > 0) {
+    process.exitCode = 1;
   }
   return result;
 }
@@ -209,6 +219,7 @@ export async function runQaTelegramCommand(opts: LiveTransportQaCommandOptions) 
   }
   const resolvedScenarioIds = resolveTelegramQaScenarioIds({
     profile: opts.profile,
+    primaryModel: runOptions.primaryModel,
     providerMode: runOptions.providerMode,
     scenarioIds: runOptions.scenarioIds,
   });

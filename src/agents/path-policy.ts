@@ -4,7 +4,7 @@
  * Converts validated absolute or relative inputs into root-relative paths without allowing boundary escapes.
  */
 import path from "node:path";
-import { normalizeWindowsPathForComparison } from "../infra/path-guards.js";
+import { normalizeWindowsPathPreservingCase } from "../infra/path-guards.js";
 import { resolveSandboxInputPath } from "./sandbox-paths.js";
 
 // Shared path boundary helpers for workspace and sandbox-facing agent inputs.
@@ -74,12 +74,14 @@ function toRelativePathUnderRoot(params: {
   );
 
   if (process.platform === "win32") {
-    // Windows comparisons need normalized separators and drive casing before
-    // path.relative; otherwise the same root can look outside the boundary.
+    // path.win32.relative already matches the root case-insensitively, so normalization
+    // here only strips extended-length prefixes that would otherwise read as an escape.
+    // It must not lowercase: this relative path is what callers create files from, and
+    // Windows is case-insensitive but case-preserving.
     const rootResolved = path.win32.resolve(params.root);
     const resolvedCandidate = path.win32.resolve(resolvedInput);
-    const rootForCompare = normalizeWindowsPathForComparison(rootResolved);
-    const targetForCompare = normalizeWindowsPathForComparison(resolvedCandidate);
+    const rootForCompare = normalizeWindowsPathPreservingCase(rootResolved);
+    const targetForCompare = normalizeWindowsPathPreservingCase(resolvedCandidate);
     const relative = path.win32.relative(rootForCompare, targetForCompare);
     return validateRelativePathWithinBoundary({
       relativePath: relative,

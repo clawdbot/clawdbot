@@ -9,8 +9,11 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
+import { persistDevicePairingStoreState } from "./device-pairing-store.js";
+import { resolveNodePairingGeneration, type PairedDevice } from "./device-pairing.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import {
+  ApnsRegistrationPairingChangedError,
   clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
   loadApnsRegistrations,
@@ -32,6 +35,7 @@ async function registerDirectApnsRegistration(params: {
   token?: string;
   topic?: string;
   environment?: unknown;
+  expectedPairingGeneration?: string;
   baseDir: string;
 }) {
   return await registerApnsRegistration({
@@ -242,6 +246,94 @@ describe("push APNs registration store", () => {
       }),
     ).resolves.toBe(false);
     await expect(loadApnsRegistration("ios-node-1", baseDir)).resolves.toEqual(replacement);
+  });
+
+  it("rejects a stale registration after the expected pairing generation is removed", async () => {
+    const baseDir = await makeTempDir();
+    const nodeId = "ios-node-generation-guard";
+    const pairedDevice: PairedDevice = {
+      deviceId: nodeId,
+      publicKey: "public-key-generation-a",
+      role: "node",
+      roles: ["node"],
+      tokens: {
+        node: {
+          token: "node-token-generation-a",
+          role: "node",
+          scopes: [],
+          createdAtMs: 100,
+        },
+      },
+      nodeSurface: {
+        createdAtMs: 200,
+        approvedAtMs: 300,
+      },
+      createdAtMs: 50,
+      approvedAtMs: 300,
+    };
+    persistDevicePairingStoreState(
+      { pendingById: {}, pairedByDeviceId: { [nodeId]: pairedDevice } },
+      baseDir,
+      "paired",
+    );
+    const generation = resolveNodePairingGeneration(pairedDevice);
+    if (!generation) {
+      throw new Error("expected node pairing generation");
+    }
+
+    await registerDirectApnsRegistration({
+      nodeId,
+      expectedPairingGeneration: generation.key,
+      baseDir,
+    });
+    persistDevicePairingStoreState({ pendingById: {}, pairedByDeviceId: {} }, baseDir, "paired", {
+      clearApnsNodeIds: [nodeId],
+    });
+    await expect(loadApnsRegistration(nodeId, baseDir)).resolves.toBeNull();
+
+    const replacementDevice: PairedDevice = {
+      ...pairedDevice,
+      publicKey: "public-key-generation-b",
+      tokens: {
+        node: {
+          token: "node-token-generation-b",
+          role: "node",
+          scopes: [],
+          createdAtMs: 101,
+        },
+      },
+      nodeSurface: {
+        ...pairedDevice.nodeSurface,
+        createdAtMs: 200,
+        approvedAtMs: 301,
+      },
+    };
+    persistDevicePairingStoreState(
+      { pendingById: {}, pairedByDeviceId: { [nodeId]: replacementDevice } },
+      baseDir,
+      "paired",
+    );
+    const replacementGeneration = resolveNodePairingGeneration(replacementDevice);
+    if (!replacementGeneration) {
+      throw new Error("expected replacement node pairing generation");
+    }
+    const replacement = await registerDirectApnsRegistration({
+      nodeId,
+      token: "DCBA4321DCBA4321DCBA4321DCBA4321",
+      expectedPairingGeneration: replacementGeneration.key,
+      baseDir,
+    });
+    await expect(loadApnsRegistration(nodeId, baseDir)).resolves.toEqual(replacement);
+
+    await expect(
+      registerDirectApnsRegistration({
+        nodeId,
+        token: "ABCD1234ABCD1234ABCD1234ABCD1234",
+        expectedPairingGeneration: generation.key,
+        baseDir,
+      }),
+    ).rejects.toBeInstanceOf(ApnsRegistrationPairingChangedError);
+    await expect(loadApnsRegistration(nodeId, baseDir)).resolves.toEqual(replacement);
   });
 
   it("rejects invalid direct and relay inputs", async () => {

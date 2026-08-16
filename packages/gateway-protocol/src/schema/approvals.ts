@@ -4,6 +4,7 @@ import { Type } from "typebox";
 import { APPROVAL_ID_WELL_FORMED_UNICODE_PATTERN } from "./approval-id.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { withSince } from "./since.js";
 
 export { isWellFormedApprovalId } from "./approval-id.js";
 
@@ -109,6 +110,7 @@ export const PluginApprovalPresentationSchema = closedObject({
   kind: Type.Literal("plugin"),
   title: Type.String({ minLength: 1, maxLength: 80 }),
   description: Type.String({ minLength: 1, maxLength: 512 }),
+  detail: Type.Optional(Type.String({ minLength: 1, maxLength: 16_384 })),
   severity: PluginApprovalSeveritySchema,
   pluginId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   toolName: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
@@ -241,10 +243,17 @@ export const ApprovalHistoryResultSchema = closedObject({
 });
 
 /** Reviewer decision for one approval identified by its exact full id. */
+export const ApprovalChannelReviewerSchema = closedObject({
+  channel: NonEmptyString,
+  accountId: NonEmptyString,
+  senderId: NonEmptyString,
+});
+
 export const ApprovalResolveParamsSchema = closedObject({
   id: ApprovalRecordCommonFields.id,
   kind: ApprovalKindSchema,
   decision: ApprovalDecisionSchema,
+  reviewer: Type.Optional(ApprovalChannelReviewerSchema),
 });
 
 /** First-answer outcome plus the canonical recorded state returned to all contenders. */
@@ -260,32 +269,41 @@ const SessionApprovalEventCommonFields = {
 };
 
 /** Sanitized pending transition delivered only to an opted-in session audience. */
-export const PendingSessionApprovalEventSchema = closedObject({
-  ...SessionApprovalEventCommonFields,
-  phase: Type.Literal("pending"),
-  approval: PendingApprovalSnapshotSchema,
-});
+export const PendingSessionApprovalEventSchema = withSince(
+  "2026.7",
+  closedObject({
+    ...SessionApprovalEventCommonFields,
+    phase: Type.Literal("pending"),
+    approval: PendingApprovalSnapshotSchema,
+  }),
+);
 
 /** Sanitized terminal transition delivered only to an opted-in session audience. */
-export const TerminalSessionApprovalEventSchema = closedObject({
-  ...SessionApprovalEventCommonFields,
-  phase: Type.Literal("terminal"),
-  approval: TerminalApprovalSnapshotSchema,
-});
+export const TerminalSessionApprovalEventSchema = withSince(
+  "2026.7",
+  closedObject({
+    ...SessionApprovalEventCommonFields,
+    phase: Type.Literal("terminal"),
+    approval: TerminalApprovalSnapshotSchema,
+  }),
+);
 
 /** Sanitized approval transition delivered only to an opted-in session audience. */
-export const SessionApprovalEventSchema = Type.Union([
-  PendingSessionApprovalEventSchema,
-  TerminalSessionApprovalEventSchema,
-]);
+export const SessionApprovalEventSchema = withSince(
+  "2026.7",
+  Type.Union([PendingSessionApprovalEventSchema, TerminalSessionApprovalEventSchema]),
+);
 
 /** Authoritative pending approval set returned when a session stream subscribes. */
-export const SessionApprovalReplaySchema = closedObject({
-  sessionKey: NonEmptyString,
-  updatedAtMs: Type.Integer({ minimum: 0 }),
-  approvals: Type.Array(PendingApprovalSnapshotSchema),
-  truncated: Type.Boolean(),
-});
+export const SessionApprovalReplaySchema = withSince(
+  "2026.7",
+  closedObject({
+    sessionKey: NonEmptyString,
+    updatedAtMs: Type.Integer({ minimum: 0 }),
+    approvals: Type.Array(PendingApprovalSnapshotSchema),
+    truncated: Type.Boolean(),
+  }),
+);
 
 // Owner-local wire types derived directly from local schema consts so the
 // public plugin-sdk declaration graph never pulls in the ProtocolSchemas registry.
@@ -304,6 +322,7 @@ export type ApprovalGetParams = Static<typeof ApprovalGetParamsSchema>;
 export type ApprovalGetResult = Static<typeof ApprovalGetResultSchema>;
 export type ApprovalHistoryParams = Static<typeof ApprovalHistoryParamsSchema>;
 export type ApprovalHistoryResult = Static<typeof ApprovalHistoryResultSchema>;
+export type ApprovalChannelReviewer = Static<typeof ApprovalChannelReviewerSchema>;
 export type ApprovalResolveParams = Static<typeof ApprovalResolveParamsSchema>;
 export type ApprovalResolveResult = Static<typeof ApprovalResolveResultSchema>;
 export type AllowedApprovalSnapshot = Static<typeof AllowedApprovalSnapshotSchema>;

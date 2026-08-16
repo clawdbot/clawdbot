@@ -1,7 +1,8 @@
 /** Polls watched adopted sessions for direct upstream human activity. */
 import { createHash } from "node:crypto";
 import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
-import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { allowsProcessHomeSessionScan } from "../config/paths.js";
+import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { readRecentUserAssistantTextForSession } from "../config/sessions/transcript.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -30,7 +31,8 @@ const log = createSubsystemLogger("sessions/upstream-monitor");
 type SessionUpstreamMonitorOptions = OpenClawStateDatabaseOptions & {
   providers?: readonly SessionCatalogProvider[];
   now?: () => number;
-  loadEntry?: typeof loadSessionEntry;
+  signal?: AbortSignal;
+  loadEntry?: typeof loadSessionEntryReadOnly;
   isRunActive?: typeof isEmbeddedAgentRunActive;
   loadOwnRecentUserTexts?: (params: {
     entry: SessionEntry;
@@ -87,6 +89,51 @@ function upstreamMonitorLinkKey(probe: {
   return `${probe.sessionKey}\n${probe.agentId}\n${upstreamSourceKey(probe)}`;
 }
 
+function loadProbeSession(
+  probe: Pick<SessionUpstreamProbe, "sessionKey" | "agentId">,
+  options: SessionUpstreamMonitorOptions,
+): SessionEntry | undefined {
+  if (options.signal?.aborted) {
+    return undefined;
+  }
+  const entry = (options.loadEntry ?? loadSessionEntryReadOnly)({
+    sessionKey: probe.sessionKey,
+    agentId: probe.agentId,
+    clone: false,
+    ...(options.env ? { env: options.env } : {}),
+  });
+  return entry?.sessionId ? entry : undefined;
+}
+
+function loadIdleProbeSession(
+  probe: Pick<SessionUpstreamProbe, "sessionKey" | "agentId">,
+  options: SessionUpstreamMonitorOptions,
+  expectedSessionId?: string,
+): SessionEntry | undefined {
+  const entry = loadProbeSession(probe, options);
+  if (
+    !entry ||
+    (expectedSessionId !== undefined && entry.sessionId !== expectedSessionId) ||
+    (options.isRunActive ?? isEmbeddedAgentRunActive)(entry.sessionId)
+  ) {
+    return undefined;
+  }
+  return entry;
+}
+
+function readMatchingProbeLink(
+  probe: SessionUpstreamProbe,
+  expectedUpdatedAt: number | undefined,
+  options: OpenClawStateDatabaseOptions,
+) {
+  const currentLink = readSessionUpstreamLink(probe.sessionKey, probe.agentId, options);
+  return currentLink &&
+    currentLink.updatedAt === expectedUpdatedAt &&
+    upstreamSourceKey(currentLink) === upstreamSourceKey(probe)
+    ? currentLink
+    : undefined;
+}
+
 async function loadOwnRecentUserTexts(
   probe: Omit<SessionUpstreamProbe, "ownRecentUserTexts">,
   entry: SessionEntry,
@@ -113,19 +160,21 @@ async function loadOwnRecentUserTexts(
 
 async function probeProvenanceUnchanged(
   probe: SessionUpstreamProbe,
+  expectedSessionId: string | undefined,
   options: SessionUpstreamMonitorOptions,
 ): Promise<boolean> {
-  const entry = (options.loadEntry ?? loadSessionEntry)({
-    sessionKey: probe.sessionKey,
-    agentId: probe.agentId,
-    clone: false,
-    ...(options.env ? { env: options.env } : {}),
-  });
-  if (!entry?.sessionId || (options.isRunActive ?? isEmbeddedAgentRunActive)(entry.sessionId)) {
+  const entry = loadIdleProbeSession(probe, options, expectedSessionId);
+  if (!entry) {
     return false;
   }
   const current = await loadOwnRecentUserTexts(probe, entry, options);
+  // Transcript I/O can outlive run admission or session replacement. Recheck
+  // the current idle owner after the last await before committing its result.
+  if (!loadIdleProbeSession(probe, options, expectedSessionId)) {
+    return false;
+  }
   return (
+    options.signal?.aborted !== true &&
     current.length === probe.ownRecentUserTexts.length &&
     current.every((text, index) => text === probe.ownRecentUserTexts[index])
   );
@@ -135,6 +184,9 @@ async function runSessionUpstreamMonitorTick(
   options: SessionUpstreamMonitorOptions = {},
   missingCounts: Map<string, SessionUpstreamMissingCounter> = new Map(),
 ): Promise<void> {
+  if (options.signal?.aborted) {
+    return;
+  }
   const dbOptions = databaseOptions(options);
   const linksByCatalog = listWatchedSessionUpstreamLinks(dbOptions);
   const watchedLinkKeys = new Set(
@@ -154,6 +206,7 @@ async function runSessionUpstreamMonitorTick(
       continue;
     }
     const probes: SessionUpstreamProbe[] = [];
+    const sessionIdBySessionKey = new Map<string, string>();
     for (const link of links) {
       const probe = {
         sessionKey: link.sessionKey,
@@ -166,24 +219,21 @@ async function runSessionUpstreamMonitorTick(
       } satisfies Omit<SessionUpstreamProbe, "ownRecentUserTexts">;
       // One corrupt session store must not reject the whole tick; skip that link only.
       try {
-        const entry = (options.loadEntry ?? loadSessionEntry)({
-          sessionKey: probe.sessionKey,
-          agentId: probe.agentId,
-          clone: false,
-          ...(options.env ? { env: options.env } : {}),
-        });
+        const entry = loadIdleProbeSession(probe, options);
         // Active runs may still append upstream user items. Defer the scan so their
         // marker remains available for positive transcript-provenance matching.
-        if (
-          !entry?.sessionId ||
-          (options.isRunActive ?? isEmbeddedAgentRunActive)(entry.sessionId)
-        ) {
+        if (!entry) {
           continue;
+        }
+        const ownRecentUserTexts = await loadOwnRecentUserTexts(probe, entry, options);
+        if (options.signal?.aborted) {
+          return;
         }
         probes.push({
           ...probe,
-          ownRecentUserTexts: await loadOwnRecentUserTexts(probe, entry, options),
+          ownRecentUserTexts,
         });
+        sessionIdBySessionKey.set(probe.sessionKey, entry.sessionId);
       } catch (error) {
         log.warn(`upstream transcript provenance failed for ${probe.sessionKey}: ${String(error)}`);
       }
@@ -196,7 +246,12 @@ async function runSessionUpstreamMonitorTick(
       links.map((link) => [link.sessionKey, link.updatedAt]),
     );
     try {
-      const outcomes = await provider.checkUpstreamActivity(probes);
+      const outcomes = await provider.checkUpstreamActivity(probes, {
+        allowProcessHomeFallback: allowsProcessHomeSessionScan(options.env ?? process.env),
+      });
+      if (options.signal?.aborted) {
+        return;
+      }
       const missingSessionKeys = new Set(
         outcomes
           .filter((outcome) => outcome.kind === "missing")
@@ -215,8 +270,27 @@ async function runSessionUpstreamMonitorTick(
         const missingCountKey = upstreamMonitorLinkKey(probe);
         if (outcome.kind === "missing") {
           const expectedUpdatedAt = linkUpdatedAtBySessionKey.get(outcome.sessionKey);
-          if (expectedUpdatedAt === undefined) {
+          const expectedSessionId = sessionIdBySessionKey.get(outcome.sessionKey);
+          // Provider I/O may outlive a new run or Continue. Only an idle current
+          // session and the exact scanned link can advance the missing streak.
+          if (expectedUpdatedAt === undefined || expectedSessionId === undefined) {
             missingCounts.delete(missingCountKey);
+            continue;
+          }
+          if (options.signal?.aborted) {
+            return;
+          }
+          const currentLink = readMatchingProbeLink(probe, expectedUpdatedAt, dbOptions);
+          if (!currentLink) {
+            missingCounts.delete(missingCountKey);
+            continue;
+          }
+          const currentSession = loadProbeSession(probe, options);
+          if (!currentSession || currentSession.sessionId !== expectedSessionId) {
+            missingCounts.delete(missingCountKey);
+            continue;
+          }
+          if ((options.isRunActive ?? isEmbeddedAgentRunActive)(currentSession.sessionId)) {
             continue;
           }
           const previous = missingCounts.get(missingCountKey);
@@ -229,15 +303,6 @@ async function runSessionUpstreamMonitorTick(
             linkUpdatedAt: expectedUpdatedAt,
           });
           if (missingCount < SESSION_UPSTREAM_MISSING_THRESHOLD) {
-            continue;
-          }
-          const currentLink = readSessionUpstreamLink(probe.sessionKey, probe.agentId, dbOptions);
-          if (
-            !currentLink ||
-            currentLink.updatedAt !== expectedUpdatedAt ||
-            upstreamSourceKey(currentLink) !== upstreamSourceKey(probe)
-          ) {
-            missingCounts.delete(missingCountKey);
             continue;
           }
           const sourceKey = upstreamSourceKey(probe);
@@ -272,7 +337,13 @@ async function runSessionUpstreamMonitorTick(
         try {
           // A run can start while the provider is scanning. Recheck ownership and
           // provenance before any marker advance so its prompt remains deferred.
-          if (!(await probeProvenanceUnchanged(probe, options))) {
+          if (
+            !(await probeProvenanceUnchanged(
+              probe,
+              sessionIdBySessionKey.get(probe.sessionKey),
+              options,
+            ))
+          ) {
             continue;
           }
         } catch (error) {
@@ -286,19 +357,10 @@ async function runSessionUpstreamMonitorTick(
         // From here to the record the path is synchronous, so a stale scan can
         // neither record from the old source nor clobber the refreshed marker.
         const expectedUpdatedAt = linkUpdatedAtBySessionKey.get(activity.sessionKey);
-        const currentLink = readSessionUpstreamLink(probe.sessionKey, probe.agentId, dbOptions);
         // Compare source identity too: a same-millisecond Continue can refresh the
         // row without changing updated_at, so the timestamp alone is not a reliable
         // optimistic lock.
-        if (
-          !currentLink ||
-          currentLink.updatedAt !== expectedUpdatedAt ||
-          upstreamSourceKey({
-            hostId: currentLink.hostId,
-            threadId: currentLink.threadId,
-            upstreamRef: currentLink.upstreamRef,
-          }) !== upstreamSourceKey(probe)
-        ) {
+        if (!readMatchingProbeLink(probe, expectedUpdatedAt, dbOptions)) {
           continue;
         }
         if (activity.humanTurns === 0) {
@@ -347,13 +409,15 @@ export function startSessionUpstreamMonitor(
 ): SessionUpstreamMonitor {
   let stopped = false;
   let running = false;
+  const lifecycle = new AbortController();
+  const tickOptions = { ...options, signal: lifecycle.signal };
   const missingCounts = new Map<string, SessionUpstreamMissingCounter>();
   const run = () => {
     if (stopped || running) {
       return;
     }
     running = true;
-    void runSessionUpstreamMonitorTick(options, missingCounts)
+    void runSessionUpstreamMonitorTick(tickOptions, missingCounts)
       .catch((error: unknown) => {
         log.warn(`upstream monitor tick failed: ${String(error)}`);
       })
@@ -368,7 +432,11 @@ export function startSessionUpstreamMonitor(
   interval.unref?.();
   return {
     stop: () => {
+      if (stopped) {
+        return;
+      }
       stopped = true;
+      lifecycle.abort();
       clearTimeout(initialTimer);
       clearInterval(interval);
     },

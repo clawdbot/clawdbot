@@ -2,31 +2,39 @@
 summary: "Microsoft Teams meetings plugin: join work or consumer meetings as a Chrome browser guest"
 read_when:
   - You want an OpenClaw agent to join a Microsoft Teams meeting
-  - You are configuring Chrome, BlackHole, or SoX for Teams meeting talk-back
+  - You are configuring Chrome or virtual audio for Teams meeting talk-back
 title: "Microsoft Teams meetings plugin"
 ---
 
-The `teams-meetings` plugin joins Microsoft Teams links as a guest in the OpenClaw Chrome profile. It accepts work links under `teams.microsoft.com/l/meetup-join/...` and consumer links under `teams.live.com/meet/...`. It does not create meetings, dial in, call Microsoft Graph, or record meetings.
+The `teams-meetings` plugin joins Microsoft Teams links as a guest in the OpenClaw Chrome profile. It accepts work links under `teams.microsoft.com/l/meetup-join/...` and consumer links under `teams.live.com/meet/...`. It does not create meetings, dial in, call Microsoft Graph, or capture audio/video recordings.
 
 ## Setup
 
-Talk-back uses the same local audio prerequisites as the [Google Meet plugin](/plugins/google-meet): macOS, the `BlackHole 2ch` virtual audio device, and SoX.
+Talk-back uses the shared [meeting-plugin audio setup](/plugins/meeting-plugins#prepare-chrome-and-audio): `BlackHole 2ch` plus SoX on macOS, or PipeWire-Pulse plus `pactl`/`pacat`/`parec` on Linux.
 
 ```bash
+openclaw plugins install @openclaw/teams-meetings
+openclaw gateway restart
 brew install blackhole-2ch sox
 sudo reboot
 system_profiler SPAudioDataType | grep -i BlackHole
 command -v sox
 ```
 
-Enable the plugin, then check setup:
+On Linux, verify the desktop user's PipeWire-Pulse session instead:
+
+```bash
+pactl info
+command -v pactl pacat parec
+```
+
+The plugin is enabled by default after installation. Add an entry only to customize it, then check setup:
 
 ```json5
 {
   plugins: {
     entries: {
       "teams-meetings": {
-        enabled: true,
         config: {
           defaultMode: "agent",
           chrome: { guestName: "OpenClaw Agent" },
@@ -37,12 +45,14 @@ Enable the plugin, then check setup:
 }
 ```
 
+Run `openclaw plugins disable teams-meetings` if you do not want the plugin active.
+
 ```bash
 openclaw teamsmeetings setup
 openclaw teamsmeetings join 'https://teams.microsoft.com/l/meetup-join/...'
 ```
 
-Use `chromeNode.node` to run Chrome, BlackHole, and SoX on a paired macOS node. The node must allow `teamsmeetings.chrome` and `browser.proxy`.
+Use `chromeNode.node` to run Chrome and its native virtual-audio backend on a paired macOS or Linux node. The node must allow `teamsmeetings.chrome` and `browser.proxy`; backend setup and generated commands resolve on that node, not on the Gateway host.
 
 ## Modes
 
@@ -52,7 +62,15 @@ Use `chromeNode.node` to run Chrome, BlackHole, and SoX on a paired macOS node. 
 | `bidi`       | A realtime voice model listens and replies directly.                        |
 | `transcribe` | Observe-only join with live-caption transcript snapshots.                   |
 
-Transcribe mode enables Teams live captions after admission and captures speaker-attributed caption rows. The `transcript` action returns the bounded caption buffer for the active OpenClaw meeting session.
+Teams live captions are enabled after admission in every mode so OpenClaw can
+persist speaker-attributed notes. The `transcript` action still returns the
+bounded live buffer only for `transcribe` sessions. On leave, OpenClaw stores
+the durable transcript and derived summary in the shared state database; list
+or export them with [`openclaw transcripts`](/cli/transcripts).
+
+Automatic notes are enabled by default. Set `transcripts.enabled: false` to
+disable durable notes globally; explicit `transcribe` mode still exposes only
+its bounded live tail.
 
 ## Guest join limits
 
@@ -65,3 +83,8 @@ The consumer Teams web client has been live-validated for the app interstitial, 
 ## Tool and gateway surface
 
 The `teams_meetings` agent tool supports `join`, `leave`, `status`, `transcript`, and `speak`. Gateway methods use the `teamsmeetings.*` prefix. The node command is `teamsmeetings.chrome`.
+
+## Related
+
+- [Meeting plugins overview](/plugins/meeting-plugins)
+- [Microsoft Teams channel](/channels/msteams)

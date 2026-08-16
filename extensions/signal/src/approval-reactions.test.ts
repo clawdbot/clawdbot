@@ -20,8 +20,10 @@ const resolverMocks = vi.hoisted(() => ({
   isApprovalNotFoundError: vi.fn(() => false),
 }));
 
-vi.mock("./approval-resolver.js", () => ({
-  resolveSignalApproval: resolverMocks.resolveSignalApproval,
+vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
+  resolveApprovalOverGateway: resolverMocks.resolveSignalApproval,
+}));
+vi.mock("openclaw/plugin-sdk/error-runtime", () => ({
   isApprovalNotFoundError: resolverMocks.isApprovalNotFoundError,
 }));
 
@@ -758,6 +760,8 @@ describe("Signal approval reactions", () => {
       approvalId: "plugin:abc",
       approvalKind: "plugin",
       decision: "allow-once",
+      channel: "signal",
+      accountId: "default",
       senderId: "+15551230000",
       gatewayUrl: undefined,
     });
@@ -818,6 +822,8 @@ describe("Signal approval reactions", () => {
       approvalId: "exec-default-to",
       approvalKind: "exec",
       decision: "allow-once",
+      channel: "signal",
+      accountId: "default",
       senderId: "+15551230000",
       gatewayUrl: undefined,
     });

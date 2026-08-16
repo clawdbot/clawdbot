@@ -3,7 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveSessionFilePath, resolveStorePath } from "./paths.js";
+import {
+  resolveSessionFilePathCore,
+  resolveSessionStorePathCore,
+  SessionStoreAgentIdRequiredError,
+} from "./paths.js";
 
 const tempDirs: string[] = [];
 
@@ -24,7 +28,7 @@ describe("resolveSessionFilePath cross-root reroot", () => {
     fs.writeFileSync(path.join(sessionsDir, "sess-1.jsonl"), "{}\n", "utf8");
     const foreign = "/nonexistent-old-root/.openclaw/agents/main/sessions/sess-1.jsonl";
 
-    const resolved = resolveSessionFilePath(
+    const resolved = resolveSessionFilePathCore(
       "sess-1",
       { sessionFile: foreign },
       { sessionsDir, agentId: "main" },
@@ -40,7 +44,7 @@ describe("resolveSessionFilePath cross-root reroot", () => {
     fs.mkdirSync(sessionsDir, { recursive: true });
     const foreign = "/nonexistent-old-root/.openclaw/agents/main/sessions/sess-2.jsonl";
 
-    const resolved = resolveSessionFilePath(
+    const resolved = resolveSessionFilePathCore(
       "sess-2",
       { sessionFile: foreign },
       { sessionsDir, agentId: "main" },
@@ -51,6 +55,17 @@ describe("resolveSessionFilePath cross-root reroot", () => {
 });
 
 describe("resolveStorePath", () => {
+  it("resolves a fixed literal path without an agent owner", () => {
+    const fixed = path.join(path.parse(process.cwd()).root, "shared", "sessions.json");
+    expect(resolveSessionStorePathCore(fixed)).toBe(path.resolve(fixed));
+  });
+
+  it("throws a typed error when an agent template has no owner", () => {
+    expect(() => resolveSessionStorePathCore("/state/agents/{agentId}/sessions.json")).toThrow(
+      SessionStoreAgentIdRequiredError,
+    );
+  });
+
   it("uses the default agent store when session.store is absent or blank", () => {
     const stateDir = path.join(path.parse(process.cwd()).root, "openclaw-test-state");
     const env = {
@@ -59,7 +74,7 @@ describe("resolveStorePath", () => {
     };
     const expected = path.join(stateDir, "agents", "work", "sessions", "sessions.json");
 
-    expect(resolveStorePath(undefined, { agentId: "work", env })).toBe(expected);
-    expect(resolveStorePath("", { agentId: "work", env })).toBe(expected);
+    expect(resolveSessionStorePathCore(undefined, { agentId: "work", env })).toBe(expected);
+    expect(resolveSessionStorePathCore("", { agentId: "work", env })).toBe(expected);
   });
 });

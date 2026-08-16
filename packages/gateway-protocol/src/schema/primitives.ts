@@ -49,13 +49,6 @@ export const GatewayClientIdSchema = Type.Enum(GATEWAY_CLIENT_IDS);
 /** Closed gateway client mode schema aligned with `GATEWAY_CLIENT_MODES`. */
 export const GatewayClientModeSchema = Type.Enum(GATEWAY_CLIENT_MODES);
 
-/** Supported secret reference backing stores for protocol SecretRef payloads. */
-export const SecretRefSourceSchema = Type.Union([
-  Type.Literal("env"),
-  Type.Literal("file"),
-  Type.Literal("exec"),
-]);
-
 const SecretProviderAliasString = Type.String({
   pattern: SECRET_PROVIDER_ALIAS_PATTERN.source,
 });
@@ -91,11 +84,18 @@ const ExecSecretRefSchema = closedObject({
   id: Type.String({ pattern: EXEC_SECRET_REF_ID_JSON_SCHEMA_PATTERN }),
 });
 
+const StoreSecretRefSchema = closedObject({
+  source: Type.Literal("store"),
+  provider: SecretProviderAliasString,
+  id: Type.String({ pattern: ENV_SECRET_REF_ID_RE.source }),
+});
+
 /** Structured secret reference accepted by config and channel protocol payloads. */
 export const SecretRefSchema = Type.Union([
   EnvSecretRefSchema,
   FileSecretRefSchema,
   ExecSecretRefSchema,
+  StoreSecretRefSchema,
 ]);
 
 /** Secret input value: either an inline string or a structured SecretRef. */

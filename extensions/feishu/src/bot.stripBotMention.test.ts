@@ -36,6 +36,22 @@ describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
     expect(ctx.content).toBe("hello world");
   });
 
+  it("parses an empty group message body with bot-mention metadata", () => {
+    const event = makeEvent(
+      "",
+      [{ key: "@_bot_1", name: "Bot", id: { open_id: BOT_OPEN_ID } }],
+      "group",
+    );
+    event.message.content = "";
+
+    expect(parseFeishuMessageEvent(event, BOT_OPEN_ID)).toMatchObject({
+      content: "",
+      chatType: "group",
+      mentionedBot: true,
+      hasAnyMention: true,
+    });
+  });
+
   it("strips bot mention in p2p (addressing prefix, not semantic content)", () => {
     const ctx = parseFeishuMessageEvent(
       makeEvent("@_bot_1 hello", [{ key: "@_bot_1", name: "Bot", id: { open_id: "ou_bot" } }]),

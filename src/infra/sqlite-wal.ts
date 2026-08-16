@@ -2,14 +2,18 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import type { Result } from "@openclaw/normalization-core/result";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { isSqliteLockError } from "./sqlite-transaction.js";
 
 // WAL maintenance configures SQLite write-ahead logging and schedules bounded
 // checkpoints so state databases do not accumulate unbounded WAL files.
 const DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES = 1000;
 const DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS = 30 * 60 * 1000;
+// SQLite applies this ceiling when a fully checkpointed WAL resets on the next
+// commit. Keep it well above the usual ~4 MiB autocheckpoint window so only
+// pathological high-water marks pay the truncation cost.
+const DEFAULT_SQLITE_WAL_JOURNAL_SIZE_LIMIT_BYTES = 64 * 1024 * 1024;
 // 512 pages (~2MB at 4KB pages) per periodic pass keeps page release strictly
 // bounded so maintenance can never behave like a blocking full VACUUM.
 const INCREMENTAL_VACUUM_MAX_PAGES_PER_PASS = 512;
@@ -34,7 +38,7 @@ type MountEntry = { mountPoint: string; fsType: string; source?: string };
 
 export type SqliteWalMaintenance = {
   checkpoint: () => boolean;
-  close: () => boolean;
+  close: (options?: { checkpointMode?: SqliteWalCheckpointMode }) => boolean;
 };
 
 /** Options controlling WAL autocheckpoint and periodic checkpoint behavior. */
@@ -467,6 +471,7 @@ export function configureSqliteWalMaintenance(
   }
   enableMacosCheckpointFullfsync(db);
   db.exec(`PRAGMA wal_autocheckpoint = ${autoCheckpointPages};`);
+  db.exec(`PRAGMA journal_size_limit = ${DEFAULT_SQLITE_WAL_JOURNAL_SIZE_LIMIT_BYTES};`);
 
   const runCheckpoint = (mode: SqliteWalCheckpointMode): boolean => {
     try {
@@ -508,12 +513,15 @@ export function configureSqliteWalMaintenance(
 
   return {
     checkpoint,
-    close: () => {
+    close: (closeOptions) => {
       if (timer) {
         clearInterval(timer);
         timer = null;
       }
-      return checkpoint();
+      // Cache eviction passes PASSIVE: a TRUNCATE close-checkpoint waits on
+      // readers and has starved the event loop for seconds under fleet churn.
+      // Orderly dispose/delete keeps TRUNCATE so sidecars are flushed for unlink.
+      return runCheckpoint(closeOptions?.checkpointMode ?? checkpointMode);
     },
   };
 }

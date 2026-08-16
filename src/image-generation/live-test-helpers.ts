@@ -38,12 +38,12 @@ export function parseCaseFilter(raw?: string): Set<string> | null {
   return values.length > 0 ? new Set(values) : null;
 }
 
-export function parseCsvFilter(raw?: string): Set<string> | null {
+export function parseImageProviderFilter(raw?: string): Set<string> | null {
   return parseLiveCsvFilter(raw, { lowercase: false });
 }
 
 export function resolveConfiguredLiveImageModels(cfg: OpenClawConfig): Map<string, string> {
-  return resolveConfiguredLiveProviderModels(cfg.agents?.defaults?.imageGenerationModel);
+  return resolveConfiguredLiveProviderModels(cfg.agents?.defaults?.mediaModels?.image);
 }
 
 export function resolveLiveImageAuthStore(params: {

@@ -6,7 +6,6 @@ import { SESSION_PLACEMENT_STATES } from "./session-placement-state.js";
 
 export {
   isCloudWorkerPlacementState,
-  SESSION_PLACEMENT_STATES,
   type SessionPlacementState,
 } from "./session-placement-state.js";
 
@@ -66,6 +65,27 @@ const SessionPlacementAckProperties = {
   ),
 };
 
+export const SessionPlacementDiskSpaceSchema = closedObject({
+  status: Type.Union([Type.Literal("ok"), Type.Literal("warning"), Type.Literal("critical")]),
+  availableBytes: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+  totalBytes: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+  observedAtMs: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+});
+
+const SessionPlacementDiskSpaceProperties = {
+  diskSpace: Type.Optional(SessionPlacementDiskSpaceSchema),
+};
+
+const WorkspaceResultConflictSchema = closedObject({
+  paths: Type.Array(NonEmptyString, { minItems: 1, maxItems: 256 }),
+  stagedResultRef: NonEmptyString,
+  totalCount: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
+});
+
+const SessionPlacementConflictProperties = {
+  workspaceResultConflict: Type.Optional(WorkspaceResultConflictSchema),
+};
+
 const TerminalSessionPlacementProperties = {
   environmentId: Type.Optional(NonEmptyString),
   activeOwnerEpoch: Type.Optional(SessionPlacementOwnerEpochSchema),
@@ -73,6 +93,9 @@ const TerminalSessionPlacementProperties = {
   remoteWorkspaceDir: Type.Optional(NonEmptyString),
   workerBundleHash: Type.Optional(WorkerBundleHashSchema),
   ...SessionPlacementAckProperties,
+  ...SessionPlacementConflictProperties,
+  terminalReason: Type.Optional(NonEmptyString),
+  terminalAtMs: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
 };
 
 function createUnownedSessionPlacementSchema<const State extends "local" | "requested">(
@@ -92,26 +115,28 @@ function createWorkerOwnedSessionPlacementSchema<
     workerBundleHash: WorkerBundleHashSchema,
     ...SessionPlacementWorkspaceProperties,
     ...SessionPlacementAckProperties,
+    ...SessionPlacementConflictProperties,
+    ...SessionPlacementDiskSpaceProperties,
   });
 }
 
-export const LocalSessionPlacementSchema = createUnownedSessionPlacementSchema("local");
-export const RequestedSessionPlacementSchema = createUnownedSessionPlacementSchema("requested");
+const LocalSessionPlacementSchema = createUnownedSessionPlacementSchema("local");
+const RequestedSessionPlacementSchema = createUnownedSessionPlacementSchema("requested");
 
-export const ProvisioningSessionPlacementSchema = closedObject({
+const ProvisioningSessionPlacementSchema = closedObject({
   state: Type.Literal("provisioning"),
   ...SessionPlacementTimingProperties,
   environmentId: Type.Optional(NonEmptyString),
 });
 
-export const SyncingSessionPlacementSchema = closedObject({
+const SyncingSessionPlacementSchema = closedObject({
   state: Type.Literal("syncing"),
   ...SessionPlacementTimingProperties,
   environmentId: NonEmptyString,
   workerBundleHash: WorkerBundleHashSchema,
 });
 
-export const StartingSessionPlacementSchema = closedObject({
+const StartingSessionPlacementSchema = closedObject({
   state: Type.Literal("starting"),
   ...SessionPlacementTimingProperties,
   environmentId: NonEmptyString,
@@ -119,18 +144,17 @@ export const StartingSessionPlacementSchema = closedObject({
   ...SessionPlacementWorkspaceProperties,
 });
 
-export const ActiveWorkerSessionPlacementSchema = createWorkerOwnedSessionPlacementSchema("active");
-export const DrainingSessionPlacementSchema = createWorkerOwnedSessionPlacementSchema("draining");
-export const ReconcilingSessionPlacementSchema =
-  createWorkerOwnedSessionPlacementSchema("reconciling");
+const ActiveWorkerSessionPlacementSchema = createWorkerOwnedSessionPlacementSchema("active");
+const DrainingSessionPlacementSchema = createWorkerOwnedSessionPlacementSchema("draining");
+const ReconcilingSessionPlacementSchema = createWorkerOwnedSessionPlacementSchema("reconciling");
 
-export const ReclaimedSessionPlacementSchema = closedObject({
+const ReclaimedSessionPlacementSchema = closedObject({
   state: Type.Literal("reclaimed"),
   ...SessionPlacementTimingProperties,
   ...TerminalSessionPlacementProperties,
 });
 
-export const FailedSessionPlacementSchema = closedObject({
+const FailedSessionPlacementSchema = closedObject({
   state: Type.Literal("failed"),
   ...SessionPlacementTimingProperties,
   ...TerminalSessionPlacementProperties,
@@ -151,12 +175,22 @@ export const SessionPlacementSchema = Type.Union([
   FailedSessionPlacementSchema,
 ]);
 
-/** Requests one-way dispatch of an existing local session to a configured worker profile. */
-export const SessionsDispatchParamsSchema = closedObject({
-  key: NonEmptyString,
-  agentId: Type.Optional(NonEmptyString),
-  profileId: NonEmptyString,
-});
+/** Requests one-way dispatch of an existing local session to exactly one worker target. */
+export const SessionsDispatchParamsSchema = Type.Object(
+  {
+    key: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+    profileId: Type.Optional(NonEmptyString),
+    deviceId: Type.Optional(NonEmptyString),
+  },
+  {
+    additionalProperties: false,
+    oneOf: [
+      { required: ["profileId"], not: { required: ["deviceId"] } },
+      { required: ["deviceId"], not: { required: ["profileId"] } },
+    ],
+  },
+);
 
 /** Result returned once session dispatch reaches durable worker ownership. */
 export const SessionsDispatchResultSchema = closedObject({
@@ -188,6 +222,7 @@ export const SessionsReclaimResultSchema = Type.Object(
 
 export const SessionPlacementProtocolSchemas = {
   SessionPlacementState: SessionPlacementStateSchema,
+  SessionPlacementDiskSpace: SessionPlacementDiskSpaceSchema,
   LocalSessionPlacement: LocalSessionPlacementSchema,
   RequestedSessionPlacement: RequestedSessionPlacementSchema,
   ProvisioningSessionPlacement: ProvisioningSessionPlacementSchema,
@@ -206,6 +241,7 @@ export const SessionPlacementProtocolSchemas = {
 } as const;
 
 export type SessionPlacement = Static<typeof SessionPlacementSchema>;
+export type SessionPlacementDiskSpace = Static<typeof SessionPlacementDiskSpaceSchema>;
 export type SessionsDispatchParams = Static<typeof SessionsDispatchParamsSchema>;
 export type SessionsDispatchResult = Static<typeof SessionsDispatchResultSchema>;
 export type SessionsReclaimParams = Static<typeof SessionsReclaimParamsSchema>;

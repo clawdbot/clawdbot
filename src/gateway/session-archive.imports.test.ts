@@ -10,11 +10,6 @@ const importCases = [
     importPath: "../auto-reply/reply/session.js",
     scope: "reply-session",
   },
-  {
-    label: "session store module",
-    importPath: "../config/sessions/store.js",
-    scope: "session-store",
-  },
 ] as const;
 
 describe("session archive runtime import guards", () => {

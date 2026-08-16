@@ -165,7 +165,6 @@ describe("handleCommands /plugins install", () => {
             source: "exec",
             command: process.execPath,
             args: ["-e", "process.exit(1)"],
-            allowInsecurePath: true,
           },
         },
       },
@@ -203,7 +202,10 @@ describe("handleCommands /plugins install", () => {
       const installParams = mockFirstObjectArg(installPluginFromNpmSpecMock);
       expectObjectFields(installParams, {
         spec: "@acme/policy-plugin@1.0.0",
-        config: policyConfig,
+        config: {
+          ...policyConfig,
+          agents: { entries: { main: {} } },
+        },
         mode: "update",
       });
       expect(installParams).not.toHaveProperty("expectedPluginId");
@@ -228,7 +230,6 @@ describe("handleCommands /plugins install", () => {
             source: "exec",
             command: process.execPath,
             args: ["-e", "process.exit(1)"],
-            allowInsecurePath: true,
           },
         },
       },
@@ -264,7 +265,10 @@ describe("handleCommands /plugins install", () => {
       expect(result?.reply?.text).toContain('Installed plugin "brave"');
       expectObjectFields(mockFirstObjectArg(installPluginFromNpmSpecMock), {
         spec: "@openclaw/brave-plugin",
-        config: policyConfig,
+        config: {
+          ...policyConfig,
+          agents: { entries: { main: {} } },
+        },
         expectedPluginId: "brave",
         trustedSourceLinkedOfficialInstall: true,
       });
@@ -745,6 +749,8 @@ describe("handleCommands /plugins install", () => {
   it("includes non-blocking ClawHub warnings in successful chat install replies", async () => {
     const warning =
       'ClawHub trust warning for "@openclaw/clawhub-demo@1.2.3": scan=pending; reasons=pending.';
+    const setupWarning =
+      'Installed plugin "clawhub-demo" without enabling it because it requires configuration first. Configure it, then run `openclaw plugins enable clawhub-demo`.';
     const richWarning = `\u001b[33m${warning}\u001b[39m`;
     installPluginFromClawHubMock.mockImplementation(async (params: unknown) => {
       if (!params || typeof params !== "object" || !("logger" in params)) {
@@ -779,7 +785,12 @@ describe("handleCommands /plugins install", () => {
         },
       };
     });
-    persistPluginInstallMock.mockResolvedValue({});
+    persistPluginInstallMock.mockImplementation(
+      async (params: { persistenceLogger?: { warn?: (message: string) => void } }) => {
+        params.persistenceLogger?.warn?.(setupWarning);
+        return { plugins: { entries: { "clawhub-demo": { enabled: false } } } };
+      },
+    );
 
     await withTempHome("openclaw-command-plugins-home-", async () => {
       const workspaceDir = await workspaceHarness.createWorkspace();
@@ -793,6 +804,7 @@ describe("handleCommands /plugins install", () => {
       }
       expect(result.reply?.text).toContain('Installed plugin "clawhub-demo"');
       expect(result.reply?.text).toContain(warning);
+      expect(result.reply?.text).toContain(setupWarning);
       expect(result.reply?.text).not.toContain("\u001b");
       expect(mockFirstObjectArg(installPluginFromClawHubMock).logger).toEqual(
         expect.objectContaining({ terminalLinks: false }),

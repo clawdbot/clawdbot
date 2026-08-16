@@ -16,6 +16,13 @@ export class CompactionError extends Error {
   }
 }
 
+/** Internal typed signal for a completed summary response with no usable text. */
+export class InvalidSummaryOutputError extends CompactionError {
+  constructor(message: string) {
+    super("summarization_failed", message);
+  }
+}
+
 type BranchSummaryErrorCode = "aborted" | "summarization_failed" | "invalid_session";
 
 export class BranchSummaryError extends Error {
@@ -59,6 +66,14 @@ export interface CompactionEntry<T = unknown> extends SessionTreeEntryBase {
   tokensBefore: number;
   details?: T;
   fromHook?: boolean;
+}
+
+type ResetReason = "new" | "reset" | "idle" | "daily" | "cron-stale";
+
+export interface ResetEntry extends SessionTreeEntryBase {
+  type: "reset";
+  reason: ResetReason;
+  firstKeptEntryId?: string;
 }
 
 interface BranchSummaryEntry<T = unknown> extends SessionTreeEntryBase {
@@ -105,6 +120,7 @@ export type SessionTreeEntry =
   | ThinkingLevelChangeEntry
   | ModelChangeEntry
   | CompactionEntry
+  | ResetEntry
   | BranchSummaryEntry
   | CustomEntry
   | CustomMessageEntry

@@ -16,7 +16,7 @@ import type {
   WhatsAppQaApprovalKind,
   WhatsAppQaApprovalScenarioRun,
   WhatsAppQaGateway,
-  WhatsAppQaScenarioDefinition,
+  WhatsAppQaScenarioMetadata,
 } from "./whatsapp-live.contracts.js";
 import { formatDiagnosticId } from "./whatsapp-live.operations.js";
 
@@ -210,7 +210,7 @@ async function waitForWhatsAppApprovalMessage(params: {
   driver: WhatsAppQaDriverSession;
   observedAfter?: Date;
   observedMessages: WhatsAppObservedMessage[];
-  scenario: WhatsAppQaScenarioDefinition;
+  scenario: WhatsAppQaScenarioMetadata;
   state: "pending" | "resolved";
   sutPhoneE164: string;
   timeoutMs: number;
@@ -267,7 +267,7 @@ export async function runWhatsAppApprovalScenario(params: {
   gateway: WhatsAppQaGateway;
   observedMessages: WhatsAppObservedMessage[];
   run: WhatsAppQaApprovalScenarioRun;
-  scenario: WhatsAppQaScenarioDefinition;
+  scenario: WhatsAppQaScenarioMetadata;
   sutAccountId: string;
   sutPhoneE164: string;
   turnSourceTo: string;

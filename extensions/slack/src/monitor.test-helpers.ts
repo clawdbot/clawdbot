@@ -2,11 +2,16 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 // Slack helper module supports monitor helpers behavior.
-import { closeOpenClawStateDatabaseForTest } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import {
+  closeOpenClawStateDatabaseForTest,
+  createChannelIngressQueueForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { vi } from "vitest";
 import type { Mock } from "vitest";
+import { setSlackRuntime } from "./runtime.js";
 
 type SlackHandler = (args: unknown) => Promise<void>;
 type SlackMiddleware = (args: { next: () => Promise<void> } & Record<string, unknown>) => unknown;
@@ -58,6 +63,7 @@ type SlackTestState = {
   appConstructorArgs?: Record<string, unknown>;
   appStartMock: Mock<(...args: unknown[]) => Promise<unknown>>;
   appStopMock: Mock<(...args: unknown[]) => Promise<unknown>>;
+  interactionRegistrations: string[];
   sendMock: Mock<(...args: unknown[]) => Promise<unknown>>;
   replyMock: Mock<(...args: unknown[]) => unknown>;
   updateLastRouteMock: Mock<(...args: unknown[]) => unknown>;
@@ -71,7 +77,6 @@ type SlackTestState = {
   >;
   socketModeLogger?: { error: (...args: unknown[]) => void };
   createSlackStartupAuthClientMock: Mock<SlackStartupAuthClientFactory>;
-  createSlackStartupAuthClientActual?: SlackStartupAuthClientFactory;
 };
 
 // globalThis-backed singleton: with isolate=false, a vi.resetModules() in any
@@ -86,6 +91,7 @@ const slackTestState: SlackTestState = vi.hoisted(() => {
     appConstructorArgs: undefined,
     appStartMock: vi.fn(),
     appStopMock: vi.fn(),
+    interactionRegistrations: [],
     sendMock: vi.fn(),
     replyMock: vi.fn(),
     updateLastRouteMock: vi.fn(),
@@ -103,12 +109,8 @@ const slackTestState: SlackTestState = vi.hoisted(() => {
 
 export const getSlackTestState = (): SlackTestState => slackTestState;
 
-export function useRealSlackStartupAuthClientOnce(): void {
-  const actual = slackTestState.createSlackStartupAuthClientActual;
-  if (!actual) {
-    throw new Error("real Slack WebClient factory is unavailable");
-  }
-  slackTestState.createSlackStartupAuthClientMock.mockImplementationOnce(actual);
+export function useSlackStartupAuthClientOnce(factory: SlackStartupAuthClientFactory): void {
+  slackTestState.createSlackStartupAuthClientMock.mockImplementationOnce(factory);
 }
 
 type SlackClient = {
@@ -293,7 +295,9 @@ export const defaultSlackTestConfig = () => ({
   },
   channels: {
     slack: {
-      dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+      dm: { enabled: true },
+      dmPolicy: "open",
+      allowFrom: ["*"],
       groupPolicy: "open",
     },
   },
@@ -315,15 +319,30 @@ export function resetSlackTestState(config: Record<string, unknown> = defaultSla
   if (lastSlackTestStateDir) {
     fs.rmSync(lastSlackTestStateDir, { recursive: true, force: true });
   }
-  lastSlackTestStateDir = fs.realpathSync(
+  const stateDir = fs.realpathSync(
     fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-slack-monitor-state-")),
   );
-  process.env.OPENCLAW_STATE_DIR = lastSlackTestStateDir;
+  lastSlackTestStateDir = stateDir;
+  process.env.OPENCLAW_STATE_DIR = stateDir;
+  setSlackRuntime({
+    state: {
+      openChannelIngressQueue: (
+        options?: Omit<Parameters<typeof createChannelIngressQueueForTests>[0], "channelId">,
+      ) =>
+        createChannelIngressQueueForTests({
+          ...options,
+          channelId: "slack",
+          stateDir: options?.stateDir ?? stateDir,
+        }),
+      resolveStateDir: () => stateDir,
+    },
+  } as unknown as PluginRuntime);
   slackTestState.config = config;
   slackTestState.appConstructorArgs = undefined;
   slackTestState.socketModeLogger = undefined;
   slackTestState.appStartMock.mockReset().mockResolvedValue(undefined);
   slackTestState.appStopMock.mockReset().mockResolvedValue(undefined);
+  slackTestState.interactionRegistrations.length = 0;
   slackTestState.sendMock.mockReset().mockResolvedValue(undefined);
   slackTestState.replyMock.mockReset();
   slackTestState.updateLastRouteMock.mockReset();
@@ -402,7 +421,6 @@ vi.mock("./resolve-users.js", () => ({
 
 vi.mock("./client.js", async () => {
   const actual = await vi.importActual<typeof import("./client.js")>("./client.js");
-  slackTestState.createSlackStartupAuthClientActual = actual.createSlackStartupAuthClient;
   return {
     ...actual,
     createSlackStartupAuthClient: (...args: Parameters<SlackStartupAuthClientFactory>) =>
@@ -464,7 +482,16 @@ vi.mock("@slack/bolt", () => {
       });
     }
     command() {
-      /* no-op */
+      slackTestState.interactionRegistrations.push("command");
+    }
+    action() {
+      slackTestState.interactionRegistrations.push("action");
+    }
+    shortcut() {
+      slackTestState.interactionRegistrations.push("shortcut");
+    }
+    view() {
+      slackTestState.interactionRegistrations.push("view");
     }
     start = (...args: unknown[]) => slackTestState.appStartMock(...args);
     stop = (...args: unknown[]) => slackTestState.appStopMock(...args);

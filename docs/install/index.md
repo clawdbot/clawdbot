@@ -9,7 +9,7 @@ title: "Install"
 
 ## System requirements
 
-- **Node 22.22.3+, 24.15+, or 25.9+** - Node 24 is the default target; the installer script handles this automatically.
+- **Node 22.22.3+, 24.15+, or 25.9+** - Node 26 is the recommended default; the installer script provisions it automatically when Node is missing.
 - **macOS, Linux, or Windows** - Windows users can start with the native Windows Hub app, the PowerShell CLI installer, or a WSL2 Gateway. See [Windows](/platforms/windows).
 - `pnpm` is only needed if you build from source.
 
@@ -81,6 +81,23 @@ If you already manage Node yourself:
     ```
 
     <Note>
+    npm 12 blocks package lifecycle scripts by default, so the command above
+    skips OpenClaw's `preinstall` and `postinstall` steps — npm reports them
+    as `blocked because they are not covered by allowScripts`. Allow them
+    explicitly:
+
+    ```bash
+    npm install -g openclaw@latest --allow-scripts openclaw
+    ```
+
+    npm 11.16.x only warns that the scripts are `not yet covered by
+    allowScripts` and still runs them. If you want to clear that warning, be
+    aware that the `npm approve-scripts openclaw` command it suggests does not
+    work for a global install — it fails with `ENOMATCH  No installed packages
+    match: openclaw`. npm 11.12 and earlier have no such policy.
+    </Note>
+
+    <Note>
     The hosted installer clears npm freshness filters such as `min-release-age`
     for the OpenClaw package install. If you install manually with npm, your own
     npm policy still applies.
@@ -89,13 +106,12 @@ If you already manage Node yourself:
   </Tab>
   <Tab title="pnpm">
     ```bash
-    pnpm add -g openclaw@latest
-    pnpm approve-builds -g
+    pnpm add -g --allow-build=openclaw openclaw@latest
     openclaw onboard --install-daemon
     ```
 
     <Note>
-    pnpm requires explicit approval for packages with build scripts. Run `pnpm approve-builds -g` after the first install.
+    pnpm requires explicit approval for packages with build scripts. `approve-builds -g` is not supported for global installs, so pass `--allow-build=openclaw` on the `pnpm add -g` command instead.
     </Note>
 
   </Tab>
@@ -135,20 +151,23 @@ curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -
 ### Containers and package managers
 
 <CardGroup cols={2}>
-  <Card title="Docker" href="/install/docker" icon="container">
-    Containerized or headless deployments.
-  </Card>
-  <Card title="Podman" href="/install/podman" icon="container">
-    Rootless container alternative to Docker.
-  </Card>
-  <Card title="Nix" href="/install/nix" icon="snowflake">
-    Declarative install via Nix flake.
-  </Card>
   <Card title="Ansible" href="/install/ansible" icon="server">
     Automated fleet provisioning.
   </Card>
   <Card title="Bun" href="/install/bun" icon="zap">
     Optional dependency installer and package-script runner.
+  </Card>
+  <Card title="ClawDock" href="/install/clawdock" icon="container">
+    Community Docker Compose setup and shell helpers.
+  </Card>
+  <Card title="Docker" href="/install/docker" icon="container">
+    Containerized or headless deployments.
+  </Card>
+  <Card title="Nix" href="/install/nix" icon="snowflake">
+    Declarative install via Nix flake.
+  </Card>
+  <Card title="Podman" href="/install/podman" icon="container">
+    Rootless container alternative to Docker.
   </Card>
 </CardGroup>
 
@@ -170,12 +189,13 @@ If you want managed startup after install:
 
 Deploy OpenClaw on a cloud server or VPS. See [Linux server](/vps) for the full
 provider picker (DigitalOcean, Hetzner, Hostinger, Fly.io, GCP, Azure, Railway,
-Northflank, Oracle Cloud, Raspberry Pi, and more), or deploy declaratively on
-[Render](/install/render).
+Northflank, Oracle Cloud, Raspberry Pi, and more), deploy declaratively on
+[Render](/install/render), or try the experimental [Cloudflare Containers](/install/cloudflare)
+template.
 
 <CardGroup cols={3}>
-  <Card title="VPS" href="/vps">
-    Pick a provider.
+  <Card title="Cloudflare" href="/install/cloudflare">
+    Experimental Worker + Container deployment.
   </Card>
   <Card title="Docker VM" href="/install/docker-vm-runtime">
     Shared Docker steps.
@@ -183,11 +203,23 @@ Northflank, Oracle Cloud, Raspberry Pi, and more), or deploy declaratively on
   <Card title="Kubernetes" href="/install/kubernetes">
     K8s deployment.
   </Card>
+  <Card title="macOS VM" href="/install/macos-vm">
+    Isolated local or hosted macOS deployment.
+  </Card>
+  <Card title="Upstash Box" href="/install/upstash">
+    Managed Linux host with SSH-tunneled access.
+  </Card>
+  <Card title="VPS" href="/vps">
+    Pick a provider.
+  </Card>
 </CardGroup>
 
-## Update, migrate, or uninstall
+## Back up, update, migrate, or uninstall
 
 <CardGroup cols={3}>
+  <Card title="Backups" href="/install/backups" icon="archive">
+    Create, verify, and restore state archives.
+  </Card>
   <Card title="Updating" href="/install/updating" icon="refresh-cw">
     Keep OpenClaw up to date.
   </Card>

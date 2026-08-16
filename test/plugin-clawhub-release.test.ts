@@ -31,7 +31,8 @@ import {
   OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
 } from "../scripts/lib/plugin-npm-release.ts";
 import { runPluginClawHubReleaseCheck } from "../scripts/plugin-clawhub-release-check.ts";
-import { cleanupTempDirs, makeTempRepoRoot } from "./helpers/temp-repo.js";
+import { writePublishablePluginFixture } from "./helpers/publishable-plugin-fixture.js";
+import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "./helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
 
@@ -234,6 +235,16 @@ describe("OpenClaw dual-published plugin metadata", () => {
         defaultChoice: "npm",
         minHostVersion: ">=2026.6.8",
         npmSpec: "@openclaw/gmi-provider",
+      },
+    },
+    {
+      extensionId: "novita",
+      packageName: "@openclaw/novita-provider",
+      install: {
+        clawhubSpec: "clawhub:@openclaw/novita-provider",
+        defaultChoice: "npm",
+        minHostVersion: ">=2026.7.2",
+        npmSpec: "@openclaw/novita-provider",
       },
     },
   ] as const;
@@ -465,7 +476,9 @@ describe("collectPluginClawHubReleasePlan", () => {
       activeRequests += 1;
       maxActiveRequests = Math.max(maxActiveRequests, activeRequests);
       try {
-        await new Promise((resolve) => setTimeout(resolve, 5));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 5);
+        });
         return await baseFetch(...args);
       } finally {
         activeRequests -= 1;
@@ -2097,59 +2110,31 @@ function createTempPluginRepo(
   );
   writeFileSync(join(repoDir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
   for (const currentExtensionId of extensionIds) {
-    mkdirSync(join(repoDir, "extensions", currentExtensionId), { recursive: true });
-    writeFileSync(
-      join(repoDir, "extensions", currentExtensionId, "package.json"),
-      JSON.stringify(
-        {
-          name: `@openclaw/${currentExtensionId}`,
-          version: "2026.4.1",
-          type: "module",
-          repository: {
-            type: "git",
-            url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
-          },
-          ...(options.requiredLatestDependencyVersion
-            ? {
-                dependencies: {
-                  "demo-runtime": options.requiredLatestDependencyVersion,
-                },
-              }
-            : {}),
-          openclaw: {
-            extensions: ["./index.ts"],
-            ...(options.includeClawHubContract === false
-              ? {}
-              : {
-                  compat: {
-                    pluginApi: ">=2026.4.1",
-                  },
-                  build: {
-                    openclawVersion: "2026.4.1",
-                  },
-                }),
-            install: {
-              npmSpec: `@openclaw/${currentExtensionId}`,
+    const fixture = writePublishablePluginFixture(repoDir, {
+      extensionId: currentExtensionId,
+      version: "2026.4.1",
+      publishTo: options.publishToClawHub === false ? "clawhub-disabled" : "clawhub",
+      ...(options.requiredLatestDependencyVersion
+        ? {
+            dependency: {
+              packageName: "demo-runtime",
+              version: options.requiredLatestDependencyVersion,
+              requireLatest: true,
             },
-            release: {
-              publishToClawHub: options.publishToClawHub ?? true,
-              ...(options.requiredLatestDependencyVersion
-                ? {
-                    requireLatestDependencies: ["demo-runtime"],
-                  }
-                : {}),
-            },
-          },
-        },
-        null,
-        2,
-      ),
-    );
-    writeFileSync(
-      join(repoDir, "extensions", currentExtensionId, "index.ts"),
-      `export const ${currentExtensionId.replaceAll(/[-.]/g, "_")} = 1;\n`,
-    );
-    writeFileSync(join(repoDir, "extensions", currentExtensionId, "README.md"), "# Demo plugin\n");
+          }
+        : {}),
+    });
+    if (options.includeClawHubContract === false) {
+      const manifestPath = join(fixture.packageDir, "package.json");
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+        openclaw?: { build?: unknown; compat?: unknown };
+      };
+      if (manifest.openclaw) {
+        delete manifest.openclaw.compat;
+        delete manifest.openclaw.build;
+      }
+      writeJsonFile(manifestPath, manifest);
+    }
   }
 
   git(repoDir, ["init", "-b", "main"]);

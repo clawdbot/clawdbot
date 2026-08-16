@@ -1,9 +1,12 @@
 // Control UI view renders agents utils screen content.
 import { formatByteSize } from "@openclaw/normalization-core";
-import { html, nothing } from "lit";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   expandToolGroups,
-  normalizeToolName,
+  normalizeToolPolicyName,
   resolveToolProfilePolicy,
 } from "../../../../src/agents/tool-policy-shared.js";
 import type {
@@ -16,8 +19,24 @@ import type {
 } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveAgentAvatarUrl, resolveAssistantTextAvatar } from "../avatar.ts";
-import { buildQualifiedChatModelValue } from "../chat/model-ref.ts";
-import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
+import { buildCatalogDisplayLookup, buildChatModelOptionFromLookup } from "../chat/model-ref.ts";
+import { resolveAgentConfigEntryTarget } from "../config/config-state-model.ts";
+
+type AgentRosterEntry = {
+  id: string;
+  kind?: "agent" | "system";
+  name?: string;
+  identity?: { name?: string };
+};
+
+/** Ordinary agent targets; system rows remain available to diagnostic surfaces. */
+export function listSelectableAgents<T extends AgentRosterEntry>(agents: readonly T[]): T[] {
+  return agents.filter((agent) => agent.kind !== "system");
+}
+
+export function selectableAgentsList(agentsList: AgentsListResult): AgentsListResult {
+  return { ...agentsList, agents: listSelectableAgents(agentsList.agents) };
+}
 
 export type AgentToolEntry = {
   id: string;
@@ -211,25 +230,39 @@ export const PROFILE_OPTIONS = [
   { id: "full", labelKey: "agents.toolCatalog.profiles.full" },
 ] as const;
 
+// Gateway catalog labels are English-only strings. Translate the known core
+// group/profile enum labels locally so localized UIs don't render English
+// section names; plugin groups (`plugin:<id>` ids) never match and keep the
+// catalog-provided label.
+const CORE_GROUP_LABEL_KEYS = new Map<string, string>(
+  FALLBACK_TOOL_SECTIONS.map((section) => [section.id, section.labelKey]),
+);
+const PROFILE_LABEL_KEYS = new Map<string, string>(
+  PROFILE_OPTIONS.map((profile) => [profile.id, profile.labelKey]),
+);
+
 export function resolveToolSections(
   toolsCatalogResult: ToolsCatalogResult | null,
 ): AgentToolSection[] {
   if (toolsCatalogResult?.groups?.length) {
-    return toolsCatalogResult.groups.map((group) => ({
-      id: group.id,
-      label: group.label,
-      source: group.source,
-      pluginId: group.pluginId,
-      tools: group.tools.map((tool) => ({
-        id: tool.id,
-        label: tool.label,
-        description: tool.description,
-        source: tool.source,
-        pluginId: tool.pluginId,
-        optional: tool.optional,
-        defaultProfiles: [...tool.defaultProfiles],
-      })),
-    }));
+    return toolsCatalogResult.groups.map((group) => {
+      const labelKey = CORE_GROUP_LABEL_KEYS.get(group.id);
+      return {
+        id: group.id,
+        label: labelKey ? t(labelKey) : group.label,
+        source: group.source,
+        pluginId: group.pluginId,
+        tools: group.tools.map((tool) => ({
+          id: tool.id,
+          label: tool.label,
+          description: tool.description,
+          source: tool.source,
+          pluginId: tool.pluginId,
+          optional: tool.optional,
+          defaultProfiles: [...tool.defaultProfiles],
+        })),
+      };
+    });
   }
   return FALLBACK_TOOL_SECTIONS.map((section) => ({
     id: section.id,
@@ -246,7 +279,10 @@ export function resolveToolProfileOptions(
   toolsCatalogResult: ToolsCatalogResult | null,
 ): readonly ToolCatalogProfile[] | ReadonlyArray<{ id: string; label: string }> {
   if (toolsCatalogResult?.profiles?.length) {
-    return toolsCatalogResult.profiles;
+    return toolsCatalogResult.profiles.map((profile) => {
+      const labelKey = PROFILE_LABEL_KEYS.get(profile.id);
+      return labelKey ? { id: profile.id, label: t(labelKey) } : profile;
+    });
   }
   return PROFILE_OPTIONS.map((profile) => ({
     id: profile.id,
@@ -260,7 +296,6 @@ type ToolPolicy = {
 };
 
 type AgentConfigEntry = {
-  id: string;
   name?: string;
   workspace?: string;
   agentDir?: string;
@@ -278,7 +313,7 @@ type AgentConfigEntry = {
 type ConfigSnapshot = {
   agents?: {
     defaults?: { workspace?: string; model?: unknown; models?: Record<string, { alias?: string }> };
-    list?: AgentConfigEntry[];
+    entries?: Record<string, AgentConfigEntry>;
   };
   tools?: {
     profile?: string;
@@ -288,13 +323,32 @@ type ConfigSnapshot = {
   };
 };
 
-export function normalizeAgentLabel(agent: {
-  id: string;
-  name?: string;
-  identity?: { name?: string };
-}) {
+export function normalizeAgentLabel(
+  agent: AgentRosterEntry,
+  hydratedIdentity?: { name?: string } | null,
+) {
+  // Roster labels own operator target identity; workspace identity only fills gaps.
   return (
-    normalizeOptionalString(agent.name) ?? normalizeOptionalString(agent.identity?.name) ?? agent.id
+    normalizeOptionalString(agent.name) ??
+    normalizeOptionalString(agent.identity?.name) ??
+    normalizeOptionalString(hydratedIdentity?.name) ??
+    agent.id
+  );
+}
+
+export function normalizeAgentTargetLabel(
+  agent: AgentRosterEntry,
+  hydratedIdentity?: Pick<AgentIdentityResult, "name" | "nameSource"> | null,
+) {
+  const resolvedName =
+    hydratedIdentity?.nameSource && hydratedIdentity.nameSource !== "default"
+      ? normalizeOptionalString(hydratedIdentity.name)
+      : undefined;
+  return (
+    resolvedName ??
+    normalizeOptionalString(agent.name) ??
+    normalizeOptionalString(agent.identity?.name) ??
+    agent.id
   );
 }
 
@@ -318,25 +372,33 @@ export function resolveAgentTextAvatar(
 }
 
 export function agentBadgeText(agentId: string, defaultId: string | null) {
-  return defaultId && agentId === defaultId ? "default" : null;
+  return defaultId && agentId === defaultId ? t("agents.default") : null;
 }
 
-export function formatBytes(bytes?: number) {
+type FormatBytesOptions = {
+  fallback?: string;
+  maxUnit?: "kilo" | "mega" | "giga" | "tera";
+  fractionDigits?: Parameters<typeof formatByteSize>[1]["fractionDigits"];
+};
+
+export function formatBytes(bytes?: number, options: FormatBytesOptions = {}) {
   if (bytes == null || !Number.isFinite(bytes)) {
-    return "-";
+    return options.fallback ?? "-";
   }
   return formatByteSize(bytes, {
     style: "legacy-binary",
-    maxUnit: "tera",
+    maxUnit: options.maxUnit ?? "tera",
     separator: " ",
-    fractionDigits: (value, unit) => (unit === "byte" ? null : value < 10 ? 1 : 0),
+    fractionDigits:
+      options.fractionDigits ?? ((value, unit) => (unit === "byte" ? null : value < 10 ? 1 : 0)),
   });
 }
 
 export function resolveAgentConfig(config: Record<string, unknown> | null, agentId: string) {
   const cfg = config as ConfigSnapshot | null;
-  const list = cfg?.agents?.list ?? [];
-  const entry = list.find((agent) => agent?.id === agentId);
+  const entry = resolveAgentConfigEntryTarget(config, agentId)?.entry as
+    | AgentConfigEntry
+    | undefined;
   return {
     entry,
     defaults: cfg?.agents?.defaults,
@@ -479,19 +541,19 @@ export function resolveEffectiveModelFallbacks(
   entryModel?: unknown,
   defaultModel?: unknown,
 ): string[] | null {
-  return resolveModelFallbacks(entryModel) ?? resolveModelFallbacks(defaultModel);
-}
-
-export function parseFallbackList(value: string): string[] {
-  return value
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  const entryFallbacks = resolveModelFallbacks(entryModel);
+  if (entryFallbacks !== null) {
+    return entryFallbacks;
+  }
+  // An agent-owned primary is strict; only an inherited primary can use
+  // the global fallback chain, matching the Gateway's model routing.
+  return resolveModelPrimary(entryModel) ? [] : resolveModelFallbacks(defaultModel);
 }
 
 type ConfiguredModelOption = {
   value: string;
   label: string;
+  provider?: string;
 };
 
 function resolveConfiguredModels(
@@ -515,7 +577,12 @@ function resolveConfiguredModels(
           : undefined
         : undefined;
     const label = alias && alias !== trimmed ? `${alias} (${trimmed})` : trimmed;
-    options.push({ value: trimmed, label });
+    const separator = trimmed.indexOf("/");
+    options.push({
+      value: trimmed,
+      label,
+      ...(separator > 0 ? { provider: trimmed.slice(0, separator) } : {}),
+    });
   }
   return options;
 }
@@ -524,50 +591,55 @@ export function buildModelOptions(
   configForm: Record<string, unknown> | null,
   current?: string | null,
   catalog?: ModelCatalogEntry[],
-  selected?: string | null,
 ) {
   const seen = new Set<string>();
   const options: ConfiguredModelOption[] = [];
-  const selectedKey = selected ? normalizeLowercaseStringOrEmpty(selected) : null;
-  const addOption = (value: string, label: string) => {
+  const catalogOptions = new Map<string, ConfiguredModelOption>();
+  const addOption = (value: string, label: string, provider?: string) => {
     const key = normalizeLowercaseStringOrEmpty(value);
     if (seen.has(key)) {
       return;
     }
     seen.add(key);
-    options.push({ value, label });
+    options.push({ value, label, ...(provider ? { provider } : {}) });
   };
 
-  for (const opt of resolveConfiguredModels(configForm)) {
-    addOption(opt.value, opt.label);
-  }
-
   if (catalog) {
+    const displayLookup = buildCatalogDisplayLookup(catalog);
     for (const entry of catalog) {
-      const provider = entry.provider?.trim();
-      const value = buildQualifiedChatModelValue(entry.id, provider);
-      const label = provider ? `${entry.id} · ${provider}` : entry.id;
-      addOption(value, label);
+      const option = buildChatModelOptionFromLookup(entry, displayLookup);
+      catalogOptions.set(normalizeLowercaseStringOrEmpty(option.value), {
+        ...option,
+        provider: entry.provider,
+      });
     }
   }
 
-  if (current && !seen.has(normalizeLowercaseStringOrEmpty(current))) {
-    options.unshift({ value: current, label: `Current (${current})` });
+  for (const opt of resolveConfiguredModels(configForm)) {
+    // Configured options keep their order and fallback aliases; an authoritative
+    // catalog match must still expose the same model identity as the chat picker.
+    const catalogOption = catalogOptions.get(normalizeLowercaseStringOrEmpty(opt.value));
+    addOption(
+      opt.value,
+      catalogOption?.label ?? opt.label,
+      catalogOption?.provider ?? opt.provider,
+    );
   }
 
-  if (options.length === 0) {
-    return nothing;
+  for (const option of catalogOptions.values()) {
+    addOption(option.value, option.label, option.provider);
   }
-  return options.map(
-    (option) => html`
-      <option
-        value=${option.value}
-        ?selected=${selectedKey === normalizeLowercaseStringOrEmpty(option.value)}
-      >
-        ${option.label}
-      </option>
-    `,
-  );
+
+  if (current && !seen.has(normalizeLowercaseStringOrEmpty(current))) {
+    const separator = current.indexOf("/");
+    options.unshift({
+      value: current,
+      label: `Current (${current})`,
+      ...(separator > 0 ? { provider: current.slice(0, separator) } : {}),
+    });
+  }
+
+  return options;
 }
 
 type CompiledPattern =
@@ -576,7 +648,7 @@ type CompiledPattern =
   | { kind: "regex"; value: RegExp };
 
 function compilePattern(pattern: string): CompiledPattern {
-  const normalized = normalizeToolName(pattern);
+  const normalized = normalizeToolPolicyName(pattern);
   if (!normalized) {
     return { kind: "exact", value: "" };
   }
@@ -620,7 +692,7 @@ export function isAllowedByPolicy(name: string, policy?: ToolPolicy) {
   if (!policy) {
     return true;
   }
-  const normalized = normalizeToolName(name);
+  const normalized = normalizeToolPolicyName(name);
   const deny = compilePatterns(policy.deny);
   if (matchesAny(normalized, deny)) {
     return false;
@@ -642,7 +714,7 @@ export function matchesList(name: string, list?: string[]) {
   if (!Array.isArray(list) || list.length === 0) {
     return false;
   }
-  const normalized = normalizeToolName(name);
+  const normalized = normalizeToolPolicyName(name);
   const patterns = compilePatterns(list);
   if (matchesAny(normalized, patterns)) {
     return true;

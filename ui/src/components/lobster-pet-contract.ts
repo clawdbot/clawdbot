@@ -1,3 +1,5 @@
+import type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
+
 export type LobsterPetMode = "idle" | "busy" | "offline";
 
 export type LobsterRunOutcome = "ok" | "error" | "aborted";
@@ -6,17 +8,55 @@ export type LobsterPetPersonalityId = "sleepy" | "zoomy" | "friendly" | "showoff
 
 export type LobsterPetPaletteId =
   | "crimson"
-  | "coral"
-  | "teal"
-  | "violet"
-  | "ink"
   | "blue"
   | "gold"
-  | "calico"
-  | "abyss"
+  | "lumen"
+  | "magma"
+  | "oilslick"
+  | "aurora"
+  | "nebula"
+  | "banana"
+  | "mood"
+  | "bee"
+  | "rubberduck"
+  | "watermelon"
+  | "clawtron"
+  | "selene"
+  | "geode"
   | "ghost"
+  | "glass"
   | "split"
-  | "retro";
+  | "sourdough"
+  | "zombie"
+  | "plush"
+  | "balloon"
+  | "cottoncandy"
+  | "cryptid"
+  | "flatpack"
+  | "tinfoil"
+  | "actual"
+  | "disco"
+  | "chimera"
+  | "pixel"
+  | "blueprint"
+  | "phosphor"
+  | "ascii"
+  | "portal"
+  | "notexture"
+  | "loading"
+  | "eclipse"
+  | "heisenbug"
+  | "invisible"
+  | "retro"
+  | "goldenretro";
+
+// Pass-through ledge visitors. Strangers are other lobsters; everyone else
+// is, at best, lobster-adjacent. None of them count for the Lobsterdex.
+export type LobsterPasserKind = "stranger" | "crab" | "snail" | "duck" | "jellyfish";
+
+// How an arriving pet gets onto the ledge. Rolled per arrival from its own
+// seeded stream; "walk" is the classic pop-up from behind the ledge.
+export type LobsterPetEntrance = "walk" | "balloon" | "bubble";
 
 export type LobsterPetPalette = {
   id: LobsterPetPaletteId;
@@ -31,7 +71,9 @@ export type LobsterPetAccessory =
   | "patch"
   | "santa"
   | "pumpkin"
-  | "party";
+  | "party"
+  | "barnacle"
+  | "monocle";
 
 export type LobsterPetAntennae = "perky" | "droopy";
 
@@ -52,37 +94,32 @@ export type LobsterPetLook = {
   build: LobsterPetBuild;
   clawSize: LobsterPetClawSize;
   tailFan: boolean;
+  // Pokemon-style shiny roll (~1 in 512): sparkles plus a saturated sheen,
+  // logged separately in the Lobsterdex.
+  shiny: boolean;
+  // Real lobsters carry a crusher and a pincer; when set, that side's claw
+  // grows mighty while the other stays dainty (overrides clawSize).
+  crusherSide: "left" | "right" | null;
+  freckles: boolean;
+  // Seeded eye-glint tint for common palettes; rare palettes keep their
+  // signature glints via CSS, and null keeps the default teal.
+  glint: string | null;
+  // Chimera deliberately mixes four donor palettes. Other variants keep this
+  // null so palette swaps cannot accidentally leak mismatched part colors.
+  chimeraParts: {
+    body: string;
+    clawLeft: string;
+    clawRight: string;
+    antennae: string;
+  } | null;
 };
-
-export type LobsterLogoVisitPhase = "in" | "leaving" | "out";
-
-export type LobsterLogoVisitDetail = {
-  phase: LobsterLogoVisitPhase;
-  // A null look on a non-"out" phase means "hide the logo, render no
-  // stand-in": a ledge visit scared the brand mark away.
-  look: LobsterPetLook | null;
-  name: string | null;
-};
-
-// Fired on the pet host whenever the logo stand-in phase changes; the
-// sidebar owns the brand slot, so the swap renders there, not here.
-export const LOBSTER_LOGO_VISIT_EVENT = "openclaw-lobster-logo-visit";
-
-function fnv1a(value: string): number {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < value.length; i++) {
-    hash ^= value.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return hash >>> 0;
-}
 
 // One salt per page load: revisiting the UI re-rolls every session's lobster,
 // while re-renders within a load stay stable for a given session key.
 const LOAD_SALT = Math.trunc(Math.random() * 0xffffffff);
 
 export function lobsterPetSeed(sessionKey: string): number {
-  return (fnv1a(sessionKey) ^ LOAD_SALT) >>> 0;
+  return (fnv1aUtf16(sessionKey) ^ LOAD_SALT) >>> 0;
 }
 
 // The most recently active session with a terminal status decides how the
@@ -90,7 +127,7 @@ export function lobsterPetSeed(sessionKey: string): number {
 export function resolveLobsterRunOutcome(
   sessions:
     | ReadonlyArray<{
-        status?: "running" | "done" | "failed" | "killed" | "timeout";
+        status?: SessionRunStatus;
         endedAt?: number | null;
         lastActivityAt?: number | null;
         updatedAt?: number | null;
@@ -128,3 +165,4 @@ export function resolveLobsterPetMode(
   }
   return sessions?.some((row) => row.hasActiveRun === true) ? "busy" : "idle";
 }
+import { fnv1aUtf16 } from "../lib/fnv1a.ts";

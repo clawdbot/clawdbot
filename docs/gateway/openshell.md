@@ -21,6 +21,8 @@ workspace sync mode.
 - OpenShell plugin installed (`openclaw plugins install @openclaw/openshell-sandbox`)
 - `openshell` CLI on `PATH` (or a custom path via
   `plugins.entries.openshell.config.command`)
+- OpenSSH client available on the Gateway host
+- OpenShell `v0.0.88` or newer when configuring an OpenShell workspace
 - An OpenShell account with sandbox access
 - OpenClaw Gateway running on the host
 
@@ -67,6 +69,15 @@ openclaw sandbox explain
 ## Workspace modes
 
 This is the most important OpenShell decision.
+
+OpenShell also has a control-plane resource named a **workspace**. That is
+separate from the filesystem workspace described below: it scopes sandboxes,
+providers, policies, inference routes, and membership. Set
+`plugins.entries.openshell.config.workspace` to use an existing non-default
+OpenShell workspace. The plugin does not create OpenShell workspaces or manage
+their membership. When this setting is unset, the plugin preserves the
+OpenShell CLI's ambient `OPENSHELL_WORKSPACE` selection, or the CLI's `default`
+fallback when no ambient selection exists.
 
 ### mirror (default)
 
@@ -123,6 +134,7 @@ All OpenShell config lives under `plugins.entries.openshell.config`:
 | `from`                    | `string`                 | `"openclaw"`  | Sandbox source for first-time create                                                   |
 | `gateway`                 | `string`                 | unset         | OpenShell gateway name (top-level `--gateway`)                                         |
 | `gatewayEndpoint`         | `string`                 | unset         | OpenShell gateway endpoint (top-level `--gateway-endpoint`)                            |
+| `workspace`               | `string`                 | unset         | Existing OpenShell control-plane workspace used for every CLI operation                |
 | `policy`                  | `string`                 | unset         | OpenShell policy ID for sandbox creation                                               |
 | `providers`               | `string[]`               | `[]`          | Provider names attached at sandbox creation (deduped, one `--provider` flag per entry) |
 | `gpu`                     | `boolean`                | `false`       | Request GPU resources (`--gpu`)                                                        |
@@ -134,6 +146,19 @@ All OpenShell config lives under `plugins.entries.openshell.config`:
 `remoteWorkspaceDir` and `remoteAgentWorkspaceDir` must be absolute paths and
 stay under the managed roots `/sandbox` or `/agent`; other absolute paths are
 rejected.
+
+`workspace` must match OpenShell's current workspace-name contract: 1-19
+lowercase alphanumeric characters or single hyphens, with no leading,
+trailing, or consecutive hyphen. Create it first with
+`openshell workspace create --name <name>`. OpenShell rejects sandbox
+operations when the selected workspace does not exist or is being deleted.
+Set it to `"default"` to override an ambient non-default Workspace explicitly.
+
+The setting applies to every OpenShell sandbox managed by this plugin instance;
+it cannot select different OpenShell workspaces per OpenClaw agent or session.
+Changing it does not migrate existing sandboxes. Delete OpenClaw's OpenShell
+sandboxes while the old workspace is still configured, then change the setting
+and restart the Gateway.
 
 Sandbox-level settings (`mode`, `scope`, `workspaceAccess`) live under
 `agents.defaults.sandbox` like any backend. See
@@ -206,9 +231,9 @@ Sandbox-level settings (`mode`, `scope`, `workspaceAccess`) live under
     defaults: {
       sandbox: { mode: "off" },
     },
-    list: [
-      {
-        id: "researcher",
+    entries: {
+      researcher: {
+        default: true,
         sandbox: {
           mode: "all",
           backend: "openshell",
@@ -216,7 +241,7 @@ Sandbox-level settings (`mode`, `scope`, `workspaceAccess`) live under
           workspaceAccess: "rw",
         },
       },
-    ],
+    },
   },
   plugins: {
     entries: {
@@ -227,6 +252,7 @@ Sandbox-level settings (`mode`, `scope`, `workspaceAccess`) live under
           mode: "remote",
           gateway: "lab",
           gatewayEndpoint: "https://lab.example",
+          workspace: "research",
           policy: "strict",
         },
       },
@@ -253,6 +279,18 @@ remote workspace for that scope, and the next use seeds a fresh one from
 local. For `mirror` mode, recreate mainly resets the remote execution
 environment since local stays canonical.
 
+OpenClaw keeps a registered sandbox's shipped legacy runtime name after an
+upgrade so its remote workspace remains addressable. Recreating that scope
+deletes the legacy runtime; the next use creates the current 19-character
+runtime name.
+
+OpenShell v0.0.92 can still locate a sandbox record created by v0.0.68, but a
+Docker-backed sandbox may remain in a non-Ready phase after the gateway
+upgrade. OpenClaw preserves the registered runtime identity, refuses to create
+a replacement implicitly, and reports the scoped `openclaw sandbox recreate`
+command. Treat that recreation as destructive in `remote` mode because the
+remote workspace is canonical.
+
 Recreate after changing any of:
 
 - `agents.defaults.sandbox.backend`
@@ -267,18 +305,44 @@ canonical paths (via realpath) before every read, write, mkdir, remove, and
 rename, rejecting mid-path symlinks. A symlink swap or remounted workspace
 cannot redirect file access outside the mirrored tree.
 
+## Custom image contract
+
+The OpenShell source image owns the remote operating system and package set.
+OpenClaw does not apply Docker image, root-filesystem, network, user, or package
+settings to this backend.
+
+Custom images used with the OpenClaw filesystem bridge must provide:
+
+- `/bin/sh`
+- `python3` or `python` for pinned write, edit, rename, and remove operations
+- GNU-compatible `stat` and `find`
+- standard `mkdir`, `mv`, `rm`, and `rmdir` utilities
+
+Package installation and private certificate roots must be included in the
+source image or installed from inside the sandbox. The selected OpenShell
+policy must permit the required network destinations, and the sandbox user and
+filesystem must permit the writes. `sandbox.docker.network`,
+`sandbox.docker.readOnlyRoot`, `sandbox.docker.user`, and
+`sandbox.docker.setupCommand` do not configure OpenShell.
+
 ## Current limitations
 
 - Sandbox browser is not supported on the OpenShell backend.
+- One plugin instance uses one OpenShell workspace; per-agent or per-session
+  OpenShell workspace selection is not supported.
 - `sandbox.docker.binds` does not apply to OpenShell; sandbox creation fails
   if binds are configured.
 - Docker-specific runtime knobs under `sandbox.docker.*` (other than `env`)
   apply only to the Docker backend.
+- Native plugin code and Gateway RPC stay on the Gateway host. Plugin-owned and
+  MCP tools are available to sandboxed sessions only when sandbox tool policy
+  allows them.
 
 ## How it works
 
-1. OpenClaw runs `sandbox get` for the sandbox name (with any configured
-   `--gateway`/`--gateway-endpoint`); if that fails it creates one with
+1. OpenClaw runs `sandbox get` for the sandbox name (with the selected
+   OpenShell workspace and any configured `--gateway`/`--gateway-endpoint`); if
+   that fails it creates one in the same OpenShell workspace with
    `sandbox create`, passing `--name`, `--from`, `--policy` when set, `--gpu`
    when enabled, `--auto-providers`/`--no-auto-providers`, and one
    `--provider` flag per configured provider.

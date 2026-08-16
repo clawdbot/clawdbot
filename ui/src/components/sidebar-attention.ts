@@ -3,6 +3,7 @@
 // list — alerts surface where the user already is instead of on a dashboard
 // they have to visit.
 import { consume } from "@lit/context";
+import { initialState, Task } from "@lit/task";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
@@ -27,6 +28,7 @@ import {
   buildSidebarAttentionItems,
   type SidebarAttentionItem,
 } from "./sidebar-attention-items.ts";
+import "./tooltip.ts";
 
 // Reloads are connection-scoped; a visibility change only refetches after the
 // snapshot is older than this, so tab switches stay free of request bursts.
@@ -47,9 +49,63 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) onOpenApprovals?: () => void;
 
   private loadedClient: GatewayBrowserClient | null = null;
+  private loadedGateway: ApplicationContext["gateway"] | null = null;
+  private loadedAgentId: string | null = null;
+  // Cron events may restart the combined task; retain the committed auth owner so an
+  // interrupted agent switch reissues auth instead of displaying the prior agent's alert.
+  private modelAuthAgentId: string | null = null;
   private loadedAtMs = 0;
   private dismissedScope: string | null = null;
   private idleRefreshTimer: ReturnType<typeof globalThis.setInterval> | null = null;
+
+  private readonly loadTask = new Task(this, {
+    autoRun: false,
+    // Gateway identity matters when a replacement source reuses the same client object.
+    args: () =>
+      [
+        null as ApplicationContext["gateway"] | null,
+        null as GatewayBrowserClient | null,
+        null as string | null,
+        true as boolean,
+      ] as const,
+    task: async ([gateway, client, agentId, refreshModelAuth], { signal }) => {
+      if (!gateway || !client) {
+        return initialState;
+      }
+      const cron = createInitialCronState({ client, connected: true });
+      const loads: Promise<unknown>[] = [
+        loadCronJobsPage(cron).then(() => {
+          if (!signal.aborted) {
+            this.cronJobs = cron.cronJobs;
+          }
+        }),
+      ];
+      if (refreshModelAuth && agentId) {
+        loads.push(
+          loadModelAuthStatus(client, {
+            agentId,
+            signal,
+          })
+            .catch(() => null)
+            .then((modelAuthStatus) => {
+              if (!signal.aborted) {
+                this.modelAuthStatus = modelAuthStatus;
+                this.modelAuthAgentId = agentId;
+              }
+            }),
+        );
+      } else if (!agentId) {
+        this.modelAuthStatus = null;
+        this.modelAuthAgentId = null;
+      }
+      await Promise.allSettled(loads);
+      return true;
+    },
+    onComplete: () => {
+      this.loadedAtMs = Date.now();
+      this.pruneAfterRefresh();
+    },
+  });
 
   private readonly subscriptions = new SubscriptionsController(this)
     .effect(
@@ -58,6 +114,29 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
         this.synchronize(gateway);
         return gateway.subscribe(() => this.synchronize(gateway));
       },
+    )
+    .watch(
+      () => this.context?.agentSelection,
+      (selection, notify) => selection.subscribe(notify),
+      () => {
+        const gateway = this.context?.gateway;
+        if (gateway) {
+          this.synchronize(gateway);
+        }
+      },
+    )
+    .effect(
+      () => this.context?.gateway,
+      (gateway) =>
+        gateway.subscribeEvents((event) => {
+          if (this.context?.gateway !== gateway || event.event !== "cron") {
+            return;
+          }
+          // The Automations page refreshes from the same event. Refresh this
+          // independent snapshot too so its ambient alert cannot contradict it.
+          this.loadedClient = null;
+          this.synchronize(gateway, { refreshModelAuth: false });
+        }),
     )
     .watch(
       () => this.context?.overlays,
@@ -101,55 +180,51 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       this.idleRefreshTimer = null;
     }
     this.subscriptions.clear();
+    void this.loadTask.run([null, null, null, false]);
     this.loadedClient = null;
+    this.loadedGateway = null;
+    this.loadedAgentId = null;
+    this.modelAuthAgentId = null;
     super.disconnectedCallback();
   }
 
-  private synchronize(gateway: ApplicationContext["gateway"]) {
+  private synchronize(
+    gateway: ApplicationContext["gateway"],
+    options: { refreshModelAuth?: boolean } = {},
+  ) {
     const snapshot = gateway.snapshot;
     const gatewayUrl = gateway.connection.gatewayUrl;
     if (gatewayUrl && gatewayUrl !== this.dismissedScope) {
       this.dismissedScope = gatewayUrl;
       this.dismissed = loadDismissals(gatewayUrl);
     }
-    if (!snapshot.connected || !snapshot.client) {
+    if (snapshot.phase !== "connected" || !snapshot.client) {
+      void this.loadTask.run([null, null, null, false]);
       this.loadedClient = null;
+      this.loadedGateway = null;
+      this.loadedAgentId = null;
+      this.modelAuthAgentId = null;
       this.cronJobs = [];
       this.modelAuthStatus = null;
       return;
     }
-    if (snapshot.client === this.loadedClient) {
+    const agentId = this.context?.agentSelection.state.selectedId ?? null;
+    if (
+      gateway === this.loadedGateway &&
+      snapshot.client === this.loadedClient &&
+      agentId === this.loadedAgentId
+    ) {
       return;
     }
+    this.loadedGateway = gateway;
     this.loadedClient = snapshot.client;
-    void this.load(gateway, snapshot.client);
-  }
-
-  private async load(gateway: ApplicationContext["gateway"], client: GatewayBrowserClient) {
-    const isCurrent = () =>
-      this.isConnected &&
-      this.loadedClient === client &&
-      gateway.snapshot.client === client &&
-      gateway.snapshot.connected;
-    const cron = createInitialCronState({ client, connected: true });
-    await Promise.allSettled([
-      loadCronJobsPage(cron).then(() => {
-        if (isCurrent()) {
-          this.cronJobs = cron.cronJobs;
-        }
-      }),
-      loadModelAuthStatus(client, {})
-        .catch(() => null)
-        .then((result) => {
-          if (isCurrent()) {
-            this.modelAuthStatus = result;
-          }
-        }),
+    this.loadedAgentId = agentId;
+    void this.loadTask.run([
+      gateway,
+      snapshot.client,
+      agentId,
+      options.refreshModelAuth !== false || agentId !== this.modelAuthAgentId,
     ]);
-    if (isCurrent()) {
-      this.loadedAtMs = Date.now();
-      this.pruneAfterRefresh();
-    }
   }
 
   // Re-arm stale snoozes only right after this tab's own data refresh: fresh
@@ -167,6 +242,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     const items = buildSidebarAttentionItems({
       cronJobs: this.cronJobs,
       modelAuthStatus: this.modelAuthStatus,
+      modelAuthAgentId: this.modelAuthAgentId,
       approvalQueue: this.context?.overlays.snapshot.approvalQueue ?? [],
       now: Date.now(),
     });
@@ -194,12 +270,13 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
   }
 
   override render() {
-    if (!this.context?.gateway.snapshot.connected) {
+    if (this.context?.gateway.snapshot.phase !== "connected") {
       return nothing;
     }
     const items = buildSidebarAttentionItems({
       cronJobs: this.cronJobs,
       modelAuthStatus: this.modelAuthStatus,
+      modelAuthAgentId: this.modelAuthAgentId,
       approvalQueue: this.context.overlays.snapshot.approvalQueue,
       now: Date.now(),
     }).filter((item) => this.dismissed[item.kind] !== item.signature);
@@ -211,24 +288,28 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
         ${items.map(
           (item) => html`
             <div class="sidebar-attention__item sidebar-attention__item--${item.severity}">
-              <button
-                type="button"
-                class="sidebar-attention__open"
-                title=${item.label}
-                @click=${() => this.open(item)}
-              >
-                <span class="sidebar-attention__icon" aria-hidden="true">${icons[item.icon]}</span>
-                <span class="sidebar-attention__label">${item.label}</span>
-              </button>
-              <button
-                type="button"
-                class="sidebar-attention__dismiss"
-                title=${t("common.dismiss")}
-                aria-label=${t("common.dismiss")}
-                @click=${() => this.dismiss(item)}
-              >
-                ${icons.x}
-              </button>
+              <openclaw-tooltip .content=${item.detail ?? item.label}>
+                <button
+                  type="button"
+                  class="sidebar-attention__open"
+                  @click=${() => this.open(item)}
+                >
+                  <span class="sidebar-attention__icon" aria-hidden="true"
+                    >${icons[item.icon]}</span
+                  >
+                  <span class="sidebar-attention__label">${item.label}</span>
+                </button>
+              </openclaw-tooltip>
+              <openclaw-tooltip .content=${t("common.dismiss")}>
+                <button
+                  type="button"
+                  class="sidebar-attention__dismiss"
+                  aria-label=${t("common.dismiss")}
+                  @click=${() => this.dismiss(item)}
+                >
+                  ${icons.x}
+                </button>
+              </openclaw-tooltip>
             </div>
           `,
         )}

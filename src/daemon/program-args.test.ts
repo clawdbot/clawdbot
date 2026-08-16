@@ -1,9 +1,6 @@
 // Daemon program argument tests cover CLI argument construction for services.
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withMockedPlatform, withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
-
-const execFileSyncMock = vi.hoisted(() => vi.fn());
 
 const fsMocks = vi.hoisted(() => ({
   access: vi.fn(),
@@ -27,21 +24,18 @@ vi.mock("node:fs/promises", async () => {
   };
 });
 
-vi.mock("node:child_process", async () => {
-  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  return { ...actual, execFileSync: execFileSyncMock };
-});
-
 import { resolveGatewayProgramArguments, resolveNodeProgramArguments } from "./program-args.js";
 
 const originalArgv = [...process.argv];
 const originalExecPath = process.execPath;
+const validatedNodePath = "/opt/Validated Node/bin/node";
+const missingSelectedNodeError =
+  "No supported Node runtime was selected for the daemon. Install Node 24.15+ (recommended) or Node 22 LTS (22.22.3+), then retry.";
 
 afterEach(() => {
   process.argv = [...originalArgv];
   process.execPath = originalExecPath;
   vi.resetAllMocks();
-  vi.unstubAllEnvs();
 });
 
 describe("resolveGatewayProgramArguments", () => {
@@ -52,10 +46,13 @@ describe("resolveGatewayProgramArguments", () => {
     fsMocks.realpath.mockResolvedValue(entryPath);
     fsMocks.access.mockResolvedValue(undefined);
 
-    const result = await resolveGatewayProgramArguments({ port: 18789 });
+    const result = await resolveGatewayProgramArguments({
+      port: 18789,
+      nodePath: validatedNodePath,
+    });
 
     expect(result.programArguments).toEqual([
-      process.execPath,
+      validatedNodePath,
       indexPath,
       "gateway",
       "--port",
@@ -75,10 +72,13 @@ describe("resolveGatewayProgramArguments", () => {
       }
     });
 
-    const result = await resolveGatewayProgramArguments({ port: 18789 });
+    const result = await resolveGatewayProgramArguments({
+      port: 18789,
+      nodePath: validatedNodePath,
+    });
 
     expect(result.programArguments).toEqual([
-      process.execPath,
+      validatedNodePath,
       entryPath,
       "gateway",
       "--port",
@@ -98,10 +98,13 @@ describe("resolveGatewayProgramArguments", () => {
       throw new Error("missing");
     });
 
-    const result = await resolveGatewayProgramArguments({ port: 18789 });
+    const result = await resolveGatewayProgramArguments({
+      port: 18789,
+      nodePath: validatedNodePath,
+    });
 
     expect(result.programArguments).toEqual([
-      process.execPath,
+      validatedNodePath,
       entryPath,
       "gateway",
       "--port",
@@ -122,9 +125,13 @@ describe("resolveGatewayProgramArguments", () => {
     fsMocks.realpath.mockResolvedValue(realpathResolved);
     fsMocks.access.mockResolvedValue(undefined); // Both paths exist
 
-    const result = await resolveGatewayProgramArguments({ port: 18789 });
+    const result = await resolveGatewayProgramArguments({
+      port: 18789,
+      nodePath: validatedNodePath,
+    });
 
     // Should use the symlinked canonical index.js path, not the realpath-resolved versioned path
+    expect(result.programArguments[0]).toBe(validatedNodePath);
     expect(result.programArguments[1]).toBe(
       path.resolve("/Users/test/Library/pnpm/global/5/node_modules/openclaw/dist/index.js"),
     );
@@ -143,10 +150,13 @@ describe("resolveGatewayProgramArguments", () => {
       throw new Error("missing");
     });
 
-    const result = await resolveGatewayProgramArguments({ port: 18789 });
+    const result = await resolveGatewayProgramArguments({
+      port: 18789,
+      nodePath: validatedNodePath,
+    });
 
     expect(result.programArguments).toEqual([
-      process.execPath,
+      validatedNodePath,
       indexPath,
       "gateway",
       "--port",
@@ -164,12 +174,11 @@ describe("resolveGatewayProgramArguments", () => {
     const result = await resolveGatewayProgramArguments({
       dev: true,
       port: 18789,
-      runtime: "node",
-      nodePath: "/usr/local/bin/node",
+      nodePath: validatedNodePath,
     });
 
     expect(result.programArguments).toEqual([
-      "/usr/local/bin/node",
+      validatedNodePath,
       "--import",
       "tsx",
       repoEntryPath,
@@ -180,79 +189,56 @@ describe("resolveGatewayProgramArguments", () => {
     expect(result.workingDirectory).toBe(path.resolve("/repo"));
   });
 
-  it("uses trusted Windows where.exe when resolving the Node runtime", async () => {
-    const repoIndexPath = path.resolve("/repo/src/index.ts");
-    const repoEntryPath = path.resolve("/repo/src/entry.ts");
-    const launcherPath = String.raw`D:\OpenClaw\openclaw.exe`;
-    process.argv = [launcherPath, repoIndexPath];
-    process.execPath = launcherPath;
-    vi.stubEnv("SystemRoot", String.raw`D:\Windows`);
-    fsMocks.realpath.mockResolvedValue(repoIndexPath);
-    fsMocks.access.mockResolvedValue(undefined);
-    execFileSyncMock.mockReturnValue(String.raw`D:\Tools\node.exe` + "\r\n");
-
-    let result: Awaited<ReturnType<typeof resolveGatewayProgramArguments>> | undefined;
-    await withMockedWindowsPlatform(async () => {
-      result = await resolveGatewayProgramArguments({
-        dev: true,
-        port: 18789,
-        runtime: "node",
-      });
-    });
-
-    expect(execFileSyncMock).toHaveBeenCalledWith(
-      path.win32.join(String.raw`D:\Windows`, "System32", "where.exe"),
-      ["node"],
-      { encoding: "utf8", timeout: 5_000, killSignal: "SIGKILL" },
-    );
-    expect(result?.programArguments).toEqual([
-      String.raw`D:\Tools\node.exe`,
-      "--import",
-      "tsx",
-      repoEntryPath,
-      "gateway",
-      "--port",
-      "18789",
-    ]);
-  });
-
-  it("bounds POSIX Node runtime lookup", async () => {
-    const repoIndexPath = path.resolve("/repo/src/index.ts");
-    const repoEntryPath = path.resolve("/repo/src/entry.ts");
-    process.argv = ["/usr/local/bin/bun", repoIndexPath];
-    process.execPath = "/usr/local/bin/bun";
-    fsMocks.realpath.mockResolvedValue(repoIndexPath);
-    fsMocks.access.mockResolvedValue(undefined);
-    execFileSyncMock.mockReturnValue("/usr/local/bin/node\n");
-
-    const result = await withMockedPlatform(
-      "linux",
-      async () =>
-        await resolveGatewayProgramArguments({
+  it.each([
+    {
+      service: "gateway",
+      selection: "missing",
+      resolve: () =>
+        resolveGatewayProgramArguments({
           dev: true,
           port: 18789,
-          runtime: "node",
         }),
-    );
+    },
+    {
+      service: "node host",
+      selection: "missing",
+      resolve: () =>
+        resolveNodeProgramArguments({
+          dev: true,
+          host: "gateway.example",
+          port: 18789,
+        }),
+    },
+    {
+      service: "gateway",
+      selection: "blank",
+      resolve: () =>
+        resolveGatewayProgramArguments({
+          dev: true,
+          port: 18789,
+          nodePath: " \t ",
+        }),
+    },
+    {
+      service: "node host",
+      selection: "blank",
+      resolve: () =>
+        resolveNodeProgramArguments({
+          dev: true,
+          host: "gateway.example",
+          port: 18789,
+          nodePath: " \t ",
+        }),
+    },
+  ])("rejects a $selection selected Node path for the $service", async ({ resolve }) => {
+    process.execPath = "/usr/local/bin/bun";
 
-    expect(execFileSyncMock).toHaveBeenCalledWith("which", ["node"], {
-      encoding: "utf8",
-      timeout: 5_000,
-      killSignal: "SIGKILL",
-    });
-    expect(result.programArguments).toEqual([
-      "/usr/local/bin/node",
-      "--import",
-      "tsx",
-      repoEntryPath,
-      "gateway",
-      "--port",
-      "18789",
-    ]);
+    await expect(resolve()).rejects.toThrow(missingSelectedNodeError);
   });
 
-  it("uses an executable wrapper when provided", async () => {
+  it("uses an executable wrapper from Bun without a selected Node path", async () => {
     const wrapperPath = path.resolve("/usr/local/bin/openclaw-doppler");
+    process.execPath = "/usr/local/bin/bun";
     fsMocks.stat.mockResolvedValue({ isFile: () => true } as never);
     fsMocks.access.mockResolvedValue(undefined);
 
@@ -291,10 +277,11 @@ describe("resolveNodeProgramArguments", () => {
       host: "gateway.example",
       port: 18789,
       tls: false,
+      nodePath: validatedNodePath,
     });
 
     expect(result.programArguments).toEqual([
-      process.execPath,
+      validatedNodePath,
       indexPath,
       "node",
       "run",

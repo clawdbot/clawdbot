@@ -1,7 +1,8 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveUsageProviderId } from "../../../../src/infra/provider-usage.shared.js";
 // Merges gateway provider signals (auth status, live usage/quota, local session
-// cost) into one card list for the Model Providers settings page.
+// cost) into one card list for the Models settings page.
 import type {
   ProviderUsageSnapshot,
   UsageSummary,
@@ -12,6 +13,7 @@ import type {
   ModelAuthStatusProfile,
   ModelAuthStatusResult,
   ModelCatalogEntry,
+  ModelCatalogProviderOutcome,
 } from "../../api/types.ts";
 import { providerDisplayLabel } from "../../components/provider-icon.ts";
 
@@ -52,6 +54,7 @@ export type ModelProviderCard = {
   hasConfigApiKey: boolean;
   modelCount: number;
   availableModelCount: number;
+  catalogStatus?: ModelCatalogProviderOutcome["status"];
   /** Live provider-reported usage (quota windows, billing, cost history). */
   usage?: ProviderUsageSnapshot;
   /** Locally-computed session spend for the requested window. */
@@ -61,7 +64,7 @@ export type ModelProviderCard = {
 type ModelProviderCardsInput = {
   authStatus: ModelAuthStatusResult | null;
   models: ModelCatalogEntry[] | null;
-  catalogModels?: ModelCatalogEntry[] | null;
+  providerOutcomes?: ModelCatalogProviderOutcome[];
   configProviderIds?: string[] | null;
   configApiKeyProviderIds?: string[] | null;
   configProviderAuthModes?: Record<string, string> | null;
@@ -190,12 +193,12 @@ function addLogoutTarget(
 export function buildModelProviderCards(input: ModelProviderCardsInput): ModelProviderCard[] {
   const drafts: CardDraft[] = [];
   const apiKeyCapabilities = new Map<string, boolean>();
-  for (const entry of input.catalogModels ?? []) {
-    const id = canonicalProviderId(entry.provider);
-    if (!id || entry.apiKeySupported === undefined) {
+  for (const capability of input.authStatus?.providerCapabilities ?? []) {
+    const id = canonicalProviderId(capability.provider);
+    if (!id) {
       continue;
     }
-    apiKeyCapabilities.set(id, apiKeyCapabilities.get(id) === true || entry.apiKeySupported);
+    apiKeyCapabilities.set(id, apiKeyCapabilities.get(id) === true || capability.apiKeySupported);
   }
 
   for (const provider of input.configProviderIds ?? []) {
@@ -217,6 +220,25 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
     const id = canonicalProviderId(provider);
     if (id) {
       ensureDraft(drafts, id, providerDisplayLabel(id)).card.configAuthMode = authMode;
+    }
+  }
+
+  const outcomeSeverity: ReadonlyArray<ModelCatalogProviderOutcome["status"]> = [
+    "auth-rejected",
+    "unavailable",
+    "ready",
+  ];
+  for (const outcome of input.providerOutcomes ?? []) {
+    const id = canonicalProviderId(outcome.provider);
+    if (!id) {
+      continue;
+    }
+    const card = ensureDraft(drafts, id, providerDisplayLabel(id)).card;
+    if (
+      !card.catalogStatus ||
+      outcomeSeverity.indexOf(outcome.status) < outcomeSeverity.indexOf(card.catalogStatus)
+    ) {
+      card.catalogStatus = outcome.status;
     }
   }
 
@@ -324,6 +346,7 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
         draft.hasUsageSnapshot ||
         Boolean(draft.card.usage) ||
         draft.card.modelCount > 0 ||
+        Boolean(draft.card.catalogStatus) ||
         (draft.card.localCost?.totalTokens ?? 0) > 0,
     )
     .map((draft) => {
@@ -393,12 +416,6 @@ export function buildSelectableDefaultModels(
   return selectable;
 }
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
 export function readModelProviderConfig(config: Record<string, unknown> | null): {
   providerIds: string[];
   apiKeyProviderIds: string[];
@@ -444,15 +461,17 @@ export function readModelProviderConfig(config: Record<string, unknown> | null):
 
 export type ProviderOption = { id: string; displayName: string };
 
+type ModelProviderCapability = NonNullable<ModelAuthStatusResult["providerCapabilities"]>[number];
+
 export function buildUnconfiguredProviderOptions(
-  models: ModelCatalogEntry[] | null,
+  capabilities: ModelProviderCapability[] | undefined,
   configuredProviderIds: Iterable<string>,
 ): ProviderOption[] {
   const configured = new Set(Array.from(configuredProviderIds, canonicalProviderId));
   const options = new Map<string, ProviderOption>();
-  for (const model of models ?? []) {
-    const id = canonicalProviderId(model.provider);
-    if (model.apiKeySupported === true && id && !configured.has(id) && !options.has(id)) {
+  for (const capability of capabilities ?? []) {
+    const id = canonicalProviderId(capability.provider);
+    if (capability.quickApiKeySetup && id && !configured.has(id) && !options.has(id)) {
       options.set(id, { id, displayName: providerDisplayLabel(id) });
     }
   }

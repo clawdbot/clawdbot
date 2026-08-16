@@ -5,14 +5,14 @@ import {
   runAgentHarnessGatewayQuestion,
   type AgentHarnessQuestionGatewayCall,
   type AgentHarnessUserInputQuestion,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 
 type CopilotUserInputHandler = NonNullable<SessionConfig["onUserInputRequest"]>;
 type CopilotUserInputRequest = Parameters<CopilotUserInputHandler>[0];
 type CopilotUserInputResponse = Awaited<ReturnType<CopilotUserInputHandler>>;
 
-type CopilotUserInputBridge = {
+export type CopilotUserInputBridge = {
   onUserInputRequest: CopilotUserInputHandler;
   cancelPending: () => void;
 };
@@ -21,7 +21,7 @@ const COPILOT_USER_INPUT_QUESTION_ID = "answer";
 const DEFAULT_USER_INPUT_TIMEOUT_MS = 15 * 60_000;
 
 export function createCopilotUserInputBridge(params: {
-  paramsForRun: EmbeddedRunAttemptParams;
+  paramsForRun: EmbeddedRunAttemptParamsV2;
   signal?: AbortSignal;
   gatewayCall?: AgentHarnessQuestionGatewayCall;
 }): CopilotUserInputBridge {
@@ -44,6 +44,7 @@ export function createCopilotUserInputBridge(params: {
           questions: [question],
           sessionKey: params.paramsForRun.sessionKey ?? params.paramsForRun.sessionId,
           agentId: params.paramsForRun.agentId,
+          runId: params.paramsForRun.runId,
           timeoutMs: params.paramsForRun.timeoutMs ?? DEFAULT_USER_INPUT_TIMEOUT_MS,
           gatewayCall,
           delivery: params.paramsForRun,
@@ -56,7 +57,7 @@ export function createCopilotUserInputBridge(params: {
         if (result.status !== "answered") {
           return emptyCopilotUserInputResponse();
         }
-        const selected = result.answers.answers[COPILOT_USER_INPUT_QUESTION_ID]?.answers[0] ?? "";
+        const selected = result.answers.answers[COPILOT_USER_INPUT_QUESTION_ID]?.[0] ?? "";
         return {
           answer: selected,
           wasFreeform: !isChoiceAnswer(question, selected),

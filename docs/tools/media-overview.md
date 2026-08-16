@@ -38,7 +38,7 @@ telephony, meetings, browser realtime, and native push-to-talk clients.
   </Card>
   <Card title="Text-to-speech" href="/tools/tts" icon="microphone">
     Convert outbound replies to spoken audio via the `tts` tool plus
-    `messages.tts` config. Synchronous.
+    `tts` config. Synchronous.
   </Card>
   <Card title="Media understanding" href="/nodes/media-understanding" icon="eye">
     Summarize inbound images, audio, and video using vision-capable model
@@ -47,6 +47,10 @@ telephony, meetings, browser realtime, and native push-to-talk clients.
   <Card title="Speech-to-text" href="/nodes/audio" icon="ear-listen">
     Transcribe inbound voice messages through batch STT or Voice Call
     streaming STT providers.
+  </Card>
+  <Card title="Media playback" href="/nodes/media-playback" icon="play">
+    Play assistant audio and video inline across the Control UI and native
+    apps, with managed access and portable playback renditions.
   </Card>
 </CardGroup>
 
@@ -171,6 +175,7 @@ catalogs returned by the Gateway.
 - [Video generation](/tools/video-generation)
 - [Music generation](/tools/music-generation)
 - [Text-to-speech](/tools/tts)
+- [Media playback](/nodes/media-playback)
 - [Media understanding](/nodes/media-understanding)
 - [Audio nodes](/nodes/audio)
 - [Talk mode](/nodes/talk)

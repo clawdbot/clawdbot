@@ -6,8 +6,13 @@ import path from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import {
+  createBoundedResponseTooLargeError,
+  readBoundedResponseText,
+  toLintErrorObject,
+} from "../../../lib/bounded-response.mjs";
+import { isRecord } from "../../../lib/record-shared.mjs";
 import { resolveWindowsTaskkillPath } from "../../../lib/windows-taskkill.mjs";
-import { readBoundedResponseText } from "../bounded-response-text.mjs";
 
 const TOKEN = "bundled-plugin-runtime-smoke-token";
 const RUNTIME_PORT_BASE_ENV = "OPENCLAW_BUNDLED_PLUGIN_RUNTIME_PORT_BASE";
@@ -752,7 +757,7 @@ async function fetchHttpProbeStatus(port, pathName, options = {}) {
         res,
         `${pathName} probe`,
         HTTP_PROBE_BODY_MAX_BYTES,
-        timeoutPromise,
+        { createTooLargeError: createBoundedResponseTooLargeError, timeoutPromise },
       );
       status.bodyText = text;
       if (text.trim()) {
@@ -993,10 +998,6 @@ function hasOwnPayloadField(raw, field) {
   );
 }
 
-function isRecord(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
 export function unwrapRpcPayload(raw) {
   if (raw?.ok === false) {
     throw new Error(`gateway RPC failed: ${JSON.stringify(raw.error ?? raw)}`);
@@ -1062,16 +1063,13 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex, plu
   const env = withManifestChannelActivationEnv(process.env, plan.channels);
   if (plan.speechProviders[0]) {
     const provider = plan.speechProviders[0];
-    config.messages = {
-      ...config.messages,
-      tts: {
-        ...config.messages?.tts,
-        provider,
-        providers: {
-          ...config.messages?.tts?.providers,
-          [provider]: {
-            ...config.messages?.tts?.providers?.[provider],
-          },
+    config.tts = {
+      ...config.tts,
+      provider,
+      providers: {
+        ...config.tts?.providers,
+        [provider]: {
+          ...config.tts?.providers?.[provider],
         },
       },
     };
@@ -1088,6 +1086,7 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex, plu
   });
   try {
     await waitForReady({ child, port, logPath });
+    assertPluginLoaded(logPath, pluginId);
     await assertBaseGatewayProbes({
       entrypoint,
       port,
@@ -1265,6 +1264,19 @@ export function assertGatewayLogNotTruncated(logPath) {
   }
 }
 
+export function assertPluginLoaded(logPath, pluginId) {
+  let text;
+  try {
+    text = fs.readFileSync(logPath, "utf8");
+  } catch {
+    return;
+  }
+  const failurePrefix = `[plugins] ${pluginId} failed to load`;
+  if (text.includes(failurePrefix)) {
+    throw new Error(`${failurePrefix}: ${tailText(text)}`);
+  }
+}
+
 export function assertNoPostReadyRuntimeDepsWork(logPath, readyOffset) {
   let stat;
   try {
@@ -1394,10 +1406,8 @@ async function smokeTtsGlobalDisable(pluginId, pluginDir, provider, pluginIndex,
         plugins: {
           enabled: false,
         },
-        messages: {
-          tts: {
-            provider: selectedProvider,
-          },
+        tts: {
+          provider: selectedProvider,
         },
       },
       port,
@@ -1450,13 +1460,11 @@ async function smokeOpenAiTts(pluginIndex) {
             openai: { enabled: true },
           },
         },
-        messages: {
-          tts: {
-            provider: "openai",
-            providers: {
-              openai: {
-                apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-              },
+        tts: {
+          provider: "openai",
+          providers: {
+            openai: {
+              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
             },
           },
         },
@@ -1542,18 +1550,4 @@ async function main(argv = process.argv.slice(2)) {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   await main();
-}
-
-function toLintErrorObject(value, fallbackMessage) {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

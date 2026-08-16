@@ -2,12 +2,12 @@ title: Session memory ranking
 
 scenario:
   id: session-memory-ranking
-  surface: memory
+  surface: session-memory
   coverage:
     primary:
-      - memory.ranking
+      - session-memory.embedding-search-ranking
     secondary:
-      - memory.recall
+      - session-memory.embedding-search-recall
   objective: Verify session-transcript memory can outrank stale durable notes and drive the final answer toward the newer fact.
   successCriteria:
     - Session memory indexing is enabled for the scenario.
@@ -30,8 +30,7 @@ scenario:
       transcriptId: qa-session-memory-ranking
       transcriptQuestion: "What is the current Project Nebula codename?"
       transcriptAnswer: "The current Project Nebula codename is ORBIT-10."
-      prompt: "Session memory ranking check: what is the current Project Nebula codename? Use memory_search first with corpus=sessions for indexed session transcripts. If the first session search misses, retry memory_search with corpus=sessions and query 'current Project Nebula codename ORBIT-10'. If that still misses, run memory_search one more time without a corpus filter using the exact query 'current Project Nebula codename ORBIT-10'. If any result contains ORBIT-10, answer ORBIT-10. If durable notes conflict with newer indexed session transcripts, prefer the newer current fact."
-      promptSnippet: "Session memory ranking check"
+      prompt: "Session memory ranking check: what is the current Project Nebula codename? Run memory_search without a corpus filter using maxResults=6 and the answer-free query 'current Project Nebula codename' so durable notes and indexed session transcripts compete in the same ranked result. Answer with the codename from the newer indexed session transcript. If durable notes conflict with newer indexed session transcripts, prefer the newer current fact."
 
 flow:
   steps:
@@ -49,7 +48,7 @@ flow:
             - ref: env
         - set: originalMemorySearch
           value:
-            expr: "original.config.agents && typeof original.config.agents === 'object' && typeof original.config.agents.defaults === 'object' ? original.config.agents.defaults.memorySearch : undefined"
+            expr: "original.config.memory && typeof original.config.memory === 'object' ? structuredClone(original.config.memory.search) : undefined"
         - set: originalToolsSessions
           value:
             expr: "original.config.tools && typeof original.config.tools === 'object' && typeof original.config.tools.sessions === 'object' ? structuredClone(original.config.tools.sessions) : undefined"
@@ -61,21 +60,15 @@ flow:
                 tools:
                   sessions:
                     visibility: all
-                agents:
-                  defaults:
-                    memorySearch:
-                      sources:
-                        - memory
-                        - sessions
-                      experimental:
-                        sessionMemory: true
-                      query:
-                        minScore: 0
-                        hybrid:
-                          enabled: true
-                          temporalDecay:
-                            enabled: true
-                            halfLifeDays: 1
+                memory:
+                  search:
+                    sources:
+                      - memory
+                      - sessions
+                    experimental:
+                      sessionMemory: true
+                    query:
+                      minScore: 0
         - call: waitForGatewayHealthy
           args:
             - ref: env
@@ -92,25 +85,25 @@ flow:
                 args:
                   - ref: memoryDir
                   - recursive: true
+              - set: now
+                value:
+                  expr: "Date.now()"
+              - set: staleAt
+                value:
+                  expr: "new Date(now - 3 * 86_400_000)"
               - set: staleMemoryPath
                 value:
-                  expr: "path.join(memoryDir, '2020-01-01.md')"
+                  expr: "path.join(memoryDir, `${staleAt.toISOString().slice(0, 10)}.md`)"
               - call: fs.writeFile
                 args:
                   - ref: staleMemoryPath
-                  - expr: "`${'Project Nebula stale codename: '}${staleFact}.\\n`"
+                  - expr: "`${'Project Nebula current codename: '}${staleFact}.\\n`"
                   - utf8
-              - set: staleAt
-                value:
-                  expr: "new Date('2020-01-01T00:00:00.000Z')"
               - call: fs.utimes
                 args:
                   - ref: staleMemoryPath
                   - ref: staleAt
                   - ref: staleAt
-              - set: now
-                value:
-                  expr: "Date.now()"
               - call: seedQaSessionTranscript
                 args:
                   - ref: env
@@ -136,7 +129,7 @@ flow:
                   - env:
                       ref: env
                     query:
-                      expr: "`current Project Nebula codename ${currentFact}`"
+                      expr: "'current Project Nebula codename'"
                     expectedNeedle:
                       ref: currentFact
               - call: reset
@@ -148,6 +141,8 @@ flow:
                       expr: config.prompt
                     timeoutMs:
                       expr: liveTurnTimeoutMs(env, 45000)
+                    transcriptToolName: memory_search
+                    requireSuccessfulTranscriptToolResult: true
               - call: waitForOutboundMessage
                 saveAs: outbound
                 args:
@@ -160,9 +155,6 @@ flow:
                   expr: "outbound.text.includes(currentFact)"
                   message:
                     expr: "`expected current transcript-backed fact ${currentFact}, got: ${outbound.text}`"
-              - set: lower
-                value:
-                  expr: "normalizeLowercaseStringOrEmpty(outbound.text)"
               - set: staleLeak
                 value:
                   expr: "outbound.text.includes(staleFact) && !/(stale|durable|conflict|older|previous)/i.test(outbound.text)"
@@ -170,19 +162,89 @@ flow:
                   expr: "!staleLeak"
                   message:
                     expr: "`stale durable fact leaked through: ${outbound.text}`"
-              - if:
-                  expr: "Boolean(env.mock)"
-                  then:
-                    - call: fetchJson
-                      saveAs: requests
-                      args:
-                        - expr: "`${env.mock.baseUrl}/debug/requests`"
-                    - set: relevant
-                      value:
-                        expr: "requests.filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet))"
-                    - assert:
-                        expr: "relevant.some((request) => request.plannedToolName === 'memory_search')"
-                        message: expected memory_search in session memory ranking flow
+              - set: rankingHistory
+                value:
+                  expr: "await env.gateway.call('chat.history', { sessionKey: 'agent:qa:session-memory-ranking', limit: 100, maxChars: 131072 }, { timeoutMs: liveTurnTimeoutMs(env, 15000) })"
+              - set: searchCalls
+                value:
+                  expr: |-
+                    (rankingHistory.messages ?? []).flatMap((message, messageIndex) =>
+                      message?.role === 'assistant' && Array.isArray(message.content)
+                        ? message.content.flatMap((item) =>
+                            ['toolCall', 'toolUse', 'tool_use'].includes(item?.type) &&
+                            (item.name ?? item.toolName) === 'memory_search' &&
+                            typeof item.id === 'string' && item.id.length > 0
+                              ? [{ messageIndex, callId: item.id, args: item.arguments ?? item.input ?? {} }]
+                              : [])
+                        : [])
+              - assert:
+                  expr: searchCalls.length > 0
+                  message: expected a persisted planned memory_search call
+              - assert:
+                  expr: "searchCalls.every((call) => !String(call.args?.query ?? '').includes(currentFact) && !String(call.args?.query ?? '').includes(staleFact))"
+                  message: memory_search query revealed an expected answer
+              - assert:
+                  expr: "searchCalls.every((call) => !Object.hasOwn(call.args ?? {}, 'corpus'))"
+                  message: memory_search corpus filter prevented durable and session memory from competing
+              - set: correlatedSearchResults
+                value:
+                  expr: |-
+                    searchCalls.flatMap((call) => {
+                      const result = (rankingHistory.messages ?? []).find((message, messageIndex) =>
+                        messageIndex > call.messageIndex &&
+                        message?.role === 'toolResult' &&
+                        message.toolName === 'memory_search' &&
+                        message.toolCallId === call.callId &&
+                        message.isError === false);
+                      if (!result) return [];
+                      const content = typeof result.content === 'string'
+                        ? result.content
+                        : Array.isArray(result.content)
+                          ? result.content
+                              .filter((item) => ['text', 'input_text', 'output_text'].includes(item?.type))
+                              .map((item) => item.text ?? '')
+                              .join('\n')
+                          : '';
+                      try {
+                        const parsed = JSON.parse(content);
+                        return Array.isArray(parsed?.results) ? [{ ...call, results: parsed.results }] : [];
+                      } catch {
+                        return [];
+                      }
+                    })
+              - assert:
+                  expr: correlatedSearchResults.length > 0
+                  message: expected a correlated successful memory_search result
+              - set: rankedSearchResult
+                value:
+                  expr: |-
+                    correlatedSearchResults.find(({ results }) =>
+                      results.some((result) =>
+                        (result.source === 'sessions' || result.corpus === 'sessions' ||
+                          String(result.path ?? '').startsWith('sessions/')) &&
+                        String(result.snippet ?? result.text ?? '').includes(currentFact)) &&
+                      results.some((result) =>
+                        (result.source === 'memory' || result.corpus === 'memory' ||
+                          String(result.path ?? '').startsWith('memory/') ||
+                          String(result.path ?? '') === 'MEMORY.md') &&
+                        String(result.snippet ?? result.text ?? '').includes(staleFact)))
+              - assert:
+                  expr: Boolean(rankedSearchResult)
+                  message:
+                    expr: "`expected current session and stale durable memory to compete in the same search result: ${JSON.stringify(correlatedSearchResults.map(({ results }) => results.map(({ path, source, corpus, score, snippet, text }) => ({ path, source, corpus, score, snippet: String(snippet ?? text ?? '').slice(0, 140) }))))}`"
+              - assert:
+                  expr: "(rankedSearchResult.args?.maxResults ?? 6) === 6"
+                  message: expected the correlated memory_search call to use maxResults=6
+              - set: currentFactRank
+                value:
+                  expr: "rankedSearchResult.results.findIndex((result) => (result.source === 'sessions' || result.corpus === 'sessions' || String(result.path ?? '').startsWith('sessions/')) && String(result.snippet ?? result.text ?? '').includes(currentFact))"
+              - set: staleFactRank
+                value:
+                  expr: "rankedSearchResult.results.findIndex((result) => (result.source === 'memory' || result.corpus === 'memory' || String(result.path ?? '').startsWith('memory/') || String(result.path ?? '') === 'MEMORY.md') && String(result.snippet ?? result.text ?? '').includes(staleFact))"
+              - assert:
+                  expr: "currentFactRank >= 0 && staleFactRank >= 0 && currentFactRank < staleFactRank"
+                  message:
+                    expr: "`stale durable memory outranked the current session fact: ${JSON.stringify(rankedSearchResult.results)}`"
             finally:
               - call: patchConfig
                 args:
@@ -192,10 +254,9 @@ flow:
                       tools:
                         sessions:
                           expr: "originalToolsSessions === undefined ? null : structuredClone(originalToolsSessions)"
-                      agents:
-                        defaults:
-                          memorySearch:
-                            expr: "originalMemorySearch === undefined ? null : structuredClone(originalMemorySearch)"
+                      memory:
+                        search:
+                          expr: "originalMemorySearch === undefined ? null : structuredClone(originalMemorySearch)"
               - call: waitForGatewayHealthy
                 args:
                   - ref: env

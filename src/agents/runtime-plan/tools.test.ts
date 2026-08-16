@@ -205,6 +205,20 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     });
   });
 
+  it("does not load a provider runtime to normalize an empty tool set", () => {
+    const onPreNormalizationSchemaDiagnostics = vi.fn();
+
+    expect(
+      normalizeAgentRuntimeTools({
+        tools: [],
+        provider: "openai",
+        onPreNormalizationSchemaDiagnostics,
+      }),
+    ).toEqual([]);
+    expect(onPreNormalizationSchemaDiagnostics).toHaveBeenCalledWith([], []);
+    expect(mocks.normalizeProviderToolSchemas).not.toHaveBeenCalled();
+  });
+
   it("preserves plugin metadata when provider schema normalization clones tools", () => {
     // Provider normalization may clone tool objects; plugin metadata has to move
     // with the clone so later dispatch still knows the owning plugin/MCP server.

@@ -13,7 +13,11 @@ import {
   scenarioMatchesQaProviderLane,
 } from "./scenario-lane.js";
 import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
-import { applyQaMergePatch, isQaMergePatchObject } from "./suite-merge-patch.js";
+import {
+  applyQaMergePatch,
+  isQaMergePatchBlockedKey,
+  isQaMergePatchObject,
+} from "./suite-merge-patch.js";
 
 const DEFAULT_QA_SUITE_CONCURRENCY = 64;
 const DEFAULT_QA_SUITE_WORKER_START_STAGGER_MS = 1_500;
@@ -34,6 +38,7 @@ function selectQaFlowSuiteScenarios(params: {
   channelDriver?: QaScorecardChannelDriver | null;
   channel?: string | null;
   claudeCliAuthMode?: QaCliBackendAuthMode;
+  resolveModuleFlowSupport?: (channel?: string) => boolean;
 }) {
   const requestedScenarioIds =
     params.scenarioIds && params.scenarioIds.length > 0 ? new Set(params.scenarioIds) : null;
@@ -45,8 +50,8 @@ function selectQaFlowSuiteScenarios(params: {
     if (missingScenarioIds.length > 0) {
       throw new Error(`unknown QA scenario id(s): ${missingScenarioIds.join(", ")}`);
     }
-    const selectedScenarios = [...requestedScenarioIds].map(
-      (scenarioId) => scenarioById.get(scenarioId)!,
+    const selectedScenarios = [...requestedScenarioIds].map((scenarioId) =>
+      scenarioById.get(scenarioId)!,
     );
     const unsupportedScenarios = selectedScenarios.filter(
       (scenario) => scenario.execution.kind !== "flow",
@@ -67,6 +72,9 @@ function selectQaFlowSuiteScenarios(params: {
         channelDriver: params.channelDriver,
         channel: params.channel,
         claudeCliAuthMode: params.claudeCliAuthMode,
+        supportsModuleFlows: params.resolveModuleFlowSupport?.(
+          params.channel ?? scenario.execution.channel,
+        ),
       });
       return mismatches.length > 0 ? [`${scenario.id} (${mismatches.join(", ")})`] : [];
     });
@@ -80,10 +88,6 @@ function selectQaFlowSuiteScenarios(params: {
   return params.scenarios.filter(
     (scenario) =>
       scenario.execution.kind === "flow" &&
-      // Explicit single-scenario runs adopt this provider later. Implicit suites must
-      // filter it here so a scenario-pinned provider cannot leak into another lane.
-      (scenario.execution.providerMode === undefined ||
-        scenario.execution.providerMode === params.providerMode) &&
       scenarioMatchesQaProviderLane({
         scenario,
         providerMode: params.providerMode,
@@ -91,6 +95,9 @@ function selectQaFlowSuiteScenarios(params: {
         channelDriver: params.channelDriver,
         channel: params.channel,
         claudeCliAuthMode: params.claudeCliAuthMode,
+        supportsModuleFlows: params.resolveModuleFlowSupport?.(
+          params.channel ?? scenario.execution.channel,
+        ),
       }),
   );
 }
@@ -190,6 +197,9 @@ function resolveQaGatewayConfigPatchSelectedAccount(
   }
   const resolved: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(patch)) {
+    if (isQaMergePatchBlockedKey(key)) {
+      continue;
+    }
     const resolvedKey = key === QA_GATEWAY_CONFIG_SELECTED_ACCOUNT_KEY ? selectedAccountId : key;
     Object.defineProperty(resolved, resolvedKey, {
       configurable: true,
@@ -201,12 +211,17 @@ function resolveQaGatewayConfigPatchSelectedAccount(
   return resolved;
 }
 
-function collectQaSuiteGatewayConfigPatch(
+// The patches stay an ordered list instead of one composed document: a merge
+// patch cannot express "delete this parent, then recreate part of it", so
+// composing a scenario's deletion with a later scenario's object would let the
+// baseline siblings it removed survive. Startup replays them in order against
+// the real config, which is the semantics a scenario author writes.
+function collectQaSuiteGatewayConfigPatches(
   scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"],
   selectedAccountId = "sut",
-): Record<string, unknown> | undefined {
+): Record<string, unknown>[] {
   const resolvedSelectedAccountId = selectedAccountId.trim() || "sut";
-  let merged: Record<string, unknown> | undefined;
+  const patches: Record<string, unknown>[] = [];
   for (const scenario of scenarios) {
     if (!isQaMergePatchObject(scenario.gatewayConfigPatch)) {
       continue;
@@ -215,17 +230,31 @@ function collectQaSuiteGatewayConfigPatch(
       scenario.gatewayConfigPatch,
       resolvedSelectedAccountId,
     );
-    merged = applyQaMergePatch(merged ?? {}, resolvedPatch) as Record<string, unknown>;
+    if (isQaMergePatchObject(resolvedPatch)) {
+      patches.push(resolvedPatch);
+    }
   }
-  return merged;
+  return patches;
+}
+
+/** Applies collected scenario patches to a gateway config in scenario order. */
+function applyQaSuiteGatewayConfigPatches(
+  config: unknown,
+  patches: readonly Record<string, unknown>[],
+): unknown {
+  return patches.reduce<unknown>((next, patch) => applyQaMergePatch(next, patch), config);
 }
 
 function collectQaSuiteGatewayRuntimeOptions(
   scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"],
 ) {
+  let allowUnhealthyStartup = false;
   let forwardHostHome = false;
   let preserveDebugArtifacts = false;
   for (const scenario of scenarios) {
+    if (scenario.gatewayRuntime?.allowUnhealthyStartup === true) {
+      allowUnhealthyStartup = true;
+    }
     if (scenario.gatewayRuntime?.forwardHostHome === true) {
       forwardHostHome = true;
     }
@@ -233,8 +262,9 @@ function collectQaSuiteGatewayRuntimeOptions(
       preserveDebugArtifacts = true;
     }
   }
-  return forwardHostHome || preserveDebugArtifacts
+  return allowUnhealthyStartup || forwardHostHome || preserveDebugArtifacts
     ? {
+        ...(allowUnhealthyStartup ? { allowUnhealthyStartup: true } : {}),
         ...(forwardHostHome ? { forwardHostHome: true } : {}),
         ...(preserveDebugArtifacts ? { preserveDebugArtifacts: true } : {}),
       }
@@ -283,10 +313,8 @@ function shouldUseIsolatedQaSuiteScenarioWorkers(params: {
     (params.concurrency > 1 ||
       params.scenarios.some(
         (scenario) =>
-          isQaMergePatchObject(scenario.gatewayConfigPatch) ||
-          (scenario.execution.kind === "flow" && scenario.execution.providerMode !== undefined) ||
-          (scenario.execution.kind === "flow" && scenario.execution.runtime !== undefined) ||
-          (scenario.execution.kind === "flow" && scenario.execution.transportPolicy !== undefined),
+          scenarioRequiresIsolatedQaSuiteWorker(scenario) ||
+          (scenario.execution.kind === "flow" && scenario.execution.providerMode !== undefined),
       ))
   );
 }
@@ -451,8 +479,8 @@ async function resolveQaSuiteOutputDir(repoRoot: string, outputDir?: string) {
 }
 
 export {
-  applyQaMergePatch,
-  collectQaSuiteGatewayConfigPatch,
+  applyQaSuiteGatewayConfigPatches,
+  collectQaSuiteGatewayConfigPatches,
   collectQaSuiteGatewayRuntimeOptions,
   collectQaSuiteTransportPolicy,
   collectQaSuitePluginIds,

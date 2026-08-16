@@ -3,8 +3,13 @@
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveStorePath } from "../config/sessions/paths.js";
-import { loadSessionEntry, patchSessionEntry } from "../config/sessions/session-accessor.js";
+import { resolveSessionAuthProfileOverrideSource } from "../config/sessions/auth-profile-override-provenance.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import {
+  loadSessionEntry,
+  loadSessionEntryReadOnly,
+  patchSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
@@ -40,10 +45,10 @@ function resolveLiveSessionModelSelection(params: {
     return null;
   }
   const agentId = normalizeOptionalString(params.agentId);
-  const storePath = resolveStorePath(cfg.session?.store, {
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, {
     agentId,
   });
-  const entry = loadSessionEntry({
+  const entry = loadSessionEntryReadOnly({
     storePath,
     sessionKey,
     hydrateSkillPromptRefs: false,
@@ -105,7 +110,7 @@ function resolveSelectionFromSessionEntry(params: {
     model,
     ...(agentRuntimeOverride ? { agentRuntimeOverride } : {}),
     authProfileId,
-    authProfileIdSource: authProfileId ? entry?.authProfileOverrideSource : undefined,
+    authProfileIdSource: authProfileId ? resolveSessionAuthProfileOverrideSource(entry) : undefined,
   };
 }
 
@@ -185,7 +190,7 @@ export function shouldSwitchToLiveModel(params: {
   if (!cfg || !sessionKey) {
     return undefined;
   }
-  const storePath = resolveStorePath(cfg.session?.store, {
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, {
     agentId: params.agentId?.trim(),
   });
   const entry = loadSessionEntry({
@@ -266,11 +271,11 @@ export async function consolidateLiveModelSwitchAfterRun(params: {
     config: cfg,
     agentId: params.agentId,
   });
-  const storePath = resolveStorePath(cfg.session?.store, { agentId });
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
   if (!storePath) {
     return;
   }
-  await patchSessionEntry(
+  await patchSessionEntryCore(
     { storePath, sessionKey },
     (entry) => {
       if (!entry.liveModelSwitchPending) {
@@ -314,13 +319,13 @@ export async function clearLiveModelSwitchPending(params: {
   if (!cfg || !sessionKey) {
     return;
   }
-  const storePath = resolveStorePath(cfg.session?.store, {
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, {
     agentId: params.agentId?.trim(),
   });
   if (!storePath) {
     return;
   }
-  await patchSessionEntry(
+  await patchSessionEntryCore(
     { storePath, sessionKey },
     (entry) => {
       const next = { ...entry };

@@ -13,6 +13,7 @@ import {
 import { startQaGatewayChild } from "../../../../extensions/qa-lab/src/gateway-child.js";
 import { startQaMockOpenAiServer } from "../../../../extensions/qa-lab/src/providers/mock-openai/server.js";
 import { GatewayClient, type GatewayClientOptions } from "../../../../src/gateway/client.js";
+import type { DiagnosticStabilitySnapshot } from "../../../../src/logging/diagnostic-stability.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -46,19 +47,17 @@ const SCENARIOS = {
   "webchat-auto-tts": {
     title: "WebChat auto TTS delivery",
     sourcePath: "qa/scenarios/media/webchat-auto-tts.yaml",
-    primaryCoverageIds: ["media.tts", "media.outbound-voice-audio-delivery"],
     docsRefs: ["docs/tools/tts.md", "docs/tools/media-overview.md"],
     codeRefs: [
       SOURCE_PATH,
-      "packages/speech-core/src/tts.ts",
-      "src/gateway/server-methods/chat.ts",
-      "src/gateway/control-ui.ts",
+      "src/tts/runtime-api.ts",
+      "src/gateway/managed-image-attachments.ts",
+      "src/gateway/server-methods/artifacts.ts",
     ],
   },
   "active-talk-agent-run-status": {
     title: "Active Talk agent-run control boundaries",
     sourcePath: "qa/scenarios/runtime/active-talk-agent-run-status.yaml",
-    primaryCoverageIds: ["voice.active-talk-agent-run-status"],
     docsRefs: ["docs/nodes/talk.md", "docs/web/control-ui.md"],
     codeRefs: [
       SOURCE_PATH,
@@ -247,11 +246,13 @@ function collectRecords(value: unknown, records: Record<string, unknown>[] = [])
   return records;
 }
 
-function findAudioAttachmentSource(value: unknown): string | undefined {
-  return collectRecords(value)
-    .filter((record) => record.kind === "audio")
-    .map((record) => record.url)
-    .find((url): url is string => typeof url === "string" && url.length > 0);
+function findAudioAttachment(value: unknown) {
+  return collectRecords(value).find(
+    (record) =>
+      (record.type === "audio" || record.kind === "audio") &&
+      typeof record.url === "string" &&
+      record.url.length > 0,
+  );
 }
 
 async function readJsonLines(filePath: string): Promise<Record<string, unknown>[]> {
@@ -279,7 +280,9 @@ async function waitForChatFinal(
     if (finalEvent) {
       return finalEvent.payload;
     }
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 100);
+    });
   }
   throw new Error(`timed out waiting for WebChat final event for run ${runId}`);
 }
@@ -296,13 +299,15 @@ async function waitForWebchatAudio(params: {
       sessionKey: params.sessionKey,
       limit: 20,
     });
-    const source = findAudioAttachmentSource(params.events) ?? findAudioAttachmentSource(history);
-    if (source) {
-      return { history, source };
+    const attachment = findAudioAttachment(params.events) ?? findAudioAttachment(history);
+    if (attachment) {
+      return { attachment, history };
     }
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 100);
+    });
   }
-  return { history, source: undefined };
+  return { attachment: undefined, history };
 }
 
 async function runWebchatAutoTtsProof(options: ProducerOptions): Promise<string> {
@@ -323,19 +328,17 @@ async function runWebchatAutoTtsProof(options: ProducerOptions): Promise<string>
       runtimeEnvPatch: {
         OPENCLAW_QA_SPEECH_CALLS_PATH: fixture.speechCallsPath,
         OPENCLAW_QA_REALTIME_CALLS_PATH: fixture.realtimeCallsPath,
+        OPENCLAW_TTS_PREFS: path.join(fixtureRoot, "tts-prefs.json"),
       },
       mutateConfig: (config) => {
         const withPlugin = withFixturePlugin(config, fixture.pluginDir);
         return {
           ...withPlugin,
-          messages: {
-            ...withPlugin.messages,
-            tts: {
-              auto: "always",
-              mode: "final",
-              provider: FIXTURE_SPEECH_PROVIDER_ID,
-              prefsPath: path.join(fixtureRoot, "tts-prefs.json"),
-            },
+          tts: {
+            ...withPlugin.tts,
+            auto: "always",
+            mode: "final",
+            provider: FIXTURE_SPEECH_PROVIDER_ID,
           },
         };
       },
@@ -356,8 +359,8 @@ async function runWebchatAutoTtsProof(options: ProducerOptions): Promise<string>
       idempotencyKey: runId,
     });
     await waitForChatFinal(events, runId);
-    const { history, source } = await waitForWebchatAudio({ client, events, sessionKey });
-    if (!source) {
+    const { attachment, history } = await waitForWebchatAudio({ client, events, sessionKey });
+    if (!attachment) {
       const speechCalls = await readJsonLines(fixture.speechCallsPath);
       throw new Error(
         `WebChat history did not contain an audio attachment; speech=${JSON.stringify(speechCalls)}; gateway=${gateway.logs()}; history=${JSON.stringify(history)}`,
@@ -367,25 +370,26 @@ async function runWebchatAutoTtsProof(options: ProducerOptions): Promise<string>
     if (speechCalls.length !== 1) {
       throw new Error(`expected one final-tail TTS synthesis, received ${speechCalls.length}`);
     }
-    const route = `${gateway.baseUrl}/__openclaw__/assistant-media`;
-    const sourceParam = encodeURIComponent(source);
-    const metadata = await fetch(`${route}?meta=1&source=${sourceParam}`, {
-      headers: { Authorization: `Bearer ${gateway.token}` },
+    const artifactId = attachment.artifactId;
+    const source = attachment.url;
+    if (typeof artifactId !== "string" || typeof source !== "string") {
+      throw new Error(`WebChat audio attachment was not managed: ${JSON.stringify(attachment)}`);
+    }
+    const download = await client.request<{ url?: string }>("artifacts.download", {
+      sessionKey,
+      artifactId,
     });
-    if (!metadata.ok) {
-      throw new Error(`media metadata failed with ${metadata.status}: ${await metadata.text()}`);
+    if (!download.url?.includes("mediaTicket=")) {
+      throw new Error(
+        `artifact download did not mint a scoped ticket: ${JSON.stringify(download)}`,
+      );
     }
-    const ticket = (await metadata.json()) as { available?: boolean; mediaTicket?: string };
-    if (ticket.available !== true || !ticket.mediaTicket?.startsWith("v1.")) {
-      throw new Error(`media metadata did not mint a scoped ticket: ${JSON.stringify(ticket)}`);
-    }
-    const withoutTicket = await fetch(`${route}?source=${sourceParam}`);
+    const sourceUrl = new URL(source, gateway.baseUrl);
+    const withoutTicket = await fetch(sourceUrl);
     if (withoutTicket.status !== 401) {
       throw new Error(`media route without ticket returned ${withoutTicket.status}, expected 401`);
     }
-    const ticketed = await fetch(
-      `${route}?source=${sourceParam}&mediaTicket=${encodeURIComponent(ticket.mediaTicket)}`,
-    );
+    const ticketed = await fetch(new URL(download.url, gateway.baseUrl));
     const body = Buffer.from(await ticketed.arrayBuffer());
     if (!ticketed.ok || !ticketed.headers.get("content-type")?.includes("audio/wav")) {
       throw new Error(`ticketed media failed with ${ticketed.status}`);
@@ -434,7 +438,9 @@ async function waitForActiveTalkStatus(client: GatewayClient, sessionKey: string
       return status;
     } catch (error) {
       lastError = error;
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 100);
+      });
     }
   }
   throw lastError instanceof Error ? lastError : new Error("timed out waiting for active Talk run");
@@ -443,20 +449,31 @@ async function waitForActiveTalkStatus(client: GatewayClient, sessionKey: string
 async function waitForQueuedTalkSteer(client: GatewayClient, sessionKey: string) {
   const deadline = Date.now() + 20_000;
   let lastResult: unknown;
+  let lastError: unknown;
   while (Date.now() < deadline) {
-    lastResult = await client.request("talk.client.steer", {
-      sessionKey,
-      text: "use the safer path",
-      mode: "steer",
-    });
-    if (
-      lastResult &&
-      typeof lastResult === "object" &&
-      (lastResult as Record<string, unknown>).queued === true
-    ) {
-      return lastResult;
+    try {
+      lastResult = await client.request("talk.client.steer", {
+        sessionKey,
+        text: "use the safer path",
+        mode: "steer",
+      });
+      lastError = undefined;
+      if (
+        lastResult &&
+        typeof lastResult === "object" &&
+        (lastResult as Record<string, unknown>).queued === true
+      ) {
+        return lastResult;
+      }
+    } catch (error) {
+      lastError = error;
     }
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 100);
+    });
+  }
+  if (lastError instanceof Error) {
+    throw lastError;
   }
   throw new Error(`timed out waiting for steerable Talk run: ${JSON.stringify(lastResult)}`);
 }
@@ -504,7 +521,7 @@ async function runActiveTalkAgentRunProof(options: ProducerOptions): Promise<str
       url: gateway.wsUrl,
     });
     const sessionKey = "agent:qa:main";
-    const created = await client.request<Record<string, unknown>>("talk.client.create", {
+    const created = await client.request("talk.client.create", {
       sessionKey,
       provider: FIXTURE_REALTIME_PROVIDER_ID,
     });
@@ -528,6 +545,9 @@ async function runActiveTalkAgentRunProof(options: ProducerOptions): Promise<str
       name: "openclaw_agent_consult",
       args: { question: "final-only marker streaming qa check: inspect the active run" },
     });
+    // A failed control step can end the scenario before this long-lived request
+    // is awaited; observe rejection immediately so cleanup cannot mask the cause.
+    void consultRequest.catch(() => undefined);
     const steer = await waitForQueuedTalkSteer(client, sessionKey);
     assertControlResult(steer, { mode: "steer", active: true, queued: true });
     await waitForActiveTalkStatus(client, sessionKey);
@@ -544,7 +564,31 @@ async function runActiveTalkAgentRunProof(options: ProducerOptions): Promise<str
     });
     assertControlResult(cancel, { mode: "cancel", active: true, aborted: true });
     await consultRequest;
-    return `real Gateway pid=${gateway.pid ?? "unknown"}; persistent WebChat connection created Talk session and completed status, steer, follow-up, cancel RPCs`;
+    client.stop();
+    client = undefined;
+    const queuedDiagnostics = (await gateway.call("diagnostics.stability", {
+      type: "message.queued",
+      limit: 20,
+    })) as DiagnosticStabilitySnapshot;
+    const steeringQueueDepths = queuedDiagnostics.events
+      .filter((event) => event.source === "embedded-agent-runner")
+      .map((event) => event.queueDepth);
+    if (JSON.stringify(steeringQueueDepths) !== JSON.stringify([1, 1])) {
+      throw new Error(
+        `active-run steering changed diagnostic backlog: ${JSON.stringify(queuedDiagnostics.events)}`,
+      );
+    }
+    const stateDiagnostics = (await gateway.call("diagnostics.stability", {
+      type: "session.state",
+      limit: 20,
+    })) as DiagnosticStabilitySnapshot;
+    const finalState = stateDiagnostics.events.at(-1);
+    if (finalState?.outcome !== "idle" || finalState.queueDepth !== 0) {
+      throw new Error(
+        `Talk run did not finish with empty diagnostic backlog: ${JSON.stringify(stateDiagnostics.events)}`,
+      );
+    }
+    return `real Gateway pid=${gateway.pid ?? "unknown"}; persistent WebChat connection completed status, steer, follow-up, cancel RPCs; steeringQueueDepths=${steeringQueueDepths.join(",")}; finalState=${finalState.outcome}; finalQueueDepth=${finalState.queueDepth}`;
   } finally {
     client?.stop();
     await gateway?.stop().catch(() => undefined);
@@ -584,7 +628,6 @@ async function runMediaTalkGatewayProducer(
       id: options.scenarioId,
       title: scenario.title,
       sourcePath: scenario.sourcePath,
-      primaryCoverageIds: scenario.primaryCoverageIds,
       docsRefs: scenario.docsRefs,
       codeRefs: scenario.codeRefs,
     },
@@ -608,7 +651,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     .then((exitCode) => {
       process.exitCode = exitCode;
     })
-    .catch((error) => {
+    .catch((error: unknown) => {
       console.error(formatErrorMessage(error));
       process.exitCode = 1;
     });

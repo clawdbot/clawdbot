@@ -20,8 +20,9 @@ struct SystemAgentSettings: View {
         VStack(alignment: .leading, spacing: 20) {
             SettingsPageHeader(
                 title: "OpenClaw",
-                subtitle: "Your AI-powered setup helper. It can check status, fix config, " +
-                    "switch models, and connect channels.")
+                subtitle: """
+                Your AI-powered setup helper. It can check status, fix config, switch models, and connect channels.
+                """)
 
             SettingsCardGroup("Chat") {
                 SystemAgentOnboardingChatView(model: self.chat)

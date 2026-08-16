@@ -36,14 +36,6 @@ export {
   truncateUtf16Safe,
 } from "./host/openclaw-runtime-io.js";
 export type { OpenClawConfig } from "./host/openclaw-runtime-config.js";
-export type { SessionSendPolicyConfig } from "./host/openclaw-runtime-config.js";
 export type { SecretInput } from "./host/openclaw-runtime-config.js";
-export type {
-  MemoryBackend,
-  MemoryCitationsMode,
-  MemoryQmdConfig,
-  MemoryQmdIndexPath,
-  MemoryQmdMcporterConfig,
-  MemoryQmdSearchMode,
-} from "./host/openclaw-runtime-config.js";
+export type { MemoryCitationsMode } from "./host/openclaw-runtime-config.js";
 export type { MemorySearchConfig } from "./host/openclaw-runtime-config.js";

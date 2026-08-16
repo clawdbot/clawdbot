@@ -8,6 +8,8 @@ final class QuickChatReplyBinding {
 
     private(set) var route: QuickChatRoutingTarget?
     private(set) var viewModel: OpenClawChatViewModel?
+    private(set) var isPastingReply = false
+    private(set) var pasteStatusMessage: String?
     @ObservationIgnored private var preparedRoute: QuickChatRoutingTarget?
 
     @ObservationIgnored private let viewModelFactory: ViewModelFactory
@@ -46,6 +48,20 @@ final class QuickChatReplyBinding {
         self.route = nil
         self.preparedRoute = nil
         self.viewModel = nil
+        self.isPastingReply = false
+        self.pasteStatusMessage = nil
+    }
+
+    func beginPaste() -> Bool {
+        guard !self.isPastingReply else { return false }
+        self.isPastingReply = true
+        self.pasteStatusMessage = nil
+        return true
+    }
+
+    func finishPaste(message: String? = nil) {
+        self.isPastingReply = false
+        self.pasteStatusMessage = message
     }
 
     private static func makeViewModel(route: QuickChatRoutingTarget) -> OpenClawChatViewModel {

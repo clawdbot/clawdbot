@@ -42,6 +42,94 @@ describe("FeishuConfigSchema webhook validation", () => {
     expect(result.requireMention).toBeUndefined();
   });
 
+  it.each([
+    ["legacy-hook", "/legacy-hook"],
+    ["legacy-hook/", "/legacy-hook/"],
+    ["legacy-hook?tenant=alpha", "/legacy-hook?tenant=alpha"],
+    ["/legacy-hook?", "/legacy-hook?"],
+    ["/legacy-hook?#", "/legacy-hook"],
+    ["/legacy-hook#fragment", "/legacy-hook"],
+    ["legacy-hook?tenant=alpha#fragment", "/legacy-hook?tenant=alpha"],
+    ["#fragment", "/"],
+    ["#?", "/"],
+    ["?tenant=alpha#fragment", "/?tenant=alpha"],
+    ["/other/../legacy-hook", "/legacy-hook"],
+    ["/other/%2e%2e/legacy-hook", "/legacy-hook"],
+    ["/other\\..\\legacy-hook", "/legacy-hook"],
+    ["//example.com/legacy-hook", "/legacy-hook"],
+    ["/\\example.com/legacy-hook", "/legacy-hook"],
+    ["https://example.com/legacy-hook/?x=1#fragment", "/legacy-hook/?x=1"],
+    ["/legacy hook", "/legacy%20hook"],
+    ["/legacy?name=hello world", "/legacy?name=hello%20world"],
+    ["/café", "/caf%C3%A9"],
+    ["/💬", "/%F0%9F%92%AC"],
+    ["/legacy?name=café", "/legacy?name=caf%C3%A9"],
+    ["/legacy\tvalue", "/legacyvalue"],
+    ["/legacy\nvalue", "/legacyvalue"],
+    ["/legacy\u0000value", "/legacy%00value"],
+    ["/legacy%23value", "/legacy%23value"],
+    ["/legacy%2Fvalue", "/legacy%2Fvalue"],
+    ["/legacy%5Cvalue", "/legacy%5Cvalue"],
+    ["/legacy%00value", "/legacy%00value"],
+    ["/legacy%ZZ", "/legacy%ZZ"],
+    ["", "/feishu/events"],
+    ["   ", "/feishu/events"],
+  ])("accepts only canonical root and account webhook path %j", (webhookPath, canonicalPath) => {
+    if (webhookPath === canonicalPath) {
+      const result = FeishuConfigSchema.parse({
+        webhookPath,
+        accounts: { main: { webhookPath } },
+      });
+      expect(result.webhookPath).toBe(webhookPath);
+      expect(result.accounts?.main?.webhookPath).toBe(webhookPath);
+      return;
+    }
+
+    for (const [input, issuePath] of [
+      [{ webhookPath }, "webhookPath"],
+      [{ accounts: { main: { webhookPath } } }, "accounts.main.webhookPath"],
+    ] as const) {
+      const result = FeishuConfigSchema.safeParse(input);
+      expectSchemaIssue(result, issuePath);
+      if (!result.success) {
+        expect(result.error.issues[0]?.message).toContain("openclaw doctor --fix");
+      }
+    }
+  });
+
+  it.each([
+    "mailto:hello@example.com",
+    "javascript:alert(1)",
+    "ftp://host/hook",
+    "file:///tmp/hook",
+    "//[",
+  ])("rejects unsupported root and account webhook URL %j", (webhookPath) => {
+    expectSchemaIssue(FeishuConfigSchema.safeParse({ webhookPath }), "webhookPath");
+    expectSchemaIssue(
+      FeishuConfigSchema.safeParse({ accounts: { main: { webhookPath } } }),
+      "accounts.main.webhookPath",
+    );
+  });
+
+  it("rejects legacy webhook input while preserving the exported canonical default", () => {
+    expect(
+      FeishuChannelConfigSchema.runtime?.safeParse({
+        webhookPath: "https://example.com/hook/?tenant=alpha#fragment",
+      }),
+    ).toMatchObject({ success: false });
+    expect(
+      FeishuChannelConfigSchema.runtime?.safeParse({ webhookPath: "/hook/?tenant=alpha" }),
+    ).toMatchObject({ success: true, data: { webhookPath: "/hook/?tenant=alpha" } });
+    expect(FeishuChannelConfigSchema.schema).toMatchObject({
+      properties: {
+        webhookPath: { default: "/feishu/events", type: "string" },
+        accounts: {
+          additionalProperties: { properties: { webhookPath: { type: "string" } } },
+        },
+      },
+    });
+  });
+
   it("does not force top-level policy defaults into account config", () => {
     const result = FeishuConfigSchema.parse({
       accounts: {

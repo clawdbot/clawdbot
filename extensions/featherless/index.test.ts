@@ -29,7 +29,7 @@ function createDefaultRuntimeModel(): ProviderRuntimeModel {
     baseUrl: FEATHERLESS_BASE_URL,
     reasoning: true,
     input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    cost: { input: 0.102, output: 0.493, cacheRead: 0, cacheWrite: 0 },
     contextWindow: FEATHERLESS_DEFAULT_CONTEXT_WINDOW,
     maxTokens: FEATHERLESS_DEFAULT_MAX_TOKENS,
     compat: { thinkingFormat: "qwen-chat-template" },
@@ -84,6 +84,7 @@ describe("featherless provider plugin", () => {
         input: ["text"],
         contextWindow: FEATHERLESS_DEFAULT_CONTEXT_WINDOW,
         maxTokens: FEATHERLESS_DEFAULT_MAX_TOKENS,
+        cost: { input: 0.102, output: 0.493, cacheRead: 0, cacheWrite: 0 },
         compat: expect.objectContaining({
           maxTokensField: "max_tokens",
           thinkingFormat: "qwen-chat-template",

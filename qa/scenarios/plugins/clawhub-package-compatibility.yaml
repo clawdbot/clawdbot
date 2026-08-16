@@ -1,0 +1,25 @@
+title: ClawHub package compatibility validation
+
+scenario:
+  id: clawhub-package-compatibility
+  surface: clawhub
+  category: clawhub.compatibility-and-trust
+  coverage:
+    primary:
+      - clawhub.clawhub-package-compatibility-validation
+  objective: Verify ClawHub plugin compatibility metadata is enforced before trust checks or artifact download.
+  successCriteria:
+    - Incompatible package-level plugin API metadata fails visibly before trust checks or download.
+    - Incompatible version-level minimum Gateway metadata fails visibly before trust checks or download.
+    - Rejected installs leave no install record or telemetry.
+    - Compatible metadata downloads and installs the plugin, persists its install record, and reports telemetry.
+  docsRefs:
+    - docs/cli/plugins.md
+    - docs/plugins/manifest.md
+  codeRefs:
+    - src/cli/plugins-cli.clawhub-install.e2e.test.ts
+    - src/plugins/clawhub.ts
+  execution:
+    kind: vitest
+    path: src/cli/plugins-cli.clawhub-install.e2e.test.ts
+    summary: Runs real CLI installs against a local ClawHub HTTP fixture and checks compatibility rejection ordering plus compatible install side effects.

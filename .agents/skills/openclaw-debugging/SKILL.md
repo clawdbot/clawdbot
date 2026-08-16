@@ -1,6 +1,6 @@
 ---
 name: openclaw-debugging
-description: Debug OpenClaw model, provider, tool-surface, code-mode, streaming, and live/Crabbox behavior by choosing the right logs, probes, and proof path before changing code.
+description: Debug OpenClaw model, provider, tool-surface, code-mode, streaming, and live/Crabbox behavior by choosing the right logs, probes, and proof path before changing code, including fetching stored sessions, transcripts, and attachments as evidence.
 ---
 
 # OpenClaw Debugging
@@ -13,7 +13,7 @@ debug signal rather than a guess.
 
 - `docs/logging.md` for log files, `openclaw logs`, and targeted debug flags.
 - `docs/reference/test.md` for local test commands.
-- `docs/reference/code-mode.md` for code-mode exec/wait and tool catalog rules.
+- `docs/tools/code-mode.md` for code-mode exec/wait and tool catalog rules.
 - Use `$openclaw-testing` for choosing test lanes.
 - Use `$crabbox` for broad, Docker, package, Linux, live-key, or CI-parity proof.
 
@@ -77,6 +77,56 @@ openclaw logs --follow
   before saying live proof is blocked. Env checks are presence-only; never print
   secrets.
 
+## Fetching Sessions and Transcripts
+
+Use these paths when a bug report references a chat session and you need the
+actual transcript, sender attribution, or attachments as evidence.
+
+CLI first (needs a configured install; safe against a live gateway):
+
+```bash
+openclaw sessions list --agent <agentId> --json
+openclaw sessions tail
+openclaw sessions export-trajectory
+```
+
+Docs: `docs/reference/database-schemas.md` for the store layout,
+https://docs.openclaw.ai/cli/sessions for the CLI.
+
+Raw store (when the CLI is unavailable, e.g. inspecting a remote host over
+SSH, or you need event-level detail):
+
+- Per-agent data plane: `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`.
+  Canonical schema: `src/state/openclaw-agent-schema.sql`.
+- Web chat URLs end in a session-id fragment: `/chat/<agentId>/<slug>-<hex>`.
+  Resolve it in `session_nodes`: `session_key LIKE '%<hex>%'` →
+  `current_session_id`, `display_name`. Key shape is
+  `agent:<agentId>:<surface>:<uuid>`; subagent sessions use surface `subagent`.
+- Transcript: `transcript_events` (`session_id`, `seq`, `event_json`).
+  `event_json.message` has `role` (`user`/`assistant`/`toolResult`) and
+  `content` (string, or parts of type `text`/`toolCall`/`image`).
+- Sender provenance: real user messages carry `message.__openclaw`
+  (`senderId`, `senderName`, `senderIsOwner`); runtime-synthesized inputs do
+  not. Use this to separate operator-authored text from injected prompts.
+- Full-text search across transcripts: `session_transcript_fts`.
+- Attachments: `media://inbound/<file>` URLs map to
+  `~/.openclaw/media/inbound/<file>`.
+
+Hosts without a `sqlite3` binary still have Node: `node:sqlite` needs no
+dependencies.
+
+```bash
+node -e 'const {DatabaseSync}=require("node:sqlite");
+const db=new DatabaseSync(process.argv[1],{readOnly:true});
+console.log(JSON.stringify(db.prepare(
+  "SELECT seq,event_json FROM transcript_events WHERE session_id=? ORDER BY seq"
+).all(process.argv[2])))' <db-path> <session-id>
+```
+
+Always open live stores `readOnly: true`; never write a running gateway's
+state (see Validation rules in the root `AGENTS.md`). For realistic-data
+work, copy the DB into a dev state dir first.
+
 ## Code Pointers
 
 - Model payload + Responses stream:
@@ -84,9 +134,9 @@ openclaw logs --follow
 - Guarded fetch/timing:
   `src/agents/provider-transport-fetch.ts`
 - OpenAI/Codex provider wrappers:
-  `src/agents/pi-embedded-runner/openai-stream-wrappers.ts`
+  `src/llm/providers/stream-wrappers/openai.ts`
 - Tool construction, Tool Search, code-mode activation:
-  `src/agents/pi-embedded-runner/run/attempt.ts`
+  `src/agents/embedded-agent-runner/run/attempt.ts`
 - Code-mode runtime and worker:
   `src/agents/code-mode.ts`
   `src/agents/code-mode.worker.ts`

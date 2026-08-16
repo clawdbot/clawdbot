@@ -1,7 +1,10 @@
 // Telegram rich-blocks unit tests for Bot API 10.2 InputRichBlock emission.
 import { describe, expect, it } from "vitest";
+import { markdownToTelegramHtml } from "./format.js";
 import {
   countInputRichBlockChars,
+  countInputRichBlockMedia,
+  countInputRichBlocks,
   inputRichBlocksToPlainText,
   type InputRichBlock,
   type RichText,
@@ -48,6 +51,207 @@ function hasStyle(text: RichText, style: string): boolean {
 }
 
 describe("markdownToTelegramRichBlocks", () => {
+  it.each([
+    {
+      name: "bullet items",
+      markdown: "- alpha\n- beta",
+      before: "• alpha\n• beta",
+      after: {
+        type: "list" as const,
+        items: [
+          { blocks: [{ type: "paragraph" as const, text: "alpha" }] },
+          { blocks: [{ type: "paragraph" as const, text: "beta" }] },
+        ],
+      },
+    },
+    {
+      name: "ordered start values",
+      markdown: "4. fourth\n5. fifth",
+      before: "4. fourth\n5. fifth",
+      after: {
+        type: "list" as const,
+        items: [
+          { blocks: [{ type: "paragraph" as const, text: "fourth" }], value: 4 },
+          { blocks: [{ type: "paragraph" as const, text: "fifth" }], value: 5 },
+        ],
+      },
+    },
+    {
+      name: "task checkboxes",
+      markdown: "- [ ] todo\n- [x] done",
+      before: "• [ ] todo\n• [x] done",
+      after: {
+        type: "list" as const,
+        items: [
+          {
+            blocks: [{ type: "paragraph" as const, text: "todo" }],
+            has_checkbox: true as const,
+          },
+          {
+            blocks: [{ type: "paragraph" as const, text: "done" }],
+            has_checkbox: true as const,
+            is_checked: true as const,
+          },
+        ],
+      },
+    },
+    {
+      name: "mixed nesting",
+      markdown: "- parent\n  1. child\n  2. sibling\n- next",
+      before: "• parent\n  1. child\n  2. sibling\n• next",
+      after: {
+        type: "list" as const,
+        items: [
+          {
+            blocks: [
+              { type: "paragraph" as const, text: "parent" },
+              {
+                type: "list" as const,
+                items: [
+                  { blocks: [{ type: "paragraph" as const, text: "child" }], value: 1 },
+                  { blocks: [{ type: "paragraph" as const, text: "sibling" }], value: 2 },
+                ],
+              },
+            ],
+          },
+          { blocks: [{ type: "paragraph" as const, text: "next" }] },
+        ],
+      },
+    },
+  ])("maps $name from flattened text to native blocks", ({ markdown, before, after }) => {
+    const rendered = markdownToTelegramRichBlocks(markdown);
+    expect(rendered.blocks).toEqual([after]);
+    expect(rendered.plainText).toBe(before);
+  });
+
+  it("keeps the classic sendMessage list path byte-identical", () => {
+    expect(markdownToTelegramHtml("- [ ] todo\n- [x] done\n\n4. fourth\n5. fifth")).toBe(
+      "• [ ] todo\n• [x] done\n\n4. fourth\n5. fifth",
+    );
+  });
+
+  it("keeps list boundaries separate from following paragraphs", () => {
+    const rendered = markdownToTelegramRichBlocks("- one\n- two\n\nafter");
+    expect(rendered.blocks.map((block) => block.type)).toEqual(["list", "paragraph"]);
+    expect(rendered.blocks[1]).toEqual({ type: "paragraph", text: "after" });
+  });
+
+  it("uses parser-owned boundaries before a following heading", () => {
+    const rendered = markdownToTelegramRichBlocks("- one\n# Heading");
+    expect(rendered.blocks.map((block) => block.type)).toEqual(["list", "heading"]);
+  });
+
+  it("keeps loose continuation paragraphs inside their native list item", () => {
+    const rendered = markdownToTelegramRichBlocks("- first\n\n  continuation\n- next");
+    expect(rendered.blocks).toHaveLength(1);
+    const list = rendered.blocks[0];
+    if (list?.type !== "list") {
+      expect(list?.type).toBe("list");
+      return;
+    }
+    expect(list.items[0]?.blocks.map((block) => block.type)).toEqual(["paragraph", "paragraph"]);
+    expect(rendered.plainText).toBe("• first\ncontinuation\n• next");
+  });
+
+  it("returns parent continuation content after a nested list", () => {
+    const rendered = markdownToTelegramRichBlocks("- parent\n  - child\n\n  continuation");
+    const outer = rendered.blocks[0];
+    if (outer?.type !== "list") {
+      expect(outer?.type).toBe("list");
+      return;
+    }
+    expect(outer.items[0]?.blocks.map((block) => block.type)).toEqual([
+      "paragraph",
+      "list",
+      "paragraph",
+    ]);
+    const nested = outer.items[0]?.blocks[1];
+    expect(nested?.type).toBe("list");
+    expect(inputRichBlocksToPlainText(nested?.type === "list" ? [nested] : [])).not.toContain(
+      "continuation",
+    );
+  });
+
+  it("preserves a blockquote around a nested list", () => {
+    const rendered = markdownToTelegramRichBlocks("- outer\n  > - inner");
+    const outer = rendered.blocks[0];
+    if (outer?.type !== "list") {
+      expect(outer?.type).toBe("list");
+      return;
+    }
+    const quote = outer.items[0]?.blocks.find((block) => block.type === "blockquote");
+    expect(quote?.type).toBe("blockquote");
+    if (quote?.type === "blockquote") {
+      expect(quote.blocks[0]?.type).toBe("list");
+    }
+  });
+
+  it("keeps distinct same-kind child lists separated by parent content", () => {
+    const rendered = markdownToTelegramRichBlocks(
+      "- outer\n  - first\n\n  parent text\n\n  - second",
+    );
+    const outer = rendered.blocks[0];
+    if (outer?.type !== "list") {
+      expect(outer?.type).toBe("list");
+      return;
+    }
+    expect(outer.items[0]?.blocks.map((block) => block.type)).toEqual([
+      "paragraph",
+      "list",
+      "paragraph",
+      "list",
+    ]);
+  });
+
+  it("nests Markdown lists inside blockquotes", () => {
+    const rendered = markdownToTelegramRichBlocks("> - parent\n>   - child");
+    expect(rendered.blocks).toHaveLength(1);
+    const quote = rendered.blocks[0];
+    expect(quote?.type).toBe("blockquote");
+    if (quote?.type !== "blockquote") {
+      return;
+    }
+    expect(quote.blocks[0]?.type).toBe("list");
+    expect(rendered.plainText).toBe("• parent\n  • child");
+  });
+
+  it("keeps rich inline formatting inside native list items", () => {
+    const rendered = markdownToTelegramRichBlocks("- **bold** and [docs](https://example.com)");
+    const list = rendered.blocks[0];
+    if (list?.type !== "list") {
+      expect(list?.type).toBe("list");
+      return;
+    }
+    const paragraph = list.items[0]?.blocks[0];
+    if (paragraph?.type !== "paragraph") {
+      expect(paragraph?.type).toBe("paragraph");
+      return;
+    }
+    expect(hasStyle(paragraph.text, "bold")).toBe(true);
+    expect(collectUrls(paragraph.text)).toEqual(["https://example.com"]);
+  });
+
+  it("degrades native lists beyond 16 nesting levels", () => {
+    const markdown = Array.from(
+      { length: 17 },
+      (_, index) => `${"  ".repeat(index)}- level ${index + 1}`,
+    ).join("\n");
+    const rendered = markdownToTelegramRichBlocks(markdown);
+    expect(rendered.degradationReasons).toEqual(["list-limit"]);
+    expect(rendered.blocks.every((block) => block.type !== "list")).toBe(true);
+    expect(rendered.plainText).toContain("level 17");
+  });
+
+  it("includes surrounding blockquotes in the 16-level nesting budget", () => {
+    const markdown = Array.from(
+      { length: 16 },
+      (_, index) => `> ${"  ".repeat(index)}- level ${index + 1}`,
+    ).join("\n");
+    const rendered = markdownToTelegramRichBlocks(markdown);
+    expect(rendered.degradationReasons).toEqual(["list-limit"]);
+    expect(JSON.stringify(rendered.blocks)).not.toContain('"type":"list"');
+  });
+
   it("nests inline styles and links", () => {
     const { blocks } = markdownToTelegramRichBlocks(
       "**bold _italic_** and [docs](https://example.com) ~~strike~~ ||spoiler|| `code`",
@@ -66,7 +270,14 @@ describe("markdownToTelegramRichBlocks", () => {
     const { blocks } = markdownToTelegramRichBlocks("**start https://example.com** end");
     const text = blocks[0] && blocks[0].type === "paragraph" ? blocks[0].text : "";
     expect(hasStyle(text, "bold")).toBe(true);
-    expect(collectUrls(text)).toEqual(["https://example.com"]);
+    expect(collectUrls(text)).toEqual([]);
+  });
+
+  it("leaves bare URL query separators to Telegram entity detection", () => {
+    const url = "https://example.com/wp-admin/post.php?post=100&action=edit";
+    const { blocks } = markdownToTelegramRichBlocks(url);
+
+    expect(blocks).toEqual([{ type: "paragraph", text: url }]);
   });
 
   it("emits pre blocks with fence language", () => {
@@ -162,6 +373,13 @@ describe("markdownToTelegramRichBlocks", () => {
     const { blocks } = markdownToTelegramRichBlocks("see README.md for details");
     const text = blocks[0] && blocks[0].type === "paragraph" ? blocks[0].text : "";
     expect(collectUrls(text)).toEqual([]);
+    expect(hasStyle(text, "code")).toBe(true);
+  });
+
+  it("preserves authored file-style links while wrapping bare file refs as code", () => {
+    const { blocks } = markdownToTelegramRichBlocks("README.md [README.md](https://README.md)");
+    const text = blocks[0] && blocks[0].type === "paragraph" ? blocks[0].text : "";
+    expect(collectUrls(text)).toEqual(["https://README.md"]);
     expect(hasStyle(text, "code")).toBe(true);
   });
 
@@ -289,9 +507,122 @@ describe("splitTelegramRichBlocks", () => {
       expect(chars).toBeLessThanOrEqual(64);
     }
   });
+
+  it.each(["blockquote", "details"] as const)(
+    "enforces recursive block limits for %s children",
+    (type) => {
+      const children: InputRichBlock[] = Array.from({ length: 6 }, (_, index) => ({
+        type: "paragraph",
+        text: `entry ${index}`,
+      }));
+      const block: InputRichBlock =
+        type === "blockquote"
+          ? { type, blocks: children, credit: "Author" }
+          : { type, blocks: children, summary: "Summary" };
+
+      const chunks = splitTelegramRichBlocks([block], { blockLimit: 5 });
+
+      expect(chunks).toHaveLength(2);
+      expect(chunks.every((chunk) => countInputRichBlocks(chunk) <= 5)).toBe(true);
+      expect(
+        chunks
+          .flat()
+          .flatMap((part) =>
+            part.type === "blockquote" || part.type === "details" ? part.blocks : [],
+          ),
+      ).toEqual(children);
+      if (type === "blockquote") {
+        expect(
+          chunks
+            .flat()
+            .flatMap((part) => (part.type === "blockquote" && part.credit ? [part.credit] : [])),
+        ).toEqual(["Author"]);
+      }
+    },
+  );
+
+  it("splits lists by whole items and isolates an indivisible oversized item", () => {
+    const items = [
+      { value: 4, blocks: [{ type: "paragraph" as const, text: "first" }] },
+      {
+        value: 5,
+        has_checkbox: true as const,
+        blocks: Array.from({ length: 5 }, (_, index) => ({
+          type: "paragraph" as const,
+          text: `nested ${index}`,
+        })),
+      },
+      { value: 6, blocks: [{ type: "paragraph" as const, text: "last" }] },
+    ];
+
+    const chunks = splitTelegramRichBlocks([{ type: "list", items }], { blockLimit: 5 });
+    const lists = chunks.flat().filter((block) => block.type === "list");
+
+    expect(chunks).toHaveLength(3);
+    expect(lists.flatMap((list) => list.items)).toEqual(items);
+    expect(countInputRichBlocks(chunks[0] ?? [])).toBeLessThanOrEqual(5);
+    expect(countInputRichBlocks(chunks[1] ?? [])).toBeGreaterThan(5);
+    expect(countInputRichBlocks(chunks[2] ?? [])).toBeLessThanOrEqual(5);
+  });
+
+  it("splits table rows and album media without duplicating captions", () => {
+    const table: InputRichBlock = {
+      type: "table",
+      caption: "Table caption",
+      cells: Array.from({ length: 6 }, (_, index) => [[{ text: `row ${index}` }]]).flat(),
+    };
+    const collage: InputRichBlock = {
+      type: "collage",
+      caption: { text: "Album caption" },
+      blocks: Array.from({ length: 51 }, (_, index) => ({
+        type: "photo" as const,
+        photo: { type: "photo" as const, media: `https://example.com/${index}.jpg` },
+      })),
+    };
+
+    const tableChunks = splitTelegramRichBlocks([table], { blockLimit: 5 });
+    const mediaChunks = splitTelegramRichBlocks([collage]);
+    const tables = tableChunks.flat().filter((block) => block.type === "table");
+    const albums = mediaChunks.flat().filter((block) => block.type === "collage");
+
+    expect(tableChunks.every((chunk) => countInputRichBlocks(chunk) <= 5)).toBe(true);
+    expect(tables.flatMap((part) => part.cells)).toEqual(table.cells);
+    expect(tables.flatMap((part) => (part.caption ? [part.caption] : []))).toEqual([
+      "Table caption",
+    ]);
+    expect(
+      mediaChunks.every(
+        (chunk) => chunk.reduce((total, block) => total + countInputRichBlockMedia(block), 0) <= 50,
+      ),
+    ).toBe(true);
+    expect(albums.flatMap((album) => album.blocks)).toEqual(collage.blocks);
+    expect(albums.flatMap((album) => (album.caption ? [album.caption.text] : []))).toEqual([
+      "Album caption",
+    ]);
+  });
 });
 
 describe("rich message plan wiring", () => {
+  it("preserves ordinary ordered lists across recursive block chunks", () => {
+    const text = Array.from({ length: 250 }, (_, index) => `${index + 1}. item ${index + 1}`).join(
+      "\n",
+    );
+
+    const chunks = splitTelegramRichMessageTextChunks({ text, textLimit: 32_768 });
+    const lists = chunks
+      .flatMap((chunk) => chunk.richMessage.blocks)
+      .filter((block) => block.type === "list");
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => countInputRichBlocks(chunk.richMessage.blocks) <= 500)).toBe(
+      true,
+    );
+    expect(lists.flatMap((list) => list.items).map((item) => item.value)).toEqual(
+      Array.from({ length: 250 }, (_, index) => index + 1),
+    );
+    expect(chunks.flatMap((chunk) => chunk.degradationReasons)).toEqual([]);
+  });
+
   it("emits blocks InputRichMessage and email skip_entity_detection", () => {
     const message = buildTelegramRichMarkdown("Contact owner@example.com for help");
     if (!("blocks" in message)) {

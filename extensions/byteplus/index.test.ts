@@ -6,10 +6,24 @@ import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-ru
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 import { BYTEPLUS_CODING_MODEL_CATALOG, BYTEPLUS_MODEL_CATALOG } from "./models.js";
+import { BYTEPLUS_PROVIDER_CATALOG } from "./models.js";
 
 describe("byteplus plugin", () => {
+  it("preserves both provider-owned static catalogs and paired ordering", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    expect(provider.catalog?.order).toBe("paired");
+    expect(provider.staticCatalog?.order).toBe("paired");
+    expect(await provider.staticCatalog?.run({} as never)).toEqual({
+      providers: Object.fromEntries(
+        BYTEPLUS_PROVIDER_CATALOG.entries.map(({ id, buildProvider }) => [id, buildProvider()]),
+      ),
+    });
+  });
+
   it("augments the catalog with bundled standard and plan models", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
+    expect(provider.auth?.[0]?.starterModel).toBe("byteplus-plan/ark-code-latest");
     const standardModel = expectDefined(BYTEPLUS_MODEL_CATALOG[0], "BytePlus standard model");
     const codingModel = expectDefined(BYTEPLUS_CODING_MODEL_CATALOG[0], "BytePlus coding model");
     const entries = await provider.augmentModelCatalog?.({
@@ -34,7 +48,6 @@ describe("byteplus plugin", () => {
     expect(planEntry?.contextWindow).toBe(codingModel.contextWindow);
     expect(BYTEPLUS_CODING_MODEL_CATALOG.map((entry) => entry.id)).toEqual([
       "ark-code-latest",
-      "glm-4.7",
       "kimi-k2.5",
     ]);
   });
@@ -50,16 +63,11 @@ describe("byteplus plugin", () => {
   });
 
   it("keeps Kimi catalog metadata aligned with provider capabilities", () => {
-    const standardKimi = BYTEPLUS_MODEL_CATALOG.find((entry) => entry.id === "kimi-k2-5-260127");
     const planKimi = BYTEPLUS_CODING_MODEL_CATALOG.find((entry) => entry.id === "kimi-k2.5");
 
-    for (const entry of [standardKimi, planKimi]) {
-      expect(entry?.reasoning).toBe(true);
-      expect(entry?.maxTokens).toBe(32768);
-      expect(entry?.cost?.input).toBe(0.6);
-      expect(entry?.cost?.output).toBe(2.5);
-      expect(entry?.cost?.cacheRead).toBe(0.12);
-      expect(entry?.cost?.cacheWrite).toBe(0);
-    }
+    expect(planKimi?.reasoning).toBe(true);
+    expect(planKimi?.input).toEqual(["text", "image"]);
+    expect(planKimi?.maxTokens).toBe(32768);
+    expect(planKimi?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
   });
 });

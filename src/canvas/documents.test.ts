@@ -1,25 +1,16 @@
 // Core Canvas document storage and URL contract coverage.
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   createCanvasDocument,
+  readCanvasDocumentHtmlSource,
   resolveCanvasDocumentsDir,
   resolveCanvasHttpPathToLocalPath,
 } from "./documents.js";
 
-const tempDirs: string[] = [];
-
-afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
-});
-
-async function createTempDir(label = "openclaw-canvas-documents-"): Promise<string> {
-  const dir = await mkdtemp(path.join(tmpdir(), label));
-  tempDirs.push(dir);
-  return dir;
-}
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function resolveCanvasDocumentDir(stateDir: string, documentId: string): string {
   return path.join(resolveCanvasDocumentsDir(stateDir), documentId);
@@ -27,8 +18,8 @@ function resolveCanvasDocumentDir(stateDir: string, documentId: string): string 
 
 describe("canvas documents", () => {
   it("builds entry urls for materialized path documents under managed storage", async () => {
-    const stateDir = await createTempDir();
-    const workspaceDir = await createTempDir("openclaw-canvas-documents-workspace-");
+    const stateDir = tempDirs.make("openclaw-canvas-documents-");
+    const workspaceDir = tempDirs.make("openclaw-canvas-documents-workspace-");
     await mkdir(path.join(workspaceDir, "player"), { recursive: true });
     await writeFile(path.join(workspaceDir, "player/index.html"), "<div>ok</div>", "utf8");
 
@@ -46,7 +37,7 @@ describe("canvas documents", () => {
   });
 
   it("materializes inline html bundles as index documents", async () => {
-    const stateDir = await createTempDir();
+    const stateDir = tempDirs.make("openclaw-canvas-documents-");
     const document = await createCanvasDocument(
       {
         kind: "html_bundle",
@@ -68,10 +59,30 @@ describe("canvas documents", () => {
     expect(indexHtml).toContain("<style>.demo{color:red}</style>");
     expect(document.title).toBe("Preview");
     expect(document.entryUrl).toBe(`/__openclaw__/canvas/documents/${document.id}/index.html`);
+    await expect(readCanvasDocumentHtmlSource(document.id, { stateDir })).resolves.toEqual({
+      html: indexHtml,
+    });
+  });
+
+  it("reports the document sandbox policy alongside board source bytes", async () => {
+    const stateDir = tempDirs.make("openclaw-canvas-documents-");
+    const document = await createCanvasDocument(
+      {
+        kind: "html_bundle",
+        entrypoint: { type: "html", value: "<script>ready()</script>" },
+        cspSandbox: "scripts",
+      },
+      { stateDir },
+    );
+
+    await expect(readCanvasDocumentHtmlSource(document.id, { stateDir })).resolves.toEqual({
+      html: "<script>ready()</script>",
+      cspSandbox: "scripts",
+    });
   });
 
   it("reuses a supplied stable id by replacing the prior materialized view", async () => {
-    const stateDir = await createTempDir();
+    const stateDir = tempDirs.make("openclaw-canvas-documents-");
     const first = await createCanvasDocument(
       {
         id: "status-card",
@@ -100,8 +111,8 @@ describe("canvas documents", () => {
   });
 
   it("copies declared assets into managed storage", async () => {
-    const stateDir = await createTempDir();
-    const workspaceDir = await createTempDir("openclaw-canvas-documents-workspace-");
+    const stateDir = tempDirs.make("openclaw-canvas-documents-");
+    const workspaceDir = tempDirs.make("openclaw-canvas-documents-workspace-");
     await mkdir(path.join(workspaceDir, "collection.media"), { recursive: true });
     await writeFile(path.join(workspaceDir, "collection.media/audio.mp3"), "audio", "utf8");
 
@@ -132,8 +143,8 @@ describe("canvas documents", () => {
   });
 
   it("wraps local and remote PDF documents in index viewer pages", async () => {
-    const stateDir = await createTempDir();
-    const workspaceDir = await createTempDir("openclaw-canvas-documents-workspace-");
+    const stateDir = tempDirs.make("openclaw-canvas-documents-");
+    const workspaceDir = tempDirs.make("openclaw-canvas-documents-workspace-");
     await writeFile(path.join(workspaceDir, "demo.pdf"), "%PDF-1.4", "utf8");
     const localDocument = await createCanvasDocument(
       { kind: "document", entrypoint: { type: "path", value: "demo.pdf" } },
@@ -160,7 +171,7 @@ describe("canvas documents", () => {
   });
 
   it("rejects traversal and malformed encoded hosted paths", async () => {
-    const stateDir = await createTempDir();
+    const stateDir = tempDirs.make("openclaw-canvas-documents-");
     expect(
       resolveCanvasHttpPathToLocalPath(
         "/__openclaw__/canvas/documents/../collection.media/index.html",

@@ -1,5 +1,4 @@
 // Question gateway methods create, inspect, wait for, and resolve transient prompts.
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   ErrorCodes,
   errorShape,
@@ -22,6 +21,8 @@ import {
   QuestionManagerError,
   QuestionManagerErrorCodes,
 } from "../question-manager.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const DEFAULT_QUESTION_TIMEOUT_MS = 15 * 60 * 1_000;
@@ -58,18 +59,18 @@ function managerError(error: unknown, respond: RespondFn): boolean {
 function normalizeQuestions(params: QuestionRequestParams): Question[] {
   const ids = new Set<string>();
   return params.questions.map((question) => {
-    if (ids.has(question.id)) {
-      throw new QuestionRequestValidationError(`duplicate question id '${question.id}'`);
+    if (ids.has(question.questionId)) {
+      throw new QuestionRequestValidationError(`duplicate question id '${question.questionId}'`);
     }
-    ids.add(question.id);
+    ids.add(question.questionId);
     if (question.options.length === 1) {
       throw new QuestionRequestValidationError(
-        `question '${question.id}' must have either no options or 2 to 4 options`,
+        `question '${question.questionId}' must have either no options or 2 to 4 options`,
       );
     }
     if (question.isSecret) {
       throw new QuestionRequestValidationError(
-        `question '${question.id}': secret questions are not supported yet`,
+        `question '${question.questionId}': secret questions are not supported yet`,
       );
     }
     const optionLabels = new Set<string>();
@@ -77,15 +78,12 @@ function normalizeQuestions(params: QuestionRequestParams): Question[] {
       const normalizedLabel = option.label.trim().toLowerCase();
       if (optionLabels.has(normalizedLabel)) {
         throw new QuestionRequestValidationError(
-          `question '${question.id}' has duplicate option label '${option.label}'`,
+          `question '${question.questionId}' has duplicate option label '${option.label}'`,
         );
       }
       optionLabels.add(normalizedLabel);
     }
-    return {
-      ...question,
-      header: truncateUtf16Safe(question.header, 12),
-    };
+    return question;
   });
 }
 
@@ -99,11 +97,35 @@ export function createQuestionHandlers(manager: QuestionManager): GatewayRequest
       }
       const request = params as QuestionRequestParams;
       try {
+        const requestedSession = request.sessionKey
+          ? resolveRequestedSessionAgentId(
+              context.getRuntimeConfig(),
+              request.sessionKey,
+              request.agentId,
+            )
+          : undefined;
+        if (requestedSession && !requestedSession.ok) {
+          respond(false, undefined, requestedSession.error);
+          return;
+        }
+        const sessionKey =
+          request.sessionKey && requestedSession?.ok
+            ? resolveStoredSessionKeyForAgentStore({
+                cfg: context.getRuntimeConfig(),
+                agentId: requestedSession.agentId,
+                sessionKey: request.sessionKey,
+              })
+            : undefined;
         const record = manager.request({
           ...(request.id ? { id: request.id } : {}),
           questions: normalizeQuestions(request),
-          ...(request.agentId ? { agentId: request.agentId } : {}),
-          ...(request.sessionKey ? { sessionKey: request.sessionKey } : {}),
+          ...(requestedSession?.ok
+            ? { agentId: requestedSession.agentId }
+            : request.agentId
+              ? { agentId: request.agentId }
+              : {}),
+          ...(sessionKey ? { sessionKey } : {}),
+          ...(request.runId ? { runId: request.runId } : {}),
           timeoutMs: request.timeoutMs ?? DEFAULT_QUESTION_TIMEOUT_MS,
           onResolved: (event) => {
             handleQuestionChannelResolved(event);

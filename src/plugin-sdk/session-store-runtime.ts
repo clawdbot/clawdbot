@@ -3,34 +3,38 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
-  readAmbientTranscriptWatermark as readAmbientTranscriptWatermarkFromEntry,
+  readAmbientTranscriptWatermarkFromEntry,
   resolveAmbientTranscriptWatermarkKey,
   updateAmbientTranscriptWatermark,
   type AmbientTranscriptWatermarkScope,
 } from "../config/sessions/ambient-transcript-watermark.js";
-import { resolveStorePath as resolveSessionStorePath } from "../config/sessions/paths.js";
-import { resolveSessionFilePath as resolveLegacySessionFilePath } from "../config/sessions/paths.js";
+import {
+  formatSqliteSessionFileMarker,
+  parseSqliteSessionFileMarker,
+} from "../config/sessions/legacy-sqlite-marker.js";
+import {
+  resolveSessionFilePathCore,
+  resolveSessionStorePathCore,
+} from "../config/sessions/paths.js";
+export { SessionStoreAgentIdRequiredError } from "../config/sessions/paths.js";
 import {
   applySessionStoreProjection as applyAccessorSessionStoreProjection,
-  cleanupSessionLifecycleArtifacts as cleanupAccessorSessionLifecycleArtifacts,
+  cleanupSessionLifecycleArtifactsCore as cleanupAccessorSessionLifecycleArtifacts,
   deleteSessionEntryLifecycle as deleteAccessorSessionEntryLifecycle,
   loadTranscriptEventsSync as loadAccessorTranscriptEventsSync,
-  listSessionEntries as listAccessorSessionEntries,
-  loadSessionEntry,
-  patchSessionEntry as patchAccessorSessionEntry,
-  readSessionUpdatedAt as readAccessorSessionUpdatedAt,
+  listSessionEntriesCore as listAccessorSessionEntries,
+  listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
+  loadSessionEntryReadOnly,
+  patchSessionEntryCore as patchAccessorSessionEntry,
+  readSessionUpdatedAtCore as readAccessorSessionUpdatedAt,
   readTranscriptStatsSync as readAccessorTranscriptStatsSync,
   resolveTranscriptSessionKeyBySessionId as resolveAccessorTranscriptSessionKeyBySessionId,
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import {
-  formatSqliteSessionFileMarker,
-  parseSqliteSessionFileMarker,
-} from "../config/sessions/sqlite-marker.js";
-import { resolveSessionStoreEntry as resolveSessionStoreEntryFromStore } from "../config/sessions/store-entry.js";
+import { resolveSessionStoreEntryCore as resolveSessionStoreEntryFromStore } from "../config/sessions/store-entry.js";
 import { normalizeResolvedMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
-import type { ResolvedSessionMaintenanceConfigInput } from "../config/sessions/store.js";
+import type { ResolvedSessionMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
 import type {
   AmbientTranscriptWatermark,
   InternalSessionEntry,
@@ -49,6 +53,15 @@ import {
   toSessionAccessScope,
 } from "./session-store-runtime-internal.js";
 import type { SessionTranscriptEvent } from "./session-transcript-runtime.js";
+
+export {
+  deliveryContextFromSession,
+  normalizeSessionDeliveryState,
+  projectSessionDeliveryFields,
+  sessionDeliveryChannel,
+  sessionDeliveryOrigin,
+  sessionDeliveryRoute,
+} from "../utils/delivery-context.shared.js";
 
 const SQLITE_SESSION_STORE_BACKUP_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
 const LEGACY_TRANSCRIPT_INSPECTION_MAX_BYTES = 16 * 1024 * 1024;
@@ -113,6 +126,8 @@ type ReadAmbientTranscriptWatermarkParams = SessionStoreReadParams & {
 
 type DeleteSessionEntryParams = SessionStoreReadParams & {
   archiveTranscript?: boolean;
+  expectedSessionId?: string | null;
+  expectedUpdatedAt?: number;
 };
 
 type SessionLifecycleArtifactsCleanupParams = {
@@ -120,6 +135,7 @@ type SessionLifecycleArtifactsCleanupParams = {
   archiveRemovedEntryTranscripts?: boolean;
   env?: NodeJS.ProcessEnv;
   orphanTranscriptMinAgeMs: number;
+  pluginOwnerId?: string;
   sessionStore?: string;
   sessionKeySegmentPrefix: string;
   storePath?: string;
@@ -174,7 +190,7 @@ function materializeLegacyTranscriptFile(
     sessionId: marker.sessionId,
     storePath: marker.storePath,
   } as const;
-  const transcriptPath = resolveLegacySessionFilePath(marker.sessionId, undefined, {
+  const transcriptPath = resolveSessionFilePathCore(marker.sessionId, undefined, {
     agentId: marker.agentId,
     ...(options?.sessionsDir ? { sessionsDir: options.sessionsDir } : {}),
   });
@@ -244,7 +260,7 @@ export function loadSessionStore(
     }).map(({ sessionKey, entry }) => {
       const sessionId = entry.sessionId?.trim();
       const projectedEntry = projectPluginSessionEntry(entry as InternalSessionEntry);
-      if (projectedEntry.sessionFile || !sessionId) {
+      if (!sessionId) {
         return [sessionKey, projectedEntry];
       }
       return [
@@ -316,7 +332,7 @@ export function resolveSessionFilePath(
   entry?: { sessionFile?: string },
   options?: { agentId?: string; sessionsDir?: string },
 ): string {
-  const resolved = resolveLegacySessionFilePath(sessionId, entry, options);
+  const resolved = resolveSessionFilePathCore(sessionId, entry, options);
   return materializeLegacyTranscriptFile(resolved, options);
 }
 
@@ -332,7 +348,7 @@ export function resolveStorePath(
   store?: string,
   options?: { agentId?: string; env?: NodeJS.ProcessEnv },
 ): string {
-  const storePath = resolveSessionStorePath(store, options);
+  const storePath = resolveSessionStorePathCore(store, options);
   if (options?.agentId) {
     legacyStoreAgentIds.set(path.resolve(storePath), options.agentId);
   }
@@ -354,15 +370,21 @@ export function resolveSessionStoreEntry(params: {
 
 /** Loads one session entry by agent/session identity. */
 export function getSessionEntry(params: SessionStoreReadParams): SessionEntry | undefined {
-  const entry = loadSessionEntry(toSessionAccessScope(params));
+  const entry = loadSessionEntryReadOnly(toSessionAccessScope(params));
   return entry ? projectPluginSessionEntry(entry) : undefined;
 }
 
-/** Lists session entries for one agent. */
+/**
+ * Lists session entries for one agent. `readOnly` reads without joining the
+ * agent database writable lifecycle (no create/register/migrate) — required
+ * for detection/introspection paths that may run across the whole fleet.
+ * One flagged entry instead of a second export keeps the SDK surface budget flat.
+ */
 export function listSessionEntries(
-  params: SessionStoreListParams = {},
+  params: SessionStoreListParams & { readOnly?: boolean } = {},
 ): SessionStoreEntrySummary[] {
-  return listAccessorSessionEntries({
+  const list = params.readOnly ? listAccessorSessionEntriesReadOnly : listAccessorSessionEntries;
+  return list({
     ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
     ...(params.env !== undefined ? { env: params.env } : {}),
     ...(params.hydrateSkillPromptRefs !== undefined
@@ -494,15 +516,22 @@ export async function upsertSessionEntry(params: UpsertSessionEntryParams): Prom
 
 /** Deletes one session entry by agent/session identity. */
 export async function deleteSessionEntry(params: DeleteSessionEntryParams): Promise<boolean> {
+  const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
   const storePath =
     params.storePath ??
-    resolveSessionStorePath(undefined, {
-      agentId: params.agentId,
+    resolveSessionStorePathCore(undefined, {
+      agentId,
       env: params.env,
     });
   const result = await deleteAccessorSessionEntryLifecycle({
-    ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
+    ...(agentId !== undefined ? { agentId } : {}),
     archiveTranscript: params.archiveTranscript ?? false,
+    ...(params.expectedSessionId !== undefined
+      ? { expectedSessionId: params.expectedSessionId }
+      : {}),
+    ...(params.expectedUpdatedAt !== undefined
+      ? { expectedUpdatedAt: params.expectedUpdatedAt }
+      : {}),
     storePath,
     target: {
       canonicalKey: params.sessionKey,
@@ -538,7 +567,7 @@ export async function cleanupSessionLifecycleArtifacts(
 ): Promise<SessionLifecycleArtifactsCleanupResult> {
   const storePath =
     params.storePath ??
-    resolveSessionStorePath(params.sessionStore, {
+    resolveSessionStorePathCore(params.sessionStore, {
       agentId: params.agentId,
       env: params.env,
     });
@@ -546,6 +575,7 @@ export async function cleanupSessionLifecycleArtifacts(
     storePath,
     ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
     archiveRemovedEntryTranscripts: params.archiveRemovedEntryTranscripts,
+    ...(params.pluginOwnerId !== undefined ? { pluginOwnerId: params.pluginOwnerId } : {}),
     sessionKeySegmentPrefix: params.sessionKeySegmentPrefix,
     transcriptContentMarker: params.transcriptContentMarker,
     orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,
@@ -558,7 +588,7 @@ export {
   parseSqliteSessionFileMarker,
   sqliteSessionFileMarkerMatchesSession,
   type SqliteSessionFileMarker,
-} from "../config/sessions/sqlite-marker.js";
+} from "../config/sessions/legacy-sqlite-marker.js";
 export {
   readRecentUserAssistantTextForSession,
   type SessionRecentConversationText,
@@ -566,7 +596,7 @@ export {
 export { resolveSessionKey } from "../config/sessions/session-key.js";
 export { resolveGroupSessionKey } from "../config/sessions/group.js";
 export { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
-export { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
+export { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 export { isValidAgentHarnessSessionStoreEntry } from "../sessions/agent-harness-session-key.js";
 // SDK-facing names are a shipped plugin contract; internals route through the
 // session accessor so the storage backend can change beneath them.

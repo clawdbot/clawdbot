@@ -262,17 +262,17 @@ function writeSessionStoreSqlite(params: {
   const db = new DatabaseSync(dbPath);
   try {
     db.exec(`
-      CREATE TABLE sessions (
+      CREATE TABLE session_nodes (
+        session_key TEXT NOT NULL PRIMARY KEY,
+        current_session_id TEXT NOT NULL,
+        entry_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE session_windows (
         session_id TEXT NOT NULL PRIMARY KEY,
         session_key TEXT NOT NULL,
         agent_harness_id TEXT,
         created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
-      CREATE TABLE session_entries (
-        session_key TEXT NOT NULL PRIMARY KEY,
-        session_id TEXT NOT NULL,
-        entry_json TEXT NOT NULL,
         updated_at INTEGER NOT NULL
       );
       CREATE TABLE transcript_events (
@@ -285,12 +285,12 @@ function writeSessionStoreSqlite(params: {
     `);
     const now = Date.now();
     db.prepare(
-      `INSERT INTO sessions (
+      `INSERT INTO session_windows (
          session_id, session_key, agent_harness_id, created_at, updated_at
        ) VALUES (?, ?, ?, ?, ?)`,
     ).run(params.sessionId, params.sessionKey, "codex", now, now);
     db.prepare(
-      `INSERT INTO session_entries (session_key, session_id, entry_json, updated_at)
+      `INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
        VALUES (?, ?, ?, ?)`,
     ).run(
       params.sessionKey,
@@ -548,7 +548,7 @@ function createCodexInstallFixture(root: string) {
   });
   chmodSync(codexBin, 0o755);
   writeJson(path.join(stateDir, "openclaw.json"), {
-    agents: { defaults: { model: { primary: "openai/gpt-5.6" } } },
+    agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
     models: { providers: { openai: { agentRuntime: { id: "codex" } } } },
   });
   writePluginInstallIndexForE2E(
@@ -880,9 +880,22 @@ describe("Codex install helpers", () => {
     expect(result.stderr).toContain("expected all workspace work to settle before completion");
   });
 
+  it("accepts a terminal completion message without the optional final marker", () => {
+    const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-legacy-completion-");
+    const fixture = createCodexNpmPluginLiveFollowthroughFixture({
+      root,
+      messageFinals: [undefined, undefined],
+    });
+
+    const result = runCodexNpmPluginLiveFollowthroughAssertions(fixture);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+  });
+
   it.each([
     ["explicit progress", [false, true]],
-    ["missing completion", [undefined, undefined]],
+    ["nonfinal completion", [undefined, false]],
   ] as const)("rejects %s Codex message final controls", (_label, messageFinals) => {
     const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-final-controls-");
     const fixture = createCodexNpmPluginLiveFollowthroughFixture({
@@ -893,7 +906,9 @@ describe("Codex install helpers", () => {
     const result = runCodexNpmPluginLiveFollowthroughAssertions(fixture);
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("expected exact message final controls");
+    expect(result.stderr).toContain(
+      "expected ordered message sends with an optional final completion marker",
+    );
   });
 
   it("accepts the explicit frozen-target JSON session and sidecar binding contract", () => {

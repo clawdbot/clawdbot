@@ -61,6 +61,61 @@ describe("Slack message tools", () => {
     );
   });
 
+  it("preserves a workspace-qualified channel for reactions", async () => {
+    const invoke = vi.fn(async () => ({ content: [], details: { ok: true } }));
+    const actions = createSlackActions("slack", { invoke });
+    if (!actions.handleAction) {
+      throw new Error("Slack message actions must provide an executor.");
+    }
+
+    await actions.handleAction({
+      channel: "slack",
+      action: "react",
+      cfg: {} as OpenClawConfig,
+      params: {
+        channelId: "team:T123:channel:C123",
+        messageId: "123.456",
+        emoji: "✅",
+      },
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "react",
+        channelId: "team:T123:channel:C123",
+      }),
+      expect.any(Object),
+      undefined,
+    );
+  });
+
+  it("preserves a workspace-qualified channel for implicit upload destinations", async () => {
+    const invoke = vi.fn(async () => ({ content: [], details: { ok: true } }));
+    const actions = createSlackActions("slack", { invoke });
+    if (!actions.handleAction) {
+      throw new Error("Slack message actions must provide an executor.");
+    }
+
+    await actions.handleAction({
+      channel: "slack",
+      action: "upload-file",
+      cfg: {} as OpenClawConfig,
+      params: {
+        channelId: "team:T123:channel:C123",
+        filePath: "/tmp/report.png",
+      },
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "uploadFile",
+        to: "team:T123:channel:C123",
+      }),
+      expect.any(Object),
+      undefined,
+    );
+  });
+
   it("classifies provider-native mutation actions", () => {
     const actions = createSlackActions("slack");
     for (const action of ["sendMessage", "editMessage", "deleteMessage", "pinMessage"]) {
@@ -165,6 +220,18 @@ describe("Slack message tools", () => {
     ]);
     expect(discovery.capabilities).toEqual(["presentation"]);
     expect(Array.isArray(discovery.schema)).toBe(true);
+    const schemas = Array.isArray(discovery.schema) ? discovery.schema : [];
+    for (const propertyName of ["forceDocument", "asDocument"]) {
+      const entries = schemas.filter((entry) => propertyName in entry.properties);
+      expect(entries.map((entry) => entry.actions)).toEqual([["send"], ["upload-file"]]);
+      for (const entry of entries) {
+        const description = (entry.properties[propertyName] as { description?: string })
+          .description;
+        expect(description).toMatch(/preserve original image bytes/i);
+        expect(description).toMatch(/without image optimization/i);
+        expect(description).toMatch(/not.*Slack document/i);
+      }
+    }
   });
 
   it("honors account-scoped action gates", () => {
@@ -223,7 +290,7 @@ describe("Slack message tools", () => {
     const cfg = {
       channels: {
         slack: {
-          identity: "user",
+          postAs: "user",
           userToken: "test-user-token",
           appToken: "test-app-token",
         },

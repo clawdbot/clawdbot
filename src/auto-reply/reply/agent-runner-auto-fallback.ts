@@ -8,6 +8,8 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolvePersistedOverrideModelRef } from "../../agents/model-selection.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import { resolveSessionModelOverrideRouteResolution } from "../../config/sessions/model-override-provenance.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
@@ -47,6 +49,9 @@ export function resolveRunAfterAutoFallbackPrimaryProbeRecheck(params: {
       ...params.run,
       provider: entryRef?.provider ?? params.run.provider,
       model: entryRef?.model ?? params.run.model,
+      requestedRouteResolution: entryRef
+        ? resolveSessionModelOverrideRouteResolution(params.entry)
+        : params.run.requestedRouteResolution,
       autoFallbackPrimaryProbe: undefined,
     };
     if (hasEntryModelOverride) {
@@ -64,8 +69,9 @@ export function resolveRunAfterAutoFallbackPrimaryProbeRecheck(params: {
     }
     if (hasEntryModelOverride && authProfileId) {
       fallbackRun.authProfileId = authProfileId;
-      if (params.entry?.authProfileOverrideSource) {
-        fallbackRun.authProfileIdSource = params.entry.authProfileOverrideSource;
+      const authProfileIdSource = resolveSessionAuthProfileOverrideSource(params.entry);
+      if (authProfileIdSource) {
+        fallbackRun.authProfileIdSource = authProfileIdSource;
       } else {
         delete fallbackRun.authProfileIdSource;
       }
@@ -88,6 +94,7 @@ export function resolveRunAfterAutoFallbackPrimaryProbeRecheck(params: {
     ...params.run,
     provider: refreshedProbe.provider,
     model: refreshedProbe.model,
+    requestedRouteResolution: "resolved",
     autoFallbackPrimaryProbe: refreshedProbe,
   };
 }
@@ -136,14 +143,13 @@ export async function clearRecoveredAutoFallbackPrimaryProbeSelection(params: {
         return null;
       }
       const shouldClearAuthProfile =
-        persistedEntry.authProfileOverrideSource === "auto" ||
-        (persistedEntry.authProfileOverrideSource === undefined &&
-          persistedEntry.authProfileOverrideCompactionCount !== undefined);
+        resolveSessionAuthProfileOverrideSource(persistedEntry) === "auto";
       clearAutoFallbackPrimaryProbeSelection(persistedEntry);
       return {
         providerOverride: undefined,
         modelOverride: undefined,
         modelOverrideSource: undefined,
+        modelOverrideRouteResolution: undefined,
         modelOverrideFallbackOriginProvider: undefined,
         modelOverrideFallbackOriginModel: undefined,
         ...(shouldClearAuthProfile
@@ -153,9 +159,7 @@ export async function clearRecoveredAutoFallbackPrimaryProbeSelection(params: {
               authProfileOverrideCompactionCount: undefined,
             }
           : {}),
-        fallbackNoticeSelectedModel: undefined,
-        fallbackNoticeActiveModel: undefined,
-        fallbackNoticeReason: undefined,
+        fallbackNotice: undefined,
         updatedAt: persistedEntry.updatedAt,
       };
     },

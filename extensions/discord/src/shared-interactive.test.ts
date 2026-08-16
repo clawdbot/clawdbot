@@ -109,7 +109,13 @@ describe("buildDiscordInteractiveComponents", () => {
               buttons: [
                 {
                   label: "Review",
-                  action: { type, url: "https://example.com/review" } as MessagePresentationAction,
+                  action: {
+                    type,
+                    url:
+                      type === "web-app"
+                        ? "https://node.tailnet.ts.net/__openclaw__/mcp-app#opaque-ticket"
+                        : "https://example.com/review",
+                  } as MessagePresentationAction,
                 },
               ],
             },
@@ -123,7 +129,10 @@ describe("buildDiscordInteractiveComponents", () => {
               {
                 label: "Review",
                 style: "link",
-                url: "https://example.com/review",
+                url:
+                  type === "web-app"
+                    ? "https://node.tailnet.ts.net/__openclaw__/mcp-app#opaque-ticket"
+                    : "https://example.com/review",
               },
             ],
           },
@@ -212,6 +221,30 @@ describe("buildDiscordInteractiveComponents", () => {
       ],
     } as unknown as MessagePresentation;
     expect(buildDiscordPresentationComponents(presentation)).toBeUndefined();
+  });
+
+  it("preserves authored block order around controls", () => {
+    expect(
+      buildDiscordPresentationComponents({
+        blocks: [
+          { type: "text", text: "First" },
+          {
+            type: "buttons",
+            buttons: [{ label: "Approve", value: "approve", style: "success" }],
+          },
+          { type: "text", text: "Last" },
+        ],
+      }),
+    ).toEqual({
+      blocks: [
+        { type: "text", text: "First" },
+        {
+          type: "actions",
+          buttons: [{ label: "Approve", style: "success", callbackData: "approve" }],
+        },
+        { type: "text", text: "Last" },
+      ],
+    });
   });
 
   it("renders typed approvals as actionable transport-private Discord controls", () => {

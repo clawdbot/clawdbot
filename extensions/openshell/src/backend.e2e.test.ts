@@ -4,7 +4,6 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { createSandboxTestContext } from "openclaw/plugin-sdk/test-fixtures";
 import {
   createSandboxBrowserConfig,
@@ -22,7 +21,6 @@ const OPENCLAW_OPENSHELL_COMMAND =
 const OPENCLAW_OPENSHELL_CONFIG_HOME =
   process.env.OPENCLAW_E2E_OPENSHELL_CONFIG_HOME?.trim() || null;
 const OPENCLAW_OPENSHELL_HOST_IP = process.env.OPENCLAW_E2E_OPENSHELL_HOST_IP?.trim() || null;
-const ANSI_ESCAPE_RE = new RegExp(`${String.fromCharCode(0x1b)}\\[[0-?]*[ -/]*[@-~]`, "gu");
 
 const CUSTOM_IMAGE_DOCKERFILE = `FROM python:3.13-slim
 
@@ -129,6 +127,35 @@ async function commandAvailable(command: string): Promise<boolean> {
   }
 }
 
+function parseActiveLocalOpenShellGateway(stdout: string): string | null {
+  let gateways: unknown;
+  try {
+    gateways = JSON.parse(stdout);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(gateways)) {
+    return null;
+  }
+  for (const gateway of gateways) {
+    if (
+      typeof gateway !== "object" ||
+      gateway === null ||
+      gateway.active !== true ||
+      typeof gateway.name !== "string" ||
+      typeof gateway.endpoint !== "string"
+    ) {
+      continue;
+    }
+    if (
+      /^(?:https?:\/\/)?(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?(?:\/|$)/u.test(gateway.endpoint)
+    ) {
+      return gateway.name;
+    }
+  }
+  return null;
+}
+
 async function activeOpenShellGateway(
   command: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -136,7 +163,7 @@ async function activeOpenShellGateway(
   try {
     const result = await runCommand({
       command,
-      args: ["gateway", "list"],
+      args: ["gateway", "list", "--output", "json"],
       env,
       allowFailure: true,
       timeoutMs: 20_000,
@@ -144,39 +171,18 @@ async function activeOpenShellGateway(
     if (result.code !== 0) {
       return null;
     }
-    const output = `${result.stdout}\n${result.stderr}`.replace(ANSI_ESCAPE_RE, "");
-    for (const line of output.split(/\r?\n/u)) {
-      const match = line.match(/\*\s+(\S+)/u);
-      if (match) {
-        const gateway = expectDefined(match[1], "OpenShell gateway name");
-        const info = await runCommand({
-          command,
-          args: ["gateway", "info", "--gateway", gateway],
-          env,
-          allowFailure: true,
-          timeoutMs: 20_000,
-        });
-        const endpoint = `${info.stdout}\n${info.stderr}`
-          .replace(ANSI_ESCAPE_RE, "")
-          .match(/Gateway endpoint:\s+(\S+)/u)?.[1];
-        if (
-          info.code === 0 &&
-          endpoint &&
-          /^(?:https?:\/\/)?(?:127\.0\.0\.1|localhost)(?::\d+)?(?:\/|$)/u.test(endpoint)
-        ) {
-          const status = await runCommand({
-            command,
-            args: ["--gateway", gateway, "sandbox", "list"],
-            env,
-            allowFailure: true,
-            timeoutMs: 20_000,
-          });
-          return status.code === 0 ? gateway : null;
-        }
-        return null;
-      }
+    const gateway = parseActiveLocalOpenShellGateway(result.stdout);
+    if (!gateway) {
+      return null;
     }
-    return null;
+    const status = await runCommand({
+      command,
+      args: ["--gateway", gateway, "sandbox", "list"],
+      env,
+      allowFailure: true,
+      timeoutMs: 20_000,
+    });
+    return status.code === 0 ? gateway : null;
   } catch {
     return null;
   }
@@ -430,6 +436,43 @@ async function runBackendExec(params: {
   }
 }
 
+describe("OpenShell gateway discovery", () => {
+  it("selects the active local gateway from structured output", () => {
+    expect(
+      parseActiveLocalOpenShellGateway(
+        JSON.stringify([
+          {
+            name: "remote",
+            endpoint: "https://gateway.example.com",
+            active: false,
+          },
+          {
+            name: "openshell",
+            endpoint: "https://127.0.0.1:17670",
+            active: true,
+          },
+        ]),
+      ),
+    ).toBe("openshell");
+  });
+
+  it.each([
+    ["malformed output", "not json"],
+    [
+      "active remote gateway",
+      JSON.stringify([
+        {
+          name: "remote",
+          endpoint: "https://gateway.example.com",
+          active: true,
+        },
+      ]),
+    ],
+  ])("rejects %s", (_name, output) => {
+    expect(parseActiveLocalOpenShellGateway(output)).toBeNull();
+  });
+});
+
 describe("openshell sandbox backend e2e", () => {
   it.runIf(process.platform !== "win32" && OPENCLAW_OPENSHELL_E2E)(
     "creates a remote-canonical sandbox through OpenShell and executes over SSH",
@@ -468,7 +511,8 @@ describe("openshell sandbox backend e2e", () => {
       const allowPolicyPath = path.join(rootDir, "allow-policy.yaml");
       const scopeSuffix = `${process.pid}-${Date.now()}`;
       const scopeKey = `session:openshell-e2e-deny:${scopeSuffix}`;
-      const allowSandboxName = `openclaw-policy-allow-${scopeSuffix}`;
+      const testRunId = `${process.pid.toString(36)}${Date.now().toString(36)}`;
+      const allowSandboxName = `oc-a-${testRunId.slice(-14)}`;
       let hostPolicyServer: HostPolicyServer | null | undefined;
       const sandboxCfg = {
         mode: "all" as const,
@@ -476,6 +520,7 @@ describe("openshell sandbox backend e2e", () => {
         scope: "session" as const,
         workspaceAccess: "rw" as const,
         workspaceRoot: path.join(rootDir, "sandboxes"),
+        dockerTmpfsSource: "configured" as const,
         docker: {
           image: "openclaw-sandbox:bookworm-slim",
           containerPrefix: "openclaw-sbx-",

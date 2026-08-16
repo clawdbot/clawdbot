@@ -1,4 +1,46 @@
 import Foundation
+import OpenClawProtocol
+
+public struct OpenClawChatSessionAgentStatus: Codable, Sendable, Hashable {
+    public let note: String
+    public let expiresAt: Double
+    public let attention: String?
+}
+
+public struct OpenClawChatSessionObserverDigest: Codable, Sendable, Hashable {
+    public let agentId: String?
+    public let runId: String?
+    public let revision: Int
+    public let updatedAt: Double
+    public let headline: String
+    public let health: String
+
+    public init(
+        agentId: String? = nil,
+        runId: String? = nil,
+        revision: Int,
+        updatedAt: Double,
+        headline: String,
+        health: String)
+    {
+        self.agentId = agentId
+        self.runId = runId
+        self.revision = revision
+        self.updatedAt = updatedAt
+        self.headline = headline
+        self.health = health
+    }
+
+    public init(_ digest: SessionObserverDigest) {
+        self.init(
+            agentId: digest.agentid,
+            runId: digest.runid,
+            revision: digest.revision,
+            updatedAt: Double(digest.updatedat),
+            headline: digest.headline,
+            health: digest.health.rawValue)
+    }
+}
 
 public struct OpenClawChatThinkingLevelOption: Codable, Identifiable, Sendable, Hashable {
     public let id: String
@@ -240,6 +282,12 @@ public struct OpenClawChatSessionWorktree: Codable, Sendable, Hashable {
     public let id: String?
     public let branch: String?
     public let repoRoot: String?
+
+    public init(id: String?, branch: String?, repoRoot: String?) {
+        self.id = id
+        self.branch = branch
+        self.repoRoot = repoRoot
+    }
 }
 
 public struct OpenClawChatAgentRuntime: Codable, Sendable, Hashable {
@@ -264,22 +312,12 @@ public struct OpenClawChatSessionGroup: Codable, Identifiable, Sendable, Hashabl
 
 public struct OpenClawChatSessionGroupsResponse: Codable, Sendable, Equatable {
     public let groups: [OpenClawChatSessionGroup]
-
-    public init(groups: [OpenClawChatSessionGroup]) {
-        self.groups = groups
-    }
 }
 
 public struct OpenClawChatSessionGroupsMutationResponse: Codable, Sendable, Equatable {
     public let ok: Bool
     public let groups: [OpenClawChatSessionGroup]
     public let updatedSessions: Int?
-
-    public init(ok: Bool, groups: [OpenClawChatSessionGroup], updatedSessions: Int? = nil) {
-        self.ok = ok
-        self.groups = groups
-        self.updatedSessions = updatedSessions
-    }
 }
 
 public struct OpenClawChatAgentChoice: Codable, Identifiable, Sendable, Hashable {
@@ -318,6 +356,14 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
     public var key: String
     public var kind: String?
     public var displayName: String?
+    public var derivedTitle: String?
+    /// Non-sensitive facts derived by the Gateway from the canonical session route.
+    public var classification: String?
+    public var agentId: String?
+    public var accountId: String?
+    public var peerKind: String?
+    public var isMain: Bool?
+    public var isBackground: Bool?
     public var label: String?
     public var category: String?
     public var pinned: Bool?
@@ -325,6 +371,8 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
     public var archived: Bool?
     public var archivedAt: Double?
     public var unread: Bool?
+    public var agentStatus: OpenClawChatSessionAgentStatus?
+    public var observerDigest: OpenClawChatSessionObserverDigest?
     public var surface: String?
     public var subject: String?
     public var room: String?
@@ -339,8 +387,15 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
     public var spawnedBy: String?
     public var childSessions: [String]?
     public var status: String?
+    public var lastRunError: String?
     public var hasActiveRun: Bool?
+    public var activeRunIds: [String]?
     public var hasActiveSubagentRun: Bool?
+    public var subagentRunState: String?
+    public var swarmGroupId: String?
+    public var swarmPhase: String?
+    public var swarmPhaseRank: Int?
+    public var swarmLog: String?
     public var worktree: OpenClawChatSessionWorktree?
     public var startedAt: Double?
     public var endedAt: Double?
@@ -370,6 +425,12 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         key: String,
         kind: String?,
         displayName: String?,
+        classification: String? = nil,
+        agentId: String? = nil,
+        accountId: String? = nil,
+        peerKind: String? = nil,
+        isMain: Bool? = nil,
+        isBackground: Bool? = nil,
         surface: String?,
         subject: String?,
         room: String?,
@@ -397,6 +458,8 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         archived: Bool? = nil,
         archivedAt: Double? = nil,
         unread: Bool? = nil,
+        agentStatus: OpenClawChatSessionAgentStatus? = nil,
+        observerDigest: OpenClawChatSessionObserverDigest? = nil,
         lastReadAt: Double? = nil,
         lastInteractionAt: Double? = nil,
         lastActivityAt: Double? = nil,
@@ -404,19 +467,34 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         spawnedBy: String? = nil,
         childSessions: [String]? = nil,
         status: String? = nil,
+        lastRunError: String? = nil,
         hasActiveRun: Bool? = nil,
+        activeRunIds: [String]? = nil,
         hasActiveSubagentRun: Bool? = nil,
+        subagentRunState: String? = nil,
+        swarmGroupId: String? = nil,
+        swarmPhase: String? = nil,
+        swarmPhaseRank: Int? = nil,
+        swarmLog: String? = nil,
         worktree: OpenClawChatSessionWorktree? = nil,
         fastMode: OpenClawChatFastMode? = nil,
         effectiveFastMode: OpenClawChatFastMode? = nil,
         startedAt: Double? = nil,
         endedAt: Double? = nil,
         runtimeMs: Double? = nil,
-        agentRuntime: OpenClawChatAgentRuntime? = nil)
+        agentRuntime: OpenClawChatAgentRuntime? = nil,
+        derivedTitle: String? = nil)
     {
         self.key = key
         self.kind = kind
         self.displayName = displayName
+        self.derivedTitle = derivedTitle
+        self.classification = classification
+        self.agentId = agentId
+        self.accountId = accountId
+        self.peerKind = peerKind
+        self.isMain = isMain
+        self.isBackground = isBackground
         self.label = label
         self.category = category
         self.pinned = pinned
@@ -424,6 +502,8 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         self.archived = archived
         self.archivedAt = archivedAt
         self.unread = unread
+        self.agentStatus = agentStatus
+        self.observerDigest = observerDigest
         self.surface = surface
         self.subject = subject
         self.room = room
@@ -437,8 +517,15 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         self.spawnedBy = spawnedBy
         self.childSessions = childSessions
         self.status = status
+        self.lastRunError = lastRunError
         self.hasActiveRun = hasActiveRun
+        self.activeRunIds = activeRunIds
         self.hasActiveSubagentRun = hasActiveSubagentRun
+        self.subagentRunState = subagentRunState
+        self.swarmGroupId = swarmGroupId
+        self.swarmPhase = swarmPhase
+        self.swarmPhaseRank = swarmPhaseRank
+        self.swarmLog = swarmLog
         self.worktree = worktree
         self.startedAt = startedAt
         self.endedAt = endedAt
@@ -510,10 +597,62 @@ public enum OpenClawChatSessionListOrganizer {
     }
 }
 
+public enum OpenClawChatChildSessionPager {
+    private static let maxCollectedSessions = 100_000
+    private static let maxPageRequests = 100
+
+    public static func collect(
+        fetchPage: (Int) async throws -> OpenClawChatSessionsListResponse) async throws
+        -> [OpenClawChatSessionEntry]
+    {
+        var rowsByKey: [String: OpenClawChatSessionEntry] = [:]
+        var remainingPageRequests = Self.maxPageRequests
+        for _ in 0..<4 {
+            let rowsBeforePass = rowsByKey.count
+            var expectedTotal: Int?
+            var seenOffsets = Set<Int>()
+            var offset = 0
+            while remainingPageRequests > 0,
+                  rowsByKey.count < Self.maxCollectedSessions,
+                  seenOffsets.insert(offset).inserted
+            {
+                remainingPageRequests -= 1
+                let page = try await fetchPage(offset)
+                expectedTotal = page.totalCount
+                for row in page.sessions {
+                    rowsByKey[row.key] = row
+                    if rowsByKey.count >= Self.maxCollectedSessions {
+                        break
+                    }
+                }
+                if rowsByKey.count >= Self.maxCollectedSessions {
+                    return Array(rowsByKey.values)
+                }
+                let hasMore = page.hasMore ?? expectedTotal.map { offset + page.sessions.count < $0 } ?? false
+                let nextOffset = page.nextOffset ?? (offset + page.sessions.count)
+                guard hasMore, !page.sessions.isEmpty, nextOffset > offset else { break }
+                offset = nextOffset
+            }
+            let added = rowsByKey.count - rowsBeforePass
+            if remainingPageRequests == 0 ||
+                added == 0 ||
+                expectedTotal.map({ rowsByKey.count >= $0 }) != false
+            {
+                break
+            }
+        }
+        return Array(rowsByKey.values)
+    }
+}
+
 public struct OpenClawChatSessionsListResponse: Codable, Sendable {
     public let ts: Double?
     public let path: String?
     public let count: Int?
+    public let totalCount: Int?
+    public let offset: Int?
+    public let nextOffset: Int?
+    public let hasMore: Bool?
     public let defaults: OpenClawChatSessionsDefaults?
     public let sessions: [OpenClawChatSessionEntry]
 
@@ -521,12 +660,20 @@ public struct OpenClawChatSessionsListResponse: Codable, Sendable {
         ts: Double?,
         path: String?,
         count: Int?,
+        totalCount: Int? = nil,
+        offset: Int? = nil,
+        nextOffset: Int? = nil,
+        hasMore: Bool? = nil,
         defaults: OpenClawChatSessionsDefaults?,
         sessions: [OpenClawChatSessionEntry])
     {
         self.ts = ts
         self.path = path
         self.count = count
+        self.totalCount = totalCount
+        self.offset = offset
+        self.nextOffset = nextOffset
+        self.hasMore = hasMore
         self.defaults = defaults
         self.sessions = sessions
     }

@@ -53,7 +53,11 @@ describe("session snapshot merge", () => {
       modelOverrideFallbackOriginModel: "claude-opus-4-6",
       authProfileOverride: "openai:fallback",
       authProfileOverrideSource: "auto",
-      fallbackNoticeSelectedModel: "openai/gpt-old",
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: "openai/gpt-old",
+        activeModel: "openai/gpt-fallback",
+      },
     };
     const next = {
       ...initialOverride,
@@ -65,7 +69,7 @@ describe("session snapshot merge", () => {
       modelOverrideFallbackOriginModel: undefined,
       authProfileOverride: undefined,
       authProfileOverrideSource: undefined,
-      fallbackNoticeSelectedModel: undefined,
+      fallbackNotice: undefined,
       liveModelSwitchPending: true,
     };
     const current: SessionEntry = {
@@ -75,7 +79,11 @@ describe("session snapshot merge", () => {
       modelOverrideSource: "user",
       authProfileOverride: "openai:user",
       authProfileOverrideSource: "user",
-      fallbackNoticeSelectedModel: "openai/gpt-new",
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: "openai/gpt-new",
+        activeModel: "openai/gpt-fallback",
+      },
     };
 
     expect(mergeSessionSnapshotChanges({ initial: initialOverride, next, current })).toEqual(
@@ -152,9 +160,12 @@ describe("session snapshot merge", () => {
       modelOverrideSource: "user",
       modelProvider: "openai",
       model: "gpt-5.4",
-      fallbackNoticeSelectedModel: "openai/gpt-5.4",
-      fallbackNoticeActiveModel: "openai/gpt-5.4-mini",
-      fallbackNoticeReason: "rate_limit",
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: "openai/gpt-5.4",
+        activeModel: "openai/gpt-5.4-mini",
+        reason: "rate_limit",
+      },
       contextTokens: 100_000,
       contextBudgetStatus: {
         schemaVersion: 1,
@@ -182,9 +193,7 @@ describe("session snapshot merge", () => {
       modelOverride: "gpt-5.5",
       modelProvider: undefined,
       model: undefined,
-      fallbackNoticeSelectedModel: undefined,
-      fallbackNoticeActiveModel: undefined,
-      fallbackNoticeReason: undefined,
+      fallbackNotice: undefined,
       contextTokens: undefined,
       contextBudgetStatus: undefined,
     };
@@ -193,7 +202,11 @@ describe("session snapshot merge", () => {
       updatedAt: 3,
       modelProvider: "openai",
       model: "gpt-5.4-mini",
-      fallbackNoticeActiveModel: "openai/gpt-5.4-nano",
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: "openai/gpt-5.4",
+        activeModel: "openai/gpt-5.4-nano",
+      },
       contextTokens: 80_000,
     };
 
@@ -206,9 +219,7 @@ describe("session snapshot merge", () => {
     });
     expect(merged.modelProvider).toBeUndefined();
     expect(merged.model).toBeUndefined();
-    expect(merged.fallbackNoticeSelectedModel).toBeUndefined();
-    expect(merged.fallbackNoticeActiveModel).toBeUndefined();
-    expect(merged.fallbackNoticeReason).toBeUndefined();
+    expect(merged.fallbackNotice).toBeUndefined();
     expect(merged.contextTokens).toBeUndefined();
     expect(merged.contextBudgetStatus).toBeUndefined();
   });
@@ -231,7 +242,11 @@ describe("session snapshot merge", () => {
       updatedAt: 3,
       modelProvider: "openai",
       model: "gpt-5.4",
-      fallbackNoticeActiveModel: "openai/gpt-5.4-mini",
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: "openai/gpt-5.4",
+        activeModel: "openai/gpt-5.4-mini",
+      },
       contextTokens: 80_000,
     };
 
@@ -244,7 +259,7 @@ describe("session snapshot merge", () => {
     });
     expect(merged.modelProvider).toBeUndefined();
     expect(merged.model).toBeUndefined();
-    expect(merged.fallbackNoticeActiveModel).toBeUndefined();
+    expect(merged.fallbackNotice).toBeUndefined();
     expect(merged.contextTokens).toBeUndefined();
   });
 
@@ -315,7 +330,11 @@ describe("session snapshot merge", () => {
       updatedAt: 2,
       modelProvider: "openai",
       model: "gpt-5.4",
-      fallbackNoticeSelectedModel: "openai/gpt-5.4",
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: "openai/gpt-5.4",
+        activeModel: "openai/gpt-5.4-mini",
+      },
       contextTokens: 100_000,
       thinkingLevel: "medium",
     };

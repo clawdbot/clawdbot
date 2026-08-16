@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 // Assertions for upgrade-survivor E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
@@ -16,7 +17,10 @@ const SCENARIOS = new Set([
   "configured-plugin-installs",
   "stale-source-plugin-shadow",
   "tilde-log-path",
+  "meeting-transcripts-sqlite",
   "versioned-runtime-deps",
+  "cron-scheduled-authority",
+  "auth-profile-v2026-7-2-beta-5",
 ]);
 
 const PERSONA_FILES = new Map([
@@ -92,13 +96,14 @@ function assert(condition, message) {
 
 function seedLegacySessionMetadata(stateDir) {
   const legacySessionsDir = path.join(stateDir, "sessions");
+  const baseUpdatedAt = Date.now() - 24 * 60 * 60 * 1000;
   writeJson(path.join(legacySessionsDir, "sessions.json"), {
     main: {
       sessionId: LEGACY_SESSION_MAIN_ID,
       sessionFile: path.join(legacySessionsDir, `${LEGACY_SESSION_MAIN_ID}.jsonl`),
       provider: "openai",
       model: "gpt-5.5",
-      updatedAt: 1710000000000,
+      updatedAt: baseUpdatedAt,
       skillsSnapshot: {
         prompt: "legacy prompt survives as metadata",
         resolvedSkills: [
@@ -114,14 +119,14 @@ function seedLegacySessionMetadata(stateDir) {
       sessionFile: path.join(legacySessionsDir, `${LEGACY_SESSION_DIRECT_ID}.jsonl`),
       provider: "openai",
       model: "gpt-5.5",
-      updatedAt: 1710000000100,
+      updatedAt: baseUpdatedAt + 100,
     },
     "slack:channel:CUPGRADE": {
       sessionId: LEGACY_SESSION_GROUP_ID,
       sessionFile: path.join(legacySessionsDir, `${LEGACY_SESSION_GROUP_ID}.jsonl`),
       provider: "openai",
       model: "gpt-5.5",
-      updatedAt: 1710000000200,
+      updatedAt: baseUpdatedAt + 200,
       lastChannel: "slack",
       lastTo: "CUPGRADE",
     },
@@ -136,6 +141,111 @@ function seedLegacySessionMetadata(stateDir) {
       `${JSON.stringify({ type: "session", id: sessionId })}\n`,
     );
   }
+}
+
+function seedLegacyMeetingTranscripts(stateDir) {
+  const sessionDir = path.join(stateDir, "transcripts", "2026-07-01", "design-review");
+  const session = {
+    sessionId: "design-review",
+    title: "Design review",
+    source: { providerId: "manual-transcript" },
+    startedAt: "2026-07-01T10:00:00.000Z",
+    stoppedAt: "2026-07-01T10:30:00.000Z",
+  };
+  writeJson(path.join(sessionDir, "metadata.json"), session);
+  write(
+    path.join(sessionDir, "transcript.jsonl"),
+    [
+      JSON.stringify({
+        id: "legacy-u-1",
+        sessionId: session.sessionId,
+        speaker: { label: "Alex" },
+        text: "First shipped transcript line",
+        final: true,
+      }),
+      JSON.stringify({
+        id: "legacy-u-2",
+        sessionId: session.sessionId,
+        speaker: { label: "Sam" },
+        text: "Second shipped transcript line",
+        final: true,
+      }),
+    ].join("\n") + "\n",
+  );
+  const summary = {
+    sessionId: session.sessionId,
+    title: session.title,
+    generatedAt: "2026-07-01T10:31:00.000Z",
+    overview: "First shipped transcript line. Second shipped transcript line.",
+    transcript: ["Alex: First shipped transcript line", "Sam: Second shipped transcript line"],
+    decisions: [],
+    actionItems: [],
+    risks: [],
+    utteranceCount: 2,
+  };
+  writeJson(path.join(sessionDir, "summary.json"), summary);
+  write(path.join(sessionDir, "summary.md"), "# Design review\n\nShipped transcript summary.\n");
+}
+
+function seedLegacyCronScheduledAuthority(stateDir) {
+  const createdAtMs = Date.parse("2026-07-01T10:00:00.000Z");
+  const base = {
+    enabled: true,
+    createdAtMs,
+    updatedAtMs: createdAtMs,
+    schedule: { kind: "every", everyMs: 3_600_000, anchorMs: createdAtMs },
+    sessionTarget: "isolated",
+    wakeMode: "now",
+    delivery: { mode: "none" },
+    state: { nextRunAtMs: createdAtMs + 3_600_000 },
+  };
+  writeJson(path.join(stateDir, "cron", "jobs.json"), {
+    version: 1,
+    jobs: [
+      {
+        ...base,
+        id: "cron-pre-cap",
+        name: "Pre-cap agent job",
+        payload: { kind: "agentTurn", message: "pre-cap" },
+      },
+      {
+        ...base,
+        id: "cron-ownerless-cap",
+        name: "Ownerless capped job",
+        payload: { kind: "agentTurn", message: "ownerless", toolsAllow: ["write"] },
+      },
+      {
+        ...base,
+        id: "cron-owner-session",
+        name: "Persisted owner session",
+        owner: {
+          agentId: "main",
+          sessionKey: "agent:main:discord:group:ops",
+        },
+        payload: { kind: "agentTurn", message: "owned", toolsAllow: ["write"] },
+      },
+      {
+        ...base,
+        id: "cron-encoded-account",
+        name: "Encoded owner account",
+        owner: {
+          agentId: "main",
+          sessionKey: "agent:main:discord:personal:direct:user-1",
+        },
+        payload: { kind: "agentTurn", message: "encoded", toolsAllow: ["write"] },
+      },
+      {
+        ...base,
+        id: "cron-agent-mismatch",
+        name: "Mismatched owner agent",
+        owner: {
+          agentId: "other",
+          sessionKey: "agent:main:discord:work:direct:user-2",
+        },
+        payload: { kind: "agentTurn", message: "mismatch", toolsAllow: ["write"] },
+      },
+    ],
+  });
 }
 
 function getScenario() {
@@ -195,6 +305,28 @@ function seedState() {
     title: "Existing user session",
   });
   seedLegacySessionMetadata(stateDir);
+  if (scenario === "meeting-transcripts-sqlite") {
+    seedLegacyMeetingTranscripts(stateDir);
+  }
+  if (scenario === "cron-scheduled-authority") {
+    seedLegacyCronScheduledAuthority(stateDir);
+  }
+  if (scenario === "auth-profile-v2026-7-2-beta-5") {
+    const fixture = readJson(
+      path.join(
+        process.cwd(),
+        "scripts/e2e/lib/upgrade-survivor/fixtures/auth-profile-v2026.7.2-beta.5.json",
+      ),
+    );
+    assert(fixture.sourceTag === "v2026.7.2-beta.5", "auth profile fixture tag drifted");
+    assert(fixture.sourceCommit === "34aefcf2fefa", "auth profile fixture commit drifted");
+    assert(fixture.agentSchemaVersion === 15, "auth profile fixture schema drifted");
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    writeJson(path.join(agentDir, "auth-profiles.json"), fixture.authProfiles);
+    writeJson(path.join(agentDir, "auth-state.json"), fixture.authState);
+    writeJson(path.join(agentDir, "auth.json"), fixture.legacyAuth);
+    writeJson(path.join(stateDir, "credentials", "oauth.json"), fixture.legacyOAuth);
+  }
 
   const runtimeRoot = path.join(stateDir, "plugin-runtime-deps");
   for (const plugin of ["discord", "telegram", "whatsapp"]) {
@@ -257,6 +389,11 @@ function seedState() {
 function assertConfigSurvived() {
   const config = getConfig();
   const coverage = getCoverage();
+  if (getScenario() === "meeting-transcripts-sqlite") {
+    // This focused migration fixture proves state import/export across one published
+    // baseline; the broad base scenario owns unrelated agent/channel config parity.
+    return;
+  }
 
   if (acceptsIntent(coverage, "update")) {
     assert(config.update?.channel === "stable", "update.channel was not preserved");
@@ -270,29 +407,20 @@ function assertConfigSurvived() {
   }
 
   if (acceptsIntent(coverage, "agents")) {
-    const agents = config.agents?.list ?? [];
-    assert(Array.isArray(agents), "agents.list missing after update/doctor");
-    assert(
-      agents.some((agent) => agent?.id === "main"),
-      "main agent missing",
-    );
-    assert(
-      agents.some((agent) => agent?.id === "ops"),
-      "ops agent missing",
-    );
+    const legacyAgents = config.agents?.list ?? [];
+    const mainAgent =
+      config.agents?.entries?.main ?? legacyAgents.find((agent) => agent?.id === "main");
+    const opsAgent =
+      config.agents?.entries?.ops ?? legacyAgents.find((agent) => agent?.id === "ops");
+    assert(mainAgent, "main agent missing");
+    assert(opsAgent, "ops agent missing");
     if (hasCoverage(coverage)) {
       assert(config.agents?.defaults?.contextTokens === 64000, "default contextTokens changed");
     } else {
-      assert(
-        agents.find((agent) => agent?.id === "main")?.contextTokens === 64000,
-        "main agent contextTokens changed",
-      );
+      assert(mainAgent.contextTokens === 64000, "main agent contextTokens changed");
     }
     if (!hasCoverage(coverage) || !coverage.skippedIntents?.includes("agent-modern-preferences")) {
-      assert(
-        agents.find((agent) => agent?.id === "ops")?.fastModeDefault === true,
-        "ops fastModeDefault changed",
-      );
+      assert(opsAgent.fastModeDefault === true, "ops fastModeDefault changed");
     }
   }
 
@@ -435,6 +563,15 @@ function assertStateSurvived() {
   if (stage !== "baseline") {
     assertSessionMetadataMigrated(stateDir);
   }
+  if (scenario === "meeting-transcripts-sqlite") {
+    assertMeetingTranscriptsMigrated(stateDir, stage);
+  }
+  if (scenario === "cron-scheduled-authority") {
+    assertCronScheduledAuthorityMigrated(stateDir, stage);
+  }
+  if (scenario === "auth-profile-v2026-7-2-beta-5") {
+    assertAuthProfileMigrationSurvived(stateDir, stage);
+  }
   const legacyRuntimeRoot = path.join(stateDir, "plugin-runtime-deps");
   if (stage === "baseline") {
     if (fs.existsSync(legacyRuntimeRoot)) {
@@ -478,35 +615,245 @@ function assertStateSurvived() {
   }
 }
 
+function assertAuthProfileMigrationSurvived(stateDir, stage) {
+  const agentDir = path.join(stateDir, "agents", "main", "agent");
+  const sources = [
+    path.join(agentDir, "auth-profiles.json"),
+    path.join(agentDir, "auth-state.json"),
+    path.join(agentDir, "auth.json"),
+    path.join(stateDir, "credentials", "oauth.json"),
+  ];
+  if (stage === "baseline") {
+    assert(
+      sources.every((source) => fs.existsSync(source)),
+      "auth profile fixture source missing",
+    );
+    return;
+  }
+  for (const source of sources) {
+    assert(!fs.existsSync(source), `legacy auth source remained active: ${source}`);
+    const prefix = `${path.basename(source)}.migrated-`;
+    const archives = fs
+      .readdirSync(path.dirname(source))
+      .filter((entry) => entry.startsWith(prefix));
+    assert(archives.length === 1, `expected one legacy auth archive for ${source}`);
+  }
+  const agentDatabase = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"), {
+    readOnly: true,
+  });
+  try {
+    const row = agentDatabase
+      .prepare("SELECT store_json FROM auth_profile_store WHERE store_key = 'primary'")
+      .get();
+    const store = JSON.parse(row?.store_json ?? "null");
+    assert(
+      store?.profiles?.["openai:default"]?.key === "fake-upgrade-openai-key",
+      "openai credential did not migrate",
+    );
+    assert(
+      store?.profiles?.["xai:default"]?.key === "fake-upgrade-xai-key",
+      "legacy xai credential did not migrate",
+    );
+    assert(
+      store?.profiles?.["anthropic:default"]?.refresh === "fake-upgrade-refresh-token",
+      "shared OAuth credential did not migrate",
+    );
+  } finally {
+    agentDatabase.close();
+  }
+  const stateDatabase = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
+    readOnly: true,
+  });
+  try {
+    const receipt = stateDatabase
+      .prepare(
+        "SELECT COUNT(*) AS count FROM migration_sources WHERE migration_kind = ? AND status = 'completed' AND removed_source = 1",
+      )
+      .get("auth-profile-json-to-sqlite-v2");
+    assert(
+      receipt?.count === 4,
+      `expected four completed auth migration receipts, got ${String(receipt?.count)}`,
+    );
+  } finally {
+    stateDatabase.close();
+  }
+}
+
+function assertCronScheduledAuthorityMigrated(stateDir, stage) {
+  const legacyStorePath = path.join(stateDir, "cron", "jobs.json");
+  const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+  if (stage === "baseline") {
+    if (fs.existsSync(legacyStorePath)) {
+      const jobs = readJson(legacyStorePath).jobs ?? [];
+      assert(jobs.length === 5, "legacy cron authority fixture row count changed before update");
+      return;
+    }
+    assert(fs.existsSync(databasePath), "legacy cron authority fixture missing before update");
+    const db = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      const rows = db.prepare("SELECT job_json FROM cron_jobs WHERE job_id LIKE 'cron-%'").all();
+      assert(rows.length === 5, "baseline cron authority fixture row count changed");
+      assert(
+        rows.every((row) => JSON.parse(row.job_json).scheduledToolPolicy === undefined),
+        "baseline unexpectedly authored current scheduled authority provenance",
+      );
+    } finally {
+      db.close();
+    }
+    return;
+  }
+  const db = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    const rows = db
+      .prepare("SELECT job_id, job_json FROM cron_jobs WHERE job_id LIKE 'cron-%'")
+      .all();
+    const jobs = new Map(rows.map((row) => [row.job_id, JSON.parse(row.job_json)]));
+    assert(jobs.size === 5, `cron authority fixture row count changed: ${jobs.size}`);
+    assert(
+      jobs.get("cron-encoded-account")?.scheduledToolPolicy?.ownerAccountId === "personal",
+      "session-encoded account authority was not recovered",
+    );
+    assert(
+      jobs.get("cron-encoded-account")?.owner?.accountId === "personal",
+      "session-encoded account was not projected onto the owner",
+    );
+    for (const id of [
+      "cron-pre-cap",
+      "cron-ownerless-cap",
+      "cron-owner-session",
+      "cron-agent-mismatch",
+    ]) {
+      assert(
+        jobs.get(id)?.scheduledToolPolicy === undefined,
+        `ambiguous legacy job unexpectedly gained scheduled authority: ${id}`,
+      );
+    }
+  } finally {
+    db.close();
+  }
+}
+
+function assertMeetingTranscriptsMigrated(stateDir, stage) {
+  const legacySessionDir = path.join(stateDir, "transcripts", "2026-07-01", "design-review");
+  if (stage === "baseline") {
+    assert(
+      fs.existsSync(path.join(legacySessionDir, "transcript.jsonl")),
+      "v2026.7.1 meeting transcript fixture missing before update",
+    );
+    return;
+  }
+
+  assert(!fs.existsSync(legacySessionDir), "legacy meeting transcript source was not archived");
+  const archiveRoot = fs
+    .readdirSync(stateDir)
+    .find((entry) => entry.startsWith("transcripts.migrated-"));
+  assert(archiveRoot, "meeting transcript migration archive missing");
+  assert(
+    fs.existsSync(
+      path.join(stateDir, archiveRoot, "2026-07-01", "design-review", "transcript.jsonl"),
+    ),
+    "archived meeting transcript JSONL missing",
+  );
+
+  const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+  const db = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    const session = db
+      .prepare(
+        "SELECT session_id, started_at, next_utterance_seq FROM meeting_transcript_sessions WHERE session_id = ?",
+      )
+      .get("design-review");
+    assert(session?.started_at === "2026-07-01T10:00:00.000Z", "meeting session row missing");
+    assert(session?.next_utterance_seq === 2, "meeting transcript sequence head changed");
+    const utterances = db
+      .prepare(
+        "SELECT sequence, utterance_id, text FROM meeting_transcript_utterances WHERE session_id = ? ORDER BY sequence ASC",
+      )
+      .all("design-review");
+    assert(
+      JSON.stringify(utterances) ===
+        JSON.stringify([
+          {
+            sequence: 0,
+            utterance_id: "legacy-u-1",
+            text: "First shipped transcript line",
+          },
+          {
+            sequence: 1,
+            utterance_id: "legacy-u-2",
+            text: "Second shipped transcript line",
+          },
+        ]),
+      "meeting transcript utterance ordering changed",
+    );
+    const receipt = db
+      .prepare(
+        "SELECT status, removed_source, source_record_count FROM migration_sources WHERE migration_kind = ?",
+      )
+      .get("meeting-transcripts-files-v1");
+    assert(receipt?.status === "archived", "meeting transcript migration receipt incomplete");
+    assert(receipt?.removed_source === 1, "meeting transcript source removal was not recorded");
+    assert(receipt?.source_record_count === 2, "meeting transcript receipt count changed");
+  } finally {
+    db.close();
+  }
+
+  const exportedDir = execFileSync(
+    "openclaw",
+    ["transcripts", "path", "2026-07-01/design-review", "--dir"],
+    { encoding: "utf8", env: process.env },
+  ).trim();
+  assert(exportedDir === legacySessionDir, "meeting transcript export path changed");
+  const exportedLines = fs
+    .readFileSync(path.join(exportedDir, "transcript.jsonl"), "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  assert(exportedLines[0]?.id === "legacy-u-1", "first exported utterance changed");
+  assert(exportedLines[1]?.id === "legacy-u-2", "second exported utterance changed");
+  assert(
+    fs
+      .readFileSync(path.join(exportedDir, "summary.md"), "utf8")
+      .includes("Shipped transcript summary"),
+    "summary.md was not materialized from SQLite",
+  );
+}
+
 function assertSessionMetadataMigrated(stateDir) {
   const legacyStorePath = path.join(stateDir, "sessions", "sessions.json");
   const agentSessionsDir = path.join(stateDir, "agents", "main", "sessions");
   const targetStorePath = path.join(agentSessionsDir, "sessions.json");
-  const dbPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
   assert(
     !fs.existsSync(legacyStorePath),
     `legacy sessions.json survived migration: ${legacyStorePath}`,
   );
 
-  const store = readMigratedSessionStore(stateDir, targetStorePath);
+  const { source, store } = readMigratedSessionStore(stateDir, targetStorePath);
   const main = store["agent:main:main"];
   const direct = store["agent:main:+15551234567"];
   const group = store["agent:main:slack:channel:cupgrade"];
   assert(main?.sessionId === LEGACY_SESSION_MAIN_ID, "main legacy session row missing");
   assert(direct?.sessionId === LEGACY_SESSION_DIRECT_ID, "direct legacy session row missing");
   assert(group?.sessionId === LEGACY_SESSION_GROUP_ID, "channel legacy session row missing");
-  const migratedSessionIds = [
-    LEGACY_SESSION_MAIN_ID,
-    LEGACY_SESSION_DIRECT_ID,
-    LEGACY_SESSION_GROUP_ID,
+  const migratedSessions = [
+    [LEGACY_SESSION_MAIN_ID, main],
+    [LEGACY_SESSION_DIRECT_ID, direct],
+    [LEGACY_SESSION_GROUP_ID, group],
   ];
-  if (fs.existsSync(dbPath)) {
+  for (const [sessionId, entry] of migratedSessions) {
+    assert(
+      !Object.hasOwn(entry ?? {}, "sessionFile"),
+      `legacy session row retained retired sessionFile metadata for ${sessionId}`,
+    );
+  }
+  if (source !== "file") {
+    const dbPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
     const db = new DatabaseSync(dbPath, { readOnly: true });
     try {
       const count = db.prepare(
         "SELECT COUNT(*) AS count FROM transcript_events WHERE session_id = ?",
       );
-      for (const sessionId of migratedSessionIds) {
+      for (const [sessionId] of migratedSessions) {
         const row = count.get(sessionId);
         assert(
           Number(row?.count ?? 0) > 0,
@@ -517,19 +864,11 @@ function assertSessionMetadataMigrated(stateDir) {
       db.close();
     }
   } else {
-    for (const [sessionId, entry] of [
-      [LEGACY_SESSION_MAIN_ID, main],
-      [LEGACY_SESSION_DIRECT_ID, direct],
-      [LEGACY_SESSION_GROUP_ID, group],
-    ]) {
+    for (const [sessionId] of migratedSessions) {
       const expectedPath = path.join(agentSessionsDir, `${sessionId}.jsonl`);
       assert(
         fs.existsSync(expectedPath),
         `legacy session transcript was not moved for ${sessionId}`,
-      );
-      assert(
-        entry?.sessionFile === expectedPath,
-        `legacy session row still points at the old sessions directory for ${sessionId}`,
       );
     }
   }
@@ -544,43 +883,71 @@ function assertSessionMetadataMigrated(stateDir) {
 }
 
 function readMigratedSessionStore(stateDir, targetStorePath) {
-  if (fs.existsSync(targetStorePath)) {
-    return readJson(targetStorePath);
-  }
-
   const dbPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
-  assert(fs.existsSync(dbPath), `agent session store missing: ${targetStorePath} or ${dbPath}`);
-
-  let db;
-  try {
-    db = new DatabaseSync(dbPath, { readOnly: true });
-    const hasSessionEntries = db
-      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_entries'")
-      .get();
-    const rows = hasSessionEntries
-      ? db
+  if (fs.existsSync(dbPath)) {
+    let db;
+    try {
+      db = new DatabaseSync(dbPath, { readOnly: true });
+      const tables = new Set(
+        db
           .prepare(
-            `SELECT se.session_key AS key, sr.session_id, se.entry_json AS value_json
-             FROM session_entries AS se
-             INNER JOIN session_routes AS sr ON sr.session_key = se.session_key`,
+            `SELECT name
+             FROM sqlite_master
+             WHERE type = 'table'
+               AND name IN ('session_nodes', 'session_entries', 'cache_entries')`,
           )
           .all()
-      : db
-          .prepare("SELECT key, value_json FROM cache_entries WHERE scope = ?")
-          .all("session_entries");
-    const store = {};
-    for (const row of rows) {
-      if (typeof row?.key !== "string" || typeof row?.value_json !== "string") {
-        continue;
+          .map((row) => row.name),
+      );
+      // SQLite is authoritative once it owns a supported session table. A stale
+      // sessions.json must not hide missing, malformed, or unreadable database state.
+      const source = tables.has("session_nodes")
+        ? "session_nodes"
+        : tables.has("session_entries")
+          ? "session_entries"
+          : tables.has("cache_entries")
+            ? "cache_entries"
+            : null;
+      if (source) {
+        const rows =
+          source === "session_nodes"
+            ? db
+                .prepare(
+                  `SELECT session_key AS key, current_session_id AS session_id, entry_json AS value_json
+                   FROM session_nodes`,
+                )
+                .all()
+            : source === "session_entries"
+              ? db
+                  .prepare(
+                    `SELECT session_key AS key, session_id, entry_json AS value_json
+                     FROM session_entries`,
+                  )
+                  .all()
+              : db
+                  .prepare("SELECT key, value_json FROM cache_entries WHERE scope = ?")
+                  .all("session_entries");
+        const store = {};
+        for (const row of rows) {
+          if (typeof row?.key !== "string" || typeof row?.value_json !== "string") {
+            continue;
+          }
+          const entry = JSON.parse(row.value_json);
+          store[row.key] =
+            typeof row.session_id === "string" ? { ...entry, sessionId: row.session_id } : entry;
+        }
+        return { source, store };
       }
-      const entry = JSON.parse(row.value_json);
-      store[row.key] =
-        typeof row.session_id === "string" ? { ...entry, sessionId: row.session_id } : entry;
+    } finally {
+      db?.close();
     }
-    return store;
-  } finally {
-    db?.close();
   }
+
+  assert(
+    fs.existsSync(targetStorePath),
+    `agent session store missing: ${targetStorePath} or ${dbPath}`,
+  );
+  return { source: "file", store: readJson(targetStorePath) };
 }
 
 function readInstalledPluginIndex() {

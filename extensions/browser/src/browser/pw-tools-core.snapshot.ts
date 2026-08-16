@@ -10,7 +10,7 @@ import {
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { Frame, Page } from "playwright-core";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
-import { ACT_MAX_VIEWPORT_DIMENSION } from "./act-policy.js";
+import { ACT_MAX_VIEWPORT_DIMENSION, resolveBrowserNavigationTimeoutMs } from "./act-policy.js";
 import { type AriaSnapshotNode, formatAriaSnapshot, type RawAXNode } from "./cdp.js";
 import type { BrowserDownloadResult } from "./download-types.js";
 import {
@@ -24,6 +24,7 @@ import {
   buildRoleSnapshotFromAiSnapshot,
   buildRoleSnapshotFromAriaSnapshot,
   finalizeRoleSnapshot,
+  type RoleSnapshotIdentityMode,
   type RoleSnapshotOptions,
   type RoleRefMap,
 } from "./pw-role-snapshot.js";
@@ -53,10 +54,6 @@ function resolveBoundedTimeoutMs(
 
 function resolveSnapshotTimeoutMs(timeoutMs: number | undefined): number {
   return resolveBoundedTimeoutMs(timeoutMs, 5_000, 500, 60_000);
-}
-
-function resolveNavigationTimeoutMs(timeoutMs: number | undefined): number {
-  return resolveBoundedTimeoutMs(timeoutMs, 20_000, 1000, 120_000);
 }
 
 function resolveViewportDimension(value: unknown, label: "width" | "height"): number {
@@ -260,7 +257,13 @@ export async function snapshotAiViaPlaywright(opts: {
   maxChars?: number;
   urls?: boolean;
   ssrfPolicy?: SsrFPolicy;
-}): Promise<{ snapshot: string; truncated?: boolean; refs: RoleRefMap }> {
+  delta?: { mode: RoleSnapshotIdentityMode; previousKeys?: ReadonlySet<string> };
+}): Promise<{
+  snapshot: string;
+  truncated?: boolean;
+  refs: RoleRefMap;
+  newElements?: number;
+}> {
   const page = await prepareSnapshotPageViaPlaywright({
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
@@ -282,6 +285,7 @@ export async function snapshotAiViaPlaywright(opts: {
         snapshot,
         refs: built.refs,
         maxChars: opts.maxChars,
+        delta: opts.delta,
       });
       assertSnapshotFrameCurrent(isFrameCurrent);
       storeRoleRefsForTarget({
@@ -335,11 +339,13 @@ async function finalizeRoleSnapshotViaPlaywright(params: {
   built: { snapshot: string; refs: RoleRefMap };
   urls?: boolean;
   maxChars?: number;
+  delta?: { mode: RoleSnapshotIdentityMode; previousKeys?: ReadonlySet<string> };
 }): Promise<{
   snapshot: string;
   truncated?: boolean;
   refs: RoleRefMap;
   stats: { lines: number; chars: number; refs: number; interactive: number };
+  newElements?: number;
 }> {
   const snapshot = params.urls
     ? appendSnapshotUrls(params.built.snapshot, await collectSnapshotUrls(params.page))
@@ -351,6 +357,7 @@ async function finalizeRoleSnapshotViaPlaywright(params: {
     snapshot,
     refs: params.built.refs,
     maxChars: params.maxChars,
+    delta: params.delta,
   });
   storeRoleRefsForTarget({
     page: params.page,
@@ -376,11 +383,13 @@ export async function snapshotRoleViaPlaywright(opts: {
   maxChars?: number;
   timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
+  delta?: { mode: RoleSnapshotIdentityMode; previousKeys?: ReadonlySet<string> };
 }): Promise<{
   snapshot: string;
   truncated?: boolean;
   refs: Record<string, { role: string; name?: string; nth?: number }>;
   stats: { lines: number; chars: number; refs: number; interactive: number };
+  newElements?: number;
 }> {
   const page = await prepareSnapshotPageViaPlaywright({
     cdpUrl: opts.cdpUrl,
@@ -411,6 +420,7 @@ export async function snapshotRoleViaPlaywright(opts: {
           mode: "aria",
           urls: opts.urls,
           maxChars: opts.maxChars,
+          delta: opts.delta,
         });
       },
     });
@@ -456,6 +466,7 @@ export async function snapshotRoleViaPlaywright(opts: {
         mode: "role",
         urls: opts.urls,
         maxChars: opts.maxChars,
+        delta: opts.delta,
       });
     },
   });
@@ -494,7 +505,7 @@ export async function navigateViaPlaywright(opts: {
     url,
     ...navigationPolicy,
   });
-  const timeout = resolveNavigationTimeoutMs(opts.timeoutMs);
+  const timeout = resolveBrowserNavigationTimeoutMs(opts.timeoutMs);
   let page = await getPageForTargetId(opts);
   let pageState = ensurePageState(page);
   const navigate = async () =>

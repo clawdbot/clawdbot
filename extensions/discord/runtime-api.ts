@@ -38,7 +38,6 @@ export {
   DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS,
   DISCORD_DEFAULT_LISTENER_TIMEOUT_MS,
   allowListMatches,
-  buildDiscordMediaPayload,
   clearGateways,
   clearPresences,
   createDiscordGatewayPlugin,
@@ -153,14 +152,11 @@ export {
   type ResolveDiscordOutboundSessionRouteParams,
 } from "./runtime-api.send.js";
 export {
-  testing as __testing,
-  testing,
   autoBindSpawnedDiscordSubagent,
   createNoopThreadBindingManager,
   createThreadBindingManager,
   formatThreadBindingDurationLabel,
   getThreadBindingManager,
-  isRecentlyUnboundThreadWebhookMessage,
   listThreadBindingsBySessionKey,
   listThreadBindingsForAccount,
   reconcileAcpThreadBindingsOnStartup,

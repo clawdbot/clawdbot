@@ -7,14 +7,15 @@ import path from "node:path";
 import { URL } from "node:url";
 import { detectMime } from "@openclaw/media-core/mime";
 import { formatByteSize } from "@openclaw/normalization-core";
+import type { Static, TSchema } from "typebox";
+import { Value } from "typebox/value";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
-import { toErrorObject } from "../infra/errors.js";
+import { isMissingPathError, toErrorObject } from "../infra/errors.js";
 import {
   canonicalPathFromExistingAncestor,
   root as fsRoot,
   FsSafeError,
 } from "../infra/fs-safe.js";
-import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
 import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "../infra/local-file-access.js";
 import { decodeWindowsTextFileBuffer } from "../infra/windows-encoding.js";
 import {
@@ -34,8 +35,12 @@ import {
 } from "./agent-tools.params.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
+import {
+  type MemoryWriteProvenanceObserver,
+  withMemoryWriteProvenance,
+} from "./memory-write-provenance.js";
 import { toRelativeWorkspacePath } from "./path-policy.js";
-import type { AgentToolResult } from "./runtime/index.js";
+import type { AgentTool, AgentToolResult } from "./runtime/index.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import {
@@ -44,7 +49,8 @@ import {
   createWriteTool,
   type ReadToolDetails,
   type ReadToolTruncationDetails,
-} from "./sessions/index.js";
+} from "./sessions/tools/index.js";
+import { expandOsHomePrefix } from "./sessions/tools/path-utils.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
 // NOTE(steipete): Upstream read now does file-magic MIME detection; we keep the wrapper
@@ -69,13 +75,34 @@ type SkillReadContent = {
   readContent?: string;
 };
 
+/** Erase a schema-specific session tool only after its input passes that owned schema. */
+function eraseSessionFileTool<TParameters extends TSchema, TDetails>(
+  tool: AgentTool<TParameters, TDetails>,
+): AnyAgentTool {
+  return {
+    ...tool,
+    execute: async (toolCallId, params, signal, onUpdate) => {
+      if (!Value.Check(tool.parameters, params)) {
+        throw new Error(`Invalid parameters for ${tool.name}`);
+      }
+      const typedParams = params as Static<TParameters>;
+      return await tool.execute(
+        toolCallId,
+        typedParams,
+        signal,
+        onUpdate ? (update) => onUpdate(update) : undefined,
+      );
+    },
+  };
+}
+
 type ReadTruncationDetails = {
   truncated: boolean;
   outputLines: number;
+  totalLines: number;
   firstLineExceedsLimit: boolean;
 };
 
-const OFFSET_BEYOND_EOF_RE = /^Offset \d+ is beyond end of file \(\d+ lines total\)$/;
 const READ_CONTINUATION_NOTICE_RE =
   /\n\n\[(?:Showing lines [^\]]*?Use offset=\d+ to continue\.|\d+ more lines in file\. Use offset=\d+ to continue\.)\]\s*$/;
 const DAILY_MEMORY_PATH_RE = /^memory\/\d{4}-\d{2}-\d{2}\.md$/;
@@ -150,13 +177,13 @@ function withToolResultText(
   if (replaced) {
     return {
       ...result,
-      content: nextContent as unknown as AgentToolResult<unknown>["content"],
+      content: nextContent,
     };
   }
-  const textBlock = { type: "text", text } as unknown as TextContentBlock;
+  const textBlock = { type: "text", text } satisfies TextContentBlock;
   return {
     ...result,
-    content: [textBlock] as unknown as AgentToolResult<unknown>["content"],
+    content: [textBlock],
   };
 }
 
@@ -180,9 +207,15 @@ function extractReadTruncationDetails(
     typeof outputLinesRaw === "number" && Number.isFinite(outputLinesRaw)
       ? Math.max(0, Math.floor(outputLinesRaw))
       : 0;
+  const totalLinesRaw = record.totalLines;
+  const totalLines =
+    typeof totalLinesRaw === "number" && Number.isFinite(totalLinesRaw)
+      ? Math.max(0, Math.floor(totalLinesRaw))
+      : 0;
   return {
     truncated: true,
     outputLines,
+    totalLines,
     firstLineExceedsLimit: record.firstLineExceedsLimit === true,
   };
 }
@@ -220,22 +253,6 @@ function stripReadTruncationContentDetails(
   };
 }
 
-function isOffsetBeyondEof(error: unknown, args: Record<string, unknown>): boolean {
-  const offset = args.offset;
-  return (
-    typeof offset === "number" &&
-    Number.isFinite(offset) &&
-    offset > 0 &&
-    error instanceof Error &&
-    OFFSET_BEYOND_EOF_RE.test(error.message)
-  );
-}
-
-function emptyReadResult(): AgentToolResult<unknown> {
-  const textBlock = { type: "text", text: "" } satisfies TextContentBlock;
-  return { content: [textBlock], details: undefined };
-}
-
 function missingDailyMemoryReadResult(relativePath: string): AgentToolResult<unknown> {
   return {
     content: [
@@ -264,9 +281,10 @@ function normalizeDailyMemoryReadPath(value: unknown): string | undefined {
 }
 
 function isNotFoundError(error: unknown): boolean {
-  if (typeof (error as NodeJS.ErrnoException | undefined)?.code === "string") {
-    return (error as NodeJS.ErrnoException).code === "ENOENT";
+  if (isMissingPathError(error)) {
+    return true;
   }
+  // Injected tool implementations may expose only their legacy human-readable error.
   if (!(error instanceof Error)) {
     return false;
   }
@@ -282,9 +300,6 @@ async function executeReadPage(params: {
   try {
     return await params.base.execute(params.toolCallId, params.args, params.signal);
   } catch (error) {
-    if (isOffsetBeyondEof(error, params.args)) {
-      return emptyReadResult();
-    }
     const missingDailyMemoryPath = normalizeDailyMemoryReadPath(params.args.path);
     if (missingDailyMemoryPath && isNotFoundError(error)) {
       return missingDailyMemoryReadResult(missingDailyMemoryPath);
@@ -334,12 +349,16 @@ async function executeReadWithAdaptivePaging(params: {
     }
 
     const truncation = extractReadTruncationDetails(pageResult);
+    const pageEndLine = nextOffset - 1 + (truncation?.outputLines ?? 0);
+    const reachedEof =
+      Boolean(truncation?.truncated) && pageEndLine >= (truncation?.totalLines ?? 0);
     const canContinue =
       Boolean(truncation?.truncated) &&
       !truncation?.firstLineExceedsLimit &&
       (truncation?.outputLines ?? 0) > 0 &&
+      pageEndLine < (truncation?.totalLines ?? 0) &&
       page < MAX_ADAPTIVE_READ_PAGES - 1;
-    const pageText = canContinue ? stripReadContinuationNotice(rawText) : rawText;
+    const pageText = canContinue || reachedEof ? stripReadContinuationNotice(rawText) : rawText;
     const delimiter = aggregatedText && pageText ? "\n\n" : "";
     const nextBytes = Buffer.byteLength(`${delimiter}${pageText}`, "utf-8");
 
@@ -880,15 +899,20 @@ export function wrapToolWorkspaceRootGuardWithOptions(
 type SandboxToolParams = {
   root: string;
   bridge: SandboxFsBridge;
+  memoryWriteProvenance?: MemoryWriteProvenanceObserver;
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
 };
 
 /** Create a sandbox-backed read tool with OpenClaw result normalization. */
-export function createSandboxedReadTool(params: SandboxToolParams) {
-  const base = createReadTool(params.root, {
-    operations: createSandboxReadOperations(params),
-  }) as unknown as AnyAgentTool;
+export function createSandboxedReadTool(
+  params: SandboxToolParams & { createTool?: typeof createReadTool },
+) {
+  const base = eraseSessionFileTool(
+    (params.createTool ?? createReadTool)(params.root, {
+      operations: createSandboxReadOperations(params),
+    }),
+  );
   return createOpenClawReadTool(base, {
     modelContextWindowTokens: params.modelContextWindowTokens,
     imageSanitization: params.imageSanitization,
@@ -896,34 +920,60 @@ export function createSandboxedReadTool(params: SandboxToolParams) {
 }
 
 /** Create a sandbox-backed write tool with required-parameter validation. */
-export function createSandboxedWriteTool(params: SandboxToolParams) {
-  const base = createWriteTool(params.root, {
-    operations: createSandboxWriteOperations(params),
-  }) as unknown as AnyAgentTool;
+export function createSandboxedWriteTool(
+  params: SandboxToolParams & { createTool?: typeof createWriteTool },
+) {
+  const base = eraseSessionFileTool(
+    (params.createTool ?? createWriteTool)(params.root, {
+      operations: createSandboxWriteOperations(params),
+    }),
+  );
   return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
 }
 
 /** Create a sandbox-backed edit tool with required-parameter validation. */
-export function createSandboxedEditTool(params: SandboxToolParams) {
-  const base = createEditTool(params.root, {
-    operations: createSandboxEditOperations(params),
-  }) as unknown as AnyAgentTool;
+export function createSandboxedEditTool(
+  params: SandboxToolParams & { createTool?: typeof createEditTool },
+) {
+  const base = eraseSessionFileTool(
+    (params.createTool ?? createEditTool)(params.root, {
+      operations: createSandboxEditOperations(params),
+    }),
+  );
   return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.edit);
 }
 
 /** Create a host workspace write tool using guarded filesystem operations. */
-export function createHostWorkspaceWriteTool(root: string, options?: { workspaceOnly?: boolean }) {
-  const base = createWriteTool(root, {
-    operations: createHostWriteOperations(root, options),
-  }) as unknown as AnyAgentTool;
+export function createHostWorkspaceWriteTool(
+  root: string,
+  options?: {
+    workspaceOnly?: boolean;
+    memoryWriteProvenance?: MemoryWriteProvenanceObserver;
+    createTool?: typeof createWriteTool;
+  },
+) {
+  const base = eraseSessionFileTool(
+    (options?.createTool ?? createWriteTool)(root, {
+      operations: createHostWriteOperations(root, options),
+    }),
+  );
   return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
 }
 
 /** Create a host workspace edit tool using guarded filesystem operations. */
-export function createHostWorkspaceEditTool(root: string, options?: { workspaceOnly?: boolean }) {
-  const base = createEditTool(root, {
-    operations: createHostEditOperations(root, options),
-  }) as unknown as AnyAgentTool;
+export function createHostWorkspaceEditTool(
+  root: string,
+  options?: {
+    workspaceOnly?: boolean;
+    memoryWriteProvenance?: MemoryWriteProvenanceObserver;
+    createTool?: typeof createEditTool;
+  },
+) {
+  const base = eraseSessionFileTool(
+    (options?.createTool ?? createEditTool)(root, {
+      operations: createHostEditOperations(root, options),
+    }),
+  );
   return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.edit);
 }
 
@@ -986,13 +1036,15 @@ export function wrapReadToolWithSkillContent(
     }
     return content;
   };
-  const virtualBase = createReadTool("/", {
-    operations: {
-      resolvePath: (filePath) => filePath,
-      access: async (filePath) => void readContent(filePath),
-      readFile: async (filePath) => Buffer.from(readContent(filePath), "utf8"),
-    },
-  }) as unknown as AnyAgentTool;
+  const virtualBase = eraseSessionFileTool(
+    createReadTool("/", {
+      operations: {
+        resolvePath: (filePath) => filePath,
+        access: async (filePath) => void readContent(filePath),
+        readFile: async (filePath) => Buffer.from(readContent(filePath), "utf8"),
+      },
+    }),
+  );
   const virtualRead = createOpenClawReadTool(virtualBase, options);
   return {
     ...tool,
@@ -1027,37 +1079,44 @@ function createSandboxReadOperations(params: SandboxToolParams) {
     readFile: (absolutePath: string) =>
       params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
     access: (absolutePath: string) => assertSandboxFileExists(params, absolutePath),
-    detectImageMimeType: async (absolutePath: string) => {
-      const buffer = await params.bridge.readFile({ filePath: absolutePath, cwd: params.root });
+    detectImageMimeType: async (absolutePath: string, buffer: Buffer) => {
       const mime = await detectMime({ buffer, filePath: absolutePath });
-      return mime && mime.startsWith("image/") ? mime : undefined;
+      return mime?.startsWith("image/") ? mime : undefined;
     },
   } as const;
 }
 
 function createSandboxWriteOperations(params: SandboxToolParams) {
-  return {
-    mkdir: async (dir: string) => {
-      await params.bridge.mkdirp({ filePath: dir, cwd: params.root });
-    },
-    writeFile: async (absolutePath: string, content: string) => {
-      await params.bridge.writeFile({ filePath: absolutePath, cwd: params.root, data: content });
-    },
-    readFile: (absolutePath: string) =>
-      params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
-    statFile: (absolutePath: string) =>
-      params.bridge.stat({ filePath: absolutePath, cwd: params.root }),
-  } as const;
+  return withMemoryWriteProvenance(
+    {
+      mkdir: async (dir: string) => {
+        await params.bridge.mkdirp({ filePath: dir, cwd: params.root });
+      },
+      writeFile: async (absolutePath: string, content: string) => {
+        await params.bridge.writeFile({ filePath: absolutePath, cwd: params.root, data: content });
+      },
+      readFile: (absolutePath: string) =>
+        params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
+      statFile: (absolutePath: string) =>
+        params.bridge.stat({ filePath: absolutePath, cwd: params.root }),
+    } as const,
+    params.memoryWriteProvenance,
+  );
 }
 
 function createSandboxEditOperations(params: SandboxToolParams) {
-  return {
-    readFile: (absolutePath: string) =>
-      params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
-    writeFile: (absolutePath: string, content: string) =>
-      params.bridge.writeFile({ filePath: absolutePath, cwd: params.root, data: content }),
-    access: (absolutePath: string) => assertSandboxFileExists(params, absolutePath),
-  } as const;
+  return withMemoryWriteProvenance(
+    {
+      readFile: (absolutePath: string) =>
+        params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
+      writeFile: (absolutePath: string, content: string) =>
+        params.bridge.writeFile({ filePath: absolutePath, cwd: params.root, data: content }),
+      statFile: (absolutePath: string) =>
+        params.bridge.stat({ filePath: absolutePath, cwd: params.root }),
+      access: (absolutePath: string) => assertSandboxFileExists(params, absolutePath),
+    } as const,
+    params.memoryWriteProvenance,
+  );
 }
 
 async function assertSandboxFileExists(params: SandboxToolParams, absolutePath: string) {
@@ -1065,15 +1124,13 @@ async function assertSandboxFileExists(params: SandboxToolParams, absolutePath: 
   if (!stat) {
     throw createFsAccessError("ENOENT", absolutePath);
   }
-}
-
-function expandTildeToOsHome(filePath: string): string {
-  const home = resolveOsHomeDir();
-  return home ? expandHomePrefix(filePath, { home }) : filePath;
+  if (stat.type === "directory") {
+    throw createFsAccessError("EISDIR", absolutePath);
+  }
 }
 
 function resolveHostPath(filePath: string): string {
-  return path.resolve(expandTildeToOsHome(filePath));
+  return path.resolve(expandOsHomePrefix(filePath));
 }
 
 async function writeHostFile(absolutePath: string, content: string) {
@@ -1114,25 +1171,41 @@ async function writeWorkspaceFile(
   // succeeds. Eagerly starting it would orphan a rejecting root promise as an unhandled
   // rejection when validation fails first — the readFile/access paths already defer the same way.
   const relative = await toCanonicalRelativeWorkspacePath(root, absolutePath);
+  // fs-safe 0.5.2 atomically replaces a final symlink on write. The workspace
+  // contract rejects symlink write targets so the link and its target survive.
+  const rootReal = await fs.realpath(root);
+  const targetStat = await fs.lstat(path.resolve(rootReal, relative)).catch(() => undefined);
+  if (targetStat?.isSymbolicLink()) {
+    throw new FsSafeError("symlink", `refusing to write to symlink: ${absolutePath}`);
+  }
   await (await getRoot()).write(relative, content, { mkdir: true });
 }
 
-function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {
+function createHostWriteOperations(
+  root: string,
+  options?: {
+    workspaceOnly?: boolean;
+    memoryWriteProvenance?: MemoryWriteProvenanceObserver;
+  },
+) {
   const workspaceOnly = options?.workspaceOnly ?? false;
 
   if (!workspaceOnly) {
     // When workspaceOnly is false, allow writes anywhere on the host
-    return {
-      mkdir: async (dir: string) => {
-        const resolved = resolveHostPath(dir);
-        await fs.mkdir(resolved, { recursive: true });
-      },
-      writeFile: writeHostFile,
-      readFile: async (absolutePath: string) =>
-        fs.readFile(path.resolve(expandTildeToOsHome(absolutePath))),
-      statFile: (absolutePath: string) =>
-        statHostFile(path.resolve(expandTildeToOsHome(absolutePath))),
-    } as const;
+    return withMemoryWriteProvenance(
+      {
+        mkdir: async (dir: string) => {
+          const resolved = resolveHostPath(dir);
+          await fs.mkdir(resolved, { recursive: true });
+        },
+        writeFile: writeHostFile,
+        readFile: async (absolutePath: string) =>
+          fs.readFile(path.resolve(expandOsHomePrefix(absolutePath))),
+        statFile: (absolutePath: string) =>
+          statHostFile(path.resolve(expandOsHomePrefix(absolutePath))),
+      } as const,
+      options?.memoryWriteProvenance,
+    );
   }
 
   // When workspaceOnly is true, enforce workspace boundary. Resolve the fs-safe
@@ -1141,40 +1214,56 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
   // orphan a rejecting promise as "Unhandled promise rejection: root dir not found".
   let rootPromise: ReturnType<typeof fsRoot> | undefined;
   const getRoot = () => (rootPromise ??= fsRoot(root));
-  return {
-    mkdir: async (dir: string) => {
-      const relative = toRelativeWorkspacePath(root, dir, { allowRoot: true });
-      const resolved = relative ? path.resolve(root, relative) : path.resolve(root);
-      await assertSandboxPath({ filePath: resolved, cwd: root, root });
-      await fs.mkdir(resolved, { recursive: true });
-    },
-    writeFile: (absolutePath: string, content: string) =>
-      writeWorkspaceFile(root, getRoot, absolutePath, content),
-    readFile: async (absolutePath: string) => {
-      const relative = toRelativeWorkspacePath(root, absolutePath);
-      return (await (await getRoot()).read(relative)).buffer;
-    },
-    statFile: async (absolutePath: string) => {
-      const relative = toRelativeWorkspacePath(root, absolutePath);
-      return statHostFile(path.resolve(root, relative));
-    },
-  } as const;
+  return withMemoryWriteProvenance(
+    {
+      mkdir: async (dir: string) => {
+        const relative = toRelativeWorkspacePath(root, dir, { allowRoot: true });
+        const resolved = relative ? path.resolve(root, relative) : path.resolve(root);
+        await assertSandboxPath({ filePath: resolved, cwd: root, root });
+        await fs.mkdir(resolved, { recursive: true });
+      },
+      writeFile: (absolutePath: string, content: string) =>
+        writeWorkspaceFile(root, getRoot, absolutePath, content),
+      readFile: async (absolutePath: string) => {
+        // Canonicalize symlink parents like the write path: fs-safe 0.5.2
+        // rejects intermediate symlinks by default, but in-workspace symlink
+        // parents are part of the workspace contract.
+        const relative = await toCanonicalRelativeWorkspacePath(root, absolutePath);
+        return (await (await getRoot()).read(relative)).buffer;
+      },
+      statFile: async (absolutePath: string) => {
+        const relative = toRelativeWorkspacePath(root, absolutePath);
+        return statHostFile(path.resolve(root, relative));
+      },
+    } as const,
+    options?.memoryWriteProvenance,
+  );
 }
 
-function createHostEditOperations(root: string, options?: { workspaceOnly?: boolean }) {
+function createHostEditOperations(
+  root: string,
+  options?: {
+    workspaceOnly?: boolean;
+    memoryWriteProvenance?: MemoryWriteProvenanceObserver;
+  },
+) {
   const workspaceOnly = options?.workspaceOnly ?? false;
 
   if (!workspaceOnly) {
     // When workspaceOnly is false, allow edits anywhere on the host
-    return {
-      readFile: async (absolutePath: string) => {
-        return await fs.readFile(resolveHostPath(absolutePath));
-      },
-      writeFile: writeHostFile,
-      access: async (absolutePath: string) => {
-        await fs.access(resolveHostPath(absolutePath));
-      },
-    } as const;
+    return withMemoryWriteProvenance(
+      {
+        readFile: async (absolutePath: string) => {
+          return await fs.readFile(resolveHostPath(absolutePath));
+        },
+        writeFile: writeHostFile,
+        statFile: (absolutePath: string) => statHostFile(resolveHostPath(absolutePath)),
+        access: async (absolutePath: string) => {
+          await fs.access(resolveHostPath(absolutePath));
+        },
+      } as const,
+      options?.memoryWriteProvenance,
+    );
   }
 
   // When workspaceOnly is true, enforce workspace boundary. Resolve the fs-safe
@@ -1183,42 +1272,53 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
   // orphan a rejecting promise as "Unhandled promise rejection: root dir not found".
   let rootPromise: ReturnType<typeof fsRoot> | undefined;
   const getRoot = () => (rootPromise ??= fsRoot(root));
-  return {
-    readFile: async (absolutePath: string) => {
-      const relative = toRelativeWorkspacePath(root, absolutePath);
-      const safeRead = await (await getRoot()).read(relative);
-      return safeRead.buffer;
-    },
-    writeFile: (absolutePath: string, content: string) =>
-      writeWorkspaceFile(root, getRoot, absolutePath, content),
-    access: async (absolutePath: string) => {
-      let relative: string;
-      try {
-        relative = toRelativeWorkspacePath(root, absolutePath);
-      } catch {
-        // Path escapes workspace root.  Don't throw here – the upstream
-        // library replaces any `access` error with a misleading "File not
-        // found" message.  By returning silently the subsequent `readFile`
-        // call will throw the same "Path escapes workspace root" error
-        // through a code-path that propagates the original message.
-        return;
-      }
-      try {
-        const opened = await (await getRoot()).open(relative);
-        await opened.handle.close().catch(() => {});
-      } catch (error) {
-        if (error instanceof FsSafeError && error.code === "not-found") {
-          throw createFsAccessError("ENOENT", absolutePath);
-        }
-        if (error instanceof FsSafeError && error.code === "outside-workspace") {
-          // Don't throw here – see the comment above about the upstream
-          // library swallowing access errors as "File not found".
+  return withMemoryWriteProvenance(
+    {
+      readFile: async (absolutePath: string) => {
+        // Canonicalize symlink parents like the write path: fs-safe 0.5.2
+        // rejects intermediate symlinks by default, but in-workspace symlink
+        // parents are part of the workspace contract.
+        const relative = await toCanonicalRelativeWorkspacePath(root, absolutePath);
+        const safeRead = await (await getRoot()).read(relative);
+        return safeRead.buffer;
+      },
+      writeFile: (absolutePath: string, content: string) =>
+        writeWorkspaceFile(root, getRoot, absolutePath, content),
+      statFile: async (absolutePath: string) => {
+        const relative = toRelativeWorkspacePath(root, absolutePath);
+        return statHostFile(path.resolve(root, relative));
+      },
+      access: async (absolutePath: string) => {
+        let relative: string;
+        try {
+          // Canonicalized like readFile so in-workspace symlink parents pass.
+          relative = await toCanonicalRelativeWorkspacePath(root, absolutePath);
+        } catch {
+          // Path escapes workspace root.  Don't throw here – the upstream
+          // library replaces any `access` error with a misleading "File not
+          // found" message.  By returning silently the subsequent `readFile`
+          // call will throw the same "Path escapes workspace root" error
+          // through a code-path that propagates the original message.
           return;
         }
-        throw error;
-      }
-    },
-  } as const;
+        try {
+          const opened = await (await getRoot()).open(relative);
+          await opened.handle.close().catch(() => {});
+        } catch (error) {
+          if (error instanceof FsSafeError && error.code === "not-found") {
+            throw createFsAccessError("ENOENT", absolutePath);
+          }
+          if (error instanceof FsSafeError && error.code === "outside-workspace") {
+            // Don't throw here – see the comment above about the upstream
+            // library swallowing access errors as "File not found".
+            return;
+          }
+          throw error;
+        }
+      },
+    } as const,
+    options?.memoryWriteProvenance,
+  );
 }
 
 async function toCanonicalRelativeWorkspacePath(

@@ -211,6 +211,7 @@ function startTelegramAccount(
 function latestMonitorOptions(): {
   token?: string;
   accountId?: string;
+  ownerAgentId?: string;
   useWebhook?: boolean;
   botInfo?: unknown;
 } {
@@ -282,26 +283,34 @@ describe("telegramPlugin gateway startup", () => {
     );
   });
 
-  it("stops before monitor startup when getMe rejects the token", async () => {
-    installTelegramRuntime();
-    probeTelegram.mockResolvedValue({
-      ok: false,
-      status: 401,
-      error: "Unauthorized",
-      elapsedMs: 12,
-    });
+  it.each([401, 404] as const)(
+    "stops before monitor startup when getMe rejects the token with %s",
+    async (status) => {
+      installTelegramRuntime();
+      probeTelegram.mockResolvedValue({
+        ok: false,
+        status,
+        error: "Unauthorized",
+        elapsedMs: 12,
+      });
 
-    const { ctx, task } = startTelegramAccount("ops");
+      const { ctx, task } = startTelegramAccount("ops");
 
-    await expect(task).rejects.toThrow(
-      'Telegram bot token unauthorized for account "ops" (getMe returned 401',
-    );
-    await expect(task).rejects.toThrow("channels.telegram.accounts.ops.botToken/tokenFile");
-    expect(monitorTelegramProvider).not.toHaveBeenCalled();
-    expect(ctx.log?.error).toHaveBeenCalledWith(
-      '[ops] Telegram bot token unauthorized for account "ops" (getMe returned 401 from Telegram; source: config token). Update channels.telegram.accounts.ops.botToken/tokenFile with the current BotFather token.',
-    );
-  });
+      await expect(task).rejects.toThrow(
+        `Telegram bot token unauthorized for account "ops" (getMe returned ${status}`,
+      );
+      await expect(task).rejects.toThrow("channels.telegram.accounts.ops.botToken/tokenFile");
+      expect(monitorTelegramProvider).not.toHaveBeenCalled();
+      expect(ctx.log?.error).toHaveBeenCalledWith(
+        `[ops] Telegram bot token unauthorized for account "ops" (getMe returned ${status} from Telegram; source: config token). Update channels.telegram.accounts.ops.botToken/tokenFile with the current BotFather token.`,
+      );
+      expect(ctx.getStatus()).toMatchObject({
+        lifecycle: "blocked",
+        terminalDisconnect: true,
+        lastError: expect.stringContaining(`getMe returned ${status}`),
+      });
+    },
+  );
 
   it("keeps existing fallback startup for non-auth probe failures", async () => {
     installTelegramRuntime();
@@ -320,6 +329,60 @@ describe("telegramPlugin gateway startup", () => {
     expect(monitorOptions.token).toBe("123456:bad-token");
     expect(monitorOptions.accountId).toBe("default");
     expect(monitorOptions.useWebhook).toBe(false);
+  });
+
+  it("starts a multi-agent account with its routed owner", async () => {
+    installTelegramRuntime();
+    probeTelegram.mockResolvedValue({
+      ok: false,
+      status: 500,
+      error: "Bad Gateway",
+      elapsedMs: 12,
+    });
+    monitorTelegramProvider.mockResolvedValue(undefined);
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, ops: {}, research: {} },
+      },
+      channels: { telegram: { botToken: "123456:bad-token" } },
+      bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "*" } }],
+    } as OpenClawConfig;
+    const account = telegramPlugin.config.resolveAccount(cfg, "default");
+    const startAccount = telegramPlugin.gateway?.startAccount;
+    if (!startAccount) {
+      throw new Error("expected Telegram startAccount gateway handler");
+    }
+
+    await startAccount(createStartAccountContext({ account, cfg }));
+
+    expect(latestMonitorOptions()).toMatchObject({
+      accountId: "default",
+      ownerAgentId: "main",
+    });
+  });
+
+  it("rejects genuinely ambiguous multi-agent account ownership before startup", async () => {
+    installTelegramRuntime();
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, ops: {}, research: {} },
+      },
+      channels: { telegram: { botToken: "123456:bad-token" } },
+    } as OpenClawConfig;
+    const account = telegramPlugin.config.resolveAccount(cfg, "default");
+    const startAccount = telegramPlugin.gateway?.startAccount;
+    if (!startAccount) {
+      throw new Error("expected Telegram startAccount gateway handler");
+    }
+
+    await expect(startAccount(createStartAccountContext({ account, cfg }))).rejects.toMatchObject({
+      name: "AgentSelectionRequiredError",
+      code: "AGENT_SELECTION_REQUIRED",
+    });
+    expect(probeTelegram).not.toHaveBeenCalled();
+    expect(monitorTelegramProvider).not.toHaveBeenCalled();
   });
 
   it("uses the getMe request guard for startup probe timeout", async () => {
@@ -552,7 +615,7 @@ describe("telegramPlugin gateway startup", () => {
     ).resolves.toBeNull();
   });
 
-  it("honors higher per-account timeoutSeconds for startup probe", async () => {
+  it("uses the built-in startup probe timeout", async () => {
     installTelegramRuntime();
     probeTelegram.mockResolvedValue({
       ok: true,
@@ -565,7 +628,7 @@ describe("telegramPlugin gateway startup", () => {
     const { ctx, task } = startTelegramAccount("ops", { timeoutSeconds: 60 });
 
     await expect(task).resolves.toBeUndefined();
-    expect(probeTelegram).toHaveBeenCalledWith("123456:bad-token", 60_000, {
+    expect(probeTelegram).toHaveBeenCalledWith("123456:bad-token", 15_000, {
       abortSignal: ctx.abortSignal,
       accountId: "ops",
       proxyUrl: undefined,

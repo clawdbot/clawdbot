@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { validateTerminalOpenParams, validateTerminalUploadParams } from "../index.js";
-import { MAX_TERMINAL_UPLOAD_BASE64_LENGTH } from "../terminal-upload-constants.js";
+import { MAX_TERMINAL_UPLOAD_BASE64_LENGTH } from "./terminal-constants.js";
 
 describe("terminal protocol", () => {
   it("accepts a typed catalog reference and rejects client command fields", () => {

@@ -1,4 +1,5 @@
 import { consume } from "@lit/context";
+import { initialState, Task } from "@lit/task";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -7,15 +8,23 @@ import type {
   SystemAgentSetupActivateResult,
   SystemAgentSetupDetectResult,
 } from "../../api/types.ts";
-import { titleForRoute } from "../../app-navigation.ts";
+import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { fetchCatalogIconBlobUrl } from "../plugins/icon-loader.ts";
+import type { ModelSetupDetectionConnection } from "./detect-cache.ts";
+import { ModelSetupIconLoader } from "./model-setup-icon-loader.ts";
+import {
+  findPreparedModelCandidate,
+  type ModelSetupPrepareOption,
+  providerAutoSetupKind,
+} from "./prepare-options.ts";
 import { detectModelSetup, verifyModelSetup } from "./rpc.ts";
 import {
   activationTargetId,
@@ -28,23 +37,43 @@ import {
   type ModelSetupVerifyState,
   type ModelSetupWizardState,
 } from "./state.ts";
-import { renderModelSetup } from "./view.ts";
+import { renderModelSetup, resolveSetupBrandIcon } from "./view.ts";
 import { ModelSetupWizardRunner } from "./wizard-runner.ts";
+import type { ModelSetupWizardCompletion, ModelSetupWizardStartMethod } from "./wizard-runner.ts";
+
+const MODEL_SETUP_DOCS_URL = "https://docs.openclaw.ai/concepts/model-providers";
 
 type Candidate = SystemAgentSetupDetectResult["candidates"][number];
 type AuthOption = NonNullable<SystemAgentSetupDetectResult["authOptions"]>[number];
 
 export type ModelSetupRouteData = {
   state: ModelSetupPageState;
-  client: GatewayBrowserClient | null;
+  connection: ModelSetupDetectionConnection;
   firstRun: boolean;
 };
 
 function errorMessage(error: unknown): string {
-  if (error instanceof Error && error.message.trim()) {
-    return error.message;
+  return formatUiError(error, t("modelSetup.errors.requestFailed"));
+}
+
+type BoundModelResult<T> =
+  | { client: GatewayBrowserClient; value: T }
+  | { client: GatewayBrowserClient; error: unknown };
+
+type ActivationTaskResult = {
+  result: SystemAgentSetupActivateResult;
+  refreshError: string | null;
+};
+
+async function captureModelResult<T>(
+  client: GatewayBrowserClient,
+  load: () => Promise<T>,
+): Promise<BoundModelResult<T>> {
+  try {
+    return { client, value: await load() };
+  } catch (error) {
+    return { client, error };
   }
-  return typeof error === "string" && error.trim() ? error : t("modelSetup.errors.requestFailed");
 }
 
 export class ModelSetupPage extends OpenClawLightDomElement {
@@ -57,83 +86,260 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   @state() private activationState: ModelSetupActivationState = { phase: "idle" };
   @state() private verifyState: ModelSetupVerifyState = { phase: "idle" };
   @state() private wizardState: ModelSetupWizardState = { phase: "idle" };
+  @state() private wizardMode: "auth" | "prepare" = "auth";
   @state() private wizardValue: unknown;
   @state() private manualProviderId = "";
   @state() private manualApiKey = "";
   @state() private manualError: string | null = null;
   @state() private moreSignInOpen = false;
   @state() private iconUrls: Record<string, string> = {};
+  @state() private setupRefreshWarning: string | null = null;
 
-  private observedClient: GatewayBrowserClient | null = null;
-  private dataClient: GatewayBrowserClient | null = null;
-  private detectAbort: AbortController | null = null;
-  private activationAbort: AbortController | null = null;
-  private verifyAbort: AbortController | null = null;
-  private detectEpoch = 0;
-  private activationEpoch = 0;
-  private verifyEpoch = 0;
-  private readonly iconMisses = new Set<string>();
-  private readonly iconRequests = new Map<
-    string,
-    { controller: AbortController; timeout: ReturnType<typeof setTimeout> }
-  >();
-  private readonly subscriptions = new SubscriptionsController(this).watch(
-    () => this.context?.gateway,
-    (gateway, notify) => gateway.subscribe(notify),
+  private observedConnection: (ModelSetupRouteData["connection"] & { connected: boolean }) | null =
+    null;
+  private pendingPrepareOption: ModelSetupPrepareOption | null = null;
+  private wizardMutationGeneration = 0;
+  private wizardMutationActive = false;
+  private readonly iconLoader = new ModelSetupIconLoader(
+    () => this.context,
+    (iconUrl) => this.currentIconUrls().has(iconUrl),
+    (urls) => (this.iconUrls = urls),
   );
+  private readonly subscriptions = new SubscriptionsController(this)
+    .watch(
+      () => this.context?.gateway,
+      (gateway, notify) => gateway.subscribe(notify),
+      (gateway) => this.synchronizeGateway(gateway.snapshot),
+    )
+    .watch(
+      () => this.context?.agentSelection,
+      (selection, notify) => selection.subscribe(notify),
+      () => this.synchronizeGateway(this.context.gateway.snapshot),
+    );
   private readonly wizard = new ModelSetupWizardRunner({
     getClient: () => this.context?.gateway.snapshot.client ?? null,
+    getAgentId: () => this.context?.agentSelection.state.selectedId ?? null,
     onChange: (next) => {
       const previousStep = this.wizardState.phase === "step" ? this.wizardState.step.id : null;
-      this.wizardState = next;
+      this.wizardState =
+        next.phase === "step" && this.wizardMutationActive ? { ...next, busy: true } : next;
       if (next.phase === "step" && next.step.id !== previousStep) {
         this.wizardValue = initialWizardValue(next.step);
       }
     },
-    onDone: () => void this.handleWizardDone(),
     requestFailedMessage: () => t("modelSetup.errors.requestFailed"),
     cancelledMessage: () => t("modelSetup.wizard.cancelled"),
+    sessionExpiredMessage: () => t("modelSetup.wizard.sessionExpired"),
+  });
+
+  private readonly detectTask = new Task<
+    readonly [GatewayBrowserClient | null, string | null, object | null],
+    BoundModelResult<SystemAgentSetupDetectResult> & { agentId: string | null; token: object }
+  >(this, {
+    autoRun: false,
+    args: () => {
+      const client = this.context?.gateway.snapshot.client ?? null;
+      return [
+        this.canUseSetup(client) ? client : null,
+        this.context?.agentSelection.state.selectedId ?? null,
+        null,
+      ] as const;
+    },
+    task: async ([client, agentId, token], { signal }) =>
+      client && token
+        ? {
+            ...(await captureModelResult(client, () =>
+              detectModelSetup(client, agentId ?? undefined, signal),
+            )),
+            agentId,
+            token,
+          }
+        : initialState,
+    onComplete: (outcome) => {
+      if (
+        this.context.gateway.snapshot.client !== outcome.client ||
+        this.context.agentSelection.state.selectedId !== outcome.agentId
+      ) {
+        return;
+      }
+      if ("error" in outcome) {
+        this.pageState = { phase: "detect-error", message: errorMessage(outcome.error) };
+        return;
+      }
+      this.pageState = { phase: "ready", result: outcome.value };
+      this.syncManualProvider(this.pageState);
+    },
+  });
+
+  private readonly activationTask = new Task<
+    readonly [GatewayBrowserClient | null, SystemAgentSetupActivateParams | null],
+    BoundModelResult<ActivationTaskResult>
+  >(this, {
+    autoRun: false,
+    args: () => [null, null],
+    task: ([client, params], { signal }) => {
+      if (!client || !params) {
+        return initialState;
+      }
+      return captureModelResult(client, async () => {
+        const mutation = await this.context.runtimeConfig.runExternalMutation((mutationClient) => {
+          if (mutationClient !== client) {
+            throw new Error("Connection changed before model activation started.");
+          }
+          return mutationClient.request<SystemAgentSetupActivateResult>(
+            "openclaw.setup.activate",
+            params,
+            {
+              timeoutMs: activationTimeoutForKind(params.kind),
+              signal,
+            },
+          );
+        });
+        if (!mutation.ok) {
+          throw new Error(mutation.error);
+        }
+        return {
+          result: mutation.value,
+          refreshError: mutation.refresh.ok ? null : mutation.refresh.error,
+        };
+      });
+    },
+    onComplete: (outcome) => {
+      const current = this.activationState;
+      if (current.phase !== "testing" || this.context.gateway.snapshot.client !== outcome.client) {
+        return;
+      }
+      if ("error" in outcome) {
+        this.activationState = {
+          phase: "failure",
+          targetId: current.targetId,
+          status: "unknown",
+          error: errorMessage(outcome.error),
+        };
+        return;
+      }
+      const activationState = mapActivationResult({
+        result: outcome.value.result,
+        targetId: current.targetId,
+        fallbackError: t("modelSetup.errors.activationFailed"),
+      });
+      this.activationState =
+        activationState.phase === "success" && outcome.value.refreshError
+          ? { ...activationState, warning: outcome.value.refreshError }
+          : activationState;
+      if (this.activationState.phase === "success") {
+        this.manualApiKey = "";
+      }
+    },
+  });
+
+  private readonly verifyTask = new Task<
+    readonly [GatewayBrowserClient | null, string | null],
+    BoundModelResult<Awaited<ReturnType<typeof verifyModelSetup>>> & { agentId: string | null }
+  >(this, {
+    autoRun: false,
+    args: () => [null, null],
+    task: async ([client, agentId], { signal }) =>
+      client
+        ? {
+            ...(await captureModelResult(client, () =>
+              verifyModelSetup(client, agentId ?? undefined, signal),
+            )),
+            agentId,
+          }
+        : initialState,
+    onComplete: (outcome) => {
+      if (
+        this.context.gateway.snapshot.client !== outcome.client ||
+        this.context.agentSelection.state.selectedId !== outcome.agentId
+      ) {
+        return;
+      }
+      this.verifyState =
+        "error" in outcome
+          ? { phase: "failed", status: "unknown", error: errorMessage(outcome.error) }
+          : mapVerifyResult(outcome.value);
+    },
   });
 
   override disconnectedCallback() {
-    this.detectAbort?.abort();
-    this.activationAbort?.abort();
-    this.verifyAbort?.abort();
-    this.resetIcons();
+    this.wizardMutationGeneration += 1;
+    this.wizardMutationActive = false;
+    void this.detectTask.run([null, null, null]);
+    void this.activationTask.run([null, null]);
+    void this.verifyTask.run([null, null]);
+    this.iconLoader.reset();
     void this.wizard.cancel();
     this.subscriptions.clear();
     super.disconnectedCallback();
   }
 
   override willUpdate(changed: PropertyValues) {
+    const snapshot = this.context.gateway.snapshot;
     if (changed.has("routeData") && this.routeData) {
-      this.pageState = this.routeData.state;
-      this.dataClient = this.routeData.client;
-      this.observedClient = this.routeData.client;
-      this.syncManualProvider(this.routeData.state);
+      const { connection } = this.routeData;
+      const current =
+        snapshot.phase === "connected" &&
+        snapshot.client === connection.client &&
+        snapshot.hello === connection.hello &&
+        this.context.agentSelection.state.selectedId === connection.agentId;
+      if (current) {
+        this.pageState = this.routeData.state;
+        this.observedConnection = { ...connection, connected: true };
+        this.syncManualProvider(this.pageState);
+      }
     }
   }
 
   override updated() {
-    const snapshot = this.context.gateway.snapshot;
-    if (snapshot.client === this.observedClient) {
-      this.reconcileIcons();
+    this.synchronizeGateway(this.context.gateway.snapshot);
+    this.iconLoader.reconcile(this.currentIconUrls());
+  }
+
+  private synchronizeGateway(snapshot: ApplicationContext["gateway"]["snapshot"]): void {
+    const connection = {
+      client: snapshot.client,
+      hello: snapshot.hello,
+      agentId: this.context.agentSelection.state.selectedId,
+      connected: snapshot.phase === "connected",
+    };
+    if (!this.observedConnection) {
+      this.observedConnection = connection;
+      if (
+        connection.connected &&
+        this.routeData &&
+        (this.routeData.connection.client !== connection.client ||
+          this.routeData.connection.hello !== connection.hello ||
+          this.routeData.connection.agentId !== connection.agentId)
+      ) {
+        void this.detect();
+      }
       return;
     }
-    this.observedClient = snapshot.client;
-    this.detectAbort?.abort();
-    this.activationAbort?.abort();
-    this.verifyAbort?.abort();
-    this.resetIcons();
+    if (
+      connection.client === this.observedConnection.client &&
+      connection.hello === this.observedConnection.hello &&
+      connection.agentId === this.observedConnection.agentId &&
+      connection.connected === this.observedConnection.connected
+    ) {
+      return;
+    }
+    this.observedConnection = connection;
+    this.wizardMutationGeneration += 1;
+    this.wizardMutationActive = false;
+    void this.detectTask.run([null, null, null]);
     this.activationState = { phase: "idle" };
+    void this.activationTask.run([null, null]);
     this.verifyState = { phase: "idle" };
+    void this.verifyTask.run([null, null]);
+    this.iconLoader.reset();
+    this.pendingPrepareOption = null;
     void this.wizard.cancel();
-    if (!snapshot.client || snapshot.client === this.dataClient) {
+    this.pageState = { phase: "loading" };
+    if (!connection.connected || !connection.client) {
       return;
     }
-    this.pageState = { phase: "loading" };
-    this.dataClient = snapshot.client;
-    if (this.canUseSetup(snapshot.client)) {
+    if (this.canUseSetup(connection.client)) {
       void this.detect();
     }
   }
@@ -142,7 +348,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     const snapshot = this.context.gateway.snapshot;
     return Boolean(
       client &&
-      snapshot.connected &&
+      snapshot.phase === "connected" &&
       hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
       isGatewayMethodAdvertised(snapshot, "openclaw.setup.detect") === true,
     );
@@ -168,127 +374,13 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     return new Set(
       [
         ...result.candidates,
+        ...(result.unavailableCandidates ?? []),
         ...result.manualProviders,
         ...(result.authOptions ?? []),
+        ...(result.prepareOptions ?? []),
         ...(result.recommendedInstalls ?? []),
-      ].flatMap((entry) => (entry.icon ? [entry.icon] : [])),
+      ].flatMap((entry) => (entry.icon && !resolveSetupBrandIcon(entry) ? [entry.icon] : [])),
     );
-  }
-
-  private reconcileIcons(): void {
-    const eligible = this.currentIconUrls();
-    const nextUrls = { ...this.iconUrls };
-    let changed = false;
-    for (const [iconUrl, blobUrl] of Object.entries(nextUrls)) {
-      if (!eligible.has(iconUrl)) {
-        URL.revokeObjectURL(blobUrl);
-        delete nextUrls[iconUrl];
-        changed = true;
-      }
-    }
-    if (changed) {
-      this.iconUrls = nextUrls;
-    }
-    for (const [iconUrl, request] of this.iconRequests) {
-      if (!eligible.has(iconUrl)) {
-        clearTimeout(request.timeout);
-        request.controller.abort();
-        this.iconRequests.delete(iconUrl);
-      }
-    }
-    for (const iconUrl of this.iconMisses) {
-      if (!eligible.has(iconUrl)) {
-        this.iconMisses.delete(iconUrl);
-      }
-    }
-    for (const iconUrl of eligible) {
-      if (
-        !this.iconUrls[iconUrl] &&
-        !this.iconMisses.has(iconUrl) &&
-        !this.iconRequests.has(iconUrl)
-      ) {
-        this.fetchIcon(iconUrl);
-      }
-    }
-  }
-
-  private fetchIcon(iconUrl: string): void {
-    const controller = new AbortController();
-    const timeout = setTimeout(
-      () => controller.abort(new DOMException("catalog icon fetch timed out", "TimeoutError")),
-      10_000,
-    );
-    const request = { controller, timeout };
-    this.iconRequests.set(iconUrl, request);
-    void fetchCatalogIconBlobUrl({
-      iconUrl,
-      basePath: this.context.basePath,
-      gatewayUrl: this.context.gateway.connection.gatewayUrl,
-      auth: {
-        hello: this.context.gateway.snapshot.hello,
-        settings: { token: this.context.gateway.connection.token },
-        password: this.context.gateway.connection.password,
-      },
-      signal: controller.signal,
-    })
-      .then((blobUrl) => {
-        if (
-          this.iconRequests.get(iconUrl) !== request ||
-          !this.context.gateway.snapshot.connected ||
-          !this.currentIconUrls().has(iconUrl)
-        ) {
-          if (blobUrl) {
-            URL.revokeObjectURL(blobUrl);
-          }
-          return;
-        }
-        if (blobUrl) {
-          this.iconUrls = { ...this.iconUrls, [iconUrl]: blobUrl };
-        } else {
-          this.iconMisses.add(iconUrl);
-        }
-      })
-      .catch(() => {
-        if (this.iconRequests.get(iconUrl) === request) {
-          this.iconMisses.add(iconUrl);
-        }
-      })
-      .finally(() => {
-        clearTimeout(timeout);
-        if (this.iconRequests.get(iconUrl) === request) {
-          this.iconRequests.delete(iconUrl);
-        }
-      });
-  }
-
-  private invalidateIcon(iconUrl: string): void {
-    const request = this.iconRequests.get(iconUrl);
-    if (request) {
-      clearTimeout(request.timeout);
-      request.controller.abort();
-      this.iconRequests.delete(iconUrl);
-    }
-    const blobUrl = this.iconUrls[iconUrl];
-    if (blobUrl) {
-      URL.revokeObjectURL(blobUrl);
-    }
-    const next = { ...this.iconUrls };
-    delete next[iconUrl];
-    this.iconUrls = next;
-    this.iconMisses.add(iconUrl);
-  }
-
-  private resetIcons(): void {
-    for (const request of this.iconRequests.values()) {
-      clearTimeout(request.timeout);
-      request.controller.abort();
-    }
-    for (const blobUrl of Object.values(this.iconUrls)) {
-      URL.revokeObjectURL(blobUrl);
-    }
-    this.iconRequests.clear();
-    this.iconMisses.clear();
-    this.iconUrls = {};
   }
 
   private async detect(): Promise<SystemAgentSetupDetectResult | null> {
@@ -296,35 +388,12 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     if (!this.canUseSetup(client)) {
       return null;
     }
-    const epoch = ++this.detectEpoch;
     this.resetVerify();
-    this.detectAbort?.abort();
-    const abortController = new AbortController();
-    this.detectAbort = abortController;
     this.pageState = { phase: "loading" };
-    try {
-      const result = await detectModelSetup(client, abortController.signal);
-      if (epoch !== this.detectEpoch || this.context.gateway.snapshot.client !== client) {
-        return null;
-      }
-      this.pageState = { phase: "ready", result };
-      this.dataClient = client;
-      this.syncManualProvider(this.pageState);
-      return result;
-    } catch (error) {
-      if (
-        epoch === this.detectEpoch &&
-        this.context.gateway.snapshot.client === client &&
-        !abortController.signal.aborted
-      ) {
-        this.pageState = { phase: "detect-error", message: errorMessage(error) };
-      }
-      return null;
-    } finally {
-      if (this.detectAbort === abortController) {
-        this.detectAbort = null;
-      }
-    }
+    const token = {};
+    await this.detectTask.run([client, this.context.agentSelection.state.selectedId, token]);
+    const outcome = this.detectTask.value;
+    return outcome?.token === token && "value" in outcome ? outcome.value : null;
   }
 
   private canVerify(client: GatewayBrowserClient | null): client is GatewayBrowserClient {
@@ -336,10 +405,8 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   }
 
   private resetVerify(): void {
-    this.verifyEpoch += 1;
-    this.verifyAbort?.abort();
-    this.verifyAbort = null;
     this.verifyState = { phase: "idle" };
+    void this.verifyTask.run([null, null]);
   }
 
   private async verifyConnection(): Promise<void> {
@@ -347,30 +414,8 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     if (!this.canVerify(client) || this.actionsDisabled()) {
       return;
     }
-    const epoch = ++this.verifyEpoch;
-    this.verifyAbort?.abort();
-    const abortController = new AbortController();
-    this.verifyAbort = abortController;
     this.verifyState = { phase: "checking" };
-    try {
-      const result = await verifyModelSetup(client, abortController.signal);
-      if (epoch !== this.verifyEpoch || this.context.gateway.snapshot.client !== client) {
-        return;
-      }
-      this.verifyState = mapVerifyResult(result);
-    } catch (error) {
-      if (
-        epoch === this.verifyEpoch &&
-        this.context.gateway.snapshot.client === client &&
-        !abortController.signal.aborted
-      ) {
-        this.verifyState = { phase: "failed", status: "unknown", error: errorMessage(error) };
-      }
-    } finally {
-      if (this.verifyAbort === abortController) {
-        this.verifyAbort = null;
-      }
-    }
+    await this.verifyTask.run([client, this.context.agentSelection.state.selectedId]);
   }
 
   private async activate(
@@ -382,47 +427,10 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     if (!this.canUseSetup(client) || this.actionsDisabled()) {
       return;
     }
-    const epoch = ++this.activationEpoch;
-    this.activationAbort?.abort();
-    const abortController = new AbortController();
-    this.activationAbort = abortController;
     this.manualError = null;
     this.activationState = { phase: "testing", targetId, modelRef };
-    try {
-      const result = await client.request<SystemAgentSetupActivateResult>(
-        "openclaw.setup.activate",
-        params,
-        { timeoutMs: activationTimeoutForKind(params.kind), signal: abortController.signal },
-      );
-      if (epoch !== this.activationEpoch || this.context.gateway.snapshot.client !== client) {
-        return;
-      }
-      this.activationState = mapActivationResult({
-        result,
-        targetId,
-        fallbackError: t("modelSetup.errors.activationFailed"),
-      });
-      if (this.activationState.phase === "success") {
-        this.manualApiKey = "";
-      }
-    } catch (error) {
-      if (
-        epoch === this.activationEpoch &&
-        this.context.gateway.snapshot.client === client &&
-        !abortController.signal.aborted
-      ) {
-        this.activationState = {
-          phase: "failure",
-          targetId,
-          status: "unknown",
-          error: errorMessage(error),
-        };
-      }
-    } finally {
-      if (this.activationAbort === abortController) {
-        this.activationAbort = null;
-      }
-    }
+    const agentId = this.context.agentSelection.state.selectedId;
+    await this.activationTask.run([client, { ...params, ...(agentId ? { agentId } : {}) }]);
   }
 
   private activateCandidate(candidate: Candidate): void {
@@ -446,27 +454,159 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     );
   }
 
-  private async handleWizardDone(): Promise<void> {
+  private selectManualProvider(providerId: string): void {
+    if (providerId !== this.manualProviderId) {
+      this.manualApiKey = "";
+    }
+    this.manualProviderId = providerId;
+    this.manualError = null;
+  }
+
+  private async useManualProvider(providerId: string): Promise<void> {
+    this.selectManualProvider(providerId);
+    await this.updateComplete;
+    const input = this.renderRoot.querySelector<HTMLInputElement>(
+      '.model-setup__manual input[type="password"]',
+    );
+    input?.scrollIntoView?.({ block: "center", behavior: "smooth" });
+    input?.focus();
+  }
+
+  private async handleWizardDone(
+    startMethod: ModelSetupWizardStartMethod,
+    preparedModelRef?: string,
+  ): Promise<void> {
+    const prepareOption =
+      startMethod === "openclaw.setup.prepare.start" ? this.pendingPrepareOption : null;
+    this.pendingPrepareOption = null;
+    if (prepareOption && preparedModelRef) {
+      const kind = providerAutoSetupKind(prepareOption.id);
+      this.wizard.close();
+      void this.activate(
+        { kind, modelRef: preparedModelRef },
+        activationTargetId(kind, preparedModelRef),
+        preparedModelRef,
+      );
+      return;
+    }
     const result = await this.detect();
     if (!result) {
       this.wizard.fail(t("modelSetup.errors.requestFailed"));
       return;
     }
-    if (!result.setupComplete) {
+    if (startMethod === "openclaw.setup.auth.start" && !result.setupComplete) {
       this.wizard.fail(t("modelSetup.wizard.notComplete"));
       return;
     }
-    this.activationState = {
-      phase: "success",
-      modelRef: result.configuredModel ?? t("modelSetup.success.configuredModel"),
-    };
+    if (startMethod === "openclaw.setup.auth.start") {
+      this.activationState = {
+        phase: "success",
+        modelRef: result.configuredModel ?? t("modelSetup.success.configuredModel"),
+      };
+    }
+    if (prepareOption) {
+      // Provider setup can persist a model before the live activation check.
+      // Keep that unverified config out of the ready surface until activation succeeds.
+      this.pageState = {
+        phase: "ready",
+        result: { ...result, configuredModel: undefined, setupComplete: false },
+      };
+      const candidate = findPreparedModelCandidate(result, prepareOption.id);
+      if (!candidate) {
+        this.wizard.fail(
+          t("modelSetup.prepare.providerNotReady", { provider: prepareOption.label }),
+        );
+        return;
+      }
+      this.wizard.close();
+      this.activateCandidate(candidate);
+      return;
+    }
     this.wizard.close();
+  }
+
+  private closeWizard(): void {
+    this.wizardMutationGeneration += 1;
+    this.wizardMutationActive = false;
+    this.pendingPrepareOption = null;
+    this.wizard.close();
+  }
+
+  private async runWizardMutation(
+    task: () => Promise<ModelSetupWizardCompletion | null>,
+  ): Promise<void> {
+    const client = this.context.gateway.snapshot.client;
+    if (this.wizardMutationActive || !this.canUseSetup(client)) {
+      return;
+    }
+    const generation = ++this.wizardMutationGeneration;
+    this.wizardMutationActive = true;
+    this.requestUpdate();
+    try {
+      const mutation = await this.context.runtimeConfig.runExternalMutation(
+        async (mutationClient) => {
+          if (mutationClient !== client) {
+            throw new Error("Connection changed before model setup continued.");
+          }
+          return await task();
+        },
+        {
+          canDispatch: () =>
+            generation === this.wizardMutationGeneration &&
+            this.context.gateway.snapshot.client === client &&
+            this.canUseSetup(client),
+          dispatchError: t("modelSetup.errors.requestFailed"),
+        },
+      );
+      if (generation !== this.wizardMutationGeneration) {
+        if (mutation.ok && !mutation.refresh.ok && this.isConnected) {
+          this.setupRefreshWarning = mutation.refresh.error;
+        }
+        if (this.isConnected && this.canUseSetup(this.context.gateway.snapshot.client)) {
+          void this.detect();
+        }
+        return;
+      }
+      if (!mutation.ok) {
+        this.wizard.fail(mutation.error);
+        return;
+      }
+      this.setupRefreshWarning = mutation.refresh.ok ? null : mutation.refresh.error;
+      const completion = mutation.value;
+      if (completion) {
+        // The coordinated wizard action has settled; follow-up activation owns
+        // its own mutation lane and must not be blocked by the prior busy flag.
+        this.wizardMutationActive = false;
+        await this.handleWizardDone(completion.startMethod, completion.preparedModelRef);
+      } else if (this.wizardState.phase === "step" && this.wizardState.busy) {
+        this.wizardState = { ...this.wizardState, busy: false };
+      }
+    } catch (error) {
+      if (generation === this.wizardMutationGeneration) {
+        this.wizard.fail(errorMessage(error));
+      }
+    } finally {
+      if (generation === this.wizardMutationGeneration) {
+        this.wizardMutationActive = false;
+        this.requestUpdate();
+      }
+    }
+  }
+
+  private cancelWizard(): void {
+    this.wizardMutationGeneration += 1;
+    this.wizardMutationActive = false;
+    this.pendingPrepareOption = null;
+    // A Gateway-owned step can commit while cancellation is being handled.
+    // Hide this generation now, but let its mutation lane settle and refresh.
+    void this.wizard.cancel({ settleActiveRequest: true });
   }
 
   private actionsDisabled(): boolean {
     return (
       this.activationState.phase === "testing" ||
       this.verifyState.phase === "checking" ||
+      this.wizardMutationActive ||
       (this.wizardState.phase !== "idle" &&
         this.wizardState.phase !== "error" &&
         this.wizardState.phase !== "cancelled")
@@ -477,7 +617,8 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     const snapshot = this.context.gateway.snapshot;
     const canAdmin = hasOperatorAdminAccess(snapshot.hello?.auth ?? null);
     const gatewayTooOld =
-      snapshot.connected && isGatewayMethodAdvertised(snapshot, "openclaw.setup.detect") !== true;
+      snapshot.phase === "connected" &&
+      isGatewayMethodAdvertised(snapshot, "openclaw.setup.detect") !== true;
     const canVerify =
       canAdmin &&
       !gatewayTooOld &&
@@ -487,31 +628,47 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       activation: this.activationState,
       verify: this.verifyState,
       wizard: this.wizardState,
+      wizardMode: this.wizardMode,
       wizardValue: this.wizardValue,
       canAdmin,
       canVerify,
+      canPrepare:
+        canAdmin &&
+        !gatewayTooOld &&
+        isGatewayMethodAdvertised(snapshot, "openclaw.setup.prepare.start") === true,
       gatewayTooOld,
+      refreshWarning: this.setupRefreshWarning,
       actionsDisabled: this.actionsDisabled(),
       manualProviderId: this.manualProviderId,
       manualApiKey: this.manualApiKey,
       manualError: this.manualError,
       moreSignInOpen: this.moreSignInOpen,
+      firstRun: this.routeData?.firstRun === true,
       iconUrls: this.iconUrls,
       onDetect: () => void this.detect(),
       onVerify: () => void this.verifyConnection(),
       onActivateCandidate: (candidate) => this.activateCandidate(candidate),
-      onStartAuth: (option: AuthOption) => void this.wizard.start(option.id),
-      onManualProviderChange: (providerId) => {
-        this.manualProviderId = providerId;
-        this.manualError = null;
+      onStartAuth: (option: AuthOption) => {
+        this.pendingPrepareOption = null;
+        this.wizardMode = "auth";
+        void this.runWizardMutation(() => this.wizard.start(option.id));
       },
+      onStartPrepare: (option: ModelSetupPrepareOption) => {
+        this.pendingPrepareOption = option;
+        this.wizardMode = "prepare";
+        void this.runWizardMutation(() =>
+          this.wizard.start(option.id, "openclaw.setup.prepare.start"),
+        );
+      },
+      onManualProviderChange: (providerId) => this.selectManualProvider(providerId),
+      onUseManualProvider: (providerId) => void this.useManualProvider(providerId),
       onManualApiKeyChange: (apiKey) => {
         this.manualApiKey = apiKey;
         this.manualError = null;
       },
       onManualConnect: () => this.connectManual(),
       onMoreSignInToggle: (open) => (this.moreSignInOpen = open),
-      onIconError: (iconUrl) => this.invalidateIcon(iconUrl),
+      onIconError: (iconUrl) => this.iconLoader.invalidate(iconUrl),
       onOpenChat: () => {
         if (this.routeData?.firstRun) {
           this.context.navigate("custodian", { search: "?onboarding=1" });
@@ -519,14 +676,25 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         }
         this.context.navigate("chat");
       },
+      onSuccessClose: () => {
+        this.activationState = { phase: "idle" };
+        void this.detect();
+      },
       onWizardValueChange: (value) => (this.wizardValue = value),
-      onWizardAnswer: (value, includeValue) => void this.wizard.answer(value, includeValue),
-      onWizardCancel: () => void this.wizard.cancel(),
-      onWizardClose: () => this.wizard.close(),
+      onWizardAnswer: (value, includeValue) =>
+        void this.runWizardMutation(() => this.wizard.answer(value, includeValue)),
+      onWizardCancel: () => this.cancelWizard(),
+      onWizardClose: () => this.closeWizard(),
     });
     return html`
       <section class="content-header">
-        <div class="page-title">${titleForRoute("model-setup")}</div>
+        <div>
+          <div class="page-title">${titleForRoute("model-setup")}</div>
+          <div class="page-subtitle">
+            ${subtitleForRoute("model-setup")}
+            ${renderDocsLink(MODEL_SETUP_DOCS_URL, t("common.learnMore"))}
+          </div>
+        </div>
       </section>
       ${renderSettingsWorkspace(body)}
     `;

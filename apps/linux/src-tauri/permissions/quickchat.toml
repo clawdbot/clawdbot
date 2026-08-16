@@ -1,7 +1,8 @@
 [[permission]]
 identifier = "allow-quickchat"
-description = "Enables Quick Chat agents, shortcut settings, send, hide, and dashboard commands."
+description = "Enables Quick Chat agents, shortcut settings, send, hide, isolated widget, and dashboard commands."
 commands.allow = [
+  "quickchat_activate",
   "quickchat_agents",
   "quickchat_hide",
   "quickchat_identity",
@@ -12,4 +13,6 @@ commands.allow = [
   "quickchat_set_shortcut",
   "quickchat_shortcut",
   "quickchat_show_dashboard",
+  "quickchat_refresh_widget_surface",
+  "quickchat_sync_widgets",
 ]

@@ -9,19 +9,24 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  resolvePreferredOpenClawTmpDir,
+  tempWorkspace,
+  type TempWorkspace,
+} from "openclaw/plugin-sdk/temp-path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   HERMES_REASON_AUTH_PROFILE_EXISTS,
   HERMES_REASON_SECRET_NO_LONGER_PRESENT,
 } from "./items.js";
 import { buildHermesMigrationProvider } from "./provider.js";
 import {
-  cleanupTempRoots,
   makeConfigRuntime,
-  makeContext,
-  makeTempRoot,
+  makeContext as makeProviderContext,
   writeFile,
 } from "./test/provider-helpers.js";
+
+let testWorkspace: TempWorkspace;
 
 async function expectMissingPath(filePath: string): Promise<void> {
   try {
@@ -57,17 +62,48 @@ function fakeJwt(payload: Record<string, unknown>): string {
 const HERMES_ACCESS_FIELD = ["access", "token"].join("_");
 const HERMES_REFRESH_FIELD = ["refresh", "token"].join("_");
 
+async function makeHermesSecretFixture(sourceName = "hermes") {
+  const root = testWorkspace.dir;
+  const source = path.join(root, sourceName);
+  const workspaceDir = path.join(root, "workspace");
+  const stateDir = path.join(root, "state");
+  const reportDir = path.join(root, "report");
+  const agentDir = path.join(stateDir, "agents", "main", "agent");
+  const config = { agents: { defaults: { workspace: workspaceDir } } } as OpenClawConfig;
+  const runtime = makeConfigRuntime(config);
+  const provider = buildHermesMigrationProvider();
+  const secretContext = (overrides: Partial<Parameters<typeof makeProviderContext>[0]> = {}) =>
+    makeProviderContext({ source, stateDir, workspaceDir, includeSecrets: true, ...overrides });
+  return {
+    root,
+    source,
+    workspaceDir,
+    stateDir,
+    reportDir,
+    agentDir,
+    config,
+    runtime,
+    provider,
+    secretContext,
+  };
+}
+
 describe("Hermes migration secret items", () => {
+  beforeEach(async () => {
+    testWorkspace = await tempWorkspace({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "openclaw-migrate-hermes-",
+    });
+  });
+
   afterEach(async () => {
     vi.unstubAllEnvs();
-    await cleanupTempRoots();
+    await testWorkspace.cleanup();
   });
 
   it("uses configured agentDir for secret planning and imports without runtime helpers", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
+    const { root, source, workspaceDir, stateDir, secretContext, provider } =
+      await makeHermesSecretFixture();
     const customAgentDir = path.join(root, "custom-agent");
     await writeFile(path.join(source, ".env"), "OPENAI_API_KEY=sk-hermes\n");
     const config = {
@@ -84,15 +120,9 @@ describe("Hermes migration secret items", () => {
         ],
       },
     } as OpenClawConfig;
-
-    const provider = buildHermesMigrationProvider();
     const plan = await provider.plan(
-      makeContext({
-        source,
-        stateDir,
-        workspaceDir,
+      secretContext({
         config,
-        includeSecrets: true,
       }),
     );
 
@@ -115,12 +145,8 @@ describe("Hermes migration secret items", () => {
     ]);
 
     const result = await provider.apply(
-      makeContext({
-        source,
-        stateDir,
-        workspaceDir,
+      secretContext({
         config,
-        includeSecrets: true,
         overwrite: true,
         reportDir: path.join(root, "report"),
       }),
@@ -138,19 +164,14 @@ describe("Hermes migration secret items", () => {
   });
 
   it("parses current Hermes dotenv syntax and legacy Kimi credentials", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
+    const { source, secretContext } = await makeHermesSecretFixture();
     const kimiEnv = ["KIMI", "CODING", "API", "KEY"].join("_");
     const openaiEnv = ["OPENAI", "API", "KEY"].join("_");
     await writeFile(
       path.join(source, ".env"),
       `\uFEFFexport ${kimiEnv} = placeholder\nexport ${openaiEnv}='redacted'\n`,
     );
-    const plan = await buildHermesMigrationProvider().plan(
-      makeContext({ source, stateDir, workspaceDir, includeSecrets: true }),
-    );
+    const plan = await buildHermesMigrationProvider().plan(secretContext());
     expect(plan.items).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -166,19 +187,11 @@ describe("Hermes migration secret items", () => {
   });
 
   it("imports the current Hermes MiniMax China credential", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
+    const { source, secretContext } = await makeHermesSecretFixture();
     const envVar = ["MINIMAX", "CN", "API", "KEY"].join("_");
     await writeFile(path.join(source, ".env"), `${envVar}=placeholder\n`);
 
-    const plan = await buildHermesMigrationProvider().plan(
-      makeContext({
-        source,
-        stateDir: path.join(root, "state"),
-        workspaceDir: path.join(root, "workspace"),
-        includeSecrets: true,
-      }),
-    );
+    const plan = await buildHermesMigrationProvider().plan(secretContext());
 
     expect(plan.items).toEqual(
       expect.arrayContaining([
@@ -191,8 +204,7 @@ describe("Hermes migration secret items", () => {
   });
 
   it("imports the selected provider credential without an endpoint override", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
+    const { source, secretContext } = await makeHermesSecretFixture();
     const envVar = ["STEPFUN", "API", "KEY"].join("_");
     await writeFile(
       path.join(source, "config.yaml"),
@@ -200,14 +212,7 @@ describe("Hermes migration secret items", () => {
     );
     await writeFile(path.join(source, ".env"), `${envVar}=placeholder\n`);
 
-    const plan = await buildHermesMigrationProvider().plan(
-      makeContext({
-        source,
-        stateDir: path.join(root, "state"),
-        workspaceDir: path.join(root, "workspace"),
-        includeSecrets: true,
-      }),
-    );
+    const plan = await buildHermesMigrationProvider().plan(secretContext());
 
     expect(plan.items).toEqual(
       expect.arrayContaining([
@@ -220,8 +225,7 @@ describe("Hermes migration secret items", () => {
   });
 
   it("keeps legacy Moonshot model routing and credentials aligned", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
+    const { source, secretContext } = await makeHermesSecretFixture();
     const envVar = ["MOONSHOT", "API", "KEY"].join("_");
     await writeFile(
       path.join(source, "config.yaml"),
@@ -229,14 +233,7 @@ describe("Hermes migration secret items", () => {
     );
     await writeFile(path.join(source, ".env"), `${envVar}=placeholder\n`);
 
-    const plan = await buildHermesMigrationProvider().plan(
-      makeContext({
-        source,
-        stateDir: path.join(root, "state"),
-        workspaceDir: path.join(root, "workspace"),
-        includeSecrets: true,
-      }),
-    );
+    const plan = await buildHermesMigrationProvider().plan(secretContext());
 
     expect(plan.items.find((item) => item.id === "config:default-model")?.details?.model).toBe(
       "moonshot/kimi-k2.5",
@@ -255,8 +252,7 @@ describe("Hermes migration secret items", () => {
     ["sk-kimi-placeholder", "kimi"],
     ["legacy-moonshot-placeholder", "moonshot"],
   ])("aligns KIMI_API_KEY with its effective %s route", async (apiKey, expectedProvider) => {
-    const root = await makeTempRoot();
-    const source = path.join(root, expectedProvider);
+    const { source, secretContext } = await makeHermesSecretFixture(expectedProvider);
     const envVar = ["KIMI", "API", "KEY"].join("_");
     await writeFile(
       path.join(source, "config.yaml"),
@@ -264,14 +260,7 @@ describe("Hermes migration secret items", () => {
     );
     await writeFile(path.join(source, ".env"), `${envVar}=${apiKey}\n`);
 
-    const plan = await buildHermesMigrationProvider().plan(
-      makeContext({
-        source,
-        stateDir: path.join(root, "state"),
-        workspaceDir: path.join(root, "workspace"),
-        includeSecrets: true,
-      }),
-    );
+    const plan = await buildHermesMigrationProvider().plan(secretContext());
 
     expect(plan.items.find((item) => item.id === "config:default-model")?.details?.model).toBe(
       `${expectedProvider}/kimi-k2.5`,
@@ -287,10 +276,7 @@ describe("Hermes migration secret items", () => {
   });
 
   it("imports a configured provider key_env as matching OpenClaw provider auth", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
+    const { source, stateDir, secretContext, config, runtime } = await makeHermesSecretFixture();
     const value = ["custom", "provider", "placeholder"].join("-");
     const envVar = ["ACME", "TOKEN"].join("_");
     await writeFile(
@@ -308,17 +294,10 @@ describe("Hermes migration secret items", () => {
       ].join("\n"),
     );
     await writeFile(path.join(source, ".env"), `${envVar}=${value}\n`);
-    const config = { agents: { defaults: { workspace: workspaceDir } } } as OpenClawConfig;
-    const runtime = makeConfigRuntime(config);
-
     const result = await buildHermesMigrationProvider({ runtime }).apply(
-      makeContext({
-        source,
-        stateDir,
-        workspaceDir,
+      secretContext({
         config,
         runtime,
-        includeSecrets: true,
         overwrite: true,
       }),
     );
@@ -346,8 +325,7 @@ describe("Hermes migration secret items", () => {
   });
 
   it("binds the host-gated OpenAI key fallback to a model-scoped endpoint", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
+    const { source, secretContext } = await makeHermesSecretFixture();
     const envVar = ["OPENAI", "API", "KEY"].join("_");
     await writeFile(
       path.join(source, "config.yaml"),
@@ -361,14 +339,7 @@ describe("Hermes migration secret items", () => {
     );
     await writeFile(path.join(source, ".env"), `${envVar}=placeholder\n`);
 
-    const plan = await buildHermesMigrationProvider().plan(
-      makeContext({
-        source,
-        stateDir: path.join(root, "state"),
-        workspaceDir: path.join(root, "workspace"),
-        includeSecrets: true,
-      }),
-    );
+    const plan = await buildHermesMigrationProvider().plan(secretContext());
 
     const secretItems = plan.items.filter((item) => item.kind === "secret");
     expect(secretItems).toHaveLength(1);
@@ -378,8 +349,7 @@ describe("Hermes migration secret items", () => {
   });
 
   it("keeps an env-backed custom endpoint and its OpenAI key on one provider", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
+    const { source, secretContext } = await makeHermesSecretFixture();
     const keyEnv = ["OPENAI", "API", "KEY"].join("_");
     const baseUrlEnv = ["OPENAI", "BASE", "URL"].join("_");
     await writeFile(
@@ -391,14 +361,7 @@ describe("Hermes migration secret items", () => {
       `${keyEnv}=placeholder\n${baseUrlEnv}=https://private.example.test/v1\n`,
     );
 
-    const plan = await buildHermesMigrationProvider().plan(
-      makeContext({
-        source,
-        stateDir: path.join(root, "state"),
-        workspaceDir: path.join(root, "workspace"),
-        includeSecrets: true,
-      }),
-    );
+    const plan = await buildHermesMigrationProvider().plan(secretContext());
 
     const providers = Object.assign(
       {},
@@ -415,11 +378,7 @@ describe("Hermes migration secret items", () => {
   });
 
   it("imports current Hermes singleton and pooled OpenAI OAuth accounts", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
-    const config = { agents: { defaults: { workspace: workspaceDir } } } as OpenClawConfig;
+    const { source, stateDir, secretContext, config, runtime } = await makeHermesSecretFixture();
     const accountOne = fakeJwt({
       "https://api.openai.com/auth": { chatgpt_account_id: "acct_one" },
       "https://api.openai.com/profile": { email: "one@example.test" },
@@ -456,16 +415,11 @@ describe("Hermes migration secret items", () => {
         },
       }),
     );
-    const runtime = makeConfigRuntime(config);
     const provider = buildHermesMigrationProvider({ runtime });
     const result = await provider.apply(
-      makeContext({
-        source,
-        stateDir,
-        workspaceDir,
+      secretContext({
         config,
         runtime,
-        includeSecrets: true,
         overwrite: true,
       }),
     );
@@ -482,10 +436,7 @@ describe("Hermes migration secret items", () => {
   });
 
   it("imports manual Hermes API-key pool entries and skips borrowed references", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
+    const { source, stateDir, secretContext, config, runtime } = await makeHermesSecretFixture();
     const firstValue = "openrouter-one";
     const secondValue = "openrouter-two";
     const borrowedValue = "borrowed-value";
@@ -525,16 +476,10 @@ describe("Hermes migration secret items", () => {
         },
       }),
     );
-    const config = { agents: { defaults: { workspace: workspaceDir } } } as OpenClawConfig;
-    const runtime = makeConfigRuntime(config);
     const result = await buildHermesMigrationProvider({ runtime }).apply(
-      makeContext({
-        source,
-        stateDir,
-        workspaceDir,
+      secretContext({
         config,
         runtime,
-        includeSecrets: true,
         overwrite: true,
       }),
     );
@@ -556,10 +501,9 @@ describe("Hermes migration secret items", () => {
   });
 
   it("uses per-provider global API-key pool fallback for an active profile", async () => {
-    const root = await makeTempRoot();
+    const { root, secretContext, config, runtime } = await makeHermesSecretFixture();
     const hermesRoot = path.join(root, ".hermes");
     const source = path.join(hermesRoot, "profiles", "coder");
-    const workspaceDir = path.join(root, "workspace");
     const stateDir = path.join(root, "state");
     const globalOpenRouterValue = ["global", "openrouter", "placeholder"].join("-");
     const globalGeminiValue = ["global", "gemini", "placeholder"].join("-");
@@ -606,17 +550,11 @@ describe("Hermes migration secret items", () => {
     );
     vi.stubEnv("HOME", root);
     vi.stubEnv("HERMES_HOME", "");
-    const config = { agents: { defaults: { workspace: workspaceDir } } } as OpenClawConfig;
-    const runtime = makeConfigRuntime(config);
-
     const result = await buildHermesMigrationProvider({ runtime }).apply(
-      makeContext({
+      secretContext({
         source: "",
-        stateDir,
-        workspaceDir,
         config,
         runtime,
-        includeSecrets: true,
         overwrite: true,
       }),
     );
@@ -644,12 +582,8 @@ describe("Hermes migration secret items", () => {
   });
 
   it("reports API key import when config update fails after profile write", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
-    const reportDir = path.join(root, "report");
-    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const { source, workspaceDir, secretContext, reportDir, agentDir, provider } =
+      await makeHermesSecretFixture();
     await writeFile(path.join(source, ".env"), "OPENAI_API_KEY=sk-hermes\n");
     const config = {
       agents: {
@@ -666,14 +600,8 @@ describe("Hermes migration secret items", () => {
         },
       },
     } as unknown as MigrationProviderContext["runtime"];
-
-    const provider = buildHermesMigrationProvider();
-    const ctx = makeContext({
-      source,
-      stateDir,
-      workspaceDir,
+    const ctx = secretContext({
       config,
-      includeSecrets: true,
       reportDir,
       runtime,
     });
@@ -701,41 +629,32 @@ describe("Hermes migration secret items", () => {
   });
 
   it("keeps secret conflict checks read-only during planning", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
-    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const { source, secretContext, agentDir, provider } = await makeHermesSecretFixture();
     await writeFile(path.join(source, ".env"), "OPENAI_API_KEY=sk-hermes\n");
-    await writeFile(
-      path.join(agentDir, "auth.json"),
-      JSON.stringify({
-        openai: { type: "api_key", provider: "openai", key: "legacy-main-key" },
-      }),
-    );
+    const existingStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:existing": {
+          type: "api_key",
+          provider: "openai",
+          key: "existing-main-key",
+        },
+      },
+    };
+    writeAuthProfileStore(agentDir, existingStore);
+    const beforePlanStore = readAuthProfileStore(agentDir);
+    await provider.plan(secretContext());
 
-    const provider = buildHermesMigrationProvider();
-    await provider.plan(makeContext({ source, stateDir, workspaceDir, includeSecrets: true }));
-
-    await expect(fs.access(path.join(agentDir, "auth.json"))).resolves.toBeUndefined();
+    expect(readAuthProfileStore(agentDir)).toEqual(beforePlanStore);
+    // Canonical profiles stay in SQLite; planning must not recreate the retired JSON sidecar.
     await expectMissingPath(path.join(agentDir, "auth-profiles.json"));
   });
 
   it("reports late-created auth profiles as conflicts without overwriting", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
-    const reportDir = path.join(root, "report");
-    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const { source, secretContext, reportDir, agentDir, provider } =
+      await makeHermesSecretFixture();
     await writeFile(path.join(source, ".env"), "OPENAI_API_KEY=sk-hermes\n");
-
-    const provider = buildHermesMigrationProvider();
-    const ctx = makeContext({
-      source,
-      stateDir,
-      workspaceDir,
-      includeSecrets: true,
+    const ctx = secretContext({
       reportDir,
     });
     const plan = await provider.plan(ctx);
@@ -781,11 +700,8 @@ describe("Hermes migration secret items", () => {
   });
 
   it("reports API key config auth profile conflicts during planning", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
-    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const { source, workspaceDir, secretContext, agentDir, provider } =
+      await makeHermesSecretFixture();
     await writeFile(path.join(source, ".env"), "OPENAI_API_KEY=sk-hermes\n");
     const config = {
       agents: {
@@ -802,14 +718,8 @@ describe("Hermes migration secret items", () => {
         },
       },
     } as OpenClawConfig;
-
-    const provider = buildHermesMigrationProvider();
-    const ctx = makeContext({
-      source,
-      stateDir,
-      workspaceDir,
+    const ctx = secretContext({
       config,
-      includeSecrets: true,
     });
     const plan = await provider.plan(ctx);
 
@@ -828,11 +738,8 @@ describe("Hermes migration secret items", () => {
   });
 
   it("reports late-created API key config auth profile conflicts before writing", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
-    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const { source, workspaceDir, secretContext, agentDir, provider } =
+      await makeHermesSecretFixture();
     await writeFile(path.join(source, ".env"), "OPENAI_API_KEY=sk-hermes\n");
     const config = {
       agents: {
@@ -841,14 +748,8 @@ describe("Hermes migration secret items", () => {
         },
       },
     } as OpenClawConfig;
-
-    const provider = buildHermesMigrationProvider();
-    const ctx = makeContext({
-      source,
-      stateDir,
-      workspaceDir,
+    const ctx = secretContext({
       config,
-      includeSecrets: true,
       runtime: makeConfigRuntime(config),
     });
     const plan = await provider.plan(ctx);
@@ -875,12 +776,8 @@ describe("Hermes migration secret items", () => {
   });
 
   it("imports supported Hermes provider env credentials including OpenCode and GitHub Copilot", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
-    const reportDir = path.join(root, "report");
-    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const { source, workspaceDir, secretContext, reportDir, agentDir, provider } =
+      await makeHermesSecretFixture();
     await writeFile(
       path.join(source, ".env"),
       ["OPENCODE_ZEN_API_KEY=opencode-key", "COPILOT_GITHUB_TOKEN=gho-copilot-token", ""].join(
@@ -894,14 +791,8 @@ describe("Hermes migration secret items", () => {
         },
       },
     } as OpenClawConfig;
-
-    const provider = buildHermesMigrationProvider();
-    const ctx = makeContext({
-      source,
-      stateDir,
-      workspaceDir,
+    const ctx = secretContext({
       config,
-      includeSecrets: true,
       reportDir,
       runtime: makeConfigRuntime(config),
     });
@@ -974,20 +865,10 @@ describe("Hermes migration secret items", () => {
   });
 
   it("does not import web-search-only Perplexity env credentials as model auth profiles", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
-    const reportDir = path.join(root, "report");
-    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const { source, secretContext, reportDir, agentDir, provider } =
+      await makeHermesSecretFixture();
     await writeFile(path.join(source, ".env"), "PERPLEXITY_API_KEY=pplx-hermes\n");
-
-    const provider = buildHermesMigrationProvider();
-    const ctx = makeContext({
-      source,
-      stateDir,
-      workspaceDir,
-      includeSecrets: true,
+    const ctx = secretContext({
       reportDir,
     });
     const plan = await provider.plan(ctx);
@@ -1001,12 +882,8 @@ describe("Hermes migration secret items", () => {
   });
 
   it("imports supported OpenCode auth store credentials next to the Hermes home", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, ".hermes");
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
-    const reportDir = path.join(root, "report");
-    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const { root, source, workspaceDir, secretContext, reportDir, agentDir, provider } =
+      await makeHermesSecretFixture(".hermes");
     await writeFile(path.join(source, "config.yaml"), "model: opencode/kimi-k2.5\n");
     await writeFile(
       path.join(root, ".local", "share", "opencode", "auth.json"),
@@ -1034,14 +911,8 @@ describe("Hermes migration secret items", () => {
         },
       },
     } as OpenClawConfig;
-
-    const provider = buildHermesMigrationProvider();
-    const ctx = makeContext({
-      source,
-      stateDir,
-      workspaceDir,
+    const ctx = secretContext({
       config,
-      includeSecrets: true,
       reportDir,
       runtime: makeConfigRuntime(config),
     });
@@ -1112,12 +983,8 @@ describe("Hermes migration secret items", () => {
   });
 
   it("skips OpenCode GitHub Copilot enterprise credentials until endpoint routing is supported", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, ".hermes");
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
-    const reportDir = path.join(root, "report");
-    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const { root, source, workspaceDir, secretContext, reportDir, agentDir, provider } =
+      await makeHermesSecretFixture(".hermes");
     await writeFile(path.join(source, "config.yaml"), "model: github-copilot/gpt-5.4\n");
     await writeFile(
       path.join(root, ".local", "share", "opencode", "auth.json"),
@@ -1138,14 +1005,8 @@ describe("Hermes migration secret items", () => {
         },
       },
     } as OpenClawConfig;
-
-    const provider = buildHermesMigrationProvider();
-    const ctx = makeContext({
-      source,
-      stateDir,
-      workspaceDir,
+    const ctx = secretContext({
       config,
-      includeSecrets: true,
       reportDir,
       runtime: makeConfigRuntime(config),
     });
@@ -1162,12 +1023,8 @@ describe("Hermes migration secret items", () => {
   });
 
   it("prefers OpenCode auth from XDG_DATA_HOME when it belongs to the migrated home", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, ".hermes");
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
-    const reportDir = path.join(root, "report");
-    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const { root, source, workspaceDir, secretContext, reportDir, agentDir } =
+      await makeHermesSecretFixture(".hermes");
     const xdgDataHome = path.join(root, "xdg-data");
     const previousXdgDataHome = process.env.XDG_DATA_HOME;
     await writeFile(path.join(source, "config.yaml"), "model: opencode/kimi-k2.5\n");
@@ -1200,12 +1057,8 @@ describe("Hermes migration secret items", () => {
     try {
       process.env.XDG_DATA_HOME = xdgDataHome;
       const provider = buildHermesMigrationProvider();
-      const ctx = makeContext({
-        source,
-        stateDir,
-        workspaceDir,
+      const ctx = secretContext({
         config,
-        includeSecrets: true,
         reportDir,
         runtime: makeConfigRuntime(config),
       });
@@ -1242,12 +1095,8 @@ describe("Hermes migration secret items", () => {
   });
 
   it("imports OpenCode OpenAI OAuth credentials as OpenAI auth", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, ".hermes");
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
-    const reportDir = path.join(root, "report");
-    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const { root, source, workspaceDir, secretContext, reportDir, agentDir, provider } =
+      await makeHermesSecretFixture(".hermes");
     const accessToken = fakeJwt({
       exp: Math.floor(Date.now() / 1000) + 3600,
       "https://api.openai.com/profile": { email: "opencode-openai@example.test" },
@@ -1275,14 +1124,8 @@ describe("Hermes migration secret items", () => {
         },
       },
     } as OpenClawConfig;
-
-    const provider = buildHermesMigrationProvider();
-    const ctx = makeContext({
-      source,
-      stateDir,
-      workspaceDir,
+    const ctx = secretContext({
       config,
-      includeSecrets: true,
       reportDir,
       runtime: makeConfigRuntime(config),
     });
@@ -1324,12 +1167,8 @@ describe("Hermes migration secret items", () => {
   });
 
   it("does not apply a planned OpenCode OpenAI OAuth credential after the source token changes", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, ".hermes");
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
-    const reportDir = path.join(root, "report");
-    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const { root, source, secretContext, reportDir, agentDir, provider } =
+      await makeHermesSecretFixture(".hermes");
     const opencodeAuthPath = path.join(root, ".local", "share", "opencode", "auth.json");
     await writeFile(path.join(source, "auth.json"), "{}");
     await writeFile(
@@ -1342,13 +1181,7 @@ describe("Hermes migration secret items", () => {
         },
       }),
     );
-
-    const provider = buildHermesMigrationProvider();
-    const ctx = makeContext({
-      source,
-      stateDir,
-      workspaceDir,
-      includeSecrets: true,
+    const ctx = secretContext({
       reportDir,
     });
     const plan = await provider.plan(ctx);
@@ -1389,10 +1222,7 @@ describe("Hermes migration secret items", () => {
   });
 
   it("reports OpenCode OpenAI OAuth config auth profile conflicts during planning", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
+    const { root, source, workspaceDir, secretContext, provider } = await makeHermesSecretFixture();
     const accessToken = fakeJwt({
       exp: Math.floor(Date.now() / 1000) + 3600,
       "https://api.openai.com/profile": { email: "codex@example.test" },
@@ -1427,15 +1257,9 @@ describe("Hermes migration secret items", () => {
         },
       }),
     );
-
-    const provider = buildHermesMigrationProvider();
     const plan = await provider.plan(
-      makeContext({
-        source,
-        stateDir,
-        workspaceDir,
+      secretContext({
         config,
-        includeSecrets: true,
       }),
     );
     const authItem = plan.items.find((item) => item.id === "auth:openai");
@@ -1452,12 +1276,8 @@ describe("Hermes migration secret items", () => {
   });
 
   it("does not collapse OpenCode OpenAI OAuth accounts that share an email", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
-    const reportDir = path.join(root, "report");
-    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const { root, source, workspaceDir, secretContext, reportDir, agentDir, provider } =
+      await makeHermesSecretFixture();
     const sharedEmail = "shared@example.com";
     const accessToken = fakeJwt({
       exp: Math.floor(Date.now() / 1000) + 3600,
@@ -1503,14 +1323,8 @@ describe("Hermes migration secret items", () => {
         },
       },
     });
-
-    const provider = buildHermesMigrationProvider();
-    const ctx = makeContext({
-      source,
-      stateDir,
-      workspaceDir,
+    const ctx = secretContext({
       config,
-      includeSecrets: true,
       reportDir,
       runtime: makeConfigRuntime(config),
     });

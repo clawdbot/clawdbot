@@ -2,6 +2,52 @@ import { describe, expect, it } from "vitest";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 
 describe("buildTelegramMessageContext forwarded debounce batches", () => {
+  it("preserves each buffered message's formatting entities in model-visible order", async () => {
+    const chat = { id: 999, type: "private" as const, first_name: "Alice" };
+    const sender = { id: 42, first_name: "Alice", is_bot: false };
+    const context = await buildTelegramMessageContextForTest({
+      message: {
+        message_id: 2,
+        chat,
+        from: sender,
+        text: "😀 quoted\nsecond\nread docs",
+        entities: [
+          { type: "blockquote", offset: 0, length: 16 },
+          { type: "bold", offset: 3, length: 6 },
+          { type: "text_link", offset: 22, length: 4, url: "https://docs.example" },
+        ],
+      },
+      options: {
+        bufferedMessages: [
+          {
+            message_id: 1,
+            date: 1_700_000_000,
+            chat,
+            from: sender,
+            text: "😀 quoted\nsecond",
+            entities: [
+              { type: "blockquote", offset: 0, length: 16 },
+              { type: "bold", offset: 3, length: 6 },
+            ],
+          },
+          {
+            message_id: 2,
+            date: 1_700_000_001,
+            chat,
+            from: sender,
+            text: "read docs",
+            entities: [{ type: "text_link", offset: 5, length: 4, url: "https://docs.example" }],
+          },
+        ],
+      },
+    });
+
+    const expected = "> 😀 **quoted**\n> second\n\nread [docs](https://docs.example)";
+    expect(context?.ctxPayload.RawBody).toBe(expected);
+    expect(context?.ctxPayload.BodyForAgent).toBe(expected);
+    expect(context?.ctxPayload.CommandBody).toBe(expected);
+  });
+
   it("keeps ordinary text plain while attributing only the forwarded segment", async () => {
     const chat = { id: 999, type: "private" as const, first_name: "Alice" };
     const sender = { id: 42, first_name: "Alice", is_bot: false };
@@ -18,7 +64,7 @@ describe("buildTelegramMessageContext forwarded debounce batches", () => {
         },
       },
       options: {
-        inboundDebounceMessages: [
+        bufferedMessages: [
           {
             message_id: 1,
             date: 1_700_000_000,
@@ -76,7 +122,7 @@ describe("buildTelegramMessageContext forwarded debounce batches", () => {
         topicConfig: undefined,
       }),
       options: {
-        inboundDebounceMessages: [
+        bufferedMessages: [
           {
             message_id: 1,
             date: 1_700_000_000,
@@ -123,9 +169,9 @@ describe("buildTelegramMessageContext forwarded debounce batches", () => {
         from: sender,
         text: "ordinary note",
       },
-      allMedia: [{ path: "/tmp/photo-1.jpg", contentType: "image/jpeg" }],
+      allMedia: [{ path: "/tmp/photo-1.jpg", contentType: "image/jpeg", kind: "image" }],
       options: {
-        inboundDebounceMessages: [
+        bufferedMessages: [
           {
             message_id: 1,
             date: 1_700_000_000,

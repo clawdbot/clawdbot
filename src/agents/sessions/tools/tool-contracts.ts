@@ -103,3 +103,21 @@ export interface WriteToolInput {
   path: string;
   content: string;
 }
+
+export type WriteToolDetails =
+  | { changed: false }
+  | {
+      changed: true;
+      created: true;
+      diff: string;
+      patch: string;
+      firstChangedLine?: number;
+    }
+  | {
+      changed: true;
+      created: false;
+      diff: string;
+      patch: string;
+      firstChangedLine?: number;
+    }
+  | { changed: true; created?: boolean };

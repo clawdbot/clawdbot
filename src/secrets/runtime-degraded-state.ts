@@ -1,4 +1,5 @@
 /** Process-local registry for SecretRef owners isolated during cold startup. */
+import type { SecretRefSource } from "../config/types.secrets.js";
 import {
   describeSecretResolutionError,
   isSecretResolutionError,
@@ -7,6 +8,7 @@ import {
 
 export type SecretDegradationReason =
   | SecretResolutionFailureReason
+  | "secret provider is not configured"
   | "resolved secret value was invalid"
   | "secret reference is not allowed for this provider"
   | "secret reference was not materialized by the active runtime"
@@ -26,13 +28,27 @@ export type DegradedSecretOwner = {
   ownerKind: Exclude<SecretOwnerKind, "unknown">;
   ownerId: string;
   state: "unavailable";
+  /** Operator-facing reload state. Omitted legacy/runtime-discovered owners are cold. */
+  degradationState?: "cold" | "stale";
   paths: string[];
   refKeys: string[];
   reason: string;
+  /** Shared provider failure that made this owner unavailable. Runtime-internal diagnostic data. */
+  providerFailures?: Array<{
+    source: SecretRefSource;
+    provider: string;
+  }>;
+  /** Ref-scoped failure retained when this owner also has a provider-scoped outage. */
+  refFailureReason?: string;
 };
 
 /** SecretRef identities resolved for one owner in an active runtime snapshot. */
-export type SecretOwnerRefState = Pick<DegradedSecretOwner, "ownerKind" | "ownerId" | "refKeys">;
+export type SecretOwnerRefState = Pick<DegradedSecretOwner, "ownerKind" | "ownerId" | "refKeys"> & {
+  /** Identity of the full owner config that may use these values. */
+  contractDigest?: string;
+  /** Last materialized values, kept process-local for unchanged-ref reload fallback. */
+  resolvedValues?: Array<{ refKey: string; value: unknown }>;
+};
 
 /** One owner from an atomic resolution attempt, including whether it caused the failure. */
 type SecretResolutionErrorOwner = DegradedSecretOwner & {
@@ -42,6 +58,11 @@ type SecretResolutionErrorOwner = DegradedSecretOwner & {
 };
 
 export const SECRET_DEGRADATION_RETRY_HINT = "openclaw secrets reload" as const;
+
+/** Only transient/unavailable resolution failures may enter degraded runtime state. */
+export function isRetryableSecretDegradationReason(reason: string): boolean {
+  return reason === "secret provider failed" || reason === "secret reference was not found";
+}
 
 /** Redacted owner details for one structured degradation warning. */
 export type SecretDegradation = {
@@ -88,6 +109,7 @@ export function classifySecretResolutionErrorDegradations(error: unknown): Secre
 export function redactSecretDegradationReason(reason: string): SecretDegradationReason {
   switch (reason) {
     case "secret provider failed":
+    case "secret provider is not configured":
     case "secret provider policy denied resolution":
     case "secret provider response violated its contract":
     case "secret reference is not allowed for this provider":
@@ -102,6 +124,7 @@ export function redactSecretDegradationReason(reason: string): SecretDegradation
 }
 
 const SECRET_SURFACE_UNAVAILABLE_ERROR_CODE = "SECRET_SURFACE_UNAVAILABLE";
+const trustedSecretSurfaceUnavailableErrors = new WeakSet<object>();
 
 /** Runtime error returned when a request targets an isolated SecretRef owner. */
 export class SecretSurfaceUnavailableError extends Error {
@@ -118,7 +141,17 @@ export class SecretSurfaceUnavailableError extends Error {
     this.ownerKind = owner.ownerKind;
     this.ownerId = owner.ownerId;
     this.paths = [...owner.paths];
+    trustedSecretSurfaceUnavailableErrors.add(this);
   }
+}
+
+/** Authenticates owner-created failures without trusting forgeable error names or prototypes. */
+export function isTrustedSecretSurfaceUnavailableError(
+  error: unknown,
+): error is SecretSurfaceUnavailableError {
+  return (
+    typeof error === "object" && error !== null && trustedSecretSurfaceUnavailableErrors.has(error)
+  );
 }
 
 let activeDegradedOwners: DegradedSecretOwner[] = [];
@@ -199,7 +232,10 @@ export function findActiveDegradedSecretOwner(
 ): DegradedSecretOwner | undefined {
   const owner =
     activeDegradedOwners.find(
-      (entry) => entry.ownerKind === ownerKind && entry.ownerId === ownerId,
+      (entry) =>
+        entry.ownerKind === ownerKind &&
+        entry.ownerId === ownerId &&
+        entry.degradationState !== "stale",
     ) ?? activeCredentialDegradedOwners.get(ownerKey(ownerKind, ownerId));
   return owner ? cloneOwner(owner) : undefined;
 }

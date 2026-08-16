@@ -33,7 +33,7 @@
   padding: 7px 12px;
   border-top: 1px solid var(--border);
   color: var(--muted);
-  cursor: pointer;
+  cursor: var(--cursor-action);
   font-size: 10px;
   font-weight: 650;
   list-style: none;
@@ -59,7 +59,7 @@
   align-items: flex-start;
   gap: 9px;
   min-width: 0;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .memory-import__collection-choice input {
@@ -229,6 +229,66 @@
 
 .memory-import__confirm .callout {
   margin-top: 12px;
+}
+
+.memory-import__backfill-dates,
+.memory-import__backfill-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.memory-import__backfill-dates label {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 10px;
+  text-align: left;
+}
+
+.memory-import__backfill-dates input {
+  min-width: 150px;
+}
+
+.memory-import__backfill-preview.settings-row,
+.memory-import__backfill-progress.settings-row {
+  display: grid;
+  gap: 6px;
+}
+
+.memory-import__backfill-preview > ul,
+.memory-import__backfill-preview > ul > li > ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.memory-import__backfill-preview > ul > li {
+  display: grid;
+  gap: 4px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+.memory-import__backfill-preview > ul > li > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.memory-import__backfill-preview > ul > li > ul {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+@media (max-width: 768px) {
+  .memory-import__backfill-dates,
+  .memory-import__backfill-actions {
+    justify-content: flex-start;
+  }
 }
 
 @keyframes memory-import-pulse {

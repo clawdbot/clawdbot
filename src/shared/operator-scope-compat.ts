@@ -2,6 +2,7 @@
 const OPERATOR_ROLE = "operator";
 const OPERATOR_ADMIN_SCOPE = "operator.admin";
 const OPERATOR_READ_SCOPE = "operator.read";
+const OPERATOR_TALK_SCOPE = "operator.talk";
 const OPERATOR_WRITE_SCOPE = "operator.write";
 const OPERATOR_SCOPE_PREFIX = "operator.";
 
@@ -28,6 +29,9 @@ function operatorScopeSatisfied(requestedScope: string, granted: Set<string>): b
   }
   if (requestedScope === OPERATOR_WRITE_SCOPE) {
     return granted.has(OPERATOR_WRITE_SCOPE);
+  }
+  if (requestedScope === OPERATOR_TALK_SCOPE) {
+    return granted.has(OPERATOR_TALK_SCOPE) || granted.has(OPERATOR_WRITE_SCOPE);
   }
   return granted.has(requestedScope);
 }

@@ -1,5 +1,8 @@
+import { toStringifiedError as asError } from "openclaw/plugin-sdk/error-runtime";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
+import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import WebSocket from "ws";
 import { sha256Hex, signDeviceRequest, utf8 } from "../protocol/index.js";
 import type { Envelope, SignedReceipt } from "../protocol/index.js";
@@ -12,6 +15,7 @@ type FetchLike = typeof fetch;
 // force unbounded allocation through response.json().
 const REEF_RELAY_JSON_MAX_BYTES = 16 * 1024 * 1024;
 const REEF_RELAY_ERROR_JSON_MAX_BYTES = 64 * 1024;
+const REEF_RELAY_ERROR_CODE_PATTERN = /^[a-z][a-z0-9_]{0,127}$/;
 // Relay envelopes are capped at 48 KiB. Leave room for inbox metadata while
 // rejecting oversized or compressed frames before ws materializes the message.
 const REEF_RELAY_WEBSOCKET_MAX_PAYLOAD_BYTES = 64 * 1024;
@@ -26,13 +30,43 @@ const REEF_WS_HANDSHAKE_MS = 30_000;
 // stops producing bytes must not pin inbox recovery forever.
 const REEF_RELAY_REQUEST_TIMEOUT_MS = 15_000;
 
+function redactReefRelayErrorMessage(message: string, secrets: readonly string[]): string {
+  let redacted = message;
+  for (const secret of secrets) {
+    if (secret.length > 0) {
+      redacted = redacted.replaceAll(secret, "<redacted>");
+    }
+  }
+  return redactSensitiveText(redacted, { mode: "tools" });
+}
+
 export class ReefRelayError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    readonly code?: string,
   ) {
     super(message);
     this.name = "ReefRelayError";
+  }
+}
+
+export class ReefProtocolCompatibilityError extends ReefRelayError {
+  constructor(
+    status: 400 | 409,
+    code: "invalid_request" | "client_upgrade_required",
+    readonly upgradeRequired: "reef-relay" | "openclaw-client",
+    message: string,
+  ) {
+    super(status, message, code);
+    this.name = "ReefProtocolCompatibilityError";
+  }
+}
+
+class ReefRelayUnavailableError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = "ReefRelayUnavailableError";
   }
 }
 
@@ -46,8 +80,36 @@ export function isDefinitiveReefRegistrationFailure(error: unknown): boolean {
   );
 }
 
+export function isRetryableReefRelayFailure(error: unknown): boolean {
+  if (error instanceof ReefRelayError) {
+    return error.status === 408 || error.status === 429 || error.status >= 500;
+  }
+  return (
+    error instanceof ReefRelayUnavailableError ||
+    (error instanceof Error && error.name === "TimeoutError")
+  );
+}
+
 export function isReefOwnershipRejection(error: unknown): boolean {
   return error instanceof ReefRelayError && error.message === "unknown_handle";
+}
+
+async function readReefRelaySuccessJson<T>(response: Response, signal?: AbortSignal): Promise<T> {
+  try {
+    return await readProviderJsonResponse<T>(response, "reef.relay", {
+      maxBytes: REEF_RELAY_JSON_MAX_BYTES,
+    });
+  } catch (error) {
+    if (signal?.aborted) {
+      throw signal.reason;
+    }
+    // Undici surfaces socket loss during response-body consumption as a
+    // TypeError even though fetch already resolved with response headers.
+    if (error instanceof TypeError) {
+      throw new ReefRelayUnavailableError(error);
+    }
+    throw error;
+  }
 }
 
 export class ReefTransportClient {
@@ -70,7 +132,7 @@ export class ReefTransportClient {
   }
 
   async authComplete(token: string): Promise<{ session: string; expires: number }> {
-    return await this.unsigned("POST", "/v1/auth/complete", { token });
+    return await this.unsigned("POST", "/v1/auth/complete", { token }, {}, [token]);
   }
 
   async createHandle(
@@ -87,29 +149,75 @@ export class ReefTransportClient {
         request_policy: requestPolicy,
       },
       { authorization: `Bearer ${session}` },
+      [session],
     );
   }
 
   listOwnHandles(
     session: string,
   ): Promise<{ handles: Array<{ handle: string; key_epoch: number; request_policy: string }> }> {
-    return this.unsigned("GET", "/v1/handles", undefined, { authorization: `Bearer ${session}` });
+    return this.unsigned("GET", "/v1/handles", undefined, { authorization: `Bearer ${session}` }, [
+      session,
+    ]);
   }
 
   mintFriendCode(): Promise<{ code: string; expires: number }> {
     return this.signed("POST", "/v1/friend-codes");
   }
   requestFriend(to: string, code?: string): Promise<{ status: string }> {
-    return this.signed("POST", "/v1/friends/request", code ? { to, code } : { to });
+    return this.signed(
+      "POST",
+      "/v1/friends/request",
+      code ? { to, code } : { to },
+      undefined,
+      code ? [code] : [],
+    );
   }
-  respondFriend(friend: RelayFriend, accept: boolean): Promise<{ peer: string; status: string }> {
-    return this.signed("POST", "/v1/friends/respond", {
-      peer: friend.peer,
-      accept,
-      expected_key_epoch: friend.key_epoch,
-      expected_ed25519_pub: friend.ed25519_pub,
-      expected_x25519_pub: friend.x25519_pub,
-    });
+  async respondFriend(
+    friend: RelayFriend,
+    accept: boolean,
+  ): Promise<{ peer: string; status: "active" | "blocked" }> {
+    let result: unknown;
+    try {
+      result = await this.signed("POST", "/v1/friends/respond", {
+        peer: friend.peer,
+        accept,
+        expected_key_epoch: friend.key_epoch,
+        expected_ed25519_pub: friend.ed25519_pub,
+        expected_x25519_pub: friend.x25519_pub,
+      });
+    } catch (error) {
+      if (
+        error instanceof ReefRelayError &&
+        error.status === 400 &&
+        error.code === "invalid_request"
+      ) {
+        throw new ReefProtocolCompatibilityError(
+          400,
+          error.code,
+          "reef-relay",
+          "The Reef relay is likely incompatible or outdated. Update OpenClaw and the Reef relay together, then approve the fresh pairing challenge again.",
+        );
+      }
+      if (
+        error instanceof ReefRelayError &&
+        error.status === 409 &&
+        error.code === "client_upgrade_required"
+      ) {
+        throw new ReefProtocolCompatibilityError(
+          409,
+          error.code,
+          "openclaw-client",
+          "OpenClaw is outdated for this Reef relay. Update OpenClaw, then approve the fresh pairing challenge again.",
+        );
+      }
+      throw error;
+    }
+    const status = accept ? "active" : "blocked";
+    if (!isRecord(result) || result.peer !== friend.peer || result.status !== status) {
+      throw new Error("invalid Reef relay friendship response");
+    }
+    return { peer: friend.peer, status };
   }
   listFriends(): Promise<{ friendships: RelayFriend[] }> {
     return this.signed("GET", "/v1/friends");
@@ -138,7 +246,13 @@ export class ReefTransportClient {
     return url.toString();
   }
 
-  async signed<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+  async signed<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    signal?: AbortSignal,
+    secrets: readonly string[] = [],
+  ): Promise<T> {
     const bytes = body === undefined ? new Uint8Array() : utf8(JSON.stringify(body));
     const auth = this.auth(path, bytes, method);
     return await this.request(
@@ -151,6 +265,7 @@ export class ReefTransportClient {
         "x-reef-sig": auth.signature,
       },
       signal,
+      [auth.signature, ...secrets],
     );
   }
 
@@ -174,9 +289,10 @@ export class ReefTransportClient {
     path: string,
     body?: unknown,
     headers: Record<string, string> = {},
+    secrets: readonly string[] = [],
   ): Promise<T> {
     const bytes = body === undefined ? new Uint8Array() : utf8(JSON.stringify(body));
-    return await this.request(method, path, bytes, headers);
+    return await this.request(method, path, bytes, headers, undefined, secrets);
   }
 
   private async request<T>(
@@ -185,6 +301,7 @@ export class ReefTransportClient {
     bytes: Uint8Array,
     headers: Record<string, string>,
     signal?: AbortSignal,
+    secrets: readonly string[] = [],
   ): Promise<T> {
     const url = new URL(path, this.relayUrl).toString();
     const timeout = buildTimeoutAbortSignal({
@@ -194,22 +311,32 @@ export class ReefTransportClient {
       url,
     });
     try {
-      const response = await this.fetcher(url, {
-        method,
-        headers: { ...headers, ...(bytes.length ? { "content-type": "application/json" } : {}) },
-        ...(bytes.length ? { body: bytes as BodyInit } : {}),
-        signal: timeout.signal,
-      });
+      let response: Response;
+      try {
+        response = await this.fetcher(url, {
+          method,
+          headers: { ...headers, ...(bytes.length ? { "content-type": "application/json" } : {}) },
+          ...(bytes.length ? { body: bytes as BodyInit } : {}),
+          signal: timeout.signal,
+        });
+      } catch (error) {
+        if (timeout.signal?.aborted) {
+          throw timeout.signal.reason;
+        }
+        throw new ReefRelayUnavailableError(error);
+      }
       if (!response.ok) {
         let message = `relay HTTP ${response.status}`;
+        let code: string | undefined;
         try {
-          const parsed = await readProviderJsonResponse<{ error?: string }>(
-            response,
-            "reef.relay.error",
-            { maxBytes: REEF_RELAY_ERROR_JSON_MAX_BYTES },
-          );
-          if (typeof parsed.error === "string" && parsed.error) {
-            message = parsed.error;
+          const parsed = await readProviderJsonResponse<unknown>(response, "reef.relay.error", {
+            maxBytes: REEF_RELAY_ERROR_JSON_MAX_BYTES,
+          });
+          if (isRecord(parsed) && typeof parsed.error === "string" && parsed.error) {
+            message = redactReefRelayErrorMessage(parsed.error, secrets);
+            if (REEF_RELAY_ERROR_CODE_PATTERN.test(parsed.error)) {
+              code = parsed.error;
+            }
           }
         } catch {
           if (timeout.signal?.aborted) {
@@ -218,14 +345,12 @@ export class ReefTransportClient {
           // Keep the status fallback when the error body is missing, malformed,
           // or oversized; callers still get a typed ReefRelayError.
         }
-        throw new ReefRelayError(response.status, message);
+        throw new ReefRelayError(response.status, message, code);
       }
       if (response.status === 204) {
         return undefined as T;
       }
-      return await readProviderJsonResponse<T>(response, "reef.relay", {
-        maxBytes: REEF_RELAY_JSON_MAX_BYTES,
-      });
+      return await readReefRelaySuccessJson<T>(response, timeout.signal);
     } finally {
       timeout.cleanup();
     }
@@ -398,7 +523,9 @@ export class ReefInboxConnection {
 
   private live(signal?: AbortSignal, onReady?: () => void): Promise<void> {
     return new Promise((resolve, reject) => {
-      const socket = this.webSocketFactory(this.client.websocketUrl());
+      const url = this.client.websocketUrl();
+      const signature = new URL(url).searchParams.get("sig") ?? "";
+      const socket = this.webSocketFactory(url);
       const workAbort = new AbortController();
       // Emit each state transition at most once per socket and never after this
       // invocation settles, so late events from an abandoned socket cannot
@@ -537,7 +664,7 @@ export class ReefInboxConnection {
         if (aborting || finished) {
           return;
         }
-        disconnect(reefInboxCloseError(event));
+        disconnect(reefInboxCloseError(event, [signature]));
       });
       socket.addEventListener("error", (event) =>
         disconnect(new Error(event.message?.trim() || "reef inbox socket error")),
@@ -549,12 +676,13 @@ export class ReefInboxConnection {
   }
 }
 
-function asError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
-}
-
-function reefInboxCloseError(event: { code?: number; reason?: string }): Error {
+function reefInboxCloseError(
+  event: { code?: number; reason?: string },
+  secrets: readonly string[] = [],
+): Error {
   const code = Number.isInteger(event.code) ? ` code=${event.code}` : "";
-  const reason = event.reason?.trim() ? ` reason=${event.reason.trim()}` : "";
+  const reason = event.reason?.trim()
+    ? ` reason=${redactReefRelayErrorMessage(event.reason.trim(), secrets)}`
+    : "";
   return new Error(`reef inbox socket closed unexpectedly${code}${reason}`);
 }

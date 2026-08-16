@@ -141,28 +141,29 @@ const baseAccount: ResolvedFeishuAccount = {
   config: FeishuConfigSchema.parse({}),
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
 type HttpInstanceLike = {
   request: (options?: Record<string, unknown>) => Promise<unknown>;
   get: (url: string, options?: Record<string, unknown>) => Promise<unknown>;
+  delete: (url: string, options?: Record<string, unknown>) => Promise<unknown>;
+  head: (url: string, options?: Record<string, unknown>) => Promise<unknown>;
+  options: (url: string, options?: Record<string, unknown>) => Promise<unknown>;
   post: (url: string, body?: unknown, options?: Record<string, unknown>) => Promise<unknown>;
+  put: (url: string, body?: unknown, options?: Record<string, unknown>) => Promise<unknown>;
+  patch: (url: string, body?: unknown, options?: Record<string, unknown>) => Promise<unknown>;
 };
 
 function requireHttpInstance(value: unknown): HttpInstanceLike {
   if (
-    isRecord(value) &&
+    isObjectRecord(value) &&
     typeof value.request === "function" &&
     typeof value.get === "function" &&
     typeof value.post === "function"
   ) {
-    return {
-      request: value.request as HttpInstanceLike["request"],
-      get: value.get as HttpInstanceLike["get"],
-      post: value.post as HttpInstanceLike["post"],
-    };
+    return value as HttpInstanceLike;
   }
   throw new Error("expected Feishu HTTP instance");
 }
@@ -172,7 +173,7 @@ function readCallOptions(
   index = -1,
 ): Record<string, unknown> {
   const call = index < 0 ? mock.mock.calls.at(index)?.[0] : mock.mock.calls[index]?.[0];
-  return isRecord(call) ? call : {};
+  return isObjectRecord(call) ? call : {};
 }
 
 function firstWsClientOptions(): {
@@ -199,7 +200,7 @@ function firstWsClientOptions(): {
 beforeAll(async () => {
   vi.doMock("@larksuiteoapi/node-sdk", () => ({
     AppType: { SelfBuild: "self" },
-    Domain: { Feishu: "https://open.feishu.cn", Lark: "https://open.larksuite.com" },
+    Domain: { Feishu: 0, Lark: 1 },
     LoggerLevel: { info: "info" },
     Client: clientCtorMock,
     WSClient: wsClientCtorMock,
@@ -277,6 +278,148 @@ describe("Feishu default User-Agent interceptor", () => {
   });
 });
 
+describe("Feishu custom HTTPS API domains", () => {
+  const sdkOrigin = "https://open.feishu.cn";
+  const customDomain = "https://private.feishu.test:8443/reverse-proxy/";
+
+  function createCustomDomainHttpInstance(accountId: string): HttpInstanceLike {
+    createFeishuClient({
+      appId: `app_${accountId}`,
+      appSecret: "local-test-placeholder", // pragma: allowlist secret
+      accountId,
+      domain: customDomain,
+    });
+    expect(readCallOptions(clientCtorMock).domain).toBe(0);
+    return requireHttpInstance(readCallOptions(clientCtorMock).httpInstance);
+  }
+
+  it.each(["get", "delete", "head", "options"] as const)(
+    "routes SDK %s requests through the configured HTTPS origin, port, and path",
+    async (method) => {
+      const httpInstance = createCustomDomainHttpInstance(`custom-domain-${method}`);
+      const requestUrl = `${sdkOrigin}/open-apis/im/v1/messages/om_proof?locale=en`;
+
+      await httpInstance[method](requestUrl, { headers: { "X-Proof": "true" } });
+
+      expect(mockBaseHttpInstance[method]).toHaveBeenCalledWith(
+        "https://private.feishu.test:8443/reverse-proxy/open-apis/im/v1/messages/om_proof?locale=en",
+        { timeout: FEISHU_HTTP_TIMEOUT_MS, headers: { "X-Proof": "true" } },
+      );
+    },
+  );
+
+  it.each(["post", "put", "patch"] as const)(
+    "routes SDK %s requests without changing their body or request options",
+    async (method) => {
+      const httpInstance = createCustomDomainHttpInstance(`custom-domain-${method}`);
+      const body = { content: "preserve this body" };
+
+      await httpInstance[method](`${sdkOrigin}/open-apis/im/v1/messages`, body, {
+        headers: { "X-Proof": "true" },
+      });
+
+      expect(mockBaseHttpInstance[method]).toHaveBeenCalledWith(
+        "https://private.feishu.test:8443/reverse-proxy/open-apis/im/v1/messages",
+        body,
+        { timeout: FEISHU_HTTP_TIMEOUT_MS, headers: { "X-Proof": "true" } },
+      );
+    },
+  );
+
+  it("routes request options after preserving Feishu SDK multipart normalization", async () => {
+    const httpInstance = createCustomDomainHttpInstance("custom-domain-upload");
+
+    await httpInstance.request({
+      url: `${sdkOrigin}/open-apis/im/v1/files?folder=root`,
+      method: "POST",
+      headers: { "Content-Type": "multipart/form-data" },
+      data: { file_type: "stream", file_name: "proof.txt", file: Buffer.from("proof") },
+    });
+
+    const delegated = readCallOptions(mockBaseHttpInstance.request);
+    expect(delegated.url).toBe(
+      "https://private.feishu.test:8443/reverse-proxy/open-apis/im/v1/files?folder=root",
+    );
+    expect(delegated.timeout).toBe(FEISHU_HTTP_TIMEOUT_MS);
+    expect(delegated.data).toBeInstanceOf(FormData);
+    expect((delegated.data as FormData).get("file_type")).toBe("stream");
+  });
+
+  it.each([
+    "https://open.feishu.cn.evil.test/open-apis/im/v1/messages",
+    "https://open.feishu.cn:444/open-apis/im/v1/messages",
+    "https://unrelated.example/open-apis/im/v1/messages",
+  ])("does not rewrite an unrelated request origin: %s", async (url) => {
+    const httpInstance = createCustomDomainHttpInstance(`custom-domain-external-${url.length}`);
+
+    await httpInstance.get(url);
+
+    expect(mockBaseHttpInstance.get).toHaveBeenCalledWith(url, {
+      timeout: FEISHU_HTTP_TIMEOUT_MS,
+    });
+  });
+
+  it("keeps independent account transport origins isolated", async () => {
+    const first = createCustomDomainHttpInstance("custom-domain-first-account");
+    createFeishuClient({
+      appId: "app_second_account",
+      appSecret: "local-test-placeholder", // pragma: allowlist secret
+      accountId: "custom-domain-second-account",
+      domain: "https://another.feishu.test:9443/tenant",
+    });
+    const second = requireHttpInstance(readCallOptions(clientCtorMock).httpInstance);
+
+    await first.get(`${sdkOrigin}/open-apis/im/v1/chats/oc_first`);
+    await second.get(`${sdkOrigin}/open-apis/im/v1/chats/oc_second`);
+
+    expect(mockBaseHttpInstance.get.mock.calls.map((call) => call[0])).toEqual([
+      "https://private.feishu.test:8443/reverse-proxy/open-apis/im/v1/chats/oc_first",
+      "https://another.feishu.test:9443/tenant/open-apis/im/v1/chats/oc_second",
+    ]);
+  });
+
+  it("routes WebSocket endpoint discovery through the same configured origin", async () => {
+    await createFeishuWSClient({
+      ...baseAccount,
+      accountId: "custom-domain-websocket",
+      domain: customDomain,
+    });
+
+    const options = readCallOptions(wsClientCtorMock);
+    expect(options.domain).toBe(0);
+    const httpInstance = requireHttpInstance(options.httpInstance);
+    await httpInstance.request({ url: `${sdkOrigin}/callback/ws/endpoint`, method: "post" });
+
+    expect(mockBaseHttpInstance.request).toHaveBeenCalledWith({
+      url: "https://private.feishu.test:8443/reverse-proxy/callback/ws/endpoint",
+      method: "post",
+      timeout: FEISHU_HTTP_TIMEOUT_MS,
+    });
+  });
+
+  it.each([
+    ["feishu", 0, "https://open.feishu.cn"],
+    ["lark", 1, "https://open.larksuite.com"],
+  ] as const)(
+    "preserves the existing %s SDK domain and direct requests",
+    async (domain, sdkDomain, url) => {
+      createFeishuClient({
+        appId: `app_${domain}`,
+        appSecret: "local-test-placeholder", // pragma: allowlist secret
+        accountId: `official-domain-${domain}`,
+        domain,
+      });
+
+      const options = readCallOptions(clientCtorMock);
+      expect(options.domain).toBe(sdkDomain);
+      await requireHttpInstance(options.httpInstance).get(`${url}/open-apis/im/v1/messages`);
+      expect(mockBaseHttpInstance.get).toHaveBeenCalledWith(`${url}/open-apis/im/v1/messages`, {
+        timeout: FEISHU_HTTP_TIMEOUT_MS,
+      });
+    },
+  );
+});
+
 describe("createFeishuClient HTTP timeout", () => {
   const readLastClientHttpInstance = (): HttpInstanceLike =>
     requireHttpInstance(readCallOptions(clientCtorMock).httpInstance);
@@ -323,6 +466,92 @@ describe("createFeishuClient HTTP timeout", () => {
     expect(mockBaseHttpInstance.get).toHaveBeenCalledWith("https://example.com/api", {
       timeout: 5_000,
     });
+  });
+
+  it.each([
+    {
+      kind: "file",
+      url: "https://open.feishu.cn/open-apis/im/v1/files",
+      data: { file_type: "stream", file_name: "tiny.txt", file: Buffer.from("tiny") },
+      mediaField: "file",
+      mediaBytes: Buffer.from("tiny"),
+      fileName: "tiny.txt",
+      scalarField: "file_type",
+      scalarValue: "stream",
+    },
+    {
+      kind: "image",
+      url: "https://open.feishu.cn/open-apis/im/v1/images",
+      data: { image_type: "message", image: Buffer.from("pixels") },
+      mediaField: "image",
+      mediaBytes: Buffer.from("pixels"),
+      fileName: "image.bin",
+      scalarField: "image_type",
+      scalarValue: "message",
+    },
+  ])("normalizes Feishu SDK $kind uploads to explicit FormData", async (testCase) => {
+    createFeishuClient({
+      appId: `app_upload_${testCase.kind}`,
+      appSecret: "test-app-secret", // pragma: allowlist secret
+      accountId: `multipart-upload-${testCase.kind}`,
+    });
+    const httpInstance = readLastClientHttpInstance();
+
+    await httpInstance.request({
+      url: testCase.url,
+      method: "POST",
+      headers: { "Content-Type": "multipart/form-data", Authorization: "Bearer test-token" },
+      data: testCase.data,
+    });
+
+    const delegated = readCallOptions(mockBaseHttpInstance.request);
+    expect(delegated.timeout).toBe(FEISHU_HTTP_TIMEOUT_MS);
+    expect(delegated.headers).toEqual({
+      "Content-Type": "multipart/form-data",
+      Authorization: "Bearer test-token",
+    });
+    const form = delegated.data as FormData;
+    expect(form).toBeInstanceOf(FormData);
+    expect(form.get(testCase.scalarField)).toBe(testCase.scalarValue);
+    const media = form.get(testCase.mediaField) as File;
+    expect(media).toBeInstanceOf(Blob);
+    expect(media.name).toBe(testCase.fileName);
+    expect(Buffer.from(await media.arrayBuffer())).toEqual(testCase.mediaBytes);
+  });
+
+  it.each([
+    {
+      name: "other endpoints",
+      url: "https://open.feishu.cn/open-apis/drive/v1/files/upload_all",
+      method: "POST",
+    },
+    {
+      name: "upload paths mentioned only in a query",
+      url: "https://open.feishu.cn/upload?return=/open-apis/im/v1/files",
+      method: "POST",
+    },
+    {
+      name: "non-POST requests",
+      url: "https://open.feishu.cn/open-apis/im/v1/files",
+      method: "GET",
+    },
+  ])("leaves $name on the SDK multipart serialization path", async ({ url, method }) => {
+    createFeishuClient({
+      appId: `app_upload_other_${method}`,
+      appSecret: "test-app-secret", // pragma: allowlist secret
+      accountId: `multipart-upload-other-${method}-${url.length}`,
+    });
+    const httpInstance = readLastClientHttpInstance();
+    const data = { file_name: "drive.txt", file: Buffer.from("drive") };
+
+    await httpInstance.request({
+      url,
+      method,
+      headers: { "Content-Type": "multipart/form-data" },
+      data,
+    });
+
+    expect(readCallOptions(mockBaseHttpInstance.request).data).toBe(data);
   });
 
   it("uses config-configured default timeout when provided", async () => {

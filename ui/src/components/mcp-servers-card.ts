@@ -4,7 +4,7 @@ import { property, state } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
 import { t } from "../i18n/index.ts";
-import { resolveEditableSnapshotConfig } from "../lib/config/index.ts";
+import { resolveEditableSnapshotConfig } from "../lib/config/config-state-model.ts";
 import {
   buildAddMcpServerPatch,
   buildRemoveMcpServerPatch,
@@ -16,11 +16,17 @@ import {
   type McpServerSummary,
   type McpServersPatchBuildResult,
 } from "../lib/config/mcp-servers.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { icons } from "./icons.ts";
 import { renderMcpServerForm, type McpServerForm } from "./mcp-server-form.ts";
-import { renderSettingsEmpty, renderSettingsSection, renderSettingsStatus } from "./settings-ui.ts";
+import {
+  renderDocsLink,
+  renderSettingsEmpty,
+  renderSettingsSection,
+  renderSettingsStatus,
+} from "./settings-ui.ts";
 
 type McpServerMessage = { kind: "error" | "success"; text: string };
 
@@ -45,6 +51,8 @@ class McpServersCard extends OpenClawLightDomElement {
 
   @property() pluginsHref = "";
 
+  @property() docsUrl = "https://docs.openclaw.ai/tools/mcp";
+
   @state() private rows: McpServerSummary[] | null = null;
   @state() private busy = false;
   @state() private message: McpServerMessage | null = null;
@@ -61,7 +69,7 @@ class McpServersCard extends OpenClawLightDomElement {
           .catch((error: unknown) => {
             this.message = {
               kind: "error",
-              text: error instanceof Error ? error.message : String(error),
+              text: formatUiError(error),
             };
           });
         return runtimeConfig.subscribe(() => this.syncRows());
@@ -84,7 +92,7 @@ class McpServersCard extends OpenClawLightDomElement {
 
   private mutationBlockedReason(): string | null {
     const gateway = this.context?.gateway;
-    if (!gateway?.snapshot.connected) {
+    if (gateway?.snapshot.phase !== "connected") {
       return t("mcpServers.connectRequired");
     }
     if (!hasOperatorAdminAccess(gateway.snapshot.hello?.auth ?? null)) {
@@ -124,7 +132,7 @@ class McpServersCard extends OpenClawLightDomElement {
       this.message = { kind: "error", text: t("mcpServers.nameInvalid") };
       return;
     }
-    const config = parseMcpTarget(form.target);
+    const config = parseMcpTarget(form.target, form.transport);
     if (!config) {
       this.message = { kind: "error", text: t("mcpServers.targetInvalid") };
       return;
@@ -219,7 +227,9 @@ class McpServersCard extends OpenClawLightDomElement {
     const body = !rows
       ? html`<div class="mcp-server-loading" role="status">${t("common.loading")}</div>`
       : rows.length === 0
-        ? renderSettingsEmpty(t("mcpPage.noServers"))
+        ? renderSettingsEmpty(html`
+            ${t("mcpPage.noServers")} ${renderDocsLink(this.docsUrl, t("mcpPage.setUpFirstServer"))}
+          `)
         : rows.map((server) => this.renderRow(server));
     return html`
       <div class="mcp-server-list">

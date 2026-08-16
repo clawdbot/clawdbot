@@ -66,8 +66,7 @@ def play_track
 end
 
 def wear_play_track
-  default_track = play_track == "internal" ? "qa" : play_track
-  "wear:#{default_track}"
+  "wear:#{play_track}"
 end
 
 def play_release_status
@@ -321,15 +320,17 @@ def play_metadata_path
   File.join(ANDROID_FASTLANE_ROOT, "metadata", "android")
 end
 
-def play_screenshot_paths
-  Dir[File.join(play_metadata_path, "**", "images", "**", "*.{png,jpg,jpeg}")]
+def play_screenshot_paths_for_type(screenshot_type)
+  Dir[File.join(play_metadata_path, "**", "images", screenshot_type, "*.{png,jpg,jpeg}")]
 end
 
 def validate_android_screenshots!
   return unless play_screenshot_upload_requested?
 
-  if play_screenshot_paths.empty?
-    UI.user_error!("SUPPLY_UPLOAD_SCREENSHOTS=1 but no screenshots were found under apps/android/fastlane/metadata/android/*/images.")
+  required_types = %w(phoneScreenshots wearScreenshots)
+  missing_types = required_types.select { |screenshot_type| play_screenshot_paths_for_type(screenshot_type).empty? }
+  unless missing_types.empty?
+    UI.user_error!("SUPPLY_UPLOAD_SCREENSHOTS=1 but no screenshots were found for: #{missing_types.join(', ')}.")
   end
 end
 

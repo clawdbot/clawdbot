@@ -40,12 +40,10 @@ import {
 } from "./reply-delivery.js";
 import {
   buildModelsProviderData,
-  createChannelMessageReplyPipeline,
   isRequestBodyLimitError,
   logTypingFailure,
   readRequestBodyWithLimit,
   type OpenClawConfig,
-  type ReplyPayload,
   type RuntimeEnv,
 } from "./runtime-api.js";
 import { sendMessageMattermost } from "./send.js";
@@ -871,39 +869,26 @@ async function handleSlashCommandAsync(params: {
     accountId: account.accountId,
   });
 
-  const { onModelSelected, typingCallbacks, ...replyPipeline } = createChannelMessageReplyPipeline({
-    cfg,
-    agentId: route.agentId,
-    channel: "mattermost",
-    accountId: account.accountId,
-    typing: {
-      start: () => sendMattermostTyping(client, { channelId }),
-      onStartError: (err) => {
-        logTypingFailure({
-          log: (message) => log?.(message),
-          channel: "mattermost",
-          target: channelId,
-          error: err,
-        });
-      },
-    },
-  });
   const humanDelay = resolveHumanDelayConfig(cfg, route.agentId);
   const deliveryBarrier = createMattermostReplyDeliveryBarrier({
     isDirect: kind === "direct",
     dmRetryOptions: account.config.dmChannelRetry,
   });
 
-  await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-    ctx: ctxPayload,
+  await core.channel.inbound.dispatch({
     cfg,
-    dispatcherOptions: {
-      ...replyPipeline,
-      resolveFollowupAdmissionBarrierTimeoutPolicy: deliveryBarrier.resolveTimeoutPolicy,
-      onDeliverySettled: deliveryBarrier.markDeliverySettled,
-      humanDelay,
-      deliver: async (payload: ReplyPayload) => {
-        await deliverMattermostReplyPayload({
+    channel: "mattermost",
+    accountId: account.accountId,
+    route: {
+      agentId: route.agentId,
+      dmScope: route.dmScope,
+      sessionKey: route.sessionKey,
+    },
+    ctxPayload,
+    delivery: {
+      observeMessageSent: true,
+      deliver: async (payload) => {
+        const result = await deliverMattermostReplyPayload({
           core,
           cfg,
           payload,
@@ -915,19 +900,38 @@ async function handleSlashCommandAsync(params: {
           sendMessage: sendMessageMattermost,
           onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
         });
-        runtime.log?.(`delivered slash reply to ${to}`);
+        if (result.visibleReplySent) {
+          runtime.log?.(`delivered slash reply to ${to}`);
+        }
+        return result;
       },
       onError: (err, info) => {
         runtime.error?.(
           `mattermost slash ${info.kind} reply failed: ${sanitizeCommandLookupError(err)}`,
         );
       },
-      typingCallbacks,
+    },
+    replyPipeline: {
+      typing: {
+        start: () => sendMattermostTyping(client, { channelId }),
+        onStartError: (err) => {
+          logTypingFailure({
+            log: (message) => log?.(message),
+            channel: "mattermost",
+            target: channelId,
+            error: err,
+          });
+        },
+      },
+    },
+    dispatcherOptions: {
+      resolveFollowupAdmissionBarrierTimeoutPolicy: deliveryBarrier.resolveTimeoutPolicy,
+      onDeliverySettled: deliveryBarrier.markDeliverySettled,
+      humanDelay,
     },
     replyOptions: {
       disableBlockStreaming:
         typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
-      onModelSelected,
     },
   });
 }

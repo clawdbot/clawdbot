@@ -27,6 +27,7 @@ import {
   findUndeclaredPluginToolNames,
   normalizePluginToolContractNames,
 } from "./tool-contracts.js";
+import { normalizePluginToolMatcher } from "./tool-hook-matcher.js";
 import type { PluginConversationBindingResolvedEvent } from "./types.js";
 
 const controlUiSurfaces = new Set<PluginControlUiDescriptor["surface"]>([
@@ -35,6 +36,7 @@ const controlUiSurfaces = new Set<PluginControlUiDescriptor["surface"]>([
   "run",
   "settings",
   "tab",
+  "widget",
 ]);
 
 function normalizeHostHookString(value: unknown): string {
@@ -215,6 +217,7 @@ export function createHostRegistrars(state: PluginRegistryState) {
     }
     const id = normalizeHostHookString(policy.id);
     const description = normalizeHostHookString(policy.description);
+    const matcher = normalizePluginToolMatcher(policy.matcher);
     if (!id || !description || typeof policy.evaluate !== "function") {
       pushDiagnostic({
         level: "error",
@@ -261,7 +264,7 @@ export function createHostRegistrars(state: PluginRegistryState) {
     const registration: PluginTrustedToolPolicyRegistryRegistration = {
       pluginId: record.id,
       pluginName: record.name,
-      policy: { ...policy, id, description },
+      policy: { ...policy, id, description, ...(matcher ? { matcher } : {}) },
       origin: record.origin,
       source: record.source,
       rootDir: record.rootDir,

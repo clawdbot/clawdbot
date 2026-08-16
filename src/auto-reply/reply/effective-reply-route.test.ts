@@ -1,13 +1,27 @@
 // Tests effective reply route selection from context, session, and fallback state.
 import { describe, expect, it } from "vitest";
+import type { SessionEntry, SessionOrigin } from "../../config/sessions/types.js";
+import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
+import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { isSystemEventProvider, resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 
 type EffectiveReplyRouteParams = Parameters<typeof resolveEffectiveReplyRoute>[0];
 type EffectiveReplyRouteContext = EffectiveReplyRouteParams["ctx"];
 type EffectiveReplyRouteEntry = NonNullable<EffectiveReplyRouteParams["entry"]>;
+type LegacyDeliveryFixture = Partial<SessionEntry> & {
+  route?: ChannelRouteRef;
+  deliveryContext?: DeliveryContext;
+  origin?: SessionOrigin;
+  lastChannel?: string;
+  lastTo?: string;
+  lastAccountId?: string;
+};
 
 const ctx = (params: EffectiveReplyRouteContext): EffectiveReplyRouteContext => params;
-const entry = (params: EffectiveReplyRouteEntry): EffectiveReplyRouteEntry => params;
+const entry = (params: LegacyDeliveryFixture): EffectiveReplyRouteEntry =>
+  normalizeLegacySessionEntryDelivery(params as SessionEntry);
 
 describe("resolveEffectiveReplyRoute", () => {
   it("uses live origin context for normal providers", () => {
@@ -313,16 +327,15 @@ describe("resolveEffectiveReplyRoute", () => {
     expect(
       resolveEffectiveReplyRoute({
         ctx: ctx({ Provider: "exec-event" }),
-        entry: entry({
-          deliveryContext: {
-            channel: "telegram",
-            to: "chat:persisted",
-            accountId: "persisted-account",
-          },
-          lastChannel: "slack",
-          lastTo: "last-to",
-          lastAccountId: "last-account",
-        }),
+        entry: {
+          delivery: normalizeSessionDeliveryState({
+            context: {
+              channel: "telegram",
+              to: "chat:persisted",
+              accountId: "persisted-account",
+            },
+          }),
+        },
       }),
     ).toEqual({
       channel: "telegram",

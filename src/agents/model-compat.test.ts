@@ -391,31 +391,33 @@ describe("isModernModelRef", () => {
   });
 
   it("includes plugin-advertised modern models", () => {
-    providerRuntimeMocks.resolveProviderModernModelRef.mockImplementation(({ provider, context }) =>
-      provider === "openai" &&
-      [
-        "gpt-5.6",
-        "gpt-5.6-sol",
-        "gpt-5.6-terra",
-        "gpt-5.6-luna",
-        "gpt-5.5",
-        "gpt-5.5-pro",
-        "gpt-5.4",
-        "gpt-5.4-pro",
-        "gpt-5.4-mini",
-        "gpt-5.4-nano",
-      ].includes(context.modelId)
-        ? true
-        : provider === "openai" &&
-            ["gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5.4-pro", "gpt-5.4-mini"].includes(
-              context.modelId,
-            )
+    providerRuntimeMocks.resolveProviderModernModelRef.mockImplementation(
+      ({ provider, context }) =>
+        provider === "openai" &&
+        [
+          "gpt-5.6",
+          "gpt-5.6-sol",
+          "gpt-5.6-terra",
+          "gpt-5.6-luna",
+          "gpt-5.5",
+          "gpt-5.5-pro",
+          "gpt-5.4",
+          "gpt-5.4-pro",
+          "gpt-5.4-mini",
+          "gpt-5.4-nano",
+        ].includes(context.modelId)
           ? true
-          : provider === "opencode" && ["claude-opus-4-6", "gemini-3-pro"].includes(context.modelId)
+          : provider === "openai" &&
+              ["gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5.4-pro", "gpt-5.4-mini"].includes(
+                context.modelId,
+              )
             ? true
-            : provider === "opencode-go"
+            : provider === "opencode" &&
+                ["claude-opus-4-6", "gemini-3-pro"].includes(context.modelId)
               ? true
-              : undefined,
+              : provider === "opencode-go"
+                ? true
+                : undefined,
     );
 
     expect(isModernModelRef({ provider: "openai", id: "gpt-5.6" })).toBe(true);
@@ -439,8 +441,9 @@ describe("isModernModelRef", () => {
   });
 
   it("matches plugin-advertised modern models only for exact provider ids", () => {
-    providerRuntimeMocks.resolveProviderModernModelRef.mockImplementation(({ provider, context }) =>
-      provider === "z.ai" && context.modelId === "glm-5" ? true : undefined,
+    providerRuntimeMocks.resolveProviderModernModelRef.mockImplementation(
+      ({ provider, context }) =>
+        provider === "z.ai" && context.modelId === "glm-5" ? true : undefined,
     );
 
     expect(isModernModelRef({ provider: "z.ai", id: "glm-5" })).toBe(true);
@@ -448,8 +451,9 @@ describe("isModernModelRef", () => {
   });
 
   it("excludes provider-declined modern models", () => {
-    providerRuntimeMocks.resolveProviderModernModelRef.mockImplementation(({ provider, context }) =>
-      provider === "opencode" && context.modelId === "minimax-m2.7" ? false : undefined,
+    providerRuntimeMocks.resolveProviderModernModelRef.mockImplementation(
+      ({ provider, context }) =>
+        provider === "opencode" && context.modelId === "minimax-m2.7" ? false : undefined,
     );
 
     expect(isModernModelRef({ provider: "opencode", id: "minimax-m2.7" })).toBe(false);
@@ -458,10 +462,12 @@ describe("isModernModelRef", () => {
 
 describe("isHighSignalLiveModelRef", () => {
   it("keeps modern higher-signal Claude families", () => {
-    providerRuntimeMocks.resolveProviderModernModelRef.mockImplementation(({ provider, context }) =>
-      provider === "anthropic" && ["claude-sonnet-4-6", "claude-opus-4-6"].includes(context.modelId)
-        ? true
-        : undefined,
+    providerRuntimeMocks.resolveProviderModernModelRef.mockImplementation(
+      ({ provider, context }) =>
+        provider === "anthropic" &&
+        ["claude-sonnet-4-6", "claude-opus-4-6"].includes(context.modelId)
+          ? true
+          : undefined,
     );
 
     expect(isHighSignalLiveModelRef({ provider: "anthropic", id: "claude-sonnet-4-6" })).toBe(true);
@@ -640,6 +646,7 @@ describe("isHighSignalLiveModelRef", () => {
     expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-4.20-0309-reasoning" })).toBe(
       true,
     );
+    expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-4.6" })).toBe(true);
     expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-4.5" })).toBe(true);
     expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-4.3" })).toBe(false);
     expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-3" })).toBe(false);
@@ -653,8 +660,9 @@ describe("isHighSignalLiveModelRef", () => {
   });
 
   it("keeps DeepSeek V4 models in the default live matrix when the provider marks them modern", () => {
-    providerRuntimeMocks.resolveProviderModernModelRef.mockImplementation(({ provider, context }) =>
-      provider === "deepseek" && context.modelId.startsWith("deepseek-v4") ? true : undefined,
+    providerRuntimeMocks.resolveProviderModernModelRef.mockImplementation(
+      ({ provider, context }) =>
+        provider === "deepseek" && context.modelId.startsWith("deepseek-v4") ? true : undefined,
     );
 
     expect(isHighSignalLiveModelRef({ provider: "deepseek", id: "deepseek-v4-flash" })).toBe(true);
@@ -682,6 +690,7 @@ describe("isPrioritizedHighSignalLiveModelRef", () => {
 
   it("lists priority refs as provider/id pairs", () => {
     expect(listPrioritizedHighSignalLiveModelRefs()).toStrictEqual([
+      { provider: "anthropic", id: "claude-opus-5" },
       { provider: "anthropic", id: "claude-opus-4-8" },
       { provider: "anthropic", id: "claude-sonnet-5" },
       { provider: "anthropic", id: "claude-sonnet-4-6" },
@@ -699,6 +708,7 @@ describe("isPrioritizedHighSignalLiveModelRef", () => {
       { provider: "openrouter", id: "minimax/minimax-m2.7" },
       { provider: "opencode-go", id: "glm-5" },
       { provider: "openrouter", id: "ai21/jamba-large-1.7" },
+      { provider: "xai", id: "grok-4.6" },
       { provider: "xai", id: "grok-4.5" },
       { provider: "xai", id: "grok-4.20-0309-reasoning" },
       { provider: "zai", id: "glm-5.1" },

@@ -31,10 +31,11 @@ async function resolveSubagentModel(
   runtimeFields: Record<string, unknown>,
   sessionId: string,
 ): Promise<string | null | undefined> {
+  const sessionKey = "agent:main:subagent:demo";
   return await withSqliteStore(
     "sessions-model",
     {
-      "agent:research:subagent:demo": {
+      [sessionKey]: {
         sessionId,
         updatedAt: Date.now() - 2 * 60_000,
         ...runtimeFields,
@@ -42,7 +43,7 @@ async function resolveSubagentModel(
     },
     async (store) => {
       const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);
-      return payload.sessions?.find((row) => row.key === "agent:research:subagent:demo")?.model;
+      return payload.sessions?.find((row) => row.key === sessionKey)?.model;
     },
   );
 }

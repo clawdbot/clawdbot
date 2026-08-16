@@ -26,7 +26,7 @@ export async function resolveDreamsPath(workspaceDir: string): Promise<string> {
       await fs.access(target);
       return target;
     } catch (err) {
-      if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      if (extractErrorCode(err) !== "ENOENT") {
         throw err;
       }
     }

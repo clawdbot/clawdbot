@@ -6,12 +6,88 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.ts";
 import type { SecretRef } from "../config/types.secrets.js";
 import { resolveAuthProfileSecretOwnerId } from "./runtime-auth-profile-owner.js";
 import { listSecretResolutionErrorOwners } from "./runtime-degraded-state.js";
+import {
+  canonicalizeSecretRefsForOwnerContract,
+  combineSecretOwnerContractDigests,
+  digestSecretOwnerContract,
+} from "./runtime-owner-contract.js";
 import { activateSecretsRuntimeSnapshotState } from "./runtime-state.js";
 import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";
 
 const EMPTY_LOADABLE_PLUGIN_ORIGINS = new Map();
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+type RuntimeConfig = ReturnType<typeof asConfig>;
+type RuntimeSnapshot = Awaited<ReturnType<typeof prepareSecretsRuntimeSnapshot>>;
+type PrepareOverrides = Omit<
+  Parameters<typeof prepareSecretsRuntimeSnapshot>[0],
+  "config" | "includeAuthStoreRefs" | "loadablePluginOrigins"
+>;
+
+function prepare(config: RuntimeConfig, overrides: PrepareOverrides = {}) {
+  return prepareSecretsRuntimeSnapshot({
+    config,
+    ...overrides,
+    includeAuthStoreRefs: false,
+    loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+  });
+}
+
+async function captureFailure(config: RuntimeConfig, overrides: PrepareOverrides = {}) {
+  return await prepare(config, overrides).catch((failure: unknown) => failure);
+}
+
+function activate(snapshot: RuntimeSnapshot): void {
+  activateSecretsRuntimeSnapshotState({
+    snapshot,
+    refreshContext: null,
+    refreshHandler: null,
+  });
+}
+
+function attachAuthOwner(params: {
+  snapshot: RuntimeSnapshot;
+  agentDir: string;
+  profileId: string;
+  ref: SecretRef;
+  refKey: string;
+  sourceConfig?: RuntimeConfig;
+  contractDigest?: string;
+  append?: boolean;
+}): string {
+  const ownerId = resolveAuthProfileSecretOwnerId(params);
+  if (params.sourceConfig) {
+    params.snapshot.sourceConfig = params.sourceConfig;
+    params.snapshot.config = params.sourceConfig;
+  }
+  params.snapshot.authStores = [
+    {
+      agentDir: params.agentDir,
+      store: {
+        version: 1,
+        profiles: {
+          [params.profileId]: {
+            type: "api_key",
+            provider: "openai",
+            key: "dummy",
+            keyRef: params.ref,
+          },
+        },
+      },
+    },
+  ];
+  const owner = {
+    ownerKind: "account" as const,
+    ownerId,
+    refKeys: [params.refKey],
+    ...(params.contractDigest ? { contractDigest: params.contractDigest } : {}),
+  };
+  params.snapshot.secretOwners = params.append
+    ? [...(params.snapshot.secretOwners ?? []), owner]
+    : [owner];
+  return ownerId;
+}
 
 const TTS_REF = {
   source: "env",
@@ -21,8 +97,8 @@ const TTS_REF = {
 
 describe("secrets runtime degraded-owner attribution", () => {
   it("fails closed for missing TTS SecretRefs outside cold-start isolation", async () => {
-    const error = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
+    const error = await captureFailure(
+      asConfig({
         models: {
           providers: {
             example: {
@@ -32,20 +108,13 @@ describe("secrets runtime degraded-owner attribution", () => {
             },
           },
         },
-        messages: {
-          tts: {
-            providers: {
-              elevenlabs: { apiKey: TTS_REF },
-            },
+        tts: {
+          providers: {
+            elevenlabs: { apiKey: TTS_REF },
           },
         },
       }),
-      env: { CURRENT_PROVIDER_REF: "resolved" },
-      includeAuthStoreRefs: false,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-    }).then(
-      () => undefined,
-      (failure: unknown) => failure,
+      { env: { CURRENT_PROVIDER_REF: "resolved" } },
     );
 
     expect(error).toBeInstanceOf(Error);
@@ -56,7 +125,7 @@ describe("secrets runtime degraded-owner attribution", () => {
       expect.objectContaining({
         ownerKind: "capability",
         ownerId: "tts",
-        paths: ["messages.tts.providers.elevenlabs.apiKey"],
+        paths: ["tts.providers.elevenlabs.apiKey"],
         reason: "secret reference was not found",
         degradationState: "cold",
         failureMatched: true,
@@ -69,26 +138,14 @@ describe("secrets runtime degraded-owner attribution", () => {
     ["CHANGED_REF", "cold"],
   ] as const)("classifies unresolved reload ref %s", async (candidateId, expectedState) => {
     const config = (ref: SecretRef) =>
-      asConfig({ messages: { tts: { providers: { elevenlabs: { apiKey: ref } } } } });
+      asConfig({ tts: { providers: { elevenlabs: { apiKey: ref } } } });
     const ref = (id: string): SecretRef => ({ source: "env", provider: "default", id });
-    const active = await prepareSecretsRuntimeSnapshot({
-      config: config(ref("CURRENT_REF")),
+    const active = await prepare(config(ref("CURRENT_REF")), {
       env: { CURRENT_REF: "resolved" },
-      includeAuthStoreRefs: false,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
     });
-    activateSecretsRuntimeSnapshotState({
-      snapshot: active,
-      refreshContext: null,
-      refreshHandler: null,
-    });
+    activate(active);
 
-    const error = await prepareSecretsRuntimeSnapshot({
-      config: config(ref(candidateId)),
-      env: {},
-      includeAuthStoreRefs: false,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-    }).catch((failure: unknown) => failure);
+    const error = await captureFailure(config(ref(candidateId)), { env: {} });
 
     expect(listSecretResolutionErrorOwners(error)).toEqual([
       expect.objectContaining({
@@ -130,24 +187,12 @@ describe("secrets runtime degraded-owner attribution", () => {
           },
         },
       });
-    const active = await prepareSecretsRuntimeSnapshot({
-      config: config("WEB_TOOL_REF"),
+    const active = await prepare(config("WEB_TOOL_REF"), {
       env: { WEB_TOOL_REF: "resolved" },
-      includeAuthStoreRefs: false,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
     });
-    activateSecretsRuntimeSnapshotState({
-      snapshot: active,
-      refreshContext: null,
-      refreshHandler: null,
-    });
+    activate(active);
 
-    const error = await prepareSecretsRuntimeSnapshot({
-      config: config(candidateId),
-      env: {},
-      includeAuthStoreRefs: false,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-    }).catch((failure: unknown) => failure);
+    const error = await captureFailure(config(candidateId), { env: {} });
 
     const owners = listSecretResolutionErrorOwners(error);
     expect(owners).toEqual(
@@ -181,8 +226,8 @@ describe("secrets runtime degraded-owner attribution", () => {
     await fs.writeFile(healthyPath, JSON.stringify({ shared: "healthy" }), "utf8");
     await fs.chmod(healthyPath, 0o600);
     const sharedId = "/shared";
-    const error = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
+    const error = await captureFailure(
+      asConfig({
         secrets: {
           providers: {
             missing: {
@@ -202,19 +247,15 @@ describe("secrets runtime degraded-owner attribution", () => {
             },
           },
         },
-        messages: {
-          tts: {
-            providers: {
-              elevenlabs: {
-                apiKey: { source: "file", provider: "healthy", id: sharedId },
-              },
+        tts: {
+          providers: {
+            elevenlabs: {
+              apiKey: { source: "file", provider: "healthy", id: sharedId },
             },
           },
         },
       }),
-      includeAuthStoreRefs: false,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-    }).catch((failure: unknown) => failure);
+    );
 
     expect(error).toBeInstanceOf(Error);
     expect(listSecretResolutionErrorOwners(error)).toEqual([
@@ -252,51 +293,35 @@ describe("secrets runtime degraded-owner attribution", () => {
     });
     const agentDir = path.join(root, "agent");
     const profileId = "openai:provider-failure";
-    const accountOwnerId = resolveAuthProfileSecretOwnerId({
+    const active = await prepare(asConfig({}));
+    const accountOwnerId = attachAuthOwner({
+      snapshot: active,
       agentDir,
       profileId,
-    });
-    const active = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({}),
-      includeAuthStoreRefs: false,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-    });
-    active.sourceConfig = config;
-    active.config = config;
-    active.authStores = [
-      {
-        agentDir,
-        store: {
-          version: 1,
-          profiles: {
-            [profileId]: {
-              type: "api_key",
-              provider: "openai",
-              key: "dummy",
-              keyRef: activeRef,
+      ref: activeRef,
+      refKey: "file:missing:/active",
+      sourceConfig: config,
+      contractDigest: combineSecretOwnerContractDigests([
+        digestSecretOwnerContract(
+          canonicalizeSecretRefsForOwnerContract(
+            {
+              profile: {
+                type: "api_key",
+                provider: "openai",
+                key: "dummy",
+                keyRef: activeRef,
+              },
+              providerId: "openai",
+              configuredProvider: undefined,
             },
-          },
-        },
-      },
-    ];
-    active.secretOwners = [
-      {
-        ownerKind: "account",
-        ownerId: accountOwnerId,
-        refKeys: ["file:missing:/active"],
-      },
-    ];
-    activateSecretsRuntimeSnapshotState({
-      snapshot: active,
-      refreshContext: null,
-      refreshHandler: null,
+            undefined,
+          ),
+        ),
+      ]),
     });
+    activate(active);
 
-    const error = await prepareSecretsRuntimeSnapshot({
-      config,
-      includeAuthStoreRefs: false,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-    }).catch((failure: unknown) => failure);
+    const error = await captureFailure(config);
 
     expect(listSecretResolutionErrorOwners(error)).toEqual(
       expect.arrayContaining([
@@ -316,10 +341,6 @@ describe("secrets runtime degraded-owner attribution", () => {
     const sharedRef = { source: "env" as const, provider: "default", id: "SHARED_API_KEY" };
     const authAgentDir = "/tmp/shared-secret-co-owner";
     const authProfileId = "openai:shared";
-    const authOwnerId = resolveAuthProfileSecretOwnerId({
-      agentDir: authAgentDir,
-      profileId: authProfileId,
-    });
     const config = asConfig({
       models: {
         providers: {
@@ -337,45 +358,18 @@ describe("secrets runtime degraded-owner attribution", () => {
         },
       },
     });
-    const active = await prepareSecretsRuntimeSnapshot({
-      config,
-      env: { SHARED_API_KEY: "dummy" },
-      includeAuthStoreRefs: false,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-    });
-    active.authStores = [
-      {
-        agentDir: authAgentDir,
-        store: {
-          version: 1,
-          profiles: {
-            [authProfileId]: {
-              type: "api_key",
-              provider: "openai",
-              key: "dummy",
-              keyRef: sharedRef,
-            },
-          },
-        },
-      },
-    ];
-    active.secretOwners?.push({
-      ownerKind: "account",
-      ownerId: authOwnerId,
-      refKeys: ["env:default:SHARED_API_KEY"],
-    });
-    activateSecretsRuntimeSnapshotState({
+    const active = await prepare(config, { env: { SHARED_API_KEY: "dummy" } });
+    const authOwnerId = attachAuthOwner({
       snapshot: active,
-      refreshContext: null,
-      refreshHandler: null,
+      agentDir: authAgentDir,
+      profileId: authProfileId,
+      ref: sharedRef,
+      refKey: "env:default:SHARED_API_KEY",
+      append: true,
     });
+    activate(active);
 
-    const error = await prepareSecretsRuntimeSnapshot({
-      config,
-      env: {},
-      includeAuthStoreRefs: false,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-    }).catch((failure: unknown) => failure);
+    const error = await captureFailure(config, { env: {} });
 
     expect(listSecretResolutionErrorOwners(error)).toEqual(
       expect.arrayContaining([
@@ -427,23 +421,11 @@ describe("secrets runtime degraded-owner attribution", () => {
         },
       },
     });
-    const active = await prepareSecretsRuntimeSnapshot({
-      config,
-      includeAuthStoreRefs: false,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-    });
-    activateSecretsRuntimeSnapshotState({
-      snapshot: active,
-      refreshContext: null,
-      refreshHandler: null,
-    });
+    const active = await prepare(config);
+    activate(active);
     await fs.writeFile(secretsPath, JSON.stringify({ shared: { invalid: true } }), "utf8");
 
-    const error = await prepareSecretsRuntimeSnapshot({
-      config,
-      includeAuthStoreRefs: false,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-    }).catch((failure: unknown) => failure);
+    const error = await captureFailure(config);
 
     expect(listSecretResolutionErrorOwners(error)).toEqual(
       expect.arrayContaining([
@@ -488,23 +470,11 @@ describe("secrets runtime degraded-owner attribution", () => {
         },
       },
     });
-    const active = await prepareSecretsRuntimeSnapshot({
-      config,
-      includeAuthStoreRefs: false,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-    });
-    activateSecretsRuntimeSnapshotState({
-      snapshot: active,
-      refreshContext: null,
-      refreshHandler: null,
-    });
+    const active = await prepare(config);
+    activate(active);
     await fs.writeFile(secretsPath, JSON.stringify({ shared: { invalid: true } }), "utf8");
 
-    const error = await prepareSecretsRuntimeSnapshot({
-      config,
-      includeAuthStoreRefs: false,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-    }).catch((failure: unknown) => failure);
+    const error = await captureFailure(config);
 
     expect(listSecretResolutionErrorOwners(error)).toEqual(
       expect.arrayContaining([
@@ -563,70 +533,36 @@ describe("secrets runtime degraded-owner attribution", () => {
           },
         },
       },
-      messages: {
-        tts: { providers: { elevenlabs: { apiKey: ref } } },
-      },
+      tts: { providers: { elevenlabs: { apiKey: ref } } },
     });
     const authAgentDir = "/tmp/invalid-value-auth-co-owner";
     const authProfileId = "openai:invalid-value";
-    const authOwnerId = resolveAuthProfileSecretOwnerId({
+    const active = await prepare(asConfig({}));
+    const authOwnerId = attachAuthOwner({
+      snapshot: active,
       agentDir: authAgentDir,
       profileId: authProfileId,
+      ref,
+      refKey: "file:ttsfile:/providers/elevenlabs/apiKey",
+      sourceConfig: config,
     });
-    const active = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({}),
-      includeAuthStoreRefs: false,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-    });
-    active.sourceConfig = config;
-    active.config = config;
-    active.authStores = [
-      {
-        agentDir: authAgentDir,
-        store: {
-          version: 1,
-          profiles: {
-            [authProfileId]: {
-              type: "api_key",
-              provider: "openai",
-              key: "dummy",
-              keyRef: ref,
-            },
-          },
-        },
-      },
-    ];
-    active.secretOwners = [
-      {
-        ownerKind: "account",
-        ownerId: authOwnerId,
-        refKeys: ["file:ttsfile:/providers/elevenlabs/apiKey"],
-      },
-    ];
-    activateSecretsRuntimeSnapshotState({
-      snapshot: active,
-      refreshContext: null,
-      refreshHandler: null,
-    });
+    activate(active);
 
-    const error = await prepareSecretsRuntimeSnapshot({
-      config,
+    const error = await captureFailure(config, {
       env: {},
-      includeAuthStoreRefs: false,
       allowUnavailableSecretOwners: true,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-    }).catch((failure: unknown) => failure);
+    });
 
     expect(error).toBeInstanceOf(Error);
     expect(String(error)).toContain(
-      "messages.tts.providers.elevenlabs.apiKey resolved to a non-string or empty value.",
+      "tts.providers.elevenlabs.apiKey resolved to a non-string or empty value.",
     );
     expect(listSecretResolutionErrorOwners(error)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           ownerKind: "capability",
           ownerId: "tts",
-          paths: ["messages.tts.providers.elevenlabs.apiKey"],
+          paths: ["tts.providers.elevenlabs.apiKey"],
           reason: "resolved secret value was invalid",
           degradationState: "cold",
           failureMatched: true,
@@ -651,8 +587,8 @@ describe("secrets runtime degraded-owner attribution", () => {
     await fs.writeFile(secretsPath, JSON.stringify({ shared: { invalid: true } }), "utf8");
     await fs.chmod(secretsPath, 0o600);
     const sharedRef = { source: "file" as const, provider: "shared", id: "/shared" };
-    const error = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
+    const error = await captureFailure(
+      asConfig({
         secrets: {
           providers: {
             shared: { source: "file", path: secretsPath, mode: "json" },
@@ -667,9 +603,7 @@ describe("secrets runtime degraded-owner attribution", () => {
             },
           },
         },
-        messages: {
-          tts: { providers: { elevenlabs: { apiKey: sharedRef } } },
-        },
+        tts: { providers: { elevenlabs: { apiKey: sharedRef } } },
         skills: {
           entries: {
             healthy: {
@@ -678,11 +612,11 @@ describe("secrets runtime degraded-owner attribution", () => {
           },
         },
       }),
-      env: { HEALTHY_SKILL_KEY: "healthy-skill-key" },
-      includeAuthStoreRefs: false,
-      allowUnavailableSecretOwners: true,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-    }).catch((failure: unknown) => failure);
+      {
+        env: { HEALTHY_SKILL_KEY: "healthy-skill-key" },
+        allowUnavailableSecretOwners: true,
+      },
+    );
 
     expect(error).toBeInstanceOf(Error);
     const owners = listSecretResolutionErrorOwners(error);
@@ -707,8 +641,8 @@ describe("secrets runtime degraded-owner attribution", () => {
   });
 
   it("still fails required gateway auth SecretRefs when env is missing", async () => {
-    const error = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
+    const error = await captureFailure(
+      asConfig({
         gateway: {
           auth: {
             mode: "token",
@@ -716,11 +650,8 @@ describe("secrets runtime degraded-owner attribution", () => {
           },
         },
       }),
-      env: {},
-      includeAuthStoreRefs: false,
-      allowUnavailableSecretOwners: true,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-    }).catch((failure: unknown) => failure);
+      { env: {}, allowUnavailableSecretOwners: true },
+    );
 
     expect(String(error)).toContain(
       'Environment variable "GATEWAY_TOKEN_REF" is missing or empty.',

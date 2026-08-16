@@ -203,11 +203,11 @@ function readSessionEntry(sessionId) {
     try {
       const row = db
         .prepare(
-          `SELECT se.session_key, se.entry_json, s.agent_harness_id
-             FROM sessions AS s
-             INNER JOIN session_entries AS se ON se.session_id = s.session_id
-            WHERE s.session_id = ?
-            ORDER BY se.updated_at DESC, se.session_key
+          `SELECT sn.session_key, sn.entry_json, sw.agent_harness_id
+             FROM session_nodes AS sn
+             INNER JOIN session_windows AS sw ON sw.session_id = sn.current_session_id
+            WHERE sw.session_id = ?
+            ORDER BY sn.updated_at DESC, sn.session_key
             LIMIT 1`,
         )
         .get(sessionId);
@@ -654,21 +654,22 @@ function assertFollowthroughTranscript({ transcriptEvents, progressMarker, compl
     );
     return text === progressMarker || text === completeMarker ? [{ ...entry, args, text }] : [];
   });
-  const expected = [
-    { text: progressMarker, final: undefined },
-    { text: completeMarker, final: true },
-  ];
+  const expected = [progressMarker, completeMarker];
   if (
     markerCalls.length !== expected.length ||
     markerCalls.some(
       (call, index) =>
-        call.text !== expected[index].text ||
+        call.text !== expected[index] ||
         call.args.action !== "send" ||
-        call.args.final !== expected[index].final,
+        // Extended-stable candidates can predate this optional Codex control.
+        // A successful ordered completion send is valid evidence; `false` is not.
+        (index === 0
+          ? call.args.final !== undefined
+          : call.args.final !== undefined && call.args.final !== true),
     )
   ) {
     throw new Error(
-      `expected exact message final controls ${JSON.stringify(expected)}, got ${JSON.stringify(markerCalls.map((call) => ({ text: call.text, action: call.args.action, final: call.args.final })))}`,
+      `expected ordered message sends with an optional final completion marker ${JSON.stringify(expected)}, got ${JSON.stringify(markerCalls.map((call) => ({ text: call.text, action: call.args.action, final: call.args.final })))}`,
     );
   }
   const [progressCall, completeCall] = markerCalls;
@@ -904,10 +905,12 @@ function assertAgentError() {
       )
     : "";
   const combined = `${stdout}\n${stderr}`;
-  if (
-    !combined.includes('Requested agent harness "codex" is not registered') &&
-    !combined.includes("Unknown model: codex/")
-  ) {
+  const expectedErrors = [
+    'Requested agent harness "codex" is not registered',
+    "Unknown model: codex/",
+    'Agent harness runtime "codex" is not present in the prepared registry.',
+  ];
+  if (!expectedErrors.some((message) => combined.includes(message))) {
     throw new Error(`unexpected post-uninstall agent error:\nstdout=${stdout}\nstderr=${stderr}`);
   }
 }

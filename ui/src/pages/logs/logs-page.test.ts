@@ -7,17 +7,24 @@ import "./logs-page.ts";
 
 type TestLogsPage = HTMLElement & {
   context: ApplicationContext;
-  connected: boolean;
-  logsAtBottom: boolean;
   logsAutoFollow: boolean;
-  logsEntries: unknown[];
+  logsEntries: Array<{ raw: string }>;
+  logsFile: string | null;
   logsStatus: { error: string | null; hasLoaded: boolean; stale: boolean };
-  scheduleScroll: (force?: boolean) => void;
+  streamFollow: {
+    atBottom: boolean;
+    schedule: (force?: boolean) => void;
+  };
   readonly updateComplete: Promise<boolean>;
-  applyGatewaySnapshot: (snapshot: ApplicationGatewaySnapshot) => void;
   loadLogs: (opts?: { reset?: boolean; quiet?: boolean }) => Promise<boolean>;
   requestUpdate: () => void;
 };
+
+type TestGateway = ApplicationContext["gateway"] & {
+  publish: (snapshot: ApplicationGatewaySnapshot) => void;
+};
+
+type TestApplicationContext = ApplicationContext & { gateway: TestGateway };
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -27,16 +34,35 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function contextWithClient(client: GatewayBrowserClient): ApplicationContext {
+function contextWithClient(
+  client: GatewayBrowserClient,
+  connected = false,
+): TestApplicationContext {
+  let snapshot = {
+    client,
+    phase: connected ? "connected" : "stopped",
+  } as ApplicationGatewaySnapshot;
+  const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
   return {
     basePath: "",
     gateway: {
-      snapshot: { client, connected: false },
-      subscribe: () => () => undefined,
+      get snapshot() {
+        return snapshot;
+      },
+      subscribe: (listener: (snapshot: ApplicationGatewaySnapshot) => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      publish: (next: ApplicationGatewaySnapshot) => {
+        snapshot = next;
+        for (const listener of listeners) {
+          listener(next);
+        }
+      },
     },
     navigate: vi.fn(),
     preload: vi.fn(async () => undefined),
-  } as unknown as ApplicationContext;
+  } as unknown as TestApplicationContext;
 }
 
 describe("LogsPage lifecycle", () => {
@@ -50,7 +76,7 @@ describe("LogsPage lifecycle", () => {
     page.context = {
       basePath: "",
       gateway: {
-        snapshot: { client: null, connected: false },
+        snapshot: { client: null, phase: "stopped" },
         subscribe: () => () => undefined,
       },
       navigate: vi.fn(),
@@ -63,7 +89,7 @@ describe("LogsPage lifecycle", () => {
     await Promise.resolve();
     requestFrame.mockClear();
 
-    page.scheduleScroll();
+    page.streamFollow.schedule();
     page.remove();
     await Promise.resolve();
 
@@ -86,8 +112,8 @@ describe("LogsPage lifecycle", () => {
 
     page.logsAutoFollow = false;
     await page.updateComplete;
-    const scheduleScroll = vi.spyOn(page, "scheduleScroll");
-    page.logsAtBottom = false;
+    const scheduleScroll = vi.spyOn(page.streamFollow, "schedule");
+    page.streamFollow.atBottom = false;
     page.logsAutoFollow = true;
     await page.updateComplete;
 
@@ -101,10 +127,13 @@ describe("LogsPage lifecycle", () => {
       request: vi.fn(() => pending.promise),
     } as unknown as GatewayBrowserClient;
     const page = document.createElement("openclaw-logs-page") as TestLogsPage;
-    page.context = contextWithClient(client);
+    const context = contextWithClient(client);
+    page.context = context;
+    page.logsEntries = [{ raw: "seed" }];
     document.body.append(page);
     await page.updateComplete;
-    page.connected = true;
+    context.gateway.publish({ client, phase: "connected" } as ApplicationGatewaySnapshot);
+    page.logsEntries = [];
 
     const load = page.loadLogs({ reset: true });
     page.context = contextWithClient(client);
@@ -122,10 +151,13 @@ describe("LogsPage lifecycle", () => {
       request: vi.fn(() => pending.promise),
     } as unknown as GatewayBrowserClient;
     const page = document.createElement("openclaw-logs-page") as TestLogsPage;
-    page.context = contextWithClient(client);
+    const context = contextWithClient(client);
+    page.context = context;
+    page.logsEntries = [{ raw: "seed" }];
     document.body.append(page);
     await page.updateComplete;
-    page.connected = true;
+    context.gateway.publish({ client, phase: "connected" } as ApplicationGatewaySnapshot);
+    page.logsEntries = [];
 
     const load = page.loadLogs({ reset: true });
     page.remove();
@@ -141,13 +173,16 @@ describe("LogsPage lifecycle", () => {
       request: vi.fn(() => pending.promise),
     } as unknown as GatewayBrowserClient;
     const page = document.createElement("openclaw-logs-page") as TestLogsPage;
-    page.context = contextWithClient(client);
+    const context = contextWithClient(client);
+    page.context = context;
+    page.logsEntries = [{ raw: "seed" }];
     document.body.append(page);
     await page.updateComplete;
-    page.connected = true;
+    context.gateway.publish({ client, phase: "connected" } as ApplicationGatewaySnapshot);
+    page.logsEntries = [];
 
     const load = page.loadLogs({ reset: true });
-    page.applyGatewaySnapshot({ client, connected: false } as ApplicationGatewaySnapshot);
+    context.gateway.publish({ client, phase: "stopped" } as ApplicationGatewaySnapshot);
     pending.resolve({ cursor: 1, lines: ["stale"], reset: true });
     await load;
 
@@ -161,10 +196,12 @@ describe("LogsPage lifecycle", () => {
       request,
     } as unknown as GatewayBrowserClient;
     const page = document.createElement("openclaw-logs-page") as TestLogsPage;
-    page.context = contextWithClient(client);
+    const context = contextWithClient(client, true);
+    page.context = context;
+    page.logsEntries = [{ raw: "seed" }];
     document.body.append(page);
     await page.updateComplete;
-    page.connected = true;
+    page.logsEntries = [];
 
     const first = page.loadLogs({ quiet: true });
     const second = page.loadLogs({ quiet: true });
@@ -176,6 +213,39 @@ describe("LogsPage lifecycle", () => {
     expect(page.logsEntries).toHaveLength(1);
   });
 
+  it("reloads from the beginning when the gateway log file changes", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ cursor: 6, file: "/tmp/source-a.log", lines: ["A-one"] })
+      .mockResolvedValueOnce({
+        cursor: 18,
+        file: "/tmp/source-b.log",
+        lines: ["B-tail"],
+        reset: false,
+      })
+      .mockResolvedValueOnce({
+        cursor: 18,
+        file: "/tmp/source-b.log",
+        lines: ["B-one", "B-tail"],
+      });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const page = document.createElement("openclaw-logs-page") as TestLogsPage;
+    page.context = contextWithClient(client, true);
+    page.logsEntries = [{ raw: "seed" }];
+    document.body.append(page);
+    await page.updateComplete;
+    page.logsEntries = [];
+
+    await page.loadLogs({ reset: true });
+    await page.loadLogs();
+
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(request.mock.calls[1]?.[1]).toMatchObject({ cursor: 6 });
+    expect(request.mock.calls[2]?.[1]).toMatchObject({ cursor: undefined });
+    expect(page.logsFile).toBe("/tmp/source-b.log");
+    expect(page.logsEntries.map((entry) => entry.raw)).toEqual(["B-one", "B-tail"]);
+  });
+
   it("retains loaded logs as stale after failure and clears the marker on retry success", async () => {
     const request = vi
       .fn()
@@ -184,16 +254,19 @@ describe("LogsPage lifecycle", () => {
       .mockResolvedValueOnce({ cursor: 2, lines: ["fresh"], reset: true });
     const client = { request } as unknown as GatewayBrowserClient;
     const page = document.createElement("openclaw-logs-page") as TestLogsPage;
-    page.context = contextWithClient(client);
+    const context = contextWithClient(client);
+    page.context = context;
+    page.logsEntries = [{ raw: "seed" }];
     document.body.append(page);
     await page.updateComplete;
-    page.connected = true;
+    context.gateway.publish({ client, phase: "connected" } as ApplicationGatewaySnapshot);
+    page.logsEntries = [];
 
     await page.loadLogs({ reset: true });
     await page.loadLogs({ reset: true });
     expect(page.logsEntries).toHaveLength(1);
     expect(page.logsStatus).toEqual({
-      error: "Error: logs unavailable",
+      error: "logs unavailable",
       hasLoaded: true,
       stale: true,
     });
@@ -213,16 +286,17 @@ describe("LogsPage lifecycle", () => {
       ),
     } as unknown as GatewayBrowserClient;
     const page = document.createElement("openclaw-logs-page") as TestLogsPage;
-    page.context = contextWithClient(client);
+    const context = contextWithClient(client);
+    page.context = context;
     const requestFrame = vi.spyOn(window, "requestAnimationFrame").mockReturnValue(1);
     document.body.append(page);
     await page.updateComplete;
-    page.applyGatewaySnapshot({ client, connected: true } as ApplicationGatewaySnapshot);
+    context.gateway.publish({ client, phase: "connected" } as ApplicationGatewaySnapshot);
     requestFrame.mockClear();
 
-    page.scheduleScroll();
-    page.applyGatewaySnapshot({ client, connected: false } as ApplicationGatewaySnapshot);
-    page.applyGatewaySnapshot({ client, connected: true } as ApplicationGatewaySnapshot);
+    page.streamFollow.schedule();
+    context.gateway.publish({ client, phase: "stopped" } as ApplicationGatewaySnapshot);
+    context.gateway.publish({ client, phase: "connected" } as ApplicationGatewaySnapshot);
     await Promise.resolve();
 
     expect(requestFrame).not.toHaveBeenCalled();

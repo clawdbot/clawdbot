@@ -76,6 +76,8 @@ describe("type suppression inventory", () => {
       "src/infra/kysely-sync.types.test.ts:55:@ts-expect-error Kysely checks where-reference string literals.",
       "src/infra/kysely-sync.types.test.ts:58:@ts-expect-error Kysely checks grouped column string literals.",
       "src/infra/kysely-sync.types.test.ts:61:@ts-expect-error Kysely checks order references and selected aliases.",
+      "src/plugin-sdk/plugin-entry.reply-trigger.test.ts:8:@ts-expect-error Trigger eligibility is only supported for before_agent_reply.",
+      "src/plugin-sdk/plugin-entry.reply-trigger.test.ts:10:@ts-expect-error An empty trigger list cannot prove that a hook is inactive.",
     ]);
   });
 });

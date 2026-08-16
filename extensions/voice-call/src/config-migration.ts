@@ -1,14 +1,9 @@
 // Voice Call setup helper migrates legacy config to the canonical schema.
-import { asOptionalRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
-
-const asObject = asOptionalRecord;
-const getString = readStringField;
-
-/** Read finite numeric config values. */
-function getNumber(obj: Record<string, unknown> | undefined, key: string): number | undefined {
-  const value = obj?.[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
+import {
+  asFiniteNumber,
+  asOptionalRecord,
+  readStringField,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /** Merge legacy provider-specific values into the canonical providers map. */
 function mergeProviderConfig(
@@ -17,11 +12,11 @@ function mergeProviderConfig(
   compatValues: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
   if (Object.keys(compatValues).length === 0) {
-    return asObject(providersValue);
+    return asOptionalRecord(providersValue);
   }
 
-  const providers = asObject(providersValue) ?? {};
-  const existing = asObject(providers[providerId]) ?? {};
+  const providers = asOptionalRecord(providersValue) ?? {};
+  const existing = asOptionalRecord(providers[providerId]) ?? {};
   return {
     ...providers,
     [providerId]: {
@@ -39,32 +34,32 @@ export function migrateVoiceCallLegacyConfigInput(params: {
   config: Record<string, unknown>;
   changes: string[];
 } {
-  const raw = asObject(params.value) ?? {};
-  const realtime = asObject(raw.realtime);
-  const realtimeAgentContext = asObject(realtime?.agentContext);
-  const twilio = asObject(raw.twilio);
-  const streaming = asObject(raw.streaming);
+  const raw = asOptionalRecord(params.value) ?? {};
+  const realtime = asOptionalRecord(raw.realtime);
+  const realtimeAgentContext = asOptionalRecord(realtime?.agentContext);
+  const twilio = asOptionalRecord(raw.twilio);
+  const streaming = asOptionalRecord(raw.streaming);
   const configPathPrefix = params.configPathPrefix ?? "plugins.entries.voice-call.config";
 
   const legacyStreamingOpenAICompat: Record<string, unknown> = {};
-  const streamingOpenAIApiKey = getString(streaming, "openaiApiKey");
+  const streamingOpenAIApiKey = readStringField(streaming, "openaiApiKey");
   if (streamingOpenAIApiKey) {
     legacyStreamingOpenAICompat.apiKey = streamingOpenAIApiKey;
   }
-  const streamingSttModel = getString(streaming, "sttModel");
+  const streamingSttModel = readStringField(streaming, "sttModel");
   if (streamingSttModel) {
     legacyStreamingOpenAICompat.model = streamingSttModel;
   }
-  const streamingSilenceDurationMs = getNumber(streaming, "silenceDurationMs");
+  const streamingSilenceDurationMs = asFiniteNumber(streaming?.silenceDurationMs);
   if (streamingSilenceDurationMs !== undefined) {
     legacyStreamingOpenAICompat.silenceDurationMs = streamingSilenceDurationMs;
   }
-  const streamingVadThreshold = getNumber(streaming, "vadThreshold");
+  const streamingVadThreshold = asFiniteNumber(streaming?.vadThreshold);
   if (streamingVadThreshold !== undefined) {
     legacyStreamingOpenAICompat.vadThreshold = streamingVadThreshold;
   }
-  const streamingProvider = getString(streaming, "provider");
-  const legacyStreamingProvider = getString(streaming, "sttProvider");
+  const streamingProvider = readStringField(streaming, "provider");
+  const legacyStreamingProvider = readStringField(streaming, "sttProvider");
 
   const normalizedStreaming: Record<string, unknown> | undefined = streaming
     ? {
@@ -138,14 +133,14 @@ export function migrateVoiceCallLegacyConfigInput(params: {
       `Moved ${configPathPrefix}.streaming.sttModel → ${configPathPrefix}.streaming.providers.openai.model.`,
     );
   }
-  if (getNumber(streaming, "silenceDurationMs") !== undefined) {
+  if (asFiniteNumber(streaming?.silenceDurationMs) !== undefined) {
     changes.push(
       `Moved ${configPathPrefix}.streaming.silenceDurationMs → ${configPathPrefix}.streaming.providers.openai.silenceDurationMs.`,
     );
   } else if (typeof streaming?.silenceDurationMs === "number") {
     changes.push(`Removed invalid ${configPathPrefix}.streaming.silenceDurationMs.`);
   }
-  if (getNumber(streaming, "vadThreshold") !== undefined) {
+  if (asFiniteNumber(streaming?.vadThreshold) !== undefined) {
     changes.push(
       `Moved ${configPathPrefix}.streaming.vadThreshold → ${configPathPrefix}.streaming.providers.openai.vadThreshold.`,
     );

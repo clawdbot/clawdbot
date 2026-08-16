@@ -61,10 +61,6 @@ export function resolvePluginDocumentExtractors(params?: {
       env: params?.env,
       onlyPluginIds: params?.onlyPluginIds,
       contract: "documentExtractors",
-      compatMode: {
-        enablement: "always",
-        vitest: true,
-      },
     }).map((plugin) => plugin.id);
   for (const pluginId of pluginIds) {
     let loaded: PluginDocumentExtractorEntry[] | null;

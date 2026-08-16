@@ -22,7 +22,7 @@ import Testing
         return (tmp, pnpmPath)
     }
 
-    @Test func `prefers open claw binary`() throws {
+    @Test func `prefers open claw binary`() async throws {
         let defaults = self.makeLocalDefaults()
 
         let tmp = try makeTempDirForTests()
@@ -31,7 +31,7 @@ import Testing
         try makeExecutableForTests(at: openclawPath)
 
         let searchPaths = [tmp.appendingPathComponent("node_modules/.bin").path]
-        let cmd = CommandResolver.openclawCommand(
+        let cmd = await CommandResolver.openclawCommand(
             subcommand: "gateway",
             defaults: defaults,
             configRoot: [:],
@@ -40,26 +40,37 @@ import Testing
         #expect(cmd.prefix(2).elementsEqual([openclawPath.path, "gateway"]))
     }
 
-    @Test func `source checkout entrypoint wins when package bin link is absent`() throws {
-        let defaults = self.makeLocalDefaults()
+    @Test func `source checkout worker uses the freshness aware runner`() async throws {
         let tmp = try makeTempDirForTests()
+        let runner = tmp.appendingPathComponent("scripts/run-node.mjs")
         let sourceEntrypoint = tmp.appendingPathComponent("openclaw.mjs")
-        let staleGlobalBin = tmp.appendingPathComponent("global/bin")
+        let distEntrypoint = tmp.appendingPathComponent("dist/entry.js")
+        let projectExecutable = tmp.appendingPathComponent("node_modules/.bin/openclaw")
+        let runtimeBin = tmp.appendingPathComponent("runtime/bin")
+        let node = runtimeBin.appendingPathComponent("node")
+        try FileManager().createDirectory(
+            at: runner.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try "// source runner\n".write(to: runner, atomically: true, encoding: .utf8)
         try makeExecutableForTests(at: sourceEntrypoint)
-        try makeExecutableForTests(at: staleGlobalBin.appendingPathComponent("openclaw"))
+        try makeExecutableForTests(at: distEntrypoint)
+        try makeExecutableForTests(at: projectExecutable)
+        try makeExecutableForTests(at: node)
+        try "#!/bin/sh\necho v22.22.3\n".write(to: node, atomically: true, encoding: .utf8)
+        try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: node.path)
 
-        let cmd = CommandResolver.openclawCommand(
-            subcommand: "node",
-            extraArgs: ["worker"],
-            defaults: defaults,
-            configRoot: [:],
-            searchPaths: [staleGlobalBin.path],
-            projectRoot: tmp)
+        let launch = try #require(try await CommandResolver.projectNodeHostWorkerLaunch(
+            projectRoot: tmp,
+            searchPaths: [runtimeBin.path]))
 
-        #expect(cmd == [sourceEntrypoint.path, "node", "worker"])
+        #expect(launch.command == [node.path, runner.path, "node", "worker"])
+        #expect(launch.currentDirectoryURL == tmp)
+        #expect(!launch.command.contains(sourceEntrypoint.path))
+        #expect(!launch.command.contains(distEntrypoint.path))
+        #expect(!launch.command.contains(projectExecutable.path))
     }
 
-    @Test func `falls back to node and script`() throws {
+    @Test func `falls back to node and script`() async throws {
         let defaults = self.makeLocalDefaults()
 
         let tmp = try makeTempDirForTests()
@@ -71,7 +82,7 @@ import Testing
         try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: nodePath.path)
         try makeExecutableForTests(at: scriptPath)
 
-        let cmd = CommandResolver.openclawCommand(
+        let cmd = await CommandResolver.openclawCommand(
             subcommand: "rpc",
             defaults: defaults,
             configRoot: [:],
@@ -86,7 +97,7 @@ import Testing
         }
     }
 
-    @Test func `prefers open claw binary over pnpm`() throws {
+    @Test func `prefers open claw binary over pnpm`() async throws {
         let defaults = self.makeLocalDefaults()
 
         let tmp = try makeTempDirForTests()
@@ -97,7 +108,7 @@ import Testing
         try makeExecutableForTests(at: openclawPath)
         try makeExecutableForTests(at: pnpmPath)
 
-        let cmd = CommandResolver.openclawCommand(
+        let cmd = await CommandResolver.openclawCommand(
             subcommand: "rpc",
             defaults: defaults,
             configRoot: [:],
@@ -107,7 +118,7 @@ import Testing
         #expect(cmd.prefix(2).elementsEqual([openclawPath.path, "rpc"]))
     }
 
-    @Test func `uses open claw binary without node runtime`() throws {
+    @Test func `uses open claw binary without node runtime`() async throws {
         let defaults = self.makeLocalDefaults()
 
         let tmp = try makeTempDirForTests()
@@ -116,7 +127,7 @@ import Testing
         let openclawPath = binDir.appendingPathComponent("openclaw")
         try makeExecutableForTests(at: openclawPath)
 
-        let cmd = CommandResolver.openclawCommand(
+        let cmd = await CommandResolver.openclawCommand(
             subcommand: "gateway",
             defaults: defaults,
             configRoot: [:],
@@ -126,11 +137,11 @@ import Testing
         #expect(cmd.prefix(2).elementsEqual([openclawPath.path, "gateway"]))
     }
 
-    @Test func `falls back to pnpm`() throws {
+    @Test func `falls back to pnpm`() async throws {
         let defaults = self.makeLocalDefaults()
         let (tmp, pnpmPath) = try self.makeProjectRootWithPnpm()
 
-        let cmd = CommandResolver.openclawCommand(
+        let cmd = await CommandResolver.openclawCommand(
             subcommand: "rpc",
             defaults: defaults,
             configRoot: [:],
@@ -140,11 +151,11 @@ import Testing
         #expect(cmd.prefix(4).elementsEqual([pnpmPath.path, "--silent", "openclaw", "rpc"]))
     }
 
-    @Test func `pnpm keeps extra args after subcommand`() throws {
+    @Test func `pnpm keeps extra args after subcommand`() async throws {
         let defaults = self.makeLocalDefaults()
         let (tmp, pnpmPath) = try self.makeProjectRootWithPnpm()
 
-        let cmd = CommandResolver.openclawCommand(
+        let cmd = await CommandResolver.openclawCommand(
             subcommand: "health",
             extraArgs: ["--json", "--timeout", "5"],
             defaults: defaults,
@@ -156,7 +167,7 @@ import Testing
         #expect(cmd.suffix(2).elementsEqual(["--timeout", "5"]))
     }
 
-    @Test func `missing CLI explains install and source checkout paths`() throws {
+    @Test func `missing CLI explains install and source checkout paths`() async throws {
         let defaults = self.makeLocalDefaults()
         let tmp = try makeTempDirForTests()
         let binDir = tmp.appendingPathComponent("bin")
@@ -165,7 +176,7 @@ import Testing
         try "#!/bin/sh\necho v22.22.3\n".write(to: nodePath, atomically: true, encoding: .utf8)
         try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: nodePath.path)
 
-        let cmd = CommandResolver.openclawCommand(
+        let cmd = await CommandResolver.openclawCommand(
             subcommand: "status",
             defaults: defaults,
             configRoot: [:],
@@ -211,6 +222,68 @@ import Testing
         let validatedPackageManagerIndex = try #require(validatedPaths.firstIndex(of: packageManagerPath))
         #expect(fallbackManagedIndex > fallbackPackageManagerIndex)
         #expect(validatedManagedIndex < validatedPackageManagerIndex)
+    }
+
+    @Test func `managed paths follow the app profile`() throws {
+        let home = try makeTempDirForTests()
+        defer { try? FileManager().removeItem(at: home) }
+        let hostBase = home.appendingPathComponent(".openclaw")
+        let profileBase = home.appendingPathComponent(".openclaw-onboardtest")
+        for base in [hostBase, profileBase] {
+            try makeExecutableForTests(at: base.appendingPathComponent("bin/openclaw"))
+            try FileManager().createDirectory(
+                at: base.appendingPathComponent("tools/node/bin"),
+                withIntermediateDirectories: true)
+        }
+
+        let cases = [
+            (AppProfile(environment: [:]), hostBase, profileBase),
+            (AppProfile(environment: ["OPENCLAW_PROFILE": "onboardtest"]), profileBase, hostBase),
+        ]
+        for (profile, expectedBase, excludedBase) in cases {
+            let paths = CommandResolver.preferredPaths(
+                home: home,
+                current: [],
+                projectRoot: home,
+                profile: profile)
+            #expect(paths.contains(expectedBase.appendingPathComponent("bin").path))
+            #expect(paths.contains(expectedBase.appendingPathComponent("tools/node/bin").path))
+            #expect(!paths.contains(excludedBase.appendingPathComponent("bin").path))
+            #expect(!paths.contains(excludedBase.appendingPathComponent("tools/node/bin").path))
+        }
+
+        let namedProfile = AppProfile(environment: ["OPENCLAW_PROFILE": "onboardtest"])
+        let staleCases = [
+            (namedProfile, hostBase),
+            (AppProfile(environment: [:]), profileBase),
+        ]
+        for (profile, staleBase) in staleCases {
+            // Stale validation and inherited shell PATH both leak foreign managed dirs.
+            let paths = CommandResolver.preferredPaths(
+                home: home,
+                current: [staleBase.appendingPathComponent("bin").path, "/usr/bin"],
+                projectRoot: home,
+                validatedExecutable: staleBase.appendingPathComponent("bin/openclaw").path,
+                profile: profile)
+            #expect(!paths.contains(staleBase.appendingPathComponent("bin").path))
+            #expect(paths.contains("/usr/bin"))
+        }
+
+        // ~/.openclaw2 is a lookalike, not the managed profile namespace; validation must survive.
+        for external in ["custom/bin/openclaw", ".openclaw2/bin/openclaw"] {
+            let customExecutable = home.appendingPathComponent(external)
+            try makeExecutableForTests(at: customExecutable)
+            let externalPaths = CommandResolver.preferredPaths(
+                home: home,
+                current: [],
+                projectRoot: home,
+                validatedExecutable: customExecutable.path,
+                profile: namedProfile)
+            let customBin = customExecutable.deletingLastPathComponent().path
+            let customIndex = try #require(externalPaths.firstIndex(of: customBin))
+            let homebrewIndex = try #require(externalPaths.firstIndex(of: "/opt/homebrew/bin"))
+            #expect(customIndex < homebrewIndex)
+        }
     }
 
     @Test func `node manager runtimes precede system runtimes`() throws {
@@ -287,14 +360,14 @@ import Testing
             requiredVersion: "2026.7.3-beta.1") == nil)
     }
 
-    @Test func `builds SSH command for remote mode`() {
+    @Test func `builds SSH command for remote mode`() async {
         let defaults = self.makeDefaults()
         defaults.set(AppState.ConnectionMode.remote.rawValue, forKey: connectionModeKey)
         defaults.set("openclaw@example.com:2222", forKey: remoteTargetKey)
         defaults.set("/tmp/id_ed25519", forKey: remoteIdentityKey)
         defaults.set("/srv/openclaw", forKey: remoteProjectRootKey)
 
-        let cmd = CommandResolver.openclawCommand(
+        let cmd = await CommandResolver.openclawCommand(
             subcommand: "status",
             extraArgs: ["--json"],
             defaults: defaults,
@@ -322,12 +395,12 @@ import Testing
         }
     }
 
-    @Test func `explicit SSH config host key policy omits strict override`() {
+    @Test func `explicit SSH config host key policy omits strict override`() async {
         let defaults = self.makeDefaults()
         defaults.set(AppState.ConnectionMode.remote.rawValue, forKey: connectionModeKey)
         defaults.set("gateway-alias", forKey: remoteTargetKey)
 
-        let cmd = CommandResolver.openclawCommand(
+        let cmd = await CommandResolver.openclawCommand(
             subcommand: "status",
             defaults: defaults,
             configRoot: [
@@ -345,7 +418,7 @@ import Testing
         #expect(cmd.contains("ControlPath=none"))
     }
 
-    @Test func `explicit SSH config replaces stale defaults with its host key policy`() {
+    @Test func `explicit SSH config replaces stale defaults with its host key policy`() async {
         let defaults = self.makeDefaults()
         defaults.set(AppState.ConnectionMode.remote.rawValue, forKey: connectionModeKey)
         defaults.set("new-gateway-alias", forKey: remoteTargetKey)
@@ -362,7 +435,7 @@ import Testing
             ],
         ]
 
-        let cmd = CommandResolver.openclawCommand(
+        let cmd = await CommandResolver.openclawCommand(
             subcommand: "status",
             defaults: defaults,
             configRoot: configRoot)
@@ -401,7 +474,7 @@ import Testing
         #expect(settings.sshHostKeyPolicy == .strict)
     }
 
-    @Test func `remote SSH with explicit blank target fails closed`() throws {
+    @Test func `remote SSH with explicit blank target fails closed`() async throws {
         let defaults = self.makeDefaults()
         defaults.set(AppState.ConnectionMode.remote.rawValue, forKey: connectionModeKey)
         defaults.set("stale-gateway-alias", forKey: remoteTargetKey)
@@ -409,7 +482,7 @@ import Testing
         let localOpenClaw = tmp.appendingPathComponent("node_modules/.bin/openclaw")
         try makeExecutableForTests(at: localOpenClaw)
 
-        let command = CommandResolver.openclawCommand(
+        let command = await CommandResolver.openclawCommand(
             subcommand: "status",
             defaults: defaults,
             configRoot: [
@@ -429,7 +502,7 @@ import Testing
         #expect(!command.contains(localOpenClaw.path))
     }
 
-    @Test func `direct remote route uses local CLI despite stale SSH defaults`() throws {
+    @Test func `direct remote route uses local CLI despite stale SSH defaults`() async throws {
         let defaults = self.makeDefaults()
         defaults.set(AppState.ConnectionMode.remote.rawValue, forKey: connectionModeKey)
         defaults.set("stale-gateway-alias", forKey: remoteTargetKey)
@@ -437,7 +510,7 @@ import Testing
         let localOpenClaw = tmp.appendingPathComponent("node_modules/.bin/openclaw")
         try makeExecutableForTests(at: localOpenClaw)
 
-        let command = CommandResolver.openclawCommand(
+        let command = await CommandResolver.openclawCommand(
             subcommand: "status",
             defaults: defaults,
             configRoot: [
@@ -510,7 +583,7 @@ import Testing
         #expect(CommandResolver.parseSSHTarget("user@host:2222")?.port == 2222)
     }
 
-    @Test func `config root local overrides remote defaults`() throws {
+    @Test func `config root local overrides remote defaults`() async throws {
         let defaults = self.makeDefaults()
         defaults.set(AppState.ConnectionMode.remote.rawValue, forKey: connectionModeKey)
         defaults.set("openclaw@example.com:2222", forKey: remoteTargetKey)
@@ -520,7 +593,7 @@ import Testing
         let openclawPath = tmp.appendingPathComponent("node_modules/.bin/openclaw")
         try makeExecutableForTests(at: openclawPath)
 
-        let cmd = CommandResolver.openclawCommand(
+        let cmd = await CommandResolver.openclawCommand(
             subcommand: "daemon",
             defaults: defaults,
             configRoot: ["gateway": ["mode": "local"]],

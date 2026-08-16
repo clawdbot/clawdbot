@@ -118,6 +118,9 @@ function summarizeKnownExec(words: string[]): string {
     const pattern = optionValue(words, ["-e", "--regexp"]) ?? positional[0];
     const target = positional.length > 1 ? positional.at(-1) : undefined;
     if (pattern) {
+      if (isUnsafeSearchSummaryPattern(pattern)) {
+        return target ? `search text in ${target}` : "search text";
+      }
       return target ? `search "${pattern}" in ${target}` : `search "${pattern}"`;
     }
     return "search text";
@@ -288,6 +291,27 @@ function summarizeKnownExec(words: string[]): string {
     return `run ${bin}`;
   }
   return /^[A-Za-z0-9._/-]+$/.test(arg) ? `run ${bin} ${arg}` : `run ${bin}`;
+}
+
+function isUnsafeSearchSummaryPattern(pattern: string): boolean {
+  const trimmed = pattern.trim();
+  return (
+    !trimmed ||
+    pattern.length > 120 ||
+    /[\r\n`]/u.test(pattern) ||
+    /^Bash failed:/iu.test(trimmed) ||
+    containsGeneratedSearchSummary(trimmed)
+  );
+}
+
+// Match the two labels this formatter emits, without hiding normal prose such as
+// "search engine" or "search textual data".
+const GENERATED_SEARCH_SUMMARY_FRAGMENT_RE = /^search\s+(?:["']|text(?:\s+in(?:\s|$)|$))/iu;
+
+function containsGeneratedSearchSummary(pattern: string): boolean {
+  return pattern
+    .split(/(?:\||->)/u)
+    .some((fragment) => GENERATED_SEARCH_SUMMARY_FRAGMENT_RE.test(fragment.trim()));
 }
 
 function summarizePipeline(stage: string): string {

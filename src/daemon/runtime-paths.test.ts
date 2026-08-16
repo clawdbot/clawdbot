@@ -245,22 +245,34 @@ describe("resolvePreferredNodePath", () => {
     expect(execFile).toHaveBeenCalledTimes(1);
   });
 
-  it("skips system node when it is too old", async () => {
+  it.each([
+    {
+      reason: "its version is unsupported",
+      runtime: nodeRuntime("22.22.2", null),
+    },
+    {
+      reason: "its SQLite version is unsafe",
+      runtime: nodeRuntime("24.17.0", "3.51.2"),
+    },
+  ])("returns undefined from Bun when the only system Node $reason", async ({ runtime }) => {
     mockNodePathPresent(darwinNode);
-
-    // Node 22.22.2 is below minimum 22.22.3
-    const execFile = vi.fn().mockResolvedValue(nodeRuntime("22.22.2", null));
+    const execFile = vi.fn().mockResolvedValue(runtime);
 
     const result = await resolvePreferredNodePath({
       env: {},
       runtime: "node",
       platform: "darwin",
       execFile,
-      execPath: "",
+      execPath: "/Users/test/.bun/bin/bun",
     });
 
     expect(result).toBeUndefined();
     expect(execFile).toHaveBeenCalledTimes(1);
+    expect(execFile).toHaveBeenCalledWith(
+      darwinNode,
+      ["-e", expect.stringContaining("SELECT sqlite_version() AS version")],
+      { encoding: "utf8", timeoutMs: 5_000 },
+    );
   });
 
   it("keeps a safe version-manager runtime when system SQLite is unsafe", async () => {
@@ -491,7 +503,26 @@ describe("resolveSystemNodeInfo", () => {
     expect(execFile).not.toHaveBeenCalled();
   });
 
-  it("renders a warning when system node is too old", () => {
+  it("reports an unavailable system Node version while preserving the selected runtime", () => {
+    const selectedNode = "/Users/me/.fnm/node-22/bin/node";
+    const warning = renderSystemNodeWarning(
+      {
+        path: darwinNode,
+        sqliteVersion: null,
+        version: null,
+        nodeSharedSqlite: false,
+        supported: false,
+      },
+      selectedNode,
+    );
+
+    expect(warning).toBe(
+      `System Node at ${darwinNode} is available, but its version could not be determined. Using ${selectedNode} for the daemon. Install Node 24.15+ (recommended) or Node 22.22.3+ from nodejs.org or Homebrew.`,
+    );
+  });
+
+  it("reports a known unsupported system Node version", () => {
+    const selectedNode = "/Users/me/.fnm/node-22/bin/node";
     const warning = renderSystemNodeWarning(
       {
         path: darwinNode,
@@ -500,11 +531,27 @@ describe("resolveSystemNodeInfo", () => {
         nodeSharedSqlite: false,
         supported: false,
       },
+      selectedNode,
+    );
+
+    expect(warning).toBe(
+      `System Node 18.19.0 at ${darwinNode} is outside the supported range. Using ${selectedNode} for the daemon. Install Node 24.15+ (recommended) or Node 22.22.3+ from nodejs.org or Homebrew.`,
+    );
+  });
+
+  it("does not warn for a supported system Node version", () => {
+    const warning = renderSystemNodeWarning(
+      {
+        path: darwinNode,
+        sqliteVersion: "3.51.3",
+        version: "24.15.0",
+        nodeSharedSqlite: false,
+        supported: true,
+      },
       "/Users/me/.fnm/node-22/bin/node",
     );
 
-    expect(warning).toContain("outside the supported range");
-    expect(warning).toContain(darwinNode);
+    expect(warning).toBeNull();
   });
 
   it("renders a WAL safety warning for supported Node with unsafe SQLite", () => {

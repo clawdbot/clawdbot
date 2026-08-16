@@ -6,12 +6,13 @@ import {
   createMatrixRoomMessageEvent,
 } from "./handler.test-helpers.js";
 
-const { downloadMatrixMediaMock, sendDurableMessageBatchMock, transcribeFirstAudioMock } =
-  vi.hoisted(() => ({
+const { downloadMatrixMediaMock, sendTranscriptEchoMock, transcribeFirstAudioMock } = vi.hoisted(
+  () => ({
     downloadMatrixMediaMock: vi.fn(),
-    sendDurableMessageBatchMock: vi.fn(),
+    sendTranscriptEchoMock: vi.fn(),
     transcribeFirstAudioMock: vi.fn(),
-  }));
+  }),
+);
 
 vi.mock("./media.js", async () => {
   const actual = await vi.importActual<typeof import("./media.js")>("./media.js");
@@ -21,10 +22,21 @@ vi.mock("./media.js", async () => {
   };
 });
 
-vi.mock("./preflight-audio.runtime.js", () => ({
-  sendDurableMessageBatch: sendDurableMessageBatchMock,
-  transcribeFirstAudio: transcribeFirstAudioMock,
-}));
+vi.mock("openclaw/plugin-sdk/media-understanding-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/media-understanding-runtime")>();
+  return {
+    ...actual,
+    createChannelPreflightAudio: (
+      params: Parameters<typeof actual.createChannelPreflightAudio>[0],
+    ) =>
+      actual.createChannelPreflightAudio({
+        ...params,
+        sendTranscriptEcho: sendTranscriptEchoMock,
+        transcribeFirstAudio: transcribeFirstAudioMock,
+      }),
+  };
+});
 
 function createAudioPreflightHarness(
   overrides: Parameters<typeof createMatrixHandlerTestHarness>[0] = {},
@@ -80,7 +92,7 @@ function expectLatestInboundContext(
 describe("createMatrixRoomMessageHandler audio preflight", () => {
   beforeEach(() => {
     downloadMatrixMediaMock.mockReset();
-    sendDurableMessageBatchMock.mockReset();
+    sendTranscriptEchoMock.mockReset();
     transcribeFirstAudioMock.mockReset();
     installMatrixMonitorTestRuntime();
   });
@@ -107,8 +119,7 @@ describe("createMatrixRoomMessageHandler audio preflight", () => {
     expect(transcribeFirstAudioMock).toHaveBeenCalledWith(
       expect.objectContaining({
         ctx: expect.objectContaining({
-          MediaPaths: ["/tmp/inbound/voice.ogg"],
-          MediaTypes: ["audio/ogg"],
+          media: [{ path: "/tmp/inbound/voice.ogg", contentType: "audio/ogg" }],
           Provider: "matrix",
           Surface: "matrix",
           OriginatingChannel: "matrix",
@@ -191,7 +202,7 @@ describe("createMatrixRoomMessageHandler audio preflight", () => {
       contentType: "audio/ogg",
       placeholder: "[matrix audio attachment]",
     });
-    sendDurableMessageBatchMock.mockResolvedValue({ status: "sent", results: [] });
+    sendTranscriptEchoMock.mockResolvedValue(undefined);
     transcribeFirstAudioMock.mockResolvedValue("hello bot");
     const { handler } = createAudioPreflightHarness({
       cfg: {
@@ -210,14 +221,15 @@ describe("createMatrixRoomMessageHandler audio preflight", () => {
       }),
     );
 
-    expect(sendDurableMessageBatchMock).toHaveBeenCalledWith(
+    expect(sendTranscriptEchoMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        channel: "matrix",
-        to: "room:!room:example.org",
-        accountId: "ops",
-        payloads: [{ text: '📝 "hello bot"' }],
-        bestEffort: true,
-        durability: "best_effort",
+        ctx: expect.objectContaining({
+          Provider: "matrix",
+          OriginatingTo: "room:!room:example.org",
+          AccountId: "ops",
+        }),
+        transcript: "hello bot",
+        format: '📝 "{transcript}"',
       }),
     );
   });

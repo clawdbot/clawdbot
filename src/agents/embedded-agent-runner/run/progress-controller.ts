@@ -2,7 +2,7 @@ import {
   FAST_MODE_AUTO_PROGRESS_KIND,
   type ReplyPayload,
 } from "../../../auto-reply/reply-payload.js";
-import { emitAgentItemEvent } from "../../../infra/agent-events.js";
+import { emitAgentActivityEvent } from "../../../infra/agent-activity-events.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveFastModeModelAutoOnSeconds } from "../../../shared/fast-mode.js";
 import {
@@ -54,9 +54,10 @@ export function createEmbeddedRunProgressController(params: {
   }) => {
     const summary = formatFastModeAutoProgressText(payload);
     try {
-      emitAgentItemEvent({
+      emitAgentActivityEvent({
         runId: params.attempt.runId,
         ...(params.attempt.sessionKey ? { sessionKey: params.attempt.sessionKey } : {}),
+        stream: "item",
         data: {
           itemId: `fast-mode-auto:${payload.enabled ? "on" : "off"}`,
           kind: "status",

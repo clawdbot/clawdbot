@@ -6,6 +6,8 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
+import { runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { monitorTlonProvider } from "./monitor/index.js";
 import { tlonSetupWizard } from "./setup-surface.js";
 import {
@@ -139,6 +141,8 @@ async function withHttpPokeAccountApi<T>(
 
 export const tlonRuntimeOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
+  chunker: chunkTextForOutbound,
+  chunkerMode: "markdown",
   textChunkLimit: 10000,
   resolveTarget: ({ to }) => resolveTlonOutboundTarget(to),
   deliveryCapabilities: {
@@ -210,34 +214,39 @@ export const tlonRuntimeOutbound: ChannelOutboundAdapter = {
   },
 };
 
-export async function probeTlonAccount(account: ConfiguredTlonAccount) {
-  try {
-    const ssrfPolicy = ssrfPolicyFromDangerouslyAllowPrivateNetwork(
-      account.dangerouslyAllowPrivateNetwork,
-    );
-    const cookie = await authenticate(account.url, account.code, { ssrfPolicy });
-    const { response, release } = await urbitFetch({
-      baseUrl: account.url,
-      path: "/~/name",
-      init: {
-        method: "GET",
-        headers: { Cookie: cookie },
-      },
-      ssrfPolicy,
-      timeoutMs: 30_000,
-      auditContext: "tlon-probe-account",
-    });
-    try {
-      if (!response.ok) {
-        return { ok: false, error: `Name request failed: ${response.status}` };
+export async function probeTlonAccount(account: ConfiguredTlonAccount, timeoutMs?: number) {
+  return await runChannelProbe(
+    timeoutMs,
+    async () => {
+      const ssrfPolicy = ssrfPolicyFromDangerouslyAllowPrivateNetwork(
+        account.dangerouslyAllowPrivateNetwork,
+      );
+      const cookie = await authenticate(account.url, account.code, { ssrfPolicy });
+      const { response, release } = await urbitFetch({
+        baseUrl: account.url,
+        path: "/~/name",
+        init: {
+          method: "GET",
+          headers: { Cookie: cookie },
+        },
+        ssrfPolicy,
+        timeoutMs: 30_000,
+        auditContext: "tlon-probe-account",
+      });
+      try {
+        if (!response.ok) {
+          return { ok: false, error: `Name request failed: ${response.status}` };
+        }
+        return { ok: true };
+      } finally {
+        await release();
       }
-      return { ok: true };
-    } finally {
-      await release();
-    }
-  } catch (error) {
-    return { ok: false, error: (error as { message?: string })?.message ?? String(error) };
-  }
+    },
+    (error) => ({
+      ok: false,
+      error: (error as { message?: string })?.message ?? String(error),
+    }),
+  );
 }
 
 export async function startTlonGatewayAccount(

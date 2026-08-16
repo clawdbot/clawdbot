@@ -4,6 +4,8 @@ import {
   SessionsCatalogHostEventSchema,
   SessionsCatalogListParamsSchema,
   SessionsCatalogListResultSchema,
+  SessionsCatalogStartTerminalParamsSchema,
+  SessionsCatalogStartTerminalResultSchema,
 } from "./sessions-catalog.js";
 
 describe("SessionsCatalogListResultSchema", () => {
@@ -17,7 +19,10 @@ describe("SessionsCatalogListResultSchema", () => {
             capabilities: {
               continueSession: true,
               archive: false,
-              createSession: { model: "anthropic/claude-opus-4-8" },
+              createSession: {
+                model: "anthropic/claude-opus-4-8",
+                startTerminal: true,
+              },
               openTerminal: true,
             },
             hosts: [
@@ -31,6 +36,7 @@ describe("SessionsCatalogListResultSchema", () => {
                     threadId: "thread-1",
                     status: "idle",
                     archived: false,
+                    createdActor: { type: "human", id: "profile-ada", label: "Ada" },
                     canContinue: true,
                     canArchive: false,
                     canOpenTerminal: true,
@@ -42,6 +48,35 @@ describe("SessionsCatalogListResultSchema", () => {
         ],
       }),
     ).toBe(true);
+  });
+});
+
+describe("SessionsCatalogStartTerminal schemas", () => {
+  it("accepts the terminal start contract and rejects unknown fields", () => {
+    const params = {
+      catalogId: "codex",
+      hostId: "gateway:local",
+      agentId: "main",
+      cwd: "/tmp/worktree",
+      initialMessage: "Inspect the failing test",
+    };
+    const result = {
+      sessionId: "terminal-1",
+      agentId: "main",
+      shell: "/bin/zsh",
+      cwd: "/tmp/worktree",
+      confined: false,
+      title: "Codex",
+    };
+
+    expect(Value.Check(SessionsCatalogStartTerminalParamsSchema, params)).toBe(true);
+    expect(
+      Value.Check(SessionsCatalogStartTerminalParamsSchema, { ...params, unexpected: true }),
+    ).toBe(false);
+    expect(Value.Check(SessionsCatalogStartTerminalResultSchema, result)).toBe(true);
+    expect(
+      Value.Check(SessionsCatalogStartTerminalResultSchema, { ...result, unexpected: true }),
+    ).toBe(false);
   });
 });
 
@@ -64,10 +99,10 @@ describe("SessionsCatalogListParamsSchema", () => {
     ).toBe(true);
   });
 
-  it("requires a catalog selector for host cursors", () => {
+  it("accepts flat optional catalog cursor fields", () => {
     expect(
       Value.Check(SessionsCatalogListParamsSchema, { cursors: { "gateway:local": "1" } }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       Value.Check(SessionsCatalogListParamsSchema, {
         catalogId: "claude",

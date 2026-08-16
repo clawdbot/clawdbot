@@ -243,6 +243,34 @@ describe("nextcloud talk room info", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("cancels failed room info response bodies before releasing their guard", async () => {
+    const cancelBody = vi.fn();
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuard.mockResolvedValue({
+      response: new Response(
+        new ReadableStream<Uint8Array>({
+          cancel: cancelBody,
+        }),
+        { status: 503 },
+      ),
+      release,
+    });
+    const config = { apiUser: "test-user" };
+    Reflect.set(config, "apiPassword", "test-password");
+    const params: Record<string, unknown> = {
+      account: {
+        accountId: "test-account",
+        baseUrl: "https://nc.example.com",
+        config,
+      },
+    };
+    Reflect.set(params, "roomToken", "test-room");
+
+    await expect(resolveNextcloudTalkRoomKind(params as never)).resolves.toBeUndefined();
+    expect(cancelBody).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("reports malformed room info JSON with a stable channel error", async () => {
     const release = vi.fn(async () => {});
     const log = vi.fn();

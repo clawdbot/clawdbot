@@ -8,6 +8,10 @@ title: "Tailscale"
 
 OpenClaw can auto-configure Tailscale **Serve** (tailnet) or **Funnel** (public) for the Gateway dashboard and WebSocket port. This keeps the gateway bound to loopback while Tailscale provides HTTPS, routing, and (for Serve) identity headers.
 
+<Note>
+Looking for the step-by-step setup? See [Give your Gateway a stable HTTPS URL](/gateway/stable-https-url).
+</Note>
+
 ## Modes
 
 `gateway.tailscale.mode`:
@@ -61,10 +65,11 @@ Use this to have the gateway listen directly on the Tailnet IP, with no Serve/Fu
 }
 ```
 
-Connect from another Tailnet device:
+Connect a native or CLI client from another Tailnet device:
 
-- Control UI: `http://<tailscale-ip>:18789/`
 - WebSocket: `ws://<tailscale-ip>:18789`
+
+Do not use the direct plain-HTTP address for the browser Control UI. Remote plain HTTP cannot create browser device identity, and token/password auth does not replace it. Use Tailscale Serve for the Control UI.
 
 <Note>
 When a bindable Tailnet IPv4 is present, the Gateway also requires `http://127.0.0.1:18789` for authenticated same-host clients. If no Tailnet address is available at startup, it falls back to loopback only; restart after Tailscale becomes available to add direct Tailnet access. Neither path adds LAN or public exposure.
@@ -110,7 +115,7 @@ This tokenless flow assumes the gateway host is trusted. If untrusted local code
 
 Scope of the bypass:
 
-- Applies only to the Control UI WebSocket auth surface. HTTP API endpoints (`/v1/*`, `/tools/invoke`, `/api/channels/*`, etc.) never use Tailscale identity-header auth; they always follow the gateway's normal HTTP auth mode.
+- Applies to the Control UI WebSocket auth surface and read-only `GET`/`HEAD` requests for Control UI profile avatars. Other HTTP API endpoints (`/v1/*`, `/tools/invoke`, `/api/channels/*`, etc.) never use Tailscale identity-header auth; they always follow the gateway's normal HTTP auth mode.
 - For Control UI operator sessions that already carry browser device identity, a verified Tailscale identity skips the bootstrap-token/QR pairing round trip.
 - It does not bypass device identity itself: device-less clients are still rejected, and node-role connections still go through normal pairing and auth checks.
 

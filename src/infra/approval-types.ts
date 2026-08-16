@@ -1,5 +1,6 @@
 // Approval kind is shared by exec and plugin approval routing surfaces.
 export type ChannelApprovalKind = "exec" | "plugin";
+export type ApprovalRequestChannelRouteClass = "bound-or-explicit" | "unbound";
 
 /** Resolve approval ownership from the typed request payload, never from id spelling. */
 export function resolveApprovalRequestKind(request: { request: object }): ChannelApprovalKind {

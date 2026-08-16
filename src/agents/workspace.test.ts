@@ -31,7 +31,6 @@ import {
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_MEMORY_FILENAME,
   DEFAULT_SOUL_FILENAME,
-  DEFAULT_TOOLS_FILENAME,
   DEFAULT_USER_FILENAME,
   ensureAgentWorkspace,
   filterBootstrapFilesForSession,
@@ -70,9 +69,29 @@ describe("resolveDefaultAgentWorkspaceDir", () => {
     expect(dir).toBe(path.join(path.resolve("/srv/openclaw-home"), ".openclaw", "workspace"));
   });
 
+  it("roots named profile workspaces inside the profile state directory", () => {
+    const dir = resolveDefaultAgentWorkspaceDir({
+      OPENCLAW_PROFILE: "work",
+      OPENCLAW_HOME: "/srv/openclaw-home",
+      HOME: "/home/other",
+    } as NodeJS.ProcessEnv);
+
+    expect(dir).toBe(path.join(path.resolve("/srv/openclaw-home"), ".openclaw-work", "workspace"));
+  });
+
+  it("rejects invalid environment-only profile names", () => {
+    expect(() =>
+      resolveDefaultAgentWorkspaceDir({
+        OPENCLAW_PROFILE: "../escape",
+        HOME: "/home/peter",
+      } as NodeJS.ProcessEnv),
+    ).toThrow('Invalid profile name: "../escape"');
+  });
+
   it("prefers OPENCLAW_WORKSPACE_DIR for default workspace resolution", () => {
     const dir = resolveDefaultAgentWorkspaceDir({
       OPENCLAW_WORKSPACE_DIR: "/srv/openclaw-workspace",
+      OPENCLAW_PROFILE: "work",
       OPENCLAW_HOME: "/srv/openclaw-home",
       HOME: "/home/other",
     } as NodeJS.ProcessEnv);
@@ -143,15 +162,32 @@ async function expectCompletedWithoutBootstrap(dir: string) {
 
 function expectSubagentAllowedBootstrapNames(files: WorkspaceBootstrapFile[]) {
   const names = files.map((file) => file.name);
-  expect(names).toStrictEqual(["AGENTS.md", "TOOLS.md"]);
+  expect(names).toStrictEqual(["AGENTS.md"]);
 }
 
 function expectCronAllowedBootstrapNames(files: WorkspaceBootstrapFile[]) {
   const names = files.map((file) => file.name);
-  expect(names).toStrictEqual(["AGENTS.md", "SOUL.md", "TOOLS.md", "IDENTITY.md", "USER.md"]);
+  expect(names).toStrictEqual(["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"]);
 }
 
 describe("ensureAgentWorkspace", () => {
+  it("registers workspace aliases in the selected state database", async () => {
+    const root = testState!.root;
+    const workspace = path.join(root, "custom-db-workspace");
+    const workspaceAlias = path.join(root, "custom-db-workspace-alias");
+    const databasePath = path.join(root, "custom-state.sqlite");
+    const options = { path: databasePath };
+    const seededAt = "2026-07-31T12:00:00.000Z";
+    await fs.mkdir(workspace);
+    await fs.symlink(workspace, workspaceAlias, process.platform === "win32" ? "junction" : "dir");
+    mergeWorkspaceSetupState(workspace, { bootstrapSeededAt: seededAt }, Date.now(), options);
+
+    expect(readWorkspaceStateSnapshot(workspaceAlias, options).setup).toEqual({
+      version: 1,
+      bootstrapSeededAt: seededAt,
+    });
+  });
+
   it("creates BOOTSTRAP.md and records a seeded marker for brand new workspaces", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
 
@@ -290,7 +326,7 @@ describe("ensureAgentWorkspace", () => {
     await expectPathMissing(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
   });
 
-  it("refuses to accept old generated bootstrap files recorded by SQLite attestation", async () => {
+  it("accepts an intact historical AGENTS.md recorded by SQLite attestation", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     const oldGeneratedAgents = "old generated agents\n";
     await fs.writeFile(path.join(tempDir, DEFAULT_AGENTS_FILENAME), oldGeneratedAgents);
@@ -306,9 +342,9 @@ describe("ensureAgentWorkspace", () => {
       ]),
     });
 
-    await expectWorkspaceVanished(
+    await expect(
       ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true }),
-    );
+    ).resolves.toMatchObject({ dir: tempDir });
     await expectPathMissing(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
   });
 
@@ -566,12 +602,10 @@ describe("ensureAgentWorkspace", () => {
     await writeWorkspaceFile({ dir: tempDir, name: DEFAULT_IDENTITY_FILENAME, content: "custom" });
     await writeWorkspaceFile({ dir: tempDir, name: DEFAULT_USER_FILENAME, content: "custom" });
     await fs.unlink(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
-    await fs.unlink(path.join(tempDir, DEFAULT_TOOLS_FILENAME));
 
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
 
     await expectPathMissing(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
-    await expect(fs.access(path.join(tempDir, DEFAULT_TOOLS_FILENAME))).resolves.toBeUndefined();
     const state = await readWorkspaceState(tempDir);
     expect(state.setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
   });
@@ -630,7 +664,6 @@ describe("ensureAgentWorkspace", () => {
     });
 
     await expect(fs.access(path.join(tempDir, DEFAULT_AGENTS_FILENAME))).resolves.toBeUndefined();
-    await expect(fs.access(path.join(tempDir, DEFAULT_TOOLS_FILENAME))).resolves.toBeUndefined();
     await expect(
       fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME)),
     ).resolves.toBeUndefined();
@@ -826,19 +859,13 @@ describe("ensureAgentWorkspace", () => {
     await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(false);
   });
 
-  it("writes the clean HEARTBEAT runtime template into new workspaces", async () => {
+  it("no longer seeds HEARTBEAT.md into new workspaces", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
 
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
 
-    const heartbeat = await fs.readFile(path.join(tempDir, DEFAULT_HEARTBEAT_FILENAME), "utf-8");
-    expect(heartbeat).not.toContain("```");
-    expect(heartbeat).toContain(
-      "# Keep this file empty (or with only comments) to skip heartbeat API calls.",
-    );
-    expect(heartbeat).toContain(
-      "# Add tasks below when you want the agent to check something periodically.",
-    );
+    // Heartbeat monitor context lives in cron scratch now; new workspaces get no file.
+    await expectPathMissing(path.join(tempDir, DEFAULT_HEARTBEAT_FILENAME));
   });
 
   it("does not recreate optional bootstrap files when workspace setup is already completed", async () => {
@@ -870,7 +897,6 @@ describe("ensureAgentWorkspace", () => {
     await fs.unlink(path.join(tempDir, DEFAULT_SOUL_FILENAME));
     await fs.unlink(path.join(tempDir, DEFAULT_IDENTITY_FILENAME));
     await fs.unlink(path.join(tempDir, DEFAULT_USER_FILENAME));
-    await fs.unlink(path.join(tempDir, DEFAULT_HEARTBEAT_FILENAME));
     await writeWorkspaceFile({
       dir: tempDir,
       name: DEFAULT_AGENTS_FILENAME,
@@ -886,9 +912,8 @@ describe("ensureAgentWorkspace", () => {
     await expectPathMissing(path.join(tempDir, DEFAULT_USER_FILENAME));
     await expectPathMissing(path.join(tempDir, DEFAULT_HEARTBEAT_FILENAME));
 
-    // Verify required files (AGENTS.md, TOOLS.md) still exist.
+    // Verify the required AGENTS.md file still exists.
     await expect(fs.access(path.join(tempDir, DEFAULT_AGENTS_FILENAME))).resolves.toBeUndefined();
-    await expect(fs.access(path.join(tempDir, DEFAULT_TOOLS_FILENAME))).resolves.toBeUndefined();
   });
 
   it("observes setup completed concurrently before writing optional bootstrap files", async () => {
@@ -1004,30 +1029,33 @@ describe("loadWorkspaceBootstrapFiles", () => {
       content: "# AGENTS.md\n\nkeep me\n",
     });
 
-    const originalReadFileSync = syncFs.readFileSync.bind(syncFs);
-    let readFileSyncCalls = 0;
+    // The bounded fd reader consumes the descriptor via fs.read; inject the
+    // transient failure at that seam.
+    const originalRead = syncFs.read.bind(syncFs);
+    let readCalls = 0;
     let threwTransient = false;
-    const readSpy = vi.spyOn(syncFs, "readFileSync").mockImplementation(((
-      target: unknown,
-      options: unknown,
-    ) => {
-      readFileSyncCalls += 1;
+    const readSpy = vi.spyOn(syncFs, "read").mockImplementation(((...args: unknown[]) => {
+      readCalls += 1;
       if (!threwTransient) {
         threwTransient = true;
-        throw Object.assign(new Error("Unknown system error -11: read"), {
-          code: "EAGAIN",
-          errno: -11,
-        });
+        const callback = args.at(-1) as (error: Error) => void;
+        callback(
+          Object.assign(new Error("Unknown system error -11: read"), {
+            code: "EAGAIN",
+            errno: -11,
+          }),
+        );
+        return;
       }
-      return originalReadFileSync(target as never, options as never);
-    }) as typeof syncFs.readFileSync);
+      (originalRead as (...forwarded: unknown[]) => void)(...args);
+    }) as typeof syncFs.read);
 
     try {
       const files = await loadWorkspaceBootstrapFiles(tempDir);
       expect(threwTransient).toBe(true);
       // The retry re-opens and reads again, so the failed first read is followed
       // by at least one more successful read.
-      expect(readFileSyncCalls).toBeGreaterThanOrEqual(2);
+      expect(readCalls).toBeGreaterThanOrEqual(2);
       const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
       expect(agents?.missing).toBe(false);
       expect(agents?.content).toContain("keep me");
@@ -1044,12 +1072,15 @@ describe("loadWorkspaceBootstrapFiles", () => {
       content: "# AGENTS.md\n",
     });
 
-    const readSpy = vi.spyOn(syncFs, "readFileSync").mockImplementation((() => {
-      throw Object.assign(new Error("Unknown system error -11: read"), {
-        code: "EAGAIN",
-        errno: -11,
-      });
-    }) as typeof syncFs.readFileSync);
+    const readSpy = vi.spyOn(syncFs, "read").mockImplementation(((...args: unknown[]) => {
+      const callback = args.at(-1) as (error: Error) => void;
+      callback(
+        Object.assign(new Error("Unknown system error -11: read"), {
+          code: "EAGAIN",
+          errno: -11,
+        }),
+      );
+    }) as typeof syncFs.read);
 
     try {
       // Unlike the template check, this reader returns an io failure (not a
@@ -1139,10 +1170,8 @@ describe("filterBootstrapFilesForSession", () => {
   const mockFiles: WorkspaceBootstrapFile[] = [
     { name: "AGENTS.md", path: "/w/AGENTS.md", content: "", missing: false },
     { name: "SOUL.md", path: "/w/SOUL.md", content: "", missing: false },
-    { name: "TOOLS.md", path: "/w/TOOLS.md", content: "", missing: false },
     { name: "IDENTITY.md", path: "/w/IDENTITY.md", content: "", missing: false },
     { name: "USER.md", path: "/w/USER.md", content: "", missing: false },
-    { name: "HEARTBEAT.md", path: "/w/HEARTBEAT.md", content: "", missing: false },
     { name: "BOOTSTRAP.md", path: "/w/BOOTSTRAP.md", content: "", missing: false },
     { name: "MEMORY.md", path: "/w/MEMORY.md", content: "", missing: false },
   ];

@@ -37,7 +37,6 @@ export {
   formatHelpExamples,
   inheritOptionFromParent,
   info,
-  resolveNodeIdFromList,
   theme,
 } from "./sdk-setup-tools.js";
 export { getRuntimeConfig, parseBooleanValue, shortenHomePath } from "./sdk-config.js";
@@ -54,5 +53,4 @@ export {
   safeParseJson,
   withTimeout,
 } from "./sdk-node-runtime.js";
-export type { OpenClawConfig } from "./sdk-config.js";
 export type { GatewayRequestHandlers, GatewayRpcOpts, NodeSession } from "./sdk-node-runtime.js";

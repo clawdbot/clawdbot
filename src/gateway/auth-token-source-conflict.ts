@@ -63,9 +63,9 @@ export function resolveGatewayAuthTokenSourceConflict(params: {
   const title = `${GATEWAY_ENV_TOKEN} conflicts with gateway.auth.token`;
   const detail =
     `${GATEWAY_ENV_TOKEN} is set while gateway.auth.token uses a different configured source. ` +
-    "Direct local Gateway clients commonly prefer the env token, while the managed gateway service " +
-    "prefers gateway.auth.token. If the values differ, CLI/RPC calls can fail to authenticate " +
-    "with the running gateway.";
+    "Configured local Gateway clients and the managed gateway service prefer gateway.auth.token. " +
+    "Environment credentials remain active for explicit environment URL and node-host targets, " +
+    "so a stale value can still authenticate against the wrong target.";
   const remediation =
     `Remove ${GATEWAY_ENV_TOKEN} from the shell, ~/.openclaw/.env, or launchctl env if gateway.auth.token is intended, ` +
     `or point gateway.auth.token at \${${GATEWAY_ENV_TOKEN}} if the env var should be canonical.`;

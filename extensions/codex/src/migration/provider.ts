@@ -41,6 +41,7 @@ export function buildCodexMigrationProvider(
       };
     },
     plan: buildCodexMigrationPlan,
+    deferredApply: { retrySafe: true },
     prepareApply(ctx) {
       if (isMemoryOnlyMigration(ctx)) {
         return undefined;

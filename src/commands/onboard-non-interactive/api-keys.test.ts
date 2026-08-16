@@ -41,6 +41,36 @@ function createRuntime() {
 }
 
 describe("resolveNonInteractiveApiKey", () => {
+  it("resolves provider environment auth against the staged config and agent workspace", async () => {
+    const runtime = createRuntime();
+    const cfg = { plugins: { entries: { example: { enabled: true } } } };
+    const workspaceDir = "/tmp/openclaw-example-workspace";
+    resolveEnvApiKey.mockReturnValue({
+      apiKey: "example-manifest-key",
+      source: "env: EXAMPLE_WORKSPACE_API_KEY",
+    });
+
+    const result = await resolveNonInteractiveApiKey({
+      provider: "example",
+      cfg,
+      workspaceDir,
+      flagName: "--example-api-key",
+      envVar: "EXAMPLE_API_KEY",
+      runtime: runtime as never,
+    });
+
+    expect(result).toEqual({
+      key: "example-manifest-key",
+      source: "env",
+      envVarName: "EXAMPLE_WORKSPACE_API_KEY",
+    });
+    expect(resolveEnvApiKey).toHaveBeenCalledWith("example", process.env, {
+      config: cfg,
+      workspaceDir,
+    });
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
   it("returns explicit flag keys before resolving env or plugin-backed setup", async () => {
     const runtime = createRuntime();
     resolveEnvApiKey.mockImplementation(() => {
@@ -218,5 +248,47 @@ describe("resolveNonInteractiveApiKey", () => {
     expect(resolveApiKeyForProfile).toHaveBeenCalledOnce();
     const [profileParams] = resolveApiKeyForProfile.mock.calls[0] ?? [];
     expect(profileParams?.profileId).toBe("custom-models-custom-local:default");
+  });
+
+  it("retains existing profile reuse in secret-ref mode without inventing an env reference", async () => {
+    const runtime = createRuntime();
+    authStore.profiles["custom-models-custom-local:default"] = {
+      type: "api_key",
+      provider: "custom-models-custom-local",
+      key: "fixture-profile-key",
+    };
+    resolveEnvApiKey.mockReturnValue(null);
+
+    const result = await resolveNonInteractiveApiKey({
+      provider: "custom-models-custom-local",
+      cfg: {},
+      flagName: "--custom-api-key",
+      envVar: "CUSTOM_API_KEY",
+      runtime: runtime as never,
+      secretInputMode: "ref",
+    });
+
+    expect(result).toEqual({ key: "fixture-profile-key", source: "profile" });
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("keeps intentionally keyless providers optional in secret-ref mode", async () => {
+    const runtime = createRuntime();
+    resolveEnvApiKey.mockReturnValue(null);
+
+    const result = await resolveNonInteractiveApiKey({
+      provider: "custom-models-custom-local",
+      cfg: {},
+      flagName: "--custom-api-key",
+      envVar: "CUSTOM_API_KEY",
+      runtime: runtime as never,
+      required: false,
+      secretInputMode: "ref",
+    });
+
+    expect(result).toBeNull();
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 });

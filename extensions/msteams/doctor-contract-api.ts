@@ -12,8 +12,7 @@ import {
   archiveLegacyStateSource,
   defineChannelAliasMigration,
   type PluginDoctorStateMigration,
-} from "openclaw/plugin-sdk/runtime-doctor";
-import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeStoredConversationId } from "./src/conversation-store-helpers.js";
 import {
@@ -147,8 +146,15 @@ function resolveLegacySanitizedSessionKey(
   return matches.length === 1 && match ? match : null;
 }
 
-function listAgentIds(config: { agents?: { list?: Array<{ id?: unknown }> } }): string[] {
+function listAgentIds(config: OpenClawConfig): string[] {
   const ids = new Set<string>(["main"]);
+  if (isRecord(config.agents?.entries)) {
+    for (const agentId of Object.keys(config.agents.entries)) {
+      if (agentId.trim()) {
+        ids.add(agentId.trim());
+      }
+    }
+  }
   for (const agent of config.agents?.list ?? []) {
     if (typeof agent.id === "string" && agent.id.trim()) {
       ids.add(agent.id.trim());
@@ -157,12 +163,14 @@ function listAgentIds(config: { agents?: { list?: Array<{ id?: unknown }> } }): 
   return [...ids];
 }
 
-function listCandidateStorePaths(params: {
+async function listCandidateStorePaths(params: {
   config: Parameters<PluginDoctorStateMigration["migrateLegacyState"]>[0]["config"];
   env: NodeJS.ProcessEnv;
-}): string[] {
+}): Promise<string[]> {
+  // Doctor enumeration cold-loads this closure; session-store-runtime pulls the
+  // session-accessor/kysely graph, so it stays behind a lazy import here.
+  const { resolveStorePath } = await import("openclaw/plugin-sdk/session-store-runtime");
   const paths = new Set<string>();
-  paths.add(resolveStorePath(params.config.session?.store, { env: params.env }));
   for (const agentId of listAgentIds(params.config)) {
     paths.add(resolveStorePath(params.config.session?.store, { agentId, env: params.env }));
   }
@@ -595,7 +603,9 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     async detectLegacyState(params) {
       const files = (
         await Promise.all(
-          listCandidateStorePaths(params).map((storePath) => listLegacyLearningFiles(storePath)),
+          (
+            await listCandidateStorePaths(params)
+          ).map((storePath) => listLegacyLearningFiles(storePath)),
         )
       ).flat();
       if (files.length === 0) {
@@ -612,7 +622,9 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       const warnings: string[] = [];
       const files = (
         await Promise.all(
-          listCandidateStorePaths(params).map((storePath) => listLegacyLearningFiles(storePath)),
+          (
+            await listCandidateStorePaths(params)
+          ).map((storePath) => listLegacyLearningFiles(storePath)),
         )
       ).flat();
       const store = params.context.openPluginStateKeyedStore<FeedbackLearningEntry>({

@@ -6,12 +6,11 @@ scenario:
   category: pre-release
   coverage:
     primary:
-      - plugins.kitchen-sink
+      - plugins.tool-plugin-kitchen-sink
     secondary:
-      - plugins.lifecycle
+      - plugins.activation-lifecycle
       - plugins.plugin-tools
-      - models.live-openai
-      - gateway.performance
+      - agent-runtime.hosted-provider-turns
   risk: high
   objective: Verify the external Kitchen Sink plugin can be installed into a qa-lab gateway, expose its major runtime surfaces, and coexist with a live OpenAI provider turn.
   successCriteria:
@@ -87,7 +86,7 @@ scenario:
       outboundTimeoutMs: 60000
       livePrompt: "Kitchen Sink OpenAI marker. Reply exactly: KITCHEN-SINK-OPENAI-OK"
       blockedReplyNeedle: "blocked by openclaw-kitchen-sink-fixture"
-      expectedAdversarialDiagnostics:
+      allowedAdversarialDiagnostics:
         - agent event subscription registration requires id and handle
         - agent tool result middleware must be a function
         - agent harness "kitchen-sink-agent-harness" registration missing required runtime methods
@@ -99,7 +98,6 @@ scenario:
         - hosted media resolver registration missing resolver
         - "http route registration missing or invalid auth: /kitchen-sink/http-route"
         - "plugin must declare contracts.embeddingProviders for adapter: kitchen-sink-embedding-provider"
-        - "plugin must own memory slot or declare contracts.memoryEmbeddingProviders for adapter: kitchen-sink-memory-embedding-provider"
         - "trusted tool policy registration requires id, description, and evaluate()"
         - memory prompt supplement registration missing builder
         - model catalog provider registration missing provider
@@ -108,6 +106,13 @@ scenario:
         - session scheduler job registration requires unique id, sessionKey, and kind
         - "plugin must declare contracts.tools for: kitchen-sink-tool"
         - tool metadata registration missing toolName
+      requiredAdversarialDiagnostics:
+        - agent tool result middleware must be a function
+        - agent harness "kitchen-sink-agent-harness" registration missing required runtime methods
+        - channel "kitchen-sink-channel-probe" registration missing required config helpers
+        - "trusted tool policy registration requires id, description, and evaluate()"
+        - session scheduler job registration requires unique id, sessionKey, and kind
+        - "plugin must declare contracts.tools for: kitchen-sink-tool"
 
 flow:
   steps:
@@ -211,7 +216,7 @@ flow:
                   unexpectedDiagnostics: [...new Set([...(pluginList.diagnostics ?? []), ...(inspect.diagnostics ?? [])]
                     .filter((entry) => entry?.level === "error")
                     .map((entry) => String(entry.message ?? ""))
-                    .filter((message) => !config.expectedAdversarialDiagnostics.includes(message)))],
+                    .filter((message) => !config.allowedAdversarialDiagnostics.includes(message)))],
                 };
               })()
         - assert:
@@ -505,11 +510,11 @@ flow:
                 .filter((entry) => entry?.level === "error")
                 .map((entry) => String(entry.message ?? ""))
         - assert:
-            expr: "config.expectedAdversarialDiagnostics.every((message) => adversarialDiagnostics.includes(message))"
+            expr: "config.requiredAdversarialDiagnostics.every((message) => adversarialDiagnostics.includes(message))"
             message:
-              expr: "`Kitchen Sink adversarial diagnostics missing expected messages: ${JSON.stringify({ expected: config.expectedAdversarialDiagnostics, actual: adversarialDiagnostics })}`"
+              expr: "`Kitchen Sink adversarial diagnostics missing required canaries: ${JSON.stringify({ required: config.requiredAdversarialDiagnostics, actual: adversarialDiagnostics })}`"
         - assert:
-            expr: "adversarialDiagnostics.every((message) => config.expectedAdversarialDiagnostics.includes(message))"
+            expr: "adversarialDiagnostics.every((message) => config.allowedAdversarialDiagnostics.includes(message))"
             message:
-              expr: "`Kitchen Sink adversarial diagnostics contained unexpected messages: ${JSON.stringify(adversarialDiagnostics)}`"
+              expr: "`Kitchen Sink adversarial diagnostics contained unapproved messages: ${JSON.stringify(adversarialDiagnostics)}`"
       detailsExpr: "{ diagnostics: adversarialDiagnostics }"

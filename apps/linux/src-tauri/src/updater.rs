@@ -29,6 +29,23 @@ enum InstallKind {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TerminalResultKind {
+    NotAvailable,
+    CheckFailed,
+    PackageUpdateAvailable,
+    UpdateReady,
+    UpdateFailed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ResultDestination {
+    None,
+    Webview,
+    WebviewAndNotificationWhenUnfocused,
+    WebviewAndNotification,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 // Keep every discriminator available so one host can test all platform rules.
 #[allow(dead_code)]
 enum Platform {
@@ -169,7 +186,7 @@ async fn run_check(app: AppHandle, manual: bool) {
     let Some(_guard) = begin_check(&app) else {
         return;
     };
-    let should_notify = || manual_pending.load(Ordering::Acquire);
+    let manual_requested = || manual_pending.load(Ordering::Acquire);
     #[cfg(target_os = "linux")]
     let updater = app.updater();
     #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -182,24 +199,35 @@ async fn run_check(app: AppHandle, manual: bool) {
     let updater = match updater {
         Ok(updater) => updater,
         Err(error) => {
-            if should_notify() {
-                emit_error(&app, error);
-            }
+            deliver_error(
+                &app,
+                manual_requested(),
+                TerminalResultKind::CheckFailed,
+                error,
+            );
             return;
         }
     };
     let update = match updater.check().await {
         Ok(Some(update)) => update,
         Ok(None) => {
-            if should_notify() {
-                emit(&app, NOT_AVAILABLE_EVENT, ());
-            }
+            deliver_result(
+                &app,
+                manual_requested(),
+                TerminalResultKind::NotAvailable,
+                NOT_AVAILABLE_EVENT,
+                (),
+                "OpenClaw is up to date — no update is available",
+            );
             return;
         }
         Err(error) => {
-            if should_notify() {
-                emit_error(&app, error);
-            }
+            deliver_error(
+                &app,
+                manual_requested(),
+                TerminalResultKind::CheckFailed,
+                error,
+            );
             return;
         }
     };
@@ -211,18 +239,19 @@ async fn run_check(app: AppHandle, manual: bool) {
     let install_kind = install_kind();
     if install_kind == InstallKind::NotifyOnly {
         let version = info.version.clone();
-        emit(
+        let notification_body = manual_notification_body(&version);
+        deliver_result(
             &app,
+            manual_requested(),
+            TerminalResultKind::PackageUpdateAvailable,
             AVAILABLE_MANUAL_EVENT,
             ManualUpdateInfo {
                 version: info.version,
                 notes: info.notes,
                 release_url: RELEASE_URL,
             },
+            &notification_body,
         );
-        if main_window(&app).is_some_and(|window| matches!(window.is_focused(), Ok(false))) {
-            crate::notify::notify(&app, "OpenClaw", &manual_notification_body(&version));
-        }
         return;
     }
 
@@ -251,12 +280,43 @@ async fn run_check(app: AppHandle, manual: bool) {
                     .expect("deferred updater state lock poisoned")
                     .replace(DeferredUpdate { update, bytes });
             }
-            let _ = window.emit(READY_EVENT, info);
-            if matches!(window.is_focused(), Ok(false)) {
-                crate::notify::notify(&app, "OpenClaw", &ready_notification_body(&version));
-            }
+            let notification_body = ready_notification_body(&version);
+            deliver_result(
+                &app,
+                manual_requested(),
+                TerminalResultKind::UpdateReady,
+                READY_EVENT,
+                info,
+                &notification_body,
+            );
         }
-        Err(error) => emit_error(&app, error),
+        Err(error) => deliver_error(
+            &app,
+            manual_requested(),
+            TerminalResultKind::UpdateFailed,
+            error,
+        ),
+    }
+}
+
+fn result_delivery(
+    manual: bool,
+    main_content_is_remote: bool,
+    result: TerminalResultKind,
+) -> ResultDestination {
+    if manual && main_content_is_remote {
+        return ResultDestination::WebviewAndNotification;
+    }
+    match result {
+        TerminalResultKind::NotAvailable | TerminalResultKind::CheckFailed if !manual => {
+            ResultDestination::None
+        }
+        TerminalResultKind::PackageUpdateAvailable | TerminalResultKind::UpdateReady => {
+            ResultDestination::WebviewAndNotificationWhenUnfocused
+        }
+        TerminalResultKind::NotAvailable
+        | TerminalResultKind::CheckFailed
+        | TerminalResultKind::UpdateFailed => ResultDestination::Webview,
     }
 }
 
@@ -306,6 +366,13 @@ fn main_window(app: &AppHandle) -> Option<WebviewWindow> {
     app.get_webview_window("main")
 }
 
+fn main_content_is_remote(app: &AppHandle, window: Option<&WebviewWindow>) -> bool {
+    !window.is_some_and(|window| {
+        app.state::<crate::DesktopState>()
+            .main_window_has_local_content(window)
+    })
+}
+
 fn progress_callback(window: WebviewWindow) -> impl FnMut(usize, Option<u64>) {
     let mut downloaded = 0_u64;
     move |chunk_size, total| {
@@ -318,6 +385,60 @@ fn emit<S: Serialize + Clone>(app: &AppHandle, event: &str, payload: S) {
     if let Some(window) = main_window(app) {
         let _ = window.emit(event, payload);
     }
+}
+
+fn deliver_result<S: Serialize + Clone>(
+    app: &AppHandle,
+    manual: bool,
+    result: TerminalResultKind,
+    event: &str,
+    payload: S,
+    notification_body: &str,
+) {
+    let window = main_window(app);
+    let destination = result_delivery(manual, main_content_is_remote(app, window.as_ref()), result);
+    if !matches!(destination, ResultDestination::None) {
+        if let Some(window) = window.as_ref() {
+            let _ = window.emit(event, payload);
+        }
+    }
+    let notify = match destination {
+        ResultDestination::None | ResultDestination::Webview => false,
+        ResultDestination::WebviewAndNotificationWhenUnfocused => window
+            .as_ref()
+            .is_some_and(|window| matches!(window.is_focused(), Ok(false))),
+        ResultDestination::WebviewAndNotification => true,
+    };
+    if notify {
+        crate::notify::notify(app, "OpenClaw", notification_body);
+    }
+}
+
+fn deliver_error(
+    app: &AppHandle,
+    manual: bool,
+    result: TerminalResultKind,
+    error: impl std::fmt::Display,
+) {
+    let message = error.to_string();
+    let notification_body = error_notification_body(result, &message);
+    deliver_result(
+        app,
+        manual,
+        result,
+        ERROR_EVENT,
+        UpdateError { message },
+        &notification_body,
+    );
+}
+
+fn error_notification_body(result: TerminalResultKind, message: &str) -> String {
+    let prefix = match result {
+        TerminalResultKind::CheckFailed => "Update check failed",
+        TerminalResultKind::UpdateFailed => "Update failed",
+        _ => unreachable!("only error results have error notification copy"),
+    };
+    format!("{prefix}: {message}")
 }
 
 fn emit_error(app: &AppHandle, error: impl std::fmt::Display) {
@@ -385,5 +506,71 @@ mod tests {
             manual_notification_body("2026.7.16"),
             "Update available: v2026.7.16 — download from the release page"
         );
+        assert_eq!(
+            error_notification_body(TerminalResultKind::CheckFailed, "offline"),
+            "Update check failed: offline"
+        );
+        assert_eq!(
+            error_notification_body(TerminalResultKind::UpdateFailed, "disk full"),
+            "Update failed: disk full"
+        );
+    }
+
+    #[test]
+    fn every_manual_terminal_result_notifies_when_main_content_is_remote() {
+        for result in [
+            TerminalResultKind::NotAvailable,
+            TerminalResultKind::CheckFailed,
+            TerminalResultKind::PackageUpdateAvailable,
+            TerminalResultKind::UpdateReady,
+            TerminalResultKind::UpdateFailed,
+        ] {
+            assert_eq!(
+                result_delivery(true, true, result),
+                ResultDestination::WebviewAndNotification,
+                "manual {result:?} must have a visible destination when the WebView is remote"
+            );
+        }
+    }
+
+    #[test]
+    fn background_result_delivery_preserves_existing_behavior() {
+        let expected = [
+            (TerminalResultKind::NotAvailable, ResultDestination::None),
+            (TerminalResultKind::CheckFailed, ResultDestination::None),
+            (
+                TerminalResultKind::PackageUpdateAvailable,
+                ResultDestination::WebviewAndNotificationWhenUnfocused,
+            ),
+            (
+                TerminalResultKind::UpdateReady,
+                ResultDestination::WebviewAndNotificationWhenUnfocused,
+            ),
+            (TerminalResultKind::UpdateFailed, ResultDestination::Webview),
+        ];
+        for main_content_is_remote in [false, true] {
+            for (result, destination) in expected {
+                assert_eq!(
+                    result_delivery(false, main_content_is_remote, result),
+                    destination
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn manual_local_results_keep_the_in_page_delivery_path() {
+        for result in [
+            TerminalResultKind::NotAvailable,
+            TerminalResultKind::CheckFailed,
+            TerminalResultKind::PackageUpdateAvailable,
+            TerminalResultKind::UpdateReady,
+            TerminalResultKind::UpdateFailed,
+        ] {
+            assert!(!matches!(
+                result_delivery(true, false, result),
+                ResultDestination::None
+            ));
+        }
     }
 }

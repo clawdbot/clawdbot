@@ -7,12 +7,17 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import {
   fetchWithSsrFGuard,
-  isPrivateOrLoopbackHost,
   resolvePinnedHostnameWithPolicy,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
   type LookupFn,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  buildClickClackSetupClaimUrl,
+  CLICKCLACK_SETUP_CODE_CLAIM_PATH,
+  isClickClackSetupLoopbackHost,
+  requireClickClackSetupApiBaseUrl,
+} from "./setup-contract.js";
 import type { ClickClackSetupCodeClaim } from "./types.js";
 
 const CLICKCLACK_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
@@ -43,7 +48,10 @@ function requireString(record: Record<string, unknown>, key: string, label: stri
   return value;
 }
 
-function parseClickClackSetupCodeClaim(value: unknown): ClickClackSetupCodeClaim {
+function parseClickClackSetupCodeClaim(
+  value: unknown,
+  expectedClaimUrl?: string,
+): ClickClackSetupCodeClaim {
   const claim = requireRecord(value, "response");
   const bot = requireRecord(claim.bot, "bot");
   const workspace = requireRecord(claim.workspace, "workspace");
@@ -63,7 +71,31 @@ function parseClickClackSetupCodeClaim(value: unknown): ClickClackSetupCodeClaim
   if (agentActivity !== undefined && typeof agentActivity !== "boolean") {
     throw new Error("ClickClack setup code claim returned invalid defaults.agentActivity");
   }
+  const contractVersion = claim.contract_version;
+  const apiBaseUrlValue = claim.api_base_url;
+  const hasContractMetadata = contractVersion !== undefined || apiBaseUrlValue !== undefined;
+  if (expectedClaimUrl && !hasContractMetadata) {
+    throw new Error("ClickClack setup code claim returned a legacy response for an exact endpoint");
+  }
+  let contract: Pick<ClickClackSetupCodeClaim, "contract_version" | "api_base_url"> = {};
+  if (hasContractMetadata) {
+    if (contractVersion !== 1 || typeof apiBaseUrlValue !== "string") {
+      throw new Error("ClickClack setup code claim returned invalid v1 contract metadata");
+    }
+    const apiBaseUrl = requireClickClackSetupApiBaseUrl(
+      apiBaseUrlValue,
+      "setup code claim response.api_base_url",
+    );
+    const canonicalClaimUrl = buildClickClackSetupClaimUrl(apiBaseUrl);
+    if (expectedClaimUrl && expectedClaimUrl !== canonicalClaimUrl) {
+      throw new Error(
+        "ClickClack setup code claim returned an API base that does not match the claim URL",
+      );
+    }
+    contract = { contract_version: 1, api_base_url: apiBaseUrl };
+  }
   return {
+    ...contract,
     token: requireString(claim, "token", "response"),
     bot: {
       id: requireString(bot, "id", "bot"),
@@ -86,25 +118,40 @@ function parseClickClackSetupCodeClaim(value: unknown): ClickClackSetupCodeClaim
 
 /** Claims a one-time setup code without sending any existing bot credential. */
 export async function claimClickClackSetupCode(params: {
-  baseUrl: string;
+  claimUrl: string;
+  expectedClaimUrl?: string;
   code: string;
   fetch?: typeof fetch;
   lookupFn?: LookupFn;
 }): Promise<ClickClackSetupCodeClaim> {
-  const baseUrl = params.baseUrl.replace(/\/+$/, "");
-  const parsedBaseUrl = new URL(baseUrl);
+  let parsedClaimUrl: URL;
+  try {
+    parsedClaimUrl = new URL(params.claimUrl);
+  } catch {
+    throw new Error("ClickClack setup code claim URL must be a valid HTTP(S) endpoint.");
+  }
+  if (
+    (parsedClaimUrl.protocol !== "http:" && parsedClaimUrl.protocol !== "https:") ||
+    parsedClaimUrl.username ||
+    parsedClaimUrl.password ||
+    parsedClaimUrl.search ||
+    parsedClaimUrl.hash ||
+    !parsedClaimUrl.pathname.endsWith(CLICKCLACK_SETUP_CODE_CLAIM_PATH)
+  ) {
+    throw new Error("ClickClack setup code claim URL must be a valid HTTP(S) endpoint.");
+  }
   const deadline = createProviderOperationDeadline({
     label: "ClickClack setup code claim",
     timeoutMs: CLICKCLACK_SETUP_CODE_CLAIM_TIMEOUT_MS,
   });
   let pinnedHttpTarget: { hostname: string; addresses: string[] } | undefined;
-  if (parsedBaseUrl.protocol === "http:") {
+  if (parsedClaimUrl.protocol === "http:") {
     const resolveTimeoutMs = resolveProviderOperationTimeoutMs({
       deadline,
       defaultTimeoutMs: CLICKCLACK_SETUP_CODE_CLAIM_TIMEOUT_MS,
     });
     const pinned = await withTimeout(
-      resolvePinnedHostnameWithPolicy(parsedBaseUrl.hostname, {
+      resolvePinnedHostnameWithPolicy(parsedClaimUrl.hostname, {
         lookupFn: params.lookupFn,
         policy: { dangerouslyAllowPrivateNetwork: true },
       }),
@@ -113,16 +160,13 @@ export async function claimClickClackSetupCode(params: {
         message: `ClickClack setup code claim timed out after ${CLICKCLACK_SETUP_CODE_CLAIM_TIMEOUT_MS}ms`,
       },
     );
-    if (!pinned.addresses.every((address) => isPrivateOrLoopbackHost(address))) {
-      throw new Error(
-        "ClickClack setup codes require HTTPS unless the server is on a private or loopback network.",
-      );
+    if (!pinned.addresses.every((address) => isClickClackSetupLoopbackHost(address))) {
+      throw new Error("ClickClack setup codes require HTTPS unless the server is on loopback.");
     }
     pinnedHttpTarget = { hostname: pinned.hostname, addresses: pinned.addresses };
   }
-  const url = `${baseUrl}/api/bot-setup-codes/claim`;
   const { response, release } = await fetchWithSsrFGuard({
-    url,
+    url: params.claimUrl,
     fetchImpl: params.fetch,
     init: {
       method: "POST",
@@ -137,8 +181,8 @@ export async function claimClickClackSetupCode(params: {
       deadline,
       defaultTimeoutMs: CLICKCLACK_SETUP_CODE_CLAIM_TIMEOUT_MS,
     }),
-    requireHttps: parsedBaseUrl.protocol === "https:",
-    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
+    requireHttps: parsedClaimUrl.protocol === "https:",
+    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(params.claimUrl),
     lookupFn: params.lookupFn,
     ...(pinnedHttpTarget
       ? { dispatcherPolicy: { mode: "direct", pinnedHostname: pinnedHttpTarget } }
@@ -153,7 +197,7 @@ export async function claimClickClackSetupCode(params: {
     const value = await readProviderJsonResponse<unknown>(response, "ClickClack setup code claim", {
       maxBytes: CLICKCLACK_SETUP_CODE_CLAIM_JSON_LIMIT_BYTES,
     });
-    return parseClickClackSetupCodeClaim(value);
+    return parseClickClackSetupCodeClaim(value, params.expectedClaimUrl);
   } finally {
     await release();
   }

@@ -14,7 +14,10 @@ import type { AuthChoiceGroup } from "./auth-choice-options.static.js";
 type ActivateSetupInference =
   typeof import("../system-agent/setup-inference.js").activateSetupInference;
 
-type LadderFailure = { label: string; status: SetupInferenceFailureStatus };
+export type SetupCandidateFailure = {
+  label: string;
+  result: Extract<ActivateSetupInferenceResult, { ok: false }>;
+};
 
 type CandidateAttempt =
   | { kind: "success"; result: Extract<ActivateSetupInferenceResult, { ok: true }> }
@@ -30,8 +33,16 @@ const SETUP_FAILURE_REASON_KEYS: Record<SetupInferenceFailureStatus, string> = {
   unknown: "wizard.guided.failureUnknown",
 };
 
-export function setupFailureReason(status: SetupInferenceFailureStatus): string {
+function setupFailureReason(status: SetupInferenceFailureStatus): string {
   return t(SETUP_FAILURE_REASON_KEYS[status]);
+}
+
+export function formatSetupCandidateFailure(failure: SetupCandidateFailure): string {
+  return t("wizard.guided.testFailure", {
+    label: failure.label,
+    reason: setupFailureReason(failure.result.status),
+    detail: failure.result.error,
+  });
 }
 
 async function noteActivationFailure(params: {
@@ -40,11 +51,7 @@ async function noteActivationFailure(params: {
   result: Extract<ActivateSetupInferenceResult, { ok: false }>;
 }): Promise<void> {
   await params.prompter.note(
-    t("wizard.guided.testFailure", {
-      label: params.label,
-      reason: setupFailureReason(params.result.status),
-      detail: params.result.error,
-    }),
+    formatSetupCandidateFailure({ label: params.label, result: params.result }),
     t("wizard.guided.aiAccessTitle"),
   );
 }
@@ -56,7 +63,7 @@ export async function tryCandidate(params: {
   prompter: WizardPrompter;
   activate: ActivateSetupInference;
   /** Auto-ladder failures collect into one quiet summary; manual retries stay loud. */
-  collectFailure?: (failure: LadderFailure) => void;
+  collectFailure?: (failure: SetupCandidateFailure) => void;
 }): Promise<CandidateAttempt> {
   const progress = params.prompter.progress(
     t("wizard.guided.testingCandidate", {
@@ -78,7 +85,7 @@ export async function tryCandidate(params: {
     return { kind: "success", result };
   }
   if (params.collectFailure) {
-    params.collectFailure({ label: params.candidate.label, status: result.status });
+    params.collectFailure({ label: params.candidate.label, result });
   } else {
     await noteActivationFailure({
       prompter: params.prompter,
@@ -103,6 +110,7 @@ export async function runManualStage(params: {
   const allowedChoices = new Set([
     ...params.detection.manualProviders.map((provider) => provider.id),
     ...params.detection.authOptions.map((option) => option.id),
+    ...(params.detection.prepareOptions ?? []).map((option) => option.id),
   ]);
   const detectedOptions = params.detection.candidates.map((candidate) => ({
     value: `candidate:${candidate.kind}`,
@@ -127,16 +135,27 @@ export async function runManualStage(params: {
     ? [
         {
           value: "detected-ai",
-          label: t("wizard.guided.detectedTitle"),
+          label: t("wizard.guided.detectedGroupLabel"),
+          hint: params.detection.candidates.map((candidate) => candidate.label).join(", "),
+          methodMessage: t("wizard.guided.detectedGroupPrompt"),
           options: detectedOptions,
         },
       ]
     : [];
-  const [{ ensureAuthProfileStore }, { promptAuthChoiceGrouped }] = await Promise.all([
+  const [
+    { ensureAuthProfileStore },
+    { detectAvailableSetupProviderIds },
+    { promptAuthChoiceGrouped },
+  ] = await Promise.all([
     import("../agents/auth-profiles.runtime.js"),
+    import("../plugins/provider-setup-availability.js"),
     import("./auth-choice-prompt.js"),
   ]);
   const store = ensureAuthProfileStore(undefined, { allowKeychainPrompt: false });
+  const detectedProviderIds = await detectAvailableSetupProviderIds({
+    config: params.config,
+    workspaceDir: params.workspace,
+  });
   while (true) {
     const choice = await promptAuthChoiceGrouped({
       prompter: params.prompter,
@@ -147,6 +166,7 @@ export async function runManualStage(params: {
       additionalGroups,
       config: params.config,
       workspaceDir: params.workspace,
+      detectedProviderIds,
     });
 
     if (choice === "skip") {
@@ -182,12 +202,15 @@ export async function runManualStage(params: {
       continue;
     }
 
-    const authOption = params.detection.authOptions.find((item) => item.id === choice);
-    if (authOption) {
+    const providerAuthOption = [
+      ...params.detection.authOptions,
+      ...(params.detection.prepareOptions ?? []),
+    ].find((item) => item.id === choice);
+    if (providerAuthOption) {
       const result = await withConsoleSubsystemsSuppressed(() =>
         params.activate({
           kind: "provider-auth",
-          authChoice: authOption.id,
+          authChoice: providerAuthOption.id,
           workspace: params.workspace,
           surface: "cli",
           runtime: params.runtime,
@@ -199,7 +222,7 @@ export async function runManualStage(params: {
       }
       await noteActivationFailure({
         prompter: params.prompter,
-        label: authOption.label,
+        label: providerAuthOption.label,
         result,
       });
       continue;

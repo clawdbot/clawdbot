@@ -71,10 +71,11 @@ function sanitizeEnvelopeHeaderPart(value: string): string {
 /** Resolves envelope formatting defaults from agent config. */
 export function resolveEnvelopeFormatOptions(cfg?: OpenClawConfig): EnvelopeFormatOptions {
   const defaults = cfg?.agents?.defaults;
+  const configuredTimezone = normalizeOptionalString(defaults?.userTimezone);
   return {
-    timezone: defaults?.envelopeTimezone,
-    includeTimestamp: defaults?.envelopeTimestamp !== "off",
-    includeElapsed: defaults?.envelopeElapsed !== "off",
+    timezone: configuredTimezone ? (resolveTimezone(configuredTimezone) ?? "local") : undefined,
+    includeTimestamp: true,
+    includeElapsed: true,
     userTimezone: defaults?.userTimezone,
   };
 }
@@ -110,7 +111,7 @@ function resolveEnvelopeTimezone(options: NormalizedEnvelopeOptions): ResolvedEn
 }
 
 /** Formats an envelope timestamp using local, UTC, user, or explicit IANA timezone rules. */
-export function formatEnvelopeTimestamp(
+export function formatAgentEnvelopeTimestamp(
   ts: number | Date | undefined,
   options?: EnvelopeFormatOptions,
 ): string | undefined {
@@ -201,7 +202,7 @@ export function formatAgentEnvelope(params: AgentEnvelopeParams): string {
   if (ip) {
     parts.push(sanitizeEnvelopeHeaderPart(ip));
   }
-  const ts = formatEnvelopeTimestamp(params.timestamp, resolved);
+  const ts = formatAgentEnvelopeTimestamp(params.timestamp, resolved);
   if (ts) {
     parts.push(ts);
   }

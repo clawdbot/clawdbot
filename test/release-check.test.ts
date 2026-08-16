@@ -5,19 +5,24 @@ import { dirname, join, resolve as resolvePath, win32 } from "node:path";
 import { bundledDistPluginFile, bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
+import { resolveNpmJsonEntries } from "../scripts/lib/npm-json-output.mts";
 import {
   LOCAL_BUILD_METADATA_DIST_PATHS,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
 } from "../scripts/lib/package-dist-inventory.ts";
 import {
   listPluginSdkDistArtifacts,
-  listPrivateLocalOnlyPluginSdkDistArtifacts,
-} from "../scripts/lib/plugin-sdk-entries.mjs";
+  listPackagedPrivatePluginSdkRuntimeArtifacts,
+  listUnpackagedPrivatePluginSdkDistArtifacts,
+} from "../scripts/lib/plugin-sdk-entries.mts";
 import {
   WORKSPACE_TEMPLATE_PACK_PATHS,
   createWorkspaceBootstrapSmokeEnv,
-} from "../scripts/lib/workspace-bootstrap-smoke.mjs";
-import { collectInstalledRootDependencyManifestErrors } from "../scripts/openclaw-npm-postpublish-verify.ts";
+} from "../scripts/lib/workspace-bootstrap-smoke.mts";
+import {
+  collectInstalledBundledRuntimeSidecarPaths,
+  collectInstalledRootDependencyManifestErrors,
+} from "../scripts/openclaw-npm-postpublish-verify.ts";
 import {
   collectAppcastSparkleVersionErrors,
   collectBundledExtensionManifestErrors,
@@ -42,7 +47,9 @@ import {
   resolveMissingPackBuildHint,
   runReleaseCheckCommand,
 } from "../scripts/release-check.ts";
+import { listStaticExtensionAssetOutputs } from "../scripts/runtime-postbuild.mts";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
+import { resolveNpmJsonEntries as resolveRuntimeNpmJsonEntries } from "../src/infra/npm-registry-spec.js";
 import { withEnv } from "../src/test-utils/env.js";
 
 function makeItem(shortVersion: string, sparkleVersion: string, channel?: string): string {
@@ -58,9 +65,11 @@ function withProcessEnv<T>(env: Record<string, string>, callback: () => T): T {
   return withEnv(env, callback);
 }
 
-const requiredPluginSdkPackPaths = [...listPluginSdkDistArtifacts(), "dist/plugin-sdk/compat.js"];
-const privateLocalOnlyPluginSdkPackPaths = listPrivateLocalOnlyPluginSdkDistArtifacts();
+const requiredPluginSdkPackPaths = listPluginSdkDistArtifacts();
+const packagedPrivatePluginSdkRuntimePaths = listPackagedPrivatePluginSdkRuntimeArtifacts();
+const unpackagedPrivatePluginSdkPaths = listUnpackagedPrivatePluginSdkDistArtifacts();
 const requiredBundledPluginPackPaths = listBundledPluginPackArtifacts();
+const requiredStaticExtensionAssetPaths = listStaticExtensionAssetOutputs();
 
 describe("collectAppcastSparkleVersionErrors", () => {
   it("accepts legacy 9-digit calver builds before lane-floor cutover", () => {
@@ -529,6 +538,7 @@ describe("collectForbiddenPackPaths", () => {
         "dist/plugin-sdk/src/plugin-sdk/provider-entry.d.ts",
       ]),
     ).toEqual([
+      "dist/plugin-sdk/index.d.ts",
       "dist/plugin-sdk/src/channels/plugins/types.public.d.ts",
       "dist/plugin-sdk/src/plugin-sdk/provider-entry.d.ts",
     ]);
@@ -563,17 +573,27 @@ describe("collectForbiddenPackPaths", () => {
     expect(pkg.files).toContain("!dist/plugin-sdk/src/**");
   });
 
-  it("blocks private local-only plugin SDK artifacts from npm pack output", () => {
+  it("blocks private declarations and non-production SDK artifacts from npm pack output", () => {
     expect(
-      collectForbiddenPackPaths(["dist/index.js", ...privateLocalOnlyPluginSdkPackPaths]),
-    ).toEqual([...privateLocalOnlyPluginSdkPackPaths].toSorted());
+      collectForbiddenPackPaths(["dist/index.js", ...unpackagedPrivatePluginSdkPaths]),
+    ).toEqual([...unpackagedPrivatePluginSdkPaths].toSorted());
   });
 
-  it("keeps private local-only plugin SDK artifacts excluded by package files", () => {
+  it("keeps private declarations and non-production SDK artifacts excluded by package files", () => {
     const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { files?: string[] };
 
-    for (const entry of privateLocalOnlyPluginSdkPackPaths) {
+    for (const entry of unpackagedPrivatePluginSdkPaths) {
       expect(pkg.files).toContain(`!${entry}`);
+    }
+  });
+
+  it("keeps production-private plugin SDK runtime facades inside package files", () => {
+    const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { files?: string[] };
+
+    expect(packagedPrivatePluginSdkRuntimePaths.length).toBeGreaterThan(0);
+    for (const entry of packagedPrivatePluginSdkRuntimePaths) {
+      expect(pkg.files).not.toContain(`!${entry}`);
+      expect(collectForbiddenPackPaths([entry])).toEqual([]);
     }
   });
 
@@ -687,10 +707,6 @@ describe("collectMissingPackPaths", () => {
     const missing = collectMissingPackPaths([
       "dist/index.js",
       "dist/entry.js",
-      "dist/plugin-sdk/compat.js",
-      "dist/plugin-sdk/index.js",
-      "dist/plugin-sdk/index.d.ts",
-      "dist/plugin-sdk/root-alias.cjs",
       "dist/build-info.json",
     ]);
 
@@ -698,18 +714,20 @@ describe("collectMissingPackPaths", () => {
       "dist/channel-catalog.json",
       PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
       "dist/control-ui/index.html",
-      "scripts/npm-runner.mjs",
       "scripts/prepare-git-hooks.mjs",
       "scripts/preinstall-package-manager-warning.mjs",
       "scripts/lib/official-external-channel-catalog.json",
       "scripts/lib/official-external-plugin-catalog.json",
       "scripts/lib/official-external-provider-catalog.json",
       "scripts/lib/recommended-tool-installs.json",
+      "scripts/lib/guard-inventory-utils.mjs",
       "scripts/lib/package-dist-imports.mjs",
       "scripts/postinstall-bundled-plugins.mjs",
       "dist/agents/compaction-planning.worker.js",
       "dist/agents/model-provider-auth.worker.js",
+      "dist/agents/prepared-model-catalog.worker.js",
       "dist/audit/audit-event-writer.worker.js",
+      "dist/config/sessions/session-accessor.sqlite-archive.worker.js",
       "dist/config/sessions/session-transcript-reconcile.worker.js",
       "dist/state/openclaw-database-verify.worker.js",
       "dist/system-agent/setup-inference-detection.worker.js",
@@ -726,7 +744,6 @@ describe("collectMissingPackPaths", () => {
   it("accepts the shipped upgrade surface when optional bundled metadata is present", () => {
     expect(
       collectMissingPackPaths([
-        "npm-shrinkwrap.json",
         "dist/index.js",
         "dist/entry.js",
         "dist/control-ui/index.html",
@@ -734,21 +751,24 @@ describe("collectMissingPackPaths", () => {
         "dist/extensions/acpx/mcp-command-line.mjs",
         "dist/extensions/acpx/mcp-proxy.mjs",
         ...requiredBundledPluginPackPaths,
+        ...requiredStaticExtensionAssetPaths,
         ...requiredPluginSdkPackPaths,
+        ...packagedPrivatePluginSdkRuntimePaths,
         ...WORKSPACE_TEMPLATE_PACK_PATHS,
-        "scripts/npm-runner.mjs",
         "scripts/prepare-git-hooks.mjs",
         "scripts/preinstall-package-manager-warning.mjs",
         "scripts/lib/official-external-channel-catalog.json",
         "scripts/lib/official-external-plugin-catalog.json",
         "scripts/lib/official-external-provider-catalog.json",
         "scripts/lib/recommended-tool-installs.json",
+        "scripts/lib/guard-inventory-utils.mjs",
         "scripts/lib/package-dist-imports.mjs",
         "scripts/postinstall-bundled-plugins.mjs",
-        "dist/plugin-sdk/root-alias.cjs",
         "dist/agents/compaction-planning.worker.js",
         "dist/agents/model-provider-auth.worker.js",
+        "dist/agents/prepared-model-catalog.worker.js",
         "dist/audit/audit-event-writer.worker.js",
+        "dist/config/sessions/session-accessor.sqlite-archive.worker.js",
         "dist/config/sessions/session-transcript-reconcile.worker.js",
         "dist/state/openclaw-database-verify.worker.js",
         "dist/system-agent/setup-inference-detection.worker.js",
@@ -776,8 +796,18 @@ describe("collectMissingPackPaths", () => {
         mkdirSync(dirname(filePath), { recursive: true });
         writeFileSync(filePath, "export {};\n");
       }
-      for (const pluginId of ["image-generation-core", "media-understanding-core"]) {
-        writeFileSync(join(distDir, "extensions", pluginId, "package.json"), "{}\n");
+      for (const relativePath of requiredBundledPluginPackPaths) {
+        if (!/^dist\/extensions\/[^/]+\/package\.json$/u.test(relativePath)) {
+          continue;
+        }
+        const packageJsonPath = join(packageRoot, relativePath);
+        mkdirSync(dirname(packageJsonPath), { recursive: true });
+        writeFileSync(packageJsonPath, "{}\n");
+      }
+      for (const relativePath of collectInstalledBundledRuntimeSidecarPaths(packageRoot)) {
+        const sidecarPath = join(packageRoot, relativePath);
+        mkdirSync(dirname(sidecarPath), { recursive: true });
+        writeFileSync(sidecarPath, "export {};\n");
       }
       writeFileSync(
         join(packageRoot, "package.json"),
@@ -792,37 +822,8 @@ describe("collectMissingPackPaths", () => {
           packageRoot,
         }),
       ).toEqual([
-        "installed package is missing required plugin SDK artifact: dist/plugin-sdk/zod.js",
         "installed package root dist file 'typescript-compiler.js' is invalid or exceeds 6291456 bytes.",
       ]);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("rejects packed plugin SDK root aliases that depend on minified export letters", () => {
-    const root = mkdtempSync(join(tmpdir(), "release-check-packed-root-alias-"));
-    try {
-      const packageRoot = join(root, "openclaw");
-      const pluginSdkDir = join(packageRoot, "dist", "plugin-sdk");
-      mkdirSync(pluginSdkDir, { recursive: true });
-      writeFileSync(
-        join(packageRoot, "package.json"),
-        `${JSON.stringify({ name: "openclaw", version: "2026.5.14-beta.3", dependencies: {} })}\n`,
-      );
-      writeFileSync(
-        join(pluginSdkDir, "root-alias.cjs"),
-        "module.exports = { onDiagnosticEvent: mod.r };\n",
-      );
-
-      expect(
-        collectPackedInstalledPackageVerificationErrors({
-          expectedVersion: "2026.5.14-beta.3",
-          packageRoot,
-        }),
-      ).toContain(
-        "installed package dist/plugin-sdk/root-alias.cjs depends on a single-letter bundled export alias.",
-      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -860,7 +861,7 @@ describe("resolveMissingPackBuildHint", () => {
   });
 
   it("does not emit a build hint for unrelated packed paths", () => {
-    expect(resolveMissingPackBuildHint(["scripts/npm-runner.mjs"])).toBeNull();
+    expect(resolveMissingPackBuildHint(["scripts/prepare-git-hooks.mjs"])).toBeNull();
   });
 });
 
@@ -892,8 +893,8 @@ describe("createPackedPluginSdkTypescriptSmokeProject", () => {
       expect(packageJson.dependencies?.["@openclaw/ai"]).toBe("file:/tmp/openclaw-ai.tgz");
       expect(tsconfig.compilerOptions?.skipLibCheck).toBe(true);
       expect(source).toBe(fixtureSource);
-      expect(source).toContain('"openclaw/plugin-sdk"');
-      expect(source).toContain('"openclaw/plugin-sdk/provider-entry"');
+      expect(source).toContain('"openclaw/plugin-sdk/core"');
+      expect(source).toContain('"openclaw/plugin-sdk/plugin-entry"');
       expect(source).toContain('"openclaw/plugin-sdk/channel-entry-contract"');
       expect(source).toContain('"openclaw/plugin-sdk/config-contracts"');
       expect(source).toContain('"openclaw/plugin-sdk/runtime-env"');
@@ -910,6 +911,14 @@ describe("collectPackUnpackedSizeErrors", () => {
   it("accepts pack results within the unpacked size budget", () => {
     expect(
       collectPackUnpackedSizeErrors([makePackResult("openclaw-2026.3.14.tgz", 120_354_302)]),
+    ).toStrictEqual([]);
+  });
+
+  it("accepts npm 12 name-keyed pack results", () => {
+    expect(
+      collectPackUnpackedSizeErrors({
+        openclaw: makePackResult("openclaw-2026.3.14.tgz", 120_354_302),
+      }),
     ).toStrictEqual([]);
   });
 
@@ -930,6 +939,20 @@ describe("collectPackUnpackedSizeErrors", () => {
     ).toEqual([
       "npm pack --dry-run produced no unpackedSize data; pack size budget was not verified.",
     ]);
+  });
+});
+
+describe("resolveNpmJsonEntries", () => {
+  it("normalizes npm <=11 arrays and npm 12 name-keyed objects", () => {
+    const entry = makePackResult("openclaw-2026.7.2.tgz", 120_354_302);
+
+    expect(resolveNpmJsonEntries([entry])).toEqual([entry]);
+    expect(resolveNpmJsonEntries(entry)).toEqual([entry]);
+    expect(resolveNpmJsonEntries({ openclaw: entry })).toEqual([entry]);
+    expect(resolveNpmJsonEntries({ "@openclaw/demo": entry })).toEqual([entry]);
+    expect(resolveNpmJsonEntries({ openclaw: entry })).toEqual(
+      resolveRuntimeNpmJsonEntries({ openclaw: entry }),
+    );
   });
 });
 

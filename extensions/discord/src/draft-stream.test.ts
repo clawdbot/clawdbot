@@ -4,6 +4,83 @@ import { describe, expect, it, vi } from "vitest";
 import { createDiscordDraftStream } from "./draft-stream.js";
 
 describe("createDiscordDraftStream", () => {
+  it("moves the visible draft to a newly adopted thread", async () => {
+    const rest = {
+      post: vi
+        .fn()
+        .mockResolvedValueOnce({ id: "parent-draft" })
+        .mockResolvedValueOnce({ id: "thread-draft" }),
+      patch: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
+    };
+    const stream = createDiscordDraftStream({
+      rest: rest as never,
+      channelId: "parent",
+      throttleMs: 250,
+    });
+
+    stream.update("working");
+    await stream.flush();
+    stream.update("working harder");
+    await stream.retarget("thread-1");
+
+    expect(rest.delete).toHaveBeenCalledWith("/channels/parent/messages/parent-draft");
+    expect(rest.post).toHaveBeenLastCalledWith(
+      "/channels/thread-1/messages",
+      expect.objectContaining({ body: expect.objectContaining({ content: "working harder" }) }),
+    );
+    expect(stream.messageId()).toBe("thread-draft");
+  });
+
+  it("retries cleanup for a parent draft left behind by retargeting", async () => {
+    const rest = {
+      post: vi
+        .fn()
+        .mockResolvedValueOnce({ id: "parent-draft" })
+        .mockResolvedValueOnce({ id: "thread-draft" }),
+      patch: vi.fn(async () => undefined),
+      delete: vi.fn().mockRejectedValueOnce(new Error("transient")).mockResolvedValue(undefined),
+    };
+    const stream = createDiscordDraftStream({
+      rest: rest as never,
+      channelId: "parent",
+      throttleMs: 250,
+    });
+
+    stream.update("working");
+    await stream.flush();
+    await stream.retarget("thread-1");
+    await stream.cleanupRetargeted();
+
+    expect(rest.delete).toHaveBeenNthCalledWith(1, "/channels/parent/messages/parent-draft");
+    expect(rest.delete).toHaveBeenNthCalledWith(2, "/channels/parent/messages/parent-draft");
+  });
+
+  it("keeps the parent draft when the thread replacement cannot be created", async () => {
+    const rest = {
+      post: vi
+        .fn()
+        .mockResolvedValueOnce({ id: "parent-draft" })
+        .mockRejectedValueOnce(new Error("thread post failed")),
+      patch: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
+    };
+    const stream = createDiscordDraftStream({
+      rest: rest as never,
+      channelId: "parent",
+      throttleMs: 250,
+    });
+
+    stream.update("working");
+    await stream.flush();
+
+    await expect(stream.retarget("thread-1")).rejects.toThrow("retarget replacement failed");
+    expect(rest.delete).not.toHaveBeenCalled();
+
+    await stream.cleanupRetargeted();
+    expect(rest.delete).toHaveBeenCalledWith("/channels/parent/messages/parent-draft");
+  });
+
   it("holds the first preview until minInitialChars is reached", async () => {
     const rest = {
       post: vi.fn(async () => ({ id: "m1" })),

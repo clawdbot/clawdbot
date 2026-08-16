@@ -1,5 +1,9 @@
 /** Implementation of `openclaw models status`. */
 import path from "node:path";
+import {
+  parseStrictFiniteNumber,
+  parseStrictPositiveInteger,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
 import {
@@ -14,6 +18,7 @@ import {
   DEFAULT_OAUTH_WARN_MS,
   formatRemainingShort,
 } from "../../agents/auth-health.js";
+import { buildAuthProfileUnusableHint } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths.js";
 import {
   ensureAuthProfileStore,
@@ -38,9 +43,11 @@ import {
   resolveProviderEnvAuthLookupMaps,
 } from "../../agents/model-auth-env-vars.js";
 import { resolveEnvApiKey } from "../../agents/model-auth.js";
-import { loadModelCatalogSnapshot } from "../../agents/model-catalog.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
-import { modelCatalogLogicalKey } from "../../agents/model-selection-shared.js";
+import {
+  modelCatalogLogicalKey,
+  resolveConfiguredModelPolicyAllow,
+} from "../../agents/model-selection-shared.js";
 import {
   buildModelAliasIndex,
   isCliProvider,
@@ -49,7 +56,9 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
+import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import { OPENAI_PROVIDER_ID } from "../../agents/openai-routing.js";
+import { loadPreparedModelCatalogSnapshot } from "../../agents/prepared-model-catalog.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import {
   readUtilityModelSetting,
@@ -62,18 +71,13 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../../config/model-input.js";
+import { parseModelPolicyWildcardRef } from "../../config/model-policy-ref.js";
 import { resolveMergedModelProviderConfig } from "../../config/model-provider-config.js";
-import {
-  parseStrictFiniteNumber,
-  parseStrictPositiveInteger,
-} from "../../infra/parse-finite-number.js";
 import { getShellEnvAppliedKeys, shouldEnableShellEnvFallback } from "../../infra/shell-env.js";
 import type { ProviderModelRouteCandidate } from "../../plugin-sdk/provider-model-types.js";
 import {
-  captureCurrentPluginMetadataSnapshotState,
   getCurrentPluginMetadataSnapshot,
-  restoreCurrentPluginMetadataSnapshotState,
-  setCurrentPluginMetadataSnapshot,
+  installTemporaryCurrentPluginMetadataSnapshot,
 } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -83,7 +87,10 @@ import { resolveRuntimeSyntheticAuthProviderRefs } from "../../plugins/synthetic
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveUserPath, shortenHomePath } from "../../utils.js";
-import { resolveProviderAuthOverview } from "./list.auth-overview.js";
+import {
+  formatProviderAuthProfileCounts,
+  resolveProviderAuthOverview,
+} from "./list.auth-overview.js";
 import { isRich } from "./list.format.js";
 import type { AuthProbeSummary } from "./list.probe.js";
 import type { ProviderAuthOverview } from "./list.types.js";
@@ -285,15 +292,12 @@ function installCommandPluginMetadataSnapshot(params: {
   if (current) {
     return () => {};
   }
-  const previousState = captureCurrentPluginMetadataSnapshotState();
-  setCurrentPluginMetadataSnapshot(params.snapshot, {
+  const lease = installTemporaryCurrentPluginMetadataSnapshot(params.snapshot, {
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
   });
-  return () => {
-    restoreCurrentPluginMetadataSnapshotState(previousState);
-  };
+  return lease.release;
 }
 
 function syntheticAuthCredential(
@@ -358,7 +362,11 @@ export async function modelsStatusCommand(
     throw new Error("--probe cannot be used with --plain output.");
   }
   const configPath = createConfigIO().configPath;
-  const cfg = await loadModelsConfig({ commandName: "models status", runtime });
+  const cfg = await loadModelsConfig({
+    commandName: "models status",
+    runtime,
+    skipPluginValidation: opts.probe !== true,
+  });
   const agentId = resolveKnownAgentId({ cfg, rawAgentId: opts.agent });
   const workspaceAgentId = agentId ?? resolveDefaultAgentId(cfg);
   const agentDir = agentId
@@ -396,8 +404,6 @@ export async function modelsStatusCommand(
   const selectedPluginRootDirs = new Map(
     [...metadataSnapshot.byPluginId].map(([pluginId, plugin]) => [pluginId, plugin.rootDir]),
   );
-  const { runPluginPayloadSmokeCheckForManifestRecords } =
-    await import("../../cli/update-cli/plugin-payload-validation.js");
   const codexRuntimeAvailabilityByProvider = new Map<
     string,
     Promise<AgentHarnessRuntimeAvailability>
@@ -410,6 +416,8 @@ export async function modelsStatusCommand(
       return cached;
     }
     const pending = (async () => {
+      const { runPluginPayloadSmokeCheckForManifestRecords } =
+        await import("../../cli/update-cli/plugin-payload-validation.js");
       const ownerPluginIds = resolveAgentHarnessOwnerPluginIds({
         runtime: "codex",
         provider,
@@ -484,7 +492,9 @@ export async function modelsStatusCommand(
       }
       return acc;
     }, {});
-    const allowed = Object.keys(cfg.agents?.defaults?.models ?? {});
+    const configuredAllowRefs = [
+      ...resolveConfiguredModelPolicyAllow({ cfg, agentId: workspaceAgentId }).refs,
+    ];
 
     const modelsPath = path.join(agentDir, "models.json");
     const aliasIndex = buildModelAliasIndex({
@@ -554,7 +564,7 @@ export async function modelsStatusCommand(
       imageModel,
       ...imageFallbacks,
       utilityModelRef ?? "",
-      ...allowed,
+      ...configuredAllowRefs,
     ]) {
       const ref = resolveStatusModelRef(raw);
       if (ref?.provider) {
@@ -610,24 +620,6 @@ export async function modelsStatusCommand(
         registryDiagnostics: metadataSnapshot.registryDiagnostics,
       }).map((provider) => normalizeProviderId(provider)),
     );
-    const catalog = await loadModelCatalogSnapshot({
-      config: cfg,
-      readOnly: true,
-      metadataSnapshot,
-    });
-    const routeSourcesByModel = new Map<
-      string,
-      Array<{ api?: (typeof catalog.routeVariants)[number]["api"]; baseUrl?: string }>
-    >();
-    for (const entry of catalog.routeVariants) {
-      if (entry.api === undefined && entry.baseUrl === undefined) {
-        continue;
-      }
-      const key = modelCatalogLogicalKey(entry);
-      const sources = routeSourcesByModel.get(key) ?? [];
-      sources.push({ api: entry.api, baseUrl: entry.baseUrl });
-      routeSourcesByModel.set(key, sources);
-    }
     const createStatusAuthResolver = (
       authStore: Parameters<typeof createModelAuthAvailabilityResolver>[0]["authStore"],
     ) =>
@@ -645,6 +637,62 @@ export async function modelsStatusCommand(
         metadataSnapshot,
       });
     let authResolver = createStatusAuthResolver(store);
+    // Status already owns the complete provider/auth use set. Carry it into the
+    // catalog owner so a read-only status does not discover every provider plugin.
+    const probedProvider = normalizeOptionalString(opts.probeProvider);
+    const providerDiscoveryProviderIds = [
+      ...new Set([
+        ...authResolver.providerDiscoveryProviderIds,
+        ...providersFromConfig,
+        ...providersFromModels,
+        ...(probedProvider ? [normalizeProviderId(probedProvider)] : []),
+      ]),
+    ].toSorted((left, right) => left.localeCompare(right));
+    const catalog = await loadPreparedModelCatalogSnapshot({
+      config: cfg,
+      ...(agentId ? { agentId } : {}),
+      providerDiscoveryProviderIds,
+      readOnly: true,
+    });
+    const visibilityPolicy = createModelVisibilityPolicy({
+      cfg,
+      catalog: catalog.entries,
+      defaultProvider: resolved.provider,
+      defaultModel: resolved.model,
+      agentId: workspaceAgentId,
+      ...DISPLAY_MODEL_PARSE_OPTIONS,
+    });
+    const allowed = visibilityPolicy.allowAny
+      ? []
+      : [
+          ...new Set([
+            ...visibilityPolicy.allowedCatalog.map((entry) => modelKey(entry.provider, entry.id)),
+            ...configuredAllowRefs.flatMap((raw) => {
+              const wildcard = parseModelPolicyWildcardRef(raw);
+              if (!wildcard) {
+                return [];
+              }
+              const prefix = wildcard.key.slice(0, -1);
+              const hasCatalogMatch = catalog.entries.some((entry) =>
+                modelKey(entry.provider, entry.id).startsWith(prefix),
+              );
+              return hasCatalogMatch ? [] : [wildcard.key];
+            }),
+          ]),
+        ].toSorted();
+    const routeSourcesByModel = new Map<
+      string,
+      Array<{ api?: (typeof catalog.routeVariants)[number]["api"]; baseUrl?: string }>
+    >();
+    for (const entry of catalog.routeVariants) {
+      if (entry.api === undefined && entry.baseUrl === undefined) {
+        continue;
+      }
+      const key = modelCatalogLogicalKey(entry);
+      const sources = routeSourcesByModel.get(key) ?? [];
+      sources.push({ api: entry.api, baseUrl: entry.baseUrl });
+      routeSourcesByModel.set(key, sources);
+    }
     const resolveProviderUses = async (
       resolver: ModelAuthAvailabilityResolver,
     ): Promise<StatusProviderUse[]> =>
@@ -1140,7 +1188,7 @@ export async function modelsStatusCommand(
       // Probe the configured utility model itself; an arbitrary catalog model
       // from the same provider can sit on a different auth route.
       utilityModelRef ?? "",
-      ...allowed,
+      ...configuredAllowRefs,
     ].filter(Boolean);
     const resolvedCandidates = rawCandidates
       .map(
@@ -1178,6 +1226,9 @@ export async function modelsStatusCommand(
               concurrency: probeConcurrency,
               maxTokens: probeMaxTokens,
             },
+            // Direct CLI probes create hidden sessions in the canonical agent DB.
+            // Gateway RPC probes omit this because the Gateway already owns the lock.
+            stateOwnership: { mode: "exclusive" },
             onProgress: update,
           });
         },
@@ -1210,6 +1261,7 @@ export async function modelsStatusCommand(
         provider?: string;
         kind: "cooldown" | "disabled";
         reason?: string;
+        recoveryHint: string;
         until: number;
         remainingMs: number;
       }> = [];
@@ -1223,11 +1275,19 @@ export async function modelsStatusCommand(
           typeof stats?.disabledUntil === "number" && now < stats.disabledUntil
             ? "disabled"
             : "cooldown";
+        const reason = kind === "disabled" ? stats?.disabledReason : stats?.cooldownReason;
+        const provider = store.profiles[profileId]?.provider;
         out.push({
           profileId,
-          provider: store.profiles[profileId]?.provider,
+          provider,
           kind,
-          reason: stats?.disabledReason,
+          reason,
+          recoveryHint: buildAuthProfileUnusableHint({
+            kind,
+            reason,
+            provider: provider ?? profileId,
+            profileId,
+          }),
           until: unusableUntil,
           remainingMs: unusableUntil - now,
         });
@@ -1415,7 +1475,7 @@ export async function modelsStatusCommand(
       )}`,
     );
     runtime.log(
-      `${label(`Configured models (${allowed.length || 0})`)}${colorize(rich, theme.muted, ":")} ${colorize(
+      `${label(`Allowed models (${allowed.length || 0})`)}${colorize(rich, theme.muted, ":")} ${colorize(
         rich,
         allowed.length ? theme.info : theme.muted,
         allowed.length ? allowed.join(", ") : "all",
@@ -1469,12 +1529,7 @@ export async function modelsStatusCommand(
         ),
       );
       if (entry.profiles.count > 0) {
-        bits.push(
-          formatKeyValue(
-            "profiles",
-            `${entry.profiles.count} (oauth=${entry.profiles.oauth}, token=${entry.profiles.token}, api_key=${entry.profiles.apiKey})`,
-          ),
-        );
+        bits.push(formatKeyValue("profiles", formatProviderAuthProfileCounts(entry.profiles)));
         if (entry.profiles.labels.length > 0) {
           bits.push(colorize(rich, theme.info, entry.profiles.labels.join(", ")));
         }
@@ -1575,6 +1630,18 @@ export async function modelsStatusCommand(
           includeEnvVar: !requiresSubscription,
         });
         runtime.log(`- ${theme.heading(provider)} ${hint}`);
+      }
+    }
+
+    if (unusableProfiles.length > 0) {
+      runtime.log("");
+      runtime.log(colorize(rich, theme.heading, "Unavailable auth profiles"));
+      for (const profile of unusableProfiles) {
+        const reason = profile.reason ? `:${profile.reason}` : "";
+        const provider = profile.provider ? ` (${profile.provider})` : "";
+        runtime.log(
+          `- ${theme.heading(profile.profileId)}${provider} ${profile.kind}${reason} (${formatRemainingShort(profile.remainingMs)}) — ${profile.recoveryHint}`,
+        );
       }
     }
 

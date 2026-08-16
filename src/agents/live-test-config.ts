@@ -1,6 +1,16 @@
+import type { OpenClawConfig } from "../config/types.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 
 const LIVE_OK_PROMPT = "Reply with the word ok.";
+
+/**
+ * Read the active host or test config without letting invalid legacy keys or
+ * config-owned env vars mutate the live-test process.
+ */
+export async function readLiveTestConfig(): Promise<OpenClawConfig> {
+  const { readBestEffortConfig } = await import("../config/io.js");
+  return await readBestEffortConfig({ isolateEnv: true, observe: false });
+}
 
 /** Return whether live tests are enabled by standard or caller-specific env flags. */
 export function isLiveTestEnabled(

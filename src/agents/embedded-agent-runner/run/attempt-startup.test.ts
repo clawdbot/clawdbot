@@ -18,8 +18,8 @@ vi.mock("../../../skills/runtime/embedded-run-entries.js", () => ({
   })),
 }));
 
-vi.mock("../../../skills/loading/workspace.js", () => ({
-  resolveSkillsPromptForRun: vi.fn(() => "skills prompt"),
+vi.mock("../../../skills/loading/workspace-skill-prompt.js", () => ({
+  resolveSkillsPrompt: vi.fn(() => "skills prompt"),
 }));
 
 vi.mock("../sandbox-skills.js", () => ({
@@ -34,7 +34,7 @@ vi.mock("../sandbox-skills.js", () => ({
   mapSandboxSkillUsagePaths: vi.fn(() => []),
 }));
 
-import { prepareEmbeddedAttemptSkills } from "./attempt-startup.js";
+import { prepareEmbeddedAttemptSkills } from "./attempt-setup.js";
 
 describe("prepareEmbeddedAttemptSkills", () => {
   beforeEach(() => {
@@ -57,5 +57,19 @@ describe("prepareEmbeddedAttemptSkills", () => {
       }),
     ).toThrow("skill prompt mapping failed");
     expect(restore).toHaveBeenCalledOnce();
+  });
+
+  it("does not load skills or apply their environment during settled finalization", () => {
+    const prepared = prepareEmbeddedAttemptSkills({
+      attempt: { operation: "settled-tool-finalization" } as EmbeddedRunAttemptParams,
+      effectiveWorkspace: "/tmp/workspace",
+      sandbox: null,
+      sessionAgentId: "main",
+    });
+
+    expect(prepared.skillsPrompt).toBe("");
+    expect(prepared.skillsSnapshotForRun).toBeUndefined();
+    expect(mocks.applySkillEnvOverrides).not.toHaveBeenCalled();
+    expect(mocks.mapSandboxSkillEntriesForPrompt).not.toHaveBeenCalled();
   });
 });

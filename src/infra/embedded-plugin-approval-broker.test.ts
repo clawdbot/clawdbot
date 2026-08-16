@@ -135,4 +135,98 @@ describe("EmbeddedPluginApprovalBroker", () => {
     await expect(resultPromise).rejects.toThrow("local TUI stopped");
     expect(broker.listPending()).toEqual([]);
   });
+
+  it("isolates a failed listener when announcing a request", async () => {
+    const broker = new EmbeddedPluginApprovalBroker();
+    const events: string[] = [];
+    broker.subscribe((event) => {
+      if (event.event === "plugin.approval.requested") {
+        throw new Error("request listener failed");
+      }
+    });
+    broker.subscribe((event) => {
+      events.push(event.event);
+    });
+
+    const resultPromise = broker.request({
+      request: requestPayload(),
+      timeoutMs: 5_000,
+    });
+    const approval = expectDefined(
+      broker.listPending()[0],
+      "broker.listPending()[0] test invariant",
+    );
+
+    expect(broker.resolve(approval.id, "allow-once")).toBe(true);
+    await expect(resultPromise).resolves.toMatchObject({ decision: "allow-once" });
+    expect(events).toEqual(["plugin.approval.requested", "plugin.approval.resolved"]);
+    expect(broker.listPending()).toEqual([]);
+  });
+
+  it("isolates a failed listener when announcing a resolution", async () => {
+    const broker = new EmbeddedPluginApprovalBroker();
+    const events: string[] = [];
+    broker.subscribe((event) => {
+      if (event.event === "plugin.approval.resolved") {
+        throw new Error("resolution listener failed");
+      }
+    });
+    broker.subscribe((event) => {
+      events.push(event.event);
+    });
+
+    const resultPromise = broker.request({
+      request: requestPayload(),
+      timeoutMs: 5_000,
+    });
+    const approval = expectDefined(
+      broker.listPending()[0],
+      "broker.listPending()[0] test invariant",
+    );
+
+    expect(() => broker.resolve(approval.id, "allow-once")).not.toThrow();
+    await expect(resultPromise).resolves.toMatchObject({ decision: "allow-once" });
+    expect(events).toEqual(["plugin.approval.requested", "plugin.approval.resolved"]);
+    expect(broker.listPending()).toEqual([]);
+  });
+
+  it("isolates failed listeners while stopping every pending request", async () => {
+    vi.useFakeTimers();
+    const broker = new EmbeddedPluginApprovalBroker();
+    const removedIds: string[] = [];
+    broker.subscribe((event) => {
+      if (event.event === "plugin.approval.removed") {
+        throw new Error("removal listener failed");
+      }
+    });
+    broker.subscribe((event) => {
+      if (event.event === "plugin.approval.removed") {
+        removedIds.push(event.payload.id);
+      }
+    });
+    const first = broker.request({
+      request: requestPayload(),
+      timeoutMs: 5_000,
+    });
+    const second = broker.request({
+      request: requestPayload(),
+      timeoutMs: 5_000,
+    });
+    let stopError: unknown;
+
+    try {
+      broker.stop(new Error("local TUI stopped"));
+    } catch (error) {
+      stopError = error;
+    }
+    const settlementsPromise = Promise.allSettled([first, second]);
+    await vi.runAllTimersAsync();
+    const settlements = await settlementsPromise;
+
+    expect(stopError).toBeUndefined();
+    expect(settlements.map((result) => result.status)).toEqual(["rejected", "rejected"]);
+    expect(removedIds).toHaveLength(2);
+    expect(new Set(removedIds).size).toBe(2);
+    expect(broker.listPending()).toEqual([]);
+  });
 });

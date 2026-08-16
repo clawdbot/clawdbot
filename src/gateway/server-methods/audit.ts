@@ -1,35 +1,32 @@
 // Metadata-only operator audit queries over the canonical shared SQLite ledger.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   type AuditActivityEventV1,
   type AuditEvent,
   validateAuditActivityListParams,
   validateAuditListParams,
+  validateAuditRunInspectParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { findAuditActivityFilterConflict } from "../../../packages/gateway-protocol/src/schema/audit-activity.js";
+import { parsePositiveAuditCursor } from "../../audit/audit-cursor.js";
 import { listAuditEvents } from "../../audit/audit-event-store.js";
 import type {
   AgentRunAuditEventRecord,
   AuditEventRecord,
   ToolActionAuditEventRecord,
 } from "../../audit/audit-event-types.js";
+import {
+  ExecutionDecisionCursorError,
+  isExecutionDecisionCursor,
+} from "../../audit/execution-decision-receipts.js";
+import { inspectExecutionIdentityRun } from "../../audit/execution-identity-context.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 const DEFAULT_AUDIT_LIST_LIMIT = 100;
 const MAX_AUDIT_LIST_LIMIT = 500;
-
-function parseAuditCursor(cursor: string | undefined): number | undefined | null {
-  if (cursor === undefined) {
-    return undefined;
-  }
-  const trimmed = cursor.trim();
-  if (!/^\d+$/.test(trimmed)) {
-    return null;
-  }
-  const parsed = Number(trimmed);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
-}
 
 /** Preserve the shipped audit.list result shape for run/tool-only clients. */
 function mapLegacyAuditEvent(
@@ -67,7 +64,7 @@ function invalidRangeOrCursor(params: { cursor?: string; after?: number; before?
   cursor?: number;
   invalid: boolean;
 } {
-  const cursor = parseAuditCursor(params.cursor);
+  const cursor = parsePositiveAuditCursor(params.cursor);
   return {
     ...(cursor !== undefined && cursor !== null ? { cursor } : {}),
     invalid:
@@ -78,15 +75,7 @@ function invalidRangeOrCursor(params: { cursor?: string; after?: number; before?
 
 export const auditHandlers: GatewayRequestHandlers = {
   "audit.list": ({ params, respond }) => {
-    if (!validateAuditListParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid audit.list params: ${formatValidationErrors(validateAuditListParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateAuditListParams, "audit.list", respond)) {
       return;
     }
     const parsed = invalidRangeOrCursor(params);
@@ -98,13 +87,16 @@ export const auditHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const agentId = normalizeOptionalString(params.agentId);
+    const sessionKey = normalizeOptionalString(params.sessionKey);
+    const runId = normalizeOptionalString(params.runId);
     const page = listAuditEvents({
       limit: Math.min(params.limit ?? DEFAULT_AUDIT_LIST_LIMIT, MAX_AUDIT_LIST_LIMIT),
       ...(parsed.cursor !== undefined ? { cursor: parsed.cursor } : {}),
       filters: {
-        ...(params.agentId ? { agentId: params.agentId } : {}),
-        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-        ...(params.runId ? { runId: params.runId } : {}),
+        ...(agentId ? { agentId } : {}),
+        ...(sessionKey ? { sessionKey } : {}),
+        ...(runId ? { runId } : {}),
         ...(params.kind ? { kind: params.kind } : {}),
         ...(params.status ? { status: params.status } : {}),
         ...(params.after !== undefined ? { after: params.after } : {}),
@@ -122,16 +114,21 @@ export const auditHandlers: GatewayRequestHandlers = {
     });
   },
   "audit.activity.list": ({ params, respond }) => {
-    if (!validateAuditActivityListParams(params)) {
+    if (
+      !assertValidParams(params, validateAuditActivityListParams, "audit.activity.list", respond)
+    ) {
+      return;
+    }
+    const filterConflict = findAuditActivityFilterConflict(params);
+    if (filterConflict) {
+      const detail =
+        filterConflict.type === "kind"
+          ? `${filterConflict.field} only applies to kind ${filterConflict.supportedKinds.join(" or ")}`
+          : `${filterConflict.field} cannot be combined with ${filterConflict.conflictingField}`;
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid audit.activity.list params: ${formatValidationErrors(
-            validateAuditActivityListParams.errors,
-          )}`,
-        ),
+        errorShape(ErrorCodes.INVALID_REQUEST, `invalid audit.activity.list filters: ${detail}`),
       );
       return;
     }
@@ -144,14 +141,17 @@ export const auditHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const agentId = normalizeOptionalString(params.agentId);
+    const sessionKey = normalizeOptionalString(params.sessionKey);
+    const runId = normalizeOptionalString(params.runId);
     const page = listAuditEvents({
       limit: Math.min(params.limit ?? DEFAULT_AUDIT_LIST_LIMIT, MAX_AUDIT_LIST_LIMIT),
       ...(parsed.cursor !== undefined ? { cursor: parsed.cursor } : {}),
       filters: {
         includeMessages: true,
-        ...(params.agentId ? { agentId: params.agentId } : {}),
-        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-        ...(params.runId ? { runId: params.runId } : {}),
+        ...(agentId ? { agentId } : {}),
+        ...(sessionKey ? { sessionKey } : {}),
+        ...(runId ? { runId } : {}),
         ...(params.kind ? { kind: params.kind } : {}),
         ...(params.status ? { status: params.status } : {}),
         ...(params.direction ? { direction: params.direction } : {}),
@@ -165,6 +165,50 @@ export const auditHandlers: GatewayRequestHandlers = {
       ...(page.nextCursor !== undefined ? { nextCursor: String(page.nextCursor) } : {}),
     });
   },
+  "audit.run.inspect": ({ params, respond }) => {
+    if (!assertValidParams(params, validateAuditRunInspectParams, "audit.run.inspect", respond)) {
+      return;
+    }
+    const decisionCursor = params.decisionCursor;
+    const executionOffset =
+      typeof params.runId !== "string" ||
+      (params.executionCursor === decisionCursor &&
+        decisionCursor !== undefined &&
+        (decisionCursor.startsWith("a:") || decisionCursor.startsWith("g:")))
+        ? undefined
+        : parsePositiveAuditCursor(params.executionCursor);
+    if (
+      (decisionCursor !== undefined && !isExecutionDecisionCursor(decisionCursor)) ||
+      executionOffset === null
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid audit.run.inspect cursor"),
+      );
+      return;
+    }
+    try {
+      respond(
+        true,
+        inspectExecutionIdentityRun({
+          ...(typeof params.runId === "string"
+            ? {
+                runId: params.runId,
+                ...(executionOffset !== undefined ? { executionOffset } : {}),
+                executionLimit: params.executionLimit ?? 50,
+              }
+            : { executionId: params.executionId! }),
+          ...(decisionCursor !== undefined ? { decisionCursor } : {}),
+          decisionLimit: params.decisionLimit ?? 50,
+        }),
+      );
+    } catch (error) {
+      if (error instanceof ExecutionDecisionCursorError) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
+        return;
+      }
+      throw error;
+    }
+  },
 };
-
-export const testApi = { mapAuditActivityEvent, mapLegacyAuditEvent, parseAuditCursor };

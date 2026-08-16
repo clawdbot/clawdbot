@@ -30,6 +30,8 @@ export type OpenClawPluginToolContext = {
   sessionId?: string;
   /** Out-of-band plugin-owned bindings attached by the current run initiator. */
   toolBindings?: Readonly<Record<string, unknown>>;
+  /** Host-prepared repository identities for project-aware tool behavior. */
+  activeProjectKeys?: readonly string[];
   /** Trusted runtime-only authorization for one bounded cross-conversation recall pass. */
   conversationRecall?: ConversationRecallContext;
   /**

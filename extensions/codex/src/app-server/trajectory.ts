@@ -2,12 +2,9 @@
  * Records optional Codex runtime trajectory events with bounded, redacted
  * context and completion payloads.
  */
-import type {
-  EmbeddedRunAttemptParams,
-  EmbeddedRunAttemptResult,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
-import { parseSqliteSessionFileMarker } from "openclaw/plugin-sdk/session-store-runtime";
+import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
 import { flattenCodexDynamicToolFunctions, type CodexDynamicToolSpec } from "./protocol.js";
 
@@ -23,7 +20,6 @@ type CodexTrajectoryInit = {
   developerInstructions?: string;
   prompt?: string;
   trajectoryRecorder?: CodexHostTrajectoryRecorder | null;
-  trajectorySessionFile?: string;
   tools?: CodexDynamicToolSpec[];
   env?: NodeJS.ProcessEnv;
   warn?: (message: string, fields: Record<string, unknown>) => void;
@@ -125,6 +121,13 @@ function createCodexHostTrajectorySink(params: {
   };
 }
 
+// The host recorder can be absent per session (target-mapping conflicts), not
+// only per process, so dedupe the warn by session: repeated attempts for one
+// session stay quiet while a later distinct session still records its loss.
+// Bounded: cleared past the cap so a pathological session churn cannot grow it.
+const warnedRecorderUnavailableSessions = new Set<string>();
+const WARNED_RECORDER_SESSIONS_CAP = 64;
+
 /** Creates a trajectory recorder when trajectory capture is enabled for the environment. */
 export function createCodexTrajectoryRecorder(
   params: CodexTrajectoryInit,
@@ -135,20 +138,23 @@ export function createCodexTrajectoryRecorder(
     return null;
   }
 
-  const sessionFile = params.trajectorySessionFile ?? params.attempt.sessionFile;
-  const sqliteMarker = parseSqliteSessionFileMarker(sessionFile);
-  if (!sqliteMarker || sqliteMarker.sessionId !== params.attempt.sessionId) {
-    params.warn?.("codex trajectory capture requires a matching SQLite session target", {
-      sessionId: params.attempt.sessionId,
-      reason: sqliteMarker ? "session-id-mismatch" : "non-sqlite-session-target",
-    });
-    return null;
-  }
+  // The host owns SQLite target resolution and identity validation; it hands
+  // back a recorder only for a committed session row. Re-deriving that here
+  // from a session-file string silently drops every capture once the host
+  // stops emitting the legacy `sqlite:` marker.
   if (!params.trajectoryRecorder) {
-    params.warn?.("codex trajectory capture requires the SQLite host recorder", {
-      sessionId: params.attempt.sessionId,
-      reason: "sqlite-recorder-unavailable",
-    });
+    // Per-attempt repeats for one session bury real diagnostics; warn once per
+    // session so retries stay quiet but each newly affected session is visible.
+    if (!warnedRecorderUnavailableSessions.has(params.attempt.sessionId)) {
+      if (warnedRecorderUnavailableSessions.size >= WARNED_RECORDER_SESSIONS_CAP) {
+        warnedRecorderUnavailableSessions.clear();
+      }
+      warnedRecorderUnavailableSessions.add(params.attempt.sessionId);
+      params.warn?.("codex trajectory capture requires the SQLite host recorder", {
+        sessionId: params.attempt.sessionId,
+        reason: "sqlite-recorder-unavailable",
+      });
+    }
     return null;
   }
   const sink = createCodexHostTrajectorySink({ recorder: params.trajectoryRecorder });
@@ -214,13 +220,14 @@ export function recordCodexTrajectoryCompletion(
   if (!recorder) {
     return;
   }
+  const terminal = attemptTerminal.project(params.result.terminal);
   recorder.recordEvent("model.completed", {
     threadId: params.threadId,
     turnId: params.turnId,
     timedOut: params.timedOut,
     yieldDetected: params.yieldDetected ?? false,
-    aborted: params.result.aborted,
-    promptError: normalizeCodexTrajectoryError(params.result.promptError),
+    aborted: terminal.aborted,
+    promptError: normalizeCodexTrajectoryError(terminal.promptError),
     usage: params.result.attemptUsage,
     assistantTexts: params.result.assistantTexts,
     messagesSnapshot: params.result.messagesSnapshot,

@@ -5,8 +5,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { CommandContext } from "../auto-reply/reply/commands-types.js";
 import { clearConfigCache } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
 import { runSystemAgentRescueMessage } from "./rescue-message.js";
@@ -14,13 +15,9 @@ import { runSystemAgentRescueMessage } from "./rescue-message.js";
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
 
-function truthy(value: string | undefined): boolean {
-  return /^(1|true|yes|on)$/i.test(value?.trim() ?? "");
-}
-
 const runLive =
-  truthy(process.env.OPENCLAW_LIVE_TEST) &&
-  truthy(process.env.OPENCLAW_LIVE_SYSTEM_AGENT_RESCUE_CHANNEL);
+  isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST) &&
+  isTruthyEnvValue(process.env.OPENCLAW_LIVE_SYSTEM_AGENT_RESCUE_CHANNEL);
 const describeLive = runLive ? describe : describe.skip;
 
 function commandContext(channel = process.env.OPENCLAW_LIVE_SYSTEM_AGENT_CHANNEL ?? "whatsapp") {
@@ -70,7 +67,7 @@ describeLive("OpenClaw live rescue channel smoke", () => {
   });
 
   it("handles /openclaw status and a persistent approval roundtrip", async () => {
-    await withTempDir({ prefix: "openclaw-live-rescue-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-live-rescue-" }, async (tempDir) => {
       const configPath = path.join(tempDir, "openclaw.json");
       setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
       setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
@@ -80,7 +77,7 @@ describeLive("OpenClaw live rescue channel smoke", () => {
           {
             meta: { lastTouchedVersion: "live-test", lastTouchedAt: new Date(0).toISOString() },
             agents: { defaults: {} },
-            tools: { exec: { security: "full", ask: "off" } },
+            tools: { exec: { mode: "full" } },
           },
           null,
           2,
@@ -88,8 +85,7 @@ describeLive("OpenClaw live rescue channel smoke", () => {
       );
 
       const cfg: OpenClawConfig = {
-        systemAgent: { rescue: { enabled: true } },
-        tools: { exec: { security: "full", ask: "off" } },
+        tools: { exec: { mode: "full" } },
       };
 
       await expect(runRescue({ commandBody: "/openclaw status", cfg })).resolves.toContain(

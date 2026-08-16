@@ -16,7 +16,7 @@ import {
 } from "../../sessions/session-key-utils.js";
 import {
   resolveTargetPrefixedChannel,
-  stripTargetKindPrefix,
+  stripOutboundTargetKindPrefix,
   stripTargetProviderPrefix,
 } from "./channel-target-prefix.js";
 import {
@@ -26,14 +26,14 @@ import {
 } from "./deliver-types.js";
 import type { DeliveryMirror } from "./mirror.js";
 import type { OutboundSessionContext } from "./session-context.js";
-import type { OutboundChannel } from "./targets.js";
 
 type OutboundAuditDeliveryContext = {
-  channel: Exclude<OutboundChannel, "none">;
+  channel: string;
   to: string;
   accountId?: string;
-  payloads: readonly ReplyPayload[];
+  payloads?: readonly ReplyPayload[];
   replyPayloadSendingHook?: { runId?: string };
+  preparedBatch?: { runId?: string };
   session?: OutboundSessionContext;
   mirror?: DeliveryMirror;
 };
@@ -94,11 +94,34 @@ function sentResults(
   return sent?.results ?? [];
 }
 
-function hasUnknownAdapterSideEffect(history: readonly OutboundPayloadDeliveryOutcome[]): boolean {
-  return history.some(
-    (outcome) =>
-      outcome.status === "suppressed" && outcome.reason === "adapter_returned_no_identity",
-  );
+function projectRecordedOutboundAuditTerminal(
+  history: readonly OutboundPayloadDeliveryOutcome[],
+): OutboundAuditTerminal | undefined {
+  // A missing adapter identity leaves the whole payload history uncertain,
+  // even if a later retry reports another terminal outcome.
+  if (
+    history.some(
+      (outcome) =>
+        outcome.status === "suppressed" && outcome.reason === "adapter_returned_no_identity",
+    )
+  ) {
+    return { outcome: "unknown", failureStage: "platform_send" };
+  }
+  const latest = history.at(-1);
+  if (latest?.status === "sent") {
+    return {
+      outcome: "sent",
+      results: latest.results,
+      ...(latest.deliveryKind ? { deliveryKind: latest.deliveryKind } : {}),
+    };
+  }
+  if (latest?.status === "suppressed") {
+    if (latest.reason === "adapter_returned_no_identity") {
+      return { outcome: "unknown", failureStage: "platform_send" };
+    }
+    return { outcome: "suppressed", reasonCode: latest.reason };
+  }
+  return undefined;
 }
 
 export function completedOutboundAuditTerminals(params: {
@@ -109,34 +132,9 @@ export function completedOutboundAuditTerminals(params: {
   const indexed = outcomesByPayload(params.payloadOutcomes);
   return Array.from({ length: params.payloadCount }, (_, payloadIndex) => {
     const history = indexed.get(payloadIndex) ?? [];
-    const latest = history.at(-1);
-    if (hasUnknownAdapterSideEffect(history)) {
-      return {
-        payloadIndex,
-        terminal: { outcome: "unknown", failureStage: "platform_send" },
-      };
-    }
-    if (latest?.status === "sent") {
-      return {
-        payloadIndex,
-        terminal: {
-          outcome: "sent",
-          results: latest.results,
-          ...(latest.deliveryKind ? { deliveryKind: latest.deliveryKind } : {}),
-        },
-      };
-    }
-    if (latest?.status === "suppressed") {
-      if (latest.reason === "adapter_returned_no_identity") {
-        return {
-          payloadIndex,
-          terminal: { outcome: "unknown", failureStage: "platform_send" },
-        };
-      }
-      return {
-        payloadIndex,
-        terminal: { outcome: "suppressed", reasonCode: latest.reason },
-      };
+    const recordedTerminal = projectRecordedOutboundAuditTerminal(history);
+    if (recordedTerminal) {
+      return { payloadIndex, terminal: recordedTerminal };
     }
     // Core delivery reports every original payload, including normalization
     // suppressions. The single-payload fallback supports legacy recovery senders.
@@ -159,35 +157,11 @@ export function failedOutboundAuditTerminals(params: {
   const indexed = outcomesByPayload(params.payloadOutcomes);
   return Array.from({ length: params.payloadCount }, (_, payloadIndex) => {
     const history = indexed.get(payloadIndex) ?? [];
+    const recordedTerminal = projectRecordedOutboundAuditTerminal(history);
+    if (recordedTerminal) {
+      return { payloadIndex, terminal: recordedTerminal };
+    }
     const latest = history.at(-1);
-    if (hasUnknownAdapterSideEffect(history)) {
-      return {
-        payloadIndex,
-        terminal: { outcome: "unknown", failureStage: "platform_send" },
-      };
-    }
-    if (latest?.status === "sent") {
-      return {
-        payloadIndex,
-        terminal: {
-          outcome: "sent",
-          results: latest.results,
-          ...(latest.deliveryKind ? { deliveryKind: latest.deliveryKind } : {}),
-        },
-      };
-    }
-    if (latest?.status === "suppressed") {
-      if (latest.reason === "adapter_returned_no_identity") {
-        return {
-          payloadIndex,
-          terminal: { outcome: "unknown", failureStage: "platform_send" },
-        };
-      }
-      return {
-        payloadIndex,
-        terminal: { outcome: "suppressed", reasonCode: latest.reason },
-      };
-    }
     const failedResults = latest?.status === "failed" ? (latest.results ?? []) : [];
     const payloadResults = failedResults.length > 0 ? failedResults : sentResults(history);
     const fallbackResults = params.payloadCount === 1 ? params.results : [];
@@ -249,7 +223,7 @@ function resolveOutboundTargetFacts(context: OutboundAuditDeliveryContext): {
   const withoutProvider = stripTargetProviderPrefix(context.to, ...providerPrefixes);
   const kindPrefix = TARGET_PREFIX_RE.exec(withoutProvider)?.[1]?.toLowerCase();
   const allowedRouteKinds = kindPrefix ? TARGET_KIND_TO_ROUTE_KINDS[kindPrefix] : undefined;
-  const conversationId = stripTargetKindPrefix(
+  const conversationId = stripOutboundTargetKindPrefix(
     withoutProvider,
     Object.keys(TARGET_KIND_TO_ROUTE_KINDS),
   );
@@ -313,9 +287,9 @@ function resolveConversationKind(
 function firstIdentifier(...values: Array<string | undefined>): string | undefined {
   for (const value of values) {
     const normalized = value?.trim();
-    // "unknown"/"suppressed" are adapter sentinel messageIds (telegram/slack
-    // outbound adapters), not platform identifiers; treating them as real ids
-    // would pseudonymize a constant and corrupt correlation refs.
+    // "unknown"/"suppressed" are adapter sentinel messageIds, not platform
+    // identifiers; treating them as real ids would pseudonymize a constant
+    // and corrupt correlation refs.
     if (normalized && normalized !== "unknown" && normalized !== "suppressed") {
       return normalized;
     }
@@ -407,8 +381,8 @@ function emitOutboundAuditTerminal(params: {
       actorType: agentId ? "agent" : "system",
       actorId: agentId ?? "gateway",
       ...(agentId ? { agentId } : {}),
-      ...(context.replyPayloadSendingHook?.runId
-        ? { runId: context.replyPayloadSendingHook.runId }
+      ...((context.preparedBatch?.runId ?? context.replyPayloadSendingHook?.runId)
+        ? { runId: context.preparedBatch?.runId ?? context.replyPayloadSendingHook?.runId }
         : {}),
       direction: "outbound",
       channel: context.channel,

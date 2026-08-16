@@ -8,7 +8,7 @@ export {
   runLegacyStateMigrations,
 } from "./state-migrations.doctor.js";
 export { migrateLegacyAgentDir } from "./state-migrations.legacy-sessions.js";
-export { migrateOrphanedSessionKeys } from "./state-migrations.session-store.js";
+export { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
 export {
   autoMigrateLegacyStateDir,
   autoMigrateLegacyTaskStateSidecars,

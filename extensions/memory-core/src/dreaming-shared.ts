@@ -1,18 +1,42 @@
 // Memory Core plugin module implements dreaming shared behavior.
-export { asNullableRecord as asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNullableRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+
 export { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
-export function normalizeTrimmedString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
+export function extractAssistantText(messages: unknown[]): string | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = asNullableRecord(messages[index]);
+    if (message?.role !== "assistant") {
+      continue;
+    }
+    if (typeof message.content === "string" && message.content.trim()) {
+      return message.content.trim();
+    }
+    if (Array.isArray(message.content)) {
+      const text = message.content
+        .flatMap((part) => {
+          const item = asNullableRecord(part);
+          return (item?.type === "text" || item?.type === "output_text") &&
+            typeof item.text === "string"
+            ? [item.text]
+            : [];
+        })
+        .join("\n")
+        .trim();
+      if (text) {
+        return text;
+      }
+    }
   }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
+  return null;
 }
 
 export function includesSystemEventToken(cleanedBody: string, eventText: string): boolean {
-  const normalizedBody = normalizeTrimmedString(cleanedBody);
-  const normalizedEventText = normalizeTrimmedString(eventText);
+  const normalizedBody = normalizeOptionalString(cleanedBody);
+  const normalizedEventText = normalizeOptionalString(eventText);
   if (!normalizedBody || !normalizedEventText) {
     return false;
   }

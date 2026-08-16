@@ -13,6 +13,13 @@ import type { GatewayBrowserClient, GatewayControlUiPluginTab } from "../../api/
 import type { RouteId } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorApprovalsAccess } from "../../app/operator-access.ts";
+import {
+  isStaleChunkImportError,
+  retryStaleChunkReloadWhenReachable,
+  scheduleStaleChunkReload,
+} from "../../app/stale-chunk-reload.ts";
+import { renderLazyViewError } from "../../components/lazy-view-error.ts";
+import { renderLoadingState } from "../../components/loading-state.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveEmbedSandbox } from "../../lib/chat/tool-display.ts";
 import { OpenClawLightDomContentsElement } from "../../lit/openclaw-element.ts";
@@ -45,6 +52,12 @@ type BundledPluginTabView = {
   }) => unknown;
   stop: (host: object) => void;
 };
+
+type BundledPluginTabViewState =
+  | { status: "idle" }
+  | { status: "loading"; id: string; token: object }
+  | { status: "error"; id: string; error: unknown }
+  | { status: "ready"; id: string; view: BundledPluginTabView };
 
 function pluginFrameGrantCoversTab(
   grant: ControlUiPluginFrameGrantAck,
@@ -88,12 +101,10 @@ export class PluginPage extends OpenClawLightDomContentsElement {
   @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext<RouteId>;
 
-  @state() private bundledView: BundledPluginTabView | null = null;
+  @state() private bundledViewState: BundledPluginTabViewState = { status: "idle" };
   @state() private externalAuthReadyKey: string | null = null;
   @state() private externalAuthUnavailableKey: string | null = null;
 
-  private bundledViewId: string | null = null;
-  private bundledViewLoadToken: object | null = null;
   private bundledViewHost: object = {};
   private gatewaySource?: ApplicationContext<RouteId>["gateway"];
   private gatewayClient: GatewayBrowserClient | null = null;
@@ -156,6 +167,44 @@ export class PluginPage extends OpenClawLightDomContentsElement {
     return load ? load() : Promise.reject(new Error(`Unknown bundled plugin tab: ${key}`));
   }
 
+  private hasCurrentBundledDescriptor(key: string): boolean {
+    return this.tabKey() === key && this.tabInfo() !== undefined && key in BUNDLED_TAB_VIEWS;
+  }
+
+  private startBundledViewLoad(key: string) {
+    const loading = { status: "loading", id: key, token: {} } as const;
+    this.bundledViewState = loading;
+    const settle = (nextState: BundledPluginTabViewState) => {
+      if (
+        this.bundledViewState.status !== "loading" ||
+        this.bundledViewState.token !== loading.token ||
+        !this.hasCurrentBundledDescriptor(key)
+      ) {
+        return;
+      }
+      this.bundledViewState = nextState;
+      if (nextState.status === "error" && isStaleChunkImportError(nextState.error)) {
+        void scheduleStaleChunkReload();
+      }
+    };
+    void this.loadBundledView(key).then(
+      (view) => settle({ status: "ready", id: key, view }),
+      (error: unknown) => settle({ status: "error", id: key, error }),
+    );
+  }
+
+  private readonly retryBundledView = () => {
+    const viewState = this.bundledViewState;
+    if (viewState.status !== "error" || !this.hasCurrentBundledDescriptor(viewState.id)) {
+      return;
+    }
+    if (isStaleChunkImportError(viewState.error)) {
+      void retryStaleChunkReloadWhenReachable();
+    } else {
+      this.bundledViewState = { status: "idle" };
+    }
+  };
+
   override willUpdate() {
     if (!this.isConnected) {
       return;
@@ -163,25 +212,15 @@ export class PluginPage extends OpenClawLightDomContentsElement {
     const key = this.tabKey();
     const info = this.tabInfo();
     const hasBundledDescriptor = info !== undefined && key in BUNDLED_TAB_VIEWS;
+    const viewState = this.bundledViewState;
     // Switching between plugin tabs reuses this element; the previous bundled
     // view must stop its background polling before the next one renders. A
     // descriptor can also disappear in place after disablement or scope loss.
-    if (this.bundledViewId !== null && (this.bundledViewId !== key || !hasBundledDescriptor)) {
+    if (viewState.status !== "idle" && (viewState.id !== key || !hasBundledDescriptor)) {
       this.stopBundledView();
     }
-    if (this.bundledViewId === null && hasBundledDescriptor) {
-      const loadToken = {};
-      this.bundledViewId = key;
-      this.bundledViewLoadToken = loadToken;
-      void this.loadBundledView(key).then((view) => {
-        if (
-          this.bundledViewLoadToken === loadToken &&
-          this.bundledViewId === key &&
-          this.tabKey() === key
-        ) {
-          this.bundledView = view;
-        }
-      });
+    if (this.bundledViewState.status === "idle" && hasBundledDescriptor) {
+      this.startBundledViewLoad(key);
     }
     this.syncExternalTabAuth(info, hasBundledDescriptor);
   }
@@ -270,7 +309,7 @@ export class PluginPage extends OpenClawLightDomContentsElement {
     const context = this.context;
     if (
       !context ||
-      !context.gateway.snapshot.connected ||
+      context.gateway.snapshot.phase !== "connected" ||
       this.externalAuthTargetKey !== targetKey ||
       this.externalAuthRefreshMarker ||
       this.externalAuthProbeMarker
@@ -496,20 +535,21 @@ export class PluginPage extends OpenClawLightDomContentsElement {
 
   private stopBundledView() {
     this.replaceBundledViewHost();
-    this.bundledView = null;
-    this.bundledViewId = null;
-    this.bundledViewLoadToken = null;
+    this.bundledViewState = { status: "idle" };
   }
 
   private replaceBundledViewHost() {
-    this.bundledView?.stop(this.bundledViewHost);
+    if (this.bundledViewState.status === "ready") {
+      this.bundledViewState.view.stop(this.bundledViewHost);
+    }
     // Async controller work is keyed by host. A new host makes every completion
     // from the retired connection epoch unreachable without coupling plugins to Lit.
     this.bundledViewHost = {};
   }
 
   private updateGatewaySource(gateway: ApplicationContext<RouteId>["gateway"]) {
-    const { client, connected } = gateway.snapshot;
+    const { client } = gateway.snapshot;
+    const connected = gateway.snapshot.phase === "connected";
     if (
       this.gatewaySource === gateway &&
       this.gatewayClient === client &&
@@ -541,15 +581,26 @@ export class PluginPage extends OpenClawLightDomContentsElement {
     // inactive or whose required scopes the connection lacks.
     const info = this.tabInfo();
     if (info && this.tabKey() in BUNDLED_TAB_VIEWS) {
-      if (!this.bundledView) {
+      const viewState = this.bundledViewState;
+      if (viewState.status === "loading") {
+        return renderLoadingState();
+      }
+      if (viewState.status === "error") {
+        return renderLazyViewError({
+          error: viewState.error,
+          onRetry: this.retryBundledView,
+          stale: isStaleChunkImportError(viewState.error),
+        });
+      }
+      if (viewState.status !== "ready") {
         return nothing;
       }
       const snapshot = context.gateway.snapshot;
       const config = context.config?.current;
-      return this.bundledView.render({
+      return viewState.view.render({
         host: this.bundledViewHost,
         client: snapshot.client,
-        connected: snapshot.connected,
+        connected: snapshot.phase === "connected",
         embed: config
           ? {
               embedSandboxMode: config.embedSandboxMode,

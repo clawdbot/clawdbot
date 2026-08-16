@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 // Control UI view renders logs screen content.
 import { html, nothing } from "lit";
 import {
@@ -11,7 +12,7 @@ import {
   renderSettingsToggle,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import { formatTimeMs } from "../../lib/format.ts";
 import type { LogEntry, LogLevel } from "./log-lines.ts";
 
 const LEVELS: LogLevel[] = ["trace", "debug", "info", "warn", "error", "fatal"];
@@ -34,7 +35,7 @@ type LogsProps = {
   onScroll: (event: Event) => void;
 };
 
-function formatTime(value?: string | null) {
+function formatLogTime(value?: string | null) {
   if (!value) {
     return "";
   }
@@ -42,7 +43,7 @@ function formatTime(value?: string | null) {
   if (Number.isNaN(date.getTime())) {
     return value;
   }
-  return date.toLocaleTimeString();
+  return formatTimeMs(date.getTime(), undefined, value);
 }
 
 function matchesFilter(entry: LogEntry, needle: string) {
@@ -65,14 +66,14 @@ export function renderLogs(props: LogsProps) {
     return matchesFilter(entry, needle);
   });
   const exportFileLabel: ExportFileLabel = needle || levelFiltered ? "filtered" : "visible";
-  const exportDisplayLabel = t(`logsView.exportLabels.${exportFileLabel}`);
+  const exportDisplayLabel = t(`gatewayLogs.exportLabels.${exportFileLabel}`);
 
   // The stream fills the remaining viewport height; the settings-page column
   // wrapper is intentionally skipped so the fill-height flex chain
   // (.settings-workspace--fill-height … .logs-card … .log-stream) stays intact.
   return html`
     <div class="settings-section__header">
-      <h2 class="settings-section__heading">${t("logsView.title")}</h2>
+      <h2 class="settings-section__heading">${t("gatewayLogs.title")}</h2>
       <div class="settings-section__actions">
         <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
           ${props.loading ? t("common.loading") : t("common.refresh")}
@@ -86,11 +87,11 @@ export function renderLogs(props: LogsProps) {
               exportFileLabel,
             )}
         >
-          ${t("logsView.exportButton", { label: exportDisplayLabel })}
+          ${t("gatewayLogs.exportButton", { label: exportDisplayLabel })}
         </button>
       </div>
     </div>
-    <p class="settings-section__desc">${t("logsView.subtitle")}</p>
+    <p class="settings-section__desc">${t("gatewayLogs.subtitle")}</p>
     ${renderPanelRefreshStatus({
       status: props.status,
       onRetry: props.onRefresh,
@@ -98,15 +99,15 @@ export function renderLogs(props: LogsProps) {
     })}
     <div class="settings-group logs-card">
       ${renderSettingsRow({
-        title: t("logsView.filter"),
-        description: props.file ? t("logsView.file", { file: props.file }) : undefined,
+        title: t("gatewayLogs.filter"),
+        description: props.file ? t("gatewayLogs.file", { file: props.file }) : undefined,
         control: html`
           <input
             class="settings-input"
-            aria-label=${t("logsView.filter")}
+            aria-label=${t("gatewayLogs.filter")}
             .value=${props.filterText}
             @input=${(e: Event) => props.onFilterTextChange((e.target as HTMLInputElement).value)}
-            placeholder=${t("logsView.searchPlaceholder")}
+            placeholder=${t("gatewayLogs.searchPlaceholder")}
           />
         `,
       })}
@@ -129,26 +130,26 @@ export function renderLogs(props: LogsProps) {
         <div class="settings-row__control">
           ${renderSettingsToggle({
             checked: props.autoFollow,
-            ariaLabel: t("logsView.autoFollow"),
+            ariaLabel: t("gatewayLogs.autoFollow"),
             onChange: (checked) => props.onToggleAutoFollow(checked),
           })}
-          <span class="settings-row__value">${t("logsView.autoFollow")}</span>
+          <span class="settings-row__value">${t("gatewayLogs.autoFollow")}</span>
         </div>
       </div>
       ${props.truncated
         ? html`
             <div class="settings-row">
-              ${renderSettingsStatus({ kind: "warn", label: t("logsView.truncated") })}
+              ${renderSettingsStatus({ kind: "warn", label: t("gatewayLogs.truncated") })}
             </div>
           `
         : nothing}
       <div class="log-stream" @scroll=${props.onScroll}>
         ${filtered.length === 0
-          ? renderSettingsEmpty(t("logsView.empty"))
+          ? renderSettingsEmpty(t("gatewayLogs.empty"))
           : filtered.map(
               (entry) => html`
                 <div class="log-row">
-                  <div class="log-time mono">${formatTime(entry.time)}</div>
+                  <div class="log-time mono">${formatLogTime(entry.time)}</div>
                   <div class="log-level ${entry.level ?? ""}">${entry.level ?? ""}</div>
                   <div class="log-subsystem mono">${entry.subsystem ?? ""}</div>
                   <div class="log-message mono">${entry.message ?? entry.raw}</div>

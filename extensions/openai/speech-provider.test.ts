@@ -1,6 +1,10 @@
 // Openai tests cover speech provider plugin behavior.
+import { createServer } from "node:http";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAISpeechProvider } from "./speech-provider.js";
+
+const OPENAI_TTS_SNAPSHOT = "gpt-4o-mini-tts-2025-12-15";
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: async ({
@@ -23,7 +27,7 @@ function isSpeechRequestBody(value: unknown): value is {
   speed?: number;
   response_format?: string;
 } {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  return isRecord(value);
 }
 
 function parseRequestBody(init: RequestInit | undefined): {
@@ -60,6 +64,13 @@ describe("buildOpenAISpeechProvider", () => {
     globalThis.fetch = originalFetch;
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
+  });
+
+  it("advertises official speech snapshots without changing the default model", () => {
+    const provider = buildOpenAISpeechProvider();
+
+    expect(provider.defaultModel).toBe("gpt-4o-mini-tts");
+    expect(provider.models).toContain(OPENAI_TTS_SNAPSHOT);
   });
 
   it("normalizes provider-owned speech config from raw provider config", () => {
@@ -179,6 +190,23 @@ describe("buildOpenAISpeechProvider", () => {
 
     expect(
       provider.parseDirectiveToken?.({
+        key: "openai_model",
+        value: OPENAI_TTS_SNAPSHOT,
+        policy: {
+          allowVoice: true,
+          allowModelId: true,
+        },
+        providerConfig: {
+          baseUrl: "https://api.openai.com/v1/",
+        },
+      } as never),
+    ).toEqual({
+      handled: true,
+      overrides: { model: OPENAI_TTS_SNAPSHOT },
+    });
+
+    expect(
+      provider.parseDirectiveToken?.({
         key: "model",
         value: "kokoro-custom-model",
         policy: {
@@ -192,6 +220,76 @@ describe("buildOpenAISpeechProvider", () => {
     ).toEqual({
       handled: false,
     });
+  });
+
+  it("sends dated speech snapshots through a real loopback HTTP request", async () => {
+    const provider = buildOpenAISpeechProvider();
+    let receivedRequest:
+      | {
+          method: string | undefined;
+          url: string | undefined;
+          body: unknown;
+        }
+      | undefined;
+    const server = createServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.on("end", () => {
+        receivedRequest = {
+          method: request.method,
+          url: request.url,
+          body: JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown,
+        };
+        response.writeHead(200, { "content-type": "audio/mpeg" });
+        response.end(Buffer.from("snapshot-audio"));
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        server.removeListener("error", reject);
+        resolve();
+      });
+    });
+
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected a loopback server address");
+      }
+
+      const result = await provider.synthesize({
+        text: "snapshot request",
+        cfg: {} as never,
+        providerConfig: {
+          apiKey: "sk-test",
+          baseUrl: `http://127.0.0.1:${address.port}/v1`,
+          model: OPENAI_TTS_SNAPSHOT,
+          voice: "alloy",
+          instructions: " Speak warmly ",
+        },
+        target: "audio-file",
+        timeoutMs: 1_000,
+      });
+
+      expect(receivedRequest).toEqual({
+        method: "POST",
+        url: "/v1/audio/speech",
+        body: {
+          model: OPENAI_TTS_SNAPSHOT,
+          input: "snapshot request",
+          voice: "alloy",
+          response_format: "mp3",
+          instructions: "Speak warmly",
+        },
+      });
+      expect(result.audioBuffer).toEqual(Buffer.from("snapshot-audio"));
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 
   it("parses preferred-OpenAI speed directive within the supported range", () => {
@@ -480,40 +578,6 @@ describe("buildOpenAISpeechProvider", () => {
       model: "tts-1",
       speed: 218 / 175,
     });
-  });
-
-  it("maps persona prompt fields to instructions when instructions are unset", async () => {
-    const provider = buildOpenAISpeechProvider();
-
-    const prepared = await provider.prepareSynthesis?.({
-      text: "hello",
-      cfg: {} as never,
-      providerConfig: {
-        apiKey: "sk-test",
-        model: "gpt-4o-mini-tts",
-        voice: "cedar",
-      },
-      persona: {
-        id: "alfred",
-        label: "Alfred",
-        prompt: {
-          profile: "A brilliant British butler.",
-          scene: "A quiet late-night study.",
-          sampleContext: "The speaker is answering a trusted operator.",
-          style: "Refined and lightly amused.",
-          accent: "British English.",
-          pacing: "Measured.",
-          constraints: ["Do not read configuration values aloud."],
-        },
-      },
-      target: "audio-file",
-      timeoutMs: 1_000,
-    });
-
-    expect(prepared?.providerConfig?.instructions).toContain("Persona: Alfred");
-    expect(prepared?.providerConfig?.instructions).toContain(
-      "Constraint: Do not read configuration values aloud.",
-    );
   });
 
   it("uses wav for Groq-compatible OpenAI TTS endpoints", async () => {

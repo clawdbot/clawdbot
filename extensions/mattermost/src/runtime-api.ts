@@ -5,7 +5,6 @@ export {
   applySetupAccountConfigPatch,
   type BaseProbeResult,
   type BlockStreamingCoalesceConfig,
-  buildAgentMediaPayload,
   buildChannelConfigSchema,
   buildComputedAccountStatusSnapshot,
   buildModelsProviderData,

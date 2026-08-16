@@ -11,42 +11,57 @@ import {
 /** Resolve a plugin update target and optional npm spec override from CLI input. */
 export function resolvePluginUpdateSelection(params: {
   installs: Record<string, PluginInstallRecord>;
+  installOwnerByPluginId?: ReadonlyMap<string, string>;
+  rejectedPluginIds?: ReadonlyMap<string, string>;
   rawId?: string;
   all?: boolean;
-}): { pluginIds: string[]; specOverrides?: Record<string, string> } {
+}): { pluginIds: string[]; specOverrides?: Record<string, string>; error?: string } {
   if (params.all) {
-    return { pluginIds: Object.keys(params.installs) };
+    const rejectedOwners = Object.keys(params.installs).filter((pluginId) =>
+      params.rejectedPluginIds?.has(pluginId),
+    );
+    if (rejectedOwners.length > 0) {
+      return {
+        pluginIds: [],
+        error: params.rejectedPluginIds?.get(rejectedOwners[0]!),
+      };
+    }
+    return {
+      pluginIds: Object.keys(params.installs),
+    };
   }
   if (!params.rawId) {
     return { pluginIds: [] };
   }
 
+  if (params.rejectedPluginIds?.has(params.rawId)) {
+    return { pluginIds: [], error: params.rejectedPluginIds.get(params.rawId) };
+  }
   if (Object.hasOwn(params.installs, params.rawId)) {
     return { pluginIds: [params.rawId] };
+  }
+  const installOwner = params.installOwnerByPluginId?.get(params.rawId);
+  if (installOwner && Object.hasOwn(params.installs, installOwner)) {
+    return { pluginIds: [installOwner] };
   }
 
   const parsedSpec = parseRegistryNpmSpec(params.rawId);
   if (!parsedSpec) {
-    return { pluginIds: [params.rawId] };
+    return { pluginIds: [] };
   }
   const matches = Object.entries(params.installs).filter(([, install]) => {
     return extractInstalledNpmPackageName(install) === parsedSpec.name;
   });
   if (matches.length !== 1) {
-    return { pluginIds: [params.rawId] };
+    return { pluginIds: [] };
   }
 
   const [pluginId] = expectDefined(matches[0], "matches capture group 0");
   if (!pluginId) {
-    return { pluginIds: [params.rawId] };
+    return { pluginIds: [] };
   }
-  if (parsedSpec.selectorKind === "none") {
-    return {
-      pluginIds: [pluginId],
-      specOverrides: {
-        [pluginId]: parsedSpec.raw,
-      },
-    };
+  if (params.rejectedPluginIds?.has(pluginId)) {
+    return { pluginIds: [], error: params.rejectedPluginIds.get(pluginId) };
   }
   return {
     pluginIds: [pluginId],

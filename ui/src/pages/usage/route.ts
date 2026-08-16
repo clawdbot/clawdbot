@@ -1,13 +1,13 @@
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
-import type { CostUsageSummary } from "../../api/types.ts";
+import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
-import { buildSessionUsageDateParams, requestSessionUsage } from "../../lib/sessions/index.ts";
-import type { ProviderUsageSummary } from "./data-types.ts";
+import { requestUsageSnapshot } from "./request-usage-snapshot.ts";
 import type { UsageRouteData } from "./usage-page.ts";
 
 function currentLocalDate(): string {
@@ -19,10 +19,7 @@ function errorMessage(error: unknown): string {
   if (isMissingOperatorReadScopeError(error)) {
     return formatMissingOperatorReadScopeMessage("usage");
   }
-  if (error instanceof Error && error.message.trim()) {
-    return error.message;
-  }
-  return typeof error === "string" ? error : "request failed";
+  return formatUiError(error, "request failed");
 }
 
 async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRouteData> {
@@ -36,7 +33,7 @@ async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRou
     timeZone: "local",
     agentId: context.agentSelection.state.scopeId,
   };
-  if (!gatewaySnapshot.connected || !gatewaySnapshot.client) {
+  if (gatewaySnapshot.phase !== "connected" || !gatewaySnapshot.client) {
     return {
       gateway,
       gatewaySnapshot,
@@ -50,26 +47,15 @@ async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRou
   }
 
   try {
-    const [result, costSummary, providerUsageSummary] = await Promise.all([
-      requestSessionUsage(gatewaySnapshot.client, {
-        ...query,
-        agentId: query.agentId ?? undefined,
-      }),
-      gatewaySnapshot.client.request<CostUsageSummary>("usage.cost", {
-        startDate: query.startDate,
-        endDate: query.endDate,
-        ...(query.agentId ? { agentId: query.agentId } : { agentScope: "all" as const }),
-        ...buildSessionUsageDateParams(query.timeZone),
-      }),
-      gatewaySnapshot.client.request<ProviderUsageSummary>("usage.status").catch(() => null),
-    ]);
+    const snapshot = await requestUsageSnapshot(gatewaySnapshot.client, {
+      ...query,
+      agentId: query.agentId ?? undefined,
+    });
     return {
       gateway,
       gatewaySnapshot,
       query,
-      result,
-      costSummary,
-      providerUsageSummary,
+      ...snapshot,
       loadedAtMs: Date.now(),
       error: null,
     };
@@ -88,8 +74,7 @@ async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRou
 }
 
 export const page = definePage({
-  id: "usage",
-  path: "/usage",
+  ...routePageSpec("usage"),
   loader: loadUsageRouteData,
   component: () =>
     import("./usage-page.ts").then(() => ({

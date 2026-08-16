@@ -2,9 +2,10 @@
 import {
   claimPendingAgentQuestionAnswer,
   type AgentHarnessQuestionGatewayCall,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { createCopilotTestHostCapabilities } from "./host-capability.test-support.js";
 import { createCopilotUserInputBridge } from "./user-input-bridge.js";
 
 type GatewayCallRecord = { method: string; opts: unknown; params: unknown };
@@ -14,6 +15,7 @@ function createParams(): EmbeddedRunAttemptParams {
     sessionId: "session-1",
     sessionKey: "agent:main:session-1",
     agentId: "main",
+    hostCapabilities: createCopilotTestHostCapabilities(),
     timeoutMs: 75_000,
     onBlockReply: vi.fn(),
   } as unknown as EmbeddedRunAttemptParams;
@@ -35,7 +37,7 @@ function createGatewayStub() {
     }
     if (method === "question.resolve") {
       const resolved = params as {
-        answers?: { answers: Record<string, { answers: string[] }> };
+        answers?: { answers: Record<string, string[]> };
         cancel?: boolean;
       };
       const result = resolved.cancel
@@ -72,12 +74,18 @@ describe("Copilot user input bridge", () => {
       agentId: "main",
       timeoutMs: 75_000,
       questions: [
-        expect.objectContaining({ id: "answer", options: [{ label: "Fast" }, { label: "Deep" }] }),
+        expect.objectContaining({
+          questionId: "answer",
+          options: [{ label: "Fast" }, { label: "Deep" }],
+        }),
       ],
     });
     const payload = vi.mocked(params.onBlockReply!).mock.calls[0]![0];
     expect(payload.channelData).toEqual({
-      askUser: { questionId: (request.params as { id: string }).id },
+      askUser: {
+        questionId: (request.params as { id: string }).id,
+        optionValues: ["Fast", "Deep"],
+      },
     });
     expect(payload.presentationTextMode).toBe("fallback");
     expect(payload.text).toContain("Reply with the number or option text.");

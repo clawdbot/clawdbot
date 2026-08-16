@@ -122,6 +122,7 @@ export function resolveDiscordGroupToolPolicy(
   // No messageProvider: channel-prefixed sender keys were historically dead here.
   return resolveScopeToolsPolicy({
     ...scope,
+    senderPolicyMode: params.senderPolicyMode,
     senderId: params.senderId,
     senderName: params.senderName,
     senderUsername: params.senderUsername,

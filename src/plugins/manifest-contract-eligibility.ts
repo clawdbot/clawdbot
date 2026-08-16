@@ -1,8 +1,16 @@
 // Determines which manifest contracts are eligible for plugin activation.
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import {
+  hasMeaningfulChannelConfigShallow,
+  resolveChannelConfigRecord,
+} from "../config/channel-configured-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readBundledDiscoveryMode } from "./bundled-discovery-state.js";
+import { normalizePluginsConfig } from "./config-state.js";
 import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
+import { resolveManifestOwnerBasePolicyBlock } from "./manifest-owner-policy.js";
 import type { PluginManifestContractListKey, PluginManifestRecord } from "./manifest-registry.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import type {
   PluginMetadataManifestView,
@@ -10,14 +18,64 @@ import type {
   PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.types.js";
 
+let bundledDiscoveryMode: { value: ReturnType<typeof readBundledDiscoveryMode> } | undefined;
+
+registerPluginMetadataProcessMemoLifecycleClear(() => {
+  bundledDiscoveryMode = undefined;
+});
+
+/** Enforces owner-specific policy while preserving bundled speech/global compatibility. */
+export function isManifestPluginOwnerAllowedByControlPlanePolicy(params: {
+  plugin: Pick<PluginManifestRecord, "id" | "origin"> & {
+    channels?: readonly string[];
+  };
+  config?: OpenClawConfig;
+  allowRestrictiveAllowlistBypass?: boolean;
+}): boolean {
+  if (!params.config?.plugins) {
+    return true;
+  }
+  const config = params.config;
+  const normalized = normalizePluginsConfig(config.plugins);
+  // Global disable is owned by each runtime surface; bundled speech remains intentionally usable.
+  const normalizedConfig = normalized.enabled ? normalized : { ...normalized, enabled: true };
+  const block = resolveManifestOwnerBasePolicyBlock({
+    plugin: params.plugin,
+    normalizedConfig,
+    allowRestrictiveAllowlistBypass:
+      params.plugin.origin === "bundled" && params.allowRestrictiveAllowlistBypass === true,
+  });
+  if (block !== "not-in-allowlist") {
+    return block === null;
+  }
+  if (params.plugin.origin !== "bundled") {
+    return false;
+  }
+  const channelIds = params.plugin.channels ?? [params.plugin.id];
+  if (
+    channelIds.some((channelId) => {
+      const channelConfig = resolveChannelConfigRecord(config, channelId);
+      return channelConfig?.enabled !== false && hasMeaningfulChannelConfigShallow(channelConfig);
+    })
+  ) {
+    return true;
+  }
+  bundledDiscoveryMode ??= { value: readBundledDiscoveryMode() };
+  return bundledDiscoveryMode.value === "compat";
+}
+
 export function isManifestPluginAvailableForControlPlane(params: {
   snapshot: Pick<PluginMetadataSnapshot, "index">;
   plugin: Pick<
     PluginManifestRecord,
     "id" | "origin" | "enabledByDefault" | "enabledByDefaultOnPlatforms"
-  >;
+  > & { channels?: readonly string[] };
   config?: OpenClawConfig;
+  allowRestrictiveAllowlistBypass?: boolean;
 }): boolean {
+  if (!isManifestPluginOwnerAllowedByControlPlanePolicy(params)) {
+    return false;
+  }
   if (params.plugin.origin === "bundled") {
     return true;
   }

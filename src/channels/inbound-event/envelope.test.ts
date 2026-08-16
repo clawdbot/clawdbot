@@ -5,7 +5,7 @@ import {
   resolveChannelInboundRouteEnvelope,
 } from "./envelope.js";
 
-const readSessionUpdatedAt = vi.hoisted(() => vi.fn(() => 60_000));
+const readSessionUpdatedAtCore = vi.hoisted(() => vi.fn(() => 60_000));
 const resolveStorePath = vi.hoisted(() => vi.fn(() => "/state/main/sessions.json"));
 const resolveAgentRoute = vi.hoisted(() =>
   vi.fn(() => ({
@@ -15,12 +15,14 @@ const resolveAgentRoute = vi.hoisted(() =>
   })),
 );
 
-vi.mock("../../config/sessions/paths.js", () => ({ resolveStorePath }));
-vi.mock("../../config/sessions/session-accessor.js", () => ({ readSessionUpdatedAt }));
+vi.mock("../../config/sessions/paths.js", () => ({
+  resolveSessionStorePathCore: resolveStorePath,
+}));
+vi.mock("../../config/sessions/session-accessor.js", () => ({ readSessionUpdatedAtCore }));
 vi.mock("../../routing/resolve-route.js", () => ({ resolveAgentRoute }));
 
 const cfg = {
-  agents: { defaults: { envelopeTimestamp: "off" } },
+  agents: { defaults: { userTimezone: "UTC" } },
   session: { store: "/state/{agentId}/sessions.json" },
 } as OpenClawConfig;
 
@@ -40,9 +42,9 @@ describe("channel inbound envelope", () => {
         body: "hello",
         timestamp: 120_000,
       }),
-    ).toBe("[Telegram Alice +1m] hello");
+    ).toBe("[Telegram Alice +1m Thu 1970-01-01T00:02:00Z] hello");
     expect(resolveStorePath).toHaveBeenCalledWith(cfg.session?.store, { agentId: "main" });
-    expect(readSessionUpdatedAt).toHaveBeenCalledWith({
+    expect(readSessionUpdatedAtCore).toHaveBeenCalledWith({
       storePath: "/state/main/sessions.json",
       sessionKey: "agent:main:telegram:direct:peer",
     });
@@ -78,7 +80,7 @@ describe("channel inbound envelope", () => {
         timestamp: 30_000,
         previousTimestamp: null,
       }),
-    ).toBe("[Telegram Alice] older");
-    expect(readSessionUpdatedAt).not.toHaveBeenCalled();
+    ).toBe("[Telegram Alice Thu 1970-01-01T00:00:30Z] older");
+    expect(readSessionUpdatedAtCore).not.toHaveBeenCalled();
   });
 });

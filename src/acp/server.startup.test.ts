@@ -1,5 +1,7 @@
 /** Tests ACP server startup readiness, Gateway bootstrap, and shutdown wiring. */
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { ReadableStream as NodeReadableStream } from "node:stream/web";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { resolveGatewayClientBootstrap } from "../gateway/client-bootstrap.js";
 
 type GatewayClientCallbacks = {
   onEvent?: (evt: { event: string; payload?: unknown }) => void;
@@ -12,14 +14,11 @@ type GatewayClientAuth = {
   token?: string;
   password?: string;
 };
-type ResolveGatewayClientBootstrap = (params: unknown) => Promise<{
-  url: string;
-  urlSource: string;
-  auth: GatewayClientAuth;
-}>;
+type ResolveGatewayClientBootstrap = typeof resolveGatewayClientBootstrap;
 type GatewayClientOptions = GatewayClientCallbacks &
   GatewayClientAuth & {
     caps?: string[];
+    tlsFingerprint?: string;
     url?: string;
   };
 type MockAcpStream = {
@@ -30,10 +29,13 @@ type MockAcpStream = {
 const mockState = vi.hoisted(() => ({
   acpProtocolVersion: 1,
   acpInputMessages: [] as unknown[],
+  rawInputChunks: [] as Uint8Array[],
   gateways: [] as MockGatewayClient[],
   gatewayAuth: [] as GatewayClientAuth[],
   gatewayOptions: [] as GatewayClientOptions[],
   agentSideConnectionCtor: vi.fn(),
+  closeAgentSideConnection: null as (() => void) | null,
+  closeAcpInput: null as (() => void) | null,
   agentHandleGatewayEvent: vi.fn(async (_evt: unknown) => {}),
   agentStart: vi.fn(),
   agentShutdown: vi.fn(),
@@ -48,12 +50,33 @@ const mockState = vi.hoisted(() => ({
   resolveGatewayClientBootstrap: vi.fn<ResolveGatewayClientBootstrap>(async (_params) => ({
     url: "ws://127.0.0.1:18789",
     urlSource: "local loopback",
+    connectionDetails: {
+      url: "ws://127.0.0.1:18789",
+      urlSource: "local loopback",
+      message: "Gateway target: ws://127.0.0.1:18789",
+    },
     auth: {
       token: undefined,
       password: undefined,
     },
   })),
 }));
+
+vi.mock("node:stream", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:stream")>();
+  vi.spyOn(actual.Readable, "toWeb").mockImplementation(
+    () =>
+      new NodeReadableStream<Uint8Array>({
+        start(controller) {
+          for (const chunk of mockState.rawInputChunks) {
+            controller.enqueue(chunk);
+          }
+        },
+      }),
+  );
+  vi.spyOn(actual.Writable, "toWeb").mockImplementation(() => new WritableStream());
+  return actual;
+});
 
 class MockGatewayClient {
   private callbacks: GatewayClientCallbacks;
@@ -100,6 +123,11 @@ vi.mock("@agentclientprotocol/sdk", () => ({
   ) {
     mockState.agentSideConnectionCtor(factory, stream);
     factory({});
+    return {
+      closed: new Promise<void>((resolve) => {
+        mockState.closeAgentSideConnection = resolve;
+      }),
+    };
   },
   PROTOCOL_VERSION: mockState.acpProtocolVersion,
   ndJsonStream: vi.fn(() => ({
@@ -109,7 +137,7 @@ vi.mock("@agentclientprotocol/sdk", () => ({
         for (const message of mockState.acpInputMessages) {
           controller.enqueue(message);
         }
-        controller.close();
+        mockState.closeAcpInput = () => controller.close();
       },
     }),
   })),
@@ -135,18 +163,19 @@ vi.mock("../gateway/call.js", () => ({
       return {
         url: url.trim(),
         urlSource: "cli --url",
+        message: `Gateway target: ${url.trim()}`,
       };
     }
     return {
       url: "ws://127.0.0.1:18789",
       urlSource: "local loopback",
+      message: "Gateway target: ws://127.0.0.1:18789",
     };
   },
 }));
 
 vi.mock("../gateway/client-bootstrap.js", () => ({
-  resolveGatewayClientBootstrap: (params: unknown) =>
-    mockState.resolveGatewayClientBootstrap(params),
+  resolveGatewayClientBootstrap: mockState.resolveGatewayClientBootstrap,
 }));
 
 vi.mock("../gateway/client.js", () => ({
@@ -293,6 +322,7 @@ describe("serveAcpGateway startup", () => {
 
     try {
       await emitHelloAndWaitForAgentSideConnection();
+      mockState.closeAcpInput?.();
       return await readCapturedAcpMessages();
     } finally {
       signalHandlers.get("SIGINT")?.();
@@ -310,15 +340,37 @@ describe("serveAcpGateway startup", () => {
   }
 
   beforeAll(async () => {
+    // Vitest workers have closed stdin; model the open ACP transport used by
+    // these startup tests. Closed-stdin behavior has process-level coverage.
+    Object.defineProperty(process.stdin, "readableEnded", {
+      configurable: true,
+      value: false,
+    });
+    Object.defineProperty(process.stdin, "readableLength", {
+      configurable: true,
+      value: 1,
+    });
     ({ serveAcpGateway } = await import("./server.js"));
+  });
+
+  afterAll(() => {
+    const testStdin = process.stdin as unknown as {
+      readableEnded?: boolean;
+      readableLength?: number;
+    };
+    delete testStdin.readableEnded;
+    delete testStdin.readableLength;
   });
 
   beforeEach(async () => {
     mockState.acpInputMessages.length = 0;
+    mockState.rawInputChunks.length = 0;
     mockState.gateways.length = 0;
     mockState.gatewayAuth.length = 0;
     mockState.gatewayOptions.length = 0;
     mockState.agentSideConnectionCtor.mockReset();
+    mockState.closeAgentSideConnection = null;
+    mockState.closeAcpInput = null;
     mockState.agentHandleGatewayEvent.mockReset();
     mockState.agentStart.mockReset();
     mockState.agentShutdown.mockReset();
@@ -333,6 +385,11 @@ describe("serveAcpGateway startup", () => {
     mockState.resolveGatewayClientBootstrap.mockResolvedValue({
       url: "ws://127.0.0.1:18789",
       urlSource: "local loopback",
+      connectionDetails: {
+        url: "ws://127.0.0.1:18789",
+        urlSource: "local loopback",
+        message: "Gateway target: ws://127.0.0.1:18789",
+      },
       auth: {
         token: undefined,
         password: undefined,
@@ -378,6 +435,35 @@ describe("serveAcpGateway startup", () => {
     }
   });
 
+  it("passes the resolved TLS fingerprint into the ACP gateway client", async () => {
+    mockState.resolveGatewayClientBootstrap.mockResolvedValue({
+      url: "wss://127.0.0.1:18789",
+      urlSource: "local loopback",
+      connectionDetails: {
+        url: "wss://127.0.0.1:18789",
+        urlSource: "local loopback",
+        message: "Gateway target: wss://127.0.0.1:18789",
+      },
+      tlsFingerprint: "sha256:local",
+      auth: {
+        token: undefined,
+        password: undefined,
+      },
+    });
+    const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
+
+    try {
+      const servePromise = serveAcpGateway({});
+      await emitHelloAndWaitForAgentSideConnection();
+
+      expect(mockState.gatewayOptions[0]?.tlsFingerprint).toBe("sha256:local");
+
+      await stopServeWithSigint(signalHandlers, servePromise);
+    } finally {
+      onceSpy.mockRestore();
+    }
+  });
+
   it.each([
     {
       name: "default logging",
@@ -389,7 +475,7 @@ describe("serveAcpGateway startup", () => {
       opts: { verbose: true },
       expected: [
         "openclaw acp: gateway event chat failed\n",
-        "openclaw acp: gateway event chat error: Error: handler boom\n",
+        "openclaw acp: gateway event chat error: handler boom\n",
       ],
     },
   ])("contains rejected gateway event handling with $name", async ({ opts, expected }) => {
@@ -459,10 +545,32 @@ describe("serveAcpGateway startup", () => {
     }
   });
 
+  it("shuts down when buffered pre-hello ACP input exceeds its limit", async () => {
+    mockState.rawInputChunks.push(new Uint8Array(1024 * 1024 + 1));
+    const onceSpy = vi
+      .spyOn(process, "once")
+      .mockImplementation(
+        ((_signal: NodeJS.Signals, _handler: () => void) => process) as typeof process.once,
+      );
+
+    try {
+      await serveAcpGateway({});
+      expect(mockState.agentSideConnectionCtor).not.toHaveBeenCalled();
+      expect(mockState.closeOpenClawStateDatabase).toHaveBeenCalledOnce();
+    } finally {
+      onceSpy.mockRestore();
+    }
+  });
+
   it("passes resolved SecretInput gateway credentials to the ACP gateway client", async () => {
     mockState.resolveGatewayClientBootstrap.mockResolvedValue({
       url: "ws://127.0.0.1:18789",
       urlSource: "local loopback",
+      connectionDetails: {
+        url: "ws://127.0.0.1:18789",
+        urlSource: "local loopback",
+        message: "Gateway target: ws://127.0.0.1:18789",
+      },
       auth: {
         token: undefined,
         password: "resolved-secret-password", // pragma: allowlist secret
@@ -512,6 +620,11 @@ describe("serveAcpGateway startup", () => {
     mockState.resolveGatewayClientBootstrap.mockResolvedValue({
       url: "ws://127.0.0.1:19999",
       urlSource: "cli --url",
+      connectionDetails: {
+        url: "ws://127.0.0.1:19999",
+        urlSource: "cli --url",
+        message: "Gateway target: ws://127.0.0.1:19999",
+      },
       auth: {
         token: undefined,
         password: undefined,
@@ -560,6 +673,27 @@ describe("serveAcpGateway startup", () => {
       const servePromise = serveAcpGateway({});
       await emitHelloAndWaitForAgentSideConnection();
       await stopServeWithSigint(signalHandlers, servePromise);
+      expect(mockState.agentShutdown).toHaveBeenCalledOnce();
+      expect(mockState.closeOpenClawStateDatabase).toHaveBeenCalledOnce();
+    } finally {
+      onceSpy.mockRestore();
+    }
+  });
+
+  it("shuts down when the ACP client closes its stdio stream", async () => {
+    const { onceSpy } = captureProcessSignalHandlers();
+
+    try {
+      const servePromise = serveAcpGateway({});
+      await emitHelloAndWaitForAgentSideConnection();
+      const closeConnection = mockState.closeAgentSideConnection;
+      if (!closeConnection) {
+        throw new Error("Expected mocked ACP connection close handler");
+      }
+
+      closeConnection();
+      await servePromise;
+
       expect(mockState.agentShutdown).toHaveBeenCalledOnce();
       expect(mockState.closeOpenClawStateDatabase).toHaveBeenCalledOnce();
     } finally {
@@ -625,6 +759,21 @@ describe("serveAcpGateway startup", () => {
       actualStateDb.closeOpenClawStateDatabase();
       onceSpy.mockRestore();
     }
+  });
+
+  it("replays an ACP frame read before Gateway hello to AgentSideConnection", async () => {
+    const initializeRequest = {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: mockState.acpProtocolVersion,
+        clientCapabilities: {},
+      },
+    };
+
+    const [message] = await captureAcpMessagesAfterStartup([initializeRequest]);
+    expect(message).toBe(initializeRequest);
   });
 
   it("coerces MCP date-string initialize protocol versions", async () => {

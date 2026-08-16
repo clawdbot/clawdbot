@@ -33,6 +33,11 @@ type DispatchReplyFromConfigMock = Mock<
   (params: {
     ctx: DispatchReplyContext;
     dispatcher: DispatchReplyDispatcher;
+    replyOptions?: {
+      turnAdoptionLifecycle?: {
+        onAdopted: () => void | Promise<void>;
+      };
+    };
   }) => Promise<{ queuedFinal: boolean; counts: DispatchReplyCounts }>
 >;
 type WithReplyDispatcherMock = Mock<

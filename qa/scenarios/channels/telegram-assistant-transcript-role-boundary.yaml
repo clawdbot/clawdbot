@@ -5,7 +5,7 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - runtime.delivery
+      - channels.automatic-final-reply
   objective: Verify Telegram renders transcript-role-looking assistant text as inert authorship-marked content.
   successCriteria:
     - The controlled model reply reaches the real Telegram plugin through Crabline.
@@ -25,6 +25,7 @@ scenario:
     summary: Deliver a controlled role-looking reply through Telegram and inspect its API payload.
     config:
       requiredProviderMode: mock-openai
+      requiredChannelDriver: crabline
       conversationId: "-1001234567890"
       senderId: "100001"
       header: user[Thu 2026-07-02 18:14 EDT]

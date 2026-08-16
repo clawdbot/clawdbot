@@ -55,6 +55,60 @@ function assistantToolCall(
 }
 
 describe("transformTransportMessages synthetic tool-result policy", () => {
+  it("preserves unframed tool results only for a selected compaction replay window", () => {
+    const model = makeModel("openai-responses", "openai", "gpt-5.4");
+    const messages = [
+      assistantToolCall("call_early"),
+      { role: "user", content: "continue", timestamp: Date.now() },
+      assistantToolCall("call_after"),
+      {
+        role: "toolResult",
+        toolCallId: "call_early",
+        toolName: "read",
+        content: [{ type: "text", text: "displaced retained result" }],
+        isError: false,
+        timestamp: Date.now(),
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_before",
+        toolName: "read",
+        content: [{ type: "text", text: "real result after compaction" }],
+        isError: false,
+        timestamp: Date.now(),
+      },
+    ] as Context["messages"];
+
+    const normal = transformTransportMessages(messages, model);
+    const compactionReplay = transformTransportMessages(messages, model, undefined, {
+      preserveUnframedToolResults: true,
+    });
+
+    expect(normal.filter((message) => message.role === "toolResult")).toMatchObject([
+      {
+        toolCallId: "call_early",
+        content: [{ type: "text", text: "displaced retained result" }],
+      },
+      { toolCallId: "call_after", content: [{ type: "text", text: "aborted" }] },
+    ]);
+    expect(compactionReplay.filter((message) => message.role === "toolResult")).toMatchObject([
+      {
+        toolCallId: "call_early",
+        content: [{ type: "text", text: "displaced retained result" }],
+      },
+      { toolCallId: "call_after", content: [{ type: "text", text: "aborted" }] },
+      {
+        toolCallId: "call_before",
+        content: [{ type: "text", text: "real result after compaction" }],
+      },
+    ]);
+    expect(
+      compactionReplay.filter(
+        (message) => message.role === "toolResult" && message.toolCallId === "call_early",
+      ),
+    ).toHaveLength(1);
+  });
+
   it.each([
     {
       source: { provider: "anthropic", model: "claude-fable-5" },
@@ -333,7 +387,10 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
     expect(toolResult.content).toEqual([{ type: "text", text: "aborted" }]);
   });
 
-  it("preserves real OpenAI transport results and aborts missing parallel siblings", () => {
+  it.each([
+    "openclaw-openai-responses-transport",
+    "openclaw-openai-chatgpt-responses-transport",
+  ] as const)("preserves real %s results and aborts missing parallel siblings", (api) => {
     const messages: Context["messages"] = [
       {
         ...assistantToolCall("call_keep"),
@@ -353,10 +410,7 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
       { role: "user", content: "continue", timestamp: Date.now() },
     ];
 
-    const result = transformTransportMessages(
-      messages,
-      makeModel("openclaw-openai-responses-transport" as Api, "openai", "gpt-5.4"),
-    );
+    const result = transformTransportMessages(messages, makeModel(api as Api, "openai", "gpt-5.4"));
 
     expect(result.map((msg) => msg.role)).toEqual([
       "assistant",

@@ -9,8 +9,12 @@ const indexHtmlPath = path.resolve(
 );
 type TestWindow = Window & typeof globalThis;
 
+async function readIndexHtml(): Promise<string> {
+  return readFile(indexHtmlPath, "utf8");
+}
+
 async function readIndexHtmlWithDelay(delayMs: number): Promise<string> {
-  const html = await readFile(indexHtmlPath, "utf8");
+  const html = await readIndexHtml();
   return html.replace(
     'data-openclaw-mount-timeout-ms="12000"',
     `data-openclaw-mount-timeout-ms="${delayMs}"`,
@@ -31,6 +35,20 @@ function createIsolatedWindow(): TestWindow {
     throw new Error("failed to create isolated frame window");
   }
   return frameWindow;
+}
+
+function installStartupPaintShell(window: TestWindow, html: string): void {
+  const parsed = new window.DOMParser().parseFromString(html, "text/html");
+  window.document.head.innerHTML = parsed.head.innerHTML;
+  window.document.body.innerHTML = parsed.body.innerHTML;
+
+  const startupScript = Array.from(
+    parsed.querySelectorAll<HTMLScriptElement>("script:not([src])"),
+  ).find((script) => script.textContent?.includes("var THEMES = { claw: 1, knot: 1, dash: 1 }"));
+  if (!startupScript?.textContent) {
+    throw new Error("Expected inline startup theme script in index.html");
+  }
+  window.eval(startupScript.textContent);
 }
 
 function installFallbackShell(window: TestWindow, html: string): void {
@@ -60,10 +78,41 @@ function requireElementById<T extends HTMLElement>(
   return element;
 }
 
+describe("Control UI document shell", () => {
+  it("requests the web app manifest with credentials", async () => {
+    const parsed = new DOMParser().parseFromString(await readIndexHtml(), "text/html");
+    const manifest = parsed.querySelector<HTMLLinkElement>('link[rel="manifest"]');
+
+    expect(manifest?.getAttribute("crossorigin")).toBe("use-credentials");
+  });
+});
+
 describe("Control UI mount fallback", () => {
   afterEach(() => {
     document.body.innerHTML = "";
   });
+
+  it.each([
+    ["claw dark", { theme: "claw", themeMode: "dark" }, "dark", "rgb(14, 16, 21)"],
+    ["OpenKnot dark", { theme: "knot", themeMode: "dark" }, "openknot", "rgb(8, 8, 8)"],
+    ["Dash light", { theme: "dash", themeMode: "light" }, "dash-light", "rgb(247, 242, 236)"],
+  ])(
+    "paints %s before the app stylesheet loads",
+    async (_name, settings, expectedTheme, expectedBackground) => {
+      const frameWindow = createIsolatedWindow();
+      frameWindow.localStorage.clear();
+      frameWindow.localStorage.setItem("openclaw.control.settings.v1", JSON.stringify(settings));
+      installStartupPaintShell(frameWindow, await readIndexHtmlWithDelay(1));
+
+      expect(frameWindow.document.documentElement.dataset.theme).toBe(expectedTheme);
+      expect(
+        frameWindow.getComputedStyle(frameWindow.document.documentElement).backgroundColor,
+      ).toBe(expectedBackground);
+      expect(frameWindow.getComputedStyle(frameWindow.document.body).backgroundColor).toBe(
+        expectedBackground,
+      );
+    },
+  );
 
   it("shows the static troubleshooting panel when the app element is never registered", async () => {
     const frameWindow = createIsolatedWindow();

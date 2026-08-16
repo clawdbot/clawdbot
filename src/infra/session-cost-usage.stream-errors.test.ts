@@ -45,7 +45,7 @@ describe("session cost usage stream errors", () => {
       return stream as unknown as nodeFs.ReadStream;
     });
 
-    const logs = await loadSessionLogs({ sessionFile });
+    const logs = await loadSessionLogs({ agentId: "main", sessionFile });
 
     expect(logs).toEqual([]);
   });
@@ -73,6 +73,7 @@ describe("session cost usage stream errors", () => {
       };
       await loadCostUsageSummaryFromCache({
         ...range,
+        agentId: "main",
         refreshMode: "sync-when-empty",
       });
       const rollupsBefore = readSessionCostUsageRollupRows();
@@ -88,11 +89,19 @@ describe("session cost usage stream errors", () => {
         return stream as unknown as nodeFs.ReadStream;
       });
 
-      await loadCostUsageSummaryFromCache(range);
-      let summary = await loadCostUsageSummaryFromCache({ ...range, requestRefresh: false });
+      await loadCostUsageSummaryFromCache({ ...range, agentId: "main" });
+      let summary = await loadCostUsageSummaryFromCache({
+        ...range,
+        agentId: "main",
+        requestRefresh: false,
+      });
       await vi.waitFor(
         async () => {
-          summary = await loadCostUsageSummaryFromCache({ ...range, requestRefresh: false });
+          summary = await loadCostUsageSummaryFromCache({
+            ...range,
+            agentId: "main",
+            requestRefresh: false,
+          });
           expect(summary.cacheStatus?.status).toBe("partial");
         },
         { interval: 5, timeout: 1_000 },

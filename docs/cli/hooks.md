@@ -15,12 +15,16 @@ Related: [Hooks](/automation/hooks) - [Plugin hooks](/plugins/hooks)
 ## List hooks
 
 ```bash
-openclaw hooks list [--eligible] [--json] [-v|--verbose]
+openclaw hooks --agent <id> --json
+openclaw hooks list [--agent <id>] [--eligible] [--json] [-v|--verbose]
 ```
 
-Lists hooks discovered from workspace, managed, extra, and bundled directories.
+Bare `openclaw hooks` and `openclaw hooks --json` use the same list operation as
+`openclaw hooks list`. The command discovers hooks from workspace, managed,
+extra, and bundled directories.
 
 - `--eligible`: only hooks whose requirements are met.
+- `--agent <id>`: inspect hooks for that agent's workspace. Required when multiple agents are configured without an implicit owner.
 - `--json`: structured output.
 - `-v, --verbose`: include a Missing column with unmet requirements.
 
@@ -37,7 +41,7 @@ Ready:
 ## Get hook info
 
 ```bash
-openclaw hooks info <name> [--json]
+openclaw hooks info <name> [--agent <id>] [--json]
 ```
 
 `<name>` is the hook name or hook key (for example `session-memory`). Shows source, file/handler paths, homepage, events, and per-requirement status (binaries, env, config, OS).
@@ -45,7 +49,7 @@ openclaw hooks info <name> [--json]
 ## Check eligibility
 
 ```bash
-openclaw hooks check [--json]
+openclaw hooks check [--agent <id>] [--json]
 ```
 
 Prints a ready/not-ready count summary; with hooks not ready, lists each with its blocking reason.
@@ -90,19 +94,19 @@ Hook packs install through the unified plugins installer/updater; `openclaw hook
 - Bare specs and `@latest` stay on the stable track; if npm resolves to a prerelease, OpenClaw stops and asks you to opt in explicitly (`@beta`, `@rc`, or an exact prerelease version).
 - Supported archives: `.zip`, `.tgz`, `.tar.gz`, `.tar`.
 - `-l, --link` links a local directory instead of copying it (adds it to `hooks.internal.load.extraDirs`); linked hook packs are managed hooks from an operator-configured directory, not workspace hooks.
-- `--pin` records npm installs as an exact resolved `name@version` in `hooks.internal.installs`.
-- Install copies the pack into `~/.openclaw/hooks/<id>`, enables its hooks under `hooks.internal.entries.*`, and records the install under `hooks.internal.installs`.
+- `--pin` records npm installs as an exact resolved `name@version` in shared SQLite state.
+- Install copies the pack into `~/.openclaw/hooks/<id>`, enables its hooks under `hooks.internal.entries.*`, and records install provenance in shared SQLite state.
 - If a stored integrity hash no longer matches the fetched artifact, OpenClaw warns and prompts before continuing; pass global `--yes` to bypass the prompt (for example in CI).
 
 ## Bundled hooks
 
-| Hook                  | Events                                            | What it does                                                                                       |
-| --------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| boot-md               | `gateway:startup`                                 | Runs `BOOT.md` at gateway startup for each configured agent scope                                  |
-| bootstrap-extra-files | `agent:bootstrap`                                 | Injects extra bootstrap files (for example monorepo `AGENTS.md`/`TOOLS.md`) during agent bootstrap |
-| command-logger        | `command`                                         | Logs command events to `~/.openclaw/logs/commands.log`                                             |
-| compaction-notifier   | `session:compact:before`, `session:compact:after` | Sends visible chat notices when session compaction starts and finishes                             |
-| session-memory        | `command:new`, `command:reset`                    | Saves session context to memory on `/new` or `/reset`                                              |
+| Hook                  | Events                                            | What it does                                                                            |
+| --------------------- | ------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| boot-md               | `gateway:startup`                                 | Runs `BOOT.md` at gateway startup for each configured agent scope                       |
+| bootstrap-extra-files | `agent:bootstrap`                                 | Injects extra bootstrap files (for example monorepo `AGENTS.md`) during agent bootstrap |
+| command-logger        | `command`                                         | Logs command events to `~/.openclaw/logs/commands.log`                                  |
+| compaction-notifier   | `session:compact:before`, `session:compact:after` | Sends visible chat notices when session compaction starts and finishes                  |
+| session-memory        | `command:new`, `command:reset`                    | Saves session context to memory on `/new` or `/reset`                                   |
 
 Enable any bundled hook with `openclaw hooks enable <hook-name>`. Full details, config keys, and defaults: [Bundled hooks](/automation/hooks#bundled-hooks).
 
@@ -117,6 +121,7 @@ grep '"action":"new"' ~/.openclaw/logs/commands.log | jq .   # filter by action
 ## Notes
 
 - `hooks list --json`, `info --json`, and `check --json` write structured JSON directly to stdout.
+- `hooks list`, `info`, and `check` pass `--agent` to a running Gateway and preserve it when falling back to local read-only discovery against an older or unavailable Gateway.
 
 ## Related
 

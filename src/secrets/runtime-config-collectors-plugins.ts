@@ -1,6 +1,6 @@
 /** Collects plugin config secret refs from runtime plugin metadata. */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveConfigWidePluginManifestRegistry } from "../config/io.plugin-metadata.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   collectPluginConfigContractMatches,
@@ -48,10 +48,12 @@ export function collectPluginConfigAssignments(params: {
   }
 
   const normalizedConfig = normalizePluginsConfig(params.config.plugins);
-  const workspaceDir = resolveAgentWorkspaceDir(
-    params.config,
-    resolveDefaultAgentId(params.config),
-  );
+  const manifestRegistry =
+    params.context.manifestRegistry ??
+    resolveConfigWidePluginManifestRegistry({
+      config: params.config,
+      env: params.context.env,
+    });
   const bundledLoadablePluginIds = [...(params.loadablePluginOrigins?.entries() ?? [])]
     .filter(([, origin]) => origin === "bundled")
     .map(([pluginId]) => pluginId);
@@ -59,12 +61,12 @@ export function collectPluginConfigAssignments(params: {
     [
       ...resolvePluginConfigContractsById({
         config: params.config,
-        workspaceDir,
         env: params.context.env,
         fallbackToBundledMetadata: true,
         fallbackToBundledMetadataForResolvedBundled: true,
         fallbackBundledPluginIds: bundledLoadablePluginIds,
         pluginIds: Object.keys(entries),
+        manifestRegistry,
       }).entries(),
     ].flatMap(([pluginId, metadata]) => {
       const secretInputs = metadata.configContracts.secretInputs;
@@ -169,6 +171,7 @@ function collectConfiguredPluginSecretAssignments(params: {
                 ownerId: fullPath,
                 requiredForGateway: false,
                 disposition: "isolate" as const,
+                contract: params.pluginConfig,
               },
             }
           : {}),

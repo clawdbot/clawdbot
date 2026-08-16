@@ -8,6 +8,7 @@ import { createSubsystemLogger, redactSensitiveText } from "./openclaw-runtime-i
 import {
   DREAMING_NARRATIVE_RUN_PREFIX,
   isDreamingNarrativeSessionStoreKey,
+  extractAgentIdFromSessionPath,
   extractAgentIdFromSessionsDir,
   HEARTBEAT_PROMPT,
   HEARTBEAT_TOKEN,
@@ -20,6 +21,7 @@ import {
   isSilentReplyPayloadText,
   isUsageCountedSessionTranscriptFileName,
   loadTranscriptEventsSync,
+  materializeSessionArchiveForRead,
   parseUsageCountedSessionIdFromFileName,
   parseSqliteSessionFileMarker,
   readTranscriptStatsSync,
@@ -29,16 +31,19 @@ import {
   stripInternalRuntimeContext,
 } from "./openclaw-runtime-session.js";
 import { retryTransientMemoryRead } from "./read-retry.js";
+import { resolveSessionResetRecallCutoff } from "./session-reset-recall.js";
 import {
   listSessionTranscriptCorpusEntriesForAgent,
   listSessionTranscriptCorpusEntriesForAgentSync,
   type SessionTranscriptCorpusEntry,
 } from "./session-transcript-corpus.js";
 import type { MemorySessionSyncTarget } from "./types.js";
+import type { MemoryEntryProvenance, MemoryOriginClass, MemorySessionKind } from "./types.js";
 
 export {
   listSessionTranscriptCorpusEntriesForAgent,
   type SessionTranscriptCorpusEntry,
+  type SessionTranscriptCorpusOptions,
 } from "./session-transcript-corpus.js";
 
 // Keep the historical one-line-per-message export shape for normal turns, but
@@ -61,10 +66,13 @@ export type SessionFileEntry = {
   lineMap: number[];
   /** Maps each content line (0-indexed) to epoch ms; 0 means unknown timestamp. */
   messageTimestampsMs: number[];
+  /** Provenance aligned one-for-one with exported content lines. */
+  lineProvenance: MemoryEntryProvenance[];
   /** True when this transcript belongs to an internal dreaming narrative run. */
   generatedByDreamingNarrative?: boolean;
   /** True when this transcript belongs to an isolated cron run session. */
   generatedByCronRun?: boolean;
+  sessionKind: MemorySessionKind;
 };
 
 export type SessionFileState = Pick<SessionFileEntry, "path" | "absPath" | "mtimeMs" | "size">;
@@ -74,8 +82,13 @@ export type BuildSessionEntryOptions = {
   generatedByDreamingNarrative?: boolean;
   /** Optional preclassification from a caller-managed cron transcript lookup. */
   generatedByCronRun?: boolean;
+  sessionKind?: MemorySessionKind;
   /** Session key for identity-backed transcript readers. */
   sessionKey?: string;
+  /** Direct SQLite identity for live runtime transcripts. */
+  agentId?: string;
+  sessionId?: string;
+  storePath?: string;
   /** Activity timestamp for transcript sources that do not have filesystem stats. */
   updatedAtMs?: number;
   /** Override for tests or specialized callers that need a tighter parse yield cadence. */
@@ -301,6 +314,9 @@ function classifySessionTranscriptCorpusEntries(
   const dreamingTranscriptPaths = new Set<string>();
   const cronRunTranscriptPaths = new Set<string>();
   for (const entry of corpusEntries) {
+    if (entry.transcriptSource === "sqlite") {
+      continue;
+    }
     const normalizedPath = normalizeComparablePath(entry.sessionFile);
     if (entry.generatedByDreamingNarrative) {
       dreamingTranscriptPaths.add(normalizedPath);
@@ -353,18 +369,9 @@ function classifySessionTranscriptFromSessionStore(absPath: string): {
 }
 
 export async function listSessionFilesForAgent(agentId: string): Promise<string[]> {
-  return (await listSessionTranscriptCorpusEntriesForAgent(agentId)).map(
-    (entry) => entry.sessionFile,
-  );
-}
-
-function extractAgentIdFromSessionPath(absPath: string): string | null {
-  const parts = path.normalize(path.resolve(absPath)).split(path.sep).filter(Boolean);
-  const sessionsIndex = parts.lastIndexOf("sessions");
-  if (sessionsIndex < 2 || parts[sessionsIndex - 2] !== "agents") {
-    return null;
-  }
-  return parts[sessionsIndex - 1] || null;
+  return (await listSessionTranscriptCorpusEntriesForAgent(agentId))
+    .filter((entry) => entry.transcriptSource !== "sqlite")
+    .map((entry) => entry.sessionFile);
 }
 
 export function sessionPathForFile(absPath: string): string {
@@ -620,6 +627,44 @@ function sanitizeSessionText(text: string, role: "user" | "assistant"): string |
   return normalized;
 }
 
+function isRecalledMemoryMessage(message: { provenance?: unknown }): boolean {
+  const provenance = message.provenance as { kind?: unknown; sourceTool?: unknown } | undefined;
+  return (
+    provenance?.kind === "internal_system" &&
+    (provenance.sourceTool === "memory_search" || provenance.sourceTool === "memory_get")
+  );
+}
+
+function classifySessionMessageOrigin(
+  message: {
+    role?: unknown;
+    provenance?: unknown;
+  } & Record<string, unknown>,
+  turnOrigin: MemoryOriginClass,
+): MemoryOriginClass {
+  if (message.role === "assistant") {
+    const openClawMetadata = message["__openclaw"];
+    if (
+      openClawMetadata &&
+      typeof openClawMetadata === "object" &&
+      (openClawMetadata as { turnTainted?: unknown }).turnTainted === true
+    ) {
+      return "untrusted";
+    }
+    return turnOrigin === "owner" ? "agent" : turnOrigin;
+  }
+  const provenance = message.provenance as { kind?: unknown } | undefined;
+  if (provenance?.kind === "internal_system") {
+    return "system";
+  }
+  const openClawMetadata = message["__openclaw"];
+  const metadata =
+    openClawMetadata && typeof openClawMetadata === "object"
+      ? (openClawMetadata as { senderIsOwner?: unknown })
+      : undefined;
+  return metadata?.senderIsOwner === true ? "owner" : "untrusted";
+}
+
 function parseSessionTimestampMs(
   record: { timestamp?: unknown },
   message: { timestamp?: unknown },
@@ -629,7 +674,7 @@ function parseSessionTimestampMs(
     if (typeof value === "number" && Number.isFinite(value)) {
       const ms = value > 0 && value < 1e11 ? value * 1000 : value;
       if (Number.isFinite(ms) && ms > 0 && ms <= MAX_DATE_TIMESTAMP_MS) {
-        return ms;
+        return Math.floor(ms);
       }
     }
     if (typeof value === "string") {
@@ -662,21 +707,31 @@ function resolveSessionEntryParseYieldLines(opts: BuildSessionEntryOptions): num
   return SESSION_ENTRY_PARSE_YIELD_LINES;
 }
 
+function resolveBuildSessionSqliteIdentity(absPath: string, opts: BuildSessionEntryOptions) {
+  if (opts.agentId && opts.sessionId && opts.storePath) {
+    return {
+      agentId: opts.agentId,
+      sessionId: opts.sessionId,
+      ...(opts.sessionKey ? { sessionKey: opts.sessionKey } : {}),
+      storePath: opts.storePath,
+    };
+  }
+  const marker = parseSqliteSessionFileMarker(absPath);
+  return marker && opts.sessionKey ? { ...marker, sessionKey: opts.sessionKey } : marker;
+}
+
 export function statSessionEntrySync(
   absPath: string,
   opts: BuildSessionEntryOptions = {},
 ): SessionFileState | null {
-  const sqliteMarker = parseSqliteSessionFileMarker(absPath);
-  if (sqliteMarker) {
+  const sqliteIdentity = resolveBuildSessionSqliteIdentity(absPath, opts);
+  if (sqliteIdentity) {
     const stats = readTranscriptStatsSync({
-      agentId: sqliteMarker.agentId,
-      sessionId: sqliteMarker.sessionId,
-      ...(opts.sessionKey ? { sessionKey: opts.sessionKey } : {}),
-      storePath: sqliteMarker.storePath,
+      ...sqliteIdentity,
     });
     return {
       absPath,
-      path: sessionPathForSessionIdentity(sqliteMarker.agentId, sqliteMarker.sessionId),
+      path: sessionPathForSessionIdentity(sqliteIdentity.agentId, sqliteIdentity.sessionId),
       mtimeMs: opts.updatedAtMs ?? stats.maxSeq,
       size: stats.sizeBytes,
     };
@@ -712,26 +767,22 @@ export async function buildSessionEntry(
   opts: BuildSessionEntryOptions = {},
 ): Promise<SessionFileEntry | null> {
   try {
-    const sqliteMarker = parseSqliteSessionFileMarker(absPath);
-    const rawSource = sqliteMarker
+    const sqliteIdentity = resolveBuildSessionSqliteIdentity(absPath, opts);
+    const rawSource = sqliteIdentity
       ? (() => {
           const stats = readTranscriptStatsSync({
-            agentId: sqliteMarker.agentId,
-            sessionId: sqliteMarker.sessionId,
-            ...(opts.sessionKey ? { sessionKey: opts.sessionKey } : {}),
-            storePath: sqliteMarker.storePath,
+            ...sqliteIdentity,
           });
           const records = loadTranscriptEventsSync({
-            agentId: sqliteMarker.agentId,
-            sessionId: sqliteMarker.sessionId,
-            ...(opts.sessionKey ? { sessionKey: opts.sessionKey } : {}),
-            storePath: sqliteMarker.storePath,
+            ...sqliteIdentity,
           });
+          const resetRecallCutoff = resolveSessionResetRecallCutoff(records);
           const raw = serializeTranscriptEvents(records);
           return {
             mtimeMs: opts.updatedAtMs ?? stats.maxSeq,
-            path: sessionPathForSessionIdentity(sqliteMarker.agentId, sqliteMarker.sessionId),
+            path: sessionPathForSessionIdentity(sqliteIdentity.agentId, sqliteIdentity.sessionId),
             raw,
+            resetRecallCutoff,
             size: stats.sizeBytes,
           };
         })()
@@ -761,11 +812,18 @@ export async function buildSessionEntry(
           content: "",
           lineMap: [],
           messageTimestampsMs: [],
+          lineProvenance: [],
+          sessionKind: opts.sessionKind ?? "unknown",
         };
       }
       raw = (
         await retryTransientMemoryRead(
-          () => readRegularFile({ filePath: absPath }),
+          () =>
+            readRegularFile({
+              filePath: isUsageCountedSessionArchiveTranscriptPath(absPath)
+                ? materializeSessionArchiveForRead(absPath)
+                : absPath,
+            }),
           `read session transcript ${absPath}`,
         )
       ).buffer.toString("utf-8");
@@ -776,17 +834,18 @@ export async function buildSessionEntry(
     const collected: string[] = [];
     const lineMap: number[] = [];
     const messageTimestampsMs: number[] = [];
+    const lineProvenance: MemoryEntryProvenance[] = [];
     const parseYieldEveryLines = resolveSessionEntryParseYieldLines(opts);
     const sqliteSessionKey =
-      sqliteMarker && !opts.sessionKey
+      sqliteIdentity && !opts.sessionKey
         ? resolveTranscriptSessionKeyBySessionId({
-            agentId: sqliteMarker.agentId,
-            sessionId: sqliteMarker.sessionId,
-            storePath: sqliteMarker.storePath,
+            agentId: sqliteIdentity.agentId,
+            sessionId: sqliteIdentity.sessionId,
+            storePath: sqliteIdentity.storePath,
           })
         : undefined;
     const sessionStoreClassification =
-      !sqliteMarker &&
+      !sqliteIdentity &&
       (opts.generatedByDreamingNarrative === undefined || opts.generatedByCronRun === undefined)
         ? classifySessionTranscriptFromSessionStore(absPath)
         : null;
@@ -800,11 +859,14 @@ export async function buildSessionEntry(
       (sqliteSessionKey ? isCronRunSessionKey(sqliteSessionKey) : undefined) ??
       sessionStoreClassification?.generatedByCronRun ??
       false;
+    const sessionKind = opts.sessionKind ?? "unknown";
     const allowArchiveRecordCronClassification =
       isUsageCountedSessionArchiveTranscriptPath(absPath);
     // A heartbeat owns every generated response until the next user turn. The
     // persisted runtime provenance makes this coupling safe from text spoofing.
     let insideHeartbeatTurn = false;
+    let insideRecalledMemoryTurn = false;
+    let turnOrigin: MemoryOriginClass = "untrusted";
     for (let jsonlIdx = 0, lineStart = 0; lineStart <= raw.length; jsonlIdx++) {
       await yieldSessionEntryParseIfNeeded(jsonlIdx, parseYieldEveryLines);
       const newlineIndex = raw.indexOf("\n", lineStart);
@@ -832,6 +894,7 @@ export async function buildSessionEntry(
         collected.length = 0;
         lineMap.length = 0;
         messageTimestampsMs.length = 0;
+        lineProvenance.length = 0;
       }
       if (
         !record ||
@@ -849,13 +912,17 @@ export async function buildSessionEntry(
       if (message.role !== "user" && message.role !== "assistant") {
         continue;
       }
-      const provenance = message.provenance as { kind?: unknown; sourceTool?: unknown } | undefined;
+      const inputProvenance = message.provenance as
+        | { kind?: unknown; sourceTool?: unknown }
+        | undefined;
       const isHeartbeatUser =
         message.role === "user" &&
-        provenance?.kind === "internal_system" &&
-        provenance.sourceTool === "heartbeat";
+        inputProvenance?.kind === "internal_system" &&
+        inputProvenance.sourceTool === "heartbeat";
       if (message.role === "user") {
         insideHeartbeatTurn = isHeartbeatUser;
+        insideRecalledMemoryTurn = isRecalledMemoryMessage(message);
+        turnOrigin = classifySessionMessageOrigin(message, turnOrigin);
       }
       if (message.role === "user" && hasInterSessionUserProvenance(message)) {
         continue;
@@ -871,7 +938,7 @@ export async function buildSessionEntry(
       if (!text) {
         continue;
       }
-      if (insideHeartbeatTurn) {
+      if (insideHeartbeatTurn || insideRecalledMemoryTurn) {
         continue;
       }
       if (generatedByDreamingNarrative || generatedByCronRun) {
@@ -884,23 +951,48 @@ export async function buildSessionEntry(
         record as { timestamp?: unknown },
         message as { timestamp?: unknown },
       );
+      const memoryProvenance: MemoryEntryProvenance = {
+        originClass: classifySessionMessageOrigin(message, turnOrigin),
+        sessionKind,
+        observedAt: Math.max(0, Math.floor(timestampMs || mtimeMs)),
+      };
       collected.push(...renderedLines);
       lineMap.push(...renderedLines.map(() => jsonlIdx + 1));
       messageTimestampsMs.push(...renderedLines.map(() => timestampMs));
+      lineProvenance.push(...renderedLines.map(() => memoryProvenance));
     }
     const content = collected.join("\n");
-    return {
+    const entry: SessionFileEntry = {
       path: memoryPath,
       absPath,
       mtimeMs,
       size,
-      hash: hashText(content + "\n" + lineMap.join(",") + "\n" + messageTimestampsMs.join(",")),
+      hash: hashText(
+        content +
+          "\n" +
+          lineMap.join(",") +
+          "\n" +
+          messageTimestampsMs.join(",") +
+          "\n" +
+          JSON.stringify(lineProvenance) +
+          "\n" +
+          JSON.stringify(rawSource?.resetRecallCutoff ?? { state: "absent" }),
+      ),
       content,
       lineMap,
       messageTimestampsMs,
+      lineProvenance,
+      sessionKind,
       ...(generatedByDreamingNarrative ? { generatedByDreamingNarrative: true } : {}),
       ...(generatedByCronRun ? { generatedByCronRun: true } : {}),
     };
+    Object.defineProperty(entry, Symbol.for("openclaw.memory.sessionResetRecallCutoff"), {
+      configurable: false,
+      enumerable: false,
+      value: rawSource?.resetRecallCutoff ?? { state: "absent" },
+      writable: false,
+    });
+    return entry;
   } catch (err) {
     void logSessionFileReadFailure(absPath, err);
     return null;

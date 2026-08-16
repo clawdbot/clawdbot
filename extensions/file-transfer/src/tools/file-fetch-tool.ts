@@ -84,7 +84,8 @@ export function createFileFetchTool(): AnyAgentTool {
       if (isInlineImage) {
         content.push({ type: "image", data: base64, mimeType });
       } else if (isInlineText) {
-        const text = buffer.toString("utf-8");
+        const decodedText = buffer.toString("utf-8");
+        const text = decodedText.startsWith("\uFEFF") ? decodedText.slice(1) : decodedText;
         const wrappedText = wrapExternalContent(
           `Fetched ${canonicalPath} (${humanSize(size)}, ${mimeType}, sha256:${shortHash}) saved at ${localPath}\n\n--- contents ---\n${text}`,
           { source: "unknown" },

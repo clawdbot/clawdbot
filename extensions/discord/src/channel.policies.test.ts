@@ -68,7 +68,8 @@ describe("discordPlugin security", () => {
       channels: {
         discord: {
           token: "discord-token",
-          dm: { policy: "allowlist", allowFrom: ["  discord:<@!123456789>  "] },
+          dmPolicy: "allowlist",
+          allowFrom: ["  discord:<@!123456789>  "],
         },
       },
     } as OpenClawConfig;

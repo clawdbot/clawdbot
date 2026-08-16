@@ -45,6 +45,12 @@ export function addGatewayRunCommand(cmd: Command, hooks: GatewayRunCommandHooks
     )
     .option("--dev", "Create a dev config + workspace if missing (no BOOTSTRAP.md)", false)
     .option(
+      "--ambient-channels",
+      "Allow the gateway to auto-configure channels from ambient environment variables",
+      false,
+    )
+    .option("--dev-ambient-channels", "Deprecated alias for --ambient-channels", false)
+    .option(
       "--reset",
       "Reset dev config + credentials + sessions + workspace (requires --dev)",
       false,

@@ -3,23 +3,25 @@ import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { doctorCommand } from "../../commands/doctor.js";
 import {
-  UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV,
-  UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV,
-} from "../../commands/doctor/shared/update-phase.js";
-import {
   assertConfigWriteAllowedInCurrentMode,
   readConfigFileSnapshot,
 } from "../../config/config.js";
+import {
+  createPluginInstallRecordMap,
+  serializePluginInstallRecordMap,
+  setPluginInstallRecordMapEntry,
+} from "../../config/plugin-install-record-map.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
+import { hasErrnoCode } from "../../infra/errors.js";
 import { readJsonIfExists, writeJson } from "../../infra/json-files.js";
-import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import {
   DEFAULT_PACKAGE_CHANNEL,
   EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
@@ -38,6 +40,8 @@ import {
   type ControlPlaneUpdateSentinelMetaFile,
 } from "../../infra/update-control-plane-sentinel.js";
 import {
+  buildPostCoreHandoffEnv,
+  POST_CORE_UPDATE_ENV,
   POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV,
   type PreUpdateConfigRestoreInput,
 } from "../../infra/update-post-core-context.js";
@@ -45,8 +49,10 @@ import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { getWindowsSystem32ExePath } from "../../infra/windows-install-roots.js";
 import {
   loadInstalledPluginIndexInstallRecords,
-  writePersistedInstalledPluginIndexInstallRecords,
+  writePersistedInstalledPluginIndexInstallRecordsWithLease,
 } from "../../plugins/installed-plugin-index-records.js";
+import { restorePersistedInstalledPluginIndexIfCurrent } from "../../plugins/installed-plugin-index-store.js";
+import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { runExec } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
@@ -70,6 +76,10 @@ import {
   writePostCoreSourceConfigFile,
 } from "./update-command-config.js";
 import {
+  completePostCorePluginUpdate,
+  withPrePluginUpdateDoctorEnv,
+} from "./update-command-fresh-doctor.js";
+import {
   updatePluginsAfterCoreUpdate,
   type PostCorePluginUpdateResult,
 } from "./update-command-plugins.js";
@@ -80,13 +90,12 @@ import {
 } from "./update-command-service.js";
 
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
-export const POST_CORE_UPDATE_ENV = "OPENCLAW_UPDATE_POST_CORE";
+export { POST_CORE_UPDATE_ENV };
 export const POST_CORE_UPDATE_CHANNEL_ENV = "OPENCLAW_UPDATE_POST_CORE_CHANNEL";
-export const POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV = "OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL";
 export const POST_CORE_UPDATE_RESULT_PATH_ENV = "OPENCLAW_UPDATE_POST_CORE_RESULT_PATH";
 export const POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV =
   "OPENCLAW_UPDATE_POST_CORE_INSTALL_RECORDS_PATH";
-const POST_CORE_UPDATE_STARTED_AT_ENV = "OPENCLAW_UPDATE_POST_CORE_STARTED_AT_MS";
+export const POST_CORE_UPDATE_STARTED_AT_ENV = "OPENCLAW_UPDATE_POST_CORE_STARTED_AT_MS";
 const POST_CORE_UPDATE_RESULT_POLL_MS = 100;
 
 export async function reportPreMutationUpdateFailure(params: {
@@ -104,11 +113,13 @@ export async function reportPreMutationUpdateFailure(params: {
     steps: [],
     durationMs: 0,
   };
-  await writeControlPlaneUpdateRestartSentinelBestEffort({
-    meta: params.controlPlaneUpdateSentinelMeta,
-    result,
-    jsonMode: Boolean(params.opts.json),
-  });
+  if (params.opts.dryRun !== true) {
+    await writeControlPlaneUpdateRestartSentinelBestEffort({
+      meta: params.controlPlaneUpdateSentinelMeta,
+      result,
+      jsonMode: Boolean(params.opts.json),
+    });
+  }
   printResult(result, params.opts);
   defaultRuntime.exit(1);
 }
@@ -127,42 +138,21 @@ type UpdateFinalizeResult = {
   };
 };
 
-function withUpdateFinalizationEnv<T>(run: () => Promise<T>): Promise<T> {
-  const previousUpdateInProgress = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
-  const previousDeferConfiguredPluginInstallRepair =
-    process.env[UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV];
-  const previousParentSupportsDoctorConfigWrite =
-    process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV];
-  process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
-  process.env[UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV] = "1";
-  process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV] = "1";
-  return run().finally(() => {
-    if (previousUpdateInProgress === undefined) {
-      delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
-    } else {
-      process.env.OPENCLAW_UPDATE_IN_PROGRESS = previousUpdateInProgress;
-    }
-    if (previousDeferConfiguredPluginInstallRepair === undefined) {
-      delete process.env[UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV];
-    } else {
-      process.env[UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV] =
-        previousDeferConfiguredPluginInstallRepair;
-    }
-    if (previousParentSupportsDoctorConfigWrite === undefined) {
-      delete process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV];
-    } else {
-      process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV] =
-        previousParentSupportsDoctorConfigWrite;
-    }
-  });
-}
-
 export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promise<void> {
   suppressDeprecations();
   const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
   if (timeoutMs === null) {
     return;
   }
+  const requestedChannel = normalizeUpdateChannel(opts.channel);
+  if (opts.channel !== undefined && !requestedChannel) {
+    defaultRuntime.error(
+      `--channel must be "stable", "extended-stable", "beta", or "dev" (got "${opts.channel}")`,
+    );
+    defaultRuntime.exit(1);
+    return;
+  }
+
   assertConfigWriteAllowedInCurrentMode();
 
   const root = await resolveUpdateRoot();
@@ -180,14 +170,6 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
             : configSnapshot.sourceConfig,
         }
       : undefined);
-  const requestedChannel = normalizeUpdateChannel(opts.channel);
-  if (opts.channel && !requestedChannel) {
-    defaultRuntime.error(
-      `--channel must be "stable", "extended-stable", "beta", or "dev" (got "${opts.channel}")`,
-    );
-    defaultRuntime.exit(1);
-    return;
-  }
   if (requestedChannel === "extended-stable") {
     const updateStatus = await checkUpdateStatus({
       root,
@@ -224,49 +206,61 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
     });
   }
 
-  const pluginUpdate = await withUpdateFinalizationEnv(async () => {
-    await createUpdateConfigSnapshot();
-    await doctorCommand(defaultRuntime, {
-      nonInteractive: true,
-      repair: true,
-      yes: opts.yes === true,
-    });
-    configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
-    if (requestedChannel) {
-      configSnapshot = await persistRequestedUpdateChannel({
-        configSnapshot,
-        requestedChannel,
+  const completedPluginUpdate = await withPluginLifecycleLease({}, async () => {
+    const initialPluginUpdate = await withPrePluginUpdateDoctorEnv(async () => {
+      await createUpdateConfigSnapshot();
+      await doctorCommand(defaultRuntime, {
+        nonInteractive: true,
+        repair: true,
+        yes: opts.yes === true,
       });
-    }
-    const restoredConfig = restoreDroppedPreUpdateChannels(configSnapshot, preFinalizeConfig);
-    configSnapshot = restoredConfig.snapshot;
-    const postDoctorStoredChannel = configSnapshot.valid
-      ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
-      : null;
-    const postDoctorChannel =
-      requestedChannel ??
-      postDoctorStoredChannel ??
-      storedChannel ??
-      effectiveChannel ??
-      DEFAULT_PACKAGE_CHANNEL;
-    const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
-    return await updatePluginsAfterCoreUpdate({
+      configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
+      if (requestedChannel) {
+        configSnapshot = await persistRequestedUpdateChannel({
+          configSnapshot,
+          requestedChannel,
+        });
+      }
+      const restoredConfig = restoreDroppedPreUpdateChannels(configSnapshot, preFinalizeConfig);
+      configSnapshot = restoredConfig.snapshot;
+      const postDoctorStoredChannel = configSnapshot.valid
+        ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
+        : null;
+      const postDoctorChannel =
+        requestedChannel ??
+        postDoctorStoredChannel ??
+        storedChannel ??
+        effectiveChannel ??
+        DEFAULT_PACKAGE_CHANNEL;
+      const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
+      return await updatePluginsAfterCoreUpdate({
+        root,
+        channel: postDoctorChannel,
+        configSnapshot,
+        configChanged: restoredConfig.changed,
+        restoredAuthoredChannels: restoredConfig.authoredChannels,
+        opts: {
+          json: opts.json,
+          timeout: opts.timeout,
+          yes: opts.yes,
+          restart: false,
+          acknowledgeClawHubRisk: opts.acknowledgeClawHubRisk,
+        },
+        timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+        pluginInstallRecords,
+      });
+    });
+    return await completePostCorePluginUpdate({
       root,
-      channel: postDoctorChannel,
-      configSnapshot,
-      configChanged: restoredConfig.changed,
-      restoredAuthoredChannels: restoredConfig.authoredChannels,
-      opts: {
-        json: opts.json,
-        timeout: opts.timeout,
-        yes: opts.yes,
-        restart: false,
-        acknowledgeClawHubRisk: opts.acknowledgeClawHubRisk,
-      },
+      pluginUpdate: initialPluginUpdate,
+      freshDoctorRequired: initialPluginUpdate.changed,
+      yes: opts.yes === true,
+      json: opts.json === true,
       timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
-      pluginInstallRecords,
     });
   });
+  const pluginUpdate = completedPluginUpdate.pluginUpdate;
+  configSnapshot = completedPluginUpdate.configSnapshot;
 
   const result: UpdateFinalizeResult = {
     status:
@@ -313,11 +307,12 @@ export async function writePostCorePluginUpdateResultFile(
   await writeJson(filePath, result, { trailingNewline: true });
 }
 
-async function writePostCorePluginInstallRecordsFile(
+/** @internal exported for focused handoff contract tests. */
+export async function writePostCorePluginInstallRecordsFile(
   filePath: string,
   records: Record<string, PluginInstallRecord>,
 ): Promise<void> {
-  await fs.writeFile(filePath, `${JSON.stringify(records)}\n`, "utf-8");
+  await fs.writeFile(filePath, `${serializePluginInstallRecordMap(records)}\n`, "utf-8");
 }
 
 export async function readPostCorePluginInstallRecordsFile(
@@ -326,11 +321,37 @@ export async function readPostCorePluginInstallRecordsFile(
   if (!filePath) {
     return undefined;
   }
+  // Missing handoff is optional (parent may omit the path). Corrupt / unreadable
+  // handoff must fail closed: silent undefined previously dropped parent install
+  // recovery context when the post-doctor index was still empty.
+  let raw: string;
   try {
-    const parsed = JSON.parse(await fs.readFile(filePath, "utf-8")) as unknown;
+    raw = await fs.readFile(filePath, "utf-8");
+  } catch (err) {
+    if (hasErrnoCode(err, "ENOENT")) {
+      return undefined;
+    }
+    throw new Error(
+      `Unable to read plugin install records file: ${filePath}. Run openclaw doctor to inspect and repair plugin installation state.`,
+      { cause: err },
+    );
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(
+      `Malformed JSON in plugin install records file: ${filePath}. Run openclaw doctor to inspect and repair plugin installation state.`,
+      { cause: err },
+    );
+  }
+  try {
     return normalizePluginInstallRecordMap(parsed);
-  } catch {
-    return undefined;
+  } catch (err) {
+    throw new Error(
+      `Invalid plugin install records in handoff file: ${filePath}. Run openclaw doctor to inspect and repair plugin installation state.`,
+      { cause: err },
+    );
   }
 }
 
@@ -427,11 +448,13 @@ function stopPostCoreUpdateChild(child: ChildProcess): void {
  */
 export function resolvePostCoreUpdateChildStdio(
   platform: NodeJS.Platform = process.platform,
+  jsonMode = false,
 ): "inherit" | "pipe" {
-  return platform === "win32" ? "pipe" : "inherit";
+  return platform === "win32" || jsonMode ? "pipe" : "inherit";
 }
 
-function preparePostCorePluginInstallRecordsForFreshProcess(params: {
+/** @internal exported for focused handoff contract tests. */
+export function preparePostCorePluginInstallRecordsForFreshProcess(params: {
   records: Record<string, PluginInstallRecord>;
   targetVersion: string | null;
 }): Record<string, PluginInstallRecord> {
@@ -443,18 +466,18 @@ function preparePostCorePluginInstallRecordsForFreshProcess(params: {
     return params.records;
   }
   let changed = false;
-  const next: Record<string, PluginInstallRecord> = {};
+  const next = createPluginInstallRecordMap<PluginInstallRecord>();
   for (const [pluginId, record] of Object.entries(params.records)) {
     const installedVersion = record.resolvedVersion ?? record.version;
     const comparison = installedVersion
       ? compareSemverStrings(installedVersion, params.targetVersion)
       : null;
     if (record.source !== "npm" || comparison === null || comparison <= 0) {
-      next[pluginId] = record;
+      setPluginInstallRecordMapEntry(next, pluginId, record);
       continue;
     }
     const { resolvedSpec: _resolvedSpec, resolvedVersion: _resolvedVersion, ...rest } = record;
-    next[pluginId] = rest;
+    setPluginInstallRecordMapEntry(next, pluginId, rest);
     changed = true;
   }
   return changed ? next : params.records;
@@ -505,38 +528,59 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
     records: params.pluginInstallRecords,
     targetVersion: postCoreHostVersion,
   });
+  let tentativePluginIndex:
+    | Awaited<ReturnType<typeof writePersistedInstalledPluginIndexInstallRecordsWithLease>>
+    | undefined;
+  const restoreTentativePluginIndex = async () => {
+    const tentative = tentativePluginIndex;
+    if (!tentative) {
+      return;
+    }
+    await withPluginLifecycleLease({}, async (lease) => {
+      await restorePersistedInstalledPluginIndexIfCurrent(tentative.previous, tentative.revision, {
+        lease,
+      });
+    });
+    tentativePluginIndex = undefined;
+  };
 
   try {
     if (pluginInstallRecords && pluginInstallRecords !== params.pluginInstallRecords) {
-      await writePersistedInstalledPluginIndexInstallRecords(pluginInstallRecords);
+      await withPluginLifecycleLease({}, async (lease) => {
+        tentativePluginIndex = await writePersistedInstalledPluginIndexInstallRecordsWithLease(
+          pluginInstallRecords,
+          {
+            ...(params.preUpdateConfig ? { config: params.preUpdateConfig.sourceConfig } : {}),
+            lease,
+          },
+        );
+      });
     }
     await writePostCorePluginInstallRecordsFile(installRecordsPath, pluginInstallRecords);
     await writePostCoreSourceConfigFile(sourceConfigPath, params.preUpdateConfig);
-    const childStdio = resolvePostCoreUpdateChildStdio();
+    const jsonMode = params.opts.json === true;
+    const childStdio = resolvePostCoreUpdateChildStdio(process.platform, jsonMode);
+    const handoffEnv = buildPostCoreHandoffEnv({
+      baseEnv: stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env)),
+      compatHostVersion: postCoreHostVersion,
+      requestedChannel: params.requestedChannel,
+      sourceConfigPath: params.preUpdateConfig ? sourceConfigPath : undefined,
+    });
     const child = spawn(params.nodeRunner ?? resolveNodeRunner(), argv, {
       stdio: childStdio,
       env: {
-        ...stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env)),
+        ...handoffEnv,
         OPENCLAW_UPDATE_IN_PROGRESS: "1",
         [POST_CORE_UPDATE_ENV]: "1",
         [POST_CORE_UPDATE_CHANNEL_ENV]: params.channel,
-        ...(params.requestedChannel
-          ? { [POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV]: params.requestedChannel }
-          : {}),
         [POST_CORE_UPDATE_RESULT_PATH_ENV]: resultPath,
         [POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV]: installRecordsPath,
         [POST_CORE_UPDATE_STARTED_AT_ENV]: String(params.updateStartedAtMs),
-        ...(postCoreHostVersion === null
-          ? {}
-          : { OPENCLAW_COMPATIBILITY_HOST_VERSION: postCoreHostVersion }),
-        ...(params.preUpdateConfig
-          ? { [POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV]: sourceConfigPath }
-          : {}),
       },
     });
-    // When piped, relay child output to the parent process so terminal output is preserved.
+    // JSON callers own stdout, so child diagnostics must remain off that protocol stream.
     if (childStdio === "pipe") {
-      child.stdout?.pipe(process.stdout);
+      child.stdout?.pipe(jsonMode ? process.stderr : process.stdout);
       child.stderr?.pipe(process.stderr);
     }
 
@@ -599,35 +643,53 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
       if (pluginUpdate) {
         return { resumed: true, pluginUpdate };
       }
+      await restoreTentativePluginIndex();
       return { resumed: false, exitCode };
     }
     return { resumed: true, ...(pluginUpdate ? { pluginUpdate } : {}) };
+  } catch (error) {
+    try {
+      await restoreTentativePluginIndex();
+    } catch (rollbackError) {
+      throw new Error("Post-core update failed and could not restore the previous plugin index", {
+        cause: rollbackError,
+      });
+    }
+    throw error;
   } finally {
     await fs.rm(resultDir, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
-export function shouldResumePostCoreUpdateInFreshProcess(params: {
-  result: UpdateRunResult;
-  downgradeRisk: boolean;
-}): boolean {
-  if (params.downgradeRisk) {
-    return false;
-  }
-  if (isPackageManagerUpdateMode(params.result.mode)) {
+export function didCoreUpdateChangeInstall(result: UpdateRunResult): boolean {
+  if (isPackageManagerUpdateMode(result.mode)) {
     return true;
   }
-  if (params.result.mode !== "git") {
+  if (result.mode !== "git") {
     return false;
   }
-  const beforeSha = normalizeOptionalString(params.result.before?.sha);
-  const afterSha = normalizeOptionalString(params.result.after?.sha);
+  const beforeSha = normalizeOptionalString(result.before?.sha);
+  const afterSha = normalizeOptionalString(result.after?.sha);
   if (beforeSha && afterSha && beforeSha !== afterSha) {
     return true;
   }
-  const beforeVersion = normalizeOptionalString(params.result.before?.version);
-  const afterVersion = normalizeOptionalString(params.result.after?.version);
+  const beforeVersion = normalizeOptionalString(result.before?.version);
+  const afterVersion = normalizeOptionalString(result.after?.version);
   return Boolean(beforeVersion && afterVersion && beforeVersion !== afterVersion);
+}
+
+export function shouldResumePostCoreUpdateInFreshProcess(params: {
+  result: UpdateRunResult;
+  downgradeRisk: boolean;
+  installKindChanged?: boolean;
+}): boolean {
+  // A package-to-git switch can land on the same version already cloned at its
+  // target SHA. The package root still changed, so old hashed chunks are unsafe.
+  return (
+    params.result.status === "ok" &&
+    !params.downgradeRisk &&
+    (params.installKindChanged === true || didCoreUpdateChangeInstall(params.result))
+  );
 }
 
 export async function writeControlPlaneUpdateRestartSentinelBestEffort(params: {

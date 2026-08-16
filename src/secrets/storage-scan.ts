@@ -6,36 +6,11 @@ import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
-import { listAuthProfileStoreAgentDirs as listAuthProfileStoreAgentDirsFromAuthStorePaths } from "./auth-store-paths.js";
 import { parseEnvValue } from "./shared.js";
 
 /** Parses one .env assignment value using the shared shell-ish env parser. */
 export function parseEnvAssignmentValue(raw: string): string {
   return parseEnvValue(raw);
-}
-
-/** Lists agent directories that own canonical auth-profile stores. */
-export function listAuthProfileStoreAgentDirs(config: OpenClawConfig, stateDir: string): string[] {
-  return listAuthProfileStoreAgentDirsFromAuthStorePaths(config, stateDir);
-}
-
-/** Lists legacy per-agent auth.json stores that can contain static credentials. */
-export function listLegacyAuthJsonPaths(stateDir: string): string[] {
-  const out: string[] = [];
-  const agentsRoot = path.join(resolveUserPath(stateDir), "agents");
-  if (!fs.existsSync(agentsRoot)) {
-    return out;
-  }
-  for (const entry of fs.readdirSync(agentsRoot, { withFileTypes: true })) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-    const candidate = path.join(agentsRoot, entry.name, "agent", "auth.json");
-    if (fs.existsSync(candidate)) {
-      out.push(candidate);
-    }
-  }
-  return out;
 }
 
 /** Lists global dotenv files that can supply secrets for the selected config and state roots. */

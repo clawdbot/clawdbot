@@ -1,46 +1,29 @@
 // OpenClaw operation tests cover rescue operation planning and execution.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
-import { executeSystemAgentOperation, isPersistentSystemAgentOperation } from "./operations.js";
-import { createSystemAgentTestRuntime } from "./system-agent.test-helpers.js";
+import { executeSystemAgentOperation, type SystemAgentCommandDeps } from "./operations.js";
+import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
+import {
+  expectSystemAgentAuditRecord as expectAuditRecord,
+  expectTestRecordFields as expectRecordFields,
+  installSystemAgentClaudeCliBackendTestFixture,
+  installSystemAgentPluginMetadataTestSnapshot,
+  readLastSystemAgentAuditEntry as readLastAuditEntry,
+  requireTestRecord as requireRecord,
+  type SystemAgentPluginMetadataTestSnapshot,
+} from "./system-agent.test-helpers.js";
 
 type TestConfig = Record<string, unknown>;
 
-function readLastAuditEntry(): unknown {
-  return listSystemAgentAuditEntriesForTests().at(-1)?.value;
-}
-
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`${label} was not an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
-  for (const [key, value] of Object.entries(fields)) {
-    expect(record[key]).toEqual(value);
-  }
-}
-
-function expectAuditRecord(
-  audit: unknown,
-  fields: Record<string, unknown>,
-  detailFields: Record<string, unknown>,
-) {
-  const auditRecord = requireRecord(audit, "audit record");
-  expectRecordFields(auditRecord, fields);
-  expectRecordFields(requireRecord(auditRecord.details, "audit details"), detailFields);
-}
-
 const mockConfig = vi.hoisted(() => {
-  const initial = {};
+  const initial = { agents: { entries: { main: { default: true } } } };
   const state = {
     path: "/tmp/openclaw.json",
     exists: true,
@@ -48,8 +31,10 @@ const mockConfig = vi.hoisted(() => {
     hash: "mock-hash-0" as string | undefined,
   };
   const cloneConfig = () => structuredClone(state.config);
+  let bindPluginMetadata = (_config: TestConfig) => {};
   const snapshot = () => {
     const config = cloneConfig();
+    bindPluginMetadata(config);
     return {
       path: state.path,
       exists: state.exists,
@@ -70,20 +55,26 @@ const mockConfig = vi.hoisted(() => {
     reset() {
       state.path = "/tmp/openclaw.json";
       state.exists = true;
-      state.config = {};
+      state.config = { agents: { entries: { main: { default: true } } } };
       state.hash = "mock-hash-0";
+      bindPluginMetadata(state.config);
     },
     missing(pathLocal: string) {
       state.path = pathLocal;
       state.exists = false;
-      state.config = {};
+      state.config = { agents: { entries: { main: { default: true } } } };
       state.hash = undefined;
+      bindPluginMetadata(state.config);
     },
     currentConfig() {
       return cloneConfig();
     },
     setConfig(config: TestConfig) {
       state.config = structuredClone(config);
+      bindPluginMetadata(state.config);
+    },
+    setPluginMetadataBinder(binder: (config: TestConfig) => void) {
+      bindPluginMetadata = binder;
     },
     readConfigFileSnapshot: vi.fn(async () => snapshot()),
     mutateConfigFile: vi.fn(
@@ -99,10 +90,12 @@ const mockConfig = vi.hoisted(() => {
         const before = snapshot();
         const draft = cloneConfig();
         await params.mutate(draft, { snapshot: before });
+        bindPluginMetadata(draft);
         await params.writeOptions?.preCommitRuntimePreflight?.(structuredClone(draft));
         state.exists = true;
         state.config = draft;
         state.hash = "mock-hash-1";
+        bindPluginMetadata(state.config);
         return {
           path: state.path,
           previousHash: before.hash ?? null,
@@ -158,7 +151,31 @@ vi.mock("../config/config.js", () => ({
   mutateConfigFile: mockConfig.mutateConfigFile,
   readConfigFileSnapshot: mockConfig.readConfigFileSnapshot,
 }));
+
+vi.mock("../state/local-onboarding-state.js", () => ({
+  readLocalOnboardingState: () => undefined,
+  readLocalOnboardingStateForConfig: () => undefined,
+  completeLocalOnboarding: () => false,
+}));
+
 const opTempDirs = useAutoCleanupTempDirTracker(afterEach);
+let restoreCliBackendFixture: (() => void) | undefined;
+let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
+
+beforeAll(() => {
+  restoreCliBackendFixture = installSystemAgentClaudeCliBackendTestFixture();
+  pluginMetadataSnapshot = installSystemAgentPluginMetadataTestSnapshot();
+  mockConfig.setPluginMetadataBinder((config) => {
+    pluginMetadataSnapshot?.bindForConfig(config as OpenClawConfig);
+  });
+  mockConfig.reset();
+});
+
+afterAll(() => {
+  mockConfig.setPluginMetadataBinder(() => {});
+  pluginMetadataSnapshot?.restore();
+  restoreCliBackendFixture?.();
+});
 
 describe("parseSystemAgentOperation", () => {
   let stateDirSnapshot: ReturnType<typeof captureEnv> | undefined;
@@ -179,12 +196,19 @@ describe("parseSystemAgentOperation", () => {
     const tempDir = opTempDirs.make("openclaw-setup-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
     const { runtime, lines } = createSystemAgentTestRuntime();
-    mockConfig.setConfig({ agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } });
+    mockConfig.setConfig({
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.5" } },
+        entries: { main: { default: true } },
+      },
+    });
     const applySetup = vi.fn(async () => ({
       configPath: path.join(tempDir, "openclaw.json"),
       configHashBefore: "mock-hash-0",
       configHashAfter: "mock-hash-1",
       bootstrapPending: true,
+      workspaceReady: true,
+      gateway: { status: "ready" as const, action: "reused" as const },
       lines: ["Workspace: /tmp/work"],
     }));
     const deps = {
@@ -209,7 +233,7 @@ describe("parseSystemAgentOperation", () => {
     expect(applySetup).not.toHaveBeenCalled();
 
     const result = await executeSystemAgentOperation(
-      { kind: "setup", workspace: "/tmp/work" },
+      { kind: "setup", workspace: "/tmp/work", agentName: "robby" },
       runtime,
       {
         approved: true,
@@ -224,6 +248,7 @@ describe("parseSystemAgentOperation", () => {
     expect(applySetup).toHaveBeenCalledWith(
       {
         workspace: "/tmp/work",
+        firstAgent: { name: "robby" },
         expectedInferenceRoute: expect.any(Object),
         surface: "cli",
         runtime,
@@ -274,7 +299,12 @@ describe("parseSystemAgentOperation", () => {
   it("rejects setup when the current route fails its live inference check", async () => {
     const tempDir = opTempDirs.make("openclaw-failed-inference-setup-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-    mockConfig.setConfig({ agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } });
+    mockConfig.setConfig({
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.5" } },
+        entries: { main: { default: true } },
+      },
+    });
     const { runtime, lines } = createSystemAgentTestRuntime();
     const applySetup = vi.fn();
 
@@ -300,7 +330,10 @@ describe("parseSystemAgentOperation", () => {
 
   it("rejects route drift during setup verification but preserves the concurrent edit", async () => {
     mockConfig.setConfig({
-      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.5" } },
+        entries: { main: { default: true } },
+      },
       auth: { order: { openai: ["openai:old"] } },
     });
     const { runtime } = createSystemAgentTestRuntime();
@@ -314,7 +347,10 @@ describe("parseSystemAgentOperation", () => {
           loadOverview: async () => ({ defaultModel: "openai/gpt-5.5" }) as never,
           verifyInferenceConfig: async () => {
             mockConfig.setConfig({
-              agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+              agents: {
+                defaults: { model: { primary: "openai/gpt-5.5" } },
+                entries: { main: { default: true } },
+              },
               auth: { order: { openai: ["openai:new"] } },
             });
             return { ok: true as const, modelRef: "openai/gpt-5.5", latencyMs: 8 };
@@ -331,7 +367,10 @@ describe("parseSystemAgentOperation", () => {
 
   it("preserves unrelated concurrent edits after re-verifying the same setup route", async () => {
     mockConfig.setConfig({
-      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.5" } },
+        entries: { main: { default: true } },
+      },
       gateway: { port: 18789 },
     });
     const { runtime } = createSystemAgentTestRuntime();
@@ -340,6 +379,8 @@ describe("parseSystemAgentOperation", () => {
       configHashBefore: "mock-hash-0",
       configHashAfter: "mock-hash-1",
       bootstrapPending: false,
+      workspaceReady: true,
+      gateway: { status: "ready" as const, action: "reused" as const },
       lines: [],
     }));
 
@@ -353,7 +394,10 @@ describe("parseSystemAgentOperation", () => {
           loadOverview: async () => ({ defaultModel: "openai/gpt-5.5" }) as never,
           verifyInferenceConfig: async () => {
             mockConfig.setConfig({
-              agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+              agents: {
+                defaults: { model: { primary: "openai/gpt-5.5" } },
+                entries: { main: { default: true } },
+              },
               gateway: { port: 19000 },
             });
             return { ok: true as const, modelRef: "openai/gpt-5.5", latencyMs: 7 };
@@ -388,7 +432,7 @@ describe("parseSystemAgentOperation", () => {
           },
         },
       ),
-    ).rejects.toThrow("Exit OpenClaw and run `openclaw onboard`");
+    ).rejects.toThrow("`openclaw onboard` on the machine running OpenClaw");
 
     expect(applySetup).not.toHaveBeenCalled();
   });
@@ -397,12 +441,19 @@ describe("parseSystemAgentOperation", () => {
     const tempDir = opTempDirs.make("openclaw-same-model-setup-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
     const { runtime } = createSystemAgentTestRuntime();
-    mockConfig.setConfig({ agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } });
+    mockConfig.setConfig({
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.5" } },
+        entries: { main: { default: true } },
+      },
+    });
     const applySetup = vi.fn(async () => ({
       configPath: path.join(tempDir, "openclaw.json"),
       configHashBefore: "mock-hash-0",
       configHashAfter: "mock-hash-1",
       bootstrapPending: false,
+      workspaceReady: true,
+      gateway: { status: "ready" as const, action: "reused" as const },
       lines: ["Workspace: /tmp/work"],
     }));
 
@@ -442,16 +493,23 @@ describe("parseSystemAgentOperation", () => {
       agents: {
         defaults: {
           model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: ["openai/gpt-5.2"] },
+          systemAgent: { agentId: "main" },
         },
-        list: [{ id: "main", default: true, workspace: "/tmp/main" }],
+        entries: { main: { default: true, workspace: "/tmp/main" } },
       },
       gateway: { port: 18789 },
       models: { providers: { openai: { baseUrl: "https://api.openai.com/v1" } } },
     });
     mockConfig.mutateConfigFile.mockClear();
     const { runtime, lines } = createSystemAgentTestRuntime();
+    const reboundBinding = { execution: { agentId: "main" } } as never;
+    const onVerifiedInferenceChanged = vi.fn();
     let verificationCalls = 0;
-    const verifyInferenceConfig = vi.fn(async ({ config }: { config: TestConfig }) => {
+    type VerifyInferenceParams = Parameters<
+      NonNullable<SystemAgentCommandDeps["verifyInferenceConfig"]>
+    >[0];
+    const verifyInferenceConfig = vi.fn(async (params: VerifyInferenceParams) => {
+      const { config, onVerifiedExecution } = params;
       verificationCalls += 1;
       const stagedDefaults = requireRecord(
         requireRecord(config.agents, "agents").defaults,
@@ -495,13 +553,15 @@ describe("parseSystemAgentOperation", () => {
               ...requireRecord(requireRecord(current.agents, "agents").defaults, "defaults"),
               models: { "google/unrelated": { agentRuntime: { id: "openclaw" } } },
             },
-            list: [
-              { id: "main", default: true, workspace: "/tmp/main" },
-              { id: "work", workspace: "/tmp/work" },
-            ],
+            entries: {
+              main: { default: true, workspace: "/tmp/main" },
+              work: { workspace: "/tmp/work" },
+            },
           },
           channels: { telegram: { enabled: true } },
         });
+      } else {
+        onVerifiedExecution?.({} as never, reboundBinding);
       }
       return { ok: true as const, modelRef: "openai/gpt-5.5", latencyMs: 17 };
     });
@@ -509,7 +569,7 @@ describe("parseSystemAgentOperation", () => {
     const result = await executeSystemAgentOperation(
       { kind: "set-default-model", model: "openai/gpt-5.5" },
       runtime,
-      { approved: true, deps: { verifyInferenceConfig } },
+      { approved: true, deps: { verifyInferenceConfig }, onVerifiedInferenceChanged },
     );
 
     expect(result).toEqual({ applied: true });
@@ -520,22 +580,33 @@ describe("parseSystemAgentOperation", () => {
     );
     expect(verifyInferenceConfig).toHaveBeenNthCalledWith(
       2,
-      expect.objectContaining({ requireExecutionOwner: true }),
+      expect.objectContaining({
+        requireExecutionOwner: true,
+        onVerifiedExecution: expect.any(Function),
+      }),
     );
+    expect(onVerifiedInferenceChanged).toHaveBeenCalledOnce();
+    expect(onVerifiedInferenceChanged).toHaveBeenCalledWith(reboundBinding);
     expect(mockConfig.mutateConfigFile).toHaveBeenCalledOnce();
     expect(mockConfig.mutateConfigFile).toHaveBeenCalledWith(
       expect.objectContaining({
-        writeOptions: { preCommitRuntimePreflight: expect.any(Function) },
+        writeOptions: {
+          auditOrigin: "system-agent",
+          preCommitRuntimePreflight: expect.any(Function),
+        },
       }),
     );
     const persisted = mockConfig.currentConfig();
     expect(
       requireRecord(requireRecord(persisted.agents, "agents").defaults, "defaults").model,
     ).toEqual({ primary: "openai/gpt-5.5", fallbacks: ["openai/gpt-5.2"] });
-    expect(requireRecord(persisted.agents, "agents").list).toEqual([
-      { id: "main", default: true, workspace: "/tmp/main" },
-      { id: "work", workspace: "/tmp/work" },
-    ]);
+    expect(
+      requireRecord(requireRecord(persisted.agents, "agents").defaults, "defaults").systemAgent,
+    ).toEqual({ agentId: "main" });
+    expect(requireRecord(persisted.agents, "agents").entries).toEqual({
+      main: { default: true, workspace: "/tmp/main" },
+      work: { workspace: "/tmp/work" },
+    });
     expect(requireRecord(persisted.auth, "auth").profiles).toEqual({
       "google:other": { provider: "google", mode: "api_key" },
     });
@@ -572,46 +643,30 @@ describe("parseSystemAgentOperation", () => {
 
   it.each([
     {
-      field: "default agent",
+      field: "system agent",
       initial: {
         agents: {
-          defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
-          list: [{ id: "main", default: true }, { id: "work" }],
+          defaults: {
+            model: { primary: "anthropic/claude-sonnet-4-6" },
+            systemAgent: { agentId: "main" },
+          },
+          entries: { main: { default: true }, work: {} },
         },
       },
       change: (config: TestConfig) => {
         const next = structuredClone(config);
-        const list = requireRecord(next.agents, "agents").list as Array<{
-          id: string;
-          default?: boolean;
-        }>;
-        delete list[0]?.default;
-        list[1]!.default = true;
-        return next;
-      },
-    },
-    {
-      field: "default marker",
-      initial: {
-        agents: {
-          defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
-          list: [{ id: "main", default: true }, { id: "work" }],
-        },
-      },
-      change: (config: TestConfig) => {
-        const next = structuredClone(config);
-        const list = requireRecord(next.agents, "agents").list as Array<{
-          id: string;
-          default?: boolean;
-        }>;
-        delete list[0]?.default;
+        const defaults = requireRecord(requireRecord(next.agents, "agents").defaults, "defaults");
+        defaults.systemAgent = { agentId: "work" };
         return next;
       },
     },
     {
       field: "auth profile order",
       initial: {
-        agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+        agents: {
+          defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
+          entries: { main: { default: true } },
+        },
         auth: { order: { anthropic: ["anthropic:one"] } },
       },
       change: (config: TestConfig) => ({
@@ -629,6 +684,7 @@ describe("parseSystemAgentOperation", () => {
               "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
             },
           },
+          entries: { main: { default: true } },
         },
       },
       change: (config: TestConfig) => {
@@ -643,7 +699,10 @@ describe("parseSystemAgentOperation", () => {
     {
       field: "model",
       initial: {
-        agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+        agents: {
+          defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
+          entries: { main: { default: true } },
+        },
       },
       change: (config: TestConfig) => {
         const next = structuredClone(config);
@@ -655,7 +714,10 @@ describe("parseSystemAgentOperation", () => {
     {
       field: "config-backed environment",
       initial: {
-        agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+        agents: {
+          defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
+          entries: { main: { default: true } },
+        },
         env: { vars: { ANTHROPIC_API_KEY: "first" } },
       },
       change: (config: TestConfig) => ({
@@ -666,7 +728,10 @@ describe("parseSystemAgentOperation", () => {
     {
       field: "secret provider policy",
       initial: {
-        agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+        agents: {
+          defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
+          entries: { main: { default: true } },
+        },
         secrets: { defaults: { env: "first" } },
       },
       change: (config: TestConfig) => ({
@@ -677,7 +742,10 @@ describe("parseSystemAgentOperation", () => {
     {
       field: "plugin load policy",
       initial: {
-        agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+        agents: {
+          defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
+          entries: { main: { default: true } },
+        },
         plugins: { enabled: true },
       },
       change: (config: TestConfig) => ({
@@ -719,7 +787,10 @@ describe("parseSystemAgentOperation", () => {
     const tempDir = opTempDirs.make("openclaw-rejected-model-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
     const originalConfig = {
-      agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+      agents: {
+        defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
+        entries: { main: { default: true } },
+      },
       gateway: { port: 18789 },
     };
     mockConfig.setConfig(originalConfig);
@@ -750,7 +821,10 @@ describe("parseSystemAgentOperation", () => {
     const tempDir = opTempDirs.make("openclaw-latest-route-rejected-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
     const originalConfig = {
-      agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+      agents: {
+        defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
+        entries: { main: { default: true } },
+      },
     };
     mockConfig.setConfig(originalConfig);
     mockConfig.mutateConfigFile.mockClear();
@@ -777,7 +851,10 @@ describe("parseSystemAgentOperation", () => {
     const tempDir = opTempDirs.make("openclaw-mismatched-model-result-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
     const originalConfig = {
-      agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+      agents: {
+        defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
+        entries: { main: { default: true } },
+      },
     };
     mockConfig.setConfig(originalConfig);
     mockConfig.mutateConfigFile.mockClear();
@@ -806,7 +883,10 @@ describe("parseSystemAgentOperation", () => {
     const tempDir = opTempDirs.make("openclaw-final-mismatched-model-result-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
     const originalConfig = {
-      agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+      agents: {
+        defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
+        entries: { main: { default: true } },
+      },
     };
     mockConfig.setConfig(originalConfig);
     mockConfig.mutateConfigFile.mockClear();
@@ -833,7 +913,10 @@ describe("parseSystemAgentOperation", () => {
     const tempDir = opTempDirs.make("openclaw-model-binding-rotated-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
     const originalConfig = {
-      agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+      agents: {
+        defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
+        entries: { main: { default: true } },
+      },
     };
     mockConfig.setConfig(originalConfig);
     mockConfig.mutateConfigFile.mockClear();
@@ -872,7 +955,10 @@ describe("parseSystemAgentOperation", () => {
     const tempDir = opTempDirs.make("openclaw-model-binding-final-probe-rotated-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
     const originalConfig = {
-      agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+      agents: {
+        defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
+        entries: { main: { default: true } },
+      },
     };
     mockConfig.setConfig(originalConfig);
     mockConfig.mutateConfigFile.mockClear();
@@ -917,13 +1003,12 @@ describe("parseSystemAgentOperation", () => {
     mockConfig.setConfig({
       agents: {
         defaults: { model: { primary: "anthropic/global-default" } },
-        list: [
-          {
-            id: "work",
+        entries: {
+          work: {
             default: true,
             model: { primary: "anthropic/work-default" },
           },
-        ],
+        },
       },
     });
     const { runtime } = createSystemAgentTestRuntime();
@@ -932,8 +1017,8 @@ describe("parseSystemAgentOperation", () => {
       expect(requireRecord(agents.defaults, "defaults").model).toEqual({
         primary: "anthropic/global-default",
       });
-      const list = agents.list as Array<{ id: string; model: unknown }>;
-      expect(list.find((agent) => agent.id === "work")?.model).toEqual({
+      const work = listAgentEntries(config as OpenClawConfig).find((entry) => entry.id === "work");
+      expect(work?.model).toEqual({
         primary: "openai/gpt-5.5",
       });
       return { ok: true as const, modelRef: "openai/gpt-5.5", latencyMs: 9 };
@@ -949,97 +1034,11 @@ describe("parseSystemAgentOperation", () => {
     expect(requireRecord(agents.defaults, "defaults").model).toEqual({
       primary: "anthropic/global-default",
     });
-    const list = agents.list as Array<{ id: string; model: unknown }>;
-    expect(list.find((agent) => agent.id === "work")?.model).toEqual({
+    const work = listAgentEntries(mockConfig.currentConfig() as OpenClawConfig).find(
+      (entry) => entry.id === "work",
+    );
+    expect(work?.model).toEqual({
       primary: "openai/gpt-5.5",
     });
-  });
-
-  it("refuses doctor repairs before any write or audit", async () => {
-    const tempDir = opTempDirs.make("openclaw-doctor-fix-refused-");
-    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-    const { runtime, lines } = createSystemAgentTestRuntime();
-    const runDoctor = vi.fn(async () => {});
-
-    const result = await executeSystemAgentOperation({ kind: "doctor-fix" }, runtime, {
-      approved: true,
-      deps: { runDoctor },
-      auditDetails: { rescue: true },
-    });
-    expect(result).toEqual({ applied: false });
-    expect(isPersistentSystemAgentOperation({ kind: "doctor-fix" })).toBe(false);
-    expect(runDoctor).not.toHaveBeenCalled();
-    expect(lines.join("\n")).toContain("Exit OpenClaw");
-    expect(lines.join("\n")).toContain("openclaw doctor --fix");
-    expect(lines.join("\n")).not.toContain("[openclaw] running: doctor.fix");
-    await expect(fs.access(path.join(tempDir, "audit", "system-agent.jsonl"))).rejects.toThrow();
-  });
-
-  it("returns from the agent TUI back to OpenClaw", async () => {
-    const { runtime, lines } = createSystemAgentTestRuntime();
-    const runTui = vi.fn(async () => ({
-      exitReason: "return-to-system-agent" as const,
-      systemAgentMessage: "restart gateway",
-    }));
-
-    const result = await executeSystemAgentOperation(
-      { kind: "open-tui", agentId: "work" },
-      runtime,
-      {
-        deps: { runTui },
-      },
-    );
-
-    expect(runTui).toHaveBeenCalledWith({
-      local: true,
-      session: "agent:work:main",
-      deliver: false,
-      historyLimit: 200,
-    });
-    expectRecordFields(result as unknown as Record<string, unknown>, {
-      applied: false,
-      returnToShell: true,
-      nextInput: "restart gateway",
-    });
-    expect(lines.join("\n")).toContain(
-      "[openclaw] returned from agent with request: restart gateway",
-    );
-  });
-
-  it("seeds a fresh hatch into the agent TUI", async () => {
-    const { runtime } = createSystemAgentTestRuntime();
-    const runTui = vi.fn(async () => ({ exitReason: "exit" as const }));
-
-    await executeSystemAgentOperation(
-      { kind: "open-tui", agentId: "work", agentDraft: "hatch" },
-      runtime,
-      { deps: { runTui } },
-    );
-
-    expect(runTui).toHaveBeenCalledWith({
-      local: true,
-      session: "agent:work:main",
-      deliver: false,
-      historyLimit: 200,
-      message: "Wake up, my friend!",
-    });
-  });
-
-  it("re-enters the OpenClaw shell when the agent TUI returns without a request", async () => {
-    const { runtime, lines } = createSystemAgentTestRuntime();
-    const runTui = vi.fn(async () => ({
-      exitReason: "return-to-system-agent" as const,
-    }));
-
-    const result = await executeSystemAgentOperation({ kind: "open-tui" }, runtime, {
-      deps: { runTui },
-    });
-
-    expectRecordFields(result as unknown as Record<string, unknown>, {
-      applied: false,
-      returnToShell: true,
-    });
-    expect((result as { nextInput?: string }).nextInput).toBeUndefined();
-    expect(lines.join("\n")).toContain("[openclaw] returned from agent");
   });
 });

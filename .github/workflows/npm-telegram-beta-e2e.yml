@@ -185,7 +185,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.15.0"
+  NODE_VERSION: "24.16.0"
 
 jobs:
   run_package_telegram_e2e:
@@ -202,14 +202,14 @@ jobs:
       DOCKER_BUILD_RECORD_UPLOAD: "false"
     steps:
       - name: Checkout dispatch ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ inputs.harness_ref || github.sha }}
           fetch-depth: 1
           persist-credentials: false
 
       - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
+        uses: useblacksmith/setup-docker-builder@6ff44f8e5255f9d8aa31ef22f7e57a2d926b7da0 # v1
         with:
           max-cache-size-mb: 800000
 
@@ -230,6 +230,16 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
+
+      - name: Build private QA harness runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+          OPENCLAW_BUILD_PRIVATE_QA: "1"
+        run: |
+          set -euo pipefail
+          pnpm build qaRuntime
+          test -f dist/plugin-sdk/qa-runtime.js
+          test -f dist/extensions/qa-lab/runtime-api.js
 
       - name: Validate inputs and secrets
         env:
@@ -352,7 +362,7 @@ jobs:
           }
           attempt_started_at="$(jq -er '.run_started_at | fromdateiso8601' <<< "$attempt_json")"
           if [[ "$ARTIFACT_RUN_ID" == "$GITHUB_RUN_ID" ]]; then
-            jq -e '(.status == "queued" or .status == "in_progress") and .conclusion == null' \
+            jq -e '(.status == "pending" or .status == "queued" or .status == "requested" or .status == "waiting" or .status == "in_progress") and .conclusion == null' \
               <<< "$attempt_json" >/dev/null || {
               echo "Current-run Package Telegram artifact is not from the active workflow attempt." >&2
               exit 1
@@ -456,6 +466,14 @@ jobs:
           const path = require("node:path");
           const [manifestPath, packageDir] = process.argv.slice(2);
           const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+          const dependencyTarballs = Array.isArray(manifest.corePackageTarballs)
+            ? manifest.corePackageTarballs
+            : manifest.corePackageTarballs === undefined && Array.isArray(manifest.dependencyTarballs)
+              ? manifest.dependencyTarballs
+              : null;
+          if (!dependencyTarballs) {
+            throw new Error("package artifact manifest is missing dependency tarball metadata");
+          }
           const entries = [
             {
               packageName: "openclaw",
@@ -463,7 +481,7 @@ jobs:
               tarballName: manifest.tarballName,
               tarballSha256: manifest.tarballSha256,
             },
-            ...(Array.isArray(manifest.dependencyTarballs) ? manifest.dependencyTarballs : []),
+            ...dependencyTarballs,
           ];
           const packageNames = new Set();
           const tarballNames = new Set();

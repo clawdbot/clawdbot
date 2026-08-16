@@ -1,5 +1,6 @@
 // Gateway Smoke script supports OpenClaw repository automation.
 import { fileURLToPath } from "node:url";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
@@ -86,10 +87,6 @@ function parseGatewaySmokeCli(
     token: getArg("--token") ?? env.OPENCLAW_GATEWAY_TOKEN,
     urlRaw: getArg("--url") ?? env.OPENCLAW_GATEWAY_URL,
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function hasHealthSummaryPayload(response: unknown): boolean {

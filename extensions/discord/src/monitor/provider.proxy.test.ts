@@ -737,26 +737,6 @@ describe("createDiscordGatewayPlugin", () => {
     );
   });
 
-  it("uses configured gateway metadata timeout before falling back", async () => {
-    vi.useFakeTimers();
-    const runtime = createRuntime();
-    globalFetchMock.mockImplementation(() => new Promise(() => {}));
-    const plugin = createDiscordGatewayPlugin({
-      discordConfig: { gatewayInfoTimeoutMs: 5_000 },
-      runtime,
-    });
-
-    const registerPromise = registerGatewayClient(plugin);
-    await vi.advanceTimersByTimeAsync(4_999);
-    expect(baseRegisterClientSpy).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    await registerPromise;
-
-    expect((plugin as unknown as { gatewayInfo?: { url?: string } }).gatewayInfo?.url).toBe(
-      "wss://gateway.discord.gg/",
-    );
-  });
-
   it("uses env gateway metadata timeout when config is unset", async () => {
     vi.useFakeTimers();
     vi.stubEnv("OPENCLAW_DISCORD_GATEWAY_INFO_TIMEOUT_MS", "6000");

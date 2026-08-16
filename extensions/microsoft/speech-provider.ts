@@ -20,11 +20,12 @@ import type {
   SpeechProviderPlugin,
   SpeechVoiceOption,
 } from "openclaw/plugin-sdk/speech";
-import { asBoolean, asFiniteNumber, asObject, trimToUndefined } from "openclaw/plugin-sdk/speech";
+import { asBoolean, asFiniteNumber, trimToUndefined } from "openclaw/plugin-sdk/speech";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { edgeTTS, inferEdgeExtension } from "./tts.js";
 
@@ -47,24 +48,13 @@ type MicrosoftProviderConfig = {
   timeoutMs?: number;
 };
 
-type MicrosoftVoiceListEntry = {
-  ShortName?: string;
-  FriendlyName?: string;
-  Locale?: string;
-  Gender?: string;
-  VoiceTag?: {
-    ContentCategories?: string[];
-    VoicePersonalities?: string[];
-  };
-};
-
 function normalizeMicrosoftProviderConfig(
   rawConfig: Record<string, unknown>,
 ): MicrosoftProviderConfig {
-  const providers = asObject(rawConfig.providers);
-  const rawEdge = asObject(rawConfig.edge);
-  const rawMicrosoft = asObject(rawConfig.microsoft);
-  const rawProviderMicrosoft = asObject(providers?.microsoft);
+  const providers = asOptionalRecord(rawConfig.providers);
+  const rawEdge = asOptionalRecord(rawConfig.edge);
+  const rawMicrosoft = asOptionalRecord(rawConfig.microsoft);
+  const rawProviderMicrosoft = asOptionalRecord(providers?.microsoft);
   const raw = { ...rawEdge, ...rawMicrosoft, ...rawProviderMicrosoft };
   const outputFormat = trimToUndefined(raw.outputFormat);
   return {
@@ -114,9 +104,10 @@ function buildMicrosoftVoiceHeaders(): Record<string, string> {
   };
 }
 
-function formatMicrosoftVoiceDescription(entry: MicrosoftVoiceListEntry): string | undefined {
-  const personalities = entry.VoiceTag?.VoicePersonalities?.filter(Boolean) ?? [];
-  return personalities.length > 0 ? personalities.join(", ") : undefined;
+function readMicrosoftVoiceTagStrings(value: unknown): string[] | undefined {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    : undefined;
 }
 
 function isCjkDominant(text: string): boolean {
@@ -173,24 +164,29 @@ async function listMicrosoftVoices(
       });
     }
     await assertOkOrThrowProviderError(response, "Microsoft voices API error");
-    const voices = await readProviderJsonResponse<MicrosoftVoiceListEntry[]>(
-      response,
-      "microsoft.speech-voices",
-    );
+    const voices = await readProviderJsonResponse<unknown>(response, "microsoft.speech-voices");
     return Array.isArray(voices)
-      ? voices
-          .map((voice) => ({
-            id: voice.ShortName?.trim() ?? "",
-            name: trimToUndefined(voice.FriendlyName) ?? trimToUndefined(voice.ShortName),
-            category: voice.VoiceTag?.ContentCategories?.find((value) => value.trim().length > 0),
-            description: formatMicrosoftVoiceDescription(voice),
-            locale: trimToUndefined(voice.Locale),
-            gender: trimToUndefined(voice.Gender),
-            personalities: voice.VoiceTag?.VoicePersonalities?.filter(
-              (value): value is string => value.trim().length > 0,
-            ),
-          }))
-          .filter((voice) => voice.id.length > 0)
+      ? voices.flatMap((value) => {
+          const voice = asOptionalRecord(value);
+          const id = trimToUndefined(voice?.ShortName);
+          if (!voice || !id) {
+            return [];
+          }
+          const voiceTag = asOptionalRecord(voice.VoiceTag);
+          const categories = readMicrosoftVoiceTagStrings(voiceTag?.ContentCategories);
+          const personalities = readMicrosoftVoiceTagStrings(voiceTag?.VoicePersonalities);
+          return [
+            {
+              id,
+              name: trimToUndefined(voice.FriendlyName) ?? id,
+              category: categories?.[0],
+              description: personalities?.length ? personalities.join(", ") : undefined,
+              locale: trimToUndefined(voice.Locale),
+              gender: trimToUndefined(voice.Gender),
+              personalities,
+            },
+          ];
+        })
       : [];
   } finally {
     await release();

@@ -14,6 +14,7 @@ import {
 } from "../provider-auth-aliases.js";
 import {
   evaluateStoredCredentialEligibility,
+  resolveTokenExpiryState,
   type AuthCredentialReasonCode,
 } from "./credential-state.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
@@ -128,6 +129,7 @@ function isConfiguredProfileCompatibleWithAuthProvider(params: {
 
 function listProfilesCompatibleWithAuthProvider(params: {
   cfg?: OpenClawConfig;
+  authAliasLookupParams?: ProviderAuthAliasLookupParams;
   store: AuthProfileStore;
   provider: string;
   providerAuthKey: string;
@@ -139,6 +141,7 @@ function listProfilesCompatibleWithAuthProvider(params: {
     .filter(([, credential]) =>
       isCredentialProviderCompatibleWithAuthProvider({
         cfg: params.cfg,
+        authAliasLookupParams: params.authAliasLookupParams,
         providerAuthKey: params.providerAuthKey,
         credential,
       }),
@@ -187,7 +190,7 @@ export function isConfiguredAwsSdkAuthProfileForProvider(params: {
   ) {
     return false;
   }
-  return providerAllowsAwsSdkAuth(params.cfg, params.provider);
+  return providerAllowsAwsSdkAuth(params.cfg, providerAuthKey);
 }
 
 /** Resolves whether a profile can be used for a provider right now. */
@@ -262,6 +265,8 @@ type ResolveAuthProfileOrderParams = {
   cfg?: OpenClawConfig;
   store: AuthProfileStore;
   provider: string;
+  /** Exact prepared metadata for request paths that must not rediscover plugin aliases. */
+  authAliasLookupParams?: ProviderAuthAliasLookupParams;
   preferredProfile?: string;
   /** Model that will consume the profile, for model-scoped cooldowns. */
   forModel?: string;
@@ -281,7 +286,10 @@ export function resolveAuthProfileOrderWithMetadata(
 ): AuthProfileOrderResolution {
   const { cfg, store, provider, preferredProfile, forModel } = params;
   const providerKey = normalizeProviderId(provider);
-  const providerAuthKey = resolveProviderIdForAuth(provider, { config: cfg });
+  const providerAuthKey = resolveProviderIdForAuth(provider, {
+    config: cfg,
+    ...params.authAliasLookupParams,
+  });
   const now = Date.now();
 
   // Clear any cooldowns that have expired since the last check so profiles
@@ -315,6 +323,7 @@ export function resolveAuthProfileOrderWithMetadata(
         .filter(([profileId, profile]) =>
           isConfiguredProfileCompatibleWithAuthProvider({
             cfg,
+            authAliasLookupParams: params.authAliasLookupParams,
             providerAuthKey,
             provider: profile.provider,
             mode: profile.mode,
@@ -325,6 +334,7 @@ export function resolveAuthProfileOrderWithMetadata(
     : [];
   const storeProfiles = listProfilesCompatibleWithAuthProvider({
     cfg,
+    authAliasLookupParams: params.authAliasLookupParams,
     store,
     provider,
     providerAuthKey,
@@ -334,6 +344,7 @@ export function resolveAuthProfileOrderWithMetadata(
       ? storeProfiles.filter((profileId) =>
           isNativeCredentialProviderCompatibleWithAuthProvider({
             cfg,
+            authAliasLookupParams: params.authAliasLookupParams,
             providerAuthKey,
             credential: store.profiles[profileId],
           }),
@@ -356,6 +367,7 @@ export function resolveAuthProfileOrderWithMetadata(
   const isValidProfile = (profileId: string): boolean => {
     const eligibility = resolveAuthProfileEligibility({
       cfg,
+      authAliasLookupParams: params.authAliasLookupParams,
       store,
       provider,
       profileId,
@@ -444,6 +456,7 @@ function resolveAuthOrder(
 
 function isNativeCredentialProviderCompatibleWithAuthProvider(params: {
   cfg?: OpenClawConfig;
+  authAliasLookupParams?: ProviderAuthAliasLookupParams;
   providerAuthKey: string;
   credential: AuthProfileCredential | undefined;
 }): boolean {
@@ -451,8 +464,10 @@ function isNativeCredentialProviderCompatibleWithAuthProvider(params: {
     return false;
   }
   return (
-    resolveProviderIdForAuth(params.credential.provider, { config: params.cfg }) ===
-    params.providerAuthKey
+    resolveProviderIdForAuth(params.credential.provider, {
+      config: params.cfg,
+      ...params.authAliasLookupParams,
+    }) === params.providerAuthKey
   );
 }
 
@@ -487,21 +502,30 @@ function orderProfilesByMode(
     }
   }
 
-  // Sort available profiles by type preference, then by lastUsed (oldest first = round-robin within type)
+  // Sort by type, OAuth expiry state, then lastUsed for round-robin within each tier.
   const scored = available.map((profileId) => {
-    const type = store.profiles[profileId]?.type;
+    const profile = store.profiles[profileId];
+    const type = profile?.type;
     const typeScore = type === "oauth" ? 0 : type === "token" ? 1 : type === "api_key" ? 2 : 3;
+    // A refreshable expired OAuth profile remains eligible, but refreshing an
+    // obsolete profile can rotate a one-time refresh token while a live peer exists.
+    const expiryScore =
+      profile?.type === "oauth" && resolveTokenExpiryState(profile.expires, now) === "expired"
+        ? 1
+        : 0;
     const lastUsed = store.usageStats?.[profileId]?.lastUsed ?? 0;
-    return { profileId, typeScore, lastUsed };
+    return { profileId, typeScore, expiryScore, lastUsed };
   });
 
   // Primary sort: type preference (oauth > token > api_key).
-  // Secondary sort: lastUsed (oldest first for round-robin within type).
   const sorted = scored
     .toSorted((a, b) => {
       // First by type (oauth > token > api_key)
       if (a.typeScore !== b.typeScore) {
         return a.typeScore - b.typeScore;
+      }
+      if (a.expiryScore !== b.expiryScore) {
+        return a.expiryScore - b.expiryScore;
       }
       // Then by lastUsed (oldest first)
       return a.lastUsed - b.lastUsed;

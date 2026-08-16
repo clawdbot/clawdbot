@@ -97,7 +97,7 @@ export async function buildLiveNvidiaProvider(): Promise<ModelProviderConfig> {
   }
   return {
     ...provider,
-    models: applyNvidiaModelDefaults(filterSelectableNvidiaModels(featuredModels)),
+    models: applyNvidiaModelDefaults(featuredModels),
   };
 }
 
@@ -112,7 +112,7 @@ export async function buildSelectableLiveNvidiaProvider(): Promise<ModelProvider
   }
   return {
     ...provider,
-    models: applyNvidiaModelDefaults(filterSelectableNvidiaModels(featuredModels)),
+    models: applyNvidiaModelDefaults(featuredModels),
   };
 }
 

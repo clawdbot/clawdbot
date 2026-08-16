@@ -67,8 +67,7 @@ describe("discord exec approvals", () => {
     const cfg = buildConfig(
       { enabled: true },
       {
-        allowFrom: ["123"],
-        dm: { allowFrom: ["456"] },
+        allowFrom: ["123", "456"],
         defaultTo: "user:789",
       },
     );

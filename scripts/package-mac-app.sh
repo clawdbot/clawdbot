@@ -25,6 +25,17 @@ MLX_TTS_HELPER_BUILD_ROOT="$MLX_TTS_HELPER_ROOT/.build"
 BUNDLE_ID="${BUNDLE_ID:-ai.openclaw.mac.debug}"
 PKG_VERSION="$(cd "$ROOT_DIR" && node -p "require('./package.json').version" 2>/dev/null || echo "0.0.0")"
 BUILD_CONFIG="${BUILD_CONFIG:-debug}"
+# OPENCLAW_SKIP_MLX_TTS=1 packages the app without the local MLX voice helper.
+# The helper pulls in the full mlx-swift Metal shader stack, which some beta
+# Xcode toolchains cannot compile (flaky `metal` diagnostics), needlessly
+# blocking unrelated dev/proof builds. Release builds must always ship the
+# helper (notarization verifies it), so refuse the skip there instead of
+# producing a silently incomplete release bundle.
+SKIP_MLX_TTS="${OPENCLAW_SKIP_MLX_TTS:-0}"
+if [[ "$SKIP_MLX_TTS" == "1" && "$BUILD_CONFIG" == "release" ]]; then
+  echo "ERROR: OPENCLAW_SKIP_MLX_TTS is not allowed for release builds; the MLX voice helper must ship in release." >&2
+  exit 1
+fi
 BUILD_TS="$(openclaw_resolve_build_timestamp)"
 if [[ "$BUILD_CONFIG" == "release" ]]; then
   OPENCLAW_REQUIRE_BUILD_METADATA=1
@@ -65,6 +76,39 @@ if [[ "$BUNDLE_ID" == *.debug ]]; then
   AUTO_CHECKS=false
 fi
 
+resolve_peekaboo_source_commit() {
+  local resolved_file="$ROOT_DIR/apps/macos/Package.resolved"
+  /usr/bin/python3 - "$resolved_file" <<'PY'
+import json
+from pathlib import Path
+import re
+import sys
+
+resolved_file = Path(sys.argv[1])
+try:
+    resolved = json.loads(resolved_file.read_text())
+except (OSError, json.JSONDecodeError) as error:
+    raise SystemExit(f"ERROR: Could not parse Peekaboo source revision from {resolved_file}: {error}")
+
+pins = resolved.get("pins") if isinstance(resolved, dict) else None
+if not isinstance(pins, list):
+    raise SystemExit(f"ERROR: Expected a pins array in {resolved_file}")
+
+peekaboo_pins = [pin for pin in pins if isinstance(pin, dict) and pin.get("identity") == "peekaboo"]
+if len(peekaboo_pins) != 1:
+    raise SystemExit(f"ERROR: Expected exactly one 'peekaboo' pin in {resolved_file}; found {len(peekaboo_pins)}")
+
+state = peekaboo_pins[0].get("state")
+revision = state.get("revision") if isinstance(state, dict) else None
+if not isinstance(revision, str) or re.fullmatch(r"[0-9a-f]{40}", revision) is None:
+    raise SystemExit(
+        f"ERROR: Peekaboo pin in {resolved_file} must have an exact 40-character lowercase hexadecimal revision"
+    )
+
+print(revision, end="")
+PY
+}
+
 sparkle_canonical_build_from_version() {
   (cd "$ROOT_DIR" && node --import tsx "$ROOT_DIR/scripts/sparkle-build.ts" canonical-build "$1")
 }
@@ -85,9 +129,179 @@ helper_bin_for_arch() {
   echo "$(helper_build_path_for_arch "$1")/$BUILD_CONFIG/$MLX_TTS_HELPER_PRODUCT"
 }
 
+build_mlx_tts_helper() {
+  local arch="$1"
+  local swift_path
+  local toolchain_metal
+  local swift_args=(build)
+
+  swift_path="$(xcrun --find swift)"
+  toolchain_metal="$(dirname "$swift_path")/metal"
+
+  if [[ -x "$toolchain_metal" ]] &&
+    ! "$toolchain_metal" --version >/dev/null 2>&1 &&
+    xcrun metal --version >/dev/null 2>&1; then
+    echo "⚠️  Xcode's default Metal shim cannot use the installed toolchain; using the native SwiftPM backend"
+    swift_args+=(--build-system native)
+  fi
+
+  swift "${swift_args[@]}" \
+    --package-path "$MLX_TTS_HELPER_ROOT" \
+    -c "$BUILD_CONFIG" \
+    --product "$MLX_TTS_HELPER_PRODUCT" \
+    --build-path "$(helper_build_path_for_arch "$arch")" \
+    --arch "$arch"
+}
+
 sparkle_framework_for_arch() {
   echo "$(build_path_for_arch "$1")/$BUILD_CONFIG/Sparkle.framework"
 }
+
+run_with_locked_swift_packages() {
+  local resolved_file="$ROOT_DIR/apps/macos/Package.resolved"
+  local resolved_snapshot
+  local command_status=0
+
+  if [[ ! -f "$resolved_file" ]]; then
+    echo "ERROR: Swift package lockfile not found at $resolved_file" >&2
+    return 1
+  fi
+  resolved_snapshot="$(mktemp)"
+  cp "$resolved_file" "$resolved_snapshot"
+  "$@" || command_status=$?
+  if ! cmp -s "$resolved_snapshot" "$resolved_file"; then
+    cp "$resolved_snapshot" "$resolved_file"
+    rm "$resolved_snapshot"
+    echo "ERROR: Swift package resolution changed Package.resolved; update it in a separate reviewed change" >&2
+    return 1
+  fi
+  rm "$resolved_snapshot"
+  return "$command_status"
+}
+
+PATCHED_SWIFTPM_RESOURCE_SOURCES=()
+
+restore_swiftpm_resource_sources() {
+  local source_file
+  local backup_file
+  for source_file in "${PATCHED_SWIFTPM_RESOURCE_SOURCES[@]:-}"; do
+    [[ -n "$source_file" ]] || continue
+    backup_file="$source_file.openclaw-original"
+    if [[ -f "$backup_file" ]]; then
+      mv "$backup_file" "$source_file"
+    fi
+  done
+  PATCHED_SWIFTPM_RESOURCE_SOURCES=()
+}
+
+patch_swiftpm_resource_lookups() {
+  local build_path="$1"
+  local checkout_root="$build_path/checkouts"
+  local source_file
+  local source_files=(
+    "$checkout_root/KeyboardShortcuts/Sources/KeyboardShortcuts/Utilities.swift"
+    "$checkout_root/SwiftMath/Sources/SwiftMath/MathBundle/MathFont.swift"
+    "$checkout_root/SwiftMath/Sources/SwiftMath/MathRender/MTFont.swift"
+  )
+
+  for source_file in "${source_files[@]}"; do
+    if [[ ! -f "$source_file" ]]; then
+      echo "ERROR: SwiftPM resource source not found at $source_file" >&2
+      return 1
+    fi
+    if [[ -e "$source_file.openclaw-original" ]]; then
+      echo "ERROR: Stale SwiftPM resource source backup at $source_file.openclaw-original" >&2
+      return 1
+    fi
+    cp -p "$source_file" "$source_file.openclaw-original"
+    chmod u+w "$source_file"
+    PATCHED_SWIFTPM_RESOURCE_SOURCES+=("$source_file")
+  done
+
+  /usr/bin/python3 - "${source_files[@]}" <<'PY'
+from pathlib import Path
+import sys
+
+
+def replace_exact(path: Path, old: str, new: str, expected: int = 1) -> str:
+    text = path.read_text()
+    if text.count(old) != expected:
+        raise SystemExit(f"Expected {expected} occurrence(s) in {path}: {old!r}")
+    return text.replace(old, new)
+
+
+keyboard_shortcuts, swift_math_font, swift_math_legacy_font = map(Path, sys.argv[1:])
+
+keyboard_text = replace_exact(
+    keyboard_shortcuts,
+    "NSLocalizedString(self, bundle: .module, comment: self)",
+    "NSLocalizedString(self, bundle: .keyboardShortcutsPackagedResources, comment: self)",
+)
+keyboard_marker = "\n\nextension Data {"
+keyboard_injection = """
+
+private extension Bundle {
+\t// Command-line SwiftPM builds resolve Bundle.module beside the executable, which is
+\t// outside a valid signed .app layout. Prefer the bundle copied into Contents/Resources.
+\tstatic let keyboardShortcutsPackagedResources: Bundle = {
+\t\t#if os(macOS)
+\t\tif let url = Bundle.main.url(
+\t\t\tforResource: \"KeyboardShortcuts_KeyboardShortcuts\",
+\t\t\twithExtension: \"bundle\"),
+\t\t   let bundle = Bundle(url: url)
+\t\t{
+\t\t\treturn bundle
+\t\t}
+\t\t#endif
+\t\treturn .module
+\t}()
+}
+"""
+if keyboard_text.count(keyboard_marker) != 1:
+    raise SystemExit(f"Expected one KeyboardShortcuts insertion marker in {keyboard_shortcuts}")
+keyboard_shortcuts.write_text(keyboard_text.replace(keyboard_marker, keyboard_injection + keyboard_marker))
+
+swift_math_text = replace_exact(
+    swift_math_font,
+    "Bundle.module.url(forResource: \"mathFonts\", withExtension: \"bundle\")",
+    "Bundle.swiftMathPackagedResources.url(forResource: \"mathFonts\", withExtension: \"bundle\")",
+    expected=2,
+)
+swift_math_marker = "\n#endif\n\n/// Now available for everyone to use"
+swift_math_injection = """
+
+extension Bundle {
+    // Keep SwiftMath's generated resource sidecar inside the signed app Resources directory.
+    static let swiftMathPackagedResources: Bundle = {
+        #if os(macOS)
+        if let url = Bundle.main.url(
+            forResource: \"SwiftMath_SwiftMath\",
+            withExtension: \"bundle\"),
+           let bundle = Bundle(url: url)
+        {
+            return bundle
+        }
+        #endif
+        return .module
+    }()
+}
+"""
+if swift_math_text.count(swift_math_marker) != 1:
+    raise SystemExit(f"Expected one SwiftMath insertion marker in {swift_math_font}")
+swift_math_font.write_text(
+    swift_math_text.replace(swift_math_marker, "\n#endif" + swift_math_injection + "\n/// Now available for everyone to use")
+)
+
+legacy_text = replace_exact(
+    swift_math_legacy_font,
+    "Bundle.module.url(forResource: \"mathFonts\", withExtension: \"bundle\")",
+    "Bundle.swiftMathPackagedResources.url(forResource: \"mathFonts\", withExtension: \"bundle\")",
+)
+swift_math_legacy_font.write_text(legacy_text)
+PY
+}
+
+trap restore_swiftpm_resource_sources EXIT
 
 PNPM_CMD=()
 
@@ -136,7 +350,7 @@ merge_framework_machos() {
 
   while IFS= read -r -d '' file; do
     if /usr/bin/file "$file" | /usr/bin/grep -q "Mach-O"; then
-      local rel="${file#$primary/}"
+      local rel="${file#"$primary"/}"
       local primary_archs
       primary_archs=$(archs_for "$file")
       IFS=' ' read -r -a primary_arch_array <<< "$primary_archs"
@@ -157,7 +371,7 @@ merge_framework_machos() {
           IFS=' ' read -r -a other_arch_array <<< "$other_archs"
           for arch in "${other_arch_array[@]}"; do
             if ! arch_in_list "$arch" "${primary_arch_array[@]}"; then
-              local thin_file="$tmp_dir/$(echo "$rel" | tr '/' '_')-$arch"
+              local thin_file="$tmp_dir/${rel//\//_}-$arch"
               /usr/bin/lipo -thin "$arch" "$other_file" -output "$thin_file"
               missing_files+=("$thin_file")
               primary_arch_array+=("$arch")
@@ -173,6 +387,8 @@ merge_framework_machos() {
     fi
   done < <(find "$primary" -type f -print0)
 }
+
+PEEKABOO_SOURCE_COMMIT="$(resolve_peekaboo_source_commit)"
 
 require_swift_toolchain
 
@@ -220,10 +436,18 @@ cd "$ROOT_DIR/apps/macos"
 echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [${BUILD_ARCHS[*]}]"
 for arch in "${BUILD_ARCHS[@]}"; do
   BUILD_PATH="$(build_path_for_arch "$arch")"
+  echo "📦 Resolving Swift packages [$arch]"
+  run_with_locked_swift_packages swift package --scratch-path "$BUILD_PATH" resolve
+  patch_swiftpm_resource_lookups "$BUILD_PATH"
   echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [$arch]"
-  swift build -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
-  echo "🔨 Building $MLX_TTS_HELPER_PRODUCT ($BUILD_CONFIG) [$arch]"
-  swift build --package-path "$MLX_TTS_HELPER_ROOT" -c "$BUILD_CONFIG" --product "$MLX_TTS_HELPER_PRODUCT" --build-path "$(helper_build_path_for_arch "$arch")" --arch "$arch"
+  run_with_locked_swift_packages swift build -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
+  restore_swiftpm_resource_sources
+  if [[ "$SKIP_MLX_TTS" == "1" ]]; then
+    echo "🔇 Skipping $MLX_TTS_HELPER_PRODUCT (OPENCLAW_SKIP_MLX_TTS=1) — app will lack the local MLX voice helper [$arch]"
+  else
+    echo "🔨 Building $MLX_TTS_HELPER_PRODUCT ($BUILD_CONFIG) [$arch]"
+    build_mlx_tts_helper "$arch"
+  fi
 done
 
 BIN_PRIMARY="$(bin_for_arch "$PRIMARY_ARCH")"
@@ -241,15 +465,26 @@ if [ ! -f "$INFO_PLIST_SRC" ]; then
   exit 1
 fi
 cp "$INFO_PLIST_SRC" "$APP_ROOT/Contents/Info.plist"
+PORT_GUARDIAN_STORAGE_VERSION="$(plist_print_required "$APP_ROOT/Contents/Info.plist" OpenClawPortGuardianStorageVersion)"
+if [[ ! "$PORT_GUARDIAN_STORAGE_VERSION" =~ ^[1-9][0-9]*$ ]]; then
+  echo "ERROR: OpenClawPortGuardianStorageVersion must be a positive integer." >&2
+  exit 1
+fi
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleIdentifier "$BUNDLE_ID"
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleShortVersionString "$APP_VERSION"
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleVersion "$APP_BUILD"
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" OpenClawBuildTimestamp "$BUILD_TS"
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" OpenClawGitCommit "$BUILD_GIT_COMMIT"
+plist_set_string_required "$APP_ROOT/Contents/Info.plist" PeekabooSourceCommit "$PEEKABOO_SOURCE_COMMIT"
 if [[ "$BUILD_CONFIG" == "release" ]]; then
   EMBEDDED_GIT_COMMIT="$(plist_print_required "$APP_ROOT/Contents/Info.plist" OpenClawGitCommit)"
+  BRIDGE_SOURCE_COMMIT="$(plist_print_required "$APP_ROOT/Contents/Info.plist" PeekabooSourceCommit)"
   if [[ "$EMBEDDED_GIT_COMMIT" != "$BUILD_GIT_COMMIT" ]]; then
-    echo "ERROR: Release app embedded Git commit '$EMBEDDED_GIT_COMMIT', expected '$BUILD_GIT_COMMIT'." >&2
+    echo "ERROR: Release app OpenClaw source mismatch: OpenClawGitCommit='$EMBEDDED_GIT_COMMIT', expected='$BUILD_GIT_COMMIT'." >&2
+    exit 1
+  fi
+  if [[ "$BRIDGE_SOURCE_COMMIT" != "$PEEKABOO_SOURCE_COMMIT" ]]; then
+    echo "ERROR: Release app Peekaboo source mismatch: PeekabooSourceCommit='$BRIDGE_SOURCE_COMMIT', expected='$PEEKABOO_SOURCE_COMMIT'." >&2
     exit 1
   fi
 fi
@@ -270,17 +505,21 @@ chmod +x "$APP_ROOT/Contents/MacOS/OpenClaw"
 # SwiftPM outputs ad-hoc signed binaries; strip the signature before install_name_tool to avoid warnings.
 /usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/OpenClaw" 2>/dev/null || true
 
-echo "🚚 Copying MLX TTS helper"
-cp "$(helper_bin_for_arch "$PRIMARY_ARCH")" "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
-if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
-  HELPER_BIN_INPUTS=()
-  for arch in "${BUILD_ARCHS[@]}"; do
-    HELPER_BIN_INPUTS+=("$(helper_bin_for_arch "$arch")")
-  done
-  /usr/bin/lipo -create "${HELPER_BIN_INPUTS[@]}" -output "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
+if [[ "$SKIP_MLX_TTS" == "1" ]]; then
+  echo "🔇 Skipping MLX TTS helper copy (OPENCLAW_SKIP_MLX_TTS=1) — bundle omits Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
+else
+  echo "🚚 Copying MLX TTS helper"
+  cp "$(helper_bin_for_arch "$PRIMARY_ARCH")" "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
+  if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
+    HELPER_BIN_INPUTS=()
+    for arch in "${BUILD_ARCHS[@]}"; do
+      HELPER_BIN_INPUTS+=("$(helper_bin_for_arch "$arch")")
+    done
+    /usr/bin/lipo -create "${HELPER_BIN_INPUTS[@]}" -output "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
+  fi
+  chmod +x "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
+  /usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT" 2>/dev/null || true
 fi
-chmod +x "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
-/usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT" 2>/dev/null || true
 
 SPARKLE_FRAMEWORK_PRIMARY="$(sparkle_framework_for_arch "$PRIMARY_ARCH")"
 if [ -d "$SPARKLE_FRAMEWORK_PRIMARY" ]; then
@@ -327,6 +566,9 @@ fi
 rm -rf "$APP_ROOT/Contents/Resources/ProviderIcons"
 cp -R "$PROVIDER_ICONS_SRC" "$APP_ROOT/Contents/Resources/ProviderIcons"
 
+echo "🖥  Staging embedded CUA driver"
+"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"
+
 echo "📦 Copying CLI installer"
 INSTALL_CLI_SRC="$ROOT_DIR/scripts/install-cli.sh"
 if [ ! -f "$INSTALL_CLI_SRC" ]; then
@@ -351,15 +593,29 @@ else
   exit 1
 fi
 
-echo "📦 Copying OpenClawKit resources"
-OPENCLAWKIT_BUNDLE="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG/OpenClawKit_OpenClawKit.bundle"
-if [ -d "$OPENCLAWKIT_BUNDLE" ]; then
-  rm -rf "$APP_ROOT/Contents/Resources/OpenClawKit_OpenClawKit.bundle"
-  cp -R "$OPENCLAWKIT_BUNDLE" "$APP_ROOT/Contents/Resources/OpenClawKit_OpenClawKit.bundle"
-else
-  echo "ERROR: OpenClawKit resource bundle not found at $OPENCLAWKIT_BUNDLE" >&2
-  exit 1
-fi
+echo "📦 Copying SwiftPM resource bundles"
+SWIFTPM_BUILD_PRODUCTS="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG"
+# Generated Bundle.module accessors resolve from Bundle.main.bundleURL. In a packaged app,
+# that is the .app root, not Contents/Resources; placing a bundle there traps on first access.
+for resource_bundle_src in "$SWIFTPM_BUILD_PRODUCTS"/*.bundle; do
+  [[ -d "$resource_bundle_src" ]] || continue
+  resource_bundle="${resource_bundle_src##*/}"
+  rm -rf "$APP_ROOT/Contents/Resources/$resource_bundle"
+  cp -R "$resource_bundle_src" "$APP_ROOT/Contents/Resources/$resource_bundle"
+done
+REQUIRED_SWIFTPM_RESOURCE_BUNDLES=(
+  "GRDB_GRDB.bundle"
+  "KeyboardShortcuts_KeyboardShortcuts.bundle"
+  "OpenClaw_OpenClaw.bundle"
+  "OpenClawKit_OpenClawKit.bundle"
+  "SwiftMath_SwiftMath.bundle"
+)
+for resource_bundle in "${REQUIRED_SWIFTPM_RESOURCE_BUNDLES[@]}"; do
+  if [[ ! -d "$APP_ROOT/Contents/Resources/$resource_bundle" ]]; then
+    echo "ERROR: Required SwiftPM resource bundle not found at $SWIFTPM_BUILD_PRODUCTS/$resource_bundle" >&2
+    exit 1
+  fi
+done
 
 running_packaged_app_pids() {
   command -v pgrep >/dev/null 2>&1 || return 0
@@ -419,7 +675,11 @@ stop_packaged_app_if_running() {
 
 stop_packaged_app_if_running
 
-echo "🔏 Signing bundle (auto-selects signing identity if SIGN_IDENTITY is unset)"
+if [[ -n "${SIGN_IDENTITY:-}" ]]; then
+  echo "🔏 Signing bundle with explicit SIGN_IDENTITY"
+else
+  echo "🔏 Signing bundle (auto-selecting signing identity)"
+fi
 "$ROOT_DIR/scripts/codesign-mac-app.sh" "$APP_ROOT"
 
 echo "✅ Bundle ready at $APP_ROOT"

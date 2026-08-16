@@ -220,6 +220,43 @@ describe("promotions feed state", () => {
     expect(state.lastCheckedAtMs).toBe(NOW + 60_000);
   });
 
+  it("keeps the cached snapshot when a refresh contains malformed UTF-8", async () => {
+    mockHttp.intercept({
+      url: FEED_URL,
+      reply: { json: feedPayload(), headers: { etag: '"v4"' } },
+    });
+    const nextPayload = JSON.stringify(feedPayload({ sequence: 5 }));
+    const [prefix, suffix] = nextPayload.split("Free Example models");
+    if (prefix === undefined || suffix === undefined) {
+      throw new Error("Expected promotion title in feed fixture");
+    }
+    mockHttp.intercept({
+      url: FEED_URL,
+      requestHeaders: { "if-none-match": '"v4"' },
+      reply: {
+        body: Buffer.concat([Buffer.from(prefix), Buffer.from([0xff]), Buffer.from(suffix)]),
+        headers: { etag: '"v5"' },
+      },
+    });
+    await maybeRefreshPromotionsFeed({ nowMs: NOW, fetchImpl: globalThis.fetch });
+
+    await maybeRefreshPromotionsFeed({
+      nowMs: NOW + 60_000,
+      force: true,
+      fetchImpl: globalThis.fetch,
+    });
+    const state = await maybeRefreshPromotionsFeed({
+      nowMs: NOW + 61_000,
+      fetchImpl: globalThis.fetch,
+    });
+
+    expect(mockHttp.requests()).toHaveLength(2);
+    expect(state.sequence).toBe(4);
+    expect(state.etag).toBe('"v4"');
+    expect(state.entries[0]?.title).toBe("Free Example models");
+    expect(state.lastCheckedAtMs).toBe(NOW + 60_000);
+  });
+
   it("keeps the cached snapshot when a refresh has calendar-invalid timestamps", async () => {
     mockHttp.intercept({
       url: FEED_URL,

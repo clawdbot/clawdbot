@@ -7,6 +7,11 @@
     <uses-permission android:name="${applicationId}.permission.RUN_VOICE_E2E" />
 
     <application>
+        <!-- Compose/Robolectric needs a generic host; the app theme keeps AppCompat dialog tests valid. -->
+        <activity
+            android:name="androidx.activity.ComponentActivity"
+            android:exported="false"
+            android:theme="@style/Theme.OpenClawNode" />
         <activity
             android:name=".ui.CanvasLifecycleTestActivity"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|uiMode|density|keyboard|keyboardHidden|navigation"

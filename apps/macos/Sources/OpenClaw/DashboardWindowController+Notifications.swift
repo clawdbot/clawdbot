@@ -75,6 +75,8 @@ extension DashboardWindowController {
     }
 
     private func publishNotificationsStatus() async {
+        // Honest absence beats a fabricated status when the process is unbundled.
+        guard PermissionManager.notificationCenterAvailable else { return }
         let settings = await UNUserNotificationCenter.current().notificationSettings()
         let permission = Self.notificationsPermissionLabel(for: settings.authorizationStatus)
         // Keep a global snapshot so late subscribers can read status without a bridge round-trip.

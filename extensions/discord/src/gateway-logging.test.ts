@@ -2,9 +2,16 @@
 import { EventEmitter } from "node:events";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
-  logVerbose: vi.fn(),
-}));
+// Suite runs isolate=false: a partial factory here poisons the shared module
+// cache for later files in the worker (#123025), so spread the real module.
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+  return {
+    ...actual,
+    logVerbose: vi.fn(),
+    warn: (message: string) => `warn:${message}`,
+  };
+});
 
 let logVerbose: typeof import("openclaw/plugin-sdk/runtime-env").logVerbose;
 let attachDiscordGatewayLogging: typeof import("./gateway-logging.js").attachDiscordGatewayLogging;
@@ -58,7 +65,7 @@ describe("attachDiscordGatewayLogging", () => {
     cleanup();
   });
 
-  it("logs warnings and metrics only to verbose", () => {
+  it("promotes warnings while keeping metrics verbose-only", () => {
     const emitter = new EventEmitter();
     const runtime = makeRuntime();
 
@@ -72,7 +79,9 @@ describe("attachDiscordGatewayLogging", () => {
 
     const logVerboseMock = vi.mocked(logVerbose);
     expect(logVerboseMock).toHaveBeenCalledTimes(2);
-    expect(runtime.log).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      "warn:discord gateway warning: High latency detected: 1200ms",
+    );
 
     cleanup();
   });

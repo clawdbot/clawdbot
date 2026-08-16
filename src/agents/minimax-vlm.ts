@@ -1,3 +1,4 @@
+import { resolvePositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { readResponseBodySnippet } from "../infra/http-error-body.js";
 /**
  * Adapts MiniMax VLM image-understanding requests for agent image inputs.
@@ -6,7 +7,6 @@ import {
   postJsonRequest,
   resolveProviderHttpRequestConfigWithOriginTrust,
 } from "../media-understanding/shared.js";
-import { resolvePositiveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { isRecord } from "../utils.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { readProviderJsonResponse } from "./provider-http-errors.js";
@@ -92,6 +92,7 @@ export async function minimaxUnderstandImage(params: {
   modelBaseUrl?: string;
   provider?: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
   /** Operator-configured private-network policy from the provider request config. */
   allowPrivateNetwork?: boolean;
   /** Resolved model request transport metadata, including proxy and TLS policy. */
@@ -152,6 +153,7 @@ export async function minimaxUnderstandImage(params: {
       image_url: imageDataUrl,
     },
     timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
     fetchFn: fetch,
     allowPrivateNetwork,
     ssrfPolicy,

@@ -1,14 +1,30 @@
 // GitHub Copilot data-residency domain resolution.
 //
-// Lives inside the provider so the shared plugin SDK only needs to export the
-// security-critical host allowlist (`normalizeGithubCopilotDomain`). The
-// env/config precedence below is GitHub Copilot provider policy, not a
-// plugin-SDK contract, so it is intentionally not part of the SDK surface.
+// The allowlist and env/config precedence are provider policy. Deprecated SDK
+// facades keep their dated compatibility copy until its removal window closes.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { normalizeGithubCopilotDomain } from "openclaw/plugin-sdk/provider-auth";
 
 /** Public GitHub Copilot host used when no data-residency domain is configured. */
 export const PUBLIC_GITHUB_COPILOT_DOMAIN = "github.com";
+const GHE_DATA_RESIDENCY_HOST = /^[a-z0-9-]+\.ghe\.com$/;
+
+export function isSupportedGithubCopilotDomain(raw: string | undefined | null): boolean {
+  const trimmed = (raw ?? "").trim().toLowerCase();
+  if (!trimmed) {
+    return true;
+  }
+  return (
+    /^[a-z0-9.-]+$/.test(trimmed) &&
+    (trimmed === PUBLIC_GITHUB_COPILOT_DOMAIN || GHE_DATA_RESIDENCY_HOST.test(trimmed))
+  );
+}
+
+export function normalizeGithubCopilotDomain(raw: string | undefined | null): string {
+  const trimmed = (raw ?? "").trim().toLowerCase();
+  return trimmed && isSupportedGithubCopilotDomain(trimmed)
+    ? trimmed
+    : PUBLIC_GITHUB_COPILOT_DOMAIN;
+}
 
 function readConfiguredGithubCopilotDomain(config?: OpenClawConfig): string | undefined {
   const params = config?.models?.providers?.["github-copilot"]?.params;
@@ -37,38 +53,4 @@ export function resolveGithubCopilotDomain(params?: {
     return normalizeGithubCopilotDomain(params.explicit);
   }
   return normalizeGithubCopilotDomain(readConfiguredGithubCopilotDomain(params?.config));
-}
-
-// Shortcut login must persist its token's tenant. A missing domain would route
-// the tenant token back to github.com after the environment override is removed.
-export function withGithubCopilotDomainConfig(cfg: OpenClawConfig, domain: string): OpenClawConfig {
-  const models: NonNullable<OpenClawConfig["models"]> = cfg.models ?? {};
-  const providers: NonNullable<typeof models.providers> = models.providers ?? {};
-  const provider = providers["github-copilot"];
-  const params = provider?.params;
-  const isDefault = domain === PUBLIC_GITHUB_COPILOT_DOMAIN;
-  if (isDefault && !(params && "githubDomain" in params)) {
-    return cfg;
-  }
-  const nextParams: Record<string, unknown> = { ...params };
-  if (isDefault) {
-    delete nextParams.githubDomain;
-  } else {
-    nextParams.githubDomain = domain;
-  }
-  const nextProviders = { ...providers };
-  if (provider) {
-    nextProviders["github-copilot"] = { ...provider, params: nextParams };
-  } else {
-    // Source config accepts partial provider inputs; catalog materialization
-    // supplies baseUrl/models before runtime consumption.
-    Object.assign(nextProviders, { "github-copilot": { params: nextParams } });
-  }
-  return {
-    ...cfg,
-    models: {
-      ...models,
-      providers: nextProviders,
-    },
-  };
 }

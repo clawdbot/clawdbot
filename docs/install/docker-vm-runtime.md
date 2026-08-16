@@ -20,61 +20,30 @@ The examples below cover three binaries only, alphabetically:
 - `goplaces` for Google Places
 - `wacli` for WhatsApp
 
-These are examples, not a complete list. Install as many binaries as your
-skills need using the same pattern. When you add a skill that needs a new
-binary later:
+These are examples, not a complete list. Docker Compose builds the repo-root
+`Dockerfile`, so extend that file rather than creating a standalone example or
+replacing its contents. The repository Dockerfile has required
+`workspace-deps`, build, runtime-assets, and final runtime stages. Its manifest
+extraction covers the `packages/*` and selected `extensions/*` workspaces before
+`pnpm install --frozen-lockfile`.
 
-1. Update the Dockerfile.
-2. Rebuild the image.
-3. Restart the containers.
+For Debian packages, prefer the existing build argument:
 
-**Example Dockerfile**
-
-```dockerfile
-FROM node:24-bookworm
-
-RUN apt-get update && apt-get install -y socat && rm -rf /var/lib/apt/lists/*
-
-# Example binary 1: Gmail CLI (gogcli — installs as `gog`)
-# Copy the current Linux asset URL from https://github.com/steipete/gogcli/releases
-RUN curl -L https://github.com/steipete/gogcli/releases/latest/download/gogcli_linux_amd64.tar.gz \
-  | tar -xzO gog > /usr/local/bin/gog; \
-  chmod +x /usr/local/bin/gog
-
-# Example binary 2: Google Places CLI
-# Copy the current Linux asset URL from https://github.com/steipete/goplaces/releases
-RUN curl -L https://github.com/steipete/goplaces/releases/latest/download/goplaces_linux_amd64.tar.gz \
-  | tar -xzO goplaces > /usr/local/bin/goplaces; \
-  chmod +x /usr/local/bin/goplaces
-
-# Example binary 3: WhatsApp CLI
-# Copy the current Linux asset URL from https://github.com/steipete/wacli/releases
-RUN curl -L https://github.com/steipete/wacli/releases/latest/download/wacli-linux-amd64.tar.gz \
-  | tar -xzO wacli > /usr/local/bin/wacli; \
-  chmod +x /usr/local/bin/wacli
-
-# Add more binaries below using the same pattern
-
-WORKDIR /app
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
-COPY ui/package.json ./ui/package.json
-COPY scripts ./scripts
-
-RUN corepack enable
-RUN pnpm install --frozen-lockfile
-
-COPY . .
-RUN pnpm build
-RUN pnpm ui:install
-RUN pnpm ui:build
-
-ENV NODE_ENV=production
-
-CMD ["node","dist/index.js"]
+```bash
+export OPENCLAW_IMAGE_APT_PACKAGES="socat"
 ```
 
+For downloaded release binaries such as `gog`, `goplaces`, or `wacli`, add the
+download and install commands to the repo-root `Dockerfile` final runtime stage,
+after its package-install blocks and before `USER node`. Preserve the existing
+non-root uid 1000 setup, `tini` entrypoint, health check, and `openclaw` symlink.
+Then rebuild and restart the containers.
+
 <Note>
-The URLs above are examples. For ARM-based VMs, choose the `arm64` assets. For reproducible builds, pin versioned release URLs.
+The repository Dockerfile digest-pins its Node and Bun base images. Keep those
+reviewed pins instead of changing them to floating `FROM node:24-bookworm`
+references. For ARM-based VMs, choose `arm64` release assets for extra binaries;
+for reproducible builds, use versioned asset URLs and verify their checksums.
 </Note>
 
 ## Build and launch

@@ -53,6 +53,24 @@ class CronJobDetailTest {
   }
 
   @Test
+  fun parsesScriptPayloadAsReadOnlyDetail() {
+    val script = "const result = await agent('check status')"
+    val detail =
+      parseGatewayCronJobDetail(
+        parseJob(
+          payload =
+            """{"kind":"script","script":"$script","timeoutSeconds":90,"toolBudget":4}""",
+        ),
+      )
+
+    requireNotNull(detail)
+    assertEquals("script", detail.payloadKind)
+    assertEquals(script, detail.payloadText)
+    assertEquals("Script · Timeout 90s · 4 tools", detail.payloadLabel.resolveNativeText())
+    assertNull(detail.payloadCommandArgv)
+  }
+
+  @Test
   fun rejectsIncompleteGatewayCronJob() {
     val incomplete = Json.parseToJsonElement("""{"id":"job-1","name":"Missing fields"}""").jsonObject
 

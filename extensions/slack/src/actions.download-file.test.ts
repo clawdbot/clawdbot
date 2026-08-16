@@ -53,7 +53,7 @@ function expectNoMediaDownload(result: Awaited<ReturnType<typeof downloadSlackFi
   expect(resolveSlackMedia).not.toHaveBeenCalled();
 }
 
-function expectResolveSlackMediaCalledWithDefaults() {
+function expectResolveSlackMediaCalledWithDefaults(client: ReturnType<typeof createClient>) {
   expect(resolveSlackMedia).toHaveBeenCalledWith({
     files: [
       {
@@ -64,6 +64,7 @@ function expectResolveSlackMediaCalledWithDefaults() {
         url_private_download: "https://files.slack.com/files-pri/T1-F123/image.png",
       },
     ],
+    client,
     token: "xoxb-test",
     maxBytes: 1024,
   });
@@ -116,8 +117,26 @@ describe("downloadSlackFile", () => {
     });
 
     expect(client.files.info).toHaveBeenCalledWith({ file: "F123" });
-    expectResolveSlackMediaCalledWithDefaults();
+    expectResolveSlackMediaCalledWithDefaults(client);
     expect(result).toEqual(makeResolvedSlackMedia());
+  });
+
+  it("passes the prepared GovSlack client to the media trust boundary", async () => {
+    const client = Object.assign(createClient(), { slackApiUrl: "https://slack-gov.com/api/" });
+    client.files.info.mockResolvedValueOnce({
+      file: makeSlackFileInfo({
+        url_private_download: "https://files.slack-gov.com/files-pri/T1-F123/image.png",
+      }),
+    });
+    resolveSlackMedia.mockResolvedValueOnce([makeResolvedSlackMedia()]);
+
+    await downloadSlackFile("F123", {
+      client,
+      token: "xoxb-test",
+      maxBytes: 1024,
+    });
+
+    expect(resolveSlackMedia).toHaveBeenCalledWith(expect.objectContaining({ client }));
   });
 
   it("preserves non-image download metadata", async () => {
@@ -153,6 +172,7 @@ describe("downloadSlackFile", () => {
           url_private_download: "https://files.slack.com/files-pri/T1-F123/report.pdf",
         },
       ],
+      client,
       token: "xoxb-test",
       maxBytes: 1024,
     });
@@ -218,7 +238,7 @@ describe("downloadSlackFile", () => {
 
     expect(result).toEqual(makeResolvedSlackMedia());
     expect(resolveSlackMedia).toHaveBeenCalledTimes(1);
-    expectResolveSlackMediaCalledWithDefaults();
+    expectResolveSlackMediaCalledWithDefaults(client);
   });
 
   it("resolves the bot token from cfg when no explicit token or client is provided", async () => {
@@ -247,7 +267,9 @@ describe("downloadSlackFile", () => {
       maxBytes: 1024,
     });
 
-    expect(createSlackLookupClientMock).toHaveBeenCalledWith("xoxb-from-cfg");
+    expect(createSlackLookupClientMock).toHaveBeenCalledWith("xoxb-from-cfg", {
+      teamId: undefined,
+    });
     expect(resolveSlackMedia).toHaveBeenCalledWith({
       files: [
         {
@@ -258,6 +280,7 @@ describe("downloadSlackFile", () => {
           url_private_download: "https://files.slack.com/files-pri/T1-F123/image.png",
         },
       ],
+      client,
       token: "xoxb-from-cfg",
       maxBytes: 1024,
     });

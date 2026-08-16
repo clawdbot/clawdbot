@@ -3,7 +3,7 @@ import {
   ConversationDeliveryInputError,
   type ConversationDeliveryRecord,
 } from "../config/sessions/conversation-delivery-store.js";
-import type { MessageActionRunResult } from "../infra/outbound/message-action-runner.js";
+import type { MessageActionResult } from "../infra/outbound/message-action-contracts.js";
 import {
   ConversationInputError,
   ConversationOperationConflictError,
@@ -23,7 +23,7 @@ const conversation = {
   lastSeenAt: 200,
 };
 
-function sentResult(): Extract<MessageActionRunResult, { kind: "send" }> {
+function sentResult(): Extract<MessageActionResult, { kind: "send" }> {
   return {
     kind: "send",
     channel: "reef",
@@ -158,6 +158,7 @@ describe("runGatewayConversationSend", () => {
     });
     expect(deps.runMessageAction).toHaveBeenCalledWith(
       expect.objectContaining({
+        defaultAccountId: conversation.accountId,
         gatewayOwnedDelivery: true,
         forceCoreDelivery: true,
         requireQueuePersistence: true,
@@ -165,6 +166,7 @@ describe("runGatewayConversationSend", () => {
         sessionKey: "agent:main:telegram:direct:operator",
       }),
     );
+    expect(deps.runMessageActionMock.mock.calls[0]?.[0]?.params).not.toHaveProperty("accountId");
     expect(result).toEqual({
       status: "sent",
       conversationRef: conversation.conversationRef,

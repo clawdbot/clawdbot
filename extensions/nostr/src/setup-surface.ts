@@ -7,7 +7,6 @@ import {
 import type { ChannelSetupDmPolicy, ChannelSetupWizard, DmPolicy } from "openclaw/plugin-sdk/setup";
 import {
   createSetupTranslator,
-  createStandardChannelSetupStatus,
   createTopLevelChannelDmPolicy,
   createTopLevelChannelParsedAllowFromPrompt,
   defineTokenCredential,
@@ -19,7 +18,13 @@ import {
 } from "openclaw/plugin-sdk/setup";
 import { DEFAULT_RELAYS } from "./default-relays.js";
 import { getPublicKeyFromPrivate, normalizePubkey } from "./nostr-key-utils.js";
-import { buildNostrSetupPatch, createNostrSetupAdapter, parseRelayUrls } from "./setup-adapter.js";
+import {
+  buildNostrSetupPatch,
+  createNostrSetupAdapter,
+  createNostrSetupContract,
+  createNostrSetupStatus,
+  parseRelayUrls,
+} from "./setup-adapter.js";
 import { resolveDefaultNostrAccountId, resolveNostrAccount } from "./types.js";
 
 const t = createSetupTranslator();
@@ -84,27 +89,14 @@ export const nostrSetupAdapter = createNostrSetupAdapter({
     }
   },
 });
+export const nostrSetupContract = createNostrSetupContract(nostrSetupAdapter);
 
 export const nostrSetupWizard: ChannelSetupWizard = {
   channel,
   resolveAccountIdForConfigure: ({ accountOverride, defaultAccountId }) =>
     accountOverride?.trim() || defaultAccountId,
   resolveShouldPromptAccountIds: () => false,
-  status: createStandardChannelSetupStatus({
-    channelLabel: "Nostr",
-    configuredLabel: t("wizard.channels.statusConfigured"),
-    unconfiguredLabel: t("wizard.channels.statusNeedsPrivateKey"),
-    configuredHint: t("wizard.channels.statusConfigured"),
-    unconfiguredHint: t("wizard.channels.statusNeedsPrivateKey"),
-    configuredScore: 1,
-    unconfiguredScore: 0,
-    includeStatusLine: true,
-    resolveConfigured: ({ cfg }) => resolveNostrAccount({ cfg }).configured,
-    resolveExtraStatusLines: ({ cfg }) => {
-      const account = resolveNostrAccount({ cfg });
-      return [`Relays: ${account.relays.length || DEFAULT_RELAYS.length}`];
-    },
-  }),
+  status: createNostrSetupStatus(resolveNostrAccount),
   introNote: {
     title: t("wizard.nostr.setupTitle"),
     lines: NOSTR_SETUP_HELP_LINES,

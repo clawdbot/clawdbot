@@ -2,12 +2,16 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
+import type { HealthSummary } from "../gateway/health/types.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
-import type { HealthSummary } from "./health.js";
+import {
+  createLegacyHealthSnapshotCollector,
+  type LegacyHealthSnapshotParams,
+} from "./health.snapshot.test-support.js";
 
 let testConfig: Record<string, unknown> = {};
 let testStore: Record<string, { updatedAt?: number }> = {};
@@ -18,7 +22,7 @@ let setActivePluginRegistry: typeof import("../plugins/runtime.js").setActivePlu
 let setActiveDegradedPlugins: typeof import("../plugins/runtime-degraded-state.js").setActiveDegradedPlugins;
 let createChannelTestPluginBase: typeof import("../test-utils/channel-plugins.js").createChannelTestPluginBase;
 let createTestRegistry: typeof import("../test-utils/channel-plugins.js").createTestRegistry;
-let getHealthSnapshot: typeof import("./health.js").getHealthSnapshot;
+let getHealthSnapshot: (params?: LegacyHealthSnapshotParams) => Promise<HealthSummary>;
 let buildTelegramHealthSummaryForTest = buildTelegramHealthSummary;
 let probeTelegramAccountForTestOverride:
   | ((account: TelegramHealthAccount, timeoutMs: number) => Promise<Record<string, unknown>>)
@@ -58,8 +62,8 @@ async function loadFreshHealthModulesForTest() {
     loadConfig: () => testConfig,
   }));
   vi.doMock("../config/sessions.js", () => ({
-    resolveStorePath: () => "/tmp/sessions.json",
-    resolveSessionFilePath: vi.fn(() => "/tmp/sessions.json"),
+    resolveSessionStorePathCore: () => "/tmp/sessions.json",
+    resolveSessionFilePathCore: vi.fn(() => "/tmp/sessions.json"),
     loadSessionStore: () => testStore,
     saveSessionStore: vi.fn().mockResolvedValue(undefined),
     readSessionUpdatedAt: vi.fn(() => undefined),
@@ -67,13 +71,10 @@ async function loadFreshHealthModulesForTest() {
     updateLastRoute: vi.fn().mockResolvedValue(undefined),
   }));
   vi.doMock("../config/sessions/paths.js", () => ({
-    resolveStorePath: () => "/tmp/sessions.json",
-  }));
-  vi.doMock("../config/sessions/store.js", () => ({
-    loadSessionStore: () => testStore,
+    resolveSessionStorePathCore: () => "/tmp/sessions.json",
   }));
   vi.doMock("../config/sessions/session-accessor.js", () => ({
-    listSessionEntries: (scope?: { agentId?: string; storePath?: string }) => {
+    listSessionEntriesReadOnly: (scope?: { agentId?: string; storePath?: string }) => {
       listHealthSessionEntriesCalls.push(scope ?? {});
       return Object.entries(testStore).map(([sessionKey, entry]) => ({ sessionKey, entry }));
     },
@@ -93,15 +94,16 @@ async function loadFreshHealthModulesForTest() {
     import("../plugins/runtime.js"),
     import("../plugins/runtime-degraded-state.js"),
     import("../test-utils/channel-plugins.js"),
-    import("./health.js"),
+    import("../gateway/health/collector.js"),
   ]);
+  const collectSnapshot = health.collectGatewayHealthSnapshot;
 
   return {
     setActivePluginRegistry: pluginsRuntime.setActivePluginRegistry,
     setActiveDegradedPlugins: pluginDegradedState.setActiveDegradedPlugins,
     createChannelTestPluginBase: channelTestUtils.createChannelTestPluginBase,
     createTestRegistry: channelTestUtils.createTestRegistry,
-    getHealthSnapshot: health.getHealthSnapshot,
+    getHealthSnapshot: createLegacyHealthSnapshotCollector(collectSnapshot),
   };
 }
 
@@ -460,7 +462,7 @@ function createIMessageHealthPlugin(): HealthTestPlugin {
   };
 }
 
-describe("getHealthSnapshot", () => {
+describe("collectGatewayHealthSnapshot", () => {
   beforeAll(async () => {
     ({
       setActivePluginRegistry,
@@ -557,39 +559,6 @@ describe("getHealthSnapshot", () => {
     ]);
   });
 
-  it("includes dead-lettered delivery queue entries in the health snapshot", async () => {
-    testConfig = { session: { store: "/tmp/x" } };
-    testStore = {};
-    setActivePluginRegistry(createTestRegistry([]));
-    const tmpStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-health-dq-"));
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = tmpStateDir;
-    try {
-      const { moveDeliveryQueueEntryToFailed, upsertDeliveryQueueEntry } =
-        await import("../infra/delivery-queue-sqlite.js");
-      const clean = await getHealthSnapshot({ timeoutMs: 10, probe: false });
-      expect(clean.deliveryQueues).toBeUndefined();
-
-      upsertDeliveryQueueEntry({
-        queueName: "outbound",
-        entry: { id: "dead-1", enqueuedAt: 1_000, retryCount: 5 },
-      });
-      moveDeliveryQueueEntryToFailed("outbound", "dead-1");
-
-      const snap = await getHealthSnapshot({ timeoutMs: 10, probe: false });
-      expect(snap.deliveryQueues?.failed).toEqual([
-        { queueName: "outbound", count: 1, oldestFailedAt: expect.any(Number) },
-      ]);
-    } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      fs.rmSync(tmpStateDir, { recursive: true, force: true });
-    }
-  });
-
   it("omits configReload when no config reloader status is supplied", async () => {
     testConfig = { session: { store: "/tmp/x" } };
     testStore = {};
@@ -682,31 +651,34 @@ describe("getHealthSnapshot", () => {
         channels: {
           telegram: {
             accountId: "default",
+            running: true,
             connected: true,
             lastConnectedAt: 123,
+            healthState: "reconnecting",
           },
         },
         channelAccounts: {},
       },
     });
-    const telegram = snap.channels.telegram as {
+    type RuntimeStateFields = {
+      running?: boolean;
       connected?: boolean;
       lastConnectedAt?: number;
+      healthState?: string;
       probe?: { ok?: boolean; bot?: { username?: string } };
-      accounts?: Record<
-        string,
-        {
-          connected?: boolean;
-          lastConnectedAt?: number;
-          probe?: { ok?: boolean; bot?: { username?: string } };
-        }
-      >;
+    };
+    const telegram = snap.channels.telegram as RuntimeStateFields & {
+      accounts?: Record<string, RuntimeStateFields>;
     };
 
+    expect(telegram.running).toBe(true);
     expect(telegram.connected).toBe(true);
     expect(telegram.lastConnectedAt).toBe(123);
+    expect(telegram.healthState).toBe("reconnecting");
     expect(telegram.probe?.bot?.username).toBe("runtime_bot");
+    expect(telegram.accounts?.default?.running).toBe(true);
     expect(telegram.accounts?.default?.connected).toBe(true);
+    expect(telegram.accounts?.default?.healthState).toBe("reconnecting");
     expect(telegram.accounts?.default?.probe?.ok).toBe(true);
   });
 
@@ -847,12 +819,12 @@ describe("getHealthSnapshot", () => {
     buildTelegramHealthSummaryForTest = (snapshot) => ({
       accountId: snapshot.accountId,
       configured: Boolean(snapshot.configured),
-      probe: { ok: true, token: "summary-secret" },
+      probe: { ok: true, token: "test-token" },
     });
     probeTelegramAccountForTestOverride = async () => ({
       ok: true,
       bot: { username: "runtime_bot" },
-      token: "probe-secret",
+      token: "test-token",
     });
 
     const snap = await getHealthSnapshot({

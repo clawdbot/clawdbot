@@ -159,6 +159,7 @@ docker_e2e_docker_cmd run -d \
     node "$entry" config set --batch-file "$batch_file" >/dev/null
     rm -f "$batch_file"
     node scripts/e2e/lib/fixture.mjs openwebui-workspace
+    node "$entry" doctor --fix --yes --force >/dev/null
 
     openclaw_e2e_exec_gateway "$entry" '"$PORT"' lan /tmp/openwebui-gateway.log
   ' >/dev/null

@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { SESSION_STORE_TEMP_STALE_MS } from "./artifacts.js";
 import { sweepOrphanSessionStoreTemps } from "./store-temp-cleanup.js";
 
@@ -16,7 +16,7 @@ async function writeAt(filePath: string, contents: string, mtimeMs: number): Pro
 
 describe("sweepOrphanSessionStoreTemps", () => {
   it("removes stale current and legacy temps while preserving fresh and unrelated files", async () => {
-    await withTempDir({ prefix: "store-temp-cleanup" }, async (dir) => {
+    await withTestDir({ prefix: "store-temp-cleanup" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const staleMtime = NOW_MS - SESSION_STORE_TEMP_STALE_MS - 1;
       const staleCurrent = `${storePath}.123.${UUID}.tmp`;
@@ -44,7 +44,7 @@ describe("sweepOrphanSessionStoreTemps", () => {
     ["corrupt", "{not-json"],
     ["non-record", "[]"],
   ])("preserves recovery candidates when the primary store is %s", async (_label, primary) => {
-    await withTempDir({ prefix: "store-temp-recovery" }, async (dir) => {
+    await withTestDir({ prefix: "store-temp-recovery" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const candidate = `${storePath}.123.${UUID}.tmp`;
       if (primary !== undefined) {
@@ -58,7 +58,7 @@ describe("sweepOrphanSessionStoreTemps", () => {
   });
 
   it("matches a custom store basename", async () => {
-    await withTempDir({ prefix: "store-temp-custom" }, async (dir) => {
+    await withTestDir({ prefix: "store-temp-custom" }, async (dir) => {
       const storePath = path.join(dir, "custom-store.json");
       const candidate = `${storePath}.123.${UUID}.tmp`;
       await fs.writeFile(storePath, "{}");

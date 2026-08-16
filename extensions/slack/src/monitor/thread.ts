@@ -9,7 +9,12 @@ import {
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatSlackFileReferenceList } from "../file-reference.js";
 import type { SlackAttachment, SlackFile } from "../types.js";
-import { chooseSlackPrimaryText, resolveSlackBlocksText } from "./block-text.js";
+import {
+  hasSlackTableBlock,
+  isSlackUnfurlAttachment,
+  resolveSlackBlocksText,
+  resolveSlackMessageText as resolveSharedSlackMessageText,
+} from "./block-text.js";
 import { logVerbose } from "./thread.runtime.js";
 
 export type SlackThreadStarter = {
@@ -47,8 +52,16 @@ function formatSlackFilePlaceholder(files: SlackFile[] | undefined): string {
   return `[attached: ${formatSlackFileReferenceList(files)}]`;
 }
 
-function pushUniqueText(parts: string[], value: string | undefined): void {
-  const text = normalizeOptionalString(value);
+function pushUniqueText(
+  parts: string[],
+  value: string | undefined,
+  options: { preserveWhitespace?: boolean } = {},
+): void {
+  const text = options.preserveWhitespace
+    ? typeof value === "string" && value.trim().length > 0
+      ? value
+      : undefined
+    : normalizeOptionalString(value);
   if (text && !parts.includes(text)) {
     parts.push(text);
   }
@@ -67,16 +80,30 @@ function resolveSlackAttachmentFallbackText(
 
   const parts: string[] = [];
   for (const attachment of attachments) {
+    const excludeTableBlocks = isSlackUnfurlAttachment(attachment);
+    const fallbackBlocks = (blocks: unknown[] | undefined) =>
+      excludeTableBlocks ? blocks?.filter((block) => !hasSlackTableBlock([block])) : blocks;
     pushUniqueText(parts, attachment.pretext);
     pushUniqueText(parts, attachment.title);
     pushUniqueText(parts, attachment.text);
-    pushUniqueText(parts, attachment.fallback);
+    const isTablePlaceholder =
+      hasSlackTableBlock(attachment.blocks) &&
+      normalizeOptionalString(attachment.fallback) === "[no preview available]";
+    if (!isTablePlaceholder) {
+      pushUniqueText(parts, attachment.fallback);
+    }
     for (const field of attachment.fields ?? []) {
       pushUniqueText(parts, field.title);
       pushUniqueText(parts, field.value);
     }
-    pushUniqueText(parts, resolveSlackBlocksFallbackText(attachment.blocks));
-    pushUniqueText(parts, resolveSlackBlocksFallbackText(attachment.message_blocks));
+    pushUniqueText(parts, resolveSlackBlocksFallbackText(fallbackBlocks(attachment.blocks)), {
+      preserveWhitespace: true,
+    });
+    pushUniqueText(
+      parts,
+      resolveSlackBlocksFallbackText(fallbackBlocks(attachment.message_blocks)),
+      { preserveWhitespace: true },
+    );
   }
   return parts.length > 0 ? parts.join("\n") : undefined;
 }
@@ -89,28 +116,25 @@ function resolveSlackMessageText(message: {
   const messageText =
     normalizeOptionalString(message.text) ??
     resolveSlackAttachmentFallbackText(message.attachments);
-  return chooseSlackPrimaryText({
-    messageText,
-    blocksText: resolveSlackBlocksText(message.blocks),
-  });
+  return resolveSharedSlackMessageText(
+    { ...message, text: messageText },
+    { preserveMessageTextWhitespace: true },
+  );
 }
 
 export async function resolveSlackThreadStarter(params: {
   channelId: string;
   threadTs: string;
   client: SlackWebClient;
-  /** Enterprise cache partition. Omit to preserve workspace-install cache identity. */
-  workspaceScope?: { accountId: string; teamId: string };
+  workspaceScope: { accountId: string; teamId: string };
 }): Promise<SlackThreadStarter | null> {
   evictThreadStarterCache();
-  const cacheKey = params.workspaceScope
-    ? JSON.stringify([
-        params.workspaceScope.accountId,
-        params.workspaceScope.teamId,
-        params.channelId,
-        params.threadTs,
-      ])
-    : `${params.channelId}:${params.threadTs}`;
+  const cacheKey = JSON.stringify([
+    params.workspaceScope.accountId,
+    params.workspaceScope.teamId,
+    params.channelId,
+    params.threadTs,
+  ]);
   const cached = THREAD_STARTER_CACHE.get(cacheKey);
   if (cached) {
     const now = asDateTimestampMs(Date.now());

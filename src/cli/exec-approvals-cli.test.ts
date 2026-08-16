@@ -1,8 +1,9 @@
-// Exec approvals CLI tests cover approval command registration and output handling.
 import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { Command } from "commander";
+// Exec approvals CLI tests cover approval command registration and output handling.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { SESSION_EXEC_OVERRIDES_NOTE } from "../infra/exec-approvals-effective.js";
@@ -38,40 +39,47 @@ const mocks = vi.hoisted(() => {
     }),
   };
   return {
-    callGatewayFromCli: vi.fn(async (method: string, _opts: unknown, params?: unknown) => {
-      if (method.endsWith(".get")) {
-        if (method === "config.get") {
-          return {
-            config: {
-              tools: {
-                exec: {
-                  security: "full",
-                  ask: "off",
+    callGatewayFromCli: vi.fn(
+      async (
+        method: string,
+        _opts: unknown,
+        params?: unknown,
+        _extra?: unknown,
+      ): Promise<unknown> => {
+        if (method.endsWith(".get")) {
+          if (method === "config.get") {
+            return {
+              config: {
+                tools: {
+                  exec: {
+                    security: "full",
+                    ask: "off",
+                  },
                 },
               },
-            },
+            };
+          }
+          const snapshot = {
+            path: "/tmp/exec-approvals.json",
+            exists: true,
+            hash: "hash-1",
+            file: { version: 1, agents: {} },
           };
+          return method === "exec.approvals.node.get"
+            ? {
+                ...snapshot,
+                resolvedDefaults: {
+                  security: "allowlist" as const,
+                  ask: "on-miss" as const,
+                  askFallback: "deny" as const,
+                  autoAllowSkills: false,
+                },
+              }
+            : snapshot;
         }
-        const snapshot = {
-          path: "/tmp/exec-approvals.json",
-          exists: true,
-          hash: "hash-1",
-          file: { version: 1, agents: {} },
-        };
-        return method === "exec.approvals.node.get"
-          ? {
-              ...snapshot,
-              resolvedDefaults: {
-                security: "allowlist" as const,
-                ask: "on-miss" as const,
-                askFallback: "deny" as const,
-                autoAllowSkills: false,
-              },
-            }
-          : snapshot;
-      }
-      return { method, params };
-    }),
+        return { method, params };
+      },
+    ),
     defaultRuntime,
     readBestEffortConfig,
     runtimeErrors,
@@ -89,12 +97,7 @@ const localSnapshot = {
   file: { version: 1, agents: {} } as ExecApprovalsFile,
 };
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`Expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-capitalized");
 
 function requireArray(value: unknown, label: string): unknown[] {
   if (!Array.isArray(value)) {
@@ -162,20 +165,21 @@ function scopeByLabel(label: string, output: Record<string, unknown> = writtenJs
 }
 
 function resetLocalSnapshot() {
+  localSnapshot.exists = true;
   localSnapshot.hash = "hash-local";
   localSnapshot.file = { version: 1, agents: {} };
 }
 
 vi.mock("./gateway-rpc.js", () => ({
-  callGatewayFromCli: (method: string, opts: unknown, params?: unknown) =>
-    mocks.callGatewayFromCli(method, opts, params),
+  callGatewayFromCli: (method: string, opts: unknown, params?: unknown, extra?: unknown) =>
+    mocks.callGatewayFromCli(method, opts, params, extra),
 }));
 
 vi.mock("./nodes-cli/rpc.js", async () => {
   const actual = await vi.importActual<typeof import("./nodes-cli/rpc.js")>("./nodes-cli/rpc.js");
   return {
     ...actual,
-    resolveNodeId: vi.fn(async () => "node-1"),
+    resolveCliNodeId: vi.fn(async () => "node-1"),
   };
 });
 
@@ -233,6 +237,24 @@ describe("exec approvals CLI", () => {
     await program.parseAsync(args, { from: "user" });
   };
 
+  const runNativeApprovalsFileCommand = async (filePath: string) => {
+    callGatewayFromCli.mockResolvedValue({
+      enabled: true,
+      hash: "sha256:current",
+      defaultAction: "deny",
+      rules: [],
+    } as never);
+    await runApprovalsCommand([
+      "approvals",
+      "set",
+      "--node",
+      "windows",
+      "--file",
+      filePath,
+      "--json",
+    ]);
+  };
+
   beforeEach(() => {
     resetLocalSnapshot();
     runtimeErrors.length = 0;
@@ -284,6 +306,49 @@ describe("exec approvals CLI", () => {
     expect(runtimeErrors).toHaveLength(0);
   });
 
+  it("renders an unstored fresh-install policy as defaults instead of absent", async () => {
+    localSnapshot.exists = false;
+
+    await runApprovalsCommand(["approvals", "get"]);
+
+    const output = defaultRuntime.log.mock.calls.map(([line]) => String(line ?? "")).join("\n");
+    expect(output).toContain("State");
+    expect(output).toContain("defaults (no stored overrides)");
+    expect(output).not.toContain("Exists");
+  });
+
+  it("sanitizes stored allowlist patterns in human output without changing JSON", async () => {
+    const pattern = "/tmp/safe\u001b[31mred\u001b[0m\u001b]0;pwned\u0007\nnext\trow\rback\bspace🦞";
+    localSnapshot.file = {
+      version: 1,
+      agents: { "*": { allowlist: [{ pattern }] } },
+    };
+
+    await runApprovalsCommand(["approvals", "get"]);
+
+    const output = defaultRuntime.log.mock.calls.map(([line]) => String(line ?? "")).join("\n");
+    const hasUnsafeControl = Array.from(output).some((char) => {
+      const codePoint = char.codePointAt(0) ?? -1;
+      return (
+        codePoint === 0x07 ||
+        codePoint === 0x08 ||
+        codePoint === 0x1b ||
+        (codePoint >= 0x7f && codePoint <= 0x9f)
+      );
+    });
+    expect(hasUnsafeControl).toBe(false);
+    expect(output).toContain("safered\\nnext\\trow\\rbackspace🦞");
+
+    defaultRuntime.writeJson.mockClear();
+    await runApprovalsCommand(["approvals", "get", "--json"]);
+
+    const file = requireRecord(writtenJson().file, "JSON approvals file");
+    const agents = requireRecord(file.agents, "JSON approvals agents");
+    const wildcard = requireRecord(agents["*"], "JSON wildcard agent");
+    const allowlist = requireArray(wildcard.allowlist, "JSON wildcard allowlist");
+    expect(requireRecord(allowlist[0], "JSON allowlist entry").pattern).toBe(pattern);
+  });
+
   it("adds effective policy to json output", async () => {
     localSnapshot.file = {
       version: 1,
@@ -304,7 +369,7 @@ describe("exec approvals CLI", () => {
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(writtenJson(), 0);
     const policy = effectivePolicy();
     expect(String(policy.note)).toContain(
-      "Effective exec policy is the host approvals file intersected with requested tools.exec policy.",
+      "Effective exec policy is the host approvals policy intersected with requested tools.exec policy.",
     );
     expect(String(policy.note)).toContain(SESSION_EXEC_OVERRIDES_NOTE);
     const scope = scopeByLabel("tools.exec");
@@ -405,7 +470,7 @@ describe("exec approvals CLI", () => {
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(writtenJson(), 0);
     const policy = effectivePolicy();
     expect(String(policy.note)).toContain(
-      "Effective exec policy is the node host approvals file intersected with gateway tools.exec policy.",
+      "Effective exec policy is the node host approvals policy intersected with gateway tools.exec policy.",
     );
     expect(String(policy.note)).toContain(SESSION_EXEC_OVERRIDES_NOTE);
     const scope = scopeByLabel("tools.exec");
@@ -761,7 +826,7 @@ describe("exec approvals CLI", () => {
         },
       },
       agents: {
-        list: [{ id: "runner" }],
+        list: [{ id: "main", default: true }, { id: "runner" }],
       },
     });
 
@@ -856,5 +921,79 @@ describe("exec approvals CLI", () => {
     await expect(testing.readStdin(Readable.from(["12345", "6"]), 5)).rejects.toThrow(
       "Exec approvals stdin exceeds 5 bytes.",
     );
+  });
+
+  it("reads approvals JSON from a regular file", async () => {
+    const dir = tempDirs.make("openclaw-approvals-file-bound-");
+    const filePath = path.join(dir, "approvals.json");
+    fs.writeFileSync(filePath, JSON.stringify({ defaultAction: "deny", rules: [] }));
+
+    await runNativeApprovalsFileCommand(filePath);
+
+    expect(callGatewayFromCli.mock.calls.map(([method]) => method)).toEqual([
+      "exec.approvals.node.get",
+      "exec.approvals.node.set",
+      "exec.approvals.node.get",
+    ]);
+    expect(runtimeErrors).toHaveLength(0);
+  });
+
+  it("rejects an oversized approvals file", async () => {
+    const dir = tempDirs.make("openclaw-approvals-file-bound-");
+    const filePath = path.join(dir, "oversized.json");
+    fs.writeFileSync(filePath, Buffer.alloc(1024 * 1024 + 1, "x"));
+
+    await expect(runNativeApprovalsFileCommand(filePath)).rejects.toThrow("__exit__:1");
+
+    expect(writtenJson().error).toContain("File exceeds 1048576 bytes");
+    expect(runtimeErrors).toHaveLength(0);
+    expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves the directory read error", async () => {
+    const dir = tempDirs.make("openclaw-approvals-file-directory-");
+
+    await expect(runNativeApprovalsFileCommand(dir)).rejects.toThrow("__exit__:1");
+
+    expect(writtenJson().error).toMatch(/EISDIR|directory/i);
+    expect(runtimeErrors).toHaveLength(0);
+    expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
+  });
+
+  it("follows a symlinked approvals file", async () => {
+    const dir = tempDirs.make("openclaw-approvals-file-symlink-");
+    const targetPath = path.join(dir, "target.json");
+    const symlinkPath = path.join(dir, "approvals.json");
+    fs.writeFileSync(targetPath, JSON.stringify({ defaultAction: "deny", rules: [] }));
+    fs.symlinkSync(targetPath, symlinkPath);
+
+    await runNativeApprovalsFileCommand(symlinkPath);
+
+    expect(callGatewayFromCli.mock.calls.map(([method]) => method)).toContain(
+      "exec.approvals.node.set",
+    );
+    expect(runtimeErrors).toHaveLength(0);
+  });
+
+  it("rejects a file that grows past the limit after opening", async () => {
+    const dir = tempDirs.make("openclaw-approvals-file-growth-");
+    const filePath = path.join(dir, "growing.json");
+    fs.writeFileSync(filePath, Buffer.alloc(1024 * 1024, "x"));
+    const open = fs.promises.open.bind(fs.promises);
+    const openSpy = vi.spyOn(fs.promises, "open").mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      fs.appendFileSync(filePath, "x");
+      return handle;
+    });
+
+    try {
+      await expect(runNativeApprovalsFileCommand(filePath)).rejects.toThrow("__exit__:1");
+    } finally {
+      openSpy.mockRestore();
+    }
+
+    expect(writtenJson().error).toContain("File exceeds 1048576 bytes");
+    expect(runtimeErrors).toHaveLength(0);
+    expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
   });
 });

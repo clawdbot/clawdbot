@@ -5,9 +5,7 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.group-messages
-    secondary:
-      - runtime.turn-ordering
+      - channels.room-session-group-messages
   objective: Verify a reply in a secondary conversation stays isolated from the primary conversation.
   successCriteria:
     - The primary conversation receives only its marker.
@@ -19,7 +17,6 @@ scenario:
     - extensions/qa-lab/src/qa-transport.ts
     - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
   execution:
-    profiles: { "matrix:adapter": 6, "matrix:all": 19, "matrix:transport": 18 }
     kind: flow
     summary: Send sequential turns to primary and secondary channel conversations and assert isolation.
     transportPolicy:

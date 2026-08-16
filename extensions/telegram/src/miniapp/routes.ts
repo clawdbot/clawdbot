@@ -1,4 +1,3 @@
-// Telegram Mini App HTTP routes.
 import crypto from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
@@ -10,6 +9,7 @@ import {
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveTelegramAccount } from "../accounts.js";
 import { validateTelegramMiniAppInitData } from "./init-data.js";
+import type { TelegramMiniAppLaunchTickets } from "./launch-ticket.js";
 import { isTelegramMiniAppOwner } from "./owner.js";
 import { renderTelegramMiniAppPage, TELEGRAM_MINIAPP_EXPIRED_MESSAGE } from "./page.js";
 import {
@@ -26,7 +26,10 @@ const RATE_LIMIT_MAX = 10;
 const replayCache = new Map<string, number>();
 const rateLimit = new Map<string, { count: number; resetAtMs: number }>();
 
-export function registerTelegramMiniAppRoutes(api: OpenClawPluginApi): void {
+export function registerTelegramMiniAppRoutes(
+  api: OpenClawPluginApi,
+  launchTickets: TelegramMiniAppLaunchTickets,
+): void {
   api.registerHttpRoute({
     path: TELEGRAM_MINIAPP_PATH_PREFIX,
     match: "prefix",
@@ -38,7 +41,7 @@ export function registerTelegramMiniAppRoutes(api: OpenClawPluginApi): void {
         return true;
       }
       if (url.pathname === AUTH_PATH) {
-        await handleAuth(api, req, res);
+        await handleAuth(api, launchTickets, req, res);
         return true;
       }
       sendText(res, 404, "Not found");
@@ -67,6 +70,7 @@ async function handlePage(req: IncomingMessage, res: ServerResponse, url: URL): 
 
 async function handleAuth(
   api: OpenClawPluginApi,
+  launchTickets: TelegramMiniAppLaunchTickets,
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
@@ -117,6 +121,16 @@ async function handleAuth(
     sendText(res, 503, TELEGRAM_MINIAPP_URL_ERROR);
     return;
   }
+  if (
+    !launchTickets.consume({
+      ticket: body.launchTicket,
+      accountId,
+      userId: validated.userId,
+    })
+  ) {
+    sendText(res, 401, TELEGRAM_MINIAPP_EXPIRED_MESSAGE);
+    return;
+  }
   if (!rememberReplay(validated.hash, validated.authDateMs + 300_000)) {
     sendText(res, 401, TELEGRAM_MINIAPP_EXPIRED_MESSAGE);
     return;
@@ -141,7 +155,7 @@ function currentConfig(api: OpenClawPluginApi): OpenClawConfig {
 
 async function readJsonBody(
   req: IncomingMessage,
-): Promise<{ initData: string; accountId?: string } | "too-large" | null> {
+): Promise<{ initData: string; launchTicket: string; accountId?: string } | "too-large" | null> {
   const chunks: Buffer[] = [];
   let total = 0;
   for await (const chunk of req) {
@@ -155,13 +169,15 @@ async function readJsonBody(
   try {
     const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
       initData?: unknown;
+      launchTicket?: unknown;
       accountId?: unknown;
     };
-    if (typeof parsed.initData !== "string") {
+    if (typeof parsed.initData !== "string" || typeof parsed.launchTicket !== "string") {
       return null;
     }
     return {
       initData: parsed.initData,
+      launchTicket: parsed.launchTicket,
       ...(typeof parsed.accountId === "string" ? { accountId: parsed.accountId } : {}),
     };
   } catch {

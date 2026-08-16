@@ -14,7 +14,7 @@ function gatewayPrompt(overrides: Partial<QuestionPrompt> = {}): QuestionPrompt 
     id: "question-1",
     questions: [
       {
-        id: "format",
+        questionId: "format",
         header: "Format",
         question: "Which format should I use?",
         options: [
@@ -64,11 +64,16 @@ describe("shared question panel", () => {
       onSkip?: () => void | Promise<void>;
     } = {},
   ) {
+    let collapsed = false;
     const redraw = () => {
       render(
         html`<openclaw-chat-question-panel
           .props=${createGatewayQuestionPanelProps(prompt, {
-            nowMs: 2_000,
+            collapsed,
+            onCollapsedChange: (nextCollapsed) => {
+              collapsed = nextCollapsed;
+              redraw();
+            },
             onChange: redraw,
             onSubmit: callbacks.onSubmit ?? vi.fn(),
             onSkip: callbacks.onSkip ?? vi.fn(),
@@ -84,14 +89,14 @@ describe("shared question panel", () => {
     const prompt = gatewayPrompt({
       questions: [
         {
-          id: "target",
+          questionId: "target",
           header: "Target",
           question: "Where should I send it?",
           options: [{ label: "Chat" }, { label: "File" }],
           isOther: true,
         },
         {
-          id: "extras",
+          questionId: "extras",
           header: "Extras",
           question: "Which extras should I include?",
           options: [{ label: "Tests" }, { label: "Docs" }],
@@ -168,7 +173,7 @@ describe("shared question panel", () => {
         questions: [
           ...gatewayPrompt().questions,
           {
-            id: "confirm",
+            questionId: "confirm",
             header: "Confirm",
             question: "Ready to continue?",
             options: [{ label: "Ready" }],
@@ -235,6 +240,7 @@ describe("shared question panel", () => {
 
     container.querySelector<HTMLButtonElement>(".chat-question-panel__collapsed-button")?.click();
     await panel.updateComplete;
+    expect(document.activeElement).toBe(container.querySelector(".chat-question-panel"));
     container.querySelector<HTMLButtonElement>(".chat-question-panel__skip")?.click();
     expect(onSkip).toHaveBeenCalledOnce();
   });
@@ -242,7 +248,7 @@ describe("shared question panel", () => {
   it("disables actions whose gateway callbacks are unavailable", async () => {
     render(
       html`<openclaw-chat-question-panel
-        .props=${createGatewayQuestionPanelProps(gatewayPrompt(), { nowMs: 2_000 })}
+        .props=${createGatewayQuestionPanelProps(gatewayPrompt(), {})}
       ></openclaw-chat-question-panel>`,
       container,
     );
@@ -254,12 +260,37 @@ describe("shared question panel", () => {
     expect(container.querySelector(".chat-question-panel__skip")).toBeNull();
   });
 
+  it("does not render the request expiry countdown", async () => {
+    drawGateway(gatewayPrompt());
+    await panelIn(container);
+
+    expect(container.querySelector(".chat-question-panel__countdown")).toBeNull();
+    expect(container.textContent).not.toContain("1:00");
+  });
+
+  it("manages collapse state when no controlled callback is supplied", async () => {
+    render(
+      html`<openclaw-chat-question-panel
+        .props=${createGatewayQuestionPanelProps(gatewayPrompt(), {})}
+      ></openclaw-chat-question-panel>`,
+      container,
+    );
+    const panel = await panelIn(container);
+
+    container.querySelector<HTMLButtonElement>(".chat-question-panel__collapse")?.click();
+    await panel.updateComplete;
+    expect(container.querySelector(".chat-question-panel--collapsed")).not.toBeNull();
+
+    container.querySelector<HTMLButtonElement>(".chat-question-panel__collapsed-button")?.click();
+    await panel.updateComplete;
+    expect(container.querySelector(".chat-question-panel--collapsed")).toBeNull();
+  });
+
   it("retains answers with submit-only wiring", async () => {
     const onSubmit = vi.fn();
     render(
       html`<openclaw-chat-question-panel
         .props=${createGatewayQuestionPanelProps(gatewayPrompt(), {
-          nowMs: 2_000,
           onSubmit,
         })}
       ></openclaw-chat-question-panel>`,
@@ -279,7 +310,6 @@ describe("shared question panel", () => {
     render(
       html`<openclaw-chat-question-panel
         .props=${createGatewayQuestionPanelProps(gatewayPrompt(), {
-          nowMs: 2_000,
           onSkip,
         })}
       ></openclaw-chat-question-panel>`,

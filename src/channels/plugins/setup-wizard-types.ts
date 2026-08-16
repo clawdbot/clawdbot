@@ -7,20 +7,17 @@ import type { DmPolicy } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
+import type { ChannelOwnedSetupContract } from "./setup-contract.js";
 import type { ChannelAccessPolicy } from "./setup-group-access.js";
 import type { ChannelConfigAdapter, ChannelSetupAdapter } from "./types.adapters.js";
-import type {
-  ChannelCapabilities,
-  ChannelId,
-  ChannelMeta,
-  ChannelSetupInput,
-} from "./types.core.js";
+import type { ChannelCapabilities, ChannelId, ChannelMeta } from "./types.core.js";
 
 export type ChannelSetupPlugin = {
   id: ChannelId;
   meta: ChannelMeta;
   capabilities: ChannelCapabilities;
   config: ChannelConfigAdapter<unknown>;
+  setupContract?: ChannelOwnedSetupContract;
   setup?: ChannelSetupAdapter;
   setupWizard?: ChannelSetupWizard | ChannelSetupWizardAdapter;
 };
@@ -88,7 +85,8 @@ type ChannelSetupWizardEnvShortcut = {
 
 /** Declarative secret/input step for a channel account credential. */
 export type ChannelSetupWizardCredential = {
-  inputKey: keyof ChannelSetupInput;
+  /** Plugin-owned key written into the runtime setup input. */
+  inputKey: string;
   providerHint: string;
   credentialLabel: string;
   preferredEnvVar?: string;
@@ -122,11 +120,14 @@ export type ChannelSetupWizardCredential = {
   }) => OpenClawConfig | Promise<OpenClawConfig>;
 };
 
-/** Declarative non-secret text step that can depend on resolved credentials. */
+/** Declarative text step that can depend on resolved credentials. */
 export type ChannelSetupWizardTextInput = {
-  inputKey: keyof ChannelSetupInput;
+  /** Plugin-owned key written into the runtime setup input. */
+  inputKey: string;
   message: string;
   placeholder?: string;
+  /** Mask input and keep any configured value server-side. */
+  sensitive?: boolean;
   required?: boolean;
   applyEmptyValue?: boolean;
   helpTitle?: string;
@@ -179,7 +180,7 @@ export type ChannelSetupWizardAllowFromEntry = {
 type ChannelSetupWizardAllowFrom = {
   helpTitle?: string;
   helpLines?: string[];
-  credentialInputKey?: keyof ChannelSetupInput;
+  credentialInputKey?: string;
   message: string;
   placeholder: string;
   invalidWithoutCredentialNote: string;
@@ -325,6 +326,8 @@ export type SetupChannelsOptions = {
   skipConfirm?: boolean;
   quickstartDefaults?: boolean;
   initialSelection?: ChannelId[];
+  /** Finish after the explicitly targeted channel is configured or paused. */
+  finishAfterInitialSelection?: boolean;
   secretInputMode?: "plaintext" | "ref";
 };
 
@@ -380,10 +383,18 @@ export type ChannelOnboardingPostWriteHook = {
   run: (ctx: { cfg: OpenClawConfig; runtime: RuntimeEnv }) => Promise<void> | void;
 };
 
-export type ChannelSetupResult = {
-  cfg: OpenClawConfig;
-  accountId?: string;
-};
+export type ChannelSetupResult =
+  | {
+      cfg: OpenClawConfig;
+      accountId?: string;
+      completion?: "configured";
+    }
+  | {
+      cfg: OpenClawConfig;
+      /** Paused setup is persisted without configured-account hooks or routing. */
+      completion: "paused";
+      accountId?: never;
+    };
 
 export type ChannelSetupConfiguredResult = ChannelSetupResult | "skip";
 

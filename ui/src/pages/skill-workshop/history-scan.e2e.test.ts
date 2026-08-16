@@ -78,6 +78,7 @@ describeBrowser("Skill Workshop history scan browser flow", () => {
         assistantAgentId: "main",
         assistantName: "Molty",
         defaultAgentId: "main",
+        featureMethods: ["chat.metadata", "chat.startup", "skills.proposals.historyScan"],
         methodResponses: {
           "skills.proposals.list": emptyProposals,
           "skills.proposals.historyStatus": emptyHistory,

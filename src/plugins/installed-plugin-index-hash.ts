@@ -59,25 +59,3 @@ export function safeFileSignature(filePath: string): InstalledPluginFileSignatur
     return undefined;
   }
 }
-
-/** Compares current file metadata with a stored installed-plugin file signature. */
-export function fileSignatureMatches(
-  filePath: string,
-  signature: InstalledPluginFileSignature | undefined,
-): boolean | undefined {
-  if (!signature) {
-    return undefined;
-  }
-  if (typeof signature.ctimeMs !== "number") {
-    return undefined;
-  }
-  const current = safeFileSignature(filePath);
-  if (!current) {
-    return false;
-  }
-  return (
-    current.size === signature.size &&
-    current.mtimeMs === signature.mtimeMs &&
-    current.ctimeMs === signature.ctimeMs
-  );
-}

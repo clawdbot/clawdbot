@@ -44,7 +44,7 @@ const createGhosttyTerminalMock: CreateGhosttyTerminalMock = vi.fn();
 const TERMINAL_PANEL_ELEMENT_NAME = `test-openclaw-terminal-panel-upload-${crypto.randomUUID()}`;
 
 class TestTerminalPanel extends OpenClawTerminalPanel {
-  protected override createTerminal = createGhosttyTerminalMock as unknown as TerminalFactory;
+  override createTerminalController = createGhosttyTerminalMock as unknown as TerminalFactory;
 }
 
 customElements.define(TERMINAL_PANEL_ELEMENT_NAME, TestTerminalPanel);

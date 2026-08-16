@@ -5,7 +5,7 @@ import {
   type SessionStateActorType,
 } from "../../sessions/session-state-events.js";
 import { formatTokenCount } from "../../utils/token-format.js";
-import { loadSessionEntry, patchSessionEntry } from "./session-accessor.js";
+import { loadSessionEntryReadOnly, patchSessionEntryCore } from "./session-accessor.js";
 import { resolveFreshSessionTotalTokens } from "./types.js";
 import type { SessionEntry, SessionGoal, SessionGoalStatus } from "./types.js";
 
@@ -49,13 +49,13 @@ function normalizeTokenCount(value: number | undefined): number | undefined {
 }
 
 function resolveEntryFreshTotalTokens(
-  entry: Pick<SessionEntry, "totalTokens" | "totalTokensFresh">,
+  entry: Pick<SessionEntry, "totalTokens" | "totalTokensFresh" | "totalTokensVersion">,
 ): number | undefined {
   return normalizeTokenCount(resolveFreshSessionTotalTokens(entry));
 }
 
 function resolveEntryGoalStartTokens(
-  entry: Pick<SessionEntry, "totalTokens" | "totalTokensFresh">,
+  entry: Pick<SessionEntry, "totalTokens" | "totalTokensFresh" | "totalTokensVersion">,
 ): number {
   return resolveEntryFreshTotalTokens(entry) ?? 0;
 }
@@ -84,7 +84,7 @@ function recordGoalChange(
 }
 
 export function resolveSessionGoalDisplayState(
-  entry: Pick<SessionEntry, "goal" | "totalTokens" | "totalTokensFresh">,
+  entry: Pick<SessionEntry, "goal" | "totalTokens" | "totalTokensFresh" | "totalTokensVersion">,
   now?: number,
   options?: { adoptFreshBaseline?: boolean },
 ): SessionGoal | undefined {
@@ -92,7 +92,7 @@ export function resolveSessionGoalDisplayState(
 }
 
 function accountGoalUsage(
-  entry: Pick<SessionEntry, "goal" | "totalTokens" | "totalTokensFresh">,
+  entry: Pick<SessionEntry, "goal" | "totalTokens" | "totalTokensFresh" | "totalTokensVersion">,
   now: number,
   options?: { adoptFreshBaseline?: boolean },
 ): SessionGoal | undefined {
@@ -182,7 +182,7 @@ export async function getSessionGoal(
   if (options.persist === false) {
     // Status rendering should not write incidental budget/baseline adoption unless callers opt in.
     const entry =
-      loadSessionEntry({ sessionKey: options.sessionKey, storePath: options.storePath }) ??
+      loadSessionEntryReadOnly({ sessionKey: options.sessionKey, storePath: options.storePath }) ??
       options.fallbackEntry;
     const projected = entry
       ? resolveSessionGoalDisplayState(entry, now, { adoptFreshBaseline: false })
@@ -190,7 +190,7 @@ export async function getSessionGoal(
     return projected ? { status: "found", goal: projected } : { status: "missing" };
   }
   let goal: SessionGoal | undefined;
-  const result = await patchSessionEntry(
+  const result = await patchSessionEntryCore(
     { sessionKey: options.sessionKey, storePath: options.storePath },
     (entry) => {
       const accounted = accountGoalUsage(entry, now);
@@ -215,7 +215,7 @@ export async function createSessionGoal(options: CreateSessionGoalOptions): Prom
   }
   const now = nowMs(options.now);
   let created: SessionGoal | undefined;
-  const result = await patchSessionEntry(
+  const result = await patchSessionEntryCore(
     { sessionKey: options.sessionKey, storePath: options.storePath },
     (entry) => {
       if (entry.goal) {
@@ -253,7 +253,7 @@ export async function updateSessionGoalStatus(
   const now = nowMs(options.now);
   let updated: SessionGoal | undefined;
   let foundSession = false;
-  const result = await patchSessionEntry(
+  const result = await patchSessionEntryCore(
     { sessionKey: options.sessionKey, storePath: options.storePath },
     (entry) => {
       foundSession = true;
@@ -316,7 +316,7 @@ export async function updateSessionGoalObjective(
   const now = nowMs(options.now);
   let updated: SessionGoal | undefined;
   let foundSession = false;
-  const result = await patchSessionEntry(
+  const result = await patchSessionEntryCore(
     { sessionKey: options.sessionKey, storePath: options.storePath },
     (entry) => {
       foundSession = true;
@@ -341,7 +341,7 @@ export async function updateSessionGoalObjective(
 
 export async function clearSessionGoal(options: SessionGoalStoreOptions): Promise<boolean> {
   let removed = false;
-  const result = await patchSessionEntry(
+  const result = await patchSessionEntryCore(
     { sessionKey: options.sessionKey, storePath: options.storePath },
     (entry) => {
       if (!entry.goal) {

@@ -1,9 +1,10 @@
 import type {
   BeforeToolCallFailureDisposition,
-  EmbeddedRunAttemptParams,
+  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveCodexToolAbortTerminalReason } from "./dynamic-tool-execution.js";
 import {
   auditNativeToolName,
@@ -13,15 +14,12 @@ import {
   type CodexNativeToolAuditStatus,
   type CodexNativeToolUnfinishedStatus,
 } from "./event-projector-items.js";
-import { readItem, readString } from "./event-projector-values.js";
+import { readItem } from "./event-projector-values.js";
 import {
   emitCodexNativePreToolUseFailureDiagnostic,
   type CodexNativePreToolUseFailure,
 } from "./native-hook-relay.js";
-import {
-  readCodexNotificationThreadId,
-  readCodexNotificationTurnId,
-} from "./notification-correlation.js";
+import { isCodexNotificationForTurn } from "./notification-correlation.js";
 import { readCodexTurn } from "./protocol-validators.js";
 import {
   isJsonObject,
@@ -72,11 +70,7 @@ export class CodexNativeToolLifecycleProjector {
 
   handleNotification(notification: CodexServerNotification): void {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
-    if (
-      !params ||
-      readCodexNotificationThreadId(params) !== this.threadId ||
-      readCodexNotificationTurnId(params) !== this.turnId
-    ) {
+    if (!params || !isCodexNotificationForTurn(params, this.threadId, this.turnId)) {
       return;
     }
     if (notification.method === "turn/completed") {

@@ -227,25 +227,20 @@ present in the static catalog.
 
 ### Token Plan catalog
 
-Token Plan uses a separate exact-string allowlist. Image-generation-only plan
-models are not included here because they use different APIs.
+Token Plan uses a separate exact-string allowlist. The built-in catalog shows
+Alibaba's currently recommended plan models and keeps the newer Qwen3-Coder
+compatibility tier selectable but hidden. Other allowlisted model IDs remain
+available as custom model refs. Image-generation-only plan models are not
+included here because they use different APIs.
 
-| Model ref                           | Input       | Context   |
-| ----------------------------------- | ----------- | --------- |
-| `qwen-token-plan/qwen3.7-max`       | text        | 1,000,000 |
-| `qwen-token-plan/qwen3.7-plus`      | text, image | 1,000,000 |
-| `qwen-token-plan/qwen3.6-plus`      | text, image | 1,000,000 |
-| `qwen-token-plan/qwen3.6-flash`     | text, image | 1,000,000 |
-| `qwen-token-plan/deepseek-v4-pro`   | text        | 1,000,000 |
-| `qwen-token-plan/deepseek-v4-flash` | text        | 1,000,000 |
-| `qwen-token-plan/deepseek-v3.2`     | text        | 131,072   |
-| `qwen-token-plan/kimi-k2.7-code`    | text, image | 262,144   |
-| `qwen-token-plan/kimi-k2.6`         | text, image | 262,144   |
-| `qwen-token-plan/kimi-k2.5`         | text, image | 262,144   |
-| `qwen-token-plan/glm-5.2`           | text        | 1,000,000 |
-| `qwen-token-plan/glm-5.1`           | text        | 202,752   |
-| `qwen-token-plan/glm-5`             | text        | 202,752   |
-| `qwen-token-plan/MiniMax-M2.5`      | text        | 196,608   |
+| Model ref                          | Input       | Context   | Picker status |
+| ---------------------------------- | ----------- | --------- | ------------- |
+| `qwen-token-plan/qwen3.7-plus`     | text, image | 1,000,000 | visible       |
+| `qwen-token-plan/qwen3.6-plus`     | text, image | 1,000,000 | visible       |
+| `qwen-token-plan/qwen3-coder-next` | text        | 262,144   | hidden        |
+| `qwen-token-plan/kimi-k2.5`        | text, image | 262,144   | visible       |
+| `qwen-token-plan/glm-5`            | text        | 202,752   | visible       |
+| `qwen-token-plan/MiniMax-M2.5`     | text        | 196,608   | visible       |
 
 ## Thinking controls
 
@@ -283,18 +278,29 @@ To make Qwen the default video provider:
 {
   agents: {
     defaults: {
-      videoGenerationModel: { primary: "qwen/wan2.6-t2v" },
+      mediaModels: { video: { primary: "qwen/wan2.6-t2v" } },
     },
   },
 }
 ```
 
-Video-generation limits: 1 output video per request, up to 1 input image
-(image-to-video), up to 4 input videos (video-to-video), max 10 seconds
-duration. Supports `size`, `aspectRatio`, `resolution`, `audio`, and
-`watermark`. Reference image/video inputs require remote http(s) URLs; local
-file paths are rejected up front because the DashScope video endpoint does not
-accept uploaded local buffers for those references.
+Each Wan model advertises only its matching runtime mode:
+
+| Mode                         | Models                           | Reference limits                      | Max duration | Supported controls                                                   |
+| ---------------------------- | -------------------------------- | ------------------------------------- | ------------ | -------------------------------------------------------------------- |
+| Text-to-video                | `wan2.6-t2v`                     | n/a                                   | 15 s         | `size`, `aspectRatio`, `resolution`, `audio`, `watermark`            |
+| Image-to-video               | `wan2.6-i2v`                     | 1 image                               | 15 s         | `resolution`, `audio`, `watermark`                                   |
+| Reference-to-video (Wan 2.6) | `wan2.6-r2v`, `wan2.6-r2v-flash` | 5 total images/videos; up to 3 videos | 10 s         | `size`, `aspectRatio`, `resolution`, `audio`, `watermark`            |
+| Reference-to-video (Wan 2.7) | `wan2.7-r2v`                     | 5 total images/videos; up to 3 videos | 10 s         | `size`, `aspectRatio`, `resolution`, `watermark`; audio is always on |
+
+Wan 2.6 text/reference models translate `resolution` plus `aspectRatio` to the
+documented exact `size`. Wan 2.6 image-to-video sends the `resolution` tier and
+uses the input image's aspect ratio. Wan 2.7 reference-to-video sends
+`media`, `resolution`, and `ratio` and always generates audio.
+
+Reference image/video inputs require remote http(s) URLs; local file paths are
+rejected up front because the DashScope video endpoint does not accept uploaded
+local buffers for those references.
 
 <Note>
 See [Video generation](/tools/video-generation) for shared tool parameters, provider selection, and failover behavior.

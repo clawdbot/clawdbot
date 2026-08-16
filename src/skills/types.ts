@@ -60,12 +60,21 @@ export type SkillUsagePath = {
   skillSource: SkillTelemetrySource;
 };
 
+export type ExplicitSkillSelection = {
+  name: string;
+  path: string;
+};
+
 export type SkillCommandSpec = {
   name: string;
+  /** Human-readable skill title for display surfaces. */
+  displayName?: string;
   /** Canonical SKILL.md path for file-scoped usage accounting. */
   skillFile?: string;
   skillName: string;
   description: string;
+  /** Whether the model can resolve this skill from its available-skills prompt. */
+  modelVisible?: boolean;
   /** Bounded source label used for diagnostics. */
   skillSource?: SkillTelemetrySource;
   /** Localized descriptions for native command surfaces that support them. */
@@ -119,6 +128,7 @@ export const WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION = 3;
 
 export type SkillSnapshot = {
   prompt: string;
+  /** Complete eligible sync identities, including skills hidden from the model prompt. */
   skills: Array<{
     name: string;
     /** Config key can differ from the prompt-facing skill name. */
@@ -128,6 +138,8 @@ export type SkillSnapshot = {
   }>;
   /** Normalized agent-level filter used to build this snapshot; undefined means unrestricted. */
   skillFilter?: string[];
+  /** Sparse per-session overlay applied after the agent-level filter. */
+  skillOverrides?: Record<string, boolean>;
   /** Effective node-exec eligibility used to select connected node-hosted skills. */
   nodeSkillsEligibility?: SkillEligibilityContext["nodeSkills"];
   resolvedSkills?: Skill[];

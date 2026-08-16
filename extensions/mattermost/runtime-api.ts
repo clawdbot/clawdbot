@@ -32,7 +32,6 @@ export {
 } from "openclaw/plugin-sdk/core";
 export { buildComputedAccountStatusSnapshot } from "openclaw/plugin-sdk/channel-status";
 export { createAccountStatusSink } from "openclaw/plugin-sdk/channel-outbound";
-export { buildAgentMediaPayload } from "openclaw/plugin-sdk/agent-media-payload";
 export {
   listSkillCommandsForAgents,
   resolveControlCommandGate,

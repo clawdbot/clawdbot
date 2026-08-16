@@ -80,9 +80,7 @@ function sessionsTableHtml() {
                               : index === 6
                                 ? "session-actions-col"
                                 : ""
-                      }">${
-                        index === 6 ? `<span class="sessions-sr-only">${header}</span>` : header
-                      }</th>`,
+                      }">${index === 6 ? `<span class="sr-only">${header}</span>` : header}</th>`,
                   )
                   .join("")}
               </tr>
@@ -197,6 +195,18 @@ function sessionsTableHtml() {
             </tbody>
           </table>
         </div>
+        <div class="data-table-pagination">
+          <div class="data-table-pagination__info">1-25 of 30 rows</div>
+          <div class="data-table-pagination__controls">
+            <select class="data-table-pagination__size" aria-label="Rows per page">
+              <option value="10">10 per page</option>
+              <option value="25" selected>25 per page</option>
+              <option value="50">50 per page</option>
+            </select>
+            <button>Previous</button>
+            <button>Next</button>
+          </div>
+        </div>
       </div>
     </div>
   `;
@@ -299,6 +309,17 @@ describeBrowserLayout("sessions responsive browser layout", () => {
       expect(metrics.hasDetails).toBe(true);
       expect(metrics.actionsVisible).toBe(true);
       expect(metrics.statusVisible).toBe(true);
+    } finally {
+      await closeFixture(fixture);
+    }
+  });
+
+  it("exposes the page-size selector by its localized accessible name", async () => {
+    const fixture = await openFixture(context, 1440, 900);
+    try {
+      const pageSize = fixture.page.getByRole("combobox", { name: "Rows per page" });
+      await pageSize.waitFor();
+      expect(await pageSize.inputValue()).toBe("25");
     } finally {
       await closeFixture(fixture);
     }

@@ -1,13 +1,28 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { discordQaScenarioSupport } from "./discord-live.runtime.js";
+import {
+  discordQaScenarioSupport,
+  type DiscordQaScenarioImplementation,
+} from "./discord-live.runtime.js";
+import { runDiscordTranscriptsVoiceAuthorizationScenario } from "./discord-transcripts-authorization.runtime.js";
 import type { DiscordQaScenarioEnvironment } from "./scenario-environment.js";
 
-async function runDiscordScenario(environment: DiscordQaScenarioEnvironment, scenarioId: string) {
-  const scenario = discordQaScenarioSupport.testing.findScenario([scenarioId])[0];
-  if (!scenario) {
-    throw new Error(`unknown Discord QA scenario id: ${scenarioId}`);
-  }
-  const run = scenario.buildRun(environment.runtimeEnv.sutApplicationId);
+export {
+  discordQaCanaryScenario,
+  discordQaMentionGatingScenario,
+  discordQaNativeHelpCommandRegistrationScenario,
+  discordQaStatusReactionsToolOnlyScenario,
+  discordQaThreadReplyFilepathAttachmentScenario,
+  discordQaVoiceAutojoinScenario,
+} from "./discord-live.runtime.js";
+export { discordQaTranscriptsVoiceAuthorizationScenario } from "./discord-transcripts-authorization.runtime.js";
+
+export async function runDiscordScenario(
+  environment: DiscordQaScenarioEnvironment,
+  implementation: DiscordQaScenarioImplementation,
+) {
+  const scenario = environment.scenario;
+  const { cfg, configureTranscriptVoiceAccess, run, voiceChannel } =
+    await environment.configureScenario(implementation);
   if (run.kind === "application-command-registration") {
     const registered =
       await discordQaScenarioSupport.testing.assertDiscordApplicationCommandsRegistered({
@@ -19,22 +34,30 @@ async function runDiscordScenario(environment: DiscordQaScenarioEnvironment, sce
     return { details: `native command registered (${registered.commandNames.join(", ")})` };
   }
   if (run.kind === "voice-autojoin") {
-    if (!environment.voiceChannel) {
+    if (!voiceChannel) {
       throw new Error("Discord voice auto-join scenario did not resolve a voice channel.");
     }
     await discordQaScenarioSupport.testing.waitForDiscordVoiceState({
       token: environment.runtimeEnv.sutBotToken,
       guildId: environment.runtimeEnv.guildId,
-      channelId: environment.voiceChannel.id,
+      channelId: voiceChannel.id,
       sutBotId: environment.sutIdentity.id,
       timeoutMs: scenario.timeoutMs,
     });
     return { details: "SUT bot joined voice channel" };
   }
+  if (run.kind === "transcripts-voice-authorization") {
+    return await runDiscordTranscriptsVoiceAuthorizationScenario(environment, {
+      cfg,
+      run,
+      voiceChannel,
+      configureTranscriptVoiceAccess,
+    });
+  }
   if (run.kind === "thread-reply-filepath-attachment") {
     const result =
       await discordQaScenarioSupport.testing.runDiscordThreadReplyFilePathAttachmentScenario({
-        cfg: environment.cfg,
+        cfg,
         driverBotId: environment.driverIdentity.id,
         outputDir: environment.outputDir,
         runtimeEnv: environment.runtimeEnv,
@@ -116,18 +139,3 @@ async function runDiscordScenario(environment: DiscordQaScenarioEnvironment, sce
     throw error;
   }
 }
-
-export const runDiscordCanaryScenario = (context: DiscordQaScenarioEnvironment) =>
-  runDiscordScenario(context, "discord-canary");
-export const runDiscordMentionGatingScenario = (context: DiscordQaScenarioEnvironment) =>
-  runDiscordScenario(context, "discord-mention-gating");
-export const runDiscordNativeHelpCommandRegistrationScenario = (
-  context: DiscordQaScenarioEnvironment,
-) => runDiscordScenario(context, "discord-native-help-command-registration");
-export const runDiscordVoiceAutojoinScenario = (context: DiscordQaScenarioEnvironment) =>
-  runDiscordScenario(context, "discord-voice-autojoin");
-export const runDiscordStatusReactionsToolOnlyScenario = (context: DiscordQaScenarioEnvironment) =>
-  runDiscordScenario(context, "discord-status-reactions-tool-only");
-export const runDiscordThreadReplyFilepathAttachmentScenario = (
-  context: DiscordQaScenarioEnvironment,
-) => runDiscordScenario(context, "discord-thread-reply-filepath-attachment");

@@ -72,6 +72,100 @@ describe("update.run package self-upgrade producer", () => {
     );
   });
 
+  it("proves the authenticated setup lifecycle before updating", async () => {
+    const script = await fs.readFile(
+      path.join(
+        process.cwd(),
+        "scripts/e2e/lib/upgrade-survivor/update-run-package-self-upgrade.sh",
+      ),
+      "utf8",
+    );
+
+    expect(script).toContain(
+      'gateway_call wizard.start \'{"mode":"local"}\' "$WIZARD_START_JSON" "$WIZARD_START_ERR"',
+    );
+    expect(script).toContain(
+      'gateway_call wizard.status "$wizard_session_params" "$WIZARD_STATUS_JSON" "$WIZARD_STATUS_ERR"',
+    );
+    expect(script).toContain(
+      'gateway_call wizard.next "$wizard_next_params" "$WIZARD_NEXT_JSON" "$WIZARD_NEXT_ERR"',
+    );
+    expect(script).toContain("runningStatusRetained: true");
+    expect(script).toContain("assert_gateway_call_error_message()");
+    expect(script).toContain(
+      '"$WIZARD_DUPLICATE_JSON" \\\n  "$WIZARD_DUPLICATE_ERR" \\\n  "wizard already running"',
+    );
+    expect(script).toContain('local allow_stderr_fallback="${5:-0}"');
+    expect(script).toContain(
+      '[ "$allow_stderr_fallback" = "1" ] && grep -Fq "$expected" "$error_output"',
+    );
+    expect(script).toContain(
+      'gateway_call wizard.cancel "$wizard_session_params" "$WIZARD_CANCEL_JSON" "$WIZARD_CANCEL_ERR"',
+    );
+    expect(script).toContain(
+      '"$WIZARD_CANCELLED_STATUS_JSON" \\\n  "$WIZARD_CANCELLED_STATUS_ERR" \\\n  "wizard not found"',
+    );
+    expect(script).toContain('step.sensitive === true && Object.hasOwn(step, "initialValue")');
+    expect(script.indexOf("Exercising authenticated Gateway wizard RPC lifecycle")).toBeLessThan(
+      script.indexOf("Invoking authenticated Gateway RPC update.run"),
+    );
+  });
+
+  it("proves the current target setup lifecycle after updating", async () => {
+    const script = await fs.readFile(
+      path.join(
+        process.cwd(),
+        "scripts/e2e/lib/upgrade-survivor/update-run-package-self-upgrade.sh",
+      ),
+      "utf8",
+    );
+
+    expect(script).toContain("Exercising current target Gateway wizard RPC lifecycle");
+    expect(script).toContain(
+      'gateway_call wizard.status "$target_status_session_params" \\\n  "$TARGET_WIZARD_STATUS_JSON" "$TARGET_WIZARD_STATUS_ERR"',
+    );
+    expect(script).toContain(
+      'gateway_call wizard.status "$target_status_session_params" \\\n  "$TARGET_WIZARD_STATUS_RETAINED_JSON" "$TARGET_WIZARD_STATUS_RETAINED_ERR"',
+    );
+    expect(script).toContain(
+      'gateway_call wizard.cancel "$target_status_session_params" \\\n  "$TARGET_WIZARD_STATUS_CANCEL_JSON" "$TARGET_WIZARD_STATUS_CANCEL_ERR"',
+    );
+    expect(script).toContain(
+      'gateway_call wizard.next "$target_active_next_params" \\\n  "$TARGET_WIZARD_NEXT_JSON" "$TARGET_WIZARD_NEXT_ERR"',
+    );
+    expect(script).toContain(
+      '"$TARGET_WIZARD_DUPLICATE_JSON" \\\n  "$TARGET_WIZARD_DUPLICATE_ERR" \\\n  "wizard already running"',
+    );
+    expect(script).toContain(
+      'gateway_call wizard.cancel "$target_active_session_params" \\\n  "$TARGET_WIZARD_CANCEL_JSON" "$TARGET_WIZARD_CANCEL_ERR"',
+    );
+    expect(script).toContain("wait_for_target_wizard_start()");
+    expect(script).toContain("target_status_settlement_polls");
+    expect(script).toContain("target_cancel_settlement_polls");
+    expect(script).toContain(
+      '"$TARGET_WIZARD_REPLACEMENT_START_JSON" \\\n    "$TARGET_WIZARD_REPLACEMENT_START_ERR"',
+    );
+    expect(script.indexOf("target_active_start_result=")).toBeLessThan(
+      script.indexOf(
+        'gateway_call wizard.status "$target_status_session_params" \\\n  "$TARGET_WIZARD_STATUS_PURGED_JSON"',
+      ),
+    );
+    expect(script).toContain(
+      '"$TARGET_WIZARD_PURGED_STATUS_JSON" \\\n  "$TARGET_WIZARD_PURGED_STATUS_ERR" \\\n  "wizard not found"',
+    );
+    expect(script.indexOf("target_replacement_start_result=")).toBeLessThan(
+      script.indexOf(
+        'gateway_call wizard.status "$target_active_session_params" \\\n  "$TARGET_WIZARD_PURGED_STATUS_JSON"',
+      ),
+    );
+    expect(script.indexOf("Invoking authenticated Gateway RPC update.run")).toBeLessThan(
+      script.indexOf("Exercising current target Gateway wizard RPC lifecycle"),
+    );
+    expect(script.indexOf("Exercising current target Gateway wizard RPC lifecycle")).toBeLessThan(
+      script.indexOf("post_restart_observed_at_ms="),
+    );
+  });
+
   it("falls back to the exact tag clone when commit or tag objects are missing", async () => {
     const script = await fs.readFile(
       path.join(process.cwd(), "scripts/e2e/update-run-package-self-upgrade-docker.sh"),
@@ -84,6 +178,21 @@ describe("update.run package self-upgrade producer", () => {
     expect(script).toContain(
       '! git -C "$source_repo" cat-file -e "$SOURCE_TAG^{commit}" 2>/dev/null',
     );
+    expect(script).toContain('tar -C "$checkout_root" -cf "$HISTORICAL_DIST_ARCHIVE" dist');
+    expect(script).toContain(
+      'npm install \\\n  --prefix "$historical_install_root" \\\n  --omit=dev',
+    );
+    expect(script).toContain(
+      'tar --no-same-owner \\\n  -xf /tmp/openclaw-update-run-historical-dist.tar \\\n  -C "$historical_package_root"',
+    );
+    expect(script).toContain(
+      'ln -s "$historical_package_root/dist/extensions/qa-channel" "$qa_plugin_link"',
+    );
+    expect(script).toContain("await import(pathToFileURL(pluginEntry).href)");
+    expect(script).not.toContain(
+      '-v "$QA_CHANNEL_FIXTURE_ROOT/checkout:/tmp/openclaw-update-run-build:ro"',
+    );
+    expect(script).not.toContain("NODE_PATH");
   });
 
   it("formats the proven version transition and sentinel", () => {
@@ -92,13 +201,32 @@ describe("update.run package self-upgrade producer", () => {
         installedVersion: "2026.7.2",
         source: { version: "2026.4.26" },
         target: { resolvedVersion: "2026.7.2", tag: "latest" },
+        wizardFlow: {
+          authenticated: true,
+          cancelledSessionPurged: true,
+          duplicateStartRejected: true,
+          runningStatusRetained: true,
+          status: "passed",
+        },
+        targetWizardFlow: {
+          activeSession: {
+            duplicateStartRejected: true,
+            purged: true,
+          },
+          authenticated: true,
+          status: "passed",
+          statusSession: {
+            purged: true,
+            runningStatusRetained: true,
+          },
+        },
         restartSentinel: {
           message: "QA-UPDATE-RUN-PACKAGE-SELF-UPGRADE",
           status: "ok",
         },
       }),
     ).toBe(
-      "source=2026.4.26; target=latest:2026.7.2; installed=2026.7.2; sentinel=ok:QA-UPDATE-RUN-PACKAGE-SELF-UPGRADE",
+      "wizard=passed:authenticated:status-retained:exclusive:purged; target-wizard=passed:authenticated:status-retained:status-purged:exclusive:purged; source=2026.4.26; target=latest:2026.7.2; installed=2026.7.2; sentinel=ok:QA-UPDATE-RUN-PACKAGE-SELF-UPGRADE",
     );
   });
 });

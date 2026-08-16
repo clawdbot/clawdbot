@@ -7,10 +7,16 @@
  * re-wrapped here unconditionally, so no provider-controlled metadata can
  * spoof the trust marker and transport-specific extras never reach the model.
  */
+import { asFiniteNumber as readFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Static } from "typebox";
 import { Type } from "typebox";
-import { wrapWebContent } from "../../security/external-content.js";
+import {
+  truncateSanitizedExternalContent,
+  wrapWebContent,
+} from "../../security/external-content.js";
+import { MAX_SEARCH_COUNT } from "./web-search-provider-common.js";
 
 const WebSearchExternalContentSchema = Type.Object(
   {
@@ -63,6 +69,7 @@ export const WebSearchOutputSchema = Type.Union([
       results: Type.Array(WebSearchResultSchema),
       externalContent: WebSearchExternalContentSchema,
       cached: Type.Optional(Type.Literal(true)),
+      truncated: Type.Optional(Type.Literal(true)),
     },
     { additionalProperties: false },
   ),
@@ -76,6 +83,7 @@ export const WebSearchOutputSchema = Type.Union([
       citations: Type.Optional(Type.Array(WebSearchCitationSchema)),
       externalContent: WebSearchExternalContentSchema,
       cached: Type.Optional(Type.Literal(true)),
+      truncated: Type.Optional(Type.Literal(true)),
     },
     { additionalProperties: false },
   ),
@@ -102,21 +110,28 @@ type WebSearchOutput = Static<typeof WebSearchOutputSchema>;
 const ENVELOPE_OPEN_RE =
   /^[ \t]*<<<EXTERNAL_UNTRUSTED_CONTENT id="[0-9a-f]+">>>[ \t]*\r?\n(?:Source: [^\n]*\r?\n---\r?\n)?/gmu;
 const ENVELOPE_END_RE = /^[ \t]*<<<END_EXTERNAL_UNTRUSTED_CONTENT id="[0-9a-f]+">>>[ \t]*\r?\n?/gmu;
+const WEB_SEARCH_OUTPUT_MAX_CHARS = 20_000;
+const WEB_SEARCH_CITATION_MAX_COUNT = 20;
+const WEB_SEARCH_CITATION_MAX_SCAN = 1_000;
+
+type WebSearchOutputBudget = { remaining: number; truncated: boolean };
 
 function unwrapEnvelopes(value: string): string {
   return value.replace(ENVELOPE_OPEN_RE, "").replace(ENVELOPE_END_RE, "").trim();
 }
 
-function readFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
 // URLs are emitted canonicalized (percent-encoded), so whitespace or readable
 // prose smuggled into a URL slot cannot ride outside the envelope as-is.
 function toHttpUrl(value: string): string | undefined {
+  if (value.length > 2_048) {
+    return undefined;
+  }
   try {
     const parsed = new URL(value);
-    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.href : undefined;
+    return (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+      parsed.href.length <= 2_048
+      ? parsed.href
+      : undefined;
   } catch {
     return undefined;
   }
@@ -124,36 +139,67 @@ function toHttpUrl(value: string): string | undefined {
 // Purely structural date charset; free-form dates could smuggle instructions.
 const PUBLISHED_RE = /^\d{4}-\d{2}-\d{2}(?:[T ][\d:.+Z-]{0,20})?$/u;
 
-function wrapProse(value: string): string {
-  const inner = unwrapEnvelopes(value);
+function wrapProse(value: string, budget?: WebSearchOutputBudget): string {
+  let inner = unwrapEnvelopes(value);
+  if (budget) {
+    const bounded = truncateSanitizedExternalContent(inner, budget.remaining);
+    budget.truncated ||= bounded.truncated;
+    budget.remaining -= bounded.text.length;
+    inner = bounded.text;
+  }
   return inner.length === 0 ? "" : wrapWebContent(inner, "web_search");
+}
+
+function consumeUrlBudget(url: string, budget: WebSearchOutputBudget): boolean {
+  if (url.length > budget.remaining) {
+    budget.truncated = true;
+    return false;
+  }
+  budget.remaining -= url.length;
+  return true;
 }
 
 function externalContentStamp(provider: string): WebSearchExternalContent {
   return { untrusted: true, source: "web_search", wrapped: true, provider };
 }
 
-function normalizeCitations(value: unknown): Array<{ url: string; title?: string }> | undefined {
+function normalizeCitations(
+  value: unknown,
+  budget: WebSearchOutputBudget,
+): Array<{ url: string; title?: string }> | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }
+  const citations: Array<{ url: string; title?: string }> = [];
+  let scanned = 0;
   // A citation url must actually parse as http(s); free text in a url slot
   // would bypass the untrusted-content envelope.
-  return value.flatMap((entry) => {
+  for (const entry of value) {
+    if (
+      ++scanned > WEB_SEARCH_CITATION_MAX_SCAN ||
+      citations.length >= WEB_SEARCH_CITATION_MAX_COUNT
+    ) {
+      budget.truncated = true;
+      break;
+    }
     if (typeof entry === "string") {
       const url = toHttpUrl(entry);
-      return url ? [{ url }] : [];
+      if (url && consumeUrlBudget(url, budget)) {
+        citations.push({ url });
+      }
+      continue;
     }
     const url = isRecord(entry) && typeof entry.url === "string" ? toHttpUrl(entry.url) : undefined;
-    if (!isRecord(entry) || !url) {
-      return [];
+    if (!isRecord(entry) || !url || !consumeUrlBudget(url, budget)) {
+      continue;
     }
     const citation: Static<typeof WebSearchCitationSchema> = { url };
     if (typeof entry.title === "string") {
-      citation.title = wrapProse(entry.title);
+      citation.title = entry.title;
     }
-    return [citation];
-  });
+    citations.push(citation);
+  }
+  return citations;
 }
 
 // Provider output is untrusted third-party data (bundled or, worse, external
@@ -194,6 +240,10 @@ export function normalizeWebSearchOutput(params: {
   }
   const tookMs = readFiniteNumber(result.tookMs);
   const cached = result.cached === true ? true : undefined;
+  const budget: WebSearchOutputBudget = {
+    remaining: WEB_SEARCH_OUTPUT_MAX_CHARS,
+    truncated: result.truncated === true,
+  };
   // The model's own request query is authoritative; provider echoes are
   // untrusted text and add nothing the model does not already know.
   const query = params.query;
@@ -210,15 +260,18 @@ export function normalizeWebSearchOutput(params: {
     // serializing into the wrapped message instead of collapsing to a bare code.
     const rawError =
       typeof result.error === "string"
-        ? result.error
-        : (JSON.stringify(result.error)?.slice(0, 2_000) ?? "provider_error");
+        ? truncateUtf16Safe(result.error, 2_000)
+        : truncateUtf16Safe(JSON.stringify(result.error) ?? "provider_error", 2_000);
     const rawMessage = typeof result.message === "string" ? result.message : rawError;
     const docs = typeof result.docs === "string" ? toHttpUrl(result.docs) : undefined;
     return {
       kind: "error",
       provider,
       error: "provider_error",
-      message: wrapProse(rawMessage === rawError ? rawError : `${rawError}: ${rawMessage}`),
+      message: wrapProse(rawMessage === rawError ? rawError : `${rawError}: ${rawMessage}`, {
+        remaining: 4_000,
+        truncated: false,
+      }),
       ...(docs ? { docs } : {}),
     };
   }
@@ -236,7 +289,13 @@ export function normalizeWebSearchOutput(params: {
       toHttpUrl(entry.url) !== undefined,
   );
   if (rows && conformingRows) {
-    const results = rows.map((row) => {
+    budget.truncated ||= rows.length > MAX_SEARCH_COUNT;
+    // Reserve source URLs first so one oversized page cannot erase later valid sources.
+    const boundedRows = rows.slice(0, MAX_SEARCH_COUNT).flatMap((row) => {
+      const url = toHttpUrl(row.url as string) as string;
+      return consumeUrlBudget(url, budget) ? [{ row, url }] : [];
+    });
+    const results = boundedRows.map(({ row, url }) => {
       const snippet =
         typeof row.snippet === "string"
           ? row.snippet
@@ -250,43 +309,52 @@ export function normalizeWebSearchOutput(params: {
           ? row.published
           : undefined;
       const normalizedRow: Static<typeof WebSearchResultSchema> = {
-        title: wrapProse(row.title as string),
-        url: toHttpUrl(row.url as string) as string,
+        title: wrapProse(row.title as string, budget),
+        url,
       };
       if (snippet !== undefined) {
-        normalizedRow.snippet = wrapProse(snippet);
+        normalizedRow.snippet = wrapProse(snippet, budget);
       }
       if (published !== undefined) {
         normalizedRow.published = published;
       }
       if (typeof row.siteName === "string") {
-        normalizedRow.siteName = wrapProse(row.siteName);
+        normalizedRow.siteName = wrapProse(row.siteName, budget);
       }
       return normalizedRow;
     });
+    const rowsWereReduced = rows.length !== results.length;
     return {
       kind: "results",
       provider,
       query,
-      count: readFiniteNumber(result.count) ?? results.length,
+      count: rowsWereReduced ? results.length : (readFiniteNumber(result.count) ?? results.length),
       ...(tookMs !== undefined ? { tookMs } : {}),
       results,
       externalContent: externalContentStamp(provider),
       ...(cached ? { cached } : {}),
+      ...(budget.truncated ? { truncated: true } : {}),
     };
   }
 
   if (typeof result.content === "string") {
-    const citations = normalizeCitations(result.citations);
+    const citations = normalizeCitations(result.citations, budget);
+    const content = wrapProse(result.content, budget);
+    for (const citation of citations ?? []) {
+      if (citation.title !== undefined) {
+        citation.title = wrapProse(citation.title, budget);
+      }
+    }
     return {
       kind: "answer",
       provider,
       query,
       ...(tookMs !== undefined ? { tookMs } : {}),
-      content: wrapProse(result.content),
+      content,
       ...(citations !== undefined ? { citations } : {}),
       externalContent: externalContentStamp(provider),
       ...(cached ? { cached } : {}),
+      ...(budget.truncated ? { truncated: true } : {}),
     };
   }
 

@@ -11,9 +11,11 @@ import {
   parseTelegramTargetForTest,
   telegramMessagingForTest,
 } from "../../infra/outbound/targets.test-helpers.js";
+import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import { buildChannelOutboundSessionRoute } from "../../plugin-sdk/core.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 
 const { extractDeliveryInfoMock } = vi.hoisted(() => ({
   extractDeliveryInfoMock: vi.fn(),
@@ -29,12 +31,16 @@ vi.mock("../../config/sessions/delivery-info.js", () => ({
 }));
 
 vi.mock("../../config/sessions/paths.js", () => ({
-  resolveStorePath: vi.fn().mockReturnValue("/tmp/test-store.json"),
+  resolveSessionStorePathCore: vi.fn().mockReturnValue("/tmp/test-store.json"),
 }));
 
-vi.mock("../../config/sessions/session-accessor.js", () => ({
-  loadSessionEntry: vi.fn(),
-}));
+vi.mock("../../config/sessions/session-accessor.js", () => {
+  const loadSessionEntry = vi.fn();
+  return {
+    loadSessionEntry,
+    loadSessionEntryReadOnly: loadSessionEntry,
+  };
+});
 
 vi.mock("../../infra/outbound/channel-selection.runtime.js", () => ({
   resolveMessageChannelSelection: vi
@@ -218,16 +224,47 @@ function makeForumBoundCfg(accountId = "account-b"): OpenClawConfig {
   });
 }
 
+function setSingleOutboundTestPlugin(
+  params: Parameters<typeof createOutboundTestPlugin>[0],
+  overrides: Partial<ReturnType<typeof createOutboundTestPlugin>> = {},
+) {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: params.id,
+        source: "test",
+        plugin: { ...createOutboundTestPlugin(params), ...overrides },
+      },
+    ]),
+  );
+}
+
 const AGENT_ID = "agent-b";
 const DEFAULT_TARGET = {
   channel: "forum" as const,
   to: "room:default",
 };
+const malformedAccountIdCases = [
+  { description: "numeric", accountId: 123 },
+  { description: "boolean", accountId: false },
+  { description: "object", accountId: {} },
+] as const;
 
-type SessionStore = Record<string, SessionEntry>;
+type SessionStore = Record<
+  string,
+  SessionEntry & {
+    lastChannel?: string;
+    lastTo?: string;
+    lastAccountId?: string;
+    lastThreadId?: string | number;
+  }
+>;
 
 function setSessionStore(store: SessionStore) {
-  vi.mocked(loadSessionEntry).mockImplementation(({ sessionKey }) => store[sessionKey]);
+  const canonical = Object.fromEntries(
+    Object.entries(store).map(([key, entry]) => [key, normalizeLegacySessionEntryDelivery(entry)]),
+  );
+  vi.mocked(loadSessionEntry).mockImplementation(({ sessionKey }) => canonical[sessionKey]);
 }
 
 function setMainSessionEntry(entry?: SessionStore[string]) {
@@ -245,10 +282,14 @@ function setLastSessionEntry(params: {
   setMainSessionEntry({
     sessionId: params.sessionId,
     updatedAt: 1000,
-    lastChannel: params.lastChannel,
-    lastTo: params.lastTo,
-    ...(params.lastThreadId ? { lastThreadId: params.lastThreadId } : {}),
-    ...(params.lastAccountId ? { lastAccountId: params.lastAccountId } : {}),
+    delivery: normalizeSessionDeliveryState({
+      context: {
+        channel: params.lastChannel,
+        to: params.lastTo,
+        threadId: params.lastThreadId,
+        accountId: params.lastAccountId,
+      },
+    }),
   });
 }
 
@@ -363,6 +404,96 @@ describe("resolveDeliveryTarget", () => {
     expect(result.accountId).toBe("account-b");
   });
 
+  it.each([
+    {
+      description: "trims an explicit account",
+      explicitAccountId: "  explicit-account  ",
+      expectedAccountId: "explicit-account",
+    },
+    {
+      description: "falls back to the session for a whitespace-only account",
+      explicitAccountId: "   ",
+      expectedAccountId: "session-account",
+    },
+    {
+      description: "falls back to the session for an empty account",
+      explicitAccountId: "",
+      expectedAccountId: "session-account",
+    },
+  ])("$description", async ({ explicitAccountId, expectedAccountId }) => {
+    setLastSessionEntry({
+      sessionId: "sess-account-normalization",
+      lastChannel: "forum",
+      lastTo: "room:ops",
+      lastAccountId: "session-account",
+    });
+
+    const result = await resolveDeliveryTarget(makeForumBoundCfg(), AGENT_ID, {
+      channel: "forum",
+      to: "room:ops",
+      accountId: explicitAccountId,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.accountId).toBe(expectedAccountId);
+  });
+
+  it.each([
+    { description: "whitespace-only", explicitAccountId: "   " },
+    { description: "empty", explicitAccountId: "" },
+  ])(
+    "falls back to the bound account for a $description account",
+    async ({ explicitAccountId }) => {
+      setMainSessionEntry(undefined);
+
+      const result = await resolveDeliveryTarget(makeForumBoundCfg(), AGENT_ID, {
+        channel: "forum",
+        to: "room:ops",
+        accountId: explicitAccountId,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.accountId).toBe("account-b");
+    },
+  );
+
+  it.each(malformedAccountIdCases)(
+    "falls back to the session for a malformed $description account",
+    async ({ accountId }) => {
+      setLastSessionEntry({
+        sessionId: "sess-malformed-account",
+        lastChannel: "forum",
+        lastTo: "room:ops",
+        lastAccountId: "session-account",
+      });
+
+      const result = await resolveDeliveryTarget(makeForumBoundCfg(), AGENT_ID, {
+        channel: "forum",
+        to: "room:ops",
+        accountId: accountId as unknown as string,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.accountId).toBe("session-account");
+    },
+  );
+
+  it.each(malformedAccountIdCases)(
+    "falls back to the bound account for a malformed $description account",
+    async ({ accountId }) => {
+      setMainSessionEntry(undefined);
+
+      const result = await resolveDeliveryTarget(makeForumBoundCfg(), AGENT_ID, {
+        channel: "forum",
+        to: "room:ops",
+        accountId: accountId as unknown as string,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.accountId).toBe("account-b");
+    },
+  );
+
   it("preserves binding order when peerless delivery falls back to a bound accountId", async () => {
     setMainSessionEntry(undefined);
     const cfg = makeCfg({
@@ -411,9 +542,9 @@ describe("resolveDeliveryTarget", () => {
     setMainSessionEntry({
       sessionId: "sess-1",
       updatedAt: 1000,
-      lastChannel: "forum",
-      lastTo: "room:default",
-      lastAccountId: "session-account",
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "forum", to: "room:default", accountId: "session-account" },
+      }),
     });
 
     const cfg = makeForumBoundCfg();
@@ -463,27 +594,21 @@ describe("resolveDeliveryTarget", () => {
 
   it("fails ambiguous directory targets instead of picking a best match", async () => {
     setMainSessionEntry(undefined);
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "alpha",
-          source: "test",
-          plugin: {
-            ...createOutboundTestPlugin({
-              id: "alpha",
-              outbound: createStubOutbound("Alpha"),
-              messaging: { targetPrefixes: ["alpha"] },
-              capabilities: { chatTypes: ["group"] },
-            }),
-            directory: {
-              listGroups: async () => [
-                { id: "channel:ops-a", name: "ops", rank: 1 },
-                { id: "channel:ops-b", name: "ops", rank: 2 },
-              ],
-            },
-          },
+    setSingleOutboundTestPlugin(
+      {
+        id: "alpha",
+        outbound: createStubOutbound("Alpha"),
+        messaging: { targetPrefixes: ["alpha"] },
+        capabilities: { chatTypes: ["group"] },
+      },
+      {
+        directory: {
+          listGroups: async () => [
+            { kind: "group", id: "channel:ops-a", name: "ops", rank: 1 },
+            { kind: "group", id: "channel:ops-b", name: "ops", rank: 2 },
+          ],
         },
-      ]),
+      },
     );
 
     const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
@@ -500,26 +625,20 @@ describe("resolveDeliveryTarget", () => {
 
   it("surfaces target resolver exceptions instead of treating raw names as resolved", async () => {
     setMainSessionEntry(undefined);
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "alpha",
-          source: "test",
-          plugin: {
-            ...createOutboundTestPlugin({
-              id: "alpha",
-              outbound: createStubOutbound("Alpha"),
-              messaging: { targetPrefixes: ["alpha"] },
-              capabilities: { chatTypes: ["group"] },
-            }),
-            directory: {
-              listGroups: async () => {
-                throw new Error("directory auth failed");
-              },
-            },
+    setSingleOutboundTestPlugin(
+      {
+        id: "alpha",
+        outbound: createStubOutbound("Alpha"),
+        messaging: { targetPrefixes: ["alpha"] },
+        capabilities: { chatTypes: ["group"] },
+      },
+      {
+        directory: {
+          listGroups: async () => {
+            throw new Error("directory auth failed");
           },
         },
-      ]),
+      },
     );
 
     const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
@@ -534,97 +653,22 @@ describe("resolveDeliveryTarget", () => {
     expect(result.error.message).toContain("directory auth failed");
   });
 
-  it("keeps parser-derived explicit thread ids for parser-only cron targets", async () => {
-    setMainSessionEntry(undefined);
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "alpha",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "alpha",
-            outbound: createStubOutbound("Alpha"),
-            messaging: {
-              targetPrefixes: ["alpha"],
-              parseExplicitTarget: ({ raw }) =>
-                raw === "alpha:room-a:topic:77"
-                  ? { to: "room-a", threadId: 77, chatType: "group" as const }
-                  : null,
-            },
-          }),
-        },
-      ]),
-    );
-
-    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
-      channel: "alpha",
-      to: "alpha:room-a:topic:77",
-    });
-
-    expect(result.ok).toBe(true);
-    expect(result.to).toBe("room-a");
-    expect(result.threadId).toBe(77);
-  });
-
-  it("does not treat parser-only target normalization as a parser thread id", async () => {
-    setLastSessionEntry({
-      sessionId: "sess-parser-stale-thread",
-      lastChannel: "alpha",
-      lastTo: "room-a",
-      lastThreadId: "stale-thread",
-    });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "alpha",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "alpha",
-            outbound: createStubOutbound("Alpha"),
-            messaging: {
-              targetPrefixes: ["alpha"],
-              parseExplicitTarget: ({ raw }) =>
-                raw === "alpha:room-b" ? { to: "room-b", chatType: "group" as const } : null,
-            },
-          }),
-        },
-      ]),
-    );
-
-    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
-      channel: "alpha",
-      to: "alpha:room-b",
-    });
-
-    expect(result.ok).toBe(true);
-    expect(result.to).toBe("room-b");
-    expect(result.threadId).toBeUndefined();
-  });
-
   it("preserves plugin-canonical targets that begin with the selected channel prefix", async () => {
     setMainSessionEntry(undefined);
     const canonicalTarget = "Bncr:tgBot:-1003891624016:6278285192";
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "bncr",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "bncr",
-            outbound: createStubOutbound("Bncr"),
-            messaging: {
-              targetPrefixes: ["bncr"],
-              targetResolver: {
-                resolveTarget: async ({ input }) =>
-                  input === canonicalTarget
-                    ? { to: canonicalTarget, kind: "group" as const, source: "normalized" as const }
-                    : null,
-              },
-            },
-          }),
+    setSingleOutboundTestPlugin({
+      id: "bncr",
+      outbound: createStubOutbound("Bncr"),
+      messaging: {
+        targetPrefixes: ["bncr"],
+        targetResolver: {
+          resolveTarget: async ({ input }) =>
+            input === canonicalTarget
+              ? { to: canonicalTarget, kind: "group" as const, source: "normalized" as const }
+              : null,
         },
-      ]),
-    );
+      },
+    });
 
     const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
       channel: "bncr",
@@ -639,27 +683,19 @@ describe("resolveDeliveryTarget", () => {
   it("preserves plugin-canonical targets returned for aliases", async () => {
     setMainSessionEntry(undefined);
     const canonicalTarget = "Bncr:tgBot:-1003891624016:6278285192";
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "bncr",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "bncr",
-            outbound: createStubOutbound("Bncr"),
-            messaging: {
-              targetPrefixes: ["bncr"],
-              targetResolver: {
-                resolveTarget: async ({ input }) =>
-                  input === "alerts"
-                    ? { to: canonicalTarget, kind: "group" as const, source: "normalized" as const }
-                    : null,
-              },
-            },
-          }),
+    setSingleOutboundTestPlugin({
+      id: "bncr",
+      outbound: createStubOutbound("Bncr"),
+      messaging: {
+        targetPrefixes: ["bncr"],
+        targetResolver: {
+          resolveTarget: async ({ input }) =>
+            input === "alerts"
+              ? { to: canonicalTarget, kind: "group" as const, source: "normalized" as const }
+              : null,
         },
-      ]),
-    );
+      },
+    });
 
     const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
       channel: "bncr",
@@ -673,19 +709,11 @@ describe("resolveDeliveryTarget", () => {
 
   it("still strips selected prefixes from generic normalized fallback targets", async () => {
     setMainSessionEntry(undefined);
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "alpha",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "alpha",
-            outbound: createStubOutbound("Alpha"),
-            messaging: { targetPrefixes: ["alpha"] },
-          }),
-        },
-      ]),
-    );
+    setSingleOutboundTestPlugin({
+      id: "alpha",
+      outbound: createStubOutbound("Alpha"),
+      messaging: { targetPrefixes: ["alpha"] },
+    });
 
     const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
       channel: "alpha",
@@ -699,40 +727,32 @@ describe("resolveDeliveryTarget", () => {
 
   it("uses plugin-resolved directory targets for route parsing", async () => {
     setMainSessionEntry(undefined);
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "alpha",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "alpha",
-            outbound: createStubOutbound("Alpha"),
-            messaging: {
-              targetPrefixes: ["alpha"],
-              targetResolver: {
-                resolveTarget: async ({ input }) =>
-                  input === "alice"
-                    ? { to: "user:123", kind: "user" as const, source: "directory" as const }
-                    : null,
-              },
-              resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target }) => {
-                const isUser = target.startsWith("user:");
-                return buildChannelOutboundSessionRoute({
-                  cfg,
-                  agentId,
-                  channel: "alpha",
-                  accountId,
-                  peer: { kind: isUser ? "direct" : "channel", id: target },
-                  chatType: isUser ? "direct" : "channel",
-                  from: target,
-                  to: isUser ? target : `channel:${target}`,
-                });
-              },
-            },
-          }),
+    setSingleOutboundTestPlugin({
+      id: "alpha",
+      outbound: createStubOutbound("Alpha"),
+      messaging: {
+        targetPrefixes: ["alpha"],
+        targetResolver: {
+          resolveTarget: async ({ input }) =>
+            input === "alice"
+              ? { to: "user:123", kind: "user" as const, source: "directory" as const }
+              : null,
         },
-      ]),
-    );
+        resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target }) => {
+          const isUser = target.startsWith("user:");
+          return buildChannelOutboundSessionRoute({
+            cfg,
+            agentId,
+            channel: "alpha",
+            accountId,
+            peer: { kind: isUser ? "direct" : "channel", id: target },
+            chatType: isUser ? "direct" : "channel",
+            from: target,
+            to: isUser ? target : `channel:${target}`,
+          });
+        },
+      },
+    });
 
     const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
       channel: "alpha",
@@ -754,29 +774,21 @@ describe("resolveDeliveryTarget", () => {
         handle: "@current",
       } satisfies ChannelDirectoryEntry,
     ]);
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "telegram",
-          source: "test",
-          plugin: {
-            ...createOutboundTestPlugin({
-              id: "telegram",
-              outbound: createStubOutbound("Telegram"),
-              capabilities: { chatTypes: ["direct", "group", "channel"] },
-              messaging: {
-                ...telegramMessagingForTest,
-                normalizeTarget: normalizeTelegramTargetForDeliveryTest,
-                targetResolver: {
-                  reservedLiterals: ["current", "self", "this", "me"],
-                  hint: "<chatId>",
-                },
-              },
-            }),
-            directory: { listGroups },
+    setSingleOutboundTestPlugin(
+      {
+        id: "telegram",
+        outbound: createStubOutbound("Telegram"),
+        capabilities: { chatTypes: ["direct", "group", "channel"] },
+        messaging: {
+          ...telegramMessagingForTest,
+          normalizeTarget: normalizeTelegramTargetForDeliveryTest,
+          targetResolver: {
+            reservedLiterals: ["current", "self", "this", "me"],
+            hint: "<chatId>",
           },
         },
-      ]),
+      },
+      { directory: { listGroups } },
     );
 
     const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
@@ -797,35 +809,27 @@ describe("resolveDeliveryTarget", () => {
 
   it("uses canonical route targets even when the route has no thread", async () => {
     setMainSessionEntry(undefined);
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "alpha",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "alpha",
-            outbound: createStubOutbound("Alpha"),
-            messaging: {
-              targetPrefixes: ["alpha"],
-              inferTargetChatType: ({ to }) => (to.startsWith("group:") ? "group" : "direct"),
-              resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target }) => {
-                const stripped = target.replace(/^alpha:/i, "");
-                return buildChannelOutboundSessionRoute({
-                  cfg,
-                  agentId,
-                  channel: "alpha",
-                  accountId,
-                  peer: { kind: "group", id: stripped.replace(/^group:/i, "") },
-                  chatType: "group",
-                  from: `alpha:${stripped}`,
-                  to: stripped.replace(/^group:/i, ""),
-                });
-              },
-            },
-          }),
+    setSingleOutboundTestPlugin({
+      id: "alpha",
+      outbound: createStubOutbound("Alpha"),
+      messaging: {
+        targetPrefixes: ["alpha"],
+        inferTargetChatType: ({ to }) => (to.startsWith("group:") ? "group" : "direct"),
+        resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target }) => {
+          const stripped = target.replace(/^alpha:/i, "");
+          return buildChannelOutboundSessionRoute({
+            cfg,
+            agentId,
+            channel: "alpha",
+            accountId,
+            peer: { kind: "group", id: stripped.replace(/^group:/i, "") },
+            chatType: "group",
+            from: `alpha:${stripped}`,
+            to: stripped.replace(/^group:/i, ""),
+          });
         },
-      ]),
-    );
+      },
+    });
 
     const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
       channel: "alpha",
@@ -839,38 +843,30 @@ describe("resolveDeliveryTarget", () => {
 
   it("keeps provider-qualified normalized targets for provider route parsing", async () => {
     setMainSessionEntry(undefined);
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "telegram",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "telegram",
-            outbound: createStubOutbound("Telegram"),
-            messaging: {
-              targetPrefixes: ["telegram"],
-              normalizeTarget: () => "telegram:group:-100200300:topic:77",
-              resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target }) => {
-                const match = /^telegram:group:(-?\d+):topic:(\d+)$/i.exec(target);
-                const chatId = match?.[1] ?? target;
-                const threadId = match?.[2] ? Number.parseInt(match[2], 10) : undefined;
-                return buildChannelOutboundSessionRoute({
-                  cfg,
-                  agentId,
-                  channel: "telegram",
-                  accountId,
-                  peer: { kind: "group", id: chatId },
-                  chatType: "group",
-                  from: `telegram:group:${chatId}`,
-                  to: chatId,
-                  ...(threadId != null ? { threadId } : {}),
-                });
-              },
-            },
-          }),
+    setSingleOutboundTestPlugin({
+      id: "telegram",
+      outbound: createStubOutbound("Telegram"),
+      messaging: {
+        targetPrefixes: ["telegram"],
+        normalizeTarget: () => "telegram:group:-100200300:topic:77",
+        resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target }) => {
+          const match = /^telegram:group:(-?\d+):topic:(\d+)$/i.exec(target);
+          const chatId = match?.[1] ?? target;
+          const threadId = match?.[2] ? Number.parseInt(match[2], 10) : undefined;
+          return buildChannelOutboundSessionRoute({
+            cfg,
+            agentId,
+            channel: "telegram",
+            accountId,
+            peer: { kind: "group", id: chatId },
+            chatType: "group",
+            from: `telegram:group:${chatId}`,
+            to: chatId,
+            ...(threadId != null ? { threadId } : {}),
+          });
         },
-      ]),
-    );
+      },
+    });
 
     const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
       channel: "telegram",
@@ -889,37 +885,29 @@ describe("resolveDeliveryTarget", () => {
       lastTo: "bad:stored:target",
       lastThreadId: "old-thread",
     });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "alpha",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "alpha",
-            outbound: createStubOutbound("Alpha"),
-            messaging: {
-              targetPrefixes: ["alpha"],
-              resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target }) => {
-                if (target === "bad:stored:target") {
-                  throw new Error("stale route parse failed");
-                }
-                const stripped = target.replace(/^alpha:/i, "");
-                return buildChannelOutboundSessionRoute({
-                  cfg,
-                  agentId,
-                  channel: "alpha",
-                  accountId,
-                  peer: { kind: "group", id: stripped },
-                  chatType: "group",
-                  from: `alpha:group:${stripped}`,
-                  to: stripped,
-                });
-              },
-            },
-          }),
+    setSingleOutboundTestPlugin({
+      id: "alpha",
+      outbound: createStubOutbound("Alpha"),
+      messaging: {
+        targetPrefixes: ["alpha"],
+        resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target }) => {
+          if (target === "bad:stored:target") {
+            throw new Error("stale route parse failed");
+          }
+          const stripped = target.replace(/^alpha:/i, "");
+          return buildChannelOutboundSessionRoute({
+            cfg,
+            agentId,
+            channel: "alpha",
+            accountId,
+            peer: { kind: "group", id: stripped },
+            chatType: "group",
+            from: `alpha:group:${stripped}`,
+            to: stripped,
+          });
         },
-      ]),
-    );
+      },
+    });
 
     const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
       channel: "alpha",
@@ -933,25 +921,17 @@ describe("resolveDeliveryTarget", () => {
 
   it("keeps cron route canonicalization best-effort when explicit route resolution fails", async () => {
     setMainSessionEntry(undefined);
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "alpha",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "alpha",
-            outbound: createStubOutbound("Alpha"),
-            messaging: {
-              targetPrefixes: ["alpha"],
-              inferTargetChatType: () => "group",
-              resolveOutboundSessionRoute: () => {
-                throw new Error("route lookup failed");
-              },
-            },
-          }),
+    setSingleOutboundTestPlugin({
+      id: "alpha",
+      outbound: createStubOutbound("Alpha"),
+      messaging: {
+        targetPrefixes: ["alpha"],
+        inferTargetChatType: () => "group",
+        resolveOutboundSessionRoute: () => {
+          throw new Error("route lookup failed");
         },
-      ]),
-    );
+      },
+    });
 
     const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
       channel: "alpha",

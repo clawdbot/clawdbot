@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { replaceFileAtomic } from "../infra/replace-file.js";
 import { isRecord } from "../utils.js";
 import { stampConfigWriteMetadata } from "./io.meta.js";
@@ -16,7 +17,6 @@ export function assertBaseSnapshotStillCurrent(
 ): void {
   if (snapshot.path !== configPath) {
     throw new ConfigMutationConflictError("config path changed since last load", {
-      currentHash: null,
       retryable: false,
     });
   }
@@ -40,7 +40,7 @@ export function assertBaseSnapshotStillCurrent(
     currentExists !== snapshot.exists ||
     (currentExists && expectedHash !== null && currentHash !== expectedHash)
   ) {
-    throw new ConfigMutationConflictError("config changed since last load", { currentHash });
+    throw new ConfigMutationConflictError("config changed since last load");
   }
 }
 
@@ -111,7 +111,7 @@ export async function rollbackConfigFileWriteIfUnchanged(params: {
 }
 
 function normalizeStatNumber(value: number | null | undefined): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
+  return asFiniteNumber(value) ?? null;
 }
 
 function normalizeStatId(value: number | bigint | null | undefined): string | null {
@@ -188,8 +188,12 @@ export function formatConfigArtifactTimestamp(ts: string): string {
   return ts.replaceAll(":", "-").replaceAll(".", "-");
 }
 
-export function stampConfigVersion(cfg: OpenClawConfig, version?: string): OpenClawConfig {
-  return stampConfigWriteMetadata(cfg, new Date().toISOString(), version);
+export function stampConfigVersion(
+  cfg: OpenClawConfig,
+  version?: string,
+  previousConfig?: unknown,
+): OpenClawConfig {
+  return stampConfigWriteMetadata(cfg, new Date().toISOString(), version, previousConfig);
 }
 
 export function resolveConfigSizeBaselineBytes(params: {

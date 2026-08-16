@@ -28,6 +28,7 @@ const TlonNetworkSchema = z
 const tlonCommonConfigFields = {
   name: z.string().optional(),
   enabled: z.boolean().optional(),
+  configWrites: z.boolean().optional(),
   ship: ShipSchema.optional(),
   url: z.string().optional(),
   code: z.string().optional(),

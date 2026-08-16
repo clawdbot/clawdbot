@@ -1,9 +1,11 @@
+import { requireActivePluginRegistry } from "../../../plugins/runtime.js";
 import { FailoverError } from "../../failover-error.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../harness/runtime-plugin.js";
 import { selectAgentHarness } from "../../harness/selection.js";
-import { ensureOpenClawModelsJson } from "../../models-config.js";
 import { resolveSelectedOpenAIRuntimeProvider } from "../../openai-routing.js";
-import { createEmptyAgentDiscoveryStores, resolveModelAsync } from "../model.js";
+import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
+import { resolveTieredModel } from "../model-resolution.js";
+import { createEmptyAgentDiscoveryStores } from "../model.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import { resolveRequestStreamTransportOverrides } from "./runtime-resolution.js";
 import {
@@ -23,6 +25,7 @@ export async function resolveEmbeddedRunModelSetup(params: {
   hookRunner: Parameters<typeof resolveHookModelSelection>[0]["hookRunner"];
   hookContext: Parameters<typeof resolveHookModelSelection>[0]["hookContext"];
   onHooksResolved: () => void;
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
 }) {
   const runParams = params.runParams;
   const hookSelection = await resolveHookModelSelection({
@@ -54,6 +57,7 @@ export async function resolveEmbeddedRunModelSetup(params: {
     agentHarnessRuntimeOverride: runParams.agentHarnessRuntimeOverride,
     requestTransportOverrides: requestStreamTransportOverrides,
     workspaceDir: params.workspaceDir,
+    pluginRegistry: params.preparedModelRuntime?.pluginRegistry ?? requireActivePluginRegistry(),
   });
   const agentHarness = selectAgentHarness({
     provider,
@@ -92,8 +96,7 @@ export async function resolveEmbeddedRunModelSetup(params: {
   const nativeModelOwned = nativeModelOwnedHarnessId !== undefined;
   const modelConfigProvider = provider;
   let resolvedModelProvider = provider;
-  let firstModelResolution: Awaited<ReturnType<typeof resolveModelAsync>> | undefined;
-  let modelResolution: Awaited<ReturnType<typeof resolveModelAsync>> | undefined;
+  let modelResolution;
   if (nativeModelOwned) {
     modelResolution = {
       model: createNativeModelOwnedRuntimeModel({ provider, modelId }),
@@ -109,58 +112,19 @@ export async function resolveEmbeddedRunModelSetup(params: {
       config: runParams.config,
       workspaceDir: params.workspaceDir,
     });
-    const modelResolutionProviders =
-      selectedRuntimeProvider !== provider ? [selectedRuntimeProvider, provider] : [provider];
-    for (const candidateProvider of modelResolutionProviders) {
-      const candidateResolution = await resolveModelAsync(
-        candidateProvider,
-        modelId,
-        params.agentDir,
-        runParams.config,
-        {
-          // Dynamic hooks can resolve an explicit model without generating models.json first.
-          skipAgentDiscovery: true,
-          allowBundledStaticCatalogFallback: pluginHarnessOwnsTransport,
-          preferBundledStaticCatalogTransport: pluginHarnessOwnsTransport,
-          workspaceDir: params.workspaceDir,
-          authProfileId: runParams.authProfileId,
-        },
-      );
-      firstModelResolution ??= candidateResolution;
-      if (candidateResolution.model) {
-        resolvedModelProvider = candidateProvider;
-        modelResolution = candidateResolution;
-        break;
-      }
-    }
-    if (!modelResolution && pluginHarnessOwnsTransport) {
-      modelResolution = firstModelResolution;
-    }
-    if (!modelResolution) {
-      await ensureOpenClawModelsJson(runParams.config, params.agentDir, {
-        workspaceDir: params.workspaceDir,
-      });
-      for (const candidateProvider of modelResolutionProviders) {
-        const candidateResolution = await resolveModelAsync(
-          candidateProvider,
-          modelId,
-          params.agentDir,
-          runParams.config,
-          {
-            workspaceDir: params.workspaceDir,
-            authProfileId: runParams.authProfileId,
-            allowBundledStaticCatalogFallback: true,
-          },
-        );
-        firstModelResolution ??= candidateResolution;
-        if (candidateResolution.model) {
-          resolvedModelProvider = candidateProvider;
-          modelResolution = candidateResolution;
-          break;
-        }
-      }
-    }
-    modelResolution ??= firstModelResolution;
+    const tieredResolution = await resolveTieredModel({
+      provider: selectedRuntimeProvider,
+      ...(selectedRuntimeProvider !== provider ? { fallbackProvider: provider } : {}),
+      modelId,
+      agentDir: params.agentDir,
+      config: runParams.config,
+      workspaceDir: params.workspaceDir,
+      authProfileId: runParams.authProfileId,
+      preparedModelRuntime: params.preparedModelRuntime,
+      staticCatalogOwnsTransport: pluginHarnessOwnsTransport,
+    });
+    resolvedModelProvider = tieredResolution.provider;
+    modelResolution = tieredResolution.resolution;
   }
   if (!modelResolution) {
     throw new FailoverError(`Unknown model: ${provider}/${modelId}`, {
@@ -188,7 +152,6 @@ export async function resolveEmbeddedRunModelSetup(params: {
     modelId,
     requestedModelId,
     modelSelectionChangedByHook,
-    beforeAgentStartResult: hookSelection.beforeAgentStartResult,
     requestStreamTransportOverrides,
     expectedHarnessArtifact,
     agentHarness,

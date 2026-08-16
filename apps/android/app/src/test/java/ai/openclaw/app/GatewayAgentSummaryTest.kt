@@ -25,6 +25,20 @@ class GatewayAgentSummaryTest {
   }
 
   @Test
+  fun parsesKindAndExcludesSystemRowsFromSelectableAgents() {
+    val agents =
+      parseGatewayAgentSummaries(
+        Json
+          .parseToJsonElement(
+            """{"agents":[{"id":"main","kind":"agent"},{"id":"ordinary-looking-id","kind":"system"},{"id":"legacy"}]}""",
+          ).jsonObject,
+      )
+
+    assertEquals("system", agents[1].kind)
+    assertEquals(listOf("main", "legacy"), agents.selectableAgents().map(GatewayAgentSummary::id))
+  }
+
+  @Test
   fun normalizesMissingAndBlankIdentityValues() {
     val missing = parse("""{"id":"main"}""")
     val blank =

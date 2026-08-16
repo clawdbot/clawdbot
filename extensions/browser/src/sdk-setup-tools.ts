@@ -5,9 +5,8 @@ export {
   callGatewayTool,
   listNodes,
   resolveNodeIdFromList,
-  selectDefaultNodeFromList,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-export type { AnyAgentTool, NodeListNode } from "openclaw/plugin-sdk/agent-harness-runtime";
+export type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 export {
   imageResultFromFile,
   jsonResult,

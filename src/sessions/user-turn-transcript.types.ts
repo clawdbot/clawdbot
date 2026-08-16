@@ -4,20 +4,30 @@ import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
 } from "../config/sessions/session-transcript-turn-lifecycle.types.js";
+import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
+import type { TranscriptTurnAdmission } from "../config/sessions/transcript-turn-admission.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import type { MediaFactInput } from "../media/media-facts.js";
 import type { InputProvenance } from "./input-provenance.js";
 
-type UserTurnSessionEntry = {
-  sessionId: string;
-  updatedAt: number;
-  sessionFile?: string;
-  threadId?: string | number;
-} & Record<string, unknown>;
+type UserTurnSessionEntry = SessionEntry;
 
-export type PersistedUserTurnMediaInput = {
-  path?: string | null;
-  url?: string | null;
-  contentType?: string | null;
+export type PersistedUserTurnMediaInput = Pick<
+  MediaFactInput,
+  | "contentType"
+  | "durationMs"
+  | "fileName"
+  | "height"
+  | "hydrationSuppressed"
+  | "messageId"
+  | "path"
+  | "sizeBytes"
+  | "transcribed"
+  | "url"
+  | "width"
+> & {
   kind?: string | null;
+  workspaceDir?: string | null;
 };
 
 export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }>;
@@ -25,11 +35,22 @@ export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }>;
 export type UserTurnInput = {
   text?: string | null;
   media?: readonly PersistedUserTurnMediaInput[] | null;
+  /** Restart-safe native image placement; model-visible prompt bytes remain separate. */
+  mediaImageLayout?: {
+    slots: readonly {
+      kind: "inline" | "offloaded";
+      factIndex?: number;
+    }[];
+    suppressedFactIndexes?: readonly number[];
+  } | null;
   timestamp?: number;
   idempotencyKey?: string;
+  /** Durable transcript message reference used to render and hydrate replies. */
+  replyToId?: string;
+  /** Bounded display fallback for replies whose target is outside loaded history. */
+  replyToPreview?: { text: string; senderLabel?: string | null } | null;
   senderIsOwner?: boolean;
   provenance?: InputProvenance;
-  mediaOnlyText?: string;
   /** Durable participant attribution. Callers must opt in at the product boundary. */
   sender?: { id?: string | null; name?: string | null; username?: string | null } | null;
   /** Durable transport correlation; stored privately and never rendered into model input. */
@@ -78,6 +99,8 @@ type UserTurnTranscriptPersistenceTarget = {
 
 export type UserTurnTranscriptTarget = UserTurnTranscriptPersistenceTarget;
 
+export type UserTurnTranscriptAdmissionReceipt = TranscriptTurnAdmission;
+
 export type UserTurnTranscriptPersistResult = {
   /** True only when this call inserted the transcript message. */
   appended?: boolean;
@@ -85,6 +108,7 @@ export type UserTurnTranscriptPersistResult = {
   sessionEntry: UserTurnSessionEntry | undefined;
   messageId: string;
   message: PersistedUserTurnMessage;
+  admission: UserTurnTranscriptAdmissionReceipt;
 };
 
 export type UserTurnTranscriptTargetResolver =
@@ -101,6 +125,7 @@ export type PersistUserTurnTranscriptParams = {
   sessionStore?: Record<string, UserTurnSessionEntry>;
   storePath?: string;
   agentId: string;
+  logicalTurnId?: string;
   threadId?: string | number;
   cwd?: string;
   config?: unknown;
@@ -129,10 +154,17 @@ export type CreateUserTurnTranscriptRecorderParams = {
 export type UserTurnTranscriptRecorder = {
   readonly message: PersistedUserTurnMessage | undefined;
   resolveMessage: () => Promise<PersistedUserTurnMessage | undefined>;
+  /** Replaces generated current-turn text before runtime persistence/provider submission. */
+  replaceTextBeforePersistence?: (text: string) => void;
   getPersistedMessage?: () => PersistedUserTurnMessage | undefined;
+  getAdmissionReceipt: () => UserTurnTranscriptAdmissionReceipt | undefined;
+  setAdmissionHandler?: (handler: (admission: UserTurnTranscriptAdmissionReceipt) => void) => void;
   markSentToProvider?: () => void;
   markRuntimePersistencePending: (pending: Promise<void>) => void;
-  markRuntimePersisted: (message?: PersistedUserTurnMessage) => void;
+  markRuntimePersisted: (
+    message?: PersistedUserTurnMessage,
+    anchor?: TranscriptEntryAnchor | UserTurnTranscriptAdmissionReceipt,
+  ) => void;
   markBlocked: () => void;
   hasPersisted: () => boolean;
   isBlocked: () => boolean;
@@ -145,6 +177,8 @@ export type UserTurnTranscriptRecorder = {
     expectedSessionId?: string;
     expectedSessionState?: SessionTranscriptTurnExpectedState;
     sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
+    /** Allow a later explicit persistence attempt when this attempt appends nothing. */
+    retryIfUnpersisted?: boolean;
   }) => Promise<UserTurnTranscriptPersistResult | undefined>;
   persistBlocked: (
     message: PersistedUserTurnMessage,

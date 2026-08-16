@@ -10,6 +10,10 @@ import {
 import { pathExists, shortenHomePath } from "../utils.js";
 import { buildCleanupPlan, isPathWithin } from "./cleanup-utils.js";
 
+// DEFLATE can legitimately encode zero-filled sparse ranges just over 1000:1.
+// Keep bounded headroom without disabling node-tar's decompression bomb guard.
+export const BACKUP_MAX_DECOMPRESSION_RATIO = 1100;
+
 type BackupAssetKind = "state" | "config" | "credentials" | "workspace";
 type BackupSkipReason = "covered" | "missing";
 
@@ -276,6 +280,27 @@ async function canonicalizeExistingPath(targetPath: string): Promise<string> {
   }
 }
 
+/** Resolve symlinks in the existing prefix while retaining a not-yet-created suffix. */
+export async function canonicalizePathForContainment(targetPath: string): Promise<string> {
+  const resolved = path.resolve(targetPath);
+  const suffix: string[] = [];
+  let probe = resolved;
+
+  while (true) {
+    try {
+      const realProbe = await fs.realpath(probe);
+      return suffix.length === 0 ? realProbe : path.join(realProbe, ...suffix.toReversed());
+    } catch {
+      const parent = path.dirname(probe);
+      if (parent === probe) {
+        return resolved;
+      }
+      suffix.push(path.basename(probe));
+      probe = parent;
+    }
+  }
+}
+
 /** Resolve the backup plan from the current OpenClaw state/config/workspace paths on disk. */
 export async function resolveBackupPlanFromDisk(
   params: {
@@ -290,7 +315,8 @@ export async function resolveBackupPlanFromDisk(
   const configPath = resolveConfigPath();
   const oauthDir = resolveOAuthDir();
 
-  const configSnapshot = await readConfigFileSnapshot();
+  // Backup discovery must not initialize or migrate the state DB before snapshot validation.
+  const configSnapshot = await readConfigFileSnapshot({ observe: false });
   if (includeWorkspace && configSnapshot.exists && !configSnapshot.valid) {
     throw new Error(
       `Config invalid at ${shortenHomePath(configSnapshot.path)}. OpenClaw cannot reliably discover custom workspaces for backup. Fix the config or rerun with --no-include-workspace for a partial backup.`,

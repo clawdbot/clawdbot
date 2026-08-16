@@ -6,7 +6,6 @@ import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
-import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS } from "openclaw/plugin-sdk/media-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAcceptedWhatsAppSendResult } from "./inbound/send-result.test-helper.js";
 import type { ActiveWebListener } from "./inbound/types.js";
@@ -14,7 +13,7 @@ import type { ActiveWebListener } from "./inbound/types.js";
 const hoisted = vi.hoisted(() => ({
   loadOutboundMediaFromUrl: vi.fn(),
   controllerListeners: new Map<string, ActiveWebListener>(),
-  runFfmpeg: vi.fn(),
+  transcodeAudioBufferToOpus: vi.fn(),
 }));
 const loadWebMediaMock = vi.fn();
 let sendMessageWhatsApp: typeof import("./send.js").sendMessageWhatsApp;
@@ -45,9 +44,9 @@ vi.mock("./connection-controller-runtime-context.js", async () => {
   };
 });
 
-vi.mock("./outbound-media.runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("./outbound-media.runtime.js")>(
-    "./outbound-media.runtime.js",
+vi.mock("openclaw/plugin-sdk/outbound-media", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/outbound-media")>(
+    "openclaw/plugin-sdk/outbound-media",
   );
   return {
     ...actual,
@@ -61,7 +60,7 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
   );
   return {
     ...actual,
-    runFfmpeg: hoisted.runFfmpeg,
+    transcodeAudioBufferToOpus: hoisted.transcodeAudioBufferToOpus,
   };
 });
 
@@ -92,10 +91,7 @@ describe("web outbound", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    hoisted.runFfmpeg.mockReset().mockImplementation(async (args: string[]) => {
-      fsSync.writeFileSync(args.at(-1) ?? "", Buffer.from("opus-output"));
-      return "";
-    });
+    hoisted.transcodeAudioBufferToOpus.mockReset().mockResolvedValue(Buffer.from("opus-output"));
     hoisted.loadOutboundMediaFromUrl.mockReset().mockImplementation(
       async (
         mediaUrl: string,
@@ -143,6 +139,94 @@ describe("web outbound", () => {
     });
     expect(sendComposingTo).toHaveBeenCalledWith("+1555");
     expect(sendMessage).toHaveBeenCalledWith("+1555", "hi", undefined, undefined);
+  });
+
+  it.each([
+    { kind: "text", mediaUrl: undefined, contentType: undefined },
+    { kind: "image", mediaUrl: "/tmp/pic.png", contentType: "image/png" },
+    { kind: "document", mediaUrl: "/tmp/report.pdf", contentType: "application/pdf" },
+    { kind: "voice", mediaUrl: "/tmp/voice.ogg", contentType: "audio/ogg" },
+  ])(
+    "rejects provider-unaccepted $kind sends without synthetic delivery progress",
+    async ({ kind, mediaUrl, contentType }) => {
+      if (mediaUrl) {
+        loadWebMediaMock.mockResolvedValueOnce({
+          buffer: Buffer.from(kind),
+          contentType,
+          kind: kind === "document" ? "document" : kind === "voice" ? "audio" : "image",
+        });
+      }
+      sendMessage.mockResolvedValueOnce({
+        kind: mediaUrl ? "media" : "text",
+        messageId: "unknown",
+        keys: [],
+        providerAccepted: false,
+      });
+      const onDeliveryResult = vi.fn();
+
+      await expect(
+        sendMessageWhatsApp("+1555", "hello", {
+          verbose: false,
+          cfg: WHATSAPP_TEST_CFG,
+          ...(mediaUrl ? { mediaUrl } : {}),
+          onDeliveryResult,
+        }),
+      ).rejects.toBeInstanceOf(PlatformMessageNotDispatchedError);
+
+      expect(sendMessage).toHaveBeenCalledOnce();
+      expect(onDeliveryResult).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { name: "text", mediaUrl: undefined },
+    { name: "media", mediaUrl: "/tmp/pic.jpg" },
+  ])("still sends $name when composing presence fails", async ({ mediaUrl }) => {
+    const mediaBuffer = Buffer.from("img");
+    if (mediaUrl) {
+      loadWebMediaMock.mockResolvedValueOnce({
+        buffer: mediaBuffer,
+        contentType: "image/jpeg",
+        kind: "image",
+      });
+    }
+    sendComposingTo.mockRejectedValueOnce(new Error("presence update unavailable"));
+
+    await expect(
+      sendMessageWhatsApp("+1555", "hi", {
+        verbose: false,
+        cfg: WHATSAPP_TEST_CFG,
+        ...(mediaUrl ? { mediaUrl } : {}),
+      }),
+    ).resolves.toEqual({
+      messageId: "msg123",
+      toJid: "1555@s.whatsapp.net",
+    });
+
+    expect(sendComposingTo).toHaveBeenCalledWith("+1555");
+    expect(sendMessage).toHaveBeenCalledWith(
+      "+1555",
+      "hi",
+      mediaUrl ? mediaBuffer : undefined,
+      mediaUrl ? "image/jpeg" : undefined,
+    );
+  });
+
+  it("re-chunks after WhatsApp marker expansion", async () => {
+    const onDeliveryResult = vi.fn();
+    await sendMessageWhatsApp("+1555", Array.from({ length: 8 }, () => "`x`").join(" "), {
+      verbose: false,
+      cfg: { channels: { whatsapp: { textChunkLimit: 20 } } },
+      onDeliveryResult,
+    });
+
+    const sentText = (sendMessage.mock.calls as unknown as Array<[string, string]>).map(
+      ([, chunk]) => chunk,
+    );
+    expect(sentText.length).toBeGreaterThan(1);
+    expect(sentText.every((chunk) => chunk.length <= 20)).toBe(true);
+    expect(sentText.join("")).not.toContain("\uE000");
+    expect(onDeliveryResult).toHaveBeenCalledTimes(sentText.length);
   });
 
   it("checks send readiness before composing or sending direct messages", async () => {
@@ -345,101 +429,6 @@ describe("web outbound", () => {
     });
   });
 
-  it("maps audio to PTT with opus mime when ogg", async () => {
-    const buf = Buffer.from("audio");
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: buf,
-      contentType: "audio/ogg",
-      kind: "audio",
-    });
-    await sendMessageWhatsApp("+1555", "voice note", {
-      verbose: false,
-      cfg: WHATSAPP_TEST_CFG,
-      mediaUrl: "/tmp/voice.ogg",
-    });
-    expect(sendMessage).toHaveBeenNthCalledWith(1, "+1555", "", buf, "audio/ogg; codecs=opus");
-    expect(sendMessage).toHaveBeenNthCalledWith(2, "+1555", "voice note", undefined, undefined);
-  });
-
-  it("reports the accepted voice send before a caption failure", async () => {
-    const buf = Buffer.from("audio");
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: buf,
-      contentType: "audio/ogg",
-      kind: "audio",
-    });
-    sendMessage
-      .mockResolvedValueOnce(createAcceptedWhatsAppSendResult("media", "voice-accepted"))
-      .mockRejectedValueOnce(new Error("caption failed"));
-    const onDeliveryResult = vi.fn();
-
-    await expect(
-      sendMessageWhatsApp("+1555", "voice note", {
-        verbose: false,
-        cfg: WHATSAPP_TEST_CFG,
-        mediaUrl: "/tmp/voice.ogg",
-        onDeliveryResult,
-      }),
-    ).rejects.toThrow("caption failed");
-
-    expect(onDeliveryResult).toHaveBeenCalledOnce();
-    expect(onDeliveryResult).toHaveBeenCalledWith(
-      expect.objectContaining({ messageId: "voice-accepted" }),
-    );
-  });
-
-  it.each([
-    { name: "mp3", contentType: "audio/mpeg", fileName: "voice.mp3" },
-    { name: "webm", contentType: "audio/webm", fileName: "voice.webm" },
-  ])("transcodes $name audio to Ogg Opus before sending a PTT voice note", async (media) => {
-    const buf = Buffer.from(media.name);
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: buf,
-      contentType: media.contentType,
-      kind: "audio",
-      fileName: media.fileName,
-    });
-
-    await sendMessageWhatsApp("+1555", "voice note", {
-      verbose: false,
-      cfg: WHATSAPP_TEST_CFG,
-      mediaUrl: `/tmp/${media.fileName}`,
-    });
-
-    expect(hoisted.runFfmpeg).toHaveBeenCalledTimes(1);
-    const ffmpegArgs = hoisted.runFfmpeg.mock.calls.at(0)?.[0] as string[] | undefined;
-    expect(ffmpegArgs?.slice(0, 5)).toEqual(["-hide_banner", "-loglevel", "error", "-y", "-i"]);
-    expect(ffmpegArgs?.[5]).toContain(`/input.${media.name}`);
-    expect(ffmpegArgs?.slice(6, -1)).toEqual([
-      "-vn",
-      "-sn",
-      "-dn",
-      "-t",
-      String(MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS),
-      "-ar",
-      "48000",
-      "-ac",
-      "1",
-      "-c:a",
-      "libopus",
-      "-b:a",
-      "64k",
-      "-f",
-      "ogg",
-    ]);
-    const outputPath = ffmpegArgs?.at(-1);
-    expect(outputPath).toContain("/fs-safe-output-");
-    expect(outputPath).toContain("-voice.ogg.part");
-    expect(sendMessage).toHaveBeenNthCalledWith(
-      1,
-      "+1555",
-      "",
-      Buffer.from("opus-output"),
-      "audio/ogg; codecs=opus",
-    );
-    expect(sendMessage).toHaveBeenNthCalledWith(2, "+1555", "voice note", undefined, undefined);
-  });
-
   it("maps video with caption", async () => {
     const buf = Buffer.from("video");
     loadWebMediaMock.mockResolvedValueOnce({
@@ -605,22 +594,25 @@ describe("web outbound", () => {
     });
   });
 
-  it("keeps explicit document kind for prehydrated image payloads", async () => {
-    const buf = Buffer.from("image-as-document");
+  it.each([
+    { contentType: "image/png", fileName: "photo.png" },
+    { contentType: "video/mp4", fileName: "clip.mp4" },
+  ])("keeps explicit document delivery for prehydrated $contentType payloads", async (media) => {
+    const buf = Buffer.from("visual-as-document");
 
     await sendMessageWhatsApp("+1555", "doc", {
       verbose: false,
       cfg: WHATSAPP_TEST_CFG,
       mediaPayload: {
         buffer: buf,
-        contentType: "image/png",
+        ...media,
         kind: "document",
-        fileName: "photo.png",
       },
     });
 
-    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "doc", buf, "image/png", {
-      fileName: "photo.png",
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "doc", buf, media.contentType, {
+      asDocument: true,
+      fileName: media.fileName,
     });
   });
 
@@ -785,6 +777,51 @@ describe("web outbound", () => {
     });
   });
 
+  it("rejects polls without an accepted provider message key", async () => {
+    sendPoll.mockResolvedValueOnce({
+      kind: "poll",
+      messageId: "unknown",
+      keys: [],
+      providerAccepted: false,
+    });
+
+    await expect(
+      sendPollWhatsApp(
+        "+1555",
+        { question: "Lunch?", options: ["Pizza", "Sushi"] },
+        { verbose: false, cfg: WHATSAPP_TEST_CFG },
+      ),
+    ).rejects.toBeInstanceOf(PlatformMessageNotDispatchedError);
+
+    expect(sendPoll).toHaveBeenCalledOnce();
+  });
+
+  it("returns the actual outbound poll key when Baileys resolves a LID target", async () => {
+    sendPoll.mockResolvedValueOnce({
+      kind: "poll",
+      messageId: "poll-lid",
+      keys: [
+        {
+          id: "poll-lid",
+          remoteJid: "123456789@lid",
+          fromMe: true,
+        },
+      ],
+      providerAccepted: true,
+    });
+
+    await expect(
+      sendPollWhatsApp(
+        "+1555",
+        { question: "Lunch?", options: ["Pizza", "Sushi"] },
+        { verbose: false, cfg: WHATSAPP_TEST_CFG },
+      ),
+    ).resolves.toEqual({
+      messageId: "poll-lid",
+      toJid: "123456789@lid",
+    });
+  });
+
   it("checks send readiness before sending direct polls", async () => {
     const assertSendReady = vi.fn(async () => {
       throw new Error("WhatsApp reachout timelock is active");
@@ -819,16 +856,19 @@ describe("web outbound", () => {
       { verbose: false, cfg: WHATSAPP_TEST_CFG },
     );
 
+    const redactedTarget = redactIdentifier("+1555");
+    const redactedJid = redactIdentifier("1555@s.whatsapp.net");
+    let content = "";
     await vi.waitFor(
       () => {
-        expect(fsSync.existsSync(logPath)).toBe(true);
+        content = fsSync.existsSync(logPath) ? fsSync.readFileSync(logPath, "utf-8") : "";
+        expect(content).toContain(redactedTarget);
+        expect(content).toContain(redactedJid);
+        expect(content).toContain("sent poll");
       },
       { timeout: 2_000, interval: 5 },
     );
 
-    const content = fsSync.readFileSync(logPath, "utf-8");
-    expect(content).toContain(redactIdentifier("+1555"));
-    expect(content).toContain(redactIdentifier("1555@s.whatsapp.net"));
     expect(content).not.toContain(`"to":"+1555"`);
     expect(content).not.toContain(`"jid":"1555@s.whatsapp.net"`);
     expect(content).not.toContain("Lunch?");

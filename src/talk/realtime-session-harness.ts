@@ -14,7 +14,12 @@ import {
   type RealtimeVoiceOutputActivityDelta,
   type RealtimeVoiceOutputActivityTracker,
 } from "./output-activity-tracker.js";
-import type { RealtimeVoiceBargeInOptions, RealtimeVoiceRole } from "./provider-types.js";
+import type {
+  RealtimeVoiceBargeInOptions,
+  RealtimeVoiceBridgeEvent,
+  RealtimeVoiceResponseOutcome,
+  RealtimeVoiceRole,
+} from "./provider-types.js";
 import {
   extendRealtimeVoiceOutputEchoSuppression,
   getRealtimeVoiceBridgeEventHealth,
@@ -35,7 +40,30 @@ import {
   createTalkSessionController,
   type TalkSessionController,
   type TalkSessionControllerParams,
+  type TalkTurnResult,
 } from "./talk-session-controller.js";
+
+const MAX_SETTLED_RESPONSE_IDS = 64;
+
+type RealtimeVoiceHarnessResponseOwner = {
+  claimResponseEvent(event: RealtimeVoiceBridgeEvent): void;
+  finishLegacyEvent(event: RealtimeVoiceBridgeEvent): RealtimeVoiceResponseOutcome | undefined;
+};
+
+const harnessResponseOwners = new WeakMap<
+  RealtimeVoiceSessionHarness,
+  RealtimeVoiceHarnessResponseOwner
+>();
+
+/** Core-only adapter for direct provider bridges that cannot use createBridge(). */
+export function handleRealtimeVoiceHarnessBridgeEvent(
+  harness: RealtimeVoiceSessionHarness,
+  event: RealtimeVoiceBridgeEvent,
+): RealtimeVoiceResponseOutcome | undefined {
+  const owner = harnessResponseOwners.get(harness);
+  owner?.claimResponseEvent(event);
+  return owner?.finishLegacyEvent(event);
+}
 
 type RealtimeVoiceSessionHarnessTalkPayloads = {
   turnStarted: () => unknown;
@@ -86,6 +114,7 @@ export type RealtimeVoiceSessionHarness<TForcedConsultContext = unknown> = {
   emit<TPayload>(input: TalkEventInput<TPayload>): TalkEvent<TPayload>;
   ensureTurn(): string;
   endTurn(reason?: string): void;
+  finishResponse(outcome: RealtimeVoiceResponseOutcome): TalkTurnResult;
   finishOutputAudio(reason: string): void;
   flushOutput(flush: () => void): void;
   getHealth(params: {
@@ -107,6 +136,8 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
   talkback?: Omit<RealtimeVoiceAgentTalkbackQueueParams, "isStopped">;
   forcedConsults?: RealtimeVoiceForcedConsultCoordinatorOptions;
   echoSuppression?: RealtimeVoiceSessionHarnessEchoSuppression;
+  transcriptLookbackMs?: number;
+  captureBridgeEvents?: boolean;
 }): RealtimeVoiceSessionHarness<TForcedConsultContext> {
   let closed = false;
   let bridge: RealtimeVoiceBridgeSession | undefined;
@@ -118,14 +149,21 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
   let suppressInputUntilMs = 0;
   let lastOutputPlayableUntilMs = 0;
   let outputFlushGeneration = 0;
+  let responseOwnerTurnId: string | undefined;
+  let responseOwnerId: string | undefined;
+  let suppressNextUnkeyedLegacyTerminal = false;
+  const settledResponseIds = new Set<string>();
+  const settledResponseIdOrder: string[] = [];
   const transcript: RealtimeVoiceTranscriptEntry[] = [];
   const bridgeEvents: RealtimeVoiceBridgeEventLogEntry[] = [];
   const outputActivity = createRealtimeVoiceOutputActivityTracker();
+  const transcriptLookbackMs =
+    params.transcriptLookbackMs ?? params.echoSuppression?.transcriptLookbackMs;
   const forcedConsults = createRealtimeVoiceForcedConsultCoordinator<TForcedConsultContext>(
     params.forcedConsults,
   );
   const talk = createTalkSessionController(
-    { ...params.talk, maxRecentEvents: 40 },
+    { maxRecentEvents: 40, ...params.talk },
     {
       onEvent: (event) => {
         recordTalkObservabilityEvent(event);
@@ -140,7 +178,106 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
       })
     : undefined;
 
-  const ensureTurn = () => talk.ensureTurn({ payload: params.talkPayloads.turnStarted() }).turnId;
+  const ensureTurn = () => {
+    const turnId = talk.ensureTurn({ payload: params.talkPayloads.turnStarted() }).turnId;
+    responseOwnerTurnId ??= turnId;
+    return turnId;
+  };
+
+  const rememberSettledResponse = (responseId: string | undefined): void => {
+    if (!responseId || settledResponseIds.has(responseId)) {
+      return;
+    }
+    settledResponseIds.add(responseId);
+    settledResponseIdOrder.push(responseId);
+    if (settledResponseIdOrder.length > MAX_SETTLED_RESPONSE_IDS) {
+      const oldest = settledResponseIdOrder.shift();
+      if (oldest) {
+        settledResponseIds.delete(oldest);
+      }
+    }
+  };
+
+  const claimResponseEvent = (event: RealtimeVoiceBridgeEvent): void => {
+    if (event.direction !== "server" || event.type !== "response.created") {
+      return;
+    }
+    responseOwnerTurnId = ensureTurn();
+    responseOwnerId = event.responseId;
+    suppressNextUnkeyedLegacyTerminal = false;
+  };
+
+  const finishResponse = (
+    outcome: RealtimeVoiceResponseOutcome,
+    source: "typed" | "legacy" | "manual",
+  ): TalkTurnResult => {
+    if (outcome.responseId && settledResponseIds.has(outcome.responseId)) {
+      return { ok: false, reason: "no_active_turn" };
+    }
+    if (outcome.responseId && responseOwnerId && outcome.responseId !== responseOwnerId) {
+      return { ok: false, reason: "stale_turn" };
+    }
+    const turnId = responseOwnerTurnId ?? talk.activeTurnId;
+    if (!turnId) {
+      return { ok: false, reason: "no_active_turn" };
+    }
+    if (talk.activeTurnId !== turnId) {
+      return { ok: false, reason: "stale_turn" };
+    }
+    talk.finishOutputAudio({
+      turnId,
+      payload: params.talkPayloads.outputAudioDone(outcome.status),
+    });
+    if (outcome.status === "failed" || outcome.status === "incomplete") {
+      talk.emit({
+        type: "session.error",
+        turnId,
+        payload: outcome,
+        final: true,
+      });
+    }
+    const payload = params.talkPayloads.turnEnded(outcome.status);
+    const result =
+      outcome.status === "cancelled"
+        ? talk.cancelTurn({ turnId, payload })
+        : talk.endTurn({ turnId, payload });
+    if (result.ok) {
+      rememberSettledResponse(outcome.responseId);
+      if (!outcome.responseId && source === "typed") {
+        // Current typed providers emit the legacy bridge event in the same dispatch.
+        // Suppress that unkeyed twin without treating arbitrary later events as typed.
+        suppressNextUnkeyedLegacyTerminal = true;
+      }
+      if (!responseOwnerId || !outcome.responseId || responseOwnerId === outcome.responseId) {
+        responseOwnerTurnId = undefined;
+        responseOwnerId = undefined;
+      }
+    }
+    return result;
+  };
+
+  const finishLegacyEvent = (
+    event: RealtimeVoiceBridgeEvent,
+  ): RealtimeVoiceResponseOutcome | undefined => {
+    if (
+      event.direction !== "server" ||
+      (event.type !== "response.done" && event.type !== "response.cancelled")
+    ) {
+      return undefined;
+    }
+    if (event.responseId && settledResponseIds.has(event.responseId)) {
+      return undefined;
+    }
+    if (!event.responseId && suppressNextUnkeyedLegacyTerminal) {
+      suppressNextUnkeyedLegacyTerminal = false;
+      return undefined;
+    }
+    const outcome: RealtimeVoiceResponseOutcome = {
+      status: event.type === "response.cancelled" ? "cancelled" : "completed",
+      ...(event.responseId ? { responseId: event.responseId } : {}),
+    };
+    return finishResponse(outcome, "legacy").ok ? outcome : undefined;
+  };
 
   const flushOutput = (flush: () => void): void => {
     outputFlushGeneration += 1;
@@ -162,6 +299,8 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
       closed = true;
       talkback?.close();
       forcedConsults.clear();
+      responseOwnerTurnId = undefined;
+      responseOwnerId = undefined;
     },
     createBridge(bridgeParams) {
       bridge = createRealtimeVoiceBridgeSession({
@@ -173,8 +312,20 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
           bridgeParams.onTranscript?.(role, text, isFinal);
         },
         onEvent: (event) => {
-          recordRealtimeVoiceBridgeEvent(bridgeEvents, event);
+          claimResponseEvent(event);
+          const legacyOutcome = finishLegacyEvent(event);
+          if (legacyOutcome) {
+            bridgeParams.onResponseDone?.(legacyOutcome);
+          }
+          if (params.captureBridgeEvents !== false) {
+            recordRealtimeVoiceBridgeEvent(bridgeEvents, event);
+          }
           bridgeParams.onEvent?.(event);
+        },
+        onResponseDone: (outcome) => {
+          if (finishResponse(outcome, "typed").ok) {
+            bridgeParams.onResponseDone?.(outcome);
+          }
         },
       });
       return bridge;
@@ -182,7 +333,14 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
     emit: (input) => talk.emit(input),
     ensureTurn,
     endTurn(reason = "completed") {
-      talk.endTurn({ payload: params.talkPayloads.turnEnded(reason) });
+      const result = talk.endTurn({ payload: params.talkPayloads.turnEnded(reason) });
+      if (result.ok) {
+        responseOwnerTurnId = undefined;
+        responseOwnerId = undefined;
+      }
+    },
+    finishResponse(outcome) {
+      return finishResponse(outcome, "typed");
     },
     finishOutputAudio(reason) {
       talk.finishOutputAudio({ payload: params.talkPayloads.outputAudioDone(reason) });
@@ -223,13 +381,13 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
       }
     },
     isLikelyAssistantEchoTranscript(text) {
-      return params.echoSuppression
-        ? isLikelyRealtimeVoiceAssistantEchoTranscript({
+      return transcriptLookbackMs === undefined
+        ? false
+        : isLikelyRealtimeVoiceAssistantEchoTranscript({
             transcript,
             text,
-            lookbackMs: params.echoSuppression.transcriptLookbackMs,
-          })
-        : false;
+            lookbackMs: transcriptLookbackMs,
+          });
     },
     isOutputPlaybackWindowActive() {
       return Date.now() <= Math.max(lastOutputPlayableUntilMs, suppressInputUntilMs);
@@ -283,6 +441,8 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
     },
     recordTranscript: (role, text) => recordRealtimeVoiceTranscript(transcript, role, text),
   };
+
+  harnessResponseOwners.set(harness, { claimResponseEvent, finishLegacyEvent });
 
   return harness;
 }

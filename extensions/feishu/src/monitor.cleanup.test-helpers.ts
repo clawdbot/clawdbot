@@ -1,3 +1,4 @@
+import { closeOpenClawStateDatabaseForTest } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { botNames, botOpenIds, httpServers, wsClients } from "./monitor.state.js";
 
 export function cleanupFeishuMonitorStateForTests(): void {
@@ -21,4 +22,5 @@ export function cleanupFeishuMonitorStateForTests(): void {
   httpServers.clear();
   botOpenIds.clear();
   botNames.clear();
+  closeOpenClawStateDatabaseForTest();
 }

@@ -14,12 +14,12 @@ export async function prepareMinGitZip(tgzDir: string): Promise<string> {
 import urllib.request
 
 preferred_names = [
-    "MinGit-2.53.0.2-64-bit.zip",
-    "MinGit-2.53.0.2-arm64.zip",
+    "MinGit-2.55.0.3-64-bit.zip",
+    "MinGit-2.55.0.3-arm64.zip",
 ]
 fallback_urls = {
-    "MinGit-2.53.0.2-arm64.zip": "https://github.com/git-for-windows/git/releases/download/v2.53.0.windows.2/MinGit-2.53.0.2-arm64.zip",
-    "MinGit-2.53.0.2-64-bit.zip": "https://github.com/git-for-windows/git/releases/download/v2.53.0.windows.2/MinGit-2.53.0.2-64-bit.zip",
+    "MinGit-2.55.0.3-arm64.zip": "https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.3/MinGit-2.55.0.3-arm64.zip",
+    "MinGit-2.55.0.3-64-bit.zip": "https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.3/MinGit-2.55.0.3-64-bit.zip",
 }
 
 try:

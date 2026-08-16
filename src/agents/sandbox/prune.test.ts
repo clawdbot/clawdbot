@@ -63,6 +63,7 @@ function buildPruneConfig(): SandboxConfig {
     scope: "session",
     workspaceAccess: "none",
     workspaceRoot: "/tmp/openclaw-sandboxes",
+    dockerTmpfsSource: "configured",
     docker: {
       image: "openclaw-sandbox:bookworm-slim",
       containerPrefix: "openclaw-sbx-",
@@ -88,7 +89,7 @@ function buildPruneConfig(): SandboxConfig {
       vncPort: 5900,
       noVncPort: 6080,
       headless: true,
-      enableNoVnc: false,
+      noVncEnabled: false,
       allowHostControl: false,
       autoStart: true,
       autoStartTimeoutMs: 1_000,

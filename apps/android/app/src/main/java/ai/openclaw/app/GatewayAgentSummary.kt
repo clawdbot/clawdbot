@@ -14,6 +14,7 @@ data class GatewayAgentSummary(
   val avatar: String? = null,
   val avatarUrl: String? = null,
   val workspaceGit: Boolean = false,
+  val kind: String? = null,
 )
 
 /** Parses validated agents.list rows into the smaller Android display model. */
@@ -26,6 +27,7 @@ private fun parseGatewayAgentSummary(item: JsonElement): GatewayAgentSummary? {
   val identity = agent["identity"].asObjectOrNull()
   return GatewayAgentSummary(
     id = id,
+    kind = agent["kind"].asStringOrNull().normalizedAgentValue(),
     name = agent["name"].asStringOrNull().normalizedAgentValue(),
     emoji = identity?.get("emoji").asStringOrNull().normalizedAgentValue(),
     avatar = identity?.get("avatar").asStringOrNull().normalizedAgentValue(),
@@ -33,5 +35,7 @@ private fun parseGatewayAgentSummary(item: JsonElement): GatewayAgentSummary? {
     workspaceGit = (agent["workspaceGit"] as? JsonPrimitive)?.content?.toBooleanStrictOrNull() == true,
   )
 }
+
+internal fun List<GatewayAgentSummary>.selectableAgents(): List<GatewayAgentSummary> = filter { it.kind != "system" }
 
 private fun String?.normalizedAgentValue(): String? = this?.trim()?.takeIf { it.isNotEmpty() }

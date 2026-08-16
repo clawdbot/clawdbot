@@ -1,6 +1,8 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveTeamsMeetingsConfig } from "../config.js";
+import { teamsMeetingsConfig } from "../config.js";
+
+const resolveTeamsMeetingsConfig = teamsMeetingsConfig.resolveConfig;
 
 const engineMocks = vi.hoisted(() => ({
   localDispose: vi.fn(async () => {}),
@@ -20,9 +22,16 @@ vi.mock("openclaw/plugin-sdk/meeting-runtime", async (importOriginal) => {
   });
   return {
     ...original,
-    createLocalMeetingRealtimeAudioTransport: () => transport(engineMocks.localDispose),
-    createNodeMeetingRealtimeAudioTransport: () => transport(engineMocks.nodeDispose),
-    startMeetingAgentRealtimeEngine: engineMocks.startAgent,
+    MeetingPlatformAdapter: {
+      ...original.MeetingPlatformAdapter,
+      createChromeRuntimeBindings: () => ({
+        createBindings: original.createMeetingRealtimeEngineBindings,
+        createLocalAudioTransport: () => transport(engineMocks.localDispose),
+        createNodeAudioTransport: () => transport(engineMocks.nodeDispose),
+        startAgentRealtimeEngine: engineMocks.startAgent,
+        startRealtimeEngine: original.startMeetingRealtimeEngine,
+      }),
+    },
   };
 });
 

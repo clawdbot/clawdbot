@@ -14,6 +14,16 @@ import { OpenClawSchema } from "./zod-schema.js";
 
 const nonBooleanConfigCases = [
   {
+    name: "gateway.controlUi.sessionObserver",
+    config: {
+      gateway: {
+        controlUi: {
+          sessionObserver: "yes",
+        },
+      },
+    },
+  },
+  {
     name: "gateway.controlUi.allowExternalEmbedUrls",
     config: {
       gateway: {
@@ -91,7 +101,7 @@ describe("agent timeoutSeconds config", () => {
     ["fractional", 1.5, false],
   ])("agents.defaults.timeoutSeconds %s", (_label, timeoutSeconds, ok) => {
     const result = OpenClawSchema.safeParse({
-      agents: { defaults: { timeoutSeconds } },
+      agents: { defaults: { timeoutSeconds }, entries: { main: { default: true } } },
     });
     expect(result.success).toBe(ok);
   });
@@ -136,6 +146,28 @@ describe("model provider localService config", () => {
       expect(result.config.models?.providers?.[provider]?.models).toEqual([]);
       expect(result.config.models?.providers?.[provider]?.baseUrl).toBe("");
     }
+  });
+
+  it("revalidates materialized bundled provider overlays", () => {
+    const first = validateConfigObjectRaw({
+      models: {
+        providers: {
+          google: {
+            timeoutSeconds: 600,
+          },
+        },
+      },
+    });
+
+    expect(first.ok).toBe(true);
+    if (!first.ok) {
+      throw new Error("expected bundled provider overlay to pass initial validation");
+    }
+    expect(first.config.models?.providers?.google?.baseUrl).toBe("");
+    expect(first.config.models?.providers?.google?.models).toEqual([]);
+
+    const second = validateConfigObjectRaw(first.config);
+    expect(second.ok).toBe(true);
   });
 
   it("rejects standalone timeout overlays for unknown model providers", () => {
@@ -305,29 +337,6 @@ describe("$schema key in config (#14998)", () => {
   });
 });
 
-describe("legacy Canvas host config", () => {
-  it("keeps root canvasHost valid so doctor can migrate it", () => {
-    const result = validateConfigObjectRaw({
-      canvasHost: {
-        enabled: false,
-        root: "~/canvas",
-        port: 18790,
-        liveReload: false,
-      },
-    });
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect((result.config as { canvasHost?: unknown }).canvasHost).toEqual({
-        enabled: false,
-        root: "~/canvas",
-        port: 18790,
-        liveReload: false,
-      });
-    }
-  });
-});
-
 describe("accessGroups config", () => {
   it("accepts Discord channel audience access groups", () => {
     const result = OpenClawSchema.safeParse({
@@ -402,64 +411,36 @@ describe("plugins.slots.contextEngine", () => {
   });
 });
 
-describe("models.pricing", () => {
-  it("accepts the model pricing bootstrap toggle", () => {
-    for (const enabled of [true, false]) {
-      const result = OpenClawSchema.safeParse({
-        models: {
-          pricing: { enabled },
-        },
-      });
-      expect(result.success).toBe(true);
-    }
+describe("models.catalogRefresh", () => {
+  it("accepts the refresh toggle and an http(s) override", () => {
+    expect(
+      OpenClawSchema.safeParse({
+        models: { catalogRefresh: { enabled: false, url: "https://catalog.example.test/v1.json" } },
+      }).success,
+    ).toBe(true);
+    expect(
+      OpenClawSchema.safeParse({
+        models: { catalogRefresh: { url: "http://localhost:8080/catalog.json" } },
+      }).success,
+    ).toBe(true);
   });
 
-  it("rejects non-boolean model pricing bootstrap values", () => {
-    const result = OpenClawSchema.safeParse({
-      models: {
-        pricing: { enabled: "false" },
-      },
-    });
-    expect(result.success).toBe(false);
-  });
-});
-
-describe("systemAgent.rescue", () => {
-  it("accepts documented rescue config", () => {
-    const result = OpenClawSchema.safeParse({
-      systemAgent: {
-        rescue: {
-          enabled: "auto",
-          ownerDmOnly: false,
-          pendingTtlMinutes: 5,
-        },
-      },
-    });
-    expect(result.success).toBe(true);
-  });
-
-  it("accepts boolean rescue enablement", () => {
-    const result = OpenClawSchema.safeParse({
-      systemAgent: {
-        rescue: {
-          enabled: true,
-          ownerDmOnly: true,
-        },
-      },
-    });
-    expect(result.success).toBe(true);
-  });
-
-  it("rejects unknown rescue keys", () => {
-    const result = OpenClawSchema.safeParse({
-      systemAgent: {
-        rescue: {
-          enabled: true,
-          shell: true,
-        },
-      },
-    });
-    expect(result.success).toBe(false);
+  it("rejects invalid refresh values", () => {
+    expect(
+      OpenClawSchema.safeParse({ models: { catalogRefresh: { enabled: "false" } } }).success,
+    ).toBe(false);
+    expect(
+      OpenClawSchema.safeParse({ models: { catalogRefresh: { url: "file:///tmp/catalog.json" } } })
+        .success,
+    ).toBe(false);
+    expect(
+      OpenClawSchema.safeParse({ models: { catalogRefresh: { url: "not a url" } } }).success,
+    ).toBe(false);
+    expect(
+      OpenClawSchema.safeParse({
+        models: { catalogRefresh: { url: "http://catalog.internal.example/catalog.json" } },
+      }).success,
+    ).toBe(false);
   });
 });
 
@@ -488,20 +469,8 @@ describe("diagnostics.otel.captureContent", () => {
     expect(invalid.success).toBe(false);
   });
 
-  it("accepts boolean and granular OTEL content capture config", () => {
-    for (const captureContent of [
-      true,
-      false,
-      {
-        enabled: true,
-        inputMessages: true,
-        outputMessages: true,
-        toolInputs: true,
-        toolOutputs: true,
-        systemPrompt: false,
-        toolDefinitions: true,
-      },
-    ]) {
+  it("accepts boolean OTEL content capture config", () => {
+    for (const captureContent of [true, false]) {
       const result = OpenClawSchema.safeParse({
         diagnostics: {
           otel: {
@@ -514,17 +483,21 @@ describe("diagnostics.otel.captureContent", () => {
   });
 });
 
-describe("auth.cooldowns auth_permanent backoff config", () => {
-  it("accepts auth_permanent backoff knobs", () => {
-    const result = OpenClawSchema.safeParse({
-      auth: {
-        cooldowns: {
-          authPermanentBackoffMinutes: 10,
-          authPermanentMaxMinutes: 60,
-        },
-      },
-    });
-    expect(result.success).toBe(true);
+describe("diagnostics.otel.metricNamePrefix", () => {
+  it("accepts valid metric name fragments and rejects invalid values", () => {
+    for (const metricNamePrefix of ["", "acme.", "Acme/team-1_"]) {
+      const result = OpenClawSchema.safeParse({
+        diagnostics: { otel: { metricNamePrefix } },
+      });
+      expect(result.success).toBe(true);
+    }
+
+    for (const metricNamePrefix of [42, " ", ".acme", "acme metrics.", "é.", "a".repeat(129)]) {
+      const result = OpenClawSchema.safeParse({
+        diagnostics: { otel: { metricNamePrefix } },
+      });
+      expect(result.success).toBe(false);
+    }
   });
 });
 
@@ -545,29 +518,29 @@ describe("ui.seamColor", () => {
   });
 });
 
-describe("tui.footer.showRemoteHost", () => {
-  it("accepts the TUI remote-host footer toggle", () => {
-    const result = OpenClawSchema.safeParse({
-      tui: {
-        footer: {
-          showRemoteHost: true,
+describe("ui.prefs.sidebarEntries", () => {
+  it("accepts the route and session entries synchronized by the Control UI", () => {
+    const result = validateConfigObject({
+      ui: {
+        prefs: {
+          sidebarEntries: ["route:usage", "session:agent:main:test"],
         },
       },
     });
 
-    expect(result.success).toBe(true);
+    expect(result.ok).toBe(true);
   });
 
-  it("rejects unknown TUI footer keys", () => {
-    const result = OpenClawSchema.safeParse({
-      tui: {
-        footer: {
-          showLocalHost: true,
+  it("rejects sidebar entries that are not strings", () => {
+    const result = validateConfigObject({
+      ui: {
+        prefs: {
+          sidebarEntries: ["route:usage", 7],
         },
       },
     });
 
-    expect(result.success).toBe(false);
+    expect(result.ok).toBe(false);
   });
 });
 
@@ -612,48 +585,13 @@ describe("gateway.controlUi.allowExternalEmbedUrls", () => {
   });
 });
 
-describe("gateway.controlUi.chatMessageMaxWidth", () => {
-  it("accepts constrained CSS width values", () => {
-    for (const value of ["960px", "82%", "min(1280px, 82%)", "calc(100% - 2rem)"]) {
+describe("gateway.controlUi.sessionObserver", () => {
+  it("accepts boolean values", () => {
+    for (const value of [true, false]) {
       const result = OpenClawSchema.safeParse({
-        gateway: {
-          controlUi: {
-            chatMessageMaxWidth: value,
-          },
-        },
+        gateway: { controlUi: { sessionObserver: value } },
       });
       expect(result.success).toBe(true);
-      if (result.success) {
-        expect(result.data.gateway?.controlUi?.chatMessageMaxWidth).toBe(value);
-      }
-    }
-  });
-
-  it("normalizes whitespace around the width value", () => {
-    const result = OpenClawSchema.safeParse({
-      gateway: {
-        controlUi: {
-          chatMessageMaxWidth: "  min(1280px,   82%)  ",
-        },
-      },
-    });
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.gateway?.controlUi?.chatMessageMaxWidth).toBe("min(1280px, 82%)");
-    }
-  });
-
-  it("rejects arbitrary CSS injection", () => {
-    for (const value of ["url(https://example.com/x)", "960px; color: red", "var(--x)"]) {
-      const result = OpenClawSchema.safeParse({
-        gateway: {
-          controlUi: {
-            chatMessageMaxWidth: value,
-          },
-        },
-      });
-      expect(result.success).toBe(false);
     }
   });
 });
@@ -821,6 +759,8 @@ describe("plugins.entries.*.llm", () => {
             llm: {
               allowModelOverride: true,
               allowedModels: ["anthropic/claude-haiku-4-5"],
+              allowedCompletionModels: ["anthropic/claude-haiku-4-5"],
+              allowAuthProfileOverride: true,
               allowAgentIdOverride: true,
             },
           },
@@ -838,6 +778,8 @@ describe("plugins.entries.*.llm", () => {
             llm: {
               allowModelOverride: "yes",
               allowedModels: [1],
+              allowedCompletionModels: [1],
+              allowAuthProfileOverride: "yes",
               allowAgentIdOverride: "yes",
             },
           },
@@ -966,100 +908,12 @@ describe("gateway.tools config", () => {
   });
 });
 
-describe("gateway.channelHealthCheckMinutes", () => {
-  it("accepts preauth handshake timeout tuning", () => {
-    const res = validateConfigObject({
-      gateway: {
-        handshakeTimeoutMs: 30_000,
-      },
-    });
-    expect(res.ok).toBe(true);
-  });
-
-  it("rejects non-positive preauth handshake timeouts", () => {
-    const res = validateConfigObject({
-      gateway: {
-        handshakeTimeoutMs: 0,
-      },
-    });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("gateway.handshakeTimeoutMs");
-    }
-  });
-
-  it("accepts zero to disable monitor", () => {
-    const res = validateConfigObject({
-      gateway: {
-        channelHealthCheckMinutes: 0,
-      },
-    });
-    expect(res.ok).toBe(true);
-  });
-
-  it("rejects negative intervals", () => {
-    const res = validateConfigObject({
-      gateway: {
-        channelHealthCheckMinutes: -1,
-      },
-    });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("gateway.channelHealthCheckMinutes");
-    }
-  });
-
-  it("rejects stale thresholds shorter than the health check interval", () => {
-    const res = validateConfigObject({
-      gateway: {
-        channelHealthCheckMinutes: 5,
-        channelStaleEventThresholdMinutes: 4,
-      },
-    });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("gateway.channelStaleEventThresholdMinutes");
-    }
-  });
-
-  it("accepts stale thresholds that match or exceed the health check interval", () => {
-    const equal = validateConfigObject({
-      gateway: {
-        channelHealthCheckMinutes: 5,
-        channelStaleEventThresholdMinutes: 5,
-      },
-    });
-    expect(equal.ok).toBe(true);
-
-    const greater = validateConfigObject({
-      gateway: {
-        channelHealthCheckMinutes: 5,
-        channelStaleEventThresholdMinutes: 6,
-      },
-    });
-    expect(greater.ok).toBe(true);
-  });
-
-  it("rejects stale thresholds shorter than the default health check interval", () => {
-    const res = validateConfigObject({
-      gateway: {
-        channelStaleEventThresholdMinutes: 4,
-      },
-    });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("gateway.channelStaleEventThresholdMinutes");
-    }
-  });
-});
-
 describe("config identity/materialization regressions", () => {
   it("keeps explicit responsePrefix and group mention patterns", () => {
     const res = validateConfigObject({
       agents: {
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             identity: {
               name: "Samantha Sloth",
               theme: "space lobster",
@@ -1067,16 +921,16 @@ describe("config identity/materialization regressions", () => {
             },
             groupChat: { mentionPatterns: ["@openclaw"] },
           },
-        ],
+        },
       },
-      messages: {
-        responsePrefix: "✅",
+      channels: {
+        whatsapp: { responsePrefix: "✅" },
       },
     });
 
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.config.messages?.responsePrefix).toBe("✅");
+      expect(res.config.channels?.whatsapp?.responsePrefix).toBe("✅");
       expect(res.config.agents?.list?.[0]?.groupChat?.mentionPatterns).toEqual(["@openclaw"]);
     }
   });
@@ -1084,25 +938,24 @@ describe("config identity/materialization regressions", () => {
   it("preserves empty responsePrefix when identity is present", () => {
     const res = validateConfigObject({
       agents: {
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             identity: {
               name: "Samantha",
               theme: "helpful sloth",
               emoji: "🦥",
             },
           },
-        ],
+        },
       },
-      messages: {
-        responsePrefix: "",
+      channels: {
+        whatsapp: { responsePrefix: "" },
       },
     });
 
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.config.messages?.responsePrefix).toBe("");
+      expect(res.config.channels?.whatsapp?.responsePrefix).toBe("");
     }
   });
 
@@ -1147,22 +1000,9 @@ describe("config identity/materialization regressions", () => {
 });
 
 describe("cron webhook schema", () => {
-  it("accepts cron.webhookToken and legacy cron.webhook", () => {
-    const res = OpenClawSchema.safeParse({
-      cron: {
-        enabled: true,
-        webhook: "https://example.invalid/legacy-cron-webhook",
-        webhookToken: "secret-token",
-      },
-    });
-
-    expect(res.success).toBe(true);
-  });
-
   it("accepts cron.webhookToken SecretRef values", () => {
     const res = OpenClawSchema.safeParse({
       cron: {
-        webhook: "https://example.invalid/legacy-cron-webhook",
         webhookToken: {
           source: "env",
           provider: "default",
@@ -1174,27 +1014,35 @@ describe("cron webhook schema", () => {
     expect(res.success).toBe(true);
   });
 
-  it("rejects non-http cron.webhook URLs", () => {
+  it("accepts the shared cron webhook SSRF policy", () => {
     const res = OpenClawSchema.safeParse({
       cron: {
-        webhook: "ftp://example.invalid/legacy-cron-webhook",
-      },
-    });
-
-    expect(res.success).toBe(false);
-  });
-
-  it("accepts cron.retry config", () => {
-    const res = OpenClawSchema.safeParse({
-      cron: {
-        retry: {
-          maxAttempts: 5,
-          backoffMs: [60000, 120000, 300000],
-          retryOn: ["rate_limit", "overloaded", "network"],
+        webhookSsrfPolicy: {
+          dangerouslyAllowPrivateNetwork: true,
+          allowedHostnames: ["127.0.0.1", "internal.example"],
+          allowRfc2544BenchmarkRange: true,
+          allowIpv6UniqueLocalRange: true,
         },
       },
     });
+
     expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.cron?.webhookSsrfPolicy).toEqual({
+        dangerouslyAllowPrivateNetwork: true,
+        allowedHostnames: ["127.0.0.1", "internal.example"],
+        allowRfc2544BenchmarkRange: true,
+        allowIpv6UniqueLocalRange: true,
+      });
+    }
+  });
+
+  it("rejects unknown cron webhook SSRF policy fields", () => {
+    const res = OpenClawSchema.safeParse({
+      cron: { webhookSsrfPolicy: { allowEverything: true } },
+    });
+
+    expect(res.success).toBe(false);
   });
 });
 
@@ -1202,7 +1050,8 @@ describe("broadcast", () => {
   it("accepts a broadcast peer map with strategy", () => {
     const res = validateConfigObject({
       agents: {
-        list: [{ id: "alfred" }, { id: "baerbel" }],
+        ownership: "explicit",
+        entries: { alfred: {}, baerbel: {} },
       },
       broadcast: {
         strategy: "parallel",
@@ -1244,12 +1093,12 @@ describe("model compat config schema", () => {
                   compat: {
                     supportsUsageInStreaming: true,
                     supportsStrictMode: false,
+                    supportsJsonSchemaResponseFormat: true,
                     requiresStringContent: true,
                     thinkingFormat,
                     requiresToolResultName: true,
                     requiresAssistantAfterToolResult: false,
                     requiresThinkingAsText: false,
-                    requiresMistralToolIds: false,
                     requiresOpenAiAnthropicToolPayload: true,
                   },
                 },
@@ -1300,9 +1149,8 @@ describe("config strict validation", () => {
   it("accepts documented agents.list[].params overrides", () => {
     const res = validateConfigObject({
       agents: {
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             model: "anthropic/claude-opus-4-6",
             params: {
               cacheRetention: "none",
@@ -1310,7 +1158,7 @@ describe("config strict validation", () => {
               maxTokens: 8192,
             },
           },
-        ],
+        },
       },
     });
 
@@ -1344,7 +1192,7 @@ describe("config strict validation", () => {
         fallback: "none",
         query: { maxResults: 7 },
       });
-      expect(snap.sourceConfig.agents?.defaults?.memorySearch).toBeUndefined();
+      expect(snap.sourceConfig.memory?.search).toBeUndefined();
     });
   });
 
@@ -1394,26 +1242,24 @@ describe("config strict validation", () => {
     });
   });
 
-  it("reports legacy messages.tts provider keys without read-time auto-migration", () => {
+  it("reports legacy tts provider keys without read-time auto-migration", () => {
     const raw = {
-      messages: {
-        tts: {
-          provider: "elevenlabs",
-          elevenlabs: {
-            apiKey: "test-key",
-            voiceId: "voice-1",
-          },
+      tts: {
+        provider: "elevenlabs",
+        elevenlabs: {
+          apiKey: "test-key",
+          voiceId: "voice-1",
         },
       },
     };
     const issues = findLegacyConfigIssues(raw);
 
-    expect(issuePaths(issues)).toContain("messages.tts");
-    expect(raw.messages.tts.elevenlabs).toEqual({
+    expect(issuePaths(issues)).toContain("tts");
+    expect(raw.tts.elevenlabs).toEqual({
       apiKey: "test-key",
       voiceId: "voice-1",
     });
-    expect(raw.messages.tts).not.toHaveProperty("providers");
+    expect(raw.tts).not.toHaveProperty("providers");
   });
 
   it("reports retired plugin model refs without an agents section", () => {
@@ -1478,11 +1324,17 @@ describe("config strict validation", () => {
 
       expect(snap.valid).toBe(false);
       expect(issuePaths(snap.issues)).toContain("agents.defaults.sandbox");
-      expect(issuePaths(snap.issues)).toContain("agents.list.0.sandbox");
+      expect(issuePaths(snap.issues)).toContain("agents.entries.openclaw.sandbox");
       expect(issuePaths(snap.legacyIssues)).toContain("agents.defaults.sandbox");
-      expect(issuePaths(snap.legacyIssues)).toContain("agents.list");
-      expect(snap.sourceConfig.agents?.defaults?.sandbox).toEqual({ perSession: true });
-      expect(snap.sourceConfig.agents?.list?.[0]?.sandbox).toEqual({ perSession: false });
+      expect(snap.sourceConfigBeforeMigrations?.agents?.defaults?.sandbox).toEqual({
+        perSession: true,
+      });
+      expect(snap.sourceConfigBeforeMigrations?.agents?.list?.[0]?.sandbox).toEqual({
+        perSession: false,
+      });
+      expect(snap.sourceConfig.agents?.entries?.openclaw?.sandbox).toEqual({
+        perSession: false,
+      });
     });
   });
 

@@ -26,6 +26,7 @@ import {
   warnIfConfigFromFuture,
   warnOnConfigMiskeys,
 } from "./io.warnings.js";
+import { migratePersistedImplicitMainRoster } from "./legacy.js";
 import { resolveShellEnvExpectedKeys } from "./shell-env-expected-keys.js";
 import type { OpenClawConfig } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
@@ -54,7 +55,7 @@ export function loadConfigFromContext(
           timeoutMs: resolveShellEnvFallbackTimeoutMs(deps.env),
         });
       }
-      return {};
+      return migratePersistedImplicitMainRoster({}).config as OpenClawConfig;
     }
     const raw = deps.fs.readFileSync(configPath, "utf-8");
     const parsed = deps.json5.parse(raw);
@@ -63,19 +64,19 @@ export function loadConfigFromContext(
       deps.env,
       deps.lowerPrecedenceEnv,
     );
-    const migration = context.migrateAndStripShippedPluginInstallConfigRecords(
-      readResolution.resolvedConfigRaw,
-      { persist: false, rootConfigRaw: parsed },
-    );
-    const effectiveConfigRaw = migration.config;
-    const validationConfigRaw = migration.validationConfig ?? effectiveConfigRaw;
-    const snapshotRaw = migration.persistedRootRaw ?? raw;
-    const snapshotParsed = migration.persistedRootParsed ?? parsed;
+    const rosterMigration = migratePersistedImplicitMainRoster(readResolution.resolvedConfigRaw);
+    const effectiveConfigRaw = rosterMigration.config;
+    const validationConfigRaw = effectiveConfigRaw;
+    const snapshotRaw = raw;
+    const snapshotParsed = parsed;
     const hash = hashConfigRaw(snapshotRaw);
     for (const warning of readResolution.envWarnings) {
       deps.logger.warn(
         `Config (${configPath}): missing env var "${warning.varName}" at ${warning.configPath} - feature using this value will be unavailable`,
       );
+    }
+    for (const diagnostic of rosterMigration.diagnostics) {
+      deps.logger.warn(`Config (${configPath}): ${diagnostic}`);
     }
     warnOnConfigMiskeys(validationConfigRaw, deps.logger);
     if (typeof validationConfigRaw !== "object" || validationConfigRaw === null) {
@@ -154,8 +155,7 @@ export function loadConfigFromContext(
         configPath,
         raw,
         parsed,
-        validateBackupSync: (backup) =>
-          context.resolveSuspiciousRecoveryBackupCandidate(backup.parsed) !== null,
+        prepareBackup: context.prepareRecoveryBackupCandidate,
       });
       if (recovery.raw !== raw) {
         restoreEnvChangesIfUnchanged({
@@ -170,7 +170,7 @@ export function loadConfigFromContext(
       context,
       validated.config,
       effectiveConfigRaw,
-      pluginMetadata.getSnapshot(),
+      pluginMetadata.getManifestRegistry(),
     );
     context.observeLoadConfigSnapshot(
       createConfigFileSnapshot({

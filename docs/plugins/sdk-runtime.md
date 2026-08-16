@@ -6,6 +6,7 @@ read_when:
   - You need to call core helpers from a plugin (TTS, STT, image gen, web search, Gateway, subagent, nodes)
   - You want to understand what api.runtime exposes
   - You are accessing config, agent, or media helpers from plugin code
+  - You are implementing model-picker persistence in a channel plugin
 ---
 
 Reference for the `api.runtime` object injected into every plugin during registration. Use these helpers instead of importing host internals directly.
@@ -43,11 +44,10 @@ Persist changes with `api.runtime.config.mutateConfigFile(...)` or `api.runtime.
 
 The mutation helpers return `afterWrite` plus a typed `followUp` summary so callers can log or test whether they requested a restart. The gateway still owns when that restart actually happens.
 
-<Warning>
-`api.runtime.config.loadConfig()` and `api.runtime.config.writeConfigFile(...)` are deprecated. They warn once per plugin at runtime and remain available only for old external plugins during the migration window. Bundled plugins must not use them: an internal config boundary guard fails the build if plugin code calls them or imports those helpers from plugin SDK subpaths. Use `current()`, a passed-in `cfg`, `mutateConfigFile(...)`, or `replaceConfigFile(...)` instead.
-</Warning>
+Use `current()`, a passed-in `cfg`, `mutateConfigFile(...)`, or
+`replaceConfigFile(...)` for runtime config access and writes.
 
-For direct SDK imports, prefer the focused config subpaths over the broad `openclaw/plugin-sdk/config-runtime` compatibility barrel: `config-contracts` for types, `plugin-config-runtime` for already-loaded config assertions, plugin entry lookup, and canonical config merging, `runtime-config-snapshot` for current process snapshots, and `config-mutation` for writes. Bundled plugin tests should mock these focused subpaths directly instead of mocking the broad compatibility barrel.
+For direct SDK imports, prefer the focused config subpaths over the broad `openclaw/plugin-sdk/config-runtime` compatibility barrel: `config-contracts` for types, `runtime-config-snapshot` for current process snapshots, and `config-mutation` for writes. Read entry-scoped values from `api.pluginConfig`; use a supplied tool context only for its runtime-wide config snapshot, and keep plugin-specific merging at that boundary. Bundled plugin tests should mock these focused subpaths directly instead of mocking the broad compatibility barrel.
 
 Internal OpenClaw runtime code follows the same direction: load config once at the CLI, gateway, or process boundary, then pass that value through. Successful mutation writes refresh the process runtime snapshot and advance its internal revision; long-lived caches should key off the runtime-owned cache key instead of serializing config locally. Long-lived runtime modules have a zero-tolerance scanner for ambient `loadConfig()` calls; use a passed `cfg`, a request `context.getRuntimeConfig()`, or `getRuntimeConfig()` at an explicit process boundary.
 
@@ -55,7 +55,34 @@ Provider and channel execution paths must use the active runtime config snapshot
 
 ## Reusable runtime utilities
 
-Use inbound `botLoopProtection` facts for bot-authored inbound messages. Core applies the shared in-memory sliding-window guard before session record and dispatch, without tying the policy to one channel. The guard tracks `(scopeId, conversationId, participant pair)` keys, counts both directions of a pair together, applies a cooldown once the window budget is exceeded, and prunes inactive entries opportunistically.
+Model-picker integrations use two focused runtime subpaths. Import the typed
+`ModelPickerAction` and `ModelPickerCapabilityProfile` contracts from
+`openclaw/plugin-sdk/interactive-runtime`. Import
+`applySessionModelSelection(...)` and its result types from
+`openclaw/plugin-sdk/model-session-runtime`; this is the live-session mutation
+seam, including its authoritative conflict check and post-commit effects. The
+lower-level `applyModelOverrideToSessionEntry(...)` helper is not a picker
+persistence API.
+
+Use `applyModelOverrideWithAuthProfileCompatibility(...)` only as the direct
+persistence fallback when a channel callback cannot enter the full live-session
+transaction and already owns an atomic canonical session-entry patch. Pass the
+active config, resolved agent directory, entry, effective provider before the
+change, and validated selection. The helper mutates that entry only: it keeps a
+pinned auth profile when its recorded credential provider or configured alias is
+compatible, clears an incompatible pin, and enforces the model-selection lock.
+The caller still owns model allowlist validation, atomic persistence,
+`markLiveSwitchPending`, and any post-commit effects. Prefer
+`applySessionModelSelection(...)` whenever the full transaction is available.
+
+Model-picker actions carry only bounded snapshot and catalog tokens. Channel
+actor identity, source-message binding, and serialized callback data stay in
+the channel's private authenticated envelope. Channel codecs opt into resolving
+these actions with `{ modelPicker: true }`; channels without a picker
+capability continue to fail closed instead of treating the action as an opaque
+callback.
+
+Use inbound `botLoopProtection` facts for bot-authored inbound messages. Core applies the shared in-memory sliding-window guard before session record and dispatch, without tying the policy to one channel. The guard tracks `(scopeId, conversationId, participant pair)` keys, counts both directions of a pair together, applies a cooldown once the window budget is exceeded, and prunes inactive entries opportunistically. Retryable transports should also supply a stable `eventId`; replaying an accepted event while it remains in the active window does not consume another budget slot. Suppressed events add no retained event-identity state.
 
 Channel plugins that expose this behavior to operators should prefer the shared `channels.defaults.botLoopProtection` shape for baseline budgets, then layer channel/provider-specific overrides on top. The shared config uses seconds because it is user-facing:
 
@@ -83,6 +110,7 @@ return {
     conversationId: "channel-1",
     senderId: "bot-a",
     receiverId: "bot-b",
+    eventId: providerEvent.id,
     config: channelConfig.botLoopProtection,
     defaultsConfig: runtimeConfig.channels?.defaults?.botLoopProtection,
     defaultEnabled: allowBotsMode !== "off",
@@ -92,6 +120,36 @@ return {
 
 Use `openclaw/plugin-sdk/pair-loop-guard-runtime` directly only for custom
 two-party event loops that do not go through the shared inbound reply runner.
+
+## Plugin command runtime helpers
+
+Plugin command handlers receive request-bound capabilities through
+`ctx.runtimeContext`. When the command is bound to a current session,
+`ctx.runtimeContext.compactCurrent()` runs the same manual compaction
+pipeline as `/compact`, including native agent-harness completion and session
+token accounting:
+
+```typescript
+const compactCurrent = ctx.runtimeContext?.compactCurrent;
+if (!compactCurrent) {
+  return { text: "This command needs a bound session." };
+}
+
+const result = await compactCurrent();
+return {
+  text: result.compacted
+    ? `Compacted to ${result.tokensAfter ?? "an unknown number of"} tokens.`
+    : `Compaction did not complete: ${result.reason ?? "unknown reason"}.`,
+};
+```
+
+This general capability is available to every plugin command, not only Codex.
+The host gates it to the current invocation and exact bound session generation.
+The capability is absent when no current session is bound; a retained callback
+fails closed after the handler settles. Do not retain it or reconstruct
+compaction with session-store patches and harness calls. The result contains
+`compacted`, optional `reason`, and optional `tokensBefore` and `tokensAfter`
+snapshots; OpenClaw owns all persistence and lifecycle coordination.
 
 ## Runtime namespaces
 
@@ -123,6 +181,15 @@ two-party event loops that do not go through the shared inbound reply runner.
       // pass level to an embedded run
     }
 
+    // Resolve a synchronous create target for a session catalog
+    const target = api.runtime.agent.resolveSessionCatalogCreateTarget({
+      config: api.runtime.config.current(),
+      requestedAgentId: agentId,
+      provider: "example",
+      modelIds: ["example-model"],
+      agentRuntime: "example-cli",
+    });
+
     // Get agent timeout
     const timeoutMs = api.runtime.agent.resolveAgentTimeoutMs(cfg);
 
@@ -141,13 +208,13 @@ two-party event loops that do not go through the shared inbound reply runner.
 
     `runEmbeddedAgent(...)` is the neutral helper for starting a normal OpenClaw agent turn from plugin code. It uses the same provider/model resolution and agent-harness selection as channel-triggered replies.
 
-    `runEmbeddedPiAgent(...)` remains as a deprecated compatibility alias for existing plugins. New code should use `runEmbeddedAgent(...)`.
-
     `resolveCliBackendDispatchEligibility({ provider, model, agentId, authProfileId, config, agentDir, workspaceDir })` shares the embedded runner's CLI-backend dispatch decision (route, the backend's declared `subscriptionAuthDispatch` capability, stored credential mode — honoring an explicitly pinned `authProfileId`) with callers that opt embedded runs into `cliBackendDispatch: "subscription-auth"`. It returns `{ provider }` when the run would execute through the CLI backend and `undefined` when it stays on the direct passthrough, so callers can budget timeouts for the run that will actually execute.
 
     `resolveThinkingPolicy(...)` returns the provider/model's supported thinking levels and optional default. Provider plugins own the model-specific profile through their thinking hooks, so tool plugins should call this runtime helper instead of importing or duplicating provider lists.
 
     `normalizeThinkingLevel(...)` converts user text such as `on`, `x-high`, or `extra high` to the canonical stored level before checking it against the resolved policy.
+
+    `resolveSessionCatalogCreateTarget(...)` is the supported synchronous policy seam for trusted native plugins that implement `SessionCatalogProvider.resolveCreateSession`. It selects the first candidate model routed to the requested runtime and allowed for the requested or default agent. It returns `undefined` when no candidate satisfies both policies. Use this helper instead of importing or duplicating core model-selection policy in a plugin.
 
     **Session store helpers** are under `api.runtime.agent.session`:
 
@@ -186,13 +253,15 @@ two-party event loops that do not go through the shared inbound reply runner.
 
     Prefer `getSessionEntry(...)`, `listSessionEntries(...)`, `patchSessionEntry(...)`, or `upsertSessionEntry(...)` for session workflows. These helpers address sessions by agent/session identity so plugins do not depend on the legacy `sessions.json` storage shape. Use `preserveActivity: true` for metadata-only patches that should not refresh session activity, and `replaceEntry: true` only when the callback returns a complete entry and deleted fields must stay deleted. Doctor and migration paths can combine `fallbackEntry`, `skipMaintenance`, and `requireWriteSuccess` for one atomic canonical-store repair.
 
-    `createSessionEntry(...)` creates a new canonical session row and transcript. Its trusted `initialEntry` surface is deliberately narrow: a non-empty `agentHarnessId`, optional `modelSelectionLocked: true`, and optional `pluginExtensions`. The injected runtime accepts only harness ids owned by the calling plugin through `registerAgentHarness(...)`; this is an ownership invariant, not a sandbox between in-process plugins. It rejects an existing row; `label` and `spawnedCwd` are separate creation fields rather than trusted-entry patches.
+    `createSessionEntry(...)` creates a new canonical session row and transcript. Its trusted `initialEntry` surface is deliberately narrow. A plugin may select an owned `agentHarnessId`; seed an owned CLI backend with `cliBackendId`, `model`, and `cliSessionBinding`; or seed a persistent ACP session with `acpBackendId` and `acpSessionBinding: { acpAgentId, agentSessionId }`. The ACP variant persists the supplied native agent session id through the canonical SQLite ACP metadata owner so the first turn resumes that external session. The injected runtime restricts plugin-owned CLI and ACP sessions to the calling plugin's `plugin:<id>:` namespace; harness ids must be owned through `registerAgentHarness(...)`. These are ownership invariants, not a sandbox between in-process plugins. Creation rejects an existing row; `label` and `spawnedCwd` are separate creation fields rather than trusted-entry patches.
+
+    Before advertising an ACP-backed action, use `resolveAcpSessionAvailability(...)` from `openclaw/plugin-sdk/acp-runtime`. It applies the canonical enablement, dispatch, allowed-agent, registered-backend, and backend-health checks; recheck it immediately before creating the session.
 
     Creation holds the session lifecycle mutation fence through `afterCreate`, so new work waits for plugin-owned initialization to finish and pre-existing admitted work makes creation fail. The callback receives a clone of the created state. If it returns a patch, that patch may contain only `pluginExtensions`, and its value is the complete final `pluginExtensions` field. A callback or final-persistence failure rolls back the unchanged new row and transcript; guarded rollback preserves a row changed or claimed concurrently. `recoverMatchingInitialEntry: true` is only for retrying interrupted initialization when the persisted trusted fields match exactly, and recovery requires `afterCreate` to return a final patch.
 
     Use `runWithWorkAdmission(...)` when a plugin starts work on a persisted session. The callback rejects archived or concurrently replaced sessions, keeps archive/reset/delete mutations coordinated through completion, and receives an `AbortSignal` that must be forwarded to the agent run. A harness may explicitly name trusted execution delegates through its experimental `delegatedExecutionPluginIds` registration field. Delegates can admit and run only an exact existing model-locked session; all session mutations remain restricted to the harness owner. See [Agent harness plugins](/plugins/sdk-agent-harness#delegated-execution).
 
-    Maintenance and repair plugins may use `deleteSessionEntry(...)` for one scoped session entry, `cleanupSessionLifecycleArtifacts(...)` for lifecycle-owned scratch sessions, and `resolveSessionStoreBackupPaths(...)` before mutating a store. These helpers are narrow repair/lifecycle surfaces, not a general store deletion API.
+    Maintenance and repair plugins may use `deleteSessionEntry(...)` for one scoped session entry, `cleanupSessionLifecycleArtifacts(...)` for lifecycle-owned scratch sessions, and `resolveSessionStoreBackupPaths(...)` before mutating a store. Pass `expectedSessionId` and `expectedUpdatedAt` when deletion must not race a concurrent session update; use `expectedSessionId: null` when the earlier snapshot had no session id. These helpers are narrow repair/lifecycle surfaces, not a general store deletion API.
 
     `resolveStorePath(...)` and `updateSessionStoreEntry(...)` round out the session helpers: `resolveStorePath` resolves the session store path for a given scope, and `updateSessionStoreEntry({ storePath, sessionKey, update })` patches one entry directly by store path when the caller already knows it.
 
@@ -200,7 +269,13 @@ two-party event loops that do not go through the shared inbound reply runner.
 
     `formatSqliteSessionFileMarker(...)`, `parseSqliteSessionFileMarker(...)`, and `sqliteSessionFileMarkerMatchesSession(...)` are transitional helpers for code that still receives a legacy field named `sessionFile`. A parsed SQLite marker identifies a live SQLite transcript target; it is not a filesystem path. New APIs should carry typed session identity instead of marker strings.
 
-    For transcript reads and writes, import `openclaw/plugin-sdk/session-transcript-runtime` and use `resolveSessionTranscriptIdentity(...)`, `resolveSessionTranscriptTarget(...)`, `readSessionTranscriptEvents(...)`, `readVisibleSessionTranscriptMessageEntries(...)`, `appendSessionTranscriptMessageByIdentity(...)`, `publishSessionTranscriptUpdateByIdentity(...)`, or `withSessionTranscriptWriteLock(...)` with `{ agentId, sessionKey, sessionId }`. These APIs let plugins identify a transcript, read raw events or visible branch-safe message entries, append messages, publish updates, and run related operations under the same transcript write lock without depending on active transcript file paths. `readVisibleSessionTranscriptMessageEntries(...)` returns ordered read metadata; its `seq` field is not a resumable cursor.
+    For transcript reads and writes, import `openclaw/plugin-sdk/session-transcript-runtime` and use `resolveSessionTranscriptIdentity(...)`, `resolveSessionTranscriptTarget(...)`, `readSessionTranscriptEvents(...)`, `readSessionTranscriptRawDelta(...)`, `readSessionTranscriptVisibleMessageDelta(...)`, `readVisibleSessionTranscriptMessageEntries(...)`, `appendSessionTranscriptMessageByIdentity(...)`, `publishSessionTranscriptUpdateByIdentity(...)`, or `withSessionTranscriptWriteLock(...)` with `{ agentId, sessionKey, sessionId }`. These APIs let plugins identify a transcript, read raw events or visible branch-safe message entries, append messages, publish updates, and run related operations under the same transcript write lock without depending on active transcript file paths. `readVisibleSessionTranscriptMessageEntries(...)` returns ordered read metadata; its `seq` field is not a resumable cursor.
+
+    `appendSessionTranscriptMessageByIdentity(...)` is a low-level append of an already canonical message. Plugins must not synthesize media-bearing user rows with top-level `MediaPath`, `MediaPaths`, `MediaUrl`, `MediaUrls`, `MediaType`, or `MediaTypes`. Channel ingress should pass ordered facts through `MsgContext.media` and let the host own user-turn persistence. A host-prepared persisted user message carries canonical ordered facts under `message.__openclaw.media`; the generic append API does not infer or repair legacy parallel arrays.
+
+    `readSessionTranscriptRawDelta(...)` returns a bounded `page`, `reset`, or `missing` result. Pass the opaque `page.cursor` into the next call. Pure appends preserve the cursor, while transcript replacement returns `reset` with a new bootstrap cursor. Pages default to 1,000 events and 1,000,000 serialized bytes; callers may request up to 10,000 events and 64 MiB. When the next event alone exceeds `maxBytes`, the page is empty and reports `requiredBytes`; retry with at least that byte limit when it is no greater than 64 MiB. Larger individual events require the complete-read API. A cursor identifies position only and never grants access to another session.
+
+    `readSessionTranscriptVisibleMessageDelta(...)` provides the same bounded bootstrap-and-resume shape over the host-owned active message projection. It returns messages from oldest to newest, so context engines can drain initial history and persist the opaque cursor as their watermark. Store and return the cursor unchanged; it is a continuation hint, not an authorization credential. Linear appends resume after the last returned message. Transcript replacement, a cursor whose anchor left or moved within the active branch, malformed cursors, and cross-session cursors return `reset` with a fresh bootstrap cursor. The count and byte defaults and caps match the raw delta API. While the active projection is rebuilding after a branch change, the result is `unavailable` with reason `projection_rebuilding`; retry later rather than falling back to an active transcript file.
 
     The legacy whole-store and active transcript file helpers are no longer exported from the plugin SDK. Use the scoped entry helpers for session metadata and the transcript identity helpers for active transcript operations. Archive/support workflows that need file artifacts should use their dedicated archive surfaces instead of active session runtime APIs.
 
@@ -228,6 +303,38 @@ two-party event loops that do not go through the shared inbound reply runner.
       reasoning: "high",
     });
     ```
+
+    `maxTokens` and `temperature` are advisory sampling hints. The selected
+    provider, CLI, or harness applies them when its transport exposes an
+    equivalent control and otherwise may ignore them. They do not weaken the
+    execution mode's isolation guarantees.
+
+    To require the configured agent runtime and a literal zero-tool model
+    surface, select isolated execution explicitly:
+
+    ```typescript
+    const result = await api.runtime.llm.complete({
+      messages: [{ role: "user", content: "Return one JSON value." }],
+      systemPrompt: "You are a JSON-only function.",
+      model: "openai/gpt-5.6-sol",
+      execution: {
+        mode: "isolated-agent-runtime",
+        authProfileId: "openai:work",
+        timeoutMs: 30_000,
+      },
+    });
+    ```
+
+    This mode accepts exactly one user message. Core derives the configured CLI
+    or harness owner, starts a fresh context, exposes no model-callable tools,
+    and never falls back to direct provider transport. Unsupported runtimes fail
+    before inference. `result.execution.owner` reports the selected owner;
+    token usage remains absent when a CLI cannot report it.
+
+    Completion failures expose a stable `code` on the thrown error. Isolated
+    callers can distinguish authorization, invalid isolated input, unsupported
+    or unavailable runtimes, aborts, timeouts, rejected output, and other
+    completion failures without matching message text.
 
     Provider orchestration can also acquire the configured local-service
     lifecycle before issuing an HTTP request:
@@ -275,7 +382,7 @@ two-party event loops that do not go through the shared inbound reply runner.
     `medium`; `max` and `ultra` become `max` when supported, otherwise `xhigh`.
 
     <Warning>
-    Model overrides require operator opt-in via `plugins.entries.<id>.llm.allowModelOverride: true` in config. Use `plugins.entries.<id>.llm.allowedModels` to restrict trusted plugins to specific canonical `provider/model` targets. Cross-agent completions require `plugins.entries.<id>.llm.allowAgentIdOverride: true`.
+    Model overrides require operator opt-in via `plugins.entries.<id>.llm.allowModelOverride: true` in config. `plugins.entries.<id>.llm.allowedModels` restricts those overrides; `plugins.entries.<id>.llm.allowedCompletionModels` separately restricts every completion, including host-resolved defaults. For direct completions, a `model@profile` override remains part of the authorized model override. Isolated `model@profile` overrides and `execution.authProfileId` require `plugins.entries.<id>.llm.allowAuthProfileOverride: true`. Cross-agent completions require `plugins.entries.<id>.llm.allowAgentIdOverride: true`.
     </Warning>
 
   </Accordion>
@@ -312,6 +419,7 @@ two-party event loops that do not go through the shared inbound reply runner.
       provider: "openai", // optional override
       model: "gpt-5.6-sol", // optional override
       deliver: false,
+      completionDelivery: "current-requester", // optional, before_dispatch hooks only
     });
 
     // Wait for completion
@@ -334,6 +442,8 @@ two-party event loops that do not go through the shared inbound reply runner.
     </Warning>
 
     `toolsAlsoAllow` adds exact, uniquely owned tools registered by the calling plugin to the worker's normal tool surface. The runtime rejects core tools and names shared with another plugin. Profiles and operator tool policies still apply, including explicit allowlists and denies.
+
+    `completionDelivery: "current-requester"` is default-off and is only available while a `before_dispatch` hook is handling an authenticated inbound request. OpenClaw captures the canonical requester session and delivery route before invoking the plugin, then delivers the subagent completion through the normal announce path. Plugins cannot provide or override requester lineage or destination fields. Calls outside that requester-bound hook context are rejected.
 
     `deleteSession(...)` can delete sessions created by the same plugin through `api.runtime.subagent.run(...)`. Deleting arbitrary user or operator sessions still requires an admin-scoped Gateway request.
 
@@ -375,6 +485,7 @@ two-party event loops that do not go through the shared inbound reply runner.
     List connected nodes and invoke a node-host command from Gateway-loaded plugin code or from plugin CLI commands. Use this when a plugin owns local work on a paired device, for example a browser or audio bridge on another Mac.
 
     ```typescript
+    const controller = new AbortController();
     const { nodes } = await api.runtime.nodes.list({ connected: true });
 
     const result = await api.runtime.nodes.invoke({
@@ -382,8 +493,15 @@ two-party event loops that do not go through the shared inbound reply runner.
       command: "my-plugin.command",
       params: { action: "start" },
       timeoutMs: 30000,
+      signal: controller.signal,
     });
     ```
+
+    Pass the agent tool or request `AbortSignal` as `signal` when the caller can
+    be canceled. Gateway-loaded calls forward cancellation to the paired node;
+    node-host command handlers receive it as `context.signal` so they can stop
+    in-flight requests and release local resources. Existing calls that omit the
+    signal retain their previous behavior.
 
     `nodes.list(...)` includes each connected node's advertised
     `nodePluginTools` descriptors when that node exposes plugin or MCP-backed
@@ -393,7 +511,7 @@ two-party event loops that do not go through the shared inbound reply runner.
 
     Inside the Gateway this runtime is in-process. In plugin CLI commands it calls the configured Gateway over RPC, so commands such as `openclaw googlemeet recover-tab` can inspect paired nodes from the terminal. Node commands still go through normal Gateway node pairing, command allowlists, plugin node-invoke policies, and node-local command handling.
 
-    Plugins that expose node-hosted agent tools can set `agentTool.defaultPlatforms` for non-dangerous commands that should be allowlisted by default. Omit it when operators must opt in with `gateway.nodes.allowCommands`. Dangerous node-host commands should register a node-invoke policy with `api.registerNodeInvokePolicy(...)`; the policy runs in the Gateway after command allowlist checks and before the command is forwarded to the node, so direct `node.invoke` calls, node-hosted plugin tools, and higher-level plugin tools share the same enforcement path.
+    Plugins that expose node-hosted agent tools can set `agentTool.defaultPlatforms` for non-dangerous commands that should be allowlisted by default. Omit it when operators must opt in with `gateway.nodes.commands.allow`. Dangerous node-host commands should register a node-invoke policy with `api.registerNodeInvokePolicy(...)`; the policy runs in the Gateway after command allowlist checks and before the command is forwarded to the node, so direct `node.invoke` calls, node-hosted plugin tools, and higher-level plugin tools share the same enforcement path.
 
     <Warning>
     The optional `scopes` field requests Gateway operator scopes for the invocation. OpenClaw honors it only for bundled plugins and trusted official plugin installations; requests from other plugins do not elevate the call. Use it only when a trusted plugin must invoke a node command with a stricter Gateway scope, such as `operator.admin`.
@@ -405,7 +523,6 @@ two-party event loops that do not go through the shared inbound reply runner.
 
     - `api.runtime.tasks.managedFlows` is mutation-capable: create, advance, and cancel Task Flows.
     - `api.runtime.tasks.flows` and `api.runtime.tasks.runs` are read-only DTO views for listing and status lookups; both expose `bindSession(...)` / `fromToolContext(...)` plus `get`, `list`, `findLatest`, and `resolve`.
-    - `api.runtime.tasks.flow` is a deprecated alias for `managedFlows`.
 
     Task Flow tracks durable multi-step workflow state. It is not a scheduler:
     use Cron or `api.session.workflow.scheduleSessionTurn(...)` for future
@@ -463,7 +580,7 @@ two-party event loops that do not go through the shared inbound reply runner.
     });
     ```
 
-    Uses core `messages.tts` configuration and provider selection. Returns PCM audio buffer + sample rate. `textToSpeechStream` is also available for streaming synthesis.
+    Uses core `tts` configuration and provider selection. Returns PCM audio buffer + sample rate. `textToSpeechStream` is also available for streaming synthesis.
 
   </Accordion>
   <Accordion title="api.runtime.mediaUnderstanding">
@@ -528,10 +645,6 @@ two-party event loops that do not go through the shared inbound reply runner.
     Returns `{ text: undefined }` when no output is produced (e.g. skipped input).
 
     `describeImageFileWithModel(...)` describes an already-known image through a specific provider/model, bypassing the default active-model resolution that `describeImageFile(...)` uses.
-
-    <Info>
-    `api.runtime.stt.transcribeAudioFile(...)` remains as a compatibility alias for `api.runtime.mediaUnderstanding.transcribeAudioFile(...)`.
-    </Info>
 
   </Accordion>
   <Accordion title="api.runtime.imageGeneration">
@@ -636,7 +749,7 @@ two-party event loops that do not go through the shared inbound reply runner.
     System-level utilities.
 
     ```typescript
-    await api.runtime.system.enqueueSystemEvent(event);
+    const accepted = api.runtime.system.enqueueSystemEvent(text, options);
     api.runtime.system.requestHeartbeat({
       source: "other",
       intent: "event",
@@ -650,7 +763,7 @@ two-party event loops that do not go through the shared inbound reply runner.
     const hint = api.runtime.system.formatNativeDependencyHint(pkg);
     ```
 
-    `runHeartbeatOnce(...)` runs a single heartbeat cycle immediately, bypassing the normal coalesce timer. Pass `{ heartbeat: { target: "last" } }` to force delivery to the last active channel instead of the default `target: "none"` suppression.
+    `runHeartbeatOnce(...)` runs a single heartbeat cycle immediately, bypassing the normal coalesce timer. Delivery defaults to the configured operator DM (`commands.ownerAllowFrom`, then channel `allowFrom`); pass `{ heartbeat: { target: "none" } }` for an internal-only run.
 
     `runCommandWithTimeout(...)` returns captured `stdout` and `stderr`, optional
     truncation counts, `code`, `signal`, `killed`, `termination`, and
@@ -729,20 +842,6 @@ two-party event loops that do not go through the shared inbound reply runner.
       { contentType: "text/plain" },
     );
     const blob = await blobs.lookup("artifact-1");
-
-    await api.runtime.state.withLease(
-      {
-        namespace: "my-feature",
-        key: "writer",
-        database: { scope: "agent", agentId },
-        leaseMs: 5 * 60_000,
-        waitMs: 30_000,
-      },
-      async ({ signal, assertOwned }) => {
-        await runExternalWriter({ signal });
-        assertOwned();
-      },
-    );
     ```
 
     Keyed stores survive restarts and are isolated by the runtime-bound plugin id. Use `registerIfAbsent(...)` for atomic dedupe claims: it returns `true` when the key was missing or expired and registered, or `false` when a live value already exists without overwriting its value, creation time, or TTL. Use `deleteIf(...)` when cleanup must remove only the value previously observed; its synchronous predicate and deletion run in one SQLite transaction. Limits: `maxEntries` per namespace, 50,000 live rows per plugin, JSON values under 64KB, and optional TTL expiry. By default, a write at either row limit sheds the oldest live rows from the namespace being written; sibling namespaces are not evicted for that write, and the write still fails if the namespace cannot free enough rows. Set `overflowPolicy: "reject-new"` for durable ownership records that must never be evicted: new keys fail at either limit, while existing keys remain updateable.
@@ -753,12 +852,12 @@ two-party event loops that do not go through the shared inbound reply runner.
 
     `openChannelIngressQueue<TPayload>(...)` opens a persisted ingress queue scoped to the calling plugin, for buffering inbound events that need at-least-once processing across restarts. When stale-claim recovery uses `shouldRecover`, also provide `shouldRecoverCorrupt` if corrupt claimed payloads should be quarantined: its payload-independent claim identity lets the plugin preserve live owner and lane policy before the queue tombstones the row.
 
-    `withLease(...)` serializes cooperative plugin work across OpenClaw processes. Choose `database: { scope: "shared" }` for one global owner or `{ scope: "agent", agentId }` for independent per-agent ownership. Forward the callback's `AbortSignal` into every fallible operation. `assertOwned()` is a point-in-time checkpoint before starting another important step; the host also verifies ownership after the callback. Lease loss or caller cancellation aborts the signal. Acquisition waits and heartbeats happen outside short synchronous SQLite transactions; plugins never receive database paths or handles. This is cooperative cancellation, not a fencing token or authorization for unfenced external writes.
+    Plugin-state leases were removed. Use short SQLite transactions for atomic database work and plugin-scoped keyed stores (`openKeyedStore` or `openSyncKeyedStore`) for bounded durable state.
 
     `openChannelIngressDrain(...)` opens the core channel-agnostic worker over that queue (or creates a queue when none is supplied). The drain owns stale-claim recovery, per-lane claim serialization, complete-at-adoption or complete-on-dispatch-return, retry/dead-letter disposition, optional pre-adoption supersede, and claim→adoption stall timeout. Wire claim ownership into reply generation with `turnAdoptionLifecycle` (via `bindIngressLifecycleToReplyOptions` from `plugin-sdk/channel-outbound`). Channel plugins keep accept-side enqueue, lane derivation, non-retryable classification, and any supersede authorization policy.
 
     <Warning>
-    `openBlobStore`, `openKeyedStore`, `openSyncKeyedStore`, `withLease`, `openChannelIngressQueue`, and `openChannelIngressDrain` are available only to bundled plugins and trusted official plugin installations in this release.
+    `openBlobStore`, `openKeyedStore`, `openSyncKeyedStore`, `openChannelIngressQueue`, and `openChannelIngressDrain` are available only to bundled plugins and trusted official plugin installations in this release. The rejection names the plugin id and the origin it loaded from; a channel plugin loaded from `plugins.load.paths` or an unofficial install is untrusted, so its ingress monitor fails channel start instead of running without a durable queue.
     </Warning>
 
   </Accordion>
@@ -832,12 +931,42 @@ two-party event loops that do not go through the shared inbound reply runner.
     - `implicitMentionKindWhen`
     - `resolveInboundMentionDecision`
 
-    `api.runtime.channel.mentions` intentionally does not expose the older `resolveMentionGating*` compatibility helpers. Prefer the normalized `{ facts, policy }` path.
+    Use the normalized `{ facts, policy }` path for mention decisions.
 
     Several fields under `reply`, `session`, and `inbound` carry per-field `@deprecated` notes pointing at the current channel-turn kernel or channel-outbound adapters; check the inline JSDoc on the specific helper before building new code on it.
 
   </Accordion>
 </AccordionGroup>
+
+## Gateway service events
+
+Long-lived services registered with `api.registerService(...)` receive a process-local
+`ctx.gatewayEvents` facade when the process runs a Gateway broadcaster; in runtimes without one the
+field is absent, so feature-detect it and keep a fallback (for example a coarse poll). Use
+`onSessionsChanged(...)` to react after the Gateway broadcasts a `sessions.changed` notice:
+
+```typescript
+let unsubscribeSessionsChanged: (() => void) | undefined;
+
+api.registerService({
+  id: "session-index",
+  start(ctx) {
+    unsubscribeSessionsChanged = ctx.gatewayEvents?.onSessionsChanged((event) => {
+      // event: { sessionKey, agentId?, label?, displayName?, reason?, phase? }
+      refreshSession(event.sessionKey);
+    });
+  },
+  stop() {
+    unsubscribeSessionsChanged?.();
+    unsubscribeSessionsChanged = undefined;
+  },
+});
+```
+
+The handler runs in the Gateway process and does not add a Gateway protocol subscription. Keep the
+returned unsubscribe function and call it during service cleanup. The payload is a lightweight
+change notice; use `api.runtime.agent.session.getSessionEntry(...)` when the plugin needs the full
+current session entry.
 
 ## Storing runtime references
 

@@ -1,10 +1,16 @@
 /** Validates and streams one approval-gated Claude CLI turn on a headless node. */
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { signalProcessTree } from "../process/kill-tree.js";
+import {
+  addSecretInputStdio,
+  type SpawnStdioEntry,
+  writeSecretInputToChild,
+} from "../process/spawn-secret-input.js";
+import type { SpawnSecretInput } from "../process/supervisor/types.js";
 import { resolveSafeChildProcessInvocation } from "../process/windows-command.js";
 import { truncateUtf8Suffix } from "../utils/utf8-truncate.js";
 import type { NodeHostClient } from "./client.js";
@@ -33,6 +39,7 @@ export async function runClaudeCliNodeCommand(params: {
   argv: string[];
   cwd: string | undefined;
   env: Record<string, string> | undefined;
+  secretInput?: SpawnSecretInput;
   timeoutMs: number | undefined;
   signal?: AbortSignal;
 }): Promise<RunResult> {
@@ -79,14 +86,16 @@ export async function runClaudeCliNodeCommand(params: {
         cwd: params.cwd,
         env: params.env ?? process.env,
       });
+      const stdio: SpawnStdioEntry[] = ["pipe", "pipe", "pipe"];
+      addSecretInputStdio(stdio, params.secretInput);
       const child = spawn(invocation.command, invocation.args, {
         cwd: params.cwd,
         env: params.env,
-        stdio: ["pipe", "pipe", "pipe"],
+        stdio,
         ...(process.platform !== "win32" ? { detached: true } : {}),
         windowsHide: invocation.windowsHide,
         windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-      });
+      }) as ChildProcessWithoutNullStreams;
 
       const kill = () => {
         const pid = child.pid;
@@ -252,6 +261,10 @@ export async function runClaudeCliNodeCommand(params: {
           truncated,
         });
       };
+      void writeSecretInputToChild(child, params.secretInput).catch((error: unknown) => {
+        kill();
+        void finish(null, error instanceof Error ? error : new Error(String(error)));
+      });
       child.once("error", (error) => void finish(null, error));
       child.once("close", (code) => void finish(code));
     });

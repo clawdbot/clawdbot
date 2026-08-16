@@ -48,29 +48,31 @@ const TAG_OVERRIDES: Record<string, ConfigTag[]> = {
   "gateway.push.apns.relay.baseUrl": ["network", "advanced"],
   "gateway.controlUi.embedSandbox": ["security", "access", "advanced"],
   "gateway.controlUi.allowExternalEmbedUrls": ["security", "access", "network", "advanced"],
-  "gateway.controlUi.chatMessageMaxWidth": ["advanced"],
   "gateway.controlUi.toolTitles": ["advanced"],
+  "gateway.controlUi.sessionObserver": ["advanced"],
   "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback": [
     "security",
     "access",
     "network",
     "advanced",
   ],
-  "gateway.controlUi.dangerouslyDisableDeviceAuth": ["security", "access", "network", "advanced"],
-  "gateway.controlUi.allowInsecureAuth": ["security", "access", "network", "advanced"],
+  "gateway.nodes.pairing.autoApproveLocal": ["security", "access", "advanced"],
   "gateway.nodes.pairing.autoApproveCidrs": ["security", "access", "network", "advanced"],
   "gateway.nodes.pairing.sshVerify": ["security", "access", "network", "advanced"],
   "mcp.apps.enabled": ["security", "access", "advanced"],
   "mcp.apps.sandboxOrigin": ["security", "network", "advanced"],
   "mcp.apps.sandboxPort": ["network", "advanced"],
   "gateway.nodes.pluginTools.enabled": ["tools", "security", "access", "network", "advanced"],
-  "gateway.nodes.skills.enabled": ["tools", "security", "access", "network", "advanced"],
+  "gateway.nodes.allowSkills": ["tools", "security", "access", "network", "advanced"],
   "nodeHost.agentRuns.claude.enabled": ["tools", "security", "access", "network", "advanced"],
+  "nodeHost.workerRuns.enabled": ["tools", "security", "access", "network", "advanced"],
   "nodeHost.mcp.servers": ["tools", "network", "advanced"],
   "nodeHost.skills.enabled": ["tools", "network", "advanced"],
   "proxy.tls.caFile": ["security", "network", "storage", "advanced"],
   "tools.exec.applyPatch.workspaceOnly": ["tools", "security", "access", "advanced"],
   "tools.exec.mode": ["tools", "security", "access"],
+  "session.sharing": ["access", "privacy", "storage"],
+  "session.sharing.*": ["access", "privacy", "storage"],
 };
 
 const PREFIX_RULES: Array<{ prefix: string; tags: ConfigTag[] }> = [
@@ -199,10 +201,6 @@ function deriveTagsForPath(path: string, hint?: ConfigUiHint): ConfigTag[] {
     }
   }
   if (hint?.advanced) {
-    tags.add("advanced");
-  }
-
-  if (tags.size === 0) {
     tags.add("advanced");
   }
 

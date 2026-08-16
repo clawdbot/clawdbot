@@ -117,7 +117,9 @@ By default OpenClaw keeps context as received: allowlists decide who can trigger
 | `"allowlist"`       | Only inject history/thread/quote/forwarded context from allowlisted senders.     |
 | `"allowlist_quote"` | `allowlist`, plus keep the explicitly quoted/replied-to message from any sender. |
 
-Set it per channel (`channels.<channel>.contextVisibility`), per account (`channels.<channel>.accounts.<accountId>.contextVisibility`), or globally (`channels.defaults.contextVisibility`). Channels that fetch supplemental context (Discord, Feishu, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp) apply the policy when building inbound context; unknown policy combinations fail closed and omit the context.
+Set it per channel (`channels.<channel>.contextVisibility`), per account (`channels.<channel>.accounts.<accountId>.contextVisibility`), or globally (`channels.defaults.contextVisibility`). Channels that fetch supplemental context (Discord, Feishu, iMessage, Matrix, Microsoft Teams, QQBot, Signal, Slack, Telegram, WhatsApp) apply the policy when building inbound context; unknown policy combinations fail closed and omit the context.
+
+These modes filter channel-supplied supplemental context only. Tool policy and the owner-only tool inventory are still selected from the current turn's originating requester, not every sender represented in the prompt. See [Requester-scoped controls and prompt context](/gateway/security#requester-scoped-controls-and-prompt-context).
 
 ![Group message flow](/images/groups-flow.svg)
 
@@ -212,7 +214,7 @@ Related:
 
 - Configuration keys and defaults: [Gateway configuration](/gateway/config-agents#agentsdefaultssandbox)
 - Debugging why a tool is blocked: [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated)
-- Bind mounts details: [Sandboxing](/gateway/sandboxing#custom-bind-mounts)
+- Bind mounts details: [Sandboxing](/gateway/sandboxing#multiple-folders-for-one-agent)
 
 ## Display labels
 
@@ -309,7 +311,15 @@ Quick mental model (evaluation order for group messages):
 
 Group messages require a mention unless overridden per group. Defaults live per subsystem under `*.groups."*"`.
 
-Replying to a bot message counts as an implicit mention when the channel exposes reply metadata; quoting a bot message can also count on channels that expose quote metadata. Current built-in cases: Discord, Microsoft Teams, QQBot, Slack, Telegram, WhatsApp, and Zalo personal.
+Supported implicit mention facts are channel-specific:
+
+| Fact                  | Current built-in producers                       |
+| --------------------- | ------------------------------------------------ |
+| Reply to the bot      | Discord, Microsoft Teams, QQBot, Slack, Telegram |
+| Quote of the bot      | WhatsApp, Zalo personal                          |
+| Bot joined the thread | Mattermost, Slack, Tlon                          |
+
+Each fact defaults to enabled when the channel produces it. Set the corresponding `implicitMentions` flag to `false` to stop that fact from bypassing mention gating; native explicit mentions remain unaffected. A flag has no effect on channels that do not produce that fact.
 
 ```json5
 {
@@ -334,15 +344,15 @@ Replying to a bot message counts as an implicit mention when the channel exposes
     },
   },
   agents: {
-    list: [
-      {
-        id: "main",
+    entries: {
+      main: {
+        default: true,
         groupChat: {
           mentionPatterns: ["@openclaw", "openclaw", "\\+15555550123"],
           historyLimit: 50,
         },
       },
-    ],
+    },
   },
 }
 ```
@@ -421,7 +431,7 @@ Account-level channel configs can set the same policy under `channels.<channel>.
 <AccordionGroup>
   <Accordion title="Mention gating notes">
     - `mentionPatterns` are case-insensitive safe regex patterns; invalid patterns and unsafe nested-repetition forms are ignored (with a warning).
-    - Pattern precedence: `agents.list[].groupChat.mentionPatterns` (useful when multiple agents share a group) overrides `messages.groupChat.mentionPatterns`; when neither is set, patterns are derived from the agent identity name/emoji.
+    - Pattern precedence: `agents.entries.*.groupChat.mentionPatterns` (useful when multiple agents share a group) overrides `messages.groupChat.mentionPatterns`; when neither is set, patterns are derived from the agent identity name/emoji.
     - Mention gating is only enforced when mention detection is possible (native mentions or `mentionPatterns` are configured).
     - Allowlisting a group or sender does not disable mention gating; set that group's `requireMention` to `false` when all messages should trigger.
     - Automatic group chat prompt context carries the resolved silent-reply instruction every turn; workspace files should not duplicate `NO_REPLY` mechanics.

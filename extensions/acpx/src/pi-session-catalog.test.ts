@@ -4,8 +4,19 @@ import path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+type ResolveAcpSessionAvailability =
+  (typeof import("openclaw/plugin-sdk/acp-runtime"))["resolveAcpSessionAvailability"];
+
 const nodeHostMocks = vi.hoisted(() => ({
   runNodePtyCommand: vi.fn(async () => ({ exitCode: 0 })),
+}));
+const acpRuntimeMocks = vi.hoisted(() => ({
+  resolveAcpSessionAvailability: vi.fn<ResolveAcpSessionAvailability>(() => ({ available: true })),
+}));
+
+vi.mock("openclaw/plugin-sdk/acp-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/acp-runtime")>()),
+  resolveAcpSessionAvailability: acpRuntimeMocks.resolveAcpSessionAvailability,
 }));
 
 vi.mock("openclaw/plugin-sdk/node-host", async (importOriginal) => {
@@ -34,7 +45,15 @@ vi.mock("openclaw/plugin-sdk/node-host", async (importOriginal) => {
 
 import { registerPiSessionCatalog } from "./pi-session-catalog-plugin.js";
 import { listLocalPiSessionPage, readLocalPiTranscriptPage } from "./pi-session-catalog.js";
-import { piSessionStore } from "./pi-session-paths.js";
+import {
+  bindTestCatalogOwner,
+  capturePiContinuationCatalog,
+  createPiStoreFixture,
+  installFakePiFixture,
+  registerPiNodeHostCommands,
+  type TestSessionCatalogProvider,
+} from "./pi-session-catalog.test-support.js";
+import { listPiSummaryPage } from "./pi-session-store.js";
 
 const PI_SESSIONS_LIST_COMMAND = "acpx.pi.sessions.list.v1";
 const PI_SESSION_READ_COMMAND = "acpx.pi.sessions.read.v1";
@@ -47,100 +66,32 @@ const originalHome = process.env.HOME;
 const originalUserProfile = process.env.USERPROFILE;
 const originalPath = process.env.PATH;
 
-async function createPiStore(
+const createPiStore = (
   assistantText = "hi",
   sessionName = "Pi catalog session",
   toolArguments: unknown = { command: "pwd" },
-): Promise<string> {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-catalog-"));
-  temporaryDirectories.push(directory);
-  process.env.PI_CODING_AGENT_SESSION_DIR = directory;
-  const entries = [
-    {
-      type: "session",
-      version: 3,
-      id: "pi-session",
-      timestamp: "2026-07-13T10:00:00.000Z",
-      cwd: "/workspace",
-    },
-    {
-      type: "message",
-      id: "user-1",
-      parentId: null,
-      timestamp: "2026-07-13T10:00:01.000Z",
-      message: { role: "user", content: "hello", timestamp: 1_783_938_001_000 },
-    },
-    {
-      type: "message",
-      id: "assistant-1",
-      parentId: "user-1",
-      timestamp: "2026-07-13T10:00:02.000Z",
-      message: {
-        role: "assistant",
-        provider: "anthropic",
-        model: "claude",
-        timestamp: 1_783_938_002_000,
-        content: [
-          { type: "thinking", thinking: "thinking" },
-          { type: "text", text: assistantText },
-          { type: "toolCall", id: "call-1", name: "bash", arguments: toolArguments },
-        ],
-      },
-    },
-    {
-      type: "message",
-      id: "tool-1",
-      parentId: "assistant-1",
-      timestamp: "2026-07-13T10:00:03.000Z",
-      message: {
-        role: "toolResult",
-        toolCallId: "call-1",
-        toolName: "bash",
-        timestamp: 1_783_938_003_000,
-        content: [{ type: "text", text: "/workspace" }],
-      },
-    },
-    {
-      type: "session_info",
-      id: "info-1",
-      parentId: "tool-1",
-      timestamp: "2026-07-13T10:00:04.000Z",
-      name: sessionName,
-    },
-  ];
-  await fs.writeFile(
-    path.join(directory, "session.jsonl"),
-    `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+  acpResolvable = false,
+) =>
+  createPiStoreFixture(
+    temporaryDirectories,
+    assistantText,
+    sessionName,
+    toolArguments,
+    acpResolvable,
   );
-  return directory;
-}
+const installFakePi = () => installFakePiFixture(temporaryDirectories, originalPath);
 
-async function installFakePi(): Promise<string> {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-cli-"));
-  temporaryDirectories.push(directory);
-  const executable = path.join(directory, "pi");
-  await fs.writeFile(executable, "#!/bin/sh\nexit 0\n");
-  await fs.chmod(executable, 0o755);
-  process.env.PATH = `${directory}${path.delimiter}${originalPath ?? ""}`;
-  return directory;
-}
-
-function registerPiNodeHostCommands(): Parameters<
-  OpenClawPluginApi["registerNodeHostCommand"]
->[0][] {
-  const commands: Parameters<OpenClawPluginApi["registerNodeHostCommand"]>[0][] = [];
-  registerPiSessionCatalog({
-    pluginConfig: {},
-    registerSessionCatalog: vi.fn(),
-    registerNodeHostCommand: (
-      command: Parameters<OpenClawPluginApi["registerNodeHostCommand"]>[0],
-    ) => commands.push(command),
-    registerNodeInvokePolicy: vi.fn(),
-  } as unknown as OpenClawPluginApi);
-  return commands;
+function usePiCandidateCacheClock(): () => void {
+  let now = Date.now();
+  vi.spyOn(Date, "now").mockImplementation(() => now);
+  return () => {
+    now += 32_001;
+  };
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
+  acpRuntimeMocks.resolveAcpSessionAvailability.mockReset().mockReturnValue({ available: true });
   nodeHostMocks.runNodePtyCommand.mockClear();
   process.env.PATH = originalPath;
   if (originalSessionDir === undefined) {
@@ -171,63 +122,9 @@ afterEach(async () => {
 });
 
 describe("Pi session catalog", () => {
-  it("rejects Windows drive-less rooted session paths", () => {
-    const originalPlatform = process.platform;
-    try {
-      Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
-      expect(() => piSessionStore({ PI_CODING_AGENT_SESSION_DIR: "\\sessions" })).toThrow(
-        "absolute or home-relative",
-      );
-      expect(() => piSessionStore({ PI_CODING_AGENT_SESSION_DIR: "C:\\sessions" })).not.toThrow();
-      expect(() =>
-        piSessionStore({ PI_CODING_AGENT_SESSION_DIR: "\\\\server\\share\\sessions" }),
-      ).not.toThrow();
-    } finally {
-      Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
-    }
-  });
-
-  it("trims the configured Pi agent directory", () => {
-    const agentDir = path.join(os.tmpdir(), "pi-agent");
-    expect(piSessionStore({ PI_CODING_AGENT_DIR: `  ${agentDir}  ` })).toEqual({
-      root: path.join(agentDir, "sessions"),
-      flat: false,
-    });
-  });
-
-  it("resolves relative project and global session directories like Pi", async () => {
-    const projectDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-project-"));
-    const agentDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-agent-"));
-    temporaryDirectories.push(projectDirectory, agentDirectory);
-    await fs.mkdir(path.join(projectDirectory, ".pi"), { recursive: true });
-    await fs.writeFile(
-      path.join(projectDirectory, ".pi", "settings.json"),
-      `${JSON.stringify({ sessionDir: "sessions" })}\n`,
-    );
-    const env = {
-      HOME: projectDirectory,
-      USERPROFILE: projectDirectory,
-      PI_CODING_AGENT_DIR: agentDirectory,
-    };
-
-    expect(piSessionStore(env, projectDirectory)).toEqual({
-      root: path.join(projectDirectory, ".pi", "sessions"),
-      flat: true,
-    });
-
-    await fs.rm(path.join(projectDirectory, ".pi", "settings.json"));
-    await fs.writeFile(
-      path.join(agentDirectory, "settings.json"),
-      `${JSON.stringify({ sessionDir: "custom-sessions" })}\n`,
-    );
-    expect(piSessionStore(env, projectDirectory)).toEqual({
-      root: path.join(agentDirectory, "custom-sessions"),
-      flat: true,
-    });
-  });
-
   it("lists named sessions and reads the active JSONL branch", async () => {
-    await createPiStore();
+    await createPiStore("hi", "Pi catalog session", { command: "pwd" }, true);
+    await installFakePi();
     const listed = await listLocalPiSessionPage({ limit: 20 });
     expect(listed).toEqual({
       sessions: [
@@ -236,7 +133,7 @@ describe("Pi session catalog", () => {
           name: "Pi catalog session",
           cwd: "/workspace",
           source: "pi-cli",
-          canContinue: false,
+          canContinue: true,
         }),
       ],
     });
@@ -261,27 +158,156 @@ describe("Pi session catalog", () => {
       cursor: latest.nextCursor,
     });
     expect(older.items.map((item) => item.type)).toEqual(["reasoning", "agentMessage"]);
+    const nonEmitted = Buffer.from(JSON.stringify({ offset: 2, extra: true }), "utf8").toString(
+      "base64url",
+    );
+    const unsafeOffset = Buffer.from(
+      JSON.stringify({ offset: Number.MAX_SAFE_INTEGER + 1 }),
+      "utf8",
+    ).toString("base64url");
+    for (const cursor of [
+      `${latest.nextCursor}$`,
+      `${latest.nextCursor}=`,
+      ` ${latest.nextCursor} `,
+      nonEmitted,
+      unsafeOffset,
+    ]) {
+      await expect(
+        readLocalPiTranscriptPage({
+          threadId: "pi-session",
+          cursor,
+        }),
+      ).rejects.toThrow("cursor is invalid");
+    }
     await expect(listLocalPiSessionPage({ cursor: " " })).rejects.toThrow("cursor is invalid");
     await expect(
       readLocalPiTranscriptPage({ threadId: "pi-session", cursor: 123 }),
     ).rejects.toThrow("cursor is invalid");
 
-    let provider: Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0] | undefined;
+    let provider: TestSessionCatalogProvider | undefined;
     registerPiSessionCatalog({
       pluginConfig: {},
       runtime: { nodes: { list: vi.fn().mockResolvedValue({ nodes: [] }) } },
-      registerSessionCatalog: (value: NonNullable<typeof provider>) => {
-        provider = value;
+      registerSessionCatalog: (
+        value: Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0],
+      ) => {
+        provider = bindTestCatalogOwner(value);
       },
       registerNodeHostCommand: vi.fn(),
       registerNodeInvokePolicy: vi.fn(),
     } as unknown as OpenClawPluginApi);
     await expect(
-      provider!.read({ hostId: "gateway", threadId: "pi-session", limit: 2 }),
+      provider!.read({
+        allowProcessHomeFallback: false,
+        hostId: "gateway",
+        threadId: "pi-session",
+        limit: 2,
+      }),
     ).resolves.toMatchObject({ threadId: "pi-session", items: expect.any(Array) });
-    await expect(provider!.list({})).resolves.toEqual([
+    await expect(provider!.list({ allowProcessHomeFallback: false })).resolves.toEqual([
       expect.objectContaining({ hostId: "gateway", sessions: [expect.any(Object)] }),
     ]);
+
+    for (const key of ["PI_CODING_AGENT_SESSION_DIR", "PI_CODING_AGENT_DIR"] as const) {
+      delete process.env[key];
+    }
+    process.env.HOME = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-isolated-home-"));
+    temporaryDirectories.push(process.env.HOME);
+    const request = { hostId: "gateway", threadId: "pi-session" };
+    const isolatedRequest = { ...request, allowProcessHomeFallback: false };
+    for (const operation of [provider!.continueSession, provider!.openTerminal]) {
+      await expect(operation?.(isolatedRequest)).rejects.toThrow(
+        "local Pi sessions are unavailable in isolated state",
+      );
+    }
+  });
+
+  it("recognizes Pi sessions when the agent directory uses a symlinked path", async () => {
+    const sessionDirectory = await createPiStore();
+    const agentDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-agent-real-"));
+    const symlinkParent = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-agent-link-"));
+    const linkedAgentDirectory = path.join(symlinkParent, "agent");
+    temporaryDirectories.push(agentDirectory, symlinkParent);
+    await fs.mkdir(path.join(agentDirectory, "sessions"), { recursive: true });
+    await fs.rename(sessionDirectory, path.join(agentDirectory, "sessions", "project"));
+    await fs.symlink(
+      agentDirectory,
+      linkedAgentDirectory,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    process.env.PI_CODING_AGENT_SESSION_DIR = path.join(agentDirectory, "sessions", "project");
+    process.env.PI_CODING_AGENT_DIR = linkedAgentDirectory;
+
+    await expect(listLocalPiSessionPage({ limit: 20 })).resolves.toEqual({
+      sessions: [expect.objectContaining({ threadId: "pi-session", canContinue: true })],
+    });
+  });
+
+  it("refreshes cached continuation eligibility without mutating prior summaries", async () => {
+    const sessionDirectory = await createPiStore(
+      "hi",
+      "Pi catalog session",
+      { command: "pwd" },
+      true,
+    );
+    const agentDirectory = path.dirname(path.dirname(sessionDirectory));
+    const unrelatedAgentDirectory = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-pi-agent-unrelated-"),
+    );
+    temporaryDirectories.push(unrelatedAgentDirectory);
+    const baseEnv = {
+      ...process.env,
+      PI_CODING_AGENT_SESSION_DIR: sessionDirectory,
+      PI_CODING_AGENT_DIR: agentDirectory,
+    };
+
+    const first = await listPiSummaryPage(baseEnv, { offset: 0, limit: 20 });
+    const firstSummary = first.summaries[0];
+    expect(firstSummary?.canContinue).toBe(true);
+
+    const second = await listPiSummaryPage(
+      { ...baseEnv, PI_CODING_AGENT_DIR: unrelatedAgentDirectory },
+      { offset: 0, limit: 20 },
+    );
+    expect(second.summaries[0]?.canContinue).toBe(false);
+    expect(second.summaries[0]).not.toBe(firstSummary);
+    expect(firstSummary?.canContinue).toBe(true);
+
+    const third = await listPiSummaryPage(baseEnv, { offset: 0, limit: 20 });
+    expect(third.summaries[0]?.canContinue).toBe(true);
+    expect(firstSummary?.canContinue).toBe(true);
+  });
+
+  it("memoizes file candidates across cadence and re-walks after expiry", async () => {
+    const sessionDirectory = await createPiStore();
+    const baseEnv = {
+      ...process.env,
+      PI_CODING_AGENT_SESSION_DIR: sessionDirectory,
+      PI_CODING_AGENT_DIR: path.dirname(path.dirname(sessionDirectory)),
+    };
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const readdirSpy = vi.spyOn(fs, "readdir");
+    const statSpy = vi.spyOn(fs, "stat");
+    try {
+      await listPiSummaryPage(baseEnv, { offset: 0, limit: 20 });
+      const readdirCount = readdirSpy.mock.calls.length;
+      const statCount = statSpy.mock.calls.length;
+
+      now += 31_999;
+      await listPiSummaryPage(baseEnv, { offset: 0, limit: 20 });
+      expect(readdirSpy).toHaveBeenCalledTimes(readdirCount);
+      expect(statSpy).toHaveBeenCalledTimes(statCount);
+
+      now += 2;
+      await listPiSummaryPage(baseEnv, { offset: 0, limit: 20 });
+      expect(readdirSpy.mock.calls.length).toBeGreaterThan(readdirCount);
+      expect(statSpy.mock.calls.length).toBeGreaterThan(statCount);
+    } finally {
+      nowSpy.mockRestore();
+      readdirSpy.mockRestore();
+      statSpy.mockRestore();
+    }
   });
 
   it("summarizes and pages a large session within transport limits", async () => {
@@ -401,12 +427,14 @@ describe("Pi session catalog", () => {
       },
     ];
     await fs.writeFile(file, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+    const expireCandidates = usePiCandidateCacheClock();
     expect((await listLocalPiSessionPage({ limit: 20 })).sessions[0]?.name).toBe("Assigned title");
 
     await fs.appendFile(
       file,
       `${JSON.stringify({ type: "session_info", id: "clear", parentId: "a", timestamp: "2026-07-13T10:00:04Z", name: "" })}\n`,
     );
+    expireCandidates();
     expect((await listLocalPiSessionPage({ limit: 20 })).sessions[0]?.name).toBe("fallback title");
   });
 
@@ -423,6 +451,7 @@ describe("Pi session catalog", () => {
         cwd: "/workspace",
       }),
     );
+    const expireCandidates = usePiCandidateCacheClock();
     expect((await listLocalPiSessionPage({ limit: 20 })).sessions[0]?.threadId).toBe("pi-session");
 
     await fs.appendFile(
@@ -435,6 +464,7 @@ describe("Pi session catalog", () => {
         name: "No final newline",
       })}`,
     );
+    expireCandidates();
     expect((await listLocalPiSessionPage({ limit: 20 })).sessions[0]?.name).toBe(
       "No final newline",
     );
@@ -443,6 +473,7 @@ describe("Pi session catalog", () => {
   it("rebuilds metadata after a same-file replacement grows", async () => {
     const directory = await createPiStore("old session");
     const file = path.join(directory, "session.jsonl");
+    const expireCandidates = usePiCandidateCacheClock();
     await listLocalPiSessionPage({ limit: 20 });
 
     const entries = [
@@ -469,6 +500,7 @@ describe("Pi session catalog", () => {
       },
     ];
     await fs.writeFile(file, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+    expireCandidates();
 
     await expect(listLocalPiSessionPage({ limit: 20 })).resolves.toMatchObject({
       sessions: [
@@ -584,6 +616,7 @@ describe("Pi session catalog", () => {
     process.env.PI_CODING_AGENT_DIR = agentDirectory;
     process.env.HOME = homeDirectory;
     process.env.USERPROFILE = homeDirectory;
+    const expireCandidates = usePiCandidateCacheClock();
 
     await expect(listLocalPiSessionPage({ limit: 20 })).resolves.toMatchObject({
       sessions: [
@@ -604,6 +637,7 @@ describe("Pi session catalog", () => {
         name: "",
       })}\n`,
     );
+    expireCandidates();
     expect((await listLocalPiSessionPage({ limit: 20 })).sessions[0]?.name).toBeUndefined();
   });
 
@@ -652,72 +686,121 @@ describe("Pi session catalog", () => {
     ).toBe(false);
   });
 
-  it.runIf(process.platform !== "win32")(
-    "opens validated local Pi sessions with the upstream terminal resume contract",
-    async () => {
-      await createPiStore();
-      await installFakePi();
-      let provider: Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0] | undefined;
-      const commands: Parameters<OpenClawPluginApi["registerNodeHostCommand"]>[0][] = [];
-      registerPiSessionCatalog({
-        pluginConfig: {},
-        runtime: { nodes: { list: vi.fn().mockResolvedValue({ nodes: [] }) } },
-        registerSessionCatalog: (value: NonNullable<typeof provider>) => {
-          provider = value;
-        },
-        registerNodeHostCommand: (
-          command: Parameters<OpenClawPluginApi["registerNodeHostCommand"]>[0],
-        ) => commands.push(command),
-        registerNodeInvokePolicy: vi.fn(),
-      } as unknown as OpenClawPluginApi);
+  it("opens validated local Pi sessions with the upstream terminal resume contract", async () => {
+    await createPiStore();
+    const binDirectory = await installFakePi();
+    const executable = path.join(binDirectory, process.platform === "win32" ? "pi.cmd" : "pi");
+    let provider: TestSessionCatalogProvider | undefined;
+    const commands: Parameters<OpenClawPluginApi["registerNodeHostCommand"]>[0][] = [];
+    registerPiSessionCatalog({
+      pluginConfig: {},
+      runtime: { nodes: { list: vi.fn().mockResolvedValue({ nodes: [] }) } },
+      registerSessionCatalog: (
+        value: Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0],
+      ) => {
+        provider = bindTestCatalogOwner(value);
+      },
+      registerNodeHostCommand: (
+        command: Parameters<OpenClawPluginApi["registerNodeHostCommand"]>[0],
+      ) => commands.push(command),
+      registerNodeInvokePolicy: vi.fn(),
+    } as unknown as OpenClawPluginApi);
 
-      await expect(provider!.list({ hostIds: ["gateway"] })).resolves.toEqual([
-        expect.objectContaining({
-          sessions: [expect.objectContaining({ threadId: "pi-session", canOpenTerminal: true })],
-        }),
-      ]);
-      await expect(
-        provider!.openTerminal!({ hostId: "gateway", threadId: "pi-session" }),
-      ).resolves.toEqual({
-        kind: "local",
-        argv: [expect.stringMatching(/pi$/u), "--session", "pi-session"],
+    await expect(provider!.list({ hostIds: ["gateway"] })).resolves.toEqual([
+      expect.objectContaining({
+        sessions: [expect.objectContaining({ threadId: "pi-session", canOpenTerminal: true })],
+      }),
+    ]);
+    await expect(
+      provider!.openTerminal!({ hostId: "gateway", threadId: "pi-session" }),
+    ).resolves.toEqual({
+      kind: "local",
+      argv: [executable, "--session", "pi-session"],
+      cwd: "/workspace",
+      title: "pi --session pi-session…",
+    });
+    await expect(
+      provider!.openTerminal!({ hostId: "gateway", threadId: "missing" }),
+    ).rejects.toThrow("Pi session is unavailable");
+
+    const terminal = commands.find((command) => command.command === PI_TERMINAL_RESUME_COMMAND)!;
+    const io = {
+      signal: new AbortController().signal,
+      onInput: vi.fn(),
+      emitChunk: vi.fn(),
+    };
+    await expect(
+      terminal.handle?.(
+        JSON.stringify({ threadId: "pi-session", cols: 100, rows: 30 }),
+        io as never,
+      ),
+    ).resolves.toBe(JSON.stringify({ exitCode: 0 }));
+    expect(nodeHostMocks.runNodePtyCommand).toHaveBeenCalledWith(
+      {
+        file: executable,
+        args: ["--session", "pi-session"],
         cwd: "/workspace",
-        title: "pi --session pi-session…",
-      });
-      await expect(
-        provider!.openTerminal!({ hostId: "gateway", threadId: "missing" }),
-      ).rejects.toThrow("Pi session is unavailable");
+        cols: 100,
+        rows: 30,
+      },
+      io,
+    );
+    await expect(
+      terminal.handle?.(JSON.stringify({ threadId: "--help", cols: 100, rows: 30 }), io as never),
+    ).rejects.toThrow("threadId is invalid");
+  });
 
-      const terminal = commands.find((command) => command.command === PI_TERMINAL_RESUME_COMMAND)!;
-      const io = {
-        signal: new AbortController().signal,
-        onInput: vi.fn(),
-        emitChunk: vi.fn(),
-      };
-      await expect(
-        terminal.handle?.(
-          JSON.stringify({ threadId: "pi-session", cols: 100, rows: 30 }),
-          io as never,
-        ),
-      ).resolves.toBe(JSON.stringify({ exitCode: 0 }));
-      expect(nodeHostMocks.runNodePtyCommand).toHaveBeenCalledWith(
-        {
-          file: expect.stringMatching(/pi$/u),
-          args: ["--session", "pi-session"],
-          cwd: "/workspace",
-          cols: 100,
-          rows: 30,
-        },
-        io,
-      );
-      await expect(
-        terminal.handle?.(JSON.stringify({ threadId: "--help", cols: 100, rows: 30 }), io as never),
-      ).rejects.toThrow("threadId is invalid");
-    },
-  );
+  it("hides and rejects Continue when ACP cannot resume Pi", async () => {
+    await createPiStore("hi", "Pi catalog session", { command: "pwd" }, true);
+    await installFakePi();
+    acpRuntimeMocks.resolveAcpSessionAvailability.mockReturnValue({
+      available: false,
+      message: "ACP is disabled by policy",
+    });
+    const { provider } = capturePiContinuationCatalog();
+
+    await expect(provider.list({ hostIds: ["gateway"] })).resolves.toEqual([
+      expect.objectContaining({
+        sessions: [expect.objectContaining({ threadId: "pi-session", canContinue: false })],
+      }),
+    ]);
+    await expect(
+      provider.continueSession!({ hostId: "gateway", threadId: "pi-session" }),
+    ).rejects.toThrow("ACP is disabled by policy");
+  });
+
+  it("keeps custom Pi stores browse-only when pi-acp cannot resolve them", async () => {
+    await createPiStore();
+    await installFakePi();
+    const { provider } = capturePiContinuationCatalog();
+
+    await expect(provider.list({ hostIds: ["gateway"] })).resolves.toEqual([
+      expect.objectContaining({
+        sessions: [expect.objectContaining({ threadId: "pi-session", canContinue: false })],
+      }),
+    ]);
+    await expect(
+      provider.continueSession!({ hostId: "gateway", threadId: "pi-session" }),
+    ).rejects.toThrow("outside the session store supported by pi-acp");
+  });
+
+  it("hides and rejects Continue when the Pi CLI is unavailable", async () => {
+    await createPiStore("hi", "Pi catalog session", { command: "pwd" }, true);
+    process.env.PATH = "";
+    const { provider } = capturePiContinuationCatalog();
+
+    await expect(provider.list({ hostIds: ["gateway"] })).resolves.toEqual([
+      expect.objectContaining({
+        sessions: [expect.objectContaining({ threadId: "pi-session", canContinue: false })],
+      }),
+    ]);
+    await expect(
+      provider.continueSession!({ hostId: "gateway", threadId: "pi-session" }),
+    ).rejects.toThrow("Pi CLI is unavailable");
+  });
 
   it("opens paired-node Pi sessions only through the advertised terminal command", async () => {
-    let provider: Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0] | undefined;
+    let provider: TestSessionCatalogProvider | undefined;
     const page = {
       payloadJSON: JSON.stringify({
         sessions: [
@@ -726,41 +809,58 @@ describe("Pi session catalog", () => {
             cwd: "/remote/workspace",
             status: "stored",
             archived: false,
-            canContinue: false,
+            canContinue: true,
             canArchive: false,
           },
         ],
       }),
     };
     const invoke = vi.fn().mockResolvedValue(page);
+    const nodes = [
+      {
+        nodeId: "node-1",
+        connected: true,
+        commands: [PI_SESSIONS_LIST_COMMAND, PI_TERMINAL_RESUME_COMMAND],
+      },
+    ];
+    const runtimeListNodes = vi.fn().mockResolvedValue({ nodes });
+    const requestListNodes = vi.fn().mockResolvedValue({ nodes });
     registerPiSessionCatalog({
       pluginConfig: {},
       runtime: {
         nodes: {
-          list: vi.fn().mockResolvedValue({
-            nodes: [
-              {
-                nodeId: "node-1",
-                connected: true,
-                commands: [PI_SESSIONS_LIST_COMMAND, PI_TERMINAL_RESUME_COMMAND],
-              },
-            ],
-          }),
+          list: runtimeListNodes,
           invoke,
         },
       },
-      registerSessionCatalog: (value: NonNullable<typeof provider>) => {
-        provider = value;
+      registerSessionCatalog: (
+        value: Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0],
+      ) => {
+        provider = bindTestCatalogOwner(value);
       },
       registerNodeHostCommand: vi.fn(),
       registerNodeInvokePolicy: vi.fn(),
     } as unknown as OpenClawPluginApi);
 
-    await expect(provider!.list({ hostIds: ["node:node-1"], search: "remote" })).resolves.toEqual([
+    await expect(
+      provider!.list({
+        hostIds: ["node:node-1"],
+        search: "remote",
+        listNodes: requestListNodes,
+      }),
+    ).resolves.toEqual([
       expect.objectContaining({
-        sessions: [expect.objectContaining({ threadId: "pi-remote", canOpenTerminal: true })],
+        sessions: [
+          expect.objectContaining({
+            threadId: "pi-remote",
+            canContinue: false,
+            canOpenTerminal: true,
+          }),
+        ],
       }),
     ]);
+    expect(requestListNodes).toHaveBeenCalledOnce();
+    expect(runtimeListNodes).not.toHaveBeenCalled();
     expect(invoke).toHaveBeenNthCalledWith(1, {
       nodeId: "node-1",
       command: PI_SESSIONS_LIST_COMMAND,
@@ -795,123 +895,5 @@ describe("Pi session catalog", () => {
     } as unknown as OpenClawPluginApi;
     registerPiSessionCatalog(api);
     expect(registerSessionCatalog).not.toHaveBeenCalled();
-  });
-
-  it("bridges paired-node list and read requests without undefined transport fields", async () => {
-    let provider: Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0] | undefined;
-    const invoke = vi
-      .fn()
-      .mockResolvedValueOnce({
-        payloadJSON: JSON.stringify({
-          sessions: [
-            {
-              threadId: "pi-remote",
-              status: "stored",
-              source: "pi-cli",
-              archived: false,
-              canContinue: false,
-              canArchive: false,
-            },
-          ],
-        }),
-      })
-      .mockResolvedValueOnce({
-        payloadJSON: JSON.stringify({
-          threadId: "pi-remote",
-          items: [{ type: "agentMessage", text: "remote answer" }],
-        }),
-      });
-    const api = {
-      pluginConfig: {},
-      runtime: {
-        nodes: {
-          list: vi.fn().mockResolvedValue({
-            nodes: [
-              {
-                nodeId: "node-1",
-                displayName: "Remote",
-                connected: true,
-                commands: [PI_SESSIONS_LIST_COMMAND, PI_SESSION_READ_COMMAND],
-              },
-            ],
-          }),
-          invoke,
-        },
-      },
-      registerSessionCatalog: (value: NonNullable<typeof provider>) => {
-        provider = value;
-      },
-      registerNodeHostCommand: vi.fn(),
-      registerNodeInvokePolicy: vi.fn(),
-    } as unknown as OpenClawPluginApi;
-
-    registerPiSessionCatalog(api);
-    const catalog = provider;
-    expect(catalog).toBeDefined();
-    await catalog!.list({ hostIds: ["node:node-1"] });
-    await catalog!.read({ hostId: "node:node-1", threadId: "pi-remote" });
-
-    expect(invoke).toHaveBeenNthCalledWith(1, {
-      nodeId: "node-1",
-      command: PI_SESSIONS_LIST_COMMAND,
-      params: {},
-      timeoutMs: 20_000,
-      scopes: ["operator.write"],
-    });
-    expect(invoke).toHaveBeenNthCalledWith(2, {
-      nodeId: "node-1",
-      command: PI_SESSION_READ_COMMAND,
-      params: { threadId: "pi-remote" },
-      timeoutMs: 20_000,
-      scopes: ["operator.write"],
-    });
-
-    invoke.mockResolvedValueOnce({
-      payloadJSON: JSON.stringify({
-        sessions: [
-          {
-            threadId: 123,
-            status: "stored",
-            archived: false,
-            canContinue: false,
-            canArchive: false,
-          },
-        ],
-      }),
-    });
-    await expect(catalog!.list({ hostIds: ["node:node-1"] })).resolves.toEqual([
-      expect.objectContaining({
-        error: { code: "NODE_INVOKE_FAILED", message: expect.any(String) },
-      }),
-    ]);
-
-    invoke.mockResolvedValueOnce({
-      payloadJSON: JSON.stringify({
-        sessions: [
-          {
-            threadId: "--help",
-            status: "stored",
-            archived: false,
-            canContinue: false,
-            canArchive: false,
-          },
-        ],
-      }),
-    });
-    await expect(catalog!.list({ hostIds: ["node:node-1"] })).resolves.toEqual([
-      expect.objectContaining({
-        error: { code: "NODE_INVOKE_FAILED", message: expect.any(String) },
-      }),
-    ]);
-
-    invoke.mockResolvedValueOnce({
-      payloadJSON: JSON.stringify({
-        threadId: "pi-remote",
-        items: [{ type: "invalid", text: "bad" }],
-      }),
-    });
-    await expect(catalog!.read({ hostId: "node:node-1", threadId: "pi-remote" })).rejects.toThrow(
-      "invalid transcript page",
-    );
   });
 });

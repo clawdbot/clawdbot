@@ -1,5 +1,7 @@
 // Openai tests cover openai chatgpt oauth flow plugin behavior.
+import { once } from "node:events";
 import { Agent, createServer, get, type IncomingHttpHeaders, type Server } from "node:http";
+import { connect, type Socket } from "node:net";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -60,6 +62,15 @@ function requestCallback(
     });
     request.on("error", reject);
   });
+}
+
+function connectIdleSocket(url: string): Promise<Socket> {
+  const callbackUrl = new URL(url);
+  const socket = connect({
+    host: resolveOpenAICallbackHost(),
+    port: Number(callbackUrl.port),
+  });
+  return once(socket, "connect").then(() => socket);
 }
 
 function mockTokenResponse(body: unknown, status = 200): void {
@@ -167,7 +178,7 @@ describe("OpenAI Codex OAuth flow", () => {
     );
   });
 
-  it("disconnects a keep-alive callback and cancels stale manual input", async () => {
+  it("disconnects callback sockets and cancels stale manual input", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => new Response(null, { status: 302 })),
@@ -182,6 +193,7 @@ describe("OpenAI Codex OAuth flow", () => {
     });
     const agent = new Agent({ keepAlive: true });
     let callbackResponse: Promise<{ headers: IncomingHttpHeaders; body: string }> | undefined;
+    let idleSocket: Socket | undefined;
     let manualPromptAborted = false;
     let manualPrompt: Promise<string> | undefined;
     const prompter = {
@@ -211,6 +223,7 @@ describe("OpenAI Codex OAuth flow", () => {
             if (!redirectUri || !state) {
               throw new Error("OAuth URL missing callback parameters");
             }
+            idleSocket = await connectIdleSocket(redirectUri);
             manualPrompt = params.prompter.text({
               message: "Paste callback",
               signal: params.manualPromptSignal,
@@ -244,7 +257,9 @@ describe("OpenAI Codex OAuth flow", () => {
       expect(response.body).toContain("OpenAI authentication completed");
       await vi.waitFor(() => expect(manualPromptAborted).toBe(true));
       expect(Object.keys(agent.freeSockets)).toHaveLength(0);
+      await vi.waitFor(() => expect(idleSocket?.destroyed).toBe(true));
     } finally {
+      idleSocket?.destroy();
       agent.destroy();
     }
   });
@@ -396,6 +411,50 @@ async function closeServer(server: Server): Promise<void> {
 }
 
 describe("OpenAI Codex OAuth bounded token response reads", () => {
+  it.each([
+    { operation: "exchange", envelope: "null", value: null },
+    { operation: "exchange", envelope: "array", value: [] },
+    { operation: "refresh", envelope: "null", value: null },
+    { operation: "refresh", envelope: "array", value: [] },
+  ] as const)(
+    "rejects $envelope $operation token responses from a real loopback HTTP server",
+    async ({ operation, value }) => {
+      const server = createServer((_req, res) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(value));
+      });
+      const port = await listenLoopbackServer(server);
+      const release = vi.fn(async () => undefined);
+
+      try {
+        ssrfMocks.fetchWithSsrFGuard.mockImplementation(async ({ init, signal }) => {
+          const response = await globalThis.fetch(`http://127.0.0.1:${port}`, {
+            ...init,
+            signal,
+          });
+          return { response, release };
+        });
+
+        const result =
+          operation === "exchange"
+            ? await exchangeOpenAIAuthorizationCode(
+                "code-loopback",
+                "verifier-loopback",
+                "http://localhost:1455/auth/callback",
+              )
+            : await refreshOpenAIAccessToken("refresh-token-loopback");
+
+        expect(result).toEqual({
+          type: "failed",
+          message: `OpenAI Codex token ${operation} failed: expected JSON object response`,
+        });
+        expect(release).toHaveBeenCalledOnce();
+      } finally {
+        await closeServer(server);
+      }
+    },
+  );
+
   it("reads under-cap token exchange responses from a real loopback HTTP server", async () => {
     const validPayload = {
       access_token: "access-token-loopback",

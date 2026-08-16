@@ -11,8 +11,22 @@ export type QaTargetParts = {
   threadId?: string;
 };
 
+/** Encode a canonical QA channel target. */
+function buildQaTargetCore(params: {
+  chatType: QaBusConversationKind;
+  conversationId: string;
+  threadId?: string | null;
+}): string {
+  if (params.threadId) {
+    return `thread:${params.conversationId}/${params.threadId}`;
+  }
+  return `${params.chatType === "direct" ? "dm" : params.chatType}:${params.conversationId}`;
+}
+
+export { buildQaTargetCore as buildQaTarget };
+
 /** Parse the lowercase, prefix-scoped target grammar shared by QA Channel and QA Lab. */
-export function parseQaTarget(
+function parseQaTargetCore(
   raw: string,
   options?: { defaultChatType?: QaBusConversationKind },
 ): QaTargetParts {
@@ -60,6 +74,8 @@ export function parseQaTarget(
   };
 }
 
+export { parseQaTargetCore as parseQaTarget };
+
 /** Addressable conversation used by QA bus messages and thread state. */
 export type QaBusConversation = {
   id: string;
@@ -77,6 +93,8 @@ export type QaBusAttachment = {
   id: string;
   kind: "image" | "video" | "audio" | "file";
   mimeType: string;
+  /** Selects how QA Channel projects an inline fixture after saving it locally. */
+  mediaFactCarrier?: "path" | "media-store-url";
   fileName?: string;
   inline?: boolean;
   url?: string;
@@ -108,6 +126,8 @@ export type QaBusMessage = {
   senderId: string;
   senderName?: string;
   text: string;
+  /** Runtime-authored failure marker; copy wording is not a QA contract. */
+  isError?: boolean;
   timestamp: number;
   threadId?: string;
   threadTitle?: string;
@@ -173,6 +193,8 @@ export type QaBusOutboundMessageInput = {
   senderId?: string;
   senderName?: string;
   text: string;
+  /** Preserves ReplyPayload.isError through the synthetic channel transport. */
+  isError?: boolean;
   timestamp?: number;
   threadId?: string;
   replyToId?: string;
@@ -234,6 +256,8 @@ export type QaBusReadMessageInput = {
 export type QaBusPollInput = {
   accountId?: string;
   cursor?: number;
+  /** Highest contiguous event cursor whose consumer work completed successfully. */
+  acknowledgedCursor?: number;
   timeoutMs?: number;
   limit?: number;
 };

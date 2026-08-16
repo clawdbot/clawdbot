@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { z } from "zod";
+import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-store.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
 import {
   executeSqliteQuerySync,
@@ -14,8 +15,6 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
-
-const ONBOARDING_RECOMMENDATIONS_KEY = "primary";
 
 const OnboardingRecommendationMatchSchema = z.object({
   appLabel: z.string(),
@@ -48,6 +47,43 @@ type OnboardingRecommendationInventoryItem = {
   bundleId?: string;
 };
 
+type WriteOnboardingRecommendationsOfferParams = {
+  inventory: readonly OnboardingRecommendationInventoryItem[];
+  matches: readonly OnboardingRecommendationMatch[];
+  answered: boolean;
+  nowMs?: number;
+};
+
+type AcknowledgeOnboardingRecommendationsParams = {
+  nowMs?: number;
+  expected?: OnboardingRecommendationsRecord;
+};
+
+type UpdatePendingOnboardingRecommendationsParams = {
+  matches: readonly OnboardingRecommendationMatch[];
+  expected: OnboardingRecommendationsRecord;
+  nowMs?: number;
+};
+
+type ClearPendingOnboardingRecommendationsParams = {
+  expected: OnboardingRecommendationsRecord;
+};
+
+export type OnboardingRecommendationsStore = {
+  read: () => OnboardingRecommendationsRecord | null;
+  writeOffer: (
+    params: WriteOnboardingRecommendationsOfferParams,
+  ) => OnboardingRecommendationsRecord;
+  acknowledge: (
+    params?: AcknowledgeOnboardingRecommendationsParams,
+  ) => OnboardingRecommendationsRecord | null;
+  updatePending: (
+    params: UpdatePendingOnboardingRecommendationsParams,
+  ) => OnboardingRecommendationsRecord | null;
+  clearPending: (params: ClearPendingOnboardingRecommendationsParams) => boolean;
+  clear: () => boolean;
+};
+
 type OnboardingRecommendationsDatabase = Pick<
   OpenClawStateKyselyDatabase,
   "onboarding_recommendations"
@@ -74,7 +110,8 @@ function hashOnboardingRecommendationInventory(
   return sha256Hex(JSON.stringify(canonicalInventory(inventory)));
 }
 
-export function readOnboardingRecommendations(
+function readOnboardingRecommendations(
+  configKey: string,
   options: OpenClawStateDatabaseOptions = {},
 ): OnboardingRecommendationsRecord | null {
   const pathname = options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env);
@@ -98,7 +135,7 @@ export function readOnboardingRecommendations(
           "accepted_at_ms",
           "updated_at_ms",
         ])
-        .where("config_key", "=", ONBOARDING_RECOMMENDATIONS_KEY),
+        .where("config_key", "=", configKey),
     );
     if (!row) {
       return null;
@@ -113,13 +150,11 @@ export function readOnboardingRecommendations(
   }, options);
 }
 
-export function writeOnboardingRecommendationsOffer(params: {
-  inventory: readonly OnboardingRecommendationInventoryItem[];
-  matches: readonly OnboardingRecommendationMatch[];
-  answered: boolean;
-  nowMs?: number;
-  database?: OpenClawStateDatabaseOptions;
-}): OnboardingRecommendationsRecord {
+function writeOnboardingRecommendationsOffer(
+  configKey: string,
+  params: WriteOnboardingRecommendationsOfferParams,
+  databaseOptions: OpenClawStateDatabaseOptions = {},
+): OnboardingRecommendationsRecord {
   const nowMs = params.nowMs ?? Date.now();
   const inventoryHash = hashOnboardingRecommendationInventory(params.inventory);
   const matches = OnboardingRecommendationMatchesSchema.parse(params.matches);
@@ -138,7 +173,7 @@ export function writeOnboardingRecommendationsOffer(params: {
             "accepted_at_ms",
             "updated_at_ms",
           ])
-          .where("config_key", "=", ONBOARDING_RECOMMENDATIONS_KEY),
+          .where("config_key", "=", configKey),
       );
       // Once the user answers, concurrent or stale offer completions must not
       // clear acceptance and make later onboarding runs ask again.
@@ -156,7 +191,7 @@ export function writeOnboardingRecommendationsOffer(params: {
         db
           .insertInto("onboarding_recommendations")
           .values({
-            config_key: ONBOARDING_RECOMMENDATIONS_KEY,
+            config_key: configKey,
             inventory_hash: inventoryHash,
             matches_json: JSON.stringify(matches),
             offered_at_ms: nowMs,
@@ -181,16 +216,15 @@ export function writeOnboardingRecommendationsOffer(params: {
         updatedAt: nowMs,
       };
     },
-    params.database,
+    databaseOptions,
     { operationLabel: "onboarding.recommendations.write" },
   );
 }
 
-export function acknowledgeOnboardingRecommendations(
-  params: {
-    nowMs?: number;
-    database?: OpenClawStateDatabaseOptions;
-  } = {},
+function acknowledgeOnboardingRecommendations(
+  configKey: string,
+  params: AcknowledgeOnboardingRecommendationsParams = {},
+  databaseOptions: OpenClawStateDatabaseOptions = {},
 ): OnboardingRecommendationsRecord | null {
   const nowMs = params.nowMs ?? Date.now();
   return runOpenClawStateWriteTransaction(
@@ -207,19 +241,38 @@ export function acknowledgeOnboardingRecommendations(
             "accepted_at_ms",
             "updated_at_ms",
           ])
-          .where("config_key", "=", ONBOARDING_RECOMMENDATIONS_KEY),
+          .where("config_key", "=", configKey),
       );
       if (!existing) {
         return null;
       }
+      if (
+        params.expected &&
+        (existing.inventory_hash !== params.expected.inventoryHash ||
+          existing.matches_json !== JSON.stringify(params.expected.matches) ||
+          existing.offered_at_ms !== params.expected.offeredAt ||
+          existing.accepted_at_ms !== params.expected.acceptedAt ||
+          existing.updated_at_ms !== params.expected.updatedAt)
+      ) {
+        return null;
+      }
       if (typeof existing.accepted_at_ms !== "number") {
-        executeSqliteQuerySync(
-          database.db,
-          db
-            .updateTable("onboarding_recommendations")
-            .set({ accepted_at_ms: nowMs, updated_at_ms: nowMs })
-            .where("config_key", "=", ONBOARDING_RECOMMENDATIONS_KEY),
-        );
+        let update = db
+          .updateTable("onboarding_recommendations")
+          .set({ accepted_at_ms: nowMs, updated_at_ms: nowMs })
+          .where("config_key", "=", configKey);
+        if (params.expected) {
+          update = update
+            .where("inventory_hash", "=", params.expected.inventoryHash)
+            .where("matches_json", "=", JSON.stringify(params.expected.matches))
+            .where("offered_at_ms", "=", params.expected.offeredAt)
+            .where("accepted_at_ms", "is", params.expected.acceptedAt)
+            .where("updated_at_ms", "=", params.expected.updatedAt);
+        }
+        const result = executeSqliteQuerySync(database.db, update);
+        if ((result.numAffectedRows ?? 0n) === 0n) {
+          return null;
+        }
       }
       const acceptedAt = existing.accepted_at_ms ?? nowMs;
       return {
@@ -230,12 +283,76 @@ export function acknowledgeOnboardingRecommendations(
         updatedAt: existing.accepted_at_ms == null ? nowMs : existing.updated_at_ms,
       };
     },
-    params.database,
+    databaseOptions,
     { operationLabel: "onboarding.recommendations.acknowledge" },
   );
 }
 
-export function clearOnboardingRecommendations(
+function updatePendingOnboardingRecommendations(
+  configKey: string,
+  params: UpdatePendingOnboardingRecommendationsParams,
+  databaseOptions: OpenClawStateDatabaseOptions = {},
+): OnboardingRecommendationsRecord | null {
+  const nowMs = params.nowMs ?? Date.now();
+  const matches = OnboardingRecommendationMatchesSchema.parse(params.matches);
+  return runOpenClawStateWriteTransaction(
+    (database) => {
+      const db = getNodeSqliteKysely<OnboardingRecommendationsDatabase>(database.db);
+      const existing = executeSqliteQueryTakeFirstSync(
+        database.db,
+        db
+          .selectFrom("onboarding_recommendations")
+          .select([
+            "inventory_hash",
+            "matches_json",
+            "offered_at_ms",
+            "accepted_at_ms",
+            "updated_at_ms",
+          ])
+          .where("config_key", "=", configKey),
+      );
+      if (
+        !existing ||
+        typeof existing.accepted_at_ms === "number" ||
+        existing.inventory_hash !== params.expected.inventoryHash ||
+        existing.matches_json !== JSON.stringify(params.expected.matches) ||
+        existing.offered_at_ms !== params.expected.offeredAt ||
+        existing.accepted_at_ms !== params.expected.acceptedAt ||
+        existing.updated_at_ms !== params.expected.updatedAt
+      ) {
+        return null;
+      }
+      const result = executeSqliteQuerySync(
+        database.db,
+        db
+          .updateTable("onboarding_recommendations")
+          .set({ matches_json: JSON.stringify(matches), updated_at_ms: nowMs })
+          .where("config_key", "=", configKey)
+          .where("accepted_at_ms", "is", null)
+          .where("inventory_hash", "=", params.expected.inventoryHash)
+          .where("matches_json", "=", JSON.stringify(params.expected.matches))
+          .where("offered_at_ms", "=", params.expected.offeredAt)
+          .where("updated_at_ms", "=", params.expected.updatedAt),
+      );
+      if ((result.numAffectedRows ?? 0n) === 0n) {
+        return null;
+      }
+      return {
+        inventoryHash: existing.inventory_hash,
+        matches,
+        offeredAt: existing.offered_at_ms,
+        acceptedAt: null,
+        updatedAt: nowMs,
+      };
+    },
+    databaseOptions,
+    { operationLabel: "onboarding.recommendations.update-pending" },
+  );
+}
+
+function clearPendingOnboardingRecommendations(
+  configKey: string,
+  params: ClearPendingOnboardingRecommendationsParams,
   databaseOptions: OpenClawStateDatabaseOptions = {},
 ): boolean {
   return runOpenClawStateWriteTransaction(
@@ -245,11 +362,53 @@ export function clearOnboardingRecommendations(
         database.db,
         db
           .deleteFrom("onboarding_recommendations")
-          .where("config_key", "=", ONBOARDING_RECOMMENDATIONS_KEY),
+          .where("config_key", "=", configKey)
+          .where("accepted_at_ms", "is", null)
+          .where("inventory_hash", "=", params.expected.inventoryHash)
+          .where("matches_json", "=", JSON.stringify(params.expected.matches))
+          .where("offered_at_ms", "=", params.expected.offeredAt)
+          .where("updated_at_ms", "=", params.expected.updatedAt),
+      );
+      return (result.numAffectedRows ?? 0n) > 0n;
+    },
+    databaseOptions,
+    { operationLabel: "onboarding.recommendations.clear-pending" },
+  );
+}
+
+function clearOnboardingRecommendations(
+  configKey: string,
+  databaseOptions: OpenClawStateDatabaseOptions = {},
+): boolean {
+  return runOpenClawStateWriteTransaction(
+    (database) => {
+      const db = getNodeSqliteKysely<OnboardingRecommendationsDatabase>(database.db);
+      const result = executeSqliteQuerySync(
+        database.db,
+        db.deleteFrom("onboarding_recommendations").where("config_key", "=", configKey),
       );
       return (result.numAffectedRows ?? 0n) > 0n;
     },
     databaseOptions,
     { operationLabel: "onboarding.recommendations.clear" },
   );
+}
+
+export function createOnboardingRecommendationsStore(params: {
+  workspaceDir: string;
+  database?: OpenClawStateDatabaseOptions;
+}): OnboardingRecommendationsStore {
+  // Doctor owns the one-time `primary` migration; a runtime fallback would recreate
+  // cross-workspace reads. Every operation stays bound to one canonical workspace key.
+  const configKey = resolveWorkspaceStateIdentity(params.workspaceDir).workspaceKey;
+  const database = params.database ?? {};
+  return {
+    read: () => readOnboardingRecommendations(configKey, database),
+    writeOffer: (offer) => writeOnboardingRecommendationsOffer(configKey, offer, database),
+    acknowledge: (options) => acknowledgeOnboardingRecommendations(configKey, options, database),
+    updatePending: (options) =>
+      updatePendingOnboardingRecommendations(configKey, options, database),
+    clearPending: (options) => clearPendingOnboardingRecommendations(configKey, options, database),
+    clear: () => clearOnboardingRecommendations(configKey, database),
+  };
 }

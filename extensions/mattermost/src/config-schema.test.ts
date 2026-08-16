@@ -110,6 +110,18 @@ describe("MattermostConfigSchema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts account-scoped message read action toggles", () => {
+    const result = MattermostConfigSchema.safeParse({
+      actions: { messages: false },
+      accounts: {
+        reader: {
+          actions: { messages: true },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("accepts implicit mention policy at root and account scope", () => {
     const result = MattermostConfigSchema.safeParse({
       implicitMentions: { threadParticipation: false },

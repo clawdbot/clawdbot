@@ -16,6 +16,7 @@ describe("isKnownInternalHookEventKey", () => {
       "message:received",
       "message:sent",
       "message:transcribed",
+      "session:auto-reset",
       "session:compact:after",
       "session:compact:before",
       "session:patch",

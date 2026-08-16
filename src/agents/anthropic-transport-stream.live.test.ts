@@ -5,9 +5,9 @@
  */
 import http from "node:http";
 import { streamAnthropic } from "@openclaw/ai/internal/anthropic";
+import { createAnthropicMessagesTransportStreamFn } from "@openclaw/ai/transports";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
-import { createAnthropicMessagesTransportStreamFn } from "./anthropic-transport-stream.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
 import { shouldSkipLiveProviderDrift } from "./live-test-provider-drift.js";
 import { isLiveBillingDrift } from "./live-test-provider-drift.test-support.js";

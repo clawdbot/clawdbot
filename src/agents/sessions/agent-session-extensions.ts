@@ -1,6 +1,4 @@
 import { basename, dirname } from "node:path";
-import { defaultApiRegistry } from "@openclaw/ai/internal/runtime";
-import { resetApiProviders } from "@openclaw/ai/providers";
 import { AgentSessionCompaction } from "./agent-session-compaction.js";
 import type { ExtensionBindings } from "./agent-session-types.js";
 import { ExtensionRunner, type ToolDefinition, wrapRegisteredTools } from "./extensions/index.js";
@@ -401,8 +399,8 @@ export abstract class AgentSessionExtensions extends AgentSessionCompaction {
     await this.settingsManager.reload();
     this.agent.steeringMode = this.settingsManager.getSteeringMode();
     this.agent.followUpMode = this.settingsManager.getFollowUpMode();
-    resetApiProviders(defaultApiRegistry);
     await this.sessionResourceLoader.reload();
+    this.sessionModelRegistry.refresh();
     this.buildRuntime({
       activeToolNames: this.getActiveToolNames(),
       flagValues: previousFlagValues,

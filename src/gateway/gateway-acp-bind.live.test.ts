@@ -4,22 +4,15 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
 import { renderCatFacePngBase64 } from "../../test/helpers/live-image-probe.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
-import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
-import {
-  clearConfigCache,
-  clearRuntimeConfigSnapshot,
-  getRuntimeConfig,
-} from "../config/config.js";
+import { isLiveTestEnabled, readLiveTestConfig } from "../agents/live-test-helpers.js";
+import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { clearPluginLoaderCache } from "../plugins/loader.test-fixtures.js";
-import {
-  pinActivePluginChannelRegistry,
-  releasePinnedPluginChannelRegistry,
-  resetPluginRuntimeStateForTest,
-} from "../plugins/runtime.js";
+import { getActivePluginRegistry, resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { setTestEnvValue } from "../test-utils/env.js";
@@ -55,7 +48,7 @@ const DEFAULT_LIVE_PARENT_MODEL = "openai/gpt-5.4";
 type LiveAcpAgent = "claude" | "codex" | "droid" | "gemini" | "opencode";
 
 function snapshotAcpBindLiveEnv(): LiveEnvSnapshot {
-  return snapshotLiveEnv(["CODEX_HOME", "OPENCLAW_GATEWAY_PORT"]);
+  return snapshotLiveEnv(["CODEX_HOME"]);
 }
 
 function resolveLiveTimeoutMs(raw: string | undefined, fallback: number): number {
@@ -126,6 +119,30 @@ function extractAssistantTexts(messages: unknown[]): string[] {
   return texts;
 }
 
+function findAssistantReplyAfterUserToken(messages: unknown[], token: string): string | null {
+  let sawTokenUserMessage = false;
+  for (const entry of messages) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const role = (entry as { role?: unknown }).role;
+    const text = extractFirstTextBlock(entry);
+    if (role === "user" && typeof text === "string" && text.includes(token)) {
+      sawTokenUserMessage = true;
+      continue;
+    }
+    if (
+      sawTokenUserMessage &&
+      role === "assistant" &&
+      typeof text === "string" &&
+      text.trim().length > 0
+    ) {
+      return text;
+    }
+  }
+  return null;
+}
+
 function createAcpProbePhrase(words: string, nonce: string): string {
   return `${words} ${nonce.toLowerCase()}`;
 }
@@ -178,12 +195,6 @@ function resolveLiveParentModel(): string {
       process.env.OPENCLAW_LIVE_ACP_BIND_CODEX_MODEL?.trim() ||
       DEFAULT_LIVE_PARENT_MODEL,
   );
-}
-
-function resolveModelObject(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
 }
 
 async function prepareCodexHomeForLiveBindTest(tempRoot: string): Promise<void> {
@@ -326,6 +337,43 @@ describe("ACP bind live probe prompts", () => {
   });
 });
 
+describe("ACP bind transcript correlation", () => {
+  const textMessage = (role: "assistant" | "user", text: string) => ({
+    role,
+    content: [{ type: "text", text }],
+  });
+
+  it("does not accept an assistant reply that precedes the routed user turn", () => {
+    expect(
+      findAssistantReplyAfterUserToken(
+        [textMessage("assistant", "late spawn reply"), textMessage("user", "follow-up token")],
+        "follow-up token",
+      ),
+    ).toBeNull();
+  });
+
+  it("skips non-text assistant entries before the routed textual reply", () => {
+    expect(
+      findAssistantReplyAfterUserToken(
+        [
+          textMessage("user", "follow-up token"),
+          { role: "assistant", content: [{ type: "toolCall", name: "read" }] },
+          textMessage("assistant", "bound reply"),
+        ],
+        "follow-up token",
+      ),
+    ).toBe("bound reply");
+  });
+});
+
+describe("ACP bind agent.wait diagnostics", () => {
+  it("includes the terminal error returned by the gateway", () => {
+    expect(formatAgentWaitFailure({ status: "error", error: "ACP turn failed" })).toContain(
+      "ACP turn failed",
+    );
+  });
+});
+
 function formatAssistantTextPreview(texts: string[], maxChars = 600): string {
   const combined = texts.join("\n\n").trim();
   if (!combined) {
@@ -424,7 +472,7 @@ async function waitForAgentRunOk(
   runId: string,
   timeoutMs = LIVE_TIMEOUT_MS,
 ) {
-  const result: { status?: string } = await client.request(
+  const result: { status?: string; [key: string]: unknown } = await client.request(
     "agent.wait",
     {
       runId,
@@ -435,8 +483,12 @@ async function waitForAgentRunOk(
     },
   );
   if (result?.status !== "ok") {
-    throw new Error(`agent.wait failed for ${runId}: status=${String(result?.status)}`);
+    throw new Error(`agent.wait failed for ${runId}: ${formatAgentWaitFailure(result)}`);
   }
+}
+
+function formatAgentWaitFailure(result: { status?: string; [key: string]: unknown }): string {
+  return JSON.stringify(result);
 }
 
 async function sendChatAndWait(params: {
@@ -595,9 +647,6 @@ describeLive("gateway live (ACP bind)", () => {
       const memoryToken = createAcpProbePhrase("quiet cedar", randomBytes(4).toString("hex"));
       let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
       let client: GatewayClient | undefined;
-      let pinnedChannelRegistry:
-        | ReturnType<typeof createSlackCurrentConversationBindingRegistry>
-        | undefined;
 
       clearRuntimeConfigSnapshot();
       setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
@@ -611,7 +660,7 @@ describeLive("gateway live (ACP bind)", () => {
         await prepareCodexHomeForLiveBindTest(tempRoot);
       }
 
-      const cfg = getRuntimeConfig();
+      const cfg = await readLiveTestConfig();
       const acpxEntry = cfg.plugins?.entries?.acpx;
       const existingAgentOverrides: Record<string, { command?: string }> =
         typeof acpxEntry?.config === "object" &&
@@ -627,7 +676,7 @@ describeLive("gateway live (ACP bind)", () => {
           defaults: {
             ...cfg.agents?.defaults,
             model: {
-              ...resolveModelObject(cfg.agents?.defaults?.model),
+              ...asNonArrayRecord(cfg.agents?.defaults?.model),
               primary: parentModel,
             },
             models: {
@@ -685,7 +734,6 @@ describeLive("gateway live (ACP bind)", () => {
         cron: {
           ...cfg.cron,
           enabled: true,
-          store: path.join(tempRoot, "cron.json"),
         },
       };
       await fs.writeFile(tempConfigPath, `${JSON.stringify(nextCfg, null, 2)}\n`);
@@ -712,9 +760,11 @@ describeLive("gateway live (ACP bind)", () => {
           timeoutMs: CONNECT_TIMEOUT_MS,
         });
         logLiveStep("gateway websocket connected");
-        const channelRegistry = createSlackCurrentConversationBindingRegistry();
-        pinActivePluginChannelRegistry(channelRegistry);
-        pinnedChannelRegistry = channelRegistry;
+        const activeRegistry = getActivePluginRegistry();
+        if (!activeRegistry) {
+          throw new Error("expected gateway root plugin registry");
+        }
+        activeRegistry.channels.push(...createSlackCurrentConversationBindingRegistry().channels);
 
         const bindResult = await bindConversationAndWait({
           client,
@@ -757,25 +807,35 @@ describeLive("gateway live (ACP bind)", () => {
           }
         }
         if (!firstBoundHistory) {
-          try {
-            const firstBoundTurn = await waitForAssistantTurn({
-              client,
+          // Correlate by transcript order instead of counts: a late spawn reply
+          // precedes this uniquely tokened user turn and cannot satisfy the check.
+          const deadline = Date.now() + 60_000;
+          let correlatedHistory: { messages?: unknown[] } | null = null;
+          let correlatedAssistantText = "";
+          while (Date.now() < deadline && !correlatedHistory) {
+            const history: { messages?: unknown[] } = await client.request("chat.history", {
               sessionKey: spawnedSessionKey,
-              minAssistantCount: 1,
-              timeoutMs: 60_000,
+              limit: 200,
             });
-            firstBoundHistory = {
-              messages: firstBoundTurn.messages,
-              lastAssistantText: firstBoundTurn.lastAssistantText,
-              matchedAssistantText: firstBoundTurn.lastAssistantText,
-            };
-          } catch (error) {
-            if (liveAgent !== "claude") {
-              throw error;
+            correlatedAssistantText =
+              findAssistantReplyAfterUserToken(history.messages ?? [], followupToken) ?? "";
+            if (correlatedAssistantText) {
+              correlatedHistory = history;
+            } else {
+              await sleep(500);
             }
-            firstBoundHistory = { messages: [], lastAssistantText: "", matchedAssistantText: "" };
-            logLiveStep("bound follow-up response not observed; continuing to marker probe");
           }
+          if (!correlatedHistory) {
+            throw new Error(
+              `bound follow-up did not land: no assistant reply after the ${followupToken} user turn`,
+            );
+          }
+          const assistantTexts = extractAssistantTexts(correlatedHistory.messages ?? []);
+          firstBoundHistory = {
+            messages: correlatedHistory.messages ?? [],
+            lastAssistantText: assistantTexts.at(-1) ?? "",
+            matchedAssistantText: correlatedAssistantText,
+          };
         }
         const observedFollowupToken =
           firstBoundHistory.matchedAssistantText.includes(followupToken);
@@ -783,7 +843,7 @@ describeLive("gateway live (ACP bind)", () => {
 
         let recallHistory: Awaited<ReturnType<typeof waitForAssistantText>> | null = null;
         const expectedRecallAssistantCount = firstAssistantCount + 1;
-        const maxRecallAttempts = liveAgent === "claude" ? 3 : 1;
+        const maxRecallAttempts = 1;
         for (let attempt = 0; attempt < maxRecallAttempts && !recallHistory; attempt += 1) {
           await sendChatAndWait({
             client,
@@ -802,7 +862,7 @@ describeLive("gateway live (ACP bind)", () => {
               sessionKey: spawnedSessionKey,
               contains: followupToken,
               minAssistantCount: expectedRecallAssistantCount,
-              timeoutMs: liveAgent === "claude" ? 60_000 : 25_000,
+              timeoutMs: 25_000,
             });
           } catch {
             if (attempt === maxRecallAttempts - 1) {
@@ -812,40 +872,15 @@ describeLive("gateway live (ACP bind)", () => {
           }
         }
         if (!recallHistory) {
-          if (liveAgent === "claude") {
-            try {
-              const recallTurn = await waitForAssistantTurn({
-                client,
-                sessionKey: spawnedSessionKey,
-                minAssistantCount: expectedRecallAssistantCount,
-                timeoutMs: 60_000,
-              });
-              recallHistory = {
-                messages: recallTurn.messages,
-                lastAssistantText: recallTurn.lastAssistantText,
-                matchedAssistantText: recallTurn.lastAssistantText,
-              };
-              logLiveStep(
-                "bound memory recall response did not repeat token; using turn progression",
-              );
-            } catch {
-              recallHistory = firstBoundHistory;
-              logLiveStep(
-                "bound memory recall response not observed; continuing from previous bound transcript",
-              );
-            }
-          } else {
-            // Live ACP harnesses can miss or significantly delay this intermediate recall turn.
-            // Continue from the previously observed bound transcript and validate marker/image/cron
-            // on subsequent turns.
-            recallHistory = firstBoundHistory;
-            logLiveStep(
-              "bound memory recall response not observed; continuing from previous bound transcript",
-            );
-          }
+          // The intermediate recall is advisory for every connector; the later
+          // marker remains the shared strict proof of bound transcript progress.
+          recallHistory = firstBoundHistory;
+          logLiveStep(
+            "bound memory recall response not observed; continuing from previous bound transcript",
+          );
         }
         const recallAssistantText = recallHistory.matchedAssistantText;
-        if (liveAgent === "claude" && recallAssistantText.includes(recallToken)) {
+        if (recallAssistantText.includes(recallToken)) {
           expect(recallAssistantText).toContain(followupToken);
           expect(recallAssistantText).toContain(recallToken);
         }
@@ -923,7 +958,7 @@ describeLive("gateway live (ACP bind)", () => {
                 client,
                 sessionKey: spawnedSessionKey,
                 minAssistantCount: markerAssistantCount + 1,
-                timeoutMs: liveAgent === "claude" ? 60_000 : 45_000,
+                timeoutMs: 45_000,
               });
             } catch {
               if (attempt === 1) {
@@ -1078,9 +1113,6 @@ describeLive("gateway live (ACP bind)", () => {
         logLiveStep("bound session created cron via MCP and CLI verification passed");
       } finally {
         try {
-          if (pinnedChannelRegistry) {
-            releasePinnedPluginChannelRegistry(pinnedChannelRegistry);
-          }
           clearConfigCache();
           clearRuntimeConfigSnapshot();
           await client?.stopAndWait({ timeoutMs: 2_000 }).catch(() => {});

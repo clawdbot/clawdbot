@@ -1,8 +1,9 @@
-// Session reset policy resolves daily/idle freshness for direct, group, and thread sessions.
+// Session reset policy resolves automatic freshness for direct, group, and thread sessions.
 import type { SessionConfig, SessionResetConfig } from "../types.base.js";
 import { DEFAULT_IDLE_MINUTES } from "./types.js";
 
-export type SessionResetMode = "daily" | "idle";
+export type SessionResetMode = "none" | "daily" | "idle";
+type SessionStaleReason = Exclude<SessionResetMode, "none">;
 export type SessionResetType = "direct" | "group" | "thread";
 
 export type SessionResetPolicy = {
@@ -16,10 +17,10 @@ export type SessionFreshness = {
   fresh: boolean;
   dailyResetAt?: number;
   idleExpiresAt?: number;
-  staleReason?: SessionResetMode;
+  staleReason?: SessionStaleReason;
 };
 
-const DEFAULT_RESET_MODE: SessionResetMode = "daily";
+const DEFAULT_RESET_MODE: SessionResetMode = "none";
 const DEFAULT_RESET_AT_HOUR = 4;
 
 /** Returns the most recent daily reset boundary for the supplied wall-clock time. */
@@ -42,25 +43,19 @@ export function resolveSessionResetPolicy(params: {
 }): SessionResetPolicy {
   const sessionCfg = params.sessionCfg;
   const baseReset = params.resetOverride ?? sessionCfg?.reset;
-  // Backward compat: accept legacy "dm" key as alias for "direct".
-  const typeReset = params.resetOverride
-    ? undefined
-    : (sessionCfg?.resetByType?.[params.resetType] ??
-      (params.resetType === "direct"
-        ? (sessionCfg?.resetByType as { dm?: SessionResetConfig } | undefined)?.dm
-        : undefined));
-  const hasExplicitReset = Boolean(baseReset || sessionCfg?.resetByType);
-  const legacyIdleMinutes = params.resetOverride ? undefined : sessionCfg?.idleMinutes;
-  const configured = Boolean(baseReset || typeReset || legacyIdleMinutes != null);
-  // Legacy `idleMinutes` implied idle reset only when no modern reset block was configured.
+  const typeReset = params.resetOverride ? undefined : sessionCfg?.resetByType?.[params.resetType];
+  const configured = Boolean(baseReset || typeReset);
+  const inheritedTypeMode = typeReset && baseReset?.mode !== "none" ? baseReset?.mode : undefined;
   const mode =
     typeReset?.mode ??
+    inheritedTypeMode ??
+    (typeReset ? "daily" : undefined) ??
     baseReset?.mode ??
-    (!hasExplicitReset && legacyIdleMinutes != null ? "idle" : DEFAULT_RESET_MODE);
+    (baseReset ? "daily" : DEFAULT_RESET_MODE);
   const atHour = normalizeResetAtHour(
     typeReset?.atHour ?? baseReset?.atHour ?? DEFAULT_RESET_AT_HOUR,
   );
-  const idleMinutesRaw = typeReset?.idleMinutes ?? baseReset?.idleMinutes ?? legacyIdleMinutes;
+  const idleMinutesRaw = typeReset?.idleMinutes ?? baseReset?.idleMinutes;
 
   let idleMinutes: number | undefined;
   if (idleMinutesRaw != null) {
@@ -83,6 +78,14 @@ export function evaluateSessionFreshness(params: {
   now: number;
   policy: SessionResetPolicy;
 }): SessionFreshness {
+  // Older releases persisted updatedAt=0 as an explicit pending reset marker.
+  // Honor that one-time tombstone even when automatic resets are disabled.
+  if (params.updatedAt === 0) {
+    return { fresh: false };
+  }
+  if (params.policy.mode === "none") {
+    return { fresh: true };
+  }
   const updatedAt = resolveTimestamp(params.updatedAt, params.now) ?? 0;
   const sessionStartedAt = resolveTimestamp(params.sessionStartedAt, params.now) ?? updatedAt;
   const lastInteractionAt =

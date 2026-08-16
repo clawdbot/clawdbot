@@ -3,11 +3,13 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   cleanupCommandLogMessages,
   createCleanupCommandRuntime,
+  gatewayService,
   prepareLegacyWorkspaceStateReset,
   removeLegacyWorkspaceStateForReset,
   removeStateAndLinkedPaths,
   removeWorkspaceDirs,
   resetCleanupCommandMocks,
+  setCleanupNixMode,
   silenceCleanupCommandRuntime,
 } from "./cleanup-command.test-support.js";
 
@@ -19,6 +21,98 @@ describe("uninstallCommand", () => {
   beforeEach(() => {
     resetCleanupCommandMocks();
     silenceCleanupCommandRuntime(runtime);
+  });
+
+  it.each([
+    {
+      failure: "inspection fails",
+      arrange: () => gatewayService.isLoaded.mockRejectedValue(new Error("inspection failed")),
+    },
+    {
+      failure: "stop fails",
+      arrange: () => gatewayService.stop.mockRejectedValue(new Error("stop failed")),
+    },
+    {
+      failure: "service removal fails",
+      arrange: () => gatewayService.uninstall.mockRejectedValue(new Error("uninstall failed")),
+    },
+  ])("preserves user data when gateway $failure", async ({ arrange }) => {
+    arrange();
+
+    await expect(
+      uninstallCommand(runtime, {
+        all: true,
+        yes: true,
+        nonInteractive: true,
+      }),
+    ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+
+    expect(removeStateAndLinkedPaths).not.toHaveBeenCalled();
+    expect(removeWorkspaceDirs).not.toHaveBeenCalled();
+    expect(prepareLegacyWorkspaceStateReset).not.toHaveBeenCalled();
+    expect(cleanupCommandLogMessages(runtime)).not.toContain(
+      "CLI still installed. Remove via npm/pnpm if desired.",
+    );
+  });
+
+  it("preserves user data when Nix owns service lifecycle", async () => {
+    setCleanupNixMode(true);
+
+    await expect(
+      uninstallCommand(runtime, {
+        all: true,
+        yes: true,
+        nonInteractive: true,
+      }),
+    ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+
+    expect(gatewayService.isLoaded).not.toHaveBeenCalled();
+    expect(gatewayService.stop).not.toHaveBeenCalled();
+    expect(gatewayService.uninstall).not.toHaveBeenCalled();
+    expect(removeStateAndLinkedPaths).not.toHaveBeenCalled();
+    expect(removeWorkspaceDirs).not.toHaveBeenCalled();
+  });
+
+  it("still removes service registration after a failed gateway stop", async () => {
+    gatewayService.stop.mockRejectedValue(new Error("listener still active"));
+
+    await expect(
+      uninstallCommand(runtime, {
+        service: true,
+        yes: true,
+        nonInteractive: true,
+      }),
+    ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+
+    expect(gatewayService.uninstall).toHaveBeenCalledOnce();
+  });
+
+  it("removes requested data after successful gateway teardown", async () => {
+    await uninstallCommand(runtime, {
+      all: true,
+      yes: true,
+      nonInteractive: true,
+    });
+
+    expect(gatewayService.stop).toHaveBeenCalledOnce();
+    expect(gatewayService.uninstall).toHaveBeenCalledOnce();
+    expect(removeStateAndLinkedPaths).toHaveBeenCalledOnce();
+    expect(removeWorkspaceDirs).toHaveBeenCalledOnce();
+  });
+
+  it("removes an unloaded service definition before deleting user data", async () => {
+    gatewayService.isLoaded.mockResolvedValue(false);
+
+    await uninstallCommand(runtime, {
+      all: true,
+      yes: true,
+      nonInteractive: true,
+    });
+
+    expect(gatewayService.stop).not.toHaveBeenCalled();
+    expect(gatewayService.uninstall).toHaveBeenCalledOnce();
+    expect(removeStateAndLinkedPaths).toHaveBeenCalledOnce();
+    expect(removeWorkspaceDirs).toHaveBeenCalledOnce();
   });
 
   it("recommends creating a backup before removing state or workspaces", async () => {

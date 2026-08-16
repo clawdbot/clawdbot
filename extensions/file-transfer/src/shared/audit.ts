@@ -74,7 +74,7 @@ function auditFilePath(dir: string): string {
 }
 
 /**
- * Append an audit record. Best-effort — failures are logged to stderr and
+ * Append an audit record. Best-effort — failures are logged through console capture and
  * never propagated to the caller (the caller's operation is the source of
  * truth, not the audit write).
  */
@@ -93,6 +93,6 @@ export async function appendFileTransferAudit(
       rejectSymlinkParents: true,
     });
   } catch (e) {
-    process.stderr.write(`[file-transfer:audit] append failed: ${String(e)}\n`);
+    console.warn(`[file-transfer:audit] append failed: ${String(e)}`);
   }
 }

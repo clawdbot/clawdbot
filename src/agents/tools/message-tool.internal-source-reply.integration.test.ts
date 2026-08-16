@@ -3,14 +3,14 @@
 import { describe, expect, it } from "vitest";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { buildReplyPayloads } from "../../auto-reply/reply/agent-runner-payloads.js";
+import { extractMessagingToolSourceReplyPayload } from "../embedded-agent-messaging-extraction.js";
 import { buildEmbeddedRunPayloads } from "../embedded-agent-runner/run/payloads.js";
-import { extractMessagingToolSourceReplyPayload } from "../embedded-agent-subscribe.tools.js";
-import { createMessageTool } from "./message-tool.js";
+import { createMessageTool } from "./message-tool-execution.js";
 
 describe("WebChat message tool internal source reply", () => {
   it("projects a real targetless send and preserves the automatic final reply", async () => {
     const tool = createMessageTool({
-      config: {},
+      config: { agents: { entries: { main: { default: true } } } },
       currentChannelProvider: "webchat",
       sourceReplyDeliveryMode: "automatic",
       agentSessionKey: "agent:main:webchat:dm:dashboard",
@@ -41,14 +41,12 @@ describe("WebChat message tool internal source reply", () => {
 
     const embeddedPayloads = buildEmbeddedRunPayloads({
       assistantTexts: ["Visible automatic final reply."],
-      toolMetas: [],
       lastAssistant: undefined,
       currentAssistant: undefined,
       sessionKey: "agent:main:webchat:dm:dashboard",
       sourceReplyDeliveryMode: "automatic",
       messagingToolSourceReplyPayloads: sourceReply ? [sourceReply] : [],
       runId: "webchat-run",
-      inlineToolResultsAllowed: false,
       verboseLevel: "off",
       reasoningLevel: "off",
       toolResultFormat: "plain",

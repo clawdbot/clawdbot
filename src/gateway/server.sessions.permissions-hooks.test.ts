@@ -14,12 +14,12 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import {
-  listSessionEntries,
+  listSessionEntriesCore,
   loadSessionEntry,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { isSessionPatchEvent } from "../hooks/internal-hooks.js";
-import { requireRecord } from "./test-helpers.assertions.js";
+import { requireGatewayRecord } from "./test-helpers.assertions.js";
 import { connectWebchatClient, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
@@ -32,9 +32,12 @@ import {
 const { createSessionStoreDir, openClient, getHarness } = setupGatewaySessionsTestHarness();
 type PermissionClient = NonNullable<Parameters<typeof connectWebchatClient>[0]["client"]>;
 
-async function openPermissionClient(client: Pick<PermissionClient, "id" | "mode">) {
+async function openPermissionClient(
+  client: Pick<PermissionClient, "id" | "mode"> & { scopes?: string[] },
+) {
   return await connectWebchatClient({
     port: getHarness().port,
+    scopes: client.scopes,
     client: {
       id: client.id,
       version: "1.0.0",
@@ -59,7 +62,7 @@ async function createPermissionCheckpointStore() {
     throw new Error("expected legacy checkpoint fixture");
   }
 
-  await upsertSessionEntry(
+  await upsertSessionEntryCore(
     { sessionKey: "agent:main:main", storePath },
     sessionStoreEntry(fixture.sessionId, {
       sessionFile: fixture.sessionFile,
@@ -89,59 +92,104 @@ async function createPermissionCheckpointStore() {
       ],
     }),
   );
-  await upsertSessionEntry(
+  await upsertSessionEntryCore(
     { sessionKey: "agent:main:discord:group:dev", storePath },
     sessionStoreEntry("sess-group"),
   );
   return { storePath };
 }
 
-test("webchat clients cannot mutate sessions", async () => {
+test("webchat session mutations follow operator scope policy", async () => {
   const { storePath } = await createPermissionCheckpointStore();
 
   const ws = await openPermissionClient({
     id: GATEWAY_CLIENT_IDS.WEBCHAT_UI,
     mode: GATEWAY_CLIENT_MODES.UI,
+    scopes: ["operator.read"],
   });
 
-  const patched = await rpcReq(ws, "sessions.patch", {
-    key: "agent:main:discord:group:dev",
-    label: "should-fail",
-  });
-  expect(patched.ok).toBe(false);
-  expect(patched.error?.message ?? "").toMatch(/webchat clients cannot patch sessions/i);
+  const deniedMutations = [
+    {
+      method: "sessions.patch",
+      params: { key: "agent:main:discord:group:dev", label: "should-fail" },
+      missingScope: "operator.write",
+    },
+    {
+      method: "sessions.delete",
+      params: { key: "agent:main:discord:group:dev" },
+      missingScope: "operator.admin",
+    },
+    {
+      method: "sessions.compact",
+      params: { key: "main", maxLines: 3 },
+      missingScope: "operator.admin",
+    },
+    {
+      method: "sessions.compaction.branch",
+      params: { key: "main", checkpointId: "checkpoint-1" },
+      missingScope: "operator.write",
+    },
+    {
+      method: "sessions.compaction.restore",
+      params: { key: "main", checkpointId: "checkpoint-1" },
+      missingScope: "operator.admin",
+    },
+    {
+      method: "sessions.branches.switch",
+      params: { sessionKey: "agent:main:main", leafEntryId: "entry-1" },
+      missingScope: "operator.admin",
+    },
+    {
+      method: "sessions.rewind",
+      params: { sessionKey: "agent:main:main", entryId: "entry-1" },
+      missingScope: "operator.admin",
+    },
+    {
+      method: "sessions.fork",
+      params: { sessionKey: "agent:main:main", entryId: "entry-1" },
+      missingScope: "operator.write",
+    },
+    {
+      method: "sessions.dispatch",
+      params: { key: "agent:main:main", profileId: "test" },
+      missingScope: "operator.admin",
+    },
+    {
+      method: "sessions.reclaim",
+      params: { key: "agent:main:main" },
+      missingScope: "operator.admin",
+    },
+    {
+      method: "sessions.pluginPatch",
+      params: {
+        key: "agent:main:main",
+        pluginId: "test-plugin",
+        namespace: "test",
+        value: true,
+      },
+      missingScope: "operator.admin",
+    },
+  ];
 
-  const deleted = await rpcReq(ws, "sessions.delete", {
-    key: "agent:main:discord:group:dev",
-  });
-  expect(deleted.ok).toBe(false);
-  expect(deleted.error?.message ?? "").toMatch(/webchat clients cannot delete sessions/i);
+  for (const mutation of deniedMutations) {
+    const result = await rpcReq(ws, mutation.method, mutation.params);
+    expect(result.ok, mutation.method).toBe(false);
+    expect(result.error, mutation.method).toEqual({
+      code: "FORBIDDEN",
+      message: `missing scope: ${mutation.missingScope}`,
+      details: {
+        code: "MISSING_SCOPE",
+        missingScope: mutation.missingScope,
+        requiredScopes: [mutation.missingScope],
+      },
+    });
+  }
 
-  const compacted = await rpcReq(ws, "sessions.compact", {
-    key: "main",
-    maxLines: 3,
-  });
-  expect(compacted.ok).toBe(false);
-  expect(compacted.error?.message ?? "").toMatch(/webchat clients cannot compact sessions/i);
-
-  const branched = await rpcReq(ws, "sessions.compaction.branch", {
-    key: "main",
-    checkpointId: "checkpoint-1",
-  });
-  expect(branched.ok).toBe(false);
-  expect(branched.error?.message ?? "").toMatch(/webchat clients cannot branch sessions/i);
   expect(
-    listSessionEntries({ storePath })
+    listSessionEntriesCore({ storePath })
       .map(({ sessionKey }) => sessionKey)
       .toSorted(),
   ).toEqual(["agent:main:discord:group:dev", "agent:main:main"]);
-
-  const restored = await rpcReq(ws, "sessions.compaction.restore", {
-    key: "main",
-    checkpointId: "checkpoint-1",
-  });
-  expect(restored.ok).toBe(false);
-  expect(restored.error?.message ?? "").toMatch(/webchat clients cannot restore sessions/i);
 
   ws.close();
 });
@@ -169,24 +217,24 @@ test("session:patch hook fires with correct context", async () => {
   });
 
   expect(patched.ok).toBe(true);
-  const event = requireRecord(
+  const event = requireGatewayRecord(
     requireFirstCallArg(sessionHookMocks.triggerInternalHook),
     "internal hook event",
   );
   expect(event.type).toBe("session");
   expect(event.action).toBe("patch");
   expect(event.sessionKey).toBe("agent:main:main");
-  const context = requireRecord(event.context, "internal hook context");
-  const sessionEntry = requireRecord(context.sessionEntry, "session entry");
+  const context = requireGatewayRecord(event.context, "internal hook context");
+  const sessionEntry = requireGatewayRecord(context.sessionEntry, "session entry");
   expect(sessionEntry.sessionId).toBe("sess-hook-test");
   expect(sessionEntry.label).toBe("updated-label");
-  expect(requireRecord(context.patch, "session patch").label).toBe("updated-label");
-  requireRecord(context.cfg, "config");
+  expect(requireGatewayRecord(context.patch, "session patch").label).toBe("updated-label");
+  requireGatewayRecord(context.cfg, "config");
 
   ws.close();
 });
 
-test("session:patch hook does not fire for webchat clients", async () => {
+test("session:patch hook does not fire after scope rejection", async () => {
   const dir = makeTempDir(permHookTempDirs, "openclaw-sessions-webchat-hook-");
   const storePath = path.join(dir, "sessions.json");
   testState.sessionStorePath = storePath;
@@ -202,6 +250,7 @@ test("session:patch hook does not fire for webchat clients", async () => {
   const ws = await openPermissionClient({
     id: GATEWAY_CLIENT_IDS.WEBCHAT_UI,
     mode: GATEWAY_CLIENT_MODES.UI,
+    scopes: ["operator.read"],
   });
 
   const patched = await rpcReq(ws, "sessions.patch", {
@@ -246,7 +295,7 @@ test("session:patch hook only fires after successful patch", async () => {
   });
 
   expect(validPatch.ok).toBe(true);
-  const event = requireRecord(
+  const event = requireGatewayRecord(
     requireFirstCallArg(sessionHookMocks.triggerInternalHook),
     "internal hook event",
   );
@@ -327,11 +376,12 @@ test("session:patch hook mutations cannot change the response path", async () =>
   ws.close();
 });
 
-test("control-ui client can mutate sessions even in webchat mode", async () => {
+test("admin-scoped webchat client can mutate sessions", async () => {
   const { storePath } = await createPermissionCheckpointStore();
   const ws = await openPermissionClient({
-    id: GATEWAY_CLIENT_IDS.CONTROL_UI,
+    id: GATEWAY_CLIENT_IDS.WEBCHAT_UI,
     mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+    scopes: ["operator.admin"],
   });
 
   const branched = await rpcReq<{

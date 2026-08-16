@@ -41,9 +41,8 @@ For channel config, publish the channel-owned JSON Schema through
 `openclaw.plugin.json#channelConfigs`. The `plugin-sdk/channel-config-schema`
 subpath is for shared schema primitives and the generic builder. OpenClaw's
 bundled plugins use `plugin-sdk/bundled-channel-config-schema` for retained
-bundled-channel schemas. Deprecated compatibility exports remain on
-`plugin-sdk/channel-config-schema-legacy`; neither bundled schema subpath is a
-pattern for new plugins.
+bundled-channel schemas. That bundled schema subpath is not a pattern for new
+plugins.
 
 <Warning>
   Do not import provider- or channel-branded convenience seams (for example
@@ -72,9 +71,11 @@ bundled-plugin helpers). For the full catalog — grouped and linked — see
 [Plugin SDK subpaths](/plugins/sdk-subpaths).
 
 The compiler entrypoint inventory lives in
-`scripts/lib/plugin-sdk-entrypoints.json`; package exports are generated from
-the public subset after subtracting repo-local test/internal subpaths listed in
-`scripts/lib/plugin-sdk-private-local-only-subpaths.json`. Run
+`scripts/lib/plugin-sdk-entrypoints.json`; typed public exports exclude the
+internal subpaths listed in
+`scripts/lib/plugin-sdk-private-local-only-subpaths.json`. Production entries
+on that list retain JavaScript-only host runtime exports for separately
+published official plugins, while test-only entries remain unexported. Run
 `pnpm plugin-sdk:surface` to audit the public export count. Deprecated public
 subpaths that are old enough and unused by bundled extension production code are
 tracked in `scripts/lib/plugin-sdk-deprecated-public-subpaths.json`; broad
@@ -85,6 +86,13 @@ deprecated re-export barrels are tracked in
 
 The `register(api)` callback receives an `OpenClawPluginApi` object with these
 methods:
+
+Plugins that provide an external team-chat surface for a session can register
+the single process-wide provider exported by
+`openclaw/plugin-sdk/session-discussion`. Its `info({ sessionKey })` method
+reports whether a discussion is unavailable, ready to open, or already open;
+`open({ sessionKey })` creates or resolves the discussion and returns its embed
+and external URLs. Registering another provider replaces the current provider.
 
 ### Capability registration
 
@@ -109,19 +117,31 @@ methods:
 | `api.registerWebSearchProvider(...)`             | Web search                                                                        |
 | `api.registerCompactionProvider(...)`            | Pluggable transcript-compaction backend                                           |
 
+Transcript source providers that share an account namespace with an inbound
+channel declare an `accountOwnership` descriptor with that channel id and a
+canonical account resolver. OpenClaw then
+ignores model-selected account ids for same-channel capture, binds the trusted
+inbound account, and records it as the session owner for later lifecycle
+actions. The resolver also selects an omitted account before OpenClaw starts or
+persists live capture. It validates an already-bound trusted account without
+redirecting it and returns an actionable typed error when no unique capable
+account exists. Configured auto-start must supply a nonempty source account or
+resolve one with this descriptor. OpenClaw rejects ambiguous or unresolved ownership before it
+persists the start or invokes the provider. Provider aliases are lookup names
+only and must not be used for this declaration.
+
 Worker providers must also declare their id in `contracts.workerProviders`.
-Core persists durable intent before `provision(profile, operationId)`. Providers validate settings before external allocation and throw `WorkerProviderError` for permanent profile rejection. `provision` must adopt the same lease when the operation id repeats.
-Core persists the validated profile settings with the lease and supplies that snapshot to `destroy({ leaseId, profile })`, which must be idempotent, and `inspect({ leaseId, profile })`, which returns `active`, `destroyed`, or `unknown`. This lets providers route lifecycle calls after a gateway restart or named-profile removal. SSH endpoints use a `SecretRef` for `keyRef`, never inline key material, and include a `hostKey` from trusted provisioning output as exactly `algorithm base64`, without a hostname or comment. Core pins `hostKey` and never trusts a key from the first connection. A provider that mints a dynamic `keyRef` can implement `resolveSshIdentity({ leaseId, profile, keyRef })`; when present, that resolver is authoritative, while providers without it use the configured generic secret resolver.
+Core persists durable intent before `provision(profile, operationId)`. Providers validate settings before external allocation and throw `WorkerProviderError` for permanent profile rejection. `provision` must adopt the same lease when the operation id repeats. Providers whose provisioning can legitimately exceed core's five-minute default may return a positive millisecond budget from `resolveProvisionTimeoutMs(profile)`; include acquisition, provider-owned setup, and cleanup in that bound.
+Core persists the validated profile settings with the lease and supplies that snapshot to `destroy({ leaseId, profile })`, which must be idempotent, and `inspect({ leaseId, profile })`, which returns `active`, `destroyed`, or `unknown`. This lets providers route lifecycle calls after a gateway restart or named-profile removal. SSH endpoints use a `SecretRef` for `keyRef`, never inline key material, and include a `hostKey` from trusted provisioning output as exactly `algorithm base64`, without a hostname or comment. Core pins `hostKey` and never trusts a key from the first connection. Providers may also return up to 10 ordered, unique `fallbackPorts` (integer ports from 1 through 65535, excluding the primary `port`); core validates and persists those advertised candidates for idempotent probes, content-addressed transfers, receipt/lock-guarded artifact installation, convergent managed-worktree mirroring, and tunnel reconnects. Ambiguous unguarded stateful commands fail closed and are not replayed across candidates. A lease may set `sharedHost: true` when the SSH account also owns unrelated processes; core then avoids host-wide process freezing during workspace reconciliation. Omitted or `false` means a dedicated worker host. Active inspection repeats this fact so core can reconcile provider-owned isolation for leases persisted before the field existed; tunnel startup waits for that first authoritative inspection. A provider that mints a dynamic `keyRef` can implement `resolveSshIdentity({ leaseId, profile, keyRef })`; when present, that resolver is authoritative, while providers without it use the configured generic secret resolver.
+`WorkerLease.desktop` is optional and has the shape `{ protocol: "rfb"; port: number; passwordFilePath?: string; apps?: WorkerDesktopApp[] }`; `passwordFilePath`, when present, must be absolute. Providers report this warm-time capability from `provision`; it cannot be retrofitted onto a live lease. The Gateway reads the password file over the provider's SSH endpoint when needed and never persists the password. `WorkerDesktopApp` is a closed union: `{ id: "browser"; executablePath: string; cdpPort: number }` or `{ id: "terminal"; executablePath: string }`. App ids must be unique, executable paths must be absolute, browser CDP ports must be integers from 1 through 65535, and the list accepts at most eight entries. Core rejects unknown ids and fields.
 Providers with renewable leases can also implement `renew(leaseId)`.
 `inspect` must throw on transient or indeterminate failures; return `unknown` only for authoritative absence. Core marks an active local record orphaned, or treats the absence as teardown completion after a persisted destroy request.
 
 Embedding providers registered with `api.registerEmbeddingProvider(...)` must
 also be listed in `contracts.embeddingProviders` in the plugin manifest. This
 is the generic embedding surface for reusable vector generation. Memory search
-can consume this generic provider surface. The older
-`api.registerMemoryEmbeddingProvider(...)` and
-`contracts.memoryEmbeddingProviders` seam is deprecated compatibility while
-existing memory-specific providers migrate.
+consumes this generic provider surface. The older memory-specific registrar and
+manifest contract were removed after their August 2026 migration window.
 
 Memory-specific providers that still expose a runtime `batchEmbed(...)` stay on
 the existing per-file batching contract unless their runtime explicitly sets
@@ -145,9 +165,30 @@ or fully dynamic tool registration.
 | `api.registerCommand(def)`             | Custom command (bypasses the LLM)                                                                                                        |
 | `api.registerNodeHostCommand(command)` | Command handled by `openclaw node run`; optional `agentTool` metadata can expose it as an agent-visible tool while the node is connected |
 
+Computer Use providers use `registerComputerUseProvider(api, provider)` from
+`openclaw/plugin-sdk/computer-use`. It registers the shared
+`screen.snapshot`/`computer.act` node-host envelope once while the provider
+keeps its driver, frame, availability, and execution lifecycle local.
+
 Plugin commands can set `agentPromptGuidance` when the agent needs a short,
 command-owned routing hint. Keep that text about the command itself; do not add
 provider- or plugin-specific policy to core prompt builders.
+
+Commands may also declare a bounded client presentation action for parsed no-argument
+invocations:
+
+```ts
+clientPresentation: {
+  when: "no-arguments",
+  action: { kind: "device-pairing" },
+}
+```
+
+The action union is closed and intentionally does not accept routes, callbacks,
+URLs, or arbitrary client data. Supporting clients handle the action only when
+they can complete it; otherwise the command follows its normal remote path.
+This metadata expresses presentation intent, not authorization: the Gateway
+remains authoritative for every RPC the client flow performs.
 
 Guidance entries may be legacy strings, which apply to every prompt surface, or
 structured entries:
@@ -176,7 +217,7 @@ successful Gateway connect; the Gateway exposes it to agent runs only while that
 node is connected and only if the descriptor's `command` is in the node's
 approved command surface. Set `agentTool.defaultPlatforms` to opt a
 non-dangerous command into the default node command allowlist; otherwise require
-explicit `gateway.nodes.allowCommands` or a node-invoke policy. `agentTool.name`
+explicit `gateway.nodes.commands.allow` or a node-invoke policy. `agentTool.name`
 must be provider-safe: start with a letter, use only letters, digits,
 underscores, or hyphens, and stay within 64 characters. MCP-backed node tools
 can set `agentTool.mcp` metadata so catalog and tool-search surfaces can show
@@ -233,8 +274,8 @@ before returning do not need this helper.
 
 #### Requester-scoped MCP connections
 
-Keep the MCP server **identity** static (name, tool filter) in `mcp.servers` or a
-bundle manifest. Optionally register a connection resolver so each trusted
+Keep the MCP server **identity** static (name, tool filter) in `mcp.servers`, a
+native plugin's `mcpServers` manifest field, or a bundle manifest. Optionally register a connection resolver so each trusted
 message requester gets their own transport:
 
 ```ts
@@ -438,8 +479,7 @@ The contracts intentionally split authority:
   own command names or aliases.
 - `allowPromptInjection=false` disables prompt-mutating hooks including
   `agent_turn_prepare`, `before_prompt_build`, `heartbeat_prompt_contribution`,
-  prompt fields from legacy `before_agent_start`, and
-  `enqueueNextTurnInjection`.
+  and `enqueueNextTurnInjection`.
 
 Examples of non-Plan consumers:
 
@@ -535,6 +575,19 @@ api.registerCli(
 );
 ```
 
+A root descriptor can also declare `machineOutput({ argv, stdoutIsTTY })` when
+the command reserves stdout for JSON, JSONL, or another machine-readable format
+without relying exclusively on a literal `--json` flag. OpenClaw evaluates this
+resolver before plugin activation so startup diagnostics can be routed to
+stderr. The resolver must be synchronous, pure, and dependency-light: inspect
+only the supplied raw argv and stdout TTY state. Reuse the same resolver in
+lightweight CLI metadata and full registration so discovery and execution do
+not disagree. Use `getRootOptionAwareCommandPath` from
+`openclaw/plugin-sdk/cli-argv` when the resolver needs command-path tokens; it
+accepts supported root options before or after the command root. `machineOutput`
+is root metadata; nested descriptors cannot use it because their owning root
+must already be active before they are visible.
+
 Nested commands receive the resolved parent command as `program`:
 
 ```typescript
@@ -566,11 +619,12 @@ descriptor-backed placeholders for parse-time lazy loading.
 AI CLI backend such as `claude-cli` or `my-cli`.
 
 - The backend `id` becomes the provider prefix in model refs like `my-cli/gpt-5`.
-- The backend `config` uses the same shape as `agents.defaults.cliBackends.<id>`.
-- User config still wins. OpenClaw merges `agents.defaults.cliBackends.<id>` over the
-  plugin default before running the CLI.
-- Use `normalizeConfig` when a backend needs compatibility rewrites after merge
-  (for example normalizing old flag shapes).
+- The backend `config` is the authoritative command adapter: argv, environment,
+  parser, session, image, and reliability behavior live in plugin code.
+- Users select the backend through model refs or model-scoped `agentRuntime.id`;
+  `openclaw.json` does not rewrite the adapter.
+- Use `normalizeConfig` when registered static fields need a runtime-aware
+  normalization pass.
 - Use `resolveExecutionArgs` for request-scoped argv rewrites that belong to
   the CLI dialect, such as mapping OpenClaw thinking levels to a native effort
   flag. The hook receives `ctx.executionMode`; use `"side-question"` to add
@@ -580,48 +634,60 @@ AI CLI backend such as `claude-cli` or `my-cli`.
 - Use `prepareExecution` for backend-owned launch environment or temporary
   auth/config bridges. Its `ctx.contextTokenBudget` is the effective token
   limit selected for the run, so native-compaction backends can align their
-  own threshold without provider-specific core branches.
+  own threshold without provider-specific core branches. It also receives the
+  core-prepared `ctx.env` when backend staging must extend bundled MCP settings.
 - Backends that can disable all native tools for a specific run may declare
-  `nativeToolMode: "selectable"`. Restricted calls pass an empty
-  `ctx.toolAvailability.native` tuple plus an exact host-isolated MCP allowlist;
-  `resolveExecutionArgs` must enforce both on the final fresh or resume argv.
-  OpenClaw fails closed if the backend cannot do so.
+  `nativeToolMode: "selectable"`. Restricted calls pass an exact
+  `ctx.toolAvailability.native` list plus canonical
+  `ctx.toolAvailability.openClaw` names. Declare
+  `toolAvailabilityEnforcement: "execution-args"` and enforce the contract in
+  final fresh/resume argv, or declare `"prepare-execution"`, enforce it in
+  staged policy, and return `toolAvailabilityEnforced: true`. OpenClaw disables
+  native tools for runtime caps such as cron `toolsAllow` and fails closed when
+  the declared enforcement path is incomplete.
 
 For an end-to-end authoring guide, see
 [CLI backend plugins](/plugins/cli-backend-plugins).
 
 ### Exclusive slots
 
-| Method                                     | What it registers                                                                                                                                                                                  |
-| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `api.registerContextEngine(id, factory)`   | Context engine (one active at a time). Lifecycle callbacks receive `runtimeSettings` when the host can provide model/provider/mode diagnostics; older strict engines are retried without that key. |
-| `api.registerMemoryCapability(capability)` | Unified memory capability                                                                                                                                                                          |
-| `api.registerMemoryPromptSection(builder)` | Memory prompt section builder                                                                                                                                                                      |
-| `api.registerMemoryFlushPlan(resolver)`    | Memory flush plan resolver                                                                                                                                                                         |
-| `api.registerMemoryRuntime(runtime)`       | Memory runtime adapter                                                                                                                                                                             |
+| Method                                     | What it registers                                                                                                                                                          |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api.registerContextEngine(id, factory)`   | Context engine (one active at a time). Use `info.acceptedHostParams` to restrict accepted host-added lifecycle fields; undeclared engines receive all current host fields. |
+| `api.registerMemoryCapability(capability)` | Unified memory capability                                                                                                                                                  |
 
-### Deprecated memory embedding adapters
+To participate in durable admitted turns, context engines must declare
+`currentTurnFence: "before-current-turn-entry-v1"` and
+`turnAdvancementIdempotency: "atomic-idempotent-v1"` under
+`info.transcriptSemantics`, then implement `commitTurn(...)` as an atomic,
+idempotent write keyed by `advancementKey`. OpenClaw supplies only the inclusive
+accepted turn, from its admitted user entry through its terminal entry; use the
+`readSessionTranscriptVisibleMessageDelta(...)` cursor API to bootstrap or
+rebuild earlier history. Without the full contract, OpenClaw uses the legacy
+context path for the whole logical turn and its retries, leaves the configured
+engine unchanged, and tries that engine again on the next logical turn.
 
-| Method                                         | What it registers                              |
-| ---------------------------------------------- | ---------------------------------------------- |
-| `api.registerMemoryEmbeddingProvider(adapter)` | Memory embedding adapter for the active plugin |
+### Memory embedding adapters
 
-- `registerMemoryCapability` is the preferred exclusive memory-plugin API.
+- `registerMemoryCapability` is the exclusive memory-plugin API.
 - `registerMemoryCapability` may also expose `publicArtifacts.listArtifacts(...)`
-  so companion plugins can consume exported memory artifacts through
-  `openclaw/plugin-sdk/memory-host-core` instead of reaching into a specific
-  memory plugin's private layout.
-- `registerMemoryPromptSection`, `registerMemoryFlushPlan`, and
-  `registerMemoryRuntime` are legacy-compatible exclusive memory-plugin APIs.
+  for host-managed exports. Companion plugins that enumerate those declared
+  artifacts still use `listActiveMemoryPublicArtifacts(...)` from the retained
+  `openclaw/plugin-sdk/memory-host-core` facade until a focused public consumer
+  API exists; they must not reach into another plugin's private layout.
+- A memory runtime that can return session-transcript hits should implement
+  `runtime.authorizeSearchHits(...)`. The host calls this hook before raw search
+  hits reach caller-visible surfaces and supplies the requesting agent, session
+  key, and sandbox state. Return only hits the requester may observe. If the hook
+  is absent, OpenClaw fails closed by withholding session-source hits while
+  retaining ordinary memory hits. Keep transcript identity and visibility
+  policy in the owning memory plugin; callers must not infer authorization from
+  paths or duplicate plugin-specific rules.
 - `MemoryFlushPlan.model` can pin the flush turn to an exact `provider/model`
   reference, such as `ollama/qwen3:8b`, without inheriting the active fallback
   chain.
-- `registerMemoryEmbeddingProvider` is deprecated. New embedding providers
-  should use `api.registerEmbeddingProvider(...)` and
-  `contracts.embeddingProviders`.
-- Existing memory-specific providers continue to work during the migration
-  window, but plugin inspection reports this as compatibility debt for
-  non-bundled plugins.
+- Embedding providers use `api.registerEmbeddingProvider(...)` and
+  `contracts.embeddingProviders`; there is no separate memory-only registry.
 
 ### Events and lifecycle
 
@@ -636,7 +702,7 @@ semantics.
 ### Hook decision semantics
 
 `before_install` is a plugin-runtime lifecycle hook, not the operator install
-policy surface. Use `security.installPolicy` when an allow/block decision must
+policy surface. Use `security.installPolicy` when an allow/warn/block decision must
 cover CLI and Gateway-backed install or update paths.
 
 - `before_tool_call`: returning `{ block: true }` is terminal. Once any handler sets it, lower-priority handlers are skipped.
@@ -668,20 +734,20 @@ shutdown, see [Safe external cron projection](/plugins/hooks#safe-external-cron-
 
 ### API object fields
 
-| Field                    | Type                      | Description                                                                                 |
-| ------------------------ | ------------------------- | ------------------------------------------------------------------------------------------- |
-| `api.id`                 | `string`                  | Plugin id                                                                                   |
-| `api.name`               | `string`                  | Display name                                                                                |
-| `api.version`            | `string?`                 | Plugin version (optional)                                                                   |
-| `api.description`        | `string?`                 | Plugin description (optional)                                                               |
-| `api.source`             | `string`                  | Plugin source path                                                                          |
-| `api.rootDir`            | `string?`                 | Plugin root directory (optional)                                                            |
-| `api.config`             | `OpenClawConfig`          | Current config snapshot (active in-memory runtime snapshot when available)                  |
-| `api.pluginConfig`       | `Record<string, unknown>` | Plugin-specific config from `plugins.entries.<id>.config`                                   |
-| `api.runtime`            | `PluginRuntime`           | [Runtime helpers](/plugins/sdk-runtime)                                                     |
-| `api.logger`             | `PluginLogger`            | Scoped logger (`debug`, `info`, `warn`, `error`)                                            |
-| `api.registrationMode`   | `PluginRegistrationMode`  | Current load mode; `"setup-runtime"` is the lightweight pre-full-entry startup/setup window |
-| `api.resolvePath(input)` | `(string) => string`      | Resolve path relative to plugin root                                                        |
+| Field                    | Type                      | Description                                                                               |
+| ------------------------ | ------------------------- | ----------------------------------------------------------------------------------------- |
+| `api.id`                 | `string`                  | Plugin id                                                                                 |
+| `api.name`               | `string`                  | Display name                                                                              |
+| `api.version`            | `string?`                 | Plugin version (optional)                                                                 |
+| `api.description`        | `string?`                 | Plugin description (optional)                                                             |
+| `api.source`             | `string`                  | Plugin source path                                                                        |
+| `api.rootDir`            | `string?`                 | Plugin root directory (optional)                                                          |
+| `api.config`             | `OpenClawConfig`          | Current config snapshot (active in-memory runtime snapshot when available)                |
+| `api.pluginConfig`       | `Record<string, unknown>` | Plugin-specific config from `plugins.entries.<id>.config`                                 |
+| `api.runtime`            | `PluginRuntime`           | [Runtime helpers](/plugins/sdk-runtime)                                                   |
+| `api.logger`             | `PluginLogger`            | Scoped logger (`debug`, `info`, `warn`, `error`)                                          |
+| `api.registrationMode`   | `PluginRegistrationMode`  | Current load mode; `"setup-runtime"` is the lightweight setup flow with runtime available |
+| `api.resolvePath(input)` | `(string) => string`      | Resolve path relative to plugin root                                                      |
 
 ## Internal module convention
 

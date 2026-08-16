@@ -2,7 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
-import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
+import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { formatDurationCompact } from "../../infra/format-time/format-duration.js";
@@ -14,12 +14,7 @@ import {
 import type { TemplateContext } from "../templating.js";
 import { buildThreadingToolContext } from "./agent-runner-utils.js";
 import { applyReplyThreading } from "./reply-payloads.js";
-import {
-  formatRunLabel,
-  formatRunStatus,
-  resolveSubagentLabel,
-  sortSubagentRuns,
-} from "./subagents-utils.js";
+import { formatRunLabel, resolveSubagentLabel, sortSubagentRuns } from "./subagents-utils.js";
 
 function createSlackThreadingPlugin(): ChannelPlugin {
   return {
@@ -439,7 +434,7 @@ const baseRun: SubagentRunRecord = {
   task: "do thing",
   cleanup: "keep",
   createdAt: 1000,
-  startedAt: 1000,
+  execution: { status: "running", startedAt: 1000 },
 };
 
 describe("subagents utils", () => {
@@ -476,20 +471,22 @@ describe("subagents utils", () => {
 
   it("sorts subagent runs by newest start/created time", () => {
     const runs: SubagentRunRecord[] = [
-      { ...baseRun, runId: "run-1", createdAt: 1000, startedAt: 1000 },
-      { ...baseRun, runId: "run-2", createdAt: 1200, startedAt: 1200 },
+      {
+        ...baseRun,
+        runId: "run-1",
+        createdAt: 1000,
+        execution: { status: "running", startedAt: 1000 },
+      },
+      {
+        ...baseRun,
+        runId: "run-2",
+        createdAt: 1200,
+        execution: { status: "running", startedAt: 1200 },
+      },
       { ...baseRun, runId: "run-3", createdAt: 900 },
     ];
     const sorted = sortSubagentRuns(runs);
     expect(sorted.map((run) => run.runId)).toEqual(["run-2", "run-1", "run-3"]);
-  });
-
-  it("formats run status from outcome and timestamps", () => {
-    expect(formatRunStatus({ ...baseRun })).toBe("running");
-    expect(formatRunStatus({ ...baseRun, endedAt: 2000, outcome: { status: "ok" } })).toBe("done");
-    expect(formatRunStatus({ ...baseRun, endedAt: 2000, outcome: { status: "timeout" } })).toBe(
-      "timeout",
-    );
   });
 
   it("formats duration compact for seconds and minutes", () => {

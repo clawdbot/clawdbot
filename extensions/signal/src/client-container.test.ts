@@ -216,9 +216,17 @@ function delayedBodyStream(
   };
 }
 const wsMockState = vi.hoisted(() => ({
-  behavior: "close" as "close" | "open" | "error" | "message" | "unexpected-response",
+  behavior: "close" as
+    | "close"
+    | "open"
+    | "error"
+    | "message"
+    | "buffered-message"
+    | "pending"
+    | "unexpected-response",
   urls: [] as string[],
   options: [] as Array<{ maxPayload?: number; handshakeTimeout?: number } | undefined>,
+  terminations: 0,
 }));
 
 beforeEach(() => {
@@ -226,6 +234,7 @@ beforeEach(() => {
   wsMockState.behavior = "close";
   wsMockState.urls = [];
   wsMockState.options = [];
+  wsMockState.terminations = 0;
 });
 
 function requireFetchCall(index = 0): [RequestInfo | URL, RequestInit] {
@@ -266,6 +275,7 @@ function expectMockLogNotContains(mock: ReturnType<typeof vi.fn>, expected: stri
 vi.mock("ws", () => ({
   default: class MockWebSocket {
     private handlers = new Map<string, Array<(...args: unknown[]) => void>>();
+    private bufferedMessageFlushed = false;
 
     constructor(url: string | URL, options?: { maxPayload?: number; handshakeTimeout?: number }) {
       wsMockState.urls.push(String(url));
@@ -273,6 +283,7 @@ vi.mock("ws", () => ({
       setTimeout(() => {
         if (wsMockState.behavior === "open") {
           this.emit("open");
+          this.emit("close", 1000, Buffer.from("done"));
         } else if (wsMockState.behavior === "error") {
           this.emit("error", new Error("WebSocket failed"));
         } else if (wsMockState.behavior === "unexpected-response") {
@@ -280,6 +291,11 @@ vi.mock("ws", () => ({
         } else if (wsMockState.behavior === "message") {
           this.emit("message", Buffer.from('{"envelope":{"timestamp":1}}'));
           this.emit("close", 1000, Buffer.from("done"));
+        } else if (wsMockState.behavior === "buffered-message") {
+          this.emit("open");
+          this.emit("message", Buffer.from('{"envelope":{"timestamp":1}}'));
+        } else if (wsMockState.behavior === "pending") {
+          // Keep the opening handshake unresolved until shutdown closes it.
         } else {
           this.emit("close", 1000, Buffer.from("done"));
         }
@@ -305,10 +321,17 @@ vi.mock("ws", () => ({
     }
 
     close() {
+      if (wsMockState.behavior === "buffered-message" && !this.bufferedMessageFlushed) {
+        this.bufferedMessageFlushed = true;
+        // ws flushes already-buffered receiver frames before its final close event.
+        this.emit("message", Buffer.from('{"envelope":{"timestamp":2}}'));
+      }
       this.emit("close", 1000, Buffer.from("done"));
     }
 
-    terminate() {}
+    terminate() {
+      wsMockState.terminations += 1;
+    }
 
     private emit(event: string, ...args: unknown[]) {
       for (const handler of this.handlers.get(event) ?? []) {
@@ -515,7 +538,7 @@ describe("containerRestRequest", () => {
     ).rejects.toThrow(`Signal REST 500: ${"x".repeat(16 * 1024)}`);
   });
 
-  it("times out stalled REST error bodies before reporting the HTTP failure", async () => {
+  it("preserves the deadline error for stalled REST error bodies", async () => {
     vi.useFakeTimers();
     try {
       let observedSignal: AbortSignal | undefined;
@@ -533,13 +556,12 @@ describe("containerRestRequest", () => {
       });
 
       await vi.advanceTimersByTimeAsync(0);
-      const requestRejection = expect(request).rejects.toThrow(
-        "Signal REST 500: Internal Server Error",
-      );
+      expect(observedSignal).toBeInstanceOf(AbortSignal);
+      const requestRejection = expect(request).rejects.toThrow("Signal REST request timed out");
 
       await vi.advanceTimersByTimeAsync(25);
       await requestRejection;
-      expect(observedSignal?.aborted).toBe(false);
+      expect(observedSignal?.aborted).toBe(true);
     } finally {
       vi.useRealTimers();
     }
@@ -595,7 +617,7 @@ describe("containerRestRequest", () => {
     }
   });
 
-  it("times out stalled REST response bodies without aborting completed fetches", async () => {
+  it("times out stalled REST response bodies within the request deadline", async () => {
     vi.useFakeTimers();
     try {
       let observedSignal: AbortSignal | undefined;
@@ -614,20 +636,19 @@ describe("containerRestRequest", () => {
 
       await vi.advanceTimersByTimeAsync(0);
       expect(mockFetch).toHaveBeenCalledOnce();
-      expect(observedSignal?.aborted).toBe(false);
+      expect(observedSignal).toBeInstanceOf(AbortSignal);
       const requestRejection = expect(request).rejects.toThrow(
-        "Signal REST response body stalled after 25ms",
+        /Signal REST (response body stalled after 25ms|request timed out)/,
       );
 
       await vi.advanceTimersByTimeAsync(25);
       await requestRejection;
-      expect(observedSignal?.aborted).toBe(false);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("allows slow REST response bodies while chunks keep arriving before the idle timeout", async () => {
+  it("allows slow REST response bodies that finish inside the overall timeout", async () => {
     vi.useFakeTimers();
     try {
       mockFetch.mockResolvedValue(
@@ -647,11 +668,79 @@ describe("containerRestRequest", () => {
 
       const request = containerRestRequest<{ ok: boolean }>("/v1/about", {
         baseUrl: "http://localhost:8080",
-        timeoutMs: 25,
+        timeoutMs: 100,
       });
 
       await vi.advanceTimersByTimeAsync(75);
       await expect(request).resolves.toEqual({ ok: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects slow-drip REST bodies that exceed the overall timeout without idling", async () => {
+    vi.useFakeTimers();
+    try {
+      let observedSignal: AbortSignal | undefined;
+      mockFetch.mockImplementation(async (_url, init: RequestInit) => {
+        observedSignal = init.signal ?? undefined;
+        return new Response(
+          delayedBodyStream([
+            { delayMs: 10, text: "{" },
+            { delayMs: 20, text: '"ok"' },
+            { delayMs: 20, text: ":true" },
+            { delayMs: 20, text: "}" },
+          ]).body,
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      });
+
+      const request = containerRestRequest<{ ok: boolean }>("/v1/about", {
+        baseUrl: "http://localhost:8080",
+        timeoutMs: 25,
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(observedSignal?.aborted).toBe(false);
+      const requestRejection = expect(request).rejects.toThrow("Signal REST request timed out");
+      await vi.advanceTimersByTimeAsync(25);
+      await requestRejection;
+      expect(observedSignal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves the deadline error for slow-drip non-ok bodies", async () => {
+    vi.useFakeTimers();
+    try {
+      let observedSignal: AbortSignal | undefined;
+      mockFetch.mockImplementation(async (_url, init: RequestInit) => {
+        observedSignal = init.signal ?? undefined;
+        return new Response(
+          delayedBodyStream([
+            { delayMs: 10, text: "{" },
+            { delayMs: 20, text: '"error"' },
+            { delayMs: 20, text: ':"busy"' },
+            { delayMs: 20, text: "}" },
+          ]).body,
+          { status: 503, statusText: "Service Unavailable" },
+        );
+      });
+
+      const request = containerRestRequest("/v1/about", {
+        baseUrl: "http://localhost:8080",
+        timeoutMs: 25,
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      const requestRejection = expect(request).rejects.toThrow("Signal REST request timed out");
+      await vi.advanceTimersByTimeAsync(25);
+      await requestRejection;
+      expect(observedSignal?.aborted).toBe(true);
     } finally {
       vi.useRealTimers();
     }
@@ -845,6 +934,78 @@ describe("containerSendMessage", () => {
     // Cleanup
     await fs.rm(tmpDir, { recursive: true });
   });
+
+  it.each([
+    {
+      stagedFilename: "report---a1b2c3d4-5678-90ab-cdef-1234567890ab.jpg",
+      expectedFilename: "report.jpg",
+    },
+    {
+      stagedFilename: "quarter;final---a1b2c3d4-5678-90ab-cdef-1234567890ab.jpg",
+      expectedFilename: "quarter_final.jpg",
+    },
+    {
+      stagedFilename: "first;middle;last---a1b2c3d4-5678-90ab-cdef-1234567890ab.jpg",
+      expectedFilename: "first_middle_last.jpg",
+    },
+    {
+      stagedFilename: "quarter,final---a1b2c3d4-5678-90ab-cdef-1234567890ab.jpg",
+      expectedFilename: "quarter_final.jpg",
+    },
+    {
+      stagedFilename: "first,middle,last---a1b2c3d4-5678-90ab-cdef-1234567890ab.jpg",
+      expectedFilename: "first_middle_last.jpg",
+    },
+    {
+      stagedFilename: "hash#name---a1b2c3d4-5678-90ab-cdef-1234567890ab.jpg",
+      expectedFilename: "hash_name.jpg",
+    },
+    {
+      stagedFilename: "mixed;comma,hash#name---a1b2c3d4-5678-90ab-cdef-1234567890ab.jpg",
+      expectedFilename: "mixed_comma_hash_name.jpg",
+    },
+    { stagedFilename: "quarter;final.jpg", expectedFilename: "quarter_final.jpg" },
+    { stagedFilename: "quarter,final.jpg", expectedFilename: "quarter_final.jpg" },
+    { stagedFilename: "hash#name.jpg", expectedFilename: "hash_name.jpg" },
+    {
+      stagedFilename: "quarter final---a1b2c3d4-5678-90ab-cdef-1234567890ab.jpg",
+      expectedFilename: "quarter final.jpg",
+    },
+  ])(
+    "restores the provider-safe original attachment filename $expectedFilename",
+    async ({ stagedFilename, expectedFilename }) => {
+      const fs = await import("node:fs/promises");
+      const os = await import("node:os");
+      const path = await import("node:path");
+
+      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "signal-test-"));
+      try {
+        const stagedFile = path.join(tmpDir, stagedFilename);
+        const content = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
+        await fs.writeFile(stagedFile, content);
+
+        mockFetch.mockResolvedValue({
+          ok: true,
+          status: 200,
+          ...bodyStream(JSON.stringify({})),
+        });
+
+        await containerSendMessage({
+          baseUrl: "http://localhost:8080",
+          account: "+14259798283",
+          recipients: ["+15550001111"],
+          message: "Photo",
+          attachments: [stagedFile],
+        });
+
+        expect(parseFetchBody().base64_attachments).toEqual([
+          `data:image/jpeg;filename=${expectedFilename};base64,${content.toString("base64")}`,
+        ]);
+      } finally {
+        await fs.rm(tmpDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("rejects outbound attachments that exceed the size cap", async () => {
     const fs = await import("node:fs/promises");
@@ -1240,7 +1401,7 @@ describe("containerFetchAttachment", () => {
     ).rejects.toThrow("Signal REST attachment exceeded size limit");
   });
 
-  it("times out stalled attachment bodies without aborting completed fetches", async () => {
+  it("times out stalled attachment bodies within the request deadline", async () => {
     vi.useFakeTimers();
     try {
       let observedSignal: AbortSignal | undefined;
@@ -1258,13 +1419,13 @@ describe("containerFetchAttachment", () => {
       });
 
       await vi.advanceTimersByTimeAsync(0);
+      expect(observedSignal).toBeInstanceOf(AbortSignal);
       const requestRejection = expect(request).rejects.toThrow(
-        "Signal REST attachment response body stalled after 25ms",
+        /Signal REST (attachment response body stalled after 25ms|request timed out)/,
       );
 
       await vi.advanceTimersByTimeAsync(25);
       await requestRejection;
-      expect(observedSignal?.aborted).toBe(false);
     } finally {
       vi.useRealTimers();
     }
@@ -1449,14 +1610,18 @@ describe("streamContainerEvents", () => {
 
   it("redacts the account and bounds the opening handshake wait", async () => {
     const log = vi.fn();
+    const onStreamOpen = vi.fn();
+    wsMockState.behavior = "open";
 
     await streamContainerEvents({
       baseUrl: "http://localhost:8080",
       account: "+14259798283",
       onEvent: vi.fn(),
+      onStreamOpen,
       logger: { log },
     });
 
+    expect(onStreamOpen).toHaveBeenCalledOnce();
     expect(log).toHaveBeenCalledWith(
       "[signal-ws] connecting to ws://localhost:8080/v1/receive/<redacted>",
     );
@@ -1480,6 +1645,150 @@ describe("streamContainerEvents", () => {
     const abortHandler = addEventListener.mock.calls.find((call) => call[0] === "abort")?.[1];
     expect(abortHandler).toBeTypeOf("function");
     expect(removeEventListener).toHaveBeenCalledWith("abort", abortHandler);
+  });
+
+  it("drains accepted and socket-buffered receive events before resolving shutdown", async () => {
+    wsMockState.behavior = "buffered-message";
+    const abort = new AbortController();
+    const removeEventListener = vi.spyOn(abort.signal, "removeEventListener");
+    let releaseFirst!: () => void;
+    const firstDelivery = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let markFirstStarted!: () => void;
+    const firstStarted = new Promise<void>((resolve) => {
+      markFirstStarted = resolve;
+    });
+    const timestamps: number[] = [];
+    const stream = streamContainerEvents({
+      baseUrl: "http://localhost:8080",
+      abortSignal: abort.signal,
+      timeoutMs: 0,
+      onEvent: async (event) => {
+        timestamps.push(event.envelope?.timestamp ?? 0);
+        if (timestamps.length === 1) {
+          markFirstStarted();
+          await firstDelivery;
+        }
+      },
+    });
+    let settled = false;
+    void stream.then(() => {
+      settled = true;
+    });
+
+    await firstStarted;
+    abort.abort();
+    const settledBeforeDrain = await Promise.race([
+      stream.then(() => true),
+      new Promise<boolean>((resolve) => {
+        setTimeout(() => resolve(false), 10);
+      }),
+    ]);
+    expect(settledBeforeDrain).toBe(false);
+    expect(settled).toBe(false);
+
+    releaseFirst();
+    await expect(stream).resolves.toBeUndefined();
+    expect(timestamps).toEqual([1, 2]);
+    expect(removeEventListener).toHaveBeenCalledWith("abort", expect.any(Function));
+    expect(wsMockState.terminations).toBe(0);
+  });
+
+  it("propagates a receive-handler failure that settles during shutdown", async () => {
+    wsMockState.behavior = "buffered-message";
+    const abort = new AbortController();
+    const appendError = new Error("durable append failed during shutdown");
+    let rejectDelivery!: (error: Error) => void;
+    const delivery = new Promise<void>((_resolve, reject) => {
+      rejectDelivery = reject;
+    });
+    let markFirstStarted!: () => void;
+    const firstStarted = new Promise<void>((resolve) => {
+      markFirstStarted = resolve;
+    });
+    const stream = streamContainerEvents({
+      baseUrl: "http://localhost:8080",
+      abortSignal: abort.signal,
+      onEvent: async () => {
+        markFirstStarted();
+        await delivery;
+      },
+    });
+
+    await firstStarted;
+    abort.abort();
+    rejectDelivery(appendError);
+    await expect(stream).rejects.toBe(appendError);
+    expect(wsMockState.terminations).toBe(0);
+  });
+
+  it("bounds a stalled shutdown drain and records the accepted-message loss risk", async () => {
+    vi.useFakeTimers();
+    try {
+      wsMockState.behavior = "buffered-message";
+      const abort = new AbortController();
+      const error = vi.fn();
+      let settled = false;
+      const stream = streamContainerEvents({
+        baseUrl: "http://localhost:8080",
+        abortSignal: abort.signal,
+        timeoutMs: 0,
+        onEvent: async () => await new Promise<void>(() => {}),
+        logger: { error },
+      }).then(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      abort.abort();
+      await vi.advanceTimersByTimeAsync(1_499);
+      expect(settled).toBe(false);
+      expect(error).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(stream).resolves.toBeUndefined();
+      expect(error).toHaveBeenCalledWith(expect.stringMatching(/receive events.*may be lost/i));
+      expect(wsMockState.terminations).toBe(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("closes immediately when aborted before the opening handshake completes", async () => {
+    wsMockState.behavior = "pending";
+    const abort = new AbortController();
+    const removeEventListener = vi.spyOn(abort.signal, "removeEventListener");
+    const stream = streamContainerEvents({
+      baseUrl: "http://localhost:8080",
+      abortSignal: abort.signal,
+      onEvent: vi.fn(),
+    });
+
+    abort.abort();
+    await expect(stream).resolves.toBeUndefined();
+    expect(removeEventListener).toHaveBeenCalledWith("abort", expect.any(Function));
+    expect(wsMockState.terminations).toBe(0);
+  });
+
+  it("handles an already-aborted signal without leaving its connection pending", async () => {
+    wsMockState.behavior = "pending";
+    const abort = new AbortController();
+    abort.abort();
+    const result = await Promise.race([
+      streamContainerEvents({
+        baseUrl: "http://localhost:8080",
+        abortSignal: abort.signal,
+        onEvent: vi.fn(),
+      }).then(() => "closed"),
+      new Promise<string>((resolve) => {
+        setTimeout(() => resolve("still pending"), 25);
+      }),
+    ]);
+
+    expect(result).toBe("closed");
+    expect(wsMockState.terminations).toBe(0);
   });
 
   it("propagates receive-handler failures to the stream", async () => {

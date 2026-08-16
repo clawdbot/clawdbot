@@ -5,7 +5,7 @@ import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_SYSTEM_AGENT } from "./legacy-config-m
 const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_SYSTEM_AGENT[0];
 
 describe("system-agent config migration", () => {
-  it("moves the retired config block", () => {
+  it("removes the retired config block", () => {
     const raw: Record<string, unknown> = {
       crestodian: { rescue: { enabled: true, pendingTtlMinutes: 10 } },
     };
@@ -13,13 +13,13 @@ describe("system-agent config migration", () => {
 
     migration?.apply(raw, changes);
 
-    expect(raw).toEqual({
-      systemAgent: { rescue: { enabled: true, pendingTtlMinutes: 10 } },
-    });
-    expect(changes).toEqual(["Moved legacy crestodian config to systemAgent."]);
+    expect(raw).toEqual({});
+    expect(changes).toEqual([
+      "Removed retired crestodian config; system-agent rescue uses built-in policy.",
+    ]);
   });
 
-  it("keeps explicit canonical values while filling missing values", () => {
+  it("does not mutate an independently retired systemAgent block", () => {
     const raw: Record<string, unknown> = {
       crestodian: { rescue: { enabled: true, ownerDmOnly: false } },
       systemAgent: { rescue: { enabled: false } },
@@ -28,11 +28,9 @@ describe("system-agent config migration", () => {
 
     migration?.apply(raw, changes);
 
-    expect(raw).toEqual({
-      systemAgent: { rescue: { enabled: false, ownerDmOnly: false } },
-    });
+    expect(raw).toEqual({ systemAgent: { rescue: { enabled: false } } });
     expect(changes).toEqual([
-      "Merged legacy crestodian config into systemAgent; kept explicit systemAgent values.",
+      "Removed retired crestodian config; system-agent rescue uses built-in policy.",
     ]);
   });
 });

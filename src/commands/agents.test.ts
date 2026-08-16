@@ -19,24 +19,22 @@ function requireAgentSummary(
 }
 
 describe("agents helpers", () => {
-  it("buildAgentSummaries includes default + configured agents", () => {
+  it("buildAgentSummaries includes configured agents without inventing a fleet default", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
           workspace: "/main-ws",
           model: { primary: "anthropic/claude" },
         },
-        list: [
-          { id: "main" },
-          {
-            id: "work",
-            default: true,
+        entries: {
+          main: {},
+          work: {
             name: "Work",
             workspace: "/work-ws",
             agentDir: "/state/agents/work/agent",
             model: "openai/gpt-4.1",
           },
-        ],
+        },
       },
       bindings: [
         {
@@ -60,7 +58,8 @@ describe("agents helpers", () => {
     expect(work.workspace).toBe(path.resolve("/work-ws"));
     expect(work.agentDir).toBe(path.resolve("/state/agents/work/agent"));
     expect(work.bindings).toBe(1);
-    expect(work.isDefault).toBe(true);
+    expect(main.isDefault).toBe(false);
+    expect(work.isDefault).toBe(false);
   });
 
   it("buildAgentSummaries renders local avatars and omits absent avatars", () => {
@@ -69,10 +68,10 @@ describe("agents helpers", () => {
       fs.writeFileSync(path.join(workspace, "avatar.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
       const cfg: OpenClawConfig = {
         agents: {
-          list: [
-            { id: "main", default: true, workspace },
-            { id: "work", workspace, identity: { avatar: "avatar.png" } },
-          ],
+          entries: {
+            main: { workspace },
+            work: { workspace, identity: { avatar: "avatar.png" } },
+          },
         },
       };
 
@@ -89,7 +88,7 @@ describe("agents helpers", () => {
   it("applyAgentConfig merges updates", () => {
     const cfg: OpenClawConfig = {
       agents: {
-        list: [{ id: "work", workspace: "/old-ws", model: "anthropic/claude" }],
+        entries: { work: { workspace: "/old-ws", model: "anthropic/claude" } },
       },
     };
 
@@ -100,23 +99,44 @@ describe("agents helpers", () => {
       agentDir: "/state/work/agent",
     });
 
-    const work = next.agents?.list?.find((agent) => agent.id === "work");
+    const work = next.agents?.entries?.work;
     expect(work?.name).toBe("Work");
     expect(work?.workspace).toBe("/new-ws");
     expect(work?.agentDir).toBe("/state/work/agent");
     expect(work?.model).toBe("anthropic/claude");
   });
 
+  it("applyAgentConfig leaves a first roster entry trivially sole", () => {
+    const next = applyAgentConfig({}, { agentId: "work", name: "Work" });
+
+    expect(next.agents?.entries).toEqual({ work: { name: "Work" } });
+    expect(requireAgentSummary(buildAgentSummaries(next), "work").isDefault).toBe(true);
+  });
+
+  it("preserves the sole agent as the ambient system owner when adding a second agent", () => {
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+
+    const next = applyAgentConfig(cfg, { agentId: "helper", name: "Helper" });
+
+    expect(next.agents).toMatchObject({
+      ownership: "explicit",
+      defaults: { systemAgent: { agentId: "main" } },
+      entries: { main: {}, helper: { name: "Helper" } },
+    });
+  });
+
   it("applyAgentConfig clears a model override", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: { model: { primary: "openai/gpt-5.6-luna" } },
-        list: [{ id: "work", workspace: "/work-ws", model: "anthropic/claude" }],
+        entries: {
+          work: { workspace: "/work-ws", model: "anthropic/claude" },
+        },
       },
     };
 
     const next = applyAgentConfig(cfg, { agentId: "work", model: null });
-    const work = next.agents?.list?.find((agent) => agent.id === "work");
+    const work = next.agents?.entries?.work;
 
     expect(work).not.toHaveProperty("model");
     expect(requireAgentSummary(buildAgentSummaries(next), "work").model).toBe(
@@ -127,7 +147,7 @@ describe("agents helpers", () => {
   it("applyAgentConfig merges identity with existing", () => {
     const cfg: OpenClawConfig = {
       agents: {
-        list: [{ id: "work", identity: { name: "Old", theme: "chill", emoji: "🐢" } }],
+        entries: { work: { identity: { name: "Old", theme: "chill", emoji: "🐢" } } },
       },
     };
 
@@ -136,7 +156,7 @@ describe("agents helpers", () => {
       identity: { name: "New", emoji: "🦀" },
     });
 
-    const work = next.agents?.list?.find((agent) => agent.id === "work");
+    const work = next.agents?.entries?.work;
     expect(work?.identity?.name).toBe("New");
     expect(work?.identity?.emoji).toBe("🦀");
     expect(work?.identity?.theme).toBe("chill");
@@ -145,13 +165,13 @@ describe("agents helpers", () => {
   it("applyAgentConfig skips identity when not provided", () => {
     const cfg: OpenClawConfig = {
       agents: {
-        list: [{ id: "work", identity: { name: "Keep", emoji: "🐢" } }],
+        entries: { work: { identity: { name: "Keep", emoji: "🐢" } } },
       },
     };
 
     const next = applyAgentConfig(cfg, { agentId: "work", name: "Renamed" });
 
-    const work = next.agents?.list?.find((agent) => agent.id === "work");
+    const work = next.agents?.entries?.work;
     expect(work?.name).toBe("Renamed");
     expect(work?.identity?.name).toBe("Keep");
     expect(work?.identity?.emoji).toBe("🐢");
@@ -414,15 +434,18 @@ describe("agents helpers", () => {
   it("pruneAgentConfig removes agent, bindings, and allowlist entries", () => {
     const cfg: OpenClawConfig = {
       agents: {
-        defaults: { subagents: { allowAgents: ["work", "home"] } },
-        list: [
-          { id: "work", default: true, workspace: "/work-ws" },
-          {
-            id: "home",
+        defaults: {
+          heartbeat: { agentId: "work", every: "5m" },
+          systemAgent: { agentId: "WORK" },
+          subagents: { allowAgents: ["work", "home"] },
+        },
+        entries: {
+          work: { workspace: "/work-ws" },
+          home: {
             workspace: "/home-ws",
             subagents: { allowAgents: ["WORK", "home"] },
           },
-        ],
+        },
       },
       bindings: [
         { agentId: "work", match: { channel: "whatsapp" } },
@@ -431,18 +454,59 @@ describe("agents helpers", () => {
       tools: {
         agentToAgent: { enabled: true, allow: ["work", "home"] },
       },
+      talk: { agentId: "work", provider: "test-provider" },
     };
 
     const result = pruneAgentConfig(cfg, "work");
-    expect(result.config.agents?.list?.map((agent) => agent.id)).not.toContain("work");
-    expect(result.config.agents?.list?.map((agent) => agent.id)).toContain("home");
+    expect(result.config.agents?.entries).not.toHaveProperty("work");
+    expect(result.config.agents?.entries).toHaveProperty("home");
     expect(result.config.bindings).toStrictEqual([
       { agentId: "home", match: { channel: "telegram" } },
     ]);
     expect(result.config.tools?.agentToAgent?.allow).toEqual(["home"]);
     expect(result.config.agents?.defaults?.subagents?.allowAgents).toEqual(["home"]);
-    expect(result.config.agents?.list?.[0]?.subagents?.allowAgents).toEqual(["home"]);
+    expect(result.config.agents?.defaults?.heartbeat).toEqual({ every: "5m" });
+    expect(result.config.agents?.defaults?.systemAgent).toBeUndefined();
+    expect(result.config.talk).toEqual({ provider: "test-provider" });
+    expect(result.config.agents?.entries?.home?.subagents?.allowAgents).toEqual(["home"]);
     expect(result.removedBindings).toBe(1);
     expect(result.removedAllow).toBe(1);
+    expect(result.clearedOwnerRefs).toEqual([
+      "agents.defaults.heartbeat.agentId",
+      "agents.defaults.systemAgent.agentId",
+      "talk.agentId",
+    ]);
+  });
+
+  it("pruneAgentConfig pins a survivor's workspace before the roster becomes sole", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        defaults: { workspace: "/srv/fleet" },
+        entries: { ops: {}, research: {} },
+      },
+    };
+
+    const result = pruneAgentConfig(cfg, "ops");
+
+    expect(result.config.agents?.entries).toEqual({
+      research: { workspace: "/srv/fleet/research" },
+    });
+  });
+
+  it("removes ambient heartbeat policy when its owner leaves a surviving fleet", () => {
+    const result = pruneAgentConfig(
+      {
+        agents: {
+          ownership: "explicit",
+          defaults: { heartbeat: { agentId: "ops", every: "5m" } },
+          entries: { ops: {}, research: {}, writer: {} },
+        },
+      },
+      "ops",
+    );
+
+    expect(result.config.agents?.defaults?.heartbeat).toBeUndefined();
+    expect(result.clearedOwnerRefs).toContain("agents.defaults.heartbeat");
   });
 });

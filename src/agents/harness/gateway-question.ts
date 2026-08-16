@@ -1,8 +1,10 @@
 import { randomBytes } from "node:crypto";
 import type {
+  QuestionAnswers,
   QuestionRequestQuestion,
   QuestionWaitAnswerResult,
 } from "../../../packages/gateway-protocol/src/schema/questions.js";
+import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import {
   buildAgentHarnessUserInputAnswers,
@@ -31,6 +33,7 @@ type PendingAgentQuestion = {
   questions: readonly AgentHarnessUserInputQuestion[];
   gatewayCall: AgentHarnessQuestionGatewayCall;
   registration: Promise<unknown>;
+  rejectRegistration: (error: unknown) => void;
   attachRegistration: (promise: Promise<unknown>) => void;
   answer?: Promise<QuestionWaitAnswerResult>;
   bufferedAnswers?: AgentHarnessUserInputAnswers;
@@ -39,7 +42,16 @@ type PendingAgentQuestion = {
   resolving: boolean;
 };
 
-const pendingAgentQuestions = new Map<string, PendingAgentQuestion>();
+const pendingAgentQuestions = resolveGlobalMap<string, PendingAgentQuestion>(
+  Symbol.for("openclaw.pendingAgentQuestions"),
+  (questions) => {
+    const error = new Error("gateway lifecycle ended before question registration completed");
+    for (const state of questions.values()) {
+      state.rejectRegistration(error);
+    }
+    questions.clear();
+  },
+);
 
 function readQuestionErrorReason(error: unknown): string | undefined {
   if (!error || typeof error !== "object") {
@@ -91,11 +103,16 @@ async function resolvePendingAgentQuestionAnswers(
   state: PendingAgentQuestion,
   answers: AgentHarnessUserInputAnswers,
 ): Promise<boolean> {
+  const gatewayAnswers: QuestionAnswers = {
+    answers: Object.fromEntries(
+      Object.entries(answers.answers).map(([questionId, answer]) => [questionId, answer.answers]),
+    ),
+  };
   try {
     await state.gatewayCall(
       "question.resolve",
       {},
-      { id: state.questionId, answers, resolvedBy: "plain-text" },
+      { id: state.questionId, answers: gatewayAnswers, resolvedBy: "plain-text" },
     );
     return true;
   } catch (error) {
@@ -143,6 +160,7 @@ export function registerPendingAgentQuestion(params: {
     ...params,
     sessionKey,
     registration,
+    rejectRegistration,
     attachRegistration: (promise) => {
       if (registrationAttached) {
         throw new Error("gateway question registration already attached");
@@ -264,6 +282,7 @@ type RunAgentHarnessGatewayQuestionParams = {
   questions: readonly AgentHarnessUserInputQuestion[];
   sessionKey: string;
   agentId?: string;
+  runId?: string;
   timeoutMs: number;
   gatewayCall: AgentHarnessQuestionGatewayCall;
   delivery: Pick<EmbeddedRunAttemptParams, "onBlockReply" | "onPartialReply">;
@@ -277,8 +296,9 @@ export async function runAgentHarnessGatewayQuestion(
   params: RunAgentHarnessGatewayQuestionParams,
 ): Promise<QuestionWaitAnswerResult> {
   const questionId = params.questionId ?? `ask_${randomBytes(16).toString("hex")}`;
-  const questions: QuestionRequestQuestion[] = params.questions.map((question) => ({
+  const questions: QuestionRequestQuestion[] = params.questions.map(({ id, ...question }) => ({
     ...question,
+    questionId: id,
     options: [...(question.options ?? [])],
   }));
   let aborted = false;
@@ -299,6 +319,7 @@ export async function runAgentHarnessGatewayQuestion(
           questions,
           sessionKey: params.sessionKey,
           ...(params.agentId ? { agentId: params.agentId } : {}),
+          ...(params.runId ? { runId: params.runId } : {}),
           timeoutMs: params.timeoutMs,
         },
         params.signal ? { signal: params.signal } : undefined,

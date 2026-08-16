@@ -25,6 +25,25 @@ export function hasSessionAutoModelFallbackProvenance(
   );
 }
 
+/** Resolves persisted route provenance, including fallback pins from before the marker existed. */
+export function resolveSessionModelOverrideRouteResolution(
+  entry:
+    | Pick<
+        SessionEntry,
+        | "providerOverride"
+        | "modelOverride"
+        | "modelOverrideRouteResolution"
+        | "modelOverrideFallbackOriginProvider"
+        | "modelOverrideFallbackOriginModel"
+      >
+    | undefined,
+): "raw" | "resolved" {
+  return (
+    entry?.modelOverrideRouteResolution ??
+    (hasSessionAutoModelFallbackProvenance(entry) ? "resolved" : "raw")
+  );
+}
+
 /** Detects an active automatic fallback rather than a self-origin configured selection. */
 export function hasSessionActiveAutoModelFallback(
   entry:

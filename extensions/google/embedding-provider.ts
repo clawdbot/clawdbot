@@ -22,7 +22,7 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
-  asOptionalRecord as asRecord,
+  asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parseGeminiAuth } from "./gemini-auth.js";
@@ -88,7 +88,7 @@ function readGeminiEmbeddingValues(value: unknown): number[] {
 }
 
 function readGeminiSingleEmbedding(payload: Record<string, unknown>): number[] {
-  const embedding = asRecord(payload.embedding);
+  const embedding = asOptionalRecord(payload.embedding);
   if (!embedding) {
     throw malformedGeminiEmbeddingResponse();
   }
@@ -103,7 +103,7 @@ function readGeminiBatchEmbeddings(
     throw malformedGeminiEmbeddingResponse();
   }
   return payload.embeddings.map((entry) => {
-    const embedding = asRecord(entry);
+    const embedding = asOptionalRecord(entry);
     if (!embedding) {
       throw malformedGeminiEmbeddingResponse();
     }
@@ -183,7 +183,7 @@ function resolveGeminiOutputDimensionality(model: string, requested?: number): n
 function resolveRemoteApiKey(remoteApiKey: unknown): string | undefined {
   const trimmed = resolveMemorySecretInputString({
     value: remoteApiKey,
-    path: "agents.*.memorySearch.remote.apiKey",
+    path: "memory.search.remote.apiKey",
   });
   if (!trimmed) {
     return undefined;

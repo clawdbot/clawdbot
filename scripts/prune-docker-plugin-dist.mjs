@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { collectRootPackageExcludedExtensionDirs } from "./lib/bundled-plugin-build-entries.mjs";
+import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { removePathIfExists } from "./runtime-postbuild-shared.mjs";
 
 const RUNTIME_DEPENDENCY_FIELDS = ["dependencies", "optionalDependencies"];
@@ -34,10 +35,16 @@ function readPackageJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
-function collectRuntimeDependencyNames(packageJson) {
+function collectRuntimeDependencyNames(packageJson, options = {}) {
   const dependencies = new Set();
   for (const field of RUNTIME_DEPENDENCY_FIELDS) {
     for (const dependencyName of Object.keys(packageJson?.[field] ?? {})) {
+      dependencies.add(dependencyName);
+    }
+  }
+  for (const dependencyName of Object.keys(packageJson?.peerDependencies ?? {})) {
+    const optional = packageJson?.peerDependenciesMeta?.[dependencyName]?.optional === true;
+    if (options.includeOptionalPeers === true || !optional) {
       dependencies.add(dependencyName);
     }
   }
@@ -61,7 +68,7 @@ function removeEmptyScopeDir(repoRoot, packageName) {
   }
 }
 
-function collectPackageRuntimeClosure(repoRoot, seedPackageNames) {
+function collectPackageRuntimeClosure(repoRoot, seedPackageNames, options = {}) {
   const seen = new Set();
   const stack = [...seedPackageNames];
 
@@ -75,7 +82,7 @@ function collectPackageRuntimeClosure(repoRoot, seedPackageNames) {
     const packageJson = readPackageJson(
       path.join(nodeModulePath(repoRoot, packageName), "package.json"),
     );
-    for (const dependencyName of collectRuntimeDependencyNames(packageJson)) {
+    for (const dependencyName of collectRuntimeDependencyNames(packageJson, options)) {
       if (!seen.has(dependencyName)) {
         stack.push(dependencyName);
       }
@@ -141,7 +148,12 @@ function pruneNodeModulesForOmittedPlugins(repoRoot, bundledPluginDir, omittedPl
   }
 
   const keptClosure = collectPackageRuntimeClosure(repoRoot, keptSeeds);
-  const omittedClosure = collectPackageRuntimeClosure(repoRoot, omittedSeeds);
+  // Hoisted workspace dev dependencies can satisfy optional peers of omitted
+  // plugins. Treat those installed peer-only branches as removal candidates;
+  // the kept runtime closure below remains authoritative.
+  const omittedClosure = collectPackageRuntimeClosure(repoRoot, omittedSeeds, {
+    includeOptionalPeers: true,
+  });
   const removed = [];
   const removalCandidates = new Set([...omittedPackageNames, ...omittedClosure]);
 
@@ -176,6 +188,11 @@ export function pruneDockerPluginDist(params = {}) {
     [...excludedPluginIds].filter((pluginId) => !keepPluginIds.has(pluginId)),
   );
   const removed = [];
+
+  // The removals below recurse into dist/ and dist-runtime/ plugin trees;
+  // refuse to follow a symlinked output root into its target.
+  assertRealOutputRoot(path.join(repoRoot, "dist"));
+  assertRealOutputRoot(path.join(repoRoot, "dist-runtime"));
 
   removed.push(...pruneNodeModulesForOmittedPlugins(repoRoot, bundledPluginDir, omittedPluginIds));
 

@@ -34,7 +34,22 @@
       "fireworks": {
         "baseUrl": "https://api.fireworks.ai/inference/v1",
         "api": "openai-completions",
+        "defaultModel": "accounts/fireworks/routers/glm-5p2-fast",
         "models": [
+          {
+            "id": "accounts/fireworks/routers/glm-5p2-fast",
+            "name": "GLM 5.2 Fast",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 256000,
+            "maxTokens": 256000,
+            "cost": {
+              "input": 2.1,
+              "output": 6.6,
+              "cacheRead": 0.21,
+              "cacheWrite": 0
+            }
+          },
           {
             "id": "accounts/fireworks/models/kimi-k2p6",
             "name": "Kimi K2.6",
@@ -45,24 +60,24 @@
             "cost": {
               "input": 0.95,
               "output": 4,
-              "cacheRead": 0,
+              "cacheRead": 0.16,
               "cacheWrite": 0
             }
           },
           {
             "id": "accounts/fireworks/routers/kimi-k2p6-turbo",
-            "name": "Kimi K2.6 Turbo (Fire Pass)",
+            "name": "Kimi K2.6 Fast",
             "reasoning": false,
             "input": ["text", "image"],
-            "contextWindow": 256000,
+            "contextWindow": 262144,
             "maxTokens": 256000,
             "compat": {
               "unsupportedToolSchemaKeywords": ["not"]
             },
             "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
+              "input": 2,
+              "output": 8,
+              "cacheRead": 0.3,
               "cacheWrite": 0
             }
           }
@@ -70,7 +85,7 @@
       }
     },
     "discovery": {
-      "fireworks": "static"
+      "fireworks": "refreshable"
     }
   },
   "configSchema": {

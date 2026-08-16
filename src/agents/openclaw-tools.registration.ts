@@ -22,35 +22,20 @@ export function collectPresentOpenClawTools(
   return candidates.filter((tool): tool is AnyAgentTool => tool !== null && tool !== undefined);
 }
 
-/** Resolves the default-on update_plan switch with an explicit kill switch. */
-function isUpdatePlanToolEnabledForOpenClawTools(params: {
-  config?: OpenClawConfig;
-  agentSessionKey?: string;
-  agentId?: string | null;
-  modelProvider?: string;
-  modelId?: string;
-}): boolean {
-  return params.config?.tools?.experimental?.planTool !== false;
-}
-
 /** Decides whether update_plan should be included in the assembled OpenClaw tool set. */
 export function shouldIncludeUpdatePlanToolForOpenClawTools(params: {
   config?: OpenClawConfig;
-  agentSessionKey?: string;
-  agentId?: string | null;
-  modelProvider?: string;
-  modelId?: string;
-  pluginToolAllowlist?: string[];
   pluginToolDenylist?: string[];
 }): boolean {
+  // Default-on with an explicit kill switch: only `false` opts out.
+  if (params.config?.tools?.updatePlan === false) {
+    return false;
+  }
   const deny = uniqueStrings([
     ...(params.config?.tools?.deny ?? []),
     ...(params.pluginToolDenylist ?? []),
   ]);
-  return (
-    isUpdatePlanToolEnabledForOpenClawTools(params) &&
-    isToolAllowedByPolicyName("update_plan", { deny })
-  );
+  return isToolAllowedByPolicyName("update_plan", { deny });
 }
 
 /** Includes ask_user only on a primary session and when normal deny policy permits it. */

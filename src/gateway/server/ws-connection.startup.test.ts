@@ -13,6 +13,7 @@ import {
   GATEWAY_STARTUP_PENDING_CLOSE_CAUSE,
   GATEWAY_STARTUP_UNAVAILABLE_REASON,
 } from "../../../packages/gateway-protocol/src/startup-unavailable.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { attachGatewayWsConnectionHandler } from "./ws-connection.js";
 import {
   attachGatewayWsForTest,
@@ -22,13 +23,91 @@ import {
 } from "./ws-connection.test-helpers.js";
 
 describe("attachGatewayWsConnectionHandler startup readiness", () => {
+  it("admits only one of two connect frames that race during lazy handler loading", async () => {
+    const sent: unknown[] = [];
+    const clients = new Set<unknown>();
+    const socket = createGatewayWsTestSocket({
+      onSend: (data) => {
+        sent.push(JSON.parse(data));
+      },
+    });
+
+    attachGatewayWsForTest({
+      attach: attachGatewayWsConnectionHandler,
+      clients,
+      socket,
+      options: {
+        getResolvedAuth: () => ({ mode: "token", allowTailscale: false, token: "test-token" }),
+        buildRequestContext: () => createGatewayWsTestRequestContext() as never,
+      },
+    });
+    const connectFrame = (id: string) =>
+      JSON.stringify({
+        type: "req",
+        id,
+        method: "connect",
+        params: {
+          minProtocol: PROTOCOL_VERSION,
+          maxProtocol: PROTOCOL_VERSION,
+          client: {
+            id: "gateway-client",
+            version: "dev",
+            platform: "test",
+            mode: GATEWAY_CLIENT_MODES.BACKEND,
+          },
+          role: "operator",
+          scopes: [],
+          caps: [],
+          auth: { token: "test-token" },
+        },
+      });
+
+    socket.emit("message", connectFrame("connect-1"));
+    socket.emit("message", connectFrame("connect-2"));
+    await vi.dynamicImportSettled();
+
+    await vi.waitFor(() => {
+      expect(clients.size).toBe(1);
+      expect(
+        sent.filter(
+          (frame) =>
+            typeof frame === "object" &&
+            frame !== null &&
+            (frame as { type?: unknown; ok?: unknown }).type === "res" &&
+            (frame as { ok?: unknown }).ok === true,
+        ),
+      ).toHaveLength(1);
+    });
+
+    socket.emit("close", 1000, Buffer.from("done"));
+    expect(clients.size).toBe(0);
+  });
+
   it.each([GATEWAY_STARTUP_CLOSE_CODE, 1006])(
     "keeps startup-unavailable close code %i at debug level",
     async (observedCloseCode) => {
-      const sent: unknown[] = [];
+      const responseReceived = createDeferred<{
+        type?: unknown;
+        id?: unknown;
+        ok?: unknown;
+        error?: {
+          code?: unknown;
+          retryable?: unknown;
+          retryAfterMs?: unknown;
+          details?: unknown;
+        };
+      }>();
       const socket = createGatewayWsTestSocket({
         onSend: (data) => {
-          sent.push(JSON.parse(data));
+          const frame = JSON.parse(data) as unknown;
+          if (
+            typeof frame === "object" &&
+            frame !== null &&
+            (frame as { type?: unknown }).type === "res" &&
+            (frame as { id?: unknown }).id === "connect-1"
+          ) {
+            responseReceived.resolve(frame);
+          }
         },
       });
       const logWsControl = createGatewayWsTestLogger();
@@ -37,7 +116,7 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
         attach: attachGatewayWsConnectionHandler,
         socket,
         options: {
-          resolvedAuth: { mode: "none", allowTailscale: false },
+          getResolvedAuth: () => ({ mode: "none", allowTailscale: false }),
           isStartupPending: () => true,
           logWsControl: logWsControl as never,
           buildRequestContext: () => createGatewayWsTestRequestContext() as never,
@@ -65,37 +144,8 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
         }),
       );
 
-      await vi.waitFor(() => {
-        expect(
-          sent.some(
-            (frame) =>
-              typeof frame === "object" &&
-              frame !== null &&
-              (frame as { type?: unknown; id?: unknown; ok?: unknown }).type === "res" &&
-              (frame as { id?: unknown }).id === "connect-1",
-          ),
-        ).toBe(true);
-      });
-
-      const response = sent.find(
-        (frame) =>
-          typeof frame === "object" &&
-          frame !== null &&
-          (frame as { type?: unknown; id?: unknown }).type === "res" &&
-          (frame as { id?: unknown }).id === "connect-1",
-      ) as
-        | {
-            type?: unknown;
-            id?: unknown;
-            ok?: unknown;
-            error?: {
-              code?: unknown;
-              retryable?: unknown;
-              retryAfterMs?: unknown;
-              details?: unknown;
-            };
-          }
-        | undefined;
+      // The handler is lazy-loaded; wait for its actual frame instead of a one-second poll.
+      const response = await responseReceived.promise;
       expect(response?.type).toBe("res");
       expect(response?.id).toBe("connect-1");
       expect(response?.ok).toBe(false);

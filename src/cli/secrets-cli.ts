@@ -10,6 +10,7 @@ import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatGatewayCommandFailure } from "./error-format.js";
 import { addGatewayClientOptions, callGatewayFromCli, type GatewayRpcOpts } from "./gateway-rpc.js";
+import { registerSecretStoreCli } from "./secrets-store-cli.js";
 
 type FsModule = typeof import("node:fs");
 type ClackPromptsModule = typeof import("@clack/prompts");
@@ -64,7 +65,7 @@ async function readPlanFile(pathname: string): Promise<SecretsApplyPlan> {
   // Apply consumes a generated plan shape, not arbitrary JSON.
   const [fsModule, { readFileDescriptorBounded }, { isSecretsApplyPlan }] = await Promise.all([
     fsModuleLoader.load(),
-    import("../infra/file-descriptor-read.js"),
+    import("../infra/boundary-file-read.js"),
     import("../secrets/plan.js"),
   ]);
   const fsConstants = fsModule.constants as typeof fsModule.constants & { O_NONBLOCK?: number };
@@ -116,6 +117,8 @@ export function registerSecretsCli(program: Command): void {
       () =>
         `\n${theme.muted("Docs:")} ${formatDocsLink("/gateway/security", "docs.openclaw.ai/gateway/security")}\n`,
     );
+
+  registerSecretStoreCli(secrets);
 
   addGatewayClientOptions(
     secrets
@@ -174,7 +177,7 @@ export function registerSecretsCli(program: Command): void {
           defaultRuntime.writeJson(report);
         } else {
           defaultRuntime.log(
-            `Secrets audit: ${report.status}. plaintext=${report.summary.plaintextCount}, unresolved=${report.summary.unresolvedRefCount}, shadowed=${report.summary.shadowedRefCount}, legacy=${report.summary.legacyResidueCount}.`,
+            `Secrets audit: ${report.status}. plaintext=${report.summary.plaintextCount}, unresolved=${report.summary.unresolvedRefCount}, shadowed=${report.summary.shadowedRefCount}, storeResidue=${report.summary.storeResidueCount}, legacy=${report.summary.legacyResidueCount}.`,
           );
           if (report.findings.length > 0) {
             for (const finding of report.findings.slice(0, 20)) {

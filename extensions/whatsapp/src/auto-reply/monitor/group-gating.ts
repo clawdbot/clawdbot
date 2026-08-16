@@ -2,6 +2,7 @@
 import type { BuildMentionRegexesOptions } from "openclaw/plugin-sdk/channel-mention-gating";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
+import type { HistoryMediaEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveWhatsAppGroupsConfigPath } from "../../group-config-path.js";
 import {
   getPrimaryIdentityId,
@@ -15,6 +16,7 @@ import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import type { MentionConfig } from "../mentions.js";
 import { buildMentionConfig, debugMention, resolveOwnerList } from "../mentions.js";
+import { formatWhatsAppAudioTranscriptForAgent } from "./audio-transcript.js";
 import { stripMentionsForCommand } from "./commands.js";
 import { resolveGroupActivationFor } from "./group-activation.js";
 import {
@@ -33,6 +35,7 @@ export type GroupHistoryEntry = {
   timestamp?: number;
   id?: string;
   senderJid?: string;
+  media?: HistoryMediaEntry[];
 };
 
 type ApplyGroupGatingParams = {
@@ -107,6 +110,18 @@ function recordPendingGroupHistoryEntry(params: {
       timestamp: params.msg.event.timestamp,
       id: params.msg.event.id,
       senderJid: senderIdentity.jid ?? params.msg.platform.senderJid,
+      ...(params.msg.payload.media
+        ? {
+            media: [
+              {
+                path: params.msg.payload.media.path,
+                url: params.msg.payload.media.url ?? params.msg.payload.media.path,
+                contentType: params.msg.payload.media.type,
+                kind: params.msg.payload.media.kind ?? undefined,
+              },
+            ],
+          }
+        : {}),
     },
   });
 }
@@ -255,10 +270,15 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
       );
       return { shouldProcess: false, needsMentionText: true } as const;
     }
+    // Mention matching needs raw STT text, but deferred history is model-visible later.
+    const pendingHistoryBody =
+      params.mentionText === undefined
+        ? undefined
+        : formatWhatsAppAudioTranscriptForAgent(params.mentionText);
     return skipGroupMessageAndStoreHistory(
       params,
       `Group message stored for context (no mention detected) in ${conversationId}: ${mentionMsg.payload.body}`,
-      params.mentionText,
+      pendingHistoryBody,
     );
   }
 

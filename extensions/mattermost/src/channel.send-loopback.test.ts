@@ -1,12 +1,20 @@
 // Mattermost tests cover the action-to-REST send path over loopback.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mattermostPlugin } from "./channel.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 import { setMattermostRuntime } from "./runtime.js";
 
 const CHANNEL_ID = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
+const loadOutboundMediaFromUrl = vi.hoisted(() => vi.fn());
+
+vi.mock("./mattermost/runtime-api.js", async () => ({
+  ...(await vi.importActual<typeof import("./mattermost/runtime-api.js")>(
+    "./mattermost/runtime-api.js",
+  )),
+  loadOutboundMediaFromUrl,
+}));
 
 describe("Mattermost send action loopback", () => {
   it("sends text with blank attachment placeholders and rejects nonblank payloads", async () => {
@@ -91,5 +99,67 @@ describe("Mattermost send action loopback", () => {
         expect(requests).toHaveLength(1);
       },
     );
+  });
+
+  it("infers a MIME extension for unnamed uploads", async () => {
+    const uploads: string[] = [];
+
+    await withServer(
+      (request, response) => {
+        let body = "";
+        request.setEncoding("utf8");
+        request.on("data", (chunk) => {
+          body += chunk;
+        });
+        request.on("end", () => {
+          if (request.url === "/api/v4/files") {
+            uploads.push(body);
+            response.writeHead(201, { "content-type": "application/json" });
+            response.end(JSON.stringify({ file_infos: [{ id: `file-${uploads.length}` }] }));
+            return;
+          }
+          response.writeHead(201, { "content-type": "application/json" });
+          response.end(JSON.stringify({ id: "post-loopback", channel_id: CHANNEL_ID }));
+        });
+      },
+      async (baseUrl) => {
+        setMattermostRuntime(createPluginRuntimeMock());
+        loadOutboundMediaFromUrl.mockReset();
+        loadOutboundMediaFromUrl.mockResolvedValueOnce({
+          buffer: Buffer.from("unnamed-image"),
+          contentType: "image/png",
+          kind: "image",
+        });
+        const cfg = {
+          channels: {
+            mattermost: {
+              botToken: "loopback-fixture",
+              baseUrl,
+              network: { dangerouslyAllowPrivateNetwork: true },
+            },
+          },
+        } as OpenClawConfig;
+        const handleAction = mattermostPlugin.actions?.handleAction;
+        if (!handleAction) {
+          throw new Error("Mattermost send action missing");
+        }
+
+        await handleAction({
+          channel: "mattermost",
+          action: "send",
+          params: {
+            to: `channel:${CHANNEL_ID}`,
+            message: "loopback media proof",
+            mediaUrl: "https://media.example.test/unnamed",
+          },
+          cfg,
+          accountId: "default",
+        });
+      },
+    );
+
+    expect(uploads).toHaveLength(1);
+    expect(uploads[0]).toContain('filename="upload.png"');
+    expect(uploads[0]).toContain("Content-Type: image/png");
   });
 });

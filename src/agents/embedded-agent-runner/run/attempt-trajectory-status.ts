@@ -19,10 +19,8 @@ type AttemptTrajectoryTerminal = {
 
 /** Signals that decide whether a completed run attempt has deliverable output. */
 type ResolveAttemptTrajectoryTerminalParams = {
-  promptError?: unknown;
-  aborted: boolean;
-  externalAbort: boolean;
-  timedOut: boolean;
+  failed: boolean;
+  interrupted: boolean;
   assistantTexts: string[];
   toolMetas: Array<{
     toolName: string;
@@ -73,7 +71,7 @@ function hasNonEmptyAssistantText(texts: string[]): boolean {
   return texts.some((text) => text.trim().length > 0);
 }
 
-function hasNonEmptyString(values: string[]): boolean {
+function hasAnyNonBlankString(values: string[]): boolean {
   return values.some((value) => value.trim().length > 0);
 }
 
@@ -84,8 +82,8 @@ function hasCommittedMessagingDeliveryEvidence(
   >,
 ): boolean {
   return (
-    hasNonEmptyString(params.messagingToolSentTexts) ||
-    hasNonEmptyString(params.messagingToolSentMediaUrls) ||
+    hasAnyNonBlankString(params.messagingToolSentTexts) ||
+    hasAnyNonBlankString(params.messagingToolSentMediaUrls) ||
     params.messagingToolSentTargets.length > 0
   );
 }
@@ -103,11 +101,11 @@ function hasAsyncStartedToolActivity(toolMetas?: readonly { asyncStarted?: boole
 export function resolveAttemptTrajectoryTerminal(
   params: ResolveAttemptTrajectoryTerminalParams,
 ): AttemptTrajectoryTerminal {
-  if (params.promptError) {
-    return { status: "error" };
-  }
-  if ((params.aborted && params.externalAbort) || params.timedOut) {
+  if (params.interrupted) {
     return { status: "interrupted" };
+  }
+  if (params.failed) {
+    return { status: "error" };
   }
 
   // Messaging/tool-use attempts may not have assistant text; only committed
@@ -131,10 +129,20 @@ export function resolveAttemptTrajectoryTerminal(
       terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON,
     };
   }
+  // A length stop with visible assistant text is delivered as a partial reply by
+  // the terminal owner, so recording it as non-deliverable here would contradict
+  // what the user received. Visible text is the canonical fact to key on:
+  // finalization runs before terminal preparation turns assistant text into
+  // payloads, so synthesizedPayloadCount is still 0 for an ordinary text-only
+  // reply and cannot stand in for "nothing was delivered".
+  const hasVisibleAssistantOutput =
+    hasNonEmptyAssistantText(params.assistantTexts) || params.synthesizedPayloadCount > 0;
+
   if (
     params.lastAssistantStopReason === "length" &&
     !params.hasTerminalOutput &&
-    !hasExplicitTerminalDelivery
+    !hasExplicitTerminalDelivery &&
+    !hasVisibleAssistantOutput
   ) {
     return {
       status: "error",
@@ -145,8 +153,7 @@ export function resolveAttemptTrajectoryTerminal(
   const hasDeliverableOrProgress =
     hasExplicitTerminalDelivery ||
     params.hasTerminalOutput ||
-    params.synthesizedPayloadCount > 0 ||
-    hasNonEmptyAssistantText(params.assistantTexts) ||
+    hasVisibleAssistantOutput ||
     params.successfulCronAdds > 0;
 
   if (hasDeliverableOrProgress) {

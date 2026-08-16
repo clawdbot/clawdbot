@@ -268,13 +268,21 @@
 
 .approval-page__action--allow-once {
   border-color: var(--accent);
-  background: var(--accent);
-  color: var(--accent-foreground);
+  background: var(--primary);
+  color: var(--primary-foreground);
 }
 
 .approval-page__action--allow-once:hover:not(:disabled) {
   border-color: var(--accent-hover);
   background: var(--accent-hover);
+}
+
+:root[data-theme="dark"] .approval-page__action--allow-once:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+
+:root[data-theme="openknot"] .approval-page__action--allow-once:hover:not(:disabled) {
+  background: var(--primary-hover);
 }
 
 .approval-page__action--deny {
@@ -381,7 +389,7 @@
   }
 }
 
-@media (max-width: 600px) {
+@media (max-width: 640px) {
   .approval-page {
     align-content: start;
     place-items: start center;

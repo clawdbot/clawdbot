@@ -4,15 +4,32 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   DEFAULT_HEARTBEAT_EVERY,
-  resolveHeartbeatPrompt as resolveHeartbeatPromptText,
+  HEARTBEAT_CRON_TASK_GUIDANCE,
+  resolveHeartbeatPromptCore as resolveHeartbeatPromptText,
 } from "../auto-reply/heartbeat.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { listAgentEntries, resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
+import { listAgentEntries, resolveAgentConfig } from "./agent-scope.js";
 
 type HeartbeatConfig = AgentDefaultsConfig["heartbeat"];
+
+function isHeartbeatSharedAcrossAgents(config: OpenClawConfig): boolean {
+  return (
+    config.agents?.defaults?.heartbeat !== undefined &&
+    normalizeOptionalString(config.agents.defaults.heartbeat.agentId) === undefined &&
+    !listAgentEntries(config).some((entry) => Boolean(entry?.heartbeat))
+  );
+}
+
+function tryResolveHeartbeatOwnerAgentId(config?: OpenClawConfig): string | undefined {
+  return (
+    normalizeOptionalString(config?.agents?.defaults?.heartbeat?.agentId) ??
+    tryResolveLegacyCompatibilityAgentId(config ?? {})
+  );
+}
 
 // System prompt heartbeat config inherits defaults, then per-agent overrides,
 // matching runtime scheduling without exposing disabled agents to the section.
@@ -31,18 +48,29 @@ function resolveHeartbeatConfigForSystemPrompt(
   return { ...defaults, ...overrides };
 }
 
-// Explicit heartbeat config on any agent means only those agents are opted in;
-// otherwise the default agent receives the standard heartbeat guidance.
-function isHeartbeatEnabledByAgentPolicy(config: OpenClawConfig, agentId: string): boolean {
+function isAgentExplicitlyEnrolledForHeartbeat(config: OpenClawConfig, agentId: string): boolean {
   const resolvedAgentId = normalizeAgentId(agentId);
+  return listAgentEntries(config).some(
+    (entry) => Boolean(entry?.heartbeat) && normalizeAgentId(entry.id) === resolvedAgentId,
+  );
+}
+
+// Explicit heartbeat config on any agent means only those agents are opted in;
+// shared defaults without an owner enroll every configured agent.
+function isHeartbeatEnabledByAgentPolicy(config: OpenClawConfig, agentId: string): boolean {
   const agents = listAgentEntries(config);
   const hasExplicitHeartbeatAgents = agents.some((entry) => Boolean(entry?.heartbeat));
   if (hasExplicitHeartbeatAgents) {
-    return agents.some(
-      (entry) => Boolean(entry?.heartbeat) && normalizeAgentId(entry.id) === resolvedAgentId,
-    );
+    return isAgentExplicitlyEnrolledForHeartbeat(config, agentId);
   }
-  return resolvedAgentId === resolveDefaultAgentId(config);
+  if (isHeartbeatSharedAcrossAgents(config)) {
+    return true;
+  }
+  const heartbeatOwnerAgentId = tryResolveHeartbeatOwnerAgentId(config);
+  return (
+    heartbeatOwnerAgentId !== undefined &&
+    normalizeAgentId(agentId) === normalizeAgentId(heartbeatOwnerAgentId)
+  );
 }
 
 function isHeartbeatCadenceEnabled(heartbeat?: HeartbeatConfig): boolean {
@@ -59,23 +87,32 @@ function isHeartbeatCadenceEnabled(heartbeat?: HeartbeatConfig): boolean {
 }
 
 /** Returns true when heartbeat guidance should be included in the system prompt. */
-export function shouldIncludeHeartbeatGuidanceForSystemPrompt(params: {
+function shouldIncludeHeartbeatGuidanceForSystemPrompt(params: {
   config?: OpenClawConfig;
   agentId?: string;
   defaultAgentId?: string;
 }): boolean {
-  const defaultAgentId = params.defaultAgentId ?? resolveDefaultAgentId(params.config ?? {});
+  const heartbeatSharedAcrossAgents = params.config
+    ? isHeartbeatSharedAcrossAgents(params.config)
+    : false;
+  const defaultAgentId = params.defaultAgentId ?? tryResolveHeartbeatOwnerAgentId(params.config);
   const agentId = params.agentId ?? defaultAgentId;
-  if (!agentId || normalizeAgentId(agentId) !== normalizeAgentId(defaultAgentId)) {
+  const explicitlyEnrolledAgent =
+    params.config && agentId
+      ? isAgentExplicitlyEnrolledForHeartbeat(params.config, agentId)
+      : false;
+  if (
+    !agentId ||
+    (!explicitlyEnrolledAgent &&
+      !heartbeatSharedAcrossAgents &&
+      normalizeAgentId(agentId) !== normalizeAgentId(defaultAgentId))
+  ) {
     return false;
   }
   if (params.config && !isHeartbeatEnabledByAgentPolicy(params.config, agentId)) {
     return false;
   }
   const heartbeat = resolveHeartbeatConfigForSystemPrompt(params.config, agentId);
-  if (heartbeat?.includeSystemPromptSection === false) {
-    return false;
-  }
   return isHeartbeatCadenceEnabled(heartbeat);
 }
 
@@ -86,10 +123,16 @@ export function resolveHeartbeatPromptForSystemPrompt(params: {
   defaultAgentId?: string;
 }): string | undefined {
   const agentId =
-    params.agentId ?? params.defaultAgentId ?? resolveDefaultAgentId(params.config ?? {});
+    params.agentId ?? params.defaultAgentId ?? tryResolveHeartbeatOwnerAgentId(params.config);
+  if (!agentId) {
+    return undefined;
+  }
   const heartbeat = resolveHeartbeatConfigForSystemPrompt(params.config, agentId);
   if (!shouldIncludeHeartbeatGuidanceForSystemPrompt(params)) {
     return undefined;
   }
-  return resolveHeartbeatPromptText(heartbeat?.prompt);
+  const prompt = resolveHeartbeatPromptText(heartbeat?.prompt);
+  return prompt.includes(HEARTBEAT_CRON_TASK_GUIDANCE)
+    ? prompt
+    : `${prompt} ${HEARTBEAT_CRON_TASK_GUIDANCE}`;
 }

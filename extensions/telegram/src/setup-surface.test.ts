@@ -1,8 +1,9 @@
 // Telegram tests cover setup surface plugin behavior.
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { installChannelDmPolicyContractSuite } from "openclaw/plugin-sdk/channel-test-helpers";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import { describe, expect, it, vi } from "vitest";
-import { promptTelegramAllowFromForAccount } from "./setup-core.js";
+import { promptTelegramAllowFromForAccount, telegramSetupAdapter } from "./setup-core.js";
+import { telegramSetupContract } from "./setup-core.js";
 import {
   buildTelegramDmAccessWarningLines,
   ensureTelegramDefaultGroupMentionGate,
@@ -10,6 +11,26 @@ import {
   telegramSetupDmPolicy,
 } from "./setup-surface.helpers.js";
 import { telegramSetupWizard } from "./setup-surface.js";
+
+describe("Telegram setup promotion contract", () => {
+  it("covers named-account promotion and environment setup", () => {
+    const input = {
+      cfg: {},
+      accountId: DEFAULT_ACCOUNT_ID,
+      input: { useEnv: true },
+    };
+    expect(telegramSetupAdapter.singleAccountKeysToMove).toEqual(["streaming", "webhookSecret"]);
+    expect(telegramSetupAdapter.namedAccountPromotionKeys).toEqual(["botToken", "tokenFile"]);
+    expect(
+      telegramSetupContract.metadata.fields.find((field) => field.key === "useEnv"),
+    ).toMatchObject({ kind: "boolean", envVars: ["TELEGRAM_BOT_TOKEN"] });
+    expect(telegramSetupContract.validateInput?.(input)).toBeNull();
+    const cfg = telegramSetupContract.applyAccountConfig(input);
+    expect(cfg.channels?.telegram).toEqual({ enabled: true });
+    expect(cfg.channels?.telegram?.botToken).toBeUndefined();
+    expect(cfg.channels?.telegram?.tokenFile).toBeUndefined();
+  });
+});
 
 describe("ensureTelegramDefaultGroupMentionGate", () => {
   it('adds groups["*"].requireMention=true for fresh setups', () => {
@@ -91,81 +112,18 @@ describe("telegram DM access warning helpers", () => {
 });
 
 describe("telegramSetupDmPolicy", () => {
-  it("reads the named-account DM policy instead of the channel root", () => {
-    expect(
-      telegramSetupDmPolicy.getCurrent?.(
-        {
-          channels: {
-            telegram: {
-              dmPolicy: "disabled",
-              accounts: {
-                alerts: {
-                  dmPolicy: "allowlist",
-                  botToken: "tok",
-                },
-              },
-            },
-          },
-        },
-        "alerts",
-      ),
-    ).toBe("allowlist");
-  });
-
-  it("reports account-scoped config keys for named accounts", () => {
-    expect(telegramSetupDmPolicy.resolveConfigKeys?.({}, "alerts")).toEqual({
-      policyKey: "channels.telegram.accounts.alerts.dmPolicy",
-      allowFromKey: "channels.telegram.accounts.alerts.allowFrom",
-    });
-  });
-
-  it("uses configured defaultAccount for omitted DM policy account context", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        telegram: {
-          defaultAccount: "alerts",
-          dmPolicy: "disabled",
-          allowFrom: ["123"],
-          accounts: {
-            alerts: {
-              dmPolicy: "allowlist",
-              botToken: "tok",
-            },
-          },
-        },
+  installChannelDmPolicyContractSuite({
+    dmPolicy: telegramSetupDmPolicy,
+    cases: [
+      {
+        name: "Telegram named accounts",
+        channel: "telegram",
+        accountId: "alerts",
+        accountConfig: { botToken: "tok" },
+        inheritedAllowFrom: ["123"],
+        defaultAccount: { rootAllowFrom: ["123"] },
       },
-    };
-
-    expect(telegramSetupDmPolicy.getCurrent?.(cfg)).toBe("allowlist");
-    expect(telegramSetupDmPolicy.resolveConfigKeys?.(cfg)).toEqual({
-      policyKey: "channels.telegram.accounts.alerts.dmPolicy",
-      allowFromKey: "channels.telegram.accounts.alerts.allowFrom",
-    });
-
-    const next = telegramSetupDmPolicy.setPolicy?.(cfg, "open");
-    expect(next?.channels?.telegram?.dmPolicy).toBe("disabled");
-    expect(next?.channels?.telegram?.accounts?.alerts?.dmPolicy).toBe("open");
-  });
-
-  it('writes open policy state to the named account and preserves inherited allowFrom with "*"', () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        telegram: {
-          allowFrom: ["123"],
-          accounts: {
-            alerts: {
-              botToken: "tok",
-            },
-          },
-        },
-      },
-    };
-
-    const next = telegramSetupDmPolicy.setPolicy?.(cfg, "open", "alerts");
-
-    expect(next?.channels?.telegram?.dmPolicy).toBeUndefined();
-    expect(next?.channels?.telegram?.accounts?.alerts?.dmPolicy).toBe("open");
-    expect(next?.channels?.telegram?.accounts?.alerts?.allowFrom).toEqual(["123", "*"]);
+    ],
   });
 });
 

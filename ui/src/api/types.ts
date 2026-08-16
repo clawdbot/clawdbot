@@ -1,7 +1,19 @@
-export type UpdateAvailable = import("../../../src/infra/update-startup.js").UpdateAvailable;
+export type {
+  UpdateAvailable,
+  UpdateHoldResult,
+  UpdateScheduleState,
+} from "../../../packages/gateway-protocol/src/index.js";
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+import type { AgentsListResult as ProtocolAgentsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import type { ChannelsStatusResult } from "../../../packages/gateway-protocol/src/schema/channels.js";
+import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { SessionRow } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
+import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import type { PresenceEntry as ProtocolPresenceEntry } from "../../../packages/gateway-protocol/src/schema/snapshot.js";
+import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { SessionGoal } from "../../../src/config/sessions/types.js";
 import type { CronJobBase } from "../../../src/cron/types-shared.js";
+import type { CronPayload as CoreCronPayload } from "../../../src/cron/types.js";
 import type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 import type { FastModeSource } from "../../../src/shared/fast-mode.js";
 import type {
@@ -13,63 +25,22 @@ import type {
 export type { ConfigUiHint, ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 export type { SessionGoal } from "../../../src/config/sessions/types.js";
 export type { FastMode } from "@openclaw/normalization-core/string-coerce";
-export type ChannelsStatusSnapshot = {
-  ts: number;
-  channelOrder: string[];
-  channelLabels: Record<string, string>;
-  channelDetailLabels?: Record<string, string>;
-  channelSystemImages?: Record<string, string>;
-  channelMeta?: ChannelUiMetaEntry[];
-  channels: Record<string, unknown>;
-  channelAccounts: Record<string, ChannelAccountSnapshot[]>;
-  channelDefaultAccountId: Record<string, string>;
-  partial?: boolean;
-  warnings?: string[];
-};
-
-export type ChannelUiMetaEntry = {
-  id: string;
-  label: string;
-  detailLabel: string;
-  systemImage?: string;
-};
-
-export type ChannelAccountSnapshot = {
-  accountId: string;
-  name?: string | null;
-  enabled?: boolean | null;
-  configured?: boolean | null;
-  linked?: boolean | null;
-  running?: boolean | null;
-  connected?: boolean | null;
-  reconnectAttempts?: number | null;
-  lastConnectedAt?: number | null;
-  lastError?: string | null;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastInboundAt?: number | null;
-  lastOutboundAt?: number | null;
-  lastProbeAt?: number | null;
-  mode?: string | null;
-  dmPolicy?: string | null;
-  allowFrom?: string[] | null;
-  tokenSource?: string | null;
-  botTokenSource?: string | null;
-  appTokenSource?: string | null;
-  credentialSource?: string | null;
-  audienceType?: string | null;
-  audience?: string | null;
-  webhookPath?: string | null;
-  webhookUrl?: string | null;
-  baseUrl?: string | null;
-  allowUnmentionedGroups?: boolean | null;
-  cliPath?: string | null;
-  dbPath?: string | null;
-  port?: number | null;
-  probe?: unknown;
-  audit?: unknown;
-  application?: unknown;
-};
+export type ChannelsPairingAccount =
+  import("../../../packages/gateway-protocol/src/index.js").ChannelsPairingAccount;
+export type ChannelsPairingApproveResult =
+  import("../../../packages/gateway-protocol/src/index.js").ChannelsPairingApproveResult;
+export type ChannelsPairingListResult =
+  import("../../../packages/gateway-protocol/src/index.js").ChannelsPairingListResult;
+export type ChannelsPairingRequest =
+  import("../../../packages/gateway-protocol/src/index.js").ChannelsPairingRequest;
+export type SessionVisibility =
+  import("../../../packages/gateway-protocol/src/index.js").SessionVisibility;
+export type SessionMembersListResult =
+  import("../../../packages/gateway-protocol/src/index.js").SessionMembersListResult;
+export type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
+export type ChannelsStatusSnapshot = ChannelsStatusResult;
+export type ChannelUiMetaEntry = NonNullable<ChannelsStatusResult["channelMeta"]>[number];
+export type ChannelAccountSnapshot = ChannelsStatusResult["channelAccounts"][string][number];
 
 type WhatsAppSelf = {
   e164?: string | null;
@@ -288,23 +259,7 @@ export type ConfigSchemaResponse = {
   generatedAt: string;
 };
 
-export type PresenceEntry = {
-  deviceId?: string | null;
-  instanceId?: string | null;
-  host?: string | null;
-  ip?: string | null;
-  version?: string | null;
-  platform?: string | null;
-  deviceFamily?: string | null;
-  modelIdentifier?: string | null;
-  roles?: string[] | null;
-  scopes?: string[] | null;
-  mode?: string | null;
-  lastInputSeconds?: number | null;
-  reason?: string | null;
-  text?: string | null;
-  ts?: number | null;
-};
+export type PresenceEntry = ProtocolPresenceEntry;
 
 export type GatewaySessionsDefaults = {
   modelProvider: string | null;
@@ -323,16 +278,12 @@ export type GatewayThinkingLevelOption = {
 
 export type GatewayAgentRow = SharedGatewayAgentRow;
 
-export type AgentsListResult = {
-  defaultId: string;
-  mainKey: string;
-  scope: string;
-  agents: GatewayAgentRow[];
-};
+export type AgentsListResult = ProtocolAgentsListResult;
 
 export type AgentIdentityResult = {
   agentId: string;
   name: string;
+  nameSource?: "config" | "agent" | "workspace" | "default";
   avatar: string;
   avatarSource?: string | null;
   avatarStatus?: "none" | "local" | "remote" | "data" | null;
@@ -344,6 +295,9 @@ export type AgentFileEntry = {
   name: string;
   path: string;
   missing: boolean;
+  // Absence is a normal workspace state (optional profile files, MEMORY.md before
+  // anything is written); the editor offers these for creation instead of flagging them.
+  expectedAbsent?: boolean;
   size?: number;
   updatedAtMs?: number;
   content?: string;
@@ -379,6 +333,9 @@ type SessionWorkspaceFileEntry = {
   content?: string;
   /** sha256 hex of the file bytes; the CAS token for sessions.files.set. */
   hash?: string;
+  mimeType?: string;
+  contentEncoding?: "utf8" | "base64";
+  previewKind?: "text" | "image" | "unsupported";
 };
 
 type SessionWorkspaceBrowserEntry = {
@@ -413,6 +370,7 @@ type SessionWorkspaceArtifactEntry = {
 export type SessionWorkspaceListResult = {
   sessionKey: string;
   root?: string;
+  gitCheckout?: boolean;
   files: SessionWorkspaceFileEntry[];
   browser?: SessionWorkspaceBrowserResult;
   artifacts?: SessionWorkspaceArtifactEntry[];
@@ -435,9 +393,9 @@ export type ArtifactDownloadResult = {
   encoding?: "base64";
   data?: string;
   url?: string;
+  expiresAt?: string;
 };
 
-export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
 type SubagentRunState = "active" | "interrupted" | "historical";
 
 type SessionCompactionCheckpointReason =
@@ -472,38 +430,20 @@ type SessionCompactionCheckpointPreview = Pick<
   "checkpointId" | "createdAt" | "reason"
 >;
 
-export type GatewaySessionRow = {
-  key: string;
-  spawnedBy?: string;
-  parentSessionKey?: string;
-  /** Managed worktree bound to this session (repo checkout + branch). */
-  worktree?: { id: string; branch: string; repoRoot: string };
-  /** Session-scoped exec node binding (exec host=node routing). */
-  execNode?: string;
-  spawnedWorkspaceDir?: string;
-  spawnedCwd?: string;
-  execCwd?: string;
+export type GatewaySessionRow = SessionRow & {
   placement?: import("../../../packages/gateway-protocol/src/index.js").SessionPlacement;
-  kind: "cron" | "direct" | "group" | "global" | "unknown";
-  label?: string;
+  icon?: string;
   /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
   category?: string;
-  displayName?: string;
-  derivedTitle?: string;
-  channel?: string;
   surface?: string;
   subject?: string;
   room?: string;
   space?: string;
-  updatedAt: number | null;
-  unread?: boolean;
-  lastReadAt?: number;
-  lastActivityAt?: number;
-  archived?: boolean;
-  archivedAt?: number;
-  pinned?: boolean;
-  pinnedAt?: number;
-  sessionId?: string;
+  agentStatus?: SessionAgentStatus;
+  observerDigest?: Pick<
+    SessionObserverDigest,
+    "agentId" | "runId" | "headline" | "health" | "updatedAt" | "revision"
+  >;
   systemSent?: boolean;
   abortedLastRun?: boolean;
   thinkingLevel?: string;
@@ -517,12 +457,6 @@ export type GatewaySessionRow = {
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
-  inputTokens?: number;
-  outputTokens?: number;
-  totalTokens?: number;
-  totalTokensFresh?: boolean;
-  estimatedCostUsd?: number;
-  status?: SessionRunStatus;
   hasActiveRun?: boolean;
   activeRunIds?: string[];
   /** An enabled cron job is bound to this session (runs in it or delivers to it). */
@@ -534,15 +468,11 @@ export type GatewaySessionRow = {
   runtimeMs?: number;
   /** UI-local timestamp for the runtimeMs sample; absent on raw Gateway rows. */
   runtimeSampledAt?: number;
-  childSessions?: string[];
-  model?: string;
-  modelProvider?: string;
   modelSelectionLocked?: boolean;
   effectiveResponseUsage?: "on" | "off" | "tokens" | "full";
-  queueMode?: "steer" | "followup" | "collect" | "interrupt";
-  effectiveQueueMode?: "steer" | "followup" | "collect" | "interrupt";
+  queueMode?: QueueMode;
+  effectiveQueueMode?: QueueMode;
   agentRuntime?: GatewayAgentRuntime;
-  contextTokens?: number;
   compactionCheckpointCount?: number;
   latestCompactionCheckpoint?: SessionCompactionCheckpointPreview;
   goal?: SessionGoal;
@@ -583,10 +513,16 @@ export type SessionsRewindResult =
   import("../../../packages/gateway-protocol/src/index.js").SessionsRewindResult;
 export type SessionsForkResult =
   import("../../../packages/gateway-protocol/src/index.js").SessionsForkResult;
+export type SessionBranch = import("../../../packages/gateway-protocol/src/index.js").SessionBranch;
+export type SessionsBranchesListResult =
+  import("../../../packages/gateway-protocol/src/index.js").SessionsBranchesListResult;
+export type SessionsBranchesSwitchResult =
+  import("../../../packages/gateway-protocol/src/index.js").SessionsBranchesSwitchResult;
 
 export type SessionsPatchResult = SessionsPatchResultBase<{
   sessionId: string;
   updatedAt?: number;
+  archivedAt?: number;
   thinkingLevel?: string;
   fastMode?: FastMode;
   verboseLevel?: string;
@@ -621,44 +557,35 @@ type CronSchedule =
   | { kind: "at"; at: string }
   | { kind: "every"; everyMs: number; anchorMs?: number }
   | { kind: "cron"; expr: string; tz?: string; staggerMs?: number }
-  | { kind: "on-exit"; command: string; cwd?: string };
+  | { kind: "on-exit"; command: string; cwd?: string }
+  | {
+      kind: "stream";
+      command: string[];
+      cwd?: string;
+      mode?: "line" | "match";
+      match?: string;
+      batchMs?: number;
+      maxBatchBytes?: number;
+    };
 
 type CronSessionTarget = "main" | "isolated" | "current" | `session:${string}`;
 type CronWakeMode = "next-heartbeat" | "now";
 
-export type CronPayload =
-  | { kind: "systemEvent"; text: string }
-  | {
-      kind: "command";
-      argv: string[];
-      cwd?: string;
-      env?: Record<string, string>;
-      input?: string;
-      timeoutSeconds?: number;
-      noOutputTimeoutSeconds?: number;
-      outputMaxBytes?: number;
-    }
-  | {
-      kind: "agentTurn";
-      message: string;
-      model?: string;
-      fallbacks?: string[];
-      thinking?: string;
-      timeoutSeconds?: number;
-      allowUnsafeExternalContent?: boolean;
-      lightContext?: boolean;
-      deliver?: boolean;
-      channel?: string;
-      to?: string;
-      bestEffortDeliver?: boolean;
-    };
+export type CronPayload = CoreCronPayload;
+
+type CronCompletionDestination = {
+  mode: "webhook";
+  to: string;
+};
 
 type CronDelivery = {
   mode: "none" | "announce" | "webhook";
   channel?: string;
   to?: string;
+  threadId?: string | number;
   accountId?: string;
   bestEffort?: boolean;
+  completionDestination?: CronCompletionDestination;
   failureDestination?: CronFailureDestination;
 };
 
@@ -688,6 +615,11 @@ type CronJobState = {
   lastErrorReason?: string;
   lastDurationMs?: number;
   consecutiveErrors?: number;
+  autoDisabled?: {
+    reason: "consecutive-failures" | "schedule-errors";
+    atMs: number;
+    consecutiveErrors: number;
+  };
   lastDelivered?: boolean;
   lastDeliveryStatus?: CronDeliveryStatus;
   lastDeliveryError?: string;
@@ -695,6 +627,15 @@ type CronJobState = {
   lastFailureNotificationDeliveryStatus?: CronDeliveryStatus;
   lastFailureNotificationDeliveryError?: string;
   lastFailureAlertAtMs?: number;
+  streamStatus?: "starting" | "running" | "restarting" | "stopped" | "disabled" | "error";
+  streamError?: string;
+  streamConsecutiveFailures?: number;
+  streamRestartExhausted?: boolean;
+  streamSourceIdentity?: string;
+  streamDroppedBatches?: number;
+  streamCoalescedBatches?: number;
+  streamLastStartedAtMs?: number;
+  streamLastExitAtMs?: number;
 };
 
 export type CronJob = CronJobBase<
@@ -758,11 +699,12 @@ export type CronRunLogEntry = {
 
 export type CronJobsListResult = {
   jobs: CronJob[];
-  total?: number;
-  limit?: number;
-  offset?: number;
-  nextOffset?: number | null;
-  hasMore?: boolean;
+  snapshotRevision: string;
+  total: number;
+  limit: number;
+  offset: number;
+  nextOffset: number | null;
+  hasMore: boolean;
 };
 
 export type CronRunsResult = {
@@ -792,6 +734,8 @@ export type SkillClawHubLink =
       valid: true;
       registry: string;
       slug: string;
+      ownerHandle?: string;
+      requestedReference?: string;
       installedVersion: string;
       installedAt: number;
       originPath?: string;
@@ -835,13 +779,14 @@ export type SkillStatusEntry = {
   userInvocable?: boolean;
   commandVisible?: boolean;
   requirements: {
-    anyBins?: string[];
+    anyBins: string[];
     bins: string[];
     env: string[];
     config: string[];
     os: string[];
   };
   missing: {
+    anyBins: string[];
     bins: string[];
     env: string[];
     config: string[];
@@ -874,10 +819,16 @@ export type ModelCatalogEntry = {
   available?: boolean;
   contextWindow?: number;
   reasoning?: boolean;
+  thinkingLevels?: GatewayThinkingLevelOption[];
+  thinkingDefault?: string;
+  supportsTools?: boolean;
   agentRuntime?: import("../../../packages/gateway-protocol/src/schema.js").GatewayAgentRuntime;
   input?: Array<"text" | "image" | "document">;
   apiKeySupported?: boolean;
 };
+
+export type ModelCatalogProviderOutcome =
+  import("../../../packages/gateway-protocol/src/schema/agents-models-skills.js").ModelCatalogProviderOutcome;
 
 export type ToolCatalogProfile =
   import("../../../packages/gateway-protocol/src/schema.js").ToolCatalogProfile;

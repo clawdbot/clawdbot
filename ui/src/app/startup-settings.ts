@@ -1,5 +1,11 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 // Control UI startup settings resolve native auth handoff and URL parameters.
-import { normalizeOptionalString } from "../lib/string-coerce.ts";
+import {
+  CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM,
+  CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT,
+  type ControlUiBootstrapProfileHint,
+} from "../../../src/gateway/control-ui-contract.js";
+import { inferBasePathFromPathname, sessionRouteNamespaceFromPath } from "../app-route-paths.ts";
 import type { UiSettings } from "./settings.ts";
 
 type ApplicationStartupLocation = {
@@ -20,6 +26,7 @@ type ApplicationStartupSettings = {
   pendingGatewayUrl: string | null;
   pendingGatewayToken: string | null;
   pendingBootstrapToken: string | null;
+  pendingBootstrapProfile: ControlUiBootstrapProfileHint | null;
   queryTokenUsed: boolean;
   location: ApplicationStartupLocation;
   changed: boolean;
@@ -41,6 +48,7 @@ export function resolveApplicationStartupSettings(
   let pendingGatewayUrl: string | null = null;
   let pendingGatewayToken: string | null = null;
   let pendingBootstrapToken: string | null = null;
+  let pendingBootstrapProfile: ControlUiBootstrapProfileHint | null = null;
   let queryTokenUsed = false;
 
   const updateSettings = (patch: Partial<UiSettings>) => {
@@ -82,6 +90,7 @@ export function resolveApplicationStartupSettings(
       pendingGatewayUrl,
       pendingGatewayToken,
       pendingBootstrapToken,
+      pendingBootstrapProfile,
       queryTokenUsed,
       location,
       changed,
@@ -103,8 +112,15 @@ export function resolveApplicationStartupSettings(
   const token = normalizeOptionalString(hashToken ?? queryToken);
   const hasBootstrapTokenParam = hashParams.has("bootstrapToken");
   const bootstrapToken = normalizeOptionalString(hashParams.get("bootstrapToken"));
-  const session = normalizeOptionalString(params.get("session") ?? hashParams.get("session"));
-  const shouldResetSessionForToken = Boolean(token && !session && !gatewayUrlChanged);
+  const hasBootstrapProfileParam = hashParams.has(CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM);
+  const bootstrapProfile = normalizeOptionalString(
+    hashParams.get(CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM),
+  );
+  const sessionPath = sessionRouteNamespaceFromPath(
+    location.pathname,
+    inferBasePathFromPathname(location.pathname),
+  );
+  const shouldResetSessionForToken = Boolean(token && !sessionPath && !gatewayUrlChanged);
   let shouldCleanUrl = false;
 
   if (params.has("token")) {
@@ -130,7 +146,15 @@ export function resolveApplicationStartupSettings(
 
   if (hasBootstrapTokenParam) {
     pendingBootstrapToken = bootstrapToken ?? null;
+    pendingBootstrapProfile =
+      bootstrapToken && bootstrapProfile === CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT
+        ? CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT
+        : null;
     hashParams.delete("bootstrapToken");
+    shouldCleanUrl = true;
+  }
+  if (hasBootstrapProfileParam) {
+    hashParams.delete(CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM);
     shouldCleanUrl = true;
   }
 
@@ -145,13 +169,6 @@ export function resolveApplicationStartupSettings(
     params.delete("password");
     hashParams.delete("password");
     shouldCleanUrl = true;
-  }
-
-  if (session) {
-    updateSettings({
-      sessionKey: session,
-      lastActiveSessionKey: session,
-    });
   }
 
   if (gatewayUrlRaw != null) {
@@ -178,6 +195,7 @@ export function resolveApplicationStartupSettings(
     pendingGatewayUrl,
     pendingGatewayToken,
     pendingBootstrapToken,
+    pendingBootstrapProfile,
     queryTokenUsed,
     location: shouldCleanUrl
       ? {

@@ -18,11 +18,9 @@ export const miscExtensionTestRoots = [
   "extensions/openshell",
   "extensions/parallel",
   "extensions/perplexity",
-  "extensions/phone-control",
   "extensions/searxng",
   "extensions/synthetic",
   "extensions/tavily",
-  "extensions/thread-ownership",
   "extensions/vercel-ai-gateway",
   "extensions/webhooks",
 ];

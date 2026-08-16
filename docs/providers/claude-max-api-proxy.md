@@ -92,8 +92,10 @@ response back in OpenAI format.
     ```json5
     {
       env: {
-        OPENAI_API_KEY: "not-needed",
-        OPENAI_BASE_URL: "http://localhost:3456/v1",
+        vars: {
+          OPENAI_API_KEY: "not-needed",
+          OPENAI_BASE_URL: "http://localhost:3456/v1",
+        },
       },
       agents: {
         defaults: {

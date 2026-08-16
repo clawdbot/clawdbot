@@ -15,7 +15,7 @@ import {
   dispatchReplyWithBufferedBlockDispatcher,
   dispatchWithContext,
   editMessageTelegram,
-  emitInternalMessageSentHook,
+  emitTelegramMessageSentHooks,
   expectDeliveredReply,
   expectDraftStreamParams,
   expectRecordFields,
@@ -439,7 +439,10 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
 
     await dispatchWithContext({ context: createContext() });
 
-    expect(answerDraftStream.update).toHaveBeenCalledWith("Choose");
+    expect(answerDraftStream.update).toHaveBeenCalledWith(
+      "Choose",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expect(mockCallArg(editMessageTelegram)).toBe(123);
     expect(mockCallArg(editMessageTelegram, 0, 1)).toBe(2001);
     expect(mockCallArg(editMessageTelegram, 0, 2)).toBe("Choose");
@@ -464,7 +467,10 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
 
     await dispatchWithContext({ context: createContext() });
 
-    expect(answerDraftStream.update).toHaveBeenCalledWith("Choose");
+    expect(answerDraftStream.update).toHaveBeenCalledWith(
+      "Choose",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expectRecordFields(mockCallArg(editMessageTelegram, 0, 3), {
       buttons: [[{ text: "OK", callback_data: "ok" }]],
     });
@@ -487,7 +493,10 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
     await dispatchWithContext({ context: createReasoningStreamContext() });
 
     expect(reasoningDraftStream.update).toHaveBeenCalledWith("🧠 _Thinking_");
-    expect(answerDraftStream.update).toHaveBeenCalledWith("Answer");
+    expect(answerDraftStream.update).toHaveBeenCalledWith(
+      "Answer",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
@@ -524,8 +533,11 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
     });
 
     expect(deliverReplies).toHaveBeenCalledTimes(2);
-    expect(answerDraftStream.update).toHaveBeenCalledWith("Buffered answer");
-    expectRecordFields(mockCallArg(emitInternalMessageSentHook), {
+    expect(answerDraftStream.update).toHaveBeenCalledWith(
+      "Buffered answer",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
+    expectRecordFields(mockCallArg(emitTelegramMessageSentHooks), {
       content: "Buffered answer",
       messageId: 2001,
     });
@@ -557,10 +569,13 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
     await dispatchWithContext({ context: createReasoningForumTopicContext() });
 
     expect(reasoningDraftStream.update).toHaveBeenCalledWith("🧠 _Thinking_");
-    expect(answerDraftStream.update).toHaveBeenCalledWith("Answer");
+    expect(answerDraftStream.update).toHaveBeenCalledWith(
+      "Answer",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expect(answerDraftStream.stop).toHaveBeenCalled();
     expect(deliverReplies).not.toHaveBeenCalled();
-    expectRecordFields(mockCallArg(emitInternalMessageSentHook), {
+    expectRecordFields(mockCallArg(emitTelegramMessageSentHooks), {
       content: "Answer",
       messageId: 2001,
     });
@@ -672,7 +687,10 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
     });
 
     expect(reasoningDraftStream.update).toHaveBeenCalledWith("🧠 _Thinking_");
-    expect(answerDraftStream.update).toHaveBeenCalledWith("Answer");
+    expect(answerDraftStream.update).toHaveBeenCalledWith(
+      "Answer",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
   });
 
   it("keeps reasoning draft labels static while the reasoning lane is active", async () => {

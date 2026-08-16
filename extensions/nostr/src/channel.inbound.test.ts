@@ -4,6 +4,7 @@ import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-help
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
 import { startNostrGatewayAccount } from "./gateway.js";
+import type { NostrIngressLifecycle } from "./nostr-ingress.js";
 import { setNostrRuntime } from "./runtime.js";
 import { buildResolvedNostrAccount } from "./test-fixtures.js";
 
@@ -39,7 +40,7 @@ beforeAll(async () => {
 function createMockBus() {
   return {
     sendDm: vi.fn(async () => {}),
-    close: vi.fn(),
+    close: vi.fn(async () => {}),
     getMetrics: vi.fn(() => ({ counters: {} })),
     publishProfile: vi.fn(),
     getProfileState: vi.fn(async () => null),
@@ -49,13 +50,14 @@ function createMockBus() {
 function createRuntimeHarness() {
   const recordInboundSession = vi.fn(async () => {});
   const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async ({ dispatcherOptions }) => {
-    await dispatcherOptions.deliver({ text: "|a|b|" });
+    await dispatcherOptions.deliver({ text: "**Table:** [docs](https://example.com)" });
   });
+  const convertMarkdownTables = vi.fn((text: string) => text);
   const runtime = {
     channel: {
       text: {
         resolveMarkdownTableMode: vi.fn(() => "off"),
-        convertMarkdownTables: vi.fn((text: string) => `converted:${text}`),
+        convertMarkdownTables,
       },
       commands: {
         shouldComputeCommandAuthorized: vi.fn(() => true),
@@ -90,6 +92,7 @@ function createRuntimeHarness() {
     runtime,
     recordInboundSession,
     dispatchReplyWithBufferedBlockDispatcher,
+    convertMarkdownTables,
   };
 }
 
@@ -102,14 +105,16 @@ async function startGatewayHarness(params: {
   setNostrRuntime(harness.runtime);
   mocks.startNostrBus.mockResolvedValueOnce(bus as never);
   const abort = new AbortController();
+  const buildContext = vi.fn((contextParams) => contextParams as never);
+  const channelRuntime = { inbound: { buildContext } } as never;
+  const startContext = createStartAccountContext({
+    account: params.account,
+    cfg: params.cfg,
+    abortSignal: abort.signal,
+  });
+  startContext.channelRuntime = channelRuntime;
 
-  const task = startNostrGatewayAccount(
-    createStartAccountContext({
-      account: params.account,
-      cfg: params.cfg,
-      abortSignal: abort.signal,
-    }),
-  );
+  const task = startNostrGatewayAccount(startContext);
   await vi.waitFor(() => {
     expect(mocks.startNostrBus).toHaveBeenCalledTimes(1);
   });
@@ -120,7 +125,7 @@ async function startGatewayHarness(params: {
     },
   };
 
-  return { harness, bus, cleanup };
+  return { harness, bus, channelRuntime, cleanup };
 }
 
 function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
@@ -168,17 +173,16 @@ describe("nostr inbound gateway path", () => {
   it("routes allowed DMs through the standard reply pipeline", async () => {
     mocks.dispatchInboundDirectDm.mockImplementationOnce(
       async (params: Parameters<typeof DispatchInboundDirectDm>[0]) => {
-        await params.deliver({ text: "|a|b|" });
+        await params.deliver({ text: "**Table:** [docs](https://example.com)" });
+        await params.deliver({ text: "***" });
       },
     );
-    const { cleanup } = await startGatewayHarness({
+    const { channelRuntime, cleanup } = await startGatewayHarness({
       account: buildResolvedNostrAccount({
         publicKey: "bot-pubkey",
         config: { dmPolicy: "allowlist", allowFrom: ["nostr:sender-pubkey"] },
       }),
-      cfg: {
-        commands: { useAccessGroups: true },
-      },
+      cfg: {},
     });
 
     const options = mockCallArg(mocks.startNostrBus) as {
@@ -187,14 +191,28 @@ describe("nostr inbound gateway path", () => {
         text: string,
         reply: (text: string) => Promise<void>,
         meta: { eventId: string; createdAt: number },
+        lifecycle: NostrIngressLifecycle,
       ) => Promise<void>;
     };
     const sendReply = vi.fn(async (_text: string) => {});
+    const lifecycle: NostrIngressLifecycle = {
+      abortSignal: new AbortController().signal,
+      onAdopted: vi.fn(async () => {}),
+      onDeferred: vi.fn(),
+      onAdoptionFinalizing: vi.fn(),
+      onAbandoned: vi.fn(async () => {}),
+    };
 
-    await options.onMessage("sender-pubkey", "hello from nostr", sendReply, {
-      eventId: "event-123",
-      createdAt: 1_710_000_000,
-    });
+    await options.onMessage(
+      "sender-pubkey",
+      "hello from nostr",
+      sendReply,
+      {
+        eventId: "event-123",
+        createdAt: 1_710_000_000,
+      },
+      lifecycle,
+    );
 
     expect(mocks.dispatchInboundDirectDm).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -206,10 +224,96 @@ describe("nostr inbound gateway path", () => {
         messageId: "event-123",
         timestamp: 1_710_000_000_000,
         commandAuthorized: true,
+        turnAdoptionLifecycle: expect.objectContaining({ admission: "exclusive" }),
+        channelRuntime,
       }),
     );
-    expect(sendReply).toHaveBeenCalledWith("converted:|a|b|");
+    expect(sendReply).toHaveBeenCalledWith("Table: docs (https://example.com)");
 
     await cleanup.stop();
+  });
+
+  it.each([
+    {
+      name: "strips an internal tool-failure banner",
+      text: "Done.\n⚠️ 🛠️ `search repos (agent)` failed",
+      expected: "Done.",
+    },
+    {
+      name: "strips internal tool-call XML",
+      text: '<tool_call>{"name":"read","arguments":{"path":"private"}}</tool_call>Done.',
+      expected: "Done.",
+    },
+    {
+      name: "strips multiline tool-response scaffolding",
+      text: [
+        "Before",
+        "<function_response>",
+        "private output",
+        "</function_response>",
+        "After",
+      ].join("\n"),
+      expected: "Before\n\nAfter",
+    },
+    {
+      name: "does not send an internal-trace-only reply",
+      text: "⚠️ 🛠️ `search repos (agent)` failed",
+      expected: null,
+    },
+    {
+      name: "preserves ordinary visible prose",
+      text: "The relay has two active subscriptions.",
+      expected: "The relay has two active subscriptions.",
+    },
+  ])("$name before sending an inbound Nostr DM reply", async ({ text, expected }) => {
+    mocks.dispatchInboundDirectDm.mockImplementationOnce(
+      async (params: Parameters<typeof DispatchInboundDirectDm>[0]) => {
+        await params.deliver({ text });
+      },
+    );
+    const { harness, cleanup } = await startGatewayHarness({
+      account: buildResolvedNostrAccount({
+        publicKey: "bot-pubkey",
+        config: { dmPolicy: "allowlist", allowFrom: ["nostr:sender-pubkey"] },
+      }),
+      cfg: {},
+    });
+    const options = mockCallArg(mocks.startNostrBus) as {
+      onMessage: (
+        senderPubkey: string,
+        text: string,
+        reply: (text: string) => Promise<void>,
+        meta: { eventId: string; createdAt: number },
+        lifecycle: NostrIngressLifecycle,
+      ) => Promise<void>;
+    };
+    const sendReply = vi.fn(async (_text: string) => {});
+    const lifecycle: NostrIngressLifecycle = {
+      abortSignal: new AbortController().signal,
+      onAdopted: vi.fn(async () => {}),
+      onDeferred: vi.fn(),
+      onAdoptionFinalizing: vi.fn(),
+      onAbandoned: vi.fn(async () => {}),
+    };
+
+    try {
+      await options.onMessage(
+        "sender-pubkey",
+        "hello from nostr",
+        sendReply,
+        { eventId: "event-123", createdAt: 1_710_000_000 },
+        lifecycle,
+      );
+
+      if (expected === null) {
+        expect(harness.convertMarkdownTables).not.toHaveBeenCalled();
+        expect(sendReply).not.toHaveBeenCalled();
+      } else {
+        expect(harness.convertMarkdownTables).toHaveBeenCalledWith(expected, "off");
+        expect(sendReply).toHaveBeenCalledWith(expected);
+      }
+    } finally {
+      await cleanup.stop();
+    }
   });
 });

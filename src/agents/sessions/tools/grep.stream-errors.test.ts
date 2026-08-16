@@ -1,5 +1,4 @@
-// Grep tool stream error tests verify that stdout/stderr errors reject the tool
-// promise instead of crashing the agent runtime.
+// Grep tool streaming tests cover result limits, cancellation, and subprocess errors.
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
@@ -20,7 +19,11 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-type MockChild = ChildProcessWithoutNullStreams & { stdout: PassThrough; stderr: PassThrough };
+type MockChild = ChildProcessWithoutNullStreams & {
+  nodeChildProcess: ChildProcessWithoutNullStreams;
+  stdout: PassThrough;
+  stderr: PassThrough;
+};
 
 function createChild(): MockChild {
   let killed = false;
@@ -34,10 +37,77 @@ function createChild(): MockChild {
     killed = true;
     return true;
   });
+  child.nodeChildProcess = child;
   return child;
 }
 
-describe("grep tool stream errors", () => {
+function grepMatch(lineNumber: number): string {
+  return `${JSON.stringify({
+    type: "match",
+    data: {
+      path: { text: "/tmp/match.txt" },
+      line_number: lineNumber,
+      lines: { text: "foo\n" },
+    },
+  })}\n`;
+}
+
+function textContent(
+  result: Awaited<ReturnType<ReturnType<typeof createGrepToolDefinition>["execute"]>>,
+): string {
+  const first = result.content[0];
+  return first?.type === "text" ? (first.text ?? "") : "";
+}
+
+describe("grep tool streaming", () => {
+  it.each([
+    {
+      name: "keeps an exact-size result complete",
+      matchCount: 2,
+      closeCode: 0,
+      expectedText: "match.txt:1: foo\nmatch.txt:2: foo",
+      expectedLimitReached: undefined,
+      expectedKilled: false,
+    },
+    {
+      name: "uses one extra match as the truncation sentinel",
+      matchCount: 3,
+      closeCode: null,
+      expectedText:
+        "match.txt:1: foo\nmatch.txt:2: foo\n\n[2 matches limit reached. Use limit=4 for more, or refine pattern]",
+      expectedLimitReached: 2,
+      expectedKilled: true,
+    },
+  ])(
+    "$name",
+    async ({ matchCount, closeCode, expectedText, expectedLimitReached, expectedKilled }) => {
+      const child = createChild();
+      vi.mocked(spawnCommand).mockReturnValue(child as never);
+      vi.mocked(ensureTool).mockResolvedValue("rg");
+
+      const tool = createGrepToolDefinition(process.cwd());
+      const resultPromise = tool.execute(
+        "call-limit",
+        { pattern: "foo", limit: 2 },
+        undefined,
+        undefined,
+        {} as never,
+      );
+      await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
+      for (let lineNumber = 1; lineNumber <= matchCount; lineNumber += 1) {
+        child.stdout.write(grepMatch(lineNumber));
+      }
+      child.stdout.end();
+      child.stderr.end();
+      child.emit("close", closeCode);
+
+      const result = await resultPromise;
+      expect(textContent(result)).toBe(expectedText);
+      expect(result.details?.matchLimitReached).toBe(expectedLimitReached);
+      expect(child.killed).toBe(expectedKilled);
+    },
+  );
+
   it("settles promptly when aborted while resolving rg", async () => {
     let resolveEnsureTool: ((value: string) => void) | undefined;
     vi.mocked(ensureTool).mockImplementationOnce(
@@ -222,5 +292,23 @@ describe("grep tool stream errors", () => {
       child.stdout.emit("error", new Error("stdout later"));
     }).not.toThrow();
     await expect(result).rejects.toThrow("stderr first");
+  });
+
+  it("keeps multibyte stderr intact when pipe chunks split a character", async () => {
+    const child = createChild();
+    vi.mocked(spawnCommand).mockReturnValue(child as never);
+    vi.mocked(ensureTool).mockResolvedValue("rg");
+
+    const tool = createGrepToolDefinition(process.cwd());
+    const result = tool.execute("call-1", { pattern: "foo" }, undefined, undefined, {} as never);
+    await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
+    const stderrBytes = Buffer.from("rg 错误：权限被拒绝\n");
+    child.stdout.end();
+    // Split inside the first multibyte character to mimic a pipe chunk boundary.
+    child.stderr.write(stderrBytes.subarray(0, 4));
+    child.stderr.end(stderrBytes.subarray(4));
+    child.emit("close", 2);
+
+    await expect(result).rejects.toThrow("rg 错误：权限被拒绝");
   });
 });

@@ -8,7 +8,12 @@ title: "Wiki"
 
 # `openclaw wiki`
 
-Inspect and maintain the `memory-wiki` vault. Provided by the bundled `memory-wiki` plugin.
+Inspect and maintain the `memory-wiki` vault. Provided by the bundled optional `memory-wiki` plugin. Enable it before first use:
+
+```bash
+openclaw plugins enable memory-wiki
+openclaw gateway restart
+```
 
 Related: [Memory Wiki plugin](/plugins/memory-wiki), [Memory Overview](/concepts/memory), [CLI: memory](/cli/memory)
 
@@ -50,21 +55,22 @@ openclaw wiki obsidian daily
 ## Agent selection
 
 When `plugins.entries.memory-wiki.config.vault.scope` is `agent`, select the
-vault with the top-level `--agent <id>` option:
+vault with the command's `--agent <id>` option:
 
 ```bash
-openclaw wiki --agent support status
-openclaw wiki --agent support search "refund policy"
-openclaw wiki --agent marketing ingest ./campaign-notes.md
+openclaw wiki status --agent support
+openclaw wiki search "refund policy" --agent support
+openclaw wiki ingest ./campaign-notes.md --agent marketing
 ```
 
-In a setup with multiple configured agents, `--agent` is required for CLI
-operations so a command cannot read or write an arbitrary default vault. If
-only one agent is configured, that agent remains the default. Unknown agent ids
-fail before the vault operation starts. The option does not change the selected
-path when `vault.scope` is `global`.
+When `--agent` is omitted, CLI operations use the configured default agent,
+matching other agent-scoped CLI families. Pass the flag to select a different
+agent. Unknown agent ids fail before the vault operation starts. If no default
+can be resolved, the error tells you to pass `--agent <id>` or configure an
+agent. The option does not change the selected path when `vault.scope` is
+`global`.
 
-Gateway clients follow the same rule: pass `agentId` on vault-backed `wiki.*`
+Gateway clients remain explicit: pass `agentId` on vault-backed `wiki.*`
 requests in an agent-scoped multi-agent setup. A missing or unknown id is an
 error. Agent turns, wiki tools, memory corpus supplements, and compiled prompt
 digests already carry the active runtime agent context.
@@ -211,7 +217,7 @@ A non-dry-run import that changes any page records an import run id, printed in 
 
 ### `wiki chatgpt rollback <run-id>`
 
-Roll back a previously applied ChatGPT import run, removing pages it created and restoring pages it overwrote. No-ops (and reports `alreadyRolledBack`) if the run was already rolled back.
+Roll back a previously applied ChatGPT import run, removing pages it created and restoring pages it overwrote. Pages changed after import are moved under the run's `.openclaw-wiki/import-runs/<run-id>/recovered/` directory instead of being deleted. Recovery paths remain in the command result on retries and later `alreadyRolledBack` responses. Interrupted runs remain `rolling_back` while target recovery or derived-artifact compilation is incomplete. A persisted process-restart fence separates those phases: after it, retries rebuild indexes and compiled caches without rewriting source pages or moving later pathname writes. A later normal compile may refresh machine-managed Related blocks. This covers in-process failure and process restart after ordinary filesystem calls return, not kernel or host power-loss ordering.
 
 ### `wiki obsidian ...`
 

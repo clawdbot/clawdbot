@@ -68,20 +68,25 @@ function isBotMentionedFromTargets(
     : isSelfChatMode(targets.self.e164, mentionCfg.allowFrom) && !isGroupConversation;
 
   const hasMentions = targets.normalizedMentions.length > 0;
-  if (hasMentions && !isSelfChat) {
+  const hasNativeMentionsOutsideSelfChat = hasMentions && !isSelfChat;
+  if (hasNativeMentionsOutsideSelfChat) {
     for (const mention of targets.normalizedMentions) {
       if (identitiesOverlap(targets.self, mention)) {
         return true;
       }
     }
-    // If the message explicitly mentions someone else, do not fall back to regex matches.
-    return false;
   } else if (hasMentions && isSelfChat) {
     // Self-chat mode: ignore WhatsApp @mention JIDs, otherwise @mentioning the owner in self-chat triggers the bot.
   }
   const bodyClean = clean(msg.payload.body);
   if (mentionCfg.mentionRegexes.some((re) => re.test(bodyClean))) {
     return true;
+  }
+
+  // Native mentions for other participants inject their identities into the
+  // body, so they must not activate the loose self-number fallback below.
+  if (hasNativeMentionsOutsideSelfChat) {
+    return false;
   }
 
   // Fallback: detect body containing our own number (with or without +, spacing)

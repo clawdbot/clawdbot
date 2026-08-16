@@ -1,10 +1,14 @@
 /** Tests before-tool-call hook ordering, mutation, and cancellation behavior. */
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createHookRunner } from "./hooks.js";
 import { addStaticTestHooks } from "./hooks.test-fixtures.js";
+import { addTestHook } from "./hooks.test-helpers.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
-import type { PluginHookToolContext } from "./types.js";
-import type { PluginHookBeforeToolCallResult } from "./types.js";
+import type {
+  PluginHookBeforeToolCallEvent,
+  PluginHookBeforeToolCallResult,
+  PluginHookToolContext,
+} from "./types.js";
 
 const stubCtx: PluginHookToolContext = {
   toolName: "bash",
@@ -252,5 +256,313 @@ describe("before_tool_call hook merger — requireApproval", () => {
   ] as const)("$name", async ({ hooks, expected }) => {
     const result = await runBeforeToolCallWithHooks(registry, hooks);
     expectRequireApprovalResult(result, expected);
+  });
+
+  it("isolates direct event mutation from the caller and later handlers", async () => {
+    const event: PluginHookBeforeToolCallEvent = {
+      toolName: "bash",
+      params: { command: "safe" },
+    };
+    let observedParams: Record<string, unknown> | undefined;
+    addTestHook({
+      registry,
+      pluginId: "approver",
+      hookName: "before_tool_call",
+      priority: 100,
+      handler: () => ({
+        requireApproval: {
+          title: "Needs approval",
+          description: "Approval needed",
+        },
+      }),
+    });
+    addTestHook({
+      registry,
+      pluginId: "mutator",
+      hookName: "before_tool_call",
+      priority: 50,
+      handler: (handlerEvent: PluginHookBeforeToolCallEvent) => {
+        handlerEvent.params.cwd = "/unapproved";
+        return {};
+      },
+    });
+    addTestHook({
+      registry,
+      pluginId: "observer",
+      hookName: "before_tool_call",
+      handler: (handlerEvent: PluginHookBeforeToolCallEvent) => {
+        observedParams = handlerEvent.params;
+        return {};
+      },
+    });
+
+    await createHookRunner(registry).runBeforeToolCall(event, stubCtx);
+
+    expect(event.params).toEqual({ command: "safe" });
+    expect(observedParams).toEqual({ command: "safe" });
+  });
+
+  it("snapshots params when approval is first requested", async () => {
+    const approvedParams = { command: "safe" };
+    addTestHook({
+      registry,
+      pluginId: "policy",
+      hookName: "before_tool_call",
+      priority: 100,
+      handler: () => ({
+        params: approvedParams,
+        requireApproval: {
+          title: "Needs approval",
+          description: "Approval needed",
+        },
+      }),
+    });
+    addTestHook({
+      registry,
+      pluginId: "policy",
+      hookName: "before_tool_call",
+      priority: 50,
+      handler: () => {
+        approvedParams.command = "mutated";
+        return { params: { command: "late override" } };
+      },
+    });
+
+    const result = await createHookRunner(registry).runBeforeToolCall(
+      { toolName: "bash", params: { command: "original" } },
+      stubCtx,
+    );
+
+    expect(result?.params).toEqual({ command: "safe" });
+  });
+
+  it("fails closed when a hook event cannot be isolated", async () => {
+    const handler = vi.fn().mockReturnValue({ block: true });
+    addTestHook({
+      registry,
+      pluginId: "policy",
+      hookName: "before_tool_call",
+      handler,
+    });
+
+    const run = createHookRunner(registry, { catchErrors: true }).runBeforeToolCall(
+      { toolName: "bash", params: { callback: () => undefined } },
+      stubCtx,
+    );
+
+    await expect(run).rejects.toThrow("before_tool_call mutable input isolation failed");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when a hook event contains shared memory", async () => {
+    const handler = vi.fn().mockReturnValue({});
+    addTestHook({
+      registry,
+      pluginId: "policy",
+      hookName: "before_tool_call",
+      handler,
+    });
+    const shared = new SharedArrayBuffer(4);
+
+    const run = createHookRunner(registry, { catchErrors: true }).runBeforeToolCall(
+      { toolName: "bash", params: { shared: new Uint8Array(shared) } },
+      stubCtx,
+    );
+
+    await expect(run).rejects.toThrow("before_tool_call mutable input isolation failed");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when shared memory is hidden in Error.cause", async () => {
+    const handler = vi.fn().mockReturnValue({});
+    addTestHook({
+      registry,
+      pluginId: "policy",
+      hookName: "before_tool_call",
+      handler,
+    });
+    const error = new Error("shared", {
+      cause: new Uint8Array(new SharedArrayBuffer(4)),
+    });
+
+    const run = createHookRunner(registry, { catchErrors: true }).runBeforeToolCall(
+      { toolName: "bash", params: { error } },
+      stubCtx,
+    );
+
+    await expect(run).rejects.toThrow("before_tool_call mutable input isolation failed");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when a hook event contains shared WebAssembly memory", async () => {
+    const handler = vi.fn().mockReturnValue({});
+    addTestHook({
+      registry,
+      pluginId: "policy",
+      hookName: "before_tool_call",
+      handler,
+    });
+    const memory = new WebAssembly.Memory({ initial: 1, maximum: 1, shared: true });
+
+    const run = createHookRunner(registry, { catchErrors: true }).runBeforeToolCall(
+      { toolName: "bash", params: { memory } },
+      stubCtx,
+    );
+
+    await expect(run).rejects.toThrow("before_tool_call mutable input isolation failed");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("does not invoke overridden collection iterators during isolation", async () => {
+    class HostileMap extends Map {
+      override [Symbol.iterator](): MapIterator<[unknown, unknown]> {
+        throw new Error("must not call overridden map iterator");
+      }
+    }
+    class HostileSet extends Set {
+      override [Symbol.iterator](): SetIterator<unknown> {
+        throw new Error("must not call overridden set iterator");
+      }
+    }
+    const map = new HostileMap();
+    const set = new HostileSet();
+    Map.prototype.set.call(map, "key", "value");
+    Set.prototype.add.call(set, "value");
+    const handler = vi.fn().mockReturnValue({});
+    addTestHook({
+      registry,
+      pluginId: "policy",
+      hookName: "before_tool_call",
+      handler,
+    });
+
+    await createHookRunner(registry, { catchErrors: true }).runBeforeToolCall(
+      {
+        toolName: "bash",
+        params: {
+          map,
+          set,
+        },
+      },
+      stubCtx,
+    );
+
+    expect(handler).toHaveBeenCalledOnce();
+    const event = handler.mock.calls[0]?.[0];
+    expect(event.params.map).toEqual(new Map([["key", "value"]]));
+    expect(event.params.set).toEqual(new Set(["value"]));
+  });
+
+  it("does not enumerate typed-array elements during isolation", async () => {
+    const bytes = new Uint8Array(1024 * 1024);
+    const ownKeys = vi.spyOn(Reflect, "ownKeys");
+    const handler = vi.fn().mockReturnValue({});
+    addTestHook({
+      registry,
+      pluginId: "policy",
+      hookName: "before_tool_call",
+      handler,
+    });
+
+    await createHookRunner(registry, { catchErrors: true }).runBeforeToolCall(
+      { toolName: "bash", params: { bytes } },
+      stubCtx,
+    );
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(ownKeys.mock.calls.some(([value]) => ArrayBuffer.isView(value))).toBe(false);
+  });
+
+  it("fails closed when approved params cannot be snapshotted", async () => {
+    const lowerPriorityHook = vi.fn().mockReturnValue({});
+    addTestHook({
+      registry,
+      pluginId: "policy",
+      hookName: "before_tool_call",
+      priority: 100,
+      handler: () => ({
+        params: { callback: () => undefined },
+        requireApproval: {
+          title: "Needs approval",
+          description: "Approval needed",
+        },
+      }),
+    });
+    addTestHook({
+      registry,
+      pluginId: "observer",
+      hookName: "before_tool_call",
+      handler: lowerPriorityHook,
+    });
+
+    const run = createHookRunner(registry, { catchErrors: true }).runBeforeToolCall(
+      { toolName: "bash", params: { command: "safe" } },
+      stubCtx,
+    );
+
+    await expect(run).rejects.toThrow("before_tool_call mutable input isolation failed");
+    expect(lowerPriorityHook).not.toHaveBeenCalled();
+  });
+});
+
+describe("before_tool_call matcher scoping", () => {
+  it("skips uncovered tools and executes a canonical matcher once", async () => {
+    const registry = createEmptyPluginRegistry();
+    const handler = vi.fn(() => ({ block: true, blockReason: "covered" }));
+    addStaticTestHooks(registry, {
+      hookName: "before_tool_call",
+      hooks: [
+        {
+          pluginId: "shell-policy",
+          matcher: ["exec"],
+          result: { block: true, blockReason: "covered" },
+          handler,
+        },
+      ],
+    });
+    const runner = createHookRunner(registry);
+
+    await expect(
+      runner.runBeforeToolCall(
+        { toolName: "web_search", params: {} },
+        { ...stubCtx, toolName: "web_search" },
+      ),
+    ).resolves.toBeUndefined();
+    await expect(
+      runner.runBeforeToolCall({ toolName: "exec", params: {} }, { ...stubCtx, toolName: "exec" }),
+    ).resolves.toMatchObject({ block: true, blockReason: "covered" });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects Codex matcher aliases instead of making them globally special", async () => {
+    const registry = createEmptyPluginRegistry();
+    const handler = vi.fn(() => ({ block: true }));
+    addStaticTestHooks(registry, {
+      hookName: "before_tool_call",
+      hooks: [{ pluginId: "codex-spelling", matcher: ["Agent"], result: { block: true }, handler }],
+    });
+
+    await expect(
+      createHookRunner(registry).runBeforeToolCall(
+        { toolName: "spawn_agent", params: {} },
+        { ...stubCtx, toolName: "spawn_agent" },
+      ),
+    ).rejects.toThrow("tool hook matcher entries must use canonical OpenClaw tool ids");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("keeps an omitted matcher as match-all", async () => {
+    const registry = createEmptyPluginRegistry();
+    const handler = vi.fn(() => ({ block: true }));
+    addStaticTestHooks(registry, {
+      hookName: "before_tool_call",
+      hooks: [{ pluginId: "legacy-policy", result: { block: true }, handler }],
+    });
+
+    await createHookRunner(registry).runBeforeToolCall(
+      { toolName: "web_search", params: {} },
+      { ...stubCtx, toolName: "web_search" },
+    );
+    expect(handler).toHaveBeenCalledOnce();
   });
 });

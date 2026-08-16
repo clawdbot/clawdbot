@@ -1,14 +1,17 @@
-import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
+import {
+  buildTransportAwareSimpleStreamFn,
+  createBoundaryAwareStreamFnForModel,
+  createOpenClawTransportStreamFnForModel,
+  prepareTransportAwareSimpleModel,
+  resolveTransportAwareSimpleApi,
+} from "@openclaw/ai/transports";
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import {
   resolveAzureOpenAIApiVersion,
   type OpenAIResponsesOutput,
   type CapturedStreamEvent,
-  makeCompletionsModel,
   makeResponsesModel,
-  createDeepSeekCompletionsModel,
-  createAssistantOutput,
   createResponsesAssistantOutput,
   createAzureResponsesModel,
   neverYieldsStream,
@@ -17,13 +20,6 @@ import {
 } from "./openai-transport-stream.test-harness.js";
 import { testing } from "./openai-transport-stream.test-support.js";
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
-import {
-  buildTransportAwareSimpleStreamFn,
-  createBoundaryAwareStreamFnForModel,
-  createOpenClawTransportStreamFnForModel,
-  prepareTransportAwareSimpleModel,
-  resolveTransportAwareSimpleApi,
-} from "./provider-transport-stream.js";
 
 describe("openai transport stream", () => {
   it("keeps bounded redacted diagnostics UTF-16 well-formed", () => {
@@ -47,33 +43,6 @@ describe("openai transport stream", () => {
         createResponsesAssistantOutput(model),
         { push: vi.fn() },
         model,
-        { firstEventTimeoutMs: 5, abortFirstEventStream, onFirstEventTimeout },
-      );
-      const rejection = expect(resultPromise).rejects.toThrow(
-        /did not deliver a first SSE event within 5ms after streaming headers/,
-      );
-
-      await vi.advanceTimersByTimeAsync(5);
-      await rejection;
-      expect(abortFirstEventStream).toHaveBeenCalledTimes(1);
-      expect(abortFirstEventStream.mock.calls[0]?.[0]).toBeInstanceOf(Error);
-      expect(onFirstEventTimeout).toHaveBeenCalledWith(abortFirstEventStream.mock.calls[0]?.[0]);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("fails OpenAI completions streams when headers arrive but no first event follows", async () => {
-    vi.useFakeTimers();
-    try {
-      const model = createDeepSeekCompletionsModel();
-      const abortFirstEventStream = vi.fn();
-      const onFirstEventTimeout = vi.fn();
-      const resultPromise = testing.processOpenAICompletionsStream(
-        neverYieldsStream() as AsyncIterable<ChatCompletionChunk>,
-        createAssistantOutput(model),
-        model,
-        { push: vi.fn() },
         { firstEventTimeoutMs: 5, abortFirstEventStream, onFirstEventTimeout },
       );
       const rejection = expect(resultPromise).rejects.toThrow(
@@ -265,11 +234,17 @@ describe("openai transport stream", () => {
             summary: [{ type: "summary_text", text: "Need a tool." }],
           },
         },
+        { type: "response.completed", response: { id: "resp_123", status: "completed" } },
       ]),
       output,
       { push: vi.fn() },
       model,
-      { authProfileId: "openai:oauth", sessionId: "session-123" },
+      {
+        reasoningReplayMetadata: testing.buildOpenAIResponsesReasoningReplayMetadata(model, {
+          authProfileId: "openai:oauth",
+          sessionId: "session-123",
+        }),
+      },
     );
 
     const expectedReplayMetadata = testing.buildOpenAIResponsesReasoningReplayMetadata(model, {
@@ -372,6 +347,119 @@ describe("openai transport stream", () => {
     expect(output.usage.cost.cacheRead).toBeCloseTo(0.00001);
     expect(output.usage.cost.cacheWrite).toBeCloseTo(0.0001875);
     expect(output.usage.cost.total).toBeCloseTo(0.0007475);
+  });
+
+  it("records Responses usage and cost when the turn ends incomplete", async () => {
+    const model = makeResponsesModel({
+      ...createAzureResponsesModel(),
+      id: "gpt-5.6-sol",
+      name: "GPT-5.6 Sol",
+      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
+    });
+    const output = createResponsesAssistantOutput(model);
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.incomplete",
+          response: {
+            id: "resp-incomplete",
+            status: "incomplete",
+            incomplete_details: { reason: "max_output_tokens" },
+            usage: {
+              input_tokens: 100,
+              output_tokens: 10,
+              total_tokens: 110,
+              input_tokens_details: { cached_tokens: 20, cache_write_tokens: 30 },
+              output_tokens_details: { reasoning_tokens: 0 },
+            },
+          },
+        },
+      ]),
+      output,
+      { push: vi.fn() },
+      model,
+    );
+
+    expectRecordFields(output.usage, {
+      input: 50,
+      output: 10,
+      cacheRead: 20,
+      cacheWrite: 30,
+      reasoningTokens: 0,
+      totalTokens: 110,
+    });
+    // Sub-cent totals round to 0 at toBeCloseTo's default precision, so assert non-zero too.
+    expect(output.usage.cost.total).toBeGreaterThan(0);
+    expect(output.usage.cost.total).toBeCloseTo(0.0007475, 7);
+    expect(output.stopReason).toBe("length");
+  });
+
+  it("reports content-filtered incomplete Responses turns as errors", async () => {
+    const model = makeResponsesModel(createAzureResponsesModel());
+    const output = createResponsesAssistantOutput(model);
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.incomplete",
+          response: {
+            id: "resp-filtered",
+            status: "incomplete",
+            incomplete_details: { reason: "content_filter" },
+            usage: { input_tokens: 12, output_tokens: 0, total_tokens: 12 },
+          },
+        },
+      ]),
+      output,
+      { push: vi.fn() },
+      model,
+    );
+
+    expect(output.stopReason).toBe("error");
+    expect(output.errorMessage).toBe("Provider incomplete_reason: content_filter");
+    expectRecordFields(output.usage, { input: 12, output: 0 });
+  });
+
+  it("backfills partial message output but not tool calls from an incomplete Responses turn", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.incomplete",
+          response: {
+            id: "resp-incomplete-output",
+            status: "incomplete",
+            incomplete_details: { reason: "max_output_tokens" },
+            output: [
+              {
+                type: "message",
+                id: "msg_truncated",
+                role: "assistant",
+                content: [{ type: "text", text: "TRUNCATED_HALF_SENTENCE" }],
+              },
+              {
+                type: "function_call",
+                id: "fc_truncated",
+                call_id: "call_truncated",
+                name: "write",
+                arguments: '{"path":"unfinished',
+              },
+            ],
+            usage: { input_tokens: 8, output_tokens: 4, total_tokens: 12 },
+          },
+        },
+      ]),
+      output,
+      { push: vi.fn() },
+      model,
+    );
+
+    expect(output.content).toMatchObject([{ type: "text", text: "TRUNCATED_HALF_SENTENCE" }]);
+    expect(output.stopReason).toBe("length");
+    expectRecordFields(output.usage, { input: 8, output: 4 });
   });
 
   it("backfills Azure Responses completed message output when item events are absent", async () => {
@@ -760,7 +848,6 @@ describe("openai transport stream", () => {
         id: "call_123|fc_123",
         name: "session_status",
         arguments: { sessionKey: "current" },
-        partialJson: '{"sessionKey":"current"}',
       },
     ]);
   });
@@ -841,6 +928,7 @@ describe("openai transport stream", () => {
   });
 
   it("enforces the code mode responses tool surface before requests leave OpenClaw", () => {
+    const visibleToolNames = new Set(["exec", "wait", "computer"]);
     const payload = {
       tools: [
         { type: "function", name: "exec" },
@@ -850,8 +938,8 @@ describe("openai transport stream", () => {
       ],
     };
 
-    testing.enforceCodeModeResponsesToolSurface(payload);
-    testing.assertCodeModeResponsesToolSurface(payload);
+    testing.enforceCodeModeResponsesToolSurface(payload, visibleToolNames);
+    testing.assertCodeModeResponsesToolSurface(payload, visibleToolNames);
     expect(payload.tools).toEqual([
       { type: "function", name: "exec" },
       { type: "function", name: "computer" },
@@ -860,6 +948,7 @@ describe("openai transport stream", () => {
   });
 
   it("skips unreadable code mode response payload tool names", () => {
+    const visibleToolNames = new Set(["exec", "wait"]);
     const payload = {
       tools: [
         { type: "function", name: "exec" },
@@ -881,8 +970,8 @@ describe("openai transport stream", () => {
       ],
     };
 
-    testing.enforceCodeModeResponsesToolSurface(payload);
-    testing.assertCodeModeResponsesToolSurface(payload);
+    testing.enforceCodeModeResponsesToolSurface(payload, visibleToolNames);
+    testing.assertCodeModeResponsesToolSurface(payload, visibleToolNames);
     expect(payload.tools).toEqual([
       { type: "function", name: "exec" },
       { type: "function", function: { name: "wait" } },
@@ -890,6 +979,7 @@ describe("openai transport stream", () => {
   });
 
   it("rejects duplicate direct-only tools in a code mode payload", () => {
+    const visibleToolNames = new Set(["exec", "wait", "computer"]);
     const payload = {
       tools: [
         { type: "function", name: "exec" },
@@ -899,16 +989,20 @@ describe("openai transport stream", () => {
       ],
     };
 
-    expect(() => testing.assertCodeModeResponsesToolSurface(payload)).toThrow(
+    expect(() => testing.assertCodeModeResponsesToolSurface(payload, visibleToolNames)).toThrow(
       /tool surface violation/,
     );
   });
 
   it("fails closed when the code mode final payload tool surface is not exec/wait", () => {
+    const visibleToolNames = new Set(["exec", "wait"]);
     expect(() =>
-      testing.assertCodeModeResponsesToolSurface({
-        tools: [{ type: "function", name: "exec" }, { type: "web_search_preview" }],
-      }),
+      testing.assertCodeModeResponsesToolSurface(
+        {
+          tools: [{ type: "function", name: "exec" }, { type: "web_search_preview" }],
+        },
+        visibleToolNames,
+      ),
     ).toThrow(/Code mode payload tool surface violation/);
   });
 
@@ -1063,7 +1157,7 @@ describe("openai transport stream", () => {
     });
     const transportAliasModel = {
       ...codexModel,
-      api: "openclaw-openai-responses-transport" as Api,
+      api: "openclaw-openai-chatgpt-responses-transport" as Api,
     } satisfies Model;
     const nonNativeChatGPTModel = makeResponsesModel({
       ...codexModel,
@@ -1088,71 +1182,6 @@ describe("openai transport stream", () => {
     expect(
       testing.buildOpenAISdkRequestOptions(openAIModel, undefined, { stream: true }),
     ).toBeUndefined();
-  });
-
-  it("moves Azure OpenAI completions api-version headers into default query params", () => {
-    const config = testing.buildOpenAICompletionsClientConfig(
-      {
-        id: "gpt-4o-mini",
-        name: "GPT-4o Mini",
-        api: "openai-completions",
-        provider: "azure-custom",
-        baseUrl: "https://example.openai.azure.com/openai/deployments/gpt-4o-mini?existing=1",
-        headers: {
-          "api-key": "azure-key",
-          "api-version": "2024-10-21",
-          "X-Tenant": "acme",
-        },
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128000,
-        maxTokens: 4096,
-      } as unknown as Model<"openai-completions">,
-      { systemPrompt: "", messages: [] } as never,
-    );
-
-    expect(config).toEqual({
-      baseURL: "https://example.openai.azure.com/openai/deployments/gpt-4o-mini",
-      defaultHeaders: {
-        "api-key": "azure-key",
-        "X-Tenant": "acme",
-      },
-      defaultQuery: {
-        existing: "1",
-        "api-version": "2024-10-21",
-      },
-    });
-  });
-
-  it("preserves configured base URL query params without moving non-Azure headers", () => {
-    const config = testing.buildOpenAICompletionsClientConfig(
-      makeCompletionsModel({
-        id: "proxy-model",
-        name: "Proxy Model",
-        provider: "custom-proxy",
-        baseUrl: "https://proxy.example.com/v1?tenant=acme",
-        headers: {
-          "api-version": "proxy-header",
-          "X-Tenant": "acme",
-        },
-        reasoning: false,
-        contextWindow: 128000,
-        maxTokens: 4096,
-      }),
-      { systemPrompt: "", messages: [] } as never,
-    );
-
-    expect(config).toEqual({
-      baseURL: "https://proxy.example.com/v1",
-      defaultHeaders: {
-        "api-version": "proxy-header",
-        "X-Tenant": "acme",
-      },
-      defaultQuery: {
-        tenant: "acme",
-      },
-    });
   });
 
   it("builds boundary-aware stream shapers for supported default agent transports", () => {
@@ -1239,9 +1268,11 @@ describe("openai transport stream", () => {
 
     const prepared = prepareTransportAwareSimpleModel(model);
 
-    expect(resolveTransportAwareSimpleApi(model.api)).toBe("openclaw-openai-responses-transport");
+    expect(resolveTransportAwareSimpleApi(model.api)).toBe(
+      "openclaw-openai-chatgpt-responses-transport",
+    );
     expectRecordFields(prepared, {
-      api: "openclaw-openai-responses-transport",
+      api: "openclaw-openai-chatgpt-responses-transport",
       provider: "openai",
       id: "codex-mini-latest",
     });

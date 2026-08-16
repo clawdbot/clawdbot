@@ -15,6 +15,7 @@ import {
 import type { XaiWebSearchResponse } from "./web-search-shared.js";
 
 export const XAI_DEFAULT_X_SEARCH_MODEL = XAI_DEFAULT_MODEL_ID;
+const XAI_X_SEARCH_MAX_CONTENT_CHARS = 20_000;
 
 type XaiXSearchConfig = {
   apiKey?: unknown;
@@ -38,6 +39,7 @@ type XaiXSearchResult = {
   content: string;
   citations: string[];
   inlineCitations?: XaiWebSearchResponse["inline_citations"];
+  truncated?: true;
 };
 
 function resolveXaiXSearchConfig(config?: Record<string, unknown>): XaiXSearchConfig {
@@ -82,6 +84,7 @@ export function buildXaiXSearchPayload(params: {
   content: string;
   citations: string[];
   inlineCitations?: XaiWebSearchResponse["inline_citations"];
+  truncated?: boolean;
   options?: XaiXSearchOptions;
 }): Record<string, unknown> {
   return {
@@ -98,6 +101,7 @@ export function buildXaiXSearchPayload(params: {
     content: wrapWebContent(params.content, "web_search"),
     citations: params.citations,
     ...(params.inlineCitations ? { inlineCitations: params.inlineCitations } : {}),
+    ...(params.truncated ? { truncated: true } : {}),
     ...(params.options?.allowedXHandles?.length
       ? { allowedXHandles: params.options.allowedXHandles }
       : {}),
@@ -119,12 +123,15 @@ export async function requestXaiXSearch(params: {
   inlineCitations: boolean;
   maxTurns?: number;
   options: XaiXSearchOptions;
+  signal?: AbortSignal;
 }): Promise<XaiXSearchResult> {
+  params.signal?.throwIfAborted();
   return await postTrustedWebToolsJson(
     {
       url: params.endpoint,
       timeoutSeconds: params.timeoutSeconds,
       apiKey: params.apiKey,
+      ...(params.signal ? { signal: params.signal } : {}),
       body: buildXaiResponsesToolBody({
         model: params.model,
         inputText: params.options.query,
@@ -143,6 +150,7 @@ export async function requestXaiXSearch(params: {
         data,
         "xAI X search failed",
         params.inlineCitations,
+        XAI_X_SEARCH_MAX_CONTENT_CHARS,
       );
     },
   );

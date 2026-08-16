@@ -22,7 +22,7 @@ import {
   resolveSkillConfig,
   resolveSkillsInstallPreferences,
 } from "../loading/config.js";
-import { loadWorkspaceSkillEntries } from "../loading/workspace.js";
+import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { mergeRemoteNodeSkillEntries } from "../runtime/remote-skills.js";
 import type {
   SkillEntry,
@@ -361,7 +361,7 @@ export function buildWorkspaceSkillStatus(
   // the loader must stay unfiltered; node-hosted skills merge in separately.
   const skillEntries = mergeRemoteNodeSkillEntries(
     opts?.entries ??
-      loadWorkspaceSkillEntries(workspaceDir, {
+      loadWorkspaceSkills(workspaceDir, {
         config: opts?.config,
         managedSkillsDir,
         bundledSkillsDir: bundledContext.dir,

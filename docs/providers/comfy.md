@@ -4,11 +4,17 @@ title: "ComfyUI"
 read_when:
   - You want to use local ComfyUI workflows with OpenClaw
   - You want to use Comfy Cloud with image, video, or music workflows
-  - You need the bundled comfy plugin config keys
+  - You need the comfy plugin config keys
 ---
 
-OpenClaw ships a bundled `comfy` plugin for workflow-driven ComfyUI runs. The
-plugin is entirely workflow-driven: OpenClaw does not map generic `size`,
+Install the official `comfy` plugin for workflow-driven ComfyUI runs:
+
+```bash
+openclaw plugins install @openclaw/comfy-provider
+openclaw gateway restart
+```
+
+The plugin is entirely workflow-driven: OpenClaw does not map generic `size`,
 `aspectRatio`, `resolution`, `durationSeconds`, or TTS-style controls onto
 your graph.
 
@@ -72,8 +78,10 @@ Choose between running ComfyUI on your own machine or using Comfy Cloud.
         {
           agents: {
             defaults: {
-              imageGenerationModel: {
-                primary: "comfy/workflow",
+              mediaModels: {
+                image: {
+                  primary: "comfy/workflow",
+                },
               },
             },
           },
@@ -147,8 +155,10 @@ Choose between running ComfyUI on your own machine or using Comfy Cloud.
         {
           agents: {
             defaults: {
-              imageGenerationModel: {
-                primary: "comfy/workflow",
+              mediaModels: {
+                image: {
+                  primary: "comfy/workflow",
+                },
               },
             },
           },
@@ -244,8 +254,10 @@ The `image` and `video` sections also support a reference-image input node:
     {
       agents: {
         defaults: {
-          imageGenerationModel: {
-            primary: "comfy/workflow",
+          mediaModels: {
+            image: {
+              primary: "comfy/workflow",
+            },
           },
         },
       },
@@ -285,8 +297,10 @@ The `image` and `video` sections also support a reference-image input node:
     {
       agents: {
         defaults: {
-          videoGenerationModel: {
-            primary: "comfy/workflow",
+          mediaModels: {
+            video: {
+              primary: "comfy/workflow",
+            },
           },
         },
       },

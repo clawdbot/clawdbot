@@ -5,6 +5,7 @@ import type {
   HealthRepairEffect,
   HealthRepairResult,
 } from "openclaw/plugin-sdk/health";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CHECK_IDS, type POLICY_CHECK_IDS } from "./check-ids.js";
 import { POLICY_FIX_METADATA_BY_CHECK_ID } from "./fix-metadata.js";
 
@@ -104,25 +105,21 @@ function previewGatewayNodeDenyCommand(
   if (
     command === undefined ||
     command === "" ||
-    finding.ocPath !== "oc://openclaw.config/gateway/nodes/denyCommands"
+    finding.ocPath !== "oc://openclaw.config/gateway/nodes/commands/deny"
   ) {
     return [];
   }
   return [
     {
-      change: `Review required: add ${command} to gateway.nodes.denyCommands for policy conformance.`,
+      change: `Review required: add ${command} to gateway.nodes.commands.deny for policy conformance.`,
       effect: {
         kind: "config",
         action: "would-append-after-review",
-        target: `gateway.nodes.denyCommands += ${command}`,
+        target: `gateway.nodes.commands.deny += ${command}`,
         dryRunSafe: true,
       },
     },
   ];
-}
-
-function uniqueStrings(values: readonly string[]): readonly string[] {
-  return [...new Set(values)];
 }
 
 function uniqueEffects(values: readonly HealthRepairEffect[]): readonly HealthRepairEffect[] {

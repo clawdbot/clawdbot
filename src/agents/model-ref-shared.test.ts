@@ -1,9 +1,7 @@
 // Documents provider/model id normalization from built-ins and plugin manifests.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  clearCurrentPluginMetadataSnapshot,
-  setCurrentPluginMetadataSnapshot,
-} from "../plugins/current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import {
   normalizeConfiguredProviderCatalogModelId,
   normalizeStaticProviderModelId,

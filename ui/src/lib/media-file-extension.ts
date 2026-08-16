@@ -1,5 +1,21 @@
 // Browser-safe media filename extension parsing shared by Control UI renderers.
 
+const SAME_ORIGIN_MEDIA_ROUTE_MARKERS = [
+  "/__openclaw__/assistant-media",
+  "/__openclaw__/media/",
+  "/api/chat/media/outgoing/",
+  "/media/inbound/",
+];
+
+function isSameOriginMediaRoute(value: string): boolean {
+  return (
+    value.startsWith("/") &&
+    SAME_ORIGIN_MEDIA_ROUTE_MARKERS.some(
+      (marker) => value.startsWith(marker) || value.includes(marker),
+    )
+  );
+}
+
 /** Returns a lowercase extension without the leading dot. */
 export function getMediaFileExtension(value: string): string | undefined {
   const trimmed = value.trim();
@@ -8,8 +24,8 @@ export function getMediaFileExtension(value: string): string | undefined {
   }
   let filename: string;
   try {
-    if (/^https?:\/\//i.test(trimmed)) {
-      const pathname = new URL(trimmed).pathname;
+    if (/^https?:\/\//i.test(trimmed) || isSameOriginMediaRoute(trimmed)) {
+      const pathname = new URL(trimmed, "https://openclaw.invalid").pathname;
       filename = pathname.slice(pathname.lastIndexOf("/") + 1);
       try {
         // Match media-core: decode only the filename and keep encoded path
@@ -26,4 +42,20 @@ export function getMediaFileExtension(value: string): string | undefined {
     filename = trimmed.split(/[\\/]/).pop() ?? trimmed;
   }
   return /\.([a-zA-Z0-9]+)$/.exec(filename)?.[1]?.toLowerCase();
+}
+
+const VIDEO_MEDIA_FILE_EXTENSIONS = new Set([
+  "avi",
+  "m4v",
+  "mkv",
+  "mov",
+  "mp4",
+  "mpeg",
+  "mpg",
+  "webm",
+]);
+
+export function hasVideoMediaFileExtension(value: string): boolean {
+  const extension = getMediaFileExtension(value);
+  return extension !== undefined && VIDEO_MEDIA_FILE_EXTENSIONS.has(extension);
 }

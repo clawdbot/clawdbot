@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
-import { buildStatusMessage } from "./status-message.js";
+import { buildStatusMessage, buildStatusMessageParts } from "./status-message.js";
 
 function statusTestModel(id: string, name: string, contextWindow: number): ModelDefinitionConfig {
   return {
@@ -40,6 +40,103 @@ describe("buildStatusMessage current time", () => {
   });
 });
 
+describe("buildStatusMessageParts presentation", () => {
+  it("mirrors the text body as a titled status table with context lines", () => {
+    const parts = buildStatusMessageParts({
+      now: 1_751_529_600_000,
+      config: { agents: { defaults: { userTimezone: "UTC", timeFormat: "24" } } },
+      agent: { model: "anthropic/claude-haiku-4-5" },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "steer", depth: 0 },
+      modelAuth: "api-key",
+      uptimeValue: "gateway 1h · system 2d",
+      channelFeatureLine: "Telegram rich messages: on · Bot API 10.2 sendRichMessage enabled",
+    });
+
+    expect(parts.text).toBe(
+      buildStatusMessage({
+        now: 1_751_529_600_000,
+        config: { agents: { defaults: { userTimezone: "UTC", timeFormat: "24" } } },
+        agent: { model: "anthropic/claude-haiku-4-5" },
+        sessionKey: "agent:main:main",
+        sessionScope: "per-sender",
+        queue: { mode: "steer", depth: 0 },
+        modelAuth: "api-key",
+        uptimeValue: "gateway 1h · system 2d",
+        channelFeatureLine: "Telegram rich messages: on · Bot API 10.2 sendRichMessage enabled",
+      }),
+    );
+    expect(parts.text).toContain("⏱️ Uptime: gateway 1h · system 2d");
+    expect(parts.text).toContain("Telegram rich messages: on");
+    expect(parts.presentation.title).toMatch(/^🦞 OpenClaw /);
+    const table = parts.presentation.blocks.find((block) => block.type === "table");
+    expect(table).toBeDefined();
+    if (table?.type !== "table") {
+      throw new Error("expected table block");
+    }
+    expect(table.headers).toEqual(["Item", "Value"]);
+    expect(table.rowHeaderColumnIndex).toBe(0);
+    const rowLabels = table.rows.map((row) => row[0]);
+    expect(rowLabels).toContain("🧠 Model");
+    expect(rowLabels).toContain("📚 Context");
+    expect(rowLabels).toContain("🧵 Session");
+    expect(rowLabels).toContain("🪢 Queue");
+    expect(
+      table.rows.every((row) => row.length === 2 && row.every((cell) => String(cell).trim())),
+    ).toBe(true);
+    const contextTexts = parts.presentation.blocks.flatMap((block) =>
+      block.type === "context" ? [block.text] : [],
+    );
+    // One compact clock-and-uptime context line; channel feature hint and
+    // reference-UTC stay text-only.
+    const clockLine = contextTexts.find((entry) => entry.includes("⏱️ gateway 1h · system 2d"));
+    expect(clockLine).toContain("(UTC)");
+    expect(contextTexts.join("\n")).not.toContain("Reference UTC");
+    expect(contextTexts.join("\n")).not.toContain("Telegram rich messages");
+    // Boring defaults stay out of the card: no zero compaction row, no depth-0
+    // queue detail, no meter or warning without usage data.
+    const rows = new Map(table.rows.map((row) => [row[0], row[1]]));
+    expect(rows.has("🧹 Compactions")).toBe(false);
+    expect(rows.get("🪢 Queue")).toBe("steer");
+    expect(String(rows.get("📚 Context"))).not.toContain("▰");
+    expect(parts.presentation.blocks.some((block) => block.type === "text")).toBe(false);
+  });
+
+  it("shows a context meter and a pressure warning when the window runs hot", () => {
+    const parts = buildStatusMessageParts({
+      now: 1_751_529_600_000,
+      config: { agents: { defaults: { userTimezone: "UTC", timeFormat: "24" } } },
+      agent: { model: "anthropic/claude-haiku-4-5", contextTokens: 100_000 },
+      sessionEntry: {
+        sessionId: "status-meter-session",
+        totalTokens: 87_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+        compactionCount: 2,
+        updatedAt: 1_751_529_500_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "steer", depth: 3 },
+      modelAuth: "api-key",
+    });
+
+    const table = parts.presentation.blocks.find((block) => block.type === "table");
+    if (table?.type !== "table") {
+      throw new Error("expected table block");
+    }
+    const rows = new Map(table.rows.map((row) => [row[0], row[1]]));
+    expect(String(rows.get("📚 Context"))).toMatch(/^▰{9}▱ /);
+    expect(rows.get("🧹 Compactions")).toBe("2");
+    expect(rows.get("🪢 Queue")).toBe("steer (depth 3)");
+    const warning = parts.presentation.blocks.find(
+      (block) => block.type === "text" && block.text.startsWith("⚠️ Context"),
+    );
+    expect(warning?.type === "text" ? warning.text : "").toBe("⚠️ Context 87% full");
+  });
+});
+
 describe("buildStatusMessage context window", () => {
   it("ignores stale runtime context after a manual session model switch", () => {
     const text = buildStatusMessage({
@@ -73,6 +170,7 @@ describe("buildStatusMessage context window", () => {
         model: "deepseek-v4-pro",
         totalTokens: 128_393,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
       sessionKey: "agent:main:telegram:direct:584667058",
       sessionScope: "per-sender",
@@ -134,11 +232,7 @@ describe("buildStatusMessage context window", () => {
     const text = buildStatusMessage({
       config: {
         agents: {
-          defaults: {
-            cliBackends: {
-              "claude-cli": { command: "claude" },
-            },
-          },
+          defaults: {},
         },
         models: {
           providers: {
@@ -161,6 +255,7 @@ describe("buildStatusMessage context window", () => {
         model: "claude-haiku-4-5",
         totalTokens: 36_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -208,6 +303,7 @@ describe("buildStatusMessage context window", () => {
         model: "deepseek-v4-pro",
         totalTokens: 50_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
       sessionKey: "agent:main:telegram:direct:auto-fallback",
       sessionScope: "per-sender",

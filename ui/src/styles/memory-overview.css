@@ -1,0 +1,92 @@
+.memory-overview__hero {
+  min-height: 210px;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: minmax(150px, 0.8fr) minmax(0, 1.4fr);
+  align-items: center;
+  gap: var(--space-5);
+  padding: var(--space-6);
+  border: 1px solid color-mix(in srgb, var(--border-strong) 72%, transparent);
+  border-radius: var(--radius-xl);
+  background:
+    radial-gradient(circle at 18% 35%, var(--accent-subtle), transparent 48%),
+    linear-gradient(145deg, var(--card), var(--bg-accent));
+}
+
+.memory-overview__lobster {
+  width: min(100%, 190px);
+  aspect-ratio: 120 / 105;
+  margin: 0 auto;
+  transform-origin: 50% 82%;
+}
+
+.memory-overview__lobster .lobster-pet__svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.memory-overview__hero--sleeping .memory-overview__lobster {
+  opacity: 0.56;
+  filter: saturate(0.7);
+}
+
+.memory-overview__hero-copy h2 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: clamp(1.55rem, 4vw, 2.2rem);
+  line-height: 1.05;
+  letter-spacing: -0.035em;
+}
+
+.memory-overview__hero-copy p {
+  max-width: 44ch;
+  margin: var(--space-3) 0 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.memory-overview__hero-actions {
+  margin-top: var(--space-4);
+}
+
+@media (max-width: 640px) {
+  .memory-overview__hero {
+    grid-template-columns: 112px minmax(0, 1fr);
+    min-height: 176px;
+    padding: var(--space-4);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .memory-overview__lobster {
+    animation: memory-overview-breathe 5.5s ease-in-out infinite;
+  }
+
+  .memory-overview__lobster .lob-reading-book__page-glow {
+    animation: memory-overview-book-shimmer 7s ease-in-out infinite;
+  }
+}
+
+@keyframes memory-overview-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+
+  50% {
+    transform: scale(1.025);
+  }
+}
+
+@keyframes memory-overview-book-shimmer {
+  0%,
+  72%,
+  100% {
+    opacity: 0;
+  }
+
+  82% {
+    opacity: 0.24;
+  }
+}

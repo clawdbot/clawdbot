@@ -1,12 +1,7 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { normalizeWorkboardChange } from "./change-payload.ts";
 import { refreshWorkboard, shouldDeferWorkboardLiveRefresh } from "./loading.ts";
-import {
-  getWorkboardRuntime,
-  getWorkboardState,
-  invalidateWorkboardLoads,
-  type WorkboardHost,
-} from "./runtime.ts";
+import { getWorkboardRuntime, getWorkboardState, type WorkboardHost } from "./runtime.ts";
 
 const WORKBOARD_LIVE_REFRESH_RETRY_MS = 1000;
 
@@ -137,21 +132,5 @@ export function resumeWorkboardLiveRefresh(host: WorkboardHost): void {
   const runtime = getWorkboardRuntime(host);
   if (runtime.liveRefreshPending && !runtime.liveRefreshRetryTimer) {
     void runPendingRefresh(host);
-  }
-}
-
-export function stopWorkboardLiveRefresh(host: WorkboardHost): void {
-  const runtime = getWorkboardRuntime(host);
-  const loadInFlight = Boolean(runtime.loadPromise);
-  runtime.liveRefreshGeneration = (runtime.liveRefreshGeneration ?? 0) + 1;
-  clearRetry(host);
-  delete runtime.liveRefreshEntry;
-  delete runtime.liveRefreshPromise;
-  delete runtime.liveChangeEpoch;
-  delete runtime.liveHighestSeenRevision;
-  delete runtime.liveAppliedRevision;
-  delete runtime.liveRefreshPending;
-  if (loadInFlight) {
-    invalidateWorkboardLoads(host);
   }
 }

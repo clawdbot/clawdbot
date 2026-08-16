@@ -1,0 +1,38 @@
+title: Agent-run execution identity inspection
+
+scenario:
+  id: agent-run-identity-inspection
+  surface: gateway
+  coverage:
+    secondary:
+      - gateway.identity-and-presence-apis
+  objective: Verify an operator can inspect one local execution, discover repeated same-session executions, and select each immutable identity context through the audit CLI before and after Gateway restart.
+  successCriteria:
+    - A real local agent turn against the deterministic mock provider records one bounded execution identity context.
+    - Fresh and existing-install restarts keep execution-identity storage absent before explicit opt-in, and global audit disable prevents new identity rows.
+    - The audit CLI renders text and JSON projections for the exact run, including every identity field and the truthful non-enforcement admission receipt.
+    - A replacement Gateway process returns byte-equivalent normalized identity context JSON for the same run.
+    - Two real public-ingress turns that omit runId share the session correlation but retain distinct execution and context ids.
+    - Run discovery reports those turns as ambiguous and both text and JSON exact-execution selection return the intended turn.
+  docsRefs:
+    - docs/gateway/audit.md
+    - docs/cli/audit.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - src/agents/agent-command.ts
+    - src/agents/agent-command-execution-identity.ts
+    - src/audit/execution-identity-admission.ts
+    - src/audit/audit-event-writer.ts
+    - src/audit/execution-identity-context.ts
+    - src/gateway/server-methods/audit.ts
+    - src/commands/audit.ts
+    - test/e2e/qa-lab/runtime/agent-run-identity-inspection.ts
+    - test/e2e/qa-lab/runtime/agent-run-identity-repeated-turn-child.ts
+  execution:
+    kind: script
+    parallelSafe: true
+    path: test/e2e/qa-lab/runtime/agent-run-identity-inspection.ts
+    summary: Starts an ephemeral Gateway and mock provider, runs local and repeated public-ingress turns, proves run ambiguity plus exact text/JSON selection, replaces the Gateway process, and compares normalized context bytes.
+    args:
+      - --artifact-base
+      - ${outputDir}

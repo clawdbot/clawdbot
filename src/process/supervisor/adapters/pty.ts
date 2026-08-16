@@ -2,10 +2,16 @@
 import type { IDisposable } from "@lydell/node-pty";
 import { signalProcessTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
+import {
+  readPtyTerminalName,
+  resolvePtyTerminalName,
+  setPtyTerminalName,
+} from "../../pty-terminal-name.js";
 import type { ManagedRunStdin, SpawnProcessAdapter } from "../types.js";
 import { toStringEnv } from "./env.js";
 
 const FORCE_KILL_WAIT_FALLBACK_MS = 4000;
+declare const WORKER_DEPLOY_BUILD: boolean;
 
 type PtyAdapter = SpawnProcessAdapter;
 
@@ -18,13 +24,32 @@ export async function createPtyAdapter(params: {
   rows?: number;
   name?: string;
 }): Promise<PtyAdapter> {
+  // Worker deploys are portable JavaScript artifacts; exec falls back to the child adapter
+  // instead of binding the Gateway host's native PTY binary into the bundle.
+  if (typeof WORKER_DEPLOY_BUILD === "boolean" && WORKER_DEPLOY_BUILD) {
+    throw new Error("PTY is unavailable in the portable worker runtime");
+  }
   const { spawn } = await import("@lydell/node-pty");
   const baseEnv = params.env ? toStringEnv(params.env) : undefined;
   const preparedSpawn = prepareOomScoreAdjustedSpawn(params.shell, params.args, { env: baseEnv });
+  const terminalName = resolvePtyTerminalName(
+    params.name ??
+      readPtyTerminalName(preparedSpawn.env, process.platform) ??
+      readPtyTerminalName(process.env, process.platform),
+  );
+  const spawnEnv = preparedSpawn.env
+    ? toStringEnv(preparedSpawn.env)
+    : process.platform === "win32"
+      ? toStringEnv(process.env)
+      : undefined;
+  // Unix node-pty rewrites child TERM from name; Windows forwards env unchanged.
+  if (spawnEnv) {
+    setPtyTerminalName({ env: spawnEnv, name: terminalName, platform: process.platform });
+  }
   const pty = spawn(preparedSpawn.command, preparedSpawn.args, {
     cwd: params.cwd,
-    env: preparedSpawn.env ? toStringEnv(preparedSpawn.env) : undefined,
-    name: params.name ?? process.env.TERM ?? "xterm-256color",
+    env: spawnEnv,
+    name: terminalName,
     cols: params.cols ?? 120,
     rows: params.rows ?? 30,
   });
@@ -188,6 +213,7 @@ export async function createPtyAdapter(params: {
   return {
     pid: pty.pid || undefined,
     stdin,
+    oomScoreWrapperSelected: preparedSpawn.wrapped,
     onStdout,
     onStderr,
     wait,

@@ -7,8 +7,8 @@ title: "Synthetic"
 ---
 
 [Synthetic](https://synthetic.new) exposes Anthropic-compatible endpoints.
-OpenClaw bundles it as the `synthetic` provider and uses the Anthropic
-Messages API.
+OpenClaw provides it through the official `@openclaw/synthetic-provider`
+plugin and uses the Anthropic Messages API.
 
 | Property | Value                                 |
 | -------- | ------------------------------------- |
@@ -20,6 +20,12 @@ Messages API.
 ## Getting started
 
 <Steps>
+  <Step title="Install the plugin">
+    ```bash
+    openclaw plugins install @openclaw/synthetic-provider
+    openclaw gateway restart
+    ```
+  </Step>
   <Step title="Get an API key">
     Get a `SYNTHETIC_API_KEY` from your Synthetic account, or let onboarding
     prompt you for one.
@@ -47,7 +53,7 @@ changes its base URL, override `models.providers.synthetic.baseUrl`.
 
 ```json5
 {
-  env: { SYNTHETIC_API_KEY: "sk-..." },
+  env: { vars: { SYNTHETIC_API_KEY: "sk-..." } },
   agents: {
     defaults: {
       model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M3" },
@@ -101,7 +107,7 @@ account.
 
 <AccordionGroup>
   <Accordion title="Model allowlist">
-    If you enable a model allowlist (`agents.defaults.models`), add every
+    If you enable a model allowlist (`agents.defaults.modelPolicy.allow`), add every
     Synthetic model you plan to use. Models not in the allowlist are hidden
     from the agent.
   </Accordion>

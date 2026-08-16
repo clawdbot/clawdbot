@@ -10,12 +10,19 @@ struct QuickChatView: View {
     let onDismiss: () -> Void
     let onSendAccepted: (Bool) -> Void
     let onShowAgentPicker: () -> Void
+    let onShowModelMenu: () -> Void
     let onShowRecentSessions: () -> Void
-    let onWindowScreenshot: () -> Void
+    let onToggleDictation: () -> Void
+    let onStopDictation: () -> Void
+    let onCaptureTextContext: () -> Void
+    let onShowCaptureMenu: () -> Void
+    let onGrantPermissions: () -> Void
+    let onPasteReply: () -> Void
     let onContentHeightChange: (CGFloat) -> Void
     let onTextViewReady: (NSTextView) -> Void
 
     @State private var editorHeight: CGFloat = 30
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack {
@@ -27,9 +34,14 @@ struct QuickChatView: View {
             VStack(spacing: 0) {
                 self.inputRow
 
+                if let context = self.model.textContext {
+                    self.contextChip(context)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+
                 if let status = self.statusLine {
                     HStack {
-                        Text(status.message)
+                        Text(verbatim: status.message)
                             .font(.caption)
                             .foregroundStyle(status.isError ? Color.red : Color.orange)
                         Spacer()
@@ -53,6 +65,7 @@ struct QuickChatView: View {
         .frame(width: 620)
         .fixedSize(horizontal: false, vertical: true)
         .animation(.spring(duration: 0.25), value: self.model.shouldShowPermissionStrip)
+        .animation(.easeOut(duration: 0.14), value: self.model.textContext)
         .animation(.easeOut(duration: 0.14), value: self.statusLine?.message)
         .animation(.spring(duration: 0.28), value: self.replyBinding.route)
         .onGeometryChange(for: CGFloat.self) { proxy in
@@ -73,6 +86,7 @@ struct QuickChatView: View {
     private var inputRow: some View {
         HStack(spacing: 10) {
             self.agentChip
+            self.modelControl
 
             ZStack(alignment: .leading) {
                 if self.model.text.isEmpty {
@@ -87,8 +101,16 @@ struct QuickChatView: View {
                 }
                 QuickChatTextView(
                     text: self.$model.text,
+                    selectionRange: self.model.dictationSelectionRange,
                     onSubmit: self.submit,
-                    onEscape: self.onDismiss,
+                    onEscape: {
+                        self.onStopDictation()
+                        self.onDismiss()
+                    },
+                    onUserEdit: {
+                        guard self.model.isDictating || self.model.isStartingDictation else { return }
+                        self.onStopDictation()
+                    },
                     onHeightChange: { self.editorHeight = $0 },
                     onTextViewReady: self.onTextViewReady)
                     .frame(height: self.editorHeight)
@@ -106,10 +128,48 @@ struct QuickChatView: View {
                 .disabled(!self.model.canSelectRecentSession)
                 .help("Continue a recent conversation")
                 .accessibilityLabel("Continue a recent conversation")
-            }
 
-            if self.model.sendState != .sending {
-                Button(action: self.onWindowScreenshot) {
+                Button(action: self.onToggleDictation) {
+                    Group {
+                        if self.model.isStartingDictation {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: self.model.isDictating ? "mic.fill" : "mic")
+                                .font(.system(size: 16.5, weight: .medium))
+                                .foregroundStyle(self.model.isDictating ? Color.red : Color.secondary)
+                                .symbolEffect(
+                                    .pulse,
+                                    isActive: self.model.isDictating && !self.reduceMotion)
+                        }
+                    }
+                    .frame(width: 22, height: 22)
+                }
+                .buttonStyle(.plain)
+                .disabled(!self.model.canToggleDictation)
+                .help(self.dictationButtonLabel)
+                .accessibilityLabel(Text(verbatim: self.dictationButtonLabel))
+
+                Button(action: self.onCaptureTextContext) {
+                    Group {
+                        if self.model.isCapturingTextContext {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "doc.text")
+                                .font(.system(size: 16.5, weight: .medium))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .frame(width: 22, height: 22)
+                }
+                .buttonStyle(.plain)
+                .disabled(!self.model.canCaptureTextContext)
+                .help(String(localized: "Attach text from \(self.model.frontmostAppName)"))
+                .accessibilityLabel(Text(verbatim: String(
+                    localized: "Attach text from \(self.model.frontmostAppName)")))
+
+                Button(action: self.onShowCaptureMenu) {
                     Image(systemName: "camera.viewfinder")
                         .font(.system(size: 16.5, weight: .medium))
                         .foregroundStyle(.secondary)
@@ -117,8 +177,8 @@ struct QuickChatView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(!self.model.canCaptureWindow)
-                .help("Send a window screenshot")
-                .accessibilityLabel("Send a window screenshot")
+                .help("Capture a screenshot")
+                .accessibilityLabel("Capture a screenshot")
             }
 
             Button {
@@ -162,6 +222,32 @@ struct QuickChatView: View {
         }
     }
 
+    private var modelControl: some View {
+        Button(action: self.onShowModelMenu) {
+            HStack(spacing: 4) {
+                if self.model.isLoadingModelControls || self.model.isUpdatingModel {
+                    ProgressView()
+                        .controlSize(.mini)
+                }
+                Text(verbatim: self.model.modelControlLabel)
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .semibold))
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
+            .background(Color.primary.opacity(0.06), in: Capsule())
+            .frame(maxWidth: 125)
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .disabled(!self.model.canUseModelControls)
+        .help("Choose model and reasoning")
+        .accessibilityLabel("Model and reasoning")
+    }
+
     private var agentAvatar: some View {
         ZStack {
             Circle()
@@ -202,13 +288,13 @@ struct QuickChatView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Needs additional permissions")
                         .font(.caption.weight(.semibold))
-                    Text(self.model.missingPermissions.map(\.permissionDisplayName).joined(separator: ", "))
+                    Text(verbatim: self.model.missingPermissions.map(\.permissionDisplayName).joined(separator: ", "))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button("Grant") {
-                    self.model.grantMissingPermissions()
+                    self.onGrantPermissions()
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
@@ -223,6 +309,29 @@ struct QuickChatView: View {
         }
     }
 
+    private func contextChip(_ context: QuickChatTextContext) -> some View {
+        HStack(spacing: 7) {
+            Image(systemName: "doc.text")
+                .foregroundStyle(Color.accentColor)
+            Text("\(context.appName) — \(context.windowTitle) (\(context.characterCount) chars)")
+                .font(.caption)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Button(action: self.model.clearTextContext) {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Remove attached text context")
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 5)
+        .background(Color.accentColor.opacity(0.1), in: Capsule())
+        .padding(.horizontal, 14)
+        .padding(.bottom, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     private func replyArea(viewModel: OpenClawChatViewModel) -> some View {
         VStack(spacing: 0) {
             Divider()
@@ -234,14 +343,51 @@ struct QuickChatView: View {
                 showsAssistantAvatars: false,
                 composerChrome: .clean,
                 isComposerEnabled: false,
-                isAttachmentInputEnabled: false)
+                isAttachmentInputEnabled: false,
+                mediaPlaybackAllowed: { !AppStateStore.shared.talkEnabled })
                 .id(self.replyBinding.route)
                 .frame(height: 300)
+            if QuickChatPasteLogic.finalAssistantText(
+                messages: viewModel.messages,
+                afterUserIdempotencyKey: self.model.lastAcceptedIdempotencyKey,
+                streamingAssistantText: viewModel.streamingAssistantText,
+                pendingRunCount: viewModel.pendingRunCount) != nil
+            {
+                HStack {
+                    Spacer()
+                    Button {
+                        self.onPasteReply()
+                    } label: {
+                        if self.replyBinding.isPastingReply {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Label("Paste to \(self.model.frontmostAppName)", systemImage: "doc.on.clipboard")
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(self.replyBinding.isPastingReply)
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 9)
+            }
         }
     }
 
     private var statusLine: (message: String, isError: Bool)? {
         if case let .failed(message) = self.model.sendState {
+            return (message, true)
+        }
+        if let message = self.model.textContextCaptureMessage {
+            return (message, false)
+        }
+        if let message = self.model.dictationStatusMessage {
+            return (message, true)
+        }
+        if let message = self.model.modelControlStatusMessage {
+            return (message, true)
+        }
+        if let message = self.replyBinding.pasteStatusMessage {
             return (message, true)
         }
         if let message = self.model.connectionStatusMessage {
@@ -251,6 +397,7 @@ struct QuickChatView: View {
     }
 
     private func submit(openChat: Bool) {
+        self.onStopDictation()
         guard self.model.canSend, let presentationID = self.model.activePresentationID else { return }
         Task {
             guard await self.model.send() else { return }
@@ -264,5 +411,11 @@ struct QuickChatView: View {
             guard self.model.activePresentationID == presentationID else { return }
             self.onSendAccepted(false)
         }
+    }
+
+    private var dictationButtonLabel: String {
+        self.model.isDictating || self.model.isStartingDictation
+            ? String(localized: "Stop dictation")
+            : String(localized: "Start dictation")
     }
 }

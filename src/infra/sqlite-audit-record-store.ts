@@ -1,4 +1,4 @@
-// Shared SQLite storage for append-only diagnostic audit records.
+// Shared SQLite storage for bounded diagnostic audit records.
 import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -29,15 +29,20 @@ type SqliteAuditRecordEntry<T> = {
   createdAt: number;
 };
 
+export type SequencedSqliteAuditRecordEntry<T> = SqliteAuditRecordEntry<T> & {
+  sequence: number;
+};
+
 function getAuditRecordKysely(database: DatabaseSync) {
   return getNodeSqliteKysely<AuditRecordDatabase>(database);
 }
 
-function parseAuditRecord<T>(row: DiagnosticEventRow): SqliteAuditRecordEntry<T> {
+function parseAuditRecord<T>(row: DiagnosticEventRow): SequencedSqliteAuditRecordEntry<T> {
   return {
     key: row.event_key,
     value: JSON.parse(row.payload_json) as T,
     createdAt: row.created_at,
+    sequence: row.sequence,
   };
 }
 
@@ -107,7 +112,7 @@ function pruneAuditRecords(params: {
   }
 }
 
-/** Opens one bounded append-only audit scope in the shared state database. */
+/** Opens one bounded audit-record scope in the shared state database. */
 export function createSqliteAuditRecordStore<T>(
   options: OpenClawStateDatabaseOptions & { scope: string; maxEntries: number },
 ) {
@@ -141,6 +146,39 @@ export function createSqliteAuditRecordStore<T>(
     );
   }
 
+  function upsertPreparedRecord(database: DatabaseSync, record: PreparedDiagnosticEventRow): void {
+    executeSqliteQuerySync(
+      database,
+      getAuditRecordKysely(database)
+        .insertInto("diagnostic_events")
+        .values({
+          scope,
+          event_key: record.event_key,
+          payload_json: record.payload_json,
+          created_at: record.created_at,
+          sequence: nextAuditSequence({ database, scope, legacy: false }),
+        })
+        .onConflict((conflict) =>
+          conflict.columns(["scope", "event_key"]).doUpdateSet({
+            payload_json: record.payload_json,
+            created_at: record.created_at,
+            // Updates retain their sequence because reordering keyed state changes retention age.
+          }),
+        ),
+    );
+    pruneAuditRecords({ database, scope, maxEntries, protectedKey: record.event_key });
+  }
+
+  function deleteRecord(database: DatabaseSync, key: string): void {
+    executeSqliteQuerySync(
+      database,
+      getAuditRecordKysely(database)
+        .deleteFrom("diagnostic_events")
+        .where("scope", "=", scope)
+        .where("event_key", "=", key),
+    );
+  }
+
   return {
     register(key: string, value: T, createdAt = Date.now()): void {
       const record = prepareRecord({ key, value, createdAt });
@@ -162,31 +200,43 @@ export function createSqliteAuditRecordStore<T>(
     upsert(key: string, value: T, createdAt = Date.now()): void {
       const record = prepareRecord({ key, value, createdAt });
       runOpenClawStateWriteTransaction((database) => {
-        executeSqliteQuerySync(
+        upsertPreparedRecord(database.db, record);
+      }, options);
+    },
+    delete(key: string): void {
+      runOpenClawStateWriteTransaction((database) => {
+        deleteRecord(database.db, key);
+      }, options);
+    },
+    compareAndSet(
+      key: string,
+      expectedValue: T | null,
+      value: T | null,
+      createdAt = Date.now(),
+    ): boolean {
+      const expectedPayloadJson = expectedValue === null ? null : JSON.stringify(expectedValue);
+      const record = value === null ? null : prepareRecord({ key, value, createdAt });
+      let updated = false;
+      runOpenClawStateWriteTransaction((database) => {
+        const current = executeSqliteQueryTakeFirstSync(
           database.db,
           getAuditRecordKysely(database.db)
-            .insertInto("diagnostic_events")
-            .values({
-              scope,
-              event_key: record.event_key,
-              payload_json: record.payload_json,
-              created_at: record.created_at,
-              sequence: nextAuditSequence({ database: database.db, scope, legacy: false }),
-            })
-            .onConflict((conflict) =>
-              conflict.columns(["scope", "event_key"]).doUpdateSet({
-                payload_json: record.payload_json,
-                created_at: record.created_at,
-              }),
-            ),
+            .selectFrom("diagnostic_events")
+            .select("payload_json")
+            .where("scope", "=", scope)
+            .where("event_key", "=", key),
         );
-        pruneAuditRecords({
-          database: database.db,
-          scope,
-          maxEntries,
-          protectedKey: key,
-        });
+        if ((current?.payload_json ?? null) !== expectedPayloadJson) {
+          return;
+        }
+        if (record) {
+          upsertPreparedRecord(database.db, record);
+        } else {
+          deleteRecord(database.db, key);
+        }
+        updated = true;
       }, options);
+      return updated;
     },
     registerLegacyMany(records: readonly SqliteAuditRecordEntry<T>[]): void {
       const prepared = records.map(prepareRecord);
@@ -216,6 +266,31 @@ export function createSqliteAuditRecordStore<T>(
           .select(["event_key", "payload_json", "created_at", "sequence"])
           .where("scope", "=", scope)
           .orderBy("sequence", "asc"),
+      ).rows.map((row) => {
+        const { sequence: _sequence, ...entry } = parseAuditRecord<T>(row);
+        return entry;
+      });
+    },
+    latest(params: {
+      limit: number;
+      beforeSequence?: number;
+    }): SequencedSqliteAuditRecordEntry<T>[] {
+      const limit = Math.max(0, Math.floor(params.limit));
+      if (limit === 0) {
+        return [];
+      }
+      const database = openOpenClawStateDatabase(options);
+      const baseQuery = getAuditRecordKysely(database.db)
+        .selectFrom("diagnostic_events")
+        .select(["event_key", "payload_json", "created_at", "sequence"])
+        .where("scope", "=", scope);
+      const query =
+        params.beforeSequence === undefined
+          ? baseQuery
+          : baseQuery.where("sequence", "<", params.beforeSequence);
+      return executeSqliteQuerySync(
+        database.db,
+        query.orderBy("sequence", "desc").limit(limit),
       ).rows.map((row) => parseAuditRecord<T>(row));
     },
   };

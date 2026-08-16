@@ -1,5 +1,7 @@
 // OpenAI ChatGPT auth helpers normalize OAuth session data for provider plugins.
+import { safeParseJsonRecord } from "../../packages/normalization-core/src/json-coercion.js";
 import { resolveExpiresAtMsFromEpochSeconds } from "../../packages/normalization-core/src/number-coercion.js";
+import { asNonArrayRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 
 const OPENAI_CODEX_AUTH_CLAIM = "https://api.openai.com/auth";
@@ -36,19 +38,14 @@ export function decodeOpenAICodexJwtPayload(token: string): Record<string, unkno
     return undefined;
   }
   try {
-    const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : undefined;
+    return safeParseJsonRecord(Buffer.from(payload, "base64url").toString("utf8"));
   } catch {
     return undefined;
   }
 }
 
 function readRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
+  return asNonArrayRecord(value);
 }
 
 /**

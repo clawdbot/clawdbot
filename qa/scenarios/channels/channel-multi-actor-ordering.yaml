@@ -5,9 +5,8 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - runtime.turn-ordering
-    secondary:
-      - channels.group-messages
+      - channels.room-allowlist
+      - agent-runtime.session-turn-ordering
   objective: Verify blocked secondary-actor traffic does not poison a later allowlisted driver turn.
   successCriteria:
     - The observer turn remains unanswered.
@@ -19,7 +18,6 @@ scenario:
     - extensions/qa-lab/src/qa-transport.ts
     - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
   execution:
-    profiles: { "matrix:adapter": 7, "matrix:all": 48, "matrix:transport": 47 }
     kind: flow
     summary: Preserve actor order across a blocked observer turn and a successful driver turn.
     transportPolicy:

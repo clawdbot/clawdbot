@@ -44,6 +44,30 @@ Before a harness is selected, OpenClaw has already resolved:
 A harness runs a prepared attempt; it does not pick providers, replace channel
 delivery, or silently switch models.
 
+### Native tool-policy enforcement
+
+Set `conversationToolPolicySupport: "exact"` only when `runAttempt` enforces every
+explicit OpenClaw tool-policy layer across native and built-in tools, OpenClaw
+tools, requester and configured MCP servers, apps, delegation, and resumed
+threads. Core passes `params.pluginHarnessToolPolicyRestricted` as the prepared
+decision that the native surface must be isolated. Default tool-profile narrowing
+does not set this flag.
+
+Harnesses with an independently managed native surface can also declare
+`conversationToolPolicySafeDenyTools` using canonical OpenClaw tool names. Core
+preserves the native surface only when every expanded deny is a known core tool
+in that audited safe list. Finite allowlists, undeclared or unknown tool names,
+wildcards, and groups containing any undeclared name remain native-surface
+restrictions. Omit the list to retain the conservative behavior where every
+explicit restriction isolates the native surface. Because omissions fail
+closed, new tools cannot silently relax the policy boundary.
+
+Omit the declaration when any native capability can bypass those layers.
+OpenClaw then visibly rejects explicitly restricted turns before invoking the
+harness. The operator can switch the session to the embedded runtime or upgrade
+the harness. Channel `/btw` side questions with a restrictive direct policy are
+rejected by core and are not covered by this declaration.
+
 ### Harness-owned auth bootstrap
 
 By default, core resolves provider credentials before calling a harness. A
@@ -107,19 +131,26 @@ Two secret-free provider-owned facts describe the selected route:
 
 Return `{ supported: false, reason }` when the harness cannot reproduce the
 prepared transport. Do not infer support by reading raw config after selection.
+Add `fallbackRuntime: "openclaw"` only when the built-in runtime can reproduce
+the exact prepared request without dropping authored behavior. Core then uses
+that fallback for explicit and persisted selections as well as multi-route
+retry sets. Leave it absent for provider, route, or authentication failures
+that must remain fail-closed.
+
 When auth preparation yields multiple retry routes, one harness must support
 all of them before dispatch. Implicit selection uses OpenClaw if no plugin can
-own the full set; an explicit or persisted plugin selection fails closed.
+own the full set; an explicit or persisted plugin selection fails closed unless
+the plugin declares the lossless OpenClaw fallback.
 
 ## Register a harness
 
 **Import:** `openclaw/plugin-sdk/agent-harness`
 
 ```typescript
-import type { AgentHarness } from "openclaw/plugin-sdk/agent-harness";
+import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
-const myHarness: AgentHarness = {
+const myHarness: AgentHarnessV2 = {
   id: "my-harness",
   label: "My native agent harness",
 
@@ -153,6 +184,44 @@ export default definePluginEntry({
 `authBootstrap` is intentionally absent from this generic example. Add
 `authBootstrap: "harness"` only when the harness meets the contract above.
 
+### Isolated completion
+
+The optional `runIsolatedCompletionV2(params)` capability serves product paths
+that require one fresh prompt-only inference call with a literal empty
+model-callable tool surface. Core passes provider and model ids, prompts,
+deadline controls, and one prepared `authorization`:
+
+- `owner: "host"` contains the exact transport `model` and resolved `auth`.
+- `owner: "harness"` contains the prepared runtime auth plan and a credential
+  snapshot restricted to the single profile selected for that call. Core owns
+  automatic fallback order and invokes the harness separately for each candidate.
+
+Host-authorized calls must use the supplied model and credential without
+substitution. Harness-authorized calls may resolve only the supplied prepared
+route and scoped profiles, or the harness's native account when the plan leaves
+auth to the harness. The harness must not switch routes, reuse a native thread,
+attach tools, invoke agent lifecycle hooks, or deliver output.
+
+Return `{ assistant: AssistantMessage }`. Core accepts only terminal text/thinking
+content with a `stop` or `length` stop reason; tool calls, failed stops, and empty
+output are rejected. If the harness cannot prove these semantics, omit the capability.
+Callers that require isolated completion then fail closed before invoking that
+harness; OpenClaw does not replay the request through another runtime.
+Plugin callers select this behavior through
+`api.runtime.llm.complete({ execution: { mode: "isolated-agent-runtime" } })`;
+the harness callback is the provider-side enforcement SPI, not a second caller
+API.
+
+The legacy `runIsolatedCompletion(params)` host-auth-only capability is
+deprecated and remains available for external plugins through 2026-10-12.
+Implement V2 for harness-owned or native authentication; OpenClaw never invents
+a host credential when only the legacy capability is present.
+
+Native agent servers often have ambient built-in tools even when OpenClaw sends
+an empty tool list. Disable and attest those native capabilities for the fresh
+turn, use a separate transport that can serialize a true zero-tool request, or
+leave the capability unsupported.
+
 ### Delegated execution
 
 A harness owner may set `delegatedExecutionPluginIds` to the ids of trusted
@@ -181,6 +250,18 @@ fallback only applies when no registered plugin harness supports the resolved
 provider/model. Once a plugin harness has claimed a run, OpenClaw does not
 replay that same turn through another runtime, because that can change
 auth/runtime semantics or duplicate side effects.
+
+A failure that occurs before the harness starts any model work may use
+`AgentHarnessPreflightError` from
+`openclaw/plugin-sdk/agent-harness-runtime`. The default error remains terminal
+for the whole model-fallback chain. Pass `{ scope: "harness" }` only when the
+failure is local to the selected harness and retrying another model on that same
+harness would repeat it. OpenClaw records the actual selected harness at the
+attempt boundary, skips only later candidates proven to use that harness, and
+runs any differently owned candidate through its normal runtime and policy
+checks. Plugins opt into the scope but never name the harness owner on the
+error. Do not use harness scope after a request or tool action may have produced
+side effects.
 
 Configured runtime policy remains authoritative about the desired runtime. A
 persisted session `agentHarnessId` keeps ownership of its native transcript
@@ -248,6 +329,11 @@ targeted runtime ids in `contracts.agentToolResultMiddleware`. This trusted
 seam is for async tool-result transforms that must run before OpenClaw or
 Codex feeds tool output back into the model.
 
+Middleware options may combine `runtimes` with a `matcher` tool-name list.
+Each registration keeps that pair intact, so registering the same handler for
+different runtimes does not broaden either matcher. Matchers use non-empty
+canonical OpenClaw tool ids; omit `matcher` to match all tools.
+
 Legacy bundled plugins can still use
 `api.registerCodexAppServerExtensionFactory(...)` for Codex app-server-only
 middleware, but new result transforms should use the runtime-neutral API. The
@@ -286,6 +372,41 @@ choice/free-form answers back into the runtime's native response shape. The
 helper keeps channel/TUI presentation consistent while each harness keeps its
 own protocol parsing and pending-request lifecycle.
 
+Each prepared attempt also receives a versioned `params.hostCapabilities`
+object. Use `bindToolSurface(...)` before exposing plugin-built OpenClaw tools,
+and use its policy and approval operations for native actions. A native action
+whose working directory differs from the attempt may pass
+`nativeOperation: { cwd }` to `runBeforeToolCall(...)`; the host normalizes that
+bounded action fact while keeping identity and policy authority closure-bound. The closure
+binds the host-resolved run, sandbox, requester, route, and approval identity;
+plugins must not reconstruct those fields or retain the capability after the
+attempt returns. Calls made after attempt settlement fail closed.
+
+New harnesses should implement `AgentHarnessV2` and type prepared attempts as
+`AgentHarnessAttemptParamsV2`, `EmbeddedRunAttemptParamsV2`, and
+`AgentHarnessSideQuestionParamsV2`; those contracts require
+`hostCapabilities`. Packages adopting V2 must declare
+`openclaw.compat.pluginApi: ">=2026.8.1"` (or a newer floor) so older hosts
+reject them before load. Import the parameter types from the runtime subpath:
+
+```typescript
+import type {
+  AgentHarnessAttemptParamsV2,
+  AgentHarnessSideQuestionParamsV2,
+  EmbeddedRunAttemptParamsV2,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+```
+
+The older `AgentHarness`,
+`AgentHarnessAttemptParams`, and `EmbeddedRunAttemptParams` names remain
+source-compatible for existing plugins, so the capability field is optional
+in those deprecated parameter types through 2026-10-12. The public
+`AgentHarnessSideQuestionParams` contract has the same compatibility window
+and optional field. Core still supplies
+the capability on every selected attempt. Compatibility is type-level only:
+current harness code must not add a runtime path that operates without the
+host capability.
+
 Native harnesses that need PI-like compact tool routing should use
 `createAgentHarnessToolSurfaceRuntime(...)` from
 `openclaw/plugin-sdk/agent-harness-tool-runtime`. It owns
@@ -293,6 +414,29 @@ tool-search/code-mode control selection, local-model lean defaults,
 runtime-compatible schema filtering, hidden catalog execution, directory
 hydration, and catalog cleanup. Harnesses still own their SDK-specific tool
 conversion and native execution callback.
+
+### Native MCP inventory
+
+A harness that owns MCP connections outside OpenClaw's in-process MCP runtime
+can implement `loadMcpToolCatalog(params)`. The callback is used by read-only
+control surfaces such as the composer Tool access view. It receives the
+authoritative session identity, runtime config, workspace, and sparse session
+MCP overrides. `mcpServerNames` is the bounded set of OpenClaw-configured
+servers whose session policy the harness may represent. Return OpenClaw's
+`McpToolCatalog` shape for only that set.
+
+Use only an already-bound native process and thread. Returning `undefined`
+means no live catalog is available; do not start a new harness process merely
+to answer inventory. Preserve raw server/tool names, assign collision-safe
+server names with `assignMcpCatalogSafeServerNames(...)`, and retain tools
+hidden only by a session denial in `sessionDeniedTools`. Core still applies the
+final OpenClaw tool policy and schema compatibility checks before exposing the
+rows.
+
+Harnesses that forward embedded attempt params should pass
+`skillWorkshopProposalOnly` through. Proposal-only skill-workshop runs are
+deliberately narrow single-tool runs, and the runtime keeps them on the raw
+tool surface instead of engaging code mode or a tool-search catalog.
 
 ### Native Codex harness mode
 
@@ -352,9 +496,9 @@ model entry:
 {
   "agents": {
     "defaults": {
-      "model": "anthropic/claude-opus-4-8",
+      "model": "anthropic/claude-opus-5",
       "models": {
-        "anthropic/claude-opus-4-8": {
+        "anthropic/claude-opus-5": {
           "agentRuntime": {
             "id": "claude-cli"
           }
@@ -370,9 +514,9 @@ Per-agent overrides use the same model-scoped shape:
 ```json
 {
   "agents": {
-    "list": [
-      {
-        "id": "codex-only",
+    "entries": {
+      "codex-only": {
+        "default": true,
         "model": "openai/gpt-5.6-sol",
         "models": {
           "openai/gpt-5.6-sol": {
@@ -380,14 +524,14 @@ Per-agent overrides use the same model-scoped shape:
           }
         }
       }
-    ]
+    }
   }
 }
 ```
 
 Legacy whole-agent runtime examples like this are ignored:
 
-```json
+```json validate=false
 {
   "agents": {
     "defaults": {
@@ -435,6 +579,13 @@ yourself.
 This keeps text, image, video, music, TTS, approval, and messaging-tool
 outputs on the same delivery path as OpenClaw-backed runs.
 
+Set `AgentHarnessAttemptResult.hostOwnedToolMediaUrls` only for native artifacts
+that the trusted harness runtime created and persisted itself. Every entry must
+also appear in `toolMediaUrls`. Never include model-selected dynamic-tool or
+OpenClaw-tool media. On `message_tool_only` routes, this narrow provenance lets
+native runtime artifacts survive source-reply suppression; normal send policy
+and ambient-room admission still apply.
+
 ### Terminal tool outcomes
 
 `AgentHarnessAttemptParams.observeToolTerminal` is the host-owned terminal
@@ -467,6 +618,64 @@ The callback remains optional for source compatibility with older experimental
 harnesses. Optional does not mean ignorable for a harness that executes tools:
 without terminal reports, OpenClaw cannot preserve mutating-tool failure truth
 across later tool calls, including quiet heartbeat completion.
+
+### Settled tool finalization
+
+OpenClaw may need one final visible answer after a harness has completed every
+tool call but its native turn ended without assistant text. A harness can opt
+into that recovery by implementing `finalizeSettledTurn({ attempt,
+settledAttempt })`.
+
+The callback is a separate capability, not another ordinary attempt. It must:
+
+- use either the exact restricted native transcript or a complete application
+  transcript frozen through the settled tool-result boundary;
+- expose no tools, permission-grant or user-input capabilities, native execution
+  hooks, agents, skills, memory, scheduling, extensions, or remote control;
+- send only the host-provided finalization prompt; and
+- fail closed if its selected transcript/isolation strategy cannot enforce
+  those restrictions.
+
+OpenClaw invokes the callback once as a terminal sub-operation, outside the
+ordinary attempt and retry loop. A failure ends the run with the
+side-effect-aware incomplete-turn warning; it cannot enter ordinary
+auth/profile rotation, model fallback, context recovery, compaction
+continuation, or hook-requested revision paths. Finalization also skips plugin
+prompt mutation, `before_agent_run`, LLM input/output, terminal revision, and
+`agent_end` hooks. Core diagnostics still record the operation and its failure.
+
+The callback returns `AgentHarnessSettledTurnFinalizationResult`, not an
+ordinary attempt result. Its public fields are limited to the completed
+assistant message, finalization-call usage, transcript-ownership metadata, and
+diagnostic trace. Tool, delivery, media, spawn, lifecycle, replay, session, and
+fallback state cannot cross this result boundary. Unknown fields and assistant
+tool calls fail closed.
+
+A harness that internally reuses its full attempt engine can call
+`projectSettledTurnFinalizationAttemptResult(...)` before returning. The helper
+rejects canonical failure, tool, delivery, replay, and lifecycle evidence, then
+projects only the narrow result. It is defense in depth after native isolation,
+not a substitute for removing the native capability surface.
+
+A projection-backed harness must put the complete context on
+`settledAttempt.settledTurnFinalizationContext` with
+`source: "openclaw-transcript"`. It must capture the active branch after the
+settled turn is mirrored, prove that the current prompt and every current tool
+call/result are present through that boundary, and freeze the resulting message
+array before returning the attempt. The finalizer must reject a missing,
+unsupported, ambiguous, or oversized context. It must not truncate messages,
+drop earlier history, or describe this application transcript as exact native
+history. Harnesses that resume one restricted native session do not need this
+projection field.
+
+Do not implement this callback by calling `runAttempt` with a best-effort
+`disableTools` hint. The harness owner must enforce the complete native
+capability boundary. OpenClaw does not provide a generic fallback because it
+cannot attest that an arbitrary native runtime honored those restrictions.
+
+The callback remains optional for experimental third-party harness
+compatibility. When the selected harness omits it, OpenClaw preserves the
+existing incomplete-turn error instead of risking repeated side effects.
 
 ## Current limitations
 

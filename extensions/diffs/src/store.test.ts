@@ -487,6 +487,30 @@ describe("createDiffsHttpHandler", () => {
     },
   );
 
+  it.each([
+    ["127.0.0.1", 200],
+    ["127.0.0.2", 200],
+    ["127.255.255.254", 200],
+    ["::1", 200],
+    ["::ffff:127.0.0.2", 200],
+    ["128.0.0.1", 404],
+  ] as const)("classifies viewer client address %s", async (remoteAddress, expectedStatusCode) => {
+    const artifact = await createViewerArtifact(store);
+    const handler = createDiffsHttpHandler({ store, allowRemoteViewer: false });
+    const res = createMockServerResponse();
+
+    await handler(
+      localReq({
+        method: "GET",
+        url: artifact.viewerPath,
+        remoteAddress,
+      }),
+      res,
+    );
+
+    expect(res.statusCode).toBe(expectedStatusCode);
+  });
+
   it("rate-limits repeated remote misses", async () => {
     const handler = createDiffsHttpHandler({ store, allowRemoteViewer: true });
 
@@ -527,11 +551,12 @@ function localReq(input: {
   method: string;
   url: string;
   headers?: Record<string, string>;
+  remoteAddress?: string;
 }): IncomingMessage {
   return {
     ...input,
     headers: input.headers ?? {},
-    socket: { remoteAddress: "127.0.0.1" },
+    socket: { remoteAddress: input.remoteAddress ?? "127.0.0.1" },
   } as unknown as IncomingMessage;
 }
 

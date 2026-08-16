@@ -1,12 +1,15 @@
 // Tests shared infra error formatting helpers.
 import { describe, expect, it } from "vitest";
+import { collectNestedErrorCandidates, extractErrorCodeOrErrno } from "./error-graph-internal.js";
 import {
   collectErrorGraphCandidates,
   extractErrorCode,
   formatErrorMessage,
+  formatErrorMessageWithCode,
   formatUncaughtError,
   hasErrnoCode,
   isErrno,
+  isMissingPathError,
   readErrorName,
 } from "./errors.js";
 
@@ -53,12 +56,62 @@ describe("error helpers", () => {
     expect(collectErrorGraphCandidates(null)).toStrictEqual([]);
   });
 
+  it("walks every canonical wrapper edge once despite duplicates and cycles", () => {
+    const cause = { name: "cause" } as { name: string; cause?: unknown };
+    const reason = { name: "reason" };
+    const original = { name: "original" };
+    const error = { name: "error" };
+    const data = { name: "data" };
+    const aggregate = { name: "aggregate" };
+    const root = {
+      name: "root",
+      cause,
+      reason,
+      original,
+      error,
+      data,
+      errors: [aggregate, cause],
+    };
+    cause.cause = root;
+
+    expect(collectNestedErrorCandidates(root)).toEqual([
+      root,
+      cause,
+      reason,
+      original,
+      error,
+      data,
+      aggregate,
+    ]);
+  });
+
+  it.each([
+    { value: { code: " econnreset " }, expected: "ECONNRESET" },
+    { value: { errno: " eai_again " }, expected: "EAI_AGAIN" },
+    { value: { errno: -3001 }, expected: "-3001" },
+    { value: { errno: false }, expected: undefined },
+  ])("normalizes error code or errno from %#", ({ value, expected }) => {
+    expect(extractErrorCodeOrErrno(value)).toBe(expected);
+  });
+
   it("matches errno-shaped errors by code", () => {
     const err = Object.assign(new Error("busy"), { code: "EADDRINUSE" });
     expect(isErrno(err)).toBe(true);
     expect(hasErrnoCode(err, "EADDRINUSE")).toBe(true);
     expect(hasErrnoCode(err, "ENOENT")).toBe(false);
     expect(isErrno("busy")).toBe(false);
+  });
+
+  it.each(["ENOENT", "ENOTDIR", "not-found"])(
+    "classifies %s as a missing path without requiring Error identity",
+    (code) => {
+      expect(isMissingPathError({ code })).toBe(true);
+    },
+  );
+
+  it("does not classify other fs-safe or errno failures as missing paths", () => {
+    expect(isMissingPathError({ code: "path-alias" })).toBe(false);
+    expect(isMissingPathError(new Error("ENOENT"))).toBe(false);
   });
 
   it.each([
@@ -98,8 +151,13 @@ describe("error helpers", () => {
   it("redacts sensitive tokens from formatted error messages", () => {
     const token = "sk-abcdefghijklmnopqrstuv";
     const formatted = formatErrorMessage(new Error(`Authorization: Bearer ${token}`));
+    const codeFormatted = formatErrorMessageWithCode(
+      Object.assign(new Error("request failed"), { code: `token=${token}` }),
+    );
     expect(formatted).toContain("Authorization: Bearer");
     expect(formatted).not.toContain(token);
+    expect(codeFormatted).toContain("request failed");
+    expect(codeFormatted).not.toContain(token);
   });
 
   it("redacts HTTP client config secrets from formatted error chains", () => {

@@ -18,18 +18,22 @@ export type SystemAgentOperation =
   | {
       kind: "config-set-ref";
       path: string;
-      source: "env" | "file" | "exec";
+      source: "env" | "file" | "exec" | "store";
       id: string;
       provider?: string;
     }
-  | { kind: "setup"; workspace?: string; model?: string }
+  | { kind: "setup"; workspace?: string; model?: string; agentName?: string }
   | { kind: "model-setup"; workspace?: string }
   | { kind: "channel-list" }
   | { kind: "channel-info"; channel: string }
   | { kind: "channel-setup"; channel: string }
+  | { kind: "skills-setup" }
+  | { kind: "search-setup" }
+  | { kind: "gateway-config-setup" }
+  | { kind: "memory-import" }
   | {
       kind: "open-setup";
-      target: "guided" | "classic" | "channels";
+      target: "guided" | "classic" | "channels" | "search" | "gateway";
       channel?: string;
     }
   | { kind: "gateway-status" }

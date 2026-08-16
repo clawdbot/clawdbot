@@ -1,21 +1,22 @@
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
+import { classifyOAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import {
-  classifyOAuthRefreshFailure,
-  classifyOAuthRefreshFailureError,
-} from "../../agents/auth-profiles/oauth-refresh-failure.js";
-import {
-  formatRateLimitOrOverloadedErrorCopy,
-  isBillingErrorMessage,
   isCompactionFailureError,
   isLikelyContextOverflowError,
-  isOverloadedErrorMessage,
-  isRateLimitErrorMessage,
   isTransientHttpError,
 } from "../../agents/embedded-agent-helpers.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
-import { isFailoverError } from "../../agents/failover-error.js";
+import { renderUserFacingText } from "../../agents/embedded-agent-helpers/user-facing-text.js";
+import { findCliTimeoutError, isFailoverError } from "../../agents/failover-error.js";
+import {
+  GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+  renderBillingReplyCopy,
+  renderControlUiAgentFailureCopy,
+  renderRateLimitOrOverloadedCopy,
+  renderRateLimitReplyCopy,
+} from "../../agents/failover/user-copy.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
-import { isFallbackSummaryError } from "../../agents/model-fallback.js";
 import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
   resolveAgentRunErrorLifecycleFields,
@@ -29,26 +30,18 @@ import { defaultRuntime } from "../../runtime.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { buildContextOverflowRecoveryText } from "./agent-runner-context-recovery.js";
-import type { AgentRunLoopResult, AgentTurnParams } from "./agent-runner-execution.types.js";
-import {
-  GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
-} from "./agent-runner-failure-copy.js";
+import type { AgentTurnInternalResult, AgentTurnParams } from "./agent-runner-execution.types.js";
 import {
   buildAuthProfileFailoverFailureText,
   buildExternalRunFailureReply,
-  buildRateLimitCooldownMessage,
-  hasBillingAttemptSummary,
   isNonDirectConversationContext,
-  isPureTransientRateLimitSummary,
   isVerboseFailureDetailEnabled,
   markAgentRunFailureReplyPayload,
-  resolveBillingFailureReplyText,
   resolveExternalRunFailureTextForConversation,
+  resolveReplyFailoverFacts,
 } from "./agent-runner-failure-reply.js";
 import type { AgentFallbackCycleState } from "./agent-runner-fallback-cycle.js";
 import type { AgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
-import { classifyProviderRequestError } from "./provider-request-error-classifier.js";
 import {
   buildRestartLifecycleReplyText,
   isReplyOperationRestartAbort,
@@ -60,6 +53,8 @@ const MAX_LIVE_SWITCH_RETRIES = 2;
 const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
 // Overload recovery stays inside one turn: bounded backoff absorbs short provider incidents,
 // while the delayed notice prevents a long silent wait without becoming assistant content.
+// This whole-turn bound multiplies the 32..160 per-run budget in
+// agents/embedded-agent-runner/run/helpers.ts; keep their product test aligned.
 const MAX_OVERLOAD_RETRIES = 10;
 const OVERLOAD_RETRY_BASE_DELAY_MS = 2_500;
 const OVERLOAD_RETRY_MAX_DELAY_MS = 30_000;
@@ -105,7 +100,7 @@ export async function cancelOverloadRetryNotice(state: OverloadRetryState): Prom
 
 type ErrorAction =
   | { kind: "retry"; liveModelSwitchError?: LiveSessionModelSwitchError }
-  | Extract<AgentRunLoopResult, { kind: "final" }>;
+  | Extract<AgentTurnInternalResult, { kind: "final" }>;
 
 export async function handleAgentExecutionError(params: {
   turn: AgentTurnParams;
@@ -167,9 +162,9 @@ export async function handleAgentExecutionError(params: {
     );
     takePendingLifecycleTerminal()?.emit("error", err);
     const switchErrorText = params.shouldSurfaceToControlUi
-      ? "⚠️ Agent failed before reply: model switch could not be completed. " +
-        "The requested model may be temporarily unavailable.\n" +
-        "Logs: openclaw logs --follow"
+      ? renderControlUiAgentFailureCopy(
+          "model switch could not be completed. The requested model may be temporarily unavailable.",
+        )
       : isVerboseFailureDetailEnabled(turn.resolvedVerboseLevel)
         ? "⚠️ Agent failed before reply: model switch could not be completed. " +
           "The requested model may be temporarily unavailable. Please try again shortly."
@@ -196,34 +191,29 @@ export async function handleAgentExecutionError(params: {
     outcome: "error",
     error: message,
   });
-  const isFallbackSummary = isFallbackSummaryError(err);
+  const failoverFacts = resolveReplyFailoverFacts(err, message);
+  const fallbackAttempts = isFailoverError(err) ? err.attempts : undefined;
+  const hasFallbackAttempts = Boolean(fallbackAttempts?.length);
   const isPureOverloadSummary =
-    isFallbackSummary &&
-    err.attempts.length > 0 &&
-    err.attempts.every((attempt) => attempt.reason === "overloaded");
-  const failoverReason = !isFallbackSummary && isFailoverError(err) ? err.reason : undefined;
-  const isOverloaded = isFallbackSummary
+    hasFallbackAttempts && fallbackAttempts?.every((attempt) => attempt.reason === "overloaded");
+  const failoverReason = failoverFacts.reason;
+  const isOverloaded = hasFallbackAttempts
     ? isPureOverloadSummary
-    : failoverReason === "overloaded" || isOverloadedErrorMessage(message);
-  const isBilling = isFallbackSummary
-    ? hasBillingAttemptSummary(err)
-    : isFailoverError(err)
-      ? err.reason === "billing"
-      : isBillingErrorMessage(message);
+    : failoverReason === "overloaded";
+  const isBilling = hasFallbackAttempts
+    ? fallbackAttempts?.some((attempt) => attempt.reason === "billing")
+    : failoverReason === "billing";
   const isContextOverflow =
-    !isBilling &&
-    ((isFailoverError(err) && err.reason === "context_overflow") ||
-      isLikelyContextOverflowError(message));
+    !isBilling && (failoverReason === "context_overflow" || isLikelyContextOverflowError(message));
   const isCompactionFailure = !isBilling && isCompactionFailureError(message);
-  const oauthRefreshFailure =
-    classifyOAuthRefreshFailureError(err) ?? classifyOAuthRefreshFailure(message);
+  const oauthRefreshFailure = classifyOAuthRefreshFailureError(err);
   const hasAuthProfileFailoverFailure = buildAuthProfileFailoverFailureText(err) !== null;
   const providerRequestError =
     !isBilling &&
     !oauthRefreshFailure &&
     !hasAuthProfileFailoverFailure &&
     !params.shouldSurfaceToControlUi
-      ? classifyProviderRequestError(err)
+      ? failoverFacts.providerRequestError
       : undefined;
   const isTransientHttp =
     isTransientHttpError(message) ||
@@ -272,6 +262,11 @@ export async function handleAgentExecutionError(params: {
         }),
       }),
     };
+  }
+  // The CLI boundary records this fact even when phase callbacks do not arrive.
+  // Replaying an observed turn may duplicate already-started side effects.
+  if (findCliTimeoutError(err)?.cliTimeout.observedActivity === true) {
+    markOverloadRetryUnsafeToReplay(params.overloadRetryState);
   }
   if (
     isOverloaded &&
@@ -400,17 +395,9 @@ export async function handleAgentExecutionError(params: {
     turn.replyOperation?.recordActivity();
     return { kind: "retry" };
   }
-  if (providerRequestError) {
-    takePendingLifecycleTerminal()?.emit("error", err);
-    turn.replyOperation?.fail("run_failed", err);
-    await params.modelPatch.fail(err);
-    return {
-      kind: "final",
-      payload: markAgentRunFailureReplyPayload({ text: providerRequestError.userMessage }),
-    };
-  }
   if (
     isTransientHttp &&
+    (!providerRequestError || providerRequestError.allowTransientHttpRetry) &&
     !params.overloadRetryState.unsafeToReplay &&
     params.consumeTransientHttpRetry()
   ) {
@@ -425,22 +412,37 @@ export async function handleAgentExecutionError(params: {
     }
     return { kind: "retry" };
   }
+  if (providerRequestError) {
+    takePendingLifecycleTerminal()?.emit("error", err);
+    turn.replyOperation?.fail("run_failed", err);
+    await params.modelPatch.fail(err);
+    return {
+      kind: "final",
+      payload: markAgentRunFailureReplyPayload({ text: providerRequestError.userMessage }),
+    };
+  }
   defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
-  const isPureTransientSummary = isFallbackSummary ? isPureTransientRateLimitSummary(err) : false;
-  const isRateLimit = isFallbackSummary
+  const isPureTransientSummary = Boolean(
+    hasFallbackAttempts &&
+    fallbackAttempts?.every(
+      (attempt) => attempt.reason === "rate_limit" || attempt.reason === "overloaded",
+    ),
+  );
+  const isRateLimit = hasFallbackAttempts
     ? isPureTransientSummary
-    : failoverReason
-      ? failoverReason === "rate_limit" || failoverReason === "overloaded"
-      : isRateLimitErrorMessage(message);
+    : failoverReason === "rate_limit" || failoverReason === "overloaded";
   const rateLimitOrOverloadedCopy =
-    !isFallbackSummary || isPureTransientSummary
-      ? formatRateLimitOrOverloadedErrorCopy(
-          failoverReason === "overloaded" ? "overloaded" : message,
-        )
+    (!hasFallbackAttempts &&
+      (failoverReason === "rate_limit" || failoverReason === "overloaded")) ||
+    isPureTransientSummary
+      ? renderRateLimitOrOverloadedCopy({
+          reason: isOverloaded ? "overloaded" : "rate_limit",
+          raw: message,
+        })
       : undefined;
-  const trimmedMessage = (
-    isTransientHttp ? sanitizeUserFacingText(message, { errorContext: true }) : message
-  ).replace(/\.\s*$/, "");
+  const userFacingMessage = isTransientHttp
+    ? renderUserFacingText(message, { errorContext: true })
+    : message;
   const externalRunFailureReply =
     !isBilling &&
     !(isRateLimit && !isOverloaded) &&
@@ -454,19 +456,32 @@ export async function handleAgentExecutionError(params: {
             includeDetails: isVerboseFailureDetailEnabled(turn.resolvedVerboseLevel),
             isHeartbeat: turn.isHeartbeat,
             replayPrevented: params.overloadRetryState.unsafeToReplay,
+            failoverFacts,
           },
         )
       : undefined;
   const fallbackText = isBilling
-    ? resolveBillingFailureReplyText(err)
+    ? renderBillingReplyCopy({
+        attempts: fallbackAttempts,
+        ...(isFailoverError(err)
+          ? { provider: err.provider, model: err.model, authMode: err.authMode }
+          : {}),
+      })
     : isRateLimit && !isOverloaded
-      ? buildRateLimitCooldownMessage(err)
+      ? renderRateLimitReplyCopy({
+          message,
+          reason: failoverReason,
+          attempts: fallbackAttempts,
+          provider: isFailoverError(err) ? err.provider : undefined,
+          cooldownExpiry: isFailoverError(err) ? err.soonestCooldownExpiry : undefined,
+          sanitizeText: (text) => sanitizeUserFacingText(text, { errorContext: true }),
+        })
       : rateLimitOrOverloadedCopy
         ? rateLimitOrOverloadedCopy
         : isContextOverflow
           ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
           : params.shouldSurfaceToControlUi
-            ? `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`
+            ? renderControlUiAgentFailureCopy(userFacingMessage)
             : (externalRunFailureReply?.text ??
               (turn.isHeartbeat
                 ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT

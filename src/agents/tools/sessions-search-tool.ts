@@ -2,11 +2,11 @@
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { callGateway } from "../../gateway/call.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
 import {
   agentSessionKeysMatchByRequestKey,
+  isIncognitoSessionKey,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { truncateUtf16Safe } from "../../utils.js";
@@ -17,15 +17,28 @@ import {
   SESSIONS_SEARCH_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readPositiveIntegerParam, readStringParam, ToolInputError } from "./common.js";
+import {
+  jsonResult,
+  readPositiveIntegerParam,
+  readToolStringParam,
+  ToolInputError,
+} from "./common.js";
+import {
+  callAgentToolGatewayRequest,
+  type AgentToolGatewayRequestCaller,
+} from "./in-process-gateway.js";
+import {
+  resolveSessionToolTargetAgentId,
+  runWithScopedSessionAccess,
+} from "./scoped-session-access.js";
 import {
   createAgentToAgentPolicy,
-  createSessionVisibilityGuard,
   createSessionVisibilityRowChecker,
   resolveDisplaySessionKey,
   resolveEffectiveSessionToolsVisibility,
   resolveSandboxedSessionToolContext,
   resolveSessionReference,
+  resolveSessionToolAccess,
   resolveVisibleSessionReference,
 } from "./sessions-helpers.js";
 
@@ -74,7 +87,7 @@ const SessionsSearchOutputSchema = Type.Union([
   ),
 ]);
 
-type GatewayCaller = typeof callGateway;
+type GatewayCaller = AgentToolGatewayRequestCaller;
 
 type GatewaySearchHit = {
   sessionKey?: unknown;
@@ -98,8 +111,9 @@ type SanitizedSearchHit = {
 
 type SearchSessionCandidate = {
   key: string;
-  access: "direct" | "row";
+  access: "authorized" | "row";
   agentId?: string;
+  expectedSessionId?: string;
   ownerSessionKey?: string;
   parentSessionKey?: string;
   spawnedBy?: string;
@@ -323,7 +337,7 @@ export function createSessionsSearchTool(opts?: {
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
 }): AnyAgentTool {
-  const gatewayCall = opts?.callGateway ?? callGateway;
+  const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
   return {
     label: "Sessions Search",
     name: "sessions_search",
@@ -333,7 +347,7 @@ export function createSessionsSearchTool(opts?: {
     outputSchema: SessionsSearchOutputSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const query = readStringParam(params, "query")?.trim() ?? "";
+      const query = readToolStringParam(params, "query")?.trim() ?? "";
       if (!query) {
         throw new ToolInputError("query must not be empty");
       }
@@ -346,7 +360,7 @@ export function createSessionsSearchTool(opts?: {
         readPositiveIntegerParam(params, "limit", {
           max: SESSIONS_SEARCH_MAX_LIMIT,
         }) ?? SESSIONS_SEARCH_DEFAULT_LIMIT;
-      const requestedSessionKey = readStringParam(params, "sessionKey");
+      const requestedSessionKey = readToolStringParam(params, "sessionKey");
       const cfg = opts?.config ?? getRuntimeConfig();
       const { mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
         resolveSandboxedSessionToolContext({
@@ -354,29 +368,71 @@ export function createSessionsSearchTool(opts?: {
           agentSessionKey: opts?.agentSessionKey,
           sandboxed: opts?.sandboxed,
         });
+      const requesterAgentId = resolveSessionAgentId({
+        sessionKey: effectiveRequesterKey,
+        config: cfg,
+        agentId: opts?.agentId,
+      });
 
-      let sessionKey: string | undefined;
+      let sessionTarget:
+        | {
+            agentId: string;
+            key: string;
+            requesterOwned: boolean;
+            expectedSessionId?: string;
+          }
+        | undefined;
       if (requestedSessionKey) {
+        const normalizedRequestedKey = requestedSessionKey.trim();
+        const semanticTargetAgentId =
+          normalizedRequestedKey === "current"
+            ? requesterAgentId
+            : normalizedRequestedKey === "main" ||
+                normalizedRequestedKey === "global" ||
+                normalizedRequestedKey === mainKey ||
+                normalizedRequestedKey === alias ||
+                Boolean(parseAgentSessionKey(normalizedRequestedKey))
+              ? resolveSessionToolTargetAgentId({
+                  cfg,
+                  targetSessionKey: normalizedRequestedKey,
+                  requesterAgentId,
+                })
+              : undefined;
         const resolved = await resolveSessionReference({
+          action: "search",
           sessionKey: requestedSessionKey,
+          keyAgentId: semanticTargetAgentId ?? requesterAgentId,
           alias,
           mainKey,
           requesterInternalKey: effectiveRequesterKey,
           restrictToSpawned,
+          callGateway: gatewayCall,
         });
         if (!resolved.ok) {
           return jsonResult({ status: resolved.status, error: resolved.error });
         }
         const visible = await resolveVisibleSessionReference({
+          action: "search",
           resolvedSession: resolved,
           requesterSessionKey: effectiveRequesterKey,
+          requesterAgentId,
           restrictToSpawned,
           visibilitySessionKey: requestedSessionKey,
+          callGateway: gatewayCall,
         });
         if (!visible.ok) {
           return jsonResult({ status: visible.status, error: visible.error });
         }
-        sessionKey = visible.key;
+        sessionTarget = {
+          key: visible.key,
+          agentId: resolveSessionToolTargetAgentId({
+            cfg,
+            targetSessionKey: visible.key,
+            resolvedAgentId: visible.agentId ?? semanticTargetAgentId,
+            requesterAgentId,
+          }),
+          requesterOwned: visible.requesterOwned,
+        };
       }
 
       const visibility = resolveEffectiveSessionToolsVisibility({
@@ -384,50 +440,68 @@ export function createSessionsSearchTool(opts?: {
         sandboxed: opts?.sandboxed === true,
       });
       const a2aPolicy = createAgentToAgentPolicy(cfg);
-      const guard = await createSessionVisibilityGuard({
-        action: "history",
-        requesterAgentId: opts?.agentId,
-        requesterSessionKey: effectiveRequesterKey,
-        visibility,
-        a2aPolicy,
-      });
+      const defaultAgentId = requesterAgentId;
       const rowGuard = createSessionVisibilityRowChecker({
         action: "history",
-        requesterAgentId: opts?.agentId,
+        defaultAgentId,
+        requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
         visibility,
         a2aPolicy,
       });
-      if (sessionKey) {
-        const access =
-          opts?.agentId && !parseAgentSessionKey(sessionKey)
-            ? rowGuard.check({ key: sessionKey, agentId: opts.agentId })
-            : guard.check(sessionKey);
+      if (sessionTarget) {
+        const { agentId, key, requesterOwned } = sessionTarget;
+        const authorizationTargetSessionKey =
+          agentId !== requesterAgentId && !parseAgentSessionKey(key)
+            ? `agent:${agentId}:${key}`
+            : key;
+        const access = await resolveSessionToolAccess({
+          action: "history",
+          displayAction: "search",
+          defaultAgentId,
+          requesterAgentId,
+          requesterSessionKey: effectiveRequesterKey,
+          authorizationTargetSessionKey,
+          targetAgentId: agentId,
+          targetSessionKey: key,
+          requesterOwned,
+          visibility,
+          a2aPolicy,
+          callGateway: gatewayCall,
+        });
         if (!access.allowed) {
           return jsonResult({ status: access.status, error: access.error });
         }
+        if (access.expectedSessionId) {
+          sessionTarget.expectedSessionId = access.expectedSessionId;
+        }
       }
-      const requesterAgentId =
-        opts?.agentId ?? resolveSessionAgentId({ sessionKey: effectiveRequesterKey, config: cfg });
-
-      const searchSessions = sessionKey
-        ? [
-            {
-              key: sessionKey,
-              access: "direct" as const,
-              ...(opts?.agentId && !parseAgentSessionKey(sessionKey)
-                ? { agentId: opts.agentId }
-                : {}),
-            },
-          ]
-        : await listVisibleSearchSessions({
-            unscopedAgentId: requesterAgentId,
-            effectiveRequesterAgentId: opts?.agentId,
-            effectiveRequesterKey,
-            gatewayCall,
-            rowGuard,
-            restrictToSpawned,
-          });
+      const searchSessions = (
+        sessionTarget
+          ? [
+              {
+                key: sessionTarget.key,
+                access: "authorized" as const,
+                ...(sessionTarget.expectedSessionId
+                  ? { expectedSessionId: sessionTarget.expectedSessionId }
+                  : {}),
+                ...(!parseAgentSessionKey(sessionTarget.key)
+                  ? { agentId: sessionTarget.agentId }
+                  : {}),
+              },
+            ]
+          : await listVisibleSearchSessions({
+              unscopedAgentId: requesterAgentId,
+              effectiveRequesterAgentId: opts?.agentId,
+              effectiveRequesterKey,
+              gatewayCall,
+              rowGuard,
+              restrictToSpawned,
+            })
+      )
+        // Search excerpts are re-persisted in the caller transcript; incognito
+        // sessions therefore stay absent even when the caller could otherwise see them.
+        .filter((candidate) => !isIncognitoSessionKey(candidate.key));
       const visibleHits: SanitizedSearchHit[] = [];
       let indexing = false;
       let backendTruncated = false;
@@ -452,19 +526,30 @@ export function createSessionsSearchTool(opts?: {
           offset += SESSIONS_SEARCH_MAX_SESSION_KEYS
         ) {
           const chunk = candidates.slice(offset, offset + SESSIONS_SEARCH_MAX_SESSION_KEYS);
-          const result = await gatewayCall<{
-            results?: GatewaySearchHit[];
-            indexing?: boolean;
-            truncated?: boolean;
-          }>({
-            method: "sessions.search",
-            params: {
-              agentId,
-              query,
-              limit: SESSIONS_SEARCH_MAX_LIMIT,
-              sessionKeys: chunk.map((candidate) => candidate.key),
-            },
-          });
+          const runSearch = () =>
+            gatewayCall<{
+              results?: GatewaySearchHit[];
+              indexing?: boolean;
+              truncated?: boolean;
+            }>({
+              method: "sessions.search",
+              params: {
+                agentId,
+                query,
+                limit: SESSIONS_SEARCH_MAX_LIMIT,
+                sessionKeys: chunk.map((candidate) => candidate.key),
+              },
+            });
+          const scopedCandidate = chunk.length === 1 ? chunk[0] : undefined;
+          const result = scopedCandidate?.expectedSessionId
+            ? await runWithScopedSessionAccess({
+                cfg,
+                agentId,
+                expectedSessionId: scopedCandidate.expectedSessionId,
+                targetSessionKey: scopedCandidate.key,
+                run: runSearch,
+              })
+            : await runSearch();
           indexing ||= result.indexing === true;
           backendTruncated ||= result.truncated === true;
           for (const hit of Array.isArray(result.results) ? result.results : []) {
@@ -481,10 +566,9 @@ export function createSessionsSearchTool(opts?: {
             }
             const { candidate, visibilityKey } = candidateMatch;
             const access =
-              candidate.access === "row" ||
-              (candidate.agentId !== undefined && !parseAgentSessionKey(candidate.key))
-                ? rowGuard.check(candidate)
-                : guard.check(visibilityKey);
+              candidate.access === "authorized"
+                ? { allowed: true as const }
+                : rowGuard.check(candidate);
             if (!access.allowed) {
               continue;
             }

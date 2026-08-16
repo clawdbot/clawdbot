@@ -1,4 +1,4 @@
-// Mistral plugin entrypoint registers its OpenClaw integration.
+import { adaptMemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import {
   applyMistralModelCompat,
@@ -8,8 +8,8 @@ import {
 } from "./api.js";
 import { mistralMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { mistralMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
-import { applyMistralConfig, MISTRAL_DEFAULT_MODEL_REF } from "./onboard.js";
-import { buildMistralProvider } from "./provider-catalog.js";
+import { applyMistralConfig } from "./onboard.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildMistralRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
 
 const PROVIDER_ID = "mistral";
@@ -23,29 +23,15 @@ function buildMistralReplayPolicy() {
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "Mistral Provider",
-  description: "Bundled Mistral provider plugin",
+  description: "Official Mistral provider plugin",
+  manifest,
   provider: {
     label: "Mistral",
     docsPath: "/providers/models",
-    auth: [
-      {
-        methodId: "api-key",
-        label: "Mistral API key",
-        hint: "API key",
-        optionKey: "mistralApiKey",
-        flagName: "--mistral-api-key",
-        envVar: "MISTRAL_API_KEY",
-        promptMessage: "Enter Mistral API key",
-        defaultModel: MISTRAL_DEFAULT_MODEL_REF,
-        applyConfig: (cfg) => applyMistralConfig(cfg),
-        wizard: {
-          groupLabel: "Mistral AI",
-        },
-      },
-    ],
+    manifestAuth: { applyConfig: applyMistralConfig },
     catalog: {
-      buildProvider: buildMistralProvider,
       allowExplicitBaseUrl: true,
+      liveModelDiscovery: true,
     },
     matchesContextOverflowError: ({ errorMessage }) =>
       /\bmistral\b.*(?:input.*too long|token limit.*exceeded)/i.test(errorMessage),
@@ -59,7 +45,9 @@ export default defineSingleProviderPluginEntry({
     buildReplayPolicy: () => buildMistralReplayPolicy(),
   },
   register(api) {
-    api.registerMemoryEmbeddingProvider(mistralMemoryEmbeddingProviderAdapter);
+    api.registerEmbeddingProvider(
+      adaptMemoryEmbeddingProviderAdapter(mistralMemoryEmbeddingProviderAdapter),
+    );
     api.registerMediaUnderstandingProvider(mistralMediaUnderstandingProvider);
     api.registerRealtimeTranscriptionProvider(buildMistralRealtimeTranscriptionProvider());
   },

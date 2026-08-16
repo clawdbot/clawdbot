@@ -4,7 +4,7 @@
  * Collects operator/user allowlist sources and explains when no callable tools remain.
  */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { normalizeToolList, normalizeToolName } from "./tool-policy.js";
+import { normalizeToolList, normalizeToolPolicyName } from "./tool-policy.js";
 
 type ExplicitToolAllowlistSource = {
   label: string;
@@ -37,17 +37,19 @@ export function buildEmptyExplicitToolAllowlistError(params: {
   callableToolNames: string[];
   toolsEnabled: boolean;
   disableTools?: boolean;
+  toolsAllowExplicitlyEmpty?: boolean;
 }): Error | null {
-  const sources =
-    params.disableTools === true
-      ? params.sources.filter((source) => source.enforceWhenToolsDisabled === true)
-      : params.sources;
+  const toolsIntentionallyDisabled =
+    params.disableTools === true || params.toolsAllowExplicitlyEmpty === true;
+  const sources = toolsIntentionallyDisabled
+    ? params.sources.filter((source) => source.enforceWhenToolsDisabled === true)
+    : params.sources;
   const callableToolNames = normalizeToolList(params.callableToolNames);
   if (sources.length === 0 || callableToolNames.length > 0) {
     return null;
   }
   const requested = sources
-    .map((source) => `${source.label}: ${source.entries.map(normalizeToolName).join(", ")}`)
+    .map((source) => `${source.label}: ${source.entries.map(normalizeToolPolicyName).join(", ")}`)
     .join("; ");
   const reason =
     params.disableTools === true

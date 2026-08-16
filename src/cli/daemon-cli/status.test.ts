@@ -46,6 +46,9 @@ describe("runDaemonStatus", () => {
   beforeEach(() => {
     gatherDaemonStatus.mockClear();
     printDaemonStatus.mockClear();
+    defaultRuntime.error.mockClear();
+    defaultRuntime.exit.mockClear();
+    defaultRuntime.writeJson.mockClear();
     resetRuntimeCapture();
   });
 
@@ -79,6 +82,7 @@ describe("runDaemonStatus", () => {
       json: false,
       deep: false,
     });
+    expect(defaultRuntime.exit).toHaveBeenCalledTimes(1);
   });
 
   it("forwards require-rpc to daemon status gathering", async () => {
@@ -111,5 +115,86 @@ describe("runDaemonStatus", () => {
     expect(runtimeErrors[0]).toBe(
       "Gateway status failed: --require-rpc needs probing enabled. Remove --no-probe or drop --require-rpc.",
     );
+    expect(defaultRuntime.exit).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders disabled-probe validation failures as JSON in JSON mode", async () => {
+    await expect(
+      runDaemonStatus({
+        rpc: {},
+        probe: false,
+        requireRpc: true,
+        json: true,
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(gatherDaemonStatus).not.toHaveBeenCalled();
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
+      ok: false,
+      error:
+        "Gateway status failed: --require-rpc needs probing enabled. Remove --no-probe or drop --require-rpc.",
+    });
+    expect(defaultRuntime.error).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders service-inspection failures as JSON in JSON mode", async () => {
+    const secret = "sk-abcdefghijklmnopqrstuv";
+    const error = new Error(`service manager unavailable: Authorization: Bearer ${secret}`);
+    error.name = "ServiceManagerError";
+    gatherDaemonStatus.mockRejectedValueOnce(error);
+
+    await expect(
+      runDaemonStatus({
+        rpc: {},
+        probe: true,
+        requireRpc: false,
+        json: true,
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(printDaemonStatus).not.toHaveBeenCalled();
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
+      ok: false,
+      error: expect.stringContaining("Gateway status failed: service manager unavailable"),
+    });
+    expect(JSON.stringify(defaultRuntime.writeJson.mock.calls)).not.toContain(error.name);
+    expect(JSON.stringify(defaultRuntime.writeJson.mock.calls)).not.toContain(secret);
+    expect(defaultRuntime.error).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledTimes(1);
+  });
+
+  it("exits only once after printing a failed required RPC probe", async () => {
+    gatherDaemonStatus.mockResolvedValueOnce({
+      service: {
+        label: "LaunchAgent",
+        loaded: true,
+        loadedText: "loaded",
+        notLoadedText: "not loaded",
+      },
+      rpc: {
+        ok: false,
+        url: "ws://127.0.0.1:18789",
+        error: "gateway closed",
+      },
+      extraServices: [],
+    });
+
+    await expect(
+      runDaemonStatus({
+        rpc: {},
+        probe: true,
+        requireRpc: true,
+        json: true,
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(printDaemonStatus).toHaveBeenCalledTimes(1);
+    expect(printDaemonStatus).toHaveBeenCalledWith(expect.any(Object), {
+      json: true,
+      deep: false,
+    });
+    expect(defaultRuntime.error).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,5 +1,4 @@
 // Best-effort legacy approval resolution events after durable CAS wins.
-import type { ApprovalDecision } from "../../../packages/gateway-protocol/src/index.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import type {
   ExecApprovalRequestPayload,
@@ -12,21 +11,13 @@ import type {
 import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
 import type { ExecApprovalRecord } from "../exec-approval-manager.js";
 import type { OperatorApprovalRecord } from "../operator-approval-store.js";
-import { resolveApprovalRequestRecipientConnIds } from "./approval-shared.js";
+import { broadcastApprovalResolvedEvent } from "./approval-shared.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type ApprovalRequest =
   | ExecApprovalRequestPayload
   | PluginApprovalRequestPayload
   | SystemAgentApprovalRequestPayload;
-
-type SystemAgentApprovalResolved = {
-  id: string;
-  decision: ApprovalDecision;
-  resolvedBy?: string | null;
-  ts: number;
-  request: SystemAgentApprovalRequestPayload;
-};
 
 export type ExecApprovalIosPushDelivery = {
   handleResolved?: (resolved: ExecApprovalResolved) => Promise<void>;
@@ -35,37 +26,6 @@ export type ExecApprovalIosPushDelivery = {
 export type PluginApprovalIosPushDelivery = {
   handleResolved?: (resolved: PluginApprovalResolved) => Promise<void>;
 };
-
-function broadcastResolvedEvent(params: {
-  approvalKind: "exec" | "plugin" | "system-agent";
-  context: GatewayRequestContext;
-  eventName: "exec.approval.resolved" | "plugin.approval.resolved" | "openclaw.approval.resolved";
-  event: ExecApprovalResolved | PluginApprovalResolved | SystemAgentApprovalResolved;
-  liveRecord: ExecApprovalRecord<ApprovalRequest>;
-}): void {
-  const recipientConnIds = resolveApprovalRequestRecipientConnIds({
-    approvalKind: params.approvalKind,
-    context: params.context,
-    record: {
-      id: params.liveRecord.id,
-      request: params.liveRecord.request,
-      createdAtMs: params.liveRecord.createdAtMs,
-      expiresAtMs: params.liveRecord.expiresAtMs,
-      requestedByConnId: params.liveRecord.requestedByConnId,
-      requestedByDeviceId: params.liveRecord.requestedByDeviceId,
-      requestedByClientId: params.liveRecord.requestedByClientId,
-      requestedByDeviceTokenAuth: params.liveRecord.requestedByDeviceTokenAuth,
-      approvalReviewerDeviceIds: params.liveRecord.approvalReviewerDeviceIds,
-    },
-  });
-  if (recipientConnIds) {
-    params.context.broadcastToConnIds(params.eventName, params.event, recipientConnIds, {
-      dropIfSlow: true,
-    });
-    return;
-  }
-  params.context.broadcast(params.eventName, params.event, { dropIfSlow: true });
-}
 
 async function runSideEffect(params: {
   context: GatewayRequestContext;
@@ -107,30 +67,23 @@ export async function publishAppliedApprovalResolution(params: {
   const decision = params.record.decision ?? "deny";
   const resolvedBy = params.liveRecord.resolvedBy ?? null;
   const ts = params.record.resolvedAtMs ?? Date.now();
-  const eventName =
-    params.record.kind === "exec"
-      ? "exec.approval.resolved"
-      : params.record.kind === "plugin"
-        ? "plugin.approval.resolved"
-        : "openclaw.approval.resolved";
   const event = {
     id: params.record.id,
     decision,
     resolvedBy,
     ts,
     request: params.liveRecord.request,
-  } as ExecApprovalResolved | PluginApprovalResolved | SystemAgentApprovalResolved;
+  };
   await runSideEffect({
     context: params.context,
     approvalKind: params.record.kind,
     effect: "broadcast",
     run: () =>
-      broadcastResolvedEvent({
+      broadcastApprovalResolvedEvent({
         approvalKind: params.record.kind,
         context: params.context,
-        eventName,
         event,
-        liveRecord: params.liveRecord,
+        record: params.liveRecord,
       }),
   });
   const nativeApprovalKind = params.record.kind;

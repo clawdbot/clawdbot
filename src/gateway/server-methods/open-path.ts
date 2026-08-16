@@ -46,7 +46,7 @@ async function observeXdgOpenStartup(command: OpenPathCommand): Promise<void> {
     reject: true,
     stdio: ["ignore", "ignore", "pipe"],
   });
-  child.unref();
+  child.nodeChildProcess.unref();
   let stderrText = "";
   const stderr = child.stderr;
   stderr?.setEncoding("utf8");
@@ -54,7 +54,7 @@ async function observeXdgOpenStartup(command: OpenPathCommand): Promise<void> {
     if (stderrText.length >= XDG_OPEN_STDERR_MAX_CHARS) {
       return;
     }
-    stderrText += String(chunk).slice(0, XDG_OPEN_STDERR_MAX_CHARS - stderrText.length);
+    stderrText += truncateUtf16Safe(String(chunk), XDG_OPEN_STDERR_MAX_CHARS - stderrText.length);
   };
   stderr?.on("data", onStderr);
 

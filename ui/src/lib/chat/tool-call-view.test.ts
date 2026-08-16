@@ -417,6 +417,10 @@ describe("resolveToolCallView", () => {
     });
 
     expect(view.target).toBe("2 files");
+    expect(view.fileOperations).toEqual([
+      { operation: "update", path: "src/a.ts" },
+      { operation: "add", path: "src/b.ts" },
+    ]);
     expect(view.stat).toEqual({ added: 2, removed: 1 });
     expect(view.diff).toContainEqual({ kind: "file", text: "Update src/a.ts" });
     expect(view.diff).toContainEqual({ kind: "file", text: "Add src/b.ts" });
@@ -493,6 +497,7 @@ describe("resolveToolCallView", () => {
 
     expect(view.kind).toBe("edit");
     expect(view.target).toBe("notes.md");
+    expect(view.fileOperations).toEqual([{ operation: "add", path: "notes.md" }]);
     expect(view.stat).toEqual({ added: 1, removed: 0 });
   });
 
@@ -512,6 +517,55 @@ describe("resolveToolCallView", () => {
       ],
       stat: { added: 2, removed: 0 },
     });
+  });
+
+  it("uses authoritative write details for diff and created-flag stats", () => {
+    const args = { path: "/repo/file.ts", content: "line 1\nline 2\n" };
+
+    expect(
+      resolveToolCallView({
+        name: "write",
+        args,
+        details: { created: false, diff: "-4 old\n+4 replacement" },
+      }),
+    ).toMatchObject({
+      diff: [
+        { kind: "del", lineNo: 4, text: "old" },
+        { kind: "add", lineNo: 4, text: "replacement" },
+      ],
+      stat: { added: 1, removed: 1 },
+    });
+
+    const created = resolveToolCallView({ name: "write", args, details: { created: true } });
+    expect(created.stat).toEqual({ added: 2, removed: 0 });
+
+    const overwrite = resolveToolCallView({ name: "write", args, details: { created: false } });
+    expect(overwrite.diff).toEqual([
+      { kind: "add", lineNo: 1, text: "line 1" },
+      { kind: "add", lineNo: 2, text: "line 2" },
+    ]);
+    expect(overwrite.stat).toBeUndefined();
+
+    const unknown = resolveToolCallView({ name: "write", args, details: { changed: true } });
+    expect(unknown.diff).toEqual(overwrite.diff);
+    expect(unknown.stat).toBeUndefined();
+
+    expect(resolveToolCallView({ name: "write", args, details: { changed: false } })).toEqual({
+      kind: "write",
+      target: "file.ts",
+      targetDetail: "/repo",
+    });
+  });
+
+  it.each(TEXT_EDITOR_TOOL_NAMES)("applies created-flag stats to %s create", (name) => {
+    const view = resolveToolCallView({
+      name,
+      args: { command: "create", path: "/repo/file.ts", file_text: "replacement\n" },
+      details: { created: false },
+    });
+
+    expect(view.diff).toEqual([{ kind: "add", lineNo: 1, text: "replacement" }]);
+    expect(view.stat).toBeUndefined();
   });
 
   it("resolves search views from pattern plus path scope", () => {
@@ -567,5 +621,24 @@ describe("resolveToolCallView", () => {
     const source = { name: "edit", args: { path: "/repo/a.ts", oldText: "x", newText: "y" } };
 
     expect(resolveToolCallView(source)).toBe(resolveToolCallView(source));
+  });
+
+  it("keeps tool-name presentation authoritative when different calls share args", () => {
+    const args = { path: "/repo/a.ts", oldText: "before", newText: "after" };
+
+    expect(resolveToolCallView({ name: "read", args })).toMatchObject({
+      kind: "read",
+      target: "a.ts",
+    });
+    expect(resolveToolCallView({ name: "edit", args })).toMatchObject({
+      kind: "edit",
+      target: "a.ts",
+      stat: { added: 1, removed: 1 },
+    });
+    expect(resolveToolCallView({ name: "write", args })).toMatchObject({
+      kind: "write",
+      target: "a.ts",
+    });
+    expect(resolveToolCallView({ name: "READ", args }).kind).toBe("read");
   });
 });

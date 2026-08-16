@@ -38,6 +38,8 @@ export function runRespawnChildWithSignalBridge(params: {
   let signalForceKillTimer: NodeJS.Timeout | undefined;
   let signalHardExitTimer: NodeJS.Timeout | undefined;
   let parentSignalReceived = false;
+  let firstForwardedSignal: NodeJS.Signals | undefined;
+  let hardKillBackstopStarted = false;
   const clearSignalTimers = (): void => {
     if (signalExitTimer) {
       clearTimeout(signalExitTimer);
@@ -73,6 +75,7 @@ export function runRespawnChildWithSignalBridge(params: {
       // Best-effort shutdown fallback.
     }
     signalForceKillTimer = setTimeout(() => {
+      hardKillBackstopStarted = true;
       forceKillChild();
       signalHardExitTimer = setTimeout(() => {
         runtime.exit(1);
@@ -81,8 +84,9 @@ export function runRespawnChildWithSignalBridge(params: {
     }, RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS);
     signalForceKillTimer.unref?.();
   };
-  const scheduleParentExit = (): void => {
+  const scheduleParentExit = (signal: NodeJS.Signals): void => {
     parentSignalReceived = true;
+    firstForwardedSignal ??= signal;
     if (signalExitTimer) {
       return;
     }
@@ -102,7 +106,15 @@ export function runRespawnChildWithSignalBridge(params: {
     }
     clearSignalTimers();
     if (signal) {
-      runtime.exit(1);
+      const forwardedSignalExitCode =
+        !hardKillBackstopStarted && signal === firstForwardedSignal
+          ? signal === "SIGINT"
+            ? 130
+            : signal === "SIGTERM"
+              ? 143
+              : undefined
+          : undefined;
+      runtime.exit(forwardedSignalExitCode ?? 1);
       return;
     }
     runtime.exit(code ?? 1);

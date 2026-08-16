@@ -2,7 +2,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { writeClaudeBundleManifest } from "../../plugins/bundle-mcp.test-support.js";
+import {
+  resolveBundlePluginRoot,
+  writeBundleTextFiles,
+  writeClaudeBundleManifest,
+} from "../../plugins/bundle-mcp.test-support.js";
+import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { prepareCliBundleMcpCaptureAttempt, prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import {
   cliBundleMcpHarness,
@@ -14,6 +20,19 @@ import {
 setupCliBundleMcpTestHarness();
 
 describe("prepareCliBundleMcpConfig", () => {
+  it("disables Claude native web search without bundle MCP", async () => {
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: false,
+      mode: "claude-config-file",
+      backend: { command: "claude", args: ["--print"] },
+      workspaceDir: "/tmp/openclaw-cli-web-search-disabled",
+      toolOverrides: { webSearch: false },
+    });
+
+    expect(prepared.backend.args).toEqual(["--print", "--disallowedTools", "WebSearch"]);
+    expect(prepared.mcpConfigHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
   it("injects a strict empty --mcp-config overlay for bundle-MCP-enabled backends without servers", async () => {
     const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
       "openclaw-cli-bundle-mcp-empty-",
@@ -92,6 +111,120 @@ describe("prepareCliBundleMcpConfig", () => {
     expect(prepared.mcpConfigHash).toMatch(/^[0-9a-f]{64}$/);
     expect(prepared.mcpResumeHash).toMatch(/^[0-9a-f]{64}$/);
 
+    await prepared.cleanup?.();
+  });
+
+  it("carries Agent Plugins data-dir and transport contracts into external projections", async () => {
+    const pluginId = "agent-cli-projection";
+    const pluginRoot = resolveBundlePluginRoot(cliBundleMcpHarness.bundleProbeHomeDir, pluginId);
+    await writeBundleTextFiles(pluginRoot, {
+      "plugin.json": JSON.stringify({
+        $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+        name: pluginId,
+      }),
+      "mcp.json": JSON.stringify({
+        $schema: "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+        mcpServers: {
+          local: { type: "stdio", command: "node" },
+          remote: { type: "streamable-http", url: "https://example.test/mcp" },
+          legacy: { type: "sse", url: "https://example.test/sse" },
+        },
+      }),
+    });
+    const agentDataDir = path.join(
+      cliBundleMcpHarness.bundleProbeHomeDir,
+      ".openclaw",
+      "plugin-data",
+      pluginId,
+    );
+    const userDataPath = path.join(
+      cliBundleMcpHarness.bundleProbeHomeDir,
+      "user-data-must-not-exist",
+    );
+    clearPluginMetadataLifecycleCaches();
+
+    const prepared = await withEnvAsync(
+      { HOME: cliBundleMcpHarness.bundleProbeHomeDir },
+      async () =>
+        await prepareCliBundleMcpConfig({
+          enabled: true,
+          mode: "gemini-system-settings",
+          backend: { command: "gemini" },
+          workspaceDir: cliBundleMcpHarness.bundleProbeWorkspaceDir,
+          config: {
+            plugins: { entries: { [pluginId]: { enabled: true } } },
+            mcp: {
+              servers: {
+                user: {
+                  command: "node",
+                  env: { PLUGIN_ROOT: "/user/plugin", PLUGIN_DATA: userDataPath },
+                },
+              },
+            },
+          },
+        }),
+    );
+
+    expect((await fs.stat(agentDataDir)).isDirectory()).toBe(true);
+    await expect(fs.stat(userDataPath)).rejects.toMatchObject({ code: "ENOENT" });
+    const raw = JSON.parse(
+      await fs.readFile(prepared.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH as string, "utf8"),
+    ) as {
+      mcpServers?: Record<string, { type?: string; transport?: string; url?: string }>;
+    };
+    expect(raw.mcpServers?.remote).toMatchObject({
+      type: "http",
+      url: "https://example.test/mcp",
+    });
+    expect(raw.mcpServers?.legacy).toMatchObject({
+      type: "sse",
+      url: "https://example.test/sse",
+    });
+    expect(raw.mcpServers?.remote?.transport).toBeUndefined();
+    expect(raw.mcpServers?.legacy?.transport).toBeUndefined();
+    await prepared.cleanup?.();
+    await fs.rm(pluginRoot, { recursive: true, force: true });
+    clearPluginMetadataLifecycleCaches();
+  });
+
+  it("projects session MCP tool denials into Claude disallowed tools", async () => {
+    const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
+      "openclaw-cli-bundle-mcp-deny-",
+    );
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: {
+        command: "claude",
+        args: ["--disallowedTools", "Bash(rm *)"],
+      },
+      workspaceDir,
+      config: {
+        plugins: { enabled: false },
+        mcp: { servers: { docs: { command: "node", args: ["docs.mjs"] } } },
+      },
+      toolOverrides: { mcpToolsDeny: { docs: ["delete_docs"] }, webSearch: false },
+    });
+
+    expect(prepared.backend.args).toContain("Bash(rm *),WebSearch,mcp__docs__delete_docs");
+    await prepared.cleanup?.();
+  });
+
+  it("applies server disables to exclusive CLI MCP configs", async () => {
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: { command: "claude" },
+      workspaceDir: "/tmp/openclaw-cli-bundle-mcp-exclusive-disable",
+      exclusiveConfig: { mcpServers: { openclaw: { command: "node" } } },
+      toolOverrides: { mcpServers: { openclaw: false } },
+    });
+
+    const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
+      mcpServers?: Record<string, unknown>;
+    };
+    expect(raw.mcpServers).toEqual({});
     await prepared.cleanup?.();
   });
 

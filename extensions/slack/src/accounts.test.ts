@@ -67,7 +67,7 @@ describe("resolveSlackOperationToken", () => {
         cfg: {
           channels: {
             slack: {
-              identity: "user",
+              postAs: "user",
               userToken: "test-user-token",
               userTokenReadOnly: true,
             },
@@ -84,7 +84,7 @@ describe("resolveSlackOperationToken", () => {
       cfg: {
         channels: {
           slack: {
-            identity: "user",
+            postAs: "user",
             botToken: "test-bot-token",
           },
         },
@@ -282,6 +282,36 @@ describe("resolveSlackAccount allowFrom precedence", () => {
     });
   });
 
+  it("inherits the top-level presence prompt when an account overrides only the mode", () => {
+    const resolved = resolveSlackAccount({
+      cfg: {
+        channels: {
+          slack: {
+            presenceEvents: {
+              mode: "auto",
+              prompt: "Use the account owner's workspace guidance.",
+            },
+            accounts: {
+              work: {
+                botToken: "xoxb-work",
+                appToken: "xapp-work",
+                presenceEvents: {
+                  mode: "on",
+                },
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(resolved.config.presenceEvents).toEqual({
+      mode: "on",
+      prompt: "Use the account owner's workspace guidance.",
+    });
+  });
+
   it("merges canonical account streaming over top-level defaults field-by-field", () => {
     const resolved = resolveSlackAccount({
       cfg: {
@@ -363,7 +393,7 @@ describe("resolveSlackAccount allowFrom precedence", () => {
     expect(resolved.config.allowFrom).toBeUndefined();
   });
 
-  it("falls back to top-level dm.allowFrom when allowFrom alias is unset", () => {
+  it("does not treat retired nested dm.allowFrom as canonical", () => {
     const resolved = resolveSlackAccount({
       cfg: {
         channels: {
@@ -374,15 +404,14 @@ describe("resolveSlackAccount allowFrom precedence", () => {
             },
           },
         },
-      },
+      } as never,
       accountId: "work",
     });
 
     expect(resolved.config.allowFrom).toBeUndefined();
-    expect(resolved.config.dm?.allowFrom).toEqual(["U123"]);
   });
 
-  it("resolves account legacy dm.allowFrom before inherited root allowFrom", () => {
+  it("resolves account allowFrom before inherited root allowFrom", () => {
     const cfg = {
       channels: {
         slack: {
@@ -391,14 +420,14 @@ describe("resolveSlackAccount allowFrom precedence", () => {
             work: {
               botToken: "xoxb-work",
               appToken: "xapp-work",
-              dm: { allowFrom: ["account-legacy"] },
+              allowFrom: ["account"],
             },
           },
         },
       },
     } satisfies OpenClawConfig;
 
-    expect(resolveSlackAccountAllowFrom({ cfg, accountId: "work" })).toEqual(["account-legacy"]);
+    expect(resolveSlackAccountAllowFrom({ cfg, accountId: "work" })).toEqual(["account"]);
   });
 
   it("coerces numeric allowFrom entries at the config boundary", () => {
@@ -419,7 +448,7 @@ describe("resolveSlackAccount allowFrom precedence", () => {
     expect(resolveSlackAccountAllowFrom({ cfg, accountId: "work" })).toEqual(["12345"]);
   });
 
-  it("resolves account legacy dm policy before inherited root policy", () => {
+  it("resolves account DM policy before inherited root policy", () => {
     const cfg = {
       channels: {
         slack: {
@@ -428,7 +457,7 @@ describe("resolveSlackAccount allowFrom precedence", () => {
             work: {
               botToken: "xoxb-work",
               appToken: "xapp-work",
-              dm: { policy: "allowlist" },
+              dmPolicy: "allowlist",
             },
           },
         },
@@ -448,7 +477,7 @@ describe("resolveSlackAccount allowFrom precedence", () => {
             Work: {
               botToken: "xoxb-work",
               appToken: "xapp-work",
-              dm: { policy: "allowlist" },
+              dmPolicy: "allowlist",
               allowFrom: ["U123"],
             },
           },

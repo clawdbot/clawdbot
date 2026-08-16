@@ -2,11 +2,15 @@ import path from "node:path";
 // Extracts provider public artifacts from plugin metadata.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
-import { loadPluginManifestRegistry, type PluginManifestRegistry } from "./manifest-registry.js";
+import {
+  loadPluginManifestRegistryCore,
+  type PluginManifestRegistry,
+} from "./manifest-registry.js";
 import {
   resolveDirectBundledProviderPolicySurface,
   resolveTrustedExternalProviderPolicySurface,
   type BundledProviderPolicySurface,
+  type ProviderPolicySurface,
 } from "./provider-policy-surface.js";
 
 function resolveBundledProviderPolicyPlugin(
@@ -22,7 +26,7 @@ function resolveBundledProviderPolicyPlugin(
     return null;
   }
 
-  const registry = options.manifestRegistry ?? loadPluginManifestRegistry();
+  const registry = options.manifestRegistry ?? loadPluginManifestRegistryCore();
   for (const plugin of registry.plugins.toSorted((left, right) =>
     left.id.localeCompare(right.id),
   )) {
@@ -42,7 +46,7 @@ function pluginOwnsProviderPolicyRef(
   normalizedProviderId: string,
 ): boolean {
   const ownedProviders = new Set(
-    [...plugin.providers, ...plugin.cliBackends]
+    [...plugin.providers, ...plugin.cliBackends, ...(plugin.contracts?.embeddingProviders ?? [])]
       .map((provider) => normalizeProviderId(provider))
       .filter(Boolean),
   );
@@ -93,7 +97,7 @@ export function resolveBundledProviderPolicySurface(
 export function resolveProviderPolicySurface(
   providerId: string,
   options: { manifestRegistry?: Pick<PluginManifestRegistry, "plugins"> } = {},
-): BundledProviderPolicySurface | null {
+): ProviderPolicySurface | null {
   const bundledSurface = resolveBundledProviderPolicySurface(providerId, options);
   if (bundledSurface) {
     return bundledSurface;

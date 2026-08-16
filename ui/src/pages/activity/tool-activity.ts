@@ -1,4 +1,6 @@
 // Control UI module implements activity model behavior.
+import { asNullableObjectRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeNullableString as toTrimmedString } from "@openclaw/normalization-core/string-coerce";
 import { formatUnknownText, truncateText } from "../../lib/format.ts";
 
 const ACTIVITY_ENTRY_LIMIT = 100;
@@ -65,18 +67,6 @@ const SECRET_PATTERNS: Array<[RegExp, string]> = [
     "$1[redacted path]",
   ],
 ];
-
-function toTrimmedString(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
-}
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
-}
 
 export function parseActivityEvent(
   payload: unknown,

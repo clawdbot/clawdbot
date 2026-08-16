@@ -12,8 +12,6 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   tui: "Terminal UI display settings. Use this section for terminal-only presentation preferences without changing Gateway or other UI behavior.",
   "tui.footer":
     "Terminal UI footer display settings. Keep optional context compact so session, model, goal, and token information stay readable.",
-  "tui.footer.showRemoteHost":
-    "Show the remote Gateway hostname in the TUI footer for non-local URL-backed connections. Default: false. Loopback and embedded local connections never show a host label.",
   plugins:
     "Plugin system controls for enabling extensions, constraining load scope, configuring entries, and tracking installs. Keep plugin policy explicit and least-privilege in production environments.",
   "plugins.enabled":
@@ -39,7 +37,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "plugins.entries.*.hooks":
     "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
   "plugins.entries.*.hooks.allowPromptInjection":
-    "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+    "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build`.",
   "plugins.entries.*.hooks.allowConversationAccess":
     "Controls whether this plugin may read raw conversation content from typed hooks such as `before_agent_run`, `before_model_resolve`, `before_agent_reply`, `llm_input`, `llm_output`, `before_agent_finalize`, and `agent_end`. Non-bundled plugins must opt in explicitly.",
   "plugins.entries.*.hooks.timeoutMs":
@@ -57,7 +55,11 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "plugins.entries.*.llm.allowModelOverride":
     "Explicitly allows this plugin to request model overrides in api.runtime.llm.complete. Keep false unless the plugin is trusted to steer model selection.",
   "plugins.entries.*.llm.allowedModels":
-    'Allowed override targets for trusted plugin LLM completions as canonical "provider/model" refs. Use "*" only when you intentionally allow any model.',
+    'Allowed override targets for trusted plugin LLM calls as canonical "provider/model" refs. Use "*" only when you intentionally allow any model override.',
+  "plugins.entries.*.llm.allowedCompletionModels":
+    'Allowed targets for every plugin LLM completion as canonical "provider/model" refs, including host-resolved defaults and overrides. Use "*" only when you intentionally allow any model.',
+  "plugins.entries.*.llm.allowAuthProfileOverride":
+    "Allows this plugin to select a non-default auth profile for isolated agent-runtime completions. Keep false unless the plugin is trusted for explicit isolated credential routing.",
   "plugins.entries.*.llm.allowAgentIdOverride":
     "Explicitly allows this plugin to request api.runtime.llm.complete against a non-default agent id. Keep false unless the plugin is trusted for cross-agent model access.",
   "plugins.entries.*.apiKey":
@@ -66,76 +68,72 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Per-plugin environment variable map injected for that plugin runtime context only. Use this to scope provider credentials to one plugin instead of sharing global process environment.",
   "plugins.entries.*.config":
     "Plugin-defined configuration payload interpreted by that plugin's own schema and validation rules. Use only documented fields from the plugin to prevent ignored or invalid settings.",
-  "agents.list.*.identity.avatar":
+  "agents.entries.*.identity.avatar":
     "Agent avatar (workspace-relative path, http(s) URL, or data URI).",
   "agents.defaults.model.primary": "Primary model (provider/model).",
   "agents.defaults.model.fallbacks":
     "Ordered fallback models (provider/model). Used when the primary model fails.",
   "agents.defaults.utilityModel":
     "Optional lower-cost model (provider/model or alias) for short internal tasks such as generated titles and progress narration. Unset derives the primary provider's declared small model when available (otherwise the primary model); set to an empty string to disable utility routing.",
-  "agents.list.*.utilityModel":
+  "agents.entries.*.utilityModel":
     "Optional per-agent utility model override for short internal tasks. Overrides agents.defaults.utilityModel.",
-  "agents.list.*.models": "Per-agent model catalog overrides keyed by full provider/model IDs.",
-  "agents.list.*.models.*.agentRuntime":
+  "agents.entries.*.models": "Per-agent model catalog overrides keyed by full provider/model IDs.",
+  "agents.entries.*.modelPolicy":
+    "Per-agent model override policy. An explicit allow list replaces the default policy for this agent.",
+  "agents.entries.*.modelPolicy.allow":
+    'Allowed model override refs for this agent. Accepts aliases, full "provider/model" refs, and trailing prefix wildcards such as "provider/*" or "provider/namespace/*"; empty permits any model.',
+  "agents.entries.*.models.*.agentRuntime":
     "Optional per-model runtime policy for this agent. Use this for agent-specific model exceptions instead of setting a whole-agent runtime.",
-  "agents.list.*.models.*.agentRuntime.id":
+  "agents.entries.*.models.*.agentRuntime.id":
     'Per-agent model runtime id: "openclaw", "auto", a registered plugin harness id such as "codex", or a supported CLI backend alias such as "claude-cli".',
   "agents.defaults.imageModel.primary":
     "Optional image model (provider/model) used when the primary model lacks image input.",
   "agents.defaults.imageModel.fallbacks": "Ordered fallback image models (provider/model).",
-  "agents.defaults.imageGenerationModel.primary":
+  "agents.defaults.mediaModels.image.primary":
     "Optional image-generation model (provider/model) used by the shared image generation capability.",
-  "agents.defaults.imageGenerationModel.fallbacks":
+  "agents.defaults.mediaModels.image.fallbacks":
     "Ordered fallback image-generation models (provider/model).",
-  "agents.defaults.imageGenerationModel.timeoutMs":
+  "agents.defaults.mediaModels.image.timeoutMs":
     "Default provider request timeout in milliseconds for image_generate calls. Per-call timeoutMs overrides this.",
-  "agents.defaults.videoGenerationModel.primary":
+  "agents.defaults.mediaModels.video.primary":
     "Optional video-generation model (provider/model) used by the shared video generation capability.",
-  "agents.defaults.videoGenerationModel.timeoutMs":
+  "agents.defaults.mediaModels.video.timeoutMs":
     "Default provider request timeout in milliseconds for video_generate calls. Per-call timeoutMs overrides this, and this value overrides provider-authored defaults.",
-  "agents.defaults.videoGenerationModel.fallbacks":
+  "agents.defaults.mediaModels.video.fallbacks":
     "Ordered fallback video-generation models (provider/model).",
-  "agents.defaults.musicGenerationModel.primary":
+  "agents.defaults.mediaModels.music.primary":
     "Optional music-generation model (provider/model) used by the shared music generation capability.",
-  "agents.defaults.musicGenerationModel.fallbacks":
+  "agents.defaults.mediaModels.music.fallbacks":
     "Ordered fallback music-generation models (provider/model).",
   "agents.defaults.voiceModel.primary":
     "Optional voice model (provider/model) used by speech, transcription, and realtime voice capabilities.",
   "agents.defaults.voiceModel.fallbacks": "Ordered fallback voice models (provider/model).",
   "agents.defaults.voiceModel.timeoutMs":
     "Default provider request timeout in milliseconds for voice model operations when the caller supports timeouts.",
-  "agents.defaults.mediaGenerationAutoProviderFallback":
-    "When true (default), shared image, music, and video generation automatically appends other auth-backed provider defaults after explicit primary/fallback refs. Set false to disable implicit cross-provider fallback while keeping explicit fallbacks.",
   "agents.defaults.pdfModel.primary":
     "Optional PDF model (provider/model) for the PDF analysis tool. Defaults to imageModel, then session model.",
   "agents.defaults.pdfModel.fallbacks": "Ordered fallback PDF models (provider/model).",
-  "agents.defaults.pdfMaxBytesMb":
-    "Maximum PDF file size in megabytes for the PDF tool (default: 10).",
+  "agents.defaults.pdfMaxMb": "Maximum PDF file size in megabytes for the PDF tool (default: 10).",
   "agents.defaults.pdfMaxPages":
     "Maximum number of PDF pages to process for the PDF tool (default: 20).",
   "agents.defaults.imageMaxDimensionPx":
     "Max image side length in pixels when sanitizing transcript/tool-result image payloads (default: 1200).",
   "agents.defaults.imageQuality":
     'Image-tool media compression preference: "auto" adapts to provider/model limits and image count, "efficient" saves tokens and bytes, "balanced" keeps the current middle ground, and "high" preserves more detail for screenshots and document images.',
-  "agents.defaults.cliBackends": "Optional CLI backends for text-only fallback (claude-cli, etc.).",
   "agents.defaults.compaction":
-    "Compaction tuning for when context nears token limits, including history share, reserve headroom, and pre-compaction memory flush behavior. Use this when long-running sessions need stable continuity under tight context windows.",
+    "Compaction behavior for when context nears token limits, including strategy and pre-compaction memory flush behavior. Use this when long-running sessions need stable continuity under tight context windows.",
+  "agents.defaults.compaction.enabled":
+    "Enable embedded proactive auto-compaction (default: true). Set false to stop threshold-driven embedded compaction while preserving OpenClaw overflow recovery, preflight compaction, and manual /compact.",
   "agents.defaults.compaction.mode":
     'Compaction strategy mode: "default" uses baseline behavior, while "safeguard" applies stricter guardrails to preserve recent context. Keep "default" unless you observe aggressive history loss near limit boundaries.',
   "agents.defaults.compaction.provider":
     "Id of a registered compaction provider plugin used for summarization. When set and the provider is registered, its summarize() method is called instead of the built-in summarizeInStages pipeline. Falls back to built-in on provider failure. Leave unset to use the default built-in summarization.",
-  "agents.defaults.compaction.reserveTokens":
-    "Token headroom reserved for reply generation and tool output after compaction runs. Use higher reserves for verbose/tool-heavy sessions, and lower reserves when maximizing retained history matters more. When the active model context window is known, the effective reserve is capped to preserve usable prompt space.",
+  "agents.defaults.compaction.thinkingLevel":
+    'Optional thinking level used only for embedded OpenClaw compaction summaries: "off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", or "ultra". It overrides the session level and is clamped to the actual compaction model/runtime; leave unset to inherit the session level. Native Codex app-server compaction ignores this setting because its compact request has no per-operation thinking override, and OpenClaw logs a warning.',
   "agents.defaults.compaction.keepRecentTokens":
     "Minimum token budget preserved from the most recent conversation window during compaction. Use higher values to protect immediate context continuity and lower values to keep more long-tail history.",
-  "agents.defaults.compaction.reserveTokensFloor":
-    "Minimum floor enforced for reserveTokens in embedded OpenClaw compaction paths (0 disables the floor guard). Use a non-zero floor to avoid over-aggressive compression under fluctuating token estimates.",
-  "agents.defaults.compaction.maxHistoryShare":
-    "Maximum fraction of total context budget allowed for retained history after compaction (range 0.1-0.9). Use lower shares for more generation headroom or higher shares for deeper historical continuity.",
   "agents.defaults.compaction.identifierPolicy":
-    'Identifier-preservation policy for compaction summaries: "strict" prepends built-in opaque-identifier retention guidance (default), "off" disables this prefix, and "custom" uses identifierInstructions. Keep "strict" unless you have a specific compatibility need.',
-  "agents.defaults.compaction.identifierInstructions":
-    'Custom identifier-preservation instruction text used when identifierPolicy="custom". Keep this explicit and safety-focused so compaction summaries do not rewrite opaque IDs, URLs, hosts, or ports.',
+    'Identifier-preservation policy for compaction summaries: "strict" prepends built-in opaque-identifier retention guidance (default), while "off" disables this prefix.',
   "agents.defaults.compaction.recentTurnsPreserve":
     "Number of most recent user/assistant turns kept verbatim outside safeguard summarization (default: 3). Raise this to preserve exact recent dialogue context, or lower it to maximize compaction savings.",
   "agents.defaults.compaction.qualityGuard":
@@ -151,15 +149,13 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.compaction.postIndexSync":
     'Controls post-compaction session memory reindex mode: "off", "async", or "await" (default: "async"). Use "await" for strongest freshness, "async" for lower compaction latency, and "off" only when session-memory sync is handled elsewhere.',
   "agents.defaults.compaction.postCompactionSections":
-    'Opt-in AGENTS.md H2/H3 section names re-injected after compaction so the agent reruns critical startup guidance. Leave unset or set [] to disable reinjection. Explicitly set ["Session Startup", "Red Lines"] to enable the legacy default pair with fallback to older "Every Session"/"Safety" headings. Enabling this can duplicate project context already present in the compaction summary.',
+    'Opt-in AGENTS.md H2/H3 section names re-injected after compaction. Leave unset or set [] to disable reinjection. Explicitly set ["Session Startup", "Red Lines"] to enable the legacy default pair.',
   "agents.defaults.compaction.timeoutSeconds":
     "Maximum time in seconds allowed for a single compaction operation before it is aborted (default: 180). Increase this for very large sessions that need more time to summarize, or decrease it to fail faster on unresponsive models.",
   "agents.defaults.compaction.model":
     "Optional provider/model or configured bare alias used only for compaction summarization. Bare aliases resolve before dispatch; a configured literal model ID wins if it collides with an alias. Leave unset to keep using the primary agent model.",
-  "agents.defaults.compaction.truncateAfterCompaction":
-    "When enabled, rotates the active session transcript after compaction so future turns load only the summary and unsummarized tail while the previous full transcript remains archived. Prevents unbounded active transcript growth in long-running sessions. Default: false.",
   "agents.defaults.compaction.maxActiveTranscriptBytes":
-    'Triggers normal local compaction when the active session transcript reaches this size (bytes or strings like "20mb"). Requires truncateAfterCompaction so successful compaction can rotate to a smaller successor transcript; set to 0 or leave unset to disable. This never splits raw transcript bytes.',
+    'Byte threshold that triggers normal preflight local compaction when the active session transcript reaches this size (bytes or strings like "20mb"). Set to 0 or leave unset to disable. Also caps Codex app-server native rollout transcripts; oversized native threads restart fresh.',
   "agents.defaults.compaction.notifyUser":
     "When enabled, sends brief context-maintenance notices to the user: when compaction starts and completes (for example, '🧹 Compacting context...' and '🧹 Compaction complete'), and when a pre-compaction memory flush is exhausted so the reply continues in a degraded state (for example, '⚠️ Memory maintenance temporarily failed; continuing your reply.'). Disabled by default to keep context maintenance silent and non-intrusive.",
   "agents.defaults.compaction.memoryFlush":
@@ -172,40 +168,25 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Threshold distance to compaction (in tokens) that triggers pre-compaction memory flush execution. Use earlier thresholds for safer persistence, or tighter thresholds for lower flush frequency.",
   "agents.defaults.compaction.memoryFlush.forceFlushTranscriptBytes":
     'Forces pre-compaction memory flush when active transcript size reaches this threshold (bytes or strings like "2mb"). Use this to prevent long-session hangs even when token counters are stale; set to 0 to disable.',
-  "agents.defaults.compaction.memoryFlush.prompt":
-    "User-prompt template used for the pre-compaction memory flush turn when generating memory candidates. Use this only when you need custom extraction instructions beyond the default memory flush behavior.",
-  "agents.defaults.compaction.memoryFlush.systemPrompt":
-    "System-prompt override for the pre-compaction memory flush turn to control extraction style and safety constraints. Use carefully so custom instructions do not reduce memory quality or leak sensitive context.",
-  "agents.defaults.runRetries":
-    "Outer run loop retry iteration boundaries for the embedded OpenClaw runner to prevent infinite execution loops during failure recovery.",
-  "agents.defaults.runRetries.base":
-    "Base number of run retry iterations for the embedded OpenClaw runner's outer run loop (default: 24).",
-  "agents.defaults.runRetries.perProfile":
-    "Additional run retry iterations granted per fallback profile candidate (default: 8).",
-  "agents.defaults.runRetries.min":
-    "Minimum absolute limit for run retry iterations (default: 32).",
-  "agents.defaults.runRetries.max":
-    "Maximum absolute limit for run retry iterations to prevent runaway execution (default: 160).",
-  "agents.list[].runRetries":
-    "Optional per-agent override for the embedded OpenClaw runner's outer run loop retry iteration boundaries.",
-  "agents.list[].runRetries.base": "Base number of run retry iterations for this agent.",
-  "agents.list[].runRetries.perProfile":
-    "Additional run retry iterations granted per fallback profile candidate for this agent.",
-  "agents.list[].runRetries.min": "Minimum absolute limit for run retry iterations for this agent.",
-  "agents.list[].runRetries.max": "Maximum absolute limit for run retry iterations for this agent.",
   "agents.defaults.embeddedAgent":
     "Embedded OpenClaw runner hardening controls for how workspace-local agent settings are trusted and applied in OpenClaw sessions.",
   "agents.defaults.embeddedAgent.projectSettingsPolicy":
     'How embedded OpenClaw handles workspace-local `.openclaw/settings.json`: "sanitize" (default) strips shellPath/shellCommandPrefix, "ignore" disables project settings entirely, and "trusted" applies project settings as-is.',
   "agents.defaults.embeddedAgent.executionContract":
     'Embedded OpenClaw execution contract: "default" keeps the standard runner behavior, while "strict-agentic" enables structured plan tracking and non-visible turn recovery for supported OpenAI/OpenAI Codex GPT-5-family runs.',
-  "agents.list[].embeddedAgent":
+  "agents.entries.*.embeddedAgent":
     "Optional per-agent embedded OpenClaw overrides. Use this to opt specific agents into stricter GPT-5 execution behavior without changing the global default.",
-  "agents.list[].embeddedAgent.executionContract":
+  "agents.entries.*.embeddedAgent.executionContract":
     'Optional per-agent embedded OpenClaw execution contract override. Set "strict-agentic" to enable structured plan tracking and non-visible turn recovery for that agent on supported OpenAI/OpenAI Codex GPT-5-family runs, or "default" to inherit the standard runner behavior.',
   "agents.defaults.humanDelay.mode": 'Delay style for block replies ("off", "natural", "custom").',
   "agents.defaults.humanDelay.minMs": "Minimum delay in ms for custom humanDelay (default: 800).",
   "agents.defaults.humanDelay.maxMs": "Maximum delay in ms for custom humanDelay (default: 2500).",
+  "agents.defaults.typingMode":
+    'Controls when typing starts for agents: "never", "instant", "thinking", or "message". Per-agent typingMode overrides this default.',
+  "agents.defaults.typingIntervalSeconds":
+    "Controls typing-indicator keepalive cadence in seconds for every agent. Increase it to reduce update frequency across all typing-capable channels.",
+  "agents.entries.*.typingMode":
+    "Overrides the default typing start policy for one agent without changing other agents.",
   commands:
     "Controls chat command surfaces, owner gating, and elevated command access behavior across providers. Keep defaults unless you need stricter operator controls or broader command availability.",
   "commands.native":
@@ -225,13 +206,8 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Allow /plugins chat command to list discovered plugins and toggle plugin enablement in config (default: false).",
   "commands.debug": "Allow /debug chat command for runtime-only overrides (default: false).",
   "commands.restart": "Allow /restart and external SIGUSR1 restart requests (default: true).",
-  "commands.useAccessGroups": "Enforce access-group allowlists/policies for commands.",
   "commands.ownerAllowFrom":
     "Explicit owner allowlist for owner-scoped commands. Use channel-native IDs (optionally prefixed like \"whatsapp:+15551234567\"). '*' is ignored.",
-  "commands.ownerDisplay":
-    "Controls how owner IDs are rendered in the system prompt. Allowed values: raw, hash. Default: raw.",
-  "commands.ownerDisplaySecret":
-    "Optional secret used to HMAC hash owner IDs when ownerDisplay=hash. Prefer env substitution.",
   "commands.allowFrom":
     "Defines elevated command allow rules by channel and sender for owner-level command surfaces. Use narrow provider-specific identities so privileged commands are not exposed to broad chat audiences.",
   mcp: "Global MCP server definitions managed by OpenClaw. Embedded OpenClaw and other runtime adapters can consume these servers without storing them inside runtime-owned project settings.",
@@ -245,6 +221,8 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Exact MCP tool names or simple '*' globs to expose from this server. When omitted, all server tools remain eligible unless excluded.",
   "mcp.servers.*.toolFilter.exclude":
     "Exact MCP tool names or simple '*' globs to hide from this server.",
+  "mcp.servers.*.oauth.identity":
+    'OAuth credential ownership for this server. Omit this field or use "shared" for operator-managed credentials; use "per-requester" to let each authenticated sender connect their own account.',
   "mcp.servers.*.oauth.authProfileId":
     "Refresh-capable auth profile id used to inject the current bearer token into this remote MCP server. When set, OpenClaw resolves and refreshes the profile at runtime and does not project refresh material downstream.",
   "mcp.servers.*.codex.agents":
@@ -253,6 +231,4 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     'Optional Codex MCP tool approval mode for this server: "auto", "prompt", or "approve". Use only for MCP servers you intentionally trust.',
   "mcp.servers.*.codex.default_tools_approval_mode":
     "Codex-native spelling for the same per-server MCP tool approval mode. Prefer defaultToolsApprovalMode in OpenClaw config.",
-  "mcp.sessionIdleTtlMs":
-    "Idle TTL in milliseconds for session-scoped bundled MCP runtimes. Defaults to 10 minutes; set 0 to disable idle eviction.",
 };

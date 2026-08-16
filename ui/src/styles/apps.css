@@ -101,10 +101,13 @@
   padding: 14px;
 }
 
+/* Wrapping keeps the nowrap badge from squeezing the title into a mid-word
+   break on narrow cards: the badge drops to its own line instead. */
 .apps-card__title-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 6px 8px;
   min-width: 0;
 }
 
@@ -113,7 +116,11 @@
   color: var(--text);
 }
 
+/* Growing right-aligns an inline badge (title absorbs the slack) yet leaves
+   a wrapped badge left-aligned under the title. Basis must stay auto: a 0%
+   basis would let the badge share the line and squeeze the title again. */
 .apps-card__title {
+  flex: 1 1 auto;
   margin: 0;
   color: var(--text-strong);
   font-size: var(--control-ui-text-md, 15px);
@@ -121,7 +128,6 @@
 }
 
 .apps-card__badge {
-  margin-inline-start: auto;
   padding: 2px 9px;
   border: 1px solid var(--border);
   border-radius: 999px;
@@ -158,7 +164,7 @@
   font-size: var(--control-ui-text-sm);
   font-weight: 550;
   text-decoration: none;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   transition:
     transform 140ms ease,
     background 140ms ease,
@@ -186,6 +192,33 @@
 .apps-card__cta:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
+}
+
+.apps-pair-hint {
+  margin: 10px 2px 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.apps-pair-hint button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  cursor: var(--cursor-action);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.apps-pair-hint button:hover {
+  color: var(--text-strong);
+}
+
+.apps-pair-hint button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: 4px;
 }
 
 .apps-community {

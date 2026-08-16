@@ -1,11 +1,106 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.gateway.GatewaySession
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import java.util.concurrent.CopyOnWriteArrayList
+
+internal val chatControllerTestJson = Json { ignoreUnknownKeys = true }
+
+internal fun CoroutineScope.createChatController(
+  requestGatewayForGateway: (suspend (gatewayId: String, method: String, paramsJson: String?) -> String)? = null,
+  captureSettingsRequestLease: ((gatewayScope: ChatCacheScope?) -> GatewaySession.RequestLease?)? = null,
+  transcriptCache: ChatTranscriptCache? = null,
+  cacheScope: () -> ChatCacheScope? = { null },
+  currentDefaultAgentId: () -> String? = { "main" },
+  currentDefaultAgentRevision: () -> Long = { 0L },
+  recordModelRecent: (String) -> Unit = {},
+  onSessionDeleted: (ChatSessionDeletion) -> Unit = {},
+  onOfflineDefaultAgentRestored: (String) -> Unit = {},
+  onAssistantReplyFinalized: (owner: ChatComposerOwner, runId: String, text: String) -> Unit = { _, _, _ -> },
+  requestGateway: suspend (method: String, paramsJson: String?) -> String = { _, _ -> "{}" },
+): ChatController {
+  val scopedRequest =
+    requestGatewayForGateway ?: { _, method, paramsJson -> requestGateway(method, paramsJson) }
+  val settingsLease =
+    captureSettingsRequestLease ?: { gatewayScope ->
+      GatewaySession.RequestLease(endpointStableId = gatewayScope?.gatewayId.orEmpty()) { method, paramsJson, _ ->
+        if (gatewayScope == null) {
+          requestGateway(method, paramsJson)
+        } else {
+          scopedRequest(gatewayScope.gatewayId, method, paramsJson)
+        }
+      }
+    }
+  return ChatController(
+    scope = this,
+    json = chatControllerTestJson,
+    requestGateway = requestGateway,
+    requestGatewayForGateway = scopedRequest,
+    captureSettingsRequestLease = settingsLease,
+    transcriptCache = transcriptCache,
+    cacheScope = cacheScope,
+    currentDefaultAgentId = currentDefaultAgentId,
+    currentDefaultAgentRevision = currentDefaultAgentRevision,
+    recordModelRecent = recordModelRecent,
+    onSessionDeleted = onSessionDeleted,
+    onOfflineDefaultAgentRestored = onOfflineDefaultAgentRestored,
+    onAssistantReplyFinalized = onAssistantReplyFinalized,
+  )
+}
+
+internal class ChatControllerTestSetup(
+  private val scope: CoroutineScope,
+) {
+  val requests = mutableListOf<Pair<String, String?>>()
+  var cacheScope: () -> ChatCacheScope? = { null }
+  var recordModelRecent: (String) -> Unit = {}
+
+  private val handlers = mutableMapOf<String, suspend (String?) -> String>()
+
+  fun respond(
+    method: String,
+    responseJson: String,
+  ) {
+    handlers[method] = { responseJson }
+  }
+
+  fun respond(
+    method: String,
+    handler: suspend (paramsJson: String?) -> String,
+  ) {
+    handlers[method] = handler
+  }
+
+  val controller: ChatController by lazy {
+    scope.createChatController(
+      cacheScope = cacheScope,
+      recordModelRecent = recordModelRecent,
+      requestGateway = { method, paramsJson ->
+        requests += method to paramsJson
+        // Unscripted methods preserve the original controller-test empty-object fallback.
+        handlers[method]?.invoke(paramsJson) ?: "{}"
+      },
+    )
+  }
+
+  operator fun component1(): ChatController = controller
+
+  operator fun component2(): MutableList<Pair<String, String?>> = requests
+}
+
+internal fun CoroutineScope.chatControllerTestSetup(
+  configure: ChatControllerTestSetup.() -> Unit,
+): ChatControllerTestSetup = ChatControllerTestSetup(this).apply(configure)
+
+internal fun CoroutineScope.createScriptedChatController(
+  configure: ChatControllerTestSetup.() -> Unit,
+): ChatController = chatControllerTestSetup(configure).controller
 
 /**
  * Scripted gateway responder for deterministic chat replay tests.
@@ -23,7 +118,9 @@ internal class ScriptedGateway(
     val paramsJson: String?,
   )
 
-  val calls = mutableListOf<Call>()
+  // Controllers can retry from a background dispatcher while tests inspect calls.
+  // Snapshot iteration keeps assertions from racing concurrent request recording.
+  val calls = CopyOnWriteArrayList<Call>()
   private val handlers = mutableMapOf<String, suspend (paramsJson: String?) -> String>()
 
   /** Client-generated run id captured from the latest chat.send params. */
@@ -98,6 +195,7 @@ internal data class ReplayHistoryMessage(
   val text: String,
   val timestampMs: Long,
   val idempotencyKey: String? = null,
+  val entryId: String? = null,
 )
 
 internal fun historyResponse(
@@ -168,6 +266,9 @@ internal fun historyResponse(
             put("timestamp", JsonPrimitive(message.timestampMs))
             if (message.idempotencyKey != null) {
               put("idempotencyKey", JsonPrimitive(message.idempotencyKey))
+            }
+            if (message.entryId != null) {
+              put("__openclaw", buildJsonObject { put("id", JsonPrimitive(message.entryId)) })
             }
           }
         },

@@ -1,12 +1,8 @@
 // Memory Core tests cover session search visibility plugin behavior.
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import { normalizeSessionDeliveryState } from "openclaw/plugin-sdk/session-store-runtime";
 import * as sessionTranscriptHit from "openclaw/plugin-sdk/session-transcript-hit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { replaceQmdSessionArtifactMappings } from "./qmd-session-artifacts.js";
 import { filterMemorySearchHitsBySessionVisibility } from "./session-search-visibility.js";
 import { asOpenClawConfig } from "./tools.test-helpers.js";
 
@@ -15,6 +11,7 @@ type TestSessionEntry = {
   updatedAt: number;
   sessionFile: string;
   chatType?: "direct" | "group" | "channel";
+  delivery?: ReturnType<typeof normalizeSessionDeliveryState>;
   origin?: { chatType?: "direct" | "group" | "channel" };
 };
 
@@ -26,7 +23,6 @@ const crossAgentStore: Record<string, TestSessionEntry> = {
   },
 };
 let combinedSessionStore: Record<string, TestSessionEntry> = crossAgentStore;
-const tempRoots: string[] = [];
 
 vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => {
   const actual =
@@ -41,87 +37,9 @@ vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => 
 });
 
 describe("filterMemorySearchHitsBySessionVisibility", () => {
-  afterEach(async () => {
+  afterEach(() => {
     vi.mocked(sessionTranscriptHit.loadCombinedSessionStoreForGateway).mockClear();
     combinedSessionStore = crossAgentStore;
-    while (tempRoots.length > 0) {
-      const root = tempRoots.pop();
-      if (root) {
-        await fs.rm(root, { recursive: true, force: true });
-      }
-    }
-  });
-
-  it("migrates legacy QMD artifact mappings to STRICT without losing rows", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-qmd-session-artifact-"));
-    tempRoots.push(root);
-    const indexPath = path.join(root, "index.sqlite");
-    const legacy = new DatabaseSync(indexPath);
-    legacy.exec(`
-      CREATE TABLE openclaw_qmd_session_artifacts (
-        collection TEXT NOT NULL,
-        artifact_path TEXT NOT NULL,
-        search_path TEXT NOT NULL,
-        docid TEXT,
-        memory_key TEXT NOT NULL,
-        agent_id TEXT NOT NULL,
-        session_id TEXT NOT NULL,
-        updated_at INTEGER NOT NULL,
-        PRIMARY KEY (collection, artifact_path)
-      );
-      INSERT INTO openclaw_qmd_session_artifacts (
-        collection, artifact_path, search_path, docid, memory_key, agent_id, session_id, updated_at
-      ) VALUES ('legacy', 'old.md', 'qmd/legacy/old.md', NULL, 'old-key', 'main', 'old', 1);
-    `);
-    legacy.close();
-
-    replaceQmdSessionArtifactMappings({
-      collection: "current",
-      indexPath,
-      mappings: [
-        {
-          agentId: "main",
-          archived: true,
-          artifactPath: "new.md",
-          collection: "current",
-          memoryKey: "new-key",
-          searchPath: "qmd/current/new.md",
-          sessionId: "new",
-        },
-      ],
-    });
-
-    const migrated = new DatabaseSync(indexPath);
-    try {
-      expect(
-        migrated
-          .prepare(
-            "SELECT strict FROM pragma_table_list WHERE name = 'openclaw_qmd_session_artifacts'",
-          )
-          .get(),
-      ).toEqual({ strict: 1 });
-      expect(
-        migrated
-          .prepare(
-            `SELECT collection, artifact_path, archived
-             FROM openclaw_qmd_session_artifacts
-             ORDER BY collection`,
-          )
-          .all(),
-      ).toEqual([
-        { collection: "current", artifact_path: "new.md", archived: 1 },
-        { collection: "legacy", artifact_path: "old.md", archived: 0 },
-      ]);
-      expect(() =>
-        migrated
-          .prepare(
-            "UPDATE openclaw_qmd_session_artifacts SET archived = ? WHERE collection = 'legacy'",
-          )
-          .run("not-an-integer"),
-      ).toThrow();
-    } finally {
-      migrated.close();
-    }
   });
 
   it("drops sessions-sourced hits when requester key is missing (fail closed)", async () => {
@@ -164,6 +82,49 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
       hits,
     });
     expect(filtered).toEqual(hits);
+  });
+
+  it("keeps memory but hides an unrelated same-agent session from a voice requester", async () => {
+    combinedSessionStore = {
+      "agent:main:voice:15550001111": {
+        sessionId: "voice",
+        updatedAt: 2,
+        sessionFile: "/tmp/sessions/voice.jsonl",
+        chatType: "direct",
+      },
+      "agent:main:telegram:direct:owner": {
+        sessionId: "private",
+        updatedAt: 1,
+        sessionFile: "/tmp/sessions/private.jsonl",
+        chatType: "direct",
+      },
+    };
+    const memoryHit: MemorySearchResult = {
+      path: "memory/allowed.md",
+      source: "memory",
+      score: 1,
+      snippet: "Visible memory",
+      startLine: 1,
+      endLine: 2,
+    };
+    const sessionHit: MemorySearchResult = {
+      path: "sessions/private.jsonl",
+      source: "sessions",
+      score: 1,
+      snippet: "Private session secret",
+      startLine: 1,
+      endLine: 2,
+    };
+
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg: asOpenClawConfig({}),
+      agentId: "main",
+      requesterSessionKey: "agent:main:voice:15550001111",
+      sandboxed: false,
+      hits: [memoryHit, sessionHit],
+    });
+
+    expect(filtered).toEqual([memoryHit]);
   });
 
   it("allows another same-agent private transcript through trusted conversation recall", async () => {
@@ -254,13 +215,24 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
         sessionId: "current",
         updatedAt: 2,
         sessionFile: "/tmp/sessions/current.jsonl",
-        origin: { chatType: "direct" },
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "discord", to: "user:current" },
+          origin: { provider: "discord", chatType: "direct", to: "user:current" },
+        }),
       },
       "agent:main:explicit:phone:group:shadow": {
         sessionId: "explicit-private",
         updatedAt: 1,
         sessionFile: "/tmp/sessions/explicit-private.jsonl",
         chatType: "direct",
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "discord", to: "user:explicit-private" },
+          origin: {
+            provider: "discord",
+            chatType: "direct",
+            to: "user:explicit-private",
+          },
+        }),
       },
     };
     const hit: MemorySearchResult = {
@@ -310,10 +282,10 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
       },
     };
     const hit: MemorySearchResult = {
-      path: "sessions/other-private.jsonl",
+      path: "sessions/main/current.jsonl.reset.2026-08-11T08-00-00.000Z",
       source: "sessions",
       score: 1,
-      snippet: "private context",
+      snippet: "prior private context",
       startLine: 1,
       endLine: 2,
     };
@@ -459,45 +431,54 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
     expect(filtered).toStrictEqual([]);
   });
 
-  it("denies another agent's private transcript during trusted conversation recall", async () => {
-    combinedSessionStore = {
-      "agent:main:telegram:direct:owner": {
-        sessionId: "current",
-        updatedAt: 2,
-        sessionFile: "/tmp/sessions/current.jsonl",
-        chatType: "direct",
-      },
-      "agent:peer:telegram:direct:owner": {
-        sessionId: "peer-private",
-        updatedAt: 1,
-        sessionFile: "/tmp/sessions/peer-private.jsonl",
-        chatType: "direct",
-      },
-    };
-    const hit: MemorySearchResult = {
-      path: "sessions/peer-private.jsonl",
-      source: "sessions",
-      score: 1,
-      snippet: "other agent context",
-      startLine: 1,
-      endLine: 2,
-    };
-    const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "all" } } });
+  it.each([
+    { name: "live", path: "sessions/peer-private.jsonl" },
+    {
+      name: "archived",
+      path: "sessions/peer/peer-private.jsonl.reset.2026-08-11T08-00-00.000Z",
+    },
+  ])(
+    "denies another agent's $name private transcript during trusted conversation recall",
+    async ({ path }) => {
+      combinedSessionStore = {
+        "agent:main:telegram:direct:owner": {
+          sessionId: "current",
+          updatedAt: 2,
+          sessionFile: "/tmp/sessions/current.jsonl",
+          chatType: "direct",
+        },
+        "agent:peer:telegram:direct:owner": {
+          sessionId: "peer-private",
+          updatedAt: 1,
+          sessionFile: "/tmp/sessions/peer-private.jsonl",
+          chatType: "direct",
+        },
+      };
+      const hit: MemorySearchResult = {
+        path,
+        source: "sessions",
+        score: 1,
+        snippet: "other agent context",
+        startLine: 1,
+        endLine: 2,
+      };
+      const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "all" } } });
 
-    const filtered = await filterMemorySearchHitsBySessionVisibility({
-      cfg,
-      requesterSessionKey: "agent:main:telegram:direct:owner",
-      sandboxed: false,
-      hits: [hit],
-      conversationRecall: {
-        anchorSessionKey: "agent:main:telegram:direct:owner",
-        scope: "same-agent-private",
-        corpus: "sessions",
-      },
-    });
+      const filtered = await filterMemorySearchHitsBySessionVisibility({
+        cfg,
+        requesterSessionKey: "agent:main:telegram:direct:owner",
+        sandboxed: false,
+        hits: [hit],
+        conversationRecall: {
+          anchorSessionKey: "agent:main:telegram:direct:owner",
+          scope: "same-agent-private",
+          corpus: "sessions",
+        },
+      });
 
-    expect(filtered).toStrictEqual([]);
-  });
+      expect(filtered).toStrictEqual([]);
+    },
+  );
 
   it("denies persisted Active Memory helper transcripts under explicit sessions", async () => {
     combinedSessionStore = {
@@ -939,5 +920,67 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
     expect(sessionTranscriptHit.loadCombinedSessionStoreForGateway).toHaveBeenCalledWith(cfg, {
       agentId: "main",
     });
+  });
+
+  it("keeps same-agent live orphan transcript hits", async () => {
+    combinedSessionStore = {};
+    const hit: MemorySearchResult = {
+      path: "sessions/main/live-orphan.jsonl",
+      source: "sessions",
+      score: 1,
+      snippet: "x",
+      startLine: 1,
+      endLine: 2,
+    };
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg: asOpenClawConfig({ tools: { sessions: { visibility: "agent" } } }),
+      requesterSessionKey: "agent:main:main",
+      sandboxed: false,
+      hits: [hit],
+    });
+    expect(filtered).toEqual([hit]);
+  });
+
+  it("drops cross-agent live orphan transcript hits", async () => {
+    combinedSessionStore = {};
+    const hit: MemorySearchResult = {
+      path: "sessions/peer/live-orphan.jsonl",
+      source: "sessions",
+      score: 1,
+      snippet: "x",
+      startLine: 1,
+      endLine: 2,
+    };
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg: asOpenClawConfig({
+        tools: {
+          sessions: { visibility: "all" },
+          agentToAgent: { enabled: true, allow: ["*"] },
+        },
+      }),
+      requesterSessionKey: "agent:main:main",
+      sandboxed: false,
+      hits: [hit],
+    });
+    expect(filtered).toStrictEqual([]);
+  });
+
+  it("does not treat a same-agent orphan filename as proven self-session lineage", async () => {
+    combinedSessionStore = {};
+    const hit: MemorySearchResult = {
+      path: "sessions/main/main.jsonl",
+      source: "sessions",
+      score: 1,
+      snippet: "x",
+      startLine: 1,
+      endLine: 2,
+    };
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg: asOpenClawConfig({ tools: { sessions: { visibility: "self" } } }),
+      requesterSessionKey: "agent:main:main",
+      sandboxed: false,
+      hits: [hit],
+    });
+    expect(filtered).toStrictEqual([]);
   });
 });

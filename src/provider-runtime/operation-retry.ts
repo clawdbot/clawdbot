@@ -249,16 +249,26 @@ export async function executeProviderOperationWithRetry<T>(params: {
   stage: ProviderOperationRetryStage;
   operation: () => Promise<T>;
   retry?: TransientProviderRetryConfig;
+  signal?: AbortSignal;
 }): Promise<T> {
   const retryConfig = providerOperationRetryConfig(params.stage, params.retry);
-  const retryOptions = resolveTransientProviderRetryOptions(retryConfig);
+  const resolvedRetryOptions = resolveTransientProviderRetryOptions(retryConfig);
+  const retrySignal =
+    params.signal && resolvedRetryOptions?.signal
+      ? AbortSignal.any([params.signal, resolvedRetryOptions.signal])
+      : (params.signal ?? resolvedRetryOptions?.signal);
+  const retryOptions = resolvedRetryOptions
+    ? { ...resolvedRetryOptions, ...(retrySignal ? { signal: retrySignal } : {}) }
+    : undefined;
   const maxAttempts = resolveTransientProviderAttempts(retryOptions);
   let lastError: unknown;
 
   for (let attemptNumber = 1; attemptNumber <= maxAttempts; attemptNumber += 1) {
+    params.signal?.throwIfAborted();
     try {
       return await params.operation();
     } catch (error) {
+      params.signal?.throwIfAborted();
       lastError = error;
       const message = formatErrorMessage(error);
       if (

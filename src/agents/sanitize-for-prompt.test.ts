@@ -23,6 +23,14 @@ function hasLoneSurrogate(value: string): boolean {
   return false;
 }
 
+function extractPromptData(block: string): string {
+  const result = block.match(/<prompt-data>\n([\s\S]*?)\n<\/prompt-data>/)?.[1];
+  if (result === undefined) {
+    throw new Error("Expected prompt data block");
+  }
+  return result;
+}
+
 describe("sanitizeForPromptLiteral (OC-19 hardening)", () => {
   it("strips ASCII control chars (CR/LF/NUL/tab)", () => {
     expect(sanitizeForPromptLiteral("/tmp/a\nb\rc\x00d\te")).toBe("/tmp/abcde");
@@ -115,6 +123,51 @@ describe("wrapPromptDataBlock", () => {
 
     expect(block).toContain(`\n${"a".repeat(3)}\n`);
     expect(hasLoneSurrogate(block)).toBe(false);
+  });
+
+  it.each([10, 11, 12])(
+    "reserves the marker after escaping within a %i-character budget",
+    (maxEscapedChars) => {
+      const result = extractPromptData(
+        wrapPromptDataBlock({
+          label: "Data",
+          text: "<".repeat(20),
+          maxEscapedChars,
+          truncationMarker: "[cut]",
+        }),
+      );
+
+      expect(result).toBe("&lt;[cut]");
+      expect(result.length).toBeLessThanOrEqual(maxEscapedChars);
+    },
+  );
+
+  it("does not split HTML entities or Unicode at the escaped limit", () => {
+    const result = extractPromptData(
+      wrapPromptDataBlock({
+        label: "Data",
+        text: `😀<${"z".repeat(20)}`,
+        maxEscapedChars: 10,
+        truncationMarker: "[cut]",
+      }),
+    );
+
+    expect(result).toBe("😀[cut]");
+    expect(result).not.toMatch(/&(?:l|g|lt|gt)?$/u);
+    expect(hasLoneSurrogate(result)).toBe(false);
+  });
+
+  it("applies the escaped budget after removing prompt control characters", () => {
+    const result = extractPromptData(
+      wrapPromptDataBlock({
+        label: "Data",
+        text: `${"\0".repeat(20)}useful-result`,
+        maxEscapedChars: 12,
+        truncationMarker: "[cut]",
+      }),
+    );
+
+    expect(result).toBe("useful-[cut]");
   });
 });
 

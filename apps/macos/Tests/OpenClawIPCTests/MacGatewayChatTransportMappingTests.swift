@@ -6,8 +6,11 @@ import Testing
 @testable import OpenClaw
 
 struct MacGatewayChatTransportMappingTests {
-    @Test func `mac chat advertises inline widgets`() {
-        #expect(GatewayConnection.operatorClientCaps == [OpenClawGatewayClientCapability.inlineWidgets])
+    @Test func `mac chat advertises typed agent rosters and inline widgets`() {
+        #expect(GatewayConnection.operatorClientCaps == [
+            OpenClawGatewayClientCapability.agentKind,
+            OpenClawGatewayClientCapability.inlineWidgets,
+        ])
     }
 
     @Test func `bare global session target carries normalized selected agent`() {
@@ -36,6 +39,19 @@ struct MacGatewayChatTransportMappingTests {
         #expect(transport.sessionTarget(for: "global") == .init(
             sessionKey: "global",
             agentID: nil))
+    }
+
+    @Test func `fixed connection does not inherit app wide cache routing`() async throws {
+        let url = try #require(URL(string: "wss://fixed.example"))
+        let connection = GatewayConnection(configProvider: {
+            (url: url, token: nil, password: nil)
+        })
+        let transport = MacGatewayChatTransport(
+            connection: connection,
+            outboxGatewayID: "manual-fixed")
+
+        #expect(await transport.currentOutboxGatewayMatchesConnection())
+        await connection.shutdown()
     }
 
     @Test func `session settings request preserves verbosity patch`() {
@@ -70,6 +86,26 @@ struct MacGatewayChatTransportMappingTests {
         #expect(request.params["maxChars"]?.value as? Int == 500_000)
     }
 
+    @Test func `message rewind and fork requests map session targets`() {
+        let rewind = MacGatewayChatTransport.rewindSessionRequest(
+            sessionKey: "global",
+            agentID: "reviewer",
+            entryId: "msg-42")
+        let fork = MacGatewayChatTransport.forkSessionAtMessageRequest(
+            sessionKey: "agent:reviewer:main",
+            agentID: nil,
+            entryId: "msg-43")
+
+        #expect(rewind.method == "sessions.rewind")
+        #expect(rewind.params["sessionKey"]?.value as? String == "global")
+        #expect(rewind.params["agentId"]?.value as? String == "reviewer")
+        #expect(rewind.params["entryId"]?.value as? String == "msg-42")
+        #expect(fork.method == "sessions.fork")
+        #expect(fork.params["sessionKey"]?.value as? String == "agent:reviewer:main")
+        #expect(fork.params["agentId"] == nil)
+        #expect(fork.params["entryId"]?.value as? String == "msg-43")
+    }
+
     @Test func `legacy trace preference migrates to independent defaults once`() throws {
         let suiteName = "MacGatewayChatTransportMappingTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
@@ -87,7 +123,7 @@ struct MacGatewayChatTransportMappingTests {
     @Test func `snapshot maps to health`() {
         let snapshot = Snapshot(
             presence: [],
-            health: OpenClawProtocol.AnyCodable(["ok": OpenClawProtocol.AnyCodable(false)]),
+            health: ["ok": OpenClawProtocol.AnyCodable(false)],
             stateversion: StateVersion(presence: 1, health: 1),
             uptimems: 123,
             configpath: nil,

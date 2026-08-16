@@ -13,12 +13,11 @@ import type {
   SpeechProviderPlugin,
 } from "openclaw/plugin-sdk/speech-core";
 import {
-  asObject,
   parseSpeechDirectiveNumberOverride,
   resolveSpeechProviderApiKey,
   trimToUndefined,
 } from "openclaw/plugin-sdk/speech-core";
-import { asFiniteNumberInRange } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asFiniteNumberInRange, asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   DEFAULT_MINIMAX_TTS_BASE_URL,
   MINIMAX_TTS_MODELS,
@@ -53,8 +52,8 @@ type MinimaxTtsProviderOverrides = {
 };
 
 function resolveConfiguredPortalTtsBaseUrl(cfg: OpenClawConfig | undefined): string | undefined {
-  const providers = asObject(asObject(cfg?.models)?.providers);
-  const portalProvider = asObject(providers?.[MINIMAX_PORTAL_PROVIDER_ID]);
+  const providers = asOptionalRecord(asOptionalRecord(cfg?.models)?.providers);
+  const portalProvider = asOptionalRecord(providers?.[MINIMAX_PORTAL_PROVIDER_ID]);
   const portalBaseUrl = trimToUndefined(portalProvider?.baseUrl);
   return portalBaseUrl ? normalizeMinimaxTtsBaseUrl(portalBaseUrl) : undefined;
 }
@@ -97,12 +96,12 @@ function normalizeMinimaxProviderConfig(
   rawConfig: Record<string, unknown>,
   cfg?: OpenClawConfig,
 ): MinimaxTtsProviderConfig {
-  const providers = asObject(rawConfig.providers);
-  const raw = asObject(providers?.minimax) ?? asObject(rawConfig.minimax);
+  const providers = asOptionalRecord(rawConfig.providers);
+  const raw = asOptionalRecord(providers?.minimax) ?? asOptionalRecord(rawConfig.minimax);
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
-      path: "messages.tts.providers.minimax.apiKey",
+      path: "tts.providers.minimax.apiKey",
     }),
     baseUrl: normalizeMinimaxTtsBaseUrl(
       trimToUndefined(raw?.baseUrl) ??

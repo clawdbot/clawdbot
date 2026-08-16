@@ -11,7 +11,7 @@ const runModelsAuthLoginFlowMock = vi.hoisted(() => vi.fn());
 const updateSessionEntryMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../commands/models/auth.js", () => ({
-  runModelsAuthLoginFlow: (opts: unknown) => runModelsAuthLoginFlowMock(opts),
+  runModelsAuthLoginFlowCore: (opts: unknown) => runModelsAuthLoginFlowMock(opts),
 }));
 vi.mock("../../config/sessions/session-accessor.js", async () => {
   const actual = await vi.importActual<typeof import("../../config/sessions/session-accessor.js")>(
@@ -114,7 +114,7 @@ describe("handleLoginCommand", () => {
   it("registers /login as a built-in command handler", () => {
     expect(buildBuiltinChatCommands().find((entry) => entry.key === "login")).toMatchObject({
       nativeName: "login",
-      nativeProviders: ["telegram"],
+      nativeProviders: ["discord", "slack", "telegram"],
       textAliases: ["/login"],
       scope: "both",
     });
@@ -529,6 +529,57 @@ describe("handleLoginCommand", () => {
     await first;
   });
 
+  it("cancels an expired flow before replacing its reservation", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    let firstSignal: AbortSignal | undefined;
+    runModelsAuthLoginFlowMock
+      .mockImplementationOnce(async (opts: ModelsAuthLoginFlowOptions) => {
+        firstSignal = opts.signal;
+        if (!firstSignal) {
+          throw new Error("expected reservation signal");
+        }
+        const signal = firstSignal;
+        await new Promise<void>((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () =>
+              reject(
+                signal.reason instanceof Error ? signal.reason : new Error("Codex login cancelled"),
+              ),
+            { once: true },
+          );
+        });
+        throw new Error("unreachable");
+      })
+      .mockResolvedValueOnce({
+        providerId: "openai",
+        methodId: "device-code",
+        profiles: [],
+      });
+
+    const first = handleLoginCommand(
+      buildLoginParams("/login codex", { opts: blockReplyOpts() }),
+      true,
+    );
+    await vi.waitFor(() => expect(firstSignal).toBeDefined());
+    now.mockReturnValue(15 * 60_000 + 1_001);
+
+    const second = await handleLoginCommand(
+      buildLoginParams("/login codex", { opts: blockReplyOpts() }),
+      true,
+    );
+
+    expect(firstSignal?.aborted).toBe(true);
+    await expect(first).resolves.toEqual({
+      shouldContinue: false,
+      reply: {
+        text: "Codex login did not complete. Send `/login codex` to request a new code.",
+      },
+    });
+    expect(second?.reply?.text).toContain("could not switch");
+    now.mockRestore();
+  });
+
   it("rejects non-owner senders before starting login", async () => {
     const result = await handleLoginCommand(
       buildLoginParams("/login codex", {
@@ -567,19 +618,6 @@ describe("handleLoginCommand", () => {
       },
     });
     expect(runModelsAuthLoginFlowMock).not.toHaveBeenCalled();
-  });
-
-  it("normalizes Codex login aliases to the OpenAI provider", async () => {
-    mockSuccessfulLoginFlow();
-
-    await handleLoginCommand(
-      buildLoginParams("/login openai-codex", { opts: blockReplyOpts() }),
-      true,
-    );
-
-    expect(runModelsAuthLoginFlowMock).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "openai" }),
-    );
   });
 
   it("returns a friendly error for unsupported providers", async () => {

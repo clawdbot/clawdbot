@@ -45,6 +45,7 @@ export {
 export {
   runPartialStreamingPreviewScenario,
   runQuietStreamingPreviewScenario,
+  runStreamingReplacementRetentionScenario,
 } from "./scenario-runtime-streaming-preview.js";
 
 export {
@@ -227,7 +228,7 @@ async function ensureMembershipLossRoomRestored(params: {
 
 export async function runMembershipLossScenario(context: MatrixQaScenarioContext) {
   const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_MEMBERSHIP_ROOM_KEY);
-  const driverClient = createMatrixQaDriverScenarioClient(context);
+  const { client: driverClient } = await primeMatrixQaDriverScenarioClient(context);
   const sutClient = createMatrixQaScenarioClient({
     accessToken: context.sutAccessToken,
     baseUrl: context.baseUrl,
@@ -357,8 +358,6 @@ export async function runReactionThreadedScenario(context: MatrixQaScenarioConte
     observedEvents: context.observedEvents,
     reactionTargetEventId: thread.reply.eventId,
     roomId: context.roomId,
-    syncState: context.syncState,
-    syncStreams: context.syncStreams,
     timeoutMs: context.timeoutMs,
   });
   advanceMatrixQaActorCursor({

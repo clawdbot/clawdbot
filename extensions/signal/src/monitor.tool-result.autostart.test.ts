@@ -1,5 +1,6 @@
 // Signal tests cover monitor.tool result.autostart plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { SignalDaemonHandle } from "./daemon.js";
 import {
@@ -72,6 +73,36 @@ function expectWaitForTransportReadyTimeout(timeoutMs: number) {
 }
 
 describe("monitorSignalProvider autostart", () => {
+  it.each(["external-native", "container"] as const)(
+    "does not spawn a daemon for %s transport",
+    async (kind) => {
+      const abortController = createAutoAbortController();
+      setSignalToolResultTestConfig({
+        channels: {
+          signal: {
+            transport: { kind, url: `http://${kind}:8080` },
+            dmPolicy: "open",
+            allowFrom: ["*"],
+          },
+        },
+      });
+
+      await runMonitorWithMocks({
+        abortSignal: abortController.signal,
+        runtime: createMonitorRuntime(),
+      });
+
+      expect(spawnSignalDaemonMock).not.toHaveBeenCalled();
+      expect(waitForTransportReadyMock).not.toHaveBeenCalled();
+      expect(streamMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          baseUrl: `http://${kind}:8080`,
+          transportKind: kind,
+        }),
+      );
+    },
+  );
+
   it("uses bounded readiness checks when auto-starting the daemon", async () => {
     const runtime = createMonitorRuntime();
     setSignalAutoStartConfig();
@@ -115,7 +146,7 @@ describe("monitorSignalProvider autostart", () => {
     expectWaitForTransportReadyTimeout(90_000);
   });
 
-  it("passes channels.signal.configPath to signal-cli daemon startup", async () => {
+  it("passes managed transport configPath to signal-cli daemon startup", async () => {
     const runtime = createMonitorRuntime();
     setSignalAutoStartConfig({ configPath: "~/.openclaw/signal-cli" });
     const abortController = createAutoAbortController();
@@ -134,7 +165,7 @@ describe("monitorSignalProvider autostart", () => {
     );
   });
 
-  it("omits configPath when channels.signal.configPath is blank", async () => {
+  it("omits configPath when managed transport configPath is blank", async () => {
     const runtime = createMonitorRuntime();
     setSignalAutoStartConfig({ configPath: " " });
     const abortController = createAutoAbortController();
@@ -168,6 +199,7 @@ describe("monitorSignalProvider autostart", () => {
 
   it("fails fast when auto-started signal daemon exits during startup", async () => {
     const runtime = createMonitorRuntime();
+    const statusSink = vi.fn();
     setSignalAutoStartConfig();
     spawnSignalDaemonMock.mockReturnValueOnce(
       createMockSignalDaemonHandle({
@@ -202,8 +234,12 @@ describe("monitorSignalProvider autostart", () => {
         autoStart: true,
         baseUrl: SIGNAL_BASE_URL,
         runtime,
+        statusSink,
       }),
     ).rejects.toThrow(/signal daemon exited/i);
+    expect(statusSink).toHaveBeenCalledWith(
+      expect.objectContaining({ lifecycle: "recovering", connected: false }),
+    );
   });
 
   it("treats daemon exit after user abort as clean shutdown", async () => {
@@ -279,17 +315,3 @@ describe("monitorSignalProvider autostart", () => {
     expect(settled).toBe(true);
   });
 });
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

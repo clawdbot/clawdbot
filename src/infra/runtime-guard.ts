@@ -1,13 +1,18 @@
 // Validates the current runtime against OpenClaw's Node engine floor.
 import process from "node:process";
+import { format } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
+import { formatConsoleDiagnosticBlock } from "../logging/json-console-line.js";
 import type { RuntimeEnv } from "../runtime.js";
 
-// Runtime validation precedes terminal setup. Keep this default path from
-// pulling terminal-core into every CLI startup command.
+// Runtime validation precedes console capture. Keep this direct sink aligned
+// with configured JSONL output without pulling in the full logger.
 const defaultRuntime: RuntimeEnv = {
   log: (...args) => console.log(...args),
-  error: (...args) => console.error(...args),
+  error: (...args) => {
+    const message = format(...args);
+    process.stderr.write(formatConsoleDiagnosticBlock({ level: "error", message: `${message}\n` }));
+  },
   exit: (code) => {
     process.exit(code);
   },
@@ -33,6 +38,7 @@ type RuntimeDetails = {
   version: string | null;
   execPath: string | null;
   pathEnv: string;
+  hasNodeSqlite: boolean;
 };
 
 const SEMVER_RE = /(\d+)\.(\d+)\.(\d+)/;
@@ -79,7 +85,18 @@ function detectRuntime(): RuntimeDetails {
     version,
     execPath: process.execPath ?? null,
     pathEnv: process.env.PATH ?? "(not set)",
+    hasNodeSqlite: currentRuntimeProvidesNodeSqlite(),
   };
+}
+
+// Bun >=1.4 (Rust rewrite) ships node:sqlite; older Buns do not. Feature-probe
+// instead of version-gating so the guard tracks the actual runtime capability.
+function currentRuntimeProvidesNodeSqlite(): boolean {
+  try {
+    return Boolean(process.getBuiltinModule?.("node:sqlite"));
+  } catch {
+    return false;
+  }
 }
 
 /** Returns whether a detected runtime meets OpenClaw's minimum runtime contract. */
@@ -87,7 +104,15 @@ function runtimeSatisfies(details: RuntimeDetails): boolean {
   if (details.kind === "node") {
     return isSupportedNodeVersion(details.version);
   }
+  if (details.kind === "bun") {
+    return details.hasNodeSqlite;
+  }
   return false;
+}
+
+/** Returns whether the current process runtime satisfies OpenClaw's engine contract. */
+export function isCurrentRuntimeSupported(): boolean {
+  return runtimeSatisfies(detectRuntime());
 }
 
 /** Checks a Node version label against OpenClaw's supported Node version range. */

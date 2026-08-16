@@ -9,7 +9,7 @@ import type {
   MigrationProviderContext,
   MigrationProviderPlugin,
   MigrationSummary,
-} from "../plugins/types.js";
+} from "./plugin-entry.js";
 
 export type {
   MigrationDetection,
@@ -278,6 +278,11 @@ export function readMigrationConfigPatchDetails(
   return { path, value: item.details?.value };
 }
 
+/** Resolves the host-owned config mutation target for migration apply. */
+export function resolveMigrationConfigRuntime(ctx: MigrationProviderContext) {
+  return ctx.configRuntime ?? ctx.runtime?.config;
+}
+
 /** Applies one planned config patch through the runtime config writer and returns its final status. */
 export async function applyMigrationConfigPatchItem(
   ctx: MigrationProviderContext,
@@ -293,7 +298,7 @@ export async function applyMigrationConfigPatchItem(
   if (!isSafeMigrationConfigPath(details.path)) {
     return markMigrationItemError(item, MIGRATION_REASON_UNSAFE_CONFIG_PATCH_PATH);
   }
-  const configApi = ctx.runtime?.config;
+  const configApi = resolveMigrationConfigRuntime(ctx);
   if (!configApi?.current || !configApi.mutateConfigFile) {
     return markMigrationItemError(item, "config runtime unavailable");
   }

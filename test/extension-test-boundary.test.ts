@@ -98,7 +98,7 @@ function findExtensionImports(source: string): string[] {
 }
 
 function isAllowedExtensionPublicImport(specifier: string): boolean {
-  return /(?:^|\/)extensions\/[^/]+\/(?:api|index|runtime-api|setup-entry|login-qr-api)\.js$/u.test(
+  return /(?:^|\/)extensions\/[^/]+\/(?:api|index|runtime-api|setup-entry|login-qr-api|test-api)\.js$/u.test(
     specifier,
   );
 }
@@ -376,12 +376,8 @@ describe("non-extension test boundaries", () => {
       "openclaw/plugin-sdk/channel-config-primitives",
     ];
     const bundledProviderSchemaNames = new Set([
-      "DiscordConfigSchema",
       "GoogleChatConfigSchema",
       "IMessageConfigSchema",
-      "MSTeamsConfigSchema",
-      "SignalConfigSchema",
-      "SlackConfigSchema",
       "TelegramConfigSchema",
       "WhatsAppConfigSchema",
     ]);

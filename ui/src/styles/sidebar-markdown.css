@@ -86,16 +86,19 @@
   vertical-align: middle;
 }
 
+/* Same link token as the message renderer: file links are styled jointly with
+   .chat-text (see chat/text.css), so a panel that kept --accent would show two
+   link colors side by side. */
 .sidebar-markdown :where(a) {
-  color: var(--accent);
+  color: var(--link);
   text-decoration: underline;
-  text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  text-decoration-color: color-mix(in srgb, var(--link) 40%, transparent);
   text-underline-offset: 2px;
   transition: text-decoration-color var(--duration-fast) ease;
 }
 
 .sidebar-markdown :where(a:hover) {
-  text-decoration-color: var(--accent);
+  text-decoration-color: var(--link);
 }
 
 .sidebar-markdown code {
@@ -103,14 +106,14 @@
   font-size: 0.88em;
 }
 
-.sidebar-markdown :where(:not(pre) > code) {
+.sidebar-markdown :where(:not(pre, a.markdown-file-link) > code) {
   padding: 0.15em 0.4em;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: rgba(0, 0, 0, 0.12);
 }
 
-:root[data-theme-mode="light"] .sidebar-markdown :where(:not(pre) > code) {
+:root[data-theme-mode="light"] .sidebar-markdown :where(:not(pre, a.markdown-file-link) > code) {
   background: rgba(0, 0, 0, 0.06);
 }
 
@@ -137,7 +140,7 @@
   border: none;
   background: none;
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--control-ui-text-scale));
   line-height: 1.55;
 }
 
@@ -146,7 +149,7 @@
   width: max-content;
   min-width: 100%;
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-variant-ligatures: none;
   letter-spacing: 0;
   line-height: 0.86;
@@ -179,7 +182,7 @@
   margin-top: 0.75em;
   overflow-x: auto;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .sidebar-markdown :where(th, td) {
@@ -192,7 +195,7 @@
 .sidebar-markdown :where(th) {
   background: var(--secondary);
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
   letter-spacing: 0.03em;
   text-transform: uppercase;
@@ -213,6 +216,22 @@
   font-weight: 600;
 }
 
+.sidebar-markdown .markdown-inline-image-button {
+  display: block;
+  max-width: 100%;
+  margin-top: 0.75em;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  cursor: zoom-in;
+}
+
+.sidebar-markdown .markdown-inline-image-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 3px;
+}
+
 .sidebar-markdown .markdown-inline-image {
   display: block;
   width: auto;
@@ -226,6 +245,10 @@
   object-fit: contain;
 }
 
+.sidebar-markdown .markdown-inline-image-button > .markdown-inline-image {
+  margin-top: 0;
+}
+
 .sidebar-markdown :where(details) {
   margin-top: 0.75em;
   overflow: hidden;
@@ -236,7 +259,7 @@
 
 .sidebar-markdown :where(summary) {
   padding: 8px 12px;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 500;
   user-select: none;
   transition: background var(--duration-fast) ease;

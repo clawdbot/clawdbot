@@ -4,11 +4,13 @@ import {
   createContractsVitestConfig,
 } from "./vitest.contracts-shared.ts";
 
-export default createContractsVitestConfig(
-  channelSurfaceContractPatterns,
-  process.env,
-  process.argv,
-  {
+export function createContractsChannelSurfaceVitestConfig(
+  env: Record<string, string | undefined> = process.env,
+  argv: string[] = process.argv,
+) {
+  return createContractsVitestConfig(channelSurfaceContractPatterns, env, argv, {
     name: "contracts-channel-surface",
-  },
-);
+  });
+}
+
+export default createContractsChannelSurfaceVitestConfig();

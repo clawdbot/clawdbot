@@ -1,5 +1,5 @@
 // Renders chat canvas payloads into text and metadata for transcript output.
-import { expectDefined, safeParseJson } from "@openclaw/normalization-core";
+import { expectDefined, safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseFenceSpans } from "../../packages/markdown-core/src/fences.js";
@@ -15,6 +15,7 @@ type McpAppPreviewDescriptor = {
   toolName?: string;
   uiResourceUri?: string;
   toolCallId?: string;
+  originSessionKey?: string;
   resultMetaState?: "unavailable";
 };
 
@@ -29,6 +30,7 @@ type CanvasPreview = {
   className?: string;
   style?: string;
   sandbox?: CanvasSandbox;
+  boardWidgetName?: string;
   mcpApp?: McpAppPreviewDescriptor;
 };
 
@@ -67,6 +69,7 @@ function coerceMcpAppDescriptor(
   const toolName = getRecordStringField(record, "toolName");
   const uiResourceUri = getRecordStringField(record, "uiResourceUri");
   const toolCallId = getRecordStringField(record, "toolCallId");
+  const originSessionKey = getRecordStringField(record, "originSessionKey");
   const resultMetaState = record?.resultMetaState === "unavailable" ? "unavailable" : undefined;
   const hasCompleteDescriptor = Boolean(
     serverName &&
@@ -85,6 +88,7 @@ function coerceMcpAppDescriptor(
         toolName,
         uiResourceUri,
         toolCallId,
+        ...(originSessionKey && originSessionKey.length <= 512 ? { originSessionKey } : {}),
         ...(resultMetaState ? { resultMetaState } : {}),
       }
     : { viewId };
@@ -102,6 +106,10 @@ function normalizePreferredHeight(value: number | undefined): number | undefined
   return typeof value === "number" && Number.isFinite(value) && value >= 160
     ? Math.min(Math.trunc(value), 1200)
     : undefined;
+}
+
+export function isCanvasBoardWidgetName(value: unknown): value is string {
+  return typeof value === "string" && /^[a-z0-9][a-z0-9._-]{0,63}$/u.test(value);
 }
 
 function coerceCanvasPreview(
@@ -140,6 +148,10 @@ function coerceCanvasPreview(
   const sandbox = normalizeSandbox(getRecordStringField(presentation, "sandbox"));
   const viewUrl = getRecordStringField(view, "url") ?? getRecordStringField(view, "entryUrl");
   const viewId = getRecordStringField(view, "id") ?? getRecordStringField(view, "docId");
+  const requestedBoardWidgetName = getRecordStringField(view, "boardWidgetName");
+  const boardWidgetName = isCanvasBoardWidgetName(requestedBoardWidgetName)
+    ? requestedBoardWidgetName
+    : undefined;
   if (mcpAppViewId && viewId === mcpAppViewId) {
     return {
       kind: "canvas",
@@ -164,6 +176,7 @@ function coerceCanvasPreview(
       ...(className ? { className } : {}),
       ...(style ? { style } : {}),
       ...(sandbox ? { sandbox } : {}),
+      ...(boardWidgetName ? { boardWidgetName } : {}),
       ...(mcpApp ? { mcpApp } : {}),
     };
   }
@@ -249,7 +262,7 @@ export function extractCanvasFromText(
   outputText: string | undefined,
   _toolName?: string,
 ): CanvasPreview | undefined {
-  const parsed = outputText ? asOptionalRecord(safeParseJson(outputText)) : undefined;
+  const parsed = outputText ? safeParseJsonRecord(outputText) : undefined;
   return coerceCanvasPreview(parsed);
 }
 

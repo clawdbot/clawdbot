@@ -556,7 +556,7 @@ describe("Matrix auth/config live surfaces", () => {
     ).toThrow(/Matrix account id "!!!" is invalid/i);
   });
 
-  it("rejects explicitly selected disabled accounts instead of borrowing another account", () => {
+  it("rejects explicitly selected disabled accounts before resolving their secrets", () => {
     const cfg = {
       channels: {
         matrix: {
@@ -566,7 +566,11 @@ describe("Matrix auth/config live surfaces", () => {
             disabled: {
               enabled: false,
               homeserver: "https://disabled.example.org",
-              accessToken: "disabled-token",
+              accessToken: {
+                source: "env",
+                provider: "default",
+                id: "MATRIX_DISABLED_ACCESS_TOKEN",
+              },
             },
           },
         },

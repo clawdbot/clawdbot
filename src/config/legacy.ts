@@ -3,6 +3,8 @@ import { LEGACY_CONFIG_MIGRATION_RULES as LEGACY_CONFIG_RULES } from "../command
 import type { LegacyConfigRule } from "./legacy.shared.js";
 import type { LegacyConfigIssue } from "./types.js";
 
+export { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
+
 // Legacy checks use raw dotted paths so doctor can report exact config keys.
 function getPathValue(root: Record<string, unknown>, path: string[]): unknown {
   let cursor: unknown = root;

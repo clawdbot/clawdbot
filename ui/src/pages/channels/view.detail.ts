@@ -1,30 +1,172 @@
 // Channel detail overlay: full status + advanced schema config form for one
 // channel, reusing the per-channel settings-language renderers.
+import { asNullableRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type TemplateResult } from "lit";
-import type { ChannelAccountSnapshot, NostrProfile } from "../../api/types.ts";
+import type { NostrProfile } from "../../api/types.ts";
+import { renderChannelIcon } from "../../components/channel-icon.ts";
 import { renderSettingsSection } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/modal-dialog.ts";
-import { renderChannelArt } from "./hub-meta.ts";
+import { resolveChannelAccounts } from "../../lib/channels/index.ts";
+import { formatRelativeTimestamp } from "../../lib/format.ts";
+import { channelDocsUrl } from "./hub-meta.ts";
 import { renderChannelConfigSection } from "./view.config.ts";
-import { renderDiscordCard } from "./view.discord.ts";
-import { renderGoogleChatCard } from "./view.googlechat.ts";
-import { renderIMessageCard } from "./view.imessage.ts";
 import { renderNostrCard } from "./view.nostr.ts";
+import { renderChannelPairingDetail } from "./view.pairing.ts";
 import {
   boolStatusKind,
   formatNullableBoolean,
   renderChannelAccountRow,
+  renderChannelActionRow,
   renderChannelErrorRow,
   renderChannelFacts,
+  renderChannelProbeRow,
   resolveChannelAccountCount,
   resolveChannelDisplayState,
 } from "./view.shared.ts";
-import { renderSignalCard } from "./view.signal.ts";
-import { renderSlackCard } from "./view.slack.ts";
-import { renderTelegramCard } from "./view.telegram.ts";
 import type { ChannelKey, ChannelsChannelData, ChannelsProps } from "./view.types.ts";
 import { renderWhatsAppCard } from "./view.whatsapp.ts";
+
+const STANDARD_CHANNEL_LOCALE_KEYS = {
+  discord: "discord",
+  googlechat: "googleChat",
+  imessage: "imessage",
+  signal: "signal",
+  slack: "slack",
+  telegram: "telegram",
+} as const;
+
+type StandardChannelKey = keyof typeof STANDARD_CHANNEL_LOCALE_KEYS;
+
+function isStandardChannel(key: ChannelKey): key is StandardChannelKey {
+  return Object.hasOwn(STANDARD_CHANNEL_LOCALE_KEYS, key);
+}
+
+function renderChannelStatusBody(
+  key: ChannelKey,
+  props: ChannelsProps,
+  data: ChannelsChannelData,
+  accountCount: number | undefined,
+) {
+  const standardKey = isStandardChannel(key) ? key : null;
+  const localeKey = standardKey ? STANDARD_CHANNEL_LOCALE_KEYS[standardKey] : null;
+  const status = standardKey ? data[standardKey] : undefined;
+  const displayState = resolveChannelDisplayState(key, props);
+  const configured = displayState.configured;
+  const accounts = resolveChannelAccounts(data.channelAccounts, key);
+  const showAccounts =
+    standardKey === "telegram" ? accounts.length > 1 : !standardKey && accounts.length > 0;
+  const extraRows =
+    standardKey === "googlechat"
+      ? [
+          {
+            label: t("common.credential"),
+            value: data.googlechat?.credentialSource ?? t("common.na"),
+          },
+          {
+            label: t("common.audience"),
+            value: data.googlechat?.audienceType
+              ? `${data.googlechat.audienceType}${data.googlechat.audience ? ` · ${data.googlechat.audience}` : ""}`
+              : t("common.na"),
+          },
+        ]
+      : standardKey === "signal"
+        ? [{ label: t("common.baseUrl"), value: data.signal?.baseUrl ?? t("common.na") }]
+        : standardKey === "telegram"
+          ? [{ label: t("common.mode"), value: data.telegram?.mode ?? t("common.na") }]
+          : [];
+  const statusRows = [
+    {
+      label: t("common.configured"),
+      value: formatNullableBoolean(configured),
+      kind: boolStatusKind(configured),
+    },
+    {
+      label: t("common.running"),
+      value: !standardKey
+        ? formatNullableBoolean(displayState.running)
+        : standardKey === "googlechat" && !status
+          ? t("common.na")
+          : formatNullableBoolean(status?.running ?? false),
+      kind: boolStatusKind(standardKey ? status?.running : displayState.running),
+    },
+    ...(standardKey
+      ? [
+          ...extraRows,
+          ...(["lastStartAt", "lastProbeAt"] as const).map((field) => ({
+            label: t(field === "lastStartAt" ? "common.lastStart" : "common.lastProbe"),
+            value: status?.[field] ? formatRelativeTimestamp(status[field]) : t("common.na"),
+          })),
+        ]
+      : [
+          {
+            label: t("common.connected"),
+            value: formatNullableBoolean(displayState.connected),
+            kind: boolStatusKind(displayState.connected),
+          },
+        ]),
+  ];
+  const lastError = readStringField(
+    asNullableRecord(standardKey ? status : displayState.status),
+    "lastError",
+  );
+
+  return renderSettingsSection(
+    {
+      title: localeKey
+        ? t(`channels.${localeKey}.title`)
+        : (readStringField(props.snapshot?.channelLabels, key) ?? key),
+      description: localeKey ? t(`channels.${localeKey}.subtitle`) : t("channels.generic.subtitle"),
+      ...(accountCount !== undefined ? { count: accountCount } : {}),
+    },
+    html`
+      ${showAccounts
+        ? accounts.map((account) => {
+            const username =
+              standardKey === "telegram"
+                ? readStringField(
+                    asNullableRecord(asNullableRecord(account.probe)?.bot),
+                    "username",
+                  )
+                : undefined;
+            return renderChannelAccountRow({
+              title: username ? `@${username}` : account.name || account.accountId,
+              accountId: account.accountId,
+              ...(standardKey === "telegram"
+                ? {
+                    facts: [
+                      `${t("common.configured")}: ${account.configured ? t("common.yes") : t("common.no")}`,
+                    ],
+                  }
+                : {}),
+              status: {
+                kind: boolStatusKind(
+                  standardKey === "telegram"
+                    ? account.running
+                    : (account.running ?? account.configured),
+                ),
+                label: account.running
+                  ? t("common.running")
+                  : !standardKey && account.configured
+                    ? t("common.configured")
+                    : t("common.no"),
+              },
+              lastInboundAt: account.lastInboundAt,
+              lastError: account.lastError,
+            });
+          })
+        : renderChannelFacts(statusRows)}
+      ${lastError ? renderChannelErrorRow(lastError) : nothing}
+      ${standardKey && status?.probe ? renderChannelProbeRow(status.probe) : nothing}
+      ${renderChannelConfigSection({ channelId: key, props })}
+      ${standardKey
+        ? renderChannelActionRow(html`<button class="btn" @click=${() => props.onRefresh(true)}>
+            ${t("common.probe")}
+          </button>`)
+        : nothing}
+    `,
+  );
+}
 
 function renderChannelBody(key: ChannelKey, props: ChannelsProps, data: ChannelsChannelData) {
   const accountCount = resolveChannelAccountCount(key, data.channelAccounts);
@@ -35,45 +177,8 @@ function renderChannelBody(key: ChannelKey, props: ChannelsProps, data: Channels
         whatsapp: data.whatsapp,
         accountCount,
       });
-    case "telegram":
-      return renderTelegramCard({
-        props,
-        telegram: data.telegram,
-        telegramAccounts: data.channelAccounts?.telegram ?? [],
-        accountCount,
-      });
-    case "discord":
-      return renderDiscordCard({
-        props,
-        discord: data.discord,
-        accountCount,
-      });
-    case "googlechat":
-      return renderGoogleChatCard({
-        props,
-        googleChat: data.googlechat,
-        accountCount,
-      });
-    case "slack":
-      return renderSlackCard({
-        props,
-        slack: data.slack,
-        accountCount,
-      });
-    case "signal":
-      return renderSignalCard({
-        props,
-        signal: data.signal,
-        accountCount,
-      });
-    case "imessage":
-      return renderIMessageCard({
-        props,
-        imessage: data.imessage,
-        accountCount,
-      });
     case "nostr": {
-      const nostrAccounts = data.channelAccounts?.nostr ?? [];
+      const nostrAccounts = resolveChannelAccounts(data.channelAccounts, "nostr");
       const primaryAccount = nostrAccounts[0];
       const accountId = primaryAccount?.accountId ?? "default";
       const profile =
@@ -100,67 +205,8 @@ function renderChannelBody(key: ChannelKey, props: ChannelsProps, data: Channels
       });
     }
     default:
-      return renderGenericChannelBody(key, props, data.channelAccounts ?? {});
+      return renderChannelStatusBody(key, props, data, accountCount);
   }
-}
-
-function renderGenericChannelBody(
-  key: ChannelKey,
-  props: ChannelsProps,
-  channelAccounts: Record<string, ChannelAccountSnapshot[]>,
-) {
-  const label = props.snapshot?.channelLabels?.[key] ?? key;
-  const displayState = resolveChannelDisplayState(key, props);
-  const lastError =
-    typeof displayState.status?.lastError === "string" ? displayState.status.lastError : undefined;
-  const accounts = channelAccounts[key] ?? [];
-  const accountCount = resolveChannelAccountCount(key, channelAccounts);
-
-  return renderSettingsSection(
-    {
-      title: label,
-      description: t("channels.generic.subtitle"),
-      ...(accountCount !== undefined ? { count: accountCount } : {}),
-    },
-    html`
-      ${accounts.length > 0
-        ? accounts.map((account) =>
-            renderChannelAccountRow({
-              title: account.name || account.accountId,
-              accountId: account.accountId,
-              status: {
-                kind: boolStatusKind(account.running ?? account.configured),
-                label: account.running
-                  ? t("common.running")
-                  : account.configured
-                    ? t("common.configured")
-                    : t("common.no"),
-              },
-              lastInboundAt: account.lastInboundAt,
-              lastError: account.lastError,
-            }),
-          )
-        : renderChannelFacts([
-            {
-              label: t("common.configured"),
-              value: formatNullableBoolean(displayState.configured),
-              kind: boolStatusKind(displayState.configured),
-            },
-            {
-              label: t("common.running"),
-              value: formatNullableBoolean(displayState.running),
-              kind: boolStatusKind(displayState.running),
-            },
-            {
-              label: t("common.connected"),
-              value: formatNullableBoolean(displayState.connected),
-              kind: boolStatusKind(displayState.connected),
-            },
-          ])}
-      ${lastError ? renderChannelErrorRow(lastError) : nothing}
-      ${renderChannelConfigSection({ channelId: key, props })}
-    `,
-  );
 }
 
 export function renderChannelDetail(params: {
@@ -176,8 +222,16 @@ export function renderChannelDetail(params: {
     <openclaw-modal-dialog label=${params.label} @modal-cancel=${() => params.onClose()}>
       <div class="channels-detail">
         <div class="channels-detail__header">
-          ${renderChannelArt(params.channelId, params.label, "cover")}
+          ${renderChannelIcon(params.channelId, params.label, "cover")}
           <div class="channels-detail__header-actions">
+            <a
+              class="btn btn--sm"
+              href=${channelDocsUrl(params.channelId)}
+              target="_blank"
+              rel="noreferrer"
+            >
+              ${t("common.docs")}
+            </a>
             <button type="button" class="btn btn--sm" @click=${() => params.onSetup()}>
               ${t("channels.hub.runSetup")}
             </button>
@@ -195,7 +249,7 @@ export function renderChannelDetail(params: {
           ${params.props.setupBlockedByDirtyConfig && params.props.configFormDirty
             ? html`<div class="callout warn">${t("channels.hub.saveBeforeSetup")}</div>`
             : nothing}
-          ${body}
+          ${renderChannelPairingDetail(params.channelId, params.props)} ${body}
         </div>
       </div>
     </openclaw-modal-dialog>

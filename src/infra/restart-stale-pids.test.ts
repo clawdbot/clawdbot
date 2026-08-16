@@ -272,6 +272,24 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       expectWarningContaining(`lsof failed during initial stale-pid scan for port 18789: ${code}`);
     });
 
+    it("finds stale pids when lsof needs seconds to answer", () => {
+      // macOS hosts with many mounted volumes need seconds per lsof call. When
+      // the default budget expires first, spawnSync reports ETIMEDOUT and the
+      // stale gateway is never killed, so the restart fails on the busy port.
+      const slowLsofMs = 3000;
+      const stalePid = process.pid + 105;
+      mockSpawnSync.mockImplementation((command: unknown, _args: unknown, options: unknown) => {
+        if (command !== "lsof") {
+          return createLsofResult();
+        }
+        const timeout = (options as { timeout?: number }).timeout ?? 0;
+        return timeout >= slowLsofMs
+          ? createOpenClawBusyResult(stalePid)
+          : createErrnoResult("ETIMEDOUT", "lsof timed out");
+      });
+      expect(findGatewayPidsOnPortSync(18789)).toStrictEqual([stalePid]);
+    });
+
     it("parses openclaw-gateway pids and excludes the current process", () => {
       const stalePid = process.pid + 1;
       mockSpawnSync.mockReturnValue({
@@ -525,7 +543,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       expect(findGatewayPidsOnPortSync(18789)).toStrictEqual([]);
     });
 
-    it("forwards the spawnTimeoutMs argument to spawnSync", () => {
+    it("uses the explicit timeout for the lsof scan", () => {
       mockSpawnSync.mockReturnValue({ error: null, status: 0, stdout: "", stderr: "" });
       findGatewayPidsOnPortSync(18789, 400);
       const lsofCall = mockCall(mockSpawnSync);
@@ -534,7 +552,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       expect(mockCallRecordArg(mockSpawnSync, 0, 2, "lsof options").timeout).toBe(400);
     });
 
-    it("uses the caller timeout for macOS ancestor ps probes", () => {
+    it("uses the explicit timeout for macOS ancestor ps probes", () => {
       const origDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
       const gatewayParentPid = process.pid + 3151;
       Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
@@ -903,6 +921,91 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       expect(result).toEqual([stalePid]);
       expect(killSpy).toHaveBeenCalledWith(stalePid, "SIGTERM");
       expect(killSpy).not.toHaveBeenCalledWith(protectedPid, expect.anything());
+    });
+
+    it("refreshes the protected pid after listener enumeration before filtering", () => {
+      const oldManagedPid = process.pid + 4100;
+      const replacementPid = process.pid + 4101;
+      const stalePid = process.pid + 4102;
+      let listenerSnapshotCaptured = false;
+      let lsofCall = 0;
+      mockSpawnSync.mockImplementation((command: unknown) => {
+        if (command !== "lsof") {
+          return createLsofResult({ status: 1 });
+        }
+        lsofCall += 1;
+        if (lsofCall === 1) {
+          listenerSnapshotCaptured = true;
+          return createLsofResult({
+            stdout: lsofOutput([
+              { pid: replacementPid, cmd: "openclaw-gateway" },
+              { pid: stalePid, cmd: "openclaw-gateway" },
+            ]),
+          });
+        }
+        return createLsofResult({ status: 1 });
+      });
+      const resolveProtectedPid = vi.fn(() => {
+        expect(listenerSnapshotCaptured).toBe(true);
+        return replacementPid;
+      });
+      const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
+
+      const result = withStubbedPpid(0, () =>
+        cleanStaleGatewayProcessesSync(18789, {
+          protectedPid: oldManagedPid,
+          resolveProtectedPid,
+        }),
+      );
+
+      expect(result).toEqual([stalePid]);
+      expect(resolveProtectedPid).toHaveBeenCalledOnce();
+      expect(killSpy).toHaveBeenCalledWith(stalePid, "SIGTERM");
+      expect(killSpy).not.toHaveBeenCalledWith(replacementPid, expect.anything());
+      expect(killSpy).not.toHaveBeenCalledWith(oldManagedPid, expect.anything());
+    });
+
+    it("does not signal the replacement when it is the only enumerated listener", () => {
+      const replacementPid = process.pid + 4201;
+      let listenerSnapshotCaptured = false;
+      mockSpawnSync.mockImplementation((command: unknown) => {
+        if (command !== "lsof") {
+          return createLsofResult({ status: 1 });
+        }
+        listenerSnapshotCaptured = true;
+        return createOpenClawBusyResult(replacementPid);
+      });
+      const resolveProtectedPid = vi.fn(() => {
+        expect(listenerSnapshotCaptured).toBe(true);
+        return replacementPid;
+      });
+      const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
+
+      const result = withStubbedPpid(0, () =>
+        cleanStaleGatewayProcessesSync(18789, { resolveProtectedPid }),
+      );
+
+      expect(result).toEqual([]);
+      expect(resolveProtectedPid).toHaveBeenCalledOnce();
+      expect(killSpy).not.toHaveBeenCalled();
+      expect(mockSpawnSync).toHaveBeenCalledTimes(1);
+    });
+
+    it("fails closed when the refreshed protected pid cannot be resolved", () => {
+      const listenerPid = process.pid + 4301;
+      mockSpawnSync.mockReturnValue(createOpenClawBusyResult(listenerPid));
+      const resolveProtectedPid = vi.fn(() => {
+        throw new Error("launchctl print failed");
+      });
+      const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
+
+      const result = withStubbedPpid(0, () =>
+        cleanStaleGatewayProcessesSync(18789, { resolveProtectedPid }),
+      );
+
+      expect(result).toEqual([]);
+      expect(resolveProtectedPid).toHaveBeenCalledOnce();
+      expect(killSpy).not.toHaveBeenCalled();
     });
 
     it("escalates to SIGKILL when process survives the SIGTERM window", () => {
@@ -1427,6 +1530,12 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
               call[0] === "ps" && Array.isArray(call[1]) && (call[1] as unknown[])[0] === "-o",
           )
           .map((call) => (call[2] as { timeout?: number } | undefined)?.timeout);
+        const initialLsofTimeout = (
+          mockSpawnSync.mock.calls.find((call) => call[0] === "lsof")?.[2] as
+            | { timeout?: number }
+            | undefined
+        )?.timeout;
+        expect(initialLsofTimeout).toBe(5000);
         expect(ancestorPsTimeouts).toContain(2000);
         expect(ancestorPsTimeouts).not.toContain(400);
         expect(lsofCall).toBe(3);

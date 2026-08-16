@@ -3,6 +3,10 @@ import OpenClawKit
 
 extension GatewayConnectionController {
     static func migrateLegacyDeviceAuth() {
+        guard
+            let primaryIdentity = DeviceIdentityStore.loadOrCreatePersisted(),
+            let shareIdentity = DeviceIdentityStore.loadOrCreatePersisted(profile: .shareExtension)
+        else { return }
         let migrationGatewayID = self.legacyDeviceAuthMigrationGatewayID()
         let relay = ShareGatewayRelaySettings.loadConfig()
         let instanceID = GatewaySettingsStore.currentInstanceID()
@@ -15,8 +19,6 @@ extension GatewayConnectionController {
         } else {
             GatewaySettingsStore.discardUnscopedGatewayCredentials(instanceId: instanceID)
         }
-        let primaryIdentity = DeviceIdentityStore.loadOrCreate()
-        let shareIdentity = DeviceIdentityStore.loadOrCreate(profile: .shareExtension)
         // The extension connects independently, so the host's last route cannot prove who
         // issued its legacy token. Require one extension re-pair instead of guessing an owner.
         DeviceAuthStore.discardUnscopedTokens(
@@ -187,8 +189,14 @@ extension GatewayConnectionController {
                 suppressStoredDeviceAuth: pendingOverride.suppressStoredDeviceAuth)
         }
 
-        static func manualStableID(host: String, port: Int) -> String {
-            "manual|\(host.lowercased())|\(port)"
+        static func manualStableID(host: String, port: Int, contextPath: String? = nil) -> String {
+            let endpoint = GatewayConnectEndpoint(
+                host: host,
+                port: port,
+                tls: true,
+                contextPath: contextPath)
+            let pathSuffix = endpoint.contextPath.map { "|\($0)" } ?? ""
+            return "manual|\(host.lowercased())|\(port)\(pathSuffix)"
         }
 
         static func setupAuth(from link: GatewayConnectDeepLink) -> SetupAuth {
@@ -196,7 +204,10 @@ extension GatewayConnectionController {
                 token: link.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
                 bootstrapToken: link.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
                 password: link.password?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
-                targetStableID: self.manualStableID(host: link.host, port: link.port))
+                targetStableID: self.manualStableID(
+                    host: link.host,
+                    port: link.port,
+                    contextPath: link.contextPath))
         }
     }
 }

@@ -1,6 +1,7 @@
 /**
  * Dispatches serialized embedded-agent subscription events to specific handlers.
  */
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import {
   handleAgentEnd,
   handleAgentStart,
@@ -9,12 +10,12 @@ import {
 } from "./embedded-agent-subscribe.handlers.lifecycle.js";
 import {
   capturePendingAssistantUsage,
-  handleMessageEnd,
   handleMessageStart,
-  handleMessageUpdate,
   preservePendingAssistantUsage,
   resetPendingAssistantUsage,
-} from "./embedded-agent-subscribe.handlers.messages.js";
+  handleMessageEnd,
+} from "./embedded-agent-subscribe.handlers.messages.lifecycle.js";
+import { handleMessageUpdate } from "./embedded-agent-subscribe.handlers.messages.update.js";
 import {
   handleToolExecutionEnd,
   handleToolExecutionStart,
@@ -24,7 +25,6 @@ import type {
   EmbeddedAgentSubscribeContext,
   EmbeddedAgentSubscribeEvent,
 } from "./embedded-agent-subscribe.handlers.types.js";
-import { isPromiseLike } from "./embedded-agent-subscribe.promise.js";
 import type { AgentMessage } from "./runtime/index.js";
 
 /** Create the serialized event dispatcher for subscribed embedded-agent sessions. */
@@ -33,7 +33,7 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
     evt: EmbeddedAgentSubscribeEvent,
     handler: () => void | Promise<void>,
     options?: { detach?: boolean },
-  ): void => {
+  ): void | Promise<void> => {
     // Most stream events must preserve order across async formatting and flush
     // work. A detached event may run after the chain without blocking delivery.
     const run = () => {
@@ -60,6 +60,7 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
         });
       if (!options?.detach) {
         ctx.state.pendingEventChain = task;
+        return task;
       }
       return;
     }
@@ -76,6 +77,7 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
       });
     if (!options?.detach) {
       ctx.state.pendingEventChain = task;
+      return task;
     }
   };
 
@@ -86,7 +88,7 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
         // message-scoped. Reset only its accounting boundary synchronously so
         // this message's streamed usage cannot inherit the prior commit state.
         resetPendingAssistantUsage(ctx, evt.message as AgentMessage);
-        scheduleEvent(evt, () => {
+        void scheduleEvent(evt, () => {
           handleMessageStart(ctx, evt as never);
         });
         return;
@@ -95,7 +97,7 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
         // delivery handlers may still be queued. Capture usage synchronously so
         // the following final snapshot can be repaired before persistence.
         capturePendingAssistantUsage(ctx, evt as never);
-        scheduleEvent(evt, () => {
+        void scheduleEvent(evt, () => {
           handleMessageUpdate(ctx, evt as never);
         });
         return;
@@ -106,22 +108,22 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
             ctx.state.pendingAssistantUsage,
           );
         }
-        scheduleEvent(evt, () => {
+        void scheduleEvent(evt, () => {
           return handleMessageEnd(ctx, evt as never);
         });
         return;
       case "tool_execution_start":
-        scheduleEvent(evt, () => {
+        void scheduleEvent(evt, () => {
           return handleToolExecutionStart(ctx, evt as never);
         });
         return;
       case "tool_execution_update":
-        scheduleEvent(evt, () => {
+        void scheduleEvent(evt, () => {
           handleToolExecutionUpdate(ctx, evt as never);
         });
         return;
       case "tool_execution_end":
-        scheduleEvent(
+        void scheduleEvent(
           evt,
           () => {
             return handleToolExecutionEnd(ctx, evt as never);
@@ -130,12 +132,12 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
         );
         return;
       case "agent_start":
-        scheduleEvent(evt, () => {
+        void scheduleEvent(evt, () => {
           handleAgentStart(ctx);
         });
         return;
       case "compaction_start":
-        scheduleEvent(evt, () => {
+        void scheduleEvent(evt, () => {
           handleCompactionStart(ctx, {
             type: "compaction_start",
             reason: evt.reason,
@@ -143,7 +145,7 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
         });
         return;
       case "compaction_end":
-        scheduleEvent(evt, () => {
+        void scheduleEvent(evt, () => {
           handleCompactionEnd(ctx, {
             type: "compaction_end",
             reason: evt.reason,
@@ -154,7 +156,7 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
         });
         return;
       case "agent_end":
-        scheduleEvent(evt, () => {
+        return scheduleEvent(evt, () => {
           return handleAgentEnd(ctx, evt as never);
         });
       default:

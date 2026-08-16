@@ -1,7 +1,9 @@
 // Tests reply turn admission decisions for active, queued, and aborted runs.
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
   deleteSessionEntryLifecycle,
   loadSessionEntry,
@@ -30,22 +32,54 @@ import { testing } from "./reply-run-registry.test-support.js";
 import { admitReplyTurn, runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission.js";
 
 const recoveryOwnerReleaseMocks = vi.hoisted(() => ({
+  beforeRelease: vi.fn(async () => {}),
   schedulePendingTarget: vi.fn(),
 }));
 
-vi.mock("../../agents/main-session-recovery-owner-release.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../agents/main-session-recovery-owner-release.js")>()),
-  scheduleMainSessionRecoveryPendingTarget: recoveryOwnerReleaseMocks.schedulePendingTarget,
-}));
+vi.mock(
+  "../../agents/main-session-recovery/main-session-recovery-store.js",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("../../agents/main-session-recovery/main-session-recovery-store.js")
+      >();
+    return {
+      ...actual,
+      releaseMainSessionRecoveryOwner: async (
+        lease: Parameters<typeof actual.releaseMainSessionRecoveryOwner>[0],
+        options: Parameters<typeof actual.releaseMainSessionRecoveryOwner>[1],
+      ) => {
+        await recoveryOwnerReleaseMocks.beforeRelease();
+        return await actual.releaseMainSessionRecoveryOwner(lease, options);
+      },
+    };
+  },
+);
+
+vi.mock(
+  "../../agents/main-session-recovery/main-session-recovery-owner-release.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../../agents/main-session-recovery/main-session-recovery-owner-release.js")
+    >()),
+    scheduleMainSessionRecoveryPendingTarget: recoveryOwnerReleaseMocks.schedulePendingTarget,
+  }),
+);
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function createDeferred() {
-  let resolve = () => {};
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
+function createTestReplyOperation(
+  overrides: Omit<Parameters<typeof createReplyOperation>[0], "resetTriggered"> &
+    Partial<Pick<Parameters<typeof createReplyOperation>[0], "resetTriggered">>,
+) {
+  return createReplyOperation({ resetTriggered: false, ...overrides });
+}
+
+function admitTestReplyTurn(
+  overrides: Omit<Parameters<typeof admitReplyTurn>[0], "kind" | "resetTriggered"> &
+    Partial<Pick<Parameters<typeof admitReplyTurn>[0], "kind" | "resetTriggered">>,
+) {
+  return admitReplyTurn({ kind: "visible", resetTriggered: false, ...overrides });
 }
 
 function createSessionStore(entries: Record<string, object>): string {
@@ -59,6 +93,10 @@ function createSessionStore(entries: Record<string, object>): string {
   return storePath;
 }
 
+function createSessionStoreFor(sessionKey: string, sessionId: string) {
+  return createSessionStore({ [sessionKey]: { sessionId, updatedAt: Date.now() } });
+}
+
 async function readSessionEntry(
   storePath: string,
   sessionKey: string,
@@ -70,15 +108,28 @@ describe("reply turn admission", () => {
   afterEach(() => {
     testing.resetReplyRunRegistry();
     resetDiagnosticRunActivityForTest();
+    recoveryOwnerReleaseMocks.beforeRelease.mockClear();
     recoveryOwnerReleaseMocks.schedulePendingTarget.mockClear();
+  });
+
+  it("binds the originating transcript leaf to the admitted operation", async () => {
+    const admission = await admitTestReplyTurn({
+      sessionKey: "agent:main:main",
+      sessionId: "session-originating-leaf",
+      originatingLeafEntryId: "leaf-before-run",
+    });
+
+    expect(admission.status).toBe("owned");
+    if (admission.status === "owned") {
+      expect(admission.operation.originatingLeafEntryId).toBe("leaf-before-run");
+      admission.operation.complete();
+    }
   });
 
   it("rejects a reply when an archive commits before admission", async () => {
     const sessionKey = "agent:main:telegram:topic:archived";
     const sessionId = "session-before-archive";
-    const storePath = createSessionStore({
-      [sessionKey]: { sessionId, updatedAt: Date.now() },
-    });
+    const storePath = createSessionStoreFor(sessionKey, sessionId);
     const mutationStarted = createDeferred();
     const releaseMutation = createDeferred();
     const mutation = runExclusiveSessionLifecycleMutation({
@@ -96,12 +147,10 @@ describe("reply turn admission", () => {
     });
     await mutationStarted.promise;
 
-    const admission = admitReplyTurn({
+    const admission = admitTestReplyTurn({
       sessionKey,
       sessionId,
       storePath,
-      kind: "visible",
-      resetTriggered: false,
     });
     releaseMutation.resolve();
     await mutation;
@@ -114,9 +163,7 @@ describe("reply turn admission", () => {
   it("rejects a reply when deletion commits before admission", async () => {
     const sessionKey = "agent:main:telegram:topic:deleted";
     const sessionId = "session-before-delete";
-    const storePath = createSessionStore({
-      [sessionKey]: { sessionId, updatedAt: Date.now() },
-    });
+    const storePath = createSessionStoreFor(sessionKey, sessionId);
     const mutationStarted = createDeferred();
     const releaseMutation = createDeferred();
     const mutation = runExclusiveSessionLifecycleMutation({
@@ -134,13 +181,11 @@ describe("reply turn admission", () => {
     });
     await mutationStarted.promise;
 
-    const admission = admitReplyTurn({
+    const admission = admitTestReplyTurn({
       sessionKey,
       sessionId,
       expectedSessionId: sessionId,
       storePath,
-      kind: "visible",
-      resetTriggered: false,
     });
     releaseMutation.resolve();
     await mutation;
@@ -152,9 +197,7 @@ describe("reply turn admission", () => {
     const sessionKey = "agent:main:telegram:topic:reset";
     const sessionId = "session-before-reset";
     const nextSessionId = "session-after-reset";
-    const storePath = createSessionStore({
-      [sessionKey]: { sessionId, updatedAt: Date.now() },
-    });
+    const storePath = createSessionStoreFor(sessionKey, sessionId);
     const mutationStarted = createDeferred();
     const releaseMutation = createDeferred();
     const mutation = runExclusiveSessionLifecycleMutation({
@@ -171,12 +214,10 @@ describe("reply turn admission", () => {
     });
     await mutationStarted.promise;
 
-    const admission = admitReplyTurn({
+    const admission = admitTestReplyTurn({
       sessionKey,
       sessionId,
       storePath,
-      kind: "visible",
-      resetTriggered: false,
     });
     releaseMutation.resolve();
     await mutation;
@@ -193,9 +234,7 @@ describe("reply turn admission", () => {
     const sessionKey = "agent:main:telegram:topic:reset-expected";
     const sessionId = "session-before-reset";
     const nextSessionId = "session-after-reset";
-    const storePath = createSessionStore({
-      [sessionKey]: { sessionId, updatedAt: Date.now() },
-    });
+    const storePath = createSessionStoreFor(sessionKey, sessionId);
     const mutationStarted = createDeferred();
     const releaseMutation = createDeferred();
     const mutation = runExclusiveSessionLifecycleMutation({
@@ -212,13 +251,11 @@ describe("reply turn admission", () => {
     });
     await mutationStarted.promise;
 
-    const admission = admitReplyTurn({
+    const admission = admitTestReplyTurn({
       sessionKey,
       sessionId,
       expectedSessionId: sessionId,
       storePath,
-      kind: "visible",
-      resetTriggered: false,
     });
     releaseMutation.resolve();
     await mutation;
@@ -229,9 +266,7 @@ describe("reply turn admission", () => {
   it("drops queued work when reset cleanup cancels admission", async () => {
     const sessionKey = "agent:main:telegram:topic:queued-reset";
     const sessionId = "session-before-reset";
-    const storePath = createSessionStore({
-      [sessionKey]: { sessionId, updatedAt: Date.now() },
-    });
+    const storePath = createSessionStoreFor(sessionKey, sessionId);
     const mutationStarted = createDeferred();
     const releaseMutation = createDeferred();
     const abortController = new AbortController();
@@ -250,13 +285,12 @@ describe("reply turn admission", () => {
     });
     await mutationStarted.promise;
 
-    const admission = admitReplyTurn({
+    const admission = admitTestReplyTurn({
       sessionKey,
       sessionId,
       expectedSessionId: sessionId,
       storePath,
       kind: "queued_followup",
-      resetTriggered: false,
       upstreamAbortSignal: abortController.signal,
     });
     releaseMutation.resolve();
@@ -280,13 +314,12 @@ describe("reply turn admission", () => {
     });
 
     await expect(
-      admitReplyTurn({
+      admitTestReplyTurn({
         sessionKey,
         sessionId,
         expectedSessionId: sessionId,
         storePath,
         kind: "queued_followup",
-        resetTriggered: false,
       }),
     ).resolves.toEqual({
       status: "skipped",
@@ -297,16 +330,12 @@ describe("reply turn admission", () => {
   it("holds lifecycle admission until a running reply operation clears", async () => {
     const sessionKey = "agent:main:telegram:topic:running-reset";
     const sessionId = "session-before-reset";
-    const storePath = createSessionStore({
-      [sessionKey]: { sessionId, updatedAt: Date.now() },
-    });
-    const admission = await admitReplyTurn({
+    const storePath = createSessionStoreFor(sessionKey, sessionId);
+    const admission = await admitTestReplyTurn({
       sessionKey,
       sessionId,
       expectedSessionId: sessionId,
       storePath,
-      kind: "visible",
-      resetTriggered: false,
     });
     expect(admission.status).toBe("owned");
     if (admission.status !== "owned") {
@@ -360,13 +389,12 @@ describe("reply turn admission", () => {
           },
         },
       });
-      const admission = await admitReplyTurn({
+      const admission = await admitTestReplyTurn({
         sessionKey,
         sessionId,
         expectedSessionId: sessionId,
         storePath,
         kind,
-        resetTriggered: false,
       });
       expect(admission.status).toBe("owned");
       if (admission.status !== "owned") {
@@ -392,6 +420,229 @@ describe("reply turn admission", () => {
     },
   );
 
+  it.each(["visible", "queued_followup"] as const)(
+    "waits for restart-recovery owner release before %s successor admission",
+    async (kind) => {
+      const sessionKey = `agent:main:telegram:topic:recovery-successor:${kind}`;
+      const sessionId = "interrupted-session";
+      const storePath = createSessionStore({
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 100,
+          status: "running",
+          abortedLastRun: true,
+          mainRestartRecovery: {
+            cycleId: "cycle-1",
+            revision: 1,
+            chargedAttempts: 0,
+          },
+        },
+      });
+      const owner = await admitTestReplyTurn({
+        sessionKey,
+        sessionId,
+        expectedSessionId: sessionId,
+        storePath,
+      });
+      expect(owner.status).toBe("owned");
+      if (owner.status !== "owned") {
+        return;
+      }
+
+      const releaseStarted = createDeferred();
+      const allowRelease = createDeferred();
+      recoveryOwnerReleaseMocks.beforeRelease.mockImplementationOnce(async () => {
+        releaseStarted.resolve();
+        await allowRelease.promise;
+      });
+      owner.operation.complete();
+      await releaseStarted.promise;
+
+      const successor = admitTestReplyTurn({
+        sessionKey,
+        sessionId,
+        expectedSessionId: sessionId,
+        storePath,
+        kind,
+      });
+      let successorSettled = false;
+      void successor.then(() => {
+        successorSettled = true;
+      });
+      await Promise.resolve();
+      expect(successorSettled).toBe(false);
+      await expect(
+        admitTestReplyTurn({
+          sessionKey,
+          sessionId,
+          expectedSessionId: sessionId,
+          storePath,
+          kind: "heartbeat",
+        }),
+      ).resolves.toEqual({ status: "skipped", reason: "active-run" });
+
+      allowRelease.resolve();
+      const admitted = await successor;
+      expect(admitted.status).toBe("owned");
+      if (admitted.status === "owned") {
+        admitted.operation.complete();
+      }
+      await vi.waitFor(async () => {
+        const entry = await readSessionEntry(storePath, sessionKey);
+        expect(entry?.mainRestartRecovery?.foregroundClaims).toBeUndefined();
+      });
+    },
+  );
+
+  it("waits through deferred owner release retries beyond one settle slice", async () => {
+    vi.useFakeTimers();
+    try {
+      const sessionKey = "agent:main:telegram:topic:deferred-recovery-release";
+      const sessionId = "interrupted-session";
+      const storePath = createSessionStore({
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 100,
+          status: "running",
+          abortedLastRun: true,
+          mainRestartRecovery: {
+            cycleId: "cycle-1",
+            revision: 1,
+            chargedAttempts: 0,
+          },
+        },
+      });
+      const owner = await admitTestReplyTurn({
+        sessionKey,
+        sessionId,
+        expectedSessionId: sessionId,
+        storePath,
+      });
+      expect(owner.status).toBe("owned");
+      if (owner.status !== "owned") {
+        return;
+      }
+      const applySessionEntryReplacements = sessionAccessor.applySessionEntryReplacements;
+      let failures = 0;
+      vi.spyOn(sessionAccessor, "applySessionEntryReplacements").mockImplementation(
+        async (params) => {
+          if (failures < 15) {
+            failures += 1;
+            throw new Error("transient session-store failure");
+          }
+          return await applySessionEntryReplacements(params);
+        },
+      );
+
+      owner.operation.complete();
+      const successor = admitTestReplyTurn({
+        sessionKey,
+        sessionId,
+        expectedSessionId: sessionId,
+        storePath,
+      });
+      let successorSettled = false;
+      void successor.then(() => {
+        successorSettled = true;
+      });
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS + 1);
+      expect(successorSettled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(20_000);
+      const admitted = await successor;
+      expect(admitted.status).toBe("owned");
+      if (admitted.status === "owned") {
+        admitted.operation.complete();
+      }
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves a source recovery identity after adopting a distinct target session", async () => {
+    const sourceSessionKey = "agent:main:telegram:slash:recovery-source";
+    const sourceSessionId = "recovery-source-session";
+    const targetSessionKey = "agent:main:telegram:group:recovery-target";
+    const targetSessionId = "recovery-target-session";
+    const storePath = createSessionStore({
+      [sourceSessionKey]: {
+        sessionId: sourceSessionId,
+        updatedAt: 100,
+        status: "running",
+        abortedLastRun: true,
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 1,
+          chargedAttempts: 0,
+        },
+      },
+      [targetSessionKey]: { sessionId: targetSessionId, updatedAt: 100 },
+    });
+    const source = await admitTestReplyTurn({
+      sessionKey: sourceSessionKey,
+      sessionId: sourceSessionId,
+      expectedSessionId: sourceSessionId,
+      storePath,
+    });
+    expect(source.status).toBe("owned");
+    if (source.status !== "owned") {
+      return;
+    }
+
+    const adoption = await admitTestReplyTurn({
+      sessionKey: targetSessionKey,
+      sessionId: source.operation.sessionId,
+      expectedSessionId: targetSessionId,
+      storePath,
+      waitForActive: false,
+      adoptOperation: source.operation,
+    });
+    expect(adoption.status).toBe("owned");
+    if (adoption.status !== "owned") {
+      source.operation.complete();
+      return;
+    }
+    adoption.operation.updateSessionId(targetSessionId);
+    expect(adoption.operation).toBe(source.operation);
+    expect(adoption.operation.key).toBe(targetSessionKey);
+    expect(adoption.operation.sessionId).toBe(targetSessionId);
+
+    const releaseStarted = createDeferred();
+    const allowRelease = createDeferred();
+    recoveryOwnerReleaseMocks.beforeRelease.mockImplementationOnce(async () => {
+      releaseStarted.resolve();
+      await allowRelease.promise;
+    });
+    adoption.operation.complete();
+    await releaseStarted.promise;
+
+    const successor = admitTestReplyTurn({
+      sessionKey: sourceSessionKey,
+      sessionId: sourceSessionId,
+      expectedSessionId: sourceSessionId,
+      storePath,
+    });
+    let successorSettled = false;
+    void successor.then(() => {
+      successorSettled = true;
+    });
+    await Promise.resolve();
+    expect(successorSettled).toBe(false);
+
+    allowRelease.resolve();
+    const admitted = await successor;
+    expect(admitted.status).toBe("owned");
+    if (admitted.status === "owned") {
+      expect(admitted.operation.sessionId).toBe(sourceSessionId);
+      admitted.operation.complete();
+    }
+    await vi.waitFor(async () => {
+      const entry = await readSessionEntry(storePath, sourceSessionKey);
+      expect(entry?.mainRestartRecovery?.foregroundClaims).toBeUndefined();
+    });
+  });
+
   it.each(["visible", "heartbeat"] as const)(
     "rejects %s reply admission for a tombstoned recovery session",
     async (kind) => {
@@ -413,17 +664,44 @@ describe("reply turn admission", () => {
       });
 
       await expect(
-        admitReplyTurn({
+        admitTestReplyTurn({
           sessionKey,
           sessionId,
           expectedSessionId: sessionId,
           storePath,
           kind,
-          resetTriggered: false,
         }),
       ).rejects.toThrow(/changed while starting work/i);
     },
   );
+
+  it("admits a visible turn after clearing orphaned restart-recovery fences", async () => {
+    const sessionKey = "agent:main:telegram:topic:orphaned-recovery-fence";
+    const sessionId = "healthy-session";
+    const storePath = createSessionStore({
+      [sessionKey]: {
+        sessionId,
+        updatedAt: 100,
+        status: "running",
+        abortedLastRun: false,
+        restartRecoveryRuns: [{ runId: "stale-run", lifecycleGeneration: "stale-generation" }],
+      },
+    });
+
+    const admission = await admitTestReplyTurn({
+      sessionKey,
+      sessionId,
+      expectedSessionId: sessionId,
+      storePath,
+    });
+    expect(admission.status).toBe("owned");
+    const persisted = await readSessionEntry(storePath, sessionKey);
+    expect(persisted?.restartRecoveryRuns).toBeUndefined();
+    expect(persisted?.mainRestartRecovery).toBeUndefined();
+    if (admission.status === "owned") {
+      admission.operation.complete();
+    }
+  });
 
   it("drops a queued followup for an admitted recovery fence", async () => {
     const sessionKey = "agent:main:telegram:topic:admitted-recovery";
@@ -444,13 +722,12 @@ describe("reply turn admission", () => {
     });
 
     await expect(
-      admitReplyTurn({
+      admitTestReplyTurn({
         sessionKey,
         sessionId,
         expectedSessionId: sessionId,
         storePath,
         kind: "queued_followup",
-        resetTriggered: false,
       }),
     ).resolves.toEqual({ status: "skipped", reason: "lifecycle-invalidated" });
   });
@@ -472,24 +749,20 @@ describe("reply turn admission", () => {
         },
       },
     });
-    const blocker = createReplyOperation({
+    const blocker = createTestReplyOperation({
       sessionKey,
       sessionId,
-      resetTriggered: false,
     });
-    const reservation = createReplyOperation({
+    const reservation = createTestReplyOperation({
       sessionKey: sourceSessionKey,
       sessionId: "source-session",
-      resetTriggered: false,
     });
 
-    const result = await admitReplyTurn({
+    const result = await admitTestReplyTurn({
       sessionKey,
       sessionId: reservation.sessionId,
       expectedSessionId: sessionId,
       storePath,
-      kind: "visible",
-      resetTriggered: false,
       waitForActive: false,
       retainLifecycleAdmissionOnActive: true,
       adoptOperation: reservation,
@@ -528,13 +801,11 @@ describe("reply turn admission", () => {
       },
     });
 
-    const admission = await admitReplyTurn({
+    const admission = await admitTestReplyTurn({
       sessionKey,
       sessionId,
       expectedSessionId: sessionId,
       storePath,
-      kind: "visible",
-      resetTriggered: false,
     });
 
     expect(admission.status).toBe("owned");
@@ -549,16 +820,12 @@ describe("reply turn admission", () => {
   it("holds interrupted queued reply work until its owner exits", async () => {
     const sessionKey = "agent:main:telegram:topic:queued-delete";
     const sessionId = "session-before-delete";
-    const storePath = createSessionStore({
-      [sessionKey]: { sessionId, updatedAt: Date.now() },
-    });
-    const admission = await admitReplyTurn({
+    const storePath = createSessionStoreFor(sessionKey, sessionId);
+    const admission = await admitTestReplyTurn({
       sessionKey,
       sessionId,
       expectedSessionId: sessionId,
       storePath,
-      kind: "visible",
-      resetTriggered: false,
     });
     expect(admission.status).toBe("owned");
     if (admission.status !== "owned") {
@@ -599,16 +866,12 @@ describe("reply turn admission", () => {
   it("excludes the initiating reply admission from an in-band lifecycle mutation", async () => {
     const sessionKey = "agent:main:telegram:topic:in-band-reset";
     const sessionId = "session-before-reset";
-    const storePath = createSessionStore({
-      [sessionKey]: { sessionId, updatedAt: Date.now() },
-    });
-    const admission = await admitReplyTurn({
+    const storePath = createSessionStoreFor(sessionKey, sessionId);
+    const admission = await admitTestReplyTurn({
       sessionKey,
       sessionId,
       expectedSessionId: sessionId,
       storePath,
-      kind: "visible",
-      resetTriggered: false,
     });
     expect(admission.status).toBe("owned");
     if (admission.status !== "owned") {
@@ -636,9 +899,7 @@ describe("reply turn admission", () => {
   it("skips an aborted reply waiting behind a lifecycle mutation", async () => {
     const sessionKey = "agent:main:telegram:topic:aborted";
     const sessionId = "session-before-abort";
-    const storePath = createSessionStore({
-      [sessionKey]: { sessionId, updatedAt: Date.now() },
-    });
+    const storePath = createSessionStoreFor(sessionKey, sessionId);
     const mutationStarted = createDeferred();
     const releaseMutation = createDeferred();
     const mutation = runExclusiveSessionLifecycleMutation({
@@ -651,12 +912,10 @@ describe("reply turn admission", () => {
     });
     await mutationStarted.promise;
     const controller = new AbortController();
-    const admission = admitReplyTurn({
+    const admission = admitTestReplyTurn({
       sessionKey,
       sessionId,
       storePath,
-      kind: "visible",
-      resetTriggered: false,
       upstreamAbortSignal: controller.signal,
     });
     controller.abort();
@@ -668,18 +927,15 @@ describe("reply turn admission", () => {
 
   it("waits for visible turns and reuses the active session id", async () => {
     const waitChanges: boolean[] = [];
-    const active = createReplyOperation({
+    const active = createTestReplyOperation({
       sessionKey: "agent:main:telegram:topic:42",
       sessionId: "active-session",
-      resetTriggered: false,
     });
     active.setPhase("running");
 
-    const admitted = admitReplyTurn({
+    const admitted = admitTestReplyTurn({
       sessionKey: "agent:main:telegram:topic:42",
       sessionId: "new-session",
-      kind: "visible",
-      resetTriggered: false,
       onReplyAdmissionWaitChange: (waiting) => waitChanges.push(waiting),
     });
 
@@ -707,18 +963,15 @@ describe("reply turn admission", () => {
   it("does not apply cleanup settle timeout to visible turn admission", async () => {
     vi.useFakeTimers();
     try {
-      const active = createReplyOperation({
+      const active = createTestReplyOperation({
         sessionKey: "agent:main:discord:channel:42",
         sessionId: "active-session",
-        resetTriggered: false,
       });
       active.setPhase("running");
 
-      const admitted = admitReplyTurn({
+      const admitted = admitTestReplyTurn({
         sessionKey: "agent:main:discord:channel:42",
         sessionId: "waiting-session",
-        kind: "visible",
-        resetTriggered: false,
       });
 
       let settled = false;
@@ -744,18 +997,16 @@ describe("reply turn admission", () => {
   it("keeps the cleanup settle timeout for queued follow-up retry", async () => {
     vi.useFakeTimers();
     try {
-      const active = createReplyOperation({
+      const active = createTestReplyOperation({
         sessionKey: "agent:main:discord:channel:42",
         sessionId: "active-session",
-        resetTriggered: false,
       });
       active.setPhase("running");
 
-      const admitted = admitReplyTurn({
+      const admitted = admitTestReplyTurn({
         sessionKey: "agent:main:discord:channel:42",
         sessionId: "queued-session",
         kind: "queued_followup",
-        resetTriggered: false,
       });
 
       await vi.advanceTimersByTimeAsync(15_000);
@@ -774,20 +1025,18 @@ describe("reply turn admission", () => {
 
   it("keeps an already-waiting follow-up behind the delivery barrier", async () => {
     const waitChanges: boolean[] = [];
-    const active = createReplyOperation({
+    const active = createTestReplyOperation({
       sessionKey: "agent:main:discord:channel:42",
       sessionId: "active-session",
-      resetTriggered: false,
     });
     let releaseBarrier: () => void = () => {};
     const barrier = new Promise<void>((resolve) => {
       releaseBarrier = resolve;
     });
-    const admitted = admitReplyTurn({
+    const admitted = admitTestReplyTurn({
       sessionKey: "agent:main:discord:channel:42",
       sessionId: "queued-session",
       kind: "queued_followup",
-      resetTriggered: false,
       onReplyAdmissionWaitChange: (waiting) => waitChanges.push(waiting),
     });
     let settled = false;
@@ -814,10 +1063,9 @@ describe("reply turn admission", () => {
   });
 
   it("allows a visible turn to claim the lane while delivery settles", async () => {
-    const active = createReplyOperation({
+    const active = createTestReplyOperation({
       sessionKey: "agent:main:discord:channel:42",
       sessionId: "active-session",
-      resetTriggered: false,
     });
     let releaseBarrier: () => void = () => {};
     const barrier = new Promise<void>((resolve) => {
@@ -825,11 +1073,9 @@ describe("reply turn admission", () => {
     });
 
     active.completeWithAfterClearBarrier(barrier);
-    const result = await admitReplyTurn({
+    const result = await admitTestReplyTurn({
       sessionKey: "agent:main:discord:channel:42",
       sessionId: "visible-session",
-      kind: "visible",
-      resetTriggered: false,
     });
 
     expect(result.status).toBe("owned");
@@ -841,10 +1087,9 @@ describe("reply turn admission", () => {
   });
 
   it("skips heartbeat turns while delivery settles", async () => {
-    const active = createReplyOperation({
+    const active = createTestReplyOperation({
       sessionKey: "agent:main:discord:channel:42",
       sessionId: "active-session",
-      resetTriggered: false,
     });
     let releaseBarrier: () => void = () => {};
     const barrier = new Promise<void>((resolve) => {
@@ -852,11 +1097,10 @@ describe("reply turn admission", () => {
     });
 
     active.completeWithAfterClearBarrier(barrier);
-    const result = await admitReplyTurn({
+    const result = await admitTestReplyTurn({
       sessionKey: "agent:main:discord:channel:42",
       sessionId: "heartbeat-session",
       kind: "heartbeat",
-      resetTriggered: false,
     });
 
     expect(result).toEqual({ status: "skipped", reason: "active-run" });
@@ -865,10 +1109,9 @@ describe("reply turn admission", () => {
   });
 
   it("passes a visible turn's rotated session to after-clear work", async () => {
-    const active = createReplyOperation({
+    const active = createTestReplyOperation({
       sessionKey: "agent:main:discord:channel:42",
       sessionId: "active-session",
-      resetTriggered: false,
     });
     let releaseBarrier: () => void = () => {};
     const barrier = new Promise<void>((resolve) => {
@@ -880,11 +1123,9 @@ describe("reply turn admission", () => {
     });
 
     active.completeWithAfterClearBarrier(barrier);
-    const visibleAdmission = await admitReplyTurn({
+    const visibleAdmission = await admitTestReplyTurn({
       sessionKey: "agent:main:discord:channel:42",
       sessionId: "visible-session",
-      kind: "visible",
-      resetTriggered: false,
     });
     expect(visibleAdmission.status).toBe("owned");
     if (visibleAdmission.status === "owned") {
@@ -897,11 +1138,10 @@ describe("reply turn admission", () => {
     await vi.waitFor(() => {
       expect(admissionSessionId).toBe("rotated-session");
     });
-    const queuedResult = await admitReplyTurn({
+    const queuedResult = await admitTestReplyTurn({
       sessionKey: "agent:main:discord:channel:42",
       sessionId: admissionSessionId ?? "queued-session",
       kind: "queued_followup",
-      resetTriggered: false,
     });
     expect(queuedResult.status).toBe("owned");
     if (queuedResult.status === "owned") {
@@ -911,18 +1151,15 @@ describe("reply turn admission", () => {
   });
 
   it("uses the active run's final session id after waiting", async () => {
-    const active = createReplyOperation({
+    const active = createTestReplyOperation({
       sessionKey: "agent:main:telegram:topic:42",
       sessionId: "pre-compact-session",
-      resetTriggered: false,
     });
     active.setPhase("preflight_compacting");
 
-    const admitted = admitReplyTurn({
+    const admitted = admitTestReplyTurn({
       sessionKey: "agent:main:telegram:topic:42",
       sessionId: "new-session",
-      kind: "visible",
-      resetTriggered: false,
     });
 
     await Promise.resolve();
@@ -941,23 +1178,18 @@ describe("reply turn admission", () => {
     const sessionKey = "agent:main:telegram:topic:compaction";
     const sessionId = "pre-compact-session";
     const nextSessionId = "post-compact-session";
-    const storePath = createSessionStore({
-      [sessionKey]: { sessionId, updatedAt: Date.now() },
-    });
-    const active = createReplyOperation({
+    const storePath = createSessionStoreFor(sessionKey, sessionId);
+    const active = createTestReplyOperation({
       sessionKey,
       sessionId,
-      resetTriggered: false,
     });
     active.setPhase("preflight_compacting");
 
-    const admitted = admitReplyTurn({
+    const admitted = admitTestReplyTurn({
       sessionKey,
       sessionId,
       expectedSessionId: sessionId,
       storePath,
-      kind: "visible",
-      resetTriggered: false,
     });
 
     await new Promise<void>((resolve) => {
@@ -982,13 +1214,10 @@ describe("reply turn admission", () => {
     const sessionKey = "agent:main:telegram:topic:compaction-before-admission";
     const sessionId = "pre-compact-session";
     const nextSessionId = "post-compact-session";
-    const storePath = createSessionStore({
-      [sessionKey]: { sessionId, updatedAt: Date.now() },
-    });
-    const active = createReplyOperation({
+    const storePath = createSessionStoreFor(sessionKey, sessionId);
+    const active = createTestReplyOperation({
       sessionKey,
       sessionId,
-      resetTriggered: false,
     });
     active.setPhase("preflight_compacting");
     active.updateSessionId(nextSessionId);
@@ -998,14 +1227,12 @@ describe("reply turn admission", () => {
     } as SessionEntry);
     active.complete();
 
-    const result = await admitReplyTurn({
+    const result = await admitTestReplyTurn({
       sessionKey,
       sessionId,
       expectedSessionId: sessionId,
       expectedActiveOperation: active,
       storePath,
-      kind: "visible",
-      resetTriggered: false,
     });
 
     expect(result.status).toBe("owned");
@@ -1019,13 +1246,10 @@ describe("reply turn admission", () => {
     const sessionKey = "agent:main:telegram:topic:late-compaction-owner";
     const sessionId = "pre-compact-session";
     const nextSessionId = "post-compact-session";
-    const storePath = createSessionStore({
-      [sessionKey]: { sessionId, updatedAt: Date.now() },
-    });
-    const active = createReplyOperation({
+    const storePath = createSessionStoreFor(sessionKey, sessionId);
+    const active = createTestReplyOperation({
       sessionKey,
       sessionId,
-      resetTriggered: false,
     });
     active.setPhase("preflight_compacting");
     active.updateSessionId(nextSessionId);
@@ -1034,13 +1258,11 @@ describe("reply turn admission", () => {
       updatedAt: Date.now(),
     } as SessionEntry);
 
-    const admitted = admitReplyTurn({
+    const admitted = admitTestReplyTurn({
       sessionKey,
       sessionId,
       expectedSessionId: sessionId,
       storePath,
-      kind: "visible",
-      resetTriggered: false,
       waitForActive: true,
     });
     await new Promise<void>((resolve) => {
@@ -1063,19 +1285,16 @@ describe("reply turn admission", () => {
     const storePath = createSessionStore({
       [sessionKey]: { sessionId: nextSessionId, updatedAt: Date.now() },
     });
-    const freshOwner = createReplyOperation({
+    const freshOwner = createTestReplyOperation({
       sessionKey,
       sessionId: nextSessionId,
-      resetTriggered: false,
     });
 
-    const admitted = admitReplyTurn({
+    const admitted = admitTestReplyTurn({
       sessionKey,
       sessionId,
       expectedSessionId: sessionId,
       storePath,
-      kind: "visible",
-      resetTriggered: false,
       waitForActive: true,
     });
 
@@ -1096,13 +1315,10 @@ describe("reply turn admission", () => {
     const sessionKey = "agent:main:telegram:topic:compaction-terminal-outcome";
     const sessionId = "pre-compact-session";
     const nextSessionId = "post-compact-session";
-    const storePath = createSessionStore({
-      [sessionKey]: { sessionId, updatedAt: Date.now() },
-    });
-    const active = createReplyOperation({
+    const storePath = createSessionStoreFor(sessionKey, sessionId);
+    const active = createTestReplyOperation({
       sessionKey,
       sessionId,
-      resetTriggered: false,
     });
     active.setPhase("preflight_compacting");
     active.updateSessionId(nextSessionId);
@@ -1112,14 +1328,12 @@ describe("reply turn admission", () => {
     } as SessionEntry);
     finish(active);
 
-    const result = await admitReplyTurn({
+    const result = await admitTestReplyTurn({
       sessionKey,
       sessionId,
       expectedSessionId: sessionId,
       expectedActiveOperation: active,
       storePath,
-      kind: "visible",
-      resetTriggered: false,
     });
 
     expect(result.status).toBe("owned");
@@ -1130,17 +1344,15 @@ describe("reply turn admission", () => {
   });
 
   it("skips heartbeat turns while a visible turn owns the lane", async () => {
-    const active = createReplyOperation({
+    const active = createTestReplyOperation({
       sessionKey: "agent:main:telegram:topic:42",
       sessionId: "visible-session",
-      resetTriggered: false,
     });
 
-    const result = await admitReplyTurn({
+    const result = await admitTestReplyTurn({
       sessionKey: "agent:main:telegram:topic:42",
       sessionId: "heartbeat-session",
       kind: "heartbeat",
-      resetTriggered: false,
     });
 
     expect(result).toMatchObject({
@@ -1156,24 +1368,24 @@ describe("reply turn admission", () => {
     try {
       const cancel = vi.fn();
       const startedAt = Date.now();
-      const active = createReplyOperation({
+      const active = createTestReplyOperation({
         sessionKey: "agent:main:telegram:topic:stale-visible",
         sessionId: "stale-session",
-        resetTriggered: false,
       });
       active.attachBackend({
         kind: "embedded",
-        cancel,
+        cancel: (reason) => {
+          cancel(reason);
+          active.complete();
+        },
         isStreaming: () => true,
       });
       active.setPhase("running");
       vi.setSystemTime(startedAt + RUN_STALE_TAKEOVER_MS + 1);
 
-      const result = await admitReplyTurn({
+      const result = await admitTestReplyTurn({
         sessionKey: "agent:main:telegram:topic:stale-visible",
         sessionId: "replacement-session",
-        kind: "visible",
-        resetTriggered: false,
       });
 
       expect(active.result).toEqual({ kind: "failed", code: "run_stalled" });
@@ -1192,21 +1404,18 @@ describe("reply turn admission", () => {
   it("keeps visible turns waiting while an active operation is still fresh", async () => {
     vi.useFakeTimers();
     try {
-      const active = createReplyOperation({
+      const active = createTestReplyOperation({
         sessionKey: "agent:main:telegram:topic:fresh-visible",
         sessionId: "fresh-session",
-        resetTriggered: false,
       });
       active.setPhase("running");
       active.recordActivity();
       const abortController = new AbortController();
       const waitChanges: boolean[] = [];
       let settled = false;
-      const result = admitReplyTurn({
+      const result = admitTestReplyTurn({
         sessionKey: "agent:main:telegram:topic:fresh-visible",
         sessionId: "waiting-session",
-        kind: "visible",
-        resetTriggered: false,
         upstreamAbortSignal: abortController.signal,
         onReplyAdmissionWaitChange: (waiting) => waitChanges.push(waiting),
       }).then((admission) => {
@@ -1237,14 +1446,16 @@ describe("reply turn admission", () => {
     try {
       const cancel = vi.fn();
       const startedAt = Date.now();
-      const active = createReplyOperation({
+      const active = createTestReplyOperation({
         sessionKey: "agent:main:telegram:topic:quiet-tool",
         sessionId: "quiet-tool-session",
-        resetTriggered: false,
       });
       active.attachBackend({
         kind: "embedded",
-        cancel,
+        cancel: (reason) => {
+          cancel(reason);
+          active.complete();
+        },
         isStreaming: () => true,
       });
       active.setPhase("running");
@@ -1260,11 +1471,9 @@ describe("reply turn admission", () => {
       vi.setSystemTime(startedAt + 12 * 60_000);
       const abortController = new AbortController();
       let settled = false;
-      const waiting = admitReplyTurn({
+      const waiting = admitTestReplyTurn({
         sessionKey: "agent:main:telegram:topic:quiet-tool",
         sessionId: "replacement-quiet-tool",
-        kind: "visible",
-        resetTriggered: false,
         upstreamAbortSignal: abortController.signal,
       }).then((admission) => {
         settled = true;
@@ -1297,10 +1506,9 @@ describe("reply turn admission", () => {
       try {
         const cancel = vi.fn();
         const startedAt = Date.now();
-        const active = createReplyOperation({
+        const active = createTestReplyOperation({
           sessionKey: `agent:main:telegram:topic:stale-${kind}`,
           sessionId: `stale-${kind}-session`,
-          resetTriggered: false,
         });
         active.attachBackend({
           kind: "embedded",
@@ -1310,11 +1518,10 @@ describe("reply turn admission", () => {
         active.setPhase("running");
         vi.setSystemTime(startedAt + RUN_STALE_TAKEOVER_MS + 1);
 
-        const admission = admitReplyTurn({
+        const admission = admitTestReplyTurn({
           sessionKey: `agent:main:telegram:topic:stale-${kind}`,
           sessionId: `replacement-${kind}-session`,
           kind,
-          resetTriggered: false,
           waitTimeoutMs: 1,
         });
         if (kind === "queued_followup") {
@@ -1341,22 +1548,19 @@ describe("reply turn admission", () => {
   it("lets visible turns reclaim terminal operations after settle grace elapsed", async () => {
     vi.useFakeTimers();
     try {
-      const startedAt = Date.now();
-      const active = createReplyOperation({
+      const active = createTestReplyOperation({
         sessionKey: "agent:main:telegram:topic:terminal-unreleased",
         sessionId: "terminal-unreleased-session",
-        resetTriggered: false,
       });
       active.setPhase("running");
       active.abortByUser();
-      vi.setSystemTime(startedAt + REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS);
 
-      const result = await admitReplyTurn({
+      const admission = admitTestReplyTurn({
         sessionKey: "agent:main:telegram:topic:terminal-unreleased",
         sessionId: "replacement-terminal-session",
-        kind: "visible",
-        resetTriggered: false,
       });
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS);
+      const result = await admission;
 
       expect(active.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
       expect(replyRunRegistry.get("agent:main:telegram:topic:terminal-unreleased")).not.toBe(
@@ -1373,17 +1577,15 @@ describe("reply turn admission", () => {
   });
 
   it("stops waiting when the caller aborts", async () => {
-    const active = createReplyOperation({
+    const active = createTestReplyOperation({
       sessionKey: "agent:main:telegram:topic:42",
       sessionId: "active-session",
-      resetTriggered: false,
     });
     const abortController = new AbortController();
-    const admitted = admitReplyTurn({
+    const admitted = admitTestReplyTurn({
       sessionKey: "agent:main:telegram:topic:42",
       sessionId: "waiting-session",
       kind: "queued_followup",
-      resetTriggered: false,
       upstreamAbortSignal: abortController.signal,
     });
 
@@ -1404,19 +1606,16 @@ describe("reply turn admission", () => {
     const storePath = createSessionStore({
       [targetSessionKey]: { sessionId: targetSessionId, updatedAt: Date.now() },
     });
-    const reservation = createReplyOperation({
+    const reservation = createTestReplyOperation({
       sessionKey: sourceSessionKey,
       sessionId: "source-reservation-adopt",
-      resetTriggered: false,
     });
 
-    const admission = await admitReplyTurn({
+    const admission = await admitTestReplyTurn({
       sessionKey: targetSessionKey,
       sessionId: reservation.sessionId,
       expectedSessionId: targetSessionId,
       storePath,
-      kind: "visible",
-      resetTriggered: false,
       waitForActive: false,
       adoptOperation: reservation,
     });
@@ -1465,25 +1664,21 @@ describe("reply turn admission", () => {
     const storePath = createSessionStore({
       [targetSessionKey]: { sessionId: targetSessionId, updatedAt: Date.now() },
     });
-    const blocker = createReplyOperation({
+    const blocker = createTestReplyOperation({
       sessionKey: targetSessionKey,
       sessionId: targetSessionId,
-      resetTriggered: false,
     });
     blocker.setPhase("running");
-    const reservation = createReplyOperation({
+    const reservation = createTestReplyOperation({
       sessionKey: sourceSessionKey,
       sessionId: "source-reservation-busy",
-      resetTriggered: false,
     });
 
-    const admission = await admitReplyTurn({
+    const admission = await admitTestReplyTurn({
       sessionKey: targetSessionKey,
       sessionId: reservation.sessionId,
       expectedSessionId: targetSessionId,
       storePath,
-      kind: "visible",
-      resetTriggered: false,
       waitForActive: false,
       adoptOperation: reservation,
     });

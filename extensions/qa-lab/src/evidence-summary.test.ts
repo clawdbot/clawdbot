@@ -28,12 +28,13 @@ describe("evidence summary", () => {
             primary: ["channels.dm"],
             secondary: ["channels.qa-channel"],
           },
-          runtimeParityTier: "standard",
+          runtimePairLane: "core",
           docsRefs: ["docs/channels/qa-channel.md"],
           codeRefs: ["extensions/qa-channel/src/gateway.ts"],
         },
       ],
       channelId: "qa-channel",
+      channelDriver: "local-shim",
       env: {
         OPENCLAW_QA_CHANNEL_DRIVER: "local-shim",
         OPENCLAW_QA_REF: "abc123",
@@ -79,7 +80,7 @@ describe("evidence summary", () => {
           path: "extensions/qa-channel/src/gateway.ts",
         },
       ],
-      runtimeParityTier: "standard",
+      runtimePairLane: "core",
       execution: {
         runner: "host",
         provider: {
@@ -122,6 +123,77 @@ describe("evidence summary", () => {
       },
     });
   });
+
+  it.each([
+    ["live Discord transport", "discord", "live", undefined, "live", true],
+    ["live Matrix transport", "matrix", "live", undefined, "live", true],
+    ["live Slack transport", "slack", "live", undefined, "live", true],
+    ["live Telegram transport", "telegram", "live", undefined, "live", true],
+    ["live WhatsApp transport", "whatsapp", "live", undefined, "live", true],
+    [
+      "live transport without a bundled channel identity",
+      "custom-live-transport",
+      "live",
+      undefined,
+      "live",
+      true,
+    ],
+    [
+      "synthetic driver for a real channel identity",
+      "telegram",
+      "qa-channel",
+      undefined,
+      "qa-channel",
+      false,
+    ],
+    [
+      "Crabline driver for a real channel identity",
+      "telegram",
+      "crabline",
+      undefined,
+      "crabline",
+      false,
+    ],
+    [
+      "explicit synthetic driver ignores requested environment metadata",
+      "telegram",
+      "qa-channel",
+      { OPENCLAW_QA_CHANNEL_DRIVER: "live" },
+      "qa-channel",
+      false,
+    ],
+    [
+      "transport without a resolved driver",
+      "custom-live-transport",
+      undefined,
+      undefined,
+      undefined,
+      false,
+    ],
+  ] as const)(
+    "records actual channel liveness for %s independently of model liveness",
+    (_label, channelId, channelDriver, env, expectedDriver, expectedLive) => {
+      const evidence = buildQaSuiteEvidenceSummary({
+        artifactPaths: [],
+        channelId,
+        channelDriver,
+        env,
+        generatedAt: "2026-07-25T00:00:00.000Z",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        providerMode: "mock-openai",
+        scenarioDefinitions: [{ id: "channel-liveness", title: "Channel liveness" }],
+        scenarioResults: [{ name: "Channel liveness", status: "pass" }],
+      });
+
+      expect(validateQaEvidenceSummaryJson(evidence)).toEqual(evidence);
+      expect(evidence.entries[0]?.execution?.channel).toEqual({
+        id: channelId,
+        live: expectedLive,
+        driver: expectedDriver,
+      });
+      expect(evidence.entries[0]?.execution?.provider.live).toBe(false);
+    },
+  );
 
   it("prefers the checked-out ref over an inherited GitHub event SHA", () => {
     const repoRoot = process.cwd();

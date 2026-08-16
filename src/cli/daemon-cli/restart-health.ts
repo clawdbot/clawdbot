@@ -1,9 +1,12 @@
 // Restart health probes for gateway service restarts and port listener recovery.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { PluginHealthErrorSummary } from "../../commands/health.types.js";
+import { resolveGatewayServiceProbeHosts } from "../../daemon/gateway-service-probe-hosts.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import type { GatewayService } from "../../daemon/service.js";
-import { classifyPortListener, inspectPortUsage, type PortUsage } from "../../infra/ports.js";
+import type { PluginHealthErrorSummary } from "../../gateway/health/types.js";
+import { classifyPortListener } from "../../infra/ports-format.js";
+import { inspectPortUsage } from "../../infra/ports-inspect.js";
+import type { PortUsage } from "../../infra/ports-types.js";
 import {
   hasActiveStartupMigrationLease,
   STARTUP_MIGRATION_LEASE_TTL_MS,
@@ -35,7 +38,7 @@ export type {
   GatewayRestartSnapshot,
   GatewayRestartWaitOutcome,
 } from "./restart-health.types.js";
-export { terminateStaleGatewayPids } from "./restart-stale-pids.js";
+export { terminateStaleGatewayPids } from "../../infra/restart-stale-pids.js";
 
 const STARTUP_MIGRATION_ACTIVITY_POLL_MS = 5_000;
 const STOPPED_FREE_EARLY_EXIT_GRACE_MS = 10_000;
@@ -86,8 +89,15 @@ export async function inspectGatewayRestart(params: {
   expectedVersion?: string | null;
   includeUnknownListenersAsStale?: boolean;
   probeAuth?: GatewayRestartProbeAuth;
+  probeHosts?: readonly string[];
 }): Promise<GatewayRestartSnapshot> {
   const env = params.env ?? process.env;
+  const probeHosts =
+    params.probeHosts ??
+    (await resolveGatewayServiceProbeHosts({
+      env,
+      command: (await params.service.readCommand?.(env).catch(() => null)) ?? null,
+    }));
   const expectedVersion = normalizeOptionalString(params.expectedVersion);
   let reachability: GatewayReachability | null = null;
   let activatedPluginErrors: PluginHealthErrorSummary[] = [];
@@ -114,7 +124,9 @@ export async function inspectGatewayRestart(params: {
 
   let portUsage: PortUsage;
   try {
-    portUsage = await inspectPortUsage(params.port);
+    portUsage = await inspectPortUsage(params.port, {
+      probeHosts,
+    });
   } catch (err) {
     portUsage = {
       port: params.port,
@@ -281,6 +293,7 @@ export async function waitForGatewayHealthyRestart(params: {
   requireRunningService?: boolean;
   supervisorKeepsAlive?: boolean;
   isStartupMigrationActive?: typeof hasActiveStartupMigrationLease;
+  probeHosts?: readonly string[];
 }): Promise<GatewayRestartSnapshot> {
   const startedAtMs = performance.now();
   const attempts = params.attempts ?? DEFAULT_RESTART_HEALTH_ATTEMPTS;
@@ -288,6 +301,12 @@ export async function waitForGatewayHealthyRestart(params: {
   const standardDeadlineMs = attempts * delayMs;
 
   const probeAuth = await resolveGatewayRestartProbeAuth(params.env).catch(() => undefined);
+  const probeHosts =
+    params.probeHosts ??
+    (await resolveGatewayServiceProbeHosts({
+      env: params.env,
+      command: await params.service.readCommand(params.env ?? process.env).catch(() => null),
+    }));
   let snapshot = await inspectGatewayRestart({
     service: params.service,
     port: params.port,
@@ -295,6 +314,7 @@ export async function waitForGatewayHealthyRestart(params: {
     expectedVersion: params.expectedVersion,
     includeUnknownListenersAsStale: params.includeUnknownListenersAsStale,
     probeAuth,
+    probeHosts,
   });
 
   let consecutiveStoppedFreeCount = 0;
@@ -382,6 +402,7 @@ export async function waitForGatewayHealthyRestart(params: {
       expectedVersion: params.expectedVersion,
       includeUnknownListenersAsStale: params.includeUnknownListenersAsStale,
       probeAuth,
+      probeHosts,
     });
   }
 }

@@ -1,3 +1,4 @@
+import { normalizeJsonSchemaForTypeBox } from "@openclaw/normalization-core/json-schema";
 // Compiles plugin manifest schemas for validation without runtime loading.
 import { Compile, type Validator as TypeBoxValidator } from "typebox/compile";
 import { Format } from "typebox/format";
@@ -6,7 +7,6 @@ import { appendAllowedValuesHint, summarizeAllowedValues } from "../config/allow
 import {
   applyJsonSchemaDefaults,
   findJsonSchemaShapeError,
-  normalizeJsonSchemaForTypeBox,
 } from "../shared/json-schema-defaults.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { PluginLruCache } from "./plugin-cache-primitives.js";

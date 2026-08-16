@@ -12,6 +12,7 @@ import {
   resolveExpiresAtMsFromEpochSeconds,
 } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { cancelUnreadResponseBody } from "../../infra/http-body.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { readProviderJsonResponse } from "../provider-http-errors.js";
 import { resolveProviderRequestHeaders } from "../provider-request-config.js";
@@ -71,6 +72,12 @@ function logDroppedAuthProfileBookkeeping(kind: string, profileId: string): void
     profileId,
     tags: ["auth_profiles", "persistence"],
   });
+}
+
+const INLINE_API_KEY_USAGE_ID_PREFIX = "inline-api-key:";
+
+export function resolveInlineProviderApiKeyUsageId(provider: string): string {
+  return `${INLINE_API_KEY_USAGE_ID_PREFIX}${normalizeProviderId(provider)}`;
 }
 
 const FAILURE_REASON_PRIORITY: AuthProfileFailureReason[] = [
@@ -245,12 +252,6 @@ function applyWhamCooldownResult(params: {
       resolveUsageWindowUntil(params.now, params.whamResult.cooldownMs),
     ),
   };
-}
-
-async function cancelUnreadResponseBody(response: Response): Promise<void> {
-  if (!response.bodyUsed) {
-    await response.body?.cancel().catch(() => undefined);
-  }
 }
 
 async function probeWhamForCooldown(
@@ -704,62 +705,19 @@ const DISABLED_FAILURE_BACKOFF_POLICIES = {
   },
 } as const satisfies Record<DisabledFailureReason, DisabledFailureBackoffPolicy>;
 
-function resolveAuthCooldownConfig(params: {
-  cfg?: OpenClawConfig;
-  providerId: string;
-}): ResolvedAuthCooldownConfig {
-  const defaults = {
-    billingBackoffHours: 5,
-    billingMaxHours: 24,
-    authPermanentBackoffMinutes: 10,
-    authPermanentMaxMinutes: 60,
-    failureWindowHours: 24,
-  } as const;
+const DEFAULT_BILLING_BACKOFF_HOURS = 5;
+const DEFAULT_BILLING_MAX_HOURS = 24;
+const DEFAULT_AUTH_PERMANENT_BACKOFF_MINUTES = 10;
+const DEFAULT_AUTH_PERMANENT_MAX_MINUTES = 60;
+const DEFAULT_FAILURE_WINDOW_HOURS = 24;
 
-  const resolvePositiveNumber = (value: unknown, fallback: number) =>
-    typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
-
-  const cooldowns = params.cfg?.auth?.cooldowns;
-  const billingOverride = (() => {
-    const map = cooldowns?.billingBackoffHoursByProvider;
-    if (!map) {
-      return undefined;
-    }
-    for (const [key, value] of Object.entries(map)) {
-      if (normalizeProviderId(key) === params.providerId) {
-        return value;
-      }
-    }
-    return undefined;
-  })();
-
-  const billingBackoffHours = resolvePositiveNumber(
-    billingOverride ?? cooldowns?.billingBackoffHours,
-    defaults.billingBackoffHours,
-  );
-  const billingMaxHours = resolvePositiveNumber(
-    cooldowns?.billingMaxHours,
-    defaults.billingMaxHours,
-  );
-  const authPermanentBackoffMinutes = resolvePositiveNumber(
-    cooldowns?.authPermanentBackoffMinutes,
-    defaults.authPermanentBackoffMinutes,
-  );
-  const authPermanentMaxMinutes = resolvePositiveNumber(
-    cooldowns?.authPermanentMaxMinutes,
-    defaults.authPermanentMaxMinutes,
-  );
-  const failureWindowHours = resolvePositiveNumber(
-    cooldowns?.failureWindowHours,
-    defaults.failureWindowHours,
-  );
-
+function resolveAuthCooldownConfig(): ResolvedAuthCooldownConfig {
   return {
-    billingBackoffMs: billingBackoffHours * 60 * 60 * 1000,
-    billingMaxMs: billingMaxHours * 60 * 60 * 1000,
-    authPermanentBackoffMs: authPermanentBackoffMinutes * 60 * 1000,
-    authPermanentMaxMs: authPermanentMaxMinutes * 60 * 1000,
-    failureWindowMs: failureWindowHours * 60 * 60 * 1000,
+    billingBackoffMs: DEFAULT_BILLING_BACKOFF_HOURS * 60 * 60 * 1000,
+    billingMaxMs: DEFAULT_BILLING_MAX_HOURS * 60 * 60 * 1000,
+    authPermanentBackoffMs: DEFAULT_AUTH_PERMANENT_BACKOFF_MINUTES * 60 * 1000,
+    authPermanentMaxMs: DEFAULT_AUTH_PERMANENT_MAX_MINUTES * 60 * 1000,
+    failureWindowMs: DEFAULT_FAILURE_WINDOW_HOURS * 60 * 60 * 1000,
   };
 }
 
@@ -798,6 +756,20 @@ export function resolveProfileUnusableUntilForDisplay(
     return null;
   }
   const stats = store.usageStats?.[profileId];
+  if (!stats) {
+    return null;
+  }
+  return resolveProfileUnusableUntil(stats);
+}
+
+export function resolveInlineProviderApiKeyUnusableUntil(
+  store: AuthProfileStore,
+  provider: string,
+): number | null {
+  if (isAuthCooldownBypassedForProvider(provider)) {
+    return null;
+  }
+  const stats = store.usageStats?.[resolveInlineProviderApiKeyUsageId(provider)];
   if (!stats) {
     return null;
   }
@@ -967,7 +939,7 @@ export async function markAuthProfileFailure(params: {
   runId?: string;
   modelId?: string;
 }): Promise<void> {
-  const { store, profileId, reason, agentDir, cfg, runId, modelId } = params;
+  const { store, profileId, reason, agentDir, runId, modelId } = params;
   const profile = store.profiles[profileId];
   if (!profile || isAuthCooldownBypassedForProvider(profile.provider)) {
     return;
@@ -1004,11 +976,7 @@ export async function markAuthProfileFailure(params: {
         return false;
       }
       const now = Date.now();
-      const providerKey = normalizeProviderId(profileValue.provider);
-      const cfgResolved = resolveAuthCooldownConfig({
-        cfg,
-        providerId: providerKey,
-      });
+      const cfgResolved = resolveAuthCooldownConfig();
 
       previousStats = freshStore.usageStats?.[profileId];
       updateTime = now;
@@ -1164,6 +1132,67 @@ export async function markAuthProfileBlockedUntil(params: {
   }
   if (updated === null) {
     logDroppedAuthProfileBookkeeping("blocked_until", profileId);
+  }
+}
+
+export async function markInlineProviderApiKeyFailure(params: {
+  store: AuthProfileStore;
+  provider: string;
+  reason: AuthProfileFailureReason;
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+  runId?: string;
+  modelId?: string;
+}): Promise<void> {
+  const { store, provider, reason, agentDir, runId, modelId } = params;
+  if (
+    (reason !== "auth" && reason !== "auth_permanent" && reason !== "billing") ||
+    isAuthCooldownBypassedForProvider(provider)
+  ) {
+    return;
+  }
+
+  const usageId = resolveInlineProviderApiKeyUsageId(provider);
+  const cfgResolved = resolveAuthCooldownConfig();
+
+  let nextStats: ProfileUsageStats | undefined;
+  let previousStats: ProfileUsageStats | undefined;
+  let updateTime = 0;
+  const updated = await authProfileUsageDeps.updateAuthProfileStoreWithLock({
+    agentDir,
+    updater: (freshStore) => {
+      const now = Date.now();
+      previousStats = freshStore.usageStats?.[usageId];
+      updateTime = now;
+      nextStats = computeNextProfileUsageStats({
+        existing: previousStats ?? {},
+        now,
+        reason,
+        cfgResolved,
+        modelId,
+      });
+      updateUsageStatsEntry(freshStore, usageId, () => nextStats as ProfileUsageStats);
+      return true;
+    },
+  });
+  if (updated) {
+    store.usageStats = updated.usageStats;
+    if (nextStats) {
+      logAuthProfileFailureStateChange({
+        runId,
+        profileId: usageId,
+        provider,
+        reason,
+        previous: previousStats,
+        next: nextStats,
+        now: updateTime,
+      });
+    }
+    notifyAuthProfileFailureHook();
+    return;
+  }
+  if (updated === null) {
+    logDroppedAuthProfileBookkeeping("inline_api_key_failure", usageId);
   }
 }
 

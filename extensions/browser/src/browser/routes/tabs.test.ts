@@ -157,7 +157,7 @@ function createRouteContext(
 
 async function callTabsRoute(params: {
   method: "get" | "post";
-  path: "/tabs" | "/tabs/action" | "/tabs/focus";
+  path: "/tabs" | "/tabs/action" | "/tabs/focus" | "/tabs/open";
   body?: Record<string, unknown>;
   profileCtx: ProfileContext;
   actionTimeoutMs?: number;
@@ -188,6 +188,45 @@ async function callTabsRoute(params: {
   );
   return response;
 }
+
+it("returns the profile that actually handled tab open", async () => {
+  const profileCtx = createProfileContext({
+    profile: { name: "hot-profile" },
+    openTab: vi.fn(async () => ({
+      targetId: "HOT-TAB",
+      title: "Hot",
+      url: "https://example.com",
+      type: "page" as const,
+      ownership: {
+        status: "durable" as const,
+        nativeTargetId: "HOT-NATIVE",
+        profileFingerprint: "sha256:profile",
+        browserInstanceFingerprint: "sha256:browser",
+      },
+    })),
+  });
+
+  const response = await callTabsRoute({
+    method: "post",
+    path: "/tabs/open",
+    body: { url: "https://example.com" },
+    profileCtx,
+  });
+
+  expect(response.body).toEqual({
+    targetId: "HOT-TAB",
+    title: "Hot",
+    url: "https://example.com",
+    type: "page",
+    ownership: {
+      status: "durable",
+      nativeTargetId: "HOT-NATIVE",
+      profileFingerprint: "sha256:profile",
+      browserInstanceFingerprint: "sha256:browser",
+    },
+    resolvedProfile: "hot-profile",
+  });
+});
 
 async function callTabsAction(params: {
   body: Record<string, unknown>;
@@ -591,7 +630,7 @@ describe("browser tab routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.body).toEqual({ ok: true });
+    expect(response.body).toEqual({ ok: true, targetId: "T2" });
     expect(profileCtx.focusTab).toHaveBeenCalledWith("T2", { exactTargetId: true });
     expect(profileCtx.ensureTabAvailable).not.toHaveBeenCalled();
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();

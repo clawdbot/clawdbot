@@ -2,6 +2,7 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
 import type { AuthProfileStore } from "../auth-profiles.js";
+import { OAuthRefreshFailureError } from "../auth-profiles/oauth-refresh-failure.js";
 import {
   resolvePreparedRuntimeAuthAttempts,
   resolvePreparedRuntimeModelAuth,
@@ -15,6 +16,13 @@ vi.mock("../model-auth-env-vars.js", async (importOriginal) => ({
     envCandidateMap: { openai: ["OPENAI_API_KEY", "OPENAI_OAUTH_TOKEN"] },
     authEvidenceMap: {},
     setupProviderFallbackRefs: [],
+  }),
+}));
+
+vi.mock("../../llm/oauth.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../llm/oauth.js")>()),
+  getOAuthApiKey: vi.fn(async () => {
+    throw new Error("invalid_grant");
   }),
 }));
 
@@ -373,6 +381,55 @@ describe("resolvePreparedRuntimeModelAuth", () => {
     });
   });
 
+  it("falls through from a stale OAuth automatic candidate to a prepared backup profile", async () => {
+    const store = authStore({
+      "openai:expired": {
+        type: "oauth",
+        provider: "openai",
+        access: "expired-access",
+        refresh: "expired-refresh",
+        expires: Date.now() - 60_000,
+      },
+      "openai:backup": {
+        type: "api_key",
+        provider: "openai",
+        key: "backup-key",
+      },
+    });
+
+    await expect(
+      resolvePreparedRuntimeModelAuth({
+        plan: {
+          providerForAuth: "openai",
+          authProfileProviderForAuth: "openai",
+          forwardedAuthProfileId: "openai:expired",
+          forwardedAuthProfileSource: "auto",
+          forwardedAuthProfileCandidateIds: ["openai:expired", "openai:backup"],
+          selectedAuthMode: "api_key",
+          modelRoute: {
+            provider: "openai",
+            modelId: "gpt-5.5",
+            api: "openai-responses",
+            baseUrl: "https://api.openai.com/v1",
+            authRequirement: "api-key",
+            requestTransportOverrides: "none",
+          },
+        },
+        model: platformModel,
+        cfg: {},
+        store,
+        secretSentinels: true,
+      }),
+    ).resolves.toMatchObject({
+      auth: { profileId: "openai:backup", mode: "api-key" },
+      plan: {
+        forwardedAuthProfileId: "openai:backup",
+        forwardedAuthProfileCandidateIds: ["openai:backup"],
+        selectedAuthMode: "api-key",
+      },
+    });
+  });
+
   it("skips an automatic candidate that cooled down after plan preparation", async () => {
     const store = authStore({
       "openai:first": {
@@ -555,6 +612,63 @@ describe("resolvePreparedRuntimeModelAuth", () => {
         errorMessage: "prepared auth failed",
       }),
     ).rejects.toBe(unavailable);
+    expect(resolveAuth).toHaveBeenCalledOnce();
+    expect(materializeModel).toHaveBeenCalledOnce();
+  });
+
+  it("does not unlock direct fallback after a prepared OAuth refresh failure", async () => {
+    const profilePlan = {
+      providerForAuth: "openai",
+      authProfileProviderForAuth: "openai",
+      forwardedAuthProfileId: "openai:oauth",
+      forwardedAuthProfileSource: "auto" as const,
+      forwardedAuthProfileCandidateIds: ["openai:oauth"],
+    };
+    const directPlan = {
+      providerForAuth: "openai",
+      authProfileProviderForAuth: "openai",
+      selectedAuthMode: "api-key",
+    };
+    const refreshFailure = new OAuthRefreshFailureError({
+      provider: "openai",
+      profileId: "openai:oauth",
+      message: "OAuth token refresh failed for openai: expired refresh credential",
+    });
+    const resolveAuth = vi.fn(async ({ attempt }: { attempt: { kind: string } }) => {
+      if (attempt.kind === "profile") {
+        throw refreshFailure;
+      }
+      return { plan: directPlan, auth: "must-not-be-used" };
+    });
+    const materializeModel = vi.fn(async () => platformModel);
+
+    await expect(
+      resolvePreparedRuntimeAuthAttempts({
+        attempts: [
+          { kind: "profile", plan: profilePlan, profileId: "openai:oauth" },
+          {
+            kind: "direct",
+            plan: directPlan,
+            allowAuthProfileFallback: false,
+            requiresPriorProfileAttempt: true,
+          },
+        ],
+        store: authStore({
+          "openai:oauth": {
+            type: "oauth",
+            provider: "openai",
+            access: "expired-access",
+            refresh: "expired-refresh",
+            expires: Date.now() - 60_000,
+          },
+        }),
+        modelId: "gpt-5.5",
+        model: platformModel,
+        materializeModel,
+        resolveAuth,
+        errorMessage: "prepared auth failed",
+      }),
+    ).rejects.toBe(refreshFailure);
     expect(resolveAuth).toHaveBeenCalledOnce();
     expect(materializeModel).toHaveBeenCalledOnce();
   });

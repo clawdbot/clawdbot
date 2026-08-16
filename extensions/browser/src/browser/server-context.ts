@@ -169,14 +169,14 @@ function createProfileContext(
           await rawSelection.ensureTabAvailable(targetId, { ...options, signal }, true),
       );
     },
-    isHttpReachable: async (timeoutMs) =>
+    isHttpReachable: async (timeoutMs, callerSignal) =>
       await withLease(
-        undefined,
+        callerSignal,
         async (signal) => await rawAvailability.isHttpReachable(timeoutMs, signal),
       ),
-    isTransportAvailable: async (timeoutMs) =>
+    isTransportAvailable: async (timeoutMs, callerSignal) =>
       await withLease(
-        undefined,
+        callerSignal,
         async (signal) => await rawAvailability.isTransportAvailable(timeoutMs, signal),
       ),
     isReachable: async (timeoutMs, options) =>

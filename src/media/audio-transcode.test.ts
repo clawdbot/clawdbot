@@ -1,8 +1,8 @@
 // Audio transcode tests cover ffmpeg-backed audio conversion behavior.
 import { existsSync, realpathSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 
 const runFfmpegMock = vi.hoisted(() => vi.fn());
@@ -11,7 +11,18 @@ vi.mock("./ffmpeg-exec.js", () => ({
   runFfmpeg: runFfmpegMock,
 }));
 
-import { transcodeAudioBuffer, transcodeAudioBufferToOpus } from "./audio-transcode.js";
+let transcodeAudioBuffer: typeof import("./audio-transcode.js").transcodeAudioBuffer;
+let transcodeAudioBufferToOpus: typeof import("./audio-transcode.js").transcodeAudioBufferToOpus;
+
+beforeAll(async () => {
+  vi.resetModules();
+  ({ transcodeAudioBuffer, transcodeAudioBufferToOpus } = await import("./audio-transcode.js"));
+});
+
+afterAll(() => {
+  vi.doUnmock("./ffmpeg-exec.js");
+  vi.resetModules();
+});
 
 type MockWithCalls = { mock: { calls: unknown[][] } };
 
@@ -103,6 +114,24 @@ describe("transcodeAudioBufferToOpus", () => {
       audioBuffer: Buffer.from("source"),
       inputExtension: "../bad",
     });
+  });
+
+  it("passes the maximum duration to ffmpeg when requested", async () => {
+    runFfmpegMock.mockImplementationOnce(async (args: string[]) => {
+      const outputPath = args.at(-1);
+      if (!outputPath) {
+        throw new Error("missing ffmpeg output path");
+      }
+      await writeFile(outputPath, Buffer.from("ogg-opus-output"));
+    });
+
+    await transcodeAudioBufferToOpus({
+      audioBuffer: Buffer.from("source-m4a"),
+      maxDurationSeconds: 300,
+    });
+
+    const ffmpegArgs = firstMockCall(runFfmpegMock, "runFfmpeg")[0] as string[];
+    expect(ffmpegArgs).toEqual(expect.arrayContaining(["-t", "300", "-c:a", "libopus"]));
   });
 
   it("keeps temp prefixes and output names inside the preferred temp root", async () => {

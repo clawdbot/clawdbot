@@ -1,7 +1,13 @@
+import {
+  getPreparedModelCatalogSnapshot,
+  loadPreparedModelCatalog,
+  type LoadPreparedModelCatalogParams,
+} from "../agents/prepared-model-catalog.js";
 /**
  * @deprecated Broad public SDK barrel. Prefer focused agent/runtime subpaths
  * and avoid adding new imports here.
  */
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 
 export {
   listAgentIds,
@@ -24,13 +30,36 @@ export {
   resolveIdentityNamePrefix,
 } from "../agents/identity.js";
 
-export { resolveApiKeyForProvider } from "../agents/model-auth.js";
-export {
-  findModelInCatalog,
-  loadModelCatalog,
-  modelSupportsVision,
-} from "../agents/model-catalog.js";
+export { resolveApiKeyForProviderCore as resolveApiKeyForProvider } from "../agents/model-auth.js";
+export { findModelInCatalog, modelSupportsVision } from "../agents/model-catalog.js";
 export type { ModelCatalogEntry } from "../agents/model-catalog.js";
+export { getPreparedModelCatalogSnapshot, loadPreparedModelCatalog };
+
+type LoadModelCatalogCompatibilityParams = LoadPreparedModelCatalogParams & {
+  /** @deprecated Lifecycle publication owns refreshes; retained for source compatibility. */
+  useCache?: boolean;
+  /** @deprecated Use getPreparedModelCatalogSnapshot for new nonblocking readers. */
+  cacheOnly?: boolean;
+  /** @deprecated Plugin metadata belongs to the published lifecycle generation. */
+  metadataSnapshot?: PluginMetadataSnapshot;
+};
+
+/** @deprecated Use loadPreparedModelCatalog or getPreparedModelCatalogSnapshot. */
+export async function loadModelCatalog(params: LoadModelCatalogCompatibilityParams = {}) {
+  const { agentId, agentDir, cacheOnly, config, env, readOnly, workspaceDir } = params;
+  const preparedParams: LoadPreparedModelCatalogParams = {
+    ...(agentId ? { agentId } : {}),
+    ...(agentDir ? { agentDir } : {}),
+    ...(config ? { config } : {}),
+    ...(env ? { env } : {}),
+    ...(readOnly !== undefined ? { readOnly } : {}),
+    ...(workspaceDir ? { workspaceDir } : {}),
+  };
+  if (cacheOnly) {
+    return getPreparedModelCatalogSnapshot(preparedParams)?.entries ?? [];
+  }
+  return await loadPreparedModelCatalog(preparedParams);
+}
 
 export {
   buildModelAliasIndex,
@@ -87,9 +116,9 @@ export type {
 } from "../agents/auth-profiles.js";
 
 export { buildConfiguredModelCatalog } from "../agents/model-selection-shared.js";
-export { extractAssistantText } from "../agents/embedded-agent-utils.js";
+export { extractEmbeddedAssistantText as extractAssistantText } from "../agents/embedded-agent-utils.js";
 export { jsonResult } from "../agents/tools/tool-results.js";
-export { readStringParam } from "../agents/tools/common.js";
+export { readToolStringParam as readStringParam } from "../agents/tools/common.js";
 export {
   resolveAgentConfig,
   resolveAgentDir,

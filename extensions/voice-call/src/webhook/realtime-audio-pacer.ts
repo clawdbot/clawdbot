@@ -4,6 +4,7 @@ const TELEPHONY_SAMPLE_RATE = 8_000;
 const TELEPHONY_CHUNK_BYTES = 160;
 const TELEPHONY_CHUNK_MS = 20;
 const DEFAULT_MAX_QUEUED_AUDIO_BYTES = TELEPHONY_SAMPLE_RATE * 120;
+const QUEUE_COMPACT_HEAD_THRESHOLD = 256;
 
 /** Queue item sent over the realtime provider media stream. */
 type RealtimeAudioQueueItem =
@@ -30,6 +31,7 @@ interface RealtimeAudioSerializer {
 /** Paces outgoing mulaw audio frames at telephony cadence. */
 export class RealtimeAudioPacer {
   private queue: RealtimeAudioQueueItem[] = [];
+  private queueHead = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private queuedAudioBytes = 0;
   private closed = false;
@@ -81,7 +83,7 @@ export class RealtimeAudioPacer {
     }
     const clearedAudioBytes = this.queuedAudioBytes;
     this.clearTimer();
-    this.queue = [];
+    this.resetQueue();
     this.queuedAudioBytes = 0;
     this.params.send(this.params.serializer.clear());
     return clearedAudioBytes;
@@ -96,7 +98,7 @@ export class RealtimeAudioPacer {
   close(): void {
     this.closed = true;
     this.clearTimer();
-    this.queue = [];
+    this.resetQueue();
     this.queuedAudioBytes = 0;
   }
 
@@ -122,13 +124,42 @@ export class RealtimeAudioPacer {
     this.params.onBackpressure?.();
   }
 
+  private get pendingQueueSize(): number {
+    return Math.max(0, this.queue.length - this.queueHead);
+  }
+
+  /** Take one queued item without shifting the remaining paced-audio backlog. */
+  private takeNextItem(): RealtimeAudioQueueItem | undefined {
+    if (this.queueHead >= this.queue.length) {
+      this.resetQueue();
+      return undefined;
+    }
+    const item = this.queue[this.queueHead];
+    this.queueHead += 1;
+    if (this.queueHead >= this.queue.length) {
+      this.resetQueue();
+    } else if (
+      this.queueHead > QUEUE_COMPACT_HEAD_THRESHOLD &&
+      this.queueHead * 2 > this.queue.length
+    ) {
+      this.queue.splice(0, this.queueHead);
+      this.queueHead = 0;
+    }
+    return item;
+  }
+
+  private resetQueue(): void {
+    this.queue.length = 0;
+    this.queueHead = 0;
+  }
+
   /** Send one queued item and schedule the next send based on audio duration. */
   private pump(): void {
     this.timer = null;
     if (this.closed) {
       return;
     }
-    const item = this.queue.shift();
+    const item = this.takeNextItem();
     if (!item) {
       return;
     }
@@ -144,11 +175,11 @@ export class RealtimeAudioPacer {
     }
 
     if (!sent) {
-      this.queue = [];
+      this.resetQueue();
       this.queuedAudioBytes = 0;
       return;
     }
-    if (this.queue.length > 0) {
+    if (this.pendingQueueSize > 0) {
       this.timer = setTimeout(() => this.pump(), delayMs);
     }
   }

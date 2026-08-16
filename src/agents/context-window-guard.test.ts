@@ -2,7 +2,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
-  CONTEXT_WINDOW_HARD_MIN_TOKENS,
   evaluateContextWindowGuard,
   formatContextWindowBlockMessage,
   formatContextWindowWarningMessage,
@@ -312,10 +311,6 @@ describe("context-window-guard", () => {
     expect(guard.shouldBlock).toBe(false);
   });
 
-  it("exports the public hard-min floor as expected", () => {
-    expect(CONTEXT_WINDOW_HARD_MIN_TOKENS).toBe(4_000);
-  });
-
   it("derives percentage-based guard thresholds above the safe floors", () => {
     const largeGuard = evaluateContextWindowGuard({
       info: { tokens: 1_000_000, source: "model" },
@@ -395,7 +390,7 @@ describe("context-window-guard", () => {
     ).toContain("This looks like a local model endpoint.");
   });
 
-  it("points config-backed block remediation at agents.defaults.contextTokens", () => {
+  it("points agent-cap block remediation at the agent contextTokens setting", () => {
     const guard = evaluateContextWindowGuard({
       info: { tokens: 8_000, source: "agentContextTokens" },
     });
@@ -405,7 +400,12 @@ describe("context-window-guard", () => {
       runtimeBaseUrl: "http://127.0.0.1:11434/v1",
     });
 
-    expect(message).toContain("OpenClaw is capped by agents.defaults.contextTokens.");
+    // A per-agent contextTokens overrides the default, so the remediation must
+    // name the agent setting. resolveAgentConfig reads both roster shapes, so it
+    // must name agents.list[] and agents.entries.*, not just defaults (#118678).
+    expect(message).toContain("agents.list[].contextTokens");
+    expect(message).toContain("agents.entries.<id>.contextTokens");
+    expect(message).toContain("agents.defaults.contextTokens");
     expect(message).not.toContain("choose a larger model");
   });
 

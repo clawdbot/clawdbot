@@ -10,6 +10,7 @@ import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 type PluginUpdateOptions = {
   all?: boolean;
   acknowledgeClawhubRisk?: boolean;
+  acknowledgeInstallPolicyWarning?: boolean;
   dryRun?: boolean;
   dangerouslyForceUnsafeInstall?: boolean;
 };
@@ -68,6 +69,11 @@ type PluginAuthoringBuildOptions = {
 type PluginAuthoringValidateOptions = {
   root?: string;
   entry?: string;
+  json?: boolean;
+};
+
+export type PluginDoctorOptions = {
+  json?: boolean;
 };
 
 type PluginAuthoringInitOptions = {
@@ -185,6 +191,11 @@ export function registerPluginsCli(program: Command) {
       false,
     )
     .option(
+      "--acknowledge-install-policy-warning",
+      "Acknowledge security.installPolicy warnings without prompting; blocks and failures remain terminal",
+      false,
+    )
+    .option(
       "--acknowledge-clawhub-risk",
       "Acknowledge ClawHub release trust warnings without prompting",
       false,
@@ -197,6 +208,7 @@ export function registerPluginsCli(program: Command) {
       async (
         raw: string,
         opts: CommanderClawHubRiskOptions & {
+          acknowledgeInstallPolicyWarning?: boolean;
           dangerouslyForceUnsafeInstall?: boolean;
           force?: boolean;
           link?: boolean;
@@ -221,6 +233,11 @@ export function registerPluginsCli(program: Command) {
     .option(
       "--dangerously-force-unsafe-install",
       "Deprecated no-op; security.installPolicy may still block",
+      false,
+    )
+    .option(
+      "--acknowledge-install-policy-warning",
+      "Acknowledge security.installPolicy warnings without prompting; blocks and failures remain terminal",
       false,
     )
     .option(
@@ -252,9 +269,10 @@ export function registerPluginsCli(program: Command) {
   plugins
     .command("doctor")
     .description("Report plugin load issues")
-    .action(async () => {
+    .option("--json", "Print JSON")
+    .action(async (opts: PluginDoctorOptions) => {
       const { runPluginsDoctorCommand } = await loadPluginsRuntime();
-      await runPluginsDoctorCommand();
+      await runPluginsDoctorCommand(opts);
     });
 
   plugins
@@ -273,6 +291,7 @@ export function registerPluginsCli(program: Command) {
     .description("Validate simple tool plugin metadata")
     .option("--root <path>", "Plugin package root")
     .option("--entry <path>", "Plugin entry module relative to --root")
+    .option("--json", "Print JSON")
     .action(async (opts: PluginAuthoringValidateOptions) => {
       const { runPluginsValidateCommand } = await loadPluginsAuthoringCommands();
       await runPluginsValidateCommand(opts);
@@ -329,5 +348,6 @@ export function registerPluginsCli(program: Command) {
       await runPluginMarketplaceListCommand(source, opts);
     });
 
+  applyParentDefaultHelpAction(marketplace);
   applyParentDefaultHelpAction(plugins);
 }

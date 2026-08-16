@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawIPC
 import OpenClawKit
 import Testing
 @testable import OpenClaw
@@ -7,10 +8,13 @@ private actor CoordinatorInvokeLifecycleProbe {
     private var invokeStarted = false
     private var invokeCancelled = false
     private var routeInvalidated = false
-    private var routeInvalidationReleased = false
-    private var routeInvalidationContinuation: CheckedContinuation<Void, Never>?
+    private let routeInvalidationGate: AsyncTestGate
     private var successorConnected = false
     private var events: [String] = []
+
+    init(routeInvalidationGate: AsyncTestGate) {
+        self.routeInvalidationGate = routeInvalidationGate
+    }
 
     func invoke(_ request: BridgeInvokeRequest) async -> BridgeInvokeResponse {
         self.invokeStarted = true
@@ -31,21 +35,8 @@ private actor CoordinatorInvokeLifecycleProbe {
     func recordInvalidation() async {
         self.routeInvalidated = true
         self.events.append("invalidation-started")
-        guard !self.routeInvalidationReleased else {
-            self.events.append("invalidation-finished")
-            return
-        }
-        await withCheckedContinuation { continuation in
-            self.routeInvalidationContinuation = continuation
-        }
+        await self.routeInvalidationGate.wait()
         self.events.append("invalidation-finished")
-    }
-
-    func releaseInvalidation() {
-        self.routeInvalidationReleased = true
-        let continuation = self.routeInvalidationContinuation
-        self.routeInvalidationContinuation = nil
-        continuation?.resume()
     }
 
     func recordSuccessorConnected() {
@@ -59,31 +50,6 @@ private actor CoordinatorInvokeLifecycleProbe {
 
     func recordedEvents() -> [String] {
         self.events
-    }
-}
-
-private actor CoordinatorRouteInvalidationHookProbe {
-    private var callCount = 0
-    private var blockedCallContinuation: CheckedContinuation<Void, Never>?
-    private var blockedCallReleased = false
-
-    func run() async {
-        self.callCount += 1
-        guard self.callCount == 2, !self.blockedCallReleased else { return }
-        await withCheckedContinuation { continuation in
-            self.blockedCallContinuation = continuation
-        }
-    }
-
-    func calls() -> Int {
-        self.callCount
-    }
-
-    func releaseBlockedCall() {
-        self.blockedCallReleased = true
-        let continuation = self.blockedCallContinuation
-        self.blockedCallContinuation = nil
-        continuation?.resume()
     }
 }
 
@@ -101,12 +67,19 @@ private actor CoordinatorDrainSnapshotProbe {
 
 private actor CoordinatorNodeHostWorkerProbe: MacNodeHostWorking {
     private var stopCount = 0
+    private let stopGate = AsyncTestGate()
+    private var blockedRouteClearAuthorityGeneration: UInt64?
+    private let routeClearEnteredGate = AsyncTestGate()
+    private let routeClearReleaseGate = AsyncTestGate()
 
-    func start(command _: [String]) async throws -> MacNodeHostManifest {
+    func start(launch _: MacNodeHostWorkerLaunch) async throws -> MacNodeHostManifest {
         MacNodeHostManifest(version: "test", caps: [], commands: [], pathEnv: "/usr/bin:/bin")
     }
 
-    func supports(_: String) async -> Bool { false }
+    func supports(_: String) async -> Bool {
+        false
+    }
+
     func invoke(_ request: BridgeInvokeRequest) async -> BridgeInvokeResponse {
         BridgeInvokeResponse(id: request.id, ok: false)
     }
@@ -114,10 +87,67 @@ private actor CoordinatorNodeHostWorkerProbe: MacNodeHostWorking {
     func handleInput(invokeId _: String, seq _: Int, payloadJSON _: String) async {}
     func cancel(invokeId _: String) async {}
 
-    func setRoute(_: GatewayNodeSessionRoute?, authorityGeneration _: UInt64) async -> Bool { true }
+    func setRoute(_ route: GatewayNodeSessionRoute?, authorityGeneration: UInt64) async -> Bool {
+        guard route == nil,
+              authorityGeneration == self.blockedRouteClearAuthorityGeneration
+        else { return true }
+        self.routeClearEnteredGate.open()
+        await self.routeClearReleaseGate.wait()
+        return true
+    }
+
+    func blockRouteClear(_ authorityGeneration: UInt64) {
+        self.blockedRouteClearAuthorityGeneration = authorityGeneration
+    }
+
+    func waitUntilBlockedRouteClearEntered() async {
+        await self.routeClearEnteredGate.wait()
+    }
+
+    func releaseBlockedRouteClear() {
+        self.routeClearReleaseGate.open()
+    }
+
     func publishInventory(ifCurrentRoute _: GatewayNodeSessionRoute) async {}
-    func stop() async { self.stopCount += 1 }
-    func stops() -> Int { self.stopCount }
+    func stop() async {
+        self.stopCount += 1
+        self.stopGate.open()
+    }
+
+    func waitUntilStopped() async {
+        await self.stopGate.wait()
+    }
+
+    func stops() -> Int {
+        self.stopCount
+    }
+}
+
+private final class CoordinatorRetrySleeperProbe: @unchecked Sendable {
+    private let entered = AsyncTestGate()
+    private let releaseGate = AsyncTestGate()
+
+    func sleep(_: UInt64) async throws {
+        self.entered.open()
+        await self.releaseGate.wait()
+        try Task.checkCancellation()
+    }
+
+    func waitUntilEntered() async {
+        await self.entered.wait()
+    }
+
+    func release() {
+        self.releaseGate.open()
+    }
+}
+
+private struct CoordinatorWaitTimeout: Error, CustomStringConvertible {
+    let operation: String
+
+    var description: String {
+        "timed out waiting for \(self.operation)"
+    }
 }
 
 struct MacNodeModeCoordinatorTests {
@@ -136,7 +166,25 @@ struct MacNodeModeCoordinatorTests {
             // notification task make progress instead of polling it out.
             try await Task.sleep(for: .milliseconds(10))
         }
-        Issue.record("timed out waiting for \(description)")
+        throw CoordinatorWaitTimeout(operation: description)
+    }
+
+    @MainActor
+    private func cleanupRevocationTest(
+        lifecycleInvalidationGate: AsyncTestGate,
+        worker: CoordinatorNodeHostWorkerProbe,
+        successor: Task<Void, Error>?,
+        gateway: GatewayNodeSession,
+        coordinator: MacNodeModeCoordinator) async
+    {
+        lifecycleInvalidationGate.open()
+        await worker.releaseBlockedRouteClear()
+        successor?.cancel()
+        if let successor {
+            _ = await successor.result
+        }
+        await gateway.disconnect()
+        await coordinator.stopAndWait()
     }
 
     @Test func `stale endpoint attempt is rejected after a suspended permission query`() {
@@ -148,7 +196,56 @@ struct MacNodeModeCoordinatorTests {
             currentGeneration: 8))
     }
 
-    @Test @MainActor func `config and CLI changes restart startup scoped node host worker`() async throws {
+    @Test @MainActor func `config and CLI changes restart startup scoped node host worker`() async {
+        let worker = CoordinatorNodeHostWorkerProbe()
+        let session = GatewayNodeSession()
+        let coordinator = MacNodeModeCoordinator(
+            session: session,
+            runtime: MacNodeRuntime(nodeHostWorker: worker),
+            nodeHostWorker: worker)
+
+        await coordinator.handleNodeHostConfigurationChangeForTesting()
+        #expect(await worker.stops() == 1)
+
+        await coordinator.handleNodeHostConfigurationChangeForTesting()
+        #expect(await worker.stops() == 2)
+
+        await coordinator.stopAndWait()
+    }
+
+    @Test @MainActor func `ordinary gateway reconnect preserves the startup scoped worker`() async {
+        let worker = CoordinatorNodeHostWorkerProbe()
+        let session = GatewayNodeSession()
+        let coordinator = MacNodeModeCoordinator(
+            session: session,
+            runtime: MacNodeRuntime(nodeHostWorker: worker),
+            nodeHostWorker: worker)
+
+        coordinator.enqueueRouteInvalidationForTesting()
+        await coordinator.waitForRouteInvalidationForTesting()
+
+        #expect(await worker.stops() == 0)
+        await coordinator.stopAndWait()
+    }
+
+    @Test @MainActor func `terminal stop owns cleanup after coordinator release`() async {
+        let worker = CoordinatorNodeHostWorkerProbe()
+        let session = GatewayNodeSession()
+        var coordinator: MacNodeModeCoordinator? = MacNodeModeCoordinator(
+            session: session,
+            runtime: MacNodeRuntime(nodeHostWorker: worker),
+            nodeHostWorker: worker)
+
+        // The MainActor task cannot begin until this test suspends below.
+        coordinator?.stop()
+        coordinator?.stop()
+        coordinator = nil
+        await worker.waitUntilStopped()
+
+        #expect(await worker.stops() == 1)
+    }
+
+    @Test @MainActor func `terminal worker failure is reported instead of scheduling another restart`() async throws {
         let worker = CoordinatorNodeHostWorkerProbe()
         let session = GatewayNodeSession()
         let notificationCenter = NotificationCenter()
@@ -157,22 +254,75 @@ struct MacNodeModeCoordinatorTests {
             runtime: MacNodeRuntime(nodeHostWorker: worker),
             nodeHostWorker: worker,
             notificationCenter: notificationCenter,
-            observeNotifications: true)
-        // The full parallel suite can keep MainActor busy for several seconds.
-        let restartTimeout: Duration = .seconds(15)
-        defer { withExtendedLifetime(coordinator) {} }
+            nodeHostWorkerRetryPolicy: MacNodeHostWorkerRetryPolicy(maximumRetryCount: 0))
 
-        notificationCenter.post(name: .openclawConfigDidChange, object: nil)
+        try coordinator.prepareNodeHostWorkerRetryForTesting(
+            command: ["/usr/local/bin/openclaw", "node", "worker"])
+        await confirmation("terminal worker failure") { confirmed in
+            let observer = notificationCenter.addObserver(
+                forName: .openclawNodeHostWorkerRetryExhausted,
+                object: coordinator,
+                queue: nil)
+            { notification in
+                #expect(notification.userInfo?["unexpectedExitCount"] as? Int == 1)
+                confirmed()
+            }
+            coordinator.handleNodeHostWorkerFailureForTesting()
+            notificationCenter.removeObserver(observer)
+        }
+        await coordinator.waitForRouteInvalidationForTesting()
+        #expect(await worker.stops() == 0)
+    }
 
-        try await self.waitUntil("node-host worker restart", timeout: restartTimeout) {
-            await worker.stops() == 1
+    @Test @MainActor func `worker cannot restart before its crash backoff expires`() async throws {
+        let worker = CoordinatorNodeHostWorkerProbe()
+        let session = GatewayNodeSession()
+        let sleeper = CoordinatorRetrySleeperProbe()
+        let coordinator = MacNodeModeCoordinator(
+            session: session,
+            runtime: MacNodeRuntime(nodeHostWorker: worker),
+            nodeHostWorker: worker,
+            observeNotifications: false,
+            nodeHostWorkerRetrySleep: { try await sleeper.sleep($0) },
+            nodeHostWorkerRetryPolicy: MacNodeHostWorkerRetryPolicy(
+                maximumRetryCount: 1,
+                initialDelayNanoseconds: 50_000_000,
+                maximumDelayNanoseconds: 50_000_000))
+        let command = ["/usr/local/bin/openclaw", "node", "worker"]
+        defer { sleeper.release() }
+
+        try coordinator.prepareNodeHostWorkerRetryForTesting(command: command)
+        coordinator.handleNodeHostWorkerFailureForTesting()
+        await sleeper.waitUntilEntered()
+        #expect(throws: MacNodeHostWorkerRetryPolicy.RetryBackoffPending.self) {
+            try coordinator.prepareNodeHostWorkerRetryForTesting(command: command)
         }
 
-        notificationCenter.post(name: .openclawCLIInstalled, object: nil)
+        sleeper.release()
+        await coordinator.waitForNodeHostWorkerRetryForTesting()
+        try coordinator.prepareNodeHostWorkerRetryForTesting(command: command)
+        await coordinator.stopAndWait()
+    }
 
-        try await self.waitUntil("node-host worker restart", timeout: restartTimeout) {
-            await worker.stops() == 2
-        }
+    @Test @MainActor func `queued failure from replaced worker does not penalize replacement`() async throws {
+        let worker = CoordinatorNodeHostWorkerProbe()
+        let session = GatewayNodeSession()
+        let coordinator = MacNodeModeCoordinator(
+            session: session,
+            runtime: MacNodeRuntime(nodeHostWorker: worker),
+            nodeHostWorker: worker)
+        let command = ["/usr/local/bin/openclaw", "node", "worker"]
+
+        try coordinator.prepareNodeHostWorkerRetryForTesting(command: command)
+        await coordinator.handleNodeHostConfigurationChangeForTesting()
+        try coordinator.prepareNodeHostWorkerRetryForTesting(command: command)
+
+        // Generation zero belongs to the replaced process. Handle it only after
+        // the successor input is installed so the ordering is deterministic.
+        coordinator.handleNodeHostWorkerFailureForTesting(configurationGeneration: .zero)
+
+        try coordinator.prepareNodeHostWorkerRetryForTesting(command: command)
+        await coordinator.stopAndWait()
     }
 
     @Test func `paused node state requires route disconnect`() {
@@ -193,67 +343,84 @@ struct MacNodeModeCoordinatorTests {
             nextPaused: false,
             previousComputerControlEnabled: true,
             nextComputerControlEnabled: true))
+        #expect(MacNodeModeCoordinator.controlTransitionRequiresRouteInvalidation(
+            previousPaused: false,
+            nextPaused: false,
+            previousComputerControlEnabled: true,
+            nextComputerControlEnabled: true,
+            previousComputerControlProvider: .peekaboo,
+            nextComputerControlProvider: .cua))
     }
 
     @Test func `first endpoint snapshot rejects a stale captured endpoint`() throws {
-        let first = try GatewayConnection.Config(
-            url: #require(URL(string: "wss://first.example.invalid")),
-            token: "first-token",
-            password: nil)
+        let first = try GatewayConnection.EndpointSnapshot(
+            config: GatewayConnection.Config(
+                url: #require(URL(string: "wss://first.example.invalid")),
+                token: "first-token",
+                password: nil),
+            routeAuthority: nil,
+            revision: 1)
         let replacement = try GatewayEndpointState.ready(
             mode: .remote,
             url: #require(URL(string: "wss://second.example.invalid")),
             token: "second-token",
-            password: nil)
+            password: nil,
+            routeRevision: 2)
 
         #expect(!MacNodeModeCoordinator.endpointState(replacement, matches: first))
     }
 
-    @Test func `stop pause and config changes revoke final connect admission`() throws {
-        let first = try GatewayConnection.Config(
-            url: #require(URL(string: "wss://first.example.invalid")),
-            token: "token",
-            password: nil)
-        let replacement = try GatewayConnection.Config(
-            url: #require(URL(string: "wss://second.example.invalid")),
-            token: "token",
-            password: nil)
+    @Test func `stop pause and endpoint changes revoke final connect admission`() throws {
+        let first = try GatewayConnection.EndpointSnapshot(
+            config: GatewayConnection.Config(
+                url: #require(URL(string: "wss://first.example.invalid")),
+                token: "token",
+                password: nil),
+            routeAuthority: nil,
+            revision: 1)
+        let replacement = try GatewayConnection.EndpointSnapshot(
+            config: GatewayConnection.Config(
+                url: #require(URL(string: "wss://second.example.invalid")),
+                token: "token",
+                password: nil),
+            routeAuthority: nil,
+            revision: 2)
 
         #expect(MacNodeModeCoordinator.endpointAttemptCanConnect(
             capturedGeneration: 4,
             currentGeneration: 4,
             isCancelled: false,
             isPaused: false,
-            capturedConfig: first,
-            currentConfig: first))
+            capturedEndpoint: first,
+            currentEndpoint: first))
         #expect(!MacNodeModeCoordinator.endpointAttemptCanConnect(
             capturedGeneration: 4,
             currentGeneration: 5,
             isCancelled: false,
             isPaused: false,
-            capturedConfig: first,
-            currentConfig: first))
+            capturedEndpoint: first,
+            currentEndpoint: first))
         #expect(!MacNodeModeCoordinator.endpointAttemptCanConnect(
             capturedGeneration: 4,
             currentGeneration: 4,
             isCancelled: true,
             isPaused: false,
-            capturedConfig: first,
-            currentConfig: first))
+            capturedEndpoint: first,
+            currentEndpoint: first))
         #expect(!MacNodeModeCoordinator.endpointAttemptCanConnect(
             capturedGeneration: 4,
             currentGeneration: 4,
             isCancelled: false,
             isPaused: true,
-            capturedConfig: first,
-            currentConfig: first))
+            capturedEndpoint: first,
+            currentEndpoint: first))
         #expect(!MacNodeModeCoordinator.endpointAttemptCanConnect(
             capturedGeneration: 4,
             currentGeneration: 4,
             isCancelled: false,
             isPaused: false,
-            capturedConfig: first,
-            currentConfig: replacement))
+            capturedEndpoint: first,
+            currentEndpoint: replacement))
     }
 
     @Test func `invoke admission stays bound to installed route authority`() {
@@ -282,16 +449,18 @@ struct MacNodeModeCoordinatorTests {
     @Test @MainActor func `revocation finishes before successor admission`() async throws {
         let webSocketSession = GatewayTestWebSocketSession()
         let gateway = GatewayNodeSession()
-        let lifecycle = CoordinatorInvokeLifecycleProbe()
-        let routeInvalidationHook = CoordinatorRouteInvalidationHookProbe()
+        let lifecycleInvalidationGate = AsyncTestGate()
+        let lifecycle = CoordinatorInvokeLifecycleProbe(
+            routeInvalidationGate: lifecycleInvalidationGate)
         let drainSnapshot = CoordinatorDrainSnapshotProbe()
+        let worker = CoordinatorNodeHostWorkerProbe()
         let runtime = MacNodeRuntime(computerControlEnabled: { true })
         let coordinator = MacNodeModeCoordinator(
             session: gateway,
             runtime: runtime,
+            nodeHostWorker: worker,
             initialPaused: false,
-            initialComputerControlEnabled: true,
-            routeInvalidationHook: { await routeInvalidationHook.run() })
+            initialComputerControlEnabled: true)
         let options = GatewayConnectOptions(
             role: "node",
             scopes: [],
@@ -302,123 +471,139 @@ struct MacNodeModeCoordinatorTests {
             clientMode: "node",
             clientDisplayName: "macOS Test",
             includeDeviceIdentity: false)
+        var successor: Task<Void, Error>?
 
-        try await gateway.connect(
-            url: #require(URL(string: "ws://first.example.invalid")),
-            token: nil,
-            bootstrapToken: nil,
-            password: nil,
-            connectOptions: options,
-            sessionBox: WebSocketSessionBox(session: webSocketSession),
-            onConnected: {},
-            onDisconnected: { _ in },
-            onInvoke: { request in await lifecycle.invoke(request) },
-            onRouteInvalidated: { await lifecycle.recordInvalidation() })
-        let task = try #require(webSocketSession.latestTask())
-        while !task.hasPendingReceiveHandler() {
-            await Task.yield()
-        }
-        let invokeEvent = try JSONSerialization.data(withJSONObject: [
-            "type": "event",
-            "event": "node.invoke.request",
-            "payload": [
-                "id": "in-flight-computer",
-                "nodeId": "test-node",
-                "command": "computer.act",
-                "paramsJSON": "{}",
-                "timeoutMs": 0,
-            ],
-        ])
-        task.emitReceiveSuccessOnce(.data(invokeEvent))
-        try await self.waitUntil("computer invoke start") {
-            await lifecycle.state().started
-        }
-
-        let originalRoute = try #require(await gateway.currentRoute())
-        let generationsBeforeRefresh = coordinator.generationsForTesting()
-        coordinator.refreshForTesting(
-            isPaused: false,
-            computerControlEnabled: true)
-        for _ in 0..<20 {
-            await Task.yield()
-        }
-        let stateAfterOrdinaryRefresh = await lifecycle.state()
-        let generationsAfterOrdinaryRefresh = coordinator.generationsForTesting()
-        #expect(await gateway.currentRoute() == originalRoute)
-        #expect(!stateAfterOrdinaryRefresh.cancelled)
-        #expect(!stateAfterOrdinaryRefresh.invalidated)
-        #expect(generationsAfterOrdinaryRefresh.endpointAttempt == generationsBeforeRefresh.endpointAttempt + 1)
-        #expect(generationsAfterOrdinaryRefresh.routeAuthority == generationsBeforeRefresh.routeAuthority)
-        #expect(coordinator.routeAuthorityAllowsInvokeForTesting(
-            generationsBeforeRefresh.routeAuthority,
-            isPaused: false))
-
-        coordinator.refreshForTesting(
-            isPaused: true,
-            computerControlEnabled: true)
-        let generationsAfterPause = coordinator.generationsForTesting()
-        #expect(generationsAfterPause.routeAuthority == generationsBeforeRefresh.routeAuthority + 1)
-        #expect(!coordinator.routeAuthorityAllowsInvokeForTesting(
-            generationsBeforeRefresh.routeAuthority,
-            isPaused: true))
-        try await self.waitUntil("route invalidation start") {
-            await lifecycle.state().invalidated
-        }
-
-        let successorURL = try #require(URL(string: "ws://successor.example.invalid"))
-        let successor = Task {
-            await coordinator.waitForRouteInvalidationForTesting(
-                onPendingSnapshot: { await drainSnapshot.recordCapture() })
+        do {
             try await gateway.connect(
-                url: successorURL,
+                url: #require(URL(string: "ws://first.example.invalid")),
                 token: nil,
                 bootstrapToken: nil,
                 password: nil,
                 connectOptions: options,
                 sessionBox: WebSocketSessionBox(session: webSocketSession),
-                onConnected: { await lifecycle.recordSuccessorConnected() },
+                onConnected: {},
                 onDisconnected: { _ in },
-                onInvoke: { request in BridgeInvokeResponse(id: request.id, ok: true) })
-        }
-        try await waitUntil("successor captured first invalidation") {
-            await drainSnapshot.hasCaptured()
-        }
-        coordinator.enqueueRouteInvalidationForTesting()
-        let generationsAfterSecondRevocation = coordinator.generationsForTesting()
-        #expect(generationsAfterSecondRevocation.routeAuthority == generationsBeforeRefresh.routeAuthority + 2)
-        #expect(generationsAfterSecondRevocation.completedRouteAuthority == generationsBeforeRefresh.routeAuthority)
+                onInvoke: { request in await lifecycle.invoke(request) },
+                onRouteInvalidated: { await lifecycle.recordInvalidation() })
+            let task = try #require(webSocketSession.latestTask())
+            while !task.hasPendingReceiveHandler() {
+                await Task.yield()
+            }
+            let invokeEvent = try JSONSerialization.data(withJSONObject: [
+                "type": "event",
+                "event": "node.invoke.request",
+                "payload": [
+                    "id": "in-flight-computer",
+                    "nodeId": "test-node",
+                    "command": "computer.act",
+                    "paramsJSON": "{}",
+                    "timeoutMs": 0,
+                ],
+            ])
+            task.emitReceiveSuccessOnce(.data(invokeEvent))
+            try await self.waitUntil("computer invoke start") {
+                await lifecycle.state().started
+            }
 
-        await lifecycle.releaseInvalidation()
-        try await self.waitUntil("second route invalidation hook") {
-            await routeInvalidationHook.calls() == 2
+            let originalRoute = try #require(await gateway.currentRoute())
+            let generationsBeforeRefresh = coordinator.generationsForTesting()
+            coordinator.refreshForTesting(
+                isPaused: false,
+                computerControlEnabled: true)
+            for _ in 0..<20 {
+                await Task.yield()
+            }
+            let stateAfterOrdinaryRefresh = await lifecycle.state()
+            let generationsAfterOrdinaryRefresh = coordinator.generationsForTesting()
+            #expect(await gateway.currentRoute() == originalRoute)
+            #expect(!stateAfterOrdinaryRefresh.cancelled)
+            #expect(!stateAfterOrdinaryRefresh.invalidated)
+            #expect(generationsAfterOrdinaryRefresh.endpointAttempt == generationsBeforeRefresh.endpointAttempt + 1)
+            #expect(generationsAfterOrdinaryRefresh.routeAuthority == generationsBeforeRefresh.routeAuthority)
+            #expect(coordinator.routeAuthorityAllowsInvokeForTesting(
+                generationsBeforeRefresh.routeAuthority,
+                isPaused: false))
+
+            coordinator.refreshForTesting(
+                isPaused: true,
+                computerControlEnabled: true)
+            let generationsAfterPause = coordinator.generationsForTesting()
+            #expect(generationsAfterPause.routeAuthority == generationsBeforeRefresh.routeAuthority + 1)
+            #expect(!coordinator.routeAuthorityAllowsInvokeForTesting(
+                generationsBeforeRefresh.routeAuthority,
+                isPaused: true))
+            try await self.waitUntil("route invalidation start") {
+                await lifecycle.state().invalidated
+            }
+
+            let successorURL = try #require(URL(string: "ws://successor.example.invalid"))
+            let successorTask = Task {
+                await coordinator.waitForRouteInvalidationForTesting(
+                    onPendingSnapshot: { await drainSnapshot.recordCapture() })
+                try await gateway.connect(
+                    url: successorURL,
+                    token: nil,
+                    bootstrapToken: nil,
+                    password: nil,
+                    connectOptions: options,
+                    sessionBox: WebSocketSessionBox(session: webSocketSession),
+                    onConnected: { await lifecycle.recordSuccessorConnected() },
+                    onDisconnected: { _ in },
+                    onInvoke: { request in BridgeInvokeResponse(id: request.id, ok: true) })
+            }
+            successor = successorTask
+            try await self.waitUntil("successor captured first invalidation") {
+                await drainSnapshot.hasCaptured()
+            }
+            coordinator.enqueueRouteInvalidationForTesting()
+            let generationsAfterSecondRevocation = coordinator.generationsForTesting()
+            #expect(generationsAfterSecondRevocation.routeAuthority == generationsBeforeRefresh.routeAuthority + 2)
+            #expect(generationsAfterSecondRevocation.completedRouteAuthority == generationsBeforeRefresh.routeAuthority)
+
+            await worker.blockRouteClear(generationsAfterSecondRevocation.routeAuthority)
+            lifecycleInvalidationGate.open()
+            await worker.waitUntilBlockedRouteClearEntered()
+            let stateWhileSecondRevocationBlocked = await lifecycle.state()
+            #expect(webSocketSession.snapshotMakeCount() == 1)
+            #expect(!stateWhileSecondRevocationBlocked.successorConnected)
+            let generationsWhileSecondRevocationBlocked = coordinator.generationsForTesting()
+            #expect(generationsWhileSecondRevocationBlocked.completedRouteAuthority ==
+                generationsBeforeRefresh.routeAuthority + 1)
+            #expect(!coordinator.routeAuthorityAllowsInvokeForTesting(
+                generationsAfterSecondRevocation.routeAuthority,
+                isPaused: false))
+
+            await worker.releaseBlockedRouteClear()
+            try await successorTask.value
+
+            let finalState = await lifecycle.state()
+            #expect(finalState.cancelled)
+            #expect(finalState.invalidated)
+            #expect(finalState.successorConnected)
+            #expect(webSocketSession.snapshotMakeCount() == 2)
+            #expect(await lifecycle.recordedEvents() == [
+                "invalidation-started",
+                "invalidation-finished",
+                "successor-connected",
+            ])
+            #expect(await gateway.currentRoute() != nil)
+            let finalGenerations = coordinator.generationsForTesting()
+            #expect(finalGenerations.completedRouteAuthority == finalGenerations.routeAuthority)
+        } catch {
+            await self.cleanupRevocationTest(
+                lifecycleInvalidationGate: lifecycleInvalidationGate,
+                worker: worker,
+                successor: successor,
+                gateway: gateway,
+                coordinator: coordinator)
+            throw error
         }
-        let stateWhileSecondRevocationBlocked = await lifecycle.state()
-        #expect(webSocketSession.snapshotMakeCount() == 1)
-        #expect(!stateWhileSecondRevocationBlocked.successorConnected)
-        let generationsWhileSecondRevocationBlocked = coordinator.generationsForTesting()
-        #expect(generationsWhileSecondRevocationBlocked.completedRouteAuthority ==
-            generationsBeforeRefresh.routeAuthority + 1)
-        #expect(!coordinator.routeAuthorityAllowsInvokeForTesting(
-            generationsAfterSecondRevocation.routeAuthority,
-            isPaused: false))
-
-        await routeInvalidationHook.releaseBlockedCall()
-        try await successor.value
-
-        let finalState = await lifecycle.state()
-        #expect(finalState.cancelled)
-        #expect(finalState.invalidated)
-        #expect(finalState.successorConnected)
-        #expect(webSocketSession.snapshotMakeCount() == 2)
-        #expect(await lifecycle.recordedEvents() == [
-            "invalidation-started",
-            "invalidation-finished",
-            "successor-connected",
-        ])
-        #expect(await gateway.currentRoute() != nil)
-        let finalGenerations = coordinator.generationsForTesting()
-        #expect(finalGenerations.completedRouteAuthority == finalGenerations.routeAuthority)
-        await gateway.disconnect()
+        await self.cleanupRevocationTest(
+            lifecycleInvalidationGate: lifecycleInvalidationGate,
+            worker: worker,
+            successor: successor,
+            gateway: gateway,
+            coordinator: coordinator)
     }
 
     @Test @MainActor func `effective endpoint transitions require route teardown`() throws {
@@ -485,6 +670,19 @@ struct MacNodeModeCoordinatorTests {
         #expect(commands.contains(OpenClawSystemCommand.notify.rawValue))
         #expect(!commands.contains(OpenClawFileSystemCommand.listDir.rawValue))
         #expect(!commands.contains(OpenClawSystemCommand.run.rawValue))
+    }
+
+    @Test func `node permission metadata omits unknown authorization state`() {
+        let permissions = MacNodeModeCoordinator.advertisedPermissions([
+            .appleScript: .unknown,
+            .accessibility: .granted,
+            .screenRecording: .notGranted,
+        ])
+
+        #expect(permissions == [
+            Capability.accessibility.rawValue: true,
+            Capability.screenRecording.rawValue: false,
+        ])
     }
 
     @Test func `local native manifest leaves browser proxy to the CLI worker`() {
@@ -823,9 +1021,38 @@ struct MacNodeModeCoordinatorTests {
         #expect(!disabledCommands.contains(OpenClawComputerCommand.act.rawValue))
     }
 
+    @Test func `camera cap gates capture and PTZ commands`() {
+        let enabledCaps = MacNodeModeCoordinator.resolvedCaps(
+            browserControlEnabled: false,
+            cameraEnabled: true,
+            computerControlEnabled: false,
+            locationMode: .off,
+            connectionMode: .local)
+        let enabledCommands = MacNodeModeCoordinator.resolvedCommands(caps: enabledCaps)
+        #expect(enabledCommands.contains(OpenClawCameraCommand.list.rawValue))
+        #expect(enabledCommands.contains(OpenClawCameraCommand.ptzStatus.rawValue))
+        #expect(enabledCommands.contains(OpenClawCameraCommand.ptzControl.rawValue))
+
+        let disabledCaps = MacNodeModeCoordinator.resolvedCaps(
+            browserControlEnabled: false,
+            cameraEnabled: false,
+            computerControlEnabled: false,
+            locationMode: .off,
+            connectionMode: .local)
+        let disabledCommands = MacNodeModeCoordinator.resolvedCommands(caps: disabledCaps)
+        #expect(!disabledCommands.contains(OpenClawCameraCommand.ptzStatus.rawValue))
+        #expect(!disabledCommands.contains(OpenClawCameraCommand.ptzControl.rawValue))
+    }
+
     @Test func `tls pin store key uses default wss port`() throws {
         let url = try #require(URL(string: "wss://gateway.example.ts.net"))
-        #expect(MacNodeModeCoordinator.tlsPinStoreKey(for: url) == "gateway.example.ts.net:443")
+        #expect(GatewayTLSRoute.storeKey(for: url) == "gateway.example.ts.net:443")
+    }
+
+    @Test func `tls pin store key preserves the shipped host identity`() throws {
+        let url = try #require(URL(string: "wss://Gateway.Example.ts.net"))
+
+        #expect(GatewayTLSRoute.storeKey(for: url) == "Gateway.Example.ts.net:443")
     }
 
     @Test func `remote tls params prefer configured fingerprint over stored pin`() throws {
@@ -838,28 +1065,30 @@ struct MacNodeModeCoordinatorTests {
             ],
         ]
 
-        let params = try #require(MacNodeModeCoordinator.tlsParams(
-            for: url,
+        let route = try #require(GatewayTLSRoute.resolve(
+            url: url,
             connectionMode: .remote,
-            root: root,
+            configuredFingerprint: GatewayRemoteConfig.resolveTLSFingerprint(root: root),
             storedFingerprint: "stored"))
 
-        #expect(params.expectedFingerprint == "sha256:configured")
-        #expect(params.allowTOFU == false)
-        #expect(params.storeKey == "gateway.example.com:443")
+        #expect(route.params.expectedFingerprint == "sha256:configured")
+        #expect(route.params.allowTOFU == false)
+        #expect(route.params.storeKey == "gateway.example.com:443")
+        #expect(!route.allowsTrustedPinReplacement)
     }
 
     @Test func `remote tls params allow first use only when no configured or stored pin exists`() throws {
         let url = try #require(URL(string: "wss://gateway.example.com"))
 
-        let params = try #require(MacNodeModeCoordinator.tlsParams(
-            for: url,
+        let route = try #require(GatewayTLSRoute.resolve(
+            url: url,
             connectionMode: .remote,
-            root: [:],
+            configuredFingerprint: nil,
             storedFingerprint: nil))
 
-        #expect(params.expectedFingerprint == nil)
-        #expect(params.allowTOFU == true)
+        #expect(route.params.expectedFingerprint == nil)
+        #expect(route.params.allowTOFU == true)
+        #expect(route.allowsTrustedPinReplacement)
     }
 
     @Test func `local tls params ignore remote configured fingerprint`() throws {
@@ -872,27 +1101,28 @@ struct MacNodeModeCoordinatorTests {
             ],
         ]
 
-        let params = try #require(MacNodeModeCoordinator.tlsParams(
-            for: url,
+        let route = try #require(GatewayTLSRoute.resolve(
+            url: url,
             connectionMode: .local,
-            root: root,
+            configuredFingerprint: GatewayRemoteConfig.resolveTLSFingerprint(root: root),
             storedFingerprint: "stored-local"))
 
-        #expect(params.expectedFingerprint == "stored-local")
-        #expect(params.allowTOFU == false)
+        #expect(route.params.expectedFingerprint == "stored-local")
+        #expect(route.params.allowTOFU == false)
+        #expect(route.allowsTrustedPinReplacement)
     }
 
     @Test func `tls session cache reuses session box for unchanged params`() throws {
         let url = try #require(URL(string: "wss://gateway.example.com"))
         var cache = MacNodeGatewayTLSSessionCache()
-        let params = try #require(MacNodeModeCoordinator.tlsParams(
-            for: url,
+        let route = try #require(GatewayTLSRoute.resolve(
+            url: url,
             connectionMode: .remote,
-            root: ["gateway": ["remote": ["tlsFingerprint": "sha256:configured"]]],
+            configuredFingerprint: "sha256:configured",
             storedFingerprint: "stored"))
 
-        let first = cache.sessionBox(url: url, params: params)
-        let second = cache.sessionBox(url: url, params: params)
+        let first = cache.sessionBox(url: url, params: route.params)
+        let second = cache.sessionBox(url: url, params: route.params)
 
         #expect(ObjectIdentifier(first.session) == ObjectIdentifier(second.session))
     }
@@ -900,19 +1130,19 @@ struct MacNodeModeCoordinatorTests {
     @Test func `tls session cache rebuilds session box when params change`() throws {
         let url = try #require(URL(string: "wss://gateway.example.com"))
         var cache = MacNodeGatewayTLSSessionCache()
-        let firstParams = try #require(MacNodeModeCoordinator.tlsParams(
-            for: url,
+        let firstRoute = try #require(GatewayTLSRoute.resolve(
+            url: url,
             connectionMode: .remote,
-            root: ["gateway": ["remote": ["tlsFingerprint": "sha256:configured"]]],
+            configuredFingerprint: "sha256:configured",
             storedFingerprint: "stored"))
-        let secondParams = try #require(MacNodeModeCoordinator.tlsParams(
-            for: url,
+        let secondRoute = try #require(GatewayTLSRoute.resolve(
+            url: url,
             connectionMode: .remote,
-            root: ["gateway": ["remote": ["tlsFingerprint": "sha256:rotated"]]],
+            configuredFingerprint: "sha256:rotated",
             storedFingerprint: "stored"))
 
-        let first = cache.sessionBox(url: url, params: firstParams)
-        let second = cache.sessionBox(url: url, params: secondParams)
+        let first = cache.sessionBox(url: url, params: firstRoute.params)
+        let second = cache.sessionBox(url: url, params: secondRoute.params)
 
         #expect(ObjectIdentifier(first.session) != ObjectIdentifier(second.session))
     }
@@ -925,9 +1155,43 @@ struct MacNodeModeCoordinatorTests {
             storeKey: "gateway.example.ts.net:443",
             expectedFingerprint: "old",
             observedFingerprint: "new",
-            systemTrustOk: true)
+            systemTrustOk: true,
+            port: 443)
+        let route = try #require(GatewayTLSRoute.resolve(
+            url: url,
+            connectionMode: .remote,
+            configuredFingerprint: nil,
+            storedFingerprint: "old"))
 
-        #expect(MacNodeModeCoordinator.shouldAutoRepairStaleTLSPin(url: url, failure: failure))
+        #expect(route.permitsTrustedPinReplacement(url: url, failure: failure))
+    }
+
+    @Test func `does not auto repair a redirected TLS authority`() throws {
+        let url = try #require(URL(string: "wss://gateway.example.ts.net"))
+        let route = try #require(GatewayTLSRoute.resolve(
+            url: url,
+            connectionMode: .remote,
+            configuredFingerprint: nil,
+            storedFingerprint: "old"))
+        let redirectedHost = GatewayTLSValidationFailure(
+            kind: .pinMismatch,
+            host: "redirect.example.ts.net",
+            storeKey: "gateway.example.ts.net:443",
+            expectedFingerprint: "old",
+            observedFingerprint: "new",
+            systemTrustOk: true,
+            port: 443)
+        let redirectedPort = GatewayTLSValidationFailure(
+            kind: .pinMismatch,
+            host: "gateway.example.ts.net",
+            storeKey: "gateway.example.ts.net:443",
+            expectedFingerprint: "old",
+            observedFingerprint: "new",
+            systemTrustOk: true,
+            port: 8443)
+
+        #expect(!route.permitsTrustedPinReplacement(url: url, failure: redirectedHost))
+        #expect(!route.permitsTrustedPinReplacement(url: url, failure: redirectedPort))
     }
 
     @Test func `does not auto repair untrusted remote pin mismatch`() throws {
@@ -938,9 +1202,77 @@ struct MacNodeModeCoordinatorTests {
             storeKey: "gateway.example.com:443",
             expectedFingerprint: "old",
             observedFingerprint: "new",
-            systemTrustOk: true)
+            systemTrustOk: true,
+            port: 443)
+        let route = try #require(GatewayTLSRoute.resolve(
+            url: url,
+            connectionMode: .remote,
+            configuredFingerprint: nil,
+            storedFingerprint: "old"))
 
-        #expect(!MacNodeModeCoordinator.shouldAutoRepairStaleTLSPin(url: url, failure: failure))
+        #expect(!route.permitsTrustedPinReplacement(url: url, failure: failure))
+    }
+
+    @Test func `does not auto repair configured pin mismatch`() throws {
+        let url = try #require(URL(string: "wss://gateway.example.ts.net"))
+        let failure = GatewayTLSValidationFailure(
+            kind: .pinMismatch,
+            host: "gateway.example.ts.net",
+            storeKey: "gateway.example.ts.net:443",
+            expectedFingerprint: "configured",
+            observedFingerprint: "new",
+            systemTrustOk: true,
+            port: 443)
+        let route = try #require(GatewayTLSRoute.resolve(
+            url: url,
+            connectionMode: .remote,
+            configuredFingerprint: "configured",
+            storedFingerprint: "old"))
+
+        #expect(!route.permitsTrustedPinReplacement(url: url, failure: failure))
+    }
+
+    @Test func `stale repair cannot replace a newer stored pin`() async throws {
+        try await withFakeGatewayTLSKeychain {
+            let url = try #require(URL(string: "wss://gateway.example.ts.net"))
+            let storeKey = "test-stale-repair"
+            GatewayTLSStore.saveFingerprint("old", stableID: storeKey)
+            let route = try #require(GatewayTLSRoute.resolve(
+                url: url,
+                connectionMode: .remote,
+                configuredFingerprint: nil,
+                storedFingerprint: "old",
+                storeKey: storeKey))
+            let firstFailure = GatewayTLSValidationFailure(
+                kind: .pinMismatch,
+                host: "gateway.example.ts.net",
+                storeKey: storeKey,
+                expectedFingerprint: "old",
+                observedFingerprint: "new",
+                systemTrustOk: true,
+                port: 443)
+            let staleFailure = GatewayTLSValidationFailure(
+                kind: .pinMismatch,
+                host: "gateway.example.ts.net",
+                storeKey: storeKey,
+                expectedFingerprint: "old",
+                observedFingerprint: "stale",
+                systemTrustOk: true,
+                port: 443)
+
+            let firstRepaired = await GatewayTLSRepairCoordinator.shared.repair(
+                route: route,
+                url: url,
+                failure: firstFailure)
+            let staleRepaired = await GatewayTLSRepairCoordinator.shared.repair(
+                route: route,
+                url: url,
+                failure: staleFailure)
+
+            #expect(firstRepaired)
+            #expect(!staleRepaired)
+            #expect(GatewayTLSStore.loadFingerprint(stableID: storeKey) == "new")
+        }
     }
 
     @Test func `auto repairs trusted loopback pin mismatch`() throws {
@@ -951,9 +1283,15 @@ struct MacNodeModeCoordinatorTests {
             storeKey: "127.0.0.1:18789",
             expectedFingerprint: "old",
             observedFingerprint: "new",
-            systemTrustOk: true)
+            systemTrustOk: true,
+            port: 18789)
+        let route = try #require(GatewayTLSRoute.resolve(
+            url: url,
+            connectionMode: .remote,
+            configuredFingerprint: nil,
+            storedFingerprint: "old"))
 
-        #expect(MacNodeModeCoordinator.shouldAutoRepairStaleTLSPin(url: url, failure: failure))
+        #expect(route.permitsTrustedPinReplacement(url: url, failure: failure))
     }
 
     @Test func `does not auto repair untrusted loopback pin mismatch`() throws {
@@ -964,8 +1302,14 @@ struct MacNodeModeCoordinatorTests {
             storeKey: "127.0.0.1:18789",
             expectedFingerprint: "old",
             observedFingerprint: "new",
-            systemTrustOk: false)
+            systemTrustOk: false,
+            port: 18789)
+        let route = try #require(GatewayTLSRoute.resolve(
+            url: url,
+            connectionMode: .remote,
+            configuredFingerprint: nil,
+            storedFingerprint: "old"))
 
-        #expect(!MacNodeModeCoordinator.shouldAutoRepairStaleTLSPin(url: url, failure: failure))
+        #expect(!route.permitsTrustedPinReplacement(url: url, failure: failure))
     }
 }

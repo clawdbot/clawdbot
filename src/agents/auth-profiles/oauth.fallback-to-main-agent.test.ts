@@ -12,11 +12,8 @@ import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-d
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { resolveApiKeyForProfile } from "./oauth.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
-import {
-  clearRuntimeAuthProfileStoreSnapshots,
-  ensureAuthProfileStore,
-  saveAuthProfileStore,
-} from "./store.js";
+import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
+import { ensureAuthProfileStore, saveAuthProfileStore } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
 const { getOAuthApiKeyMock } = vi.hoisted(() => {
   vi.resetModules();
@@ -43,7 +40,7 @@ vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
   buildProviderAuthDoctorHintWithPlugin: async () => null,
   formatProviderAuthProfileApiKeyWithPlugin: async (params: { context?: { access?: string } }) =>
     params.context?.access,
-  refreshProviderOAuthCredentialWithPlugin: async () => null,
+  resolveProviderOAuthCredentialWithPlugin: async () => ({ status: "unhandled" }),
 }));
 
 vi.mock("../../plugins/provider-runtime.js", () => ({

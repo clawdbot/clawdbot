@@ -1,9 +1,8 @@
-/** Tests foreground reply freshness fencing for buffered inbound dispatch. */
+/** Tests foreground reply delivery ordering for buffered inbound dispatch. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { OutboundDeliveryError } from "../infra/outbound/deliver-types.js";
 import { resetGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import { getReplyPayloadMetadata } from "./reply-payload.js";
 import type { ReplyDispatchBeforeDeliver } from "./reply/reply-dispatcher.js";
 import type { ReplyDispatchBeforeDeliverOptions } from "./reply/reply-dispatcher.types.js";
 import { buildTestCtx } from "./reply/test-ctx.js";
@@ -29,14 +28,6 @@ type Delivery = {
   kind: "tool" | "block" | "final";
   text: string | undefined;
 };
-
-function createDeferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
-}
 
 function queuedFinalResult() {
   return {
@@ -86,7 +77,7 @@ function dispatchWithDeliveries(
   });
 }
 
-describe("foreground reply freshness", () => {
+describe("foreground reply delivery order", () => {
   beforeEach(() => {
     resetGlobalHookRunner();
     hoisted.dispatchReplyFromConfigMock.mockReset();
@@ -96,11 +87,11 @@ describe("foreground reply freshness", () => {
     resetGlobalHookRunner();
   });
 
-  it("suppresses an older foreground final after a newer inbound event starts for the same session target", async () => {
+  it("delivers same-target foreground finals once in inbound order", async () => {
     const deliveries: Delivery[] = [];
-    const cancellationReasons: Array<string | undefined> = [];
-    const olderStarted = createDeferred<void>();
-    const releaseOlderFinal = createDeferred<void>();
+    const olderStarted = createDeferred();
+    const newerStarted = createDeferred();
+    const releaseOlderFinal = createDeferred();
 
     hoisted.dispatchReplyFromConfigMock.mockImplementation(
       async (params: DispatchReplyFromConfigParams) => {
@@ -111,6 +102,72 @@ describe("foreground reply freshness", () => {
           return queuedFinalResult();
         }
         if (params.ctx.MessageSid === "new-message") {
+          newerStarted.resolve();
+          params.dispatcher.sendFinalReply({ text: "new final" });
+          return queuedFinalResult();
+        }
+        throw new Error(`unexpected test message ${params.ctx.MessageSid ?? "<missing>"}`);
+      },
+    );
+
+    const olderDispatch = dispatchWithDeliveries(
+      buildForegroundCtx({ MessageSid: "old-message" }),
+      deliveries,
+    );
+    await olderStarted.promise;
+
+    const newerDispatch = dispatchWithDeliveries(
+      buildForegroundCtx({ MessageSid: "new-message" }),
+      deliveries,
+    );
+    await newerStarted.promise;
+
+    releaseOlderFinal.resolve();
+    const [olderResult, newerResult] = await Promise.all([olderDispatch, newerDispatch]);
+
+    expect(newerResult).toEqual({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+    });
+    expect(olderResult).toEqual({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+    });
+    expect(deliveries).toEqual([
+      { kind: "final", text: "old final" },
+      { kind: "final", text: "new final" },
+    ]);
+  });
+
+  it("retains a waiting successor so a third foreground final cannot overtake", async () => {
+    const deliveries: Delivery[] = [];
+    const olderBeforeDeliverStarted = createDeferred();
+    const releaseOlderBeforeDeliver = createDeferred<ReplyPayload | null>();
+    const waitingSuccessorStarted = createDeferred();
+    const newestStarted = createDeferred();
+    const releaseWaitingSuccessor = createDeferred();
+
+    hoisted.dispatchReplyFromConfigMock.mockImplementation(
+      async (params: DispatchReplyFromConfigParams) => {
+        if (params.ctx.MessageSid === "old-message") {
+          params.dispatcher.sendFinalReply({ text: "old final" });
+          return queuedFinalResult();
+        }
+        if (params.ctx.MessageSid === "waiting-message") {
+          waitingSuccessorStarted.resolve();
+          params.replyOptions?.onReplyAdmissionWaitChange?.(true);
+          try {
+            await releaseWaitingSuccessor.promise;
+          } finally {
+            params.replyOptions?.onReplyAdmissionWaitChange?.(false);
+          }
+          return {
+            queuedFinal: false,
+            counts: { tool: 0, block: 0, final: 0 },
+          };
+        }
+        if (params.ctx.MessageSid === "new-message") {
+          newestStarted.resolve();
           params.dispatcher.sendFinalReply({ text: "new final" });
           return queuedFinalResult();
         }
@@ -122,68 +179,43 @@ describe("foreground reply freshness", () => {
       buildForegroundCtx({ MessageSid: "old-message" }),
       deliveries,
       {
-        onBeforeDeliverCancelled: (payload) => {
-          cancellationReasons.push(
-            getReplyPayloadMetadata(payload)?.foregroundDeliverySuppression?.reason,
-          );
+        beforeDeliver: () => {
+          olderBeforeDeliverStarted.resolve();
+          return releaseOlderBeforeDeliver.promise;
         },
       },
     );
-    await olderStarted.promise;
+    await olderBeforeDeliverStarted.promise;
 
-    const newerResult = await dispatchWithDeliveries(
+    const waitingSuccessorDispatch = dispatchWithDeliveries(
+      buildForegroundCtx({ MessageSid: "waiting-message" }),
+      deliveries,
+    );
+    await waitingSuccessorStarted.promise;
+    const newestDispatch = dispatchWithDeliveries(
       buildForegroundCtx({ MessageSid: "new-message" }),
       deliveries,
     );
+    await newestStarted.promise;
 
-    releaseOlderFinal.resolve();
-    const olderResult = await olderDispatch;
+    releaseOlderBeforeDeliver.resolve({ text: "old final" });
+    await olderDispatch;
+    expect(deliveries).toEqual([{ kind: "final", text: "old final" }]);
 
-    expect(newerResult).toEqual({
-      queuedFinal: true,
-      counts: { tool: 0, block: 0, final: 1 },
-    });
-    expect(olderResult).toEqual({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
-    expect(deliveries).toEqual([{ kind: "final", text: "new final" }]);
-    expect(cancellationReasons).toEqual(["stale-foreground"]);
-  });
+    releaseWaitingSuccessor.resolve();
+    await Promise.all([waitingSuccessorDispatch, newestDispatch]);
 
-  it("leaves configured beforeDeliver cancellations untagged", async () => {
-    const deliveries: Delivery[] = [];
-    const cancellationReasons: Array<string | undefined> = [];
-
-    hoisted.dispatchReplyFromConfigMock.mockImplementation(
-      async (params: DispatchReplyFromConfigParams) => {
-        params.dispatcher.sendFinalReply({ text: "policy-blocked final" });
-        return queuedFinalResult();
-      },
-    );
-
-    const result = await dispatchWithDeliveries(buildForegroundCtx(), deliveries, {
-      beforeDeliver: () => null,
-      onBeforeDeliverCancelled: (payload) => {
-        cancellationReasons.push(
-          getReplyPayloadMetadata(payload)?.foregroundDeliverySuppression?.reason,
-        );
-      },
-    });
-
-    expect(result).toEqual({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
-    expect(deliveries).toEqual([]);
-    expect(cancellationReasons).toEqual([undefined]);
+    expect(deliveries).toEqual([
+      { kind: "final", text: "old final" },
+      { kind: "final", text: "new final" },
+    ]);
   });
 
   it("releases a WhatsApp-shaped lane after beforeDeliver times out", async () => {
     vi.useFakeTimers();
     try {
       const deliveries: Delivery[] = [];
-      const hookStarted = createDeferred<void>();
+      const hookStarted = createDeferred();
       const onSettled = vi.fn();
       let hookCalls = 0;
       const beforeDeliver = vi.fn((payload: ReplyPayload) => {
@@ -230,7 +262,7 @@ describe("foreground reply freshness", () => {
     vi.useFakeTimers();
     try {
       const deliveries: Delivery[] = [];
-      const hookStarted = createDeferred<void>();
+      const hookStarted = createDeferred();
       hoisted.dispatchReplyFromConfigMock.mockImplementation(
         async (params: DispatchReplyFromConfigParams) => {
           params.dispatcher.sendFinalReply({ text: "budgeted final" });
@@ -263,7 +295,7 @@ describe("foreground reply freshness", () => {
 
   it("keeps an older foreground final when a newer inbound has no visible delivery while beforeDeliver is pending", async () => {
     const deliveries: Delivery[] = [];
-    const beforeDeliverStarted = createDeferred<void>();
+    const beforeDeliverStarted = createDeferred();
     const releaseBeforeDeliver = createDeferred<ReplyPayload | null>();
     const beforeDeliver = vi.fn(() => {
       beforeDeliverStarted.resolve();
@@ -315,10 +347,10 @@ describe("foreground reply freshness", () => {
 
   it("does not fence an older final behind a newer inbound waiting for its delivery", async () => {
     const deliveries: Delivery[] = [];
-    const olderStarted = createDeferred<void>();
-    const newerStarted = createDeferred<void>();
-    const releaseOlderFinal = createDeferred<void>();
-    const olderDelivered = createDeferred<void>();
+    const olderStarted = createDeferred();
+    const newerStarted = createDeferred();
+    const releaseOlderFinal = createDeferred();
+    const olderDelivered = createDeferred();
 
     hoisted.dispatchReplyFromConfigMock.mockImplementation(
       async (params: DispatchReplyFromConfigParams) => {
@@ -373,12 +405,12 @@ describe("foreground reply freshness", () => {
     expect(deliveries).toEqual([{ kind: "final", text: "old final" }]);
   });
 
-  it("keeps an older final fenced while a newer independent turn resolves", async () => {
+  it("does not make an older final wait for a newer independent turn", async () => {
     const deliveries: Delivery[] = [];
-    const olderBeforeDeliverStarted = createDeferred<void>();
+    const olderBeforeDeliverStarted = createDeferred();
     const releaseOlderBeforeDeliver = createDeferred<ReplyPayload | null>();
-    const newerStarted = createDeferred<void>();
-    const releaseNewerFinal = createDeferred<void>();
+    const newerStarted = createDeferred();
+    const releaseNewerFinal = createDeferred();
 
     hoisted.dispatchReplyFromConfigMock.mockImplementation(
       async (params: DispatchReplyFromConfigParams) => {
@@ -414,412 +446,74 @@ describe("foreground reply freshness", () => {
     );
     await newerStarted.promise;
     releaseOlderBeforeDeliver.resolve({ text: "old final" });
-    await Promise.resolve();
-    expect(deliveries).toEqual([]);
+    await expect(olderDispatch).resolves.toEqual(queuedFinalResult());
+    expect(deliveries).toEqual([{ kind: "final", text: "old final" }]);
 
     releaseNewerFinal.resolve();
     await expect(newerDispatch).resolves.toEqual(queuedFinalResult());
-    await expect(olderDispatch).resolves.toEqual({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
-    expect(deliveries).toEqual([{ kind: "final", text: "new final" }]);
+    expect(deliveries).toEqual([
+      { kind: "final", text: "old final" },
+      { kind: "final", text: "new final" },
+    ]);
   });
 
-  it("keeps an older foreground final fenced while a newer visible delivery is unresolved", async () => {
-    const deliveries: Delivery[] = [];
-    const beforeDeliverStarted = createDeferred<void>();
-    const releaseBeforeDeliver = createDeferred<ReplyPayload | null>();
-    const newerDeliverStarted = createDeferred<void>();
-    const releaseNewerDeliver = createDeferred<void>();
-    const beforeDeliver = vi.fn(() => {
-      beforeDeliverStarted.resolve();
-      return releaseBeforeDeliver.promise;
-    });
+  it.each(["onSettled", "onFreshSettledDelivery"] as const)(
+    "orders %s delivery behind an earlier foreground final",
+    async (settledHook) => {
+      const deliveries: Delivery[] = [];
+      const olderBeforeDeliverStarted = createDeferred();
+      const releaseOlderBeforeDeliver = createDeferred<ReplyPayload | null>();
+      const newerStarted = createDeferred();
 
-    hoisted.dispatchReplyFromConfigMock.mockImplementation(
-      async (params: DispatchReplyFromConfigParams) => {
-        if (params.ctx.MessageSid === "old-message") {
-          params.dispatcher.sendFinalReply({ text: "old final" });
-          return queuedFinalResult();
-        }
-        if (params.ctx.MessageSid === "new-message") {
-          params.dispatcher.sendFinalReply({ text: "new final" });
-          return queuedFinalResult();
-        }
-        throw new Error(`unexpected test message ${params.ctx.MessageSid ?? "<missing>"}`);
-      },
-    );
-
-    const olderDispatch = dispatchWithDeliveries(
-      buildForegroundCtx({ MessageSid: "old-message" }),
-      deliveries,
-      { beforeDeliver },
-    );
-    await beforeDeliverStarted.promise;
-
-    const newerDispatch = dispatchWithDeliveries(
-      buildForegroundCtx({ MessageSid: "new-message" }),
-      deliveries,
-      {
-        deliver: async (payload, info) => {
-          newerDeliverStarted.resolve();
-          await releaseNewerDeliver.promise;
-          deliveries.push({ kind: info.kind, text: payload.text });
+      hoisted.dispatchReplyFromConfigMock.mockImplementation(
+        async (params: DispatchReplyFromConfigParams) => {
+          if (params.ctx.MessageSid === "old-message") {
+            params.dispatcher.sendFinalReply({ text: "old final" });
+            return queuedFinalResult();
+          }
+          if (params.ctx.MessageSid === "new-message") {
+            newerStarted.resolve();
+            return {
+              queuedFinal: false,
+              counts: { tool: 0, block: 0, final: 0 },
+            };
+          }
+          throw new Error(`unexpected test message ${params.ctx.MessageSid ?? "<missing>"}`);
         },
-      },
-    );
-    await newerDeliverStarted.promise;
+      );
 
-    releaseBeforeDeliver.resolve({ text: "old rewritten final" });
-    await Promise.resolve();
-    expect(deliveries).toEqual([]);
-
-    releaseNewerDeliver.resolve();
-    const newerResult = await newerDispatch;
-    const olderResult = await olderDispatch;
-
-    expect(beforeDeliver).toHaveBeenCalledTimes(1);
-    expect(newerResult).toEqual({
-      queuedFinal: true,
-      counts: { tool: 0, block: 0, final: 1 },
-    });
-    expect(olderResult).toEqual({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
-    expect(deliveries).toEqual([{ kind: "final", text: "new final" }]);
-  });
-
-  it("keeps an older foreground final when a newer visible delivery fails", async () => {
-    const deliveries: Delivery[] = [];
-    const beforeDeliverStarted = createDeferred<void>();
-    const releaseBeforeDeliver = createDeferred<ReplyPayload | null>();
-    const beforeDeliver = vi.fn(() => {
-      beforeDeliverStarted.resolve();
-      return releaseBeforeDeliver.promise;
-    });
-
-    hoisted.dispatchReplyFromConfigMock.mockImplementation(
-      async (params: DispatchReplyFromConfigParams) => {
-        if (params.ctx.MessageSid === "old-message") {
-          params.dispatcher.sendFinalReply({ text: "old final" });
-          return queuedFinalResult();
-        }
-        if (params.ctx.MessageSid === "new-message") {
-          params.dispatcher.sendFinalReply({ text: "new final" });
-          return queuedFinalResult();
-        }
-        throw new Error(`unexpected test message ${params.ctx.MessageSid ?? "<missing>"}`);
-      },
-    );
-
-    const olderDispatch = dispatchWithDeliveries(
-      buildForegroundCtx({ MessageSid: "old-message" }),
-      deliveries,
-      { beforeDeliver },
-    );
-    await beforeDeliverStarted.promise;
-
-    const newerResult = await dispatchWithDeliveries(
-      buildForegroundCtx({ MessageSid: "new-message" }),
-      deliveries,
-      {
-        deliver: async () => {
-          throw new Error("delivery failed");
+      const olderDispatch = dispatchWithDeliveries(
+        buildForegroundCtx({ MessageSid: "old-message" }),
+        deliveries,
+        {
+          beforeDeliver: () => {
+            olderBeforeDeliverStarted.resolve();
+            return releaseOlderBeforeDeliver.promise;
+          },
         },
-      },
-    );
-
-    releaseBeforeDeliver.resolve({ text: "old rewritten final" });
-    const olderResult = await olderDispatch;
-
-    expect(beforeDeliver).toHaveBeenCalledTimes(1);
-    expect(newerResult).toEqual({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-      failedCounts: { tool: 0, block: 0, final: 1 },
-    });
-    expect(olderResult).toEqual({
-      queuedFinal: true,
-      counts: { tool: 0, block: 0, final: 1 },
-    });
-    expect(deliveries).toEqual([{ kind: "final", text: "old rewritten final" }]);
-  });
-
-  it("suppresses an older foreground final when a newer delivery partially sends before failing", async () => {
-    const deliveries: Delivery[] = [];
-    const beforeDeliverStarted = createDeferred<void>();
-    const releaseBeforeDeliver = createDeferred<ReplyPayload | null>();
-    const beforeDeliver = vi.fn(() => {
-      beforeDeliverStarted.resolve();
-      return releaseBeforeDeliver.promise;
-    });
-
-    hoisted.dispatchReplyFromConfigMock.mockImplementation(
-      async (params: DispatchReplyFromConfigParams) => {
-        if (params.ctx.MessageSid === "old-message") {
-          params.dispatcher.sendFinalReply({ text: "old final" });
-          return queuedFinalResult();
-        }
-        if (params.ctx.MessageSid === "new-message") {
-          params.dispatcher.sendFinalReply({ text: "new final" });
-          return queuedFinalResult();
-        }
-        throw new Error(`unexpected test message ${params.ctx.MessageSid ?? "<missing>"}`);
-      },
-    );
-
-    const olderDispatch = dispatchWithDeliveries(
-      buildForegroundCtx({ MessageSid: "old-message" }),
-      deliveries,
-      { beforeDeliver },
-    );
-    await beforeDeliverStarted.promise;
-
-    const newerResult = await dispatchWithDeliveries(
-      buildForegroundCtx({ MessageSid: "new-message" }),
-      deliveries,
-      {
-        deliver: async (payload, info) => {
-          deliveries.push({ kind: info.kind, text: payload.text });
-          throw new OutboundDeliveryError("second chunk failed", {
-            cause: new Error("second chunk failed"),
-            results: [{ channel: "whatsapp", messageId: "wa-1" }],
-          });
+      );
+      await olderBeforeDeliverStarted.promise;
+      const newerDispatch = dispatchWithDeliveries(
+        buildForegroundCtx({ MessageSid: "new-message" }),
+        deliveries,
+        {
+          [settledHook]: () => {
+            deliveries.push({ kind: "final", text: "new settled final" });
+            return { visibleReplySent: true };
+          },
         },
-      },
-    );
+      );
+      await newerStarted.promise;
 
-    releaseBeforeDeliver.resolve({ text: "old rewritten final" });
-    const olderResult = await olderDispatch;
+      releaseOlderBeforeDeliver.resolve({ text: "old final" });
+      await Promise.all([olderDispatch, newerDispatch]);
 
-    expect(beforeDeliver).toHaveBeenCalledTimes(1);
-    expect(newerResult).toEqual({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-      failedCounts: { tool: 0, block: 0, final: 1 },
-    });
-    expect(olderResult).toEqual({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
-    expect(deliveries).toEqual([{ kind: "final", text: "new final" }]);
-  });
-
-  it("keeps an older foreground final when a newer adapter reports non-visible delivery", async () => {
-    const deliveries: Delivery[] = [];
-    const beforeDeliverStarted = createDeferred<void>();
-    const releaseBeforeDeliver = createDeferred<ReplyPayload | null>();
-    const beforeDeliver = vi.fn(() => {
-      beforeDeliverStarted.resolve();
-      return releaseBeforeDeliver.promise;
-    });
-
-    hoisted.dispatchReplyFromConfigMock.mockImplementation(
-      async (params: DispatchReplyFromConfigParams) => {
-        if (params.ctx.MessageSid === "old-message") {
-          params.dispatcher.sendFinalReply({ text: "old final" });
-          return queuedFinalResult();
-        }
-        if (params.ctx.MessageSid === "new-message") {
-          params.dispatcher.sendFinalReply({ text: "new final" });
-          return queuedFinalResult();
-        }
-        throw new Error(`unexpected test message ${params.ctx.MessageSid ?? "<missing>"}`);
-      },
-    );
-
-    const olderDispatch = dispatchWithDeliveries(
-      buildForegroundCtx({ MessageSid: "old-message" }),
-      deliveries,
-      { beforeDeliver },
-    );
-    await beforeDeliverStarted.promise;
-
-    const newerResult = await dispatchWithDeliveries(
-      buildForegroundCtx({ MessageSid: "new-message" }),
-      deliveries,
-      {
-        deliver: async () => ({ visibleReplySent: false }),
-      },
-    );
-
-    releaseBeforeDeliver.resolve({ text: "old rewritten final" });
-    const olderResult = await olderDispatch;
-
-    expect(beforeDeliver).toHaveBeenCalledTimes(1);
-    expect(newerResult).toEqual({
-      queuedFinal: true,
-      counts: { tool: 0, block: 0, final: 1 },
-    });
-    expect(olderResult).toEqual({
-      queuedFinal: true,
-      counts: { tool: 0, block: 0, final: 1 },
-    });
-    expect(deliveries).toEqual([{ kind: "final", text: "old rewritten final" }]);
-  });
-
-  it("suppresses an older foreground final when a newer settled hook reports visible delivery", async () => {
-    const deliveries: Delivery[] = [];
-    const beforeDeliverStarted = createDeferred<void>();
-    const releaseBeforeDeliver = createDeferred<ReplyPayload | null>();
-    const beforeDeliver = vi.fn(() => {
-      beforeDeliverStarted.resolve();
-      return releaseBeforeDeliver.promise;
-    });
-
-    hoisted.dispatchReplyFromConfigMock.mockImplementation(
-      async (params: DispatchReplyFromConfigParams) => {
-        if (params.ctx.MessageSid === "old-message") {
-          params.dispatcher.sendFinalReply({ text: "old final" });
-          return queuedFinalResult();
-        }
-        if (params.ctx.MessageSid === "new-message") {
-          params.dispatcher.sendFinalReply({ text: "new final" });
-          return queuedFinalResult();
-        }
-        throw new Error(`unexpected test message ${params.ctx.MessageSid ?? "<missing>"}`);
-      },
-    );
-
-    const olderDispatch = dispatchWithDeliveries(
-      buildForegroundCtx({ MessageSid: "old-message" }),
-      deliveries,
-      { beforeDeliver },
-    );
-    await beforeDeliverStarted.promise;
-
-    const newerResult = await dispatchWithDeliveries(
-      buildForegroundCtx({ MessageSid: "new-message" }),
-      deliveries,
-      {
-        deliver: async () => ({ visibleReplySent: false }),
-        onSettled: async () => ({ visibleReplySent: true }),
-      },
-    );
-
-    releaseBeforeDeliver.resolve({ text: "old rewritten final" });
-    const olderResult = await olderDispatch;
-
-    expect(beforeDeliver).toHaveBeenCalledTimes(1);
-    expect(newerResult).toEqual({
-      queuedFinal: true,
-      counts: { tool: 0, block: 0, final: 1 },
-    });
-    expect(olderResult).toEqual({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
-    expect(deliveries).toEqual([]);
-  });
-
-  it("still runs stale generic settled hooks after a newer visible reply", async () => {
-    const deliveries: Delivery[] = [];
-    const beforeDeliverStarted = createDeferred<void>();
-    const releaseBeforeDeliver = createDeferred<ReplyPayload | null>();
-    const beforeDeliver = vi.fn(() => {
-      beforeDeliverStarted.resolve();
-      return releaseBeforeDeliver.promise;
-    });
-    const olderSettled = vi.fn();
-
-    hoisted.dispatchReplyFromConfigMock.mockImplementation(
-      async (params: DispatchReplyFromConfigParams) => {
-        if (params.ctx.MessageSid === "old-message") {
-          params.dispatcher.sendFinalReply({ text: "old final" });
-          return queuedFinalResult();
-        }
-        if (params.ctx.MessageSid === "new-message") {
-          params.dispatcher.sendFinalReply({ text: "new final" });
-          return queuedFinalResult();
-        }
-        throw new Error(`unexpected test message ${params.ctx.MessageSid ?? "<missing>"}`);
-      },
-    );
-
-    const olderDispatch = dispatchWithDeliveries(
-      buildForegroundCtx({ MessageSid: "old-message" }),
-      deliveries,
-      { beforeDeliver, onSettled: olderSettled },
-    );
-    await beforeDeliverStarted.promise;
-
-    const newerResult = await dispatchWithDeliveries(
-      buildForegroundCtx({ MessageSid: "new-message" }),
-      deliveries,
-    );
-
-    releaseBeforeDeliver.resolve({ text: "old rewritten final" });
-    const olderResult = await olderDispatch;
-
-    expect(beforeDeliver).toHaveBeenCalledTimes(1);
-    expect(olderSettled).toHaveBeenCalledTimes(1);
-    expect(newerResult).toEqual({
-      queuedFinal: true,
-      counts: { tool: 0, block: 0, final: 1 },
-    });
-    expect(olderResult).toEqual({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
-    expect(deliveries).toEqual([{ kind: "final", text: "new final" }]);
-  });
-
-  it("suppresses an older fresh settled delivery after a newer visible reply", async () => {
-    const deliveries: Delivery[] = [];
-    const beforeDeliverStarted = createDeferred<void>();
-    const releaseBeforeDeliver = createDeferred<ReplyPayload | null>();
-    const beforeDeliver = vi.fn(() => {
-      beforeDeliverStarted.resolve();
-      return releaseBeforeDeliver.promise;
-    });
-    const olderFreshDelivery = vi.fn(() => {
-      deliveries.push({ kind: "final", text: "old settled fallback" });
-      return { visibleReplySent: true };
-    });
-
-    hoisted.dispatchReplyFromConfigMock.mockImplementation(
-      async (params: DispatchReplyFromConfigParams) => {
-        if (params.ctx.MessageSid === "old-message") {
-          params.dispatcher.sendFinalReply({ text: "old final" });
-          return queuedFinalResult();
-        }
-        if (params.ctx.MessageSid === "new-message") {
-          params.dispatcher.sendFinalReply({ text: "new final" });
-          return queuedFinalResult();
-        }
-        throw new Error(`unexpected test message ${params.ctx.MessageSid ?? "<missing>"}`);
-      },
-    );
-
-    const olderDispatch = dispatchWithDeliveries(
-      buildForegroundCtx({ MessageSid: "old-message" }),
-      deliveries,
-      { beforeDeliver, onFreshSettledDelivery: olderFreshDelivery },
-    );
-    await beforeDeliverStarted.promise;
-
-    const newerResult = await dispatchWithDeliveries(
-      buildForegroundCtx({ MessageSid: "new-message" }),
-      deliveries,
-    );
-
-    releaseBeforeDeliver.resolve({ text: "old rewritten final" });
-    const olderResult = await olderDispatch;
-
-    expect(beforeDeliver).toHaveBeenCalledTimes(1);
-    expect(olderFreshDelivery).not.toHaveBeenCalled();
-    expect(newerResult).toEqual({
-      queuedFinal: true,
-      counts: { tool: 0, block: 0, final: 1 },
-    });
-    expect(olderResult).toEqual({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
-    expect(deliveries).toEqual([{ kind: "final", text: "new final" }]);
-  });
+      expect(deliveries).toEqual([
+        { kind: "final", text: "old final" },
+        { kind: "final", text: "new settled final" },
+      ]);
+    },
+  );
 
   it("runs the settled delivery hook when dispatch fails after queueing a reply", async () => {
     const deliveries: Delivery[] = [];
@@ -848,8 +542,8 @@ describe("foreground reply freshness", () => {
 
   it("keeps concurrent foreground finals isolated for different targets sharing a session", async () => {
     const deliveries: Delivery[] = [];
-    const firstStarted = createDeferred<void>();
-    const releaseFirstFinal = createDeferred<void>();
+    const firstStarted = createDeferred();
+    const releaseFirstFinal = createDeferred();
 
     hoisted.dispatchReplyFromConfigMock.mockImplementation(
       async (params: DispatchReplyFromConfigParams) => {

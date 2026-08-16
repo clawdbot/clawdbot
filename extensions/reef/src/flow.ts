@@ -1,4 +1,7 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   appendAudit,
   appendInboxRead,
@@ -42,12 +45,6 @@ interface LegacyDeliveryCandidate {
   expiresAt: number;
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function buildLegacyDeliveryIndex(
   entries: readonly AuditEntry[],
 ): Map<string, LegacyDeliveryCandidate> {
@@ -57,12 +54,12 @@ function buildLegacyDeliveryIndex(
   const candidates = new Map<string, LegacyDeliveryCandidate>();
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index]!;
-    const payload = asRecord(entry.event.payload);
+    const payload = asOptionalRecord(entry.event.payload);
     if (entry.event.type === "confirm_delivery") {
       if (entry.event.ts < oldest) {
         continue;
       }
-      const receipt = asRecord(payload?.receipt);
+      const receipt = asOptionalRecord(payload?.receipt);
       if (typeof receipt?.id === "string") {
         confirmed.add(receipt.id);
         sealed.delete(receipt.id);
@@ -260,6 +257,20 @@ export class ReefMessageFlow {
         return undefined;
       }
       if (receipt.status === "accepted") {
+        // The owner was told this send looked undelivered; close that loop so
+        // silence after an overdue notice always means "still undelivered".
+        // Notify before consuming the binding: a failed dispatch leaves the
+        // record for the retried receipt, while a duplicate enqueue stays
+        // deduped by its context key. Skip conflicted records — the rejection
+        // notice path owns their follow-up. A rejection cannot appear during
+        // this await: receipts are the only rejection writer and the inbox
+        // dispatches entries strictly serially (ReefInboxConnection.serialize),
+        // so this snapshot stays authoritative until the consume below.
+        if (delivery.overdueNotifiedAt !== undefined && !delivery.rejection) {
+          await this.options.onOwnerNotice(
+            `Reef message ${entry.id} to @${entry.peer} was delivered after the earlier delay notice; the peer's claw is reachable again.`,
+          );
+        }
         if (
           !this.options.trust.consumeOutboundDelivery(entry.peer, entry.id, delivery) &&
           this.options.trust.outboundDelivery(entry.peer, entry.id)?.rejection

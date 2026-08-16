@@ -7,13 +7,10 @@ import { buildAgentSessionKey, parseAgentSessionKey } from "openclaw/plugin-sdk/
 import {
   archiveLegacyStateSource,
   type PluginDoctorStateMigration,
-} from "openclaw/plugin-sdk/runtime-doctor";
-import {
-  deleteSessionEntry,
-  listSessionEntries,
-  resolveStorePath,
-  upsertSessionEntry,
-} from "openclaw/plugin-sdk/session-store-runtime";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
+// Doctor enumeration cold-loads this closure; session-store-runtime pulls the
+// session-accessor/kysely graph, so values load lazily inside async bodies.
+import type { listSessionEntries } from "openclaw/plugin-sdk/session-store-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveZalouserDmSessionScope } from "./src/session-scope.js";
 import {
@@ -81,10 +78,13 @@ async function collectLegacyZalouserCredentialSources(
     .toSorted((left, right) => left.profile.localeCompare(right.profile));
 }
 
-function collectLegacyZalouserDmEntries(
+async function collectLegacyZalouserDmEntries(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
-): LegacyZalouserDmEntry[] {
+  options: { readOnly?: boolean } = {},
+): Promise<LegacyZalouserDmEntry[]> {
+  const { deliveryContextFromSession, listSessionEntries, resolveStorePath } =
+    await import("openclaw/plugin-sdk/session-store-runtime");
   const entries = new Map<string, LegacyZalouserDmEntry>();
   const fallbackAccountId = config.channels?.zalouser?.defaultAccount?.trim() || "default";
   const agentIds = new Set([
@@ -93,7 +93,11 @@ function collectLegacyZalouserDmEntries(
   ]);
   for (const agentId of agentIds) {
     const storePath = resolveStorePath(config.session?.store, { agentId, env });
-    const storedEntries = listSessionEntries({ agentId, storePath });
+    const storedEntries = listSessionEntries({
+      agentId,
+      storePath,
+      ...(options.readOnly ? { readOnly: true } : {}),
+    });
     const entryByKey = new Map(storedEntries.map(({ sessionKey, entry }) => [sessionKey, entry]));
     for (const { sessionKey, entry } of storedEntries) {
       const parsed = parseAgentSessionKey(sessionKey);
@@ -107,7 +111,7 @@ function collectLegacyZalouserDmEntries(
       const canonicalKey = buildAgentSessionKey({
         agentId: parsed.agentId,
         channel: "zalouser",
-        accountId: entry.lastAccountId?.trim() || fallbackAccountId,
+        accountId: deliveryContextFromSession(entry)?.accountId?.trim() || fallbackAccountId,
         peer: { kind: "direct", id: peerId },
         dmScope: resolveZalouserDmSessionScope(config),
         identityLinks: config.session?.identityLinks,
@@ -228,16 +232,25 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "zalouser-direct-session-keys",
     label: "Zalo Personal direct-message sessions",
-    detectLegacyState({ config, env }) {
-      const count = collectLegacyZalouserDmEntries(config, env).flatMap(
-        ({ legacyKeys }) => legacyKeys,
-      ).length;
+    async detectLegacyState({ config, env }) {
+      // A never-configured channel cannot own legacy DMs, so do not scan every agent DB at startup.
+      // Removed config defers leftover-row detection until zalouser is configured again.
+      if (
+        config.channels?.zalouser === undefined &&
+        (await collectLegacyZalouserCredentialSources(env)).length === 0
+      ) {
+        return null;
+      }
+      const pending = await collectLegacyZalouserDmEntries(config, env, { readOnly: true });
+      const count = pending.flatMap(({ legacyKeys }) => legacyKeys).length;
       return count > 0
         ? { preview: [`- Zalo Personal direct-message session keys: ${count} legacy row(s)`] }
         : null;
     },
     async migrateLegacyState({ config, env }) {
-      const pending = collectLegacyZalouserDmEntries(config, env);
+      const { deleteSessionEntry, upsertSessionEntry } =
+        await import("openclaw/plugin-sdk/session-store-runtime");
+      const pending = await collectLegacyZalouserDmEntries(config, env);
       const warnings: string[] = [];
       let migrated = 0;
       for (const entry of pending) {

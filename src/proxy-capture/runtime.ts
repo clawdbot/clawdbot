@@ -3,11 +3,13 @@ import { isUtf8 } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { URL } from "node:url";
 import { normalizeRequestInitHeadersForFetch } from "../infra/fetch-headers.js";
+import { readChunkWithIdleTimeout } from "../infra/http-body.js";
 import {
   hasRegisteredSecretValuesForRedaction,
   redactRegisteredSecretValues,
 } from "../logging/secret-redaction-registry.js";
 import { resolveDebugProxySettings, type DebugProxySettings } from "./env.js";
+import { redactedCaptureHeaders, REDACTED_CAPTURE_HEADER_VALUE } from "./header-redaction.js";
 import {
   closeDebugProxyCaptureStore,
   getDebugProxyCaptureStore,
@@ -22,17 +24,27 @@ import type {
 } from "./types.js";
 
 const DEBUG_PROXY_FETCH_PATCH_KEY = Symbol.for("openclaw.debugProxy.fetchPatch");
-const REDACTED_CAPTURE_HEADER_VALUE = "[REDACTED]";
 const REDACTED_CAPTURE_BINARY_PAYLOAD = Buffer.from("[REDACTED BINARY PAYLOAD]", "utf8");
 // Cap captured response bodies so debug proxy capture cannot be turned into an
 // out-of-memory vector. The patched global fetch tees every outbound response
 // through clone(), so a single large (or hostile, effectively endless) provider
 // response would otherwise be buffered fully into memory just to record it.
 const MAX_CAPTURED_RESPONSE_BODY_BYTES = 16 * 1024 * 1024;
+// The byte cap bounds how much a capture can buffer; this bounds how long it can
+// wait for the next byte. Without it a remote that sends headers and then stalls
+// keeps the capture branch of the clone() tee readable forever, and a tee branch
+// only settles once both branches cancel or the source reaches EOF — so the
+// caller's own cancellation, and the transport release that follows it, wait on
+// a diagnostic read. Matches the idle bounds the shared body readers already
+// take (src/infra/http-body.ts).
+const CAPTURED_RESPONSE_BODY_IDLE_TIMEOUT_MS = 10_000;
+
+/** Distinguishes the capture deadline from a genuine response-stream failure. */
+class CaptureReadIdleTimeoutError extends Error {}
 
 type CapturedResponseBodyResult =
   | { status: "captured"; buffer: Buffer }
-  | { status: "too-large" | "unavailable" };
+  | { status: "too-large" | "unavailable" | "stalled" };
 
 // Reads a cloned capture response body under a byte cap. Oversized or
 // non-streaming Response-like bodies return a metadata-only status instead of
@@ -49,7 +61,7 @@ async function readCapturedResponseBodyBounded(
   maxBytes: number,
 ): Promise<CapturedResponseBodyResult> {
   const clone = response.clone();
-  const body = (clone as unknown as { body?: ReadableStream<Uint8Array> | null }).body;
+  const body = clone.body;
   if (!body || typeof body.getReader !== "function") {
     // A real null-body Response consumes as empty. Response-like objects without
     // a stream cannot be read under a byte cap, so never call arrayBuffer().
@@ -61,9 +73,34 @@ async function readCapturedResponseBodyBounded(
   const chunks: Buffer[] = [];
   let total = 0;
   let truncated = false;
+  let stalled = false;
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      let next: Awaited<ReturnType<typeof readChunkWithIdleTimeout>>;
+      try {
+        next = await readChunkWithIdleTimeout(
+          reader,
+          CAPTURED_RESPONSE_BODY_IDLE_TIMEOUT_MS,
+          ({ chunkTimeoutMs }) =>
+            new CaptureReadIdleTimeoutError(
+              `capture read stalled: no data for ${chunkTimeoutMs}ms`,
+            ),
+        );
+      } catch (error) {
+        // The helper rejects for a failed read as well as for the deadline, and
+        // only the deadline is a capture decision: a reset or aborted stream is
+        // the exchange failing, and has to keep reaching the error handler.
+        if (!(error instanceof CaptureReadIdleTimeoutError)) {
+          throw error;
+        }
+        // The helper has already issued the branch cancel fire-and-forget, which
+        // is what lets the tee settle. Capture keeps what it has and records the
+        // exchange as metadata: a stalled remote must not turn a diagnostic read
+        // into a failure of the request being observed.
+        stalled = true;
+        break;
+      }
+      const { done, value } = next;
       if (done) {
         break;
       }
@@ -87,32 +124,13 @@ async function readCapturedResponseBodyBounded(
       // Some non-compliant/mocked streams reject releaseLock; ignore.
     }
   }
+  if (stalled) {
+    return { status: "stalled" };
+  }
   return truncated
     ? { status: "too-large" }
     : { status: "captured", buffer: Buffer.concat(chunks, total) };
 }
-const SENSITIVE_CAPTURE_HEADER_NAMES = new Set([
-  "authorization",
-  "proxy-authorization",
-  "cookie",
-  "set-cookie",
-  "x-api-key",
-  "api-key",
-  "apikey",
-  "x-auth-token",
-  "auth-token",
-  "x-access-token",
-  "access-token",
-]);
-const SENSITIVE_CAPTURE_HEADER_NAME_FRAGMENTS = [
-  "api-key",
-  "apikey",
-  "token",
-  "secret",
-  "password",
-  "credential",
-  "session",
-];
 
 function parseDeclaredCaptureContentLength(raw: string | null | undefined): bigint | undefined {
   if (raw === null || raw === undefined) {
@@ -193,36 +211,6 @@ function resolveUrlString(input: RequestInfo | URL): string | null {
     return input.url;
   }
   return null;
-}
-
-function isSensitiveCaptureHeaderName(name: string): boolean {
-  const normalized = name.trim().toLowerCase();
-  if (!normalized) {
-    return false;
-  }
-  if (SENSITIVE_CAPTURE_HEADER_NAMES.has(normalized)) {
-    return true;
-  }
-  return SENSITIVE_CAPTURE_HEADER_NAME_FRAGMENTS.some((fragment) => normalized.includes(fragment));
-}
-
-function redactedCaptureHeaders(
-  headers: Headers | Record<string, string> | undefined,
-): Record<string, string> | undefined {
-  if (!headers) {
-    return undefined;
-  }
-  const entries =
-    headers instanceof Headers ? Array.from(headers.entries()) : Object.entries(headers);
-  const redacted: Record<string, string> = {};
-  for (const [name, value] of entries) {
-    // Header names are matched exactly and by sensitive fragments because
-    // providers use many token/key naming variants.
-    redacted[name] = isSensitiveCaptureHeaderName(name)
-      ? REDACTED_CAPTURE_HEADER_VALUE
-      : redactRegisteredSecretValues(value, () => REDACTED_CAPTURE_HEADER_VALUE);
-  }
-  return redacted;
 }
 
 function redactCaptureUrl(rawUrl: string): string {
@@ -538,14 +526,23 @@ export function captureHttpExchange(
       method: params.method,
     }),
     contentType: requestContentType,
-    headersJson: runtime.safeJsonString(redactedCaptureHeaders(params.requestHeaders)),
+    headersJson: runtime.safeJsonString(
+      redactedCaptureHeaders(
+        params.requestHeaders,
+        Array.isArray(params.meta?.sensitiveRequestHeaderNames)
+          ? params.meta.sensitiveRequestHeaderNames.filter(
+              (name): name is string => typeof name === "string",
+            )
+          : undefined,
+      ),
+    ),
     metaJson: redactedCaptureJson(params.meta, runtime.safeJsonString),
     ...requestPayload,
   });
   // Records the response status/headers without a body. Used both when a
   // Response-like object cannot be cloned and when capturing the body would be
   // unsafe (over the cap), so the exchange is still observable without OOM risk.
-  const recordResponseMetadataOnly = (bodyCapture: "unavailable" | "too-large") => {
+  const recordResponseMetadataOnly = (bodyCapture: "unavailable" | "too-large" | "stalled") => {
     store.recordEvent({
       ...createHttpCaptureEventBase({
         settings,

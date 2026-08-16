@@ -2,17 +2,21 @@ import {
   cancelPendingAgentQuestionForSession,
   claimPendingAgentQuestionAnswer,
   embeddedAgentLog,
+  formatErrorMessage,
   setActiveEmbeddedRun,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  interruptCodexTurnBestEffort,
-  retireCodexAppServerClientAfterTimedOutTurn,
-} from "./attempt-client-cleanup.js";
+import { retireCodexAppServerClientAfterTimedOutTurn } from "./attempt-client-cleanup.js";
 import { isTerminalTurnStatus } from "./attempt-notifications.js";
-import { createCodexSteeringQueue, type CodexSteeringQueueOptions } from "./attempt-steering.js";
+import {
+  CodexSteeringAcceptedUnconfirmedError,
+  createCodexSteeringQueue,
+  type CodexSteeringQueueOptions,
+} from "./attempt-steering.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
-import type { CodexTurnStartResponse, JsonObject } from "./protocol.js";
+import { createCodexNativeMcpAppResultDetailsPreparer } from "./native-mcp-app.js";
+import { isJsonObject, type CodexTurnStartResponse } from "./protocol.js";
 import { readRecentCodexRateLimits } from "./rate-limit-cache.js";
+import { readBoundedCodexRemoteWorkspaceFile } from "./remote-workspace-media.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
@@ -52,11 +56,17 @@ export async function activateCodexAttemptTurn(
     sandboxSessionKey,
     effectiveCwd,
   } = connection;
-  const { dynamicToolParams, computerContextEpoch } = attemptTools;
-  const { state, userInputBridgeRef, steeringQueueRef, turnWatches } = turnRuntime;
+  const { dynamicToolParams, compactionPlanState, computerContextEpoch, toolBridge } = attemptTools;
+  const { state, userInputBridgeRef, steeringQueueRef, turnWatches, completeTurn, interruptTurn } =
+    turnRuntime;
   const { emitExecutionPhaseOnce, emitLifecycleStart, maybeAnnounceFastModeAutoOff } = lifecycle;
   const { enqueueNotification } = notifications;
   const activeTurnId = turn.turn.id;
+  const prepareNativeMcpAppResultDetails = createCodexNativeMcpAppResultDetailsPreparer({
+    client: resourceState.client,
+    threadId: resourceState.thread.threadId,
+    attempt: dynamicToolParams,
+  });
   const streamState = { eventEmitted: false, needsTerminalSnapshot: false };
   emitExecutionPhaseOnce("turn_accepted", { phase: "turn_accepted" });
   userInputBridgeRef.current = createCodexUserInputBridge({
@@ -85,18 +95,45 @@ export async function activateCodexAttemptTurn(
     resourceState.thread.threadId,
     activeTurnId,
     {
+      initialContextTokens: connection.mutable.startupContextTokens,
       nativePostToolUseRelayEnabled:
         resourceState.nativeHookRelay?.allowedEvents.includes("post_tool_use") === true &&
         resourceState.nativeHookRelay.shouldRelayEvent("post_tool_use"),
       readRecentRateLimits: () => readRecentCodexRateLimits(resourceState.client),
       runAbortSignal: runAbortController.signal,
+      remoteWorkspaceRoot: connection.appServer.remoteWorkspaceRoot,
+      remoteWorkspaceRequestTimeoutMs: connection.appServer.requestTimeoutMs,
+      readRemoteWorkspaceFile: ({ path, maxBytes, signal, timeoutMs }) =>
+        readBoundedCodexRemoteWorkspaceFile({
+          client: resourceState.client,
+          path,
+          maxBytes,
+          signal,
+          timeoutMs,
+        }),
       trajectoryRecorder,
+      resolveDynamicToolResultContentSource: toolBridge.resultContentSourceForTool,
       onNativeToolResultRecorded: maybeAnnounceFastModeAutoOff,
+      ...(prepareNativeMcpAppResultDetails ? { prepareNativeMcpAppResultDetails } : {}),
       upstreamUserText: turnState.codexTurnPromptText,
-      onContextCompacted: () => {
+      onContextCompacted: async () => {
         computerContextEpoch.value += 1;
         delete computerContextEpoch.frameToolCallId;
         delete computerContextEpoch.frameImageIdentity;
+        try {
+          await compactionPlanState.restore({
+            client: resourceState.client,
+            threadId: resourceState.thread.threadId,
+            timeoutMs: connection.appServer.requestTimeoutMs,
+            signal: runAbortController.signal,
+          });
+        } catch (error) {
+          embeddedAgentLog.warn("failed to restore Codex plan state after compaction", {
+            runId: params.runId,
+            threadId: resourceState.thread.threadId,
+            error: formatErrorMessage(error),
+          });
+        }
       },
     },
   );
@@ -128,13 +165,16 @@ export async function activateCodexAttemptTurn(
     }
   }
   if (!state.completed && isTerminalTurnStatus(turn.turn.status)) {
+    if (!isJsonObject(turn.turn)) {
+      throw new Error("Codex turn completion payload is not a JSON object");
+    }
     await enqueueNotification(
       {
         method: "turn/completed",
         params: {
           threadId: resourceState.thread.threadId,
           turnId: activeTurnId,
-          turn: turn.turn as unknown as JsonObject,
+          turn: turn.turn,
         },
       },
       { threadId: resourceState.thread.threadId, turnId: activeTurnId },
@@ -144,45 +184,89 @@ export async function activateCodexAttemptTurn(
     client: resourceState.client,
     threadId: resourceState.thread.threadId,
     turnId: activeTurnId,
+    requestTimeoutMs: connection.appServer.requestTimeoutMs,
     claimPendingUserInput: () => userInputBridgeRef.current?.claimPendingRequest(),
     signal: runAbortController.signal,
   });
   steeringQueueRef.current = activeSteeringQueue;
+  const claimPendingUserInputAnswer = async (
+    text: string,
+    optionsLocal?: CodexSteeringQueueOptions,
+  ) => {
+    if (optionsLocal?.isInboundUserMessage !== true || optionsLocal.images?.length) {
+      return false;
+    }
+    const claimed = await claimPendingAgentQuestionAnswer({
+      sessionKey: params.sessionKey ?? params.sessionId,
+      text,
+      persist: optionsLocal.userTurnTranscriptRecorder
+        ? async () => {
+            await optionsLocal.userTurnTranscriptRecorder?.persistApproved();
+          }
+        : undefined,
+    });
+    return claimed;
+  };
+  const cancelPendingUserInput = (resolvedBy: string) =>
+    cancelPendingAgentQuestionForSession({
+      sessionKey: params.sessionKey ?? params.sessionId,
+      resolvedBy,
+    });
+  const queueMessage = async (text: string, optionsLocal?: CodexSteeringQueueOptions) => {
+    const isInboundUserMessage = optionsLocal?.isInboundUserMessage === true;
+    if (await claimPendingUserInputAnswer(text, optionsLocal)) {
+      optionsLocal?.onQueueAccepted?.(true);
+      return undefined;
+    } else if (isInboundUserMessage && optionsLocal?.images?.length) {
+      try {
+        await cancelPendingUserInput("image-reply");
+      } catch (error) {
+        // Cleanup failure must not drop the user's image turn.
+        embeddedAgentLog.warn("failed to cancel codex gateway question before image steering", {
+          error,
+        });
+      }
+    }
+    try {
+      await activeSteeringQueue.queue(text, optionsLocal);
+    } catch (error) {
+      if (error instanceof CodexSteeringAcceptedUnconfirmedError) {
+        return {
+          transcriptCommit: "unconfirmed" as const,
+          errorMessage: formatErrorMessage(error),
+        };
+      }
+      throw error;
+    }
+    return undefined;
+  };
   const handle = {
     kind: "embedded" as const,
     runId: params.runId,
-    queueMessage: async (text: string, optionsLocal?: CodexSteeringQueueOptions) => {
-      const isInboundUserMessage = optionsLocal?.isInboundUserMessage === true;
-      if (isInboundUserMessage && !optionsLocal?.images?.length) {
-        const claimed = await claimPendingAgentQuestionAnswer({
-          sessionKey: params.sessionKey ?? params.sessionId,
-          text,
-        });
-        if (claimed) {
-          return;
-        }
-      } else if (isInboundUserMessage) {
-        try {
-          await cancelPendingAgentQuestionForSession({
-            sessionKey: params.sessionKey ?? params.sessionId,
-            resolvedBy: "image-reply",
-          });
-        } catch (error) {
-          // Cleanup failure must not drop the user's image turn.
-          embeddedAgentLog.warn("failed to cancel codex gateway question before image steering", {
-            error,
-          });
-        }
-      }
-      await activeSteeringQueue.queue(text, optionsLocal);
+    toolAuthorityFingerprint: params.toolAuthorityFingerprint,
+    claimPendingUserInputAnswer,
+    cancelPendingUserInput,
+    queueMessage,
+    messageInjection: {
+      isAvailable: () =>
+        !state.completed &&
+        !state.terminalTurnNotificationQueued &&
+        !state.timedOut &&
+        !runAbortController.signal.aborted,
+      queueMessage,
     },
     isStreaming: () => !state.completed && !runAbortController.signal.aborted,
+    isAborted: () => runAbortController.signal.aborted,
     isStopped: () => state.completed || state.timedOut || runAbortController.signal.aborted,
     isAbortable: () =>
       !terminalState.terminalOutcomeFrozen || terminalState.sharedAbortAllowedAfterTerminalOutcome,
     isCompacting: () => projectorRef.current?.isCompacting() ?? false,
+    // queueMessage resolves only after Codex echoes the steered userMessage completion.
+    // Gateway-owned turns rely on that boundary before finalizing adoption.
+    supportsTranscriptCommitWait: true,
     supportsQueueMessageImages: true,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     cancel: () => abortExplicitly("cancelled"),
     abort: () => abortExplicitly("aborted"),
   };
@@ -222,14 +306,10 @@ export async function activateCodexAttemptTurn(
           reason: String(runAbortController.signal.reason ?? "timeout"),
           suspectPhysicalClient: state.turnWatchTimeoutKind === "terminal",
         });
-      })().finally(() => state.resolveCompletion?.());
+      })().finally(completeTurn);
       return;
     }
-    interruptCodexTurnBestEffort(resourceState.client, {
-      threadId: resourceState.thread.threadId,
-      turnId: activeTurnId,
-    });
-    state.resolveCompletion?.();
+    void interruptTurn(activeTurnId).finally(completeTurn);
   };
   runAbortController.signal.addEventListener("abort", abortListener, { once: true });
   if (runAbortController.signal.aborted) {

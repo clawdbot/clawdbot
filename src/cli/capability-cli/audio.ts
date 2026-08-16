@@ -16,6 +16,7 @@ import {
   providerHasGenericConfig,
   providerSummaryText,
   requireProviderModelOverride,
+  resolveCapabilityProviderAgentId,
   resolveLocalCapabilityRuntimeConfig,
 } from "./shared.js";
 
@@ -40,7 +41,7 @@ async function runAudioTranscribe(params: {
   if (!result.text) {
     if (isMissingMediaUnderstandingProvider(result)) {
       throw new Error(
-        "No audio transcription provider is configured or ready. Configure tools.media.audio.models, or pass --model <provider/model> after configuring that provider's auth/API key.",
+        "No audio transcription provider is configured or ready. Configure an audio-capable tools.media.models entry, or pass --model <provider/model> after configuring that provider's auth/API key.",
       );
     }
     throw new Error(`No transcript returned for audio: ${path.resolve(params.file)}`);
@@ -80,10 +81,12 @@ export function registerAudioCapabilityCommands(capability: Command): void {
   audio
     .command("providers")
     .description("List audio transcription providers")
+    .option("--agent <id>", "Agent whose provider state should be inspected")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const cfg = getRuntimeConfig();
+        const agentId = resolveCapabilityProviderAgentId(cfg, opts.agent as string | undefined);
         const remoteProviders = [...buildMediaUnderstandingRegistry(undefined, cfg).values()]
           .filter((provider) => provider.capabilities?.includes("audio"))
           .map((provider) => ({
@@ -91,6 +94,7 @@ export function registerAudioCapabilityCommands(capability: Command): void {
             configured: providerHasGenericConfig({
               cfg,
               providerId: provider.id,
+              agentId,
               envVars: getProviderEnvVars(provider.id, {
                 config: cfg,
                 includeUntrustedWorkspacePlugins: false,

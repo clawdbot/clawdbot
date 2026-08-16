@@ -139,7 +139,7 @@ describe("gateway chat.inject transcript writes", () => {
     }
   });
 
-  it("emits and returns the redacted injected assistant message", async () => {
+  it("emits a redacted injected message through its persisted transcript owner", async () => {
     const fixture = await createSqliteTranscriptFixture({
       prefix: "openclaw-chat-inject-redact-",
       sessionId: "sess-redact",
@@ -155,13 +155,13 @@ describe("gateway chat.inject transcript writes", () => {
         sessionKey: "global",
         storePath: fixture.storePath,
         message: `Here is your key: ${fakeApiKey}`,
-        config: { logging: { redactSensitive: "tools" } },
+        config: {},
       });
 
       expect(appended.ok).toBe(true);
       expect(JSON.stringify(appended.message)).not.toContain(fakeApiKey);
       expect(updates).toHaveLength(1);
-      expect(updates[0]).toMatchObject({ sessionKey: "global", agentId: "main" });
+      expect(updates[0]).toMatchObject({ sessionKey: "agent:main:main", agentId: "main" });
 
       const last = (await readLastTranscriptRecord(fixture)) as { message?: unknown };
       expect(JSON.stringify(last.message)).not.toContain(fakeApiKey);

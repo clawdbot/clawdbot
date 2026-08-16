@@ -1,6 +1,15 @@
 // Nostr tests cover outbound relay failover behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import {
+  closeOpenClawStateDatabaseForTest,
+  createChannelIngressQueueForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginRuntime } from "../runtime-api.js";
 import { startNostrBus } from "./nostr-bus.js";
+import { setNostrRuntime } from "./runtime.js";
 
 const BAD_RELAY = "wss://bad-relay.example";
 const GOOD_RELAY = "wss://good-relay.example";
@@ -55,8 +64,22 @@ vi.mock("./nostr-profile.js", () => ({
   publishProfile: vi.fn(),
 }));
 
+let stateDir = "";
+
 describe("Nostr outbound relay failover", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-nostr-outbound-"));
+    stateDir = await fs.realpath(created);
+    const ingressQueue = createChannelIngressQueueForTests<Record<string, unknown>>({
+      channelId: "nostr",
+      accountId: "default",
+      stateDir,
+    });
+    setNostrRuntime({
+      state: {
+        openChannelIngressQueue: () => ingressQueue,
+      },
+    } as unknown as PluginRuntime);
     mocks.poolPublish
       .mockReset()
       .mockImplementation((relays: string[]) => [
@@ -65,6 +88,11 @@ describe("Nostr outbound relay failover", () => {
         ),
       ]);
     mocks.close.mockReset();
+  });
+
+  afterEach(async () => {
+    closeOpenClawStateDatabaseForTest();
+    await fs.rm(stateDir, { recursive: true, force: true });
   });
 
   it("tries the next relay when the first relay cannot connect", async () => {
@@ -81,7 +109,7 @@ describe("Nostr outbound relay failover", () => {
       [BAD_RELAY],
       [GOOD_RELAY],
     ]);
-    bus.close();
+    await bus.close();
   });
 
   it("preserves string connection failures when every relay fails", async () => {
@@ -99,6 +127,6 @@ describe("Nostr outbound relay failover", () => {
     );
     expect(onError).toHaveBeenCalledWith(expect.any(Error), `publish to ${BAD_RELAY}`);
 
-    bus.close();
+    await bus.close();
   });
 });

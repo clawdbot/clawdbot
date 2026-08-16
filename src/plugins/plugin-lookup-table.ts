@@ -1,4 +1,5 @@
 /** Builds plugin lookup tables keyed by manifest ids, channels, providers, and commands. */
+import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createGatewayStartupMetadataPluginIdScope,
@@ -12,12 +13,11 @@ import {
   type PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry-snapshot.js";
-import { normalizeWorkerProviderIds } from "./worker-provider-registry.js";
+import { normalizeWorkerProviderIds } from "./worker-provider-id.js";
 
 type PluginLookUpTableMetrics = PluginMetadataSnapshot["metrics"] & {
   startupPlanMs: number;
   startupPluginCount: number;
-  deferredChannelPluginCount: number;
 };
 
 export type PluginLookUpTable = PluginMetadataSnapshot & {
@@ -34,6 +34,7 @@ type LoadPluginLookUpTableParams = {
   index?: PluginRegistrySnapshot;
   metadataSnapshot?: PluginMetadataSnapshot;
   workerProviderIds?: readonly string[];
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 };
 
 const lookupTableMemoBySnapshot = new WeakMap<
@@ -50,6 +51,7 @@ export function loadPluginLookUpTable(params: LoadPluginLookUpTableParams): Plug
       : {}),
     env: params.env,
     workerProviderIds,
+    ambientEnvTriggers: params.ambientEnvTriggers,
   });
   const metadataSnapshot =
     params.metadataSnapshot &&
@@ -90,6 +92,7 @@ export function loadPluginLookUpTable(params: LoadPluginLookUpTableParams): Plug
     index,
     manifestRegistry,
     workerProviderIds,
+    ambientEnvTriggers: params.ambientEnvTriggers,
   });
   const startupPlanMs = performance.now() - startupPlanStartedAt;
 
@@ -102,7 +105,6 @@ export function loadPluginLookUpTable(params: LoadPluginLookUpTableParams): Plug
       startupPlanMs,
       totalMs: metadataSnapshot.metrics.totalMs + startupPlanMs,
       startupPluginCount: startup.pluginIds.length,
-      deferredChannelPluginCount: startup.configuredDeferredChannelPluginIds.length,
     },
   };
   let memoByKey = lookupTableMemoBySnapshot.get(metadataSnapshot);

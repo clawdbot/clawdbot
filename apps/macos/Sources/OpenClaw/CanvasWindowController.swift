@@ -20,6 +20,8 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
     private var debugStatusEnabled = false
     private var debugStatusTitle: String?
     private var debugStatusSubtitle: String?
+    private var canvasVisible = false
+    private var watchesLocalCanvasFiles = false
 
     var onVisibilityChanged: ((Bool) -> Void)?
 
@@ -41,6 +43,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
         let config = WKWebViewConfiguration()
         config.userContentController = WKUserContentController()
         config.preferences.isElementFullscreenEnabled = true
+        config.preferences.tabFocusesLinks = true
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
         canvasWindowLogger.debug("CanvasWindowController init config ready")
         for scheme in CanvasScheme.allSchemes {
@@ -164,7 +167,9 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
             self?.hideCanvas()
         }
 
-        self.watcher.start()
+        // Keep event delivery active while hidden so file changes are not lost.
+        // The recursive polling fallback is enabled only for visible local Canvas content.
+        self.watcher.startEventStream()
         canvasWindowLogger.debug("CanvasWindowController init done")
     }
 
@@ -199,7 +204,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
         if let path {
             self.load(target: path, trustedA2UIActions: trustedA2UIActions)
         }
-        self.onVisibilityChanged?(true)
+        self.setCanvasVisible(true)
     }
 
     func hideCanvas() {
@@ -207,7 +212,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
             self.persistFrameIfPanel()
         }
         self.window?.orderOut(nil)
-        self.onVisibilityChanged?(false)
+        self.setCanvasVisible(false)
     }
 
     func load(target: String, trustedA2UIActions: Bool = false) {
@@ -255,6 +260,27 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
         }
         canvasWindowLogger.debug("canvas load local canvas")
         self.webView.load(URLRequest(url: url))
+    }
+
+    func setCanvasVisible(_ visible: Bool) {
+        self.canvasVisible = visible
+        self.updateFilePolling()
+        self.onVisibilityChanged?(visible)
+    }
+
+    func updateFilePollingForCommittedNavigation(to url: URL) {
+        // Requested navigations can fail or redirect, so polling follows the
+        // committed main-frame document rather than the requested target.
+        self.watchesLocalCanvasFiles = CanvasScheme.allSchemes.contains(url.scheme?.lowercased() ?? "")
+        self.updateFilePolling()
+    }
+
+    private func updateFilePolling() {
+        self.watcher.setPollingEnabled(self.canvasVisible && self.watchesLocalCanvasFiles)
+    }
+
+    var _testIsFilePollingActive: Bool {
+        self.watcher.isPolling
     }
 
     func updateA2UITrustForMainFrameNavigation(to url: URL) {

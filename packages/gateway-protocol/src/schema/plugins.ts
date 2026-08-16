@@ -23,6 +23,8 @@ export const PluginControlUiDescriptorSchema = closedObject({
     Type.Literal("tool"),
     Type.Literal("run"),
     Type.Literal("settings"),
+    Type.Literal("tab"),
+    Type.Literal("widget"),
   ]),
   label: NonEmptyString,
   description: Type.Optional(Type.String()),
@@ -45,6 +47,7 @@ export const PluginsSessionActionParamsSchema = closedObject({
   pluginId: NonEmptyString,
   actionId: NonEmptyString,
   sessionKey: Type.Optional(NonEmptyString),
+  agentId: Type.Optional(NonEmptyString),
   payload: Type.Optional(PluginJsonValueSchema),
 });
 
@@ -171,10 +174,12 @@ export const PluginsInstallParamsSchema = Type.Union([
     packageName: NonEmptyString,
     version: Type.Optional(NonEmptyString),
     acknowledgeClawHubRisk: Type.Optional(Type.Boolean()),
+    acknowledgeInstallPolicyWarning: Type.Optional(Type.Literal(true)),
   }),
   closedObject({
     source: Type.Literal("official"),
     pluginId: NonEmptyString,
+    acknowledgeInstallPolicyWarning: Type.Optional(Type.Literal(true)),
   }),
 ]);
 

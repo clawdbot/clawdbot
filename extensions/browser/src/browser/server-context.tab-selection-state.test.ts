@@ -108,6 +108,15 @@ describe("browser server-context tab selection state", () => {
 
     const fetchMock = vi.fn(async (url: unknown) => {
       const u = String(url);
+      if (u.includes("/json/version")) {
+        return {
+          ok: true,
+          json: async () => ({
+            webSocketDebuggerUrl:
+              "ws://127.0.0.1:18800/devtools/browser/MANAGED-BROWSER?auth=fixture-value",
+          }),
+        } as unknown as Response;
+      }
       if (!u.includes("/json/list")) {
         throw new Error(`unexpected fetch: ${u}`);
       }
@@ -132,6 +141,12 @@ describe("browser server-context tab selection state", () => {
 
     const opened = await openclaw.openTab("http://127.0.0.1:8080");
     expect(opened.targetId).toBe("CREATED");
+    expect((opened as { ownership?: unknown }).ownership).toMatchObject({
+      status: "durable",
+      nativeTargetId: "CREATED",
+      profileFingerprint: expect.stringMatching(/^sha256:/),
+      browserInstanceFingerprint: expect.stringMatching(/^sha256:/),
+    });
     expect(state.profiles.get("openclaw")?.lastTargetId).toBe("CREATED");
     expect(createTargetViaCdp).toHaveBeenCalledWith({
       cdpUrl: "http://127.0.0.1:18800",
@@ -305,6 +320,10 @@ describe("browser server-context tab selection state", () => {
       title: "",
       url: "https://example.com/final",
       type: "page",
+      ownership: {
+        status: "non-durable",
+        reason: "browser-identity-lookup-failed",
+      },
     });
 
     expect(profileState.lastTargetId).toBe("GOOD");
@@ -344,6 +363,10 @@ describe("browser server-context tab selection state", () => {
       title: "",
       url: "https://example.com",
       type: "page",
+      ownership: {
+        status: "non-durable",
+        reason: "browser-identity-lookup-failed",
+      },
     });
 
     expect(profileState.lastTargetId).toBe("GOOD");
@@ -351,7 +374,7 @@ describe("browser server-context tab selection state", () => {
       nextTabNumber: 2,
       byTargetId: { GOOD: { tabId: "t1", label: "good", url: "about:blank" } },
     });
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("rejects invalid labels before direct CDP target creation", async () => {
@@ -695,6 +718,10 @@ describe("browser server-context tab selection state", () => {
       url: "https://example.com",
       wsUrl: "ws://127.0.0.1:18800/devtools/page/RAW_UNSETTLED",
       type: "page",
+      ownership: {
+        status: "non-durable",
+        reason: "browser-identity-lookup-failed",
+      },
     });
     expect(profileState.lastTargetId).toBe("GOOD");
     expect(profileState.tabAliases?.byTargetId.RAW_UNSETTLED).toBeUndefined();
@@ -956,46 +983,5 @@ describe("browser server-context tab selection state", () => {
         suggestedTargetId: "fresh-right",
       }),
     ]);
-  });
-
-  it("resolves friendly tab references before backend focus and close calls", async () => {
-    const fetchMock = vi.fn(async (url: unknown) => {
-      const value = String(url);
-      if (value.includes("/json/list")) {
-        return {
-          ok: true,
-          json: async () => [
-            {
-              id: "DOCS_RAW",
-              title: "Docs",
-              url: "https://docs.example.com",
-              webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/DOCS_RAW",
-              type: "page",
-            },
-          ],
-        } as unknown as Response;
-      }
-      if (value.includes("/json/activate/DOCS_RAW") || value.includes("/json/close/DOCS_RAW")) {
-        return { ok: true } as unknown as Response;
-      }
-      throw new Error(`unexpected fetch: ${value}`);
-    });
-
-    global.fetch = withBrowserFetchPreconnect(fetchMock);
-    const state = makeState("openclaw");
-    const ctx = createTestBrowserRouteContext({ getState: () => state });
-    const openclaw = ctx.forProfile("openclaw");
-
-    await openclaw.labelTab("DOCS_RAW", "docs");
-    await expect(openclaw.ensureTabAvailable("t1")).resolves.toEqual(
-      expect.objectContaining({ targetId: "DOCS_RAW" }),
-    );
-    await openclaw.focusTab("docs");
-    await openclaw.closeTab("t1");
-
-    expect(fetchCallUrls(fetchMock).some((url) => url.includes("/json/activate/DOCS_RAW"))).toBe(
-      true,
-    );
-    expect(fetchCallUrls(fetchMock).some((url) => url.includes("/json/close/DOCS_RAW"))).toBe(true);
   });
 });

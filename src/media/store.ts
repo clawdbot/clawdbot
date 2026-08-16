@@ -2,16 +2,19 @@
 import "../infra/fs-safe-defaults.js";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import type { request as httpRequest } from "node:http";
 import path from "node:path";
 import {
   basenameFromAnyPath,
   extnameFromAnyPath,
   nameFromAnyPath,
 } from "@openclaw/media-core/file-name";
-import { detectMime, extensionForMime } from "@openclaw/media-core/mime";
+import {
+  detectMime,
+  extensionForMime,
+  getFileExtension,
+  normalizeMimeType,
+} from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { fileStore } from "../infra/file-store.js";
 import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
@@ -20,33 +23,44 @@ import type { resolvePinnedHostname } from "../infra/net/ssrf.js";
 import { retryAsync } from "../infra/retry.js";
 import { writeSiblingTempFile } from "../infra/sibling-temp-file.js";
 import { resolveConfigDir } from "../utils.js";
-import { downloadMediaToFile, setMediaStoreDownloadDepsForTest } from "./store.download.js";
 import { isFsSafeError, readLocalFileSafely, type FsSafeLikeError } from "./store.runtime.js";
 import { formatMediaLimitMb, MEDIA_FILE_MODE } from "./store.shared.js";
 
 const resolveMediaDir = () => path.join(resolveConfigDir(), "media");
 /** Default per-file media-store byte cap used by inbound staging and plugin SDK callers. */
 export const MEDIA_MAX_BYTES = 5 * 1024 * 1024;
+export const PLAYBACK_TRANSCODE_SUBDIR = "playback-transcode";
+
+// The outgoing tree is owned by the SQLite managed-media reaper: originals
+// there are referenced by durable chat-history records, and the legacy
+// records/*.json files are the pre-SQLite migration barrier. An mtime-only
+// sweep would delete both out from under that reaper.
+const MANAGED_OUTGOING_SUBDIR = "outgoing";
+/** Fixed disk budget for cached playback renditions; oldest outputs are evicted first. */
+const PLAYBACK_TRANSCODE_MAX_CACHE_BYTES = 512 * 1024 * 1024;
+/** Playback renditions outlive transient media but are still retired after one week. */
+const PLAYBACK_TRANSCODE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_BYTES = MEDIA_MAX_BYTES;
 const DEFAULT_TTL_MS = 2 * 60 * 1000; // 2 minutes
-type RequestImpl = typeof httpRequest;
-type ResolvePinnedHostnameImpl = typeof resolvePinnedHostname;
+let playbackCacheOperationTail = Promise.resolve();
+let resolvePinnedHostnameForTest: typeof resolvePinnedHostname | undefined;
 type CleanOldMediaOptions = {
   recursive?: boolean;
   pruneEmptyDirs?: boolean;
 };
 
-/** Overrides network dependencies for media-store tests. */
+/** Overrides the canonical remote resolver for loopback integration tests. */
 function setMediaStoreNetworkDepsForTest(deps?: {
-  httpRequest?: RequestImpl;
-  httpsRequest?: RequestImpl;
-  resolvePinnedHostname?: ResolvePinnedHostnameImpl;
+  resolvePinnedHostname?: typeof resolvePinnedHostname;
 }): void {
-  setMediaStoreDownloadDepsForTest(deps);
+  resolvePinnedHostnameForTest = deps?.resolvePinnedHostname;
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.mediaStoreTestApi")] = {
+    enforcePlaybackTranscodeCacheLimit,
+    PLAYBACK_TRANSCODE_MAX_CACHE_BYTES,
+    PLAYBACK_TRANSCODE_TTL_MS,
     setMediaStoreNetworkDepsForTest,
   };
 }
@@ -70,7 +84,7 @@ function resolveMediaSubdir(subdir: string, caller: string): string {
   if (segments.some((segment) => !segment || segment === "." || segment === "..")) {
     throw new Error(`${caller}: unsafe media subdir: ${JSON.stringify(subdir)}`);
   }
-  return path.join(...segments);
+  return path.posix.join(...segments);
 }
 
 function resolveMediaScopedDir(subdir: string, caller: string): string {
@@ -88,12 +102,12 @@ function resolveMediaRelativePath(id: string, subdir: string, caller: string): s
     throw new Error(`${caller}: unsafe media ID: ${JSON.stringify(id)}`);
   }
   const safeSubdir = resolveMediaSubdir(subdir, caller);
-  return safeSubdir ? path.join(safeSubdir, id) : id;
+  return safeSubdir ? path.posix.join(safeSubdir, id) : id;
 }
 
-function openMediaStore(maxBytes = MAX_BYTES) {
+function openMediaStore(maxBytes = MAX_BYTES, rootDir = resolveMediaDir()) {
   return fileStore({
-    rootDir: resolveMediaDir(),
+    rootDir,
     dirMode: 0o700,
     maxBytes,
     mode: MEDIA_FILE_MODE,
@@ -157,7 +171,9 @@ function findErrorWithCode(err: unknown, code: string): NodeJS.ErrnoException | 
   return findErrorWithCode(err.cause, code);
 }
 
-function isMissingPathError(err: unknown): boolean {
+function hasRecoverableMissingMediaDirCause(err: unknown): boolean {
+  // Recursive mkdir repairs only the ENOENT race where cleanup pruned the directory.
+  // Structural ENOTDIR and generic fs-safe absence remain terminal diagnostics.
   return findErrorWithCode(err, "ENOENT") !== undefined;
 }
 
@@ -174,7 +190,7 @@ async function retryAfterRecreatingDir<T>(dir: string, run: () => Promise<T>): P
       attempts: 2,
       minDelayMs: 0,
       maxDelayMs: 0,
-      shouldRetry: isMissingPathError,
+      shouldRetry: hasRecoverableMissingMediaDirCause,
       onRetry: async () => {
         // Cleanup can prune the directory between mkdir and file open. Recreate
         // it once; further failures remain terminal instead of looping.
@@ -184,29 +200,130 @@ async function retryAfterRecreatingDir<T>(dir: string, run: () => Promise<T>): P
   );
 }
 
-// Maps the cleanup mode onto the prune sweep depth. The fs-safe prune walker keys descent off
-// maxDepth whenever it is set and only falls back to the recursive flag when maxDepth is undefined,
-// so recursive:false must resolve to depth 0 (root only). Without this, recursive:false collapses
-// to the same one-level sweep as the unset default and would still descend into — and delete —
-// retained media subdirectories (e.g. media/inbound/<id>).
-function resolveCleanupMaxDepth(recursive: boolean | undefined): number | undefined {
-  if (recursive === true) {
-    return undefined; // full-tree sweep (configured maintenance timer)
+async function prunePlaybackTranscodeCacheToSize(): Promise<void> {
+  const dir = resolveMediaScopedDir(PLAYBACK_TRANSCODE_SUBDIR, "prunePlaybackTranscodeCacheToSize");
+  const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+  const files = (
+    await Promise.all(
+      entries.map(async (entry) => {
+        if (!entry.isFile() || entry.name.startsWith(".")) {
+          return null;
+        }
+        const stat = await fs.lstat(path.join(dir, entry.name)).catch(() => null);
+        return stat?.isFile() ? { name: entry.name, size: stat.size, mtimeMs: stat.mtimeMs } : null;
+      }),
+    )
+  )
+    .filter((entry): entry is { name: string; size: number; mtimeMs: number } => Boolean(entry))
+    .toSorted((left, right) => left.mtimeMs - right.mtimeMs || left.name.localeCompare(right.name));
+  let totalBytes = files.reduce((total, file) => total + file.size, 0);
+  for (const file of files) {
+    if (totalBytes <= PLAYBACK_TRANSCODE_MAX_CACHE_BYTES) {
+      break;
+    }
+    const relativePath = resolveMediaRelativePath(
+      file.name,
+      PLAYBACK_TRANSCODE_SUBDIR,
+      "prunePlaybackTranscodeCacheToSize",
+    );
+    const removed = await openMediaStore()
+      .remove(relativePath)
+      .then(() => true)
+      .catch(() => false);
+    if (removed) {
+      totalBytes -= file.size;
+    }
   }
-  if (recursive === false) {
-    return 0; // root-only sweep; never descend into retained subdirectories
-  }
-  return 1; // default: prune the media root and its immediate first-level subdirectories
 }
 
-/** Prunes expired media files, optionally recursing into scoped media subdirectories. */
-export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS, options: CleanOldMediaOptions = {}) {
-  await openMediaStore().pruneExpired({
-    maxDepth: resolveCleanupMaxDepth(options.recursive),
-    ttlMs,
-    recursive: options.recursive ?? true,
-    pruneEmptyDirs: options.pruneEmptyDirs,
+async function pruneNonPlaybackMedia(ttlMs: number, options: CleanOldMediaOptions): Promise<void> {
+  if (options.recursive === false) {
+    await openMediaStore().pruneExpired({ ttlMs, recursive: false, maxDepth: 0 });
+    return;
+  }
+  const mediaDir = resolveMediaDir();
+  await openMediaStore().pruneExpired({ ttlMs, recursive: false, maxDepth: 0 });
+  const entries = await fs.readdir(mediaDir, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (
+      !entry.isDirectory() ||
+      entry.name === PLAYBACK_TRANSCODE_SUBDIR ||
+      entry.name === MANAGED_OUTGOING_SUBDIR
+    ) {
+      continue;
+    }
+    const scopedDir = path.join(mediaDir, entry.name);
+    const recursive = options.recursive === true;
+    await openMediaStore(MAX_BYTES, scopedDir).pruneExpired({
+      ttlMs,
+      recursive,
+      maxDepth: recursive ? undefined : 0,
+      pruneEmptyDirs: options.pruneEmptyDirs,
+    });
+    if (options.pruneEmptyDirs) {
+      await fs.rmdir(scopedDir).catch(() => {});
+    }
+  }
+}
+
+async function queuePlaybackCacheOperation<T>(operation: () => Promise<T>): Promise<T> {
+  const run = playbackCacheOperationTail.then(operation);
+  playbackCacheOperationTail = run.then(
+    () => {},
+    () => {},
+  );
+  return await run;
+}
+
+/** Serializes cache publication with quota enforcement and propagates failures to the writer. */
+export async function writePlaybackTranscodeCache(params: {
+  buffer: Buffer;
+  fileName: string;
+  maxBytes: number;
+  tempPrefix: string;
+}): Promise<string> {
+  return await queuePlaybackCacheOperation(async () => {
+    const relativePath = resolveMediaRelativePath(
+      params.fileName,
+      PLAYBACK_TRANSCODE_SUBDIR,
+      "writePlaybackTranscodeCache",
+    );
+    const filePath = await openMediaStore(params.maxBytes).write(relativePath, params.buffer, {
+      maxBytes: params.maxBytes,
+      tempPrefix: params.tempPrefix,
+    });
+    await prunePlaybackTranscodeCacheToSize();
+    return filePath;
   });
+}
+
+/** Serializes maintenance quota scans with cache insertions. */
+async function enforcePlaybackTranscodeCacheLimit(): Promise<void> {
+  await queuePlaybackCacheOperation(prunePlaybackTranscodeCacheToSize);
+}
+
+/** Prunes expired playback renditions and reapplies the fixed cache size budget. */
+export async function prunePlaybackTranscodeCache(): Promise<void> {
+  await queuePlaybackCacheOperation(async () => {
+    const cacheDir = resolveMediaScopedDir(
+      PLAYBACK_TRANSCODE_SUBDIR,
+      "prunePlaybackTranscodeCache",
+    );
+    await openMediaStore(MAX_BYTES, cacheDir).pruneExpired({
+      ttlMs: PLAYBACK_TRANSCODE_TTL_MS,
+      recursive: true,
+      pruneEmptyDirs: true,
+    });
+    await prunePlaybackTranscodeCacheToSize();
+  });
+}
+
+/** Prunes expired non-playback media, optionally recursing into scoped subdirectories. */
+export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS, options: CleanOldMediaOptions = {}) {
+  await pruneNonPlaybackMedia(ttlMs, options);
+  // Trust metadata must not outlive the staged file that it authorizes.
+  const { pruneStaleTrustedGeneratedHtmlMarkers } = await import("./web-media.js");
+  await pruneStaleTrustedGeneratedHtmlMarkers();
 }
 
 function looksLikeUrl(src: string) {
@@ -246,7 +363,7 @@ function safeOriginalFilenameExtension(originalFilename?: string): string | unde
 }
 
 function extensionForAuthoritativeHeaderMime(contentType?: string): string | undefined {
-  const mime = normalizeOptionalString(contentType?.split(";")[0]);
+  const mime = normalizeMimeType(contentType);
   if (!mime || mime === "application/octet-stream" || mime === "binary/octet-stream") {
     return undefined;
   }
@@ -261,7 +378,7 @@ function isGenericContainerMime(mime?: string): boolean {
 }
 
 function isImageHeaderMime(contentType?: string): boolean {
-  return normalizeOptionalString(contentType?.split(";")[0])?.startsWith("image/") === true;
+  return normalizeMimeType(contentType)?.startsWith("image/") === true;
 }
 
 function resolveSavedMediaExtension(params: {
@@ -269,6 +386,7 @@ function resolveSavedMediaExtension(params: {
   headerExt?: string;
   contentType?: string;
   originalFilename?: string;
+  detectionFilePathHint?: string;
 }): string {
   const trustedHeaderExt =
     params.headerExt &&
@@ -280,6 +398,7 @@ function resolveSavedMediaExtension(params: {
     trustedHeaderExt ??
     extensionForMime(params.detectedMime) ??
     safeOriginalFilenameExtension(params.originalFilename) ??
+    getFileExtension(params.detectionFilePathHint) ??
     ""
   );
 }
@@ -368,7 +487,7 @@ async function writeMediaStreamToFile(params: {
         sniffChunks.push(buffer.byteLength > remaining ? buffer.subarray(0, remaining) : buffer);
         sniffLen += Math.min(buffer.byteLength, remaining);
       }
-      await handle.write(buffer);
+      await handle.writeFile(buffer);
     }
     return {
       sniffBuffer: Buffer.concat(sniffChunks, sniffLen),
@@ -438,29 +557,17 @@ export async function saveMediaSource(
 ): Promise<SavedMedia> {
   const dir = resolveMediaScopedDir(subdir, "saveMediaSource");
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  const baseId = crypto.randomUUID();
   if (looksLikeUrl(source)) {
-    return await saveMediaSiblingTempFile({
-      dir,
-      tempPrefix: `.${baseId}`,
-      writeTemp: async (tempPath) => {
-        const { headerMime, sniffBuffer, size } = await downloadMediaToFile({
-          url: source,
-          dest: tempPath,
-          headers,
-          maxBytes,
-        });
-        const mime = await detectMime({
-          buffer: sniffBuffer,
-          headerMime,
-          filePath: source,
-        });
-        const ext = extensionForMime(mime) ?? path.extname(new URL(source).pathname);
-        const id = buildSavedMediaId({ baseId, ext });
-        return { id, size, contentType: mime };
-      },
+    const { saveRemoteMediaForStore } = await import("./store.remote.runtime.js");
+    return await saveRemoteMediaForStore({
+      source,
+      headers,
+      subdir,
+      maxBytes,
+      resolvePinnedHostnameForTest,
     });
   }
+  const baseId = crypto.randomUUID();
   try {
     const { buffer, stat } = await readLocalFileSafely({ filePath: source, maxBytes });
     const mime = await detectMime({ buffer, filePath: source });
@@ -502,6 +609,7 @@ export async function saveMediaBuffer(
     headerExt,
     contentType,
     originalFilename,
+    detectionFilePathHint,
   });
   const id = buildSavedMediaId({ baseId: uuid, ext, originalFilename });
   await writeSavedMediaBuffer({ subdir, id, buffer });
@@ -540,6 +648,7 @@ export async function saveMediaStream(
         headerExt,
         contentType,
         originalFilename,
+        detectionFilePathHint,
       });
       const id = buildSavedMediaId({ baseId, ext, originalFilename });
       return { id, size, contentType: mime };

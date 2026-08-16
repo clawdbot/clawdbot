@@ -1,8 +1,66 @@
 // Tests CLI entrypoint argument handling and startup behavior.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { tryHandlePrecomputedCommandHelpFastPath, tryHandleRootHelpFastPath } from "./entry.js";
 
 describe("entry root help fast path", () => {
+  it.each([
+    { name: "long root help", argv: ["node", "openclaw", "--help"] },
+    { name: "short root help", argv: ["node", "openclaw", "-h"] },
+    {
+      name: "profile-prefixed root help",
+      argv: ["node", "openclaw", "--profile", "work", "--help"],
+    },
+    {
+      name: "no-color-prefixed root help",
+      argv: ["node", "openclaw", "--no-color", "--help"],
+    },
+  ])("respects the startup help fast path kill switch for $name", async ({ argv }) => {
+    const outputPrecomputedRootHelpText = vi.fn(() => true);
+    const outputRootHelp = vi.fn();
+    const loadRootHelpRenderOptionsForConfigSensitivePlugins = vi.fn(async () => null);
+
+    await expect(
+      tryHandleRootHelpFastPath(argv, {
+        env: { OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH: "1" },
+        outputPrecomputedRootHelpText,
+        outputRootHelp,
+        loadRootHelpRenderOptionsForConfigSensitivePlugins,
+      }),
+    ).resolves.toBe(false);
+
+    expect(loadRootHelpRenderOptionsForConfigSensitivePlugins).not.toHaveBeenCalled();
+    expect(outputPrecomputedRootHelpText).not.toHaveBeenCalled();
+    expect(outputRootHelp).not.toHaveBeenCalled();
+  });
+
+  it("respects the process env startup help fast path kill switch", async () => {
+    const original = process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH;
+    const outputPrecomputedRootHelpText = vi.fn(() => true);
+    const outputRootHelp = vi.fn();
+    const loadRootHelpRenderOptionsForConfigSensitivePlugins = vi.fn(async () => null);
+    process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH = "1";
+
+    try {
+      await expect(
+        tryHandleRootHelpFastPath(["node", "openclaw", "--help"], {
+          outputPrecomputedRootHelpText,
+          outputRootHelp,
+          loadRootHelpRenderOptionsForConfigSensitivePlugins,
+        }),
+      ).resolves.toBe(false);
+
+      expect(loadRootHelpRenderOptionsForConfigSensitivePlugins).not.toHaveBeenCalled();
+      expect(outputPrecomputedRootHelpText).not.toHaveBeenCalled();
+      expect(outputRootHelp).not.toHaveBeenCalled();
+    } finally {
+      if (original === undefined) {
+        delete process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH;
+      } else {
+        process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH = original;
+      }
+    }
+  });
+
   it("prefers precomputed root help text when available", async () => {
     let outputPrecomputedRootHelpTextCalls = 0;
 
@@ -63,6 +121,41 @@ describe("entry root help fast path", () => {
     expect(handled).toBe(true);
     expect(outputPrecomputedRootHelpTextCalls).toBe(0);
     expect(outputRootHelpOptions).toEqual([liveOptions]);
+  });
+
+  it("structures root help rendering failures for JSON console style", async () => {
+    const logging = await import("./logging.js");
+    logging.setLoggerOverride({ level: "silent", consoleLevel: "info", consoleStyle: "json" });
+    const stderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true as unknown as ReturnType<typeof process.stderr.write>);
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new Error(`exit ${String(code)}`);
+    }) as typeof process.exit);
+
+    try {
+      await expect(
+        tryHandleRootHelpFastPath(["node", "openclaw", "--help"], {
+          env: {},
+          loadRootHelpRenderOptionsForConfigSensitivePlugins: async () => ({
+            config: {},
+            env: {},
+          }),
+          outputRootHelp: () => {
+            throw new Error("render failed");
+          },
+        }),
+      ).rejects.toThrow("exit 1");
+      const line = stderrSpy.mock.calls.map(([value]) => String(value)).join("");
+      expect(JSON.parse(line)).toMatchObject({
+        level: "error",
+        message: expect.stringContaining("Failed to display help"),
+      });
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    } finally {
+      logging.resetLogger();
+      vi.restoreAllMocks();
+    }
   });
 
   it("ignores non-root help invocations", async () => {

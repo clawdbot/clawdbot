@@ -10,6 +10,7 @@ const DEFAULT_GEMINI_WEB_SEARCH_MODEL = "gemini-2.5-flash";
 export type GeminiConfig = {
   apiKey?: unknown;
   baseUrl?: unknown;
+  headers?: unknown;
   model?: unknown;
   providerApiKey?: unknown;
   providerBaseUrl?: unknown;

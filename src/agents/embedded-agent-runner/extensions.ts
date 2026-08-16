@@ -2,15 +2,12 @@
  * Builds extension factories available to embedded-agent runtime sessions.
  */
 import { randomUUID } from "node:crypto";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { normalizeAcceptedSessionSpawnResult } from "../accepted-session-spawn.js";
 import { setCompactionSafeguardRuntime } from "../agent-hooks/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../agent-hooks/compaction-safeguard.js";
-import contextPruningExtension from "../agent-hooks/context-pruning.js";
-import { setContextPruningRuntime } from "../agent-hooks/context-pruning/runtime.js";
-import { computeEffectiveSettings } from "../agent-hooks/context-pruning/settings.js";
-import { makeToolPrunablePredicate } from "../agent-hooks/context-pruning/tools.js";
 import { resolveEffectiveCompactionMode } from "../agent-settings.js";
 import {
   finalizeToolTerminalPresentation,
@@ -22,8 +19,6 @@ import { createAgentToolResultMiddlewareRunner } from "../harness/tool-result-mi
 import type { AgentToolResult } from "../runtime/index.js";
 import type { ExtensionFactory, SessionManager } from "../sessions/index.js";
 import { isToolResultError } from "../tool-result-error.js";
-import { resolveTranscriptPolicy } from "../transcript-policy.js";
-import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "./cache-ttl.js";
 import { recordEmbeddedToolSendReceipt } from "./tool-send-receipts.js";
 
 type AgentToolResultEvent = {
@@ -37,27 +32,35 @@ type AgentToolResultEvent = {
   isError?: boolean;
 };
 
-function recordFromUnknown(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
 function snapshotToolSendReceipt(details: unknown): unknown {
-  const toolSend = recordFromUnknown(details).toolSend;
-  return toolSend && typeof toolSend === "object" && !Array.isArray(toolSend)
-    ? { ...(toolSend as Record<string, unknown>) }
-    : toolSend;
+  const toolSend = (asOptionalRecord(details) ?? {}).toolSend;
+  const toolSendRecord = asOptionalRecord(toolSend);
+  return toolSendRecord ? { ...toolSendRecord } : toolSend;
 }
 
 function buildAgentToolResultMiddlewareFactory(
   sessionManager: SessionManager,
-  runId?: string,
+  context: {
+    agentId?: string;
+    sessionId?: string;
+    sessionKey?: string;
+    runId?: string;
+  },
 ): ExtensionFactory {
-  const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" });
+  const { agentId, sessionKey, runId } = context;
+  // Snapshot the prepared session once; tool results must never rediscover
+  // mutable session identity after a later turn has started.
+  const sessionId = context.sessionId ?? sessionManager.getSessionId?.();
+  const runner = createAgentToolResultMiddlewareRunner({
+    runtime: "openclaw",
+    ...(agentId ? { agentId } : {}),
+    ...(sessionId ? { sessionId } : {}),
+    ...(sessionKey ? { sessionKey } : {}),
+    ...(runId ? { runId } : {}),
+  });
   return (agent) => {
     agent.on("tool_result", async (rawEvent: unknown, ctx: { cwd?: string }) => {
-      const event = recordFromUnknown(rawEvent) as AgentToolResultEvent;
+      const event = (asOptionalRecord(rawEvent) ?? {}) as AgentToolResultEvent;
       if (!event.toolName) {
         return undefined;
       }
@@ -85,7 +88,7 @@ function buildAgentToolResultMiddlewareFactory(
         turnId: event.turnId,
         toolCallId,
         toolName: event.toolName,
-        args: recordFromUnknown(adjustedInput ?? event.input),
+        args: asOptionalRecord(adjustedInput ?? event.input) ?? {},
         cwd: ctx.cwd,
         isError: event.isError,
         result: current,
@@ -116,61 +119,6 @@ function buildAgentToolResultMiddlewareFactory(
   };
 }
 
-function resolveContextWindowTokens(params: {
-  cfg: OpenClawConfig | undefined;
-  provider: string;
-  modelId: string;
-  model: ProviderRuntimeModel | undefined;
-}): number {
-  return resolveContextWindowInfo({
-    cfg: params.cfg,
-    provider: params.provider,
-    modelId: params.modelId,
-    modelContextTokens: params.model?.contextTokens,
-    modelContextWindow: params.model?.contextWindow,
-    defaultTokens: DEFAULT_CONTEXT_TOKENS,
-  }).tokens;
-}
-
-function buildContextPruningFactory(params: {
-  cfg: OpenClawConfig | undefined;
-  sessionManager: SessionManager;
-  provider: string;
-  modelId: string;
-  model: ProviderRuntimeModel | undefined;
-}): ExtensionFactory | undefined {
-  const raw = params.cfg?.agents?.defaults?.contextPruning;
-  if (raw?.mode !== "cache-ttl") {
-    return undefined;
-  }
-  if (!isCacheTtlEligibleProvider(params.provider, params.modelId, params.model?.api)) {
-    return undefined;
-  }
-
-  const settings = computeEffectiveSettings(raw);
-  if (!settings) {
-    return undefined;
-  }
-  const transcriptPolicy = resolveTranscriptPolicy({
-    modelApi: params.model?.api,
-    provider: params.provider,
-    modelId: params.modelId,
-  });
-
-  setContextPruningRuntime(params.sessionManager, {
-    settings,
-    contextWindowTokens: resolveContextWindowTokens(params),
-    isToolPrunable: makeToolPrunablePredicate(settings.tools),
-    dropThinkingBlocks: transcriptPolicy.dropThinkingBlocks,
-    lastCacheTouchAt: readLastCacheTtlTimestamp(params.sessionManager, {
-      provider: params.provider,
-      modelId: params.modelId,
-    }),
-  });
-
-  return contextPruningExtension;
-}
-
 export function buildEmbeddedExtensionFactories(params: {
   cfg: OpenClawConfig | undefined;
   sessionManager: SessionManager;
@@ -178,26 +126,31 @@ export function buildEmbeddedExtensionFactories(params: {
   provider: string;
   modelId: string;
   model: ProviderRuntimeModel | undefined;
+  contextTokenBudget?: number;
+  agentId?: string;
+  sessionId?: string;
+  sessionKey?: string;
   runId?: string;
 }): ExtensionFactory[] {
   const factories: ExtensionFactory[] = [];
   if (resolveEffectiveCompactionMode(params.cfg) === "safeguard") {
     const compactionCfg = params.cfg?.agents?.defaults?.compaction;
     const qualityGuardCfg = compactionCfg?.qualityGuard;
-    const contextWindowInfo = resolveContextWindowInfo({
-      cfg: params.cfg,
-      provider: params.provider,
-      modelId: params.modelId,
-      modelContextTokens: params.model?.contextTokens,
-      modelContextWindow: params.model?.contextWindow,
-      defaultTokens: DEFAULT_CONTEXT_TOKENS,
-    });
+    // Prepared runs carry the canonical policy budget; fallback resolution is
+    // only for callers that do not own a prepared attempt.
+    const contextWindowTokens =
+      params.contextTokenBudget ??
+      resolveContextWindowInfo({
+        cfg: params.cfg,
+        provider: params.provider,
+        modelId: params.modelId,
+        modelContextTokens: params.model?.contextTokens,
+        modelContextWindow: params.model?.contextWindow,
+        defaultTokens: DEFAULT_CONTEXT_TOKENS,
+      }).tokens;
     setCompactionSafeguardRuntime(params.sessionManager, {
-      maxHistoryShare: compactionCfg?.maxHistoryShare,
-      contextWindowTokens: contextWindowInfo.tokens,
+      contextWindowTokens,
       identifierPolicy: compactionCfg?.identifierPolicy,
-      identifierInstructions: compactionCfg?.identifierInstructions,
-      customInstructions: compactionCfg?.customInstructions,
       qualityGuardEnabled: qualityGuardCfg?.enabled ?? true,
       qualityGuardMaxRetries: qualityGuardCfg?.maxRetries,
       model: params.model,
@@ -208,10 +161,13 @@ export function buildEmbeddedExtensionFactories(params: {
     });
     factories.push(compactionSafeguardExtension);
   }
-  const pruningFactory = buildContextPruningFactory(params);
-  if (pruningFactory) {
-    factories.push(pruningFactory);
-  }
-  factories.push(buildAgentToolResultMiddlewareFactory(params.sessionManager, params.runId));
+  factories.push(
+    buildAgentToolResultMiddlewareFactory(params.sessionManager, {
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      runId: params.runId,
+    }),
+  );
   return factories;
 }

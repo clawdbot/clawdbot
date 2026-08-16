@@ -81,7 +81,7 @@ function resolvePerplexityApiKey(perplexity?: PerplexityConfig): {
 } {
   const fromConfig = readConfiguredSecretString(
     perplexity?.apiKey,
-    "tools.web.search.perplexity.apiKey",
+    "plugins.entries.perplexity.config.webSearch.apiKey",
   );
   if (fromConfig) {
     return { apiKey: fromConfig, source: "config" };
@@ -201,6 +201,7 @@ async function runPerplexitySearchApi(params: {
   apiKey: string;
   count: number;
   timeoutSeconds: number;
+  signal?: AbortSignal;
   country?: string;
   searchDomainFilter?: string[];
   searchRecencyFilter?: string;
@@ -243,6 +244,7 @@ async function runPerplexitySearchApi(params: {
     {
       url: PERPLEXITY_SEARCH_ENDPOINT,
       timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
       init: {
         method: "POST",
         headers: buildPerplexityRequestHeaders(params.apiKey, true),
@@ -274,6 +276,7 @@ async function runPerplexitySearch(params: {
   baseUrl: string;
   model: string;
   timeoutSeconds: number;
+  signal?: AbortSignal;
   freshness?: string;
 }): Promise<{ content: string; citations: string[] }> {
   const endpoint = `${params.baseUrl.trim().replace(/\/$/, "")}/chat/completions`;
@@ -289,6 +292,7 @@ async function runPerplexitySearch(params: {
     {
       url: endpoint,
       timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
       init: {
         method: "POST",
         headers: buildPerplexityRequestHeaders(params.apiKey),
@@ -311,6 +315,7 @@ async function runPerplexitySearch(params: {
 export async function executePerplexitySearch(
   args: Record<string, unknown>,
   searchConfig?: SearchConfigRecord,
+  signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
   const perplexityConfig = resolvePerplexityConfig(searchConfig);
   const runtime = resolvePerplexityTransport(perplexityConfig);
@@ -318,7 +323,7 @@ export async function executePerplexitySearch(
     return {
       error: "missing_perplexity_api_key",
       message:
-        "web_search (perplexity) needs an API key. Set PERPLEXITY_API_KEY or OPENROUTER_API_KEY in the Gateway environment, or configure tools.web.search.perplexity.apiKey. If you do not want to configure a search API key, use web_fetch for a specific URL or the browser tool for interactive pages.",
+        "web_search (perplexity) needs an API key. Set PERPLEXITY_API_KEY or OPENROUTER_API_KEY in the Gateway environment, or configure plugins.entries.perplexity.config.webSearch.apiKey. If you do not want to configure a search API key, use web_fetch for a specific URL or the browser tool for interactive pages.",
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
@@ -499,6 +504,7 @@ export async function executePerplexitySearch(
               baseUrl: runtime.baseUrl,
               model: runtime.model,
               timeoutSeconds,
+              signal,
               freshness,
             });
             return {
@@ -523,6 +529,7 @@ export async function executePerplexitySearch(
             apiKey: runtime.apiKey,
             count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
             timeoutSeconds,
+            signal,
             country: country ?? undefined,
             searchDomainFilter: domainFilter,
             searchRecencyFilter: freshness,
@@ -541,6 +548,7 @@ export async function executePerplexitySearch(
     (payload as { tookMs: number }).tookMs = Date.now() - start;
   }
 
+  signal?.throwIfAborted();
   writeCachedSearchPayload(cacheKey, payload, resolveSearchCacheTtlMs(searchConfig));
   return payload;
 }
@@ -550,11 +558,7 @@ export const testing = {
   resolvePerplexityBaseUrl,
   resolvePerplexityModel,
   resolvePerplexityTransport,
-  isDirectPerplexityBaseUrl,
   resolvePerplexityRequestModel,
   resolvePerplexityApiKey,
   readPerplexityJsonResponse,
-  normalizeToIsoDate,
-  isoToPerplexityDate,
 } as const;
-export { testing as __testing };

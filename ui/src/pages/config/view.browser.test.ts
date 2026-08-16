@@ -3,7 +3,9 @@ import { render } from "lit";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import "../../styles.css";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
+import { renderConfigForm } from "../../components/config-form.ts";
 import { warmJson5 } from "../../lib/json5-runtime.ts";
+import { renderBrowserLinkPreferencesRow } from "./browser-link-preferences.ts";
 import { createConfigViewState, renderConfig, type ConfigProps } from "./view.ts";
 
 describe("config view", () => {
@@ -22,8 +24,6 @@ describe("config view", () => {
     saving: false,
     applying: false,
     updating: false,
-    autoSaveStatus: "idle" as const,
-    needsApply: false,
     connected: true,
     schema: {
       type: "object",
@@ -42,16 +42,31 @@ describe("config view", () => {
     onFormModeChange: vi.fn(),
     onViewStateChange: vi.fn(),
     onFormPatch: vi.fn(),
+    onFormRemove: vi.fn(),
     onSectionChange: vi.fn(),
     onSave: vi.fn(),
-    onApply: vi.fn(),
     onRawDiscard: vi.fn(),
     onSubsectionChange: vi.fn(),
     version: "2026.3.11",
     theme: "claw" as ThemeName,
+    themeOverridden: false,
+    themeProvenance: "default" as const,
+    themeResetValue: "claw" as ThemeName,
     themeMode: "system" as ThemeMode,
+    themeModeOverridden: false,
+    themeModeProvenance: "default" as const,
+    themeModeResetValue: "system" as ThemeMode,
+    systemLocale: "en" as const,
+    localeOverride: undefined,
+    localeOverridden: false,
+    localeProvenance: "default" as const,
+    localeResetValue: undefined,
+    onLocaleChange: vi.fn(),
+    resetLocale: vi.fn(),
     setTheme: vi.fn(),
+    resetTheme: vi.fn(),
     setThemeMode: vi.fn(),
+    resetThemeMode: vi.fn(),
     hasCustomTheme: false,
     customThemeLabel: null,
     customThemeSourceUrl: null,
@@ -65,12 +80,30 @@ describe("config view", () => {
     onClearCustomTheme: vi.fn(),
     onOpenCustomThemeImport: vi.fn(),
     textScale: 100,
+    textScaleOverridden: false,
     setTextScale: vi.fn(),
+    resetTextScale: vi.fn(),
+    sidebarLiveActivity: true,
+    setSidebarLiveActivity: vi.fn(),
+    hiddenSessionCatalogIds: new Set<string>(),
+    hiddenSessionCatalogLabels: new Map<string, string>(),
+    setSessionCatalogHidden: vi.fn(),
+    chatMessageMaxWidth: undefined,
+    setChatMessageMaxWidth: vi.fn(),
+    showAdvancedSettings: false,
+    setShowAdvancedSettings: vi.fn(),
     chatSendShortcut: "enter" as const,
+    chatSendShortcutOverridden: false,
+    chatSendShortcutProvenance: "default" as const,
+    chatSendShortcutResetValue: "enter" as const,
     setChatSendShortcut: vi.fn(),
+    resetChatSendShortcut: vi.fn(),
     chatFollowUpMode: undefined,
+    chatFollowUpModeOverridden: false,
+    chatFollowUpModeProvenance: "default" as const,
     serverQueueMode: "steer" as const,
     setChatFollowUpMode: vi.fn(),
+    resetChatFollowUpMode: vi.fn(),
     catalogOpenTarget: "viewer" as const,
     setCatalogOpenTarget: vi.fn(),
     gatewayUrl: "",
@@ -95,6 +128,64 @@ describe("config view", () => {
     } finally {
       container.remove();
     }
+  });
+
+  it("renders System language first on Appearance and emits locale overrides", () => {
+    const onLocaleChange = vi.fn();
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      systemLocale: "pt-BR",
+      localeOverride: undefined,
+      onLocaleChange,
+    });
+
+    const sections = [...container.querySelectorAll<HTMLElement>(".settings-section")];
+    expect(sections[0]?.id).toBe("settings-language");
+    expect(sections[0]?.textContent).toContain("Language");
+    expect(sections[0]?.textContent).toContain("Synced across your devices through the gateway");
+
+    const select = sections[0]?.querySelector("wa-select") as
+      | (HTMLElement & { value: string })
+      | null;
+    expect(select?.value).toBe("system");
+    expect(sections[0]?.querySelector('wa-option[value="system"]')?.textContent).toContain(
+      "System (Português (Brazilian Portuguese))",
+    );
+    if (select) {
+      Object.defineProperty(select, "value", { configurable: true, value: "fr" });
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+      Object.defineProperty(select, "value", { configurable: true, value: "system" });
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    expect(onLocaleChange).toHaveBeenCalledWith("fr");
+    expect(onLocaleChange).toHaveBeenCalledWith(undefined);
+  });
+
+  it("labels System from the navigator locale while an explicit locale is selected", () => {
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      systemLocale: "de",
+      localeOverride: "fr",
+      localeOverridden: true,
+    });
+    const select = queryRequired(
+      container,
+      "#settings-language wa-select",
+      HTMLElement,
+    ) as HTMLElement & { value: string };
+
+    expect(
+      (
+        select.querySelector('wa-option[value="fr"]') as
+          | (HTMLElement & { selected: boolean })
+          | null
+      )?.selected,
+    ).toBe(true);
+    expect(select.querySelector('wa-option[value="system"]')?.textContent).toContain(
+      "System (Deutsch (German))",
+    );
   });
 
   function findOptionalButtonByText(
@@ -130,6 +221,292 @@ describe("config view", () => {
   function normalizedText(container: HTMLElement): string {
     return container.textContent?.replace(/\s+/g, " ").trim() ?? "";
   }
+
+  it("places a Control UI Browser preference in the same settings group before schema rows", () => {
+    const { container } = renderConfigView({
+      schema: {
+        type: "object",
+        properties: {
+          browser: {
+            type: "object",
+            title: "Browser",
+            properties: {
+              enabled: { type: "boolean", title: "Browser Enabled" },
+            },
+          },
+        },
+      },
+      uiHints: { "browser.enabled": { advanced: false } },
+      formValue: { browser: { enabled: true } },
+      activeSection: "browser",
+      sectionPrelude: renderBrowserLinkPreferencesRow({
+        enabled: false,
+        onChange: vi.fn(),
+      }),
+    });
+
+    const groups = container.querySelectorAll("#config-section-browser .settings-group");
+    expect(groups).toHaveLength(1);
+    expect(
+      [...groups[0]!.querySelectorAll(".settings-row__title")].map((node) =>
+        node.textContent?.trim(),
+      ),
+    ).toEqual(["Open links in Control UI browser", "Browser Enabled"]);
+  });
+
+  it("routes restore-default actions through config removal", () => {
+    const onFormPatch = vi.fn();
+    const onFormRemove = vi.fn();
+    const { container } = renderConfigView({
+      schema: {
+        type: "object",
+        properties: {
+          gateway: {
+            type: "object",
+            title: "Gateway",
+            properties: {
+              retries: { type: "integer", title: "Retries", default: 3 },
+              mode: {
+                type: "string",
+                title: "Mode",
+                default: "balanced",
+                enum: ["balanced", "fast", "careful", "safe", "strict", "custom"],
+              },
+            },
+          },
+        },
+      },
+      uiHints: {
+        "gateway.retries": { advanced: false },
+        "gateway.mode": { advanced: false },
+      },
+      formValue: { gateway: { retries: 9, mode: "custom" } },
+      activeSection: "gateway",
+      onFormPatch,
+      onFormRemove,
+    });
+
+    const retriesRow = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
+      (row) => row.textContent?.includes("Retries"),
+    );
+    queryRequired(
+      retriesRow ?? container,
+      "button[aria-label='Reset to default']",
+      HTMLButtonElement,
+    ).click();
+    expect(onFormRemove).toHaveBeenCalledWith(["gateway", "retries"]);
+    expect(onFormPatch).not.toHaveBeenCalled();
+
+    const modeRow = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
+      (row) => row.textContent?.includes("Mode"),
+    );
+    const select = queryRequired(modeRow ?? container, "select", HTMLSelectElement);
+    expect(select.selectedOptions[0]?.textContent?.trim()).toBe("custom");
+    select.value = "__unset__";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onFormRemove).toHaveBeenCalledWith(["gateway", "mode"]);
+  });
+
+  it("uses one inline advanced disclosure without mutating config fields", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        gateway: {
+          type: "object",
+          properties: {
+            port: { type: "integer", title: "Port" },
+            reload: { type: "string", title: "Reload mode" },
+          },
+        },
+      },
+    };
+    const uiHints = {
+      "gateway.port": { advanced: false },
+      "gateway.reload": { advanced: true },
+    };
+    const setShowAdvancedSettings = vi.fn();
+    const collapsed = renderConfigView({
+      schema,
+      uiHints,
+      formValue: { gateway: { port: 18789, reload: "hybrid" } },
+      activeSection: "gateway",
+      setShowAdvancedSettings,
+    });
+
+    const ghost = queryRequired(collapsed.container, ".config-advanced-ghost", HTMLButtonElement);
+    expect(ghost.textContent?.replace(/\s+/g, " ").trim()).toBe(
+      "1 advanced setting hidden Show advanced",
+    );
+    ghost.click();
+    expect(setShowAdvancedSettings).toHaveBeenCalledWith(true);
+    expect(ghost.classList.contains("config-show-advanced")).toBe(true);
+    expect(ghost.getAttribute("aria-pressed")).toBe("false");
+
+    const global = renderConfigView({
+      schema,
+      uiHints,
+      formValue: { gateway: { port: 18789, reload: "hybrid" } },
+      activeSection: "gateway",
+      showAdvancedSettings: true,
+    });
+    expect(global.container.querySelector(".config-advanced-ghost")).toBeNull();
+    const divider = queryRequired(global.container, ".config-advanced-divider", HTMLElement);
+    expect(divider.textContent?.replace(/\s+/g, " ").trim()).toBe("Advanced Hide Advanced");
+    const hide = queryRequired(divider, ".config-advanced-divider__toggle", HTMLButtonElement);
+    expect(hide.classList.contains("config-show-advanced")).toBe(true);
+    expect(hide.getAttribute("aria-pressed")).toBe("true");
+    hide.click();
+    expect(global.props.setShowAdvancedSettings).toHaveBeenCalledWith(false);
+    expect(normalizedText(global.container)).toContain("Reload mode");
+
+    const searchHit = renderConfigView({
+      schema,
+      uiHints,
+      formValue: { gateway: { port: 18789, reload: "hybrid" } },
+      activeSection: "gateway",
+      forceAdvancedSection: "gateway",
+    });
+    expect(searchHit.container.querySelector(".config-advanced-ghost")).toBeNull();
+    expect(normalizedText(searchHit.container)).toContain("Reload mode");
+
+    const nested = document.createElement("div");
+    render(
+      renderConfigForm({
+        schema: {
+          type: "object",
+          properties: {
+            agents: {
+              type: "object",
+              properties: {
+                defaults: {
+                  type: "object",
+                  properties: { tuning: { type: "boolean" } },
+                },
+              },
+            },
+          },
+        },
+        uiHints: { "agents.defaults.tuning": { advanced: true } },
+        value: { agents: { defaults: { tuning: true } } },
+        activeSection: "agents",
+        activeSubsection: "defaults",
+        forceAdvancedSection: "agents",
+        onShowAdvanced: vi.fn(),
+        onPatch: vi.fn(),
+      }),
+      nested,
+    );
+    expect(nested.querySelector(".config-advanced-ghost")).toBeNull();
+    expect(normalizedText(nested)).toContain("Tuning");
+
+    const forcedPage = renderConfigView({
+      schema,
+      uiHints,
+      formValue: { gateway: { port: 18789, reload: "hybrid" } },
+      activeSection: "gateway",
+      forceShowAdvanced: true,
+    });
+    expect(findOptionalButtonByText(forcedPage.container, "Show advanced")).toBeUndefined();
+    expect(forcedPage.container.querySelector(".config-advanced-ghost")).toBeNull();
+    expect(normalizedText(forcedPage.container)).toContain("Reload mode");
+  });
+
+  it("offers the toggle exactly when the active scope can hide advanced fields", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        gateway: {
+          type: "object",
+          properties: { mode: { type: "string", title: "Mode" } },
+        },
+        diagnostics: {
+          type: "object",
+          properties: { flags: { type: "string", title: "Flags" } },
+        },
+      },
+    };
+
+    // Unhinted leaves default to the advanced tier, so the inline disclosure
+    // must remain available even when no hint carries advanced === true.
+    const unhinted = renderConfigView({
+      schema,
+      uiHints: {},
+      formValue: { diagnostics: { flags: "all" } },
+      activeSection: "diagnostics",
+    });
+    expect(findOptionalButtonByText(unhinted.container, "Show advanced")).toBeUndefined();
+    expect(unhinted.container.querySelector(".config-advanced-ghost")).not.toBeNull();
+
+    // An advanced hint in a different top-level section must not surface a
+    // no-op toggle on a fully-common active section.
+    const offScope = renderConfigView({
+      schema,
+      uiHints: {
+        "gateway.mode": { advanced: false },
+        "diagnostics.flags": { advanced: true },
+      },
+      formValue: { gateway: { mode: "local" } },
+      activeSection: "gateway",
+    });
+    expect(findOptionalButtonByText(offScope.container, "Show advanced")).toBeUndefined();
+    expect(offScope.container.querySelector(".config-advanced-ghost")).toBeNull();
+  });
+
+  it("shows the form-unsafe banner only for populated unsupported paths", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        gateway: {
+          type: "object",
+          properties: {
+            opaque: {
+              title: "Opaque setting",
+              anyOf: [{ type: "string" }, {}],
+            },
+          },
+        },
+        agents: {
+          type: "object",
+          properties: {
+            opaque: { anyOf: [{ type: "string" }, {}] },
+          },
+        },
+      },
+    };
+
+    const empty = renderConfigView({
+      schema,
+      formValue: { gateway: {}, agents: { opaque: "off-scope" } },
+      activeSection: "gateway",
+    });
+    expect(empty.container.querySelector(".config-content-callout .info")).toBeNull();
+    expect(findButtonByText(empty.container, "Form").getAttribute("title")).toBe("");
+
+    const onFormModeChange = vi.fn();
+    const populated = renderConfigView({
+      schema,
+      formValue: {
+        gateway: { opaque: "custom" },
+        agents: { opaque: "off-scope" },
+      },
+      activeSection: "gateway",
+      onFormModeChange,
+    });
+    const banner = queryRequired(
+      populated.container,
+      ".config-content-callout .callout.info",
+      HTMLElement,
+    );
+    expect(normalizedText(banner)).toBe(
+      "1 setting in this config can only be edited as text: gateway.opaque Open Raw editor",
+    );
+    expect(banner.querySelector("code")?.textContent).toBe("gateway.opaque");
+    expect(findButtonByText(populated.container, "Form").getAttribute("title")).toBe(
+      "Form view can't safely edit some fields",
+    );
+    findButtonByText(banner, "Open Raw editor").click();
+    expect(onFormModeChange).toHaveBeenCalledWith("raw");
+  });
 
   function findButtonByText(container: HTMLElement, text: string): HTMLButtonElement {
     const button = Array.from(container.querySelectorAll("button")).find(
@@ -188,6 +565,7 @@ describe("config view", () => {
           gateway: { type: "object", properties: { mode: { type: "string" } } },
         },
       },
+      uiHints: { "gateway.mode": { advanced: false } },
       formValue: { gateway: { mode: "remote" } },
       originalValue: { gateway: { mode: "local" } },
     });
@@ -198,83 +576,6 @@ describe("config view", () => {
     for (const label of ["Reload", "Clear", "Save", "Apply", "Update"]) {
       expect(findOptionalButtonByText(container, label)).toBeUndefined();
     }
-    // Idle autosave renders no status row beyond the mode toggle.
-    expect(container.querySelector(".config-toolbar__status .settings-status")).toBeNull();
-  });
-
-  it("renders the inline autosave status and retries failed saves", () => {
-    const onSave = vi.fn();
-    const { container } = renderConfigView({ autoSaveStatus: "saving", onSave });
-    const status = queryRequired(container, ".config-toolbar__status", HTMLElement);
-    expect(status.textContent?.trim()).toBe("Saving…");
-    expect(
-      status.querySelector(".settings-status")?.classList.contains("settings-status--accent"),
-    ).toBe(true);
-
-    const saved = renderConfigView({ autoSaveStatus: "saved" });
-    expect([
-      ...queryRequired(saved.container, ".config-toolbar__status .settings-status", HTMLElement)
-        .classList,
-    ]).toContain("settings-status--ok");
-    expect(saved.container.textContent).toContain("Saved");
-
-    const failed = renderConfigView({ autoSaveStatus: "error", onSave });
-    const failedStatus = queryRequired(failed.container, ".config-toolbar__status", HTMLElement);
-    expect(failedStatus.textContent).toContain("Save failed");
-    expect(
-      failedStatus.querySelector(".settings-status")?.classList.contains("settings-status--danger"),
-    ).toBe(true);
-    findButtonByText(failed.container, "Retry").click();
-    expect(onSave).toHaveBeenCalledTimes(1);
-  });
-
-  it("offers only a reload on base-hash conflicts instead of a retry", () => {
-    const onSave = vi.fn();
-    const onRawDiscard = vi.fn();
-    const { container } = renderConfigView({ autoSaveStatus: "conflict", onSave, onRawDiscard });
-
-    const status = queryRequired(container, ".config-toolbar__status", HTMLElement);
-    expect(status.textContent).toContain("Settings changed elsewhere");
-    expect(
-      status.querySelector(".settings-status")?.classList.contains("settings-status--danger"),
-    ).toBe(true);
-    expect(findOptionalButtonByText(container, "Retry")).toBeUndefined();
-    findButtonByText(container, "Reload").click();
-    expect(onRawDiscard).toHaveBeenCalledTimes(1);
-    expect(onSave).not.toHaveBeenCalled();
-  });
-
-  it("shows the restart banner after a save and wires it to apply", () => {
-    const onApply = vi.fn();
-    const { container } = renderConfigView({ needsApply: true, onApply });
-
-    const banner = queryRequired(container, ".config-apply-banner", HTMLElement);
-    expect(banner.textContent).toContain("Saved to openclaw.json — restart the gateway to apply.");
-    const applyButton = findButtonByText(container, "Restart & apply");
-    expect(applyButton.disabled).toBe(false);
-    applyButton.click();
-    expect(onApply).toHaveBeenCalledTimes(1);
-
-    const busy = renderConfigView({ needsApply: true, applying: true, onApply });
-    const busyButton = findButtonContainingText(busy.container, "Applying…");
-    expect(busyButton.disabled).toBe(true);
-    expect(busyButton.getAttribute("aria-busy")).toBe("true");
-    expect(busyButton.querySelectorAll(".config-action-spinner")).toHaveLength(1);
-
-    // Any in-flight write, pending load, or dirty raw draft gates the action.
-    for (const overrides of [
-      { saving: true },
-      { loading: true },
-      { updating: true },
-      { autoSaveStatus: "saving" as const },
-      { formMode: "raw" as const, raw: '{\n  "a": 1\n}\n', originalRaw: "{\n}\n" },
-    ]) {
-      const gated = renderConfigView({ needsApply: true, ...overrides });
-      expect(findButtonByText(gated.container, "Restart & apply").disabled).toBe(true);
-    }
-
-    const cleared = renderConfigView({ needsApply: false });
-    expect(cleared.container.querySelector(".config-apply-banner")).toBeNull();
   });
 
   it("keeps explicit open/save/discard controls in raw mode", () => {
@@ -308,15 +609,12 @@ describe("config view", () => {
       rawDraftPending: true,
       raw: '{\n  "a": 1\n}\n',
       originalRaw: "{\n}\n",
-      needsApply: true,
     });
 
-    // The capability refuses form submissions and apply until the raw draft
-    // is saved or discarded — so the raw actions must stay on screen and the
-    // Form toggle + restart action are gated instead of failing generically.
+    // The capability refuses form submissions until the raw draft is saved or
+    // discarded, so the raw actions stay on screen and Form remains gated.
     expect(container.querySelector(".config-raw-actions")).not.toBeNull();
     expect(findButtonByText(container, "Form").disabled).toBe(true);
-    expect(findButtonByText(container, "Restart & apply").disabled).toBe(true);
   });
 
   it("disables raw save/discard without changes and locks the editor while busy", () => {
@@ -352,6 +650,7 @@ describe("config view", () => {
           gateway: { type: "object", properties: { mode: { type: "string" } } },
         },
       },
+      uiHints: { "gateway.mode": { advanced: false } },
       formValue: { gateway: { mode: "remote" } },
       originalValue: { gateway: { mode: "local" } },
     });
@@ -392,12 +691,12 @@ describe("config view", () => {
 
     render(renderConfig({ ...props, formMode: "form" }), container);
     expect(normalizedText(container)).toContain(
-      "Your config contains fields the form editor can't safely represent. Use Raw mode to edit those entries.",
+      "1 setting in this config can only be edited as text: lastTouchedAt Open Raw editor",
     );
 
     render(renderConfig({ ...props, formMode: "raw" }), container);
     expect(normalizedText(container)).not.toContain(
-      "Your config contains fields the form editor can't safely represent. Use Raw mode to edit those entries.",
+      "1 setting in this config can only be edited as text: lastTouchedAt Open Raw editor",
     );
     expect(container.querySelector(".config-raw-field")).not.toBeNull();
   });
@@ -471,22 +770,19 @@ describe("config view", () => {
     expect(onSectionChange).toHaveBeenCalledWith(null);
   });
 
-  it("renders the virtual Notifications tab in Communication settings", () => {
+  it("renders the virtual Notifications tab on Notifications settings", () => {
     const onSectionChange = vi.fn();
     const { container } = renderConfigView({
-      navRootLabel: "Communication",
-      includeSections: ["channels", "messages", "broadcast", "__notifications__", "talk", "audio"],
+      navRootLabel: "Notifications",
+      includeSections: ["__notifications__"],
       includeVirtualSections: true,
       onSectionChange,
       schema: {
         type: "object",
-        properties: {
-          channels: { type: "object", properties: {} },
-          messages: { type: "object", properties: {} },
-        },
+        properties: {},
       },
-      formValue: { channels: {}, messages: {} },
-      originalValue: { channels: {}, messages: {} },
+      formValue: {},
+      originalValue: {},
       webPush: {
         supported: true,
         permission: "default",
@@ -505,15 +801,14 @@ describe("config view", () => {
     const onWebPushSubscribe = vi.fn();
     const { container } = renderConfigView({
       activeSection: "__notifications__",
-      includeSections: ["channels", "messages", "__notifications__"],
+      includeSections: ["__notifications__"],
       includeVirtualSections: true,
+      showModeToggle: false,
+      showRootTab: false,
       onWebPushSubscribe,
       schema: {
         type: "object",
-        properties: {
-          channels: { type: "object", properties: {} },
-          messages: { type: "object", properties: {} },
-        },
+        properties: {},
       },
       webPush: {
         supported: true,
@@ -524,6 +819,8 @@ describe("config view", () => {
     });
 
     const card = queryRequired(container, "#settings-communications-notifications", HTMLElement);
+    expect(container.querySelector(".config-toolbar")).toBeNull();
+    expect(container.textContent).not.toContain("Saved");
     expect(
       card.querySelector(".settings-section__actions .settings-status")?.textContent?.trim(),
     ).toBe("Ready");
@@ -559,6 +856,7 @@ describe("config view", () => {
           },
         },
       },
+      uiHints: { "channels.telegram": { advanced: false } },
       formValue: {
         channels: { telegram: "on" },
         messages: { inbox: "smart" },
@@ -659,6 +957,7 @@ describe("config view", () => {
           models: offScopeSchema,
         },
       },
+      uiHints: { "channels.telegram": { advanced: false } },
       formValue: {
         channels: { telegram: "enabled" },
         models: {},
@@ -685,21 +984,22 @@ describe("config view", () => {
           auth: {
             type: "object",
             properties: {
-              authPermanentBackoffMinutes: {
-                type: "number",
+              order: {
+                type: "object",
               },
             },
           },
         },
       },
+      uiHints: { "auth.order": { advanced: false } },
       formValue: {
         auth: {
-          authPermanentBackoffMinutes: 10,
+          order: {},
         },
       },
       originalValue: {
         auth: {
-          authPermanentBackoffMinutes: 10,
+          order: {},
         },
       },
     });
@@ -852,7 +1152,7 @@ describe("config view", () => {
       raw: '{\n  channels: { discord: { token: { id: "TOKEN_AFTER" } } }\n}\n',
       originalRaw: '{\n  channels: { discord: { token: { id: "TOKEN_BEFORE" } } }\n}\n',
       uiHints: {
-        "channels.discord.token": { sensitive: true },
+        "channels.discord.token": { sensitive: true, advanced: false },
       },
       formValue: {
         channels: {
@@ -1114,7 +1414,7 @@ describe("config view", () => {
     const { container } = renderConfigView({
       schema: secretRefSchema,
       uiHints: {
-        "channels.discord.token": { sensitive: true },
+        "channels.discord.token": { sensitive: true, advanced: false },
       },
       formMode: "form",
       formValue: secretRefValue,
@@ -1138,7 +1438,7 @@ describe("config view", () => {
         formMode: "raw",
         schema: secretRefSchema,
         uiHints: {
-          "channels.discord.token": { sensitive: true },
+          "channels.discord.token": { sensitive: true, advanced: false },
         },
         formValue: secretRefValue,
         originalValue: secretRefOriginalValue,
@@ -1168,6 +1468,7 @@ describe("config view", () => {
           },
         },
       },
+      uiHints: { "gateway.mode": { advanced: false } },
       formValue: {
         gateway: {
           mode: { malformed: true },
@@ -1207,6 +1508,7 @@ describe("config view", () => {
     const customButton = findButtonByText(container, "Import");
 
     expect(customButton.disabled).toBe(false);
+    expect(customButton.hasAttribute("aria-pressed")).toBe(false);
     expect(
       normalizedText(
         queryRequired(container, ".settings-theme-import__inline-hint", HTMLParagraphElement),
@@ -1218,6 +1520,333 @@ describe("config view", () => {
     customButton.click();
 
     expect(onOpenCustomThemeImport).toHaveBeenCalledTimes(1);
+  });
+
+  it("exposes theme and text-size selection to assistive technology", () => {
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      theme: "knot",
+      textScale: 110,
+    });
+
+    expect(findButtonByText(container, "Knot").getAttribute("aria-pressed")).toBe("true");
+    expect(findButtonByText(container, "Claw").getAttribute("aria-pressed")).toBe("false");
+    const textScaleButtons = [
+      ...container.querySelectorAll<HTMLButtonElement>(".settings-text-scale__btn"),
+    ];
+    expect(
+      textScaleButtons
+        .find((button) => button.textContent?.includes("110%"))
+        ?.getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(
+      textScaleButtons
+        .find((button) => button.textContent?.includes("100%"))
+        ?.getAttribute("aria-pressed"),
+    ).toBe("false");
+
+    const { container: customContainer } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      hasCustomTheme: true,
+      customThemeLabel: "Light Green",
+      theme: "custom",
+    });
+    expect(findButtonByText(customContainer, "Light Green").getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    expect(findButtonByText(customContainer, "Claw").getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("shows Appearance defaults without reset actions", () => {
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      lobsterPetVisits: true,
+      setLobsterPetVisits: vi.fn(),
+      lobsterPetSounds: false,
+      setLobsterPetSounds: vi.fn(),
+      composerHoldToRecord: true,
+      setComposerHoldToRecord: vi.fn(),
+    });
+    const text = normalizedText(container);
+
+    for (const expected of [
+      "Using default: System",
+      "Using default: Claw",
+      "Using default: 100%",
+      "Using default: Enabled",
+      "Using default: 48rem",
+      "Using default: Enter",
+      "Using default: OpenClaw viewer",
+      "Using default: Disabled",
+    ]) {
+      expect(text).toContain(expected);
+    }
+    const lobsterPreviews = container.querySelectorAll(".lobsterdex__mini");
+    expect(lobsterPreviews).toHaveLength(42);
+    expect([...lobsterPreviews].every((preview) => preview.getAttribute("role") === "img")).toBe(
+      true,
+    );
+    expect(
+      [...lobsterPreviews].every((preview) => Boolean(preview.getAttribute("aria-label")?.trim())),
+    ).toBe(true);
+    expect(container.querySelector('button[aria-label="Reset to default"]')).toBeNull();
+  });
+
+  it("resets every explicit Appearance override independently", () => {
+    const resetLocale = vi.fn();
+    const setTheme = vi.fn();
+    const resetTheme = vi.fn();
+    const setThemeMode = vi.fn();
+    const resetThemeMode = vi.fn();
+    const setTextScale = vi.fn();
+    const resetTextScale = vi.fn();
+    const setSidebarLiveActivity = vi.fn();
+    const setChatMessageMaxWidth = vi.fn();
+    const setChatSendShortcut = vi.fn();
+    const resetChatSendShortcut = vi.fn();
+    const setCatalogOpenTarget = vi.fn();
+    const setComposerHoldToRecord = vi.fn();
+    const setLobsterPetVisits = vi.fn();
+    const setLobsterPetSounds = vi.fn();
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      systemLocale: "de",
+      localeOverride: "pt-BR",
+      localeOverridden: true,
+      resetLocale,
+      theme: "knot",
+      themeOverridden: true,
+      setTheme,
+      resetTheme,
+      themeMode: "dark",
+      themeModeOverridden: true,
+      setThemeMode,
+      resetThemeMode,
+      textScale: 110,
+      textScaleOverridden: true,
+      setTextScale,
+      resetTextScale,
+      sidebarLiveActivity: false,
+      setSidebarLiveActivity,
+      chatMessageMaxWidth: "82%",
+      setChatMessageMaxWidth,
+      chatSendShortcut: "modifier-enter",
+      chatSendShortcutOverridden: true,
+      setChatSendShortcut,
+      resetChatSendShortcut,
+      catalogOpenTarget: "terminal",
+      setCatalogOpenTarget,
+      composerHoldToRecord: false,
+      setComposerHoldToRecord,
+      lobsterPetVisits: false,
+      setLobsterPetVisits,
+      lobsterPetSounds: true,
+      setLobsterPetSounds,
+    });
+    const resetIn = (element: Element | null) => {
+      const button = element?.querySelector<HTMLButtonElement>(
+        'button[aria-label="Reset to default"]',
+      );
+      expect(button).not.toBeNull();
+      button?.click();
+    };
+    const row = (title: string) =>
+      Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
+        (candidate) =>
+          candidate.querySelector(".settings-row__title")?.textContent?.trim() === title,
+      ) ?? null;
+
+    resetIn(container.querySelector("#settings-language .settings-row"));
+    resetIn(container.querySelector("#settings-appearance-theme > .settings-section__header"));
+    resetIn(row("Color mode"));
+    resetIn(container.querySelector("#settings-appearance-text-size > .settings-section__header"));
+    resetIn(row("Show live agent activity in sidebar"));
+    resetIn(row("Message width"));
+    resetIn(row("Send shortcut"));
+    resetIn(row("Open external sessions in"));
+    resetIn(row("Hold microphone button to dictate"));
+    resetIn(row("Lobster visits"));
+    resetIn(row("Lobster sounds"));
+
+    expect(resetLocale).toHaveBeenCalledOnce();
+    expect(resetTheme).toHaveBeenCalledOnce();
+    expect(resetThemeMode).toHaveBeenCalledOnce();
+    expect(resetTextScale).toHaveBeenCalledOnce();
+    expect(setSidebarLiveActivity).toHaveBeenCalledWith(true);
+    expect(setChatMessageMaxWidth).toHaveBeenCalledWith(undefined);
+    expect(resetChatSendShortcut).toHaveBeenCalledOnce();
+    expect(setCatalogOpenTarget).toHaveBeenCalledWith("viewer");
+    expect(setComposerHoldToRecord).toHaveBeenCalledWith(true);
+    expect(setLobsterPetVisits).toHaveBeenCalledWith(true);
+    expect(setLobsterPetSounds).toHaveBeenCalledWith(false);
+  });
+
+  it("shows reset actions for authored synced values equal to product defaults", () => {
+    const resetTheme = vi.fn();
+    const resetThemeMode = vi.fn();
+    const resetChatSendShortcut = vi.fn();
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      theme: "claw",
+      themeOverridden: true,
+      themeProvenance: "synced",
+      resetTheme,
+      themeMode: "system",
+      themeModeOverridden: true,
+      themeModeProvenance: "synced",
+      resetThemeMode,
+      chatSendShortcut: "enter",
+      chatSendShortcutOverridden: true,
+      chatSendShortcutProvenance: "synced",
+      resetChatSendShortcut,
+    });
+    const themeSection = queryRequired(container, "#settings-appearance-theme", HTMLElement);
+    const shortcutRow = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
+      (candidate) =>
+        candidate.querySelector(".settings-row__title")?.textContent?.trim() === "Send shortcut",
+    );
+
+    expect(normalizedText(themeSection)).toContain("Default: Claw");
+    expect(normalizedText(themeSection)).toContain("Default: System");
+    expect(shortcutRow?.textContent).toContain("Default: Enter");
+    themeSection
+      .querySelector<HTMLButtonElement>(
+        ":scope > .settings-section__header button[aria-label='Reset to default']",
+      )
+      ?.click();
+    const colorModeRow = Array.from(
+      themeSection.querySelectorAll<HTMLElement>(".settings-row"),
+    ).find(
+      (candidate) =>
+        candidate.querySelector(".settings-row__title")?.textContent?.trim() === "Color mode",
+    );
+    colorModeRow
+      ?.querySelector<HTMLButtonElement>("button[aria-label='Reset to default']")
+      ?.click();
+    shortcutRow?.querySelector<HTMLButtonElement>("button[aria-label='Reset to default']")?.click();
+
+    expect(resetTheme).toHaveBeenCalledOnce();
+    expect(resetThemeMode).toHaveBeenCalledOnce();
+    expect(resetChatSendShortcut).toHaveBeenCalledOnce();
+  });
+
+  it("renders rejected theme and locale edits as resettable browser-only fallbacks", () => {
+    const resetLocale = vi.fn();
+    const resetTheme = vi.fn();
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      localeOverride: "fr",
+      localeOverridden: true,
+      localeProvenance: "device-local",
+      localeResetValue: "de",
+      resetLocale,
+      theme: "knot",
+      themeOverridden: true,
+      themeProvenance: "device-local",
+      themeResetValue: "claw",
+      resetTheme,
+    });
+    const languageRow = queryRequired(container, "#settings-language .settings-row", HTMLElement);
+    const themeSection = queryRequired(container, "#settings-appearance-theme", HTMLElement);
+    const themeDescription = queryRequired(
+      themeSection,
+      ":scope > .settings-section__desc",
+      HTMLElement,
+    );
+
+    expect(languageRow.textContent).toContain("Default: Deutsch (German)");
+    expect(languageRow.textContent).toContain("Stored in this browser only");
+    expect(languageRow.textContent).not.toContain("Synced across your devices");
+    expect(
+      (
+        languageRow.querySelector('wa-option[value="fr"]') as HTMLElement & {
+          selected: boolean;
+        }
+      ).selected,
+    ).toBe(true);
+    expect(themeDescription.textContent).toContain("Default: Claw");
+    expect(themeDescription.textContent).toContain("Stored in this browser only");
+    expect(themeDescription.textContent).not.toContain("Synced across your devices");
+    expect(
+      themeSection.querySelector(".settings-theme-card--knot")?.getAttribute("aria-pressed"),
+    ).toBe("true");
+
+    languageRow.querySelector<HTMLButtonElement>('button[aria-label="Reset to default"]')?.click();
+    themeSection
+      .querySelector<HTMLButtonElement>(
+        ":scope > .settings-section__header button[aria-label='Reset to default']",
+      )
+      ?.click();
+
+    expect(resetLocale).toHaveBeenCalledOnce();
+    expect(resetTheme).toHaveBeenCalledOnce();
+  });
+
+  it("shows pending synced preferences without claiming they already synced", () => {
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      theme: "claw",
+      themeOverridden: false,
+      themeProvenance: "pending",
+      chatFollowUpMode: "queue",
+      chatFollowUpModeOverridden: true,
+      chatFollowUpModeProvenance: "pending",
+    });
+    const themeSection = queryRequired(container, "#settings-appearance-theme", HTMLElement);
+    const themeDescription = queryRequired(
+      themeSection,
+      ":scope > .settings-section__desc",
+      HTMLElement,
+    );
+    const followUpRow = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
+      (candidate) =>
+        candidate.querySelector(".settings-row__title")?.textContent?.trim() ===
+        "Follow-ups while the agent is working",
+    );
+
+    expect(themeDescription.textContent).toContain("Waiting to sync through the gateway");
+    expect(themeDescription.textContent).not.toContain("Synced across your devices");
+    expect(followUpRow?.textContent).toContain("Waiting to sync through the gateway");
+    expect(followUpRow?.textContent).not.toContain("Synced across your devices");
+  });
+
+  it("labels synced and browser-only Chat preferences per row", () => {
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      composerHoldToRecord: true,
+      setComposerHoldToRecord: vi.fn(),
+    });
+    const chat = queryRequired(container, "#settings-appearance-chat", HTMLElement);
+    const sectionDescription = Array.from(chat.children).find((child) =>
+      child.classList.contains("settings-section__desc"),
+    );
+    const row = (title: string) =>
+      Array.from(chat.querySelectorAll<HTMLElement>(".settings-row")).find(
+        (candidate) =>
+          candidate.querySelector(".settings-row__title")?.textContent?.trim() === title,
+      );
+
+    expect(sectionDescription).toBeUndefined();
+    expect(row("Send shortcut")?.textContent).toContain("Synced across your devices");
+    expect(row("Follow-ups while the agent is working")?.textContent).toContain(
+      "Synced across your devices",
+    );
+    for (const title of [
+      "Message width",
+      "Open external sessions in",
+      "Hold microphone button to dictate",
+    ]) {
+      expect(row(title)?.textContent).toContain("Stored in this browser only");
+      expect(row(title)?.textContent).not.toContain("Synced across your devices");
+    }
   });
 
   it("shows the tweakcn importer once the custom slot is opened", () => {
@@ -1290,17 +1919,31 @@ describe("config view", () => {
   });
 
   it("names the chat preference selects for assistive tech", () => {
+    const onMicrophoneRefresh = vi.fn();
+    const onCameraRefresh = vi.fn();
     const { container } = renderConfigView({
       activeSection: "__appearance__",
       includeSections: ["__appearance__"],
       microphone: {
         devices: [{ deviceId: "mic-1", label: "Desk Mic" }],
+        permissionRequired: false,
         selectedDeviceId: "mic-1",
         loading: false,
         error: null,
       },
       onMicrophoneSelect: vi.fn(),
-      onMicrophoneRefresh: vi.fn(),
+      onMicrophoneRefresh,
+      camera: {
+        devices: [{ deviceId: "camera-1", label: "Desk Camera" }],
+        permissionRequired: false,
+        selectedDeviceId: "camera-1",
+        loading: false,
+        error: null,
+      },
+      onCameraSelect: vi.fn(),
+      onCameraRefresh,
+      composerHoldToRecord: true,
+      setComposerHoldToRecord: vi.fn(),
     });
 
     const shortcutSelect = queryRequired(
@@ -1328,16 +1971,312 @@ describe("config view", () => {
       HTMLSelectElement,
     );
     expect(microphoneSelect.getAttribute("aria-label")).toBe("Microphone input");
+    expect(microphoneSelect.classList.contains("settings-select--media-device")).toBe(true);
+    const cameraSelect = queryRequired(container, "[data-settings-camera]", HTMLSelectElement);
+    expect(cameraSelect.getAttribute("aria-label")).toBe("Camera");
+    expect(cameraSelect.classList.contains("settings-select--media-device")).toBe(true);
+    expect(Array.from(cameraSelect.options, (option) => option.textContent?.trim())).toEqual([
+      "System default",
+      "Desk Camera",
+    ]);
+    expect(container.textContent).toContain("Hold microphone button to dictate");
+
+    microphoneSelect.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
+    cameraSelect.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
+    expect(onMicrophoneRefresh).not.toHaveBeenCalled();
+    expect(onCameraRefresh).not.toHaveBeenCalled();
+  });
+
+  it("requests media access for each native picker opening gesture", () => {
+    const cases = [
+      {
+        devices: [{ deviceId: "anonymous", label: "Microphone 1" }],
+        gesture: new MouseEvent("pointerdown", { bubbles: true, button: 0 }),
+      },
+      { devices: [], gesture: new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }) },
+      { devices: [], gesture: new KeyboardEvent("keydown", { key: "F4", bubbles: true }) },
+    ];
+
+    for (const { devices, gesture } of cases) {
+      const onMicrophoneRefresh = vi.fn();
+      const { container } = renderConfigView({
+        activeSection: "__appearance__",
+        includeSections: ["__appearance__"],
+        microphone: {
+          devices,
+          permissionRequired: true,
+          selectedDeviceId: "",
+          loading: false,
+          error: null,
+        },
+        onMicrophoneSelect: vi.fn(),
+        onMicrophoneRefresh,
+      });
+      const microphoneSelect = queryRequired(
+        container,
+        "[data-settings-microphone]",
+        HTMLSelectElement,
+      );
+
+      microphoneSelect.dispatchEvent(gesture);
+      expect(onMicrophoneRefresh).toHaveBeenCalledOnce();
+    }
+  });
+
+  it("coalesces picker gestures while media access is starting", () => {
+    const onCameraRefresh = vi.fn();
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      camera: {
+        devices: [],
+        permissionRequired: true,
+        selectedDeviceId: "",
+        loading: true,
+        error: null,
+      },
+      onCameraSelect: vi.fn(),
+      onCameraRefresh,
+    });
+    const cameraSelect = queryRequired(container, "[data-settings-camera]", HTMLSelectElement);
+
+    cameraSelect.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 2 }));
+    expect(onCameraRefresh).not.toHaveBeenCalled();
+
+    cameraSelect.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
+    cameraSelect.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    cameraSelect.dispatchEvent(new KeyboardEvent("keydown", { key: "F4", bubbles: true }));
+    expect(onCameraRefresh).toHaveBeenCalledOnce();
+  });
+
+  it("previews lobster sounds only when the user enables them", () => {
+    const param = () => ({
+      setValueAtTime: vi.fn(),
+      exponentialRampToValueAtTime: vi.fn(),
+    });
+    const audioContextCtor = vi.fn(function MockAudioContext() {
+      return {
+        state: "running",
+        currentTime: 0,
+        destination: {},
+        resume: vi.fn(),
+        close: vi.fn(() => Promise.resolve()),
+        createOscillator: vi.fn(() => ({
+          type: "sine",
+          frequency: param(),
+          connect: (node: unknown) => node,
+          start: vi.fn(),
+          stop: vi.fn(),
+        })),
+        createGain: vi.fn(() => ({ gain: param(), connect: vi.fn() })),
+      };
+    });
+    vi.stubGlobal("AudioContext", audioContextCtor);
+
+    const activateSwitch = (element: HTMLElement & { checked: boolean }, nextChecked: boolean) => {
+      const dispatchClick = (path: EventTarget[]) => {
+        const event = new MouseEvent("click", { bubbles: true, composed: true });
+        Object.defineProperty(event, "composedPath", { value: () => path });
+        element.dispatchEvent(event);
+      };
+      dispatchClick([document.createElement("span"), element]);
+      element.checked = nextChecked;
+      dispatchClick([document.createElement("input"), element]);
+      element.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    };
+
+    const setLobsterPetSounds = vi.fn();
+    const disabled = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      lobsterPetVisits: true,
+      setLobsterPetVisits: vi.fn(),
+      lobsterPetSounds: false,
+      setLobsterPetSounds,
+    });
+    const disabledRow = Array.from(
+      disabled.container.querySelectorAll<HTMLElement>(".settings-row--toggle"),
+    ).find((candidate) => candidate.textContent?.includes("Lobster sounds"));
+    const disabledSwitch = disabledRow?.querySelector<HTMLElement & { checked: boolean }>(
+      "wa-switch",
+    );
+    expect(disabledSwitch).toBeDefined();
+    if (!disabledSwitch) {
+      return;
+    }
+
+    expect(audioContextCtor).not.toHaveBeenCalled();
+    activateSwitch(disabledSwitch, true);
+    expect(audioContextCtor).toHaveBeenCalledTimes(1);
+    expect(setLobsterPetSounds).toHaveBeenCalledWith(true);
+
+    const enabled = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      lobsterPetVisits: true,
+      setLobsterPetVisits: vi.fn(),
+      lobsterPetSounds: true,
+      setLobsterPetSounds,
+    });
+    const enabledRow = Array.from(
+      enabled.container.querySelectorAll<HTMLElement>(".settings-row--toggle"),
+    ).find((candidate) => candidate.textContent?.includes("Lobster sounds"));
+    const enabledSwitch = enabledRow?.querySelector<HTMLElement & { checked: boolean }>(
+      "wa-switch",
+    );
+    expect(enabledSwitch).toBeDefined();
+    if (!enabledSwitch) {
+      return;
+    }
+
+    const noOpKey = new KeyboardEvent("keydown", {
+      key: "ArrowRight",
+      bubbles: true,
+      composed: true,
+    });
+    Object.defineProperty(noOpKey, "composedPath", {
+      value: () => [document.createElement("input"), enabledSwitch],
+    });
+    enabledSwitch.dispatchEvent(noOpKey);
+    expect(audioContextCtor).toHaveBeenCalledTimes(1);
+
+    activateSwitch(enabledSwitch, false);
+    expect(audioContextCtor).toHaveBeenCalledTimes(1);
+    expect(setLobsterPetSounds).toHaveBeenLastCalledWith(false);
+  });
+
+  it("renders and changes the live sidebar activity preference", () => {
+    const setSidebarLiveActivity = vi.fn();
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      sidebarLiveActivity: true,
+      setSidebarLiveActivity,
+    });
+
+    const row = Array.from(container.querySelectorAll<HTMLElement>(".settings-row--toggle")).find(
+      (candidate) => candidate.textContent?.includes("Show live agent activity in sidebar"),
+    );
+    expect(row).toBeDefined();
+    expect(row?.querySelector<HTMLElement & { checked: boolean }>("wa-switch")?.checked).toBe(true);
+    row?.click();
+    expect(setSidebarLiveActivity).toHaveBeenCalledWith(false);
+  });
+
+  it("labels hidden session sections from the catalog and keeps ids as the fallback", () => {
+    const setSessionCatalogHidden = vi.fn();
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      hiddenSessionCatalogIds: new Set(["claude", "offline-catalog"]),
+      hiddenSessionCatalogLabels: new Map([["claude", "Claude Code"]]),
+      setSessionCatalogHidden,
+    });
+
+    const heading = Array.from(container.querySelectorAll("h3")).find(
+      (candidate) => candidate.textContent?.trim() === "Hidden session sections",
+    );
+    const labeledRow = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
+      (candidate) =>
+        candidate.querySelector(".settings-row__title")?.textContent?.trim() === "Claude Code",
+    );
+    const fallbackRow = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
+      (candidate) =>
+        candidate.querySelector(".settings-row__title")?.textContent?.trim() === "offline-catalog",
+    );
+    expect(heading).toBeDefined();
+    expect(labeledRow).toBeDefined();
+    expect(fallbackRow).toBeDefined();
+    labeledRow?.querySelector<HTMLButtonElement>("button")?.click();
+    expect(setSessionCatalogHidden).toHaveBeenCalledWith("claude", false);
+  });
+
+  it("uses rich Lobsterdex lore tooltips and opens the full collection", () => {
+    const firstSeenAt = new Date("2026-07-10T12:00:00.000Z").getTime();
+    vi.stubGlobal("localStorage", window.localStorage);
+    localStorage.setItem(
+      "openclaw.control.lobsterdex.v1",
+      JSON.stringify({
+        crimson: { firstSeenAt, name: "Ruby", shinySeenAt: firstSeenAt },
+      }),
+    );
+    const onOpenLobsterdex = vi.fn();
+    try {
+      const { container } = renderConfigView({
+        activeSection: "__appearance__",
+        includeSections: ["__appearance__"],
+        lobsterPetVisits: true,
+        setLobsterPetVisits: vi.fn(),
+        lobsterPetSounds: true,
+        setLobsterPetSounds: vi.fn(),
+        lobsterdexHref: "/settings/lobsterdex",
+        onOpenLobsterdex,
+      });
+
+      const seen = container.querySelector(".lobster-pet--palette-crimson");
+      const seenTooltip = seen?.closest("openclaw-tooltip");
+      expect(seen?.hasAttribute("title")).toBe(false);
+      expect(seen?.getAttribute("aria-label")).toContain("Ruby ✦");
+      expect(seenTooltip?.querySelector('[slot="content"]')?.textContent).toContain(
+        "The classic red, first in every tide pool.",
+      );
+      expect(seenTooltip?.querySelector('[slot="content"]')?.textContent).toContain(
+        new Date(firstSeenAt).toLocaleDateString(),
+      );
+
+      const unseen = container.querySelector(".lobster-pet--palette-watermelon");
+      expect(unseen?.getAttribute("aria-label")).toContain("Ripe when thumped.");
+      expect(
+        unseen?.closest("openclaw-tooltip")?.querySelector('[slot="content"]')?.textContent,
+      ).toContain("Ripe when thumped.");
+
+      const openLink = container.querySelector<HTMLAnchorElement>(".lobsterdex__open");
+      openLink?.addEventListener("click", (event) => event.preventDefault(), {
+        capture: true,
+        once: true,
+      });
+      openLink?.click();
+      expect(onOpenLobsterdex).not.toHaveBeenCalled();
+
+      openLink?.click();
+      expect(onOpenLobsterdex).toHaveBeenCalledOnce();
+    } finally {
+      localStorage.removeItem("openclaw.control.lobsterdex.v1");
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("validates and changes the browser-local chat width", () => {
+    const setChatMessageMaxWidth = vi.fn();
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      setChatMessageMaxWidth,
+    });
+    const input = container.querySelector<HTMLInputElement>("[data-settings-chat-message-width]");
+    expect(input).not.toBeNull();
+
+    input!.value = " min(1280px,  82%) ";
+    input!.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(setChatMessageMaxWidth).toHaveBeenCalledWith("min(1280px, 82%)");
+
+    input!.value = "960px; color: red";
+    input!.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(input!.validationMessage).not.toBe("");
+    expect(setChatMessageMaxWidth).toHaveBeenCalledTimes(1);
   });
 
   it("marks browser follow-up overrides and resets them to the server", () => {
     const setChatFollowUpMode = vi.fn();
+    const resetChatFollowUpMode = vi.fn();
     const { container } = renderConfigView({
       activeSection: "__appearance__",
       includeSections: ["__appearance__"],
       chatFollowUpMode: "queue",
+      chatFollowUpModeOverridden: true,
       serverQueueMode: "steer",
       setChatFollowUpMode,
+      resetChatFollowUpMode,
     });
 
     expect(container.textContent).toContain("Overriding server default (steer)");
@@ -1346,7 +2285,8 @@ describe("config view", () => {
     );
     expect(reset).toBeDefined();
     reset?.click();
-    expect(setChatFollowUpMode).toHaveBeenCalledWith(undefined);
+    expect(resetChatFollowUpMode).toHaveBeenCalledOnce();
+    expect(setChatFollowUpMode).not.toHaveBeenCalled();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

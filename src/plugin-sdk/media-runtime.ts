@@ -49,6 +49,7 @@ export {
   createDirectTextMediaOutbound,
   createScopedChannelMediaMaxBytesResolver,
 } from "../channels/plugins/outbound/direct-text-media.js";
+/** @deprecated Use ordered inbound facts from `channel-inbound`. */
 export { buildAgentMediaPayload } from "./agent-media-payload.js";
 export { transcribeFirstAudio } from "../media-understanding/audio-preflight.ts";
 export {

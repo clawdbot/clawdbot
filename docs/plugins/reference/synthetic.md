@@ -12,7 +12,7 @@ Adds Synthetic model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/synthetic-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/synthetic-provider`
 
 ## Surface
 

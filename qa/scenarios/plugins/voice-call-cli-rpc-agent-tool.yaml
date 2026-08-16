@@ -2,8 +2,8 @@ title: Voice Call CLI, RPC, agent tool, and realtime consult flow
 
 scenario:
   id: voice-call-cli-rpc-agent-tool
-  surface: voice-call-channel
-  category: voice-call-channel.channel-setup-and-operations
+  surface: voice-call
+  category: voice-call.channel-setup-and-operations
   coverage:
     primary:
       - voice-call.cli-rpc-agent-tool
@@ -26,6 +26,7 @@ scenario:
     - test/e2e/qa-lab/runtime/voice-call-gateway.ts
   execution:
     kind: script
+    parallelSafe: true
     path: test/e2e/qa-lab/runtime/voice-call-gateway.ts
     summary: Starts a real Gateway and Voice Call plugin, runs the actual CLI plus RPC and tools.invoke entry points, then drives the runtime-issued realtime media stream through embedded-agent consult.
     args:

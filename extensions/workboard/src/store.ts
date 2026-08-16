@@ -20,7 +20,7 @@ import {
   retryBudgetExhausted,
 } from "./store-card-helpers.js";
 import {
-  CLAIM_RECLAIM_MS,
+  isWorkboardClaimReclaimable,
   MAX_ATTACHMENT_ENTRIES,
   MAX_CARDS,
   MAX_CARD_NOTIFICATIONS,
@@ -69,6 +69,10 @@ export class WorkboardStore extends WorkboardNotificationStore {
       const orchestrated: WorkboardCard[] = [];
       const orchestratedByBoard = new Map<string, number>();
       for (const card of await this.list({ boardId })) {
+        // Archived cards remain readable and restorable, but must never re-enter automation.
+        if (card.metadata?.archivedAt) {
+          continue;
+        }
         let latest = await this.promoteDependencyReady(card.id, now);
         const wasPromoted = latest.status !== card.status;
         const claim = latest.metadata?.claim;
@@ -78,7 +82,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
         const timedOut =
           Boolean(maxRuntimeSeconds && runtimeStartedAt) &&
           now - runtimeStartedAt! > secondsToDurationMs(maxRuntimeSeconds!);
-        const claimExpired = Boolean(claim?.expiresAt && now - claim.expiresAt > CLAIM_RECLAIM_MS);
+        const claimExpired = isWorkboardClaimReclaimable(claim, now);
         const retriesExhausted = retryBudgetExhausted(latest);
         if (latest.status === "running" && (timedOut || claimExpired)) {
           const reason = timedOut
@@ -138,7 +142,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
           });
           blocked.push(latest);
         }
-        if (latest.status === "ready") {
+        if (latest.status === "ready" && !latest.metadata?.archivedAt) {
           latest = await this.recordDispatch(latest, now);
         }
         if (await this.shouldAutoOrchestrate(latest)) {
@@ -224,7 +228,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
       const rows: WorkboardDiagnosticsResult["diagnostics"] = [];
       for (const card of cards) {
         const latest = await this.get(card.id);
-        if (!latest) {
+        if (!latest || latest.metadata?.archivedAt) {
           continue;
         }
         const diagnostics = mergeDiagnostics(

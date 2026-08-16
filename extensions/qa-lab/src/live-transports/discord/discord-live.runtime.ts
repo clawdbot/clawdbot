@@ -18,8 +18,8 @@ import { chromium } from "playwright-core";
 import { z } from "zod";
 import { startQaGatewayChild } from "../../gateway-child.js";
 import { isTruthyOptIn } from "../../mantis-options.runtime.js";
-import { listQaScenariosForExecutionProfile } from "../../scenario-catalog.js";
 import { assertLiveScenarioReply as assertDiscordScenarioReply } from "../shared/live-scenario-reply.js";
+import type { DiscordTranscriptsVoiceAuthorizationRun } from "./discord-transcripts-authorization.types.js";
 
 type DiscordQaRuntimeEnv = {
   guildId: string;
@@ -30,15 +30,7 @@ type DiscordQaRuntimeEnv = {
   voiceChannelId?: string;
 };
 
-type DiscordQaScenarioId =
-  | "discord-canary"
-  | "discord-mention-gating"
-  | "discord-native-help-command-registration"
-  | "discord-voice-autojoin"
-  | "discord-thread-reply-filepath-attachment"
-  | "discord-status-reactions-tool-only";
-
-type DiscordQaScenarioRun =
+export type DiscordQaScenarioRun =
   | {
       kind: "channel-message";
       expectReply: boolean;
@@ -53,6 +45,7 @@ type DiscordQaScenarioRun =
   | {
       kind: "voice-autojoin";
     }
+  | DiscordTranscriptsVoiceAuthorizationRun
   | {
       kind: "status-reactions-tool-only";
       expectedSequence: string[];
@@ -65,11 +58,14 @@ type DiscordQaScenarioRun =
       replyContent: string;
     };
 
-type DiscordQaScenarioDefinition = {
-  id: DiscordQaScenarioId;
-  title: string;
-  timeoutMs: number;
+export type DiscordQaScenarioImplementation = {
   buildRun: (sutApplicationId: string) => DiscordQaScenarioRun;
+};
+
+type DiscordQaScenarioMetadata = {
+  id: string;
+  timeoutMs: number;
+  title: string;
 };
 
 type DiscordUser = {
@@ -196,7 +192,7 @@ type DiscordReactionSnapshot = {
 type DiscordStatusReactionTimeline = {
   expectedSequence: string[];
   htmlPath?: string;
-  scenarioId: DiscordQaScenarioId;
+  scenarioId: string;
   scenarioTitle: string;
   screenshotPath?: string;
   screenshotWarning?: string;
@@ -215,7 +211,7 @@ type DiscordThreadReplyAttachmentEvidence = {
   messageContent?: string;
   messageId?: string;
   parentMessageId?: string;
-  scenarioId: DiscordQaScenarioId;
+  scenarioId: string;
   scenarioTitle: string;
   screenshotPath?: string;
   screenshotWarning?: string;
@@ -234,85 +230,70 @@ const DISCORD_QA_ENV_KEYS = [
   "OPENCLAW_QA_DISCORD_SUT_APPLICATION_ID",
 ] as const;
 
-const DISCORD_QA_SCENARIOS: DiscordQaScenarioDefinition[] = [
-  {
-    id: "discord-canary",
-    title: "Discord canary echo",
-    timeoutMs: 45_000,
-    buildRun: (sutApplicationId) => {
-      const token = `DISCORD_QA_ECHO_${randomUUID().slice(0, 8).toUpperCase()}`;
-      return {
-        kind: "channel-message",
-        expectReply: true,
-        input: `<@${sutApplicationId}> reply with only this exact marker: ${token}`,
-        expectedTextIncludes: [token],
-        matchText: token,
-      };
-    },
+export const discordQaCanaryScenario: DiscordQaScenarioImplementation = {
+  buildRun: (sutApplicationId) => {
+    const token = `DISCORD_QA_ECHO_${randomUUID().slice(0, 8).toUpperCase()}`;
+    return {
+      kind: "channel-message",
+      expectReply: true,
+      input: `<@${sutApplicationId}> reply with only this exact marker: ${token}`,
+      expectedTextIncludes: [token],
+      matchText: token,
+    };
   },
-  {
-    id: "discord-mention-gating",
-    title: "Discord unmentioned message does not trigger",
-    timeoutMs: 8_000,
-    buildRun: () => {
-      const token = `DISCORD_QA_NOMENTION_${randomUUID().slice(0, 8).toUpperCase()}`;
-      return {
-        kind: "channel-message",
-        expectReply: false,
-        input: `reply with only this exact marker: ${token}`,
-        matchText: token,
-      };
-    },
+};
+
+export const discordQaMentionGatingScenario: DiscordQaScenarioImplementation = {
+  buildRun: () => {
+    const token = `DISCORD_QA_NOMENTION_${randomUUID().slice(0, 8).toUpperCase()}`;
+    return {
+      kind: "channel-message",
+      expectReply: false,
+      input: `reply with only this exact marker: ${token}`,
+      matchText: token,
+    };
   },
-  {
-    id: "discord-native-help-command-registration",
-    title: "Discord native help command is registered",
-    timeoutMs: 45_000,
-    buildRun: () => ({
-      kind: "application-command-registration",
-      expectedCommandNames: ["help"],
-    }),
+};
+
+export const discordQaNativeHelpCommandRegistrationScenario: DiscordQaScenarioImplementation = {
+  buildRun: () => ({
+    kind: "application-command-registration",
+    expectedCommandNames: ["help"],
+  }),
+};
+
+export const discordQaVoiceAutojoinScenario: DiscordQaScenarioImplementation = {
+  buildRun: () => ({
+    kind: "voice-autojoin",
+  }),
+};
+
+export const discordQaStatusReactionsToolOnlyScenario: DiscordQaScenarioImplementation = {
+  buildRun: () => {
+    const token = `DISCORD_QA_STATUS_${randomUUID().slice(0, 8).toUpperCase()}`;
+    return {
+      kind: "status-reactions-tool-only",
+      input: [
+        `Mantis status reaction QA marker ${token}.`,
+        "Think briefly, then reply with only this exact marker:",
+        token,
+      ].join(" "),
+      expectedSequence: ["👀", DEFAULT_EMOJIS.thinking, DEFAULT_EMOJIS.done],
+    };
   },
-  {
-    id: "discord-voice-autojoin",
-    title: "Discord voice auto-join connects",
-    timeoutMs: 60_000,
-    buildRun: () => ({
-      kind: "voice-autojoin",
-    }),
+};
+
+export const discordQaThreadReplyFilepathAttachmentScenario: DiscordQaScenarioImplementation = {
+  buildRun: () => {
+    const token = `DISCORD_QA_THREAD_FILE_${randomUUID().slice(0, 8).toUpperCase()}`;
+    return {
+      kind: "thread-reply-filepath-attachment",
+      input: `Mantis Discord thread attachment parent ${token}`,
+      replyContent: `Mantis thread attachment reply ${token}`,
+      expectedAttachmentFilename: "mantis-thread-report.md",
+    };
   },
-  {
-    id: "discord-status-reactions-tool-only",
-    title: "Discord explicit status reactions run in tool-only reply mode",
-    timeoutMs: 75_000,
-    buildRun: () => {
-      const token = `DISCORD_QA_STATUS_${randomUUID().slice(0, 8).toUpperCase()}`;
-      return {
-        kind: "status-reactions-tool-only",
-        input: [
-          `Mantis status reaction QA marker ${token}.`,
-          "Think briefly, then reply with only this exact marker:",
-          token,
-        ].join(" "),
-        expectedSequence: ["👀", DEFAULT_EMOJIS.thinking, DEFAULT_EMOJIS.done],
-      };
-    },
-  },
-  {
-    id: "discord-thread-reply-filepath-attachment",
-    title: "Discord thread reply preserves filePath attachment",
-    timeoutMs: 45_000,
-    buildRun: () => {
-      const token = `DISCORD_QA_THREAD_FILE_${randomUUID().slice(0, 8).toUpperCase()}`;
-      return {
-        kind: "thread-reply-filepath-attachment",
-        input: `Mantis Discord thread attachment parent ${token}`,
-        replyContent: `Mantis thread attachment reply ${token}`,
-        expectedAttachmentFilename: "mantis-thread-report.md",
-      };
-    },
-  },
-];
+};
 
 const discordQaCredentialPayloadSchema = z.object({
   guildId: z.string().trim().min(1),
@@ -389,6 +370,10 @@ function buildDiscordQaConfig(
   },
   options: {
     statusReactionsToolOnly?: boolean;
+    voiceChannelAccess?: {
+      channelId: string;
+      users: string[];
+    };
     voiceAutoJoin?: {
       channelId: string;
       guildId: string;
@@ -412,10 +397,6 @@ function buildDiscordQaConfig(
         statusReactions: {
           ...baseCfg.messages?.statusReactions,
           enabled: true,
-          timing: {
-            ...baseCfg.messages?.statusReactions?.timing,
-            debounceMs: 0,
-          },
         },
       }
     : {
@@ -425,16 +406,41 @@ function buildDiscordQaConfig(
           visibleReplies: "automatic" as const,
         },
       };
-  const voiceConfig = options.voiceAutoJoin
-    ? {
-        ...baseCfg.channels?.discord?.voice,
-        enabled: true,
-        mode: "stt-tts" as const,
-        autoJoin: [options.voiceAutoJoin],
-      }
-    : undefined;
+  const voiceConfig =
+    options.voiceAutoJoin || options.voiceChannelAccess
+      ? {
+          ...baseCfg.channels?.discord?.voice,
+          enabled: true,
+          mode: "stt-tts" as const,
+          ...(options.voiceAutoJoin ? { autoJoin: [options.voiceAutoJoin] } : { autoJoin: [] }),
+        }
+      : undefined;
   return {
     ...baseCfg,
+    ...(options.voiceChannelAccess
+      ? {
+          agents: {
+            ...baseCfg.agents,
+            entries: {
+              ...baseCfg.agents?.entries,
+              qa: {
+                ...baseCfg.agents?.entries?.qa,
+                tools: {
+                  ...baseCfg.agents?.entries?.qa?.tools,
+                  alsoAllow: uniqueStrings([
+                    ...(baseCfg.agents?.entries?.qa?.tools?.alsoAllow ?? []),
+                    "transcripts",
+                  ]),
+                },
+              },
+            },
+          },
+          tools: {
+            ...baseCfg.tools,
+            alsoAllow: uniqueStrings([...(baseCfg.tools?.alsoAllow ?? []), "transcripts"]),
+          },
+        }
+      : {}),
     plugins: {
       ...baseCfg.plugins,
       allow: pluginAllow,
@@ -463,6 +469,14 @@ function buildDiscordQaConfig(
                     requireMention: !options.statusReactionsToolOnly,
                     users: [params.driverBotId],
                   },
+                  ...(options.voiceChannelAccess
+                    ? {
+                        [options.voiceChannelAccess.channelId]: {
+                          enabled: true,
+                          users: options.voiceChannelAccess.users,
+                        },
+                      }
+                    : {}),
                 },
               },
             },
@@ -955,7 +969,7 @@ async function observeStatusReactionTimeline(params: {
   channelId: string;
   expectedSequence: string[];
   messageId: string;
-  scenarioId: DiscordQaScenarioId;
+  scenarioId: string;
   scenarioTitle: string;
   timeoutMs: number;
   token: string;
@@ -1121,7 +1135,7 @@ async function runDiscordThreadReplyFilePathAttachmentScenario(params: {
   driverBotId: string;
   outputDir: string;
   runtimeEnv: DiscordQaRuntimeEnv;
-  scenario: DiscordQaScenarioDefinition;
+  scenario: DiscordQaScenarioMetadata;
   scenarioRun: Extract<DiscordQaScenarioRun, { kind: "thread-reply-filepath-attachment" }>;
   sutAccountId: string;
   sutBotId: string;
@@ -1348,19 +1362,6 @@ function buildObservedMessagesArtifact(params: {
   });
 }
 
-function findScenario(ids?: string[]) {
-  const requestedIds =
-    ids && ids.length > 0
-      ? ids
-      : listQaScenariosForExecutionProfile("discord:adapter").map((scenario) => scenario.id);
-  const scenariosById = new Map(DISCORD_QA_SCENARIOS.map((scenario) => [scenario.id, scenario]));
-  const missingIds = requestedIds.filter((id) => !scenariosById.has(id as DiscordQaScenarioId));
-  if (missingIds.length > 0) {
-    throw new Error(`unknown Discord QA scenario id(s): ${missingIds.join(", ")}`);
-  }
-  return requestedIds.map((id) => scenariosById.get(id as DiscordQaScenarioId)!);
-}
-
 function matchesDiscordScenarioReply(params: {
   channelId: string;
   message: DiscordObservedMessage;
@@ -1408,7 +1409,6 @@ async function assertDiscordApplicationCommandsRegistered(params: {
 }
 
 const testing = {
-  DISCORD_QA_SCENARIOS,
   collectSeenReactionSequence,
   assertDiscordScenarioReply,
   assertDiscordApplicationCommandsRegistered,
@@ -1416,7 +1416,6 @@ const testing = {
   buildDiscordWebMessageUrl,
   buildObservedMessagesArtifact,
   computeDiscordRttMs,
-  findScenario,
   getCurrentDiscordUser,
   observeStatusReactionTimeline,
   pollChannelMessages,

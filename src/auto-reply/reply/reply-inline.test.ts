@@ -22,7 +22,7 @@ describe("stripInlineStatus", () => {
   });
 
   it("collapses horizontal whitespace but keeps newlines", () => {
-    const result = stripInlineStatus("hello   world\n  indented  line");
+    const result = stripInlineStatus("hello \t  world\n\t indented  line");
     expect(result.cleaned).toBe("hello world\n indented line");
     // didStrip is true because whitespace normalization changed the string
     expect(result.didStrip).toBe(true);

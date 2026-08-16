@@ -22,6 +22,8 @@ export type MediaAttachment = {
   path?: string;
   url?: string;
   mime?: string;
+  kind?: "image" | "audio" | "video" | "document" | "sticker" | "unknown";
+  workspaceDir?: string;
   index: number;
   alreadyTranscribed?: boolean;
 };
@@ -33,15 +35,6 @@ export type MediaUnderstandingOutput = {
   text: string;
   provider: string;
   model?: string;
-};
-
-/** Provider shape used for capability discovery and dispatch. */
-export type MediaUnderstandingProvider = {
-  id: string;
-  capabilities?: MediaUnderstandingCapability[];
-  transcribeAudio?: unknown;
-  describeVideo?: unknown;
-  describeImage?: unknown;
-  describeImages?: unknown;
-  extractStructured?: unknown;
+  requestedBackend?: string;
+  observedBackend?: string;
 };

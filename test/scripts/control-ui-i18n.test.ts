@@ -15,6 +15,7 @@ import {
   analyzeControlUiCatalogs,
   flattenControlUiCatalog,
   formatControlUiCatalogFallbackDriftError,
+  verifyControlUiReferencedKeys,
 } from "../../scripts/control-ui-i18n-verify.ts";
 import {
   appendBoundedProcessOutput,
@@ -26,6 +27,7 @@ import {
   shouldReuseExistingTranslation,
 } from "../../scripts/control-ui-i18n.ts";
 import { collectControlUiRawCopyFromSource } from "../../scripts/lib/control-ui-i18n-raw-copy.ts";
+import { waitForPidFile } from "../helpers/process-wait.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 describe("control-ui-i18n generated ownership", () => {
@@ -40,7 +42,6 @@ describe("control-ui-i18n generated ownership", () => {
 
     expect(() =>
       assertControlUiGeneratedArtifactsIsolated([
-        "ui/src/i18n/locales/de.ts",
         "ui/src/i18n/.i18n/catalog-fallbacks.json",
         "ui/src/i18n/.i18n/de.meta.json",
         "ui/src/i18n/.i18n/de.tm.jsonl",
@@ -52,7 +53,7 @@ describe("control-ui-i18n generated ownership", () => {
         "ui/src/i18n/locales/de.ts",
         "ui/src/i18n/.i18n/glossary.de.json",
       ]),
-    ).toThrow("Control UI generated locale artifacts must be isolated from source changes");
+    ).not.toThrow();
 
     expect(() =>
       assertControlUiGeneratedArtifactsIsolated([
@@ -81,9 +82,49 @@ describe("control-ui-i18n generated ownership", () => {
       ),
     ).not.toThrow();
 
-    expect(shouldStrictControlUiI18n(["ui/src/i18n/locales/de.ts"])).toBe(true);
+    expect(shouldStrictControlUiI18n(["ui/src/i18n/locales/de.ts"])).toBe(false);
+    expect(shouldStrictControlUiI18n(["ui/src/i18n/.i18n/de.tm.jsonl"])).toBe(true);
     expect(shouldStrictControlUiI18n(["ui/src/i18n/locales/en.ts"])).toBe(false);
     expect(shouldStrictControlUiI18n(null)).toBe(true);
+  });
+
+  it("allows only a complete canonical translation-memory ownership migration", () => {
+    const locales = readdirSync(path.resolve("ui/src/i18n/.i18n"))
+      .filter((fileName) => fileName.endsWith(".tm.jsonl"))
+      .map((fileName) => fileName.slice(0, -".tm.jsonl".length));
+    const owners = [
+      ".gitattributes",
+      "scripts/ci-changed-scope.mjs",
+      "scripts/control-ui-i18n.ts",
+      "scripts/control-ui-i18n-verify.ts",
+      "scripts/lib/control-ui-i18n-catalog.ts",
+      "scripts/lib/control-ui-i18n-sync-plan.ts",
+      "ui/AGENTS.md",
+      "ui/config/control-ui-locales.ts",
+      "ui/vite.config.ts",
+    ];
+    const adapters = locales.map((locale) => `ui/src/i18n/locales/${locale}.ts`);
+    const generated = [
+      "ui/src/i18n/.i18n/catalog-fallbacks.json",
+      ...locales.flatMap((locale) => [
+        `ui/src/i18n/.i18n/${locale}.tm.jsonl`,
+        `ui/src/i18n/.i18n/${locale}.meta.json`,
+      ]),
+    ];
+    const migration = [...owners, ...adapters, ...generated];
+
+    expect(() => assertControlUiGeneratedArtifactsIsolated(migration)).not.toThrow();
+    expect(() => assertControlUiGeneratedArtifactsIsolated(migration.slice(1))).toThrow(
+      "Control UI generated locale artifacts must be isolated",
+    );
+    expect(() =>
+      assertControlUiGeneratedArtifactsIsolated(
+        migration.filter((filePath) => filePath !== generated[1]),
+      ),
+    ).toThrow("Control UI generated locale artifacts must be isolated");
+    expect(() =>
+      assertControlUiGeneratedArtifactsIsolated([...migration, "ui/src/i18n/.i18n/other.tm.jsonl"]),
+    ).toThrow("Control UI generated locale artifacts must be isolated");
   });
 
   it("allows generated release output on trusted release and main runs only", () => {
@@ -212,9 +253,32 @@ describe("control-ui-i18n process runner", () => {
     );
   });
 
+  it("rejects literal keys and template prefixes missing from the English catalog", () => {
+    const source = flattenControlUiCatalog(
+      { common: { ok: "OK" }, workboard: { status: { ready: "Ready" } } },
+      "en",
+    );
+    const content = [
+      't("common.ok");',
+      't("common.missing");',
+      "t(`workboard.status.${status}`);",
+      "t(`workboard.missing.${status}`);",
+    ].join("\n");
+
+    expect(() =>
+      verifyControlUiReferencedKeys(source, [{ content, relativeFile: "ui/src/pages/example.ts" }]),
+    ).toThrowError(
+      [
+        "control-ui referenced translation key verification failed.",
+        'ui/src/pages/example.ts:2: missing English catalog key "common.missing"',
+        'ui/src/pages/example.ts:4: missing English catalog subtree "workboard.missing."',
+      ].join("\n"),
+    );
+  });
+
   it("finds raw text and attributes split by template interpolation", () => {
     const source =
-      'const jsx = <button aria-label="Archive" />; const view = html`<button title="Delete ${name}">Delete ${name}</button>`;';
+      'const jsx = <button aria-label="Archive" />; const view = html`<button title="Delete ${name}">Delete ${name}</button>`; const image = html`<img alt="Preview" />`; menu.setAttribute("aria-label", "Selection actions"); reply.setAttribute("aria-label", `Reply to ${name}`); file.setAttribute("title", "Open " + fileName);';
     const sourceFile = ts.createSourceFile(
       "ui/src/pages/example.ts",
       source,
@@ -231,8 +295,12 @@ describe("control-ui-i18n process runner", () => {
       }).map(({ kind, text }) => ({ kind, text })),
     ).toEqual([
       { kind: "html-attribute", text: "Archive" },
+      { kind: "html-attribute", text: "Preview" },
       { kind: "html-attribute", text: "Delete" },
       { kind: "html-text", text: "Delete" },
+      { kind: "html-attribute", text: "Selection actions" },
+      { kind: "html-attribute", text: "Reply to" },
+      { kind: "html-attribute", text: "Open" },
     ]);
   });
 
@@ -424,7 +492,7 @@ describe("control-ui-i18n process runner", () => {
           }),
         ).rejects.toThrow(`timed out after 500ms`);
 
-        const grandchildPid = Number(readFileSync(markerPath, "utf8"));
+        const grandchildPid = await waitForPidFile(markerPath, 1_000);
         await waitForProcessExit(grandchildPid);
       } finally {
         tempDirs.cleanup();
@@ -498,13 +566,11 @@ describe("control-ui-i18n process runner", () => {
 
         try {
           const deadline = Date.now() + 30_000;
+          grandchildPid = await waitForPidFile(grandchildPidPath, 30_000);
           let fastReady = false;
           while (Date.now() < deadline) {
             try {
               fastReady = readFileSync(fastReadyPath, "utf8") === "ready";
-            } catch {}
-            try {
-              grandchildPid = Number(readFileSync(grandchildPidPath, "utf8"));
             } catch {}
             if (fastReady && grandchildPid > 0 && processIsAlive(grandchildPid)) {
               break;

@@ -5,6 +5,10 @@ import { parseVaultSecretId } from "./vault-secret-id.js";
 
 const KUBERNETES_SERVICE_ACCOUNT_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token";
 const VAULT_FETCH_TIMEOUT_MS = 5000;
+const VAULT_ERROR_BODY_MAX_BYTES = 64 * 1024;
+
+class VaultProviderError extends Error {}
+class VaultForbiddenError extends Error {}
 
 function readStdin() {
   return new Promise((resolve, reject) => {
@@ -51,7 +55,7 @@ function normalizeVaultAddress() {
   return address;
 }
 
-function normalizeOptionalString(value) {
+function normalizeVaultOptionalString(value) {
   return value?.trim() || undefined;
 }
 
@@ -70,7 +74,7 @@ function readVaultCredentialFile(filePath, label, emptyMessage) {
 }
 
 function resolveVaultAuthMethod() {
-  const method = normalizeOptionalString(process.env.OPENCLAW_VAULT_AUTH_METHOD) ?? "token";
+  const method = normalizeVaultOptionalString(process.env.OPENCLAW_VAULT_AUTH_METHOD) ?? "token";
   if (
     method === "token" ||
     method === "token_file" ||
@@ -91,7 +95,7 @@ function resolveVaultTokenEnv() {
 }
 
 function resolveVaultTokenFile() {
-  const tokenFile = normalizeOptionalString(process.env.VAULT_TOKEN_FILE);
+  const tokenFile = normalizeVaultOptionalString(process.env.VAULT_TOKEN_FILE);
   if (!tokenFile) {
     throw new Error("VAULT_TOKEN_FILE is required.");
   }
@@ -144,6 +148,47 @@ function assertVaultRequestUrl(baseUrl, requestUrl) {
   }
 }
 
+async function readVaultErrorPayload(response) {
+  const contentLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > VAULT_ERROR_BODY_MAX_BYTES) {
+    try {
+      await response.body?.cancel();
+    } catch {
+      // The fetch timeout still owns a stuck or failed cancellation.
+    }
+    return undefined;
+  }
+  const reader = response.body?.getReader();
+  if (!reader) {
+    return undefined;
+  }
+  const decoder = new TextDecoder();
+  let bytesRead = 0;
+  let text = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      text += decoder.decode();
+      break;
+    }
+    bytesRead += value.byteLength;
+    if (bytesRead > VAULT_ERROR_BODY_MAX_BYTES) {
+      try {
+        await reader.cancel();
+      } catch {
+        // The fetch timeout still owns a stuck or failed cancellation.
+      }
+      return undefined;
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
 async function fetchVault(baseUrl, url, init) {
   assertVaultRequestUrl(baseUrl, url);
   const abortController = new AbortController();
@@ -156,11 +201,20 @@ async function fetchVault(baseUrl, url, init) {
     });
     return {
       response,
-      payload: response.ok ? await response.json() : undefined,
+      payload: response.ok ? await response.json() : await readVaultErrorPayload(response),
     };
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function isInvalidVaultTokenPayload(payload) {
+  return (
+    Array.isArray(payload?.errors) &&
+    payload.errors.some(
+      (entry) => typeof entry === "string" && entry.trim().toLowerCase() === "invalid token",
+    )
+  );
 }
 
 function addVaultNamespaceHeader(headers) {
@@ -175,7 +229,7 @@ function resolveVaultAuthMount(method) {
 }
 
 function resolveVaultAuthRole(method) {
-  const role = normalizeOptionalString(process.env.OPENCLAW_VAULT_AUTH_ROLE);
+  const role = normalizeVaultOptionalString(process.env.OPENCLAW_VAULT_AUTH_ROLE);
   if (!role) {
     throw new Error(`OPENCLAW_VAULT_AUTH_ROLE is required for ${method} auth.`);
   }
@@ -184,7 +238,7 @@ function resolveVaultAuthRole(method) {
 
 function resolveVaultJwt(method) {
   const jwtFile =
-    normalizeOptionalString(process.env.OPENCLAW_VAULT_JWT_FILE) ??
+    normalizeVaultOptionalString(process.env.OPENCLAW_VAULT_JWT_FILE) ??
     (method === "kubernetes" ? KUBERNETES_SERVICE_ACCOUNT_TOKEN_PATH : undefined);
   if (!jwtFile) {
     throw new Error("OPENCLAW_VAULT_JWT_FILE is required for jwt auth.");
@@ -238,7 +292,32 @@ async function resolveVaultClientToken(baseUrl) {
   throw new Error("Unsupported Vault auth method.");
 }
 
-function readStringField(payload, parsedId) {
+async function classifyVaultClientToken(baseUrl, vaultToken) {
+  const headers = {
+    "X-Vault-Token": vaultToken,
+  };
+  addVaultNamespaceHeader(headers);
+  let response;
+  let payload;
+  try {
+    ({ response, payload } = await fetchVault(baseUrl, `${baseUrl}/v1/auth/token/lookup-self`, {
+      headers,
+    }));
+  } catch {
+    return "unknown";
+  }
+  if (response.ok) {
+    return "valid";
+  }
+  if (response.status === 401 || isInvalidVaultTokenPayload(payload)) {
+    return "invalid";
+  }
+  // Token introspection is advisory. Preserve the concrete per-id ACL failures
+  // when this probe is denied, unavailable, or otherwise inconclusive.
+  return "unknown";
+}
+
+function readVaultStringField(payload, parsedId) {
   const record = payload;
   const data = resolveKvVersion() === 2 ? record?.data?.data : record?.data;
   const value = data?.[parsedId.field];
@@ -256,13 +335,38 @@ async function readVaultSecret(baseUrl, vaultToken, id) {
     "X-Vault-Token": vaultToken,
   };
   addVaultNamespaceHeader(headers);
-  const { response, payload } = await fetchVault(baseUrl, buildVaultUrl(baseUrl, parsedId), {
-    headers,
-  });
+  let response;
+  let payload;
+  try {
+    ({ response, payload } = await fetchVault(baseUrl, buildVaultUrl(baseUrl, parsedId), {
+      headers,
+    }));
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new Error(`Vault read response for "${id}" was not valid JSON.`, { cause: error });
+    }
+    throw new VaultProviderError("Vault request failed.", { cause: error });
+  }
   if (!response.ok) {
+    if (
+      response.status === 401 ||
+      (response.status === 403 && isInvalidVaultTokenPayload(payload)) ||
+      response.status === 408 ||
+      response.status === 412 ||
+      response.status === 425 ||
+      response.status === 429 ||
+      response.status === 472 ||
+      response.status === 473 ||
+      response.status >= 500
+    ) {
+      throw new VaultProviderError(`Vault read failed (${response.status}).`);
+    }
+    if (response.status === 403) {
+      throw new VaultForbiddenError(`Vault read failed for "${id}" (403).`);
+    }
     throw new Error(`Vault read failed for "${id}" (${response.status}).`);
   }
-  return readStringField(payload, parsedId);
+  return readVaultStringField(payload, parsedId);
 }
 
 async function resolveFromVault(ids) {
@@ -270,25 +374,45 @@ async function resolveFromVault(ids) {
   if (ids.length === 0) {
     return response;
   }
-  const contextPromise = Promise.resolve().then(async () => {
-    const baseUrl = normalizeVaultAddress();
-    return {
-      baseUrl,
-      vaultToken: await resolveVaultClientToken(baseUrl),
-    };
-  });
-  await Promise.all(
+  // Address and authentication are provider-wide. Let those failures terminate the
+  // subprocess so OpenClaw fans one provider diagnostic out to every affected owner.
+  const baseUrl = normalizeVaultAddress();
+  const vaultToken = await resolveVaultClientToken(baseUrl);
+  const results = await Promise.all(
     ids.map(async (id) => {
       try {
-        const { baseUrl, vaultToken } = await contextPromise;
-        response.values[id] = await readVaultSecret(baseUrl, vaultToken, id);
+        return { id, value: await readVaultSecret(baseUrl, vaultToken, id) };
       } catch (error) {
-        response.errors[id] = {
-          message: error instanceof Error ? error.message : String(error),
+        return {
+          id,
+          error,
+          providerFailure: error instanceof VaultProviderError,
+          forbidden: error instanceof VaultForbiddenError,
         };
       }
     }),
   );
+  const providerFailures = results.filter((result) => result.providerFailure);
+  const firstProviderFailure = providerFailures[0];
+  // A batch-wide outage is provider-scoped only when every requested read failed that way.
+  // Mixed results retain their values and per-id failures instead of misclassifying all owners.
+  if (firstProviderFailure && providerFailures.length === results.length) {
+    throw firstProviderFailure.error;
+  }
+  if (results.every((result) => result.forbidden)) {
+    if ((await classifyVaultClientToken(baseUrl, vaultToken)) === "invalid") {
+      throw new VaultProviderError("Vault token is invalid.");
+    }
+  }
+  for (const result of results) {
+    if ("value" in result) {
+      response.values[result.id] = result.value;
+      continue;
+    }
+    response.errors[result.id] = {
+      message: result.error instanceof Error ? result.error.message : String(result.error),
+    };
+  }
   return response;
 }
 
@@ -300,6 +424,7 @@ async function main() {
 
 /** @param {unknown} error */
 function handleFatalError(error) {
+  process.exitCode = 1;
   writeResponse({
     protocolVersion: 1,
     values: {},

@@ -36,6 +36,7 @@ describe("telegramOutbound.sanitizeText", () => {
       accountId: "default",
     });
     expect(sanitized).not.toContain("<details>");
+    expect(sanitized).toContain("**More**\n\nbody");
     expect(sanitized).toContain("• done");
   });
 
@@ -62,5 +63,21 @@ describe("telegramOutbound.sanitizeText", () => {
       payload: { text: islandText },
     });
     expect(sanitized).not.toContain("<details>");
+    expect(sanitized).toContain("**More**\n\nbody");
+  });
+
+  it("advertises native details preservation only for rich accounts", () => {
+    expect(
+      telegramOutbound.preserveMarkdownDetails?.({
+        cfg: { channels: { telegram: { richMessages: true } } } as never,
+        accountId: "default",
+      }),
+    ).toBe(true);
+    expect(
+      telegramOutbound.preserveMarkdownDetails?.({
+        cfg: { channels: { telegram: {} } } as never,
+        accountId: "default",
+      }),
+    ).toBe(false);
   });
 });

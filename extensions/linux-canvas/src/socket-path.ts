@@ -1,5 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+
+const log = createSubsystemLogger("linux-canvas");
+
+function reportSocketWatchError(directory: string, error: unknown): void {
+  log.warn(
+    `linux canvas socket watcher unavailable for ${directory}; continuing with availability polling: ${String(error)}`,
+  );
+}
 
 export function resolveLinuxCanvasSocketPath(
   env: NodeJS.ProcessEnv = process.env,
@@ -35,9 +44,10 @@ export function watchLinuxCanvasSocket(socketPath: string, onChange: () => void)
         onChange();
       }
     });
-    watcher.on("error", () => {});
+    watcher.on("error", (error) => reportSocketWatchError(directory, error));
     return () => watcher.close();
-  } catch {
+  } catch (error) {
+    reportSocketWatchError(directory, error);
     return () => {};
   }
 }

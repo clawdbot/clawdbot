@@ -42,6 +42,45 @@ describe("isPidAlive", () => {
     expect(isPidAlive(Number.POSITIVE_INFINITY)).toBe(false);
   });
 
+  it("returns true when process probing reports EPERM", () => {
+    const error = Object.assign(new Error("permission denied"), { code: "EPERM" });
+    vi.spyOn(process, "kill").mockImplementation(() => {
+      throw error;
+    });
+    mockProcReads({
+      "/proc/42/status": "Name:\tnode\nState:\tS (sleeping)\nPid:\t42\n",
+    });
+
+    expect(isPidAlive(42)).toBe(true);
+    expect(process["kill"]).toHaveBeenCalledWith(42, 0);
+  });
+
+  it("returns false for Linux zombies even when probing reports EPERM", async () => {
+    const error = Object.assign(new Error("permission denied"), { code: "EPERM" });
+    vi.spyOn(process, "kill").mockImplementation(() => {
+      throw error;
+    });
+    mockProcReads({
+      "/proc/42/status": "Name:\tnode\nUmask:\t0022\nState:\tZ (zombie)\nTgid:\t42\nPid:\t42\n",
+    });
+
+    await withMockedPlatform("linux", async () => {
+      expect(isPidAlive(42)).toBe(false);
+    });
+
+    expect(process["kill"]).toHaveBeenCalledWith(42, 0);
+  });
+
+  it("returns false when process probing reports ESRCH", () => {
+    const error = Object.assign(new Error("missing process"), { code: "ESRCH" });
+    vi.spyOn(process, "kill").mockImplementation(() => {
+      throw error;
+    });
+
+    expect(isPidAlive(42)).toBe(false);
+    expect(process["kill"]).toHaveBeenCalledWith(42, 0);
+  });
+
   it("returns false for zombie processes on Linux", async () => {
     const zombiePid = process.pid;
 

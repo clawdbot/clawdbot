@@ -1,3 +1,4 @@
+import { initialState, Task, TaskStatus } from "@lit/task";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import type {
@@ -5,11 +6,11 @@ import type {
   MigrationsMemoryApplyResult,
   MigrationsMemoryPlanResult,
 } from "../../../packages/gateway-protocol/src/schema/migrations.js";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { RouteId } from "../app-routes.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
 import { t } from "../i18n/index.ts";
+import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import "../styles/onboarding-memory-import.css";
@@ -23,11 +24,7 @@ type ProviderResult =
   | { kind: "error"; message: string };
 
 function toErrorMessage(error: unknown): string {
-  return error instanceof Error && error.message.trim()
-    ? error.message
-    : typeof error === "string"
-      ? error
-      : t("onboarding.memoryImport.unknownError");
+  return formatUiError(error, t("onboarding.memoryImport.unknownError"));
 }
 
 function createIdempotencyKey(): string {
@@ -71,17 +68,13 @@ class OnboardingMemoryImport extends OpenClawLightDomElement {
   @property({ attribute: false }) context?: ApplicationContext<RouteId>;
   @property({ type: Boolean }) active = false;
 
-  @state() private plan: MigrationsMemoryPlanResult | null = null;
   @state() private selectedByProvider: Record<string, boolean> = {};
   @state() private applyingProviderId: string | null = null;
   @state() private results: Record<string, ProviderResult> = {};
   @state() private done = false;
   @state() private closed = false;
+  private agentsListRequest: ApplicationContext<RouteId>["agents"] | undefined;
 
-  private requestedClient: GatewayBrowserClient | null = null;
-  private requestedAgentId: string | null = null;
-  private planClient: GatewayBrowserClient | null = null;
-  private requestEpoch = 0;
   private readonly subscriptions = new SubscriptionsController(this)
     .watch(
       () => this.context?.gateway,
@@ -96,14 +89,85 @@ class OnboardingMemoryImport extends OpenClawLightDomElement {
       (selection, notify) => selection.subscribe(notify),
     );
 
+  private readonly planTask = new Task(this, {
+    args: () => {
+      const snapshot = this.context?.gateway.snapshot;
+      return [
+        this.active,
+        this.closed,
+        guardIsDone(),
+        this.isConnected && snapshot?.phase === "connected" ? (snapshot.client ?? null) : null,
+        snapshot ? hasOperatorAdminAccess(snapshot.hello?.auth ?? null) : false,
+        this.currentAgentId(),
+      ] as const;
+    },
+    task: async ([active, closed, guarded, client, admin, agentId], { signal }) => {
+      if (
+        !active ||
+        closed ||
+        guarded ||
+        !client ||
+        !admin ||
+        !agentId ||
+        this.applyingProviderId !== null ||
+        this.done
+      ) {
+        return initialState;
+      }
+      const plan = await client.request<MigrationsMemoryPlanResult>(
+        "migrations.memory.plan",
+        { agentId, overwrite: false },
+        { signal },
+      );
+      if (plan.agentId !== agentId) {
+        return initialState;
+      }
+      if (
+        offeredProviders(plan).length === 0 &&
+        plan.providers.some((provider) => provider.error)
+      ) {
+        return initialState;
+      }
+      return { client, agentId, plan };
+    },
+    onComplete: ({ plan }) => {
+      const providers = offeredProviders(plan);
+      if (providers.length === 0) {
+        if (!plan.providers.some((provider) => provider.error)) {
+          setGuardDone();
+          this.closed = true;
+        }
+        return;
+      }
+      this.results = {};
+      this.done = false;
+      this.selectedByProvider = Object.fromEntries(
+        providers.map((provider) => [provider.providerId, true]),
+      );
+    },
+  });
+
   override disconnectedCallback() {
-    this.requestEpoch += 1;
+    void this.planTask.run([false, true, true, null, false, null]);
     this.subscriptions.clear();
     super.disconnectedCallback();
   }
 
   protected override updated() {
-    void this.loadOfferIfReady();
+    if (this.context?.agents.state.agentsList) {
+      this.agentsListRequest = undefined;
+    } else if (this.context && this.agentsListRequest !== this.context.agents) {
+      const agents = this.context.agents;
+      this.agentsListRequest = agents;
+      void agents
+        .ensureList()
+        .catch(() => null)
+        .then(() => {
+          if (this.context?.agents === agents && !agents.state.agentsList) {
+            this.agentsListRequest = undefined;
+          }
+        });
+    }
   }
 
   private currentAgentId(): string | null {
@@ -118,87 +182,18 @@ class OnboardingMemoryImport extends OpenClawLightDomElement {
     return list.defaultId ?? list.agents[0]?.id ?? null;
   }
 
-  private async loadOfferIfReady() {
-    const context = this.context;
-    if (!this.active || this.closed || guardIsDone() || !context) {
-      return;
-    }
-    // A displayed offer is frozen to its gateway client and agent. If either
-    // changes while idle, drop the stale offer so an apply can never target
-    // the previously selected workspace.
-    if (this.plan && this.applyingProviderId === null && !this.done) {
-      const bindingClient = context.gateway.snapshot.client;
-      const bindingAgent = this.currentAgentId();
-      if (this.planClient !== bindingClient || this.plan.agentId !== bindingAgent) {
-        this.plan = null;
-        this.planClient = null;
-        this.requestedClient = null;
-        this.requestedAgentId = null;
-        this.selectedByProvider = {};
-        this.results = {};
-      }
-    }
-    if (this.plan || this.applyingProviderId !== null || this.done) {
-      return;
-    }
-    const snapshot = context.gateway.snapshot;
-    if (
-      !snapshot.connected ||
-      !snapshot.client ||
-      !hasOperatorAdminAccess(snapshot.hello?.auth ?? null)
-    ) {
-      return;
-    }
-    if (!context.agents.state.agentsList) {
-      void context.agents.ensureList();
-      return;
-    }
+  private get planBinding() {
+    const value = this.planTask.value;
+    const snapshot = this.context?.gateway.snapshot;
     const agentId = this.currentAgentId();
-    if (
-      !agentId ||
-      (this.requestedClient === snapshot.client && this.requestedAgentId === agentId)
-    ) {
-      return;
+    if (this.planTask.status !== TaskStatus.COMPLETE || !value) {
+      return null;
     }
+    return value.client === snapshot?.client && value.agentId === agentId ? value : null;
+  }
 
-    const client = snapshot.client;
-    const epoch = ++this.requestEpoch;
-    this.requestedClient = client;
-    this.requestedAgentId = agentId;
-    this.plan = null;
-    this.planClient = null;
-    this.results = {};
-    this.done = false;
-    try {
-      const plan = await client.request<MigrationsMemoryPlanResult>("migrations.memory.plan", {
-        agentId,
-        overwrite: false,
-      });
-      if (
-        epoch !== this.requestEpoch ||
-        plan.agentId !== agentId ||
-        this.context?.gateway.snapshot.client !== client ||
-        this.currentAgentId() !== agentId
-      ) {
-        return;
-      }
-      const providers = offeredProviders(plan);
-      if (providers.length === 0) {
-        if (plan.providers.some((provider) => provider.error)) {
-          return;
-        }
-        setGuardDone();
-        this.closed = true;
-        return;
-      }
-      this.planClient = client;
-      this.plan = plan;
-      this.selectedByProvider = Object.fromEntries(
-        providers.map((provider) => [provider.providerId, true]),
-      );
-    } catch {
-      // Transient planning failures stay silent and unguarded so a reload can retry.
-    }
+  private get plan(): MigrationsMemoryPlanResult | null {
+    return this.planBinding?.plan ?? null;
   }
 
   private toggleProvider(providerId: string, selected: boolean) {
@@ -207,9 +202,10 @@ class OnboardingMemoryImport extends OpenClawLightDomElement {
 
   private async importSelected() {
     const context = this.context;
-    const plan = this.plan;
-    const client = this.planClient;
-    const agentId = plan?.agentId;
+    const binding = this.planBinding;
+    const plan = binding?.plan;
+    const client = binding?.client;
+    const agentId = binding?.agentId;
     if (!context || !client || !plan || !agentId || this.applyingProviderId !== null || this.done) {
       return;
     }
@@ -271,7 +267,11 @@ class OnboardingMemoryImport extends OpenClawLightDomElement {
       }
     }
     this.applyingProviderId = null;
-    this.done = true;
+    this.done =
+      this.context?.gateway.snapshot.client === client && this.currentAgentId() === agentId;
+    if (!this.done) {
+      void this.planTask.run();
+    }
   }
 
   private finish() {
@@ -346,7 +346,9 @@ class OnboardingMemoryImport extends OpenClawLightDomElement {
                   </span>`
                 : result?.kind === "error"
                   ? html`<span role="alert">
-                      ${t("onboarding.memoryImport.providerError", { error: result.message })}
+                      ${t("onboarding.memoryImport.providerError", {
+                        error: formatUiExternalText(result.message),
+                      })}
                     </span>`
                   : nothing}
         </div>
@@ -363,7 +365,7 @@ class OnboardingMemoryImport extends OpenClawLightDomElement {
       this.closed ||
       guardIsDone() ||
       !context ||
-      !snapshot?.connected ||
+      snapshot?.phase !== "connected" ||
       !snapshot.client ||
       !hasOperatorAdminAccess(snapshot.hello?.auth ?? null) ||
       providers.length === 0

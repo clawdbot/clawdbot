@@ -1,6 +1,8 @@
 // Tests lifecycle/work admission ordering across canonical keys and backing ids.
+import { setImmediate as waitForImmediate } from "node:timers/promises";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import {
   resetGatewayWorkAdmission,
@@ -11,21 +13,16 @@ import {
   beginSessionWorkAdmission,
   cancelSessionWorkAdmissionHandoff,
   consumeSessionWorkAdmissionHandoff,
+  getCurrentSessionWorkAdmissionRelease,
   getActiveSessionLifecycleMutationCount,
   getActiveSessionWorkAdmissionCount,
+  getSessionWorkAdmissionRelease,
   hasOnlySessionLifecycleMutationKindActive,
   interruptSessionWorkAdmissions,
+  isSessionLifecycleMutationActive,
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "./session-lifecycle-admission.js";
-
-function createDeferred() {
-  let resolve = () => {};
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
 
 it("counts one multi-identity admission once", async () => {
   const admission = await beginSessionWorkAdmission({
@@ -39,6 +36,126 @@ it("counts one multi-identity admission once", async () => {
     admission.release();
   }
   expect(getActiveSessionWorkAdmissionCount()).toBe(0);
+});
+
+it("exposes completion only to the matching admitted session turn", async () => {
+  const scope = "store-self-archive-release";
+  const sessionKey = "agent:main:self-archive";
+  const sessionId = "session-self-archive";
+  const admission = await beginSessionWorkAdmission({
+    scope,
+    identities: [sessionKey, sessionId],
+    assertAllowed: () => {},
+  });
+  let settled = false;
+  let release: Promise<void> | undefined;
+
+  try {
+    expect(
+      getCurrentSessionWorkAdmissionRelease({ scope, identities: [sessionKey] }),
+    ).toBeUndefined();
+
+    await admission.run(async () => {
+      expect(
+        getCurrentSessionWorkAdmissionRelease({ scope, identities: ["agent:main:other"] }),
+      ).toBeUndefined();
+      release = getCurrentSessionWorkAdmissionRelease({
+        scope,
+        identities: [sessionKey, sessionId],
+      });
+      expect(release).toBeInstanceOf(Promise);
+      void release?.then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+    });
+
+    expect(settled).toBe(false);
+  } finally {
+    admission.release();
+  }
+
+  await release;
+  await Promise.resolve();
+  expect(settled).toBe(true);
+});
+
+it("waits for every nested admission that owns the same session", async () => {
+  const scope = "store-self-archive-nested";
+  const sessionKey = "agent:main:nested-self-archive";
+  const outerAdmission = await beginSessionWorkAdmission({
+    scope,
+    identities: [sessionKey, "outer-session"],
+    assertAllowed: () => {},
+  });
+  let release: Promise<void> | undefined;
+  let settled = false;
+
+  try {
+    await outerAdmission.run(async () => {
+      const innerAdmission = await beginSessionWorkAdmission({
+        scope,
+        identities: [sessionKey, "inner-session"],
+        assertAllowed: () => {},
+      });
+
+      try {
+        await innerAdmission.run(async () => {
+          release = getCurrentSessionWorkAdmissionRelease({
+            scope,
+            identities: [sessionKey],
+          });
+          void release?.then(() => {
+            settled = true;
+          });
+        });
+      } finally {
+        innerAdmission.release();
+      }
+
+      await Promise.resolve();
+      expect(settled).toBe(false);
+    });
+    expect(settled).toBe(false);
+  } finally {
+    outerAdmission.release();
+  }
+
+  await release;
+  await Promise.resolve();
+  expect(settled).toBe(true);
+});
+
+it("waits for a competing session admission outside the caller context", async () => {
+  const scope = "store-competing-self-archive";
+  const sessionKey = "agent:main:competing-self-archive";
+  const admission = await beginSessionWorkAdmission({
+    scope,
+    identities: [sessionKey, "competing-session"],
+    assertAllowed: () => {},
+  });
+  let settled = false;
+  let release: Promise<void> | undefined;
+
+  try {
+    expect(
+      getCurrentSessionWorkAdmissionRelease({ scope, identities: [sessionKey] }),
+    ).toBeUndefined();
+    release = getSessionWorkAdmissionRelease({ scope, identities: [sessionKey] });
+    expect(release).toBeInstanceOf(Promise);
+    void release?.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+  } finally {
+    admission.release();
+  }
+
+  await release;
+  await Promise.resolve();
+  expect(settled).toBe(true);
 });
 
 it("atomically hands admitted work across an interrupted RPC boundary", async () => {
@@ -139,6 +256,249 @@ it("counts one multi-identity lifecycle mutation once across module instances", 
     await mutation;
   }
   expect(second.getActiveSessionLifecycleMutationCount()).toBe(0);
+});
+
+it("keeps a same-identity mutation queued until finalization completes", async () => {
+  const target = { scope: "store-finalize-order", identities: ["session-finalize-order"] };
+  const finalizeStarted = createDeferred();
+  const releaseFinalize = createDeferred();
+  let secondRan = false;
+  const first = runExclusiveSessionLifecycleMutation({
+    ...target,
+    run: async () => {},
+    finalize: async () => {
+      finalizeStarted.resolve();
+      await releaseFinalize.promise;
+    },
+  });
+  await finalizeStarted.promise;
+
+  const second = runExclusiveSessionLifecycleMutation({
+    ...target,
+    run: async () => {
+      secondRan = true;
+    },
+  });
+  await waitForImmediate();
+  expect(secondRan).toBe(false);
+
+  releaseFinalize.resolve();
+  await Promise.all([first, second]);
+});
+
+it("finalizes a lifecycle mutation when its run throws", async () => {
+  const runError = new Error("lifecycle run failed");
+  const finalize = vi.fn(async () => {});
+
+  await expect(
+    runExclusiveSessionLifecycleMutation({
+      scope: "store-finalize-run-error",
+      identities: ["session-finalize-run-error"],
+      run: async () => {
+        throw runError;
+      },
+      finalize,
+    }),
+  ).rejects.toBe(runError);
+  expect(finalize).toHaveBeenCalledOnce();
+});
+
+it("releases lifecycle state when finalization throws", async () => {
+  const target = { scope: "store-finalize-error", identities: ["session-finalize-error"] };
+  const finalizeError = new Error("lifecycle finalizer failed");
+
+  await expect(
+    runExclusiveSessionLifecycleMutation({
+      ...target,
+      run: async () => {},
+      finalize: async () => {
+        throw finalizeError;
+      },
+    }),
+  ).rejects.toBe(finalizeError);
+  expect(isSessionLifecycleMutationActive(target.scope, target.identities)).toBe(false);
+  await expect(
+    runExclusiveSessionLifecycleMutation({ ...target, run: async () => "next" }),
+  ).resolves.toBe("next");
+});
+
+it("counts a cross-store lifecycle mutation once and fences every target", async () => {
+  const mutationStarted = createDeferred();
+  const releaseMutation = createDeferred();
+  const mutation = runExclusiveSessionLifecycleMutation({
+    targets: [
+      {
+        scope: "store-cross-count-b",
+        identities: ["agent:work:main", "session-cross-count-b"],
+      },
+      {
+        scope: "store-cross-count-a",
+        identities: ["agent:main:main", "session-cross-count-a"],
+      },
+      {
+        scope: "store-cross-count-a",
+        identities: ["session-cross-count-a", undefined],
+      },
+    ],
+    run: async () => {
+      mutationStarted.resolve();
+      await releaseMutation.promise;
+    },
+  });
+  await mutationStarted.promise;
+
+  try {
+    expect(getActiveSessionLifecycleMutationCount()).toBe(1);
+    expect(isSessionLifecycleMutationActive("store-cross-count-a", ["agent:main:main"])).toBe(true);
+    expect(isSessionLifecycleMutationActive("store-cross-count-b", ["session-cross-count-b"])).toBe(
+      true,
+    );
+    expect(isSessionLifecycleMutationActive("store-cross-count-b", ["agent:main:main"])).toBe(
+      false,
+    );
+  } finally {
+    releaseMutation.resolve();
+    await mutation;
+  }
+
+  expect(getActiveSessionLifecycleMutationCount()).toBe(0);
+  expect(isSessionLifecycleMutationActive("store-cross-count-a", ["session-cross-count-a"])).toBe(
+    false,
+  );
+  expect(isSessionLifecycleMutationActive("store-cross-count-b", ["session-cross-count-b"])).toBe(
+    false,
+  );
+});
+
+it("serializes opposite-direction cross-store lifecycle mutations", async () => {
+  const main = {
+    scope: "store-cross-order-a",
+    identities: ["agent:main:main", "session-cross-order-a"],
+  };
+  const work = {
+    scope: "store-cross-order-b",
+    identities: ["agent:work:main", "session-cross-order-b"],
+  };
+  let activeMutations = 0;
+  let maximumActiveMutations = 0;
+  let completedMutations = 0;
+
+  await Promise.all(
+    Array.from({ length: 48 }, async (_, index) =>
+      runExclusiveSessionLifecycleMutation({
+        targets: index % 2 === 0 ? [main, work] : [work, main],
+        run: async () => {
+          activeMutations += 1;
+          maximumActiveMutations = Math.max(maximumActiveMutations, activeMutations);
+          try {
+            await Promise.resolve();
+            completedMutations += 1;
+          } finally {
+            activeMutations -= 1;
+          }
+        },
+      }),
+    ),
+  );
+
+  expect(completedMutations).toBe(48);
+  expect(maximumActiveMutations).toBe(1);
+  expect(activeMutations).toBe(0);
+  expect(getActiveSessionLifecycleMutationCount()).toBe(0);
+});
+
+it("interrupts admitted work in both stores before a cross-store mutation", async () => {
+  const mainTarget = {
+    scope: "store-cross-interrupt-a",
+    identities: ["agent:main:main", "session-cross-interrupt-a"],
+  };
+  const workTarget = {
+    scope: "store-cross-interrupt-b",
+    identities: ["agent:work:main", "session-cross-interrupt-b"],
+  };
+  let mainInterrupted = false;
+  let workInterrupted = false;
+  const mainAdmission = await beginSessionWorkAdmission({
+    ...mainTarget,
+    assertAllowed: () => {},
+    onInterrupt: () => {
+      mainInterrupted = true;
+      mainAdmission.release();
+    },
+  });
+  const workAdmission = await beginSessionWorkAdmission({
+    ...workTarget,
+    assertAllowed: () => {},
+    onInterrupt: () => {
+      workInterrupted = true;
+      workAdmission.release();
+    },
+  });
+
+  try {
+    await runExclusiveSessionLifecycleMutation({
+      targets: [workTarget, mainTarget],
+      prepare: async () => {
+        const interrupted = await Promise.all([
+          interruptSessionWorkAdmissions({ ...mainTarget, timeoutMs: 1_000 }),
+          interruptSessionWorkAdmissions({ ...workTarget, timeoutMs: 1_000 }),
+        ]);
+        expect(interrupted).toEqual([true, true]);
+      },
+      run: async () => {
+        expect(mainInterrupted).toBe(true);
+        expect(workInterrupted).toBe(true);
+        expect(isSessionWorkAdmissionActive(mainTarget.scope, mainTarget.identities)).toBe(false);
+        expect(isSessionWorkAdmissionActive(workTarget.scope, workTarget.identities)).toBe(false);
+      },
+    });
+  } finally {
+    mainAdmission.release();
+    workAdmission.release();
+  }
+});
+
+it("cancels an opposite-direction cross-store mutation before activation", async () => {
+  const main = {
+    scope: "store-cross-cancel-a",
+    identities: ["agent:main:main", "session-cross-cancel-a"],
+  };
+  const work = {
+    scope: "store-cross-cancel-b",
+    identities: ["agent:work:main", "session-cross-cancel-b"],
+  };
+  const mutationStarted = createDeferred();
+  const releaseMutation = createDeferred();
+  const first = runExclusiveSessionLifecycleMutation({
+    targets: [main, work],
+    run: async () => {
+      mutationStarted.resolve();
+      await releaseMutation.promise;
+    },
+  });
+  await mutationStarted.promise;
+
+  const controller = new AbortController();
+  const abortError = new Error("cancel queued cross-store lifecycle mutation");
+  let cancelledMutationRan = false;
+  const cancelled = runExclusiveSessionLifecycleMutation({
+    targets: [work, main],
+    signal: controller.signal,
+    run: async () => {
+      cancelledMutationRan = true;
+    },
+  });
+  controller.abort(abortError);
+
+  try {
+    await expect(cancelled).rejects.toBe(abortError);
+  } finally {
+    releaseMutation.resolve();
+    await first;
+  }
+
+  expect(cancelledMutationRan).toBe(false);
+  expect(getActiveSessionLifecycleMutationCount()).toBe(0);
 });
 
 it("rejects an admission that resumes after suspension closes the async gap", async () => {

@@ -19,15 +19,15 @@ describe("createPostCompactionLoopGuard", () => {
     expect(verdict.armed).toBe(false);
   });
 
-  it("arms for the configured window after compaction", () => {
-    const guard = createPostCompactionLoopGuard({ windowSize: 3 });
+  it("arms for the built-in window after compaction", () => {
+    const guard = createPostCompactionLoopGuard();
     guard.armPostCompaction();
     expect(guard.snapshot().armed).toBe(true);
     expect(guard.snapshot().remainingAttempts).toBe(3);
   });
 
   it("decrements remainingAttempts on each observation", () => {
-    const guard = createPostCompactionLoopGuard({ windowSize: 3 });
+    const guard = createPostCompactionLoopGuard();
     guard.armPostCompaction();
     guard.observe(callOutcome("read", { path: "/x" }, "r1"));
     expect(guard.snapshot().remainingAttempts).toBe(2);
@@ -38,10 +38,10 @@ describe("createPostCompactionLoopGuard", () => {
     expect(guard.snapshot().armed).toBe(false);
   });
 
-  it("aborts on the windowSize-th identical (tool,args,result) call within the window", () => {
+  it("aborts on the third identical (tool,args,result) call within the window", () => {
     // Repeating the same tool, args, and result right after compaction means the
     // model likely lost progress and is stuck replaying the same recovery step.
-    const guard = createPostCompactionLoopGuard({ windowSize: 3 });
+    const guard = createPostCompactionLoopGuard();
     guard.armPostCompaction();
     expect(
       guard.observe(callOutcome("gateway", { action: "lookup", path: "x" }, "r1")).shouldAbort,
@@ -59,7 +59,7 @@ describe("createPostCompactionLoopGuard", () => {
   });
 
   it("does NOT abort when the result hash changes (progress was made)", () => {
-    const guard = createPostCompactionLoopGuard({ windowSize: 3 });
+    const guard = createPostCompactionLoopGuard();
     guard.armPostCompaction();
     guard.observe(callOutcome("read", { path: "/x" }, "r1"));
     guard.observe(callOutcome("read", { path: "/x" }, "r2"));
@@ -68,7 +68,7 @@ describe("createPostCompactionLoopGuard", () => {
   });
 
   it("does NOT abort when the args hash changes", () => {
-    const guard = createPostCompactionLoopGuard({ windowSize: 3 });
+    const guard = createPostCompactionLoopGuard();
     guard.armPostCompaction();
     guard.observe(callOutcome("read", { path: "/a" }, "r1"));
     guard.observe(callOutcome("read", { path: "/b" }, "r1"));
@@ -77,28 +77,31 @@ describe("createPostCompactionLoopGuard", () => {
   });
 
   it("does NOT abort outside the window", () => {
-    const guard = createPostCompactionLoopGuard({ windowSize: 2 });
+    const guard = createPostCompactionLoopGuard();
     guard.armPostCompaction();
     guard.observe(callOutcome("read", { path: "/x" }, "r1"));
     guard.observe(callOutcome("read", { path: "/x" }, "r1"));
+    expect(guard.snapshot().armed).toBe(true);
+    guard.observe(callOutcome("read", { path: "/y" }, "r2"));
     expect(guard.snapshot().armed).toBe(false);
     const after = guard.observe(callOutcome("read", { path: "/x" }, "r1"));
     expect(after.shouldAbort).toBe(false);
   });
 
   it("re-arms when armPostCompaction is called again (multiple compactions per run)", () => {
-    const guard = createPostCompactionLoopGuard({ windowSize: 2 });
+    const guard = createPostCompactionLoopGuard();
     guard.armPostCompaction();
     guard.observe(callOutcome("read", { path: "/x" }, "r1"));
+    guard.observe(callOutcome("read", { path: "/y" }, "r2"));
     guard.observe(callOutcome("read", { path: "/x" }, "r1"));
     expect(guard.snapshot().armed).toBe(false);
     guard.armPostCompaction();
     expect(guard.snapshot().armed).toBe(true);
-    expect(guard.snapshot().remainingAttempts).toBe(2);
+    expect(guard.snapshot().remainingAttempts).toBe(3);
   });
 
   it("respects the parent loop detection disabled state", () => {
-    const guard = createPostCompactionLoopGuard({ windowSize: 3 }, { enabled: false });
+    const guard = createPostCompactionLoopGuard({ enabled: false });
     guard.armPostCompaction();
     guard.observe(callOutcome("gateway", { x: 1 }, "r1"));
     guard.observe(callOutcome("gateway", { x: 1 }, "r1"));
@@ -106,8 +109,8 @@ describe("createPostCompactionLoopGuard", () => {
     expect(third.shouldAbort).toBe(false);
   });
 
-  it("disarms after observing windowSize calls regardless of verdict", () => {
-    const guard = createPostCompactionLoopGuard({ windowSize: 3 });
+  it("disarms after observing the built-in window regardless of verdict", () => {
+    const guard = createPostCompactionLoopGuard();
     guard.armPostCompaction();
     guard.observe(callOutcome("read", { path: "/a" }, "r1"));
     guard.observe(callOutcome("write", { path: "/b" }, "r2"));
@@ -134,8 +137,9 @@ describe("PostCompactionLoopPersistedError", () => {
   });
 
   it("can be built from a guard verdict via fromVerdict", () => {
-    const guard = createPostCompactionLoopGuard({ windowSize: 2 });
+    const guard = createPostCompactionLoopGuard();
     guard.armPostCompaction();
+    guard.observe(callOutcome("read", { path: "/x" }, "r1"));
     guard.observe(callOutcome("read", { path: "/x" }, "r1"));
     const verdict = guard.observe(callOutcome("read", { path: "/x" }, "r1"));
     expect(verdict.shouldAbort).toBe(true);

@@ -70,13 +70,26 @@ Disable it on the node if needed:
 
 ## Run (foreground)
 
+For one-paste onboarding, use [`openclaw connect`](/cli/connect). It accepts a
+single-use join URL or the same setup code forms as `--pair`, then runs this
+node-host runtime.
+
 ```bash
 openclaw node run --host <gateway-host> --port 18789
+```
+
+Or paste a short-lived node setup link from the Control UI Devices page:
+
+```bash
+openclaw node run --pair "oc-pair://<setup-code>"
 ```
 
 Options:
 
 - `--host <host>`: Gateway WebSocket host (default: `127.0.0.1`)
+- `--pair <code-or-url>`: Read the Gateway endpoint, bootstrap token, TLS mode,
+  and optional certificate pin from a setup code or `oc-pair://` URL. Explicit
+  gateway flags override values from `--pair`.
 - `--port <port>`: Gateway WebSocket port (default: `18789`)
 - `--context-path <path>`: Gateway WebSocket context path (e.g. `/openclaw-gw`). Appended to the WebSocket URL.
 - `--tls`: Use TLS for the gateway connection
@@ -86,6 +99,12 @@ Options:
 - `--display-name <name>`: Override the node display name
 
 ## Gateway auth for node host
+
+`--pair` uses a 10-minute single-use bootstrap token for the first connection.
+After pairing, reconnects use the durable device credential. The setup link
+does not pre-approve `system.run`; normal node approval and SSH verification
+remain in force. `node install --pair` is intentionally unavailable because a
+short-lived bearer setup link must not be persisted in service arguments.
 
 `openclaw node run` and `openclaw node install` resolve gateway auth from config/env (no `--token`/`--password` flags on node commands):
 
@@ -125,6 +144,12 @@ Options:
 - `--display-name <name>`: Override the node display name
 - `--runtime <runtime>`: Service runtime (`node`)
 - `--force`: Reinstall/overwrite if already installed
+
+> **Linux (systemd user service):** Run `sudo loginctl enable-linger <user>` after
+> install. Without lingering, `systemd --user` tears down the node service when
+> your last SSH session ends, so the node silently goes offline after logout.
+> `openclaw node install` prints this warning when it detects lingering is
+> disabled.
 
 Manage the service:
 
@@ -170,8 +195,8 @@ Inspect the local node identity the Gateway verifies against:
 openclaw node identity --json
 ```
 
-It prints the device ID and public key from `identity/device.json` and never
-creates or modifies identity files.
+It prints the device ID and public key from the `primary` row in
+`state/openclaw.sqlite` and never creates the database or a new identity.
 
 On tightly controlled node networks, the Gateway operator can explicitly opt in
 to auto-approving first-time node pairing from trusted CIDRs:
@@ -204,11 +229,11 @@ identity that the Gateway uses for pairing and routing. This state lives in the
 OpenClaw state directory (`~/.openclaw` by default, or `$OPENCLAW_STATE_DIR`
 when set):
 
-| State                                        | Purpose                                                                                                                          |
-| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `state/openclaw.sqlite` (`node_host_config`) | Client instance ID, display name, and Gateway connection metadata. The client sends this ID as `instanceId`.                     |
-| `identity/device.json`                       | Signed Ed25519 keypair and derived device ID. For signed connections, this device ID is the routed node ID and pairing identity. |
-| `identity/device-auth.json`                  | Paired device tokens, keyed by cryptographic device ID and role.                                                                 |
+| State                                                    | Purpose                                                                                                                          |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `state/openclaw.sqlite` (`node_host_config`)             | Client instance ID, display name, and Gateway connection metadata. The client sends this ID as `instanceId`.                     |
+| `state/openclaw.sqlite` (`device_identities`, `primary`) | Signed Ed25519 keypair and derived device ID. For signed connections, this device ID is the routed node ID and pairing identity. |
+| `state/openclaw.sqlite` (`device_auth_tokens`)           | Paired device tokens, keyed by cryptographic device ID and role.                                                                 |
 
 `--node-id` changes only the client instance ID in shared SQLite state. It does
 not change the cryptographic device ID or clear pairing auth. Migrating a retired
@@ -234,20 +259,21 @@ The two request IDs are distinct. An applicable trusted-CIDR policy can
 auto-approve the first-time device-pairing step; command-surface approval remains
 a separate check.
 
-Older OpenClaw releases stored node-host state in `node.json` and could leave an
-obsolete `token` field there. Stop the node host and run `openclaw doctor --fix`
-once; Doctor imports the supported identity and connection fields into SQLite,
-discards the unused token field, verifies the row, and removes the retired file.
-Normal node commands fail closed with this repair instruction while the file or
-an interrupted Doctor claim remains. Keep both files under `identity/` private;
-they contain the device keypair and auth tokens.
+Older OpenClaw releases stored node-host state in `node.json`, the signed
+identity in `identity/device.json`, and paired auth in
+`identity/device-auth.json`. Stop the node host and run
+`openclaw doctor --fix` once; Doctor claims each retired source, validates it,
+imports and verifies the canonical SQLite row, then removes the old file. Normal
+node commands fail closed with this repair instruction while either retired file
+or an interrupted Doctor claim remains. Keep `state/openclaw.sqlite` private;
+it contains the device keypair and auth tokens.
 
 ## Exec approvals
 
 `system.run` is gated by local exec approvals:
 
-- `$OPENCLAW_STATE_DIR/exec-approvals.json`, or
-  `~/.openclaw/exec-approvals.json` when the variable is unset
+- `$OPENCLAW_STATE_DIR/state/openclaw.sqlite#exec_approvals_config`, or
+  `~/.openclaw/state/openclaw.sqlite#exec_approvals_config` when the variable is unset
 - [Exec approvals](/tools/exec-approvals)
 - `openclaw approvals --node <id|name|ip>` (edit from the Gateway)
 
@@ -259,4 +285,5 @@ created are rejected instead of changing what the node executes.
 ## Related
 
 - [CLI reference](/cli)
+- [Connect a machine](/cli/connect)
 - [Nodes](/nodes)

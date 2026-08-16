@@ -1,11 +1,11 @@
 import process from "node:process";
 import { expectDefined } from "@openclaw/normalization-core";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import {
   decodeWindowsOutputBuffer,
   resolveWindowsConsoleEncoding,
 } from "../infra/windows-encoding.js";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { releaseChildProcessOutputAfterExit } from "./child-process.js";
 import {
   appendCapturedOutput,
@@ -69,6 +69,22 @@ export async function runCommandWithTimeout(
   argv: string[],
   optionsOrTimeout: number | CommandOptions,
 ): Promise<SpawnResult> {
+  return await runCommandWithOutputEncoding(argv, optionsOrTimeout, false);
+}
+
+/** Run a command whose stdout and stderr are defined to be UTF-8 on every platform. */
+export async function runUtf8CommandWithTimeout(
+  argv: string[],
+  optionsOrTimeout: number | CommandOptions,
+): Promise<SpawnResult> {
+  return await runCommandWithOutputEncoding(argv, optionsOrTimeout, true);
+}
+
+async function runCommandWithOutputEncoding(
+  argv: string[],
+  optionsOrTimeout: number | CommandOptions,
+  forceUtf8: boolean,
+): Promise<SpawnResult> {
   const options: CommandOptions =
     typeof optionsOrTimeout === "number" ? { timeoutMs: optionsOrTimeout } : optionsOrTimeout;
   const {
@@ -123,7 +139,7 @@ export async function runCommandWithTimeout(
     MAX_PRESERVED_PENDING_LINE_BYTES,
   );
   const maxPreservedOutputLines = Math.max(0, Math.floor(options.maxPreservedOutputLines ?? 16));
-  const windowsEncoding = resolveWindowsConsoleEncoding();
+  const windowsEncoding = forceUtf8 ? null : resolveWindowsConsoleEncoding();
   const cancelController = new AbortController();
   let termination: CommandTerminationReason | undefined;
   let childExitState: { code: number | null; signal: NodeJS.Signals | null } | undefined;
@@ -154,13 +170,14 @@ export async function runCommandWithTimeout(
     stripFinalNewline: false,
     windowsVerbatimArguments: options.windowsVerbatimArguments,
   });
-  const releaseOutput = releaseChildProcessOutputAfterExit(child);
-  child.once("exit", (code, signalValue) => {
+  const nodeChild = child.nodeChildProcess;
+  const releaseOutput = releaseChildProcessOutputAfterExit(nodeChild);
+  nodeChild.once("exit", (code, signalValue) => {
     childExited = true;
     childExitState = { code, signal: signalValue };
   });
   const terminationController = createCommandTerminationController({
-    child,
+    child: nodeChild,
     cancelController,
     baseEnv,
     env,
@@ -358,7 +375,7 @@ export async function runCommandWithTimeout(
   const isCauseLessWindowsShimResult =
     !termination &&
     invocation.usesWindowsExitCodeShim &&
-    typeof child.pid === "number" &&
+    typeof nodeChild.pid === "number" &&
     result.code === undefined &&
     result.cause === undefined &&
     !result.timedOut &&
@@ -376,8 +393,8 @@ export async function runCommandWithTimeout(
       if (
         childExitState?.code != null ||
         childExitState?.signal != null ||
-        child.exitCode != null ||
-        child.signalCode != null
+        nodeChild.exitCode != null ||
+        nodeChild.signalCode != null
       ) {
         break;
       }
@@ -405,10 +422,10 @@ export async function runCommandWithTimeout(
     throw error;
   }
 
-  const resolvedSignal = result.signal ?? childExitState?.signal ?? child.signalCode ?? null;
+  const resolvedSignal = result.signal ?? childExitState?.signal ?? nodeChild.signalCode ?? null;
   const resolvedCode = resolveProcessExitCode({
     explicitCode: result.exitCode ?? childExitState?.code,
-    childExitCode: child.exitCode,
+    childExitCode: nodeChild.exitCode,
     resolvedSignal,
     usesWindowsExitCodeShim: invocation.usesWindowsExitCodeShim,
     timedOut: termination === "timeout",
@@ -447,16 +464,20 @@ export async function runCommandWithTimeout(
     }
   }
 
+  const decodeCapturedOutput = (
+    capture: CapturedOutputBuffers,
+    captureMode: CommandOutputCaptureMode,
+  ): string => {
+    const buffer = finalizeCapturedOutput(capture, captureMode, forceUtf8);
+    return forceUtf8
+      ? buffer.toString("utf8")
+      : decodeWindowsOutputBuffer({ buffer, windowsEncoding });
+  };
+
   return {
-    pid: child.pid,
-    stdout: decodeWindowsOutputBuffer({
-      buffer: finalizeCapturedOutput(stdoutCapture, stdoutCaptureMode),
-      windowsEncoding,
-    }),
-    stderr: decodeWindowsOutputBuffer({
-      buffer: finalizeCapturedOutput(stderrCapture, stderrCaptureMode),
-      windowsEncoding,
-    }),
+    pid: nodeChild.pid,
+    stdout: decodeCapturedOutput(stdoutCapture, stdoutCaptureMode),
+    stderr: decodeCapturedOutput(stderrCapture, stderrCaptureMode),
     stdoutTruncatedBytes: stdoutCapture.truncatedBytes || undefined,
     stderrTruncatedBytes: stderrCapture.truncatedBytes || undefined,
     preservedStdoutLines:
@@ -465,7 +486,7 @@ export async function runCommandWithTimeout(
       stderrCapture.preservedLines.length > 0 ? stderrCapture.preservedLines : undefined,
     code: normalizedCode,
     signal: resolvedSignal,
-    killed: child.killed,
+    killed: nodeChild.killed,
     termination: termination === "output-limit" ? "signal" : termination,
     noOutputTimedOut: termination === "no-output-timeout",
     outputLimitExceeded: termination === "output-limit" || undefined,

@@ -1,0 +1,176 @@
+title: Cron final reply after a failed terminal tool
+
+scenario:
+  id: cron-failed-tool-terminal-finalization
+  surface: cron
+  coverage:
+    primary: [agent-runtime.failure-recovery-empty-response-recovery]
+    secondary: [automation.isolated-cron-execution, channels.qa-channel-final-reply]
+  regressionRefs:
+    - openclaw/openclaw#118274
+  gatewayConfigPatch:
+    tools:
+      codeMode:
+        enabled: true
+  objective: Verify an isolated announce cron finalizes one failed terminal tool honestly and delivers one visible reply.
+  successCriteria:
+    - The isolated cron run completes successfully after one failed Code Mode exec.
+    - One failure-honest finalization observes the exact failed call and exposes no tools.
+    - The failed tool never replays and qa-channel receives exactly one final reply.
+  codeRefs:
+    - src/cron/isolated-agent/run-executor.ts
+    - src/agents/embedded-agent-runner/run/incomplete-turn-resolution.ts
+    - src/agents/embedded-agent-runner/run/incomplete-turn-recovery.ts
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
+  execution:
+    kind: flow
+    suiteIsolation: isolated
+    isolationReason: Enables Code Mode and forces an isolated cron with exact delivery assertions.
+    channel: qa-channel
+    retryCount: 0
+    summary: Prove a real failed terminal Code Mode tool still produces one visible cron announcement.
+    config:
+      requiredProviderMode: mock-openai
+      channelId: qa-failed-cron
+      promptSnippet: Failed tool terminal recovery QA check
+      retryNeedle: The previous assistant turn completed its tool calls but did not produce a user-visible answer.
+      failureHonestyNeedle: state that failure plainly and do not claim it succeeded
+      expectedMarker: CRON-FAILED-TOOL-FINALIZED-OK
+      expectedReply: "The requested file could not be read: ENOENT. CRON-FAILED-TOOL-FINALIZED-OK"
+
+flow:
+  steps:
+    - name: forces an isolated cron containing one terminal tool failure
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: failed-terminal cron proof requires mock-openai
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - set: requestCursorBefore
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - set: scheduledFor
+          value:
+            expr: "new Date(Date.now() + 10 * 60 * 1000).toISOString()"
+        - call: env.gateway.call
+          saveAs: added
+          args:
+            - cron.add
+            - agentId: qa
+              name:
+                expr: "`qa-failed-terminal-${randomUUID()}`"
+              enabled: true
+              deleteAfterRun: false
+              schedule:
+                kind: at
+                at:
+                  ref: scheduledFor
+              sessionTarget: isolated
+              wakeMode: now
+              payload:
+                kind: agentTurn
+                message: "Failed tool terminal recovery QA check: read the missing workspace file, then respond with exact marker: `CRON-FAILED-TOOL-FINALIZED-OK`."
+              delivery:
+                mode: announce
+                channel: qa-channel
+                to:
+                  expr: "`channel:${config.channelId}`"
+        - set: jobId
+          value:
+            expr: added.id
+        - set: runStartedAt
+          value:
+            expr: "Date.now()"
+        - call: env.gateway.call
+          saveAs: runResponse
+          args:
+            - cron.run
+            - id:
+                ref: jobId
+              mode: force
+            - timeoutMs: 30000
+        - assert:
+            expr: "runResponse?.ok === true && runResponse?.ran !== false"
+            message:
+              expr: "`expected one forced cron run, got ${JSON.stringify(runResponse)}`"
+
+    - name: proves one failed call, one honest finalization, and one delivery
+      actions:
+        - call: waitForCronRunCompletion
+          saveAs: completedRun
+          args:
+            - callGateway:
+                expr: "env.gateway.call.bind(env.gateway)"
+              jobId:
+                ref: jobId
+              afterTs:
+                ref: runStartedAt
+              timeoutMs:
+                expr: "liveTurnTimeoutMs(env, 60000)"
+        - set: scenarioRequests
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet))"
+        - assert:
+            expr: "typeof completedRun?.sessionKey === 'string' && completedRun.sessionKey.startsWith(`agent:qa:cron:${jobId}:run:`)"
+            message:
+              expr: "`expected an isolated cron run session, got ${JSON.stringify(completedRun)}`"
+        - assert:
+            expr: "completedRun.status === 'ok'"
+            message:
+              expr: "`expected a successful cron run, got ${JSON.stringify({ run: completedRun, requests: scenarioRequests.map((request) => ({ tool: request.plannedToolName, wireTool: request.plannedWireToolName, callId: request.plannedToolCallId, outputCallId: request.toolOutputCallId, finalization: String(request.allInputText ?? '').includes(config.retryNeedle) })) })}`"
+        - set: readPlans
+          value:
+            expr: "scenarioRequests.filter((request) => request.plannedToolName === 'read')"
+        - set: finalizations
+          value:
+            expr: "scenarioRequests.filter((request) => String(request.allInputText ?? '').includes(config.retryNeedle))"
+        - assert:
+            expr: "readPlans.length === 1 && readPlans[0].plannedWireToolName === 'exec'"
+            message:
+              expr: "`expected one Code Mode read plan, got ${JSON.stringify(readPlans)}`"
+        - assert:
+            expr: "finalizations.length === 1 && String(finalizations[0].allInputText ?? '').includes(config.failureHonestyNeedle)"
+            message:
+              expr: "`expected one failure-honest cron finalization, got ${JSON.stringify(finalizations)}`"
+        - set: replayedExecCalls
+          value:
+            expr: "(Array.isArray(finalizations[0].body?.input) ? finalizations[0].body.input : []).filter((item) => item?.type === 'function_call' && item.name === 'exec' && String(item.arguments ?? '').includes('qa-failed-terminal-missing-file.txt'))"
+        - set: failedExecOutputs
+          value:
+            expr: "(Array.isArray(finalizations[0].body?.input) ? finalizations[0].body.input : []).filter((item) => item?.type === 'function_call_output' && item.call_id === replayedExecCalls[0]?.call_id && /ENOENT|no such file/i.test(typeof item.output === 'string' ? item.output : JSON.stringify(item.output ?? '')))"
+        - assert:
+            expr: "replayedExecCalls.length === 1 && failedExecOutputs.length === 1 && finalizations[0].toolOutputCallId === replayedExecCalls[0].call_id"
+            message:
+              expr: "`cron finalization did not preserve the normalized parent exec/result pairing: calls=${JSON.stringify(replayedExecCalls.map((item) => item.call_id))} outputs=${JSON.stringify(failedExecOutputs.map((item) => item.call_id))}`"
+        - assert:
+            expr: "!Array.isArray(finalizations[0].body?.tools) || finalizations[0].body.tools.length === 0"
+            message: cron finalization exposed a replayable model tool surface
+        - call: readSessionTranscriptSummary
+          saveAs: transcript
+          args:
+            - ref: env
+            - expr: "`agent:qa:cron:${jobId}`"
+        - assert:
+            expr: "transcript.assistantToolCallCounts.exec === 1 && transcript.completedToolCallCounts.exec === 1 && !transcript.successfulToolCallCounts.exec"
+            message:
+              expr: "`expected exactly one failed cron exec result, got ${JSON.stringify(transcript)}`"
+        - call: waitForCondition
+          saveAs: deliveries
+          args:
+            - lambda:
+                expr: "(() => { const matches = state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === config.channelId); return matches.length > 0 ? matches : undefined; })()"
+            - 10000
+            - 100
+        - assert:
+            expr: "deliveries.length === 1 && deliveries[0].text.trim() === config.expectedReply"
+            message:
+              expr: "`expected exactly one failure-honest cron announcement, got ${JSON.stringify(deliveries)}`"
+      detailsExpr: "`${deliveries[0].text}; calls=${String(transcript.assistantToolCallCounts.exec)} failed=${String(transcript.completedToolCallCounts.exec)} finalizations=${String(finalizations.length)}`"

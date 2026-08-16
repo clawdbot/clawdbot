@@ -55,6 +55,7 @@ function applyGatewayConfig({
   return withEnv(
     {
       OPENCLAW_GATEWAY_TOKEN: undefined,
+      OPENCLAW_GATEWAY_PASSWORD: undefined,
       [SAMPLE_SECRET_REF.id]: undefined,
       ...env,
     },
@@ -69,7 +70,7 @@ function applyGatewayConfig({
   );
 }
 
-describe("applyNonInteractiveGatewayConfig token resolution chain", () => {
+describe("applyNonInteractiveGatewayConfig auth resolution", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -111,6 +112,32 @@ describe("applyNonInteractiveGatewayConfig token resolution chain", () => {
     expect(randomToken).not.toHaveBeenCalled();
   });
 
+  it("selects token auth when --gateway-token overrides a no-auth config", () => {
+    const result = applyGatewayConfig({
+      nextConfig: { gateway: { auth: { mode: "none" } } },
+      opts: { gatewayToken: "flag-token" } as OnboardOptions,
+    });
+
+    expect(result?.nextConfig.gateway?.auth).toEqual({ mode: "token", token: "flag-token" });
+  });
+
+  it("keeps password auth when a token-only rerun targets an existing Funnel", () => {
+    const result = applyGatewayConfig({
+      nextConfig: {
+        gateway: {
+          auth: { mode: "password", password: "test-password" },
+          tailscale: { mode: "funnel" },
+        },
+      },
+      opts: { gatewayToken: "flag-token" } as OnboardOptions,
+    });
+
+    expect(result?.nextConfig.gateway?.auth).toEqual({
+      mode: "password",
+      password: "test-password",
+    });
+  });
+
   it("uses OPENCLAW_GATEWAY_TOKEN to fill an empty config on first-run", () => {
     const result = applyGatewayConfig({ env: { OPENCLAW_GATEWAY_TOKEN: "env-token" } });
 
@@ -123,6 +150,25 @@ describe("applyNonInteractiveGatewayConfig token resolution chain", () => {
 
     expect(randomToken).toHaveBeenCalledOnce();
     expect(result?.nextConfig.gateway?.auth?.token).toBe("generated-random-token");
+  });
+
+  it("establishes token auth when explicitly enabling Tailscale Serve from no-auth", () => {
+    const result = applyGatewayConfig({
+      nextConfig: {
+        gateway: {
+          bind: "loopback",
+          auth: { mode: "none" },
+          tailscale: { mode: "off" },
+        },
+      },
+      opts: { tailscale: "serve" } as OnboardOptions,
+    });
+
+    expect(result?.nextConfig.gateway?.auth).toEqual({
+      mode: "token",
+      token: "generated-random-token",
+    });
+    expect(result?.nextConfig.gateway?.tailscale?.mode).toBe("serve");
   });
 
   // --- SecretRef preservation ---
@@ -192,6 +238,22 @@ describe("applyNonInteractiveGatewayConfig token resolution chain", () => {
     expect(randomToken).not.toHaveBeenCalled();
   });
 
+  it("selects token auth when --gateway-token-ref-env overrides password auth", () => {
+    const newRefId = "OPENCLAW_GATEWAY_TOKEN_NEW_REF";
+    const result = applyGatewayConfig({
+      nextConfig: { gateway: { auth: { mode: "password", password: "test-password" } } },
+      opts: { gatewayTokenRefEnv: newRefId } as OnboardOptions,
+      env: { [newRefId]: "resolved-new-ref-value" },
+    });
+
+    expect(result?.nextConfig.gateway?.auth?.mode).toBe("token");
+    expect(result?.nextConfig.gateway?.auth?.token).toEqual({
+      source: "env",
+      provider: "default",
+      id: newRefId,
+    });
+  });
+
   it("fails when --gateway-token-ref-env points to a missing env var", () => {
     const runtime = createRuntime();
 
@@ -206,5 +268,27 @@ describe("applyNonInteractiveGatewayConfig token resolution chain", () => {
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(randomToken).not.toHaveBeenCalled();
+  });
+
+  it("rejects an explicitly empty password instead of preserving the existing password", () => {
+    const runtime = createRuntime();
+    const result = applyGatewayConfig({
+      nextConfig: { gateway: { auth: { mode: "password", password: "test-password" } } },
+      opts: { gatewayPassword: " " } as OnboardOptions,
+      runtime,
+    });
+
+    expect(result).toBeNull();
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--gateway-password"));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("preserves environment-backed password auth without persisting the password", () => {
+    const result = applyGatewayConfig({
+      nextConfig: { gateway: { auth: { mode: "password" } } },
+      env: { OPENCLAW_GATEWAY_PASSWORD: "environment-password" },
+    });
+
+    expect(result?.nextConfig.gateway?.auth).toEqual({ mode: "password" });
   });
 });

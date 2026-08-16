@@ -2,10 +2,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { buildRealtimeVoiceAgentConsultPolicyInstructions } from "openclaw/plugin-sdk/realtime-voice";
 import { root } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeOptionalString as normalizeString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import type { OpenClawPluginApi } from "../api.js";
 import type { VoiceCallConfig } from "./config.js";
-import type { CoreAgentDeps } from "./core-bridge.js";
 
 // Builds compact agent context injected into realtime voice sessions.
 
@@ -60,7 +60,8 @@ export async function buildRealtimeVoiceInstructions(params: {
   baseInstructions: string;
   config: VoiceCallConfig;
   coreConfig: OpenClawConfig;
-  agentRuntime: CoreAgentDeps;
+  agentRuntime: OpenClawPluginApi["runtime"]["agent"];
+  agentId: string;
 }): Promise<string> {
   const { config } = params;
   const sections: string[] = [params.baseInstructions];
@@ -74,7 +75,7 @@ export async function buildRealtimeVoiceInstructions(params: {
     return sections.filter(Boolean).join("\n\n");
   }
 
-  const agentId = config.agentId ?? "main";
+  const { agentId } = params;
   const capsule: string[] = [
     "OpenClaw agent voice context:",
     `- Agent id: ${agentId}`,
@@ -87,12 +88,20 @@ export async function buildRealtimeVoiceInstructions(params: {
       | VoiceIdentityLike
       | undefined;
     const identityLines = [
-      normalizeString(identity?.name) ? `- Name: ${normalizeString(identity?.name)}` : undefined,
-      normalizeString(identity?.emoji) ? `- Emoji: ${normalizeString(identity?.emoji)}` : undefined,
-      normalizeString(identity?.vibe) ? `- Vibe: ${normalizeString(identity?.vibe)}` : undefined,
-      normalizeString(identity?.theme) ? `- Theme: ${normalizeString(identity?.theme)}` : undefined,
-      normalizeString(identity?.creature)
-        ? `- Creature/persona: ${normalizeString(identity?.creature)}`
+      normalizeOptionalString(identity?.name)
+        ? `- Name: ${normalizeOptionalString(identity?.name)}`
+        : undefined,
+      normalizeOptionalString(identity?.emoji)
+        ? `- Emoji: ${normalizeOptionalString(identity?.emoji)}`
+        : undefined,
+      normalizeOptionalString(identity?.vibe)
+        ? `- Vibe: ${normalizeOptionalString(identity?.vibe)}`
+        : undefined,
+      normalizeOptionalString(identity?.theme)
+        ? `- Theme: ${normalizeOptionalString(identity?.theme)}`
+        : undefined,
+      normalizeOptionalString(identity?.creature)
+        ? `- Creature/persona: ${normalizeOptionalString(identity?.creature)}`
         : undefined,
     ].filter(Boolean);
     if (identityLines.length > 0) {

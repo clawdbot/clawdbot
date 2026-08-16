@@ -9,7 +9,7 @@ export type WorkerEnvironmentLeasedState = Exclude<
 
 const TRANSITIONS = {
   requested: ["provisioning", "failed"],
-  provisioning: ["bootstrapping", "failed"],
+  provisioning: ["bootstrapping", "ready", "failed"],
   bootstrapping: ["ready", "draining", "orphaned"],
   ready: ["bootstrapping", "attached", "idle", "draining", "orphaned"],
   attached: ["idle", "draining", "orphaned"],

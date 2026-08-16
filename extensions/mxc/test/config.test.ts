@@ -109,6 +109,8 @@ describe("createMxcPluginConfigSchema", () => {
       type: "number",
       minimum: 1,
       maximum: MAX_TIMER_TIMEOUT_SECONDS,
+      description:
+        "Per-command execution timeout in seconds. Capped to the sandbox policy baseline timeout when both are set.",
     });
   });
 });

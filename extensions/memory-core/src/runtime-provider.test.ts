@@ -1,13 +1,12 @@
 // Memory Core provider tests cover plugin runtime integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { describe, expect, it, vi } from "vitest";
 
 const managerDebug = {
-  backend: "qmd" as const,
+  backend: "builtin" as const,
   purpose: "default" as const,
   managerMs: 7,
-  managerCacheState: "cached-full-hit" as const,
-  qmdIdentityHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 };
 
 const getMemorySearchManagerMock = vi.hoisted(() =>
@@ -17,11 +16,21 @@ const getMemorySearchManagerMock = vi.hoisted(() =>
     error: undefined,
   })),
 );
+const filterMemorySearchHitsBySessionVisibilityMock = vi.hoisted(() => vi.fn());
+const configureMemoryCoreDreamingStateMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./memory/index.js", () => ({
   closeAllMemorySearchManagers: vi.fn(async () => {}),
   closeMemorySearchManager: vi.fn(async () => {}),
   getMemorySearchManager: getMemorySearchManagerMock,
+}));
+
+vi.mock("./session-search-visibility.js", () => ({
+  filterMemorySearchHitsBySessionVisibility: filterMemorySearchHitsBySessionVisibilityMock,
+}));
+
+vi.mock("./dreaming-state.js", () => ({
+  configureMemoryCoreDreamingState: configureMemoryCoreDreamingStateMock,
 }));
 
 import { createMemoryRuntime, memoryRuntime } from "./runtime-provider.js";
@@ -70,31 +79,51 @@ describe("memoryRuntime", () => {
     });
   });
 
-  it("keeps SQLite lease coordination scoped to each runtime instance", async () => {
+  it("binds the scoped state opener inside each lazy runtime instance", async () => {
     const cfg = {} as OpenClawConfig;
-    const firstLease = vi.fn();
-    const secondLease = vi.fn();
+    const openKeyedStore = vi.fn();
+    configureMemoryCoreDreamingStateMock.mockClear();
 
-    await Promise.all([
-      createMemoryRuntime({ withLease: firstLease }).getMemorySearchManager({
-        cfg,
-        agentId: "first",
-      }),
-      createMemoryRuntime({ withLease: secondLease }).getMemorySearchManager({
-        cfg,
-        agentId: "second",
-      }),
-    ]);
-
-    expect(getMemorySearchManagerMock).toHaveBeenCalledWith({
+    await createMemoryRuntime({ openKeyedStore }).getMemorySearchManager({
       cfg,
-      agentId: "first",
-      withLease: firstLease,
+      agentId: "main",
     });
-    expect(getMemorySearchManagerMock).toHaveBeenCalledWith({
+
+    expect(configureMemoryCoreDreamingStateMock).toHaveBeenCalledWith(openKeyedStore);
+  });
+
+  it("delegates raw-hit authorization to the canonical session visibility filter", async () => {
+    const cfg = {} as OpenClawConfig;
+    const hits: MemorySearchResult[] = [
+      {
+        source: "sessions",
+        path: "sessions/private.jsonl",
+        startLine: 1,
+        endLine: 1,
+        score: 1,
+        snippet: "private",
+      },
+    ];
+    filterMemorySearchHitsBySessionVisibilityMock.mockResolvedValue([]);
+    if (!memoryRuntime.authorizeSearchHits) {
+      throw new Error("memory runtime search authorizer is unavailable");
+    }
+
+    await expect(
+      memoryRuntime.authorizeSearchHits({
+        cfg,
+        agentId: "main",
+        requesterSessionKey: "agent:main:voice:15550001234",
+        sandboxed: false,
+        hits,
+      }),
+    ).resolves.toEqual([]);
+    expect(filterMemorySearchHitsBySessionVisibilityMock).toHaveBeenCalledWith({
       cfg,
-      agentId: "second",
-      withLease: secondLease,
+      agentId: "main",
+      requesterSessionKey: "agent:main:voice:15550001234",
+      sandboxed: false,
+      hits,
     });
   });
 });

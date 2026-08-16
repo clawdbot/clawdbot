@@ -8,6 +8,8 @@ import type {
   ModelCatalog,
   ModelCatalogAlias,
   ModelCatalogDiscovery,
+  ModelCatalogModel,
+  ModelCatalogProvider,
   NormalizedModelCatalogRow,
 } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
@@ -50,6 +52,8 @@ type ManifestModelCatalogPlan = {
   conflicts: readonly ManifestModelCatalogConflict[];
 };
 
+export type ManifestModelCatalogRowSelection = "static" | "supplemental";
+
 export type ManifestModelCatalogSuppressionEntry = {
   pluginId: string;
   provider: string;
@@ -63,9 +67,24 @@ type ManifestModelCatalogSuppressionPlan = {
   suppressions: readonly ManifestModelCatalogSuppressionEntry[];
 };
 
+function mergeRemoteModelWithTrustedTransport(
+  remoteModel: ModelCatalogModel,
+  trustedModel: ModelCatalogModel | undefined,
+): ModelCatalogModel {
+  // Spread keeps an untrusted own `__proto__` key as data instead of invoking
+  // Object.prototype's setter while trusted transport fields win explicitly.
+  return {
+    ...remoteModel,
+    ...(trustedModel?.baseUrl ? { baseUrl: trustedModel.baseUrl } : {}),
+    ...(trustedModel?.headers ? { headers: trustedModel.headers } : {}),
+  };
+}
+
 export function planManifestModelCatalogRows(params: {
   registry: ManifestModelCatalogRegistry;
   providerFilter?: string;
+  remoteOverlay?: Readonly<Record<string, ModelCatalogProvider>>;
+  selection?: ManifestModelCatalogRowSelection;
 }): ManifestModelCatalogPlan {
   const providerFilter = params.providerFilter
     ? normalizeModelCatalogProviderId(params.providerFilter)
@@ -73,13 +92,24 @@ export function planManifestModelCatalogRows(params: {
   const entries: ManifestModelCatalogPlanEntry[] = [];
 
   for (const plugin of params.registry.plugins) {
-    for (const entry of planManifestModelCatalogPluginEntries({ plugin, providerFilter })) {
+    for (const entry of planManifestModelCatalogPluginEntries({
+      plugin,
+      providerFilter,
+      remoteOverlay: params.remoteOverlay,
+    })) {
       entries.push(entry);
     }
   }
 
   const rowCandidates: NormalizedModelCatalogRow[] = [];
-  const seenRows = new Map<string, { pluginId: string; row: NormalizedModelCatalogRow }>();
+  const seenRows = new Map<
+    string,
+    {
+      pluginId: string;
+      row: NormalizedModelCatalogRow;
+      discovery: ModelCatalogDiscovery | undefined;
+    }
+  >();
   const conflicts = new Map<string, ManifestModelCatalogConflict>();
   for (const entry of entries) {
     for (const row of entry.rows) {
@@ -99,13 +129,30 @@ export function planManifestModelCatalogRows(params: {
         }
         continue;
       }
-      seenRows.set(row.mergeKey, { pluginId: entry.pluginId, row });
+      seenRows.set(row.mergeKey, {
+        pluginId: entry.pluginId,
+        row,
+        discovery: entry.discovery,
+      });
       rowCandidates.push(row);
     }
   }
 
   const conflictedMergeKeys = new Set(conflicts.keys());
-  const rows = rowCandidates.filter((row) => !conflictedMergeKeys.has(row.mergeKey));
+  const rows = rowCandidates.filter((row) => {
+    if (conflictedMergeKeys.has(row.mergeKey)) {
+      return false;
+    }
+    const discovery = seenRows.get(row.mergeKey)?.discovery;
+    if (params.selection === "static") {
+      return discovery === "static";
+    }
+    return (
+      params.selection !== "supplemental" ||
+      discovery !== "runtime" ||
+      row.source === "runtime-refresh"
+    );
+  });
 
   return {
     entries,
@@ -120,6 +167,7 @@ export function planManifestModelCatalogRows(params: {
 function planManifestModelCatalogPluginEntries(params: {
   plugin: ManifestModelCatalogPlugin;
   providerFilter: string | undefined;
+  remoteOverlay: Readonly<Record<string, ModelCatalogProvider>> | undefined;
 }): ManifestModelCatalogPlanEntry[] {
   const providers = params.plugin.modelCatalog?.providers;
   if (!providers) {
@@ -144,11 +192,41 @@ function planManifestModelCatalogPluginEntries(params: {
       return [];
     }
     return plannedProviders.flatMap((plannedProvider) => {
-      const rows = normalizeModelCatalogProviderRows({
+      const remoteProvider = params.remoteOverlay?.[normalizedProvider];
+      const remoteModelIds = new Set(remoteProvider?.models.map((model) => model.id) ?? []);
+      const manifestModelsById = new Map(providerCatalog.models.map((model) => [model.id, model]));
+      const providerDefaults = remoteProvider
+        ? {
+            ...providerCatalog,
+            ...remoteProvider,
+            ...(providerCatalog.baseUrl ? { baseUrl: providerCatalog.baseUrl } : {}),
+            ...(providerCatalog.headers ? { headers: providerCatalog.headers } : {}),
+          }
+        : providerCatalog;
+      const manifestRows = normalizeModelCatalogProviderRows({
         provider: plannedProvider,
-        providerCatalog,
+        providerCatalog: {
+          ...providerDefaults,
+          models: providerCatalog.models.filter((model) => !remoteModelIds.has(model.id)),
+        },
         source: "manifest",
       });
+      const remoteRows = remoteProvider
+        ? normalizeModelCatalogProviderRows({
+            provider: plannedProvider,
+            providerCatalog: {
+              ...providerDefaults,
+              models: remoteProvider.models.map((model) =>
+                mergeRemoteModelWithTrustedTransport(model, manifestModelsById.get(model.id)),
+              ),
+            },
+            source: "runtime-refresh",
+          })
+        : [];
+      const rows = [...manifestRows, ...remoteRows].toSorted(
+        (left, right) =>
+          left.provider.localeCompare(right.provider) || left.id.localeCompare(right.id),
+      );
       if (rows.length === 0) {
         return [];
       }

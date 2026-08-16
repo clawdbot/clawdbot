@@ -45,7 +45,7 @@ final class GatewayDiscoveryModel {
     }
 
     var gateways: [DiscoveredGateway] = []
-    var statusText: String = "Idle"
+    var statusText: String = GatewayDiscoveryStatusText.idle
     private(set) var debugLog: [DebugLogEntry] = []
 
     private var browsers: [String: NWBrowser] = [:]
@@ -125,7 +125,7 @@ final class GatewayDiscoveryModel {
         self.gatewaysByDomain = [:]
         self.statesByDomain = [:]
         self.gateways = []
-        self.statusText = "Stopped"
+        self.statusText = GatewayDiscoveryStatusText.stopped
     }
 
     private func recomputeGateways() {

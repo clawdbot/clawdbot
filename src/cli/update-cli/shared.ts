@@ -3,13 +3,13 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageName, readPackageVersion } from "../../infra/package-json.js";
 import { normalizePackageTagInput } from "../../infra/package-tag.js";
-import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { trimLogTail } from "../../infra/restart-sentinel.js";
 import { parseSemver } from "../../infra/runtime-guard.js";
 import { fetchNpmTagVersion } from "../../infra/update-check.js";
@@ -75,6 +75,9 @@ export function parseTimeoutMsOrExit(timeout?: string): number | undefined | nul
 }
 
 const OPENCLAW_REPO_URL = "https://github.com/openclaw/openclaw.git";
+// Keep the full commit graph for dev ref switching while deferring historical blobs.
+// A shallow clone would make older or non-default dev targets unreachable.
+const GIT_CLONE_BLOB_FILTER = "--filter=blob:none";
 const MAX_LOG_CHARS = 8000;
 
 export const DEFAULT_PACKAGE_NAME = "openclaw";
@@ -251,7 +254,7 @@ export async function ensureGitCheckout(params: {
     await fs.mkdir(path.dirname(params.dir), { recursive: true });
     return await runUpdateStep({
       name: "git clone",
-      argv: ["git", "clone", OPENCLAW_REPO_URL, params.dir],
+      argv: ["git", "clone", GIT_CLONE_BLOB_FILTER, OPENCLAW_REPO_URL, params.dir],
       env: gitEnv,
       timeoutMs: params.timeoutMs,
       progress: params.progress,
@@ -268,7 +271,7 @@ export async function ensureGitCheckout(params: {
 
     return await runUpdateStep({
       name: "git clone",
-      argv: ["git", "clone", OPENCLAW_REPO_URL, params.dir],
+      argv: ["git", "clone", GIT_CLONE_BLOB_FILTER, OPENCLAW_REPO_URL, params.dir],
       cwd: params.dir,
       env: gitEnv,
       timeoutMs: params.timeoutMs,

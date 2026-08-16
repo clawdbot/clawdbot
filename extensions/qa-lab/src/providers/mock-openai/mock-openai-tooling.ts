@@ -1,9 +1,12 @@
 // QA Lab mock provider tool planning and memory fixtures.
 import { createHash } from "node:crypto";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY } from "../../qa-web-search-provider.js";
 import type { StreamEvent } from "./mock-openai-contracts.js";
 
 let mockFunctionCallSequence = 0;
+
+export const QA_TOOL_SEARCH_SECONDARY_TARGET = "fake_plugin_tool_01";
 
 function normalizePromptPathCandidate(candidate: string) {
   const trimmed = candidate.trim().replace(/^`+|`+$/g, "");
@@ -40,9 +43,10 @@ export function readTargetFromPrompt(prompt: string) {
     return repoScoped;
   }
 
-  const loosePath = /\b[A-Za-z0-9._-]+\.(?:md|json|ts|tsx|js|mjs|cjs|txt|yaml|yml)\b/i
-    .exec(prompt)?.[0]
-    ?.trim();
+  const loosePath =
+    /\b[A-Za-z0-9_][A-Za-z0-9._@!:-]*\.(?:md|json|ts|tsx|js|mjs|cjs|txt|yaml|yml)\b/i
+      .exec(prompt)?.[0]
+      ?.trim();
   if (loosePath) {
     return loosePath;
   }
@@ -64,7 +68,11 @@ export function execCommandFromToolProgressPrompt(prompt: string) {
   );
 }
 
-export function buildMockFunctionCall(name: string, args: Record<string, unknown>) {
+export function buildMockFunctionCall(
+  name: string,
+  args: Record<string, unknown>,
+  namespace?: string,
+) {
   const serialized = JSON.stringify(args);
   const callSuffix = createHash("sha256")
     .update(name)
@@ -81,6 +89,7 @@ export function buildMockFunctionCall(name: string, args: Record<string, unknown
     id: itemId,
     call_id: callId,
     name,
+    ...(namespace ? { namespace } : {}),
     arguments: serialized,
   };
   return {
@@ -95,8 +104,9 @@ export function buildMockFunctionCall(name: string, args: Record<string, unknown
 export function buildToolCallEventsWithArgs(
   name: string,
   args: Record<string, unknown>,
+  namespace?: string,
 ): StreamEvent[] {
-  const call = buildMockFunctionCall(name, args);
+  const call = buildMockFunctionCall(name, args, namespace);
   return [
     {
       type: "response.output_item.added",
@@ -105,6 +115,7 @@ export function buildToolCallEventsWithArgs(
         id: call.itemId,
         call_id: call.callId,
         name,
+        ...(namespace ? { namespace } : {}),
         arguments: "",
       },
     },
@@ -119,6 +130,50 @@ export function buildToolCallEventsWithArgs(
         id: call.responseId,
         status: "completed",
         output: [call.item],
+        usage: { input_tokens: 64, output_tokens: 16, total_tokens: 80 },
+      },
+    },
+  ];
+}
+
+export function buildCustomToolCallEventsWithInput(
+  name: string,
+  input: string,
+  namespace?: string,
+): StreamEvent[] {
+  const call = buildMockFunctionCall(name, { input }, namespace);
+  const itemId = call.itemId.replace(/^fc_/, "ctc_");
+  const item = {
+    type: "custom_tool_call",
+    id: itemId,
+    call_id: call.callId,
+    name,
+    ...(namespace ? { namespace } : {}),
+    input,
+    status: "completed",
+  };
+  return [
+    {
+      type: "response.created",
+      response: { id: call.responseId },
+    },
+    {
+      type: "response.output_item.added",
+      item: { ...item, input: "", status: "in_progress" },
+    },
+    {
+      type: "response.custom_tool_call_input.delta",
+      item_id: itemId,
+      call_id: call.callId,
+      delta: input,
+    },
+    { type: "response.output_item.done", item },
+    {
+      type: "response.completed",
+      response: {
+        id: call.responseId,
+        status: "completed",
+        output: [item],
         usage: { input_tokens: 64, output_tokens: 16, total_tokens: 80 },
       },
     },
@@ -164,12 +219,40 @@ export function extractToolSearchTarget(text: string): string | null {
   return match?.[1]?.trim() || null;
 }
 
+export function toolSearchOutputHasCandidate(output: unknown, targetTool: string): boolean {
+  if (!isRecord(output) || !Array.isArray(output.results)) {
+    return false;
+  }
+  return output.results.some(
+    (result) =>
+      isRecord(result) &&
+      Array.isArray(result.candidates) &&
+      result.candidates.some(
+        (candidate) =>
+          isRecord(candidate) && (candidate.name === targetTool || candidate.id === targetTool),
+      ),
+  );
+}
+
 export function buildQaToolSearchArgs(
   targetTool: string,
   failureMode: boolean,
 ): Record<string, unknown> {
   if (failureMode && targetTool === "web_search") {
     return { query: QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY };
+  }
+  if (failureMode && targetTool === "apply_patch") {
+    return {
+      input: [
+        "*** Begin Patch",
+        "*** Update File: ../runtime-tool-fixture-denied.txt",
+        "@@",
+        "-runtime-tool-fixture-denied-original",
+        "+runtime patch outside the workspace",
+        "*** End Patch",
+        "",
+      ].join("\n"),
+    };
   }
   if (failureMode) {
     return { __qaFailureMode: "denied-input" };
@@ -214,6 +297,53 @@ export function buildQaToolSearchArgs(
   }
   if (targetTool === "message") {
     return { action: "send", message: "runtime parity message fixture" };
+  }
+  if (targetTool === "ask_user") {
+    return {
+      questions: [
+        {
+          id: "deploy_target",
+          header: "Deploy",
+          question: "Where should this deploy?",
+          options: [
+            { label: "Staging (Recommended)", description: "Safer default" },
+            { label: "Production", description: "Ship to users" },
+          ],
+        },
+        {
+          id: "checks",
+          header: "Checks",
+          question: "Which checks should run?",
+          options: [
+            { label: "Unit (Recommended)", description: "Fast focused coverage" },
+            { label: "E2E", description: "Full user-path coverage" },
+            { label: "Lint", description: "Static checks" },
+          ],
+          multiSelect: true,
+        },
+        {
+          id: "release_note",
+          header: "Note",
+          question: "Which release note label should be used?",
+          options: [
+            { label: "Routine (Recommended)", description: "Standard release note" },
+            { label: "Urgent", description: "Highlight prominently" },
+          ],
+        },
+      ],
+      timeoutSeconds: 60,
+    };
+  }
+  if (targetTool === "llm-task") {
+    return {
+      prompt: 'Remember this fact and reply exactly `{"status":"ok"}`.',
+      input: { secret: "qa-plugin-usage-secret-sentinel" },
+      schema: {
+        type: "object",
+        required: ["status"],
+        properties: { status: { const: "ok" } },
+      },
+    };
   }
   if (targetTool === "session_status") {
     return { sessionKey: "current" };

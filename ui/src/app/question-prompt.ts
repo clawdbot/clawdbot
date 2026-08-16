@@ -1,29 +1,42 @@
 // Control UI module owns transient operator question state.
+import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeNullableString as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import type {
   Question,
   QuestionAnswers,
   QuestionRecord,
+  QuestionResolveResult,
   QuestionResolvedEvent,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type { GatewayEventFrame } from "../api/gateway.ts";
-
-type QuestionClient = {
-  request: (method: string, params?: unknown) => Promise<unknown>;
-};
+import { GatewayRequestError, type GatewayEventFrame } from "../api/gateway.ts";
+import { t } from "../i18n/index.ts";
+import { formatUiError } from "../lib/format-error.ts";
+import {
+  publishQuestionClientResolution,
+  registerQuestionClientOwner,
+  requestQuestionGateway,
+  unregisterQuestionClientOwner,
+  type QuestionClient,
+  type QuestionClientResolutionOwner,
+} from "./question-prompt-client.ts";
 
 type QuestionDraft = {
   selected: Set<string>;
   freeText: string;
 };
 
+type QuestionPromptStatus = QuestionRecord["status"] | "unavailable";
+
 export type QuestionPrompt = {
   id: string;
   questions: Question[];
   agentId?: string;
   sessionKey?: string;
+  runId?: string;
   createdAtMs: number;
   expiresAtMs: number;
-  status: QuestionRecord["status"];
+  status: QuestionPromptStatus;
   answers?: QuestionAnswers;
   submittedAnswers?: QuestionAnswers;
   answeredElsewhere: boolean;
@@ -35,8 +48,8 @@ export type QuestionPrompt = {
   revision: number;
 };
 
-type QuestionPromptState = {
-  client: QuestionClient | null;
+type QuestionPromptState = QuestionClientResolutionOwner & {
+  ownerClient: QuestionClient | null;
   prompts: Map<string, QuestionPrompt>;
   unmatchedResolutions: Map<string, QuestionResolvedEvent>;
   revision: number;
@@ -49,32 +62,37 @@ type QuestionAnswerValues = Record<string, string[]>;
 
 const REFRESH_RETRY_DELAYS_MS = [1_000, 2_000, 4_000] as const;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function readNonEmptyString(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
-}
-
 function readTimestamp(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+  return asSafeIntegerInRange(value, { min: 0 }) ?? null;
+}
+
+const MAX_HEADER_GRAPHEMES = 12;
+
+function clampHeaderGraphemes(header: string): string {
+  const segments = [...new Intl.Segmenter().segment(header)];
+  if (segments.length <= MAX_HEADER_GRAPHEMES) {
+    return header;
+  }
+  return segments
+    .slice(0, MAX_HEADER_GRAPHEMES)
+    .map((part) => part.segment)
+    .join("");
 }
 
 function parseQuestion(value: unknown): Question | null {
   if (!isRecord(value)) {
     return null;
   }
-  const id = readNonEmptyString(value.id);
+  const questionId = readNonEmptyString(value.questionId);
   const header = typeof value.header === "string" ? value.header : null;
   const question = readNonEmptyString(value.question);
-  if (!id || !/^[a-z][a-z0-9_]*$/.test(id) || header === null || header.length > 12 || !question) {
+  if (!questionId || !/^[a-z][a-z0-9_]*$/.test(questionId) || header === null || !question) {
     return null;
   }
+  // Clamp instead of reject: the gateway enforces the 12-cap with grapheme
+  // semantics, and any re-count here (UTF-16, code points, or a second grapheme
+  // impl) can disagree at the boundary and silently drop the whole prompt.
+  const clampedHeader = clampHeaderGraphemes(header);
   if (!Array.isArray(value.options) || value.options.length > 4) {
     return null;
   }
@@ -102,8 +120,8 @@ function parseQuestion(value: unknown): Question | null {
     }
   }
   return {
-    id,
-    header,
+    questionId,
+    header: clampedHeader,
     question,
     options,
     ...(value.multiSelect === true ? { multiSelect: true } : {}),
@@ -116,18 +134,14 @@ function parseQuestionAnswers(value: unknown): QuestionAnswers | null {
     return null;
   }
   const answers: QuestionAnswers["answers"] = {};
-  for (const [id, answerValue] of Object.entries(value.answers)) {
-    if (
-      !/^[a-z][a-z0-9_]*$/.test(id) ||
-      !isRecord(answerValue) ||
-      !Array.isArray(answerValue.answers)
-    ) {
+  for (const [questionId, answerValue] of Object.entries(value.answers)) {
+    if (!/^[a-z][a-z0-9_]*$/.test(questionId) || !Array.isArray(answerValue)) {
       return null;
     }
-    if (!answerValue.answers.every((answer) => typeof answer === "string")) {
+    if (!answerValue.every((answer) => typeof answer === "string")) {
       return null;
     }
-    answers[id] = { answers: [...answerValue.answers] };
+    answers[questionId] = [...answerValue];
   }
   return { answers };
 }
@@ -146,9 +160,9 @@ function questionAnswersEqual(
     leftIds.every(
       (id, index) =>
         id === rightIds[index] &&
-        left.answers[id]?.answers.length === right.answers[id]?.answers.length &&
-        left.answers[id]?.answers.every((answer, answerIndex) =>
-          Object.is(answer, right.answers[id]?.answers[answerIndex]),
+        left.answers[id]?.length === right.answers[id]?.length &&
+        left.answers[id]?.every((answer, answerIndex) =>
+          Object.is(answer, right.answers[id]?.[answerIndex]),
         ),
     )
   );
@@ -171,16 +185,18 @@ function parseQuestionRecord(payload: unknown): QuestionRecord | null {
   if (questions.some((question) => question === null)) {
     return null;
   }
-  const questionIds = new Set(questions.map((question) => question?.id));
+  const questionIds = new Set(questions.map((question) => question?.questionId));
   if (questionIds.size !== questions.length) {
     return null;
   }
   const agentId = payload.agentId === undefined ? undefined : readNonEmptyString(payload.agentId);
   const sessionKey =
     payload.sessionKey === undefined ? undefined : readNonEmptyString(payload.sessionKey);
+  const runId = payload.runId === undefined ? undefined : readNonEmptyString(payload.runId);
   if (
     (payload.agentId !== undefined && !agentId) ||
-    (payload.sessionKey !== undefined && !sessionKey)
+    (payload.sessionKey !== undefined && !sessionKey) ||
+    (payload.runId !== undefined && !runId)
   ) {
     return null;
   }
@@ -189,6 +205,7 @@ function parseQuestionRecord(payload: unknown): QuestionRecord | null {
     questions: questions as Question[],
     ...(agentId ? { agentId } : {}),
     ...(sessionKey ? { sessionKey } : {}),
+    ...(runId ? { runId } : {}),
     createdAtMs,
     expiresAtMs,
   };
@@ -228,16 +245,31 @@ function parseQuestionResolvedEvent(payload: unknown): QuestionResolvedEvent | n
   return null;
 }
 
+function parseQuestionResolveResult(payload: unknown): QuestionResolveResult | null {
+  if (!isRecord(payload)) {
+    return null;
+  }
+  if (payload.status === "cancelled") {
+    return { status: "cancelled" };
+  }
+  const answers = parseQuestionAnswers(payload.answers);
+  return payload.status === "answered" && answers ? { status: "answered", answers } : null;
+}
+
 export function createQuestionPromptState(onChange: () => void): QuestionPromptState {
-  return {
+  const state: QuestionPromptState = {
     client: null,
+    ownerClient: null,
+    clientGeneration: 0,
     prompts: new Map(),
     unmatchedResolutions: new Map(),
     revision: 0,
     tickTimer: null,
     refreshRetryTimer: null,
     onChange,
+    onQuestionResolution: (resolution) => recordQuestionResolution(state, resolution),
   };
+  return state;
 }
 
 function scheduleTick(state: QuestionPromptState): void {
@@ -279,6 +311,7 @@ function promptFromRecord(
     questions: record.questions,
     ...(record.agentId ? { agentId: record.agentId } : {}),
     ...(record.sessionKey ? { sessionKey: record.sessionKey } : {}),
+    ...(record.runId ? { runId: record.runId } : {}),
     createdAtMs: record.createdAtMs,
     expiresAtMs: record.expiresAtMs,
     status: record.status,
@@ -324,6 +357,23 @@ function applyQuestionResolution(
   prompt.revision = ++state.revision;
 }
 
+function recordQuestionResolution(
+  state: QuestionPromptState,
+  resolved: QuestionResolvedEvent,
+): void {
+  const prompt = state.prompts.get(resolved.id);
+  if (prompt) {
+    applyQuestionResolution(state, prompt, resolved);
+  } else {
+    // Broadcasts and same-client results own one fact. Gateway list/resolve are
+    // synchronous; WebSocket FIFO delivers it before any later empty list response,
+    // so existing hydration consumes this tombstone without a parallel recovery.
+    state.unmatchedResolutions.set(resolved.id, resolved);
+    state.revision += 1;
+  }
+  state.onChange();
+}
+
 export function handleQuestionPromptEvent(
   state: QuestionPromptState,
   event: Pick<GatewayEventFrame, "event" | "payload">,
@@ -352,18 +402,10 @@ export function handleQuestionPromptEvent(
     return false;
   }
   const resolved = parseQuestionResolvedEvent(event.payload);
-  const prompt = resolved ? state.prompts.get(resolved.id) : undefined;
   if (!resolved) {
     return false;
   }
-  if (!prompt) {
-    state.unmatchedResolutions.set(resolved.id, resolved);
-    state.revision += 1;
-    state.onChange();
-    return true;
-  }
-  applyQuestionResolution(state, prompt, resolved);
-  state.onChange();
+  recordQuestionResolution(state, resolved);
   return true;
 }
 
@@ -381,17 +423,18 @@ function parseQuestionGetResult(value: unknown): QuestionRecord | null {
 
 function isQuestionNotFoundError(error: unknown): boolean {
   return (
-    error instanceof Error &&
-    error.name === "GatewayClientRequestError" &&
-    isRecord((error as Error & { details?: unknown }).details) &&
-    (error as Error & { details: Record<string, unknown> }).details.reason === "QUESTION_NOT_FOUND"
+    error instanceof GatewayRequestError &&
+    isRecord(error.details) &&
+    error.details.reason === "QUESTION_NOT_FOUND"
   );
 }
 
-function markResolvedElsewhere(state: QuestionPromptState, prompt: QuestionPrompt): void {
-  prompt.status = "answered";
+function markRecoveryUnavailable(state: QuestionPromptState, prompt: QuestionPrompt): void {
+  // QUESTION_NOT_FOUND means the gateway tombstone aged out. It proves the prompt is
+  // no longer actionable, but not whether it was answered, cancelled, or expired.
+  prompt.status = "unavailable";
   prompt.answers = undefined;
-  prompt.answeredElsewhere = true;
+  prompt.answeredElsewhere = false;
   prompt.localResolutionConfirmed = false;
   prompt.locallyExpired = false;
   prompt.submitting = false;
@@ -405,7 +448,7 @@ async function refreshPendingQuestions(
   isCurrentClient: () => boolean = () => state.client === client,
 ): Promise<boolean> {
   const startedAtRevision = state.revision;
-  const listResult = await client.request("question.list", {});
+  const listResult = await requestQuestionGateway(client, "question.list", {});
   const records = parseQuestionListResult(listResult);
   if (!records || !isCurrentClient()) {
     return false;
@@ -444,42 +487,48 @@ async function refreshPendingQuestions(
       missingIds.add(id);
     }
   }
-  const missingResults = await Promise.allSettled(
-    missing.map((candidate) => client.request("question.get", { id: candidate.id })),
-  );
-  if (!isCurrentClient()) {
-    return false;
-  }
-  let complete = true;
-  for (const [index, candidate] of missing.entries()) {
-    const current = state.prompts.get(candidate.id);
-    if (candidate.prompt && current !== candidate.prompt) {
-      if (!current || current.status === "pending" || current.locallyExpired) {
-        complete = false;
+  const recovered = await Promise.all(
+    missing.map(async (candidate) => {
+      const result = await requestQuestionGateway(client, "question.get", {
+        id: candidate.id,
+      }).then(
+        (value) => ({ ok: true as const, value }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+      if (!isCurrentClient()) {
+        return false;
       }
-      continue;
-    }
-    if (candidate.prompt && current?.revision !== candidate.revision && !current?.locallyExpired) {
-      if (current?.status === "pending") {
-        complete = false;
+      const current = state.prompts.get(candidate.id);
+      if (candidate.prompt && current !== candidate.prompt) {
+        return Boolean(current && current.status !== "pending" && !current.locallyExpired);
       }
-      continue;
-    }
-    if (!candidate.prompt && !state.unmatchedResolutions.has(candidate.id)) {
-      continue;
-    }
-    const missingResult = missingResults[index];
-    if (
-      current &&
-      missingResult?.status === "rejected" &&
-      isQuestionNotFoundError(missingResult.reason)
-    ) {
-      markResolvedElsewhere(state, current);
-      continue;
-    }
-    const record =
-      missingResult?.status === "fulfilled" ? parseQuestionGetResult(missingResult.value) : null;
-    if (record) {
+      if (
+        candidate.prompt &&
+        current?.revision !== candidate.revision &&
+        !current?.locallyExpired
+      ) {
+        return current?.status !== "pending";
+      }
+      if (!candidate.prompt && !state.unmatchedResolutions.has(candidate.id)) {
+        return true;
+      }
+      if (!result.ok) {
+        if (!isQuestionNotFoundError(result.error)) {
+          return false;
+        }
+        if (current) {
+          markRecoveryUnavailable(state, current);
+        }
+        // An aged-out tombstone cannot hydrate an unmatched resolution;
+        // retaining it would retry an already-final reconnect forever.
+        state.unmatchedResolutions.delete(candidate.id);
+        state.onChange();
+        return true;
+      }
+      const record = parseQuestionGetResult(result.value);
+      if (!record) {
+        return false;
+      }
       const prompt = promptFromRecord(state, record, current);
       const unmatched = state.unmatchedResolutions.get(candidate.id);
       if (unmatched) {
@@ -487,13 +536,14 @@ async function refreshPendingQuestions(
         applyQuestionResolution(state, prompt, unmatched);
       }
       state.prompts.set(candidate.id, prompt);
-      continue;
-    }
-    complete = false;
-  }
-  scheduleTick(state);
-  state.onChange();
-  return complete;
+      scheduleTick(state);
+      // Publish each settled recovery immediately; a hung sibling must never
+      // withhold an already-authoritative answer until its own deadline.
+      state.onChange();
+      return true;
+    }),
+  );
+  return isCurrentClient() && recovered.every(Boolean);
 }
 
 export function refreshPendingQuestionsWithRetry(
@@ -501,18 +551,21 @@ export function refreshPendingQuestionsWithRetry(
   client: QuestionClient,
   isCurrentClient: () => boolean = () => state.client === client,
 ): void {
+  const clientGeneration = state.clientGeneration;
+  const refreshIsCurrent = () =>
+    state.client === client && state.clientGeneration === clientGeneration && isCurrentClient();
   let retryIndex = 0;
   const run = async () => {
-    if (!isCurrentClient()) {
+    if (!refreshIsCurrent()) {
       return;
     }
     let complete: boolean;
     try {
-      complete = await refreshPendingQuestions(state, client, isCurrentClient);
+      complete = await refreshPendingQuestions(state, client, refreshIsCurrent);
     } catch {
       complete = false;
     }
-    if (complete || !isCurrentClient()) {
+    if (complete || !refreshIsCurrent()) {
       return;
     }
     const delayMs = REFRESH_RETRY_DELAYS_MS[retryIndex];
@@ -533,10 +586,62 @@ export function setQuestionPromptClient(
     globalThis.clearTimeout(state.refreshRetryTimer);
     state.refreshRetryTimer = null;
   }
+  if (state.client === client) {
+    return;
+  }
+
+  if (state.client) {
+    unregisterQuestionClientOwner(state.client, state);
+  }
+  state.clientGeneration += 1;
+  const ownerChanged =
+    client !== null && state.ownerClient !== null && state.ownerClient !== client;
   state.client = client;
+  if (client !== null) {
+    state.ownerClient = client;
+    registerQuestionClientOwner(client, state);
+  }
+
+  if (ownerChanged) {
+    const changed = state.prompts.size > 0 || state.unmatchedResolutions.size > 0;
+    if (state.tickTimer) {
+      globalThis.clearTimeout(state.tickTimer);
+      state.tickTimer = null;
+    }
+    state.prompts.clear();
+    state.unmatchedResolutions.clear();
+    if (changed) {
+      state.revision += 1;
+      state.onChange();
+    }
+    return;
+  }
+
+  if (client) {
+    // Disposal stops the projection clock; same-owner remount must restart it
+    // before async hydration so an expired question cannot strand the surface.
+    scheduleTick(state);
+  }
+  let changed = false;
+  for (const prompt of state.prompts.values()) {
+    if (!prompt.submitting) {
+      continue;
+    }
+    // The transport owns this submission. Reconnect must release its spinner
+    // without discarding answers needed for authoritative recovery.
+    prompt.submitting = false;
+    prompt.revision = ++state.revision;
+    changed = true;
+  }
+  if (changed) {
+    state.onChange();
+  }
 }
 
 export function disposeQuestionPromptState(state: QuestionPromptState): void {
+  if (state.client) {
+    unregisterQuestionClientOwner(state.client, state);
+  }
   if (state.tickTimer) {
     globalThis.clearTimeout(state.tickTimer);
     state.tickTimer = null;
@@ -545,14 +650,15 @@ export function disposeQuestionPromptState(state: QuestionPromptState): void {
     globalThis.clearTimeout(state.refreshRetryTimer);
     state.refreshRetryTimer = null;
   }
+  state.clientGeneration += 1;
+  // Retained records belong to the previous client: remount on it may recover
+  // them, while a different Gateway must still recognize and purge its state.
   state.client = null;
 }
 
 function buildAnswers(values: QuestionAnswerValues): QuestionAnswers {
   return {
-    answers: Object.fromEntries(
-      Object.entries(values).map(([id, answers]) => [id, { answers: [...answers] }]),
-    ),
+    answers: Object.fromEntries(Object.entries(values).map(([id, answers]) => [id, [...answers]])),
   };
 }
 
@@ -563,11 +669,12 @@ async function resolveQuestionPrompt(
 ): Promise<void> {
   const prompt = state.prompts.get(id);
   const client = state.client;
+  const clientGeneration = state.clientGeneration;
   if (!prompt || prompt.status !== "pending" || prompt.submitting) {
     return;
   }
   if (!client) {
-    prompt.error = "Not connected. Try again after reconnecting.";
+    prompt.error = t("chat.questions.disconnected");
     prompt.revision = ++state.revision;
     state.onChange();
     return;
@@ -579,29 +686,36 @@ async function resolveQuestionPrompt(
   prompt.revision = ++state.revision;
   state.onChange();
   try {
-    await client.request(
+    const result = await requestQuestionGateway(
+      client,
       "question.resolve",
       submittedAnswers ? { id, answers: submittedAnswers } : { id, cancel: true },
+      prompt.expiresAtMs,
     );
-    const current = state.prompts.get(id);
-    if (!current) {
+    const resolved = parseQuestionResolveResult(result);
+    if (!resolved || resolved.status !== (submittedAnswers ? "answered" : "cancelled")) {
+      throw new Error("invalid question.resolve response");
+    }
+    if (state.client === client && state.clientGeneration === clientGeneration) {
+      const current = state.prompts.get(id);
+      if (current) {
+        current.localResolutionConfirmed = true;
+      }
+    }
+    // The committed RPC result owns every same-client projection even when
+    // fanout fails or its submitting pane unmounts before the response.
+    publishQuestionClientResolution(client, { ...resolved, id });
+  } catch (error) {
+    if (state.client !== client || state.clientGeneration !== clientGeneration) {
       return;
     }
-    current.localResolutionConfirmed = true;
-    if (current.status !== "pending") {
-      current.answeredElsewhere = false;
-      current.submitting = false;
-    }
-    current.revision = ++state.revision;
-    state.onChange();
-  } catch (error) {
     const current = state.prompts.get(id);
     if (!current) {
       return;
     }
     current.submitting = false;
     if (current.status === "pending") {
-      current.error = error instanceof Error ? error.message : String(error);
+      current.error = formatUiError(error);
       current.revision = ++state.revision;
       state.onChange();
       return;

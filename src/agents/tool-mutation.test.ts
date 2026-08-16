@@ -20,6 +20,15 @@ describe("tool mutation helpers", () => {
     ).toBe(true);
   });
 
+  it("classifies portal list as replay-safe and portal mutations as mutating", () => {
+    expect(isMutatingToolCall("portal", { action: "list" })).toBe(false);
+    expect(isReplaySafeToolCall("portal", { action: "list" })).toBe(true);
+    for (const action of ["open", "close"]) {
+      expect(isMutatingToolCall("portal", { action }), action).toBe(true);
+      expect(isReplaySafeToolCall("portal", { action }), action).toBe(false);
+    }
+  });
+
   it("builds stable fingerprints for mutating calls and omits read-only calls", () => {
     const writeFingerprint = buildToolMutationState(
       "write",
@@ -39,6 +48,40 @@ describe("tool mutation helpers", () => {
       path: "/tmp/demo.txt",
     }).actionFingerprint;
     expect(readFingerprint).toBeUndefined();
+  });
+
+  it("binds reordered exact arguments to one owner but separates changed facts and owners", () => {
+    const ownerKey = '["memory-lancedb","memory_store"]';
+    const metric = buildToolMutationState(
+      "memory_store",
+      { category: "preference", text: "The user prefers metric units." },
+      undefined,
+      { ownerKey },
+    );
+    const reordered = buildToolMutationState(
+      "memory_store",
+      { text: "The user prefers metric units.", category: "preference" },
+      undefined,
+      { ownerKey },
+    );
+    const imperial = buildToolMutationState(
+      "memory_store",
+      { category: "preference", text: "The user prefers imperial units." },
+      undefined,
+      { ownerKey },
+    );
+    const otherOwner = buildToolMutationState(
+      "memory_store",
+      { category: "preference", text: "The user prefers metric units." },
+      undefined,
+      { ownerKey: '["other-plugin","memory_store"]' },
+    );
+
+    expect(metric).toMatchObject({ mutatingAction: true, replaySafe: false });
+    expect(metric.actionFingerprint).toBe(reordered.actionFingerprint);
+    expect(metric.actionFingerprint).not.toBe(imperial.actionFingerprint);
+    expect(metric.actionFingerprint).not.toBe(otherOwner.actionFingerprint);
+    expect(metric.actionFingerprint).not.toContain("metric units");
   });
 
   it.each([
@@ -219,6 +262,13 @@ describe("tool mutation helpers", () => {
     expect(isReplaySafeToolCall("computer", {})).toBe(false);
   });
 
+  it("classifies mobile UI observation as replay-safe and act as mutating", () => {
+    expect(isReplaySafeToolCall("mobile_ui", { action: "observe" })).toBe(true);
+    expect(isMutatingToolCall("mobile_ui", { action: "observe" })).toBe(false);
+    expect(isReplaySafeToolCall("mobile_ui", { action: "act" })).toBe(false);
+    expect(isMutatingToolCall("mobile_ui", { action: "act" })).toBe(true);
+  });
+
   it("keeps computer input fingerprints stable and target-specific", () => {
     const first = buildToolMutationState(
       "computer",
@@ -260,7 +310,13 @@ describe("tool mutation helpers", () => {
         plan: [{ step: "Inspect", status: "in_progress" }],
       }),
     ).toBe(true);
+    expect(isReplaySafeToolCall("memory_get", { path: "memory/notes.md" })).toBe(true);
+    expect(isReplaySafeToolCall("memory_search", { query: "recall" })).toBe(false);
+    expect(isReplaySafeToolCall("memory_recall", { query: "recall" })).toBe(false);
+    expect(isReplaySafeToolCall("automations", { action: "status" })).toBe(true);
+    // Legacy transcript entries predate the rename and must stay classified.
     expect(isReplaySafeToolCall("cron", { action: "status" })).toBe(true);
+    expect(isReplaySafeToolCall("cron", { action: "add" })).toBe(false);
     expect(isReplaySafeToolCall("gateway", { action: "config.get" })).toBe(true);
     expect(isReplaySafeToolCall("gateway", { action: "config.schema.lookup" })).toBe(true);
     expect(isReplaySafeToolCall("gateway", { action: "config.patch" })).toBe(false);
@@ -279,6 +335,7 @@ describe("tool mutation helpers", () => {
     );
     expect(isReplaySafeToolCall("skill_workshop", { action: "list" })).toBe(true);
     expect(isReplaySafeToolCall("skill_workshop", { action: "inspect" })).toBe(true);
+    expect(isReplaySafeToolCall("skill_workshop", { action: "read" })).toBe(true);
     expect(isReplaySafeToolCall("skill_workshop", { action: "create" })).toBe(false);
     expect(isReplaySafeToolCall("transcripts", { action: "status" })).toBe(true);
     expect(isReplaySafeToolCall("transcripts", { action: "import" })).toBe(false);
@@ -322,11 +379,8 @@ describe("tool mutation helpers", () => {
     expect(buildToolMutationState("write", { path: "/tmp/Foo|bar" }).fileTarget).toEqual({
       path: "/tmp/foo|bar",
     });
-    // Non-file-mutating tools never carry fileTarget, even with a path arg.
     expect(buildToolMutationState("bash", { command: "rm /tmp/a" }).fileTarget).toBeUndefined();
     expect(buildToolMutationState("exec", { command: "touch /tmp/a" }).fileTarget).toBeUndefined();
-    // apply_patch is excluded from file-mutating set, so no fileTarget even
-    // if a path-shaped arg is synthetically present.
     expect(
       buildToolMutationState("apply_patch", { input: "*** Update File: /tmp/a" }).fileTarget,
     ).toBeUndefined();
@@ -361,10 +415,6 @@ describe("tool mutation helpers", () => {
         },
       ),
     ).toBe(true);
-    // `apply_patch` is intentionally excluded from the file-mutating set
-    // because production `apply_patch` calls only carry opaque `input` text,
-    // so `extractFileTarget` returns `undefined` and the fail-closed branch
-    // refuses cross-tool recovery.
     expect(
       isSameToolMutationAction(
         {
@@ -378,7 +428,7 @@ describe("tool mutation helpers", () => {
           fileTarget: { path: "/tmp/a" },
         },
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("does not cross-recover file mutations on different targets (#79024)", () => {
@@ -484,6 +534,7 @@ describe("tool mutation helpers", () => {
     expect(isLikelyMutatingToolName("conversations_list")).toBe(false);
     expect(isLikelyMutatingToolName("sessions")).toBe(true);
     expect(isLikelyMutatingToolName("computer")).toBe(true);
+    expect(isLikelyMutatingToolName("mobile_ui")).toBe(true);
     expect(isLikelyMutatingToolName("browser_actions")).toBe(true);
     expect(isLikelyMutatingToolName("message_slack")).toBe(true);
     expect(isLikelyMutatingToolName("browser")).toBe(false);

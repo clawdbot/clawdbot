@@ -80,14 +80,19 @@ openclaw gateway
 
   </Step>
 
-  <Step title="Approve the first pairing request (pairing mode)">
+  <Step title="Approve the first DM access request (pairing mode)">
+
+    Open **Settings → Channels → DM access requests**, find the WhatsApp account,
+    and approve the sender. If you prefer the CLI:
 
 ```bash
 openclaw pairing list whatsapp
 openclaw pairing approve whatsapp <CODE>
 ```
 
-    Pairing requests expire after 1 hour; pending requests are capped at 3 per account.
+    DM access requests expire after 1 hour; pending requests are capped at 3 per
+    account. This approval is separate from the WhatsApp login QR used to link the
+    account itself.
 
   </Step>
 </Steps>
@@ -126,14 +131,12 @@ A separate WhatsApp number is recommended (setup and metadata are optimized for 
 
 - The gateway owns the WhatsApp socket and reconnect loop.
 - A watchdog tracks two signals independently: raw WhatsApp Web transport activity and application-message activity. A quiet-but-connected session is not restarted just because no message arrived recently; it forces reconnect only when transport frames stop arriving for a fixed internal window (not user-configurable) or application messages stay silent past 4x the normal message timeout. Right after a reconnect for a recently active session, that first window uses the shorter normal message timeout instead of the 4x window. OpenClaw can auto-reply to offline messages that Baileys delivers early in that reconnect, bounded by the inbound message-ID dedupe lifetime; initial startup keeps the short stale-history guard.
-- Baileys socket timings are explicit under `web.whatsapp.*`: `keepAliveIntervalMs` (application ping interval), `connectTimeoutMs` (opening handshake timeout), `defaultQueryTimeoutMs` (Baileys query waits, plus OpenClaw's outbound send/presence and inbound read-receipt timeouts).
 - Outbound sends require an active WhatsApp listener for the target account; sends fail fast otherwise.
 - Group sends attach native mention metadata for `@+<digits>` and `@<digits>` tokens (in text and media captions) when the token matches current participant metadata, including LID-backed groups.
 - Status and broadcast chats (`@status`, `@broadcast`) are ignored.
 - Direct chats use DM session rules (`session.dmScope`; default `main` collapses DMs into the agent main session). Group sessions are isolated per JID (`agent:<agentId>:whatsapp:group:<jid>`).
 - WhatsApp Channels/Newsletters can be explicit outbound targets via their native `@newsletter` JID, using channel session metadata (`agent:<agentId>:whatsapp:channel:<jid>`) rather than DM semantics.
 - WhatsApp Web transport honors standard proxy environment variables on the gateway host (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`, lowercase variants). Prefer host-level proxy config over per-channel settings.
-- With `messages.removeAckAfterReply` enabled, OpenClaw clears the ack reaction once a visible reply is delivered.
 
 ## Call the current requester with MeowCaller (experimental)
 
@@ -296,7 +299,7 @@ Scope the opt-in to one account under `channels.whatsapp.accounts.<id>.pluginHoo
     Group replies require a mention by default. Mention detection includes:
 
     - explicit WhatsApp mentions of the bot identity
-    - configured mention regex patterns (`agents.list[].groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`)
+    - configured mention regex patterns (`agents.entries.*.groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`)
     - inbound voice-note transcripts for authorized group messages
     - implicit reply-to-bot detection (reply sender matches bot identity)
 
@@ -340,7 +343,7 @@ Direct chats match E.164 numbers; groups match WhatsApp group JIDs. Group allowl
 
 ## Personal-number and self-chat behavior
 
-When the linked self number is also present in `allowFrom`, self-chat safeguards activate: skip read receipts for self-chat turns, ignore mention-JID auto-trigger behavior that would ping yourself, and default replies to `[{identity.name}]` (or `[openclaw]`) when `messages.responsePrefix` is unset.
+When the linked self number is also present in `allowFrom`, self-chat safeguards activate: skip read receipts for self-chat turns, ignore mention-JID auto-trigger behavior that would ping yourself, and default replies to `[{identity.name}]` (or `[openclaw]`) when the channel/account `responsePrefix` is unset.
 
 ## Message normalization and context
 
@@ -456,23 +459,18 @@ Per-account override: `channels.whatsapp.accounts.<id>.reactionLevel`.
 
 ## Acknowledgment reactions
 
-`channels.whatsapp.ackReaction` sends an immediate reaction on inbound receipt, gated by `reactionLevel` (suppressed when `"off"`):
+`messages.ackReaction` sends an immediate reaction on inbound receipt, gated by the active WhatsApp account's `reactionLevel` (suppressed when `"off"`). `messages.ackReactionScope` selects direct messages, groups, or both:
 
 ```json5
 {
-  channels: {
-    whatsapp: {
-      ackReaction: {
-        emoji: "👀",
-        direct: true,
-        group: "mentions", // always | mentions | never
-      },
-    },
+  messages: {
+    ackReaction: "👀",
+    ackReactionScope: "group-mentions", // all | direct | group-all | group-mentions | off
   },
 }
 ```
 
-Notes: sent immediately after inbound is accepted (pre-reply); if `ackReaction` is present without `emoji`, WhatsApp uses the routed agent's identity emoji falling back to "👀" (omit `ackReaction` or set `emoji: ""` for no ack); failures are logged but do not block reply delivery; group mode `mentions` reacts only on mention-triggered turns, while group activation `always` bypasses that check; WhatsApp uses `channels.whatsapp.ackReaction` only (legacy `messages.ackReaction` does not apply here).
+Notes: the reaction is sent immediately after inbound is accepted (pre-reply); omit `messages.ackReaction` or set it to `""` for no acknowledgment. Failures are logged but do not block reply delivery. The default scope is `"group-mentions"`; use `"all"` for direct messages and all eligible groups.
 
 ## Lifecycle status reactions
 
@@ -483,17 +481,28 @@ Set `messages.statusReactions.enabled: true` to let WhatsApp replace the ack rea
   messages: {
     statusReactions: {
       enabled: true,
-      emojis: {
-        deploy: "🛫",
-        build: "🏗️",
-        concierge: "💁",
-      },
     },
   },
 }
 ```
 
-Notes: `channels.whatsapp.ackReaction` still controls eligibility for direct messages and groups; the queued state uses the same effective emoji as plain ack reactions; WhatsApp has one bot reaction slot per message, so lifecycle updates replace the current reaction in place; `messages.removeAckAfterReply: true` clears the final status reaction after the configured done/error hold; tool emoji categories include `tool`, `coding`, `web`, `deploy`, `build`, and `concierge`.
+Notes: `messages.ackReactionScope` still controls eligibility for direct messages and groups; the queued state uses the same effective emoji as plain acknowledgment reactions. WhatsApp has one bot reaction slot per message, so lifecycle updates replace the current reaction in place and restore the acknowledgment after the final done/error state.
+
+## Active-turn typing
+
+For admitted automatic turns where typing is allowed, WhatsApp sends a
+`composing` presence update when agent execution begins and refreshes it while
+the turn remains active. Refreshing stops when the run completes, including
+terminal failure or cancellation. The controller seals and cleans up when the
+reply dispatcher reports idle, or after a short safety timeout if that signal
+does not arrive. Turns for which the existing typing and suppression policy
+disables typing do not start this activity.
+
+Typing presence is ephemeral, best-effort activity feedback. It is not a
+persisted message, delivery receipt, or guarantee that every WhatsApp client
+will display continuous activity; reconnects and client behavior can make the
+indicator disappear. Lifecycle status reactions remain the persistent-looking
+opt-in status surface described above.
 
 ## Multi-account and credentials
 
@@ -539,20 +548,6 @@ openclaw channels status
     Symptom: linked account with repeated disconnects or reconnect attempts.
 
     Quiet accounts can stay connected past the normal message timeout; the watchdog restarts only when WhatsApp Web transport activity stops, the socket closes, or application-level activity stays silent beyond the longer safety window (see Runtime model above).
-
-    If logs show repeated `status=408 Request Time-out Connection was lost`, tune Baileys socket timings under `web.whatsapp`. Start by shortening `keepAliveIntervalMs` below your network's idle timeout and increasing `connectTimeoutMs` on slow or lossy links:
-
-    ```json5
-    {
-      web: {
-        whatsapp: {
-          keepAliveIntervalMs: 15000,
-          connectTimeoutMs: 60000,
-          defaultQueryTimeoutMs: 60000,
-        },
-      },
-    }
-    ```
 
     Fix:
 
@@ -625,7 +620,7 @@ Resolution for direct messages follows the identical pattern against the `direct
 This account-replaces-root behavior for prompt resolution is a plain shallow override: any account `groups`/`direct` key, including an explicit empty object, replaces the root map. It differs from the group-membership allowlist check described above, which has a single-account safety net for an accidentally empty `groups: {}`.
 </Note>
 
-**Difference from Telegram:** Telegram suppresses root `groups` for every account in a multi-account setup (even accounts with no `groups` of their own) to stop a bot receiving group messages for groups it does not belong to. WhatsApp does not apply that guard — root `groups`/`direct` are inherited by any account without its own override, regardless of account count. In a multi-account WhatsApp setup, define the full map under each account explicitly if you want per-account prompts.
+**Difference from Telegram:** Telegram uses the same whole-map account override for `groups` in multi-account configs, but a single account's empty `groups: {}` falls back to root groups as a migration safety net. Telegram's `direct` map also has separate DM-topic semantics. In WhatsApp—or for one account among several Telegram accounts—use an explicit empty `groups: {}` when that account should not inherit root group defaults.
 
 Important behavior:
 
@@ -681,9 +676,11 @@ Primary reference: [Configuration reference - WhatsApp](/gateway/config-channels
 | Area             | Fields                                                                                                         |
 | ---------------- | -------------------------------------------------------------------------------------------------------------- |
 | Access           | `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`                                             |
-| Delivery         | `textChunkLimit`, `streaming.chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `ackReaction`, `reactionLevel`      |
+| Delivery         | `textChunkLimit`, `streaming.chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `reactionLevel`                     |
 | Multi-account    | `accounts.<id>.enabled`, `accounts.<id>.authDir`, and other per-account overrides                              |
-| Operations       | `configWrites`, `debounceMs`, `web.enabled`, `web.heartbeatSeconds`, `web.reconnect.*`, `web.whatsapp.*`       |
+| Operations       | `configWrites`, `enabled`                                                                                      |
+| Inbound batching | `messages.inbound.debounceMs`, `messages.inbound.byChannel.whatsapp`                                           |
+| Acknowledgments  | `messages.ackReaction`, `messages.ackReactionScope`                                                            |
 | Session behavior | `session.dmScope`, `historyLimit`, `dmHistoryLimit`, `dms.<id>.historyLimit`                                   |
 | Prompts          | `groups.<id>.systemPrompt`, `groups["*"].systemPrompt`, `direct.<id>.systemPrompt`, `direct["*"].systemPrompt` |
 

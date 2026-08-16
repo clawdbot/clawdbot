@@ -20,6 +20,7 @@ import {
   resolveClientIp,
   resolveGatewayBindHost,
   resolveGatewayListenHosts,
+  resolveGatewayRequiredListenHosts,
   resolveHostName,
 } from "./net.js";
 
@@ -416,6 +417,17 @@ describe("resolveGatewayListenHosts", () => {
     const hosts = await resolveGatewayListenHosts("127.0.0.1", { canBindToHost });
     expect(hosts).toEqual(["127.0.0.1", "::1"]);
     expect(canBindToHost).toHaveBeenCalledWith("::1");
+  });
+});
+
+describe("resolveGatewayRequiredListenHosts", () => {
+  it.each([
+    ["127.0.0.1", ["127.0.0.1"]],
+    ["0.0.0.0", ["0.0.0.0"]],
+    ["::1", ["::1"]],
+    ["100.64.0.1", ["100.64.0.1", "127.0.0.1"]],
+  ])("returns required startup hosts for %s", (host, expected) => {
+    expect(resolveGatewayRequiredListenHosts(host)).toEqual(expected);
   });
 });
 

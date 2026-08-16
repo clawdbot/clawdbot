@@ -1,4 +1,7 @@
 import { type CallToolResult, ContentBlockSchema } from "@modelcontextprotocol/sdk/types.js";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { BoardMcpAppDescriptor } from "../../packages/gateway-protocol/src/index.js";
 import { getOrCreateSessionMcpRuntime } from "../agents/agent-bundle-mcp-runtime.js";
 import type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
@@ -9,8 +12,9 @@ import {
 } from "../agents/mcp-ui-resource.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { visitSessionMessagesAsync } from "./session-transcript-readers.js";
-import { loadSessionEntry } from "./session-utils.js";
+import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
 const MCP_APP_RESTORE_IN_FLIGHT_KEY = Symbol.for("openclaw.mcpAppRestoreInFlight");
 
@@ -22,6 +26,8 @@ type McpAppDescriptor = {
   toolCallId: string;
   resultMetaState?: "unavailable";
 };
+
+type TranscriptLookup = { viewId: string } | { descriptor: BoardMcpAppDescriptor };
 
 type ReconstructionData = {
   descriptor: McpAppDescriptor;
@@ -40,24 +46,13 @@ type TranscriptResultRead =
   | { kind: "restorable"; value: TranscriptResult }
   | { kind: "unavailable" };
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function readString(record: Record<string, unknown> | undefined, key: string): string | undefined {
-  const value = record?.[key];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function readDescriptor(value: unknown): McpAppDescriptor | undefined {
-  const record = asRecord(value);
-  const viewId = readString(record, "viewId");
-  const serverName = readString(record, "serverName");
-  const toolName = readString(record, "toolName");
-  const uiResourceUri = readString(record, "uiResourceUri");
-  const toolCallId = readString(record, "toolCallId");
+  const record = asOptionalRecord(value);
+  const viewId = normalizeOptionalString(record?.viewId);
+  const serverName = normalizeOptionalString(record?.serverName);
+  const toolName = normalizeOptionalString(record?.toolName);
+  const uiResourceUri = normalizeOptionalString(record?.uiResourceUri);
+  const toolCallId = normalizeOptionalString(record?.toolCallId);
   const rawResultMetaState = record?.resultMetaState;
   const resultMetaState = rawResultMetaState === "unavailable" ? rawResultMetaState : undefined;
   if (
@@ -90,22 +85,27 @@ function readToolInputFromMessage(
   toolCallId: string,
   modelToolName: string,
 ): { found: true; input: unknown } | undefined {
-  const message = asRecord(value);
-  if (readString(message, "role")?.toLowerCase() !== "assistant") {
+  const message = asOptionalRecord(value);
+  if (normalizeOptionalString(message?.role)?.toLowerCase() !== "assistant") {
     return undefined;
   }
   const content = Array.isArray(message?.content) ? message.content : [];
   for (const blockValue of content) {
-    const block = asRecord(blockValue);
-    if ((readString(block, "id") ?? readString(block, "toolCallId")) !== toolCallId) {
+    const block = asOptionalRecord(blockValue);
+    if (
+      (normalizeOptionalString(block?.id) ?? normalizeOptionalString(block?.toolCallId)) !==
+      toolCallId
+    ) {
       continue;
     }
-    const type = readString(block, "type")?.toLowerCase();
+    const type = normalizeOptionalString(block?.type)?.toLowerCase();
     if (type !== "toolcall" && type !== "tool_call" && type !== "tooluse" && type !== "tool_use") {
       continue;
     }
     const blockToolName =
-      readString(block, "name") ?? readString(block, "toolName") ?? readString(block, "tool_name");
+      normalizeOptionalString(block?.name) ??
+      normalizeOptionalString(block?.toolName) ??
+      normalizeOptionalString(block?.tool_name);
     if (blockToolName !== modelToolName) {
       continue;
     }
@@ -130,29 +130,49 @@ function readCallToolResult(message: Record<string, unknown>, details: Record<st
   } as CallToolResult;
 }
 
-function readTranscriptResult(value: unknown, viewId: string): TranscriptResultRead | undefined {
-  const message = asRecord(value);
-  if (!message || readString(message, "role")?.toLowerCase() !== "toolresult") {
+function matchesLookup(
+  rawDescriptor: Record<string, unknown> | undefined,
+  lookup: TranscriptLookup,
+): boolean {
+  if ("viewId" in lookup) {
+    return normalizeOptionalString(rawDescriptor?.viewId) === lookup.viewId;
+  }
+  const descriptor = lookup.descriptor;
+  return (
+    normalizeOptionalString(rawDescriptor?.serverName) === descriptor.serverName &&
+    normalizeOptionalString(rawDescriptor?.toolName) === descriptor.toolName &&
+    normalizeOptionalString(rawDescriptor?.uiResourceUri) === descriptor.uiResourceUri &&
+    normalizeOptionalString(rawDescriptor?.toolCallId) === descriptor.toolCallId
+  );
+}
+
+function readTranscriptResult(
+  value: unknown,
+  lookup: TranscriptLookup,
+): TranscriptResultRead | undefined {
+  const message = asOptionalRecord(value);
+  if (!message || normalizeOptionalString(message.role)?.toLowerCase() !== "toolresult") {
     return undefined;
   }
-  const details = asRecord(message.details);
+  const details = asOptionalRecord(message.details);
   if (!details) {
     return undefined;
   }
-  const preview = asRecord(details.mcpAppPreview);
-  const rawDescriptor = asRecord(preview?.mcpApp);
-  if (readString(rawDescriptor, "viewId") !== viewId) {
+  const preview = asOptionalRecord(details.mcpAppPreview);
+  const rawDescriptor = asOptionalRecord(preview?.mcpApp);
+  if (!matchesLookup(rawDescriptor, lookup)) {
     return undefined;
   }
   const descriptor = readDescriptor(rawDescriptor);
-  const modelToolName = readString(message, "toolName") ?? readString(message, "tool_name");
+  const modelToolName =
+    normalizeOptionalString(message.toolName) ?? normalizeOptionalString(message.tool_name);
   if (!descriptor || !modelToolName) {
     return { kind: "unavailable" };
   }
   if (
-    readString(message, "toolCallId") !== descriptor.toolCallId ||
-    readString(details, "mcpServer") !== descriptor.serverName ||
-    readString(details, "mcpTool") !== descriptor.toolName ||
+    normalizeOptionalString(message.toolCallId) !== descriptor.toolCallId ||
+    normalizeOptionalString(details.mcpServer) !== descriptor.serverName ||
+    normalizeOptionalString(details.mcpTool) !== descriptor.toolName ||
     descriptor.resultMetaState === "unavailable"
   ) {
     return { kind: "unavailable" };
@@ -166,13 +186,13 @@ function readTranscriptResult(value: unknown, viewId: string): TranscriptResultR
 /** Searches the full active transcript without retaining its messages in memory. */
 async function findMcpAppReconstructionDataByVisit(
   visitTranscript: TranscriptVisit,
-  viewId: string,
+  lookup: TranscriptLookup,
 ): Promise<ReconstructionData | undefined> {
   let resultRead: TranscriptResultRead | undefined;
   let resultIndex = -1;
   let messageIndex = 0;
   await visitTranscript((message) => {
-    const read = readTranscriptResult(message, viewId);
+    const read = readTranscriptResult(message, lookup);
     if (read) {
       resultRead = read;
       resultIndex = messageIndex;
@@ -222,16 +242,18 @@ function getRestoreInFlight(): Map<string, Promise<ReconstructionResult | undefi
   return created;
 }
 
-async function restoreMcpAppViewOnce(params: {
+async function reconstructMcpAppView(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   sessionKey: string;
-  viewId: string;
+  lookup: TranscriptLookup;
+  allowedAppToolNames: ReadonlySet<string>;
+  authorizeAppInteraction?: () => boolean | Promise<boolean>;
+  readOnly: boolean;
+  viewId?: string;
 }): Promise<ReconstructionResult | undefined> {
-  if (!params.viewId.startsWith("mcp-app-") || params.viewId.length > 128) {
-    return undefined;
-  }
-  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
-  const loaded = loadSessionEntry(params.sessionKey, { agentId });
+  const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
+  const loaded = loadGatewaySessionEntryReadOnly(params.sessionKey, { agentId });
   const sessionId = loaded.entry?.sessionId;
   if (!sessionId) {
     return undefined;
@@ -249,7 +271,7 @@ async function restoreMcpAppViewOnce(params: {
       reason: "MCP App restart reconstruction",
       cache: "reuse",
     });
-  }, params.viewId);
+  }, params.lookup);
   if (!data) {
     return undefined;
   }
@@ -263,40 +285,75 @@ async function restoreMcpAppViewOnce(params: {
   if (runtime.mcpAppsEnabled !== true) {
     return undefined;
   }
-  await fetchMcpAppView({
+  const fetched = await fetchMcpAppView({
     runtime,
+    agentId,
     serverName: data.descriptor.serverName,
     toolName: data.descriptor.toolName,
     uiResourceUri: data.descriptor.uiResourceUri,
     toolCallId: data.descriptor.toolCallId,
     toolInput: data.toolInput,
     toolResult: data.toolResult,
-    viewId: data.descriptor.viewId,
+    ...(params.viewId ? { viewId: params.viewId } : {}),
+    allowedAppToolNames: params.allowedAppToolNames,
+    ...(params.authorizeAppInteraction
+      ? { authorizeAppInteraction: params.authorizeAppInteraction }
+      : {}),
+    ...(params.readOnly ? { readOnly: true as const } : {}),
+  });
+  const view = fetched ? getMcpAppViewLease(fetched.viewId, runtime) : undefined;
+  return view ? { runtime, view } : undefined;
+}
+
+async function restoreMcpAppViewOnce(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  sessionKey: string;
+  viewId: string;
+}): Promise<ReconstructionResult | undefined> {
+  if (!params.viewId.startsWith("mcp-app-") || params.viewId.length > 128) {
+    return undefined;
+  }
+  return await reconstructMcpAppView({
+    ...params,
+    lookup: { viewId: params.viewId },
     // A reconstructed preview can render and read its owning server resources,
     // but cannot call tools without a fresh run carrying current effective policy.
     allowedAppToolNames: new Set(),
     readOnly: true,
   });
-  const view = getMcpAppViewLease(params.viewId, runtime);
-  return view ? { runtime, view } : undefined;
+}
+
+export async function mintMcpAppViewFromTranscript(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  sessionKey: string;
+  descriptor: BoardMcpAppDescriptor;
+  allowedAppToolNames: ReadonlySet<string>;
+  authorizeAppInteraction?: () => boolean | Promise<boolean>;
+  readOnly: boolean;
+}): Promise<ReconstructionResult | undefined> {
+  return await reconstructMcpAppView({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+    lookup: { descriptor: params.descriptor },
+    allowedAppToolNames: params.allowedAppToolNames,
+    ...(params.authorizeAppInteraction
+      ? { authorizeAppInteraction: params.authorizeAppInteraction }
+      : {}),
+    readOnly: params.readOnly,
+  });
 }
 
 export async function restoreMcpAppView(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   sessionKey: string;
   viewId: string;
 }): Promise<ReconstructionResult | undefined> {
-  const key = `${params.sessionKey}\0${params.viewId}`;
+  const key = `${params.agentId ?? ""}\0${params.sessionKey}\0${params.viewId}`;
   const inFlight = getRestoreInFlight();
-  const existing = inFlight.get(key);
-  if (existing) {
-    return await existing;
-  }
-  const pending = restoreMcpAppViewOnce(params).finally(() => {
-    if (inFlight.get(key) === pending) {
-      inFlight.delete(key);
-    }
+  return await getOrCreatePromise(inFlight, key, () => restoreMcpAppViewOnce(params), {
+    evictOnSettled: true,
   });
-  inFlight.set(key, pending);
-  return await pending;
 }

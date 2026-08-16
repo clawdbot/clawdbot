@@ -13,7 +13,9 @@ import {
   type Socket,
 } from "node:net";
 import { dirname } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../../windows-cmd-helpers.mjs";
+import { toStringifiedError } from "../error-format.mts";
 import { resolveWindowsTaskkillPath } from "../windows-taskkill.mjs";
 import type {
   Cleanup,
@@ -28,6 +30,7 @@ import {
   CROSS_OS_COMMAND_HEARTBEAT_SECONDS,
   CROSS_OS_PROCESS_TREE_KILL_AFTER_MS,
 } from "./config.ts";
+import { readLogTextSince } from "./logs.ts";
 import { formatError, sleep, toLintErrorObject, trimForSummary } from "./shared.ts";
 
 const CROSS_OS_SIGNAL_EXIT_CODES: Partial<Record<NodeJS.Signals, number>> = {
@@ -36,6 +39,8 @@ const CROSS_OS_SIGNAL_EXIT_CODES: Partial<Record<NodeJS.Signals, number>> = {
   SIGTERM: 143,
 };
 const CROSS_OS_ACTIVE_CHILD_TREE_KILLERS = new Set<(signal: NodeJS.Signals) => void>();
+const STARTUP_MIGRATION_RESTART_PREFIX =
+  "OpenClaw plugin migration inputs changed during startup convergence;";
 let forwardedSignalExitCode: number | undefined;
 let forwardedSignalForceKillTimer: NodeJS.Timeout | undefined;
 
@@ -116,8 +121,38 @@ export async function canConnectToLoopbackPort(port: number, timeoutMs = 1_000) 
   });
 }
 
-function hasChildExited(child: ChildProcess) {
+export function hasChildExited(child: ChildProcess) {
   return child.exitCode !== null || (child.signalCode ?? null) !== null;
+}
+
+export async function waitForGatewayWithStartupMigrationRestart(params: {
+  gatewayHolder: { current: GatewayHandle | null };
+  restartGateway: () => Promise<GatewayHandle>;
+  waitUntilReady: (gateway: GatewayHandle) => Promise<void>;
+}) {
+  let gateway = params.gatewayHolder.current;
+  if (!gateway) {
+    throw new Error("Gateway restart coordination requires an active gateway handle.");
+  }
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await params.waitUntilReady(gateway);
+      return;
+    } catch (error) {
+      if (!hasChildExited(gateway.child)) {
+        throw error;
+      }
+      await gateway.waitForClose();
+      await gateway.closeLog();
+      const startupLog = readLogTextSince(gateway.logPath, gateway.launchLogOffset);
+      if (attempt > 0 || !startupLog.includes(STARTUP_MIGRATION_RESTART_PREFIX)) {
+        throw error;
+      }
+      gateway = await params.restartGateway();
+      params.gatewayHolder.current = gateway;
+    }
+  }
 }
 
 export async function stopGateway(gateway: GatewayHandle | null) {
@@ -235,10 +270,23 @@ function resolveCommandCaptureLimit(options: CommandOptions) {
   return Math.max(1, Math.floor(value));
 }
 
+function decodeBoundedUtf8Tail(buffer: Buffer, maxBytes: number): string {
+  const tail = buffer.subarray(Math.max(0, buffer.byteLength - maxBytes));
+  let start = 0;
+  while (start < tail.byteLength) {
+    const byte = tail[start];
+    if (byte === undefined || (byte & 0xc0) !== 0x80) {
+      break;
+    }
+    start += 1;
+  }
+  return tail.subarray(start).toString("utf8");
+}
+
 function appendBoundedCommandOutput(current: string, chunk: Uint8Array | string, maxBytes: number) {
   const chunkBuffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
   if (chunkBuffer.byteLength >= maxBytes) {
-    return chunkBuffer.subarray(chunkBuffer.byteLength - maxBytes).toString("utf8");
+    return decodeBoundedUtf8Tail(chunkBuffer, maxBytes);
   }
 
   const currentBuffer = Buffer.from(current);
@@ -249,7 +297,7 @@ function appendBoundedCommandOutput(current: string, chunk: Uint8Array | string,
 
   const currentTailBytes = maxBytes - chunkBuffer.byteLength;
   const currentTail = currentBuffer.subarray(currentBuffer.byteLength - currentTailBytes);
-  return Buffer.concat([currentTail, chunkBuffer], maxBytes).toString("utf8");
+  return decodeBoundedUtf8Tail(Buffer.concat([currentTail, chunkBuffer]), maxBytes);
 }
 
 export async function runCommand(
@@ -282,6 +330,8 @@ export async function runCommandInvocation(
     });
     const activeChildTree = registerActiveChildProcessTree(child);
     const logStream = createWriteStream(options.logPath, { flags: "a" });
+    const stdoutDecoder = new StringDecoder("utf8");
+    const stderrDecoder = new StringDecoder("utf8");
     let stdout = "";
     let stderr = "";
     let timedOut = false;
@@ -387,14 +437,20 @@ export async function runCommandInvocation(
     logStream.write(`${new Date().toISOString()} start command=${commandLabel}\n`);
 
     child.stdout?.on("data", (chunk) => {
-      const text = chunk.toString();
-      stdout = appendBoundedCommandOutput(stdout, chunk, maxCapturedOutputBytes);
-      logStream.write(text);
+      stdout = appendBoundedCommandOutput(
+        stdout,
+        stdoutDecoder.write(chunk),
+        maxCapturedOutputBytes,
+      );
+      logStream.write(chunk);
     });
     child.stderr?.on("data", (chunk) => {
-      const text = chunk.toString();
-      stderr = appendBoundedCommandOutput(stderr, chunk, maxCapturedOutputBytes);
-      logStream.write(text);
+      stderr = appendBoundedCommandOutput(
+        stderr,
+        stderrDecoder.write(chunk),
+        maxCapturedOutputBytes,
+      );
+      logStream.write(chunk);
     });
 
     child.on("error", (error) => {
@@ -415,6 +471,8 @@ export async function runCommandInvocation(
         return;
       }
       activeChildTree.unregister();
+      stdout = appendBoundedCommandOutput(stdout, stdoutDecoder.end(), maxCapturedOutputBytes);
+      stderr = appendBoundedCommandOutput(stderr, stderrDecoder.end(), maxCapturedOutputBytes);
       finalize(() => {
         const result = {
           exitCode: exitCode ?? 1,
@@ -502,8 +560,7 @@ export async function startStaticFileServer(params: {
         server.close((error) => {
           void (async () => {
             const closeLogError = await finishStaticFileServerLog(logStream, logStreamError).catch(
-              (logError: unknown): Error =>
-                logError instanceof Error ? logError : new Error(String(logError)),
+              (logError: unknown): Error => toStringifiedError(logError),
             );
             if (error) {
               rejectPromise(error);

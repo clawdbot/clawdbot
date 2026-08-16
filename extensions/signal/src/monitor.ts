@@ -1,6 +1,6 @@
 // Signal plugin module implements monitor behavior.
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
-import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-outbound";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -9,6 +9,7 @@ import type {
   SignalReactionNotificationMode,
 } from "openclaw/plugin-sdk/config-contracts";
 import {
+  canonicalizeBase64,
   detectMime,
   estimateBase64DecodedBytes,
   saveMediaBuffer,
@@ -46,7 +47,9 @@ import { resolveSignalAccount, resolveSignalReplyToMode } from "./accounts.js";
 import { isSignalNativeApprovalHandlerConfigured } from "./approval-native.js";
 import { addSignalApprovalReactionHintToStructuredPayload } from "./approval-reactions.js";
 import { signalRpcRequest, signalCheck } from "./client-adapter.js";
-import { formatSignalDaemonExit, spawnSignalDaemon, type SignalDaemonHandle } from "./daemon.js";
+import type { SignalTransportKind } from "./client-adapter.js";
+import { createSignalDaemonLifecycle } from "./daemon-lifecycle.js";
+import { spawnSignalDaemon, type SignalDaemonHandle } from "./daemon.js";
 import { isSignalSenderAllowed, type resolveSignalSender } from "./identity.js";
 import { createSignalEventHandler } from "./monitor/event-handler.js";
 import type {
@@ -59,7 +62,11 @@ import { materializeSignalPresentationFallback } from "./presentation-fallback.j
 import { registerSignalReactionTargetsForDeliveredPayload } from "./reaction-targets.js";
 import { sendMessageSignal } from "./send.js";
 import { startSignalIngressMonitor, type SignalIngressMonitor } from "./signal-ingress.js";
-import { runSignalSseLoop } from "./sse-reconnect.js";
+import {
+  publishSignalRecovering,
+  runSignalSseLoop,
+  type SignalStatusSink,
+} from "./sse-reconnect.js";
 
 export type MonitorSignalOpts = {
   runtime?: RuntimeEnv;
@@ -68,7 +75,7 @@ export type MonitorSignalOpts = {
   accountId?: string;
   config?: OpenClawConfig;
   baseUrl?: string;
-  channelRuntime?: ChannelRuntimeSurface;
+  channelRuntime?: PluginRuntime["channel"];
   autoStart?: boolean;
   startupTimeoutMs?: number;
   cliPath?: string;
@@ -84,6 +91,7 @@ export type MonitorSignalOpts = {
   mediaMaxMb?: number;
   reconnectPolicy?: Partial<BackoffPolicy>;
   waitForTransportReady?: typeof waitForTransportReady;
+  statusSink?: SignalStatusSink;
 };
 
 function createSignalMonitorTaskRunner(runtime: RuntimeEnv) {
@@ -103,49 +111,6 @@ function createSignalMonitorTaskRunner(runtime: RuntimeEnv) {
         await Promise.allSettled(inFlight);
       }
     },
-  };
-}
-
-function createSignalDaemonLifecycle(params: { abortSignal?: AbortSignal }) {
-  let daemonHandle: SignalDaemonHandle | null = null;
-  let daemonStopRequested = false;
-  let daemonStopPromise: Promise<void> | undefined;
-  let daemonExitError: Error | undefined;
-  const daemonAbortController = new AbortController();
-  const abortSignal = params.abortSignal
-    ? AbortSignal.any([params.abortSignal, daemonAbortController.signal])
-    : daemonAbortController.signal;
-  const stop = (): Promise<void> => {
-    if (daemonStopPromise) {
-      return daemonStopPromise;
-    }
-    daemonStopRequested = true;
-    if (!daemonAbortController.signal.aborted) {
-      daemonAbortController.abort(
-        params.abortSignal?.reason ?? new Error("Signal monitor stopped"),
-      );
-    }
-    daemonStopPromise = daemonHandle?.stop() ?? Promise.resolve();
-    return daemonStopPromise;
-  };
-  const attach = (handle: SignalDaemonHandle) => {
-    daemonHandle = handle;
-    void handle.exited.then((exit) => {
-      if (daemonStopRequested || params.abortSignal?.aborted) {
-        return;
-      }
-      daemonExitError = new Error(formatSignalDaemonExit(exit));
-      if (!daemonAbortController.signal.aborted) {
-        daemonAbortController.abort(daemonExitError);
-      }
-    });
-  };
-  const getExitError = () => daemonExitError;
-  return {
-    attach,
-    stop,
-    getExitError,
-    abortSignal,
   };
 }
 
@@ -181,26 +146,31 @@ function isSignalReactionMessage(
 function shouldEmitSignalReactionNotification(params: {
   mode?: SignalReactionNotificationMode;
   account?: string | null;
+  accountUuid?: string | null;
   targets?: SignalReactionTarget[];
   sender?: ReturnType<typeof resolveSignalSender> | null;
   allowlist?: string[];
 }) {
-  const { mode, account, targets, sender, allowlist } = params;
+  const { mode, account, accountUuid, targets, sender, allowlist } = params;
   const effectiveMode = mode ?? "own";
   if (effectiveMode === "off") {
     return false;
   }
   if (effectiveMode === "own") {
-    const accountId = account?.trim();
-    if (!accountId || !targets || targets.length === 0) {
+    const accountId = normalizeOptionalString(account);
+    const normalizedAccountUuid = normalizeOptionalString(accountUuid);
+    if ((!accountId && !normalizedAccountUuid) || !targets || targets.length === 0) {
       return false;
     }
-    const normalizedAccount = normalizeE164(accountId);
+    const normalizedAccount = accountId ? normalizeE164(accountId) : undefined;
     return targets.some((target) => {
       if (target.kind === "uuid") {
-        return accountId === target.id || accountId === `uuid:${target.id}`;
+        // UUID-only reaction payloads omit the phone identity carried by account.
+        return [accountId, normalizedAccountUuid].some(
+          (candidate) => candidate === target.id || candidate === `uuid:${target.id}`,
+        );
       }
-      return normalizedAccount === target.id;
+      return Boolean(normalizedAccount) && normalizedAccount === target.id;
     });
   }
   if (effectiveMode === "allowlist") {
@@ -272,7 +242,7 @@ function deriveSignalAttachmentRpcMaxResponseBytes(maxBytes: number): number | u
 async function fetchAttachment(params: {
   baseUrl: string;
   account?: string;
-  apiMode?: "native" | "container" | "auto";
+  transportKind?: SignalTransportKind;
   attachment: SignalAttachment;
   sender?: string;
   groupId?: string;
@@ -304,7 +274,7 @@ async function fetchAttachment(params: {
   const result = await signalRpcRequest<{ data?: string }>("getAttachment", rpcParams, {
     baseUrl: params.baseUrl,
     maxResponseBytes: deriveSignalAttachmentRpcMaxResponseBytes(params.maxBytes),
-    apiMode: params.apiMode,
+    transportKind: params.transportKind,
   });
   if (!result?.data) {
     return null;
@@ -314,7 +284,11 @@ async function fetchAttachment(params: {
       `Signal attachment ${attachment.id} exceeds ${(params.maxBytes / (1024 * 1024)).toFixed(0)}MB limit`,
     );
   }
-  const buffer = Buffer.from(result.data, "base64");
+  const canonicalData = canonicalizeBase64(result.data);
+  if (!canonicalData) {
+    throw new Error(`Signal attachment ${attachment.id} returned malformed base64 data`);
+  }
+  const buffer = Buffer.from(canonicalData, "base64");
   const originalFilename = normalizeOptionalString(attachment.filename ?? undefined);
   const contentType =
     normalizeOptionalString(attachment.contentType ?? undefined) ??
@@ -569,15 +543,17 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   const reactionMode = accountInfo.config.reactionNotifications ?? "own";
   const reactionAllowlist = normalizeStringEntries(accountInfo.config.reactionAllowlist);
   const mediaMaxBytes = (opts.mediaMaxMb ?? accountInfo.config.mediaMaxMb ?? 8) * 1024 * 1024;
+  const transportKind = accountInfo.transport.kind;
+  const managedTransport =
+    accountInfo.transport.kind === "managed-native" ? accountInfo.transport : undefined;
   const ignoreAttachments = opts.ignoreAttachments ?? accountInfo.config.ignoreAttachments ?? false;
   const sendReadReceipts = Boolean(opts.sendReadReceipts ?? accountInfo.config.sendReadReceipts);
   const waitForTransportReadyFn = opts.waitForTransportReady ?? waitForTransportReady;
 
-  const autoStart = opts.autoStart ?? accountInfo.config.autoStart ?? !accountInfo.config.httpUrl;
-  const configuredApiMode = cfg.channels?.signal?.apiMode ?? "auto";
+  const autoStart = Boolean(managedTransport) && (opts.autoStart ?? true);
   const startupTimeoutMs = Math.min(
     120_000,
-    Math.max(1_000, opts.startupTimeoutMs ?? accountInfo.config.startupTimeoutMs ?? 30_000),
+    Math.max(1_000, opts.startupTimeoutMs ?? managedTransport?.startupTimeoutMs ?? 30_000),
   );
   const readReceiptsViaDaemon = autoStart && sendReadReceipts;
   const daemonLifecycle = createSignalDaemonLifecycle({ abortSignal: opts.abortSignal });
@@ -585,28 +561,22 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   let daemonHandle: SignalDaemonHandle | null = null;
   let ingressMonitor: SignalIngressMonitor | undefined;
 
-  if (autoStart && configuredApiMode === "container") {
-    throw new Error(
-      "channels.signal.autoStart=true is incompatible with channels.signal.apiMode=container",
-    );
-  }
-
   if (autoStart) {
-    const cliPath = opts.cliPath ?? accountInfo.config.cliPath ?? "signal-cli";
+    const cliPath = opts.cliPath ?? managedTransport?.cliPath ?? "signal-cli";
     const configPath =
       normalizeOptionalString(opts.configPath) ??
-      normalizeOptionalString(accountInfo.config.configPath);
-    const httpHost = opts.httpHost ?? accountInfo.config.httpHost ?? "127.0.0.1";
-    const httpPort = opts.httpPort ?? accountInfo.config.httpPort ?? 8080;
+      normalizeOptionalString(managedTransport?.configPath);
+    const httpHost = opts.httpHost ?? managedTransport?.httpHost ?? "127.0.0.1";
+    const httpPort = opts.httpPort ?? managedTransport?.httpPort ?? 8080;
     daemonHandle = spawnSignalDaemon({
       cliPath,
       ...(configPath ? { configPath } : {}),
       account,
       httpHost,
       httpPort,
-      receiveMode: opts.receiveMode ?? accountInfo.config.receiveMode,
+      receiveMode: opts.receiveMode ?? managedTransport?.receiveMode,
       ignoreAttachments: opts.ignoreAttachments ?? accountInfo.config.ignoreAttachments,
-      ignoreStories: opts.ignoreStories ?? accountInfo.config.ignoreStories,
+      ignoreStories: opts.ignoreStories ?? managedTransport?.ignoreStories,
       sendReadReceipts,
       runtime,
     });
@@ -654,6 +624,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
 
     const handleEvent = createSignalEventHandler({
       runtime,
+      channelRuntime: opts.channelRuntime,
       abortSignal: daemonLifecycle.abortSignal,
       runTrackedTask: (task) => {
         void monitorTaskRunner.runTask(task);
@@ -677,7 +648,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       ignoreAttachments,
       sendReadReceipts,
       readReceiptsViaDaemon,
-      fetchAttachment: (params) => fetchAttachment({ ...params, apiMode: configuredApiMode }),
+      fetchAttachment: (params) => fetchAttachment({ ...params, transportKind }),
       deliverReplies: (params) => deliverReplies({ ...params, cfg, chunkMode }),
       resolveSignalReactionTargets,
       isSignalReactionMessage,
@@ -689,9 +660,6 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       accountId: accountInfo.accountId,
       dispatch: handleEvent,
       runtime,
-      runTrackedTask: (task) => {
-        void monitorTaskRunner.runTask(task);
-      },
     });
 
     await runSignalSseLoop({
@@ -701,8 +669,9 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       runtime,
       // signal-cli can keep the SSE event endpoint idle until the next inbound event.
       timeoutMs: 0,
-      apiMode: configuredApiMode,
+      transportKind,
       policy: opts.reconnectPolicy,
+      statusSink: opts.statusSink,
       onEvent: (event) =>
         monitorTaskRunner.runTask(async () => await ingressMonitor?.receive(event)),
     });
@@ -714,6 +683,9 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     const daemonExitError = daemonLifecycle.getExitError();
     if (opts.abortSignal?.aborted && !daemonExitError) {
       return;
+    }
+    if (daemonExitError) {
+      publishSignalRecovering(opts.statusSink, daemonExitError.message);
     }
     throw err;
   } finally {

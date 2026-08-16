@@ -1,6 +1,7 @@
 // Terminal Core module implements display string behavior.
 import os from "node:os";
 import path from "node:path";
+import { lowercasePreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 
 // Display-safe string helpers for shortening user home paths.
 
@@ -49,7 +50,7 @@ function resolveRawHomeDir(
   const explicitHome = normalize(env.OPENCLAW_HOME);
   if (explicitHome) {
     const fallbackHome = resolveRawOsHomeDir(env, homedir);
-    return fallbackHome ? explicitHome.replace(/^~(?=$|[\\/])/, fallbackHome) : explicitHome;
+    return fallbackHome ? explicitHome.replace(/^~(?=$|[\\/])/, () => fallbackHome) : explicitHome;
   }
   return resolveRawOsHomeDir(env, homedir);
 }
@@ -73,13 +74,30 @@ function resolveHomeDisplayPrefix(): { home: string; prefix: string } | undefine
   return explicitHome ? { home, prefix: "$OPENCLAW_HOME" } : { home, prefix: "~" };
 }
 
+/** Find a case-insensitive Windows path without changing offsets in the original string. */
+function indexOfWindowsPath(input: string, home: string, cursor: number): number {
+  const foldedHome = lowercasePreservingWhitespace(home);
+  // Folding the whole display can expand Unicode and shift indices. Fixed-width slices keep
+  // replacement offsets anchored to the original string while retaining Windows casing rules.
+  for (let index = cursor; index <= input.length - home.length; index += 1) {
+    if (lowercasePreservingWhitespace(input.slice(index, index + home.length)) === foldedHome) {
+      return index;
+    }
+  }
+  return -1;
+}
+
 /** Replace a whole-value home or child path without clipping sibling path prefixes. */
 function replaceHomePath(input: string, display: { home: string; prefix: string }): string {
   let output = "";
   let cursor = 0;
-
+  // terminal-core is standalone, so it keeps only its token-aware scan local;
+  // app-level home selection and path rendering remain owned by core.
   while (cursor < input.length) {
-    const index = input.indexOf(display.home, cursor);
+    const index =
+      process.platform === "win32"
+        ? indexOfWindowsPath(input, display.home, cursor)
+        : input.indexOf(display.home, cursor);
     if (index < 0) {
       return `${output}${input.slice(cursor)}`;
     }

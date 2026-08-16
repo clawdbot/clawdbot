@@ -5,7 +5,6 @@ import type {
   WAMessage,
   WAPresence,
 } from "baileys";
-import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import { resolveWhatsAppDocumentFileName } from "../document-filename.js";
 import { addWhatsAppImagePreviewFields } from "../image-preview.js";
 import { isWhatsAppNewsletterJid } from "../normalize.js";
@@ -17,7 +16,9 @@ import {
 } from "./outbound-mentions.js";
 import {
   combineWhatsAppSendResults,
+  mergeWhatsAppAcceptedSendError,
   normalizeWhatsAppSendResult,
+  rememberWhatsAppAcceptedSend,
   type WhatsAppSendKind,
   type WhatsAppSendResult,
 } from "./send-result.js";
@@ -38,14 +39,6 @@ type StructuredLocationSend = {
 type StructuredStickerSendOptions = {
   mimetype?: string;
 };
-
-function recordWhatsAppOutbound(accountId: string) {
-  recordChannelActivity({
-    channel: "whatsapp",
-    accountId,
-    direction: "outbound",
-  });
-}
 
 function supportsForcedDocumentMediaType(mediaType: string): boolean {
   return mediaType.startsWith("image/") || mediaType.startsWith("video/");
@@ -82,15 +75,37 @@ export function createWebSendApi(params: {
     params.resolveOutboundMentions
       ? await params.resolveOutboundMentions({ jid, text })
       : { text, mentionedJids: [] };
+  const runAcceptedSend = async (
+    kind: WhatsAppSendKind,
+    accountId: string,
+    send: (
+      capture: (result: WAMessage | undefined, kind: WhatsAppSendKind) => void,
+    ) => Promise<void>,
+  ): Promise<WhatsAppSendResult> => {
+    const results: WhatsAppSendResult[] = [];
+    try {
+      // Baileys resolves only after relay acceptance; capture that fact before any later work.
+      await send((result, sendKind) => {
+        rememberWhatsAppAcceptedSend({
+          accountId,
+          result: normalizeWhatsAppSendResult(result, sendKind),
+          results,
+        });
+      });
+      return combineWhatsAppSendResults(kind, results);
+    } catch (error) {
+      throw mergeWhatsAppAcceptedSendError({ error, kind, results });
+    }
+  };
   const sendStructuredMessage = async (
     to: string,
     content: AnyMessageContent,
     kind: WhatsAppSendKind,
   ): Promise<WhatsAppSendResult> => {
     const jid = resolveOutboundJid(to);
-    const result = await params.sock.sendMessage(jid, content);
-    recordWhatsAppOutbound(params.defaultAccountId);
-    return normalizeWhatsAppSendResult(result, kind);
+    return await runAcceptedSend(kind, params.defaultAccountId, async (capture) => {
+      capture(await params.sock.sendMessage(jid, content), kind);
+    });
   };
 
   return {
@@ -162,26 +177,29 @@ export function createWebSendApi(params: {
         remoteJid: sendOptions?.quotedMessageKey?.remoteJid,
         fromMe: sendOptions?.quotedMessageKey?.fromMe,
         participant: sendOptions?.quotedMessageKey?.participant,
+        destinationJid: jid,
+        requestedJid: toWhatsappJid(to),
+        lookupTargetJid: sendOptions?.quotedMessageKey?.lookupTargetJid,
         messageText: sendOptions?.quotedMessageKey?.messageText,
+        media: sendOptions?.quotedMessageKey?.media,
       });
-      const result = quotedOpts
-        ? await params.sock.sendMessage(jid, payload, quotedOpts)
-        : await params.sock.sendMessage(jid, payload);
-      const results = [normalizeWhatsAppSendResult(result, mediaBuffer ? "media" : "text")];
-      if (shouldSendAudioText) {
-        const resolvedAudioText = await resolveMentions(jid, text);
-        const textPayload = addWhatsAppOutboundMentionsToContent(
-          { text: resolvedAudioText.text },
-          resolvedAudioText.mentionedJids,
-        );
-        const textResult = quotedOpts
-          ? await params.sock.sendMessage(jid, textPayload, quotedOpts)
-          : await params.sock.sendMessage(jid, textPayload);
-        results.push(normalizeWhatsAppSendResult(textResult, "text"));
-      }
+      const kind = mediaBuffer ? "media" : "text";
       const accountId = sendOptions?.accountId ?? params.defaultAccountId;
-      recordWhatsAppOutbound(accountId);
-      return combineWhatsAppSendResults(mediaBuffer ? "media" : "text", results);
+      return await runAcceptedSend(kind, accountId, async (capture) => {
+        const sendPayload = async (content: AnyMessageContent) =>
+          quotedOpts
+            ? await params.sock.sendMessage(jid, content, quotedOpts)
+            : await params.sock.sendMessage(jid, content);
+        capture(await sendPayload(payload), kind);
+        if (shouldSendAudioText) {
+          const resolvedAudioText = await resolveMentions(jid, text);
+          const textPayload = addWhatsAppOutboundMentionsToContent(
+            { text: resolvedAudioText.text },
+            resolvedAudioText.mentionedJids,
+          );
+          capture(await sendPayload(textPayload), "text");
+        }
+      });
     },
     sendPoll: async (
       to: string,

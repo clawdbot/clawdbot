@@ -1,8 +1,10 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import { buildConversationRef } from "../../routing/conversation-ref.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {
   beginConversationDeliveryOperation,
   findConversationTurnDeliveryByReplyTarget,
@@ -14,7 +16,21 @@ import {
   markConversationDeliveryUnknown,
 } from "./conversation-delivery-store.js";
 import { resolveConversation } from "./conversation-registry.js";
-import { deleteSessionEntryLifecycle, upsertSessionEntry } from "./session-accessor.js";
+import {
+  deleteSessionEntryLifecycle,
+  upsertSessionEntryCore as upsertCanonicalSessionEntry,
+} from "./session-accessor.js";
+import type { SessionEntry, SessionOrigin } from "./types.js";
+
+type LegacyDeliveryFixture = Partial<SessionEntry> & {
+  deliveryContext?: DeliveryContext;
+  origin?: SessionOrigin;
+};
+
+const upsertSessionEntry = (
+  scope: Parameters<typeof upsertCanonicalSessionEntry>[0],
+  entry: LegacyDeliveryFixture,
+) => upsertCanonicalSessionEntry(scope, normalizeLegacySessionEntryDelivery(entry as SessionEntry));
 
 async function withConversationStore(
   run: (params: {
@@ -22,7 +38,7 @@ async function withConversationStore(
     conversationRef: string;
   }) => Promise<void> | void,
 ): Promise<void> {
-  await withTempDir({ prefix: "openclaw-conversation-delivery-" }, async (dir) => {
+  await withTestDir({ prefix: "openclaw-conversation-delivery-" }, async (dir) => {
     const storePath = path.join(dir, "sessions.json");
     const scope = { agentId: "main", storePath };
     try {

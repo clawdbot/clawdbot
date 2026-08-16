@@ -9,7 +9,10 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
 import type { TelegramTransport } from "./fetch.js";
-import { isRecoverableTelegramNetworkError } from "./network-errors.js";
+import {
+  isRecoverableTelegramNetworkError,
+  isTelegramAuthenticationError,
+} from "./network-errors.js";
 import { TelegramPollingLivenessTracker } from "./polling-liveness.js";
 import {
   createTelegramRestartBackoffState,
@@ -19,12 +22,11 @@ import {
 import { createTelegramPollingStatusPublisher } from "./polling-status.js";
 import { TelegramPollingTransportState } from "./polling-transport-state.js";
 import { TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS } from "./request-timeouts.js";
-import { createTelegramTransportIngressDrain } from "./telegram-ingress-drain-factory.js";
+import { createTelegramTransportIngressMonitor } from "./telegram-ingress-drain-factory.js";
 import { resolveTelegramAdoptionStallTimeoutMs } from "./telegram-ingress-drain.js";
 import {
   resolveTelegramIngressSpoolDir,
-  telegramSpooledUpdateLaneKey,
-  writeTelegramSpooledUpdate,
+  resolveTelegramUpdateId,
 } from "./telegram-ingress-spool.js";
 import {
   createTelegramIngressWorker,
@@ -84,13 +86,16 @@ type TelegramPollingSessionOpts = {
   token: string;
   config: NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
   accountId: string;
+  ownerAgentId?: string;
   runtime: Parameters<typeof createTelegramBot>[0]["runtime"];
+  buildContext?: Parameters<typeof createTelegramBot>[0]["buildContext"];
   proxyFetch: Parameters<typeof createTelegramBot>[0]["proxyFetch"];
   botInfo?: Parameters<typeof createTelegramBot>[0]["botInfo"];
   abortSignal?: AbortSignal;
   runnerOptions: RunOptions<unknown>;
-  getLastUpdateId: () => number | null;
-  persistUpdateId: (updateId: number) => Promise<void>;
+  getAcceptedUpdateId: () => number | null;
+  getCommittedUpdateId: () => number | null;
+  persistUpdateId: (updateId: number) => void | Promise<void>;
   log: (line: string) => void;
   /** Pre-resolved Telegram transport to reuse across bot instances */
   telegramTransport?: TelegramTransport;
@@ -205,6 +210,7 @@ export class TelegramPollingSession {
     );
     const delay = formatDurationPrecise(delayMs);
     this.opts.log(`${buildLine(delay)}${stopTimeoutSuffix}`);
+    this.#status.notePollingRecovery();
     try {
       await sleepWithAbort(delayMs, this.opts.abortSignal);
     } catch (sleepErr) {
@@ -287,22 +293,30 @@ export class TelegramPollingSession {
       ? this.opts.abortSignal
       : cycleAbortSignal;
     const telegramTransport = this.#transportState.acquireForNextCycle();
-    const persistedLastUpdateId = this.opts.getLastUpdateId();
-    const lastUpdateId = this.opts.isolatedIngress?.enabled ? null : persistedLastUpdateId;
+    const committedUpdateId = this.opts.getCommittedUpdateId();
+    const lastUpdateId = this.opts.isolatedIngress?.enabled
+      ? null
+      : this.opts.getAcceptedUpdateId();
     const updateOffset = {
       lastUpdateId,
-      persistenceFloorUpdateId: persistedLastUpdateId,
-      onUpdateId: this.opts.persistUpdateId,
+      persistenceFloorUpdateId: committedUpdateId,
+      // In isolated mode the offset is persisted as soon as the update is
+      // durably spooled (see #runIsolatedIngressCycle), so the bot's update
+      // tracker does not need to persist it again after dispatch.
+      ...(this.opts.isolatedIngress?.enabled ? {} : { onUpdateId: this.opts.persistUpdateId }),
     };
     try {
       return createTelegramBot({
         token: this.opts.token,
         runtime: this.opts.runtime,
+        buildContext: this.opts.buildContext,
         proxyFetch: this.opts.proxyFetch,
         config: this.opts.config,
         accountId: this.opts.accountId,
+        ownerAgentId: this.opts.ownerAgentId,
         botInfo: this.opts.botInfo,
         ...(botApiAbortSignal ? { fetchAbortSignal: botApiAbortSignal } : {}),
+        ...(this.opts.abortSignal ? { accountAbortSignal: this.opts.abortSignal } : {}),
         mediaAbortSignal: cycleAbortSignal,
         minimumClientTimeoutSeconds: TELEGRAM_POLLING_CLIENT_TIMEOUT_FLOOR_SECONDS,
         ...(updateOffset ? { updateOffset } : {}),
@@ -344,40 +358,35 @@ export class TelegramPollingSession {
     }
   }
 
-  #ingressDrain: ReturnType<typeof createTelegramTransportIngressDrain> | undefined;
+  #ingressMonitor: ReturnType<typeof createTelegramTransportIngressMonitor> | undefined;
 
-  /** Long-lived drain for this session; dispose only when the cycle ends. */
-  #getOrCreateSpooledDrain(params: {
+  /** Long-lived monitor for this session; stop only when the cycle ends. */
+  #getOrCreateSpooledMonitor(params: {
     bot: TelegramBot;
+    botInfo: TelegramBot["botInfo"];
     spoolDir: string;
-  }): ReturnType<typeof createTelegramTransportIngressDrain> {
-    if (this.#ingressDrain) {
-      return this.#ingressDrain;
+    pollIntervalMs: number;
+    abortSignal?: AbortSignal;
+  }): ReturnType<typeof createTelegramTransportIngressMonitor> {
+    if (this.#ingressMonitor) {
+      return this.#ingressMonitor;
     }
-    this.#ingressDrain = createTelegramTransportIngressDrain({
+    this.#ingressMonitor = createTelegramTransportIngressMonitor({
       spoolDir: params.spoolDir,
       bot: params.bot,
       cfg: this.opts.config,
       accountId: this.opts.accountId,
-      botInfo: this.opts.botInfo,
+      botInfo: params.botInfo,
       adoptionStallTimeoutMs: this.#spooledUpdateHandlerTimeoutMs,
-      abortSignal: this.opts.abortSignal,
+      pollIntervalMs: params.pollIntervalMs,
+      ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
       onLog: (message) => this.opts.log(message),
+      onError: (error) =>
+        this.opts.log(
+          `[telegram][diag] isolated polling spool drain failed: ${formatErrorMessage(error)}`,
+        ),
     });
-    return this.#ingressDrain;
-  }
-
-  /** Pump the core-owned durable ingress drain for this session's spool. */
-  async #pumpSpooledDrain(params: {
-    bot: TelegramBot;
-    spoolDir: string;
-    shouldStop: () => boolean;
-  }): Promise<{ started: number }> {
-    if (params.shouldStop()) {
-      return { started: 0 };
-    }
-    const drain = this.#getOrCreateSpooledDrain(params);
-    return await drain.drainOnce({ shouldStop: params.shouldStop });
+    return this.#ingressMonitor;
   }
 
   async #runIsolatedIngressCycle(bot: TelegramBot): Promise<"continue" | "exit"> {
@@ -402,13 +411,29 @@ export class TelegramPollingSession {
       );
       return shouldRetry ? "continue" : "exit";
     }
+    // A pre-probed or cached bot may already be initialized; admission and replay
+    // must share grammY's actual capability snapshot instead of a second source.
+    const botInfo = bot.botInfo;
     const spoolDir =
       ingress.spoolDir ?? resolveTelegramIngressSpoolDir({ accountId: this.opts.accountId });
+    const drainIntervalMs = Math.max(100, Math.floor(ingress.drainIntervalMs ?? 500));
+    const ingressAbortSignal = cycleAbortController
+      ? this.opts.abortSignal
+        ? AbortSignal.any([cycleAbortController.signal, this.opts.abortSignal])
+        : cycleAbortController.signal
+      : this.opts.abortSignal;
+    const ingressMonitor = this.#getOrCreateSpooledMonitor({
+      bot,
+      botInfo,
+      spoolDir,
+      pollIntervalMs: drainIntervalMs,
+      ...(ingressAbortSignal ? { abortSignal: ingressAbortSignal } : {}),
+    });
     const workerFactory = ingress.createWorker ?? createTelegramIngressWorker;
     const worker = workerFactory({
       token: this.opts.token,
       accountId: this.opts.accountId,
-      initialUpdateId: this.opts.getLastUpdateId(),
+      initialUpdateId: this.opts.getCommittedUpdateId(),
       spoolDir,
       apiRoot: ingress.apiRoot,
       timeoutSeconds: ingress.timeoutSeconds,
@@ -438,7 +463,6 @@ export class TelegramPollingSession {
       errorCode: null,
     };
     const liveness = new TelegramPollingLivenessTracker();
-    let consecutiveDrainFailures = 0;
     let restartRequested = false;
     let stalledRestart = false;
     let stopTimedOut = false;
@@ -448,12 +472,10 @@ export class TelegramPollingSession {
       forceCycleResolve = resolve;
     });
     let requestImmediateDrain: () => void = () => undefined;
-    let drainRequested = false;
-    let cycleEnding = false;
     const endCycle = () => {
-      cycleEnding = true;
       abortMedia();
     };
+    requestImmediateDrain = ingressMonitor.requestDrain;
     const unsubscribe = worker.onMessage((message) => {
       const ackSpooledUpdate = (
         requestId: string,
@@ -473,6 +495,9 @@ export class TelegramPollingSession {
         }
       };
       if (message.type === "poll-start") {
+        this.opts.log(
+          `[telegram][diag] isolated polling worker poll-start offset=${message.offset ?? "null"}`,
+        );
         liveness.noteGetUpdatesStarted({ offset: message.offset }, message.startedAt);
         pollState.startedAt = message.startedAt;
         pollState.offset = message.offset;
@@ -494,7 +519,14 @@ export class TelegramPollingSession {
       }
       if (message.type === "poll-error") {
         this.#rearmPendingDeliveryDrain();
-        liveness.noteGetUpdatesError(new Error(message.message), message.finishedAt);
+        const retryAfterMs =
+          message.errorCode === 429 &&
+          message.retryAfterMs !== undefined &&
+          Number.isFinite(message.retryAfterMs) &&
+          message.retryAfterMs > 0
+            ? Math.min(message.retryAfterMs, MAX_POLL_STALL_THRESHOLD_MS)
+            : undefined;
+        liveness.noteGetUpdatesError(new Error(message.message), message.finishedAt, retryAfterMs);
         liveness.noteGetUpdatesFinished();
         pollState.outcome = "error";
         pollState.error = message.message;
@@ -502,22 +534,47 @@ export class TelegramPollingSession {
         return;
       }
       if (message.type === "update") {
-        void writeTelegramSpooledUpdate({
-          spoolDir,
-          update: message.update,
-          laneKey: telegramSpooledUpdateLaneKey(message.update, this.opts.botInfo),
-        }).then(
-          (updateId) => {
-            ackSpooledUpdate(message.requestId, { ok: true, updateId });
-            requestImmediateDrain();
-          },
-          (err: unknown) => {
+        const updateIdHint = resolveTelegramUpdateId(message.update) ?? "unknown";
+        this.opts.log(
+          `[telegram][diag] isolated polling worker update received updateId=${updateIdHint} queued=${message.queued}`,
+        );
+        // The worker waits for this request's ACK before emitting the next update.
+        // The committed spool enqueue is the ACK boundary; offset persistence is
+        // monotonic catch-up and must not stall intake during a state-store outage.
+        void (async () => {
+          const updateId = resolveTelegramUpdateId(message.update);
+          if (updateId === null) {
+            ackSpooledUpdate(message.requestId, {
+              ok: false,
+              message: "Telegram update missing numeric update_id.",
+            });
+            return;
+          }
+          try {
+            await ingressMonitor.admit(message.update);
+            this.opts.log(`[telegram][diag] isolated polling update spooled updateId=${updateId}`);
+          } catch (err: unknown) {
+            this.opts.log(
+              `[telegram] isolated polling update spool failed updateId=${updateIdHint}: ${formatErrorMessage(err)}`,
+            );
             ackSpooledUpdate(message.requestId, {
               ok: false,
               message: formatErrorMessage(err),
             });
-          },
-        );
+            return;
+          }
+
+          const offsetPersistence = this.opts.persistUpdateId(updateId);
+          void Promise.resolve(offsetPersistence).catch((err: unknown) => {
+            if (!this.opts.abortSignal?.aborted) {
+              this.opts.log(
+                `[telegram] isolated polling offset persist failed updateId=${updateId}: ${formatErrorMessage(err)}`,
+              );
+            }
+          });
+          this.opts.log(`[telegram][diag] isolated polling offset queued updateId=${updateId}`);
+          ackSpooledUpdate(message.requestId, { ok: true, updateId });
+        })();
         return;
       }
       if (message.type === "spooled") {
@@ -530,9 +587,6 @@ export class TelegramPollingSession {
       void stopWorker();
     };
     this.opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
-    const drainIntervalMs = Math.max(100, Math.floor(ingress.drainIntervalMs ?? 500));
-    let drainActive = false;
-    const drainHealth = { lastCompletedAt: Date.now() };
     // Fail closed when the spool stops making progress: keeping any claim live would
     // prevent a healthy process from recovering a wedged drain.
     const stopBot = () => {
@@ -567,56 +621,7 @@ export class TelegramPollingSession {
         }, POLL_STOP_GRACE_MS);
       }
     };
-    const drainOnce = async () => {
-      if (cycleEnding || restartRequested || this.opts.abortSignal?.aborted) {
-        return;
-      }
-      if (drainActive) {
-        drainRequested = true;
-        return;
-      }
-      drainActive = true;
-      drainRequested = false;
-      let drainCompleted = false;
-      try {
-        await this.#pumpSpooledDrain({
-          bot,
-          spoolDir,
-          shouldStop: () => cycleEnding,
-        });
-        consecutiveDrainFailures = 0;
-        drainCompleted = true;
-      } catch (err) {
-        consecutiveDrainFailures += 1;
-        this.opts.log(
-          `[telegram][diag] isolated polling spool drain failed (${consecutiveDrainFailures}): ${formatErrorMessage(err)}`,
-        );
-      } finally {
-        if (drainCompleted) {
-          drainHealth.lastCompletedAt = Date.now();
-        }
-        drainActive = false;
-        if (
-          drainRequested &&
-          !cycleEnding &&
-          !restartRequested &&
-          !this.opts.abortSignal?.aborted
-        ) {
-          drainRequested = false;
-          // Handler finalizers clear active lane guards in microtasks; redrain
-          // after them so newly unblocked same-lane rows can claim immediately.
-          void Promise.resolve().then(drainOnce);
-        }
-      }
-    };
-    requestImmediateDrain = () => {
-      void drainOnce();
-    };
-    await drainOnce();
-    const drainTimer = setInterval(() => {
-      void drainOnce();
-    }, drainIntervalMs);
-    drainTimer.unref?.();
+    ingressMonitor.start();
     const watchdog = setInterval(() => {
       if (this.opts.abortSignal?.aborted || restartRequested) {
         return;
@@ -630,7 +635,7 @@ export class TelegramPollingSession {
       this.#transportState.markDirty();
       stalledRestart = true;
       this.opts.log(`[telegram] ${stall.message}`);
-      this.#status.notePollingError(stall.message);
+      this.#status.notePollingError(stall.message, "recovering");
       requestStopForRestart();
     }, POLL_WATCHDOG_INTERVAL_MS);
     watchdog.unref?.();
@@ -656,14 +661,17 @@ export class TelegramPollingSession {
           pollState.error &&
           !isRecoverableTelegramNetworkError(new Error(pollState.error), { context: "polling" })
         ) {
-          this.#status.notePollingError(pollState.error);
+          this.#status.notePollingError(
+            pollState.error,
+            pollState.errorCode === 401 || pollState.errorCode === 404 ? "blocked" : undefined,
+          );
           throw new Error(pollState.error, { cause: err });
         }
         const message = isConflict
           ? `Telegram getUpdates conflict: ${pollState.error}.${TELEGRAM_GET_UPDATES_CONFLICT_HINT}`
           : formatErrorMessage(err);
         this.opts.log(`[telegram][diag] isolated polling ingress failed: ${message}`);
-        this.#status.notePollingError(message);
+        this.#status.notePollingError(message, "recovering");
         clearForceCycleTimer();
         const shouldRestart = await this.#waitBeforeRestart(
           (delay) => `Telegram isolated polling ingress failed; restarting in ${delay}.`,
@@ -695,18 +703,14 @@ export class TelegramPollingSession {
       return shouldRestart ? "continue" : "exit";
     } finally {
       clearInterval(watchdog);
-      clearInterval(drainTimer);
       clearForceCycleTimer();
       unsubscribe();
       this.opts.abortSignal?.removeEventListener("abort", stopOnAbort);
       // End media work before waiting for durable handlers so every interrupted claim can retry.
       endCycle();
       await stopWorker();
-      if (!restartRequested) {
-        await drainOnce();
-      }
-      this.#ingressDrain?.dispose();
-      this.#ingressDrain = undefined;
+      await waitForGracefulStop(() => ingressMonitor.stop());
+      this.#ingressMonitor = undefined;
       await waitForGracefulStop(stopBot);
       if (this.#activeCycleAbort === cycleAbortController) {
         this.#activeCycleAbort = undefined;
@@ -821,7 +825,7 @@ export class TelegramPollingSession {
         this.#transportState.markDirty();
         stalledRestart = true;
         this.opts.log(`[telegram] ${stall.message}`);
-        this.#status.notePollingError(stall.message);
+        this.#status.notePollingError(stall.message, "recovering");
         requestStopForRestart();
       }
     }, POLL_WATCHDOG_INTERVAL_MS);
@@ -866,6 +870,10 @@ export class TelegramPollingSession {
         this.#transportState.markDirty();
       }
       if (!isConflict && !isRecoverable) {
+        this.#status.notePollingError(
+          formatErrorMessage(err),
+          isTelegramAuthenticationError(err) ? "blocked" : undefined,
+        );
         throw err;
       }
       const reason = isConflict ? "getUpdates conflict" : "network error";
@@ -878,7 +886,10 @@ export class TelegramPollingSession {
       // status. Recoverable network blips stay log-only; the stall watchdog
       // owns status for extended outages (see detectStall above).
       if (isConflict) {
-        this.#status.notePollingError(`Telegram ${reason}: ${errMsg}.${conflictHint}`);
+        this.#status.notePollingError(
+          `Telegram ${reason}: ${errMsg}.${conflictHint}`,
+          "recovering",
+        );
       }
       clearForceCycleTimer();
       const shouldRestart = await this.#waitBeforeRestart(

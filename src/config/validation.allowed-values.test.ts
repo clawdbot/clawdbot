@@ -35,6 +35,23 @@ describe("config validation allowed-values metadata", () => {
     }
   });
 
+  it("reports the supported diagnostics OTel protocol when grpc is configured", () => {
+    const result = validateConfigObjectRaw({
+      diagnostics: {
+        otel: {
+          protocol: "grpc",
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const issue = requireIssue(result.issues, "diagnostics.otel.protocol");
+      expect(issue.allowedValues).toEqual(["http/protobuf"]);
+      expect(issue.allowedValuesHiddenCount).toBe(0);
+    }
+  });
+
   it("skips allowed-values hints for unions with open-ended branches", () => {
     const result = validateConfigObjectRaw({
       cron: { sessionRetention: true },
@@ -126,7 +143,7 @@ describe("config validation allowed-values metadata", () => {
   it("keeps generic union messaging for mixed scalar-or-object unions", () => {
     const result = validateConfigObjectRaw({
       agents: {
-        list: [{ id: "a", model: true }],
+        entries: { a: { model: true } },
       },
     });
 
@@ -134,7 +151,7 @@ describe("config validation allowed-values metadata", () => {
     if (!result.ok) {
       expect(result.issues).toEqual([
         {
-          path: "agents.list.0.model",
+          path: "agents.entries.a.model",
           message: "Invalid input",
         },
       ]);

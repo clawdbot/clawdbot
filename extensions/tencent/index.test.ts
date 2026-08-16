@@ -10,6 +10,7 @@ import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-trans
 import { describe, expect, it } from "vitest";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import tencentPlugin from "./index.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 type OpenAICompletionsModel = Model<"openai-completions">;
 
@@ -143,13 +144,23 @@ describe("tencent provider plugin", () => {
 
     const hy3 = catalogProvider.models?.find((m) => m.id === "hy3");
     expect(hy3?.reasoning).toBe(true);
+    expect(hy3?.maxTokens).toBe(128_000);
     expect(hy3?.compat?.supportsReasoningEffort).toBe(true);
-    expect(hy3?.compat?.supportedReasoningEfforts).toEqual(["none", "high"]);
+    expect(hy3?.compat?.supportedReasoningEfforts).toEqual(["none", "low", "high"]);
 
     const hy3Preview = catalogProvider.models?.find((m) => m.id === "hy3-preview");
     expect(hy3Preview?.reasoning).toBe(true);
+    expect(hy3Preview?.maxTokens).toBe(128_000);
     expect(hy3Preview?.compat?.supportsReasoningEffort).toBe(true);
     expect(hy3Preview?.compat?.supportedReasoningEfforts).toEqual(["none", "low", "high"]);
+
+    const manifestRows = manifest.modelCatalog.providers["tencent-tokenhub"].models as Array<
+      Record<string, unknown>
+    >;
+    expect(manifestRows.find((model) => model.id === "hy3-preview")).toMatchObject({
+      status: "deprecated",
+      replacedBy: "hy3",
+    });
   });
 
   it("builds the static Tencent TokenPlan model catalog with reasoning flags", async () => {
@@ -164,8 +175,9 @@ describe("tencent provider plugin", () => {
 
     const hy3 = catalogProvider.models?.find((m) => m.id === "hy3");
     expect(hy3?.reasoning).toBe(true);
+    expect(hy3?.maxTokens).toBe(128_000);
     expect(hy3?.compat?.supportsReasoningEffort).toBe(true);
-    expect(hy3?.compat?.supportedReasoningEfforts).toEqual(["none", "high"]);
+    expect(hy3?.compat?.supportedReasoningEfforts).toEqual(["none", "low", "high"]);
   });
 
   it("injects reasoning_effort into TokenPlan hy3 chat-completions payload", async () => {

@@ -4,7 +4,7 @@
  */
 import type { Server } from "node:http";
 import type { RunningChrome } from "./chrome.js";
-import type { BrowserTab, BrowserTransport } from "./client.types.js";
+import type { BrowserOpenResult, BrowserTab, BrowserTransport } from "./client.types.js";
 import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
 import type { BrowserErrorResponse } from "./errors.js";
 import type { ExtensionRelayHandle } from "./extension-relay/relay-server.js";
@@ -20,8 +20,6 @@ export type BrowserTabTargetOptions = BrowserOperationOptions & {
 export type ProfileRuntimeState = {
   profile: ResolvedBrowserProfile;
   running: RunningChrome | null;
-  /** @deprecated Lifecycle starts are owned by the profile actor. */
-  ensureBrowserAvailable?: { key: string; promise: Promise<void> } | null;
   managedLaunchFailure?: {
     consecutiveFailures: number;
     lastFailureAt: number;
@@ -35,11 +33,6 @@ export type ProfileRuntimeState = {
     nextTabNumber: number;
     byTargetId: Record<string, { tabId: string; label?: string; url?: string }>;
   };
-  /** @deprecated Lifecycle reconciliation is owned by the profile actor. */
-  reconcile?: {
-    previousProfile: ResolvedBrowserProfile;
-    reason: string;
-  } | null;
 };
 
 /** Runtime state for the Browser control server. */
@@ -70,8 +63,8 @@ type BrowserProfileActions = {
     targetId?: string,
     options?: EnsureTabAvailableOptions,
   ) => Promise<BrowserTab>;
-  isHttpReachable: (timeoutMs?: number) => Promise<boolean>;
-  isTransportAvailable: (timeoutMs?: number) => Promise<boolean>;
+  isHttpReachable: (timeoutMs?: number, signal?: AbortSignal) => Promise<boolean>;
+  isTransportAvailable: (timeoutMs?: number, signal?: AbortSignal) => Promise<boolean>;
   isReachable: (
     timeoutMs?: number,
     options?: { ephemeral?: boolean; signal?: AbortSignal },
@@ -80,7 +73,7 @@ type BrowserProfileActions = {
   openTab: (
     url: string,
     opts?: { label?: string; signal?: AbortSignal; timeoutMs?: number },
-  ) => Promise<BrowserTab>;
+  ) => Promise<BrowserOpenResult>;
   labelTab: (targetId: string, label: string) => Promise<BrowserTab>;
   focusTab: (targetId: string, options?: BrowserTabTargetOptions) => Promise<void>;
   closeTab: (targetId: string, options?: BrowserTabTargetOptions) => Promise<void>;

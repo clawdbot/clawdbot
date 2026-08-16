@@ -1,5 +1,6 @@
 // Sessions cleanup tests cover stale session cleanup and runtime output.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { RuntimeEnv } from "../runtime.js";
 
@@ -35,7 +36,7 @@ vi.mock("./session-store-targets.js", () => ({
 vi.mock("../config/sessions.js", () => ({
   resolveMaintenanceConfig: mocks.resolveMaintenanceConfig,
   loadSessionStore: mocks.loadSessionStore,
-  resolveSessionFilePath: mocks.resolveSessionFilePath,
+  resolveSessionFilePathCore: mocks.resolveSessionFilePath,
   resolveSessionFilePathOptions: mocks.resolveSessionFilePathOptions,
   pruneStaleEntries: mocks.pruneStaleEntries,
   capEntryCount: mocks.capEntryCount,
@@ -125,7 +126,6 @@ describe("sessionsCleanupCommand", () => {
         missingKeys: Set<string>;
         staleKeys: Set<string>;
         cappedKeys: Set<string>;
-        budgetEvictedKeys: Set<string>;
         dmScopeRetiredKeys: Set<string>;
         modelRunPrunedKeys?: Set<string>;
       }) => {
@@ -140,9 +140,6 @@ describe("sessionsCleanupCommand", () => {
         }
         if (params.cappedKeys.has(params.key)) {
           return "cap-overflow";
-        }
-        if (params.budgetEvictedKeys.has(params.key)) {
-          return "evict-budget";
         }
         return "keep";
       },
@@ -227,7 +224,7 @@ describe("sessionsCleanupCommand", () => {
     expect(logs).toHaveLength(1);
     expect(JSON.parse(logs[0] ?? "{}")).toEqual({
       agentId: "main",
-      storePath: "/resolved/sessions.json",
+      storePath: "/resolved/openclaw-agent.sqlite",
       mode: "enforce",
       dryRun: false,
       beforeCount: 3,
@@ -262,9 +259,10 @@ describe("sessionsCleanupCommand", () => {
   });
 
   it("delegates non-store enforcing cleanup through the Gateway writer when reachable", async () => {
+    const remoteStorePath = "C:\\Users\\gateway\\.openclaw\\agents\\main\\sessions\\sessions.json";
     mocks.callGateway.mockResolvedValue({
       agentId: "main",
-      storePath: "/resolved/sessions.json",
+      storePath: remoteStorePath,
       mode: "enforce",
       dryRun: false,
       beforeCount: 3,
@@ -298,7 +296,7 @@ describe("sessionsCleanupCommand", () => {
     expect(logs).toHaveLength(1);
     expect(JSON.parse(logs[0] ?? "{}")).toEqual({
       agentId: "main",
-      storePath: "/resolved/sessions.json",
+      storePath: remoteStorePath,
       mode: "enforce",
       dryRun: false,
       beforeCount: 3,
@@ -313,6 +311,32 @@ describe("sessionsCleanupCommand", () => {
       applied: true,
       appliedCount: 1,
     });
+  });
+
+  it("preserves a Gateway-owned store path in human output", async () => {
+    const remoteStorePath = "C:\\Users\\gateway\\.openclaw\\openclaw-agent.sqlite";
+    mocks.callGateway.mockResolvedValue({
+      agentId: "main",
+      storePath: remoteStorePath,
+      mode: "enforce",
+      dryRun: false,
+      beforeCount: 3,
+      afterCount: 1,
+      missing: 0,
+      dmScopeRetired: 0,
+      modelRunPruned: 0,
+      pruned: 2,
+      capped: 0,
+      diskBudget: null,
+      wouldMutate: true,
+      applied: true,
+      appliedCount: 1,
+    });
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCleanupCommand({ enforce: true }, runtime);
+
+    expectLogsToInclude(logs, `Session store: ${remoteStorePath}`);
   });
 
   it("returns dry-run JSON without mutating the store", async () => {
@@ -348,7 +372,6 @@ describe("sessionsCleanupCommand", () => {
           missingKeys: new Set<string>(),
           staleKeys: new Set<string>(),
           cappedKeys: new Set<string>(),
-          budgetEvictedKeys: new Set<string>(),
           dmScopeRetiredKeys: new Set<string>(),
           modelRunPrunedKeys: new Set<string>(),
         },
@@ -368,7 +391,7 @@ describe("sessionsCleanupCommand", () => {
     expect(logs).toHaveLength(1);
     expect(JSON.parse(logs[0] ?? "{}")).toEqual({
       agentId: "main",
-      storePath: "/resolved/sessions.json",
+      storePath: "/resolved/openclaw-agent.sqlite",
       mode: "warn",
       dryRun: true,
       beforeCount: 2,
@@ -419,7 +442,6 @@ describe("sessionsCleanupCommand", () => {
           missingKeys: new Set(["missing"]),
           staleKeys: new Set<string>(),
           cappedKeys: new Set<string>(),
-          budgetEvictedKeys: new Set<string>(),
           dmScopeRetiredKeys: new Set<string>(),
           modelRunPrunedKeys: new Set<string>(),
         },
@@ -440,7 +462,7 @@ describe("sessionsCleanupCommand", () => {
     expect(logs).toHaveLength(1);
     expect(JSON.parse(logs[0] ?? "{}")).toEqual({
       agentId: "main",
-      storePath: "/resolved/sessions.json",
+      storePath: "/resolved/openclaw-agent.sqlite",
       mode: "warn",
       dryRun: true,
       beforeCount: 1,
@@ -489,7 +511,6 @@ describe("sessionsCleanupCommand", () => {
           missingKeys: new Set<string>(),
           staleKeys: new Set(["stale"]),
           cappedKeys: new Set<string>(),
-          budgetEvictedKeys: new Set<string>(),
           dmScopeRetiredKeys: new Set<string>(),
           modelRunPrunedKeys: new Set<string>(),
         },
@@ -505,6 +526,7 @@ describe("sessionsCleanupCommand", () => {
       runtime,
     );
 
+    expectLogsToInclude(logs, "Session store: /resolved/openclaw-agent.sqlite");
     expectLogsToInclude(logs, "Planned session actions:");
     expectLogsToInclude(logs, "Would prune unreferenced artifacts: 2");
     const tableHeaderLines = logs.filter((line) => line.includes("Action") && line.includes("Key"));
@@ -588,7 +610,6 @@ describe("sessionsCleanupCommand", () => {
           missingKeys: new Set<string>(),
           staleKeys: new Set(["cronPruned", "unsafePruned", "malformedLabelPruned"]),
           cappedKeys: new Set(["directCapped"]),
-          budgetEvictedKeys: new Set<string>(),
           dmScopeRetiredKeys: new Set<string>(),
         },
       ],
@@ -613,6 +634,75 @@ describe("sessionsCleanupCommand", () => {
     );
     expect(logs.join("\n")).not.toContain("\u001b[31m");
     expectLogsToInclude(logs, "Total: 3 kept, 4 pruned");
+  });
+
+  it("aligns the label summary columns for emoji and CJK labels", async () => {
+    mocks.enforceSessionDiskBudget.mockResolvedValue(null);
+    mocks.runSessionsCleanup.mockResolvedValue({
+      mode: "warn",
+      previewResults: [
+        {
+          summary: {
+            agentId: "main",
+            storePath: "/resolved/sessions.json",
+            mode: "warn",
+            dryRun: true,
+            beforeCount: 2,
+            afterCount: 2,
+            missing: 0,
+            dmScopeRetired: 0,
+            pruned: 0,
+            capped: 0,
+            unreferencedArtifacts: {
+              scannedFiles: 0,
+              removedFiles: 0,
+              freedBytes: 0,
+              olderThanMs: 604800000,
+            },
+            diskBudget: null,
+            wouldMutate: true,
+          },
+          beforeStore: {
+            emojiKept: {
+              sessionId: "emoji-kept",
+              updatedAt: 2,
+              model: "test:opus",
+              label: "🔥修复",
+            },
+            plainKept: {
+              sessionId: "plain-kept",
+              updatedAt: 1,
+              model: "test:opus",
+              label: "plain",
+            },
+          },
+          missingKeys: new Set<string>(),
+          staleKeys: new Set<string>(),
+          cappedKeys: new Set<string>(),
+          dmScopeRetiredKeys: new Set<string>(),
+        },
+      ],
+      appliedSummaries: [],
+    });
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCleanupCommand(
+      {
+        dryRun: true,
+      },
+      runtime,
+    );
+
+    expectLogsToInclude(logs, "Summary by Label:");
+    const summaryLogs = logs.slice(logs.indexOf("Summary by Label:") + 1);
+    const emojiLine = summaryLogs.find((line) => line.includes("🔥修复"));
+    const plainLine = summaryLogs.find((line) => line.includes("plain"));
+    expect(emojiLine).toBeDefined();
+    expect(plainLine).toBeDefined();
+    // "🔥修复" is 6 visible columns (wide emoji + 2 CJK) but only 5 UTF-16 code
+    // units; padding by code-unit length would shift the counts column left.
+    const keptColumn = (line: string) => visibleWidth(line.slice(0, line.indexOf("1 kept")));
+    expect(keptColumn(emojiLine ?? "")).toBe(keptColumn(plainLine ?? ""));
   });
 
   it("returns grouped JSON for --all-agents dry-runs", async () => {
@@ -644,7 +734,6 @@ describe("sessionsCleanupCommand", () => {
           missingKeys: new Set<string>(),
           staleKeys: new Set(["stale"]),
           cappedKeys: new Set<string>(),
-          budgetEvictedKeys: new Set<string>(),
           dmScopeRetiredKeys: new Set<string>(),
           modelRunPrunedKeys: new Set<string>(),
         },
@@ -668,7 +757,6 @@ describe("sessionsCleanupCommand", () => {
           missingKeys: new Set<string>(),
           staleKeys: new Set(["stale"]),
           cappedKeys: new Set<string>(),
-          budgetEvictedKeys: new Set<string>(),
           dmScopeRetiredKeys: new Set<string>(),
           modelRunPrunedKeys: new Set<string>(),
         },
@@ -694,7 +782,7 @@ describe("sessionsCleanupCommand", () => {
       stores: [
         {
           agentId: "main",
-          storePath: "/resolved/main-sessions.json",
+          storePath: "/resolved/main-sessions.sqlite",
           mode: "warn",
           dryRun: true,
           beforeCount: 1,
@@ -709,7 +797,7 @@ describe("sessionsCleanupCommand", () => {
         },
         {
           agentId: "work",
-          storePath: "/resolved/work-sessions.json",
+          storePath: "/resolved/work-sessions.work.sqlite",
           mode: "warn",
           dryRun: true,
           beforeCount: 1,

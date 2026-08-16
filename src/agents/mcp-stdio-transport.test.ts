@@ -1,6 +1,7 @@
 // Exercises MCP stdio process lifecycle, JSON-RPC IO, and close escalation.
 import type { SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
+import fs from "node:fs/promises";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
@@ -32,6 +33,7 @@ class MockChildProcess extends EventEmitter {
 describe("OpenClawStdioClientTransport", () => {
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
     spawnMock.mockReset();
     killProcessTreeMock.mockReset();
     signalProcessTreeMock.mockReset();
@@ -75,6 +77,28 @@ describe("OpenClawStdioClientTransport", () => {
     expect(options.env?.EXAMPLE).toBe("1");
     expect(transport.pid).toBe(4321);
     expect(transport.stderr).toBeInstanceOf(PassThrough);
+  });
+
+  it("does not infer Agent Plugins data-dir ownership from subprocess env", async () => {
+    const mkdirSpy = vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
+    const child = new MockChildProcess();
+    spawnMock.mockReturnValue(child);
+    const transport = new OpenClawStdioClientTransport({
+      command: "node",
+      env: { PLUGIN_ROOT: "/plugin", PLUGIN_DATA: "/user-owned-file" },
+    });
+
+    const started = transport.start();
+    child.emit("spawn");
+    await started;
+
+    expect(mkdirSpy).not.toHaveBeenCalled();
+    const options = spawnMock.mock.calls.at(0)?.[2] as SpawnOptions;
+    expect(options.env).toMatchObject({
+      PLUGIN_ROOT: "/plugin",
+      PLUGIN_DATA: "/user-owned-file",
+    });
+    mkdirSpy.mockRestore();
   });
 
   it("kills the process tree when graceful stdio close does not exit", async () => {
@@ -245,5 +269,24 @@ describe("OpenClawStdioClientTransport", () => {
 
     child.stderr.write("server diagnostic");
     expect(transport.stderr?.read()?.toString()).toBe("server diagnostic");
+  });
+
+  it("reports an oversized stdout frame without an unhandled error crash", async () => {
+    const child = new MockChildProcess();
+    spawnMock.mockReturnValue(child);
+
+    const transport = new OpenClawStdioClientTransport({ command: "npx" });
+    const onerror = vi.fn();
+    Object.assign(transport, { onerror });
+    const started = transport.start();
+    child.emit("spawn");
+    await started;
+
+    const oversized = Buffer.alloc(10 * 1024 * 1024 + 1, 0x20);
+    expect(() => child.stdout.emit("data", oversized)).not.toThrow();
+    expect(onerror).toHaveBeenCalledTimes(1);
+    const reported = onerror.mock.calls.at(0)?.at(0) as Error;
+    expect(reported).toBeInstanceOf(Error);
+    expect(reported.message).toMatch(/exceeded maximum size/);
   });
 });

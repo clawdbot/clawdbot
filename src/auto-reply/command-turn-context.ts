@@ -42,10 +42,15 @@ export type CommandTurnContextInput = {
   BodyForCommands?: unknown;
   RawBody?: unknown;
   Body?: unknown;
+  commandText?: unknown;
+  rawText?: unknown;
   BotUsername?: unknown;
 };
 
 function resolveCommandBody(input: CommandTurnContextInput): string | undefined {
+  if (typeof input.commandText === "string") {
+    return input.commandText;
+  }
   return (
     normalizeOptionalString(input.CommandBody) ??
     normalizeOptionalString(input.BodyForCommands) ??
@@ -213,6 +218,7 @@ export function resolveCommandTurnTargetSessionKey(input: {
   BodyForCommands?: unknown;
   RawBody?: unknown;
   Body?: unknown;
+  commandText?: unknown;
   CommandTargetSessionKey?: unknown;
 }): string | undefined {
   if (

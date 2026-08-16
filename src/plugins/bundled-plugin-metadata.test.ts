@@ -2,14 +2,14 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { beforeAll, describe, expect, it } from "vitest";
 import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../test-utils/repo-files.js";
-import { collectBundledChannelConfigs } from "./bundled-channel-config-metadata.js";
+import { collectBundledChannelConfigsCore } from "./bundled-channel-config-metadata.js";
 import {
   listBundledPluginMetadata,
   resolveBundledPluginGeneratedPath,
-  resolveBundledPluginRepoEntryPath,
 } from "./bundled-plugin-metadata.js";
 
 type BundledPluginMetadata = ReturnType<typeof listBundledPluginMetadata>[number];
@@ -38,6 +38,7 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "bonjour",
   "browser",
   "canvas",
+  "cua-computer",
   "device-pair",
   "diagnostics-otel",
   "diagnostics-prometheus",
@@ -54,15 +55,14 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "ollama",
   "opencode",
   "openshell",
-  "phone-control",
   "policy",
   "reef",
   "talk-voice",
   "teams-meetings",
-  "thread-ownership",
   "voice-call",
   "webhooks",
   "workboard",
+  "zoom-meetings",
 ] as const;
 const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS = [
   "acpx",
@@ -71,13 +71,16 @@ const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS = [
   "canvas",
   "device-pair",
   "file-transfer",
+  "google-meet",
   "linux-canvas",
   "linux-node",
   "memory-core",
   "ollama",
   "opencode",
-  "phone-control",
   "talk-voice",
+  "teams-meetings",
+  "xai",
+  "zoom-meetings",
 ] as const;
 
 installGeneratedPluginTempRootCleanup();
@@ -142,7 +145,7 @@ let repoBundledPluginManifestsCache:
   | undefined;
 const repoBundledChannelConfigsCache = new Map<
   string,
-  ReturnType<typeof collectBundledChannelConfigs>
+  ReturnType<typeof collectBundledChannelConfigsCore>
 >();
 
 function listRepoBundledPluginMetadata(): readonly BundledPluginMetadata[] {
@@ -291,7 +294,7 @@ function collectRepoBundledChannelConfigsForTest(dirName: string) {
   if (!manifest.ok) {
     throw toLintErrorObject(manifest.error, "Non-Error thrown");
   }
-  const configs = collectBundledChannelConfigs({
+  const configs = collectBundledChannelConfigsCore({
     pluginDir,
     manifest: manifest.manifest,
     packageManifest: getPackageManifestMetadata(readPackageManifest(pluginDir)),
@@ -322,8 +325,6 @@ function createInstalledPluginRecordForManifest(
     startup: {
       sidecar: record.activation?.onStartup === true,
       memory: hasPluginKind(record, "memory"),
-      deferConfiguredChannelFullLoadUntilAfterListen:
-        record.startupDeferConfiguredChannelFullLoadUntilAfterListen === true,
       agentHarnesses: [
         ...new Set([...(record.activation?.onAgentHarnesses ?? []), ...record.cliBackends]),
       ].toSorted((left, right) => left.localeCompare(right)),
@@ -468,6 +469,22 @@ describe("bundled plugin metadata", () => {
     });
   });
 
+  it("keeps QA runner discovery on narrow bundled runtime sidecars", () => {
+    const runnerPlugins = listRepoBundledPluginMetadata().filter(
+      (entry) => (entry.manifest.qaRunners?.length ?? 0) > 0,
+    );
+    expect(runnerPlugins.length).toBeGreaterThan(0);
+
+    for (const plugin of runnerPlugins) {
+      expectArtifactPresence(plugin?.publicSurfaceArtifacts, {
+        contains: ["qa-runner-api.js"],
+      });
+      expectArtifactPresence(plugin?.runtimeSidecarArtifacts, {
+        contains: ["qa-runner-api.js"],
+      });
+    }
+  });
+
   it("loads tlon channel config metadata from the lightweight schema surface", () => {
     const tlonChannelConfig = collectRepoBundledChannelConfigsForTest("tlon")?.tlon as
       | { schema?: { type?: unknown } }
@@ -508,7 +525,7 @@ describe("bundled plugin metadata", () => {
         dir: "discord",
         configuredState: {
           env: {
-            allOf: ["DISCORD_BOT_TOKEN"],
+            anyOf: ["DISCORD_BOT_TOKEN"],
           },
         },
       },
@@ -524,7 +541,7 @@ describe("bundled plugin metadata", () => {
         dir: "slack",
         configuredState: {
           env: {
-            anyOf: ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_USER_TOKEN"],
+            anyOf: ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_USER_TOKEN"],
           },
         },
       },
@@ -532,7 +549,7 @@ describe("bundled plugin metadata", () => {
         dir: "telegram",
         configuredState: {
           env: {
-            allOf: ["TELEGRAM_BOT_TOKEN"],
+            anyOf: ["TELEGRAM_BOT_TOKEN"],
           },
         },
       },
@@ -578,6 +595,15 @@ describe("bundled plugin metadata", () => {
 
     expect(entry?.manifest.commandAliases).toStrictEqual([{ name: "voicecall" }]);
     expect(entry?.manifest.activation?.onCommands).toStrictEqual(["voicecall"]);
+  });
+
+  it("keeps Workboard CLI ownership separate from its slash command", () => {
+    const entry = listRepoBundledPluginManifests().find(
+      ({ manifest }) => manifest.id === "workboard",
+    );
+
+    expect(entry?.manifest.commandAliases).toStrictEqual([{ name: "workboard" }]);
+    expect(entry?.manifest.activation?.onCommands).toStrictEqual(["workboard"]);
   });
 
   it("scopes Codex CLI activation to the codex command", () => {
@@ -824,75 +850,6 @@ describe("bundled plugin metadata", () => {
         pluginsDir,
       ),
     ).toBe(path.join(pluginRoot, "index.js"));
-  });
-
-  it("resolves bundled repo entry paths from dist before workspace source", () => {
-    const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-repo-entry-");
-    const pluginRoot = path.join(tempRoot, "extensions", "alpha");
-    const distPluginRoot = path.join(tempRoot, "dist", "extensions", "alpha");
-
-    writeJson(path.join(pluginRoot, "package.json"), {
-      name: "@openclaw/alpha",
-      version: "0.0.1",
-      openclaw: {
-        extensions: ["./index.ts"],
-      },
-    });
-    writeJson(path.join(pluginRoot, "openclaw.plugin.json"), {
-      id: "alpha",
-      configSchema: { type: "object" },
-    });
-    fs.writeFileSync(path.join(pluginRoot, "index.ts"), "export const source = true;\n", "utf8");
-
-    expect(
-      resolveBundledPluginRepoEntryPath({
-        rootDir: tempRoot,
-        pluginId: "alpha",
-        preferBuilt: true,
-      }),
-    ).toBe(path.join(pluginRoot, "index.ts"));
-
-    fs.mkdirSync(distPluginRoot, { recursive: true });
-    fs.writeFileSync(path.join(distPluginRoot, "index.js"), "export const built = true;\n", "utf8");
-    expect(
-      resolveBundledPluginRepoEntryPath({
-        rootDir: tempRoot,
-        pluginId: "alpha",
-        preferBuilt: true,
-      }),
-    ).toBe(path.join(distPluginRoot, "index.js"));
-  });
-
-  it("keeps bundled repo entry path resolution inside the plugin directory", () => {
-    const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-repo-contained-");
-    const pluginRoot = path.join(tempRoot, "extensions", "alpha");
-
-    writeJson(path.join(pluginRoot, "package.json"), {
-      name: "@openclaw/alpha",
-      version: "0.0.1",
-      openclaw: {
-        extensions: ["../escape.ts"],
-      },
-    });
-    writeJson(path.join(pluginRoot, "openclaw.plugin.json"), {
-      id: "alpha",
-      configSchema: { type: "object" },
-    });
-    fs.writeFileSync(path.join(tempRoot, "extensions", "escape.ts"), "export {};\n", "utf8");
-    fs.mkdirSync(path.join(tempRoot, "dist", "extensions"), { recursive: true });
-    fs.writeFileSync(
-      path.join(tempRoot, "dist", "extensions", "escape.js"),
-      "export {};\n",
-      "utf8",
-    );
-
-    expect(
-      resolveBundledPluginRepoEntryPath({
-        rootDir: tempRoot,
-        pluginId: "alpha",
-        preferBuilt: true,
-      }),
-    ).toBeNull();
   });
 
   it("merges runtime channel schema metadata with manifest-owned channel config fields", () => {
@@ -1164,17 +1121,4 @@ describe("bundled plugin metadata", () => {
   });
 });
 
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

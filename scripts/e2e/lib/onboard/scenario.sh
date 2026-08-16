@@ -24,6 +24,7 @@ export GATEWAY_LOG_PATH
 mkdir -p "$OPENCLAW_E2E_LOG_DIR"
 cleanup_onboard_artifacts() {
   openclaw_e2e_stop_process "${GATEWAY_PID:-}"
+  openclaw_e2e_stop_process "${mock_openai_pid:-}"
   rm -rf "$ONBOARD_TMP_DIR"
 }
 if [ "$OPENCLAW_ONBOARD_SCENARIO_SOURCE_ONLY" != "1" ]; then
@@ -131,7 +132,7 @@ stop_gateway() {
 }
 
 cleanup_wizard_case() {
-  exec 3>&- 2>/dev/null || true
+  { exec 3>&-; } 2>/dev/null || true
   openclaw_e2e_stop_process "${wizard_pid:-}"
   stop_gateway "${gw_pid:-}"
   rm -rf "${input_fifo_dir:-}"
@@ -241,6 +242,75 @@ send_skills_flow() {
   send "" 2.0
 }
 
+send_guided_skip_ui_flow() {
+  wait_for_log "What should we call your first agent?" 120 || return $?
+  send $'\r' 0.8
+  wait_for_log "How should I set things up?" 120 || return $?
+  send $'\r' 0.8
+  wait_for_log "Use Current model?" 120 || return $?
+  send $'\r' 0.8
+}
+
+validate_guided_skip_ui_log() {
+  local log_path="$1"
+  local mock_request_log="$2"
+  log_contains "Hi — I'm OpenClaw. I keep this system running. Let's get you set up." || {
+    echo "Guided onboarding introduction was not rendered"
+    return 1
+  }
+  log_contains "OpenClaw is ready." || {
+    echo "Guided onboarding did not reach its skip-UI completion"
+    return 1
+  }
+  if log_contains "Opening the Control UI dashboard"; then
+    echo "Guided skip-UI onboarding attempted a browser handoff"
+    return 1
+  fi
+  if log_contains "Your browser is ready"; then
+    echo "Guided skip-UI onboarding completed a browser handoff"
+    return 1
+  fi
+  if log_contains "Hatching your agent now"; then
+    echo "Guided skip-UI onboarding attempted a terminal handoff"
+    return 1
+  fi
+  grep -q '"/v1/responses"' "$mock_request_log" || {
+    echo "Guided onboarding did not verify the configured model through /v1/responses"
+    return 1
+  }
+}
+
+run_case_guided_skip_ui() {
+  local mock_port="19091"
+  local mock_log="$ONBOARD_TMP_DIR/guided-skip-ui-mock-openai.log"
+  local mock_request_log="$ONBOARD_TMP_DIR/guided-skip-ui-mock-requests.jsonl"
+  set_isolated_openclaw_env guided-skip-ui
+  export OPENAI_API_KEY="sk-openclaw-guided-skip-ui-e2e"
+  node scripts/e2e/lib/onboard/write-config.mjs \
+    guided-skip-ui \
+    "$OPENCLAW_CONFIG_PATH" \
+    "$OPENCLAW_TEST_WORKSPACE_DIR" \
+    "$mock_port"
+  mock_openai_pid="$(
+    openclaw_e2e_start_tracked_process \
+      "$mock_log" \
+      env MOCK_PORT="$mock_port" MOCK_REQUEST_LOG="$mock_request_log" \
+      node scripts/e2e/mock-openai-server.mjs
+  )"
+  openclaw_e2e_wait_mock_openai "$mock_port"
+
+  run_wizard_cmd \
+    guided-skip-ui \
+    "$HOME" \
+    "node \"$OPENCLAW_ENTRY\" onboard --skip-ui" \
+    send_guided_skip_ui_flow
+
+  validate_guided_skip_ui_log "$WIZARD_LOG_PATH" "$mock_request_log"
+  echo "QA_ASSERT cli.guided-onboarding pass"
+  openclaw_e2e_stop_process "$mock_openai_pid"
+  mock_openai_pid=""
+}
+
 run_case_local_basic() {
   set_isolated_openclaw_env local-basic
   openclaw_e2e_run_logged local-basic node "$OPENCLAW_ENTRY" onboard \
@@ -261,12 +331,60 @@ run_case_local_basic() {
   sessions_dir="$OPENCLAW_STATE_DIR/agents/main/sessions"
 
   openclaw_e2e_assert_dir "$sessions_dir"
-  for file in AGENTS.md BOOTSTRAP.md IDENTITY.md SOUL.md TOOLS.md USER.md; do
+  for file in AGENTS.md BOOTSTRAP.md IDENTITY.md SOUL.md USER.md; do
     openclaw_e2e_assert_file "$workspace_dir/$file"
   done
 
   assert_onboard_config local-basic "$workspace_dir"
 
+}
+
+run_case_local_auth_refs() {
+  set_isolated_openclaw_env local-auth-refs
+  export OPENAI_API_KEY="sk-openclaw-onboard-auth-ref-e2e"
+  export OPENCLAW_GATEWAY_TOKEN="openclaw-onboard-gateway-ref-e2e"
+
+  openclaw_e2e_run_logged local-auth-refs node "$OPENCLAW_ENTRY" onboard \
+    --non-interactive \
+    --accept-risk \
+    --flow quickstart \
+    --mode local \
+    --auth-choice openai-api-key \
+    --secret-input-mode ref \
+    --gateway-auth token \
+    --gateway-token-ref-env OPENCLAW_GATEWAY_TOKEN \
+    --skip-channels \
+    --skip-skills \
+    --skip-daemon \
+    --skip-ui \
+    --skip-health
+
+  node scripts/e2e/lib/release-scenarios/assertions.mjs \
+    assert-openai-env-ref \
+    "$OPENAI_API_KEY"
+  assert_onboard_config local-auth-refs
+  echo "QA_ASSERT cli.gateway-auth-storage.token-ref pass"
+}
+
+run_case_local_password() {
+  set_isolated_openclaw_env local-password
+
+  openclaw_e2e_run_logged local-password node "$OPENCLAW_ENTRY" onboard \
+    --non-interactive \
+    --accept-risk \
+    --flow quickstart \
+    --mode local \
+    --auth-choice skip \
+    --gateway-auth password \
+    --gateway-password "openclaw-onboard-password-e2e" \
+    --skip-channels \
+    --skip-skills \
+    --skip-daemon \
+    --skip-ui \
+    --skip-health
+
+  assert_onboard_config local-password
+  echo "QA_ASSERT cli.gateway-auth-storage.password pass"
 }
 
 run_case_remote_non_interactive() {
@@ -280,6 +398,7 @@ run_case_remote_non_interactive() {
     --skip-health
 
   assert_onboard_config remote-non-interactive
+  echo "QA_ASSERT cli.remote-onboarding pass"
 }
 
 run_case_reset() {
@@ -299,6 +418,7 @@ run_case_reset() {
     --skip-health
 
   assert_onboard_config reset
+  echo "QA_ASSERT cli.targeted-reconfiguration.reset pass"
 }
 
 run_case_channels() {
@@ -317,6 +437,7 @@ run_case_skills() {
   run_wizard_cmd skills "$home_dir" "node \"$OPENCLAW_ENTRY\" configure --section skills" send_skills_flow
 
   assert_onboard_config skills
+  echo "QA_ASSERT cli.targeted-reconfiguration.skills pass"
 }
 
 validate_local_basic_log() {
@@ -324,10 +445,29 @@ validate_local_basic_log() {
   openclaw_e2e_assert_log_not_contains "$log_path" "systemctl --user unavailable"
 }
 
+run_selected_cases() {
+  local selected_cases="${OPENCLAW_ONBOARD_E2E_CASES:-guided-skip-ui,local-basic,remote-non-interactive,reset,channels,skills}"
+  local case_name
+  local -a cases=()
+  IFS="," read -r -a cases <<<"$selected_cases"
+  for case_name in "${cases[@]}"; do
+    case "$case_name" in
+      guided-skip-ui) run_case_guided_skip_ui ;;
+      local-basic) run_case_local_basic ;;
+      local-auth-refs) run_case_local_auth_refs ;;
+      local-password) run_case_local_password ;;
+      remote-non-interactive) run_case_remote_non_interactive ;;
+      reset) run_case_reset ;;
+      channels) run_case_channels ;;
+      skills) run_case_skills ;;
+      *)
+        echo "Unknown onboarding E2E case: $case_name" >&2
+        return 2
+        ;;
+    esac
+  done
+}
+
 if [ "$OPENCLAW_ONBOARD_SCENARIO_SOURCE_ONLY" != "1" ]; then
-  run_case_local_basic
-  run_case_remote_non_interactive
-  run_case_reset
-  run_case_channels
-  run_case_skills
+  run_selected_cases
 fi

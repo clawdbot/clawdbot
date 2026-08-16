@@ -2,9 +2,17 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-tools.exec-approval-followup-state.js";
+import {
+  addSubagentRunForTests,
+  getSubagentRunByChildSessionKey,
+  testing as subagentRegistryTesting,
+} from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
-import { setGatewayDedupeEntry } from "./agent-job.js";
+import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
+import { prepareAgentRunDispatch } from "../agent-turn/agent-run-admission-phase.js";
+import { createAgentTurnIo } from "../agent-turn/io.js";
+import { resolveAgentRunExpiresAtMs } from "../chat-abort.js";
 import {
   getAgentTestMocks,
   makeContext,
@@ -124,7 +132,7 @@ describe("gateway agent handler chat.abort integration", () => {
           goal: expect.objectContaining({ id: "goal-work-global" }),
         }),
         new Set(["conn-1"]),
-        { dropIfSlow: true },
+        { agentId: "work", dropIfSlow: true, sessionKeys: ["global"] },
       );
     });
   });
@@ -1610,9 +1618,92 @@ describe("gateway agent handler chat.abort integration", () => {
     expect(mocks.agentCommand).not.toHaveBeenCalled();
   });
 
+  it("starts the registered timeout only after dispatch admission resolves", async () => {
+    prime();
+    const context = makeContext();
+    const runId = "idem-dispatch-admission-timeout-start";
+    const sessionId = "existing-session-id";
+    let nowMs = 1_000_000;
+    const dateNow = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    let markAcquireStarted = () => {};
+    const acquireStarted = new Promise<void>((resolve) => {
+      markAcquireStarted = resolve;
+    });
+    let releaseAcquire = () => {};
+    const acquireReleased = new Promise<void>((resolve) => {
+      releaseAcquire = resolve;
+    });
+    type AdmittedRunAbort = Parameters<
+      Parameters<typeof prepareAgentRunDispatch>[0]["setAdmittedRunAbort"]
+    >[0];
+    let registration: AdmittedRunAbort | undefined;
+
+    try {
+      const pending = prepareAgentRunDispatch({
+        request: {
+          message: "wait for dispatch admission",
+          timeout: 120,
+          idempotencyKey: runId,
+        },
+        cfg: {},
+        sessionEntry: { sessionId, updatedAt: nowMs },
+        resolvedSessionKey: "agent:main:main",
+        activeSessionAgentId: "main",
+        delivery: {} as never,
+        allowModelOverride: false,
+        lifecycleGeneration: "test-generation",
+        getAdmittedSessionId: () => sessionId,
+        suppressVisibleSessionEffects: false,
+        isOneShotModelRun: false,
+        isRestartRecoveryResumeRun: false,
+        runId,
+        agentDedupeKeys: [`agent:${runId}`],
+        context,
+        client: null,
+        io: createAgentTurnIo(vi.fn()),
+        abortForLifecycleRotation: () => false,
+        acquireGatewayWorkAdmission: async () => {
+          markAcquireStarted();
+          await acquireReleased;
+        },
+        assertGatewayWorkAdmissionAllowed: () => {},
+        hasGatewayAdmissionOutcome: () => false,
+        respondToGatewayAdmissionOutcome: () => true,
+        admissionAgentId: () => "main",
+        getGatewayWorkAdmission: () => undefined,
+        setAdmittedRunAbort: (value: AdmittedRunAbort) => {
+          registration = value;
+        },
+        getAdmittedRunAbort: () => registration,
+        markAgentRunAccepted: () => {},
+      } as unknown as Parameters<typeof prepareAgentRunDispatch>[0]);
+
+      await acquireStarted;
+      expect(registration).toBeUndefined();
+      nowMs += 90_000;
+      releaseAcquire();
+      await pending;
+
+      const abortEntry = requireValue(registration?.entry, "chat abort entry missing");
+      expect(abortEntry.startedAtMs).toBe(nowMs);
+      expect(abortEntry.expiresAtMs).toBe(
+        resolveAgentRunExpiresAtMs({ now: nowMs, timeoutMs: 120_000 }),
+      );
+    } finally {
+      releaseAcquire();
+      dateNow.mockRestore();
+    }
+  });
+
   it("uses the explicit no-timeout agent expiry instead of the chat 24h cap", async () => {
     prime();
-    mocks.agentCommand.mockImplementation(() => new Promise(() => {}));
+    let onExecutionStarted: (() => void) | undefined;
+    mocks.agentCommand.mockImplementation(
+      (opts: { onExecutionStarted?: () => void }) =>
+        new Promise(() => {
+          onExecutionStarted = opts.onExecutionStarted;
+        }),
+    );
 
     const context = makeContext();
     const respond = vi.fn();
@@ -1631,6 +1722,148 @@ describe("gateway agent handler chat.abort integration", () => {
     const entry = context.chatAbortControllers.get(runId);
     const abortEntry = requireValue(entry, "chat abort entry missing");
     expect(abortEntry.expiresAtMs - abortEntry.startedAtMs).toBeGreaterThan(24 * 60 * 60_000);
+    const startedAtMs = abortEntry.startedAtMs;
+    const executionStartedAtMs = Date.now() + 60_000;
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(executionStartedAtMs);
+    try {
+      requireValue(onExecutionStarted, "execution-start callback missing")();
+      expect(abortEntry.startedAtMs).toBe(startedAtMs);
+      expect(abortEntry.expiresAtMs - executionStartedAtMs).toBeGreaterThan(24 * 60 * 60_000);
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
+  it("starts and rearms the agent timeout at the actual gateway execution boundaries", async () => {
+    prime();
+    const sessionKey = "agent:main:main";
+    const sessionId = "existing-session-id";
+    const runId = "idem-agent-execution-timeout-boundaries";
+    let nowMs = 1_000_000;
+    const dateNow = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    let releaseMutation = () => {};
+    let markMutationStarted = () => {};
+    const mutationStarted = new Promise<void>((resolve) => {
+      markMutationStarted = resolve;
+    });
+    const mutation = runExclusiveSessionLifecycleMutation({
+      scope: "/tmp/sessions.json",
+      identities: [sessionKey, sessionId],
+      run: async () => {
+        markMutationStarted();
+        await new Promise<void>((resolve) => {
+          releaseMutation = resolve;
+        });
+      },
+    });
+    await mutationStarted;
+    let onExecutionStarted: (() => void) | undefined;
+    mocks.agentCommand.mockImplementation(
+      (opts: { onExecutionStarted?: () => void }) =>
+        new Promise(() => {
+          onExecutionStarted = opts.onExecutionStarted;
+        }),
+    );
+    const context = makeContext();
+    const respond = vi.fn();
+    const admissionStartedAtMs = nowMs;
+    const request = invokeAgent(
+      {
+        message: "wait for admission, then preserve a full execution timeout",
+        agentId: "main",
+        sessionKey,
+        idempotencyKey: runId,
+        timeout: 120,
+      },
+      { context, respond, reqId: runId },
+    );
+
+    try {
+      await waitForAssertion(() => expect(context.dedupe.has(`agent:${runId}`)).toBe(true));
+      expect(context.chatAbortControllers.has(runId)).toBe(false);
+      nowMs += 90_000;
+      releaseMutation();
+      await mutation;
+      await request;
+      await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalledTimes(1));
+
+      const abortEntry = requireValue(
+        context.chatAbortControllers.get(runId),
+        "chat abort entry missing",
+      );
+      expect(abortEntry.startedAtMs).toBe(nowMs);
+      expect(abortEntry.startedAtMs).toBeGreaterThan(admissionStartedAtMs);
+      expect(abortEntry.expiresAtMs).toBe(
+        resolveAgentRunExpiresAtMs({ now: abortEntry.startedAtMs, timeoutMs: 120_000 }),
+      );
+
+      nowMs += 120_000;
+      const executionStartedAtMs = nowMs;
+      const executionStarted = requireValue(onExecutionStarted, "execution-start callback missing");
+      executionStarted();
+      expect(abortEntry.startedAtMs).toBe(admissionStartedAtMs + 90_000);
+      expect(abortEntry.expiresAtMs).toBe(
+        resolveAgentRunExpiresAtMs({ now: executionStartedAtMs, timeoutMs: 120_000 }),
+      );
+
+      const firstExecutionExpiryMs = abortEntry.expiresAtMs;
+      nowMs += 120_000;
+      executionStarted();
+      expect(abortEntry.startedAtMs).toBe(admissionStartedAtMs + 90_000);
+      expect(abortEntry.expiresAtMs).toBe(firstExecutionExpiryMs);
+    } finally {
+      releaseMutation();
+      await mutation;
+      dateNow.mockRestore();
+    }
+  });
+
+  it("keeps an elapsed queue deadline terminal before the maintenance sweep", async () => {
+    prime();
+    const runId = "idem-agent-expired-queue-deadline";
+    let nowMs = 1_000_000;
+    const dateNow = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    let onExecutionStarted: (() => void) | undefined;
+    mocks.agentCommand.mockImplementation(
+      (opts: { onExecutionStarted?: () => void }) =>
+        new Promise(() => {
+          onExecutionStarted = opts.onExecutionStarted;
+        }),
+    );
+    const context = makeContext();
+
+    try {
+      await invokeAgent(
+        {
+          message: "do not revive an expired queue deadline",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          idempotencyKey: runId,
+          timeout: 120,
+        },
+        { context, respond: vi.fn(), reqId: runId },
+      );
+
+      const abortEntry = requireValue(
+        context.chatAbortControllers.get(runId),
+        "chat abort entry missing",
+      );
+      const startedAtMs = abortEntry.startedAtMs;
+      const queueExpiresAtMs = abortEntry.expiresAtMs;
+      nowMs = queueExpiresAtMs + 1;
+      const executionStarted = requireValue(onExecutionStarted, "execution-start callback missing");
+      executionStarted();
+
+      expect(abortEntry.startedAtMs).toBe(startedAtMs);
+      expect(abortEntry.expiresAtMs).toBe(queueExpiresAtMs);
+      expect(abortEntry.controller.signal.aborted).toBe(false);
+
+      nowMs = queueExpiresAtMs - 1;
+      executionStarted();
+      expect(abortEntry.expiresAtMs).toBe(queueExpiresAtMs);
+    } finally {
+      dateNow.mockRestore();
+    }
   });
 
   it("sets the maintenance expiry to the configured agent timeout, not the 24h chat default", async () => {
@@ -1709,6 +1942,75 @@ describe("gateway agent handler chat.abort integration", () => {
     });
     expect(capturedSignal?.aborted).toBe(true);
     expect(context.chatAbortControllers.has(runId)).toBe(false);
+  });
+
+  it("chat.abort by runId kills only subagents owned by that requester turn", async () => {
+    prime();
+    subagentRegistryTesting.setDepsForTest({
+      persistSubagentRunsToDisk: () => {},
+      persistSubagentRunsToDiskOrThrow: () => {},
+    });
+    const pending = new Promise(() => {});
+    let capturedSignal: AbortSignal | undefined;
+    mocks.agentCommand.mockImplementationOnce((opts: { abortSignal?: AbortSignal }) => {
+      capturedSignal = opts.abortSignal;
+      return pending;
+    });
+
+    const context = makeContext();
+    const runId = "idem-abort-owned-subagents";
+    const ownedChildSessionKey = "agent:main:subagent:owned-by-aborted-turn";
+    const unrelatedChildSessionKey = "agent:main:subagent:owned-by-other-turn";
+    await invokeAgent(
+      {
+        message: "hi",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: runId,
+      },
+      { context, reqId: runId },
+    );
+    for (const [childSessionKey, requesterTurnRunId] of [
+      [ownedChildSessionKey, runId],
+      [unrelatedChildSessionKey, "other-parent-turn"],
+    ] as const) {
+      addSubagentRunForTests({
+        runId: `child-${requesterTurnRunId}`,
+        childSessionKey,
+        controllerSessionKey: "agent:main:main",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        requesterAgentId: "main",
+        requesterTurnRunId,
+        task: requesterTurnRunId,
+        cleanup: "keep",
+        createdAt: Date.now() - 2_000,
+        startedAt: Date.now() - 1_000,
+      });
+    }
+
+    const abortRespond = vi.fn();
+    await expectDefined(
+      chatHandlers["chat.abort"],
+      'chatHandlers["chat.abort"] test invariant',
+    )({
+      params: { sessionKey: "agent:main:main", runId },
+      respond: abortRespond as never,
+      context,
+      req: { type: "req", id: "abort-req", method: "chat.abort" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(mockCallArg(abortRespond)).toBe(true);
+    expect(capturedSignal?.aborted).toBe(true);
+    expect(getSubagentRunByChildSessionKey(ownedChildSessionKey)).toMatchObject({
+      endedReason: "subagent-killed",
+      killReconciliation: { suppressTaskDelivery: true },
+    });
+    expect(
+      getSubagentRunByChildSessionKey(unrelatedChildSessionKey)?.execution.endedAt,
+    ).toBeUndefined();
   });
 
   it("chat.abort by runId allows the owner connection to use a stale session key", async () => {
@@ -2239,6 +2541,83 @@ describe("gateway agent handler chat.abort integration", () => {
     });
   });
 
+  it("does not dispatch a duplicate sessionless run while its reservation is active", async () => {
+    prime();
+    let finishRun!: (result: {
+      payloads: Array<{ text: string }>;
+      meta: { durationMs: number };
+    }) => void;
+    mocks.agentCommand.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finishRun = resolve;
+      }),
+    );
+
+    const context = makeContext();
+    const runId = "idem-sessionless-active-collision";
+    const request = {
+      message: "hi",
+      agentId: "main",
+      sessionId: "sessionless-existing-session",
+      idempotencyKey: runId,
+    };
+    await invokeAgent(request, { context, reqId: runId });
+    expect(context.chatAbortControllers.has(runId)).toBe(false);
+    expect(mocks.agentCommand).toHaveBeenCalledTimes(1);
+
+    const duplicateRespond = vi.fn();
+    await invokeAgent(request, {
+      context,
+      reqId: `${runId}-duplicate`,
+      respond: duplicateRespond,
+    });
+
+    expect(mocks.agentCommand).toHaveBeenCalledTimes(1);
+    expect(duplicateRespond).toHaveBeenCalledWith(
+      true,
+      { runId, status: "in_flight", agentId: "main" },
+      undefined,
+      {
+        cached: true,
+        runId,
+      },
+    );
+
+    finishRun({ payloads: [{ text: "ok" }], meta: { durationMs: 1 } });
+  });
+
+  it("keeps a sessionless run from replacing an active projected run", async () => {
+    prime();
+    const context = makeContext();
+    const runId = "idem-sessionless-projected-collision";
+    const preExisting = {
+      controller: new AbortController(),
+      sessionId: "chat-send-session",
+      sessionKey: "agent:main:main",
+      startedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 60_000,
+    };
+    context.chatAbortControllers.set(runId, preExisting);
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "hi",
+        agentId: "main",
+        sessionId: "sessionless-existing-session",
+        idempotencyKey: runId,
+      },
+      { context, reqId: runId, respond },
+    );
+
+    expect(context.chatAbortControllers.get(runId)).toBe(preExisting);
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(true, { runId, status: "in_flight" }, undefined, {
+      cached: true,
+      runId,
+    });
+  });
+
   it("returns in_flight instead of replaying cached accepted agent replies", async () => {
     prime();
     mocks.agentCommand.mockImplementationOnce(
@@ -2280,7 +2659,7 @@ describe("gateway agent handler chat.abort integration", () => {
     expect(mocks.agentCommand).not.toHaveBeenCalled();
     expect(duplicateRespond).toHaveBeenCalledWith(
       true,
-      { runId, status: "in_flight", sessionKey: "agent:main:main" },
+      { runId, status: "in_flight", sessionKey: "agent:main:main", agentId: "main" },
       undefined,
       {
         cached: true,

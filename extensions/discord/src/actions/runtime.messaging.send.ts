@@ -288,6 +288,9 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
           ...ctx.withOpts(),
           reply: createReusableDiscordReplyReference(replyTo),
           silent,
+          mediaAccess: ctx.options?.mediaAccess,
+          mediaLocalRoots: ctx.options?.mediaLocalRoots,
+          mediaReadFile: ctx.options?.mediaReadFile,
         });
         return jsonResult(
           await appendDiscordThreadRenameResult(ctx, {
@@ -348,12 +351,14 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         return jsonResult({ ok: true, thread });
       } catch (error) {
         if (error instanceof DiscordThreadInitialMessageError) {
+          const initialMessageDelivery = error.initialMessageDelivery;
           return jsonResult({
             ok: true,
             partial: true,
             thread: error.thread,
-            warning: "Discord thread was created, but sending the initial message failed.",
+            warning: `${error.initialMessageWarning}.`,
             initialMessageError: error.initialMessageError,
+            ...(initialMessageDelivery ? { initialMessageDelivery } : {}),
           });
         }
         throw error;
@@ -416,6 +421,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         {
           ...ctx.withOpts(),
           mediaUrl,
+          mediaAccess: ctx.options?.mediaAccess,
           mediaLocalRoots: ctx.options?.mediaLocalRoots,
           mediaReadFile: ctx.options?.mediaReadFile,
           reply: createReusableDiscordReplyReference(replyTo),

@@ -96,6 +96,11 @@ export class GatewayPlugin extends Plugin {
   private outboundLimiter = new GatewaySendLimiter(
     (payload) => this.sendSerializedGatewayEvent(payload),
     (error) => this.emitter.emit("error", error),
+    (warning) =>
+      this.emitter.emit(
+        "warning",
+        `Gateway outbound queue overflow policy=${warning.policy} droppedEvents=${warning.droppedEvents} queuedEvents=${warning.queuedEvents} maxQueuedEvents=${warning.maxQueuedEvents}`,
+      ),
   );
 
   constructor(options: GatewayPluginOptions, gatewayInfo?: APIGatewayBotInfo) {

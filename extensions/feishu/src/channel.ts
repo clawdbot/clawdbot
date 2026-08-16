@@ -29,6 +29,7 @@ import {
   createChannelDirectoryAdapter,
   createRuntimeDirectoryLiveAdapter,
 } from "openclaw/plugin-sdk/directory-runtime";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import {
   legacyInteractiveReplyToPresentation,
   normalizeLegacyInteractiveReply,
@@ -39,6 +40,7 @@ import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
 import {
+  isRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -68,7 +70,6 @@ import {
   PAIRING_APPROVED_MESSAGE,
 } from "./channel-runtime-api.js";
 import { normalizeFeishuChatType, resolveFeishuChatType } from "./chat-type.js";
-import { isRecord } from "./comment-shared.js";
 import { FeishuChannelConfigSchema } from "./config-schema.js";
 import {
   buildFeishuConversationId,
@@ -107,9 +108,9 @@ import { collectFeishuSecurityAuditFindings } from "./security-audit.js";
 import { createFeishuSendReceipt } from "./send-result.js";
 import { resolveFeishuSessionConversation } from "./session-conversation.js";
 import { resolveFeishuOutboundSessionRoute } from "./session-route.js";
-import { feishuSetupAdapter } from "./setup-core.js";
+import { feishuSetupContract } from "./setup-core.js";
 import { feishuSetupWizard, runFeishuLogin } from "./setup-surface.js";
-import { looksLikeFeishuId, normalizeFeishuTarget } from "./targets.js";
+import { looksLikeFeishuId, normalizeFeishuTarget, resolveReceiveIdType } from "./targets.js";
 import type { FeishuConfig, FeishuProbeResult, ResolvedFeishuAccount } from "./types.js";
 
 function readFeishuMediaParam(params: Record<string, unknown>): string | undefined {
@@ -180,6 +181,38 @@ const loadFeishuChannelRuntime = createLazyRuntimeNamedExport(
   "feishuChannelRuntime",
 );
 
+async function resolveFeishuMessageSender<TSender>(params: {
+  resolve: (
+    runtime: Awaited<ReturnType<typeof loadFeishuChannelRuntime>>,
+  ) => TSender | null | undefined;
+  unavailableMessage: string;
+}): Promise<TSender> {
+  try {
+    const sender = params.resolve(await loadFeishuChannelRuntime());
+    if (sender) {
+      return sender;
+    }
+    throw new Error(params.unavailableMessage);
+  } catch (error) {
+    if (error instanceof PlatformMessageNotDispatchedError) {
+      throw error;
+    }
+    throw new PlatformMessageNotDispatchedError(params.unavailableMessage, { cause: error });
+  }
+}
+
+const resolveFeishuTextSender = () =>
+  resolveFeishuMessageSender({
+    resolve: (runtime) => runtime.feishuOutbound.sendText,
+    unavailableMessage: "Feishu text sending is not available.",
+  });
+
+const resolveFeishuMediaSender = () =>
+  resolveFeishuMessageSender({
+    resolve: (runtime) => runtime.feishuOutbound.sendMedia,
+    unavailableMessage: "Feishu media sending is not available.",
+  });
+
 function toFeishuMessageSendResult(
   result: { messageId?: string; chatId?: string; receipt?: ChannelMessageSendResult["receipt"] },
   kind: MessageReceiptPartKind,
@@ -206,12 +239,19 @@ const feishuMessageAdapter = defineChannelMessageAdapter({
     },
   },
   send: {
+    lifecycle: {
+      // Resolve process-stable runtime methods before core records platform-send start.
+      // Provider invocation stays below so a lost provider result remains ambiguous.
+      beforeSendAttempt: async (ctx) => {
+        if (ctx.kind === "text") {
+          await resolveFeishuTextSender();
+        } else if (ctx.kind === "media") {
+          await resolveFeishuMediaSender();
+        }
+      },
+    },
     text: async (ctx) => {
-      const runtime = await loadFeishuChannelRuntime();
-      const sendText = runtime.feishuOutbound.sendText;
-      if (!sendText) {
-        throw new Error("Feishu text sending is not available.");
-      }
+      const sendText = await resolveFeishuTextSender();
       const { onDeliveryResult, ...outboundCtx } = ctx;
       const result = await sendText({
         ...outboundCtx,
@@ -226,11 +266,7 @@ const feishuMessageAdapter = defineChannelMessageAdapter({
       return toFeishuMessageSendResult(result, "text");
     },
     media: async (ctx) => {
-      const runtime = await loadFeishuChannelRuntime();
-      const sendMedia = runtime.feishuOutbound.sendMedia;
-      if (!sendMedia) {
-        throw new Error("Feishu media sending is not available.");
-      }
+      const sendMedia = await resolveFeishuMediaSender();
       const { onDeliveryResult, ...outboundCtx } = ctx;
       const result = await sendMedia({
         ...outboundCtx,
@@ -341,30 +377,6 @@ function describeFeishuMessageTool({
   return {
     actions: Array.from(actions),
     capabilities: enabled ? ["presentation"] : [],
-  };
-}
-
-function setFeishuNamedAccountEnabled(
-  cfg: ClawdbotConfig,
-  accountId: string,
-  enabled: boolean,
-): ClawdbotConfig {
-  const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      feishu: {
-        ...feishuCfg,
-        accounts: {
-          ...feishuCfg?.accounts,
-          [accountId]: {
-            ...feishuCfg?.accounts?.[accountId],
-            enabled,
-          },
-        },
-      },
-    },
   };
 }
 
@@ -641,7 +653,13 @@ function readFirstString(
 const UNRESOLVED_RESPONSE_PREFIX_VAR_PATTERN = /\{[a-zA-Z][a-zA-Z0-9.]*\}/;
 
 function resolveFeishuMessageActionResponsePrefix(ctx: ChannelMessageActionContext) {
-  const configured = ctx.cfg.messages?.responsePrefix;
+  const channel = ctx.cfg.channels?.feishu as
+    | { responsePrefix?: string; accounts?: Record<string, { responsePrefix?: string }> }
+    | undefined;
+  const configured =
+    (ctx.accountId ? channel?.accounts?.[ctx.accountId]?.responsePrefix : undefined) ??
+    channel?.responsePrefix ??
+    (channel === undefined ? ctx.cfg.messages?.responsePrefix : undefined);
   if (!configured) {
     return undefined;
   }
@@ -983,22 +1001,6 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       configSchema: FeishuChannelConfigSchema,
       config: {
         ...feishuConfigAdapter,
-        setAccountEnabled: ({ cfg, accountId, enabled }) => {
-          const isDefault = accountId === DEFAULT_ACCOUNT_ID;
-          if (isDefault) {
-            return {
-              ...cfg,
-              channels: {
-                ...cfg.channels,
-                feishu: {
-                  ...cfg.channels?.feishu,
-                  enabled,
-                },
-              },
-            };
-          }
-          return setFeishuNamedAccountEnabled(cfg, accountId, enabled);
-        },
         deleteAccount: ({ cfg, accountId }) => {
           const isDefault = accountId === DEFAULT_ACCOUNT_ID;
 
@@ -1129,7 +1131,9 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                   ...(audioAsVoice === undefined ? {} : { audioAsVoice }),
                 },
                 accountId: ctx.accountId ?? undefined,
+                ...(ctx.mediaAccess ? { mediaAccess: ctx.mediaAccess } : {}),
                 mediaLocalRoots: ctx.mediaLocalRoots,
+                ...(ctx.mediaReadFile ? { mediaReadFile: ctx.mediaReadFile } : {}),
                 ...(replyInThread
                   ? { threadId: replyToMessageId }
                   : { replyToId: replyToMessageId }),
@@ -1156,7 +1160,9 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 text: text ?? "",
                 mediaUrl,
                 accountId: ctx.accountId ?? undefined,
+                ...(ctx.mediaAccess ? { mediaAccess: ctx.mediaAccess } : {}),
                 mediaLocalRoots: ctx.mediaLocalRoots,
+                ...(ctx.mediaReadFile ? { mediaReadFile: ctx.mediaReadFile } : {}),
                 ...(replyInThread
                   ? { threadId: replyToMessageId }
                   : { replyToId: replyToMessageId }),
@@ -1682,11 +1688,13 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           }
         },
       },
-      setup: feishuSetupAdapter,
+      setupContract: feishuSetupContract,
       setupWizard: feishuSetupWizard,
       messaging: {
         targetPrefixes: ["feishu", "lark"],
         normalizeTarget: (raw) => normalizeFeishuTarget(raw) ?? undefined,
+        inferTargetChatType: ({ to }) =>
+          resolveReceiveIdType(to) === "chat_id" ? "group" : "direct",
         resolveDeliveryTarget: ({ conversationId, parentConversationId }) => {
           const directId = parseFeishuDirectConversationId(conversationId);
           if (directId) {

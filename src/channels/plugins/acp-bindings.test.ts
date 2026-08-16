@@ -9,7 +9,8 @@ const resolveDefaultAgentIdMock = vi.hoisted(() => vi.fn());
 const resolveAgentWorkspaceDirMock = vi.hoisted(() => vi.fn());
 const getLoadedChannelPluginMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../agents/agent-scope.js", () => ({
+vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
   resolveAgentConfig: resolveAgentConfigMock,
   resolveDefaultAgentId: resolveDefaultAgentIdMock,
   resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock,

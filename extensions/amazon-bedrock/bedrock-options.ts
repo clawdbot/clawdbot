@@ -46,6 +46,7 @@ export function supportsBedrockPromptCaching(modelId: string, modelName?: string
       (candidate) =>
         candidate.includes("claude-fable-5") ||
         candidate.includes("claude-mythos-5") ||
+        candidate.includes("claude-opus-5") ||
         candidate.includes("claude-sonnet-5"),
     )
   ) {

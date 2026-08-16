@@ -1,7 +1,8 @@
-// Verifies fallback cooldown probe decisions and diagnostic records.
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
+// Verifies fallback cooldown probe decisions and diagnostic records.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagnostic-log-capture.js";
@@ -38,7 +39,6 @@ const sessionSuspensionMocks = vi.hoisted(() => ({
       onDeferred?.({
         cfg: {},
         sessionId: "test-session",
-        laneId: "main",
         reason: "quota_exhausted",
         failedProvider: "openai",
         failedModel: "gpt-4.1-mini",
@@ -110,7 +110,8 @@ type AuthProfilesStoreModule = typeof import("./auth-profiles/store.js");
 type AuthProfilesSourceCheckModule = typeof import("./auth-profiles/source-check.js");
 type AuthProfilesUsageModule = typeof import("./auth-profiles/usage.js");
 type AuthProfilesOrderModule = typeof import("./auth-profiles/order.js");
-type ModelFallbackModule = typeof import("./model-fallback.js");
+type ModelFallbackCooldownModule = typeof import("./model-fallback-cooldown.js");
+type ModelFallbackModule = typeof import("./model-fallback-runner.js");
 type LoggerModule = typeof import("../logging/logger.js");
 
 let mockedEnsureAuthProfileStore: ReturnType<
@@ -133,7 +134,7 @@ let mockedResolveAuthProfileOrder: ReturnType<
 >;
 let runWithModelFallback: ModelFallbackModule["runWithModelFallback"];
 let resolveCooldownDecision: (typeof import("./model-fallback.test-support.js"))["resolveCooldownDecision"];
-let probeThrottleInternals: ModelFallbackModule["probeThrottleInternals"];
+let probeThrottleInternals: ModelFallbackCooldownModule["probeThrottleInternals"];
 let resetLogger: LoggerModule["resetLogger"];
 let setLoggerOverride: LoggerModule["setLoggerOverride"];
 
@@ -147,7 +148,8 @@ async function loadModelFallbackProbeModules() {
   const authProfilesUsageModule = await import("./auth-profiles/usage.js");
   const authProfilesOrderModule = await import("./auth-profiles/order.js");
   const loggerModule = await import("../logging/logger.js");
-  const modelFallbackModule = await import("./model-fallback.js");
+  const modelFallbackCooldownModule = await import("./model-fallback-cooldown.js");
+  const modelFallbackModule = await import("./model-fallback-runner.js");
   const modelFallbackTestSupport = await import("./model-fallback.test-support.js");
   mockedEnsureAuthProfileStore = vi.mocked(authProfilesStoreModule.ensureAuthProfileStore);
   mockedHasAnyAuthProfileStoreSource = vi.mocked(
@@ -161,7 +163,7 @@ async function loadModelFallbackProbeModules() {
   mockedResolveAuthProfileOrder = vi.mocked(authProfilesOrderModule.resolveAuthProfileOrder);
   runWithModelFallback = modelFallbackModule.runWithModelFallback;
   resolveCooldownDecision = modelFallbackTestSupport.resolveCooldownDecision;
-  probeThrottleInternals = modelFallbackModule.probeThrottleInternals;
+  probeThrottleInternals = modelFallbackCooldownModule.probeThrottleInternals;
   resetLogger = loggerModule.resetLogger;
   setLoggerOverride = loggerModule.setLoggerOverride;
 }
@@ -200,12 +202,7 @@ function expectPrimaryProbeSuccess(
   });
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function expectRecordWithFields(
   records: Array<Record<string, unknown>>,
@@ -315,7 +312,7 @@ describe("runWithModelFallback – probe logic", () => {
     reason: "rate_limit" | "billing",
   ) {
     expect(decision).toEqual({
-      type: "suspend_lanes",
+      type: "suspend_session",
       reason,
       leaderCandidate: OPENAI_PROBE_CANDIDATE,
     });
@@ -839,7 +836,7 @@ describe("runWithModelFallback – probe logic", () => {
     );
   });
 
-  it("does not lock lane when fallback candidates remain after suspend_lanes decision", async () => {
+  it("does not suspend the session when fallback candidates remain", async () => {
     const cfg = makeCfg({
       agents: {
         defaults: {
@@ -872,7 +869,7 @@ describe("runWithModelFallback – probe logic", () => {
     expect(sessionSuspensionMocks.suspendSession).not.toHaveBeenCalled();
   });
 
-  it("defers embedded lane suspension only while another candidate remains", async () => {
+  it("defers embedded session suspension only while another candidate remains", async () => {
     const cfg = makeCfg({
       agents: {
         defaults: {
@@ -966,7 +963,7 @@ describe("runWithModelFallback – probe logic", () => {
       return [];
     });
 
-    // Throttle primary probe so billing goes to suspend_lanes
+    // Throttle primary probe so billing records terminal session suspension.
     probeThrottleInternals.lastProbeAttempt.set("openai", NOW - 10_000);
 
     const run = vi.fn().mockResolvedValue("should-not-run");
@@ -983,21 +980,16 @@ describe("runWithModelFallback – probe logic", () => {
 
     expect(sessionSuspensionMocks.suspendSession).toHaveBeenCalledWith(
       expect.objectContaining({
-        laneId: undefined,
         failedProvider: "anthropic",
       }),
     );
     expect(sessionSuspensionMocks.suspendSession).not.toHaveBeenCalledWith(
       expect.objectContaining({ failedProvider: "openai" }),
     );
-    expect(
-      sessionSuspensionMocks.suspendSession.mock.calls.every(
-        ([params]) => params.laneId === undefined,
-      ),
-    ).toBe(true);
+    expect(sessionSuspensionMocks.suspendSession.mock.calls[0]?.[0]).not.toHaveProperty("laneId");
   });
 
-  it("restores a deferred embedded lane when later candidates cannot run", async () => {
+  it("records the final candidate when later candidates cannot run", async () => {
     const cfg = makeCfg({
       agents: {
         defaults: {
@@ -1031,9 +1023,11 @@ describe("runWithModelFallback – probe logic", () => {
     expect(run).toHaveBeenCalledOnce();
     expect(sessionSuspensionMocks.suspendSession).toHaveBeenCalledWith(
       expect.objectContaining({
-        laneId: "main",
         failedProvider: "anthropic",
       }),
+    );
+    expect(sessionSuspensionMocks.suspendSession.mock.calls.at(-1)?.[0]).not.toHaveProperty(
+      "laneId",
     );
   });
 
@@ -1067,9 +1061,11 @@ describe("runWithModelFallback – probe logic", () => {
     expect(run).toHaveBeenCalledOnce();
     expect(sessionSuspensionMocks.suspendSession).toHaveBeenCalledWith(
       expect.objectContaining({
-        laneId: "main",
         failedProvider: "openai",
       }),
+    );
+    expect(sessionSuspensionMocks.suspendSession.mock.calls.at(-1)?.[0]).not.toHaveProperty(
+      "laneId",
     );
   });
 });

@@ -38,12 +38,16 @@ clawhub_integrity="$(
   exit 1
 }
 
-npm ci \
-  --prefix "${destination}" \
-  --ignore-scripts \
-  --no-audit \
-  --no-fund \
-  --omit=dev
+# npm 12 misvalidates the lockfile root when this project is selected with --prefix.
+# Running inside the copied project keeps its committed root metadata authoritative.
+(
+  cd "${destination}"
+  npm ci \
+    --ignore-scripts \
+    --no-audit \
+    --no-fund \
+    --omit=dev
+)
 
 clawhub_version="$(
   CLAWHUB_CLI_ROOT="${destination}" \

@@ -2,9 +2,15 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createPersistentDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createNextcloudTalkReplayGuard } from "./replay-guard.js";
+import {
+  NEXTCLOUD_TALK_PLUGIN_ID,
+  NEXTCLOUD_TALK_REPLAY_DEDUPE_MAX_ENTRIES,
+  NEXTCLOUD_TALK_REPLAY_DEDUPE_NAMESPACE_PREFIX,
+  NEXTCLOUD_TALK_REPLAY_DEDUPE_TTL_MS,
+} from "./replay-migration-contract.js";
 
 const hoisted = vi.hoisted(() => ({
   probeNextcloudTalkBotResponseFeature: vi.fn(),
@@ -94,7 +100,8 @@ describe("nextcloud-talk doctor", () => {
 
   it("migrates legacy replay dedupe JSON into SQLite during doctor repair", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-nextcloud-doctor-"));
-    const legacyDir = path.join(stateDir, "nextcloud-talk", "replay-dedupe");
+    const canonicalStateDir = await fs.realpath(stateDir);
+    const legacyDir = path.join(canonicalStateDir, "nextcloud-talk", "replay-dedupe");
     const legacyPath = path.join(legacyDir, "account-a.json");
     await fs.mkdir(legacyDir, { recursive: true });
     await fs.writeFile(
@@ -104,6 +111,7 @@ describe("nextcloud-talk doctor", () => {
       }),
     );
 
+    const env = { ...process.env, OPENCLAW_STATE_DIR: canonicalStateDir };
     const mutation = await nextcloudTalkDoctor.repairConfig?.({
       cfg: {
         channels: {
@@ -118,7 +126,7 @@ describe("nextcloud-talk doctor", () => {
         },
       } as never,
       doctorFixCommand: "openclaw doctor --fix",
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      env,
     });
 
     expect(mutation?.changes.join("\n")).toContain(
@@ -126,13 +134,14 @@ describe("nextcloud-talk doctor", () => {
     );
     await expect(fs.access(legacyPath)).rejects.toThrow();
 
-    const guard = createNextcloudTalkReplayGuard({ stateDir });
-    await expect(
-      guard.shouldProcess({
-        accountId: "account-a",
-        roomToken: "room-1",
-        messageId: "msg-1",
-      }),
-    ).resolves.toBe(false);
+    const dedupe = createPersistentDedupe({
+      ttlMs: NEXTCLOUD_TALK_REPLAY_DEDUPE_TTL_MS,
+      memoryMaxSize: 0,
+      pluginId: NEXTCLOUD_TALK_PLUGIN_ID,
+      namespacePrefix: NEXTCLOUD_TALK_REPLAY_DEDUPE_NAMESPACE_PREFIX,
+      stateMaxEntries: NEXTCLOUD_TALK_REPLAY_DEDUPE_MAX_ENTRIES,
+      env,
+    });
+    await expect(dedupe.hasRecent("room-1:msg-1", { namespace: "account-a" })).resolves.toBe(true);
   });
 });

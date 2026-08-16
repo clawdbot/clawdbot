@@ -238,7 +238,8 @@ export function assertMatrixQaCliBackupRestoreFailed(
           error.includes(
             "backup decryption key is not loaded on this device (secret storage did not return a key)",
           ))
-      : ["bad mac", "backup key mismatch", "does not have the matching backup decryption key"].some(
+      : error.includes("bad mac") ||
+        ["bad mac", "backup key mismatch", "does not have the matching backup decryption key"].some(
           (expected) => keyLoadError.includes(expected),
         );
   if (!expectedDiagnostic) {

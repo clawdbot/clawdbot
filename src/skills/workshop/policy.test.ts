@@ -196,6 +196,25 @@ describe("resolveSkillWorkshopToolApproval", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("requires pending approval before restoring a skill collection", async () => {
+    const result = await resolveSkillWorkshopToolApproval({
+      toolName: "skill_workshop",
+      toolParams: { action: "restore_collection" },
+      config: pendingApprovalConfig,
+    });
+
+    expect(result?.requireApproval).toMatchObject({
+      title: "Restore previous skill collection",
+      description:
+        "Replace current workspace skills with the previous collection backup. Later skill changes may be removed.",
+      severity: "warning",
+      timeoutMs: 70_000,
+      timeoutReason:
+        "The Skill Workshop approval request expired without a decision. This restore call left workspace skills unchanged. Review the current skills, then request the restore again if it is still wanted. Do not retry this tool call in a loop.",
+      allowedDecisions: ["allow-once", "deny"],
+    });
+  });
+
   it("uses runtime config when lifecycle hook config is absent", async () => {
     setRuntimeConfigSnapshot({
       skills: {

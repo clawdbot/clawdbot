@@ -8,11 +8,18 @@
     />
     <title>OpenClaw Control</title>
     <meta name="color-scheme" content="dark light" />
+    <!-- These mirror the claw theme's --bg tokens for first paint; runtime theme application keeps them synchronized. -->
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#faf9f7" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1015" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
-    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
     <script>
+      // Configure Zod before module evaluation so its JIT probe cannot violate strict CSP.
+      globalThis.__zod_globalConfig ??= {};
+      globalThis.__zod_globalConfig.jitless = true;
+
       (function () {
         var THEMES = { claw: 1, knot: 1, dash: 1 };
         var MODES = { system: 1, light: 1, dark: 1 };
@@ -58,14 +65,54 @@
                   ? "light"
                   : "dark";
           document.documentElement.setAttribute("data-theme", resolved);
-          document.documentElement.setAttribute(
-            "data-theme-mode",
-            resolved.includes("light") ? "light" : "dark",
-          );
+          var resolvedMode = resolved.includes("light") ? "light" : "dark";
+          document.documentElement.setAttribute("data-theme-mode", resolvedMode);
+          // Carapace CSS selects on [data-theme-resolved]; keep in lockstep.
+          document.documentElement.setAttribute("data-theme-resolved", resolvedMode);
         } catch (e) {}
       })();
     </script>
     <style>
+      /* Paint before the app stylesheet arrives so WebKit never exposes a white
+         document between its native dark canvas and the persisted UI theme. */
+      html,
+      body {
+        min-height: 100%;
+      }
+
+      html {
+        background: #0e1015;
+        color-scheme: dark;
+      }
+
+      html[data-theme-mode="light"] {
+        background: #faf9f7;
+        color-scheme: light;
+      }
+
+      html[data-theme="openknot"] {
+        background: #080808;
+      }
+
+      html[data-theme="openknot-light"] {
+        background: #f9f9fb;
+      }
+
+      html[data-theme="dash"] {
+        background: #1a1210;
+      }
+
+      html[data-theme="dash-light"] {
+        background: #f7f2ec;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100%;
+        background: inherit;
+        color-scheme: inherit;
+      }
+
       body.openclaw-mount-fallback-active {
         margin: 0;
         min-width: 320px;
@@ -155,7 +202,10 @@
         margin-top: 24px;
       }
 
+      /* The fallback renders when the bundle fails to load, so it cannot read
+         base.css tokens; it repeats the cursor policy locally for that reason. */
       .mount-fallback__button {
+        cursor: pointer;
         min-height: 42px;
         border: 1px solid rgba(148, 163, 184, 0.36);
         border-radius: 6px;
@@ -164,6 +214,19 @@
         background: transparent;
         font: inherit;
         font-weight: 700;
+      }
+
+      @media (display-mode: standalone),
+        (display-mode: minimal-ui),
+        (display-mode: window-controls-overlay) {
+        .mount-fallback__button {
+          cursor: default;
+        }
+      }
+
+      html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrome)
+        .mount-fallback__button {
+        cursor: default;
       }
 
       .mount-fallback__button--primary {

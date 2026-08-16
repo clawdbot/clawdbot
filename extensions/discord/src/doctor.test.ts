@@ -21,6 +21,74 @@ function getDiscordCompatibilityNormalizer(): NonNullable<
 }
 
 describe("discord doctor", () => {
+  it("promotes shipped nested DM access at root and account scope", () => {
+    const normalize = getDiscordCompatibilityNormalizer();
+    const result = normalize({
+      cfg: {
+        channels: {
+          discord: {
+            dm: { enabled: false, policy: "allowlist", allowFrom: ["123"] },
+            accounts: {
+              work: {
+                dm: { groupEnabled: true, policy: "open", allowFrom: ["*"] },
+              },
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.config.channels?.discord).toEqual({
+      dm: { enabled: false },
+      dmPolicy: "allowlist",
+      allowFrom: ["123"],
+      accounts: {
+        work: {
+          dm: { groupEnabled: true },
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+    });
+  });
+
+  it("strips retired gateway, queue, and retry tuning at root and account scope", () => {
+    const normalize = getDiscordCompatibilityNormalizer();
+    const result = normalize({
+      cfg: {
+        channels: {
+          discord: {
+            gatewayInfoTimeoutMs: 1,
+            gatewayReadyTimeoutMs: 2,
+            gatewayRuntimeReadyTimeoutMs: 3,
+            eventQueue: { listenerTimeout: 4 },
+            retry: { attempts: 5 },
+            voice: {
+              realtime: {
+                providers: {
+                  custom: { retry: { attempts: 9 }, eventQueue: { maxConcurrency: 2 } },
+                },
+              },
+            },
+            accounts: {
+              work: { eventQueue: { maxConcurrency: 6 }, retry: { attempts: 7 } },
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.config.channels?.discord).toEqual({
+      voice: {
+        realtime: {
+          providers: { custom: { retry: { attempts: 9 }, eventQueue: { maxConcurrency: 2 } } },
+        },
+      },
+      accounts: { work: {} },
+    });
+    expect(result.changes).toContain("Removed retired Discord tuning knobs.");
+  });
+
   it("normalizes legacy discord streaming aliases for runtime config", () => {
     const normalize = getDiscordCompatibilityNormalizer();
 
@@ -91,10 +159,10 @@ describe("discord doctor", () => {
     ]);
   });
 
-  it("pins progress mode when migrating delivery-only aliases", () => {
+  it("keeps delivery-only aliases mode-free and preserves explicit legacy progress", () => {
     const normalize = getDiscordCompatibilityNormalizer();
 
-    const result = normalize({
+    const deliveryOnly = normalize({
       cfg: {
         channels: {
           discord: { blockStreaming: true },
@@ -102,17 +170,33 @@ describe("discord doctor", () => {
       } as never,
     });
 
-    const migrated = result.config.channels?.discord as Record<string, unknown>;
-    expect(migrated).toEqual({
+    const deliveryOnlyMigrated = deliveryOnly.config.channels?.discord as Record<string, unknown>;
+    expect(deliveryOnlyMigrated).toEqual({
+      streaming: { block: { enabled: true } },
+    });
+    expect(resolveDiscordPreviewStreamMode(deliveryOnlyMigrated)).toBe("off");
+    expect(deliveryOnly.changes).toEqual([
+      "Moved channels.discord.blockStreaming → channels.discord.streaming.block.enabled.",
+    ]);
+
+    const explicitProgress = normalize({
+      cfg: {
+        channels: {
+          discord: { streamMode: "progress", blockStreaming: true },
+        },
+      } as never,
+    });
+    const explicitProgressMigrated = explicitProgress.config.channels?.discord as Record<
+      string,
+      unknown
+    >;
+    expect(explicitProgressMigrated).toEqual({
       streaming: { mode: "progress", block: { enabled: true } },
     });
-    // Effective preview-mode parity: `streaming` absent resolved to progress
-    // before migration, so the migrated object must keep progress instead of
-    // falling to the object-without-mode default (off).
-    expect(resolveDiscordPreviewStreamMode(migrated)).toBe(resolveDiscordPreviewStreamMode({}));
-    expect(result.changes).toEqual([
+    expect(resolveDiscordPreviewStreamMode(explicitProgressMigrated)).toBe("progress");
+    expect(explicitProgress.changes).toEqual([
+      "Moved channels.discord.streamMode → channels.discord.streaming.mode (progress).",
       "Moved channels.discord.blockStreaming → channels.discord.streaming.block.enabled.",
-      "Set channels.discord.streaming.mode (progress) to keep the previous default while migrating flat streaming keys.",
     ]);
   });
 
@@ -545,7 +629,9 @@ describe("discord doctor", () => {
 
     const result = maybeRepairDiscordNumericIds(cfg, "openclaw doctor --fix");
     expect(result.config.channels?.discord?.allowFrom).toEqual(["123"]);
-    expect(result.config.channels?.discord?.dm?.allowFrom).toEqual(["99"]);
+    expect(
+      (result.config.channels?.discord?.dm as { allowFrom?: string[] } | undefined)?.allowFrom,
+    ).toEqual(["99"]);
     expect(result.config.channels?.discord?.guilds?.main?.users).toEqual(["111"]);
     expect(result.config.channels?.discord?.guilds?.main?.roles).toEqual(["222"]);
     expect(result.changes).not.toHaveLength(0);
@@ -602,5 +688,47 @@ describe("discord doctor", () => {
     } as unknown as OpenClawConfig;
 
     expect(collectDiscordMissingEnvTokenWarnings({ cfg, env: {} })).toStrictEqual([]);
+  });
+
+  it("warns when Discord transcript auto-start cannot choose between voice accounts", async () => {
+    const cfg = {
+      transcripts: {
+        autoStart: [
+          {
+            providerId: "discord-voice",
+            guildId: "guild-1",
+            channelId: "channel-1",
+          },
+          {
+            providerId: "discord-voice",
+            accountId: "alpha",
+            guildId: "guild-1",
+            channelId: "channel-2",
+          },
+          { providerId: "meeting", meetingUrl: "https://meet.example.test/standup" },
+        ],
+      },
+      channels: {
+        discord: {
+          accounts: {
+            alpha: { token: "alpha-token", voice: { enabled: true } },
+            bravo: { token: "bravo-token", voice: { enabled: true } },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const warnings =
+      (await discordDoctor.collectPreviewWarnings?.({
+        cfg,
+        doctorFixCommand: "openclaw doctor --fix",
+        env: {},
+      })) ?? [];
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("transcripts.autoStart[0]");
+    expect(warnings[0]).toContain("Multiple Discord accounts are enabled for voice");
+    expect(warnings[0]).toContain("transcripts.autoStart[0].accountId");
+    expect(warnings[0]).toContain("channels.discord.defaultAccount");
   });
 });

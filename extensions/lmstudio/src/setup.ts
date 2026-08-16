@@ -26,6 +26,7 @@ import {
   type ProviderPrepareDynamicModelContext,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/provider-setup";
+import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import { WizardCancelledError, type WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -44,6 +45,7 @@ import { discoverLmstudioModels, fetchLmstudioModels } from "./models.fetch.js";
 import {
   mapLmstudioWireModelsToConfig,
   type LmstudioModelWire,
+  resolveLoadedContextWindow,
   resolveLmstudioInferenceBase,
 } from "./models.js";
 import {
@@ -66,16 +68,15 @@ type ProviderPromptText = (params: {
 
 type ProviderPromptNote = (message: string, title?: string) => Promise<void> | void;
 type LmstudioDiscoveryResult = Awaited<ReturnType<typeof fetchLmstudioModels>>;
+const LMSTUDIO_APP_GUIDED_MIN_CONTEXT_TOKENS = 16_384;
+
 type LmstudioSetupDiscovery = {
   discovery: LmstudioDiscoveryResult;
   models: ModelDefinitionConfig[];
+  loadedModelIds: Set<string>;
   defaultModel: string | undefined;
   defaultModelId: string | undefined;
 };
-
-function isTruthyEnvValue(value: string | undefined): boolean {
-  return ["1", "true", "yes", "on"].includes(value?.trim().toLowerCase() ?? "");
-}
 
 function resolveLmstudioSetupDefaultBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
   return isTruthyEnvValue(env.OPENCLAW_DOCKER_SETUP)
@@ -206,10 +207,19 @@ function applyRequestedContextWindowToAllModels(params: {
   );
 }
 
+function collectLoadedLmstudioModelIds(discovery: LmstudioDiscoveryResult): Set<string> {
+  return new Set(
+    discovery.models.flatMap((entry) => {
+      const id = entry.key?.trim();
+      return entry.type === "llm" && id && resolveLoadedContextWindow(entry) !== null ? [id] : [];
+    }),
+  );
+}
+
 function resolveLmstudioDiscoveryFailure(params: {
   baseUrl: string;
   discovery: LmstudioDiscoveryResult;
-}): { noteLines: [string, string]; reason: string } | null {
+}): { noteLines: [string, string]; retryLine?: string; reason: string } | null {
   const { baseUrl, discovery } = params;
   if (!discovery.reachable) {
     return {
@@ -217,28 +227,35 @@ function resolveLmstudioDiscoveryFailure(params: {
         `LM Studio could not be reached at ${baseUrl}.`,
         "Start LM Studio (or run lms server start) and re-run setup.",
       ],
+      retryLine: "Start LM Studio (or run lms server start), then continue to retry.",
       reason: "LM Studio not reachable",
     };
   }
   if (discovery.status !== undefined && discovery.status >= 400) {
+    const retryable =
+      discovery.status === 408 ||
+      discovery.status === 425 ||
+      discovery.status === 429 ||
+      discovery.status >= 500;
     return {
       noteLines: [
         `LM Studio returned HTTP ${discovery.status} while listing models at ${baseUrl}.`,
-        "Check the base URL and API key, then re-run setup.",
+        retryable
+          ? "Wait for LM Studio to recover, then re-run setup."
+          : "Check the base URL and API key, then re-run setup.",
       ],
+      ...(retryable ? { retryLine: "Wait for LM Studio to recover, then continue to retry." } : {}),
       reason: `LM Studio discovery failed (${discovery.status})`,
     };
   }
-  const hasUsableModel = discovery.models.some(
-    (model) => model.type === "llm" && Boolean(model.key?.trim()),
-  );
-  if (!hasUsableModel) {
+  if (collectLoadedLmstudioModelIds(discovery).size === 0) {
     return {
       noteLines: [
-        `No LM Studio LLM models were found at ${baseUrl}.`,
-        "Load at least one model in LM Studio (or run lms load), then re-run setup.",
+        `No loaded LM Studio LLM models were found at ${baseUrl}.`,
+        "Load a model in LM Studio (or run lms load <model>), then re-run setup.",
       ],
-      reason: "No LM Studio models found",
+      retryLine: "Load a model in LM Studio (or run lms load <model>), then continue to retry.",
+      reason: "No loaded LM Studio models found",
     };
   }
   return null;
@@ -354,7 +371,12 @@ function collectAppGuidedLmstudioModelIds(discovery: LmstudioDiscoveryResult): S
   return new Set(
     discovery.models.flatMap((entry) => {
       const id = entry.key?.trim();
-      return entry.type === "llm" && entry.capabilities?.trained_for_tool_use === true && id
+      if (entry.type !== "llm" || entry.capabilities?.trained_for_tool_use !== true || !id) {
+        return [];
+      }
+      const loadedContextWindow = resolveLoadedContextWindow(entry);
+      return loadedContextWindow !== null &&
+        loadedContextWindow >= LMSTUDIO_APP_GUIDED_MIN_CONTEXT_TOKENS
         ? [id]
         : [];
     }),
@@ -384,11 +406,15 @@ async function discoverLmstudioSetupModels(params: {
     return { failure };
   }
   const models = mapLmstudioWireModelsToConfig(discovery.models);
-  const defaultModelId = selectDefaultLmstudioModelId(models);
+  const loadedModelIds = collectLoadedLmstudioModelIds(discovery);
+  const defaultModelId = selectDefaultLmstudioModelId(
+    models.filter((model) => loadedModelIds.has(model.id)),
+  );
   return {
     value: {
       discovery,
       models,
+      loadedModelIds,
       defaultModel: defaultModelId ? `${PROVIDER_ID}/${defaultModelId}` : undefined,
       defaultModelId,
     },
@@ -485,6 +511,8 @@ export async function promptAndConfigureLmstudioInteractive(params: {
   prompter?: WizardPrompter;
   secretInputMode?: SecretInputMode;
   allowSecretRefPrompt?: boolean;
+  isRemote?: boolean;
+  signal?: AbortSignal;
   promptText?: ProviderPromptText;
   note?: ProviderPromptNote;
 }): Promise<ProviderAuthResult> {
@@ -579,18 +607,42 @@ export async function promptAndConfigureLmstudioInteractive(params: {
     })
       ? LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER
       : undefined);
-  const setupDiscovery = await discoverLmstudioSetupModels({
-    baseUrl,
-    apiKey: setupDiscoveryApiKey,
-    ...(resolvedHeaders ? { headers: resolvedHeaders } : {}),
-    timeoutMs: 5000,
-  });
-  if ("failure" in setupDiscovery) {
-    await note?.(setupDiscovery.failure.noteLines.join("\n"), "LM Studio");
-    throw new WizardCancelledError(setupDiscovery.failure.reason);
+  const discoverSetupModels = async () => {
+    const result = await discoverLmstudioSetupModels({
+      baseUrl,
+      apiKey: setupDiscoveryApiKey,
+      ...(resolvedHeaders ? { headers: resolvedHeaders } : {}),
+      timeoutMs: 5000,
+    });
+    params.signal?.throwIfAborted();
+    return result;
+  };
+  let setupDiscovery = await discoverSetupModels();
+  while ("failure" in setupDiscovery) {
+    if (!params.isRemote || !params.prompter) {
+      await note?.(setupDiscovery.failure.noteLines.join("\n"), "LM Studio");
+      throw new WizardCancelledError(setupDiscovery.failure.reason);
+    }
+    if (!setupDiscovery.failure.retryLine) {
+      await note?.(setupDiscovery.failure.noteLines.join("\n"), "LM Studio");
+      throw new WizardCancelledError(setupDiscovery.failure.reason);
+    }
+    await note?.(
+      [setupDiscovery.failure.noteLines[0], setupDiscovery.failure.retryLine].join("\n"),
+      "LM Studio",
+    );
+    const retry = await params.prompter.confirm({
+      message: "Retry this LM Studio connection now?",
+      initialValue: true,
+    });
+    if (!retry) {
+      throw new WizardCancelledError("LM Studio setup cancelled");
+    }
+    params.signal?.throwIfAborted();
+    setupDiscovery = await discoverSetupModels();
   }
   let discoveredModels = setupDiscovery.value.models;
-  if (params.prompter) {
+  if (params.prompter && !params.isRemote) {
     const requestedRaw = await params.prompter.text({
       message: "Preferred context length to load LM Studio models with (optional)",
       placeholder: "e.g. 32768 (leave blank to skip)",
@@ -746,18 +798,25 @@ export async function configureLmstudioNonInteractive(
   const selectedModel = selectedModelId
     ? discoveredModels.find((model) => model.id === selectedModelId)
     : undefined;
-  if (!selectedModelId || !selectedModel) {
+  const selectedModelLoaded =
+    selectedModelId !== undefined && setupDiscovery.value.loadedModelIds.has(selectedModelId);
+  if (!selectedModelId || !selectedModel || !selectedModelLoaded) {
     const availableModels = discoveredModels.map((model) => model.id).join(", ");
     normalizedCtx.runtime.error(
-      requestedModelId
+      requestedModelId && selectedModel && !selectedModelLoaded
         ? [
-            `LM Studio model ${requestedModelId} was not found at ${baseUrl}.`,
-            `Available models: ${availableModels}`,
+            `LM Studio model ${requestedModelId} is installed but not loaded at ${baseUrl}.`,
+            "Load that model in LM Studio, then re-run setup.",
           ].join("\n")
-        : [
-            `LM Studio did not expose a usable default model at ${baseUrl}.`,
-            `Available models: ${availableModels || "(none)"}`,
-          ].join("\n"),
+        : requestedModelId
+          ? [
+              `LM Studio model ${requestedModelId} was not found at ${baseUrl}.`,
+              `Available models: ${availableModels}`,
+            ].join("\n")
+          : [
+              `LM Studio did not expose a usable default model at ${baseUrl}.`,
+              `Available models: ${availableModels || "(none)"}`,
+            ].join("\n"),
     );
     normalizedCtx.runtime.exit(1);
     return null;

@@ -66,6 +66,8 @@ describe("buildStatusScanResult", () => {
     ];
     const agentStatus = {
       defaultId: "main",
+      ownership: "sole" as const,
+      selectionRequired: false,
       totalSessions: 0,
       bootstrapPendingCount: 0,
       agents: [
@@ -87,9 +89,9 @@ describe("buildStatusScanResult", () => {
     const pluginCompatibility = [
       {
         pluginId: "legacy",
-        code: "legacy-before-agent-start" as const,
-        compatCode: "legacy-before-agent-start" as const,
-        severity: "warn" as const,
+        code: "hook-only" as const,
+        compatCode: "hook-only-plugin-shape" as const,
+        severity: "info" as const,
         message: "warn",
       },
     ];

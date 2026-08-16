@@ -1,7 +1,10 @@
 {
   "id": "llama-cpp",
   "name": "llama.cpp Provider",
-  "description": "Local GGUF text inference and embeddings through node-llama-cpp.",
+  "description": "Managed local llama.cpp server for GGUF chat and embeddings.",
+  "doctorContract": {
+    "configRepair": true
+  },
   "activation": {
     "onStartup": false
   },
@@ -29,8 +32,9 @@
       "method": "local",
       "choiceId": "llama-cpp",
       "appGuidedDiscovery": true,
-      "choiceLabel": "Local model (llama.cpp)",
-      "choiceHint": "Downloads an approximately 5.0 GB local model; requires 16 GB RAM",
+      "appGuidedActionLabel": "Set up model",
+      "choiceLabel": "llama.cpp",
+      "choiceHint": "Install a verified llama.cpp server and run a private GGUF model managed by OpenClaw",
       "groupId": "llama-cpp",
       "groupLabel": "Local llama.cpp",
       "groupHint": "No API key required"

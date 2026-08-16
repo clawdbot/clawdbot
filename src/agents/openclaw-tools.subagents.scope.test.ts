@@ -11,7 +11,7 @@ import {
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
-} from "./subagent-registry.test-helpers.js";
+} from "./subagents/registry/subagent-registry.test-helpers.js";
 import { createPerSenderSessionConfig } from "./test-helpers/session-config.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 

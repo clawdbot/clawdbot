@@ -8,7 +8,10 @@ import type { TelegramTransport } from "./fetch.js";
 export type TelegramBotOptions = {
   token: string;
   accountId?: string;
+  /** Agent that owns account-scoped Telegram runtime state. */
+  ownerAgentId?: string;
   runtime?: RuntimeEnv;
+  buildContext?: typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
   requireMention?: boolean;
   allowFrom?: Array<string | number>;
   groupAllowFrom?: Array<string | number>;
@@ -20,6 +23,8 @@ export type TelegramBotOptions = {
   botInfo?: TelegramBotInfo;
   /** Signal to abort in-flight Telegram API fetch requests (e.g. getUpdates) on shutdown. */
   fetchAbortSignal?: AbortSignal;
+  /** Account-lifecycle signal; polling-cycle recovery must not abort account-owned work. */
+  accountAbortSignal?: AbortSignal;
   /** Signal to abort inbound media resolution without cancelling adopted-turn Bot API calls. */
   mediaAbortSignal?: AbortSignal;
   /** Minimum grammY client timeout when timeoutSeconds is configured on long-polling bots. */

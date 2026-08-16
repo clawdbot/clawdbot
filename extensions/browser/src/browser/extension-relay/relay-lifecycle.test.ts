@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { relayTestKey } from "../../../chrome-extension/relay-key.test-support.js";
 import { resolveProfile, type ResolvedBrowserConfig } from "../config.js";
 import { getProfileLifecycle } from "../server-context.lifecycle.js";
 import type { BrowserServerState } from "../server-context.types.js";
@@ -19,8 +20,8 @@ vi.mock("./relay-server.js", () => ({
 
 import { ensureExtensionRelayForProfile } from "./relay-lifecycle.js";
 
-const OLD_TOKEN = "a".repeat(64);
-const ROTATED_TOKEN = "b".repeat(64);
+const OLD_TOKEN = relayTestKey(1);
+const ROTATED_TOKEN = relayTestKey(2);
 
 const PROFILE_NAME = "chrome";
 const RELAY_PORT = 18_123;
@@ -30,6 +31,8 @@ function createState(token: string, existing?: ExtensionRelayHandle) {
     extensionRelayToken: token,
     extensionRelayDefaultPort: 18_799,
     extensionRelayPorts: { [PROFILE_NAME]: RELAY_PORT },
+    extensionRelay: { allowLegacyAuth: true },
+    extensionRelayInternalTokens: existing ? { [PROFILE_NAME]: existing.internalToken } : {},
     profiles: {
       [PROFILE_NAME]: {
         cdpPort: RELAY_PORT,
@@ -56,6 +59,8 @@ function createHandle(token: string, port = RELAY_PORT): ExtensionRelayHandle {
   return {
     port,
     token,
+    allowLegacyAuth: true,
+    internalToken: `${token.slice(0, 8)}-internal`,
     bridge: {} as ExtensionRelayHandle["bridge"],
     close: vi.fn(async () => {}),
   };
@@ -74,9 +79,11 @@ describe("extension relay lifecycle", () => {
     vi.clearAllMocks();
     readExtensionRelayTokenMock.mockReturnValue(ROTATED_TOKEN);
     ensureExtensionRelayTokenMock.mockReturnValue(ROTATED_TOKEN);
-    startExtensionRelayServerMock.mockImplementation(async ({ port, token }) => ({
+    startExtensionRelayServerMock.mockImplementation(async ({ port, token, allowLegacyAuth }) => ({
       port,
       token,
+      allowLegacyAuth,
+      internalToken: "replacement-internal",
       bridge: {},
       close: vi.fn(async () => {}),
     }));
@@ -85,7 +92,8 @@ describe("extension relay lifecycle", () => {
   it("rebounds an existing relay when the host-local token rotates", async () => {
     const oldRelay = createHandle(OLD_TOKEN);
     const { profile, state } = createState(OLD_TOKEN, oldRelay);
-    expect(profile.cdpUrl).toContain(OLD_TOKEN);
+    expect(profile.cdpUrl).toContain(encodeURIComponent(oldRelay.internalToken));
+    expect(profile.cdpUrl).not.toContain(OLD_TOKEN);
 
     const handle = await ensureExtensionRelayForProfile(state, profile);
 
@@ -93,11 +101,13 @@ describe("extension relay lifecycle", () => {
     expect(startExtensionRelayServerMock).toHaveBeenCalledWith({
       port: RELAY_PORT,
       token: ROTATED_TOKEN,
+      allowLegacyAuth: true,
     });
     expect(handle.token).toBe(ROTATED_TOKEN);
     expect(state.resolved.extensionRelayToken).toBe(ROTATED_TOKEN);
-    expect(profile.cdpUrl).toContain(ROTATED_TOKEN);
-    expect(resolveProfile(state.resolved, PROFILE_NAME)?.cdpUrl).toContain(ROTATED_TOKEN);
+    expect(profile.cdpUrl).toContain("replacement-internal");
+    expect(profile.cdpUrl).not.toContain(ROTATED_TOKEN);
+    expect(resolveProfile(state.resolved, PROFILE_NAME)?.cdpUrl).toContain("replacement-internal");
     expect(state.extensionRelays?.get(PROFILE_NAME)).toBe(handle);
   });
 

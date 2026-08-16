@@ -74,6 +74,84 @@ describe("doctor config flow steps", () => {
     expect(result.state.pendingChanges).toBe(true);
   });
 
+  it("migrates the resolved config so single-file include values are repairable", () => {
+    const sourceConfig = {
+      mcp: { servers: { local: { command: "node", disabled: true } } },
+    } as unknown as OpenClawConfig;
+    migrateLegacyConfigMock.mockReturnValueOnce({
+      config: {
+        commands: { native: "auto" },
+        mcp: { servers: { local: { command: "node", enabled: false } } },
+      },
+      sourceConfig: { mcp: { servers: { local: { command: "node", enabled: false } } } },
+      changes: ["Moved mcp.servers.local.disabled true → enabled false."],
+    });
+
+    const result = createLegacyStepResult({
+      exists: true,
+      parsed: { mcp: { $include: "./mcp.json5" } },
+      legacyIssues: [{ path: "mcp.servers", message: "disabled is legacy" }],
+      path: "/tmp/config.json",
+      valid: false,
+      issues: [],
+      raw: "{}",
+      resolved: sourceConfig,
+      sourceConfig,
+      config: sourceConfig,
+      runtimeConfig: sourceConfig,
+      warnings: [],
+    } satisfies DoctorConfigPreflightResult["snapshot"]);
+
+    expect(migrateLegacyConfigMock).toHaveBeenCalledWith(sourceConfig, {
+      authoredRaw: { mcp: { $include: "./mcp.json5" } },
+      resolvedRaw: sourceConfig,
+    });
+    expect(result.state.pendingChanges).toBe(true);
+    expect(result.state.candidate.mcp?.servers?.local?.enabled).toBe(false);
+    expect(result.state.candidate.commands).toBeUndefined();
+  });
+
+  it("blocks grpc migration when include ownership is ambiguous and names every source", () => {
+    const sourceConfig = {
+      diagnostics: { otel: { enabled: true, protocol: "grpc" } },
+    } as unknown as OpenClawConfig;
+    const result = createLegacyStepResult({
+      exists: true,
+      parsed: { diagnostics: { $include: ["./a.json5", "./b.json5"] } },
+      includeProvenance: [
+        {
+          path: ["diagnostics"],
+          kind: "multiple",
+          hasSiblingOverrides: false,
+          targetPaths: ["/tmp/a.json5", "/tmp/b.json5"],
+        },
+      ],
+      legacyIssues: [
+        {
+          path: "diagnostics.otel.protocol",
+          message: "grpc is unsupported",
+        },
+      ],
+      path: "/tmp/config.json",
+      valid: false,
+      issues: [],
+      raw: "{}",
+      resolved: sourceConfig,
+      sourceConfig,
+      config: sourceConfig,
+      runtimeConfig: sourceConfig,
+      warnings: [],
+    } satisfies DoctorConfigPreflightResult["snapshot"]);
+
+    expect(migrateLegacyConfigMock).not.toHaveBeenCalled();
+    expect(result.blocksWrite).toBe(true);
+    expect(result.changeLines).toStrictEqual([]);
+    expect(result.issueLines.join("\n")).toContain(
+      'Inspect these candidate source files and remove or replace diagnostics.otel.protocol = "grpc" from every definition: /tmp/a.json5, /tmp/b.json5.',
+    );
+    expect(result.issueLines.join("\n")).toContain("No config files were changed.");
+  });
+
   it("keeps pending repair state for legacy issues even when the snapshot is already normalized", () => {
     const result = createLegacyStepResult({
       exists: true,

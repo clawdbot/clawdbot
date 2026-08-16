@@ -68,10 +68,12 @@ struct QuickChatControllerTests {
                     ])
             },
             agentIdentityProvider: { _ in .placeholder },
-            sendProvider: { _, _, _, _, _ in "ok" },
+            sendProvider: { _, _, _, _, _, _ in "ok" },
             permissionStatusProvider: { _ in [:] },
             permissionGrantProvider: { _ in [:] },
-            connectionGateProvider: { .available })
+            connectionGateProvider: { .available },
+            modelControlsProvider: { _ in .testFixture },
+            modelPatchProvider: { _, _ in nil })
         let controller = QuickChatController(
             enableUI: false,
             model: model,
@@ -92,21 +94,53 @@ struct QuickChatControllerTests {
     }
 
     @Test func `controller lifecycle cleans monitor tokens without UI`() {
-        let snapshots = QuickChatController.exerciseForTesting()
+        var globalMonitorInstallCount = 0
+        var localMonitorInstallCount = 0
+        var clearedMonitorCount = 0
+        var hotkeyRegisterCount = 0
+        var hotkeyRemoveCount = 0
+        let controller = QuickChatController(
+            enableUI: false,
+            model: Self.makeModel(),
+            monitoringEnabled: true,
+            globalMonitorInstaller: { _, _ in
+                globalMonitorInstallCount += 1
+                return NSObject()
+            },
+            localMonitorInstaller: { _, _ in
+                localMonitorInstallCount += 1
+                return NSObject()
+            },
+            monitorClearer: { monitor in
+                if monitor != nil {
+                    clearedMonitorCount += 1
+                }
+                monitor = nil
+            },
+            hotkeyRegistrar: { _ in hotkeyRegisterCount += 1 },
+            hotkeyRemover: { hotkeyRemoveCount += 1 },
+            allowsHotkeyRegistrationInTests: true)
 
-        #expect(snapshots.count == 4)
-        #expect(!snapshots[0].isVisible)
-        #expect(snapshots[0].hotkeyRegistered)
-        #expect(snapshots[0].isEnabled)
-        #expect(snapshots[1].isVisible)
-        #expect(snapshots[1].hasGlobalMonitor)
-        #expect(snapshots[1].hasLocalMonitor)
-        #expect(!snapshots[2].isVisible)
-        #expect(!snapshots[2].hasGlobalMonitor)
-        #expect(!snapshots[2].hasLocalMonitor)
-        #expect(!snapshots[2].hotkeyRegistered)
-        #expect(!snapshots[2].isEnabled)
-        #expect(!snapshots[3].hotkeyRegistered)
+        controller.start()
+        controller.setEnabled(true)
+        #expect(!controller.isVisible)
+        #expect(controller.isEnabled)
+        #expect(hotkeyRegisterCount == 1)
+
+        controller.present()
+        #expect(controller.isVisible)
+        #expect(globalMonitorInstallCount == 1)
+        #expect(localMonitorInstallCount == 1)
+
+        controller.setEnabled(false)
+        #expect(!controller.isVisible)
+        #expect(!controller.isEnabled)
+        #expect(hotkeyRemoveCount == 1)
+        #expect(clearedMonitorCount == 2)
+
+        controller.stop()
+        #expect(hotkeyRemoveCount == 1)
+        #expect(clearedMonitorCount == 2)
     }
 
     @Test func `resign key keeps bar visible while granting permissions`() async {
@@ -121,7 +155,7 @@ struct QuickChatControllerTests {
                     agents: [AgentSummary(id: "main", name: "Main")])
             },
             agentIdentityProvider: { _ in .placeholder },
-            sendProvider: { _, _, _, _, _ in "ok" },
+            sendProvider: { _, _, _, _, _, _ in "ok" },
             permissionStatusProvider: { capabilities in
                 Dictionary(uniqueKeysWithValues: capabilities.map { ($0, $0 != .notifications) })
             },
@@ -129,7 +163,9 @@ struct QuickChatControllerTests {
                 await latch.wait()
                 return Dictionary(uniqueKeysWithValues: capabilities.map { ($0, true) })
             },
-            connectionGateProvider: { .available })
+            connectionGateProvider: { .available },
+            modelControlsProvider: { _ in .testFixture },
+            modelPatchProvider: { _, _ in nil })
         let controller = QuickChatController(enableUI: false, model: model, monitoringEnabled: false)
         controller.present()
         guard let id = model.activePresentationID else {
@@ -146,6 +182,51 @@ struct QuickChatControllerTests {
 
         latch.finish()
         while model.isGrantingPermissions {
+            await Task.yield()
+        }
+        controller.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification))
+        #expect(!controller.isVisible)
+        controller.stop()
+    }
+
+    @Test func `resign key keeps bar visible while capturing focused text`() async {
+        let latch = TextCaptureLatch()
+        let model = QuickChatModel(
+            sessionKeyProvider: { "main" },
+            agentsProvider: {
+                AgentsListResult(
+                    defaultid: "main",
+                    mainkey: "main",
+                    scope: AnyCodable("per-agent"),
+                    agents: [AgentSummary(id: "main", name: "Main")])
+            },
+            agentIdentityProvider: { _ in .placeholder },
+            sendProvider: { _, _, _, _, _, _ in "ok" },
+            permissionStatusProvider: { capabilities in
+                Dictionary(uniqueKeysWithValues: capabilities.map { ($0, true) })
+            },
+            permissionGrantProvider: { capabilities in
+                Dictionary(uniqueKeysWithValues: capabilities.map { ($0, true) })
+            },
+            connectionGateProvider: { .available },
+            textContextCaptureProvider: { await latch.wait() },
+            modelControlsProvider: { _ in .testFixture },
+            modelPatchProvider: { _, _ in nil })
+        let controller = QuickChatController(enableUI: false, model: model, monitoringEnabled: false)
+        controller.present()
+        guard let id = model.activePresentationID else {
+            Issue.record("expected active presentation")
+            return
+        }
+        await model.refreshForPresentation(id: id)
+
+        model.captureFocusedAppText()
+        #expect(model.isCapturingTextContext)
+        controller.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification))
+        #expect(controller.isVisible)
+
+        latch.finish(.cancelled)
+        while model.isCapturingTextContext {
             await Task.yield()
         }
         controller.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification))
@@ -173,10 +254,12 @@ struct QuickChatControllerTests {
                     agents: [AgentSummary(id: "main", name: "Main")])
             },
             agentIdentityProvider: { _ in .placeholder },
-            sendProvider: { _, _, _, _, _ in "ok" },
+            sendProvider: { _, _, _, _, _, _ in "ok" },
             permissionStatusProvider: { _ in [:] },
             permissionGrantProvider: { _ in [:] },
-            connectionGateProvider: { .available })
+            connectionGateProvider: { .available },
+            modelControlsProvider: { _ in .testFixture },
+            modelPatchProvider: { _, _ in nil })
     }
 }
 
@@ -229,6 +312,25 @@ private final class GrantLatch {
     func finish() {
         self.finished = true
         self.continuation?.resume()
+        self.continuation = nil
+    }
+}
+
+@MainActor
+private final class TextCaptureLatch {
+    private var continuation: CheckedContinuation<QuickChatTextContextCaptureOutcome, Never>?
+    private var outcome: QuickChatTextContextCaptureOutcome?
+
+    func wait() async -> QuickChatTextContextCaptureOutcome {
+        if let outcome { return outcome }
+        return await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func finish(_ outcome: QuickChatTextContextCaptureOutcome) {
+        self.outcome = outcome
+        self.continuation?.resume(returning: outcome)
         self.continuation = nil
     }
 }

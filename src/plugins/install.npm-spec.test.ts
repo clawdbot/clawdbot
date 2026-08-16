@@ -16,7 +16,7 @@ import {
   hasRetainedManagedNpmInstallMarker,
   markRetainedManagedNpmInstall,
 } from "./managed-npm-retention.js";
-import { createSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
+import { createSyncSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
 
 const runCommandWithTimeoutMock = vi.fn();
 const resolveOpenClawPackageRootSyncMock = vi.fn();
@@ -34,8 +34,10 @@ vi.resetModules();
 
 const { installPluginFromNpmPackArchive, installPluginFromNpmSpec, PLUGIN_INSTALL_ERROR_CODE } =
   await import("./install.js");
+const { classifyNpmManagedOverrideCompatibilityError } =
+  await import("./install-managed-npm-state.js");
 
-const suiteTempRootTracker = createSuiteTempRootTracker("openclaw-plugin-install-npm-spec");
+const suiteTempRootTracker = createSyncSuiteTempRootTracker("openclaw-plugin-install-npm-spec");
 let previousNpmGlobalConfig: string | undefined;
 let npmGlobalConfigPath: string;
 let npmPackArchiveInstallCase: {
@@ -220,6 +222,7 @@ function writeInstalledNpmPlugin(params: {
   packageName: string;
   version: string;
   pluginId?: string;
+  legacyPluginIds?: string[];
   indexJs?: string;
   extraDistFiles?: Record<string, string>;
   dependency?: { name: string; version: string };
@@ -251,6 +254,7 @@ function writeInstalledNpmPlugin(params: {
     JSON.stringify({
       id: params.pluginId ?? params.packageName,
       name: params.pluginId ?? params.packageName,
+      ...(params.legacyPluginIds ? { legacyPluginIds: params.legacyPluginIds } : {}),
       configSchema: { type: "object" },
     }),
     "utf-8",
@@ -298,6 +302,7 @@ type MockNpmPackage = {
   version: string;
   npmRoot: string;
   pluginId?: string;
+  legacyPluginIds?: string[];
   integrity?: string;
   shasum?: string;
   indexJs?: string;
@@ -731,6 +736,22 @@ beforeAll(async () => {
 });
 
 describe("installPluginFromNpmSpec", () => {
+  it.each([
+    "npm ERR! Invalid comparator: npm:@nolyfill/domexception@1.0.28",
+    'npm error code EINVALIDTAGNAME\nnpm error Invalid tag name "0.2.2>ip" of package "werift-ice@0.2.2>ip"',
+    "npm error Override without name: @scope/parent>child",
+    'npm error code EINVALIDPACKAGENAME\nnpm error Invalid package name "parent>" of package "parent>@scope/child"',
+  ])("detects npm-incompatible managed override errors", (stderr) => {
+    expect(classifyNpmManagedOverrideCompatibilityError({ stdout: "", stderr })).toBeDefined();
+  });
+
+  it.each([
+    'npm error code EINVALIDTAGNAME\nnpm error Invalid tag name "next" of package "pkg@next"',
+    'npm error code EINVALIDPACKAGENAME\nnpm error Invalid package name "bad name" of package "bad name@1"',
+  ])("ignores unrelated npm package validation errors", (stderr) => {
+    expect(classifyNpmManagedOverrideCompatibilityError({ stdout: "", stderr })).toBeUndefined();
+  });
+
   it("classifies npm metadata command failures", async () => {
     runCommandWithTimeoutMock.mockResolvedValue(failedSpawn("registry unavailable"));
 
@@ -1486,7 +1507,6 @@ describe("installPluginFromNpmSpec", () => {
       omitInstalledIntegrity: true,
       npmRoot,
       expectedDependencySpec: "1.0.0",
-      hoistedDependency: { name: "plain-crypto-js", version: "1.0.0" },
     };
     mockNpmViewAndInstallMany([
       fixture,
@@ -1501,6 +1521,7 @@ describe("installPluginFromNpmSpec", () => {
       throw new Error("expected npm mock implementation");
     }
     let managedInstallAttempts = 0;
+    const outsideDependencyDir = suiteTempRootTracker.makeTempDir();
     runCommandWithTimeoutMock.mockImplementation(async (argv, options) => {
       if (
         isManagedNpmInstallCommand(argv) &&
@@ -1512,7 +1533,19 @@ describe("installPluginFromNpmSpec", () => {
           fixture.omitInstalledIntegrity = false;
         }
       }
-      return await delegate(argv, options);
+      const commandResult = await delegate(argv, options);
+      if (
+        managedInstallAttempts === 2 &&
+        isManagedNpmInstallCommand(argv) &&
+        options?.cwd === npmProjectRoot
+      ) {
+        fs.symlinkSync(
+          outsideDependencyDir,
+          path.join(npmProjectRoot, "node_modules", "outside-dependency"),
+          "junction",
+        );
+      }
+      return commandResult;
     });
     let mutatedPeerAfterQuarantine = false;
     const addPeerAfterQuarantine = () => {
@@ -1547,7 +1580,8 @@ describe("installPluginFromNpmSpec", () => {
     if (result.ok) {
       return;
     }
-    expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+    expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED);
+    expect(result.error).toContain("installed dependency scan found package outside install root");
     expect(managedInstallAttempts).toBe(2);
     expect(mutatedPeerAfterQuarantine).toBe(true);
     const quarantineParent = path.join(npmProjectRoot, "_openclaw-quarantined-npm-projects");
@@ -1774,6 +1808,7 @@ describe("installPluginFromNpmSpec", () => {
       `${JSON.stringify({ lockfileVersion: 3, packages: {} })}\n`,
       "utf8",
     );
+    fs.writeFileSync(path.join(npmProjectRoot, "npm-shrinkwrap.json"), "{}\n", "utf8");
 
     mockNpmViewAndInstall({
       spec: `${packageName}@1.0.0`,
@@ -1829,6 +1864,7 @@ describe("installPluginFromNpmSpec", () => {
       ),
     ).toBe("old tree");
     expect(fs.existsSync(path.join(quarantineDir, "package-lock.json"))).toBe(true);
+    expect(fs.existsSync(path.join(quarantineDir, "npm-shrinkwrap.json"))).toBe(true);
   });
 
   it("allows rebuilt hoisted dependencies after managed npm project quarantine", async () => {
@@ -1876,6 +1912,45 @@ describe("installPluginFromNpmSpec", () => {
 
     expect(result.ok).toBe(true);
     expect(managedInstallAttempts).toBe(2);
+  });
+
+  it("reports the npm exit code when a managed install fails without output", async () => {
+    const stateDir = suiteTempRootTracker.makeTempDir();
+    const npmRoot = path.join(stateDir, "npm");
+    const packageName = "empty-output-plugin";
+    const npmProjectRoot = resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName });
+
+    mockNpmViewAndInstall({
+      spec: `${packageName}@1.0.0`,
+      packageName,
+      version: "1.0.0",
+      pluginId: packageName,
+      npmRoot,
+      expectedDependencySpec: "1.0.0",
+    });
+    const delegate = runCommandWithTimeoutMock.getMockImplementation();
+    if (!delegate) {
+      throw new Error("expected npm mock implementation");
+    }
+    runCommandWithTimeoutMock.mockImplementation(
+      async (argv: string[], options?: { cwd?: string }) => {
+        if (isManagedNpmInstallCommand(argv) && options?.cwd === npmProjectRoot) {
+          return failedSpawn("");
+        }
+        return await delegate(argv, options);
+      },
+    );
+
+    const result = await installPluginFromNpmSpec({
+      spec: `${packageName}@1.0.0`,
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("npm install failed: exit code 1 (no output from npm)");
+    }
   });
 
   it("keeps corrupt managed npm project artifacts quarantined when the rebuild retry fails", async () => {
@@ -1949,7 +2024,7 @@ describe("installPluginFromNpmSpec", () => {
     expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, packageName))).toBe(false);
   });
 
-  it("blocks npm installs with denied hoisted transitive dependencies", async () => {
+  it("allows npm installs with formerly denied hoisted transitive dependencies", async () => {
     const stateDir = suiteTempRootTracker.makeTempDir();
     const npmRoot = path.join(stateDir, "npm");
 
@@ -1968,14 +2043,7 @@ describe("installPluginFromNpmSpec", () => {
       logger: { info: () => {}, warn: () => {} },
     });
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
-      expect(result.error).toContain('blocked dependencies "plain-crypto-js" as package name');
-      expect(result.error.replaceAll("\\", "/")).toContain(
-        "node_modules/plain-crypto-js/package.json",
-      );
-    }
+    expect(result.ok).toBe(true);
   });
 
   it.runIf(process.platform !== "win32")(
@@ -2927,7 +2995,7 @@ describe("installPluginFromNpmSpec", () => {
     }
   });
 
-  it("retries without npm alias overrides when npm rejects alias comparators", async () => {
+  it("retries without each npm-incompatible override kind while preserving valid rules", async () => {
     const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     const hostRoot = suiteTempRootTracker.makeTempDir();
     fs.writeFileSync(
@@ -2945,8 +3013,10 @@ describe("installPluginFromNpmSpec", () => {
       path.join(hostRoot, "pnpm-workspace.yaml"),
       [
         "overrides:",
-        "  axios: 1.16.0",
+        "  axios: 1.18.0",
         '  node-domexception: "npm:@nolyfill/domexception@1.0.28"',
+        '  "range-target@>1": 2.0.0',
+        '  "werift-ice@0.2.2>ip": "npm:neoip@3.1.0"',
         "  nested:",
         '    alias: "npm:@scope/alias@1.0.0"',
         "    semver: 1.2.3",
@@ -2979,10 +3049,40 @@ describe("installPluginFromNpmSpec", () => {
             expect(manifest.overrides?.["node-domexception"]).toBe(
               "npm:@nolyfill/domexception@1.0.28",
             );
+            expect(manifest.overrides?.["range-target@>1"]).toBe("2.0.0");
+            expect(manifest.overrides?.["werift-ice@0.2.2>ip"]).toBe("npm:neoip@3.1.0");
             expect(manifest.openclaw?.managedOverrides).toEqual([
               "axios",
               "nested",
               "node-domexception",
+              "range-target@>1",
+              "werift-ice@0.2.2>ip",
+            ]);
+            return {
+              code: 1,
+              stdout: "",
+              stderr:
+                'npm error code EINVALIDTAGNAME\nnpm error Invalid tag name "0.2.2>ip" of package "werift-ice@0.2.2>ip"',
+              signal: null,
+              killed: false,
+              termination: "exit" as const,
+            };
+          }
+          if (installAttempts === 2) {
+            expect(manifest.overrides).toEqual({
+              axios: "1.18.0",
+              nested: {
+                alias: "npm:@scope/alias@1.0.0",
+                semver: "1.2.3",
+              },
+              "node-domexception": "npm:@nolyfill/domexception@1.0.28",
+              "range-target@>1": "2.0.0",
+            });
+            expect(manifest.openclaw?.managedOverrides).toEqual([
+              "axios",
+              "nested",
+              "node-domexception",
+              "range-target@>1",
             ]);
             return {
               code: 1,
@@ -2994,12 +3094,17 @@ describe("installPluginFromNpmSpec", () => {
             };
           }
           expect(manifest.overrides).toEqual({
-            axios: "1.16.0",
+            axios: "1.18.0",
             nested: {
               semver: "1.2.3",
             },
+            "range-target@>1": "2.0.0",
           });
-          expect(manifest.openclaw?.managedOverrides).toEqual(["axios", "nested"]);
+          expect(manifest.openclaw?.managedOverrides).toEqual([
+            "axios",
+            "nested",
+            "range-target@>1",
+          ]);
         }
         return await baseImplementation?.(argv, options);
       },
@@ -3013,10 +3118,11 @@ describe("installPluginFromNpmSpec", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(installAttempts).toBe(2);
-    expect(warnings).toContain(
-      "npm rejected managed npm alias overrides; retrying plugin install without alias overrides for this npm version.",
-    );
+    expect(installAttempts).toBe(3);
+    expect(warnings).toEqual([
+      "npm rejected managed npm overrides; retrying plugin install without npm-incompatible overrides for this npm version.",
+      "npm rejected managed npm overrides; retrying plugin install without npm-incompatible overrides for this npm version.",
+    ]);
   });
 
   it("keeps installed npm package output when dangerous-looking plugin code is present", async () => {
@@ -3272,6 +3378,89 @@ describe("installPluginFromNpmSpec", () => {
       });
     },
   );
+
+  it("accepts a trusted manifest-declared plugin id replacement during update", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    mockNpmViewAndInstall({
+      spec: "@openclaw/fish-audio-speech@2026.8.1-beta.0",
+      packageName: "@openclaw/fish-audio-speech",
+      version: "2026.8.1-beta.0",
+      pluginId: "fish-audio-speech",
+      legacyPluginIds: ["fish-audio"],
+      npmRoot,
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: "@openclaw/fish-audio-speech@2026.8.1-beta.0",
+      npmDir: npmRoot,
+      mode: "update",
+      expectedPluginId: "fish-audio",
+      expectedReplacementPluginId: "fish-audio-speech",
+      trustedSourceLinkedOfficialInstall: true,
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.pluginId).toBe("fish-audio-speech");
+    }
+  });
+
+  it.each([
+    {
+      name: "untrusted source",
+      mode: "update" as const,
+      trustedSourceLinkedOfficialInstall: false,
+      expectedReplacementPluginId: "fish-audio-speech",
+      legacyPluginIds: ["fish-audio"],
+    },
+    {
+      name: "different catalog replacement",
+      mode: "update" as const,
+      trustedSourceLinkedOfficialInstall: true,
+      expectedReplacementPluginId: "different-plugin",
+      legacyPluginIds: ["fish-audio"],
+    },
+    {
+      name: "fresh install",
+      mode: "install" as const,
+      trustedSourceLinkedOfficialInstall: true,
+      expectedReplacementPluginId: "fish-audio-speech",
+      legacyPluginIds: ["fish-audio"],
+    },
+    {
+      name: "manifest without the legacy id",
+      mode: "update" as const,
+      trustedSourceLinkedOfficialInstall: true,
+      expectedReplacementPluginId: "fish-audio-speech",
+      legacyPluginIds: undefined,
+    },
+  ])("rejects a manifest id replacement for a $name", async (testCase) => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    mockNpmViewAndInstall({
+      spec: "@openclaw/fish-audio-speech@2026.8.1-beta.0",
+      packageName: "@openclaw/fish-audio-speech",
+      version: "2026.8.1-beta.0",
+      pluginId: "fish-audio-speech",
+      legacyPluginIds: testCase.legacyPluginIds,
+      npmRoot,
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: "@openclaw/fish-audio-speech@2026.8.1-beta.0",
+      npmDir: npmRoot,
+      mode: testCase.mode,
+      expectedPluginId: "fish-audio",
+      expectedReplacementPluginId: testCase.expectedReplacementPluginId,
+      trustedSourceLinkedOfficialInstall: testCase.trustedSourceLinkedOfficialInstall,
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.PLUGIN_ID_MISMATCH);
+    }
+  });
 
   it("rejects non-registry npm specs", async () => {
     const result = await installPluginFromNpmSpec({ spec: "github:evil/evil" });

@@ -22,7 +22,6 @@ export {
 } from "./thread-bindings.config.js";
 
 export {
-  isRecentlyUnboundThreadWebhookMessage,
   resolveThreadBindingIdleTimeoutMs,
   resolveThreadBindingInactivityExpiresAt,
   resolveThreadBindingMaxAgeExpiresAt,
@@ -42,7 +41,6 @@ export {
 export type { AcpThreadBindingReconciliationResult } from "./thread-bindings.lifecycle.js";
 
 export {
-  testing,
   createNoopThreadBindingManager,
   createThreadBindingManager,
   getThreadBindingManager,

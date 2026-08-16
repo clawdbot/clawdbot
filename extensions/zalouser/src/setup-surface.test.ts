@@ -1,4 +1,5 @@
 // Zalouser tests cover setup surface plugin behavior.
+import { installChannelDmPolicyContractSuite } from "openclaw/plugin-sdk/channel-test-helpers";
 import {
   createPluginSetupWizardConfigure,
   createTestWizardPrompter,
@@ -374,91 +375,18 @@ describe("zalouser setup wizard", () => {
     expect(result.cfg.plugins?.allow).toEqual(["telegram", "zalouser"]);
   });
 
-  it("reads the named-account DM policy instead of the channel root", () => {
-    expect(
-      zalouserSetupWizard.dmPolicy?.getCurrent(
-        {
-          channels: {
-            zalouser: {
-              dmPolicy: "disabled",
-              accounts: {
-                work: {
-                  profile: "work",
-                  dmPolicy: "allowlist",
-                },
-              },
-            },
-          },
-        } as OpenClawConfig,
-        "work",
-      ),
-    ).toBe("allowlist");
-  });
-
-  it("reports account-scoped config keys for named accounts", () => {
-    expect(zalouserSetupWizard.dmPolicy?.resolveConfigKeys?.({} as OpenClawConfig, "work")).toEqual(
+  installChannelDmPolicyContractSuite({
+    dmPolicy: zalouserSetupWizard.dmPolicy!,
+    cases: [
       {
-        policyKey: "channels.zalouser.accounts.work.dmPolicy",
-        allowFromKey: "channels.zalouser.accounts.work.allowFrom",
+        name: "Zalo Personal named accounts",
+        channel: "zalouser",
+        accountId: "work",
+        accountConfig: { profile: "work" },
+        inheritedAllowFrom: ["123456789"],
+        defaultAccount: { rootAllowFrom: ["123456789"] },
       },
-    );
-  });
-
-  it("uses configured defaultAccount for omitted DM policy account context", () => {
-    const cfg = {
-      channels: {
-        zalouser: {
-          defaultAccount: "work",
-          dmPolicy: "disabled",
-          allowFrom: ["123456789"],
-          accounts: {
-            work: {
-              dmPolicy: "allowlist",
-              profile: "work-profile",
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(zalouserSetupWizard.dmPolicy?.getCurrent(cfg)).toBe("allowlist");
-    expect(zalouserSetupWizard.dmPolicy?.resolveConfigKeys?.(cfg)).toEqual({
-      policyKey: "channels.zalouser.accounts.work.dmPolicy",
-      allowFromKey: "channels.zalouser.accounts.work.allowFrom",
-    });
-
-    const next = zalouserSetupWizard.dmPolicy?.setPolicy(cfg, "open");
-    expect(next?.channels?.zalouser?.dmPolicy).toBe("disabled");
-    const workAccount = next?.channels?.zalouser?.accounts?.work as
-      | { dmPolicy?: string; allowFrom?: Array<string | number> }
-      | undefined;
-    expect(workAccount?.dmPolicy).toBe("open");
-  });
-
-  it('writes open policy state to the named account and preserves inherited allowFrom with "*"', () => {
-    const next = zalouserSetupWizard.dmPolicy?.setPolicy(
-      {
-        channels: {
-          zalouser: {
-            allowFrom: ["123456789"],
-            accounts: {
-              work: {
-                profile: "work",
-              },
-            },
-          },
-        },
-      } as OpenClawConfig,
-      "open",
-      "work",
-    );
-
-    expect(next?.channels?.zalouser?.dmPolicy).toBeUndefined();
-    const workAccount = next?.channels?.zalouser?.accounts?.work as
-      | { dmPolicy?: string; allowFrom?: Array<string | number> }
-      | undefined;
-    expect(workAccount?.dmPolicy).toBe("open");
-    expect(workAccount?.allowFrom).toEqual(["123456789", "*"]);
+    ],
   });
 
   it("shows the account-scoped current DM policy in quickstart notes", async () => {

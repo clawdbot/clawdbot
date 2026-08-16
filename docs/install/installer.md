@@ -15,7 +15,7 @@ OpenClaw ships three installer scripts, served from `openclaw.ai`.
 | [`install-cli.sh`](#install-clish) | macOS / Linux / WSL  | Installs Node + OpenClaw into a local prefix (`~/.openclaw`) via npm or git. No root required. |
 | [`install.ps1`](#installps1)       | Windows (PowerShell) | Installs Node if needed, installs OpenClaw via npm (default) or git, can run onboarding.       |
 
-All three support Node **22.22.3+, 24.15+, or 25.9+**; Node 24 is the default target for fresh installs.
+All three support Node **22.22.3+, 24.15+, or 25.9+**. On macOS and Linux, fresh installs provision Node 26; on Windows, winget/Chocolatey/Scoop install the supported Node LTS line, and the portable fallback downloads Node 26.
 
 ## Quick commands
 
@@ -72,9 +72,9 @@ Recommended for most interactive installs on macOS/Linux/WSL.
   <Step title="Detect OS">
     Supports macOS and Linux (including WSL).
   </Step>
-  <Step title="Ensure Node.js 24 by default">
-    Checks Node version and installs Node 24 if needed (Homebrew on macOS, NodeSource setup scripts on Linux apt/dnf/yum). On macOS, Homebrew is installed only when the installer needs it for Node or Git. Node 22.22.3+, Node 24.15+, and Node 25.9+ are supported; Node 23 is unsupported.
-    On Alpine/musl Linux, the installer uses apk packages instead of NodeSource and verifies the actual linked SQLite version. Current stable Alpine package streams can provide a new-enough Node with vulnerable system SQLite; when that happens, use an official `node:24-alpine` container or a glibc-based host instead.
+  <Step title="Ensure Node.js 26 by default">
+    Checks Node version and installs Node 26 if needed (Homebrew `node` on macOS, NodeSource setup scripts on Linux apt/dnf/yum). On macOS, Homebrew is installed only when the installer needs it for Node or Git. Node 22.22.3+, Node 24.15+, and Node 25.9+ are supported; Node 23 is unsupported.
+    On Alpine/musl Linux, the installer uses apk packages instead of NodeSource and verifies the actual linked SQLite version. Current stable Alpine package streams can provide a new-enough Node with vulnerable system SQLite; when that happens, use an official `node:26-alpine` container or a glibc-based host instead.
   </Step>
   <Step title="Ensure Git">
     Installs Git if missing using the detected package manager, including Homebrew on macOS and apk on Alpine.
@@ -209,6 +209,10 @@ by default, plus git-checkout installs under the same prefix flow.
     - `git` method: clones/updates a checkout (default `~/openclaw`) and still writes the wrapper to `<prefix>/bin/openclaw`
 
   </Step>
+  <Step title="Verify the installed CLI">
+    Runs `<prefix>/bin/openclaw --version` and stops with an error unless the
+    installed wrapper exits successfully with a nonempty version.
+  </Step>
   <Step title="Refresh loaded gateway service">
     If a gateway service is already loaded from that same prefix, the script runs
     `openclaw gateway install --force`, which activates the replacement service,
@@ -256,7 +260,9 @@ by default, plus git-checkout installs under the same prefix flow.
 | `--npm`                                 | Shortcut for npm method                                                         |
 | `--git \| --github`                     | Shortcut for git method                                                         |
 | `--git-dir \| --dir <path>`             | Git checkout directory (default: `~/openclaw`)                                  |
+| `--no-git-update`                       | Skip `git pull` for an existing git checkout                                    |
 | `--version <ver>`                       | OpenClaw version or dist-tag (default: `latest`)                                |
+| `--compatible-with <ver>`               | Refuse a CLI that cannot modify config written by `<ver>`                       |
 | `--node-version <ver>`                  | Node version (default: `24.15.0`; `22.22.3` on Linux ARMv7)                     |
 | `--json`                                | Emit NDJSON events                                                              |
 | `--onboard`                             | Run `openclaw onboard` after install                                            |
@@ -299,8 +305,8 @@ by default, plus git-checkout installs under the same prefix flow.
   <Step title="Ensure PowerShell + Windows environment">
     Requires PowerShell 5+.
   </Step>
-  <Step title="Ensure Node.js 24 by default">
-    If missing, attempts install via winget, then Chocolatey, then Scoop. If no package manager is available, the script downloads the official Node.js 24 Windows zip into `%LOCALAPPDATA%\OpenClaw\deps\portable-node` and adds it to the current process and user PATH. Node 22.22.3+, Node 24.15+, and Node 25.9+ are supported; Node 23 is unsupported.
+  <Step title="Ensure a supported Node.js runtime">
+    If missing, attempts install via winget, then Chocolatey, then Scoop. If no package manager is available, the script downloads the official Node.js 26 Windows zip into `%LOCALAPPDATA%\OpenClaw\deps\portable-node` and adds it to the current process and user PATH. Node 22.22.3+, Node 24.15+, and Node 25.9+ are supported; Node 23 is unsupported.
   </Step>
   <Step title="Install OpenClaw">
     - `npm` method (default): global npm install using the selected `-Tag`, launched from a writable installer temp directory so shells opened in protected folders such as `C:\` still work

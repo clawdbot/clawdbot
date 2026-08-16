@@ -1,13 +1,10 @@
+import "../../styles/logs.css";
 import { consume } from "@lit/context";
+import { initialState, Task, TaskStatus } from "@lit/task";
 import { html, type PropertyValues } from "lit";
 import { state } from "lit/decorators.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { titleForRoute } from "../../app-navigation.ts";
-import {
-  applicationContext,
-  type ApplicationContext,
-  type ApplicationGatewaySnapshot,
-} from "../../app/context.ts";
+import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import {
   beginPanelRefresh,
   completePanelRefresh,
@@ -15,13 +12,15 @@ import {
   failPanelRefresh,
 } from "../../components/panel-refresh-status.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
+import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
-import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { StreamAutoFollowController } from "../../lit/stream-auto-follow-controller.ts";
 import {
   DEFAULT_LOG_LEVEL_FILTERS,
   parseLogLine,
@@ -33,19 +32,10 @@ import { renderLogs } from "./view.ts";
 const LOG_BUFFER_LIMIT = 2000;
 const LOGS_POLL_INTERVAL_MS = 2000;
 
-type LogsRequestScope = {
-  gateway: ApplicationContext["gateway"];
-  client: GatewayBrowserClient;
-  generation: number;
-};
-
 class LogsPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
-  @state() private client: GatewayBrowserClient | null = null;
-  @state() private connected = false;
-  @state() private logsLoading = false;
   @state() private logsStatus = createPanelRefreshStatus();
   @state() private logsFile: string | null = null;
   @state() private logsEntries: LogEntry[] = [];
@@ -53,7 +43,6 @@ class LogsPage extends OpenClawLightDomElement {
   @state() private logsLevelFilters: Record<LogLevel, boolean> = { ...DEFAULT_LOG_LEVEL_FILTERS };
   @state() private logsAutoFollow = true;
   @state() private logsTruncated = false;
-  @state() private logsAtBottom = true;
 
   private logsCursor: number | null = null;
   private readonly logsLimit = 500;
@@ -66,29 +55,119 @@ class LogsPage extends OpenClawLightDomElement {
     },
     false,
   );
-  private logsScrollFrame: number | null = null;
   private contentScrollFrame: number | null = null;
-  private hasBoundGatewaySource = false;
-  private gatewaySource: ApplicationContext["gateway"] | null = null;
-  private requestGeneration = 0;
-  private activeRequest: LogsRequestScope | null = null;
-  private readonly subscriptions = new SubscriptionsController(this).effect(
-    () => this.context?.gateway,
-    (gateway) => {
-      const resetForSourceBind = this.hasBoundGatewaySource;
-      this.hasBoundGatewaySource = true;
-      this.gatewaySource = gateway;
-      this.requestGeneration += 1;
-      const cleanup = gateway.subscribe((snapshot) => {
-        if (this.gatewaySource === gateway && this.context.gateway === gateway) {
-          this.applyGatewaySnapshot(snapshot);
+  private logsTaskQuiet = false;
+  private logsTaskArgs(opts?: { reset?: boolean; quiet?: boolean }) {
+    return [
+      this.gateway.connected ? this.gateway.gateway : null,
+      this.gateway.connected ? this.gateway.client : null,
+      opts?.reset ? null : this.logsCursor,
+      this.logsFile,
+      opts?.reset === true,
+      opts?.quiet === true,
+    ] as const;
+  }
+  private readonly logsTask = new Task(this, {
+    autoRun: false,
+    // A cursor belongs to one file; recover source changes inside this task so
+    // no mixed-source page can publish between the incremental and reset reads.
+    args: () => this.logsTaskArgs(),
+    task: async ([gateway, client, cursor, file, reset, quiet], { signal }) => {
+      if (!gateway || !client) {
+        return initialState;
+      }
+      try {
+        const requestTail = (nextCursor?: number) =>
+          client.request<{
+            file?: string;
+            cursor?: number;
+            lines?: unknown;
+            truncated?: boolean;
+            reset?: boolean;
+          }>(
+            "logs.tail",
+            { cursor: nextCursor, limit: this.logsLimit, maxBytes: this.logsMaxBytes },
+            { signal },
+          );
+        let payload = await requestTail(reset ? undefined : (cursor ?? undefined));
+        const sourceChanged =
+          !reset && file !== null && payload.file !== undefined && payload.file !== file;
+        if (sourceChanged) {
+          payload = await requestTail();
         }
-      });
-      this.applyGatewaySnapshot(gateway.snapshot, resetForSourceBind);
-      this.logsAtBottom = true;
-      return cleanup;
+        return { ok: true as const, payload, cursor, reset: reset || sourceChanged, quiet };
+      } catch (error) {
+        return { ok: false as const, error, quiet };
+      }
     },
-  );
+    onComplete: (result) => {
+      if (!result.ok) {
+        if (isMissingOperatorReadScopeError(result.error)) {
+          this.logsEntries = [];
+          this.logsStatus = failPanelRefresh(
+            createPanelRefreshStatus(),
+            formatMissingOperatorReadScopeMessage("logs"),
+          );
+        } else {
+          this.logsStatus = failPanelRefresh(this.logsStatus, formatUiError(result.error));
+        }
+        return;
+      }
+      const lines = Array.isArray(result.payload.lines)
+        ? result.payload.lines.filter((line): line is string => typeof line === "string")
+        : [];
+      const entries = lines.map(parseLogLine);
+      const shouldReset = result.reset || result.payload.reset || result.cursor == null;
+      this.logsEntries = shouldReset
+        ? entries
+        : [...this.logsEntries, ...entries].slice(-LOG_BUFFER_LIMIT);
+      this.logsCursor =
+        typeof result.payload.cursor === "number" ? result.payload.cursor : this.logsCursor;
+      this.logsFile = typeof result.payload.file === "string" ? result.payload.file : this.logsFile;
+      this.logsTruncated = Boolean(result.payload.truncated);
+      this.logsStatus = completePanelRefresh();
+    },
+  });
+  private readonly gateway = new GatewayPageController(this, {
+    getGateway: () => this.context?.gateway,
+    onIdentityChange: () => {
+      this.logsStatus = createPanelRefreshStatus();
+      this.logsFile = null;
+      this.logsEntries = [];
+      this.logsTruncated = false;
+      this.logsCursor = null;
+      this.streamFollow.atBottom = true;
+    },
+    invalidateRequests: () => {
+      this.logsTaskQuiet = false;
+      void this.logsTask.run([null, null, null, null, false, false]);
+    },
+    onSnapshot: (change) => {
+      this.syncPolling();
+      if (change.becameConnected && this.logsFile !== null) {
+        void this.loadLogs({ reset: true, quiet: true });
+        return;
+      }
+      this.ensureInitialLogs();
+    },
+  });
+  private readonly streamFollow = new StreamAutoFollowController(this, {
+    selector: ".log-stream",
+    isEnabled: () => this.logsAutoFollow,
+    captureCurrent: () => {
+      const gateway = this.gateway.gateway;
+      const epoch = this.gateway.epoch;
+      // Same-client reconnects retain object identity; the epoch keeps queued
+      // scroll work bound to the connection that scheduled it.
+      return () =>
+        this.isConnected &&
+        this.gateway.connected &&
+        gateway !== null &&
+        this.gateway.gateway === gateway &&
+        this.context.gateway === gateway &&
+        this.gateway.epoch === epoch;
+    },
+  });
 
   override firstUpdated() {
     this.resetContentScroll();
@@ -102,22 +181,15 @@ class LogsPage extends OpenClawLightDomElement {
     const autoFollowEnabled = this.logsAutoFollow && changed.has("logsAutoFollow");
     if (
       autoFollowEnabled ||
-      (this.logsAutoFollow && this.logsAtBottom && changed.has("logsEntries"))
+      (this.logsAutoFollow && this.streamFollow.atBottom && changed.has("logsEntries"))
     ) {
-      this.scheduleScroll(autoFollowEnabled);
+      this.streamFollow.schedule(autoFollowEnabled);
     }
   }
 
   override disconnectedCallback() {
-    this.subscriptions.clear();
-    this.requestGeneration += 1;
-    this.activeRequest = null;
-    this.gatewaySource = null;
-    this.logsLoading = false;
-    if (this.logsScrollFrame !== null) {
-      cancelAnimationFrame(this.logsScrollFrame);
-      this.logsScrollFrame = null;
-    }
+    this.logsTaskQuiet = false;
+    void this.logsTask.run([null, null, null, null, false, false]);
     if (this.contentScrollFrame !== null) {
       cancelAnimationFrame(this.contentScrollFrame);
       this.contentScrollFrame = null;
@@ -133,36 +205,8 @@ class LogsPage extends OpenClawLightDomElement {
     }
   }
 
-  private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot, resetForSourceBind = false) {
-    const connectionChanged = snapshot.connected !== this.connected;
-    const clientChanged = resetForSourceBind || snapshot.client !== this.client;
-    if (clientChanged || connectionChanged) {
-      this.requestGeneration += 1;
-      this.activeRequest = null;
-    }
-    this.client = snapshot.client;
-    this.connected = snapshot.connected;
-    if (clientChanged) {
-      this.resetServerState();
-    } else if (connectionChanged) {
-      this.logsLoading = false;
-    }
-    this.syncPolling();
-    this.ensureInitialLogs();
-  }
-
-  private resetServerState() {
-    this.logsLoading = false;
-    this.logsStatus = createPanelRefreshStatus();
-    this.logsFile = null;
-    this.logsEntries = [];
-    this.logsTruncated = false;
-    this.logsCursor = null;
-    this.logsAtBottom = true;
-  }
-
   private syncPolling() {
-    if (!this.connected || !this.client) {
+    if (!this.gateway.connected || !this.gateway.client) {
       this.polling.stop();
       return;
     }
@@ -170,151 +214,32 @@ class LogsPage extends OpenClawLightDomElement {
   }
 
   private ensureInitialLogs() {
-    if (!this.connected || !this.client || this.logsEntries.length > 0 || this.logsLoading) {
+    if (!this.gateway.connected || !this.gateway.client || this.logsEntries.length > 0) {
       return;
     }
     void this.loadLogs({ reset: true }).then((current) => {
       if (current) {
-        this.scheduleScroll(true);
+        this.streamFollow.schedule(true);
       }
     });
-  }
-
-  private captureRequestScope(): LogsRequestScope | null {
-    const gateway = this.gatewaySource;
-    const client = this.client;
-    if (
-      !gateway ||
-      !client ||
-      !this.connected ||
-      !this.isConnected ||
-      this.context.gateway !== gateway
-    ) {
-      return null;
-    }
-    return { gateway, client, generation: this.requestGeneration };
-  }
-
-  private isRequestScopeCurrent(scope: LogsRequestScope): boolean {
-    return (
-      this.isConnected &&
-      this.gatewaySource === scope.gateway &&
-      this.context.gateway === scope.gateway &&
-      this.requestGeneration === scope.generation &&
-      this.client === scope.client &&
-      this.connected
-    );
   }
 
   private async loadLogs(opts?: { reset?: boolean; quiet?: boolean }): Promise<boolean> {
-    const scope = this.captureRequestScope();
     const quiet = opts?.quiet === true;
-    if (!scope || (this.activeRequest && this.isRequestScopeCurrent(this.activeRequest))) {
+    const gateway = this.gateway.gateway;
+    if (
+      !gateway ||
+      !this.gateway.client ||
+      !this.gateway.connected ||
+      this.context.gateway !== gateway ||
+      (this.logsTask.status === TaskStatus.PENDING && opts?.reset !== true)
+    ) {
       return false;
     }
-    this.activeRequest = scope;
-    const isCurrentOperation = () =>
-      this.activeRequest === scope && this.isRequestScopeCurrent(scope);
-    if (!quiet) {
-      this.logsLoading = true;
-    }
+    this.logsTaskQuiet = quiet;
     this.logsStatus = beginPanelRefresh(this.logsStatus, { clearError: !quiet });
-    try {
-      const res = await scope.client.request("logs.tail", {
-        cursor: opts?.reset ? undefined : (this.logsCursor ?? undefined),
-        limit: this.logsLimit,
-        maxBytes: this.logsMaxBytes,
-      });
-      if (!isCurrentOperation()) {
-        return false;
-      }
-      const payload = res as {
-        file?: string;
-        cursor?: number;
-        lines?: unknown;
-        truncated?: boolean;
-        reset?: boolean;
-      };
-      const lines = Array.isArray(payload.lines)
-        ? payload.lines.filter((line): line is string => typeof line === "string")
-        : [];
-      const entries = lines.map(parseLogLine);
-      const shouldReset = opts?.reset || payload.reset || this.logsCursor == null;
-      this.logsEntries = shouldReset
-        ? entries
-        : [...this.logsEntries, ...entries].slice(-LOG_BUFFER_LIMIT);
-      this.logsCursor = typeof payload.cursor === "number" ? payload.cursor : this.logsCursor;
-      this.logsFile = typeof payload.file === "string" ? payload.file : this.logsFile;
-      this.logsTruncated = Boolean(payload.truncated);
-      this.logsStatus = completePanelRefresh();
-      return true;
-    } catch (err) {
-      if (!isCurrentOperation()) {
-        return false;
-      }
-      if (isMissingOperatorReadScopeError(err)) {
-        this.logsEntries = [];
-        this.logsStatus = failPanelRefresh(
-          createPanelRefreshStatus(),
-          formatMissingOperatorReadScopeMessage("logs"),
-        );
-      } else {
-        this.logsStatus = failPanelRefresh(this.logsStatus, String(err));
-      }
-      return true;
-    } finally {
-      if (this.activeRequest === scope) {
-        this.activeRequest = null;
-        if (this.isRequestScopeCurrent(scope) && !quiet) {
-          this.logsLoading = false;
-        }
-      }
-    }
-  }
-
-  private scheduleScroll(force = false) {
-    if (this.logsScrollFrame !== null) {
-      cancelAnimationFrame(this.logsScrollFrame);
-    }
-    const gateway = this.gatewaySource;
-    const generation = this.requestGeneration;
-    const isCurrent = () =>
-      this.isConnected &&
-      this.connected &&
-      gateway !== null &&
-      this.gatewaySource === gateway &&
-      this.context.gateway === gateway &&
-      this.requestGeneration === generation;
-    void this.updateComplete.then(() => {
-      if (!isCurrent()) {
-        return;
-      }
-      this.logsScrollFrame = requestAnimationFrame(() => {
-        this.logsScrollFrame = null;
-        if (!isCurrent()) {
-          return;
-        }
-        const container = this.querySelector(".log-stream") as HTMLElement | null;
-        if (!container) {
-          return;
-        }
-        const distanceFromBottom =
-          container.scrollHeight - container.scrollTop - container.clientHeight;
-        if (force || distanceFromBottom < 80) {
-          container.scrollTop = container.scrollHeight;
-        }
-      });
-    });
-  }
-
-  private handleScroll(event: Event) {
-    const container = event.currentTarget as HTMLElement | null;
-    if (!container) {
-      return;
-    }
-    const distanceFromBottom =
-      container.scrollHeight - container.scrollTop - container.clientHeight;
-    this.logsAtBottom = distanceFromBottom < 80;
+    await this.logsTask.run(this.logsTaskArgs(opts));
+    return this.logsTask.status === TaskStatus.COMPLETE;
   }
 
   private exportLogs(lines: string[], label: string) {
@@ -333,7 +258,7 @@ class LogsPage extends OpenClawLightDomElement {
 
   override render() {
     const body = renderLogs({
-      loading: this.logsLoading,
+      loading: this.logsTask.status === TaskStatus.PENDING && !this.logsTaskQuiet,
       status: this.logsStatus,
       file: this.logsFile,
       entries: this.logsEntries,
@@ -349,11 +274,11 @@ class LogsPage extends OpenClawLightDomElement {
       onRefresh: () =>
         void this.loadLogs({ reset: true }).then((current) => {
           if (current) {
-            this.scheduleScroll(true);
+            this.streamFollow.schedule(true);
           }
         }),
       onExport: (lines, label) => this.exportLogs(lines, label),
-      onScroll: (event) => this.handleScroll(event),
+      onScroll: (event) => this.streamFollow.handleScroll(event),
     });
     return html`
       <section class="content-header">

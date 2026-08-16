@@ -21,7 +21,16 @@ export type InternalConfigWriteResult = ConfigWriteResult & {
   [configWritePostCommitRollback]?: () => void;
 };
 
+export type ConfigWriteAuditOrigin =
+  | "doctor"
+  | "system-agent"
+  | "config-rpc"
+  | "plugin-install"
+  | "cli";
+
 export type ConfigWriteOptions = {
+  /** Semantic writer label recorded in the config audit journal. */
+  auditOrigin?: ConfigWriteAuditOrigin;
   /** Read-time env snapshot used to validate `${VAR}` restoration decisions. */
   envSnapshotForRestore?: Record<string, string | undefined>;
   /** Only use envSnapshotForRestore for the config path that produced it. */
@@ -36,6 +45,10 @@ export type ConfigWriteOptions = {
   explicitSetPaths?: readonly (readonly string[])[];
   /** Source-shaped values paired with explicitSetPaths. */
   explicitSetValueSource?: OpenClawConfig;
+  /** Agent ids that this write intentionally removes from the canonical roster. */
+  allowedAgentRosterRemovals?: readonly string[];
+  /** Permit explicit local overrides below an ancestor $include without flattening it. */
+  allowIncludeAncestorExplicitSetPaths?: boolean;
   /** Fresh snapshot fast path for an immediate write. */
   baseSnapshot?: ConfigFileSnapshot;
   /** Plugin metadata paired with baseSnapshot. */
@@ -97,7 +110,7 @@ export type ConfigIoDeps = {
 export type NormalizedConfigIoDeps = Required<ConfigIoDeps>;
 
 export type ConfigIoFactoryOptions = ConfigIoDeps & {
-  pluginValidation?: "full" | "skip";
+  pluginValidation?: "full" | "skip" | "core-only";
   preservedLegacyRootKeys?: readonly string[];
   shellEnvFallback?: "load" | "defer";
 };
@@ -107,6 +120,7 @@ export type ConfigSnapshotReadOptions = {
   observe?: boolean;
   isolateEnv?: boolean;
   lowerPrecedenceEnv?: Readonly<Record<string, string>>;
+  allowCurrentPluginMetadata?: boolean;
   recoverSuspicious?: boolean;
   allowSuspiciousRecovery?: (
     candidate: OpenClawConfig,
@@ -135,11 +149,16 @@ export type BestEffortConfigSnapshot = {
   sourceConfig: OpenClawConfig;
 };
 
-export type ShippedPluginInstallConfigWriteMigration = { migrated: false } | { migrated: true };
-
-export type ShippedPluginInstallConfigReadMigration = {
-  config: unknown;
-  validationConfig?: unknown;
-  persistedRootParsed?: unknown;
-  persistedRootRaw?: string;
+export type ConfigRecoveryCandidate = {
+  raw: string;
+  parsed: unknown;
+  config?: OpenClawConfig;
 };
+
+export type ConfigRecoveryCandidatePreparation =
+  | { ok: true; candidate: ConfigRecoveryCandidate }
+  | { ok: false; reason: string };
+
+export type PrepareConfigRecoveryCandidate = (
+  candidate: ConfigRecoveryCandidate,
+) => ConfigRecoveryCandidatePreparation;

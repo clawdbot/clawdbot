@@ -1,19 +1,20 @@
 // Signal plugin module owns raw-envelope durable ingress mapping and draining.
 import {
-  createChannelIngressDrain,
-  DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
-  DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-  type ChannelIngressDrain,
+  createChannelIngressError,
+  createChannelIngressMonitor,
   type ChannelIngressQueue,
+  type ChannelIngressMonitorDeliveryResult,
+  type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import {
+  asPositiveSafeInteger,
+  isRecord,
+  normalizeNullableString as normalizeRawString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SignalSseEvent } from "./client-adapter.js";
 import { getOptionalSignalRuntime } from "./runtime.js";
 
-const SIGNAL_INGRESS_COMPLETED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const SIGNAL_INGRESS_COMPLETED_MAX_ENTRIES = 1000;
-const SIGNAL_INGRESS_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const SIGNAL_INGRESS_FAILED_MAX_ENTRIES = 1000;
 const SIGNAL_INGRESS_DRAIN_INTERVAL_MS = 1_000;
 
 type SignalIngressEnvelope = {
@@ -29,6 +30,7 @@ type SignalIngressEnvelope = {
 type SignalIngressEventFacts = {
   eventId: string;
   laneKey: string;
+  numberAliasEventId?: string;
 };
 
 type SignalIngressPayload = {
@@ -37,45 +39,23 @@ type SignalIngressPayload = {
   event: SignalSseEvent;
 };
 
-export type SignalIngressLifecycle = {
-  abortSignal: AbortSignal;
-  onAdopted: () => void | Promise<void>;
-  onDeferred: () => void;
-  onAdoptionFinalizing: () => void;
-  onAbandoned: () => void | Promise<void>;
-};
+type SignalIngressBody = Omit<SignalIngressPayload, "version">;
 
-type SignalIngressDispatchResult =
-  | { kind: "completed" }
-  | { kind: "deferred" }
-  | { kind: "failed-retryable"; error: unknown };
+export type SignalIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
+
+type SignalIngressDispatchResult = ChannelIngressMonitorDeliveryResult;
 
 type SignalIngressDispatch = (
   event: SignalSseEvent,
   lifecycle: SignalIngressLifecycle,
 ) => Promise<SignalIngressDispatchResult | void> | SignalIngressDispatchResult | void;
 
-class SignalIngressPermanentError extends Error {
-  constructor(
-    readonly reason: "parse-error" | "missing-sender" | "missing-timestamp" | "unsupported-event",
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
-    this.name = "SignalIngressPermanentError";
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function normalizeRawString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
+const SignalIngressPermanentError = createChannelIngressError<
+  "parse-error" | "missing-sender" | "missing-timestamp" | "unsupported-event"
+>("SignalIngressPermanentError", { withReason: true });
 
 function normalizeTimestamp(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
+  return asPositiveSafeInteger(value) ?? null;
 }
 
 function parseReceiveEnvelope(event: SignalSseEvent): SignalIngressEnvelope | null {
@@ -149,36 +129,10 @@ function inspectSignalIngressEvent(event: SignalSseEvent): SignalIngressEventFac
   return {
     eventId: JSON.stringify([senderKey, timestamp]),
     laneKey: groupId ? `group:${groupId}` : `direct:${senderKey}`,
+    ...(senderUuid && senderNumber
+      ? { numberAliasEventId: JSON.stringify([`number:${senderNumber}`, timestamp]) }
+      : {}),
   };
-}
-
-type SignalIngressEnqueueResult =
-  | Awaited<ReturnType<ChannelIngressQueue<SignalIngressPayload>["enqueue"]>>
-  | { kind: "ignored" };
-
-/** Durable receive chokepoint. Metadata comes from raw fields; payload stays byte-equivalent JSON. */
-async function enqueueSignalIngressEvent(params: {
-  queue: ChannelIngressQueue<SignalIngressPayload>;
-  event: SignalSseEvent;
-  now?: number;
-}): Promise<SignalIngressEnqueueResult> {
-  const facts = inspectSignalIngressEvent(params.event);
-  if (!facts) {
-    return { kind: "ignored" };
-  }
-  const receivedAt = params.now ?? Date.now();
-  await params.queue.prune({
-    completedTtlMs: SIGNAL_INGRESS_COMPLETED_TTL_MS,
-    completedMaxEntries: SIGNAL_INGRESS_COMPLETED_MAX_ENTRIES,
-    failedTtlMs: SIGNAL_INGRESS_FAILED_TTL_MS,
-    failedMaxEntries: SIGNAL_INGRESS_FAILED_MAX_ENTRIES,
-    ...(params.now === undefined ? {} : { now: params.now }),
-  });
-  return await params.queue.enqueue(
-    facts.eventId,
-    { version: 1, receivedAt, event: params.event },
-    { receivedAt, laneKey: facts.laneKey },
-  );
 }
 
 function resolveSignalIngressNonRetryableFailure(error: unknown) {
@@ -187,36 +141,10 @@ function resolveSignalIngressNonRetryableFailure(error: unknown) {
     : null;
 }
 
-function createSignalIngressDrain(params: {
-  queue: ChannelIngressQueue<SignalIngressPayload>;
-  dispatch: SignalIngressDispatch;
-  abortSignal?: AbortSignal;
-  onLog?: (message: string) => void;
-}): ChannelIngressDrain {
-  return createChannelIngressDrain<SignalIngressPayload>({
-    queue: params.queue,
-    retryPolicy: {
-      maxAttempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-      deadLetterMinAgeMs: DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
-    },
-    resolveNonRetryableFailure: resolveSignalIngressNonRetryableFailure,
-    ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
-    ...(params.onLog ? { onLog: params.onLog } : {}),
-    dispatchClaimedEvent: async (record, lifecycle) => {
-      if (!inspectSignalIngressEvent(record.payload.event)) {
-        throw new SignalIngressPermanentError(
-          "unsupported-event",
-          "Signal ingress row no longer contains a dispatchable envelope",
-        );
-      }
-      return await params.dispatch(record.payload.event, lifecycle);
-    },
-  });
-}
-
 export type SignalIngressMonitor = {
   receive: (event: SignalSseEvent) => Promise<void>;
   stop: () => Promise<void>;
+  waitForIdle: () => Promise<void>;
 };
 
 /** Open the account queue, recover it, and keep newly appended rows draining. */
@@ -225,7 +153,6 @@ export async function startSignalIngressMonitor(params: {
   queue?: ChannelIngressQueue<SignalIngressPayload>;
   dispatch: SignalIngressDispatch;
   runtime: Pick<RuntimeEnv, "error" | "log">;
-  runTrackedTask: (task: () => Promise<void>) => void;
 }): Promise<SignalIngressMonitor> {
   let queue = params.queue;
   if (!queue) {
@@ -237,59 +164,61 @@ export async function startSignalIngressMonitor(params: {
       accountId: params.accountId,
     });
   }
-  const drain = createSignalIngressDrain({
-    queue,
-    dispatch: params.dispatch,
-    onLog: (message) => params.runtime.log?.(`signal ${message}`),
+  const ingressQueue = queue;
+  const monitor = createChannelIngressMonitor<
+    SignalSseEvent,
+    SignalIngressBody,
+    SignalIngressPayload
+  >({
+    queue: ingressQueue,
+    inspect: (event) => inspectSignalIngressEvent(event),
+    payload: {
+      version: 1,
+      serialize: (event, { receivedAt }) => ({ receivedAt, event }),
+      deserialize: (body) => body.event,
+      encode: ({ body }) => ({ version: 1, ...body }),
+      decode: (payload) => ({ version: payload.version, body: payload }),
+      createClaimError: (_kind, claim) =>
+        new SignalIngressPermanentError(
+          "unsupported-event",
+          `Signal ingress row ${claim.id} has an invalid payload`,
+        ),
+    },
+    deliver: (event, lifecycle) => params.dispatch(event, lifecycle),
+    onDurableAdmission: async (_event, { facts }) => {
+      const { numberAliasEventId } = facts as SignalIngressEventFacts;
+      if (!numberAliasEventId) {
+        return;
+      }
+      // signal-cli can learn or forget a UUID between redeliveries; bridge both
+      // shipped sender IDs before the monitor releases its admission/claim lock.
+      if (!(await ingressQueue.complete(numberAliasEventId))) {
+        await ingressQueue.complete(facts.eventId);
+      }
+    },
+    pollIntervalMs: SIGNAL_INGRESS_DRAIN_INTERVAL_MS,
+    retention: {
+      // Signal previously pruned before every enqueue rather than on a timed cadence.
+      pruneIntervalMs: 0,
+      // At most two tombstones per message preserve the prior 1,000-message window.
+      completedMaxEntries: 2_000,
+      failedMaxEntries: 1_000,
+    },
+    appendRetryDelaysMs: [0],
+    drain: {
+      resolveNonRetryableFailure: resolveSignalIngressNonRetryableFailure,
+      onLog: (message) => params.runtime.log?.(`signal ${message}`),
+    },
+    onError: (error) => params.runtime.error?.(`signal ingress drain failed: ${String(error)}`),
   });
-  let drainPass: Promise<void> | undefined;
-  let drainRequested = false;
-
-  const requestDrain = (): Promise<void> => {
-    drainRequested = true;
-    if (!drainPass) {
-      drainPass = (async () => {
-        while (drainRequested) {
-          drainRequested = false;
-          const result = await drain.drainOnce();
-          if (result.started > 0) {
-            params.runTrackedTask(async () => {
-              await drain.waitForIdle();
-              await requestDrain();
-            });
-          }
-        }
-      })().finally(() => {
-        drainPass = undefined;
-        if (drainRequested) {
-          void requestDrain().catch((error: unknown) => {
-            params.runtime.error?.(`signal ingress drain failed: ${String(error)}`);
-          });
-        }
-      });
-    }
-    return drainPass;
-  };
-
-  await requestDrain();
-  const timer = setInterval(() => {
-    void requestDrain().catch((error: unknown) => {
-      params.runtime.error?.(`signal ingress drain failed: ${String(error)}`);
-    });
-  }, SIGNAL_INGRESS_DRAIN_INTERVAL_MS);
-  timer.unref?.();
+  monitor.start();
 
   return {
     receive: async (event) => {
-      const result = await enqueueSignalIngressEvent({ queue, event });
-      if (result.kind !== "ignored") {
-        await requestDrain();
-      }
+      await monitor.admit(event);
+      await monitor.waitForPumpIdle();
     },
-    stop: async () => {
-      clearInterval(timer);
-      await drainPass?.catch(() => undefined);
-      drain.dispose();
-    },
+    stop: monitor.stop,
+    waitForIdle: monitor.waitForIdle,
   };
 }

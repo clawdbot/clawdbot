@@ -1,11 +1,22 @@
 // Covers platform browser-open command resolution.
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SpawnResult } from "../process/exec-result.js";
 
-const { detectBinaryMock, getWindowsInstallRootsMock } = vi.hoisted(() => ({
-  detectBinaryMock: vi.fn(async () => false),
-  getWindowsInstallRootsMock: vi.fn(() => ({ systemRoot: "C:\\Windows" })),
-}));
+const { detectBinaryMock, getWindowsInstallRootsMock, runCommandWithTimeoutMock } = vi.hoisted(
+  () => ({
+    detectBinaryMock: vi.fn(async () => false),
+    getWindowsInstallRootsMock: vi.fn(() => ({ systemRoot: "C:\\Windows" })),
+    runCommandWithTimeoutMock: vi.fn<() => Promise<SpawnResult>>(async () => ({
+      stdout: "",
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    })),
+  }),
+);
 
 vi.mock("./detect-binary.js", () => ({
   detectBinary: detectBinaryMock,
@@ -18,13 +29,67 @@ vi.mock("./windows-install-roots.js", async () => {
   return { ...actual, getWindowsInstallRoots: getWindowsInstallRootsMock };
 });
 
-import { resolveBrowserOpenCommand } from "./browser-open.js";
+vi.mock("../process/exec.js", () => ({
+  runCommandWithTimeout: runCommandWithTimeoutMock,
+}));
+
+import { openUrl, resolveBrowserOpenCommand } from "./browser-open.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   detectBinaryMock.mockReset().mockResolvedValue(false);
   getWindowsInstallRootsMock.mockReset().mockReturnValue({ systemRoot: "C:\\Windows" });
+  runCommandWithTimeoutMock.mockReset().mockResolvedValue({
+    stdout: "",
+    stderr: "",
+    code: 0,
+    signal: null,
+    killed: false,
+    termination: "exit",
+  });
+});
+
+describe("openUrl", () => {
+  it("returns true after a normal zero exit", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    vi.stubEnv("VITEST", "");
+    vi.stubEnv("NODE_ENV", "development");
+
+    await expect(openUrl("https://example.com/")).resolves.toBe(true);
+  });
+
+  it("returns false after a non-zero exit", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    vi.stubEnv("VITEST", "");
+    vi.stubEnv("NODE_ENV", "development");
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
+      stdout: "",
+      stderr: "browser opener failed",
+      code: 1,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+
+    await expect(openUrl("https://example.com/")).resolves.toBe(false);
+  });
+
+  it("returns false after a timeout", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    vi.stubEnv("VITEST", "");
+    vi.stubEnv("NODE_ENV", "development");
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
+      stdout: "",
+      stderr: "",
+      code: 124,
+      signal: null,
+      killed: true,
+      termination: "timeout",
+    });
+
+    await expect(openUrl("https://example.com/")).resolves.toBe(false);
+  });
 });
 
 describe("resolveBrowserOpenCommand", () => {

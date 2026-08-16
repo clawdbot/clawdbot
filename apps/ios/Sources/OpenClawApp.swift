@@ -672,6 +672,7 @@ struct OpenClawApp: App {
     @State private var appearanceModel: AppAppearanceModel
     @State private var appModel: NodeAppModel
     @State private var gatewayController: GatewayConnectionController
+    @State private var voiceLiveActivityCoordinator: VoiceLiveActivityCoordinator
     @UIApplicationDelegateAdaptor(OpenClawAppDelegate.self) private var appDelegate
     @Environment(\.scenePhase) private var scenePhase
 
@@ -701,6 +702,7 @@ struct OpenClawApp: App {
         OpenClawAppModelRegistry.appModel = appModel
         _appearanceModel = State(initialValue: AppAppearanceModel())
         _appModel = State(initialValue: appModel)
+        _voiceLiveActivityCoordinator = State(initialValue: VoiceLiveActivityCoordinator())
         _gatewayController = State(
             initialValue: GatewayConnectionController(
                 appModel: appModel,
@@ -719,11 +721,19 @@ struct OpenClawApp: App {
                 .environment(self.appModel.voiceWake)
                 .environment(self.gatewayController)
                 .task {
+                    if !Self.screenshotModeEnabled {
+                        self.voiceLiveActivityCoordinator.start(appModel: self.appModel)
+                    }
                     self.appModel.setScenePhase(self.scenePhase)
                     self.appDelegate.appModel = self.appModel
                     self.appDelegate.scenePhaseChanged(self.scenePhase)
                     self.applyWindowTint()
                     self.gatewayController.setScenePhase(self.scenePhase)
+                    #if DEBUG
+                    if Self.liveActivityVoicePreviewEnabled {
+                        LiveActivityManager.shared.startVoicePreview()
+                    }
+                    #endif
                 }
                 .onReceive(
                     NotificationCenter.default.publisher(for: UIContentSizeCategory.didChangeNotification),
@@ -755,6 +765,14 @@ struct OpenClawApp: App {
     private static var screenshotNotificationGuidanceEnabled: Bool {
         #if DEBUG
         ProcessInfo.processInfo.arguments.contains("--openclaw-screenshot-notification-guidance")
+        #else
+        false
+        #endif
+    }
+
+    private static var liveActivityVoicePreviewEnabled: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("--openclaw-live-activity-voice-preview")
         #else
         false
         #endif

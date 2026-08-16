@@ -70,9 +70,6 @@ export function buildCopilotDynamicHeaders(params: {
   hasImages: boolean;
 }): Record<string, string> {
   return {
-    ...buildCopilotIdeHeaders(),
-    "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
-    "Openai-Organization": "github-copilot",
     "x-initiator": inferCopilotInitiator(params.messages),
     ...(params.hasImages ? { "Copilot-Vision-Request": "true" } : {}),
   };

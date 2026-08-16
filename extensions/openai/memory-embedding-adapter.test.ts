@@ -1,6 +1,10 @@
 // Openai tests cover memory embedding adapter plugin behavior.
-import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  resolveRemoteEmbeddingBearerClient,
+  type MemoryEmbeddingProvider,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   createOpenAiEmbeddingProvider: vi.fn(),
@@ -27,6 +31,10 @@ const provider: MemoryEmbeddingProvider = {
 };
 
 describe("OpenAI memory embedding adapter", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   beforeEach(() => {
     mocks.createOpenAiEmbeddingProvider.mockReset();
     mocks.runOpenAiEmbeddingBatches.mockClear();
@@ -41,6 +49,105 @@ describe("OpenAI memory embedding adapter", () => {
         outputDimensionality: 512,
       },
     });
+  });
+
+  it("keeps native OpenAI embedding cache identity stable across OpenClaw versions", async () => {
+    const createForVersion = async (version: string) => {
+      vi.stubEnv("OPENCLAW_VERSION", version);
+      const client = await resolveRemoteEmbeddingBearerClient({
+        provider: "openai",
+        defaultBaseUrl: "https://api.openai.com/v1",
+        options: {
+          config: { models: {} } as never,
+          model: "text-embedding-3-small",
+          remote: { apiKey: "fixture-secret" },
+        },
+      });
+      mocks.createOpenAiEmbeddingProvider.mockResolvedValueOnce({
+        provider,
+        client: { ...client, model: "text-embedding-3-small" },
+      });
+      const result = await openAiMemoryEmbeddingProviderAdapter.create({
+        config: {} as never,
+        provider: "openai",
+        model: "text-embedding-3-small",
+        fallback: "none",
+      });
+      return { headers: client.headers, cacheKeyData: result.runtime?.cacheKeyData };
+    };
+
+    const previous = await createForVersion("2026.7.1");
+    const current = await createForVersion("2026.7.2");
+
+    expect(previous.headers).toMatchObject({
+      Authorization: "Bearer fixture-secret",
+      version: "2026.7.1",
+      "User-Agent": "openclaw/2026.7.1",
+    });
+    expect(current.headers).toMatchObject({
+      Authorization: "Bearer fixture-secret",
+      version: "2026.7.2",
+      "User-Agent": "openclaw/2026.7.2",
+    });
+    expect(current.cacheKeyData).toEqual(previous.cacheKeyData);
+    expect(hashText(JSON.stringify(current.cacheKeyData))).toBe(
+      hashText(JSON.stringify(previous.cacheKeyData)),
+    );
+    expect(current.cacheKeyData).toMatchObject({
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      model: "text-embedding-3-small",
+      headers: [
+        ["Content-Type", "application/json"],
+        ["originator", "openclaw"],
+      ],
+    });
+    expect(JSON.stringify(current.cacheKeyData)).not.toContain("fixture-secret");
+  });
+
+  it("preserves custom endpoint tenant and version-like cache identity headers", async () => {
+    const createForTenant = async (tenant: string) => {
+      const client = await resolveRemoteEmbeddingBearerClient({
+        provider: "bailian-embedding",
+        defaultBaseUrl: "https://embeddings.example/v1",
+        options: {
+          config: { models: {} } as never,
+          model: "text-embedding-v3",
+          remote: {
+            apiKey: "fixture-secret",
+            headers: {
+              "X-Tenant": tenant,
+              version: "tenant-api-v2",
+              "User-Agent": "tenant-client/2",
+            },
+          },
+        },
+      });
+      mocks.createOpenAiEmbeddingProvider.mockResolvedValueOnce({
+        provider,
+        client: { ...client, model: "text-embedding-v3" },
+      });
+      return await openAiMemoryEmbeddingProviderAdapter.create({
+        config: {} as never,
+        provider: "bailian-embedding",
+        model: "text-embedding-v3",
+        fallback: "none",
+      });
+    };
+
+    const first = await createForTenant("tenant-a");
+    const second = await createForTenant("tenant-b");
+    const headers = first.runtime?.cacheKeyData?.headers;
+
+    expect(headers).toEqual(
+      expect.arrayContaining([
+        ["X-Tenant", "tenant-a"],
+        ["version", "tenant-api-v2"],
+        ["User-Agent", "tenant-client/2"],
+      ]),
+    );
+    expect(first.runtime?.cacheKeyData).not.toEqual(second.runtime?.cacheKeyData);
+    expect(JSON.stringify(first.runtime?.cacheKeyData)).not.toContain("fixture-secret");
   });
 
   it("sends document input_type in OpenAI batch embedding requests", async () => {

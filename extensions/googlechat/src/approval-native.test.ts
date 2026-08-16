@@ -18,7 +18,7 @@ const GOOGLE_CHAT_APPROVAL_ACCOUNT = {
   audienceType: "app-url" as const,
   audience: "https://chat-app.example.test/googlechat",
   appPrincipal: "123456789012345678901",
-  dm: { allowFrom: ["users/123"] },
+  allowFrom: ["users/123"],
 };
 
 const execApprovalPayload: ReplyPayload = {
@@ -59,7 +59,7 @@ describe("googleChatApprovalCapability", () => {
               audienceType: "app-url",
               audience: "https://chat-app.example.test/googlechat",
               appPrincipal: "123456789012345678901",
-              dm: { allowFrom: ["users/123"] },
+              allowFrom: ["users/123"],
             },
           },
         },
@@ -81,7 +81,7 @@ describe("googleChatApprovalCapability", () => {
                 private_key: "test-key",
                 token_uri: "https://oauth2.googleapis.com/token",
               },
-              dm: { allowFrom: ["users/123"] },
+              allowFrom: ["users/123"],
             },
           },
         },
@@ -100,7 +100,7 @@ describe("googleChatApprovalCapability", () => {
                 token_uri: "https://oauth2.googleapis.com/token",
               },
               audienceType: "project-number",
-              dm: { allowFrom: ["users/123"] },
+              allowFrom: ["users/123"],
             },
           },
         },
@@ -119,7 +119,7 @@ describe("googleChatApprovalCapability", () => {
       },
       audienceType: "app-url" as const,
       audience: "https://chat-app.example.test/googlechat",
-      dm: { allowFrom: ["users/123"] },
+      allowFrom: ["users/123"],
     };
 
     expect(
@@ -169,7 +169,7 @@ describe("googleChatApprovalCapability", () => {
               },
               audienceType: "app-url",
               audience: "https://chat-app.example.test/googlechat",
-              dm: { allowFrom: ["users/123"] },
+              allowFrom: ["users/123"],
             },
           },
         },
@@ -189,7 +189,7 @@ describe("googleChatApprovalCapability", () => {
               },
               audienceType: "project-number",
               audience: "1234567890",
-              dm: { allowFrom: ["users/123"] },
+              allowFrom: ["users/123"],
             },
           },
         },
@@ -200,7 +200,7 @@ describe("googleChatApprovalCapability", () => {
   it("preserves Google Chat approval actor authorization", () => {
     expect(
       googleChatApprovalCapability.authorizeActorAction?.({
-        cfg: { channels: { googlechat: { dm: { allowFrom: ["users/123"] } } } },
+        cfg: { channels: { googlechat: { allowFrom: ["users/123"] } } },
         senderId: "users/123",
         action: "approve",
         approvalKind: "plugin",
@@ -209,7 +209,7 @@ describe("googleChatApprovalCapability", () => {
 
     expect(
       googleChatApprovalCapability.authorizeActorAction?.({
-        cfg: { channels: { googlechat: { dm: { allowFrom: ["users/123"] } } } },
+        cfg: { channels: { googlechat: { allowFrom: ["users/123"] } } },
         senderId: "users/999",
         action: "approve",
         approvalKind: "plugin",
@@ -237,7 +237,7 @@ describe("googleChatApprovalCapability", () => {
               audienceType: "app-url",
               audience: "https://alpha.example.com/googlechat",
               appPrincipal: "123456789012345678901",
-              dm: { allowFrom: ["users/123"] },
+              allowFrom: ["users/123"],
             },
             beta: {
               enabled: true,
@@ -250,7 +250,7 @@ describe("googleChatApprovalCapability", () => {
               audienceType: "app-url",
               audience: "https://beta.example.com/googlechat",
               appPrincipal: "987654321098765432109",
-              dm: { allowFrom: ["users/456"] },
+              allowFrom: ["users/456"],
             },
           },
         },
@@ -298,7 +298,7 @@ describe("googleChatApprovalCapability", () => {
           audienceType: "app-url",
           audience: "https://chat-app.example.test/googlechat",
           appPrincipal: "123456789012345678901",
-          dm: { allowFrom: ["users/123"] },
+          allowFrom: ["users/123"],
         },
       },
     };

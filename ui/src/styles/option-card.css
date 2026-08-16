@@ -11,9 +11,9 @@
 .option-card__chip {
   justify-self: start;
   padding: 4px 8px;
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--border);
   border-radius: var(--radius-full);
-  color: var(--text-muted);
+  color: var(--muted);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.05em;
@@ -48,14 +48,12 @@
   transition:
     border-color var(--duration-fast) var(--ease-out),
     background var(--duration-fast) var(--ease-out),
-    box-shadow var(--duration-fast) var(--ease-out),
-    transform var(--duration-fast) var(--ease-out);
+    box-shadow var(--duration-fast) var(--ease-out);
 }
 
 .option-card__choice:hover:not(:disabled) {
   border-color: var(--border-strong);
   background: var(--bg-hover);
-  transform: translateY(-1px);
 }
 
 .option-card__choice:focus-visible {
@@ -65,6 +63,14 @@
 
 .option-card__choice--recommended,
 .option-card__choice--selected {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+/* Hover must not swap the accent tint for the neutral one; the mismatched
+   layers read as the card overlapping itself. */
+.option-card__choice--recommended:hover:not(:disabled),
+.option-card__choice--selected:hover:not(:disabled) {
   border-color: var(--accent);
   background: var(--accent-subtle);
 }
@@ -80,7 +86,7 @@
 }
 
 .option-card__description {
-  color: var(--text-muted);
+  color: var(--muted);
   font-size: 12px;
   line-height: 1.45;
 }
@@ -89,7 +95,7 @@
   flex: 0 0 auto;
   padding: 3px 6px;
   border-radius: var(--radius-full);
-  background: var(--accent);
+  background: var(--primary);
   color: var(--primary-foreground);
   font-size: 10px;
   font-weight: 700;
@@ -102,7 +108,7 @@
   padding: 2px 0;
   border: 0;
   background: transparent;
-  color: var(--text-muted);
+  color: var(--muted);
   font-size: 12px;
   text-decoration: underline;
   text-underline-offset: 3px;
@@ -112,7 +118,7 @@
   color: var(--text);
 }
 
-@media (max-width: 700px) {
+@media (max-width: 768px) {
   .option-card__choices {
     grid-template-columns: 1fr;
   }

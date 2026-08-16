@@ -1,13 +1,12 @@
 #!/usr/bin/env node
-
 // Measures CLI startup memory with an isolated home and RSS hook.
 import { spawnSync as defaultSpawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+import { pathToFileURL } from "node:url";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
+const repoRoot = resolveRepoRoot(import.meta.url);
 const tmpDir = process.env.TMPDIR || process.env.TEMP || process.env.TMP || os.tmpdir();
 const MAX_RSS_MARKER = "__OPENCLAW_MAX_RSS_KB__=";
 const DEFAULT_COMMAND_TIMEOUT_MS = 60_000;
@@ -18,7 +17,8 @@ const COMMAND_TIMEOUT_MS = readPositiveIntEnv(
 );
 let tmpHome = null;
 let rssHookPath = null;
-
+const PASS = "pass";
+const FAIL = "fail";
 function readPositiveIntEnv(name, fallback, env = process.env) {
   const value = readPositiveNumberEnv(name, fallback, env);
   if (!Number.isSafeInteger(value)) {
@@ -26,7 +26,6 @@ function readPositiveIntEnv(name, fallback, env = process.env) {
   }
   return value;
 }
-
 function readPositiveNumberEnv(name, fallback, env = process.env) {
   const raw = env[name];
   if (raw === undefined || raw === "") {
@@ -42,12 +41,10 @@ function readPositiveNumberEnv(name, fallback, env = process.env) {
   }
   return value;
 }
-
 function readNonEmptyEnv(name) {
   const value = process.env[name];
   return value === undefined || value.length === 0 ? null : value;
 }
-
 function readRequiredPathOption(argv, index, flag) {
   const value = argv[index + 1];
   if (!value || value.startsWith("-")) {
@@ -55,7 +52,6 @@ function readRequiredPathOption(argv, index, flag) {
   }
   return value;
 }
-
 function parseArgs(argv) {
   const options = {
     jsonPath:
@@ -67,6 +63,9 @@ function parseArgs(argv) {
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
+    if (arg === undefined) {
+      break;
+    }
     if (arg === "--json") {
       const value = readRequiredPathOption(argv, index, "--json");
       options.jsonPath = path.resolve(value);
@@ -89,7 +88,6 @@ function parseArgs(argv) {
   }
   return options;
 }
-
 function resolveDefaultLimitsMb(platform = process.platform) {
   return {
     // Linux CI is the tight startup regression signal. macOS consistently reports
@@ -105,9 +103,7 @@ function resolveDefaultLimitsMb(platform = process.platform) {
     gatewayStatus: 500,
   };
 }
-
 const DEFAULT_LIMITS_MB = resolveDefaultLimitsMb();
-
 const cases = [
   {
     id: "help",
@@ -143,7 +139,6 @@ const cases = [
     ),
   },
 ];
-
 function formatFixGuidance(testCase, details) {
   const command = `node ${testCase.args.join(" ")}`;
   const guidance = [
@@ -159,7 +154,6 @@ function formatFixGuidance(testCase, details) {
   ];
   return `${guidance.join("\n")}\n`;
 }
-
 function formatFailure(testCase, message, details = "") {
   const trimmedDetails = details.trim();
   const sections = [message];
@@ -169,7 +163,14 @@ function formatFailure(testCase, message, details = "") {
   sections.push(formatFixGuidance(testCase, trimmedDetails || message));
   return sections.join("\n\n");
 }
-
+function failResult(report, testCase, error, details = "") {
+  return {
+    ...report,
+    status: FAIL,
+    error,
+    failureMessage: formatFailure(testCase, error, details),
+  };
+}
 function parseMaxRssMb(stderr) {
   const matches = [...stderr.matchAll(new RegExp(`^${MAX_RSS_MARKER}(\\d+)\\s*$`, "gm"))];
   const lastMatch = matches.at(-1);
@@ -179,19 +180,15 @@ function parseMaxRssMb(stderr) {
   const maxRssKb = Number(lastMatch[1]);
   return Number.isFinite(maxRssKb) && maxRssKb > 0 ? maxRssKb / 1024 : null;
 }
-
 function formatMb(value) {
   return typeof value === "number" && Number.isFinite(value) ? `${value.toFixed(1)} MB` : "n/a";
 }
-
 function formatCaseCommand(testCase) {
   return `node ${testCase.args.join(" ")}`;
 }
-
 function nodeImportSpecifierForPath(filePath) {
   return pathToFileURL(filePath).href;
 }
-
 function buildBenchEnv(homeDir = tmpHome) {
   if (!homeDir) {
     throw new Error("temporary home is not initialized");
@@ -209,7 +206,6 @@ function buildBenchEnv(homeDir = tmpHome) {
     LANG: process.env.LANG ?? "C.UTF-8",
     TERM: process.env.TERM ?? "dumb",
   };
-
   if (process.env.LC_ALL) {
     env.LC_ALL = process.env.LC_ALL;
   }
@@ -226,10 +222,8 @@ function buildBenchEnv(homeDir = tmpHome) {
   // Keep the benchmark on a single process so RSS reflects the actual command
   // path rather than the warning-suppression respawn wrapper.
   env.OPENCLAW_NO_RESPAWN = "1";
-
   return env;
 }
-
 function runCaseSample(testCase, sampleIndex, params = {}) {
   if (!rssHookPath) {
     throw new Error("RSS hook path is not initialized");
@@ -254,7 +248,8 @@ function runCaseSample(testCase, sampleIndex, params = {}) {
       killSignal: "SIGKILL",
     },
   );
-  const stderr = result.stderr ?? "";
+  const stderr = String(result.stderr ?? "");
+  const stdout = String(result.stdout ?? "");
   const maxRssMb = parseMaxRssMb(stderr);
   const matrixBootstrapWarning = /matrix: crypto runtime bootstrap failed/i.test(stderr);
   const report = {
@@ -263,88 +258,72 @@ function runCaseSample(testCase, sampleIndex, params = {}) {
     command: formatCaseCommand(testCase),
     limitMb: testCase.limitMb,
     maxRssMb,
-    status: "pass",
+    status: PASS,
     exitCode: result.status,
     signal: result.signal ?? null,
     error: null,
   };
-
   if (result.error) {
     const timedOut = result.error.code === "ETIMEDOUT";
-    report.status = "fail";
-    report.error = timedOut
+    const error = timedOut
       ? `${testCase.label} timed out after ${timeoutMs}ms`
       : `${testCase.label} failed to start: ${result.error.message}`;
-    return Object.assign(report, {
-      failureMessage: formatFailure(testCase, report.error, stderr.trim() || result.stdout || ""),
-    });
+    return failResult(report, testCase, error, stderr.trim() || stdout);
   }
   if (result.status !== 0) {
-    report.status = "fail";
     const exitDetail = result.status ?? result.signal ?? "unknown";
-    report.error = `${testCase.label} exited with ${String(exitDetail)}`;
-    return Object.assign(report, {
-      failureMessage: formatFailure(testCase, report.error, stderr.trim() || result.stdout || ""),
-    });
+    const error = `${testCase.label} exited with ${String(exitDetail)}`;
+    return failResult(report, testCase, error, stderr.trim() || stdout);
   }
   if (maxRssMb == null) {
-    report.status = "fail";
-    report.error = `${testCase.label} did not report max RSS`;
-    return Object.assign(report, {
-      failureMessage: formatFailure(testCase, report.error, stderr),
-    });
+    const error = `${testCase.label} did not report max RSS`;
+    return failResult(report, testCase, error, stderr);
   }
   if (matrixBootstrapWarning) {
-    report.status = "fail";
-    report.error = `${testCase.label} triggered Matrix crypto bootstrap during startup`;
-    return Object.assign(report, {
-      failureMessage: formatFailure(testCase, report.error),
-    });
+    const error = `${testCase.label} triggered Matrix crypto bootstrap during startup`;
+    return failResult(report, testCase, error);
   }
   return report;
 }
-
 function median(values) {
   const sorted = values.toSorted((left, right) => left - right);
-  return sorted[Math.floor(sorted.length / 2)];
+  const middle = sorted.at(Math.floor(sorted.length / 2));
+  if (middle === undefined) {
+    throw new Error("cannot compute median of an empty sample set");
+  }
+  return middle;
 }
-
 function formatRssSamples(samplesMb) {
   return samplesMb.map((value) => value.toFixed(1)).join(", ");
 }
-
 function runCase(testCase, params = {}) {
-  const samples = [];
-  let report = null;
+  let report = runCaseSample(testCase, 0, params);
+  if (report.status !== "pass" || report.maxRssMb == null) {
+    return report;
+  }
+  const samples = [report.maxRssMb];
   // Shared CI runners occasionally produce a single allocator/RSS spike. Independent
   // homes plus a median keep that outlier from masking regressions; two high samples fail.
-  for (let sampleIndex = 0; sampleIndex < STARTUP_MEMORY_SAMPLE_COUNT; sampleIndex += 1) {
-    report = runCaseSample(testCase, sampleIndex, params);
-    if (report.status !== "pass" || report.maxRssMb == null) {
-      return report;
+  for (let sampleIndex = 1; sampleIndex < STARTUP_MEMORY_SAMPLE_COUNT; sampleIndex += 1) {
+    const sample = runCaseSample(testCase, sampleIndex, params);
+    if (sample.status !== "pass" || sample.maxRssMb == null) {
+      return sample;
     }
-    samples.push(report.maxRssMb);
+    samples.push(sample.maxRssMb);
+    report = sample;
   }
-
   const maxRssMb = median(samples);
-  report = { ...report, maxRssMb, rssSamplesMb: samples };
+  const result = { ...report, maxRssMb, rssSamplesMb: samples };
   if (maxRssMb > testCase.limitMb) {
-    report.status = "fail";
-    report.error = `${testCase.label} median max RSS ${maxRssMb.toFixed(1)} MB exceeded ${
-      testCase.limitMb
-    } MB (samples: ${formatRssSamples(samples)} MB)`;
-    return Object.assign(report, {
-      failureMessage: formatFailure(testCase, report.error),
-    });
+    const error = `${testCase.label} median max RSS ${maxRssMb.toFixed(1)} MB exceeded ${testCase.limitMb} MB (samples: ${formatRssSamples(samples)} MB)`;
+    return failResult(result, testCase, error);
   }
-
   console.log(
     `[startup-memory] ${testCase.label}: ${maxRssMb.toFixed(1)} MB median max RSS ` +
       `(limit ${testCase.limitMb} MB; samples ${formatRssSamples(samples)} MB)`,
   );
-  return report;
+  return result;
 }
-
 function writeReport(options, results) {
   const failed = results.filter((result) => result.status !== "pass");
   const report = {
@@ -365,9 +344,7 @@ function writeReport(options, results) {
       const samples = result.rssSamplesMb
         ? ` (samples: ${result.rssSamplesMb.map(formatMb).join(", ")})`
         : "";
-      return `- ${result.label}: ${result.status} median max RSS ${formatMb(
-        result.maxRssMb,
-      )} / ${formatMb(result.limitMb)}${samples}`;
+      return `- ${result.label}: ${result.status} median max RSS ${formatMb(result.maxRssMb)} / ${formatMb(result.limitMb)}${samples}`;
     }),
     "",
   ];
@@ -384,7 +361,6 @@ function writeReport(options, results) {
   writeFileSync(options.jsonPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
   writeFileSync(options.summaryPath, `${lines.join("\n")}\n`, "utf8");
 }
-
 function runStartupMemoryCheck(argv = process.argv.slice(2), params = {}) {
   const platform = params.platform ?? process.platform;
   if (platform !== "linux" && platform !== "darwin") {
@@ -418,30 +394,25 @@ function runStartupMemoryCheck(argv = process.argv.slice(2), params = {}) {
       rssHookPath = null;
     }
   }
-
   const failure = results.find((result) => result.status !== "pass");
   if (failure?.failureMessage) {
     throw new Error(failure.failureMessage);
   }
   return { skipped: false, results };
 }
-
 /**
  * Test-only access to pure startup memory helper functions.
  */
 export const testing = {
   cases,
-  nodeImportSpecifierForPath,
   parseArgs,
   readPositiveIntEnv,
   readPositiveNumberEnv,
   repoRoot,
   resolveDefaultLimitsMb,
-  runCase,
   runStartupMemoryCheck,
   sampleCount: STARTUP_MEMORY_SAMPLE_COUNT,
 };
-
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     runStartupMemoryCheck();

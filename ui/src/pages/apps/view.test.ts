@@ -18,6 +18,7 @@ const EXPECTED_EXTERNAL_HREFS = [
   "https://docs.openclaw.ai/platforms/windows",
   "https://github.com/openclaw/openclaw/releases",
   "https://docs.openclaw.ai/platforms/linux",
+  "https://chromewebstore.google.com/detail/openclaw/kcdjddhmeafeomebliikmbpblkmkfoig",
   "https://docs.openclaw.ai/tools/chrome-extension",
   "https://clawhub.ai",
   "https://discord.gg/clawd",
@@ -30,9 +31,9 @@ describe("renderApps", () => {
     await i18n.setLocale("en");
   });
 
-  function renderIntoContainer(onNavigate = vi.fn()) {
+  function renderIntoContainer(onNavigate = vi.fn(), onPairDevice?: () => void) {
     const container = document.createElement("div");
-    render(renderApps({ onNavigate }), container);
+    render(renderApps({ onNavigate, onPairDevice }), container);
     return container;
   }
 
@@ -79,12 +80,27 @@ describe("renderApps", () => {
     expect(onNavigate).toHaveBeenCalledExactlyOnceWith("plugins");
   });
 
-  it("badges the watch apps as bundled with their phone apps", () => {
+  it("offers device pairing from the phone section only when permitted", () => {
+    const withoutPair = renderIntoContainer();
+    expect(withoutPair.querySelector(".apps-pair-hint")).toBeNull();
+
+    const onPairDevice = vi.fn();
+    const container = renderIntoContainer(vi.fn(), onPairDevice);
+    const hint = container.querySelector(".apps-pair-hint");
+    expect(hint?.textContent).toContain("Already have the app?");
+    hint?.querySelector("button")?.click();
+    expect(onPairDevice).toHaveBeenCalledOnce();
+  });
+
+  it("badges only the bundled watch apps", () => {
     const container = renderIntoContainer();
     const badges = Array.from(container.querySelectorAll(".apps-card__badge")).map(
       (badge) => badge.textContent?.trim(),
     );
-    expect(badges).toEqual(["Included with the iOS app", "Included with the Android app"]);
+    expect(badges).toEqual([
+      "Included with the iOS app",
+      "Included with the Android app",
+    ]);
   });
 
   it("renders decorative lazy card art with a per-theme variant for every card", () => {

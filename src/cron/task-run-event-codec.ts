@@ -1,9 +1,10 @@
 /** Write-side cron codec: converts a finished service event into a run-history entry.
  * Kept separate from task-run-detail.ts so the read/history codec stays free of the
  * agents failover tree (which transitively pulls the sandbox module graph). */
-import { resolveFailoverReasonFromError } from "../agents/failover-error.js";
+import { resolveCronRunErrorReason } from "./run-error-reason.js";
 import type { CronRunLogEntry } from "./run-log-types.js";
 import type { CronEvent } from "./service/state.js";
+import type { CronRunErrorClassification } from "./types.js";
 
 type CronFinishedEvent = CronEvent & { action: "finished" };
 
@@ -24,8 +25,9 @@ function resolveCronRunEndedAt(event: CronFinishedEvent, fallbackTs: number): nu
 export function cronRunLogEntryFromEvent(
   event: CronFinishedEvent,
   fallbackTs: number,
+  errorClassification?: CronRunErrorClassification,
 ): CronRunLogEntry {
-  const errorReason = resolveFailoverReasonFromError(event.error, event.provider) ?? undefined;
+  const errorReason = resolveCronRunErrorReason(event.error, event.provider, errorClassification);
   return {
     ts: resolveCronRunEndedAt(event, fallbackTs),
     jobId: event.jobId,

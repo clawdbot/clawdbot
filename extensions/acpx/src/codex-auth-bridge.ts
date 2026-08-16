@@ -8,6 +8,7 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
+import { isRecord as isConfigRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   parse as parseToml,
   stringify as stringifyToml,
@@ -26,11 +27,7 @@ import {
 import { quoteCommandPart, splitCommandParts } from "./command-line.js";
 import { resolveAcpxPluginRoot } from "./config.js";
 import type { ResolvedAcpxPluginConfig } from "./config.js";
-import {
-  OPENCLAW_ACPX_LEASE_ID_ARG,
-  OPENCLAW_ACPX_LEASE_ID_ENV,
-  OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
-} from "./process-lease.js";
+import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
 
 const CLAUDE_ACP_PACKAGE = "@agentclientprotocol/claude-agent-acp";
 const CLAUDE_ACP_BIN = "claude-agent-acp";
@@ -293,7 +290,6 @@ function resolveStderrLogPath(args) {
     return undefined;
   }
   const leaseId =
-    process.env[${JSON.stringify(OPENCLAW_ACPX_LEASE_ID_ENV)}] ||
     readOpenClawWrapperArg(args, ${quoteCommandPart(OPENCLAW_ACPX_LEASE_ID_ARG)}) ||
     "pid-" + process.pid;
   const fileName = stderrLogFileNamePrefix + "." + safeDiagnosticFilePart(leaseId) + ".log";
@@ -805,10 +801,6 @@ function extractConfiguredAdapterArgs(params: {
   }
 
   return undefined;
-}
-
-function isConfigRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function mergeConfigRecords(

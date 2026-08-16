@@ -28,12 +28,12 @@ import {
 import {
   listProfilesForProvider,
   promoteAuthProfileInOrder,
-  upsertAuthProfileWithLock,
+  upsertAuthProfileWithLockOrThrow,
 } from "../../agents/auth-profiles/profiles.js";
 import { loadAuthProfileStoreForRuntime } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { clearAuthProfileCooldown } from "../../agents/auth-profiles/usage.js";
-import { normalizeProviderId } from "../../agents/model-selection-normalize.js";
+import { normalizeProviderId } from "../../agents/model-ref-shared.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { formatCliCommand } from "../../cli/command-format.js";
@@ -41,7 +41,6 @@ import { parseDurationMs } from "../../cli/parse-duration.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { normalizeAgentModelRefForConfig } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { callGateway } from "../../gateway/call.js";
 import { isRemoteEnvironment } from "../../infra/remote-env.js";
 import {
   applyProviderAuthConfigPatch,
@@ -52,9 +51,9 @@ import {
 } from "../../plugins/provider-auth-choice-helpers.js";
 import { applyAuthProfileConfig } from "../../plugins/provider-auth-helpers.js";
 import { createVpsAwareOAuthHandlers } from "../../plugins/provider-oauth-flow.js";
-import { resolvePluginProviders } from "../../plugins/providers.runtime.js";
+import { resolvePluginProvidersCore } from "../../plugins/providers.runtime.js";
 import {
-  resolvePluginSetupProvider,
+  resolvePluginSetupProviderCore,
   resolvePluginSetupRegistry,
 } from "../../plugins/setup-registry.js";
 import type {
@@ -69,22 +68,8 @@ import type { WizardPrompter } from "../../wizard/prompts.js";
 import { validateAnthropicSetupToken } from "../auth-token.js";
 import { repairCodexRuntimePluginInstallForModelSelection } from "../codex-runtime-plugin-install.js";
 import { repairCopilotRuntimePluginInstallForModelSelection } from "../copilot-runtime-plugin-install.js";
+import { refreshRunningGatewayAuthState } from "./auth-refresh.js";
 import { loadValidConfigOrThrow, resolveKnownAgentId, updateConfig } from "./shared.js";
-
-type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
-
-// CLI auth writes occur outside the gateway process, which may retain an older runtime snapshot.
-async function refreshRunningGatewayAuthState(): Promise<void> {
-  try {
-    await callGateway({
-      method: "models.authStatus",
-      params: { refresh: true },
-      timeoutMs: 3000,
-    });
-  } catch {
-    // Auth writes must still succeed when no local gateway is running.
-  }
-}
 
 function resolveManualTokenExpiryMs(expiresIn: string | undefined): number | undefined {
   const normalizedExpiresIn = normalizeStringifiedOptionalString(expiresIn);
@@ -164,9 +149,10 @@ function resolveDefaultTokenProfileId(provider: string): string {
 
 function normalizeManualAuthProvider(provider: string): string {
   const normalized = normalizeProviderId(provider);
-  return normalized === "openai" || normalized === "codex" || normalized === "openai-codex"
-    ? "openai"
-    : normalized;
+  if (normalized === "openai-codex" || normalized === "codex-cli") {
+    throw new Error(`"${normalized}" is a legacy provider ID; use --provider openai.`);
+  }
+  return normalized === "openai" || normalized === "codex" ? "openai" : normalized;
 }
 
 function isOpenAIProvider(provider: string): boolean {
@@ -262,7 +248,7 @@ function preferSetupAuthProviders(params: {
     ? normalizeManualAuthProvider(params.requestedProvider)
     : undefined;
   if (requestedProvider) {
-    const setupProvider = resolvePluginSetupProvider({
+    const setupProvider = resolvePluginSetupProviderCore({
       provider: requestedProvider,
       config: params.config,
       workspaceDir: params.workspaceDir,
@@ -293,12 +279,11 @@ async function resolveModelsAuthContext(params?: {
   const providerRef = requestedProvider
     ? normalizeManualAuthProvider(requestedProvider)
     : undefined;
-  const providers = resolvePluginProviders({
+  const providers = resolvePluginProvidersCore({
     config,
     workspaceDir,
     mode: "setup",
     includeUntrustedWorkspacePlugins: false,
-    bundledProviderVitestCompat: true,
     ...(providerRef
       ? {
           providerRefs: [providerRef],
@@ -511,7 +496,7 @@ async function persistProviderAuthResult(params: {
     params.runtime.log(
       params.setDefault
         ? `Default model set to ${defaultModel}`
-        : `Default model available: ${defaultModel} (use --set-default to apply)`,
+        : `Default model available: ${defaultModel} (current default unchanged; run ${formatCliCommand(`openclaw models set ${defaultModel}`)} to apply)`,
     );
   }
   if (params.result.notes && params.result.notes.length > 0) {
@@ -555,8 +540,10 @@ async function runProviderAuthMethod(params: {
   setDefault?: boolean;
   env?: NodeJS.ProcessEnv;
   isRemote?: boolean;
+  signal?: AbortSignal;
   openUrl?: (url: string) => Promise<void>;
 }): Promise<{ result: ProviderAuthResult; profiles: ProviderAuthResult["profiles"] }> {
+  params.signal?.throwIfAborted();
   const selectedProviderId = normalizeProviderId(params.provider.id);
   await clearStaleProfileLockouts(selectedProviderId, params.agentDir);
 
@@ -569,6 +556,7 @@ async function runProviderAuthMethod(params: {
     runtime: params.runtime,
     allowSecretRefPrompt: false,
     isRemote: params.isRemote ?? isRemoteEnvironment(),
+    signal: params.signal,
     openUrl:
       params.openUrl ??
       (async (url) => {
@@ -579,6 +567,7 @@ async function runProviderAuthMethod(params: {
       createVpsAwareHandlers: (runtimeParams) => createVpsAwareOAuthHandlers(runtimeParams),
     },
   });
+  params.signal?.throwIfAborted();
   const resultProviderIds = new Set(
     result.profiles.map((profile) => normalizeProviderId(profile.credential.provider)),
   );
@@ -788,15 +777,6 @@ export async function modelsAuthPasteApiKeyCommand(
   runtime.log(`Auth profile: ${profileId} (${provider}/api_key)`);
 }
 
-async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
-  const updated = await upsertAuthProfileWithLock(params);
-  if (!updated) {
-    throw new Error(
-      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
-    );
-  }
-}
-
 /** Interactive helper for adding token auth profiles, with provider/method prompts. */
 export async function modelsAuthAddCommand(opts: { agent?: string }, runtime: RuntimeEnv) {
   const { config, agentDir, workspaceDir, providers } = await resolveModelsAuthContext({
@@ -934,6 +914,7 @@ export type ModelsAuthLoginFlowOptions = LoginOptions & {
   prompter: WizardPrompter;
   env?: NodeJS.ProcessEnv;
   isRemote?: boolean;
+  signal?: AbortSignal;
   openUrl?: (url: string) => Promise<void>;
 };
 
@@ -1000,11 +981,11 @@ function maybeLogOpenAICodexNativeSearchTip(runtime: RuntimeEnv, providerId: str
     return;
   }
   runtime.log(
-    "Tip: Codex-capable models can use native Codex web search. Enable it with openclaw configure --section web (recommended mode: cached). Docs: https://docs.openclaw.ai/tools/web",
+    `Tip: Codex-capable models can use native Codex web search. Configure the \`web_search\` tool with \`${formatCliCommand("openclaw configure --section web")}\`. Docs: https://docs.openclaw.ai/tools/web`,
   );
 }
 
-export async function runModelsAuthLoginFlow(
+export async function runModelsAuthLoginFlowCore(
   opts: ModelsAuthLoginFlowOptions,
 ): Promise<ModelsAuthLoginFlowResult> {
   const { config, agentDir, workspaceDir, providers } = await resolveModelsAuthContext({
@@ -1096,6 +1077,7 @@ export async function runModelsAuthLoginFlow(
     setDefault: opts.setDefault,
     env: opts.env,
     isRemote: opts.isRemote,
+    signal: opts.signal,
     openUrl: opts.openUrl,
   });
   maybeLogOpenAICodexNativeSearchTip(opts.runtime, selectedProvider.id);
@@ -1118,7 +1100,7 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     );
   }
 
-  await runModelsAuthLoginFlow({
+  await runModelsAuthLoginFlowCore({
     ...opts,
     runtime,
     prompter: createClackPrompter(),

@@ -29,19 +29,15 @@ vi.mock("openclaw/plugin-sdk/dangerous-name-runtime", () => ({
   isDangerousNameMatchingEnabled: () => false,
 }));
 
-vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
-  danger: (value: string) => value,
-}));
-
-vi.mock("openclaw/plugin-sdk/string-coerce-runtime", () => ({
-  normalizeOptionalString: (value: string | null | undefined) => {
-    if (typeof value !== "string") {
-      return undefined;
-    }
-    const normalized = value.trim();
-    return normalized.length > 0 ? normalized : undefined;
-  },
-}));
+// Suite runs isolate=false: a partial factory here poisons the shared module
+// cache for later files in the worker (#123025), so spread the real module.
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+  return {
+    ...actual,
+    danger: (value: string) => value,
+  };
+});
 
 vi.mock("../proxy-request-client.js", () => ({
   DISCORD_REST_TIMEOUT_MS: 15_000,
@@ -91,6 +87,9 @@ vi.mock("./listeners.js", () => ({
   },
   DiscordReactionRemoveListener: function DiscordReactionRemoveListener() {
     return { type: "reaction-remove" };
+  },
+  DiscordThreadDeleteListener: function DiscordThreadDeleteListener() {
+    return { type: "thread-delete" };
   },
   DiscordThreadUpdateListener: function DiscordThreadUpdateListener() {
     return { type: "thread-update" };
@@ -397,7 +396,12 @@ describe("registerDiscordMonitorListeners", () => {
   it("skips reaction listeners when every configured guild disables reactions and DMs are off", () => {
     registerDiscordMonitorListeners(createListenerParams());
 
-    expect(registeredListenerTypes()).toEqual(["interaction", "message", "thread-update"]);
+    expect(registeredListenerTypes()).toEqual([
+      "interaction",
+      "message",
+      "thread-update",
+      "thread-delete",
+    ]);
   });
 
   it("keeps reaction listeners when direct messages can emit reaction notifications", () => {
@@ -440,6 +444,7 @@ describe("registerDiscordMonitorListeners", () => {
       "interaction",
       "message",
       "thread-update",
+      "thread-delete",
       "presence",
       "presence-guild-create",
       "presence-guild-delete",

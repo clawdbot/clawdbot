@@ -1,0 +1,28 @@
+title: Gateway plugin approval lifecycle
+
+scenario:
+  id: gateway-plugin-approvals
+  surface: gateway
+  category: gateway.approvals-and-remote-execution
+  coverage:
+    primary:
+      - gateway.plugin-approvals
+  objective: Prove that a real Gateway routes one plugin approval to a capable reviewer and records one consistent terminal decision.
+  successCriteria:
+    - The Gateway generates a plugin-prefixed approval ID and reports approval-client delivery.
+    - A distinct admin reviewer with the approvals capability receives the matching requested event.
+    - The pending inventory contains the request while waitDecision remains blocked.
+    - The reviewer resolution produces identical waitDecision and resolved-event outcomes.
+    - The resolved request leaves the pending approval inventory.
+  docsRefs:
+    - docs/gateway/protocol.md
+    - docs/help/testing.md
+  codeRefs:
+    - src/gateway/server-methods/plugin-approval.ts
+    - src/gateway/server-methods/approval-shared.ts
+    - src/gateway/server-request-context.ts
+    - test/e2e/qa-lab/runtime/gateway-plugin-approvals.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/runtime/gateway-plugin-approvals.e2e.test.ts
+    summary: Run authenticated requester and reviewer clients over real Gateway WebSockets through request, wait, resolve, and cleanup.

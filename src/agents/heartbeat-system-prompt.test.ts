@@ -3,22 +3,19 @@ import { describe, expect, it } from "vitest";
 import { resolveHeartbeatPromptForSystemPrompt } from "./heartbeat-system-prompt.js";
 
 describe("resolveHeartbeatPromptForSystemPrompt", () => {
-  it("omits the heartbeat section when disabled in defaults", () => {
+  it("includes the heartbeat section for the default enabled cadence", () => {
     expect(
       resolveHeartbeatPromptForSystemPrompt({
         config: {
           agents: {
-            defaults: {
-              heartbeat: {
-                includeSystemPromptSection: false,
-              },
-            },
+            defaults: { heartbeat: {} },
+            entries: { main: { default: true } },
           },
         },
         agentId: "main",
         defaultAgentId: "main",
       }),
-    ).toBeUndefined();
+    ).toBeDefined();
   });
 
   it("omits the heartbeat section when the default cadence is disabled", () => {
@@ -31,6 +28,7 @@ describe("resolveHeartbeatPromptForSystemPrompt", () => {
                 every: "0m",
               },
             },
+            entries: { main: { default: true } },
           },
         },
         agentId: "main",
@@ -89,6 +87,42 @@ describe("resolveHeartbeatPromptForSystemPrompt", () => {
     ).toBeUndefined();
   });
 
+  it("includes the heartbeat section for every agent enrolled by shared defaults", () => {
+    expect(
+      resolveHeartbeatPromptForSystemPrompt({
+        config: {
+          agents: {
+            defaults: { heartbeat: { every: "30m" } },
+            list: [{ id: "ops" }, { id: "research" }],
+          },
+        },
+        agentId: "research",
+      }),
+    ).toBeDefined();
+  });
+
+  it("includes the heartbeat section only for explicitly enrolled agents", () => {
+    const config = {
+      agents: {
+        ownership: "explicit" as const,
+        list: [{ id: "ops" }, { id: "research", heartbeat: { every: "30m" } }],
+      },
+    };
+
+    expect(
+      resolveHeartbeatPromptForSystemPrompt({
+        config,
+        agentId: "research",
+      }),
+    ).toBeDefined();
+    expect(
+      resolveHeartbeatPromptForSystemPrompt({
+        config,
+        agentId: "ops",
+      }),
+    ).toBeUndefined();
+  });
+
   it("honors default-agent overrides for the prompt text", () => {
     // Defaults establish cadence/shape, but the default agent can override the
     // final visible prompt text.
@@ -114,10 +148,22 @@ describe("resolveHeartbeatPromptForSystemPrompt", () => {
         agentId: "main",
         defaultAgentId: "main",
       }),
-    ).toBe("Ops check");
+    ).toContain("Ops check");
+    expect(
+      resolveHeartbeatPromptForSystemPrompt({
+        config: {
+          agents: {
+            defaults: { heartbeat: { every: "30m" } },
+            list: [{ id: "main", heartbeat: { prompt: "Ops check" } }],
+          },
+        },
+        agentId: "main",
+        defaultAgentId: "main",
+      }),
+    ).toContain("Recurring tasks are automations");
   });
 
-  it("does not inject the heartbeat section for non-default agents", () => {
+  it("includes the heartbeat section for explicitly enrolled non-default agents", () => {
     expect(
       resolveHeartbeatPromptForSystemPrompt({
         config: {
@@ -140,6 +186,6 @@ describe("resolveHeartbeatPromptForSystemPrompt", () => {
         agentId: "ops",
         defaultAgentId: "main",
       }),
-    ).toBeUndefined();
+    ).toContain("Ops prompt");
   });
 });
