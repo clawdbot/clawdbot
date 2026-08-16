@@ -50,7 +50,7 @@ type ValidateConfigWithPluginsResult =
 
 type ValidateConfigWithPluginsParams = {
   env?: NodeJS.ProcessEnv;
-  pluginValidation?: "full" | "skip";
+  pluginValidation?: "full" | "skip" | "core-only";
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">;
   loadPluginMetadataSnapshot?: (
     config: OpenClawConfig,
@@ -165,7 +165,7 @@ function validateConfigObjectWithPluginsBase(
   let registryInfo: RegistryInfo | null = opts.pluginMetadataSnapshot
     ? rememberRegistry(opts.pluginMetadataSnapshot.manifestRegistry)
     : null;
-  if (opts.applyDefaults && !registryInfo) {
+  if (opts.applyDefaults && !registryInfo && opts.pluginValidation !== "core-only") {
     const pluginMetadataSnapshot = opts.loadPluginMetadataSnapshot?.(parsedConfig);
     if (pluginMetadataSnapshot) {
       registryInfo = rememberRegistry(pluginMetadataSnapshot.manifestRegistry);
@@ -176,7 +176,7 @@ function validateConfigObjectWithPluginsBase(
         manifestRegistry: registryInfo?.registry,
       })
     : parsedConfig;
-  if (opts.pluginValidation === "skip") {
+  if (opts.pluginValidation !== "full") {
     return { ok: true, config, warnings: [] };
   }
 

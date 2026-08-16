@@ -37,6 +37,8 @@ type BundledHealthCheckSelection = {
   readonly includeAllChecks?: boolean;
 };
 
+export type BundledHealthCheckPluginStateMode = "direct" | "deferred" | "isolated";
+
 function loadMemoryCoreHealthApi(): BundledHealthApi {
   return loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
     dirName: "memory-core",
@@ -44,25 +46,29 @@ function loadMemoryCoreHealthApi(): BundledHealthApi {
   });
 }
 
-export function shouldIsolatePluginStateForBundledHealthChecks(
+export function resolveBundledHealthCheckPluginStateMode(
   selection: BundledHealthCheckSelection,
-): boolean {
+): BundledHealthCheckPluginStateMode {
   if (
     selection.includeAllChecks !== true &&
     (selection.onlyIds === undefined || selection.onlyIds.length === 0)
   ) {
-    return false;
+    return "direct";
   }
-  const isolatedIds = loadMemoryCoreHealthApi().pluginStateIsolatedDoctorCheckIds ?? [];
+  const isolatedIds = new Set(loadMemoryCoreHealthApi().pluginStateIsolatedDoctorCheckIds ?? []);
   const skippedIds = new Set(selection.skipIds ?? []);
-  const eligibleIds = isolatedIds.filter((id) => !skippedIds.has(id));
-  if (eligibleIds.length === 0) {
-    return false;
+  const selectedOnlyIds = [...new Set(selection.onlyIds ?? [])].filter((id) => !skippedIds.has(id));
+  const selectedIsolatedIds =
+    selectedOnlyIds.length > 0
+      ? selectedOnlyIds.filter((id) => isolatedIds.has(id))
+      : [...isolatedIds].filter((id) => !skippedIds.has(id));
+  if (selectedIsolatedIds.length === 0) {
+    return "direct";
   }
-  const onlyIds = new Set(selection.onlyIds ?? []);
-  return onlyIds.size > 0
-    ? eligibleIds.some((id) => onlyIds.has(id))
-    : selection.includeAllChecks === true;
+  if (selectedOnlyIds.length > 0 && selectedOnlyIds.every((id) => isolatedIds.has(id))) {
+    return "deferred";
+  }
+  return "isolated";
 }
 
 /** Registers bundled health checks that are explicitly enabled by config and owner policy. */

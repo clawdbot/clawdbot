@@ -6,10 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderPolicySurface } from "../plugins/provider-policy-surface.js";
 import {
   registerBundledHealthChecks,
-  shouldIsolatePluginStateForBundledHealthChecks,
+  resolveBundledHealthCheckPluginStateMode,
 } from "./bundled-health-checks.js";
 
-const STATE_ISOLATED_CHECK_ID = "memory-core/managed-local-embedding-setup";
+const STATE_DEFERRED_CHECK_ID = "memory-core/managed-local-embedding-setup";
 
 const mocks = vi.hoisted(() => ({
   inspectEmbeddingProviderSetup: vi.fn(),
@@ -23,7 +23,7 @@ const mocks = vi.hoisted(() => ({
   loadBundledPluginPublicArtifactModuleSync: vi.fn(({ dirName }: { dirName: string }) =>
     dirName === "memory-core"
       ? {
-          pluginStateIsolatedDoctorCheckIds: [STATE_ISOLATED_CHECK_ID],
+          pluginStateIsolatedDoctorCheckIds: [STATE_DEFERRED_CHECK_ID],
           registerMemoryCoreDoctorChecks: mocks.registerMemoryCoreDoctorChecks,
         }
       : dirName === "cua-computer"
@@ -60,43 +60,50 @@ describe("registerBundledHealthChecks", () => {
 
   it.each([
     {
-      title: "isolates an explicitly selected owner-declared check",
-      selection: { onlyIds: [STATE_ISOLATED_CHECK_ID] },
-      expected: true,
+      title: "defers state for an explicitly selected owner-declared check",
+      selection: { onlyIds: [STATE_DEFERRED_CHECK_ID] },
+      expected: "deferred",
     },
     {
       title: "isolates owner-declared checks included by --all",
       selection: { includeAllChecks: true },
-      expected: true,
+      expected: "isolated",
     },
     {
-      title: "does not isolate ordinary default selection",
-      selection: {},
-      expected: false,
-    },
-    {
-      title: "does not isolate an unrelated explicit check",
-      selection: { onlyIds: ["core/doctor/final-config-validation"] },
-      expected: false,
-    },
-    {
-      title: "does not isolate a selected check excluded by --skip",
+      title: "isolates mixed explicit selections",
       selection: {
-        onlyIds: [STATE_ISOLATED_CHECK_ID],
-        skipIds: [STATE_ISOLATED_CHECK_ID],
+        onlyIds: [STATE_DEFERRED_CHECK_ID, "core/doctor/final-config-validation"],
       },
-      expected: false,
+      expected: "isolated",
     },
     {
-      title: "does not isolate an owner-declared check excluded from --all",
+      title: "uses direct state for ordinary default selection",
+      selection: {},
+      expected: "direct",
+    },
+    {
+      title: "uses direct state for an unrelated explicit check",
+      selection: { onlyIds: ["core/doctor/final-config-validation"] },
+      expected: "direct",
+    },
+    {
+      title: "uses direct state when the selected deferred check is skipped",
+      selection: {
+        onlyIds: [STATE_DEFERRED_CHECK_ID],
+        skipIds: [STATE_DEFERRED_CHECK_ID],
+      },
+      expected: "direct",
+    },
+    {
+      title: "uses direct state when the deferred check is excluded from --all",
       selection: {
         includeAllChecks: true,
-        skipIds: [STATE_ISOLATED_CHECK_ID],
+        skipIds: [STATE_DEFERRED_CHECK_ID],
       },
-      expected: false,
+      expected: "direct",
     },
-  ])("$title", ({ selection, expected }) => {
-    expect(shouldIsolatePluginStateForBundledHealthChecks(selection)).toBe(expected);
+  ] as const)("$title", ({ selection, expected }) => {
+    expect(resolveBundledHealthCheckPluginStateMode(selection)).toBe(expected);
     if (selection.onlyIds === undefined && selection.includeAllChecks !== true) {
       expect(mocks.loadBundledPluginPublicArtifactModuleSync).not.toHaveBeenCalled();
     }

@@ -7,7 +7,7 @@ import { maybeLoadDotEnvForConfig } from "../config/io.read-helpers.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import {
   registerBundledHealthChecks,
-  shouldIsolatePluginStateForBundledHealthChecks,
+  resolveBundledHealthCheckPluginStateMode,
 } from "../flows/bundled-health-checks.js";
 import { configValidationIssuesToHealthFindings } from "../flows/doctor-core-checks.js";
 import { scrubDoctorErrorMessage } from "../flows/doctor-error-message.js";
@@ -59,7 +59,10 @@ type DoctorLintExecution = {
 
 class DoctorLintStateSnapshotError extends Error {
   constructor(cause: unknown) {
-    super("Doctor lint could not prepare a private plugin-state snapshot.", { cause });
+    super(
+      `Doctor lint could not prepare a private plugin-state snapshot: ${scrubDoctorErrorMessage(cause)}`,
+      { cause },
+    );
     this.name = "DoctorLintStateSnapshotError";
   }
 }
@@ -88,14 +91,30 @@ export async function runDoctorLintCli(
   }
   maybeLoadDotEnvForConfig(process.env);
   const sourceEnv = { ...process.env };
+  const pluginStateMode = resolveBundledHealthCheckPluginStateMode(opts);
   let execution: DoctorLintExecution;
-  if (!shouldIsolatePluginStateForBundledHealthChecks(opts)) {
+  if (pluginStateMode === "direct") {
     execution = await executeDoctorLint(runtime, opts, sevMin, {
-      pluginMetadataEnv: process.env,
+      pluginMetadataEnv: sourceEnv,
       readConfigSnapshot: () => readConfigFileSnapshot({ observe: false }),
-      sourceEnv: process.env,
+      sourceEnv,
       runWithPluginStateSnapshot: async (run) =>
-        await withReadOnlyPluginStateSnapshot({ ...process.env }, run),
+        await withReadOnlyPluginStateSnapshot(sourceEnv, run),
+    });
+  } else if (pluginStateMode === "deferred") {
+    const sourceConfigPath = resolveConfigPath(sourceEnv, resolveStateDir(sourceEnv));
+    const configIo = createConfigIO({
+      env: sourceEnv,
+      configPath: sourceConfigPath,
+      observe: false,
+      pluginValidation: "core-only",
+    });
+    execution = await executeDoctorLint(runtime, opts, sevMin, {
+      pluginMetadataEnv: sourceEnv,
+      readConfigSnapshot: () => configIo.readConfigFileSnapshot(),
+      sourceEnv,
+      runWithPluginStateSnapshot: async (run) =>
+        await withReadOnlyPluginStateSnapshot(sourceEnv, run),
     });
   } else {
     try {
