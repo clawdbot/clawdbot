@@ -14,6 +14,7 @@ import {
   resolveAttemptSpawnWorkspaceDir,
   resolveModelAuthMode,
   resolveSandboxContext,
+  resolveSessionPermissionExecMode,
   supportsModelTools,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   type RuntimeToolSchemaDiagnostic,
@@ -254,6 +255,11 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
         ...buildEmbeddedAttemptToolRunContext(params),
         exec: {
           ...params.execOverrides,
+          ...(params.permissionMode
+            ? {
+                mode: resolveSessionPermissionExecMode({ mode: params.permissionMode }),
+              }
+            : {}),
           ...resolveCodexNodeExecToolOverrides(nativeExecutionPolicy),
           config: params.config,
           elevated: params.bashElevated,

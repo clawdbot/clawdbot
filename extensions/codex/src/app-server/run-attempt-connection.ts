@@ -1,6 +1,7 @@
 import {
   isActiveHarnessContextEngine,
   resolveSandboxContext,
+  resolveSessionPermissionExecMode,
   resolveSessionAgentIds,
   resolveUserPath,
   type FastModeAutoProgressState,
@@ -103,7 +104,12 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   const execPolicy = resolveOpenClawExecPolicyForCodexAppServer({
     // The explicit session mode replaces legacy per-session execSecurity/execAsk.
     // Global/agent policy and approvals-file floors remain authoritative.
-    execOverrides: params.permissionMode ? undefined : params.execOverrides,
+    execOverrides: params.permissionMode
+      ? {
+          ...params.execOverrides,
+          mode: resolveSessionPermissionExecMode({ mode: params.permissionMode }),
+        }
+      : params.execOverrides,
     approvals: loadExecApprovals(),
     config: params.config,
     agentId: sessionAgentId,
@@ -191,6 +197,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       agentDir,
       requirementsToml,
       openClawSandboxActive: sandbox?.enabled === true,
+      sessionPermissionMode: params.permissionMode,
     }).appServer;
   const initialStartupBindingHadInactiveThreadBootstrap =
     isInactiveThreadBootstrapBinding(startupBinding);
@@ -299,21 +306,22 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
         homeScope: appServer.start.homeScope,
       }),
       requirementsToml,
-      policyLocked: execPolicy.touched || startupBinding?.connectionScope === "supervision",
+      policyLocked: startupBinding?.connectionScope === "supervision",
     });
   const resolveFinalAppServer = (
     configured: typeof configuredAppServer,
     selection: { modelProvider?: string; model?: string },
   ) => {
+    const session = applySessionPermissionPolicy(configured, selection);
     const trusted = resolveCodexAppServerForModelProvider({
-      appServer: configured,
+      appServer: session,
       provider: selection.modelProvider,
       model: selection.model,
       config: params.config,
       env: process.env,
       agentDir,
     });
-    return { appServer: applySessionPermissionPolicy(trusted, selection) };
+    return { session, appServer: trusted };
   };
   let resolvedAppServer = resolveFinalAppServer(configuredAppServer, reviewerPolicyContext);
   let appServer = resolvedAppServer.appServer;
