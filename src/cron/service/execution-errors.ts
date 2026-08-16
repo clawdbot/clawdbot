@@ -1,5 +1,6 @@
 /** Formats stable cron timeout and execution error messages. */
 import { formatEmbeddedAgentExecutionPhase } from "../../agents/embedded-agent-runner/execution-phase.js";
+import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import {
   CRON_JOB_EXECUTION_TIMEOUT_ERROR,
   CRON_PRE_EXECUTION_TIMEOUT_ERROR,
@@ -80,8 +81,5 @@ export function normalizeCronRunErrorText(err: unknown): string {
   if (isAbortError(err)) {
     return timeoutErrorMessage();
   }
-  if (typeof err === "string") {
-    return err === `Error: ${timeoutErrorMessage()}` ? timeoutErrorMessage() : err;
-  }
-  return String(err);
+  return formatErrorMessageWithCode(err);
 }

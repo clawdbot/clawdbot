@@ -1,6 +1,7 @@
 import { createServer, type Server } from "node:net";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { FailoverError } from "../agents/failover-error.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -128,7 +129,11 @@ async function runPersistedDiagnosticCase(params: {
         }).entries[0];
         expect(finished).toBeDefined();
         expect(history).toBeDefined();
-        return { finished: finished!, history: history! };
+        return {
+          finished: finished!,
+          history: history!,
+          lastError: cron.getJob(job.id)?.state.lastError,
+        };
       } finally {
         cron.stop();
         resetTaskRegistryForTests({ persist: false });
@@ -213,6 +218,41 @@ describe.sequential("cron execution diagnostics", () => {
         },
       });
     }
+  });
+
+  it("persists provider failures without internal class names", async () => {
+    const message =
+      "The selected model was not found by the provider. Check the model id or choose a different model.";
+    const modelRef = { provider: "openai", model: "not-a-real-model" };
+    resolveConfiguredModelRefMock.mockReturnValue(modelRef);
+    resolveAllowedModelRefMock.mockReturnValue({ ref: modelRef });
+    runWithModelFallbackMock.mockRejectedValueOnce(
+      new FailoverError(message, {
+        reason: "model_not_found",
+        provider: modelRef.provider,
+        model: modelRef.model,
+        code: "MODEL_NOT_FOUND",
+      }),
+    );
+
+    const { finished, history, lastError } = await runPersistedDiagnosticCase({
+      cfg: configFor(modelRef),
+      modelRef,
+      name: "missing provider model",
+    });
+
+    for (const outcome of [finished, history]) {
+      expect(outcome).toMatchObject({
+        status: "error",
+        provider: modelRef.provider,
+        model: modelRef.model,
+        error: `${message} | MODEL_NOT_FOUND`,
+        diagnostics: { summary: message },
+      });
+      expect(outcome.error).not.toContain("FailoverError");
+    }
+    expect(lastError).toBe(`${message} | MODEL_NOT_FOUND`);
+    expect(history.errorReason).toBe("model_not_found");
   });
 
   it("persists and emits a fatal execution-denial diagnostic", async () => {

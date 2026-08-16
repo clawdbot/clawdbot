@@ -15,6 +15,7 @@ import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { isCronSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { normalizeCronRunErrorText } from "../service/execution-errors.js";
 import {
   appendAdmittedDirectCronDeliveryTranscriptMirror,
   buildDirectCronTranscriptMirrorPayloads,
@@ -490,7 +491,7 @@ export async function dispatchCronDelivery(
           status: "error",
           summary,
           outputText,
-          error: String(err),
+          error: normalizeCronRunErrorText(err),
           deliveryAttempted,
           ...params.telemetry,
         });

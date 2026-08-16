@@ -794,7 +794,9 @@ describe("cron task run terminal records", () => {
     "cron: isolated agent setup timed out before runner start (last phase: preparing)",
     "cron: isolated agent run stalled before execution start",
     "cron: isolated agent run stalled before execution start (last phase: preparing)",
-  ])("preserves %j as a provisional timed-out task", async (error) => {
+    Object.assign(new Error("request aborted"), { name: "AbortError" }),
+  ])("preserves a provisional timed-out task for case %#", async (input) => {
+    const expected = input instanceof Error ? timeoutErrorMessage() : input;
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-cron-provisional-watchdog-timeout-" },
       async () => {
@@ -829,7 +831,7 @@ describe("cron task run terminal records", () => {
         tryFinishCronTaskRunWithoutHistory(state, {
           taskRunId,
           status: "error",
-          error,
+          error: input,
           endedAt: startedAt + 100,
         });
 
@@ -841,7 +843,7 @@ describe("cron task run terminal records", () => {
         ).toEqual([
           expect.objectContaining({
             status: "timed_out",
-            error,
+            error: expected,
             endedAt: startedAt + 100,
           }),
         ]);
