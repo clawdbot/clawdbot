@@ -497,8 +497,11 @@ describe("runGatewayLoop", () => {
     await withIsolatedSignals(async ({ captureSignal }) => {
       const unresolvedFirstStartup = new Promise<void>(() => {});
       const replacementError = new Error("replacement deferred startup failed");
+      const cleanupError = new Error("replacement cleanup failed");
       const closeFirst = createCloseMock();
-      const closeSecond = createCloseMock();
+      const closeSecond = vi.fn<GatewayCloseFn>(async () => {
+        throw cleanupError;
+      });
       const closeThird = createCloseMock();
       let markThirdStarted: (() => void) | undefined;
       const thirdStarted = new Promise<void>((resolve) => {
@@ -536,6 +539,7 @@ describe("runGatewayLoop", () => {
         "expected replacement deferred startup failure",
       );
       expect(closeSecond).toHaveBeenCalledWith({ reason: "gateway startup failed" });
+      expect(gatewayLog.warn).toHaveBeenCalledWith(expect.stringContaining(cleanupError.message));
 
       sigusr1();
       await thirdStarted;

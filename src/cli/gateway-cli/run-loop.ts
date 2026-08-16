@@ -1086,7 +1086,13 @@ export async function runGatewayLoop(params: {
             ? { startupReason: GATEWAY_AGENT_MEDIA_MIGRATION_REQUIRED_REASON }
             : {}),
         });
-        await failedServer?.close({ reason: "gateway startup failed" });
+        try {
+          await failedServer?.close({ reason: "gateway startup failed" });
+        } catch (closeError) {
+          gatewayLog.warn(
+            `failed to close gateway after startup failure: ${formatErrorMessage(closeError)}`,
+          );
+        }
         // On initial startup, let the error propagate so the outer handler
         // can report "Gateway failed to start" and exit non-zero. Only
         // swallow errors on subsequent in-process restarts to keep the

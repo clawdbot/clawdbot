@@ -521,19 +521,22 @@ export async function prepareGatewayLifecycle(params: {
       getEventLoopHealth: readinessEventLoopHealth.snapshot,
       getConfigReloaderHotReloadStatus: kernel.getConfigReloaderHotReloadStatus,
     });
+  const stopRegisteredSidecars = async (sidecars: typeof runtimeState.postReadySidecars) => {
+    const results = await Promise.allSettled(sidecars.map(async (sidecar) => await sidecar.stop()));
+    const failure = results.find((result) => result.status === "rejected");
+    if (failure) {
+      throw failure.reason;
+    }
+  };
   const stopRegisteredPostReadySidecars = async () => {
     const postReadySidecars = runtimeState.postReadySidecars;
     runtimeState.postReadySidecars = [];
-    for (const postReadySidecar of postReadySidecars) {
-      await postReadySidecar.stop();
-    }
+    await stopRegisteredSidecars(postReadySidecars);
   };
   const stopRegisteredGatewayLifetimeSidecars = async () => {
     const gatewayLifetimeSidecars = runtimeState.gatewayLifetimeSidecars;
     runtimeState.gatewayLifetimeSidecars = [];
-    for (const gatewayLifetimeSidecar of gatewayLifetimeSidecars) {
-      await gatewayLifetimeSidecar.stop();
-    }
+    await stopRegisteredSidecars(gatewayLifetimeSidecars);
   };
   const createCloseHandler = () => async (optsValue?: GatewayCloseOptions) => {
     const channelIds = listLoadedChannelPlugins().map((plugin) => plugin.id as ChannelId);

@@ -90,6 +90,20 @@ describe("createGatewayKernel", () => {
       await expect(
         dispatchGatewayRequestInProcess("chat.send", chatParams, dispatchOptions),
       ).resolves.toEqual({ runId, status: "ok" });
+
+      const cleanupError = new Error("lifetime sidecar cleanup failed");
+      const failingSidecar = vi.fn(async () => {
+        throw cleanupError;
+      });
+      const trailingSidecar = vi.fn(async () => {});
+      kernel.kernel.setGatewayLifetimeSidecars([
+        { stop: failingSidecar },
+        { stop: trailingSidecar },
+      ]);
+
+      await expect(kernel.stopRegisteredGatewayLifetimeSidecars()).rejects.toBe(cleanupError);
+      expect(failingSidecar).toHaveBeenCalledOnce();
+      expect(trailingSidecar).toHaveBeenCalledOnce();
     } finally {
       try {
         await kernel?.closeOnStartupFailure();

@@ -72,22 +72,36 @@ export async function startGatewayServerCore(
   return {
     startupSettled,
     close: async (optsLocal) => {
+      const closeErrors: unknown[] = [];
+      const runCloseStep = async (label: string, step: () => void | Promise<void>) => {
+        try {
+          await step();
+        } catch (err) {
+          closeErrors.push(err);
+          log.warn(`gateway close ${label} failed: ${String(err)}`);
+        }
+      };
       try {
-        markClosePreludeStarted();
-        await beginClosePrelude();
+        await runCloseStep("prelude fence", markClosePreludeStarted);
+        await runCloseStep("prelude owners", beginClosePrelude);
         // Kill any live operator shells before the socket layer tears down.
-        terminalSessions.disposeAll();
-        await stopRegisteredGatewayLifetimeSidecars();
-        await stopRegisteredPostReadySidecars();
+        await runCloseStep("terminal sessions", () => terminalSessions.disposeAll());
+        await runCloseStep("lifetime sidecars", stopRegisteredGatewayLifetimeSidecars);
+        await runCloseStep("post-ready sidecars", stopRegisteredPostReadySidecars);
         // Run gateway_stop plugin hook before shutdown
-        const { runGlobalGatewayStopSafely } = await import("../plugins/hook-runner-global.js");
-        await runGlobalGatewayStopSafely({
-          event: { reason: optsLocal?.reason ?? "gateway stopping" },
-          ctx: { port },
-          onError: (err) => log.warn(`gateway_stop hook failed: ${String(err)}`),
+        await runCloseStep("plugin hook", async () => {
+          const { runGlobalGatewayStopSafely } = await import("../plugins/hook-runner-global.js");
+          await runGlobalGatewayStopSafely({
+            event: { reason: optsLocal?.reason ?? "gateway stopping" },
+            ctx: { port },
+            onError: (err) => log.warn(`gateway_stop hook failed: ${String(err)}`),
+          });
         });
-        await runClosePrelude();
-        await close(optsLocal);
+        await runCloseStep("runtime prelude", runClosePrelude);
+        await runCloseStep("transport", () => close(optsLocal));
+        if (closeErrors.length > 0) {
+          throw closeErrors[0];
+        }
       } finally {
         clearFallbackGatewayContextForServer.get()();
       }

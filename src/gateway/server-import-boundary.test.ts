@@ -241,9 +241,18 @@ describe("gateway startup import boundaries", () => {
     const serverImpl = readServerImplementation();
     const closeStart = /close:\s*async\s*\([^)]*\)\s*=>/u.exec(serverImpl)?.index ?? -1;
     const hookStart = serverImpl.indexOf("runGlobalGatewayStopSafely", closeStart);
-    const closeFenceStart = serverImpl.indexOf("markClosePreludeStarted();", closeStart);
-    const reloadStopStart = serverImpl.indexOf("await beginClosePrelude();", closeStart);
-    const terminalStopStart = serverImpl.indexOf("terminalSessions.disposeAll();", closeStart);
+    const closeFenceStart = serverImpl.indexOf(
+      'runCloseStep("prelude fence", markClosePreludeStarted)',
+      closeStart,
+    );
+    const reloadStopStart = serverImpl.indexOf(
+      'runCloseStep("prelude owners", beginClosePrelude)',
+      closeStart,
+    );
+    const terminalStopStart = serverImpl.indexOf(
+      'runCloseStep("terminal sessions", () => terminalSessions.disposeAll())',
+      closeStart,
+    );
     const markHelperStart = serverImpl.indexOf("const markClosePreludeStarted = () => {");
     const markHelperEnd = serverImpl.indexOf("};", markHelperStart);
     const beginHelperStart = serverImpl.indexOf("const beginClosePrelude = async () => {");
