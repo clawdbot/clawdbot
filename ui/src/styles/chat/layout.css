@@ -351,10 +351,10 @@ openclaw-chat-page {
   background: transparent;
 }
 
-/* The oversized clipped transcript owns its focus ring, so it stays inward to keep every edge visible. */
+/* The transcript stays keyboard-focusable for scroll keys, but the owner chose
+   no focus box: a ring around the whole main content reads as a broken border. */
 .chat-thread:focus-visible {
-  outline: 2px solid var(--muted-strong);
-  outline-offset: -2px;
+  outline: none;
 }
 
 .chat-thread-inner > :first-child {
