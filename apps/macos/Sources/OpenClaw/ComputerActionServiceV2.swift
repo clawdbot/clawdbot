@@ -42,6 +42,97 @@ struct ComputerActionExecutionAuthority {
     }
 }
 
+struct ComputerOpaqueReferenceStore<WindowTarget, ElementTarget> {
+    struct Observation {
+        let id: String
+        let windowRef: String
+        let snapshotId: String
+        let elements: [String: ElementTarget]
+    }
+
+    private(set) var lifecycleGeneration: UInt64?
+    private var windowRefs: [String: WindowTarget] = [:]
+    private(set) var observation: Observation?
+
+    mutating func adoptLifecycleGeneration(_ generation: UInt64) {
+        guard self.lifecycleGeneration != generation else { return }
+        self.lifecycleGeneration = generation
+        self.windowRefs.removeAll()
+        self.observation = nil
+    }
+
+    mutating func projectWindows(
+        _ targets: [WindowTarget],
+        matches: (WindowTarget, WindowTarget) -> Bool,
+        issueRef: (String) -> String) -> [(ref: String, target: WindowTarget)]
+    {
+        // Discovery may omit windows transiently; only generation rotation owns
+        // ref invalidation, while matching live identities keep stable refs.
+        targets.map { target in
+            let ref = self.issueWindowRef(target, matches: matches, issueRef: issueRef)
+            return (ref, target)
+        }
+    }
+
+    func resolveWindow(_ ref: String) throws -> WindowTarget {
+        guard let target = self.windowRefs[ref] else {
+            throw ComputerActionService.ComputerActionError.staleObservation
+        }
+        return target
+    }
+
+    mutating func replaceWindow(_ target: WindowTarget, for ref: String) {
+        guard self.windowRefs[ref] != nil else { return }
+        self.windowRefs[ref] = target
+    }
+
+    mutating func replaceObservation(
+        windowRef: String,
+        snapshotId: String,
+        elements: [ElementTarget],
+        issueRef: (String) -> String) -> (id: String, elementRefs: [String])
+    {
+        let id = issueRef("observation")
+        let elementRefs = elements.map { _ in issueRef("element") }
+        self.observation = Observation(
+            id: id,
+            windowRef: windowRef,
+            snapshotId: snapshotId,
+            elements: Dictionary(uniqueKeysWithValues: zip(elementRefs, elements)))
+        return (id, elementRefs)
+    }
+
+    func resolveObservation(_ id: String?, windowRef: String) throws -> Observation {
+        guard let observation = self.observation,
+              observation.id == id,
+              observation.windowRef == windowRef
+        else {
+            throw ComputerActionService.ComputerActionError.staleObservation
+        }
+        return observation
+    }
+
+    func resolveElement(_ ref: String, observation: Observation) throws -> ElementTarget {
+        guard let element = observation.elements[ref] else {
+            throw ComputerActionService.ComputerActionError.staleObservation
+        }
+        return element
+    }
+
+    private mutating func issueWindowRef(
+        _ target: WindowTarget,
+        matches: (WindowTarget, WindowTarget) -> Bool,
+        issueRef: (String) -> String) -> String
+    {
+        if let existing = self.windowRefs.first(where: { matches($0.value, target) })?.key {
+            return existing
+        }
+        let ref = issueRef("window")
+        self.windowRefs[ref] = target
+        return ref
+    }
+}
+
 /// Implements the additive computer.act v2 surface without changing the v1
 /// coordinate path. All authority-bearing references are process-local,
 /// execution-local, and invalidated when the native lifecycle generation moves.
@@ -57,13 +148,6 @@ final class ComputerActionServiceV2 {
         let bounds: CGRect
     }
 
-    private struct ObservationState {
-        let id: String
-        let windowRef: String
-        let snapshotId: String
-        let elements: [String: ElementTarget]
-    }
-
     private let executionID = UUID().uuidString.lowercased()
     private let automation: UIAutomationService
     private let applications: ApplicationService
@@ -71,10 +155,8 @@ final class ComputerActionServiceV2 {
     private let menu: MenuService
     private let observationService: DesktopObservationService
     private let snapshotManager: InMemorySnapshotManager
-    private var lifecycleGeneration: UInt64?
     private var appRefs: [String: ServiceApplicationInfo] = [:]
-    private var windowRefs: [String: WindowTarget] = [:]
-    private var observation: ObservationState?
+    private var references = ComputerOpaqueReferenceStore<WindowTarget, ElementTarget>()
     private var executionAuthority: ComputerActionExecutionAuthority?
 
     init() {
@@ -190,8 +272,7 @@ final class ComputerActionServiceV2 {
         let appOutput = try await self.withExecutionAuthority {
             try await self.applications.listApplications()
         }
-        self.windowRefs.removeAll(keepingCapacity: true)
-        var rows: [[String: Any]] = []
+        var targets: [WindowTarget] = []
         var warnings = appOutput.metadata.warnings
         outer: for app in appOutput.data.applications
             where app.windowCount > 0 || app.windowIDs?.isEmpty == false
@@ -204,20 +285,25 @@ final class ComputerActionServiceV2 {
                 }
                 warnings.append(contentsOf: output.metadata.warnings)
                 for window in output.data.windows where window.layer == 0 {
-                    let ref = self.issueWindowRef(app: app, window: window)
-                    rows.append([
-                        "windowRef": ref,
-                        "appName": app.name,
-                        "title": window.title,
-                        "bounds": Self.boundsDictionary(window.bounds),
-                        "isOnScreen": window.isOnScreen,
-                        "minimized": window.isMinimized,
-                    ])
-                    if rows.count == 500 { break outer }
+                    targets.append(WindowTarget(app: app, window: window))
+                    if targets.count == 500 { break outer }
                 }
             } catch {
                 warnings.append("\(app.name): \(error.localizedDescription)")
             }
+        }
+        let rows = self.references.projectWindows(
+            targets,
+            matches: Self.sameWindow,
+            issueRef: self.makeRef).map { entry in
+            [
+                "windowRef": entry.ref,
+                "appName": entry.target.app.name,
+                "title": entry.target.window.title,
+                "bounds": Self.boundsDictionary(entry.target.window.bounds),
+                "isOnScreen": entry.target.window.isOnScreen,
+                "minimized": entry.target.window.isMinimized,
+            ] as [String: Any]
         }
         var details: [String: AnyCodable] = ["windows": AnyCodable(rows)]
         if !warnings.isEmpty {
@@ -294,32 +380,30 @@ final class ComputerActionServiceV2 {
         guard observedWindow.windowID == target.window.windowID else {
             throw ComputerActionService.ComputerActionError.staleObservation
         }
-        self.windowRefs[windowRef] = WindowTarget(app: target.app, window: observedWindow)
+        self.references.replaceWindow(
+            WindowTarget(app: target.app, window: observedWindow),
+            for: windowRef)
         let detected = result.elements?.elements.all ?? []
         let filtered = Self.filterElements(detected, query: params.query)
         let bounded = Array(filtered.prefix(limits.maxElements))
-        let observationID = self.issueRef("observation")
-        var elementTargets: [String: ElementTarget] = [:]
-        let elements = bounded.map { element in
-            let ref = self.issueRef("element")
-            elementTargets[ref] = ElementTarget(id: element.id, bounds: element.bounds)
-            return OpenClawComputerObservationElement(
+        let snapshotID = result.elements?.snapshotId ?? ""
+        guard !snapshotID.isEmpty else {
+            throw ComputerActionService.ComputerActionError.refused(
+                "Peekaboo observation returned no snapshot receipt")
+        }
+        let issuedObservation = self.references.replaceObservation(
+            windowRef: windowRef,
+            snapshotId: snapshotID,
+            elements: bounded.map { ElementTarget(id: $0.id, bounds: $0.bounds) },
+            issueRef: self.makeRef)
+        let elements = zip(bounded, issuedObservation.elementRefs).map { element, ref in
+            OpenClawComputerObservationElement(
                 elementRef: ref,
                 role: element.type.rawValue,
                 label: element.label,
                 value: element.value,
                 bounds: Self.bounds(element.bounds))
         }
-        let snapshotID = result.elements?.snapshotId ?? ""
-        guard !snapshotID.isEmpty else {
-            throw ComputerActionService.ComputerActionError.refused(
-                "Peekaboo observation returned no snapshot receipt")
-        }
-        self.observation = ObservationState(
-            id: observationID,
-            windowRef: windowRef,
-            snapshotId: snapshotID,
-            elements: elementTargets)
         var details: [String: AnyCodable] = [
             "totalElementCount": AnyCodable(detected.count),
             "coordinateSpace": AnyCodable("global-logical-points"),
@@ -343,7 +427,7 @@ final class ComputerActionServiceV2 {
                 format: "png",
                 width: Int(size.width),
                 height: Int(size.height),
-                observationId: observationID,
+                observationId: issuedObservation.id,
                 elements: elements.isEmpty ? nil : elements),
             details: details)
     }
@@ -479,7 +563,7 @@ final class ComputerActionServiceV2 {
                     try await self.automation.typeActionsWithOutcome(
                         [.text(text)],
                         cadence: .fixed(milliseconds: 0),
-                        snapshotId: params.elementRef == nil ? nil : self.observation?.snapshotId,
+                        snapshotId: params.elementRef == nil ? nil : self.references.observation?.snapshotId,
                         expectedWindowIdentity: identity,
                         expectedWindowBounds: target.window.bounds)
                 }
@@ -540,7 +624,7 @@ final class ComputerActionServiceV2 {
                 try await self.automation.setValueWithOutcome(
                     target: element.id,
                     value: .string(value),
-                    snapshotId: self.observation?.snapshotId)
+                    snapshotId: self.references.observation?.snapshotId)
             }
             return Self.result(from: result.outcome, background: true)
         } catch let failure as DesktopActionFailure {
@@ -595,7 +679,7 @@ final class ComputerActionServiceV2 {
                 direction: Self.scrollDirection(direction),
                 amount: min(100, max(1, params.scrollAmount ?? 3)),
                 target: element?.id,
-                snapshotId: element == nil ? nil : self.observation?.snapshotId,
+                snapshotId: element == nil ? nil : self.references.observation?.snapshotId,
                 foreground: mode == .foreground))
         }
         return Self.result(from: result.outcome, background: mode == .background)
@@ -604,36 +688,29 @@ final class ComputerActionServiceV2 {
     // MARK: - Reference and target helpers
 
     private func adoptLifecycleGeneration(_ generation: UInt64) {
-        guard self.lifecycleGeneration != generation else { return }
-        self.lifecycleGeneration = generation
+        let previousGeneration = self.references.lifecycleGeneration
+        self.references.adoptLifecycleGeneration(generation)
+        guard previousGeneration != generation else { return }
         self.appRefs.removeAll()
-        self.windowRefs.removeAll()
-        self.observation = nil
     }
 
     private func issueRef(_ kind: String) -> String {
-        "peekaboo:v2:\(kind):\(self.executionID):\(self.lifecycleGeneration ?? 0):" +
+        "peekaboo:v2:\(kind):\(self.executionID):\(self.references.lifecycleGeneration ?? 0):" +
             UUID().uuidString.lowercased()
     }
 
-    private func issueWindowRef(app: ServiceApplicationInfo, window: ServiceWindowInfo) -> String {
-        if let existing = self.windowRefs.first(where: {
-            $0.value.app.processIdentifier == app.processIdentifier &&
-                $0.value.window.windowID == window.windowID &&
-                $0.value.window.mutationIdentity == window.mutationIdentity
-        })?.key {
-            return existing
-        }
-        let ref = self.issueRef("window")
-        self.windowRefs[ref] = WindowTarget(app: app, window: window)
-        return ref
+    private func makeRef(_ kind: String) -> String {
+        self.issueRef(kind)
+    }
+
+    private static func sameWindow(_ lhs: WindowTarget, _ rhs: WindowTarget) -> Bool {
+        lhs.app.processIdentifier == rhs.app.processIdentifier &&
+            lhs.window.windowID == rhs.window.windowID &&
+            lhs.window.mutationIdentity == rhs.window.mutationIdentity
     }
 
     private func resolveWindow(_ ref: String) throws -> WindowTarget {
-        guard let target = self.windowRefs[ref] else {
-            throw ComputerActionService.ComputerActionError.staleObservation
-        }
-        return target
+        try self.references.resolveWindow(ref)
     }
 
     private func requiredWindow(_ params: OpenClawComputerActParams) throws -> WindowTarget {
@@ -641,15 +718,9 @@ final class ComputerActionServiceV2 {
     }
 
     private func requiredObservation(_ params: OpenClawComputerActParams, windowRef: String) throws
-        -> ObservationState
+        -> ComputerOpaqueReferenceStore<WindowTarget, ElementTarget>.Observation
     {
-        guard let observation = self.observation,
-              observation.id == params.observationId,
-              observation.windowRef == windowRef
-        else {
-            throw ComputerActionService.ComputerActionError.staleObservation
-        }
-        return observation
+        try self.references.resolveObservation(params.observationId, windowRef: windowRef)
     }
 
     private func requiredElement(
@@ -658,10 +729,7 @@ final class ComputerActionServiceV2 {
     {
         let elementRef = try Self.require(params.elementRef, field: "elementRef")
         let observation = try self.requiredObservation(params, windowRef: windowRef)
-        guard let element = observation.elements[elementRef] else {
-            throw ComputerActionService.ComputerActionError.staleObservation
-        }
-        return element
+        return try self.references.resolveElement(elementRef, observation: observation)
     }
 
     private func clickTarget(
