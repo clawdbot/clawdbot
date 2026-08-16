@@ -195,6 +195,25 @@ describe("Tool Search flattened call arguments", () => {
     },
   );
 
+  it("recovers double-wrapped tool_call dispatcher arguments", async () => {
+    const target = fakeTool("inspect_resource", Type.Object({ path: Type.String() }));
+    const { catalogRef, config } = createRuntime([target]);
+    const callTool = createToolSearchTools({ catalogRef, config }).find(
+      (tool) => tool.name === TOOL_CALL_RAW_TOOL_NAME,
+    );
+
+    expect(callTool).toBeDefined();
+    // Model emitted { args: { id: "...", args: {...} } } instead of { id: "...", args: {...} }
+    await callTool!.execute("double-wrapped-call", {
+      args: {
+        id: "inspect_resource",
+        args: { path: "/api/items?query=x" },
+      },
+    });
+    expect(target.execute).toHaveBeenCalledOnce();
+    expect(vi.mocked(target.execute).mock.calls[0]?.[1]).toEqual({ path: "/api/items?query=x" });
+  });
+
   it("rejects flattened selectors that identify different catalog tools", async () => {
     const intended = fakeTool("inspect_resource");
     const colliding = fakeTool("search");

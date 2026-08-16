@@ -223,6 +223,21 @@ export function readToolSearchCallArgs(
   catalog?: ToolSearchCatalogSession,
 ): { id: string; input: unknown } {
   const params = asToolParamsRecord(args);
+
+  // Handle double-wrapped args: { args: { id: "...", args: {...} } }
+  // Some models emit this malformed shape intermittently.
+  if (params.args != null && typeof params.args === "object" && !Array.isArray(params.args)) {
+    // SAFETY: guarded by typeof check above — params.args is a non-null, non-array object.
+    const nestedArgs = params.args as Record<string, unknown>;
+    if (typeof nestedArgs.id === "string" && nestedArgs.args != null) {
+      // Recover the intended call by unwrapping one level.
+      return {
+        id: nestedArgs.id.trim(),
+        input: nestedArgs.args,
+      };
+    }
+  }
+
   const dottedInput = Object.fromEntries(
     Object.entries(params)
       .filter(([key]) => key.startsWith("args.") && key.length > 5)
