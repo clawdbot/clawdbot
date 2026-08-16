@@ -41,6 +41,7 @@ export function listSandboxWorkspaceDirs(params: {
     if (sandbox.scope === "agent") {
       const layout = resolveSandboxWorkspaceLayoutPaths({
         cfg: { ...sandbox, workspaceRoot },
+        agentId,
         rawSessionKey: `agent:${agentId}:main`,
         workspaceDir: resolveAgentWorkspaceDir(params.cfg, agentId, params.env),
       });
@@ -69,6 +70,7 @@ export function listSandboxWorkspaceDirs(params: {
       }
       const layout = resolveSandboxWorkspaceLayoutPaths({
         cfg: { ...sandbox, workspaceRoot },
+        agentId,
         rawSessionKey: sessionKey,
         workspaceDir: resolveAgentWorkspaceDir(params.cfg, agentId, params.env),
       });

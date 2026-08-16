@@ -27,7 +27,7 @@ const { resolveRuntimeWebToolsMock, runtimePrepareImportMock } = vi.hoisted(() =
 }));
 
 function explicitMainRoster() {
-  return { agents: { list: [{ id: "main", default: true }] } };
+  return { agents: { list: [{ id: "main" }] } };
 }
 
 vi.mock("./runtime-prepare.runtime.js", () => {
@@ -240,7 +240,7 @@ describe("secrets runtime fast path", () => {
       const snapshot = prepareSecretsRuntimeFastPathSnapshot({
         config: asConfig({
           agents: {
-            list: [{ id: "default", agentDir, default: true }],
+            list: [{ id: "main", agentDir }],
           },
         }),
         env,
@@ -293,7 +293,7 @@ describe("secrets runtime fast path", () => {
       const fastPath = prepareSecretsRuntimeFastPathSnapshot({
         config: asConfig({
           agents: {
-            list: [{ id: "default", agentDir, default: true }],
+            list: [{ id: "main", agentDir }],
           },
         }),
         env,
@@ -339,7 +339,7 @@ describe("secrets runtime fast path", () => {
     };
     const config = (port: number) =>
       asConfig({
-        agents: { list: [{ id: "default", agentDir, default: true }] },
+        agents: { list: [{ id: "main", agentDir }] },
         gateway: { port },
       });
     const initialSnapshot = await prepareSecretsRuntimeSnapshot({
@@ -393,7 +393,7 @@ describe("secrets runtime fast path", () => {
     };
     const initial = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
-        agents: { list: [{ id: "default", agentDir, default: true }] },
+        agents: { list: [{ id: "main", agentDir }] },
       }),
       agentDirs: [agentDir],
       loadAuthStore,
@@ -430,7 +430,7 @@ describe("secrets runtime fast path", () => {
     });
     const config = (port: number) =>
       asConfig({
-        agents: { list: [{ id: "default", agentDir, default: true }] },
+        agents: { list: [{ id: "main", agentDir }] },
         gateway: { port },
       });
     const initial = await prepareSecretsRuntimeSnapshot({
@@ -480,7 +480,7 @@ describe("secrets runtime fast path", () => {
       const fastPath = prepareSecretsRuntimeFastPathSnapshot({
         config: asConfig({
           agents: {
-            list: [{ id: "default", agentDir, default: true }],
+            list: [{ id: "main", agentDir }],
           },
         }),
         env,

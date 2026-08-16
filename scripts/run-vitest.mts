@@ -13,6 +13,7 @@ import { toolingIsolatedTestFiles } from "../test/vitest/vitest.tooling-isolated
 import { isUiTestTarget } from "../test/vitest/vitest.ui-paths.mjs";
 import { boundaryTestFiles } from "../test/vitest/vitest.unit-paths.mjs";
 import { parsePermissiveBooleanToken } from "./lib/arg-utils.mts";
+import { resolveExtensionTestConfig } from "./lib/extension-test-plan.mts";
 import { runWithFailedTrailer, writeFailedTrailer } from "./lib/failed-trailer.mts";
 import { createGatewayServerTestTargetChunks } from "./lib/gateway-server-test-plan.mts";
 import { signalExitCode } from "./lib/managed-child-process.mts";
@@ -81,6 +82,12 @@ export const VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS = new Map([
     DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
   ],
   ["test/vitest/vitest.infra.config.ts", DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
+  // Largest extension shard: silent transform/import startup was measured at
+  // ~210s on a loaded macOS host, so the 120s default kills healthy runs (#123025).
+  [
+    "test/vitest/vitest.extension-discord.config.ts",
+    DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
+  ],
   [GATEWAY_CORE_VITEST_CONFIG, DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
   [GATEWAY_SERVER_VITEST_CONFIG, DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
 ]);
@@ -693,6 +700,22 @@ function isOwnedAgentDirectoryTarget(arg: string, cwd: string, fsImpl: VitestPat
   );
 }
 
+function isOwnedExtensionRootTarget(arg: string, cwd: string, fsImpl: VitestPathFs): boolean {
+  const relative = toRepoRelativeArg(arg, cwd).replace(/\/+$/u, "");
+  const [root, extensionId, ...remainder] = relative.split("/");
+  if (
+    root !== "extensions" ||
+    !extensionId ||
+    remainder.length > 0 ||
+    !isExplicitDirectoryTargetArg(arg, cwd, fsImpl)
+  ) {
+    return false;
+  }
+  // Extension roots delegate so the bounded planner owns process lifetime (#124413).
+  // Raw Vitest would run the workspace config as one process.
+  return resolveExtensionTestConfig(relative).length > 0;
+}
+
 function isExplicitProjectRouterTargetArg(
   arg: string,
   cwd = process.cwd(),
@@ -709,7 +732,9 @@ function isExplicitProjectRouterTargetArg(
   }
   const filePath = path.isAbsolute(arg) ? arg : path.resolve(cwd, arg);
   return fsImpl.existsSync(filePath)
-    ? isDelegableBroadProjectRouterTarget(arg, cwd) || isOwnedAgentDirectoryTarget(arg, cwd, fsImpl)
+    ? isDelegableBroadProjectRouterTarget(arg, cwd) ||
+        isOwnedAgentDirectoryTarget(arg, cwd, fsImpl) ||
+        isOwnedExtensionRootTarget(arg, cwd, fsImpl)
     : path.extname(arg) === "" &&
         /^(?:src|test|extensions|ui|packages|apps)\//u.test(toRepoRelativeArg(arg, cwd));
 }

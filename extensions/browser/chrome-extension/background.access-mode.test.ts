@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  cleanupBackgroundHarnesses,
   loadBackground,
   TEST_RELAY_KEY,
   REPLACEMENT_TEST_RELAY_KEY,
@@ -13,7 +14,8 @@ describe("relay command authorization", () => {
     vi.resetModules();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await cleanupBackgroundHarnesses();
     vi.unstubAllGlobals();
   });
 

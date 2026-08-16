@@ -664,12 +664,8 @@ describe("install.ps1 failure handling", () => {
     expect(npmInstallBody).toContain('$freshnessArgs = @("--min-release-age=0")');
     expect(npmInstallBody).toContain("Remove-Item Env:NPM_CONFIG_BEFORE");
     expect(npmInstallBody).toContain("Remove-Item Env:NPM_CONFIG_MIN_RELEASE_AGE");
-    expect(npmInstallBody).toContain('$env:NODE_LLAMA_CPP_SKIP_DOWNLOAD = "1"');
     expect(npmInstallBody).toContain("$env:NPM_CONFIG_LOGLEVEL = $prevLogLevel");
     expect(npmInstallBody).toContain("$env:NPM_CONFIG_BEFORE = $prevBefore");
-    expect(npmInstallBody).toContain(
-      "$env:NODE_LLAMA_CPP_SKIP_DOWNLOAD = $prevNodeLlamaSkipDownload",
-    );
     expect(npmInstallBody).toContain(
       "Write-NpmInstallFailureDetails -Output $npmOutput -CacheRoots $npmDebugLogRoots",
     );
@@ -969,7 +965,6 @@ describe("install.ps1 failure handling", () => {
     expect(gitInstallBody).toContain('$env:PNPM_CONFIG_WORKSPACE_CONCURRENCY = "1"');
     expect(gitInstallBody).toContain('$env:PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN = "false"');
     expect(gitInstallBody).toContain('$env:PNPM_CONFIG_SIDE_EFFECTS_CACHE = "false"');
-    expect(gitInstallBody).toContain('$env:NODE_LLAMA_CPP_POSTINSTALL = "skip"');
     expect(gitInstallBody).toContain("$installSucceeded = ($LASTEXITCODE -eq 0)");
     expect(gitInstallBody).toContain("clearing node_modules and retrying once");
     expect(gitInstallBody).toContain("Remove-Item -Recurse -Force node_modules");
@@ -991,7 +986,6 @@ describe("install.ps1 failure handling", () => {
     expect(gitInstallBody).toContain(
       "$env:PNPM_CONFIG_WORKSPACE_CONCURRENCY = $prevPnpmWorkspaceConcurrency",
     );
-    expect(gitInstallBody).toContain("$env:NODE_LLAMA_CPP_POSTINSTALL = $prevNodeLlamaPostinstall");
     expect(gitInstallBody).toContain("Add-ToUserPath $binDir");
     expect(gitInstallBody).toContain('Write-Host "[!] pnpm build failed for the Git checkout"');
     expect(gitInstallBody).toContain('$entryPath = Join-Path $RepoDir "dist\\\\entry.js"');

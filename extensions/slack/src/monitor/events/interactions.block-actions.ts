@@ -15,8 +15,12 @@ import {
   normalizeOptionalString,
   normalizeUniqueTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
-import { decodeSlackApprovalAction, type SlackApprovalAction } from "../../approval-actions.js";
+import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import {
+  decodeSlackApprovalAction,
+  SLACK_APPROVAL_HEADER_BLOCK_ID,
+  type SlackApprovalAction,
+} from "../../approval-actions.js";
 import { isSlackApprovalAuthorizedSender } from "../../approval-auth.js";
 import { isSlackExecApprovalAuthorizedSender } from "../../exec-approvals.js";
 import { dispatchSlackPluginInteractiveHandler } from "../../interactive-dispatch.js";
@@ -537,11 +541,9 @@ function buildSlackApprovalTerminalBlocks(params: {
   prefix: "Resolved" | "Already resolved";
 }): (Block | KnownBlock)[] {
   const blocks = removeSlackApprovalControls(params.blocks ?? []).filter((block) => {
-    const text = (block as { type?: unknown; text?: { text?: unknown } }).text?.text;
+    const blockId = (block as { block_id?: unknown }).block_id;
     return !(
-      (block as { type?: unknown }).type === "section" &&
-      typeof text === "string" &&
-      /^\*(?:Exec|Plugin) approval required\*/u.test(text)
+      (block as { type?: unknown }).type === "section" && blockId === SLACK_APPROVAL_HEADER_BLOCK_ID
     );
   });
   return [
@@ -974,7 +976,7 @@ function enqueueSlackBlockActionEvent(params: {
   params.ctx.runtime.log?.(
     `slack:interaction action=${params.parsed.actionId} type=${params.parsed.actionSummary.actionType ?? "unknown"} user=${params.parsed.userId} channel=${params.parsed.channelId}`,
   );
-  const sessionKey = params.ctx.resolveSlackSystemEventSessionKey({
+  const route = params.ctx.resolveSlackSystemEventRoute({
     channelId: params.parsed.channelId,
     channelType: params.auth.channelType,
     senderId: params.parsed.userId,
@@ -990,8 +992,7 @@ function enqueueSlackBlockActionEvent(params: {
     normalizeOptionalString(params.parsed.typedActionWithText.action_ts) ??
       params.parsed.typedBody.trigger_id,
   ].filter(Boolean);
-  const queued = enqueueSystemEvent(params.formatSystemEvent(eventPayload), {
-    sessionKey,
+  const queued = enqueueRoutedSystemEvent(params.formatSystemEvent(eventPayload), route, {
     contextKey: contextParts.join(":"),
     deliveryContext: {
       channel: "slack",
@@ -1005,7 +1006,8 @@ function enqueueSlackBlockActionEvent(params: {
       source: "hook",
       intent: "immediate",
       reason: "hook:slack-interaction",
-      sessionKey,
+      agentId: route.agentId,
+      sessionKey: route.sessionKey,
       heartbeat: { target: "last" },
     });
   }

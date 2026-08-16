@@ -59,7 +59,7 @@ type SessionArchiveLifecycleParams = {
   sessionId?: string;
   agentId: string;
   sessionKey: string;
-  defaultAgentId: string;
+  defaultAgentId?: string;
   lifecycleIdentities: string[];
 };
 

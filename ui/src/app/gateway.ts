@@ -8,6 +8,7 @@ export type ApplicationGatewayPhase =
   | "connecting"
   | "connected"
   | "reconnecting"
+  | "reload-required"
   | "offline";
 
 export type ApplicationGatewaySnapshot = {

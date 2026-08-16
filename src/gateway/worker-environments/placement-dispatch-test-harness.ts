@@ -76,6 +76,7 @@ export function createHarness(
     listWorkspaceReconciliationOwners: () => placementStore.listWorkspaceReconciliationOwners(),
     listPendingWorkspaceResults: () => placementStore.listPendingWorkspaceResults(),
     workspaceResultInstanceId: () => placementStore.workspaceResultInstanceId(),
+    validateWorkspaceResultClaim: (claim) => placementStore.validateWorkspaceResultClaim(claim),
     recordStagedWorkspaceResult: (claim, ref) =>
       placementStore.recordStagedWorkspaceResult(claim, ref),
     recordWorkspaceResultConflict: (claim, conflict) =>
@@ -175,7 +176,6 @@ export function createHarness(
   const tunnelHandle = (ownerEpoch: number): WorkerTunnelHandle => ({
     environmentId: ready.environmentId,
     ownerEpoch,
-    connectionEndpoint: { kind: "unix", socketPath: "/worker/gateway.sock" },
     launchTurn: vi.fn(),
     quiesceWorkspace: vi.fn(async () => {
       log.push("workspace:quiesce");
@@ -372,8 +372,8 @@ export function createHarness(
     placements: {
       current: () => placementStore.get(REQUEST.sessionId),
       seedStarting: () => seedStartingPlacement(placementStore, environmentId),
-      seedActive: (ownerEpoch: number) =>
-        seedActivePlacement(placementStore, { environmentId, ownerEpoch }),
+      seedActive: (ownerEpoch: number, executionMode?: "worker-turn" | "remote-exec") =>
+        seedActivePlacement(placementStore, { environmentId, ownerEpoch, executionMode }),
       seedDraining: (ownerEpoch: number) => {
         const active = seedActivePlacement(placementStore, { environmentId, ownerEpoch });
         if (active.state !== "active") {
@@ -405,6 +405,9 @@ export function createHarness(
     },
     markEnvironmentOwnerEpoch: (ownerEpoch: number) => {
       currentEnvironment = { ...attached, ownerEpoch };
+    },
+    markEnvironmentProviderId: (providerId: string) => {
+      currentEnvironment = { ...attached, providerId };
     },
     markEnvironmentAttachments: (attachedSessionIds: string[]) => {
       currentEnvironment = { ...attached, attachedSessionIds };

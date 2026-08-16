@@ -57,6 +57,7 @@ import {
   CLAUDE_CLI_BACKEND_ID,
   CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS,
   CLAUDE_CLI_OFF_THINKING_PROFILE,
+  supportsClaudeDynamicSystemPromptSections,
 } from "./cli-shared.js";
 import {
   applyAnthropicConfigDefaults,
@@ -984,19 +985,24 @@ async function runAnthropicCliMigrationNonInteractive(ctx: {
   runtime: ProviderAuthContext["runtime"];
   agentDir?: string;
 }): Promise<ProviderAuthContext["config"] | null> {
-  const credential = claudeCliAuth.readClaudeCliCredentialsForSetupNonInteractive();
-  if (!credential) {
-    ctx.runtime.error(
-      [
-        'Auth choice "anthropic-cli" requires Claude CLI auth on this host.',
-        `Run ${formatCliCommand("claude auth login")} first.`,
-      ].join("\n"),
-    );
+  const credentialResult = claudeCliAuth.readClaudeCliCredentialsForSetupNonInteractive();
+  if (credentialResult.status !== "available") {
+    const error =
+      credentialResult.status === "unreadable"
+        ? [
+            'Auth choice "anthropic-cli" found Claude CLI credentials on this host, but they could not be read non-interactively.',
+            "Re-run this command without --non-interactive, or use --auth-choice setup-token / --anthropic-api-key <key>.",
+          ]
+        : [
+            'Auth choice "anthropic-cli" requires Claude CLI auth on this host.',
+            `Run ${formatCliCommand("claude auth login")} first.`,
+          ];
+    ctx.runtime.error(error.join("\n"));
     ctx.runtime.exit(1);
     return null;
   }
 
-  const result = buildAnthropicCliMigrationResult(ctx.config, credential);
+  const result = buildAnthropicCliMigrationResult(ctx.config, credentialResult.credential);
   const currentDefaults = ctx.config.agents?.defaults;
   const currentModel = currentDefaults?.model;
   const currentFallbacks =
@@ -1193,7 +1199,28 @@ export function buildAnthropicProvider(): ProviderPlugin {
 
 /** Register Anthropic provider, Claude CLI backend, and media understanding provider. */
 export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
-  api.registerCliBackend(buildAnthropicCliBackend());
+  let supportsDynamicSystemPromptSections = false;
+  // Start once at plugin load. The first Claude execution awaits the same promise,
+  // so a post-ready gateway hook cannot race the first session's immutable argv.
+  const dynamicSystemPromptSectionsProbe = (async () => {
+    try {
+      const result = await api.runtime.system.runCommandWithTimeout(["claude", "--version"], {
+        timeoutMs: 1_500,
+        killProcessTree: true,
+        maxOutputBytes: { stdout: 1_024, stderr: 1_024 },
+      });
+      supportsDynamicSystemPromptSections =
+        result?.code === 0 && supportsClaudeDynamicSystemPromptSections(result.stdout);
+    } catch {
+      supportsDynamicSystemPromptSections = false;
+    }
+  })();
+  api.registerCliBackend(
+    buildAnthropicCliBackend({
+      ensureDynamicSystemPromptSectionsSupport: () => dynamicSystemPromptSectionsProbe,
+      supportsDynamicSystemPromptSections: () => supportsDynamicSystemPromptSections,
+    }),
+  );
   api.registerProvider(buildAnthropicProvider());
   api.registerMediaUnderstandingProvider(anthropicMediaUnderstandingProvider);
   registerClaudeSessionDiscovery(api);

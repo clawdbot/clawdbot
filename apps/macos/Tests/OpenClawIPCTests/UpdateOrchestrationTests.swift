@@ -8,16 +8,18 @@ import Testing
 @MainActor
 struct UpdateOrchestrationTests {
     @MainActor
-    @Test func `post update performs no service work under active profile`() {
-        let profile = AppProfile(environment: ["OPENCLAW_PROFILE": "work"])
-        NodeServiceManager._testResetPersistentServiceCalls()
-        GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+    @Test func `post update performs no service work under active profile`() async {
+        await TestIsolation.withIsolatedState {
+            let profile = AppProfile(environment: ["OPENCLAW_PROFILE": "work"])
+            NodeServiceManager._testResetPersistentServiceCalls()
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
 
-        #expect(!PostUpdateController.shared.startIfNeeded(profile: profile))
-        let snapshot = NodeServiceManager._testPersistentServiceCallSnapshot()
-        #expect(snapshot.commands.isEmpty)
-        #expect(snapshot.ownershipReads == 0)
-        #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+            #expect(!PostUpdateController.shared.startIfNeeded(profile: profile))
+            let snapshot = NodeServiceManager._testPersistentServiceCallSnapshot()
+            #expect(snapshot.commands.isEmpty)
+            #expect(snapshot.ownershipReads == 0)
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+        }
     }
 
     @Test func `Sparkle receipt appears only after the target app launches`() throws {

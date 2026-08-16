@@ -4,15 +4,15 @@ import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-k
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
-import { isReservedSystemAgentId } from "./agent-id.js";
+import { isReservedSystemAgentId, SYSTEM_AGENT_ID } from "./agent-id.js";
 import { SYSTEM_AGENT_AUDIT_STORE_LABEL } from "./audit.js";
+import { redactSystemAgentConfig } from "./config-redaction.js";
 import {
   CONFIG_GET_OUTPUT_MAX_CHARS,
   CONFIG_SCHEMA_CHILDREN_MAX,
   applyPersistentOperation,
   assertConfigWriteDoesNotBypassInferenceVerification,
   createNoExitRuntime,
-  executePluginInstall,
   executeSetDefaultModel,
   executeSetup,
   formatChannelDocsUrl,
@@ -22,7 +22,6 @@ import {
   loadOverviewForOperation,
   readConfigFileSnapshotLazy,
   readConfigValueAtPath,
-  redactConfigValue,
   resolveChannelSetupState,
   resolveTuiAgentId,
   runConfigSetOperation,
@@ -30,6 +29,7 @@ import {
   type ExecuteOptions,
 } from "./operations-execution-helpers.js";
 import type { SystemAgentOperation, SystemAgentOperationResult } from "./operations-parse.js";
+import { executePluginInstall } from "./plugin-install.js";
 
 const loadOverviewModule = async () => await import("./overview.js");
 
@@ -122,18 +122,19 @@ export async function executeSystemAgentOperation(
         runtime.log(`Config missing: ${shortenHomePath(snapshot.path)}`);
         return { applied: false };
       }
-      const cfg = snapshot.valid
-        ? (snapshot.sourceConfig ?? snapshot.config)
-        : snapshot.sourceConfig;
-      const lookup = readConfigValueAtPath(cfg ?? {}, operation.path);
+      const cfg = snapshot.sourceConfig;
+      // Redact before selecting a subtree so wildcard channel/plugin hints retain full paths.
+      const lookup = readConfigValueAtPath(
+        redactSystemAgentConfig(cfg, { config: cfg, valid: snapshot.valid }),
+        operation.path,
+      );
       if (!lookup.found) {
         runtime.log(
           `${operation.path}: not set. Use \`config schema ${operation.path}\` to see what is allowed.`,
         );
         return { applied: false };
       }
-      const redacted = redactConfigValue(lookup.value, operation.path);
-      const rendered = JSON.stringify(redacted, null, 2) ?? "null";
+      const rendered = JSON.stringify(lookup.value, null, 2) ?? "null";
       runtime.log(
         rendered.length > CONFIG_GET_OUTPUT_MAX_CHARS
           ? `${operation.path} = ${truncateUtf16Safe(rendered, CONFIG_GET_OUTPUT_MAX_CHARS)}\n… (truncated)`
@@ -412,6 +413,7 @@ export async function executeSystemAgentOperation(
             return await createAgentForOperation({
               name: operation.agentId,
               ...(operation.workspace ? { workspace: operation.workspace } : {}),
+              provenance: { createdVia: "agent", creatorAgentId: SYSTEM_AGENT_ID },
             });
           });
           if (result.status === "error") {

@@ -4,7 +4,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { html, nothing } from "lit";
 import {
   expandToolGroups,
   normalizeToolPolicyName,
@@ -337,6 +336,22 @@ export function normalizeAgentLabel(
   );
 }
 
+export function normalizeAgentTargetLabel(
+  agent: AgentRosterEntry,
+  hydratedIdentity?: Pick<AgentIdentityResult, "name" | "nameSource"> | null,
+) {
+  const resolvedName =
+    hydratedIdentity?.nameSource && hydratedIdentity.nameSource !== "default"
+      ? normalizeOptionalString(hydratedIdentity.name)
+      : undefined;
+  return (
+    resolvedName ??
+    normalizeOptionalString(agent.name) ??
+    normalizeOptionalString(agent.identity?.name) ??
+    agent.id
+  );
+}
+
 export function resolveAgentTextAvatar(
   agent: { identity?: { emoji?: string; avatar?: string } },
   agentIdentity?: AgentIdentityResult | null,
@@ -538,6 +553,7 @@ export function resolveEffectiveModelFallbacks(
 type ConfiguredModelOption = {
   value: string;
   label: string;
+  provider?: string;
 };
 
 function resolveConfiguredModels(
@@ -561,7 +577,12 @@ function resolveConfiguredModels(
           : undefined
         : undefined;
     const label = alias && alias !== trimmed ? `${alias} (${trimmed})` : trimmed;
-    options.push({ value: trimmed, label });
+    const separator = trimmed.indexOf("/");
+    options.push({
+      value: trimmed,
+      label,
+      ...(separator > 0 ? { provider: trimmed.slice(0, separator) } : {}),
+    });
   }
   return options;
 }
@@ -570,26 +591,27 @@ export function buildModelOptions(
   configForm: Record<string, unknown> | null,
   current?: string | null,
   catalog?: ModelCatalogEntry[],
-  selected?: string | null,
 ) {
   const seen = new Set<string>();
   const options: ConfiguredModelOption[] = [];
   const catalogOptions = new Map<string, ConfiguredModelOption>();
-  const selectedKey = selected ? normalizeLowercaseStringOrEmpty(selected) : null;
-  const addOption = (value: string, label: string) => {
+  const addOption = (value: string, label: string, provider?: string) => {
     const key = normalizeLowercaseStringOrEmpty(value);
     if (seen.has(key)) {
       return;
     }
     seen.add(key);
-    options.push({ value, label });
+    options.push({ value, label, ...(provider ? { provider } : {}) });
   };
 
   if (catalog) {
     const displayLookup = buildCatalogDisplayLookup(catalog);
     for (const entry of catalog) {
       const option = buildChatModelOptionFromLookup(entry, displayLookup);
-      catalogOptions.set(normalizeLowercaseStringOrEmpty(option.value), option);
+      catalogOptions.set(normalizeLowercaseStringOrEmpty(option.value), {
+        ...option,
+        provider: entry.provider,
+      });
     }
   }
 
@@ -597,30 +619,27 @@ export function buildModelOptions(
     // Configured options keep their order and fallback aliases; an authoritative
     // catalog match must still expose the same model identity as the chat picker.
     const catalogOption = catalogOptions.get(normalizeLowercaseStringOrEmpty(opt.value));
-    addOption(opt.value, catalogOption?.label ?? opt.label);
+    addOption(
+      opt.value,
+      catalogOption?.label ?? opt.label,
+      catalogOption?.provider ?? opt.provider,
+    );
   }
 
   for (const option of catalogOptions.values()) {
-    addOption(option.value, option.label);
+    addOption(option.value, option.label, option.provider);
   }
 
   if (current && !seen.has(normalizeLowercaseStringOrEmpty(current))) {
-    options.unshift({ value: current, label: `Current (${current})` });
+    const separator = current.indexOf("/");
+    options.unshift({
+      value: current,
+      label: `Current (${current})`,
+      ...(separator > 0 ? { provider: current.slice(0, separator) } : {}),
+    });
   }
 
-  if (options.length === 0) {
-    return nothing;
-  }
-  return options.map(
-    (option) => html`
-      <option
-        value=${option.value}
-        ?selected=${selectedKey === normalizeLowercaseStringOrEmpty(option.value)}
-      >
-        ${option.label}
-      </option>
-    `,
-  );
+  return options;
 }
 
 type CompiledPattern =

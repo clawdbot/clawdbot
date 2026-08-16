@@ -13,6 +13,8 @@ type DoctorConfigResult = {
   cfg: OpenClawConfig;
   path?: string;
   shouldWriteConfig?: boolean;
+  /** Repair panels held back until the atomic config write commits. */
+  pendingChangePanels?: readonly string[];
   sourceConfigValid?: boolean;
   sourceLastTouchedVersion?: string;
   skipPluginValidationOnWrite?: boolean;
@@ -37,6 +39,10 @@ export type DoctorHealthFlowContext = {
   cfgForPersistence: OpenClawConfig;
   /** The finalized config-flow candidate crossed the atomic writer boundary. */
   configResultWriteCommitted?: boolean;
+  /** Cron ownership could not be made safe, so every config write remains deferred this run. */
+  configWriteDeferredByCronOwnership?: true;
+  /** The repaired candidate failed write validation; nothing was persisted this run. */
+  configWriteBlockedByValidation?: true;
   /** One-shot repairs that require a durable config write have completed. */
   postConfigWriteRepairsCommitted?: boolean;
   sourceConfigValid: boolean;
@@ -63,6 +69,7 @@ export type DoctorHealthCheckContext = HealthCheckContext & {
 export type DoctorHealthContribution = FlowContribution & {
   kind: "core";
   surface: "health";
+  required?: true;
   healthChecks: readonly HealthCheckInput[];
   healthCheckIds: readonly string[];
   run: (ctx: DoctorHealthFlowContext) => Promise<void>;
@@ -74,7 +81,7 @@ export type DoctorContributionHealthCheck =
       readonly kind?: "core";
       readonly source?: string;
     })
-  | (Omit<RunnableHealthCheck, "id" | "kind" | "source"> & {
+  | (Omit<RunnableHealthCheck, "id" | "kind" | "source" | "sourceContract"> & {
       readonly id?: string;
       readonly kind?: "core";
       readonly source?: string;

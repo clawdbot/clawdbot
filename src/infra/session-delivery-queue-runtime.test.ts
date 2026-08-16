@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { drainPendingSessionDeliveries } from "./session-delivery-queue-recovery.js";
 import {
   schedulePendingSessionDeliveries,
   scheduleSessionDelivery,
@@ -9,13 +10,12 @@ import {
 } from "./session-delivery-queue-runtime.js";
 import { testing } from "./session-delivery-queue-runtime.test-support.js";
 import {
-  drainPendingSessionDeliveries,
   enqueueClaimedSessionDelivery,
   enqueueSessionDelivery,
   loadPendingSessionDelivery,
   loadPendingSessionDeliveries,
   releaseSessionDeliveryClaim,
-} from "./session-delivery-queue.js";
+} from "./session-delivery-queue-storage.js";
 
 const logger = {
   info: vi.fn(),

@@ -100,6 +100,12 @@ export function buildCliMcpGrantContext(params: {
   toolsAllow?: string[];
 }): McpLoopbackRequestContext {
   const sessionKey = resolveCliMcpSessionKey(params.run, params.config, params.agentId);
+  const runtimePolicySessionKey = normalizeOptionalMcpContextValue(
+    params.run.runtimePolicySessionKey,
+  );
+  const runtimePolicyAgentId = runtimePolicySessionKey
+    ? normalizeOptionalMcpContextValue(params.run.agentId)
+    : undefined;
   const clientCaps = uniqueStrings(
     (params.run.clientCaps ?? []).map((cap) => cap.trim()).filter(Boolean),
   );
@@ -127,7 +133,8 @@ export function buildCliMcpGrantContext(params: {
     grantedToolsAllow[0] === "message";
   return {
     sessionKey,
-    runtimePolicySessionKey: normalizeOptionalMcpContextValue(params.run.runtimePolicySessionKey),
+    runtimePolicySessionKey,
+    ...(runtimePolicyAgentId ? { runtimePolicyAgentId } : {}),
     agentId: params.agentId,
     sessionId: normalizeOptionalMcpContextValue(params.run.sessionId),
     runId: normalizeOptionalMcpContextValue(params.run.runId),
@@ -138,6 +145,9 @@ export function buildCliMcpGrantContext(params: {
     ...(params.toolsAllow ? { toolsAllow: params.toolsAllow } : {}),
     ...(params.run.scheduledToolPolicy
       ? { scheduledToolPolicy: { ...params.run.scheduledToolPolicy } }
+      : {}),
+    ...(params.run.cronCreatorCallerOrigin
+      ? { cronCreatorCallerOrigin: { ...params.run.cronCreatorCallerOrigin } }
       : {}),
     modelProvider: params.modelProvider,
     modelId: params.modelId,

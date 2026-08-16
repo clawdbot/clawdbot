@@ -10,6 +10,7 @@ import {
 import type { GatewaySessionRow } from "../session-utils.types.js";
 import { writeSessionStore } from "../test-helpers.js";
 import { directSessionReq } from "../test/server-sessions.test-helpers.js";
+import { admitWorkerConnection } from "./admission.js";
 import { hashWorkerCredential } from "./credential.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
@@ -74,6 +75,105 @@ describe("worker environment service", () => {
       deliveredAtMs: support.testState.nowMs,
     });
     expect(workerService.takeMintedCredential(binding)).toBeUndefined();
+  });
+
+  it("commits an installed Gateway bundle receipt and credential for a node lease", async () => {
+    const workerBuild = structuredClone(support.BOOTSTRAP_RECEIPT);
+    const workerService = support.createService(
+      support.createProvider({
+        provisionBeforeInstallation: true,
+        provision: async () => ({
+          leaseId: "device-lease-1",
+          node: { deviceId: "device-1" },
+          sharedHost: true,
+        }),
+      }),
+      { ensureNodeWorkerBundle: async () => workerBuild },
+    );
+
+    const result = await workerService.create("development", "request-device");
+
+    expect(result).toMatchObject({
+      state: "ready",
+      leaseId: "device-lease-1",
+      sshEndpoint: null,
+      bootstrapReceipt: { ...workerBuild, installKind: "bundle" },
+      sharedHost: true,
+      ownerEpoch: 1,
+    });
+    expect(support.testState.prepareInstallation).not.toHaveBeenCalled();
+    expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
+    const credential = workerService.takeMintedCredential({
+      environmentId: result.environmentId,
+      ownerEpoch: result.ownerEpoch,
+      sessionId: null,
+    });
+    expect(credential).toMatchObject({
+      credential: support.CREDENTIAL,
+      bundleHash: support.BUNDLE_HASH,
+    });
+    const attachedCredential = await workerService.attachSession({
+      environmentId: result.environmentId,
+      ownerEpoch: result.ownerEpoch,
+      sessionId: "session-device",
+    });
+    const attached = support.testState.store.get(result.environmentId)!;
+    const admission = {
+      environmentId: result.environmentId,
+      credential: attachedCredential.credential,
+      ownerEpoch: attached.ownerEpoch,
+      rpcSetVersion: 1,
+      sessionId: "session-device",
+      runId: "run-device",
+      handshake: workerBuild,
+    } as const;
+    expect(
+      admitWorkerConnection({
+        store: support.testState.store,
+        admission,
+        expectedBuild: workerBuild,
+        nowMs: support.testState.nowMs,
+      }),
+    ).toMatchObject({ ok: true });
+    expect(
+      admitWorkerConnection({
+        store: support.testState.store,
+        admission: {
+          ...admission,
+          handshake: { ...workerBuild, bundleHash: "d".repeat(64) },
+        },
+        expectedBuild: workerBuild,
+        nowMs: support.testState.nowMs,
+      }),
+    ).toEqual({ ok: false, reason: "bundle-mismatch" });
+  });
+
+  it("fails node provisioning visibly when Gateway bundle installation fails", async () => {
+    const workerService = support.createService(
+      support.createProvider({
+        provisionBeforeInstallation: true,
+        provision: async () => ({
+          leaseId: "device-lease-install-failure",
+          node: { deviceId: "device-1" },
+        }),
+      }),
+      {
+        ensureNodeWorkerBundle: async () => {
+          throw new Error("bundle transfer unavailable");
+        },
+      },
+    );
+
+    await expect(
+      workerService.create("development", "request-device-install-failure"),
+    ).rejects.toMatchObject({
+      code: "bootstrap_failure",
+      message: expect.stringContaining("bundle transfer unavailable"),
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+    expect(support.testState.store.list()[0]).toMatchObject({
+      state: "failed",
+      lastError: expect.stringContaining("bundle transfer unavailable"),
+    });
   });
 
   it("creates a nested environment from its parent's snapshot after config drift", async () => {
@@ -264,6 +364,7 @@ describe("worker environment service", () => {
         sessionKey: "agent:main:session-bootstrap-failure",
         agentId: "main",
         profileId: "development",
+        executionMode: "worker-turn",
       }),
     ).rejects.toThrow("Worker bootstrap failed: remote bootstrap rejected");
 
@@ -416,6 +517,42 @@ describe("worker environment service", () => {
 
     expect(events).toEqual(["abort", "destroy"]);
     expect(support.testState.store.list()[0]).toMatchObject({ state: "failed", leaseId: null });
+  });
+
+  it("allows a large bundle bootstrap to outlive the former service deadline", async () => {
+    vi.useFakeTimers();
+    support.testState.prepareInstallation = vi.fn(async () => ({
+      ...support.BUNDLE_ARTIFACT,
+      tarballBytes: 243_000_000,
+    }));
+    let finishBootstrap: (() => void) | undefined;
+    const bootstrapPending = new Promise<void>((resolve) => {
+      finishBootstrap = resolve;
+    });
+    let bootstrapSignal: AbortSignal | undefined;
+    support.testState.bootstrapWorker = vi.fn(async ({ signal }) => {
+      bootstrapSignal = signal;
+      await bootstrapPending;
+      return support.BOOTSTRAP_RECEIPT;
+    });
+    const workerService = support.createService(support.createProvider());
+
+    const creation = workerService.create("development", "request-large-bundle-bootstrap");
+    await support.waitForFast(() =>
+      expect(support.testState.bootstrapWorker).toHaveBeenCalledOnce(),
+    );
+    let creationError: unknown;
+    try {
+      await vi.advanceTimersByTimeAsync(35 * 60_000 + 1);
+      expect(bootstrapSignal?.aborted).toBe(false);
+    } finally {
+      finishBootstrap?.();
+      await creation.catch((error: unknown) => {
+        creationError = error;
+      });
+    }
+    expect(creationError).toBeUndefined();
+    expect(support.testState.store.list()[0]).toMatchObject({ state: "ready" });
   });
 
   it("adopts one committed provision across a service and store restart", async () => {
@@ -699,6 +836,17 @@ describe("worker environment service", () => {
 
   it.each([
     ["missing result", null, "invalid provision result"],
+    ["missing transport", { leaseId: "lease-invalid" }, "invalid provision result"],
+    [
+      "ambiguous transport",
+      { leaseId: "lease-invalid", ssh: support.SSH_ENDPOINT, node: { deviceId: "device-1" } },
+      "invalid provision result",
+    ],
+    [
+      "blank node device id",
+      { leaseId: "lease-invalid", node: { deviceId: " " } },
+      "invalid node device id",
+    ],
     [
       "malformed SSH endpoint",
       { leaseId: "lease-invalid", ssh: { ...support.SSH_ENDPOINT, keyRef: "not-a-secret-ref" } },

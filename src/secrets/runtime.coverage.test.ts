@@ -38,26 +38,6 @@ vi.mock("../plugins/installed-plugin-index-records.js", () => ({
   loadInstalledPluginIndexInstallRecordsSync: () => ({}),
 }));
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => {
-  const plugins = COVERAGE_WEB_PROVIDER_PLUGIN_IDS.search.map((id) => ({
-    id,
-    origin: "bundled",
-    contracts: {
-      webSearchProviders: [id],
-      ...(COVERAGE_WEB_PROVIDER_PLUGIN_IDS.fetch.includes(id) ? { webFetchProviders: [id] } : {}),
-    },
-  }));
-  const createSnapshot = () => ({
-    index: { diagnostics: [], plugins: [] },
-    manifestRegistry: { diagnostics: [], plugins },
-    plugins,
-  });
-  return {
-    loadPluginMetadataSnapshot: createSnapshot,
-    resolvePluginMetadataSnapshot: createSnapshot,
-  };
-});
-
 vi.mock("./channel-contract-api.js", () => ({
   loadChannelSecretContractApi: ({ channelId }: { channelId: string }) =>
     COVERAGE_CHANNEL_CONTRACTS.get(channelId),

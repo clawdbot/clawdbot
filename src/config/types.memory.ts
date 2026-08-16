@@ -65,7 +65,7 @@ export type MemorySearchConfig = {
    * Supported values today are 768, 1536, and 3072.
    */
   outputDimensionality?: number;
-  /** Local embedding settings (node-llama-cpp). */
+  /** Local embedding settings for the managed llama.cpp server. */
   local?: {
     /** GGUF model path or hf: URI. */
     modelPath?: string;

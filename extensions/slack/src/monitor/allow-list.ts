@@ -13,6 +13,7 @@ import {
 import { parseSlackTarget } from "../target-parsing.js";
 
 const SLACK_SLUG_CACHE_MAX = 512;
+const SLACK_STABLE_USER_ID_RE = /^[ubw][a-z0-9]+$/;
 const slackSlugCache = new Map<string, string>();
 
 export function normalizeSlackSlug(raw?: string) {
@@ -54,7 +55,7 @@ export function normalizeSlackAllowOwnerEntry(entry: string): string | undefined
     return undefined;
   }
   const withoutPrefix = trimmed.replace(/^(slack:|user:)/, "");
-  return /^u[a-z0-9]+$/.test(withoutPrefix) ? withoutPrefix : undefined;
+  return SLACK_STABLE_USER_ID_RE.test(withoutPrefix) ? withoutPrefix : undefined;
 }
 
 export type SlackAllowListMatch = AllowlistMatch<
@@ -75,7 +76,6 @@ export function resolveSlackAllowListMatch(params: {
   id?: string;
   name?: string;
   allowNameMatching?: boolean;
-  allowUnscoped?: boolean;
 }): SlackAllowListMatch {
   const compiledAllowList = compileAllowlist(params.allowList);
   const teamId = normalizeOptionalLowercaseString(params.teamId);
@@ -100,13 +100,9 @@ export function resolveSlackAllowListMatch(params: {
         ] satisfies Array<{ value?: string; source: SlackAllowListSource }>)
       : []),
   ];
-  const candidates =
-    teamId && params.allowUnscoped !== true
-      ? scopedCandidates
-      : [...scopedCandidates, ...unscopedCandidates];
   return resolveCompiledAllowlistMatch({
     compiledAllowlist: compiledAllowList,
-    candidates,
+    candidates: [...scopedCandidates, ...unscopedCandidates],
   });
 }
 
@@ -116,7 +112,6 @@ export function allowListMatches(params: {
   id?: string;
   name?: string;
   allowNameMatching?: boolean;
-  allowUnscoped?: boolean;
 }) {
   return resolveSlackAllowListMatch(params).allowed;
 }
@@ -127,7 +122,6 @@ export function resolveSlackUserAllowed(params: {
   userId?: string;
   userName?: string;
   allowNameMatching?: boolean;
-  allowUnscoped?: boolean;
 }) {
   const allowList = normalizeAllowListLower(params.allowList);
   if (allowList.length === 0) {
@@ -139,7 +133,6 @@ export function resolveSlackUserAllowed(params: {
     id: params.userId,
     name: params.userName,
     allowNameMatching: params.allowNameMatching,
-    allowUnscoped: params.allowUnscoped,
   });
 }
 
@@ -147,7 +140,6 @@ export function resolveSlackUserAllowListForTeam(params: {
   allowList?: Array<string | number>;
   teamId?: string;
   preserveUnmatchedScopedEntries?: boolean;
-  allowUnscoped?: boolean;
 }): string[] {
   const allowList = normalizeAllowListLower(params.allowList);
   const teamId = normalizeOptionalLowercaseString(params.teamId);
@@ -156,12 +148,12 @@ export function resolveSlackUserAllowListForTeam(params: {
       return [entry];
     }
     if (!entry.startsWith("team:")) {
-      return params.allowUnscoped === true || params.preserveUnmatchedScopedEntries ? [entry] : [];
+      return [entry];
     }
     try {
       const target = parseSlackTarget(entry);
       if (target?.kind === "user" && target.teamId?.toLowerCase() === teamId) {
-        return params.allowUnscoped === true ? [target.id.toLowerCase()] : [entry];
+        return [entry];
       }
       return params.preserveUnmatchedScopedEntries ? [entry] : [];
     } catch {

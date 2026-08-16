@@ -1,6 +1,5 @@
 // Prepare Extension Package Boundary Artifacts tests cover prepare extension package boundary artifacts script behavior.
 import { spawn } from "node:child_process";
-// Prepare Extension Package Boundary Artifacts tests cover prepare extension package boundary artifacts script behavior.
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
@@ -15,6 +14,7 @@ import {
 } from "../../scripts/lib/plugin-sdk-entries.mjs";
 import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import {
+  computeArtifactInputsDigest,
   createPrefixedOutputWriter,
   isArtifactSetFresh,
   parseMode,
@@ -560,6 +560,61 @@ describe("prepare-extension-package-boundary-artifacts", () => {
         outputPaths: ["dist/demo.tsbuildinfo"],
       }),
     ).toBe(false);
+  });
+
+  it("keeps mtime-stale artifacts fresh when the hash stamp matches the input digest", () => {
+    // Regression: fresh checkouts re-stamp every input mtime, so cache-restored
+    // artifacts must stay fresh by content identity, not build again per CI run.
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-hash-"));
+    tempRoots.add(rootDir);
+    const inputPath = path.join(rootDir, "src", "demo.ts");
+    const stampPath = path.join(rootDir, "dist", ".demo.stamp");
+    const outputPath = path.join(rootDir, "dist", "demo.d.ts");
+    fs.mkdirSync(path.dirname(inputPath), { recursive: true });
+    fs.mkdirSync(path.dirname(stampPath), { recursive: true });
+    fs.writeFileSync(inputPath, "export const demo = 1;\n", "utf8");
+    fs.writeFileSync(outputPath, "export declare const demo = 1;\n", "utf8");
+    fs.writeFileSync(
+      stampPath,
+      `${computeArtifactInputsDigest({ rootDir, inputPaths: ["src"] })}\n`,
+      "utf8",
+    );
+
+    // Simulate checkout: inputs newer than restored outputs, bytes unchanged.
+    fs.utimesSync(stampPath, new Date(1_000), new Date(1_000));
+    fs.utimesSync(outputPath, new Date(1_000), new Date(1_000));
+    const repairTimeMs = Date.now();
+    fs.utimesSync(inputPath, repairTimeMs / 1_000, (repairTimeMs + 0.5) / 1_000);
+    const freshParams = {
+      rootDir,
+      inputPaths: ["src"],
+      outputPaths: ["dist/.demo.stamp", "dist/demo.d.ts"],
+      hashStampPath: "dist/.demo.stamp",
+    };
+
+    vi.useFakeTimers();
+    vi.setSystemTime(repairTimeMs);
+    try {
+      expect(isArtifactSetFresh(freshParams)).toBe(true);
+      // The repaired output must clear the newest input by a whole millisecond.
+      // Matching it exactly leaves no headroom for sub-millisecond write
+      // rounding or lagging metadata, and a CI runner that lands even a
+      // fraction short puts every later invocation back on the full-hash path.
+      expect(fs.statSync(outputPath).mtimeMs).toBeGreaterThanOrEqual(
+        Math.ceil(fs.statSync(inputPath).mtimeMs) + 1,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+
+    fs.appendFileSync(inputPath, "export const demoTwo = 2;\n", "utf8");
+    fs.utimesSync(outputPath, new Date(1_000), new Date(1_000));
+    expect(isArtifactSetFresh(freshParams)).toBe(false);
+
+    // Legacy timestamp stamps never satisfy the hash fallback.
+    fs.writeFileSync(stampPath, `${new Date(5_000).toISOString()}\n`, "utf8");
+    fs.utimesSync(stampPath, new Date(1_000), new Date(1_000));
+    expect(isArtifactSetFresh(freshParams)).toBe(false);
   });
 
   it("requires generated entry-shim outputs in addition to the freshness stamp", () => {

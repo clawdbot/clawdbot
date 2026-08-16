@@ -1,10 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import {
-  type WorkerAdmissionHandshake,
-  WORKER_RPC_SET_VERSION,
-} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import type { SecretRef } from "../../config/types.secrets.js";
 import { validateCloudWorkerProfileSettings } from "../../config/zod-schema.cloud-workers.js";
@@ -17,7 +14,7 @@ import {
   type WorkerSshEndpoint,
   type WorkerSshIdentity,
 } from "../../plugins/types.js";
-import { verifyWorkerAdmissionHandshake } from "./admission.js";
+import { STALE_WORKER_BUILD_REASON, verifyWorkerAdmissionHandshake } from "./admission.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { WorkerCredentialBroker } from "./credential-broker.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
@@ -53,10 +50,14 @@ type WorkerProviderLifecycleOptions = {
     profile: WorkerProfile;
     keyRef: SecretRef;
   }) => Promise<WorkerSshIdentity>;
+  ensureNodeWorkerBundle?: (deviceId: string) => Promise<WorkerAdmissionHandshake>;
   providerCallTimeoutMs?: number;
-  tunnelManager?: WorkerTunnelManager;
+  tunnelManager?: Pick<WorkerTunnelManager, "stop">;
   credentialBroker: WorkerCredentialBroker;
-  callBootstrap: <T>(run: (signal: AbortSignal) => Promise<T>) => Promise<T>;
+  callBootstrap: <T>(
+    installation: WorkerInstallationArtifact,
+    run: (signal: AbortSignal) => Promise<T>,
+  ) => Promise<T>;
   callProvider: <T>(environmentId: string, run: () => Promise<T>, timeoutMs?: number) => Promise<T>;
   inState: (record: WorkerEnvironmentRecord, ...states: WorkerEnvironmentState[]) => boolean;
   isServiceError: (error: unknown, code: string) => boolean;
@@ -103,13 +104,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
   const saveError = options.saveError;
   const serviceError = options.serviceError;
   const withLock = options.withLock;
-  const {
-    credentialExpiry,
-    credentialMaterial,
-    ensurePendingCredential,
-    grantFrom,
-    stageCredential,
-  } = options.credentialBroker;
+  const { commitReady, ensurePendingCredential } = options.credentialBroker;
 
   function requireWorkerProfile(value: unknown): WorkerProfile {
     const error = validateCloudWorkerProfileSettings(value);
@@ -220,14 +215,16 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     if (record.state !== "bootstrapping" || !record.leaseId || !record.sshEndpoint) {
       throw serviceError("invalid_state", "Worker bootstrap requires a provisioned SSH lease");
     }
+    const leaseId = record.leaseId;
+    const sshEndpoint = record.sshEndpoint;
     let receipt: WorkerAdmissionHandshake;
     try {
-      receipt = await callBootstrap((signal) =>
+      receipt = await callBootstrap(installation, (signal) =>
         options.bootstrapWorker({
           operationId: record.provisionOperationId,
-          sshEndpoint: record.sshEndpoint,
+          sshEndpoint,
           installation,
-          resolveIdentity: identityResolverFor(record, provider, record.leaseId),
+          resolveIdentity: identityResolverFor(record, provider, leaseId),
           signal,
         }),
       );
@@ -235,26 +232,9 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         throw new Error("Worker bootstrap receipt does not match the expected build identity");
       }
     } catch (error) {
-      return await failBootstrap(record, record.leaseId, provider, error);
+      return await failBootstrap(record, leaseId, provider, error);
     }
-    const material = credentialMaterial();
-    // Receipt, owner epoch, and credential hash commit together. A failed write leaves the
-    // durable lease bootstrapping so reconcile can retry without admitting a partial identity.
-    const ready = move(record, "ready", {
-      bootstrapReceipt: receipt,
-      credential: {
-        credentialHash: material.credentialHash,
-        sessionId: null,
-        rpcSetVersion: WORKER_RPC_SET_VERSION,
-        expiresAtMs: credentialExpiry(),
-      },
-    });
-    const grant = grantFrom({
-      credential: material.credential,
-      record: store.getCredential(record.environmentId),
-    });
-    stageCredential(grant);
-    return ready;
+    return commitReady(record, { ...receipt, installKind: "bundle" });
   };
 
   const finishProvision = async (
@@ -291,11 +271,31 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     // A timeout can happen after allocation; retain the same operation id for safe replay.
     const patch = {
       leaseId: lease.leaseId,
-      sshEndpoint: lease.ssh,
       sharedHost: lease.sharedHost === true,
       desktop: lease.desktop ?? null,
     };
-    const bootstrapping = move(record, "bootstrapping", patch);
+    if (lease.node) {
+      let nodeBuild: WorkerAdmissionHandshake;
+      try {
+        if (!options.ensureNodeWorkerBundle) {
+          throw new Error("Device worker bundle installer is unavailable");
+        }
+        nodeBuild = await options.ensureNodeWorkerBundle(lease.node.deviceId);
+      } catch (error) {
+        const detail = boundedError(error);
+        move(record, "failed", { lastError: detail });
+        throw serviceError("bootstrap_failure", `Device worker bootstrap failed: ${detail}`);
+      }
+      return commitReady(
+        record,
+        { ...nodeBuild, installKind: "bundle" },
+        { ...patch, sshEndpoint: null },
+      );
+    }
+    const bootstrapping = move(record, "bootstrapping", {
+      ...patch,
+      sshEndpoint: lease.ssh,
+    });
     if (record.destroyRequestedAtMs !== null) {
       return bootstrapping;
     }
@@ -317,7 +317,11 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     provider = providerFor(record.providerId),
   ) => {
     let installation: WorkerInstallationArtifact | undefined;
-    if (record.state === "requested" && record.destroyRequestedAtMs === null) {
+    if (
+      record.state === "requested" &&
+      record.destroyRequestedAtMs === null &&
+      provider.provisionBeforeInstallation !== true
+    ) {
       try {
         // Fresh requests package before allocation. Once provisioning is durable, provider replay
         // must happen first because the previous response may have been lost after allocation.
@@ -377,6 +381,19 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     return finishProvenDestroy(destroying);
   };
 
+  const recordStaleBuildDestroy = (record: WorkerEnvironmentRecord) => {
+    // Attached sessions need the build cause after teardown so placement reconciliation can
+    // persist an actionable terminal reason instead of inferring from destroyed environment state.
+    return record.state === "attached"
+      ? store.requestDestroy({
+          environmentId: record.environmentId,
+          state: record.state,
+          terminalState: "failed",
+          lastError: STALE_WORKER_BUILD_REASON,
+        })
+      : record;
+  };
+
   const reconcileRecord = async (initialRecord: WorkerEnvironmentRecord): Promise<void> => {
     let record = initialRecord;
     if (record.state === "requested" && record.destroyRequestedAtMs !== null) {
@@ -386,14 +403,13 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     if (record.destroyRequestedAtMs === null && inState(record, "ready", "idle", "attached")) {
       try {
         currentBundle = await options.prepareInstallation("bundle");
-        if (
-          record.bootstrapReceipt &&
-          verifyWorkerAdmissionHandshake(record.bootstrapReceipt, currentBundle)
-        ) {
-          const sessionId = record.state === "attached" ? record.attachedSessionIds[0] : null;
-          if (record.state !== "attached" || sessionId) {
-            ensurePendingCredential(record, sessionId ?? null);
-            record = store.get(record.environmentId) ?? record;
+        if (record.bootstrapReceipt) {
+          if (verifyWorkerAdmissionHandshake(record.bootstrapReceipt, currentBundle)) {
+            const sessionId = record.state === "attached" ? record.attachedSessionIds[0] : null;
+            if (record.state !== "attached" || sessionId) {
+              ensurePendingCredential(record, sessionId ?? null);
+              record = store.get(record.environmentId) ?? record;
+            }
           }
         }
       } catch {
@@ -410,7 +426,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     const leaseId = record.leaseId;
     if (!leaseId) {
       const provisioned = await resumeProvision(record, provider).catch(() => undefined);
-      if (provisioned?.state === "bootstrapping") {
+      if (provisioned?.leaseId && provisioned.destroyRequestedAtMs !== null) {
         await finishDestroy(provisioned, provider).catch(() => undefined);
       }
       return;
@@ -456,6 +472,14 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       move(draining, "orphaned", { lastError: ORPHANED_LEASE_ERROR });
       return;
     }
+    if (status === "dormant") {
+      if (teardownExpected) {
+        await finishDestroy(record, provider).catch(() => undefined);
+      }
+      // A paired device may be offline without losing its lease. Keep that authoritative
+      // holding state out of the unknown/orphan path until pairing itself is removed.
+      return;
+    }
     const inspectedSharedHost = inspection.sharedHost === true;
     if (record.sharedHost !== null && record.sharedHost !== inspectedSharedHost) {
       // Workspace actions capture isolation at tunnel creation. Fence the old actions before
@@ -472,6 +496,19 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       await finishDestroy(record, provider).catch(() => undefined);
       return;
     }
+    if (!record.sshEndpoint) {
+      if (
+        currentBundle &&
+        (!record.bootstrapReceipt ||
+          !verifyWorkerAdmissionHandshake(record.bootstrapReceipt, currentBundle))
+      ) {
+        // A stale node environment cannot be upgraded in place because its credential and
+        // placement ownership bind the old build. Retire it; reprovisioning reuses the installed
+        // content-addressed bundle without another transfer.
+        await finishDestroy(recordStaleBuildDestroy(record), provider).catch(() => undefined);
+      }
+      return;
+    }
     if (record.state === "attached") {
       if (
         currentBundle &&
@@ -481,7 +518,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         // A new Gateway build rejects the old worker at admission. This is expected lifecycle
         // teardown, not a bootstrap failure. `leaseId` above came from this record, so provider
         // inspection and destruction share the same durable lease identity.
-        await finishDestroy(record, provider).catch(() => undefined);
+        await finishDestroy(recordStaleBuildDestroy(record), provider).catch(() => undefined);
       }
       return;
     }

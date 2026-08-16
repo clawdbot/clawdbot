@@ -220,7 +220,6 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
   payloadCount: number;
   hasTerminalToolPresentation?: boolean;
   aborted: boolean;
-  promptError?: unknown;
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
 }): string | null {
@@ -314,10 +313,8 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
     params.payloadCount !== 0 ||
     params.hasTerminalToolPresentation ||
     params.aborted ||
-    ((params.promptError != null ||
-      params.timedOut ||
-      params.attempt.terminal.kind === "timeout") &&
-      !idlePromptTimeout) ||
+    ((params.timedOut || params.attempt.terminal.kind === "timeout") && !idlePromptTimeout) ||
+    (terminal.kind === "failed" && !params.attempt.settledTurnFinalizationContext) ||
     (assistant?.stopReason === "toolUse" ? !allToolsProvenSettled : !emptyStopAfterSettledTools) ||
     hasUnsettledToolError ||
     hasAsyncActivity(params.attempt.toolMetas) ||

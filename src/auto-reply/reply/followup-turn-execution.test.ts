@@ -215,6 +215,174 @@ describe("executeFollowupTurn", () => {
     expect(call.resolvedVerboseLevel).toBe("off");
   });
 
+  it.each([
+    {
+      initialLevel: "off",
+      queuedLevel: "on",
+      expectedDurableCommentary: true,
+    },
+    {
+      initialLevel: "on",
+      queuedLevel: "off",
+      expectedDurableCommentary: false,
+    },
+  ] as const)(
+    "refreshes commentary ownership for a queued $initialLevel-to-$queuedLevel transition",
+    async ({ initialLevel, queuedLevel, expectedDurableCommentary }) => {
+      let verboseLevel = queuedLevel;
+      let isVerboseProgressActive = () => initialLevel !== "off";
+      const turn = createTurn({
+        session: {
+          kind: "session",
+          key: "main",
+          current: () => ({ sessionId: "session", updatedAt: 1, verboseLevel }),
+          publish: () => undefined,
+          adopt: () => undefined,
+        },
+      });
+      state.execute.mockImplementation(async (params: AgentTurnParams) => {
+        expect(params.resolvedVerboseLevel).toBe(queuedLevel);
+        expect(params.opts?.commentaryPayloadsEnabled).toBe(expectedDurableCommentary);
+        verboseLevel = queuedLevel === "off" ? "on" : "off";
+        expect(isVerboseProgressActive()).toBe(queuedLevel !== "off");
+        return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+      });
+
+      const result = await executeFollowupTurn({
+        turn,
+        defaults: {
+          typing: createTypingController(),
+          typingMode: "never",
+          defaultModel: "claude",
+          opts: {
+            commentaryPayloadsEnabled: true,
+            shouldDeliverCommentaryPayloads: () => isVerboseProgressActive(),
+            onVerboseProgressVisibility: (getter) => {
+              isVerboseProgressActive = getter;
+            },
+          },
+        },
+        onToolResult: vi.fn(async () => {}),
+        onCompactionNoticePayload: vi.fn(async () => {}),
+      });
+
+      expect(result.commentaryPayloadsEnabled).toBe(expectedDurableCommentary);
+    },
+  );
+
+  it("routes a queued verbose-off preamble to the draft commentary owner", async () => {
+    const onItemEvent = vi.fn(async () => true as const);
+    let preambleVisible: boolean | void = false;
+    let toolVisible: boolean | void = true;
+    const turn = createTurn({
+      session: {
+        kind: "session",
+        key: "main",
+        current: () => ({ sessionId: "session", updatedAt: 1, verboseLevel: "off" }),
+        publish: () => undefined,
+        adopt: () => undefined,
+      },
+    });
+    state.execute.mockImplementation(async (params: AgentTurnParams) => {
+      expect(params.opts?.commentaryPayloadsEnabled).toBe(false);
+      preambleVisible = await params.opts?.onItemEvent?.({
+        kind: "preamble",
+        progressText: "Checking the queued request",
+      });
+      toolVisible = await params.opts?.onItemEvent?.({
+        kind: "tool",
+        progressText: "running exec",
+      });
+      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+    });
+
+    const result = await executeFollowupTurn({
+      turn,
+      defaults: {
+        typing: createTypingController(),
+        typingMode: "never",
+        defaultModel: "claude",
+        opts: {
+          commentaryPayloadsEnabled: true,
+          shouldDeliverCommentaryPayloads: () => false,
+          onItemEvent,
+        },
+      },
+      onToolResult: vi.fn(async () => {}),
+      onCompactionNoticePayload: vi.fn(async () => {}),
+    });
+    await result.progress.drain();
+
+    expect(result.commentaryPayloadsEnabled).toBe(false);
+    expect(preambleVisible).toBe(true);
+    expect(toolVisible).toBe(false);
+    expect(onItemEvent).toHaveBeenCalledOnce();
+    expect(onItemEvent).toHaveBeenCalledWith({
+      kind: "preamble",
+      progressText: "Checking the queued request",
+    });
+  });
+
+  it.each([
+    {
+      owner: "without a static opt-in",
+      ownerOptions: {},
+      expectedDurableCommentary: false,
+    },
+    {
+      owner: "with only a static opt-in",
+      ownerOptions: { commentaryPayloadsEnabled: true },
+      expectedDurableCommentary: true,
+    },
+    {
+      owner: "with the durable callback owner",
+      ownerOptions: {
+        commentaryPayloadsEnabled: true,
+        shouldDeliverCommentaryPayloads: () => true,
+      },
+      expectedDurableCommentary: true,
+    },
+  ] as const)(
+    "suppresses queued verbose-off preambles $owner",
+    async ({ ownerOptions, expectedDurableCommentary }) => {
+      const onItemEvent = vi.fn(async () => true as const);
+      let preambleVisible: boolean | void = true;
+      const turn = createTurn({
+        session: {
+          kind: "session",
+          key: "main",
+          current: () => ({ sessionId: "session", updatedAt: 1, verboseLevel: "off" }),
+          publish: () => undefined,
+          adopt: () => undefined,
+        },
+      });
+      state.execute.mockImplementation(async (params: AgentTurnParams) => {
+        preambleVisible = await params.opts?.onItemEvent?.({
+          kind: "preamble",
+          progressText: "Checking the queued request",
+        });
+        return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+      });
+
+      const result = await executeFollowupTurn({
+        turn,
+        defaults: {
+          typing: createTypingController(),
+          typingMode: "never",
+          defaultModel: "claude",
+          opts: { onItemEvent, ...ownerOptions },
+        },
+        onToolResult: vi.fn(async () => {}),
+        onCompactionNoticePayload: vi.fn(async () => {}),
+      });
+      await result.progress.drain();
+
+      expect(result.commentaryPayloadsEnabled).toBe(expectedDurableCommentary);
+      expect(preambleVisible).toBe(false);
+      expect(onItemEvent).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps room-event progress, tool summaries, and typing silent", async () => {
     const turn = createTurn({
       queued: { ...createTurn().queued, currentInboundEventKind: "room_event" },
@@ -326,6 +494,15 @@ describe("executeFollowupTurn", () => {
             approvalSlug: "117ba06d",
             allowedDecisions: ["allow-once", "allow-always", "deny"],
           },
+        },
+      },
+    },
+    {
+      label: "unavailable exec approvals",
+      payload: {
+        text: "Exec approval is unavailable.",
+        channelData: {
+          execApprovalUnavailable: { reason: "no-approval-route" },
         },
       },
     },

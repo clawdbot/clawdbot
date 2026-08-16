@@ -14,8 +14,8 @@ import {
   EXTERNAL_CLI_SYNC_TTL_MS,
   MINIMAX_CLI_PROFILE_ID,
   OPENAI_CODEX_DEFAULT_PROFILE_ID,
+  authProfilesLog,
 } from "./constants.js";
-import { authProfilesLog } from "./constants.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
 import { isSafeToCopyOAuthIdentity } from "./oauth-identity.js";
 import {
@@ -130,6 +130,11 @@ function listExternalCliProfileIds(providerConfig: ExternalCliSyncProvider): str
 
 function listExternalCliProviderIds(providerConfig: ExternalCliSyncProvider): string[] {
   return [providerConfig.provider, ...(providerConfig.aliases ?? [])];
+}
+
+/** Provider ids whose external CLI credentials can be refreshed by this owner. */
+export function listExternalCliSyncProviderIds(): string[] {
+  return [...new Set(EXTERNAL_CLI_SYNC_PROVIDERS.flatMap(listExternalCliProviderIds))];
 }
 
 function normalizeExternalCliCredentialProvider(
@@ -259,6 +264,30 @@ function isExternalCliProviderInScope(params: {
     const normalized = normalizeProviderId(alias);
     return providerScope.has(raw) || (normalized ? providerScope.has(normalized) : false);
   });
+}
+
+/** True when a previously resolved built-in CLI profile belongs to this refresh scope. */
+export function isExternalCliAuthProfileInScope(params: {
+  store: AuthProfileStore;
+  profileId: string;
+  providerIds?: Iterable<string>;
+  profileIds?: Iterable<string>;
+}): boolean {
+  const credential = params.store.profiles[params.profileId];
+  const providerConfig = resolveExternalCliSyncProvider({
+    profileId: params.profileId,
+    ...(credential?.type === "oauth" ? { credential } : {}),
+  });
+  return providerConfig
+    ? isExternalCliProviderInScope({
+        providerConfig,
+        store: params.store,
+        options: {
+          ...(params.providerIds ? { providerIds: params.providerIds } : {}),
+          ...(params.profileIds ? { profileIds: params.profileIds } : {}),
+        },
+      })
+    : false;
 }
 
 function listScopedExternalCliProfileIds(params: {

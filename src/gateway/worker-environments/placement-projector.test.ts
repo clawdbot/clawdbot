@@ -10,6 +10,7 @@ const RECORD_BASE = {
   sessionId: "session-1",
   agentId: "main",
   sessionKey: "agent:main:session-1",
+  executionMode: "worker-turn" as const,
   generation: 4,
   workspaceBaseManifestRef: null,
   remoteWorkspaceDir: null,
@@ -26,6 +27,27 @@ const RECORD_BASE = {
 };
 
 describe("worker placement projection", () => {
+  it("adds an exact active disk-space sample only when supplied", () => {
+    const active = {
+      ...RECORD_BASE,
+      state: "active",
+      environmentId: "environment-1",
+      activeOwnerEpoch: 7,
+      workspaceBaseManifestRef: "manifest-1",
+      remoteWorkspaceDir: "/workspace",
+      workerBundleHash: BUNDLE_HASH,
+    } satisfies WorkerSessionPlacementRecord;
+    const diskSpace = {
+      status: "critical" as const,
+      availableBytes: 50,
+      totalBytes: 1_000,
+      observedAtMs: 250,
+    };
+
+    expect(projectWorkerSessionPlacement(active, diskSpace)).toMatchObject({ diskSpace });
+    expect(projectWorkerSessionPlacement(active)).not.toHaveProperty("diskSpace");
+  });
+
   it("emits only fields valid for each placement discriminator", () => {
     const records = [
       {
@@ -65,7 +87,7 @@ describe("worker placement projection", () => {
       },
     ] satisfies WorkerSessionPlacementRecord[];
 
-    const projected = records.map(projectWorkerSessionPlacement);
+    const projected = records.map((record) => projectWorkerSessionPlacement(record));
 
     expect(projected).toEqual([
       {

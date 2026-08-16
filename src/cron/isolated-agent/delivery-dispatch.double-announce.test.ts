@@ -2327,6 +2327,25 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(2);
   });
 
+  it("does not retry permanent typed pre-dispatch rejections", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    const rejection = new PlatformMessageNotDispatchedError("payload rejected", {
+      cause: new Error("invalid payload"),
+      retryable: false,
+    });
+    vi.mocked(deliverOutboundPayloads).mockRejectedValue(rejection);
+
+    const params = makeBaseParams({ synthesizedText: "Reject this once." });
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectResultFields(state.result, {
+      status: "error",
+      error: "payload rejected | OPENCLAW_PLATFORM_MESSAGE_NOT_DISPATCHED | invalid payload",
+      deliveryAttempted: true,
+    });
+  });
+
   it.each(["structured", "threaded"] as const)(
     "retries proven-not-sent %s cron delivery without duplicating a message",
     async (deliveryKind) => {
@@ -2369,7 +2388,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     expectResultFields(state.result, {
       status: "error",
-      error: "Error: read ECONNRESET after send",
+      error: "read ECONNRESET after send | ECONNRESET",
       deliveryAttempted: true,
     });
   });
@@ -2433,7 +2452,8 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     expectResultFields(state.result, {
       status: "error",
-      error: String(notDispatchedError),
+      error:
+        "second payload stopped before final dispatch | OPENCLAW_PLATFORM_MESSAGE_NOT_DISPATCHED | connect ECONNREFUSED | ECONNREFUSED",
       deliveryAttempted: true,
     });
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
@@ -2782,7 +2802,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     expectResultFields(state.result, {
       status: "error",
-      error: "Error: chat not found",
+      error: "chat not found",
       deliveryAttempted: true,
     });
   });
@@ -2808,7 +2828,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     expectResultFields(state.result, {
       status: "error",
-      error: String(deliveryError),
+      error: deliveryError.message,
       deliveryAttempted: true,
     });
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
@@ -2855,7 +2875,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     expectResultFields(state.result, {
       status: "error",
-      error: String(deliveryError),
+      error: deliveryError.message,
       deliveryAttempted: true,
     });
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
@@ -2883,7 +2903,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     expectResultFields(state.result, {
       status: "error",
-      error: "Error: boom",
+      error: "boom",
       deliveryAttempted: true,
     });
   });

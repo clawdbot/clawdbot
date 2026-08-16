@@ -11,6 +11,7 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
@@ -40,6 +41,7 @@ import { resolveDiscordReplyReference } from "./reply-reference.js";
 import { createDiscordSendReceiptFromResults } from "./send.receipt.js";
 
 export const DISCORD_TEXT_CHUNK_LIMIT = 2000;
+const log = createSubsystemLogger("discord/outbound");
 const loadDiscordThreadBindings = createLazyRuntimeModule(
   () => import("./monitor/thread-bindings.js"),
 );
@@ -199,6 +201,10 @@ export const discordOutbound: ChannelOutboundAdapter = {
           if (webhookSelected) {
             throw error;
           }
+          // Falling back to the plain bot send is intended (persona delivery is
+          // best-effort), but the failure must stay operator-visible: a broken
+          // webhook binding otherwise degrades every reply silently.
+          log.warn("discord webhook persona send failed; falling back to bot send", { error });
         }
       }
       const { send, target, options } = await resolveDiscordOutboundMessageSend(ctx);

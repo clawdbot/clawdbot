@@ -245,7 +245,7 @@ What helps in practice:
 - Limit high-risk tools (`exec`, `browser`, `web_fetch`, `web_search`) to trusted agents or explicit allowlists.
 - If you allowlist interpreters (`python`, `node`, `ruby`, `perl`, `php`, `lua`, `osascript`), enable `tools.exec.strictInlineEval` so inline eval forms (`-c`, `-e`, and similar) still need explicit approval. In allowlist mode, any heredoc segment (`<<`) always requires reviewer or explicit approval, regardless of quoting - an allowlisted command cannot use a heredoc body to bypass allowlist review.
 - Reduce blast radius by using a read-only or tool-disabled **reader agent** to summarize untrusted content, then pass the summary to your main agent.
-- For Gmail hooks, the built-in per-message session isolates conversation context but does not remove the target agent's tool or workspace permissions. Route untrusted mail to a dedicated reader agent, apply [per-agent sandbox and tool restrictions](/tools/multi-agent-sandbox-tools), and constrain any handoff to the main agent with [`tools.agentToAgent`](/gateway/config-tools#toolsagenttoagent). See [Gmail integration](/gateway/configuration-reference#gmail-integration).
+- For Gmail hooks, the built-in per-message session isolates conversation context but does not remove the target agent's tool or workspace permissions. Route untrusted mail to a dedicated reader agent, apply [per-agent sandbox and tool restrictions](/tools/multi-agent-sandbox-tools), and constrain any handoff to the main agent with [`tools.agentToAgent`](/gateway/config-tools#tools-agenttoagent). See [Gmail integration](/gateway/configuration-reference#gmail-integration).
 - Keep `web_search` / `web_fetch` / `browser` off for tool-enabled agents unless needed.
 - For OpenResponses URL inputs (`input_file` / `input_image`), set a tight `gateway.http.endpoints.responses.files.urlAllowlist` / `images.urlAllowlist` and keep `maxUrlParts` low (empty allowlists count as unset). Use `files.allowUrl: false` / `images.allowUrl: false` to disable URL fetching entirely.
 - Keep secrets out of prompts; pass them via env/config on the gateway host instead.
@@ -336,11 +336,11 @@ Plugins run in-process with the Gateway - treat them as trusted code.
 - Installing/updating plugins runs executable code:
   - The install path is the per-plugin directory under the active plugin install root.
   - ClawHub packages and OpenClaw's bundled/official catalog are trusted sources. A new arbitrary npm, `npm-pack:`, git, local path/archive, or marketplace source warns before install; noninteractive installs require `--force` after you review and trust that source. `--force` confirms provenance and permits overwrite; it does not bypass `security.installPolicy` or remaining install safety checks. Updates reuse the already selected source.
-  - OpenClaw does not run built-in local dangerous-code blocking during install/update. Use `security.installPolicy` for operator-owned local allow/block decisions and `openclaw security audit --deep` for diagnostic scanning.
+  - OpenClaw does not run built-in local dangerous-code blocking during install/update. Use `security.installPolicy` for operator-owned local allow/warn/block decisions and `openclaw security audit --deep` for diagnostic scanning.
   - npm and git plugin installs run package-manager dependency convergence only during the explicit install/update flow. Local paths and archives are treated as self-contained packages; OpenClaw copies/references them without running `npm install`.
   - Prefer pinned exact versions (`@scope/pkg@1.2.3`) and inspect the unpacked code before enabling.
-  - `--dangerously-force-unsafe-install` is deprecated and no longer changes install/update behavior.
-  - `security.installPolicy` lets operators run a trusted local command to make host-specific allow/block decisions for skill and plugin installs. It runs after source material is staged but before install continues, applies to ClawHub skills too, and is not bypassed by deprecated unsafe flags.
+  - `security.installPolicy` lets operators run a trusted local command to return `allow`, `warn`, or `block` for skill and plugin installs. It runs after source material is staged but before install continues and applies to ClawHub skills too.
+  - A `warn` result stops before commit. Interactive CLI commands ask the operator to type the plugin or skill name using the same wording as suspicious ClawHub releases, then re-evaluate policy before continuing. An over-4,000-character rendered review fails closed before prompting. Declined and non-interactive direct CLI commands can use `--acknowledge-install-policy-warning` as explicit approval after review for every warning in that command invocation. The Control UI exposes the same invocation-wide approval through **Install anyway** for plugin installs. Other Gateway-backed and automatic installs remain blocked when they have no operator-confirmation flow. Every approved warning is re-evaluated before continuing. `block` and policy failures remain terminal. Neither `--force` nor the deprecated plugin install/update flag `--dangerously-force-unsafe-install` approves policy warnings.
 
 Details: [Plugins](/tools/plugin)
 
@@ -688,11 +688,11 @@ Trusted proxy headers do not make node device pairing automatically trusted - `g
 
 ### Control UI over HTTP
 
-The Control UI needs a secure context (HTTPS or localhost) to generate device identity.
+The Control UI generates device identity with pure-JS Ed25519, so pairing works on any origin, including plain HTTP.
 
-- Token/password auth does not replace browser device identity over remote plain HTTP. Use HTTPS (for example, Tailscale Serve) or open the UI on `127.0.0.1` from the Gateway host.
-- `gateway.controlUi.dangerouslyDisableDeviceAuth`: retired break-glass input. Older configs preserve authenticated, pairing-only Control UI access for remediation until a browser reopened over HTTPS or localhost completes the bounded, explicit self-pairing migration; do not add it to current config.
-- Separately, successful `gateway.auth.mode: "trusted-proxy"` authentication can admit **operator** Control UI sessions without device identity. This does not extend to node-role Control UI sessions.
+- Token/password auth does not replace browser device identity: HTTP browsers still pair with a signed device key, which never crosses the wire. Prefer HTTPS (for example, Tailscale Serve) — plaintext transport still exposes the page and the shared secret to on-path attackers.
+- `gateway.controlUi.dangerouslyDisableDeviceAuth`: retired break-glass input, now fully inert. Control UI browsers pair through the normal device flow; `openclaw doctor --fix` removes the legacy key.
+- Separately, successful `gateway.auth.mode: "trusted-proxy"` authentication can admit **operator** Control UI sessions without device identity when the browser cannot supply one. Browsers that can mint an identity (any origin, including plain HTTP) follow the normal pairing flow instead — automatic with `deviceAutoApprove`, otherwise a one-time approval. This does not extend to node-role Control UI sessions.
 
 ### Insecure/dangerous flags
 
@@ -701,7 +701,6 @@ The Control UI needs a secure context (HTTPS or localhost) to generate device id
 <AccordionGroup>
   <Accordion title="Flags tracked by the audit today">
     - `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true`
-    - pending Control UI device-auth migration imported from retired `gateway.controlUi.dangerouslyDisableDeviceAuth=true`
     - `security.audit.suppressions configured (<count>)`
     - `hooks.gmail.allowUnsafeExternalContent=true`
     - `hooks.mappings[<index>].allowUnsafeExternalContent=true`
@@ -713,7 +712,7 @@ The Control UI needs a secure context (HTTPS or localhost) to generate device id
   <Accordion title="All dangerous*/dangerously* keys in the config schema">
     Control UI and browser:
     - `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback`
-    - `gateway.controlUi.dangerouslyDisableDeviceAuth` (retired upgrade input)
+    - `gateway.controlUi.dangerouslyDisableDeviceAuth` (retired, inert)
     - `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork`
 
     Channel name-matching (bundled and plugin channels; also per `accounts.<accountId>` where applicable):
@@ -741,7 +740,7 @@ The Control UI needs a secure context (HTTPS or localhost) to generate device id
 ## Deployment and host trust
 
 - Full-disk encryption on the gateway host; prefer a dedicated OS user account for the Gateway if the host is shared.
-- Published package dependency lock: source checkouts use `pnpm-lock.yaml`; the published `openclaw` npm package and OpenClaw-owned npm plugin packages include `npm-shrinkwrap.json` so installs use the reviewed transitive dependency graph from the release instead of resolving a fresh graph at install time. This is a supply-chain hardening and release reproducibility boundary, not a sandbox - see [npm shrinkwrap](/gateway/security/shrinkwrap).
+- Published package dependency lock: source checkouts use `pnpm-lock.yaml`; the published `openclaw` npm package and OpenClaw-owned npm plugin packages include `npm-shrinkwrap.json` so installs use the reviewed transitive dependency graph from the release instead of resolving a fresh graph at install time. This is a supply-chain hardening and release reproducibility boundary, not a sandbox - see [npm shrinkwrap](/gateway/security/dependency-locking).
 - Secure file operations: OpenClaw uses `@openclaw/fs-safe` for root-bounded file access, atomic writes, archive extraction, temp workspaces, and secret-file helpers. Optional native acceleration defaults **off**; set `OPENCLAW_FS_SAFE_NATIVE_MODE=auto` to use an installed platform binding or `require` to fail closed when native support is unavailable. Details: [Secure file operations](/gateway/security/secure-file-operations).
 - Shared Slack workspace risk: if everyone in Slack can message the bot, the core risk is delegated tool authority - any allowed sender can induce tool calls (`exec`, browser, network/file tools) within the agent's policy, prompt/content injection from one sender can affect shared state/devices/outputs, and if the shared agent has sensitive credentials/files, any allowed sender can potentially drive exfiltration via tool usage. Use separate agents/gateways with minimal tools for team workflows; keep personal-data agents private.
 - Company-shared agent (acceptable pattern): fine when everyone using the agent is in the same trust boundary (for example one company team) and the agent is strictly business-scoped. Run it on a dedicated machine/VM/container, use a dedicated OS user + dedicated browser/profile/accounts, and do not sign that runtime into personal Apple/Google accounts or personal password-manager/browser profiles. Mixing personal and company identities on the same runtime collapses the separation and increases personal-data exposure risk.

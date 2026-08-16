@@ -10,8 +10,9 @@ import {
   deriveLastRoutePolicy,
   resolveAgentRoute,
   resolveThreadSessionKeys,
+  buildAgentMainSessionKey,
+  sanitizeAgentId,
 } from "openclaw/plugin-sdk/routing";
-import { buildAgentMainSessionKey, sanitizeAgentId } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultTelegramAccountId } from "./accounts.js";

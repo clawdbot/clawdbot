@@ -260,6 +260,10 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Controls whether this headless node host may advertise Claude CLI agent turns to the gateway.",
   "nodeHost.agentRuns.claude.enabled":
     "Advertise paired-node Claude session continuation when the local claude binary is available (default: false). Runs still require node exec approval.",
+  "nodeHost.workerRuns":
+    "Opt in to full OpenClaw worker session hosting from Gateway-managed bundles. Disabled by default.",
+  "nodeHost.workerRuns.enabled":
+    "Allow this paired node to host sessions from exact bundles installed by its Gateway (default: false).",
   "nodeHost.browserProxy":
     "Groups browser-proxy settings for exposing local browser control through node routing. Enable only when remote node workflows need your local browser profiles.",
   "nodeHost.browserProxy.enabled":

@@ -427,7 +427,7 @@ describe("runNodeDaemonStatus", () => {
     await runNodeDaemonStatus();
 
     expect(mocks.runtime.error).toHaveBeenCalledWith(
-      "Node service check failed: Error: systemd unavailable",
+      "Node service check failed: systemd unavailable",
     );
     expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
     expect(stdout()).not.toContain("not loaded");
@@ -435,27 +435,33 @@ describe("runNodeDaemonStatus", () => {
   });
 
   it("reports a failed service check as JSON without inventing node status", async () => {
-    mocks.service.isLoaded.mockRejectedValue(new Error("systemd unavailable"));
+    const secret = "sk-abcdefghijklmnopqrstuv";
+    const error = new Error(`systemd unavailable: Authorization: Bearer ${secret}`);
+    error.name = "ServiceManagerError";
+    mocks.service.isLoaded.mockRejectedValue(error);
 
-    await runNodeDaemonStatus({ json: true });
+    await expect(runNodeDaemonStatus({ json: true })).rejects.toThrow(
+      "Node service check failed: systemd unavailable",
+    );
 
-    expect(mocks.runtime.writeJson).toHaveBeenCalledWith({
-      error: "Node service check failed: Error: systemd unavailable",
-    });
-    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+    expect(mocks.runtime.exit).not.toHaveBeenCalled();
     expect(mocks.runtime.error).not.toHaveBeenCalled();
   });
 
   it("reports an unknown runtime when runtime inspection fails", async () => {
-    mocks.service.readRuntime.mockRejectedValue(new Error("permission denied"));
+    const error = new Error("permission denied");
+    error.name = "RuntimeInspectionError";
+    mocks.service.readRuntime.mockRejectedValue(error);
 
     await runNodeDaemonStatus({ json: true });
 
     expect(mocks.runtime.writeJson).toHaveBeenCalledWith({
       service: expect.objectContaining({
-        runtime: { status: "unknown", detail: "Error: permission denied" },
+        runtime: { status: "unknown", detail: "permission denied" },
       }),
     });
+    expect(JSON.stringify(mocks.runtime.writeJson.mock.calls)).not.toContain(error.name);
   });
 
   it("keeps missing service-unit status on stderr and prints recovery hints on stdout", async () => {

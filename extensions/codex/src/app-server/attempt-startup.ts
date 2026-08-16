@@ -390,11 +390,12 @@ export async function startCodexAttemptThread(params: {
             };
             releaseStartupResourcesOnTimeout = releaseStartupSandboxEnvironment;
             try {
-              startupSandboxEnvironment = shouldRequireCodexSandboxExecServerEnvironment({
+              const sandboxEnvironmentRequired = shouldRequireCodexSandboxExecServerEnvironment({
                 sandbox: params.sandbox,
                 nativeToolSurfaceEnabled: params.nativeToolSurfaceEnabled,
                 sandboxExecServerEnabled: params.sandboxExecServerEnabled,
-              })
+              });
+              startupSandboxEnvironment = sandboxEnvironmentRequired
                 ? await ensureCodexSandboxExecServerEnvironment({
                     client: activeStartupClient,
                     sandbox: params.sandbox ?? null,
@@ -408,12 +409,7 @@ export async function startCodexAttemptThread(params: {
                 await releaseStartupSandboxEnvironment();
                 throw new CodexAppServerStartupError("aborted");
               }
-              if (
-                params.sandbox?.enabled &&
-                params.nativeToolSurfaceEnabled &&
-                params.sandboxExecServerEnabled &&
-                !startupSandboxEnvironment
-              ) {
+              if (sandboxEnvironmentRequired && !startupSandboxEnvironment) {
                 throw new Error(
                   "Codex app-server did not register an OpenClaw sandbox exec-server environment.",
                 );

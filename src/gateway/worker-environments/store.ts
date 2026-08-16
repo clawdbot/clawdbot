@@ -41,10 +41,15 @@ import {
   type WorkerEnvironmentState,
   type WorkerEnvironmentUnleasedState,
 } from "./state.js";
+import { pruneExpiredTerminalWorkerEnvironments } from "./terminal-environment-retention.js";
 
 type WorkerEnvironmentProfileSnapshot = WorkerProfile;
 type WorkerEnvironmentSshEndpoint = WorkerSshEndpoint;
-type WorkerEnvironmentBootstrapReceipt = WorkerAdmissionHandshake;
+type WorkerBootstrapInstallKind = "bundle" | "local";
+type WorkerEnvironmentBootstrapReceipt = WorkerAdmissionHandshake & {
+  /** Provenance only; admission authority remains the exact stored build identity. */
+  installKind?: WorkerBootstrapInstallKind;
+};
 type WorkerEnvironmentTeardownTerminalState = "destroyed" | "failed";
 type RecordIdentity = { environmentId: string; providerId: string; profileId: string };
 type RecordBase = RecordIdentity & {
@@ -63,7 +68,11 @@ type RecordBase = RecordIdentity & {
 };
 type Ssh = WorkerEnvironmentSshEndpoint;
 type UnleasedRecord = { state: WorkerEnvironmentUnleasedState; leaseId: null; sshEndpoint: null };
-type LeasedRecord = { state: WorkerEnvironmentLeasedState; leaseId: string; sshEndpoint: Ssh };
+type LeasedRecord = {
+  state: WorkerEnvironmentLeasedState;
+  leaseId: string;
+  sshEndpoint: Ssh | null;
+};
 export type WorkerEnvironmentRecord = RecordBase & (UnleasedRecord | LeasedRecord);
 export class WorkerSessionAlreadyAttachedError extends Error {
   constructor(
@@ -174,6 +183,7 @@ function normalizeBootstrapReceipt(value: {
   bundleHash: unknown;
   openclawVersion: unknown;
   protocolFeatures: unknown;
+  installKind?: unknown;
 }): WorkerEnvironmentBootstrapReceipt {
   const bundleHash = required(value.bundleHash, "bootstrap bundle hash");
   if (!WORKER_BUNDLE_HASH_PATTERN.test(bundleHash)) {
@@ -191,10 +201,18 @@ function normalizeBootstrapReceipt(value: {
   ) {
     throw new Error("Worker environment bootstrap protocol features exceed admission limits");
   }
+  if (
+    value.installKind !== undefined &&
+    value.installKind !== "bundle" &&
+    value.installKind !== "local"
+  ) {
+    throw new Error("Worker environment bootstrap install kind is invalid");
+  }
   return {
     bundleHash,
     openclawVersion: required(value.openclawVersion, "bootstrap OpenClaw version"),
     protocolFeatures: normalizeSortedUniqueTrimmedStringList(value.protocolFeatures),
+    ...(value.installKind ? { installKind: value.installKind } : {}),
   };
 }
 function normalizeCredentialHash(value: unknown): string {
@@ -381,6 +399,7 @@ function bootstrapReceiptFrom(row: Row): WorkerEnvironmentBootstrapReceipt | nul
     bootstrap_bundle_hash: bundleHash,
     bootstrap_openclaw_version: openclawVersion,
     bootstrap_protocol_features_json: encodedFeatures,
+    bootstrap_install_kind: installKind,
   } = row;
   if (bundleHash === null && openclawVersion === null && encodedFeatures === null) {
     return null;
@@ -392,6 +411,7 @@ function bootstrapReceiptFrom(row: Row): WorkerEnvironmentBootstrapReceipt | nul
     bundleHash,
     openclawVersion,
     protocolFeatures: JSON.parse(encodedFeatures) as unknown,
+    ...(installKind === null ? {} : { installKind }),
   });
 }
 function assertShape(
@@ -406,8 +426,8 @@ function assertShape(
     if (!leaseId) {
       throw new Error(`Worker environment state ${state} requires a provider lease`);
     }
-    if (!sshEndpoint) {
-      throw new Error("Worker environment provider lease requires an SSH endpoint reference");
+    if (state === "bootstrapping" && !sshEndpoint) {
+      throw new Error("Worker environment bootstrap requires an SSH endpoint reference");
     }
   } else if (leaseId || sshEndpoint || desktop) {
     throw new Error(`Worker environment state ${state} cannot retain a provider lease`);
@@ -553,6 +573,49 @@ function findCredentialByHash(db: DatabaseSync, credentialHash: string) {
       .where("credential_hash", "=", credentialHash),
   );
   return row ? credentialFromRow(row) : undefined;
+}
+function findTransferOwner(db: DatabaseSync, environmentId: string) {
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    query(db)
+      .selectFrom("worker_environments")
+      .leftJoin(
+        "worker_environment_credentials",
+        "worker_environment_credentials.environment_id",
+        "worker_environments.environment_id",
+      )
+      .select([
+        "worker_environments.owner_epoch as environment_owner_epoch",
+        "worker_environments.attached_session_ids_json",
+        "worker_environments.destroy_requested_at_ms",
+        "worker_environments.state",
+        "worker_environment_credentials.owner_epoch as credential_owner_epoch",
+        "worker_environment_credentials.expires_at_ms",
+        "worker_environment_credentials.session_id",
+      ])
+      .where("worker_environments.environment_id", "=", environmentId),
+  );
+  if (!row) {
+    return undefined;
+  }
+  return {
+    environment: {
+      ownerEpoch: row.environment_owner_epoch,
+      attachedSessionIds: normalizeAttachedSessionIds(
+        JSON.parse(row.attached_session_ids_json) as unknown,
+      ),
+      destroyRequestedAtMs: row.destroy_requested_at_ms,
+      state: row.state,
+    },
+    credential:
+      row.credential_owner_epoch === null || row.expires_at_ms === null
+        ? undefined
+        : {
+            ownerEpoch: row.credential_owner_epoch,
+            expiresAtMs: row.expires_at_ms,
+            sessionId: row.session_id,
+          },
+  };
 }
 function getRequired(db: DatabaseSync, environmentId: string) {
   const record = find(db, environmentId);
@@ -818,6 +881,7 @@ export function createWorkerEnvironmentStore(
               bootstrap_bundle_hash: null,
               bootstrap_openclaw_version: null,
               bootstrap_protocol_features_json: null,
+              bootstrap_install_kind: null,
               owner_epoch: 0,
               teardown_terminal_state: null,
               state: "requested",
@@ -834,10 +898,24 @@ export function createWorkerEnvironmentStore(
     },
     get: (environmentId: string) => find(read(), required(environmentId, "id")),
     getCredential: (environmentId: string) => findCredential(read(), required(environmentId, "id")),
+    getTransferOwner: (environmentId: string) =>
+      findTransferOwner(read(), required(environmentId, "id")),
+    revokeEnvironmentCredential(environmentId: string): void {
+      return write((db) => revokeCredential(db, required(environmentId, "id")));
+    },
     findCredentialByHash: (credentialHash: string) =>
       findCredentialByHash(read(), normalizeCredentialHash(credentialHash)),
     list: (): WorkerEnvironmentRecord[] => listRows(read(), false),
     listForReconcile: (): WorkerEnvironmentRecord[] => listRows(read(), true),
+    pruneTerminalEnvironments(params: { nowMs?: number; limit?: number } = {}): number {
+      return write((db) =>
+        pruneExpiredTerminalWorkerEnvironments({
+          db,
+          nowMs: params.nowMs ?? now(),
+          ...(params.limit === undefined ? {} : { limit: params.limit }),
+        }),
+      );
+    },
     reconcileSharedHost(input: {
       environmentId: string;
       state: WorkerEnvironmentState;
@@ -953,7 +1031,12 @@ export function createWorkerEnvironmentStore(
               : patch.desktop === null
                 ? null
                 : normalizeWorkerDesktopEndpoint(patch.desktop);
-        const acceptsBootstrapReceipt = from === "bootstrapping" && to === "ready";
+        const acceptsBootstrapReceipt =
+          to === "ready" &&
+          (from === "bootstrapping" || (from === "provisioning" && sshEndpoint === null));
+        if (to === "ready" && !acceptsBootstrapReceipt) {
+          throw new Error("Ready worker transition requires bootstrap proof or a node lease");
+        }
         if (patch.bootstrapReceipt !== undefined && !acceptsBootstrapReceipt) {
           throw new Error("Bootstrap receipt can only be recorded when a worker becomes ready");
         }
@@ -1042,6 +1125,7 @@ export function createWorkerEnvironmentStore(
           bootstrap_protocol_features_json: bootstrapReceipt
             ? json(bootstrapReceipt.protocolFeatures)
             : null,
+          bootstrap_install_kind: bootstrapReceipt?.installKind ?? null,
           owner_epoch: ownerEpoch,
           state: to,
           attached_session_ids_json: json(attachedSessionIds),

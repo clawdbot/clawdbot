@@ -8,6 +8,7 @@ import { NonEmptyString } from "./primitives.js";
 export const DesktopSourceSchema = Type.Union([
   closedObject({ kind: Type.Literal("host") }),
   closedObject({ kind: Type.Literal("environment"), environmentId: NonEmptyString }),
+  closedObject({ kind: Type.Literal("node"), nodeId: NonEmptyString }),
 ]);
 
 const DesktopObserveCredentialsSchema = closedObject({
@@ -26,6 +27,11 @@ export const DesktopObserveParamsSchema = Type.Union([
     source: closedObject({ kind: Type.Literal("environment"), environmentId: NonEmptyString }),
     control: Type.Optional(Type.Boolean()),
   }),
+  closedObject({
+    source: closedObject({ kind: Type.Literal("node"), nodeId: NonEmptyString }),
+    control: Type.Optional(Type.Boolean()),
+    credentials: Type.Optional(DesktopObserveCredentialsSchema),
+  }),
 ]);
 
 export const DesktopObserveResultSchema = closedObject({
@@ -36,6 +42,8 @@ export const DesktopObserveResultSchema = closedObject({
   vncPassword: Type.Optional(NonEmptyString),
   // Auth drives credential prompting without coupling clients to RFB security numbers.
   auth: Type.Optional(Type.String({ enum: ["none", "vnc-password", "ard-account"] })),
+  // Gateway-side pre-auth keeps credentials out of the browser RFB client.
+  preauthenticated: Type.Optional(Type.Boolean()),
 });
 
 export const DesktopLaunchParamsSchema = closedObject({

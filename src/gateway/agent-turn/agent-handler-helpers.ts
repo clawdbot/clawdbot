@@ -11,7 +11,10 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { CronScheduledToolPolicy } from "../../cron/scheduled-tool-policy.js";
+import type {
+  CronScheduledToolCallerOrigin,
+  CronScheduledToolPolicy,
+} from "../../cron/scheduled-tool-policy.js";
 import type { PluginHookSessionEndReason } from "../../plugins/hook-types.js";
 import {
   AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE,
@@ -39,6 +42,7 @@ export type RestoredCronContinuation = {
   toolsAllow?: string[];
   toolsAllowIsDefault?: boolean;
   scheduledToolPolicy?: CronScheduledToolPolicy;
+  scheduledToolCallerOrigin?: CronScheduledToolCallerOrigin;
   cliSessionBindingFacts?: {
     extraSystemPromptStatic?: string;
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
@@ -180,7 +184,7 @@ export function emitAgentSendSessionLifecycleTransition(
         sessionId: string;
         storePath: string;
         sessionFile?: string;
-        agentId?: string;
+        agentId: string;
         workspaceDir?: string;
         previousSessionId?: string;
         previousSessionFile?: string;

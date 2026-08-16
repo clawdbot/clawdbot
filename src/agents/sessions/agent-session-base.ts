@@ -15,6 +15,7 @@ import type {
   AgentSessionEventListener,
   AgentSessionWriteSettlementRunner,
 } from "./agent-session-types.js";
+import { replaceAgentMessageInPlace } from "./agent-session-utils.js";
 import { formatNoApiKeyFoundMessage } from "./auth-guidance.js";
 import {
   type ExtensionCommandContextActions,
@@ -83,7 +84,7 @@ export abstract class AgentSessionBase {
   // Compaction state
   protected compactionAbortController: AbortController | undefined = undefined;
   protected autoCompactionAbortController: AbortController | undefined = undefined;
-  protected overflowRecoveryAttempted = false;
+  protected overflowRecoveryAttempts = 0;
   protected contextOverflowRecoveryOwner: "session" | "caller";
 
   // Branch summarization state
@@ -367,7 +368,7 @@ export abstract class AgentSessionBase {
 
     // Retire the exact queued display entry before publishing message_start.
     if (event.type === "message_start" && event.message.role === "user") {
-      this.overflowRecoveryAttempted = false;
+      this.overflowRecoveryAttempts = 0;
       retireQueuedUserMessage(event.message);
     }
 
@@ -419,6 +420,10 @@ export abstract class AgentSessionBase {
           throw error;
         }
         if (event.message.role === "assistant") {
+          const persisted = this.sessionManager.getEntry(entryId);
+          if (persisted?.type === "message" && persisted.message.role === "assistant") {
+            replaceAgentMessageInPlace(event.message, persisted.message);
+          }
           this.lastAssistantEntryId = entryId;
         } else if (event.message.role === "user") {
           // A queued user message_end normally follows a committed append before listeners consume it.
@@ -436,7 +441,7 @@ export abstract class AgentSessionBase {
         // A length response may still need overflow recovery in checkCompaction();
         // retryCount is independent and resets for every non-error response below.
         if (assistantMsg.stopReason !== "error" && assistantMsg.stopReason !== "length") {
-          this.overflowRecoveryAttempted = false;
+          this.overflowRecoveryAttempts = 0;
         }
 
         // Reset retry counter immediately on successful assistant response
@@ -476,22 +481,6 @@ export abstract class AgentSessionBase {
       }
     }
     return undefined;
-  }
-
-  private replaceMessageInPlace(target: AgentMessage, replacement: AgentMessage): void {
-    // Agent-core stores the finalized message object in its state before emitting message_end.
-    // SessionManager persistence happens later in handleAgentEvent() with event.message.
-    // Mutating this object in place keeps agent state, later turn/agent events, listeners,
-    // and the eventual SessionManager.appendMessage(event.message) persistence in sync.
-    if (target === replacement) {
-      return;
-    }
-
-    const targetRecord = target as unknown as Record<string, unknown>;
-    for (const key of Object.keys(targetRecord)) {
-      delete targetRecord[key];
-    }
-    Object.assign(targetRecord, replacement);
   }
 
   /** Emit extension events based on agent events */
@@ -537,7 +526,7 @@ export abstract class AgentSessionBase {
       };
       const replacement = await this.currentExtensionRunner.emitMessageEnd(extensionEvent);
       if (replacement) {
-        this.replaceMessageInPlace(event.message, replacement);
+        replaceAgentMessageInPlace(event.message, replacement);
         return true;
       }
     } else if (event.type === "tool_execution_start") {

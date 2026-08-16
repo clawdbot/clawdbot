@@ -13,7 +13,10 @@ import {
 } from "../../infra/outbound/deliver.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { deriveDurableFinalDeliveryRequirements } from "../message/capabilities.js";
-import { sendDurableMessageBatchCore } from "../message/send.js";
+import {
+  durableMessageBatchMayHaveReachedRecipient,
+  sendDurableMessageBatchCore,
+} from "../message/send.js";
 import { createChannelDeliveryResultFromReceipt } from "./delivery-result.js";
 import type { ChannelDeliveryInfo, ChannelDeliveryResult } from "./types.js";
 
@@ -178,6 +181,7 @@ export async function deliverInboundReplyWithMessageSendContextCore(
   try {
     support = await resolveOutboundDurableFinalDeliverySupport({
       cfg: params.cfg,
+      agentId: params.agentId,
       channel,
       requirements: requiredCapabilities,
     });
@@ -240,7 +244,7 @@ export async function deliverInboundReplyWithMessageSendContextCore(
     receipt: send.receipt,
     threadId: stringifyThreadId(threadId),
     ...(replyToId ? { replyToId } : {}),
-    visibleReplySent: send.status === "sent",
+    visibleReplySent: durableMessageBatchMayHaveReachedRecipient(send),
     ...(send.deliveryIntent ? { deliveryIntent: toDeliveryIntent(send.deliveryIntent) } : {}),
   });
   const delivery: ChannelDeliveryResult =
@@ -248,7 +252,9 @@ export async function deliverInboundReplyWithMessageSendContextCore(
       ? { ...receiptDelivery, suppression: resolveDurableSuppression(send) }
       : receiptDelivery;
   if (send.status === "suppressed") {
-    return { status: "handled_no_send", reason: "no_visible_result", delivery };
+    return delivery.visibleReplySent === true
+      ? { status: "handled_visible", delivery }
+      : { status: "handled_no_send", reason: "no_visible_result", delivery };
   }
   return { status: "handled_visible", delivery };
 }

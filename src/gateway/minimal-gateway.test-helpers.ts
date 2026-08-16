@@ -105,6 +105,7 @@ export async function startMinimalRealGateway(
     },
   });
   const sessionListRequests: Record<string, unknown>[] = [];
+  const sessionResolveRequests: Record<string, unknown>[] = [];
   const hellos: unknown[] = [];
   const connectFailures: unknown[] = [];
   const clients: WebSocket[] = [];
@@ -115,10 +116,15 @@ export async function startMinimalRealGateway(
   }
   const startServer = async () => {
     const methods = await import("./server-methods.js");
-    const original = methods.coreGatewayHandlers["sessions.list"]!;
+    const originalList = methods.coreGatewayHandlers["sessions.list"]!;
+    const originalResolve = methods.coreGatewayHandlers["sessions.resolve"]!;
     methods.coreGatewayHandlers["sessions.list"] = async (options) => {
       sessionListRequests.push(options.params as Record<string, unknown>);
-      return await original(options);
+      return await originalList(options);
+    };
+    methods.coreGatewayHandlers["sessions.resolve"] = async (options) => {
+      sessionResolveRequests.push(options.params as Record<string, unknown>);
+      return await originalResolve(options);
     };
     const gateway = await import("./server.js");
     return await gateway
@@ -128,7 +134,10 @@ export async function startMinimalRealGateway(
         controlUiEnabled: false,
         sidecarStartup: "defer",
       })
-      .finally(() => (methods.coreGatewayHandlers["sessions.list"] = original));
+      .finally(() => {
+        methods.coreGatewayHandlers["sessions.list"] = originalList;
+        methods.coreGatewayHandlers["sessions.resolve"] = originalResolve;
+      });
   };
   try {
     for (const session of sessions) {
@@ -151,6 +160,7 @@ export async function startMinimalRealGateway(
     url: `ws://127.0.0.1:${port}`,
     token,
     sessionListRequests,
+    sessionResolveRequests,
     hellos,
     connectFailures,
     issueNodeBootstrapToken: async () =>

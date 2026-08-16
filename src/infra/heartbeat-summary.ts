@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   listAgentEntries,
   resolveAgentConfig,
-  resolveDefaultAgentId,
+  tryResolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
@@ -11,9 +11,11 @@ import {
   resolveHeartbeatPromptCore as resolveHeartbeatPromptText,
 } from "../auto-reply/heartbeat.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { resolveAmbientHeartbeatAgentId } from "./heartbeat-agent-resolution.js";
 
 // Heartbeat summaries merge default and per-agent heartbeat config for CLI/UI
 // display without scheduling any work.
@@ -40,7 +42,11 @@ function hasExplicitHeartbeatAgents(cfg: OpenClawConfig) {
 
 /** Return whether heartbeat scheduling applies to an agent. */
 export function isHeartbeatEnabledForAgent(cfg: OpenClawConfig, agentId?: string): boolean {
-  const resolvedAgentId = normalizeAgentId(agentId ?? resolveDefaultAgentId(cfg));
+  const ambientAgentId =
+    agentId === undefined
+      ? resolveAmbientHeartbeatAgentId(cfg)
+      : (tryResolveLegacyCompatibilityAgentId(cfg) ?? tryResolveDefaultAgentId(cfg));
+  const resolvedAgentId = normalizeAgentId(agentId ?? ambientAgentId);
   const list = listAgentEntries(cfg);
   const hasExplicit = hasExplicitHeartbeatAgents(cfg);
   if (hasExplicit) {
@@ -49,9 +55,13 @@ export function isHeartbeatEnabledForAgent(cfg: OpenClawConfig, agentId?: string
     );
   }
   if (cfg.agents?.defaults?.heartbeat) {
+    const configuredAgentId = normalizeOptionalString(cfg.agents.defaults.heartbeat.agentId);
+    if (configuredAgentId) {
+      return resolvedAgentId === normalizeAgentId(configuredAgentId);
+    }
     return true;
   }
-  return resolvedAgentId === resolveDefaultAgentId(cfg);
+  return ambientAgentId !== undefined && resolvedAgentId === ambientAgentId;
 }
 
 /** Resolve a heartbeat interval string to milliseconds. */

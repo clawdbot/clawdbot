@@ -51,7 +51,7 @@ when personas must not share compiled wiki knowledge.
 | -------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
 | Config                           | `~/.openclaw/openclaw.json`                                                            | `OPENCLAW_CONFIG_PATH`                                                                      |
 | State dir                        | `~/.openclaw`                                                                          | `OPENCLAW_STATE_DIR`                                                                        |
-| Default agent's workspace        | `~/.openclaw/workspace` (or `workspace-<profile>` when `OPENCLAW_PROFILE` is set)      | `agents.entries.*.workspace`, then `agents.defaults.workspace`, or `OPENCLAW_WORKSPACE_DIR` |
+| Default agent's workspace        | `<stateDir>/workspace` (`~/.openclaw-<profile>/workspace` for a named profile)         | `agents.entries.*.workspace`, then `agents.defaults.workspace`, or `OPENCLAW_WORKSPACE_DIR` |
 | Other agents' workspace          | `<stateDir>/workspace-<agentId>` (or `<agents.defaults.workspace>/<agentId>` when set) | `agents.entries.*.workspace`                                                                |
 | Agent dir                        | `~/.openclaw/agents/<agentId>/agent`                                                   | `agents.entries.*.agentDir`                                                                 |
 | Sessions and transcripts         | `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`                             | —                                                                                           |
@@ -63,7 +63,7 @@ If you configure nothing, OpenClaw runs one agent:
 
 - `agentId` defaults to `main`.
 - Sessions key as `agent:main:<mainKey>` (default `mainKey` is `main`).
-- Workspace defaults to `~/.openclaw/workspace` (or `workspace-<profile>` when `OPENCLAW_PROFILE` is set to something other than `default`).
+- Workspace defaults to `<stateDir>/workspace` (`~/.openclaw/workspace` for the default install and `~/.openclaw-<profile>/workspace` for a named profile).
 - State defaults to `~/.openclaw/agents/main/agent`.
 
 ## Agent helper
@@ -81,6 +81,20 @@ Add `bindings` to route inbound messages (the wizard offers to do this for you),
 ```bash
 openclaw agents list --bindings
 ```
+
+### Agent provenance
+
+OpenClaw records how each configured agent was created: `operator` for CLI,
+onboarding, and Gateway requests; `agent` when the system agent requested it;
+and `claw` when a Claw install added it. Agent-created entries also retain the
+requesting agent id. Inspect the current creation hierarchy with:
+
+```bash
+openclaw agents list --tree
+```
+
+Deleted creators remain historical provenance. If the creator is no longer in
+the configured roster, its children appear at the root of the tree.
 
 ## Quick start
 

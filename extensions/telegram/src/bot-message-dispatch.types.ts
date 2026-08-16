@@ -35,7 +35,7 @@ export type DispatchTelegramMessageParams = {
   textLimit: number;
   telegramCfg: TelegramAccountConfig;
   telegramDeps?: TelegramBotDeps;
-  opts: Pick<TelegramBotOptions, "token" | "mediaMaxMb">;
+  opts: Pick<TelegramBotOptions, "token" | "mediaMaxMb" | "ownerAgentId">;
   retryDispatchErrors?: boolean;
   suppressFailureFallback?: boolean;
   /**

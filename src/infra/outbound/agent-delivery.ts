@@ -23,8 +23,8 @@ import {
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { resolveOutboundSessionRoute, type OutboundSessionRoute } from "./outbound-session.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
-import type { OutboundTargetResolution } from "./targets.js";
 import {
+  type OutboundTargetResolution,
   resolveOutboundTarget,
   resolveSessionDeliveryTarget,
   type SessionDeliveryTarget,
@@ -187,6 +187,7 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
     resolveOutboundChannelPlugin({
       channel: resolvedChannel,
       cfg: params.cfg,
+      agentId: params.agentId,
       allowBootstrap: true,
     });
   if (!plugin) {

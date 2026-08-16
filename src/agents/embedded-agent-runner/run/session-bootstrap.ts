@@ -11,17 +11,15 @@ import {
   loadSessionEntry,
   updateSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
-import type { InternalSessionEntry, SessionEntry } from "../../../config/sessions/types.js";
+import { resolvePersistedSessionStoreOwnerForTarget } from "../../../config/sessions/session-store-owner.js";
+import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import type { ContextEngineSessionTarget } from "../../../context-engine/types.js";
 import { emitAgentEventIfCurrent } from "../../../infra/agent-events.js";
 import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
-import {
-  parseAgentSessionKey,
-  resolveAgentIdFromSessionKey,
-} from "../../../routing/session-key.js";
+import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../../sessions/session-id-resolution.js";
-import { resolveDefaultAgentId } from "../../agent-scope.js";
+import { resolveSessionAgentId } from "../../agent-scope.js";
 import {
   resolveSessionKeyForRequestCore,
   resolveStoredSessionKeyForSessionId,
@@ -102,11 +100,25 @@ export function buildContextEngineCompactionSessionTarget(params: {
     : marker
       ? markerSessionKey
       : (targetSessionKey ?? suppliedSessionKey);
+  const targetStoreOwner = resolvePersistedSessionStoreOwnerForTarget({
+    config: params.config ?? {},
+    sessionKey,
+    storePath: targetStorePath,
+  });
+  const trustExplicitAlternateStoreAgent = Boolean(
+    targetAgentId &&
+    targetStorePath &&
+    !parseAgentSessionKey(sessionKey)?.agentId &&
+    targetStoreOwner.kind === "none",
+  );
   const agentId =
-    targetAgentId ??
+    (trustExplicitAlternateStoreAgent ? targetAgentId : undefined) ??
     marker?.agentId ??
-    params.agentId ??
-    resolveAgentIdFromSessionKey(sessionKey, resolveDefaultAgentId(params.config ?? {}));
+    resolveSessionAgentId({
+      agentId: targetAgentId ?? params.agentId,
+      config: params.config,
+      sessionKey,
+    });
   const storePath =
     targetStorePath ??
     marker?.storePath ??
@@ -142,12 +154,16 @@ export async function resetNoRealConversationTokenSnapshot(params: {
   if (!params.sessionKey) {
     return;
   }
-  const storePath = resolveSessionStorePathCore(params.config?.session?.store, {
+  const agentId = resolveSessionAgentId({
     agentId: params.agentId,
+    config: params.config,
+    sessionKey: params.sessionKey,
   });
+  const storePath = resolveSessionStorePathCore(params.config?.session?.store, { agentId });
   try {
     await updateSessionEntry(
       {
+        agentId,
         storePath,
         sessionKey: params.sessionKey,
       },
@@ -224,9 +240,28 @@ export function assertAgentHarnessRunAdmission(
   if (!sessionKey) {
     return undefined;
   }
-  const admissionAgentId = params.agentId ?? resolveAgentIdFromSessionKey(sessionKey);
+  const targetAgentId = normalizeOptionalString(params.sessionTarget?.agentId);
+  const targetStorePath = normalizeOptionalString(params.sessionTarget?.storePath);
+  const targetStoreOwner = resolvePersistedSessionStoreOwnerForTarget({
+    config: params.config ?? {},
+    sessionKey,
+    storePath: targetStorePath,
+  });
+  const trustExplicitAlternateStoreAgent = Boolean(
+    targetAgentId &&
+    targetStorePath &&
+    !parseAgentSessionKey(sessionKey)?.agentId &&
+    targetStoreOwner.kind === "none",
+  );
+  const admissionAgentId = trustExplicitAlternateStoreAgent
+    ? targetAgentId
+    : resolveSessionAgentId({
+        agentId: targetAgentId ?? params.agentId,
+        config: params.config,
+        sessionKey,
+      });
   const storePath =
-    normalizeOptionalString(params.sessionTarget?.storePath) ??
+    targetStorePath ??
     resolveSessionStorePathCore(params.config?.session?.store, { agentId: admissionAgentId });
   const durableEntry = loadSessionEntry({
     ...(admissionAgentId ? { agentId: admissionAgentId } : {}),
@@ -285,9 +320,9 @@ export async function claimAgentSessionWriter(params: RunEmbeddedAgentParams): P
       ) {
         throw new Error(`Session changed before writer claim commit: ${snapshot.sessionKey}`);
       }
-      return {
+      return Object.assign({}, entry, {
         activeWriterRunId: params.runId,
-      } as Partial<InternalSessionEntry> as Partial<SessionEntry>;
+      });
     },
     { skipMaintenance: true },
   );

@@ -8,12 +8,33 @@ openclaw-new-session-page {
 }
 
 .new-session-page {
+  position: relative;
   display: flex;
   flex-direction: column;
   flex: 1 1 0;
   width: 100%;
   min-width: 0;
   min-height: 0;
+}
+
+/* Opposite end of the fixed shell-control rail: new-thread privacy belongs to
+   the page, not to the message being composed. */
+.new-session-page__incognito-rail {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 45;
+}
+
+.new-session-page__incognito-toggle--active,
+.new-session-page__incognito-toggle--active:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 42%, transparent);
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg-elevated));
+  color: var(--accent);
+}
+
+html.openclaw-native-macos .new-session-page__incognito-rail {
+  top: 52px;
 }
 
 /* Mirrors .chat-thread: the top inset doubles as the native macOS titlebar
@@ -78,10 +99,13 @@ openclaw-new-session-page {
   opacity: 1;
 }
 
-/* Active mode stays readable without hover; inactive revealed pills keep the
-   muted resting color until directly hovered. */
-.new-session-page__visibility--active {
-  color: var(--text);
+/* Active mode must read as toggled-on even while hovered: hover on an
+   inactive pill already shows a neutral fill, so active gets an accent
+   tint to stay distinguishable under the cursor. */
+.new-session-page__visibility--active,
+.new-session-page__visibility--active:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
 }
 
 .new-session-page__visibility:disabled {
@@ -334,21 +358,42 @@ wa-popover.new-session-page__select::part(body) {
   color: var(--muted);
 }
 
-/* Place browsing uses the same shell as its root menu, with inset root rows. */
-wa-popover.new-session-page__place-popover {
+.new-session-page__menu-facts {
+  display: inline-flex;
+  flex: 0 1 auto;
+  gap: 3px;
+  min-width: 0;
+  max-width: 62%;
+  overflow: hidden;
+}
+
+.new-session-page__menu-fact {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--bg-hover) 62%, transparent);
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 14px;
+  white-space: nowrap;
+}
+
+/* Project browsing uses a wider shell for paths and remote result details. */
+wa-popover.new-session-page__project-popover {
   --max-width: min(420px, calc(100vw - 24px));
 }
 
-wa-popover.new-session-page__place-popover::part(body) {
+wa-popover.new-session-page__project-popover::part(body) {
   width: min(420px, calc(100vw - 24px));
   max-width: none;
   padding: 0;
   overflow: hidden;
 }
 
-/* part(body) hides overflow for the browser view's square corners, so the
-   root menu needs its own scroll region or long place lists become unreachable. */
-.new-session-page__place-root {
+/* Popovers need their own scroll region because project and destination
+   catalogs can grow beyond the available viewport. */
+.new-session-page__picker-root {
   max-height: min(420px, 60vh);
   padding: var(--menu-padding);
   overflow-y: auto;
@@ -429,6 +474,16 @@ wa-popover.new-session-page__place-popover::part(body) {
   align-items: center;
 }
 
+.new-session-page__start-submit[aria-busy="true"] svg {
+  animation: new-session-start-spin 0.75s linear infinite;
+}
+
+@keyframes new-session-start-spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
 .new-session-page__start-primary {
   width: 34px;
   min-width: 34px;
@@ -458,13 +513,6 @@ wa-dropdown.new-session-page__start-menu {
 .new-session-page__composer .new-session-page__message {
   max-height: calc(10lh + var(--chat-box-inset) + var(--chat-box-inset));
   padding-left: var(--chat-box-inset);
-  --scrollbar-size: 6px;
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--muted) 42%, transparent) transparent;
-}
-
-.new-session-page__composer .new-session-page__message::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--muted) 42%, transparent);
 }
 
 .new-session-page__composer::after {
@@ -491,7 +539,18 @@ wa-dropdown.new-session-page__start-menu {
   opacity: 0.5;
 }
 
+/* Reason shown after Enter/Start is pressed while a submit gate blocks it. */
+.new-session-page__blocked-submit {
+  padding: 4px var(--chat-box-inset) 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .new-session-page__start-submit[aria-busy="true"] svg {
+    animation: none;
+  }
+
   .new-session-page__composer::after,
   .new-session-page__composer > *,
   .new-session-page__visibility {
@@ -702,7 +761,7 @@ wa-dropdown.new-session-page__start-menu {
    the right edge. */
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .new-session-page__scroll {
-    padding: 12px 8px;
+    padding: 52px 8px 12px;
   }
 
   .new-session-page__triggers {
@@ -714,6 +773,7 @@ wa-dropdown.new-session-page__start-menu {
      Keep those pills intrinsic and let the model picker use the remaining width. */
   .new-session-page__composer .agent-chat__composer-controls {
     display: flex;
+    flex-wrap: wrap;
     gap: 2px;
   }
 
@@ -727,10 +787,5 @@ wa-dropdown.new-session-page__start-menu {
 
   .new-session-page__select {
     position: static;
-  }
-
-  wa-popover.new-session-page__select::part(body) {
-    width: auto;
-    max-width: none;
   }
 }

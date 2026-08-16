@@ -6,6 +6,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { SessionEntry } from "../config/sessions.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
+  appendTranscriptEvent,
+  appendTranscriptMessage,
   listSessionEntriesCore,
   loadTranscriptEvents,
   replaceSessionEntry,
@@ -261,7 +263,7 @@ function makeResult(params: {
       durationMs: 1,
       stopReason: "end_turn",
       executionTrace: {
-        runner: params.runner ?? "embedded",
+        runner: params.runner ?? "cli",
         fallbackUsed: false,
         winnerProvider: "openai",
         winnerModel: "gpt-5.5",
@@ -460,57 +462,121 @@ describe("agentCommand compaction transcript rotation", () => {
     ).resolves.toContainEqual(expect.objectContaining({ role: "assistant" }));
   });
 
-  it.each(["cli", "embedded"] as const)(
-    "persists the pending final before %s compaction failure and still delivers",
-    async (runner) => {
-      const sessionId = `${runner}-compaction-failure`;
-      const sessionKey = `agent:main:explicit:${sessionId}`;
-      const text = `${runner} reply generated before compaction`;
-      let compactionSessionEntry: SessionEntry | undefined;
-      let storedEntryBeforeCompaction: SessionEntry | undefined;
-      state.runAgentAttemptMock.mockResolvedValueOnce(makeResult({ sessionId, text, runner }));
-      state.runCliTurnCompactionLifecycleMock.mockImplementationOnce(async (params) => {
-        compactionSessionEntry = params.sessionEntry;
-        storedEntryBeforeCompaction = findStoredSessionEntry(sessionKey);
-        throw new Error(COMPACTION_ERROR);
-      });
-
-      const result = await agentCommand({
-        message: "room message",
-        sessionId,
-        sessionKey,
-        cwd: state.workspaceDir,
-        channel: "discord",
-        to: "discord:dm:123",
-        accountId: "main",
-        deliver: true,
-      });
-
-      expect(compactionSessionEntry).toMatchObject({
-        pendingFinalDelivery: {
-          kind: "replayable",
-          text,
-          context: {
-            channel: "discord",
-            to: "discord:dm:123",
-            accountId: "main",
+  it("keeps embedded assistant transcript ownership when visible text is projected", async () => {
+    const storePath = requireStorePath();
+    const sessionId = "embedded-projected-final";
+    const sessionKey = `agent:main:explicit:${sessionId}`;
+    state.runAgentAttemptMock.mockImplementationOnce(async (attempt) => {
+      if (!attempt.userTurnTranscriptRecorder) {
+        throw new Error("missing embedded user-turn transcript recorder");
+      }
+      await attempt.userTurnTranscriptRecorder.persistApproved();
+      await appendTranscriptMessage(
+        { agentId: "main", sessionId, sessionKey, storePath },
+        {
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "[Thu 2026-08-13 16:39 PDT] OVERRIDE-OK" }],
+            api: "ollama",
+            provider: "ollama",
+            model: "llama3.2:latest",
+            timestamp: Date.now(),
           },
+          cwd: state.workspaceDir,
         },
-      });
-      expect(storedEntryBeforeCompaction).toMatchObject({
-        pendingFinalDelivery: { kind: "replayable", text },
-      });
-      expect(result).toMatchObject({ deliverySucceeded: true });
-      expect(state.deliverAgentCommandResultMock).toHaveBeenCalledOnce();
-      expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
-        expect.objectContaining({ payloads: [{ text }] }),
       );
-      expect(readLifecyclePhases()).toContain("end");
-      expect(readLifecyclePhases()).not.toContain("error");
-      const storedEntryAfterDelivery = findStoredSessionEntry(sessionKey);
-      expect(storedEntryAfterDelivery?.pendingFinalDelivery).toBeUndefined();
-    },
-  );
+      await appendTranscriptEvent(
+        { agentId: "main", sessionId, sessionKey, storePath },
+        {
+          type: "custom",
+          customType: "openclaw:bootstrap-context:full",
+          data: { runId: "embedded-run" },
+        },
+      );
+      return makeResult({
+        sessionId,
+        text: "OVERRIDE-OK",
+        runner: "embedded",
+      });
+    });
+
+    await agentCommand({
+      message: "Reply with exactly: OVERRIDE-OK",
+      sessionId,
+      sessionKey,
+      cwd: state.workspaceDir,
+    });
+
+    const events = (await loadTranscriptEvents({
+      agentId: "main",
+      sessionId,
+      storePath,
+    })) as Array<{
+      type?: unknown;
+      customType?: unknown;
+      message?: { role?: unknown; api?: unknown };
+    }>;
+    const assistantEvents = events.filter(
+      (event) => event.type === "message" && event.message?.role === "assistant",
+    );
+    expect(assistantEvents).toHaveLength(1);
+    expect(assistantEvents.filter((event) => event.message?.api === "cli")).toHaveLength(0);
+    expect(
+      events.filter(
+        (event) =>
+          event.type === "custom" && event.customType === "openclaw:bootstrap-context:full",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("persists the pending final before CLI compaction failure and still delivers", async () => {
+    const sessionId = "cli-compaction-failure";
+    const sessionKey = `agent:main:explicit:${sessionId}`;
+    const text = "cli reply generated before compaction";
+    let compactionSessionEntry: SessionEntry | undefined;
+    let storedEntryBeforeCompaction: SessionEntry | undefined;
+    state.runAgentAttemptMock.mockResolvedValueOnce(makeResult({ sessionId, text, runner: "cli" }));
+    state.runCliTurnCompactionLifecycleMock.mockImplementationOnce(async (params) => {
+      compactionSessionEntry = params.sessionEntry;
+      storedEntryBeforeCompaction = findStoredSessionEntry(sessionKey);
+      throw new Error(COMPACTION_ERROR);
+    });
+
+    const result = await agentCommand({
+      message: "room message",
+      sessionId,
+      sessionKey,
+      cwd: state.workspaceDir,
+      channel: "discord",
+      to: "discord:dm:123",
+      accountId: "main",
+      deliver: true,
+    });
+
+    expect(compactionSessionEntry).toMatchObject({
+      pendingFinalDelivery: {
+        kind: "replayable",
+        text,
+        context: {
+          channel: "discord",
+          to: "discord:dm:123",
+          accountId: "main",
+        },
+      },
+    });
+    expect(storedEntryBeforeCompaction).toMatchObject({
+      pendingFinalDelivery: { kind: "replayable", text },
+    });
+    expect(result).toMatchObject({ deliverySucceeded: true });
+    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledOnce();
+    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
+      expect.objectContaining({ payloads: [{ text }] }),
+    );
+    expect(readLifecyclePhases()).toContain("end");
+    expect(readLifecyclePhases()).not.toContain("error");
+    const storedEntryAfterDelivery = findStoredSessionEntry(sessionKey);
+    expect(storedEntryAfterDelivery?.pendingFinalDelivery).toBeUndefined();
+  });
 
   it("excludes hidden reasoning from the pending final persisted before compaction", async () => {
     const sessionId = "reasoning-filter-compaction-failure";

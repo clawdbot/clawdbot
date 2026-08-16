@@ -5,7 +5,6 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { readAcpSessionMetaBatch } from "../acp/runtime/session-meta.js";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
   countActiveDescendantRuns,
@@ -22,7 +21,10 @@ import {
 } from "../routing/session-key.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { type SessionEntryPair, sortAndLimitSessionEntries } from "./session-list-order.js";
-import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
+import {
+  resolveSessionStoreAgentId,
+  resolveStoredSessionKeyForAgentStore,
+} from "./session-store-key.js";
 import { readSessionTitleFieldsFromTranscriptBatch as readScopedSessionTitleFieldsFromTranscriptBatch } from "./session-transcript-title-reader.js";
 import type {
   SessionActorProfileIdentity,
@@ -139,9 +141,7 @@ function populateSessionListAcpMetadata(params: {
   const entries = params.entries.map(([key, entry]) => {
     const parsed = parseAgentSessionKey(key);
     const agentId = normalizeAgentId(
-      key === "global" && typeof params.opts.agentId === "string"
-        ? params.opts.agentId
-        : (parsed?.agentId ?? resolveDefaultAgentId(params.cfg)),
+      parsed?.agentId ?? params.opts.agentId ?? resolveSessionStoreAgentId(params.cfg, key),
     );
     return {
       sessionKey: resolveStoredSessionKeyForAgentStore({
@@ -149,10 +149,14 @@ function populateSessionListAcpMetadata(params: {
         agentId,
         sessionKey: key,
       }),
+      agentId,
       entry,
     };
   });
-  params.rowContext.acpSessionMetaByEntry = readAcpSessionMetaBatch({ entries });
+  params.rowContext.acpSessionMetaByEntry = readAcpSessionMetaBatch({
+    entries,
+    cfg: params.cfg,
+  });
 }
 
 function resolveSessionsListLimit(
@@ -293,6 +297,7 @@ function filterSessionEntries(params: {
         shouldResolveDerivedSessionModelSearchFields(search) &&
         matchesSessionListSearch(
           resolveSessionListSearchModelFields({
+            ...(agentId ? { agentId } : {}),
             cfg,
             key,
             entry,
@@ -431,6 +436,7 @@ function prepareSessionList(params: ListSessionsFromStoreParams) {
 
 function buildSessionsListResult(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   list: ReturnType<typeof prepareSessionList>;
   modelCatalog?: ModelCatalogEntry[];
   sessions: GatewaySessionRow[];
@@ -447,6 +453,7 @@ function buildSessionsListResult(params: {
     hasMore: list.hasMore,
     creators: list.creators,
     defaults: getSessionDefaults(params.cfg, params.modelCatalog, {
+      ...(params.agentId ? { agentId: params.agentId } : {}),
       allowPluginNormalization: false,
     }),
     sessions,
@@ -468,7 +475,7 @@ export function listSessionsFromStore(params: ListSessionsFromStoreParams): Sess
   const sessions = list.entries.map(([key, entry], index) => {
     const includeTranscriptFields = index < SESSIONS_LIST_TRANSCRIPT_FIELD_ROWS;
     const rowAgentId =
-      key === "global" && typeof opts.agentId === "string"
+      !parseAgentSessionKey(key) && typeof opts.agentId === "string"
         ? normalizeAgentId(opts.agentId)
         : undefined;
     const storeChildSessionsByKey =
@@ -497,7 +504,13 @@ export function listSessionsFromStore(params: ListSessionsFromStoreParams): Sess
       lightweightListRow: params.lightweightListRows === true,
     });
   });
-  return buildSessionsListResult({ cfg, list, modelCatalog: params.modelCatalog, sessions });
+  return buildSessionsListResult({
+    cfg,
+    list,
+    modelCatalog: params.modelCatalog,
+    sessions,
+    agentId: opts.agentId,
+  });
 }
 
 /**
@@ -529,12 +542,9 @@ export async function listSessionsFromStoreAsync(
           return [];
         }
         const parsed = parseAgentSessionKey(key);
-        const agentId =
-          key === "global" && typeof opts.agentId === "string"
-            ? normalizeAgentId(opts.agentId)
-            : parsed?.agentId
-              ? normalizeAgentId(parsed.agentId)
-              : resolveDefaultAgentId(cfg);
+        const agentId = normalizeAgentId(
+          parsed?.agentId ?? opts.agentId ?? resolveSessionStoreAgentId(cfg, key),
+        );
         return [
           {
             agentId,
@@ -551,7 +561,7 @@ export async function listSessionsFromStoreAsync(
       const [key, entry] = expectDefined(list.entries[i], "entries entry at i");
       const includeTranscriptFields = i < SESSIONS_LIST_TRANSCRIPT_FIELD_ROWS;
       const rowAgentId =
-        key === "global" && typeof opts.agentId === "string"
+        !parseAgentSessionKey(key) && typeof opts.agentId === "string"
           ? normalizeAgentId(opts.agentId)
           : undefined;
       const storeChildSessionsByKey =
@@ -606,6 +616,12 @@ export async function listSessionsFromStoreAsync(
       }
     }
 
-    return buildSessionsListResult({ cfg, list, modelCatalog: params.modelCatalog, sessions });
+    return buildSessionsListResult({
+      cfg,
+      list,
+      modelCatalog: params.modelCatalog,
+      sessions,
+      agentId: opts.agentId,
+    });
   });
 }

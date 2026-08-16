@@ -114,6 +114,59 @@ describe("worker environment protocol schemas", () => {
     ).toBe(true);
   });
 
+  it("accepts only redacted node worker bundle status", () => {
+    const node = {
+      id: "node:build-mac",
+      type: "node",
+      status: "available",
+    };
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...node,
+        workerBundle: { status: "installed", version: "2026.8.9" },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...node,
+        workerBundle: { status: "missing" },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...node,
+        workerBundle: {
+          status: "installed",
+          version: "2026.8.9",
+          bundleHash: "a".repeat(64),
+        },
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...node,
+        workerBundle: { status: "installed", version: "" },
+      }),
+    ).toBe(false);
+  });
+
+  it("accepts bounded node lifecycle history and rejects malformed timestamps", () => {
+    const node = {
+      id: "node:build-mac",
+      type: "node",
+      status: "unavailable",
+      lastConnectedAtMs: 1_000,
+      lastDisconnectedAtMs: 2_000,
+      lastSeenAtMs: 1_500,
+      lastSeenReason: "silent_push",
+    };
+    expect(Value.Check(EnvironmentSummarySchema, node)).toBe(true);
+    expect(Value.Check(EnvironmentSummarySchema, { ...node, lastDisconnectedAtMs: -1 })).toBe(
+      false,
+    );
+    expect(Value.Check(EnvironmentSummarySchema, { ...node, lastSeenReason: "" })).toBe(false);
+  });
+
   it("keeps desktop app launch requests, results, and projected ids closed", () => {
     expect(validateWorkerDesktopLaunchParams({ environmentId: "worker:one", app: "browser" })).toBe(
       true,
@@ -170,6 +223,29 @@ describe("worker environment protocol schemas", () => {
         status: "available",
       }),
     ).toBe(true);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        id: "node:outdated",
+        type: "node",
+        status: "available",
+        issues: [
+          {
+            code: "update-required",
+            action: "update-and-reconnect",
+            updateCommand: "openclaw update",
+            headlessReconnectCommand: "openclaw node restart",
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        id: "node:outdated",
+        type: "node",
+        status: "available",
+        issues: [{ code: "update-required", action: "run-legacy-worker" }],
+      }),
+    ).toBe(false);
     expect(
       Value.Check(EnvironmentSummarySchema, {
         ...workerSummary("ready", "available"),

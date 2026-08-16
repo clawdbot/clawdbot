@@ -6,6 +6,7 @@ import type { SessionObserverDigest } from "../../../../../packages/gateway-prot
 import type { ControlUiSessionPullRequest } from "../../../../../src/gateway/control-ui-contract.js";
 import { icons } from "../../../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
+import { renderPanelEmptyState } from "../../../components/panel-empty-state.ts";
 import "../../../components/tooltip.ts";
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
@@ -243,9 +244,9 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
   @property({ attribute: false }) onCommandConsumed?: (generation: number) => void;
   @property({ attribute: false }) onSubmit?: (question: string) => void;
   @property({ attribute: false }) onDraftChange?: (draft: string) => void;
-  @property({ attribute: false }) onClear?: () => void;
   @property({ attribute: false }) onModeChange?: (mode: SessionRailMode) => void;
   @property({ attribute: false }) onVisibilityChange?: (visible: boolean) => void;
+  @property({ type: Boolean }) embedded = false;
   @state() private now = Date.now();
 
   private readonly railState = new ChatSessionRailState();
@@ -504,7 +505,11 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
     return html`
       <div class="chat-session-rail__thread" aria-live="polite" ${ref(syncScroll)}>
         ${this.companion.exchanges.length === 0 && !this.companion.pendingQuestion
-          ? html`<p class="chat-session-rail__empty">${t("chat.rail.empty")}</p>`
+          ? renderPanelEmptyState({
+              icon: icons.bot,
+              heading: t("chat.sidePanel.companion"),
+              description: t("chat.rail.empty"),
+            })
           : nothing}
         ${this.companion.exchanges.map((exchange) =>
           this.renderExchange(exchange.question, exchange.answer, exchange.ts),
@@ -544,7 +549,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
 
   override render() {
     const input = this.input();
-    const mode = this.railState.mode(input);
+    const mode = this.embedded ? "expanded" : this.railState.mode(input);
     this.renderedMode = mode;
     if (mode === "hidden") {
       return nothing;
@@ -567,7 +572,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
           <button
             class="btn btn--ghost btn--icon chat-icon-btn chat-session-rail__hide"
             type="button"
-            aria-label=${t("chat.rail.hide")}
+            aria-label=${t("chat.rail.close")}
             @click=${() => this.hide()}
           >
             ${icons.x}
@@ -594,80 +599,63 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
             time: formatTimeAgo(Math.max(0, this.terminalAgeReference - digest.updatedAt)),
           })
         : null;
+    // No aria-live on the section: it contains a 1Hz elapsed clock, so a live
+    // region would announce every tick; the thread owns its own polite region.
     return html`
       <section
-        class="chat-session-rail chat-session-rail--expanded"
+        class="chat-session-rail chat-session-rail--expanded ${this.embedded
+          ? "chat-session-rail--embedded"
+          : ""}"
         role="region"
-        aria-live="polite"
         aria-label=${t("chat.rail.title")}
         tabindex="-1"
         @keydown=${(event: KeyboardEvent) => {
-          if (event.key === "Escape") {
+          if (!this.embedded && event.key === "Escape") {
             event.preventDefault();
             event.stopPropagation();
             this.collapse();
           }
         }}
       >
-        <header class="chat-session-rail__header">
-          <div class="chat-session-rail__header-copy">
-            <div class="chat-session-rail__status-row">
-              ${digest ? this.renderStatus(digest) : html`<strong>${t("chat.rail.title")}</strong>`}
-              ${elapsed
-                ? html`<span class="chat-session-rail__timing">${elapsed}</span>`
-                : finished
-                  ? html`<span class="chat-session-rail__timing">${finished}</span>`
-                  : nothing}
-            </div>
-            ${digest
-              ? html`<strong class="chat-session-rail__headline">${digest.headline}</strong>`
-              : html`<span class="chat-session-rail__subtitle">${t("chat.rail.subtitle")}</span>`}
-          </div>
-          <div class="chat-session-rail__actions">
-            <wa-dropdown
-              class="chat-session-rail__menu"
-              placement="bottom-end"
-              @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
-                if (event.detail.item.value === "clear") {
-                  this.onClear?.();
-                }
-              }}
-            >
-              <button
-                slot="trigger"
-                class="btn btn--ghost btn--icon chat-icon-btn"
-                type="button"
-                aria-label=${t("chat.rail.moreActions")}
-                aria-haspopup="menu"
-                aria-expanded="false"
-              >
-                ${icons.moreHorizontal}
-              </button>
-              <wa-dropdown-item
-                value="clear"
-                ?disabled=${!this.connected || this.companion.pendingQuestion !== null}
-              >
-                ${t("chat.rail.clear")}
-              </wa-dropdown-item>
-            </wa-dropdown>
-            <button
-              class="btn btn--ghost btn--icon chat-icon-btn chat-session-rail__hide"
-              type="button"
-              aria-label=${t("chat.rail.hide")}
-              @click=${() => this.hide()}
-            >
-              ${icons.x}
-            </button>
-            <button
-              class="btn btn--ghost btn--icon chat-icon-btn chat-session-rail__toggle"
-              type="button"
-              aria-label=${t("chat.rail.collapse")}
-              @click=${() => this.collapse()}
-            >
-              ${icons.chevronUp}
-            </button>
-          </div>
-        </header>
+        ${this.embedded
+          ? nothing
+          : html`<header class="rail-header chat-session-rail__header">
+              <div class="rail-header__copy chat-session-rail__header-copy">
+                <div class="chat-session-rail__status-row">
+                  ${digest
+                    ? this.renderStatus(digest)
+                    : html`<strong>${t("chat.rail.title")}</strong>`}
+                  ${elapsed
+                    ? html`<span class="chat-session-rail__timing">${elapsed}</span>`
+                    : finished
+                      ? html`<span class="chat-session-rail__timing">${finished}</span>`
+                      : nothing}
+                </div>
+                ${digest
+                  ? html`<strong class="chat-session-rail__headline">${digest.headline}</strong>`
+                  : html`<span class="chat-session-rail__subtitle"
+                      >${t("chat.rail.subtitle")}</span
+                    >`}
+              </div>
+              <div class="rail-header__actions chat-session-rail__actions">
+                <button
+                  class="rail-header__action chat-session-rail__hide"
+                  type="button"
+                  aria-label=${t("chat.rail.close")}
+                  @click=${() => this.hide()}
+                >
+                  ${icons.x}
+                </button>
+                <button
+                  class="rail-header__action chat-session-rail__toggle"
+                  type="button"
+                  aria-label=${t("chat.rail.collapse")}
+                  @click=${() => this.collapse()}
+                >
+                  ${icons.chevronUp}
+                </button>
+              </div>
+            </header>`}
         ${digest
           ? html`<div class="chat-session-rail__digest">${this.renderDigestDetails(digest)}</div>`
           : nothing}

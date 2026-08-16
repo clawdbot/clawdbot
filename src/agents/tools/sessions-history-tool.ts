@@ -6,12 +6,14 @@
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
+import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { capArrayByJsonBytes } from "../../gateway/session-transcript-readers.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { truncateUtf16Safe } from "../../utils.js";
-import { resolveDefaultAgentId } from "../agent-scope-config.js";
+import { resolveSessionAgentId, resolveSessionAgentIds } from "../agent-scope.js";
 import { optionalPositiveIntegerSchema } from "../schema/typebox.js";
 import {
   describeSessionsHistoryTool,
@@ -30,15 +32,19 @@ import {
   callAgentToolGatewayRequest,
   type AgentToolGatewayRequestCaller,
 } from "./in-process-gateway.js";
-import { runWithScopedSessionAccess } from "./scoped-session-access.js";
 import {
-  createSessionVisibilityGuard,
+  resolveSessionToolTargetAgentId,
+  runWithScopedSessionAccess,
+} from "./scoped-session-access.js";
+import {
   createSessionVisibilityRowChecker,
   createAgentToAgentPolicy,
   resolveEffectiveSessionToolsVisibility,
   resolveSessionReference,
   resolveSandboxedSessionToolContext,
+  resolveSessionToolAccess,
   resolveVisibleSessionReference,
+  shouldResolveSessionIdInput,
 } from "./sessions-helpers.js";
 
 const SessionsHistoryToolSchema = Type.Object({
@@ -353,6 +359,7 @@ function resolveSessionsHistoryPaginationMetadata(params: {
 
 export function createSessionsHistoryTool(opts?: {
   agentSessionKey?: string;
+  requesterAgentIdOverride?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
@@ -388,8 +395,31 @@ export function createSessionsHistoryTool(opts?: {
           agentSessionKey: opts?.agentSessionKey,
           sandboxed: opts?.sandboxed,
         });
+      const requesterAgentId = resolveSessionAgentIds({
+        config: cfg,
+        sessionKey: effectiveRequesterKey,
+        agentId: opts?.requesterAgentIdOverride,
+      }).sessionAgentId;
+      const normalizedInputKey = sessionKeyParam.trim();
+      const isCurrentSession = normalizedInputKey === "current";
+      const isConfiguredMainAlias =
+        normalizedInputKey === "main" ||
+        normalizedInputKey === "global" ||
+        normalizedInputKey === mainKey ||
+        normalizedInputKey === alias;
+      const inputStoreOwner =
+        shouldResolveSessionIdInput(sessionKeyParam) && !isConfiguredMainAlias
+          ? { kind: "none" as const }
+          : resolvePersistedSessionStoreOwnerForKey(cfg, sessionKeyParam);
       const resolvedSession = await resolveSessionReference({
+        action: "history",
         sessionKey: sessionKeyParam,
+        ...(isCurrentSession
+          ? { agentId: requesterAgentId }
+          : inputStoreOwner.kind === "configured"
+            ? { agentId: inputStoreOwner.agentId }
+            : {}),
+        keyAgentId: requesterAgentId,
         alias,
         mainKey,
         requesterInternalKey: effectiveRequesterKey,
@@ -406,7 +436,10 @@ export function createSessionsHistoryTool(opts?: {
       });
       const resolutionAccess = createSessionVisibilityRowChecker({
         action: "history",
-        defaultAgentId: resolveDefaultAgentId(cfg),
+        defaultAgentId:
+          resolvedSession.agentId ??
+          resolveSessionAgentId({ config: cfg, sessionKey: resolvedSession.key }),
+        requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
         visibility,
         a2aPolicy,
@@ -415,6 +448,7 @@ export function createSessionsHistoryTool(opts?: {
         action: "history",
         resolvedSession,
         requesterSessionKey: effectiveRequesterKey,
+        requesterAgentId,
         restrictToSpawned,
         visibilitySessionKey: sessionKeyParam,
         concealResolutionError: resolutionAccess.allowed ? undefined : resolutionAccess.error,
@@ -429,16 +463,30 @@ export function createSessionsHistoryTool(opts?: {
       // From here on, use the canonical key (sessionId inputs already resolved).
       const resolvedKey = visibleSession.key;
       const displayKey = visibleSession.displayKey;
+      const targetAgentId = resolveSessionToolTargetAgentId({
+        cfg,
+        targetSessionKey: resolvedKey,
+        resolvedAgentId: visibleSession.agentId,
+        requesterAgentId,
+      });
 
-      const visibilityGuard = await createSessionVisibilityGuard({
+      const authorizationKey =
+        targetAgentId !== requesterAgentId && !parseAgentSessionKey(resolvedKey)
+          ? `agent:${targetAgentId}:${resolvedKey}`
+          : resolvedKey;
+      const access = await resolveSessionToolAccess({
         action: "history",
-        defaultAgentId: resolveDefaultAgentId(cfg),
+        defaultAgentId: requesterAgentId,
+        requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
+        authorizationTargetSessionKey: authorizationKey,
+        targetAgentId,
+        targetSessionKey: resolvedKey,
+        requesterOwned: visibleSession.requesterOwned,
         visibility,
         a2aPolicy,
         callGateway: gatewayCall,
       });
-      const access = visibilityGuard.check(resolvedKey);
       if (!access.allowed) {
         return jsonResult({
           status: access.status,
@@ -448,6 +496,7 @@ export function createSessionsHistoryTool(opts?: {
 
       const result = await runWithScopedSessionAccess({
         cfg,
+        agentId: targetAgentId,
         expectedSessionId: access.expectedSessionId,
         targetSessionKey: resolvedKey,
         run: async () =>
@@ -461,6 +510,7 @@ export function createSessionsHistoryTool(opts?: {
             method: "chat.history",
             params: {
               sessionKey: resolvedKey,
+              agentId: targetAgentId,
               limit,
               ...(offset !== undefined ? { offset } : {}),
               ...(messageId ? { messageId } : {}),

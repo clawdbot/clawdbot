@@ -1,6 +1,7 @@
 // Local Heavy Check Runtime tests cover local heavy check runtime script behavior.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -12,6 +13,7 @@ import {
   resolveRepoToolBinPath,
   shouldAcquireLocalHeavyCheckLockForOxlint,
   shouldAcquireLocalHeavyCheckLockForTsgo,
+  withLocalHeavyCheckLockHeld,
 } from "../../scripts/lib/local-heavy-check-runtime.mts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
@@ -42,6 +44,18 @@ function makeEnv(overrides: Record<string, string | undefined> = {}) {
 }
 
 describe("local-heavy-check-runtime", () => {
+  it("marks every nested heavy-check wrapper as covered by the parent lock", () => {
+    const baseEnv = { BASE: "1" };
+
+    expect(withLocalHeavyCheckLockHeld(baseEnv)).toEqual({
+      BASE: "1",
+      OPENCLAW_OXLINT_SKIP_LOCK: "1",
+      OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
+      OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1",
+    });
+    expect(baseEnv).toEqual({ BASE: "1" });
+  });
+
   it("resolves repo tools from the primary checkout for dependency-less worktrees", () => {
     const primaryRoot = createTempDir("openclaw-primary-checkout-");
     const cwd = path.join(primaryRoot, ".codex", "worktrees", "task", "openclaw");
@@ -326,6 +340,7 @@ describe("local-heavy-check-runtime", () => {
       "error",
       "--threads=1",
     ]);
+    expect(env.GOMAXPROCS).toBe("2");
     expect(env.GOGC).toBe("30");
     expect(env.GOMEMLIMIT).toBe("3GiB");
   });
@@ -341,6 +356,7 @@ describe("local-heavy-check-runtime", () => {
       "error",
       "--threads=1",
     ]);
+    expect(env.GOMAXPROCS).toBe("2");
     expect(env.GOGC).toBe("30");
     expect(env.GOMEMLIMIT).toBe("3GiB");
   });
@@ -348,7 +364,7 @@ describe("local-heavy-check-runtime", () => {
   it("honors an explicit oxlint thread count", () => {
     const { args, env } = applyLocalOxlintPolicy(
       ["--threads=8"],
-      makeEnv({ GOGC: "80", GOMEMLIMIT: "5GiB" }),
+      makeEnv({ GOMAXPROCS: "3", GOGC: "80", GOMEMLIMIT: "5GiB" }),
       ROOMY_HOST,
     );
 
@@ -360,8 +376,43 @@ describe("local-heavy-check-runtime", () => {
       "--report-unused-disable-directives-severity",
       "error",
     ]);
+    expect(env.GOMAXPROCS).toBe("3");
     expect(env.GOGC).toBe("80");
     expect(env.GOMEMLIMIT).toBe("5GiB");
+  });
+
+  it("passes the throttled Go concurrency limit to the oxlint child", () => {
+    const cwd = createTempDir("openclaw-oxlint-go-limit-");
+    const binDir = path.join(cwd, "node_modules", ".bin");
+    const capturePath = path.join(cwd, "gomaxprocs.txt");
+    const oxlintPath = path.join(binDir, "oxlint");
+    fs.mkdirSync(binDir, { recursive: true });
+    fs.writeFileSync(
+      oxlintPath,
+      "#!/usr/bin/env node\nrequire('node:fs').writeFileSync(process.env.CAPTURE_PATH, process.env.GOMAXPROCS || '');\n",
+      "utf8",
+    );
+    fs.chmodSync(oxlintPath, 0o755);
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      CAPTURE_PATH: capturePath,
+      OPENCLAW_LOCAL_CHECK: "1",
+      OPENCLAW_LOCAL_CHECK_MODE: "throttled",
+      OPENCLAW_OXLINT_SKIP_LOCK: "1",
+      OPENCLAW_OXLINT_SKIP_PREPARE: "1",
+    };
+    delete env.GOMAXPROCS;
+
+    const result = spawnSync(
+      process.execPath,
+      [path.resolve("scripts/run-oxlint.mjs"), "--tsconfig", "config/tsconfig/oxlint.core.json"],
+      { cwd, encoding: "utf8", env },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(fs.readFileSync(capturePath, "utf8")).toBe(
+      String(Math.min(2, Math.max(1, os.availableParallelism()))),
+    );
   });
 
   it("allows forcing full-speed oxlint runs on roomy hosts", () => {

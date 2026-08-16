@@ -235,7 +235,7 @@ This checklist is the public shape of the release flow. Private credentials, sig
 5. Only after the Code SHA is green, generate the top `CHANGELOG.md` section from merged PRs and direct commits since the last reachable shipped tag. Keep entries user-facing and deduplicated. When a divergent shipped tag or later forward-port re-associates already-released PRs, pass it explicitly as `--shipped-ref`.
 6. Commit only `CHANGELOG.md`. This commit is the **Release SHA**. The complete diff from Code SHA to Release SHA must be exactly `CHANGELOG.md`; any other changed path returns the release to step 2.
 7. Run SHA-pinned Full Release Validation for the Release SHA with evidence reuse enabled. The lightweight parent must record `changelog-only-release-v1`, point at the green Code SHA, and dispatch no product child lanes. This reuses product evidence; it does not reuse package bytes.
-8. Run `OpenClaw NPM Release` with `preflight_only=true` against the Release SHA/tag. Save the successful `preflight_run_id`. This builds and checks the exact package bytes that include the final changelog.
+8. Run `OpenClaw NPM Release` with `preflight_only=true` against the Release SHA/tag. Save the successful `preflight_run_id`. This builds and checks the exact package bytes that include the final changelog. Review its **Plugin SDK API diff** summary. If it reports changes, inspect the readable diff (also uploaded as `plugin-sdk-api-release-diff-<run-id>-<run-attempt>`) and record the 8-character acknowledgement digest printed by the report; omit the acknowledgement when it reports no Plugin SDK API changes.
 9. Run the candidate helper against the untagged Release SHA with the successful Release-SHA validation parent and npm preflight instead of dispatching either again:
 
    ```bash
@@ -244,10 +244,11 @@ This checklist is the public shape of the release flow. Private credentials, sig
      --target-sha <release-sha> \
      --full-release-run <release-sha-validation-run-id> \
      --npm-preflight-run <preflight-run-id> \
+     --plugin-sdk-api-acknowledgement <reviewed-8-character-digest> \
      --skip-dispatch
    ```
 
-   For stable, also pass `--windows-node-tag vX.Y.Z`. Beta and alpha candidates defer Parallels install/update proof to the postpublish `pnpm release:beta-smoke` roster by default; pass `--run-parallels` only when the operator explicitly wants that proof before publish. Stable and full candidates run Parallels by default. The helper still verifies release-note provenance, npm preflight bytes, Telegram package proof, and plugin publish plans, then prints the publish command. After it completes green, create and push the final signed tag at that same Release SHA, then run the printed publish command.
+   Include `--plugin-sdk-api-acknowledgement` only when the preflight reported Plugin SDK API changes. For stable, also pass `--windows-node-tag vX.Y.Z`. Beta and alpha candidates defer Parallels install/update proof to the postpublish `pnpm release:beta-smoke` roster by default; pass `--run-parallels` only when the operator explicitly wants that proof before publish. Stable and full candidates run Parallels by default. The helper still verifies release-note provenance, npm preflight bytes, Telegram package proof, and plugin publish plans, then prints the publish command. After it completes green, create and push the final signed tag at that same Release SHA, then run the printed publish command.
 
    `pnpm release:candidate` validates the current frozen branch tip by default (or the explicit `--target-sha`), and rejects a tag that already exists. It records evidence before the final signed tag is pushed.
 
@@ -283,7 +284,7 @@ A legacy fallback correction tag may reuse base-package evidence only when the c
 - Run `pnpm check:test-types` before release preflight so test TypeScript stays covered outside the faster local `pnpm check` gate.
 - Run `pnpm check:architecture` before release preflight so the broader import cycle and architecture boundary checks are green outside the faster local gate.
 - Run `pnpm build && pnpm ui:build` before `pnpm release:check` so the expected `dist/*` release artifacts and Control UI bundle exist for the pack validation step.
-- Run `pnpm release:prep` after the root version bump and before tagging. It runs every deterministic release generator that commonly drifts after a version/config/API change: plugin versions, plugin inventory, base config schema, bundled channel config metadata, config docs baseline, plugin SDK exports, the Plugin SDK API contract manifest, and Control UI locale bundles. It also blocks until native app translations and platform-generated locale resources match the source inventory; if they lag, wait for or dispatch `Native App Locale Refresh` before freezing the Code SHA. `pnpm release:check` re-runs those guards plus transient npm package-lock validation in check mode (including the strict locale gates plus the plugin SDK surface budget) and reports every failure in one pass before running package release checks.
+- Run `pnpm release:prep` after the root version bump and before tagging. It runs every deterministic release generator that commonly drifts after a version or config change: plugin versions, plugin inventory, base config schema, bundled channel config metadata, config docs baseline, plugin SDK exports, and Control UI locale bundles. It also blocks until native app translations and platform-generated locale resources match the source inventory; if they lag, wait for or dispatch `Native App Locale Refresh` before freezing the Code SHA. `pnpm release:check` re-runs those guards plus transient npm package-lock validation in check mode (including the strict locale gates plus the plugin SDK surface budget) and reports every failure in one pass before running package release checks. The npm preflight separately compares the exact release SHA with the prior published dist-tag and reports any Plugin SDK API changes.
 - Plugin version sync updates the publishable `@openclaw/ai` runtime package, official plugin package versions, and existing `openclaw.compat.pluginApi` floors to the OpenClaw release version by default. Treat that field as the plugin SDK/runtime API floor, not just a copy of the package version: for plugin-only releases that intentionally remain compatible with older OpenClaw hosts, keep the floor at the oldest supported host API and document that choice in the plugin release proof.
 - Run the manual `Full Release Validation` workflow before release approval to kick off all pre-release test boxes from one entrypoint. It accepts a branch, tag, or full commit SHA, dispatches manual `CI`, and dispatches `OpenClaw Release Checks` for install smoke, package acceptance, cross-OS package checks, QA Lab parity, Matrix, and Telegram lanes. Stable and full runs always include exhaustive live/E2E and Docker release-path soak; `run_release_soak=true` is retained for an explicit beta soak. Package Acceptance provides the canonical package Telegram E2E during candidate validation, avoiding a second concurrent live poller.
 
@@ -558,8 +559,11 @@ gh workflow run openclaw-release-publish.yml \
   -f preflight_run_id=<successful-openclaw-npm-preflight-run-id> \
   -f full_release_validation_run_id=<successful-full-release-validation-run-id> \
   -f full_release_validation_run_attempt=<successful-full-release-validation-run-attempt> \
+  -f plugin_sdk_api_acknowledgement=<reviewed-8-character-digest> \
   -f npm_dist_tag=beta
 ```
+
+Include `plugin_sdk_api_acknowledgement` only when the npm preflight's Plugin SDK API report contains changes.
 
 Stable publish to the default beta dist-tag:
 
@@ -572,6 +576,7 @@ gh workflow run openclaw-release-publish.yml \
   -f preflight_run_id=<successful-openclaw-npm-preflight-run-id> \
   -f full_release_validation_run_id=<successful-full-release-validation-run-id> \
   -f full_release_validation_run_attempt=<successful-full-release-validation-run-attempt> \
+  -f plugin_sdk_api_acknowledgement=<reviewed-8-character-digest> \
   -f npm_dist_tag=beta
 ```
 
@@ -586,6 +591,7 @@ gh workflow run openclaw-release-publish.yml \
   -f preflight_run_id=<successful-openclaw-npm-preflight-run-id> \
   -f full_release_validation_run_id=<successful-full-release-validation-run-id> \
   -f full_release_validation_run_attempt=<successful-full-release-validation-run-attempt> \
+  -f plugin_sdk_api_acknowledgement=<reviewed-8-character-digest> \
   -f npm_dist_tag=latest
 ```
 

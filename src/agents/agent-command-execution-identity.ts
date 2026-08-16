@@ -1,5 +1,7 @@
-import type { ExecutionIdentityAdmissionFacts } from "../audit/execution-identity-admission.js";
-import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
+import type {
+  ExecutionIdentityAdmissionFacts,
+  ExecutionIdentityAdmissionToken,
+} from "../audit/execution-identity-admission.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";

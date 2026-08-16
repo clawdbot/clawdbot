@@ -152,7 +152,25 @@ describe("sandbox ssh helpers", () => {
         updateHostKeys: false,
         [field]: `/tmp/key\n  ${directive} /tmp/injected`,
       }),
-    ).rejects.toThrow(`SSH sandbox ${field} must not contain line breaks.`);
+    ).rejects.toThrow(`SSH sandbox ${field} must not contain line breaks or double quotes.`);
+  });
+
+  // Default macOS crabbox lease keys live under "Application Support"; unquoted
+  // ssh_config arguments tokenize on whitespace and read as extra arguments.
+  it("quotes path directives containing whitespace", async () => {
+    const session = await createSshSandboxSessionFromSettings({
+      command: "ssh",
+      target: "peter@example.com:2222",
+      strictHostKeyChecking: true,
+      updateHostKeys: false,
+      identityFile: "/tmp/Application Support/lease/id_ed25519",
+      knownHostsFile: "/tmp/Application Support/lease/known_hosts",
+    });
+    sessions.push(session);
+
+    const config = await fs.readFile(session.configPath, "utf8");
+    expect(config).toContain('  IdentityFile "/tmp/Application Support/lease/id_ed25519"');
+    expect(config).toContain('  UserKnownHostsFile "/tmp/Application Support/lease/known_hosts"');
   });
 
   it("wraps remote exec commands with env and workdir", () => {

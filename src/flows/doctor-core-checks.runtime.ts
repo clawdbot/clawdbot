@@ -10,7 +10,7 @@ import {
   listAgentIds,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
+  tryResolveSoleAgentId,
 } from "../agents/agent-scope.js";
 import { createOpenClawCodingTools } from "../agents/agent-tools.js";
 import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
@@ -53,7 +53,7 @@ import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.typ
 import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tools.js";
 import type { ProviderCatalogOrder, ProviderPlugin } from "../plugins/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { buildWorkspaceSkillStatus, type SkillStatusEntry } from "../skills/discovery/status.js";
+import { buildWorkspaceSkillStatus } from "../skills/discovery/status.js";
 import type { HealthCheckContext, HealthFinding } from "./health-checks.js";
 
 type BundleMcpToolRuntime = Awaited<ReturnType<typeof createBundleMcpToolRuntime>>;
@@ -64,12 +64,10 @@ function formatGatewayHealthTarget(url: string): string {
   return redactSensitiveUrlLikeString(url);
 }
 
-export function detectUnavailableSkills(cfg: OpenClawConfig): SkillStatusEntry[] {
-  const agentId = resolveDefaultAgentId(cfg);
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+export function detectUnavailableSkills(cfg: OpenClawConfig, workspaceDir: string) {
   const report = buildWorkspaceSkillStatus(workspaceDir, {
     config: cfg,
-    agentId,
+    agentId: tryResolveSoleAgentId(cfg),
   });
   return collectUnavailableAgentSkills(report);
 }
@@ -618,11 +616,11 @@ function groupProviderCatalogsForDoctor(providers: readonly ProviderPlugin[]): {
 
 export async function collectProviderCatalogProjectionFindings(
   cfg: OpenClawConfig,
+  workspaceDir?: string,
 ): Promise<readonly HealthFinding[]> {
   const { runProviderStaticCatalog } = await import("../plugins/provider-discovery.js");
   const { resolvePluginProvidersCore } = await import("../plugins/providers.runtime.js");
   const env = process.env;
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
   let providers: Awaited<ReturnType<typeof resolvePluginProvidersCore>>;
   try {
     providers = resolvePluginProvidersCore({
@@ -843,7 +841,6 @@ function collectBundleMcpRuntimeToolSchemaFindings(params: {
       modelId: params.modelRef.model,
     }),
     warn: () => {},
-    toolPolicyAuditLogLevel: "debug",
   });
   return collectNormalizedToolSchemaFindings({
     agentId: params.agentId,
@@ -906,7 +903,6 @@ function collectAgentRuntimeToolSchemaFindings(params: {
       modelContextWindowTokens: params.model.contextWindow,
       allowGatewaySubagentBinding: true,
       emitBeforeToolCallDiagnostics: false,
-      toolPolicyAuditLogLevel: "debug",
     });
   } catch (error) {
     return [agentRuntimeToolLoadFailureFinding({ agentId: params.agentId, error })];
@@ -1056,7 +1052,6 @@ function shouldReportBundleMcpRuntimeDiagnostic(params: {
         modelId: params.modelRef.model,
       }),
       warn: () => {},
-      toolPolicyAuditLogLevel: "debug",
     }).length > 0
   );
 }
@@ -1103,6 +1098,8 @@ export async function collectRuntimeToolSchemaFindings(
           config: cfg,
           agentId,
           agentDir: resolveAgentDir(cfg, agentId),
+          readOnly: true,
+          providerDiscoveryProviderIds: [],
         });
         const modelRef = resolveDefaultModelForAgent({
           cfg,

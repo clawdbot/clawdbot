@@ -1,9 +1,11 @@
-import { countFailedChannelIngressQueueEntries } from "../../channels/message/ingress-queue.js";
+import {
+  countChannelIngressQueuePressure,
+  countFailedChannelIngressQueueEntries,
+} from "../../channels/message/ingress-queue-health.js";
 import { countFailedDeliveryQueueEntries } from "../../infra/delivery-queue-sqlite.js";
 import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { DeliveryQueueHealthSummary } from "./types.js";
 
 const healthLog = createSubsystemLogger("health");
 
@@ -13,48 +15,42 @@ const debugHealth = (message: string, error: unknown) => {
   }
 };
 
-/** Builds dead-lettered inbound and outbound queue health for gateway snapshots. */
-export function buildDeliveryQueueHealthSummary(): DeliveryQueueHealthSummary | undefined {
+function readQueueHealth<T>(message: string, read: () => T[]): T[] {
+  try {
+    return read();
+  } catch (error) {
+    debugHealth(message, error);
+    return [];
+  }
+}
+
+/** Builds redacted inbound pressure and dead-letter health for gateway snapshots. */
+export function buildDeliveryQueueHealthSummary(
+  cachedIngressPressure?: ReturnType<typeof countChannelIngressQueuePressure>,
+) {
   // Queue health reads are diagnostic; a storage failure must not take the
   // gateway health endpoint down with it.
-  let failed: DeliveryQueueHealthSummary["failed"] = [];
-  try {
-    failed = countFailedDeliveryQueueEntries().map((queue) => {
-      const entry: DeliveryQueueHealthSummary["failed"][number] = {
-        queueName: queue.queueName,
-        count: queue.count,
-      };
-      if (queue.oldestFailedAt != null) {
-        entry.oldestFailedAt = queue.oldestFailedAt;
-      }
-      return entry;
-    });
-  } catch (error) {
-    debugHealth("outbound delivery queue health read failed", error);
-  }
+  const failed = readQueueHealth(
+    "outbound delivery queue health read failed",
+    countFailedDeliveryQueueEntries,
+  );
+  const ingressFailed = readQueueHealth(
+    "channel ingress failed queue health read failed",
+    countFailedChannelIngressQueueEntries,
+  );
+  const ingressPressure =
+    cachedIngressPressure ??
+    readQueueHealth(
+      "channel ingress pressure health read failed",
+      countChannelIngressQueuePressure,
+    );
 
-  let ingressFailed: NonNullable<DeliveryQueueHealthSummary["ingressFailed"]> = [];
-  try {
-    ingressFailed = countFailedChannelIngressQueueEntries().map((queue) => {
-      const entry: NonNullable<DeliveryQueueHealthSummary["ingressFailed"]>[number] = {
-        channelId: queue.channelId,
-        accountId: queue.accountId,
-        count: queue.count,
-      };
-      if (queue.oldestFailedAt != null) {
-        entry.oldestFailedAt = queue.oldestFailedAt;
-      }
-      return entry;
-    });
-  } catch (error) {
-    debugHealth("channel ingress queue health read failed", error);
-  }
-
-  if (failed.length === 0 && ingressFailed.length === 0) {
+  if (failed.length === 0 && ingressFailed.length === 0 && ingressPressure.length === 0) {
     return undefined;
   }
   return {
     failed,
     ...(ingressFailed.length > 0 ? { ingressFailed } : {}),
+    ...(ingressPressure.length > 0 ? { ingressPressure } : {}),
   };
 }

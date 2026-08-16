@@ -2,16 +2,17 @@
 import type { App } from "@slack/bolt";
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import type {
   OpenClawConfig,
   SlackReactionNotificationMode,
+  SessionScope,
+  DmPolicy,
+  GroupPolicy,
 } from "openclaw/plugin-sdk/config-contracts";
-import type { SessionScope } from "openclaw/plugin-sdk/config-contracts";
-import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/config-contracts";
 import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
+import { logVerbose, getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -37,7 +38,7 @@ import {
   type SlackSuggestedPromptsInput,
   updateSlackSuggestedPrompts,
 } from "./suggested-prompts.js";
-import { createSlackSystemEventSessionKeyResolver } from "./system-event-session.js";
+import { createSlackSystemEventRouteResolver } from "./system-event-session.js";
 
 export {
   buildSlackAssistantThreadMetadata,
@@ -60,6 +61,8 @@ type SlackChannelCacheEntry = {
 };
 
 type SlackUserInfo = { name?: string; error?: unknown };
+type BuildChannelInboundContext =
+  typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
 const SLACK_CHANNEL_CACHE_MAX_ENTRIES = 1024;
 const SLACK_USER_CACHE_MAX_ENTRIES = 2048;
 const SLACK_CHANNEL_DENIAL_WARNING_TTL_MS = 5 * 60_000;
@@ -72,6 +75,7 @@ export type SlackMonitorContext = {
   app: App;
   runtime: RuntimeEnv;
   channelRuntime?: ChannelRuntimeSurface;
+  buildContext?: BuildChannelInboundContext;
 
   botUserId: string;
   botId?: string;
@@ -110,13 +114,13 @@ export type SlackMonitorContext = {
 
   logger: ReturnType<typeof getChildLogger>;
   shouldDropMismatchedSlackEvent: (body: unknown) => boolean;
-  resolveSlackSystemEventSessionKey: (params: {
+  resolveSlackSystemEventRoute: (params: {
     channelId?: string | null;
     channelType?: string | null;
     senderId?: string | null;
     threadTs?: string | null;
     eventScope?: SlackEventScope;
-  }) => string;
+  }) => { agentId: string; sessionKey: string };
   isChannelAllowed: (params: {
     teamId?: string;
     channelId?: string;
@@ -277,12 +281,11 @@ export function createSlackMonitorContext(params: {
     return id ? readLruMapEntry(channelCache, scopedKey(id, eventScope))?.info.type : undefined;
   };
 
-  const resolveSlackSystemEventSessionKey = createSlackSystemEventSessionKeyResolver({
+  const resolveSlackSystemEventRoute = createSlackSystemEventRouteResolver({
     cfg: params.cfg,
     accountId: params.accountId,
     getTeamId: () => ctx.teamId,
     mainKey: params.mainKey,
-    sessionScope: params.sessionScope,
     threadInheritParent: params.threadInheritParent,
     recallSlackChannelType,
   });
@@ -507,6 +510,8 @@ export function createSlackMonitorContext(params: {
     app: params.app,
     runtime: params.runtime,
     channelRuntime: params.channelRuntime,
+    buildContext: (params.channelRuntime as PluginRuntime["channel"] | undefined)?.inbound
+      .buildContext,
     botUserId: params.botUserId,
     botId: params.botId,
     identityHealth: params.identityHealth,
@@ -544,7 +549,7 @@ export function createSlackMonitorContext(params: {
     mediaMaxBytes: params.mediaMaxBytes,
     logger,
     shouldDropMismatchedSlackEvent,
-    resolveSlackSystemEventSessionKey,
+    resolveSlackSystemEventRoute,
     isChannelAllowed,
     resolveChannelName,
     rememberSlackChannelType,

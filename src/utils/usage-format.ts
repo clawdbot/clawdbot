@@ -9,7 +9,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   listAgentEntries,
   resolveAgentDir,
-  resolveDefaultAgentId,
+  tryResolveDefaultAgentId,
 } from "../agents/agent-scope-config.js";
 import { modelKey, normalizeModelRef, normalizeProviderId } from "../agents/model-selection.js";
 import type { NormalizedUsage } from "../agents/usage.js";
@@ -317,7 +317,8 @@ function resolveCostAgentDir(config?: OpenClawConfig, agentDir?: string): string
     return agentDir;
   }
   if (config && listAgentEntries(config).length > 0) {
-    return resolveAgentDir(config, resolveDefaultAgentId(config));
+    const defaultAgentId = tryResolveDefaultAgentId(config);
+    return defaultAgentId ? resolveAgentDir(config, defaultAgentId) : undefined;
   }
   // Config-less and pricing-only lookups are shipped APIs for the historical
   // main models.json. Full runtime configs resolve their roster default above.

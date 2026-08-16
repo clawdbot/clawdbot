@@ -1025,7 +1025,7 @@ describe("Codex app-server dynamic tool build", () => {
       "configured sandbox backend",
     );
     expect(tools.find((tool) => tool.name === "sandbox_process")?.description).toContain(
-      "sandbox_exec sessions",
+      "background shell sessions",
     );
   });
 
@@ -1100,15 +1100,17 @@ describe("Codex app-server dynamic tool build", () => {
       ask: "off",
     };
 
+    const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params);
     const tools = await buildDynamicToolsForTest(params, workspaceDir, {
-      nativeToolSurfaceEnabled: true,
+      nativeToolSurfaceEnabled,
     });
 
+    expect(nativeToolSurfaceEnabled).toBe(false);
     expect(tools.map((tool) => tool.name)).toEqual(["message", "node_exec", "node_process"]);
     const nodeExec = tools.find((tool) => tool.name === "node_exec");
     const nodeProcess = tools.find((tool) => tool.name === "node_process");
     expect(nodeExec?.description).toContain("host=node internally");
-    expect(nodeProcess?.description).toContain("node_exec sessions");
+    expect(nodeProcess?.description).toContain("background shell sessions");
     expect(nodeExec?.parameters).toEqual({
       type: "object",
       properties: {
@@ -1142,7 +1144,7 @@ describe("Codex app-server dynamic tool build", () => {
     expect(result?.content).toEqual([
       {
         type: "text",
-        text: "Command still running (session exec-1, pid 123). Use node_process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.",
+        text: "Command still running (session exec-1, pid 123). Use remote-node background-session control (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up when available.",
       },
     ]);
 
@@ -1160,12 +1162,18 @@ describe("Codex app-server dynamic tool build", () => {
         ],
       },
     } as never;
+    const runtimePolicyNativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
+      runtimePolicyParams,
+      undefined,
+      { agentId: "policy", runtimeSessionKey: "agent:policy:session-1" },
+    );
     const runtimePolicyTools = await buildDynamicToolsForTest(runtimePolicyParams, workspaceDir, {
       sandboxSessionKey: "agent:policy:session-1",
-      nativeToolSurfaceEnabled: true,
+      nativeToolSurfaceEnabled: runtimePolicyNativeToolSurfaceEnabled,
       sessionAgentId: "policy",
     });
 
+    expect(runtimePolicyNativeToolSurfaceEnabled).toBe(false);
     expect(runtimePolicyTools.map((tool) => tool.name)).toEqual([
       "message",
       "node_exec",
@@ -1964,7 +1972,7 @@ describe("Codex app-server dynamic tool build", () => {
     expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
   });
 
-  it("keeps Codex native tool surfaces when the effective exec target is node", () => {
+  it("disables Codex native tool surfaces when the effective exec target is node", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const sessionParams = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     sessionParams.disableTools = false;
@@ -1975,16 +1983,16 @@ describe("Codex app-server dynamic tool build", () => {
       ask: "off",
     };
 
-    expect(shouldEnableCodexAppServerNativeToolSurface(sessionParams)).toBe(true);
+    expect(shouldEnableCodexAppServerNativeToolSurface(sessionParams)).toBe(false);
 
     sessionParams.toolsAllow = ["*"];
-    expect(shouldEnableCodexAppServerNativeToolSurface(sessionParams)).toBe(true);
+    expect(shouldEnableCodexAppServerNativeToolSurface(sessionParams)).toBe(false);
 
     const globalParams = createParams(path.join(tempDir, "global-session.jsonl"), workspaceDir);
     globalParams.disableTools = false;
     globalParams.config = { tools: { exec: { host: "node" } } } as never;
 
-    expect(shouldEnableCodexAppServerNativeToolSurface(globalParams)).toBe(true);
+    expect(shouldEnableCodexAppServerNativeToolSurface(globalParams)).toBe(false);
 
     const autoOverrideParams = createParams(
       path.join(tempDir, "auto-override-session.jsonl"),
@@ -2008,7 +2016,7 @@ describe("Codex app-server dynamic tool build", () => {
       shouldEnableCodexAppServerNativeToolSurface(agentParams, undefined, {
         agentId: "main",
       }),
-    ).toBe(true);
+    ).toBe(false);
 
     const runtimePolicyParams = createParams(
       path.join(tempDir, "runtime-policy-session.jsonl"),
@@ -2026,7 +2034,7 @@ describe("Codex app-server dynamic tool build", () => {
       },
     } as never;
 
-    expect(shouldEnableCodexAppServerNativeToolSurface(runtimePolicyParams)).toBe(true);
+    expect(shouldEnableCodexAppServerNativeToolSurface(runtimePolicyParams)).toBe(false);
   });
 
   it("disables Codex native tool surfaces whenever an OpenClaw sandbox is active", () => {

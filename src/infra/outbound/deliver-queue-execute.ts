@@ -24,17 +24,13 @@ import {
   type OutboundPayloadDeliveryOutcome,
 } from "./deliver-types.js";
 import { runOutboundDeliveryCommitHooks } from "./delivery-commit-hooks.js";
-import {
-  completeDurableDelivery,
-  rejectDurableDelivery,
-  suppressDurableDelivery,
-} from "./delivery-completion.js";
+import { rejectDurableDelivery, settleDurableDelivery } from "./delivery-completion.js";
 import {
   failDelivery,
   failDeliveryAfterPlatformSend,
   failDeliveryBeforePlatformSend,
   markDeliveryPlatformSendDispatched,
-} from "./delivery-queue.js";
+} from "./delivery-queue-storage.js";
 import { createMessageSentEmitter, type MessageSentEvent } from "./message-sent-hook.js";
 import {
   completedOutboundAuditTerminals,
@@ -87,9 +83,22 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     params.requireUnknownSendReconciliation === true && platformQueueId !== undefined;
   let queuedPreSendState: QueuedPreSendState | undefined;
   let queuedPostSendState: QueuedPostSendState | undefined;
+  let platformSendStarted = false;
   let platformSendRoute: PlatformSendRoute | undefined;
   let deliveredResults: OutboundDeliveryResult[] = [];
   let commitHooksRun = false;
+  const settleDeliveryCompletion = async (
+    result: OutboundDeliveryResult | undefined,
+  ): Promise<void> => {
+    if (!params.deliveryCompletion) {
+      return;
+    }
+    await settleDurableDelivery(
+      params.deliveryCompletion,
+      result ? { result } : { platformSendStarted },
+      platformQueueStateDir,
+    );
+  };
   // Deliberately process-local: message_sent is best-effort after queue
   // settlement, not a durable plugin outbox or a reason to retry delivery.
   const messageSentEvents: MessageSentEvent[] = [];
@@ -207,6 +216,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       params.abortSignal?.throwIfAborted();
       await params.onPlatformSendStart?.(route);
       params.abortSignal?.throwIfAborted();
+      platformSendStarted = true;
     },
     onPlatformSendDispatch: async () => {
       params.abortSignal?.throwIfAborted();
@@ -301,17 +311,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       });
     }
     if (!queueId) {
-      if (params.deliveryCompletion) {
-        if (results.length > 0) {
-          await completeDurableDelivery(
-            params.deliveryCompletion,
-            results.at(-1)!,
-            platformQueueStateDir,
-          );
-        } else {
-          await suppressDurableDelivery(params.deliveryCompletion, platformQueueStateDir);
-        }
-      }
+      await settleDeliveryCompletion(results.at(-1));
       if (!params.deferCommitHooks) {
         flushMessageSentEvents();
         await runOutboundDeliveryCommitHooks(results);
@@ -365,17 +365,6 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
           );
         }
       } else {
-        if (params.deliveryCompletion) {
-          if (results.length > 0) {
-            await completeDurableDelivery(
-              params.deliveryCompletion,
-              results.at(-1)!,
-              platformQueueStateDir,
-            );
-          } else {
-            await suppressDurableDelivery(params.deliveryCompletion, platformQueueStateDir);
-          }
-        }
         const postSendState =
           queuedPostSendState ??
           (results.length > 0 || queuedPreSendState === "marked"
@@ -383,6 +372,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
             : queuedPreSendState === "acked"
               ? "acked"
               : undefined);
+        await settleDeliveryCompletion(results.at(-1));
         if (results.length === 0 && postSendState === "marked") {
           // The provider was invoked but returned no recipient-visible identity;
           // never convert that ambiguous platform outcome into a success receipt.

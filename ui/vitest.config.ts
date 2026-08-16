@@ -21,6 +21,10 @@ const workspaceSourceAliases = [
     replacement: path.resolve(repoRoot, "packages/gateway-client/src/browser.ts"),
   },
   {
+    find: "@openclaw/gateway-client/scope-upgrade",
+    replacement: path.resolve(repoRoot, "packages/gateway-client/src/scope-upgrade.ts"),
+  },
+  {
     find: /^@openclaw\/gateway-protocol\/(.+)$/u,
     replacement: path.resolve(repoRoot, "packages/gateway-protocol/src/$1.ts"),
   },
@@ -94,8 +98,10 @@ const nodeDrivenBrowserLayoutTests = [
   "src/pages/chat/chat-responsive.browser.test.ts",
   "src/components/form-controls.browser.test.ts",
   "src/pages/sessions/view.browser.test.ts",
+  "src/styles/corner-shape.browser.test.ts",
   "src/styles/cursor-policy.browser.test.ts",
   "src/styles/chat-file-link-presentation.browser.test.ts",
+  "src/styles/chat-github-link-presentation.browser.test.ts",
   "src/styles/sr-only.browser.test.ts",
 ] as const;
 const mockRegistryUnitTests = [

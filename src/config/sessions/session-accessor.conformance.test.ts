@@ -66,8 +66,6 @@ import { getRuntimeConfig } from "../config.js";
 
 type AccessorAdapter = {
   name: string;
-  publishesTranscriptUpdates: boolean;
-  usesSqliteStore: boolean;
   entryScope(paths: TestPaths): SessionAccessScope;
   transcriptReadScope(paths: TestPaths, id?: string): SessionTranscriptReadScope;
   transcriptScope(paths: TestPaths, id?: string): SessionTranscriptAccessScope;
@@ -118,13 +116,10 @@ type TestPaths = {
   stateDir: string;
   storePath: string;
   tempDir: string;
-  transcriptPath: string;
 };
 
 const publicAccessorAdapter: AccessorAdapter = {
   name: "public-accessor",
-  publishesTranscriptUpdates: true,
-  usesSqliteStore: true,
   entryScope: (paths) => ({
     agentId: "main",
     env: { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir },
@@ -161,8 +156,6 @@ const publicAccessorAdapter: AccessorAdapter = {
 
 const sqliteAdapter: AccessorAdapter = {
   name: "sqlite",
-  publishesTranscriptUpdates: true,
-  usesSqliteStore: true,
   entryScope: (paths) => ({
     agentId: "main",
     env: { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir },
@@ -209,6 +202,12 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
   "session accessor conformance: $name",
   (adapter) => {
     let paths: TestPaths;
+    // Register direct SQLite cases only once instead of once per adapter row.
+    const t = (name: string, run: () => Promise<void>) => {
+      if (adapter === sqliteAdapter) {
+        it(name, run);
+      }
+    };
 
     beforeEach(() => {
       const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-accessor-conf-"));
@@ -217,7 +216,6 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
         stateDir: path.join(tempDir, "state"),
         storePath: path.join(tempDir, "sessions.json"),
         tempDir,
-        transcriptPath: path.join(tempDir, "session.jsonl"),
       };
     });
 
@@ -335,10 +333,13 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
     it("conforms for lifecycle entry and transcript cleanup", async () => {
       const nowMs = Date.now();
       const oldTimestamp = nowMs - 600_000;
-      const usesSqliteStore = adapter.usesSqliteStore;
-      const cleanupStorePath = usesSqliteStore
-        ? path.join(paths.stateDir, "agents", "main", "sessions", "sessions.json")
-        : paths.storePath;
+      const cleanupStorePath = path.join(
+        paths.stateDir,
+        "agents",
+        "main",
+        "sessions",
+        "sessions.json",
+      );
       const scopedEntry = (sessionKey: string): SessionAccessScope => ({
         ...adapter.entryScope(paths),
         sessionKey,
@@ -364,22 +365,10 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
           timestamp: new Date(timestamp).toISOString(),
           type: "metadata",
         };
-        if (usesSqliteStore) {
-          await adapter.appendTranscriptEvent(
-            scopedTranscript(params.sessionKey, params.sessionId),
-            event,
-          );
-          return;
-        }
-        const transcriptPath = path.join(
-          path.dirname(cleanupStorePath),
-          `${params.sessionId}.jsonl`,
+        await adapter.appendTranscriptEvent(
+          scopedTranscript(params.sessionKey, params.sessionId),
+          event,
         );
-        fs.writeFileSync(transcriptPath, `${JSON.stringify(event)}\n`, "utf-8");
-        if (params.old) {
-          const oldDate = new Date(oldTimestamp);
-          fs.utimesSync(transcriptPath, oldDate, oldDate);
-        }
       };
 
       await adapter.replaceSessionEntry(scopedEntry("agent:main:lifecycle-cleanup-missing"), {
@@ -469,75 +458,63 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       expect(adapter.loadSessionEntry(scopedEntry("agent:main:regular"))).toMatchObject({
         sessionId: "referenced",
       });
-      if (usesSqliteStore) {
-        expect(fs.existsSync(cleanupStorePath)).toBe(false);
-        const database = openOpenClawAgentDatabase({
-          agentId: "main",
-          env: { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir },
-          path: path.join(paths.stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
-        });
-        const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db);
-        const removedRoute = executeSqliteQueryTakeFirstSync(
-          database.db,
-          db
-            .selectFrom("session_nodes")
-            .select("current_session_id")
-            .where("session_key", "=", "agent:main:lifecycle-cleanup-removed"),
-        );
-        expect(removedRoute).toBeUndefined();
-        const freshRoute = executeSqliteQueryTakeFirstSync(
-          database.db,
-          db
-            .selectFrom("session_nodes")
-            .select("current_session_id")
-            .where("session_key", "=", "agent:main:lifecycle-cleanup-fresh"),
-        );
-        expect(freshRoute).toEqual({ current_session_id: "fresh-lifecycle" });
-        await expect(
-          adapter.loadTranscriptEvents(scopedTranscript("agent:main:regular", "referenced")),
-        ).resolves.not.toEqual([]);
-        await expect(
-          adapter.loadTranscriptEvents(
-            scopedTranscript("agent:main:lifecycle-cleanup-removed", "removed-lifecycle"),
-          ),
-        ).resolves.toEqual([]);
-        const files = fs.readdirSync(path.dirname(cleanupStorePath));
-        const removedArchive = files.find((file) =>
-          file.startsWith("removed-lifecycle.jsonl.deleted."),
-        );
-        const orphanArchive = files.find((file) =>
-          file.startsWith("orphan-lifecycle.jsonl.deleted."),
-        );
-        expect(removedArchive).toBeDefined();
-        // Route-referenced orphan history is retained in SQLite, not archived.
-        expect(orphanArchive).toBeUndefined();
-        await expect(
-          adapter.loadTranscriptEvents(scopedTranscript("agent:main:orphan", "orphan-lifecycle")),
-        ).resolves.not.toEqual([]);
-        expect(
-          readSessionArchiveContentSync(
-            path.join(path.dirname(cleanupStorePath), removedArchive ?? ""),
-          )
-            .trim()
-            .split("\n")
-            .map((line) => JSON.parse(line)),
-        ).toEqual([
-          expect.objectContaining({
-            id: "removed-lifecycle-event",
-            marker: "lifecycle-marker-run",
-          }),
-        ]);
-      } else {
-        const files = fs.readdirSync(path.dirname(cleanupStorePath));
-        expect(
-          files.filter((file) => file.startsWith("removed-lifecycle.jsonl.deleted.")),
-        ).toHaveLength(1);
-        expect(
-          files.filter((file) => file.startsWith("orphan-lifecycle.jsonl.deleted.")),
-        ).toHaveLength(1);
-        expect(files).toContain("fresh-lifecycle.jsonl");
-        expect(files).toContain("referenced.jsonl");
-      }
+      expect(fs.existsSync(cleanupStorePath)).toBe(false);
+      const database = openOpenClawAgentDatabase({
+        agentId: "main",
+        env: { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir },
+        path: path.join(paths.stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
+      });
+      const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db);
+      const removedRoute = executeSqliteQueryTakeFirstSync(
+        database.db,
+        db
+          .selectFrom("session_nodes")
+          .select("current_session_id")
+          .where("session_key", "=", "agent:main:lifecycle-cleanup-removed"),
+      );
+      expect(removedRoute).toBeUndefined();
+      const freshRoute = executeSqliteQueryTakeFirstSync(
+        database.db,
+        db
+          .selectFrom("session_nodes")
+          .select("current_session_id")
+          .where("session_key", "=", "agent:main:lifecycle-cleanup-fresh"),
+      );
+      expect(freshRoute).toEqual({ current_session_id: "fresh-lifecycle" });
+      await expect(
+        adapter.loadTranscriptEvents(scopedTranscript("agent:main:regular", "referenced")),
+      ).resolves.not.toEqual([]);
+      await expect(
+        adapter.loadTranscriptEvents(
+          scopedTranscript("agent:main:lifecycle-cleanup-removed", "removed-lifecycle"),
+        ),
+      ).resolves.toEqual([]);
+      const files = fs.readdirSync(path.dirname(cleanupStorePath));
+      const removedArchive = files.find((file) =>
+        file.startsWith("removed-lifecycle.jsonl.deleted."),
+      );
+      const orphanArchive = files.find((file) =>
+        file.startsWith("orphan-lifecycle.jsonl.deleted."),
+      );
+      expect(removedArchive).toBeDefined();
+      // Route-referenced orphan history is retained in SQLite, not archived.
+      expect(orphanArchive).toBeUndefined();
+      await expect(
+        adapter.loadTranscriptEvents(scopedTranscript("agent:main:orphan", "orphan-lifecycle")),
+      ).resolves.not.toEqual([]);
+      expect(
+        readSessionArchiveContentSync(
+          path.join(path.dirname(cleanupStorePath), removedArchive ?? ""),
+        )
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line)),
+      ).toEqual([
+        expect.objectContaining({
+          id: "removed-lifecycle-event",
+          marker: "lifecycle-marker-run",
+        }),
+      ]);
     });
 
     it("conforms for raw transcript event load and append", async () => {
@@ -559,7 +536,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       ]);
     });
 
-    it("loads raw SQLite transcript events synchronously through a read scope", async () => {
+    t("loads raw SQLite transcript events synchronously through a read scope", async () => {
       const scope = sqliteAdapter.transcriptScope(paths);
       const readScope = sqliteAdapter.transcriptReadScope(paths);
       const event = {
@@ -574,7 +551,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       expect(loadTranscriptEventsSync(readScope)).toEqual([event]);
     });
 
-    it("maps canonical sessions.json store paths to the agent SQLite database", async () => {
+    t("maps canonical sessions.json store paths to the agent SQLite database", async () => {
       const legacyStorePath = path.join(
         paths.stateDir,
         "agents",
@@ -625,7 +602,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       );
     });
 
-    it("keeps custom JSON store paths beside their SQLite database", async () => {
+    t("keeps custom JSON store paths beside their SQLite database", async () => {
       const customStorePath = path.join(paths.tempDir, "custom-sessions.json");
       const sqlitePath = path.join(paths.tempDir, "custom-sessions.voice.sqlite");
       const scope = {
@@ -650,7 +627,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       expect(fs.existsSync(customStorePath)).toBe(false);
     });
 
-    it("uses the requested agent for custom sessions.json SQLite targets", async () => {
+    t("uses the requested agent for custom sessions.json SQLite targets", async () => {
       const customStorePath = path.join(paths.tempDir, "custom-store", "sessions.json");
       const customSqlitePath = path.join(
         path.dirname(customStorePath),
@@ -686,7 +663,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       });
     });
 
-    it("parses only the selected SQLite entry across keyed loads", async () => {
+    t("parses only the selected SQLite entry across keyed loads", async () => {
       const scope = sqliteAdapter.entryScope(paths);
       for (let index = 0; index < 20; index += 1) {
         await upsertSessionEntryCore(
@@ -737,32 +714,35 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       }
     });
 
-    it("prunes stale SQLite entries below the entry cap without parsing on every write", async () => {
-      const scope = sqliteAdapter.entryScope(paths);
-      const staleScope = {
-        ...scope,
-        sessionKey: "agent:main:stale-under-cap",
-      };
-      await replaceSessionEntry(staleScope, {
-        model: "stale",
-        sessionId: "stale-under-cap",
-        updatedAt: Date.now() - 31 * 24 * 60 * 60 * 1000,
-      });
+    t(
+      "prunes stale SQLite entries below the entry cap without parsing on every write",
+      async () => {
+        const scope = sqliteAdapter.entryScope(paths);
+        const staleScope = {
+          ...scope,
+          sessionKey: "agent:main:stale-under-cap",
+        };
+        await replaceSessionEntry(staleScope, {
+          model: "stale",
+          sessionId: "stale-under-cap",
+          updatedAt: Date.now() - 31 * 24 * 60 * 60 * 1000,
+        });
 
-      await upsertSessionEntryCore(scope, {
-        model: "fresh",
-        sessionId: "fresh-session",
-        updatedAt: Date.now(),
-      });
+        await upsertSessionEntryCore(scope, {
+          model: "fresh",
+          sessionId: "fresh-session",
+          updatedAt: Date.now(),
+        });
 
-      expect(loadSessionEntry(staleScope)).toBeUndefined();
-      expect(loadSessionEntry(scope)).toMatchObject({
-        model: "fresh",
-        sessionId: "fresh-session",
-      });
-    });
+        expect(loadSessionEntry(staleScope)).toBeUndefined();
+        expect(loadSessionEntry(scope)).toMatchObject({
+          model: "fresh",
+          sessionId: "fresh-session",
+        });
+      },
+    );
 
-    it("serializes concurrent SQLite entry patches", async () => {
+    t("serializes concurrent SQLite entry patches", async () => {
       const scope = sqliteAdapter.entryScope(paths);
 
       await upsertSessionEntryCore(scope, {
@@ -796,10 +776,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       });
     });
 
-    it("does not hold a write transaction while awaiting a SQLite entry updater", async () => {
-      if (adapter !== sqliteAdapter) {
-        return;
-      }
+    t("does not hold a write transaction while awaiting a SQLite entry updater", async () => {
       const scope = sqliteAdapter.entryScope(paths);
       await replaceSessionEntry(scope, {
         model: "base",
@@ -849,10 +826,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       expect(unrelatedWriteError).toBeUndefined();
     });
 
-    it("allows auth and trajectory writers while a session updater is preparing", async () => {
-      if (adapter !== sqliteAdapter) {
-        return;
-      }
+    t("allows auth and trajectory writers while a session updater is preparing", async () => {
       const agentDir = path.join(paths.tempDir, "agents", "main", "agent");
       const conventionalStorePath = path.join(
         paths.tempDir,
@@ -909,10 +883,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       expect(readPersistedAuthProfileStateRaw(agentDir)).toEqual({ selectedProfile: "test" });
     });
 
-    it("rejects a prepared SQLite entry patch when its source row changes", async () => {
-      if (adapter !== sqliteAdapter) {
-        return;
-      }
+    t("rejects a prepared SQLite entry patch when its source row changes", async () => {
       const scope = sqliteAdapter.entryScope(paths);
       await replaceSessionEntry(scope, {
         model: "base",
@@ -957,7 +928,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       expect(loadSessionEntry(scope)).toMatchObject({ model: "newer", updatedAt: 20 });
     });
 
-    it("dedupes SQLite transcript identities inside the writer path", async () => {
+    t("dedupes SQLite transcript identities inside the writer path", async () => {
       const scope = sqliteAdapter.transcriptScope(paths, "session-dedupe");
       const event = {
         id: "event-dedupe",
@@ -1007,45 +978,48 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       ).rejects.toThrow(/use append(?:Sqlite)?TranscriptMessage instead/);
     });
 
-    it("rejects conflicting SQLite transcript messages after default idempotency dedupe", async () => {
-      const scope = sqliteAdapter.transcriptScope(paths, "session-unchecked-dedupe");
-      const message = {
-        role: "assistant",
-        content: "unchecked",
-        idempotencyKey: "unchecked-once",
-      };
+    t(
+      "rejects conflicting SQLite transcript messages after default idempotency dedupe",
+      async () => {
+        const scope = sqliteAdapter.transcriptScope(paths, "session-unchecked-dedupe");
+        const message = {
+          role: "assistant",
+          content: "unchecked",
+          idempotencyKey: "unchecked-once",
+        };
 
-      const appended = await appendTranscriptMessage(scope, { message });
-      const replayed = await appendTranscriptMessage(scope, { message });
-      await expect(
-        appendTranscriptMessage(scope, {
-          message: {
-            ...message,
-            content: "unchecked replay",
-          },
-        }),
-      ).rejects.toThrow(/conflicts with the admitted message/u);
+        const appended = await appendTranscriptMessage(scope, { message });
+        const replayed = await appendTranscriptMessage(scope, { message });
+        await expect(
+          appendTranscriptMessage(scope, {
+            message: {
+              ...message,
+              content: "unchecked replay",
+            },
+          }),
+        ).rejects.toThrow(/conflicts with the admitted message/u);
 
-      const events = await loadTranscriptEvents(scope);
-      const keyedEvents = events.filter((event): event is { message: typeof message } => {
-        return (
-          Boolean(event) &&
-          typeof event === "object" &&
-          !Array.isArray(event) &&
-          (event as { message?: { idempotencyKey?: string } }).message?.idempotencyKey ===
-            "unchecked-once"
-        );
-      });
-      expect(appended).toMatchObject({ appended: true });
-      expect(replayed).toMatchObject({
-        appended: false,
-        message: expect.objectContaining({ content: "unchecked" }),
-        messageId: appended?.messageId,
-      });
-      expect(keyedEvents).toHaveLength(1);
-    });
+        const events = await loadTranscriptEvents(scope);
+        const keyedEvents = events.filter((event): event is { message: typeof message } => {
+          return (
+            Boolean(event) &&
+            typeof event === "object" &&
+            !Array.isArray(event) &&
+            (event as { message?: { idempotencyKey?: string } }).message?.idempotencyKey ===
+              "unchecked-once"
+          );
+        });
+        expect(appended).toMatchObject({ appended: true });
+        expect(replayed).toMatchObject({
+          appended: false,
+          message: expect.objectContaining({ content: "unchecked" }),
+          messageId: appended?.messageId,
+        });
+        expect(keyedEvents).toHaveLength(1);
+      },
+    );
 
-    it("treats replayed SQLite transcript message ids as existing appends", async () => {
+    t("treats replayed SQLite transcript message ids as existing appends", async () => {
       const scope = sqliteAdapter.transcriptScope(paths, "session-event-id-dedupe");
       const eventId = "message-retry-event-id";
 
@@ -1172,18 +1146,14 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
           type: "message",
         }),
       ]);
-      if (adapter.publishesTranscriptUpdates) {
-        expect(updates).toEqual([
-          expect.objectContaining({
-            agentId: "main",
-            message: appended?.message,
-            messageId: appended?.messageId,
-            sessionKey: scope.sessionKey,
-          }),
-        ]);
-      } else {
-        expect(updates).toEqual([]);
-      }
+      expect(updates).toEqual([
+        expect.objectContaining({
+          agentId: "main",
+          message: appended?.message,
+          messageId: appended?.messageId,
+          sessionKey: scope.sessionKey,
+        }),
+      ]);
     });
   },
 );
@@ -1198,7 +1168,6 @@ describe("sqlite session normalization", () => {
       stateDir: path.join(tempDir, "state"),
       storePath: path.join(tempDir, "sessions.json"),
       tempDir,
-      transcriptPath: path.join(tempDir, "session.jsonl"),
     };
   });
 
@@ -1321,6 +1290,33 @@ describe("sqlite session normalization", () => {
         .prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?")
         .get(sessionKey),
     ).toEqual({ entry_valid: 0 });
+  });
+
+  it("writes a valid session beside an unrelated malformed legacy row", async () => {
+    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
+    const database = openOpenClawAgentDatabase({ agentId: "main", env, path: paths.sqlitePath });
+    database.db
+      .prepare(
+        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, entry_valid, updated_at) VALUES (?, ?, ?, -1, ?)",
+      )
+      .run("agent:main:malformed", "malformed-session", "{ malformed", 0);
+
+    await expect(
+      replaceSessionEntry(
+        {
+          agentId: "main",
+          env,
+          sessionKey: "agent:main:valid",
+          storePath: paths.sqlitePath,
+        },
+        { sessionId: "valid-session", updatedAt: Date.now() },
+      ),
+    ).resolves.toMatchObject({ sessionId: "valid-session" });
+    expect(
+      database.db
+        .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+        .get("agent:main:malformed"),
+    ).toEqual({ entry_json: "{ malformed" });
   });
 
   it("exposes same-key rollover lineage when a killed session is replaced", async () => {
@@ -1658,6 +1654,177 @@ describe("sqlite session normalization", () => {
         storePath: paths.sqlitePath,
       }).map((summary) => summary.sessionKey),
     ).toEqual(["agent:main:newer", "agent:main:newest"]);
+  });
+
+  it("preserves recent SQLite entries and transcripts during write-triggered capping", async () => {
+    vi.mocked(getRuntimeConfig).mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "365d",
+          maxEntries: 2,
+          preserveRecent: "7d",
+        },
+      },
+    });
+    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
+    const now = Date.now();
+    const scopeFor = (sessionKey: string) => ({
+      agentId: "main",
+      env,
+      sessionKey,
+      storePath: paths.sqlitePath,
+    });
+    const recentSessionId = "recent-dashboard-session-1";
+    const recentTranscriptEvent = {
+      id: "recent-dashboard-event",
+      timestamp: new Date().toISOString(),
+      type: "metadata",
+    };
+
+    await patchSessionEntryCore(
+      scopeFor("agent:main:archived-1"),
+      () => ({ archivedAt: now - 4, sessionId: "archived-session-1", updatedAt: now - 4 }),
+      {
+        fallbackEntry: {
+          archivedAt: now - 4,
+          sessionId: "archived-session-1",
+          updatedAt: now - 4,
+        },
+        replaceEntry: true,
+        skipMaintenance: true,
+      },
+    );
+    await patchSessionEntryCore(
+      scopeFor("agent:main:recent-dashboard-1"),
+      () => ({ sessionId: recentSessionId, updatedAt: now - 2 }),
+      {
+        fallbackEntry: { sessionId: recentSessionId, updatedAt: now - 2 },
+        replaceEntry: true,
+        skipMaintenance: true,
+      },
+    );
+    await appendTranscriptEvent(
+      { ...scopeFor("agent:main:recent-dashboard-1"), sessionId: recentSessionId },
+      recentTranscriptEvent,
+    );
+    await patchSessionEntryCore(
+      scopeFor("agent:main:recent-dashboard-2"),
+      () => ({ sessionId: "recent-dashboard-session-2", updatedAt: now - 1 }),
+      {
+        fallbackEntry: { sessionId: "recent-dashboard-session-2", updatedAt: now - 1 },
+        replaceEntry: true,
+        skipMaintenance: true,
+      },
+    );
+
+    await patchSessionEntryCore(
+      scopeFor("agent:main:maintenance-trigger"),
+      () => ({ sessionId: "maintenance-trigger-session", updatedAt: now }),
+      {
+        fallbackEntry: { sessionId: "maintenance-trigger-session", updatedAt: now },
+        replaceEntry: true,
+      },
+    );
+
+    expect(
+      listSessionEntryRows({
+        agentId: "main",
+        env,
+        storePath: paths.sqlitePath,
+      }).map((summary) => summary.sessionKey),
+    ).toEqual([
+      "agent:main:archived-1",
+      "agent:main:maintenance-trigger",
+      "agent:main:recent-dashboard-1",
+      "agent:main:recent-dashboard-2",
+    ]);
+    await expect(
+      loadTranscriptEvents({
+        agentId: "main",
+        env,
+        sessionId: recentSessionId,
+        storePath: paths.sqlitePath,
+      }),
+    ).resolves.toEqual([recentTranscriptEvent]);
+  });
+
+  it("preserves pinned SQLite entries and transcripts during write-triggered capping", async () => {
+    vi.mocked(getRuntimeConfig).mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "365d",
+          maxEntries: 2,
+        },
+      },
+    });
+    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
+    const scopeFor = (sessionKey: string) => ({
+      agentId: "main",
+      env,
+      sessionKey,
+      storePath: paths.sqlitePath,
+    });
+    const pinnedKey = "agent:main:pinned-dashboard";
+    const pinnedSessionId = "pinned-dashboard-session";
+    const pinnedTranscriptEvent = {
+      id: "pinned-event",
+      timestamp: new Date().toISOString(),
+      type: "metadata",
+    };
+
+    await patchSessionEntryCore(
+      scopeFor(pinnedKey),
+      () => ({ sessionId: pinnedSessionId, updatedAt: 1, pinnedAt: 2 }),
+      {
+        fallbackEntry: { sessionId: pinnedSessionId, updatedAt: 1, pinnedAt: 2 },
+        replaceEntry: true,
+        skipMaintenance: true,
+      },
+    );
+    await appendTranscriptEvent(
+      { ...scopeFor(pinnedKey), sessionId: pinnedSessionId },
+      pinnedTranscriptEvent,
+    );
+    await patchSessionEntryCore(
+      scopeFor("agent:main:recent-dashboard"),
+      () => ({ sessionId: "recent-dashboard-session", updatedAt: 3 }),
+      {
+        fallbackEntry: { sessionId: "recent-dashboard-session", updatedAt: 3 },
+        replaceEntry: true,
+        skipMaintenance: true,
+      },
+    );
+
+    await patchSessionEntryCore(
+      scopeFor("agent:main:maintenance-trigger"),
+      () => ({ sessionId: "maintenance-trigger-session", updatedAt: 4 }),
+      {
+        fallbackEntry: { sessionId: "maintenance-trigger-session", updatedAt: 4 },
+        replaceEntry: true,
+      },
+    );
+
+    expect(loadSessionEntry(scopeFor(pinnedKey))).toMatchObject({
+      pinnedAt: 2,
+      sessionId: pinnedSessionId,
+    });
+    expect(
+      listSessionEntryRows({
+        agentId: "main",
+        env,
+        storePath: paths.sqlitePath,
+      }).map((summary) => summary.sessionKey),
+    ).toEqual(["agent:main:maintenance-trigger", pinnedKey]);
+    await expect(
+      loadTranscriptEvents({
+        agentId: "main",
+        env,
+        sessionId: pinnedSessionId,
+        storePath: paths.sqlitePath,
+      }),
+    ).resolves.toEqual([pinnedTranscriptEvent]);
   });
 
   it("preserves an admitted SQLite session when another session triggers maintenance", async () => {

@@ -3,7 +3,6 @@
 
 import { withProgress } from "../cli/progress.js";
 import { hasConfiguredChannelsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
-import { buildPluginCompatibilitySnapshotNotices } from "../plugins/status.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { executeStatusScanFromOverview } from "./status.scan-execute.ts";
 import { resolveStatusMemoryStatusSnapshot } from "./status.scan-memory.ts";
@@ -80,7 +79,9 @@ export async function scanStatus(
 
       progress.setLabel("Checking plugins…");
       const pluginCompatibility = opts.all
-        ? buildPluginCompatibilitySnapshotNotices({ config: overview.cfg })
+        ? await import("../plugins/status.js").then(({ buildPluginCompatibilitySnapshotNotices }) =>
+            buildPluginCompatibilitySnapshotNotices({ config: overview.cfg }),
+          )
         : [];
       progress.tick();
 

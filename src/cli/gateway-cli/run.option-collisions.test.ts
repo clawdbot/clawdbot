@@ -515,31 +515,32 @@ describe("gateway run option collisions", () => {
     expect(runtimeErrors.join("\n")).toContain("Invalid --port. Use a port number from 1 to 65535");
   });
 
-  it("suppresses ambient channel triggers for dev gateways by default", async () => {
-    await runGatewayCli(["gateway", "run", "--allow-unconfigured", "--dev"]);
+  it.each([{ options: [] as string[] }, { options: ["--dev"] }])(
+    "suppresses ambient channel triggers by default with options %j",
+    async ({ options }) => {
+      await runGatewayCli(["gateway", "run", "--allow-unconfigured", ...options]);
 
-    expect(gatewayStartOptions().ambientEnvTriggers).toBe("suppress");
-  });
+      expect(gatewayStartOptions().ambientEnvTriggers).toBe("suppress");
+    },
+  );
 
-  it("allows ambient channel triggers with the explicit dev override", async () => {
-    await runGatewayCli([
-      "gateway",
-      "run",
-      "--allow-unconfigured",
-      "--dev",
-      "--dev-ambient-channels",
-    ]);
+  it.each([
+    {
+      label: "the primary subcommand flag",
+      argv: ["gateway", "run", "--allow-unconfigured", "--ambient-channels"],
+    },
+    {
+      label: "the inherited primary flag",
+      argv: ["gateway", "--ambient-channels", "run", "--allow-unconfigured"],
+    },
+    {
+      label: "the deprecated alias",
+      argv: ["gateway", "run", "--allow-unconfigured", "--dev-ambient-channels"],
+    },
+  ])("allows ambient channel triggers with $label", async ({ argv }) => {
+    await runGatewayCli(argv);
 
     expect(gatewayStartOptions().ambientEnvTriggers).toBe("allow");
-  });
-
-  it("rejects the ambient channel override outside dev mode", async () => {
-    await expect(
-      runGatewayCli(["gateway", "run", "--allow-unconfigured", "--dev-ambient-channels"]),
-    ).rejects.toThrow("__exit__:1");
-
-    expect(startGatewayServer).not.toHaveBeenCalled();
-    expect(runtimeErrors).toContain("Use --dev-ambient-channels with --dev.");
   });
 
   it("drops the pristine core fact when guarded config becomes stateful", async () => {

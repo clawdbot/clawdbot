@@ -80,8 +80,8 @@ import {
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
-import { recordSessionCreated } from "../../sessions/session-state-events.js";
 import {
+  recordSessionCreated,
   classifySessionStateActor,
   registerMainSessionGroupWatch,
 } from "../../sessions/session-state-events.js";
@@ -1102,7 +1102,12 @@ async function initSessionStateAttemptLocked(
     // Direct-message browser tabs use a peer-scoped runtime identity even when
     // their transcript aliases main; cleanup must carry both exact keys.
     const runtimePolicySessionKey =
-      resolveRuntimePolicySessionKey({ cfg, ctx: sessionCtxForState, sessionKey }) ?? sessionKey;
+      resolveRuntimePolicySessionKey({
+        agentId,
+        cfg,
+        ctx: sessionCtxForState,
+        sessionKey,
+      }) ?? sessionKey;
     void runWithGatewayIndependentRootWorkContinuation(async () => {
       await cleanupBrowserSessionsForLifecycleEnd({
         cfg,
@@ -1138,7 +1143,7 @@ async function initSessionStateAttemptLocked(
         const payload = buildSessionEndHookPayload({
           sessionId: previousSessionEntry.sessionId,
           sessionKey,
-          cfg,
+          agentId,
           reason: previousSessionEndReason,
           sessionFile: previousSessionTranscript.sessionFile,
           transcriptArchived: previousSessionTranscript.transcriptArchived,
@@ -1168,7 +1173,7 @@ async function initSessionStateAttemptLocked(
       const payload = buildSessionStartHookPayload({
         sessionId: effectiveSessionId,
         sessionKey,
-        cfg,
+        agentId,
         resumedFrom: previousSessionEntry?.sessionId,
       });
       void runWithGatewayIndependentRootWorkContinuation(async () => {

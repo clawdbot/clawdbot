@@ -5,8 +5,12 @@
  * copies instead of reusing host-path snapshots.
  */
 import path from "node:path";
-import type { SkillEligibilityContext, SkillSnapshot, SkillUsagePath } from "../../skills/types.js";
-import type { SkillEntry } from "../../skills/types.js";
+import type {
+  SkillEligibilityContext,
+  SkillSnapshot,
+  SkillUsagePath,
+  SkillEntry,
+} from "../../skills/types.js";
 import type { SandboxContext } from "../sandbox/types.js";
 
 const MATERIALIZED_SKILLS_WORKSPACE_CONTAINER_PARTS = [".openclaw", "sandbox-skills"] as const;

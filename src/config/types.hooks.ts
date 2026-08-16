@@ -1,4 +1,5 @@
 // Defines hook configuration matching and command types.
+import type { InstallRecordBase } from "./types.installs.js";
 export type HookMappingMatch = {
   path?: string;
   source?: string;
@@ -125,4 +126,3 @@ export type HooksConfig = {
   /** Internal agent event hooks */
   internal?: InternalHooksConfig;
 };
-import type { InstallRecordBase } from "./types.installs.js";

@@ -4,7 +4,7 @@ import { resetThreadPresentation } from "./chat-thread-interactions.ts";
 
 export const observedElements = new Set<Element>();
 export const resizeObservers = new Set<RecordingResizeObserver>();
-export const transcriptDomState = { measuredRowHeight: 100 };
+export const transcriptDomState = { measuredRowHeight: 100, detachedRowHeight: 100 };
 
 class RecordingResizeObserver implements ResizeObserver {
   private readonly targets = new Set<Element>();
@@ -95,9 +95,14 @@ export function installTranscriptDomMocks(): void {
   observedElements.clear();
   resizeObservers.clear();
   transcriptDomState.measuredRowHeight = 100;
+  transcriptDomState.detachedRowHeight = 100;
   vi.stubGlobal("ResizeObserver", RecordingResizeObserver);
   vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(
-    () => transcriptDomState.measuredRowHeight,
+    function (this: HTMLElement) {
+      return this.isConnected
+        ? transcriptDomState.measuredRowHeight
+        : transcriptDomState.detachedRowHeight;
+    },
   );
   vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
     x: 0,

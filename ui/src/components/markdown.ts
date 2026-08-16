@@ -1,4 +1,3 @@
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 // Control UI module implements markdown behavior.
 import DOMPurify from "dompurify";
 import { stripUnsupportedCitationControlMarkers } from "../../../src/shared/text/citation-control-markers.js";
@@ -318,7 +317,6 @@ const APP_RESOURCE_PATH_PREFIXES = [
   ["plugins", "diffs-language-pack"],
 ];
 const markdownCache = new Map<string, string>();
-const TAIL_LINK_BLUR_CLASS = "chat-link-tail-blur";
 
 function getCachedMarkdown(key: string): string | null {
   const cached = markdownCache.get(key);
@@ -469,9 +467,6 @@ function installHooks() {
 
     node.setAttribute("rel", "noreferrer noopener");
     node.setAttribute("target", "_blank");
-    if (normalizeLowercaseStringOrEmpty(href).includes("tail")) {
-      node.classList.add(TAIL_LINK_BLUR_CLASS);
-    }
   });
 }
 

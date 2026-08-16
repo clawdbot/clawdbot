@@ -573,7 +573,3 @@ export async function runDiscordGatewayLifecycle(params: {
     params.threadBindings.stop();
   }
 }
-
-// Test-only surface. Re-exported from the plugin root `test-api.ts` entry so Knip's
-// production scan sees the consumer; tests import `testing` from `test-api.js`.
-export const testing = { waitForGatewayReady };

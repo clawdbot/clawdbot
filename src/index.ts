@@ -3,8 +3,10 @@
 // Package executable entrypoint that forwards to the CLI bootstrap.
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { formatCliFailureLines } from "./cli/failure-output.js";
+import { formatCliFailureLines, formatCliJsonFailure } from "./cli/failure-output.js";
+import { isJsonOutputModeActive } from "./cli/json-output-mode.js";
 import { runCliWithExitFinalization } from "./cli/one-shot-exit.js";
+import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
 import { formatUncaughtError } from "./infra/errors.js";
 import { runFatalErrorHooks } from "./infra/fatal-error-hooks.js";
 import { isMainModule } from "./infra/is-main.js";
@@ -70,6 +72,7 @@ export async function runLegacyCliEntry(
 const isMain = isMainModule({
   currentFile: fileURLToPath(import.meta.url),
 });
+const handledRootVersion = isMain && tryHandleRootVersionFastPath(process.argv);
 
 if (!isMain) {
   ({
@@ -96,8 +99,8 @@ if (!isMain) {
   } = await import("./library.js"));
 }
 
-if (isMain) {
-  const { restoreRuntimeTerminalState } = await import("./runtime.js");
+if (isMain && !handledRootVersion) {
+  const { defaultRuntime, restoreRuntimeTerminalState } = await import("./runtime.js");
 
   // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
   // These log the error and exit gracefully instead of crashing without trace.
@@ -113,6 +116,9 @@ if (isMain) {
         formatUncaughtError(error),
       );
       return;
+    }
+    if (isJsonOutputModeActive(process.argv)) {
+      defaultRuntime.writeJson(formatCliJsonFailure(error));
     }
     for (const line of formatCliFailureLines({
       title: "OpenClaw hit an unexpected runtime error.",
@@ -135,6 +141,9 @@ if (isMain) {
         retainConsoleRoutingUntilProcessExit: true,
       }),
     onError: (err) => {
+      if (isJsonOutputModeActive(process.argv)) {
+        defaultRuntime.writeJson(formatCliJsonFailure(err));
+      }
       for (const line of formatCliFailureLines({
         title: "The CLI command failed.",
         error: err,

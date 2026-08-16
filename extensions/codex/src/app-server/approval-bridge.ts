@@ -71,7 +71,6 @@ export async function handleCodexAppServerApprovalRequest(params: {
     "allowedEvents" | "generation" | "relayId"
   >;
   autoApprove?: boolean;
-  autoApproveOpenClawToolPolicy?: boolean;
   signal?: AbortSignal;
   onNativeToolFailureDisposition?: (
     itemId: string,
@@ -123,16 +122,6 @@ export async function handleCodexAppServerApprovalRequest(params: {
       return resolvePolicyApproval(policyOutcome.outcome);
     }
     const canAutoApproveConcreteToolCall = CONCRETE_TOOL_AUTO_APPROVAL_METHODS.has(params.method);
-    if (
-      canAutoApproveConcreteToolCall &&
-      params.autoApproveOpenClawToolPolicy === true &&
-      policyOutcome?.outcome === "allowed"
-    ) {
-      return resolvePolicyApproval(
-        "approved-once",
-        "Codex app-server approval accepted by OpenClaw tool policy.",
-      );
-    }
     if (canAutoApproveConcreteToolCall && params.autoApprove === true) {
       return resolvePolicyApproval(
         "approved-session",
@@ -354,13 +343,7 @@ function buildApprovalContext(params: {
   const description =
     permissionLines.length > 0
       ? joinDescriptionLinesWithinLimit(permissionLines, PERMISSION_DESCRIPTION_MAX_LENGTH)
-      : [
-          subject,
-          ...commandDetailLines,
-          params.paramsForRun.sessionKey && `Session: ${params.paramsForRun.sessionKey}`,
-        ]
-          .filter(Boolean)
-          .join("\n");
+      : [subject, ...commandDetailLines].join("\n");
   return {
     kind,
     title,
@@ -1193,7 +1176,7 @@ function approvalKindForMethod(method: string): AgentApprovalEventData["kind"] {
 function emitApprovalEvent(params: EmbeddedRunAttemptParams, data: AgentApprovalEventData): void {
   void params.onAgentEvent?.({
     stream: "approval",
-    data: data as unknown as Record<string, unknown>,
+    data: { ...data },
   });
 }
 

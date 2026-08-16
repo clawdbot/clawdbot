@@ -92,6 +92,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     error: null,
     deletedSessions: [],
     groups: [],
+    groupSettings: [],
     sectionOrder: [],
   };
   const connection = createGatewayConnectionLifecycle(gateway.snapshot);
@@ -374,6 +375,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         error: null,
         deletedSessions: [],
         groups: state.groups,
+        groupSettings: state.groupSettings,
         sectionOrder: state.sectionOrder,
       });
       return;
@@ -494,6 +496,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     refreshReplacement: roster.refreshReplacement,
     createResult: mutations.createResult,
     create: mutations.create,
+    recover: mutations.recover,
     patch: mutations.patch,
     retireModelOverride: mutations.retireModelOverride,
     setModelOverride: mutations.setModelOverride,
@@ -520,8 +523,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     listBranches: operations.listBranches,
     switchBranch: operations.switchBranch,
     groupsLoad: groups.load,
+    groupsGeneration: groups.generation,
+    groupsStatus: groups.status,
+    groupsInvalidate: groups.invalidate,
     groupsPut: groups.put,
     groupsRename: groups.rename,
+    groupsUpdate: groups.update,
     groupsDelete: groups.delete,
     subscribeCreated(listener) {
       createdListeners.add(listener);

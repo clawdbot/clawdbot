@@ -1,10 +1,15 @@
 // Settlement liveness: a wedged block-reply flush must not park the turn.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { bindStreamLlmRuntime } from "../../../llm/model-runtime-binding.js";
 import { SessionManager } from "../../sessions/index.js";
 import { RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
-import { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
+import {
+  prepareEmbeddedAttemptTransport,
+  settleEmbeddedAttemptStream,
+} from "./attempt-stream-settle.js";
 
 type SettleInput = Parameters<typeof settleEmbeddedAttemptStream>[0];
+type PrepareTransportInput = Parameters<typeof prepareEmbeddedAttemptTransport>[0];
 
 function createSettleFixture(overrides?: Partial<SettleInput>): SettleInput {
   const sessionManager = SessionManager.inMemory();
@@ -97,5 +102,69 @@ describe("settleEmbeddedAttemptStream liveness", () => {
     const result = await settleEmbeddedAttemptStream(input);
     expect(flushed).toHaveBeenCalledWith({ reason: "pre_compaction", attemptAccepted: false });
     expect(result.sessionIdUsed).toBe("sess-settle-1");
+  });
+});
+
+describe("prepareEmbeddedAttemptTransport", () => {
+  it("applies the prepared transport to the live agent owner", async () => {
+    const streamFn = vi.fn();
+    bindStreamLlmRuntime(streamFn, {
+      streamSimple: streamFn,
+      registry: { getApiProvider: () => undefined },
+    } as never);
+    const session = {
+      agent: {
+        streamFn,
+        transport: "auto",
+      },
+    };
+    const input = {
+      attempt: {
+        config: {},
+        model: {
+          api: "test-api",
+          provider: "test-provider",
+          id: "test-model",
+        },
+        modelId: "test-model",
+        provider: "test-provider",
+        promptCacheKey: undefined,
+        resolvedApiKey: undefined,
+        runId: "run-transport-1",
+        runtimePlan: {
+          auth: { forwardedAuthProfileId: undefined },
+          transport: {
+            resolveExtraParams: () => ({ transport: "sse" }),
+          },
+        },
+        sessionId: "sess-transport-1",
+      },
+      session,
+      settingsManager: {
+        getGlobalSettings: () => ({}),
+        getProjectSettings: () => ({}),
+      },
+      providerThinkingLevel: undefined,
+      sessionAgentId: "main",
+      workspaceDir: "/workspace",
+      workspaceOnly: false,
+      agentDir: "/agent",
+      abortSignal: new AbortController().signal,
+      getProviderRuntimeHandle: () => ({
+        provider: "test-provider",
+        modelId: "test-model",
+      }),
+      sandboxSessionKey: "agent:main:test",
+      codeModeControlsEnabled: false,
+      providerPromptState: {
+        state: {},
+        effectiveContextTokenBudget: 128_000,
+      },
+    } as unknown as PrepareTransportInput;
+
+    const result = await prepareEmbeddedAttemptTransport(input);
+
+    expect(result.effectiveAgentTransport).toBe("sse");
+    expect(session.agent.transport).toBe("sse");
   });
 });

@@ -97,6 +97,19 @@ describe("cleanupEmbeddedAttemptSessionPhase", () => {
     expect(input.emitDiagnosticRunCompleted).toHaveBeenCalledWith("completed", null, undefined);
   });
 
+  it("keeps compaction timeout observations abort-like only for cleanup", async () => {
+    const input = createInput();
+    const readState = input.readState;
+    input.readState = () => ({ ...readState(), timedOutDuringCompaction: true });
+
+    await cleanupEmbeddedAttemptSessionPhase(input as never);
+
+    expect(hoisted.cleanupEmbeddedAttemptResources).toHaveBeenCalledWith(
+      expect.objectContaining({ aborted: true }),
+    );
+    expect(input.emitDiagnosticRunCompleted).toHaveBeenCalledWith("completed", null, undefined);
+  });
+
   it("emits the before-agent blocked status and owner", async () => {
     const input = createInput({
       readState: () => ({

@@ -330,7 +330,6 @@ export function buildTelegramQaConfig(
             enabled: true,
             botToken: params.sutToken,
             dmPolicy: "disabled",
-            replyToMode: "first",
             groups: {
               [params.groupId]: {
                 groupPolicy: "allowlist",

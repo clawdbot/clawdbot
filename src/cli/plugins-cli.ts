@@ -10,6 +10,7 @@ import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 type PluginUpdateOptions = {
   all?: boolean;
   acknowledgeClawhubRisk?: boolean;
+  acknowledgeInstallPolicyWarning?: boolean;
   dryRun?: boolean;
   dangerouslyForceUnsafeInstall?: boolean;
 };
@@ -190,6 +191,11 @@ export function registerPluginsCli(program: Command) {
       false,
     )
     .option(
+      "--acknowledge-install-policy-warning",
+      "Acknowledge security.installPolicy warnings without prompting; blocks and failures remain terminal",
+      false,
+    )
+    .option(
       "--acknowledge-clawhub-risk",
       "Acknowledge ClawHub release trust warnings without prompting",
       false,
@@ -202,6 +208,7 @@ export function registerPluginsCli(program: Command) {
       async (
         raw: string,
         opts: CommanderClawHubRiskOptions & {
+          acknowledgeInstallPolicyWarning?: boolean;
           dangerouslyForceUnsafeInstall?: boolean;
           force?: boolean;
           link?: boolean;
@@ -226,6 +233,11 @@ export function registerPluginsCli(program: Command) {
     .option(
       "--dangerously-force-unsafe-install",
       "Deprecated no-op; security.installPolicy may still block",
+      false,
+    )
+    .option(
+      "--acknowledge-install-policy-warning",
+      "Acknowledge security.installPolicy warnings without prompting; blocks and failures remain terminal",
       false,
     )
     .option(

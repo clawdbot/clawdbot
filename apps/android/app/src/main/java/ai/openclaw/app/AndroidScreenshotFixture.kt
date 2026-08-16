@@ -18,6 +18,7 @@ internal object AndroidScreenshotFixture {
   }
 
   const val gatewayId = "android-screenshot-gateway"
+  const val controlUiBaseUrl = "http://127.0.0.1:18789"
   const val mainSessionKey = "agent:main:node-screenshot"
   const val primarySessionTitle = "Android release planning"
   const val cronJobId = "android-release-digest"

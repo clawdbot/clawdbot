@@ -23,6 +23,7 @@ import {
   getPluginRegistryState,
 } from "./runtime-state.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-scope.js";
 import type {
   ProviderPlugin,
   ProviderExtraParamsForTransportContext,
@@ -33,7 +34,7 @@ import type {
   ProviderWrapStreamFnContext,
 } from "./types.js";
 
-let providerRuntimePluginCache: ConfigScopedRuntimeCache<ProviderPlugin | null> = new WeakMap();
+const providerRuntimePluginCache: ConfigScopedRuntimeCache<ProviderPlugin | null> = new WeakMap();
 const defaultProviderRuntimePluginCache = new PluginLruCache<ProviderPlugin | null>(128);
 
 type ProviderRuntimePluginLookupParams = {
@@ -80,11 +81,6 @@ export function getModelProviderRuntimePluginHandle(
   return model
     ? (model as ModelWithProviderRuntimePluginHandle)[MODEL_PROVIDER_RUNTIME_PLUGIN_HANDLE_SYMBOL]
     : undefined;
-}
-
-export function clearProviderRuntimePluginCacheForTest(): void {
-  providerRuntimePluginCache = new WeakMap();
-  defaultProviderRuntimePluginCache.clear();
 }
 
 function resolveProviderRuntimePluginCacheKey(
@@ -152,6 +148,14 @@ function findProviderRuntimePluginInLoadedRegistries(params: {
   lookup: ProviderRuntimePluginLookupParams;
   ownerRefs: readonly string[];
 }): ProviderPlugin | undefined {
+  const generationRegistry = getPluginRuntimeGenerationRegistry();
+  if (generationRegistry) {
+    return findProviderRuntimePluginInRegistry({
+      registry: generationRegistry,
+      provider: params.lookup.provider,
+      ownerRefs: params.ownerRefs,
+    });
+  }
   const scopedRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
   const scopedPlugin = scopedRegistry
     ? findProviderRuntimePluginInRegistry({
@@ -185,17 +189,23 @@ function findProviderRuntimePluginInRegistry(params: {
   provider: string;
   ownerRefs: readonly string[];
 }): ProviderPlugin | undefined {
-  return params.registry.providers
-    .map((entry) => Object.assign({}, entry.provider, { pluginId: entry.pluginId }))
-    .find((plugin) => {
-      if (params.ownerRefs.length > 0) {
-        return (
-          matchesProviderLiteralId(plugin, params.provider) ||
-          params.ownerRefs.some((ownerRef) => matchesProviderPluginRef(plugin, ownerRef))
-        );
-      }
-      return matchesProviderPluginRef(plugin, params.provider);
-    });
+  return listProviderRuntimePluginsInRegistry(params.registry).find((plugin) => {
+    if (params.ownerRefs.length > 0) {
+      return (
+        matchesProviderLiteralId(plugin, params.provider) ||
+        params.ownerRefs.some((ownerRef) => matchesProviderPluginRef(plugin, ownerRef))
+      );
+    }
+    return matchesProviderPluginRef(plugin, params.provider);
+  });
+}
+
+function listProviderRuntimePluginsInRegistry(
+  registry: PluginRegistry,
+): Array<ProviderPlugin & { pluginId: string }> {
+  return registry.providers.map((entry) =>
+    Object.assign({}, entry.provider, { pluginId: entry.pluginId }),
+  );
 }
 
 function hasConfiguredModelProvider(params: {
@@ -217,6 +227,17 @@ export function resolveProviderPluginsForHooks(params: {
   applyAutoEnable?: boolean;
   pluginMetadataSnapshot?: PluginMetadataRegistryView;
 }): ProviderPlugin[] {
+  const generationRegistry = getPluginRuntimeGenerationRegistry();
+  if (generationRegistry) {
+    const plugins = listProviderRuntimePluginsInRegistry(generationRegistry);
+    const onlyPluginIds = params.onlyPluginIds ? new Set(params.onlyPluginIds) : undefined;
+    return plugins.filter(
+      (plugin) =>
+        (!onlyPluginIds || onlyPluginIds.has(plugin.pluginId)) &&
+        (!params.providerRefs?.length ||
+          params.providerRefs.some((providerRef) => matchesProviderPluginRef(plugin, providerRef))),
+    );
+  }
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
   return resolvePluginProvidersCore({
@@ -247,6 +268,9 @@ export function resolveProviderRuntimePlugin(
   });
   if (loadedPlugin) {
     return loadedPlugin;
+  }
+  if (getPluginRuntimeGenerationRegistry()) {
+    return undefined;
   }
   if (
     isPluginProvidersLoadInFlight({

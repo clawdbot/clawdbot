@@ -298,6 +298,16 @@ function acceptsCronRunContinuationLifecycleEvent(params: {
   return Boolean(marker?.phase === "continuing" && runId && marker.ownerRunId === runId);
 }
 
+// sessions.list cache fence input. The terminal entry write (status/endedAt/
+// runtimeMs) commits asynchronously after the run-index fence already bumped
+// at lifecycle end; without its own fence a list computed in that window
+// caches the pre-terminal row indefinitely.
+let lifecyclePersistenceVersion = 0;
+
+export function readSessionLifecyclePersistenceVersion(): number {
+  return lifecyclePersistenceVersion;
+}
+
 export async function persistGatewaySessionLifecycleEvent(params: {
   sessionKey: string;
   agentId?: string;
@@ -360,4 +370,5 @@ export async function persistGatewaySessionLifecycleEvent(params: {
       requireWriteSuccess: true,
     },
   );
+  lifecyclePersistenceVersion += 1;
 }

@@ -17,8 +17,8 @@ import {
   type PageState,
   type RoleRefs,
   type RoleRefsCacheEntry,
+  BrowserObservedDialogBlockedError,
 } from "./pw-session-contracts.js";
-import { BrowserObservedDialogBlockedError } from "./pw-session-contracts.js";
 import {
   appendRecentDialog,
   clearArmedDialogResponse,

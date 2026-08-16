@@ -47,6 +47,7 @@ import { page as modelSetupPage } from "./pages/model-setup/route.ts";
 import { page as newSessionPage } from "./pages/new-session/route.ts";
 import { page as pluginPage } from "./pages/plugin/route.ts";
 import { page as pluginsPage } from "./pages/plugins/route.ts";
+import { page as portalsPage } from "./pages/portals/route.ts";
 import { page as profilePage } from "./pages/profile/route.ts";
 import { page as secretsPage } from "./pages/secrets/route.ts";
 import { page as sessionsPage } from "./pages/sessions/route.ts";
@@ -80,6 +81,7 @@ const APP_ROUTE_TREE = [
   activityPage,
   dashboardsPage,
   appsPage,
+  portalsPage,
   agentsPage,
   approvalsPage,
   channelsPage,
@@ -160,7 +162,7 @@ function routerHistoryLocation(location: ReturnType<RouterHistory["location"]>, 
   };
 }
 
-function sameRouteLocation(left: RouteLocation, right: RouteLocation): boolean {
+export function sameRouteLocation(left: RouteLocation, right: RouteLocation): boolean {
   return (
     left.pathname === right.pathname && left.search === right.search && left.hash === right.hash
   );

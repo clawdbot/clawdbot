@@ -102,13 +102,15 @@ function transformAssistant<TApi extends Api>(
     if (block.type === "text") {
       return sameModel ? block : { type: "text" as const, text: block.text };
     }
-    if (sameModel) {
-      return block;
-    }
     const { thoughtSignature: _, ...unsigned } = block;
-    const id = normalizeToolCallId?.(block.id, model, message) ?? block.id;
-    if (id !== block.id) {
-      toolCallIdMap.set(block.id, id);
+    // Pairing uses these IDs as shared keys, before model-specific normalization runs.
+    const trimmedId = block.id.trim();
+    if (sameModel) {
+      return trimmedId === block.id ? block : Object.assign({}, block, { id: trimmedId });
+    }
+    const id = normalizeToolCallId?.(trimmedId, model, message) ?? trimmedId;
+    if (id !== trimmedId) {
+      toolCallIdMap.set(trimmedId, id);
     }
     return id === block.id ? unsigned : Object.assign({}, unsigned, { id });
   });
@@ -131,8 +133,9 @@ export function transformMessages<TApi extends Api>(
     if (message.role !== "toolResult") {
       return message;
     }
-    const toolCallId = toolCallIdMap.get(message.toolCallId);
-    return toolCallId ? Object.assign({}, message, { toolCallId }) : message;
+    const trimmedId = message.toolCallId.trim();
+    const toolCallId = toolCallIdMap.get(trimmedId) ?? trimmedId;
+    return toolCallId === message.toolCallId ? message : Object.assign({}, message, { toolCallId });
   });
 
   const result: Message[] = [];

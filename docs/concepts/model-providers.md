@@ -16,7 +16,7 @@ Reference for **LLM/model providers** (not chat channels like WhatsApp/Telegram)
     - Model refs use `provider/model` (example: `opencode/claude-opus-4-6`).
     - `agents.defaults.models` stores aliases and per-model settings; `agents.defaults.modelPolicy.allow` is the optional explicit override allowlist.
     - CLI helpers: `openclaw onboard`, `openclaw models list`, `openclaw models set <provider/model>`.
-    - `models.providers.*.contextWindow` / `contextTokens` / `maxTokens` set provider-level defaults; `models.providers.*.models[].contextWindow` / `contextTokens` / `maxTokens` override them per model.
+    - `models.providers.*.maxTokens` sets the provider-level output-token default. On each `models.providers.*.models[]` entry, `contextWindow` declares the native window, `contextTokens` caps active input, and `maxTokens` overrides output capacity for that model.
     - Fallback rules, cooldown probes, and session-override persistence: [Model failover](/concepts/model-failover).
 
   </Accordion>
@@ -164,7 +164,7 @@ Claude CLI reuse (`claude -p`) is a sanctioned OpenClaw integration path. Anthro
 - `agents.defaults.models["openai/<model>"].params.transport` and `params.serviceTier` are authored embedded-provider request settings. They keep implicit runtime selection on OpenClaw; native Codex owns its app-server transport and service tier.
 - Valid model-scoped `params.fastMode` / `params.fast_mode` values and valid cutoff keys are portable typed agent-runtime controls. They do not count as authored provider request params and do not select a runtime. Pin `agentRuntime.id: "openclaw"` or `agentRuntime.id: "codex"` when a recipe depends on one runtime.
 - Hidden OpenClaw attribution headers (`originator`, `version`, `User-Agent`) are only attached on native Codex traffic to `chatgpt.com/backend-api`, not generic OpenAI-compatible proxies
-- The shared `/fast` toggle, configured defaults, and valid model-scoped Fast params resolve through one runtime-control policy. See [Thinking levels](/tools/thinking#fast-mode-fast) for precedence.
+- The shared `/fast` toggle, configured defaults, and valid model-scoped Fast params resolve through one runtime-control policy. See [Thinking levels](/tools/thinking#fast-mode-%2Ffast) for precedence.
 - OpenAI API Fast mode is premium-priced and model-specific. GPT-5.6 Sol currently costs 2× Standard token pricing, and long-context multipliers stack. ChatGPT/Codex-credit Fast mode is separate: GPT-5.6 and GPT-5.5 currently consume 2.5× Standard credits, while API-key Codex runs use API token pricing. See [Fast mode](https://openai.com/api-priority-processing/), [API pricing](https://developers.openai.com/api/docs/pricing), and [Codex speed](https://learn.chatgpt.com/docs/agent-configuration/speed).
 - The native Codex catalog can expose exact `openai/gpt-5.6-sol`, `openai/gpt-5.6-terra`, and `openai/gpt-5.6-luna` refs according to account access. It does not apply the direct API's bare `gpt-5.6` alias client-side.
 - `openai/gpt-5.5` uses the Codex catalog native `contextWindow = 400000` and default runtime `contextTokens = 272000`; override the runtime cap with `models.providers.openai.models[].contextTokens`
@@ -673,8 +673,9 @@ Example (OpenAI-compatible):
     - `reasoning: false`
     - `input: ["text"]`
     - `cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }`
-    - `contextWindow: 200000`
     - `maxTokens: 8192`
+
+    An omitted `contextWindow` remains unset so authored native-window metadata is unambiguous. When neither discovery nor per-model context metadata is available, context-budget callers use the standard `200000`-token fallback.
 
     Recommended: set explicit values that match your proxy/model limits.
 

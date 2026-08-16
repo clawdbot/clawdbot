@@ -164,7 +164,7 @@ describe("healthCommand", () => {
     probeGatewayStatusMock.mockReset();
   });
 
-  it("outputs JSON from gateway", async () => {
+  it("renders the gateway session path identically in JSON and text", async () => {
     const agentSessions = {
       path: "/tmp/sessions.json",
       count: 1,
@@ -198,6 +198,13 @@ describe("healthCommand", () => {
     expect(parsed.channels.whatsapp?.linked).toBe(true);
     expect(parsed.channels.telegram?.configured).toBe(true);
     expect(parsed.sessions.count).toBe(1);
+
+    runtime.log.mockClear();
+    callGatewayMock.mockResolvedValueOnce(snapshot);
+    await healthCommand({ json: false, timeoutMs: 5000, config: {} }, runtime as never);
+
+    const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
+    expect(output).toContain(`Session store (main): ${parsed.sessions.path}`);
   });
 
   it("prints the gateway probe duration in text output", async () => {
@@ -212,6 +219,42 @@ describe("healthCommand", () => {
 
     const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
     expect(output).toContain("Gateway probe duration: 5ms");
+  });
+
+  it("shows every agent when an explicit fleet has no default owner", async () => {
+    const sessions = (agentId: string) => ({
+      path: `/tmp/${agentId}/sessions.json`,
+      count: 0,
+      recent: [],
+    });
+    const snapshot = {
+      ...createHealthSummary({ channels: {}, channelOrder: [], channelLabels: {} }),
+      defaultAgentId: undefined,
+      agents: [
+        { ...createMainAgentSummary(sessions("alpha")), agentId: "alpha", isDefault: false },
+        { ...createMainAgentSummary(sessions("beta")), agentId: "beta", isDefault: false },
+      ],
+    };
+    callGatewayMock.mockResolvedValueOnce(snapshot);
+
+    await healthCommand(
+      {
+        json: false,
+        timeoutMs: 1000,
+        config: {
+          agents: {
+            ownership: "explicit",
+            entries: { alpha: {}, beta: {} },
+          },
+        },
+      },
+      runtime as never,
+    );
+
+    const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
+    expect(output).toContain("Session store (alpha): /tmp/alpha/sessions.json");
+    expect(output).toContain("Session store (beta): /tmp/beta/sessions.json");
+    expect(output).not.toContain("(default)");
   });
 
   it("prints persistent event-loop degradation duration in text output", async () => {
@@ -733,6 +776,58 @@ describe("formatDeliveryQueueHealthLine", () => {
 
     expect(formatDeliveryQueueHealthLine(summary, 7_290_000)).toBe(
       "Delivery queue: warning (dead-lettered entries — inbound line/default: 1, inbound telegram/ops: 2; oldest 2h ago)",
+    );
+  });
+
+  it("summarizes ingress pressure per channel account", () => {
+    const summary = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    summary.deliveryQueues = {
+      failed: [],
+      ingressPressure: [
+        {
+          channelId: "telegram",
+          accountId: "ops",
+          laneCount: 1,
+          pendingCount: 56,
+          claimedCount: 0,
+          blockedCount: 55,
+          oldestReceivedAt: 90_000,
+        },
+      ],
+    };
+
+    expect(formatDeliveryQueueHealthLine(summary, 7_290_000)).toBe(
+      "Delivery queue: warning (ingress pressure — inbound telegram/ops: 1 pressured lane, 56 pending, 0 claimed, 55 blocked; oldest 2h ago)",
+    );
+  });
+
+  it("summarizes dead letters and ingress pressure together", () => {
+    const summary = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    summary.deliveryQueues = {
+      failed: [{ queueName: "outbound", count: 2, oldestFailedAt: 90_000 }],
+      ingressPressure: [
+        {
+          channelId: "line",
+          accountId: "default",
+          laneCount: 2,
+          pendingCount: 3,
+          claimedCount: 1,
+          blockedCount: 2,
+          oldestReceivedAt: 3_690_000,
+        },
+      ],
+    };
+
+    expect(formatDeliveryQueueHealthLine(summary, 7_290_000)).toBe(
+      "Delivery queue: warning (dead-lettered entries — outbound: 2; oldest 2h ago; ingress pressure — inbound line/default: 2 pressured lanes, 3 pending, 1 claimed, 2 blocked; oldest 1h ago)",
     );
   });
 

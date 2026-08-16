@@ -7,7 +7,6 @@ import {
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
-  navigateToControlUiSession,
   requireRecord,
   sessionRow,
   sessionsListResponse,
@@ -564,13 +563,27 @@ suite.define(() => {
     const page = await context.newPage();
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
     const main = sessionRow("agent:main:main", "Main", baseTime);
+    const target = {
+      ...sessionRow(
+        "agent:main:dashboard:navigation-target",
+        "Navigation target",
+        baseTime - 1_000,
+      ),
+      parentSessionKey: main.key,
+      sessionId: "navigation-target",
+    };
     const archived = {
-      ...sessionRow("agent:main:navigation-archive", "Navigation archive", baseTime - 1_000),
+      ...sessionRow(
+        "agent:main:dashboard:navigation-archive",
+        "Navigation archive",
+        baseTime - 2_000,
+      ),
+      parentSessionKey: main.key,
       sessionId: "navigation-archive",
     };
     const gateway = await installMockGateway(page, {
       methodResponses: {
-        "sessions.list": sessionsListResponse([main, archived]),
+        "sessions.list": sessionsListResponse([main, target, archived]),
         "sessions.patch": {},
       },
       sessionKey: main.key,
@@ -599,35 +612,36 @@ suite.define(() => {
         .locator(".agent-chat__disabled-banner");
       await archivedNotice.waitFor({ state: "visible", timeout: 10_000 });
 
-      await navigateToControlUiSession(page, main.key);
-      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(main.key));
+      await rowFor(target.key).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(target.key));
+      await archivedRow.waitFor({ state: "detached", timeout: 10_000 });
 
-      await gateway.setMethodResponse("sessions.list", sessionsListResponse([main]));
+      await gateway.setMethodResponse("sessions.list", sessionsListResponse([main, target]));
       let listRequestCount = (await gateway.getRequests("sessions.list")).length;
       await gateway.emitGatewayEvent("sessions.changed", {
-        ...main,
+        ...target,
         updatedAt: baseTime + 1_000,
         reason: "update",
-        sessionKey: main.key,
+        sessionKey: target.key,
       });
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list")).length)
         .toBeGreaterThan(listRequestCount);
-      await archivedRow.waitFor({ state: "detached", timeout: 10_000 });
 
       await gateway.setMethodResponse(
         "sessions.list",
         sessionsListResponse([
           { ...main, updatedAt: baseTime + 2_000 },
+          { ...target, updatedAt: baseTime + 3_000 },
           { ...archived, archived: false, updatedAt: baseTime + 3_000 },
         ]),
       );
       listRequestCount = (await gateway.getRequests("sessions.list")).length;
       await gateway.emitGatewayEvent("sessions.changed", {
-        ...main,
+        ...target,
         updatedAt: baseTime + 2_000,
         reason: "update",
-        sessionKey: main.key,
+        sessionKey: target.key,
       });
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list")).length)
@@ -833,6 +847,7 @@ suite.define(() => {
       expect(requireRecord(request.params)).toMatchObject({
         archivedOnly: true,
         deleteTranscript: true,
+        expectedSessionId: `session:${key}`,
         key,
       });
       await row.waitFor({ state: "visible" });

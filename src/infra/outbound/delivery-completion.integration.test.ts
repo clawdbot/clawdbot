@@ -88,4 +88,65 @@ describe("pending-final durable delivery completion", () => {
     expect(sendMatrix).toHaveBeenCalledOnce();
     expect(await loadPendingDeliveries(tmpDir)).toEqual([]);
   });
+
+  it("keeps an uncertainty notice owed when a live send returns no delivery identity", async () => {
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    const sessionKey = "agent:main:matrix:direct:unknown-live";
+    const storePath = path.join(tmpDir, "sessions.json");
+    const deliveryId = "pending-final-unknown-live";
+    const completion = {
+      kind: "pending-final" as const,
+      deliveryId,
+      intentId: "pending-final-intent-unknown-live",
+      sessionId: "session-unknown-live",
+      sessionKey,
+      storePath,
+    };
+    const context = { channel: "matrix", to: "!room:example" };
+    await replaceSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionId: completion.sessionId,
+        status: "running",
+        updatedAt: Date.now(),
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: "delivery identity may have been lost",
+          context,
+          createdAt: Date.now(),
+          intentId: completion.intentId,
+          deliveries: [{ id: deliveryId, state: "prepared" }],
+        },
+      },
+    );
+    const sendMatrix = vi.fn().mockResolvedValue({});
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {} as OpenClawConfig,
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "delivery identity may have been lost" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+        deliveryIntentId: deliveryId,
+        deliveryCompletion: completion,
+      }),
+    ).resolves.toEqual([]);
+
+    expect((await loadPendingDeliveries(tmpDir))[0]).toMatchObject({
+      id: deliveryId,
+      recoveryState: "unknown_after_send",
+    });
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      pendingFinalDelivery: {
+        deliveries: [{ id: deliveryId, state: "unknown" }],
+      },
+      pendingDeliveryNotice: {
+        intentId: completion.intentId,
+        state: "owed",
+        context,
+      },
+    });
+  });
 });

@@ -6,7 +6,10 @@ import { emitDiagnosticsTimelineEvent } from "../../infra/diagnostics-timeline.j
 import type { ChatRunTiming } from "../server-chat-state.js";
 import { terminalizeRestartSafeChatAdmission } from "./chat-restart-recovery.js";
 import { startChatDispatch } from "./chat-send-agent-dispatch.js";
-import { prepareChatSendAttachments } from "./chat-send-attachments.js";
+import {
+  discardPreparedChatSendAttachments,
+  prepareChatSendAttachments,
+} from "./chat-send-attachments.js";
 import { handleChatSendSetupError } from "./chat-send-dispatch-errors.js";
 import type { ChatSendExternalAuthorityAdmission } from "./chat-send-external-authority-contract.js";
 import {
@@ -24,14 +27,16 @@ import {
 import { createGatewayChatUserTurnController } from "./chat-user-turn-recorder.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-export async function handleChatSend(
+async function handleChatSendWithOptions(
   { params, respond, context, client }: GatewayRequestHandlerOptions,
   onAdmissionOwned?: () => Promise<boolean>,
   externalAuthorityAdmission?: ChatSendExternalAuthorityAdmission,
+  options?: { trustedSystemInput?: boolean },
 ): Promise<void> {
   const setup = await prepareAndAdmitChatSend(
     { params, respond, context, client },
     onAdmissionOwned,
+    options,
   );
   if (!setup) {
     return;
@@ -68,6 +73,17 @@ export async function handleChatSend(
   if (!preparedAttachments.ok) {
     return;
   }
+  // Prepared inbound media has no transcript reference until the user turn
+  // persists; every pre-ACK abandonment exit funnels through
+  // cleanupAdmittedRun, which fires this armed discard. The hasPersisted gate
+  // protects the restart-safe path, which persists durably before its abort
+  // and routing exits; dispatch owns persistence after the ACK disarms this.
+  let preparedMediaRecorder: { hasPersisted: () => boolean } | undefined;
+  admitted.value.setDiscardAbandonedPreparedMedia(() => {
+    if (!preparedMediaRecorder?.hasPersisted()) {
+      void discardPreparedChatSendAttachments(preparedAttachments.value.offloadedRefs);
+    }
+  });
   if (activeRunAbort.controller.signal.aborted) {
     finishAbortedChatSend();
     return;
@@ -122,6 +138,7 @@ export async function handleChatSend(
       recorder: userTurnRecorder,
       replyContextFieldsPromise,
     } = userTurn;
+    preparedMediaRecorder = userTurnRecorder;
     if (restartSafeAdmission) {
       const persistedUserTurn = await persistGatewayUserTurnTranscript();
       // A matching idempotency row and lifecycle claim commit atomically, so
@@ -245,6 +262,10 @@ export async function handleChatSend(
       },
       { config: cfg },
     );
+    // After the ACK, dispatch owns the turn: its error lifecycle persists the
+    // user transcript (which references the media) on every path, so a
+    // post-ACK cleanupAdmittedRun must not race that persist with a discard.
+    admitted.value.setDiscardAbandonedPreparedMedia(undefined);
     respond(true, ackPayload, undefined, { runId: clientRunId });
     const chatSendAckedAtMs = chatSendTiming?.ackedAtMs ?? performance.now();
     startChatDispatch({
@@ -281,4 +302,22 @@ export async function handleChatSend(
       terminalizeRestartSafeAdmission,
     });
   }
+}
+
+export async function handleChatSend(
+  options: GatewayRequestHandlerOptions,
+  onAdmissionOwned?: () => Promise<boolean>,
+  externalAuthorityAdmission?: ChatSendExternalAuthorityAdmission,
+): Promise<void> {
+  await handleChatSendWithOptions(options, onAdmissionOwned, externalAuthorityAdmission);
+}
+
+/** Dispatches Gateway-authored system input without widening the public chat-send contract. */
+export async function handleTrustedInternalChatSend(
+  options: GatewayRequestHandlerOptions,
+  onAdmissionOwned?: () => Promise<boolean>,
+): Promise<void> {
+  await handleChatSendWithOptions(options, onAdmissionOwned, undefined, {
+    trustedSystemInput: true,
+  });
 }

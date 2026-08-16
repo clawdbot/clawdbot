@@ -176,6 +176,7 @@ export async function resolveCommandsSystemPromptBundle(
     agentId: sessionAgentId,
   });
   const toolPolicySessionKey = resolveRuntimePolicySessionKey({
+    agentId: sessionAgentId,
     cfg: params.cfg,
     ctx: params.ctx,
     sessionKey: params.sessionKey,

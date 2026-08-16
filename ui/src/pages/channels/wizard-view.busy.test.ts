@@ -118,11 +118,9 @@ describe("renderChannelWizard busy controls", () => {
         { label: "Beta", value: "beta" },
       ],
     });
-    const group = select.container.querySelector<HTMLElement & { disabled: boolean }>(
-      "wa-radio-group",
-    );
-    expect(group?.disabled).toBe(true);
+    const group = select.container.querySelector("wa-select");
     expect(group?.hasAttribute("disabled")).toBe(true);
+    expect(group?.querySelector('[slot="label"]')?.textContent).toBe("Pick one");
   });
 
   it("disables multiselect choices and submission while a step is running", () => {
@@ -182,9 +180,7 @@ describe("renderChannelWizard busy controls", () => {
       },
       false,
     );
-    expect(
-      select.container.querySelector<HTMLElement & { disabled: boolean }>("wa-radio-group")
-        ?.disabled,
-    ).toBe(false);
+    const picker = select.container.querySelector("wa-select");
+    expect(picker?.hasAttribute("disabled")).toBe(false);
   });
 });

@@ -15,9 +15,6 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 const repositoryScriptEntries = [
   // setup-node-env invokes this helper from composite-action YAML.
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
-  ".github/actions/setup-node-env/verify-importers.mjs!",
-  ".github/actions/register-bind-mount-cleanup/main.cjs!",
-  ".github/actions/register-bind-mount-cleanup/post.cjs!",
   "apps/android/scripts/build-release-artifacts.ts!",
   "scripts/bundle-a2ui.mts!",
   "scripts/build-discord-activity-sdk.mts!",
@@ -25,6 +22,10 @@ const repositoryScriptEntries = [
   "scripts/check-control-ui-precompressed-assets.mts!",
   "scripts/check-live-cache.ts!",
   "scripts/check-package-dist-imports.mjs!",
+  // Cloudflare deployment template: wrangler bundles the Worker from this entry.
+  "scripts/cloudflare/src/index.ts!",
+  // Invoked by the documented macOS Computer Use live-proof shell rig.
+  "scripts/dev/computer-use-macos-live-proof.ts!",
   "scripts/dev/ios-node-e2e.ts!",
   "scripts/diffs-shiki-curated.ts!",
   // Reusable Docker workflows invoke this from the downloaded .release-harness tree.
@@ -90,6 +91,8 @@ const repositoryScriptEntries = [
   "scripts/qa-coverage-report.ts!",
   "scripts/qa-parity-report.ts!",
   "scripts/resolve-frozen-codex-live-suite.mjs!",
+  // Changed-file checks invoke this targeted UI Stylelint entrypoint by path.
+  "scripts/run-stylelint.mts!",
   "scripts/secrets/openclaw-bws-resolver.mjs!",
   "scripts/sqlite-session-entry-cache-lifetime-proof.ts!",
   "scripts/sync-labels.ts!",
@@ -155,6 +158,9 @@ const rootEntries = [
   "src/config/sessions/session-accessor.sqlite-archive.worker.ts!",
   "src/state/openclaw-database-verify.worker.ts!",
   "src/agents/model-provider-auth.worker.ts!",
+  "src/agents/prepared-model-catalog.worker.ts!",
+  // Spawned through computed sibling URLs by the service-child host and relay.
+  "src/process/supervisor/{service-child-relay,service-child-group-anchor}.ts!",
   // Loaded by URL from setup-inference-detection.ts; no static import edge exists.
   "src/system-agent/setup-inference-detection.worker.ts!",
   // Split runtime loaded through a path assembled in subagent-registry.ts.
@@ -209,6 +215,8 @@ const rootEntries = [
 const bundledPluginEntries = [
   "index.ts!",
   "setup-entry.ts!",
+  // Setup APIs may lazy-load this top-level package artifact by string specifier.
+  "setup-surface.ts!",
   // Core resolves these public plugin artifacts by basename rather than by a
   // static import from the plugin entry module.
   "*-api.ts!",
@@ -434,6 +442,9 @@ const config = {
     ".": {
       ignoreDependencies: [
         "@openclaw/*",
+        // Cloudflare template dependency: declared in scripts/cloudflare/package.json
+        // (isolated deploy tooling), not in the root manifest.
+        "@cloudflare/containers",
         // Docker packaging stages @openclaw/ai without nested dependencies after
         // verifying the root owns its exact runtime dependency versions.
         "@mistralai/mistralai",
@@ -656,7 +667,7 @@ const config = {
       project: ["src/**/*.ts!"],
     },
     "packages/memory-host-sdk": {
-      entry: ["src/*.ts!", "src/host/embeddings-worker-child.ts!"],
+      entry: ["src/*.ts!", "src/host/embeddings.types.ts!"],
       project: ["src/**/*.ts!"],
     },
     "packages/*": {
@@ -665,10 +676,7 @@ const config = {
     },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/amazon-bedrock-mantle`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/amazon-bedrock`]: bundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/anthropic`]: bundledPluginWorkspace([
-      // The plugin-SDK anthropic-cli facade resolves this shipped artifact by basename.
-      "cli-api.ts!",
-    ]),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/anthropic`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/anthropic-vertex`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/acpx`]: bundledPluginWorkspace([
       // Copied as executable runtime internals by the package artifact manifest.
@@ -681,7 +689,6 @@ const config = {
       "browser-control-auth.ts!",
       "browser-config.ts!",
       "browser-doctor.ts!",
-      "browser-host-inspection.ts!",
       "browser-maintenance.ts!",
       "browser-profiles.ts!",
       // Built by tsdown as the native messaging executable; Chrome launches it by path.
@@ -807,6 +814,8 @@ const config = {
       "web/vite.config.ts!",
       // Imported directly from the GitHub Actions smoke-plan script.
       "src/ci-smoke-plan.ts!",
+      // Imported directly from the GitHub Actions evidence workflow.
+      "src/profile-evidence-sharding.ts!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/senseaudio`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/tavily`]: bundledPluginWorkspace(),
@@ -827,12 +836,7 @@ const config = {
     [`${BUNDLED_PLUGIN_ROOT_DIR}/llama-cpp`]: {
       entry: bundledPluginEntries,
       project: ["**/*.{js,mjs,ts}!"],
-      ignoreDependencies: [
-        // The provider resolves node-llama-cpp from its own package at runtime
-        // so local embeddings use the plugin-owned native dependency.
-        "node-llama-cpp",
-        ...bundledPluginIgnoredRuntimeDependencies,
-      ],
+      ignoreDependencies: bundledPluginIgnoredRuntimeDependencies,
     },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/lmstudio`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/reef`]: {

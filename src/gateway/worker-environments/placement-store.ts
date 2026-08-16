@@ -9,11 +9,13 @@ import {
 import { createPlacementPendingFailureOps } from "./placement-pending-failure.js";
 import {
   assertRecordShape,
+  isCurrentPlacementTurnClaim,
   nextGeneration,
   normalizeEpoch,
+  normalizeWorkerPlacementExecutionMode,
   normalizeIdentity,
   required,
-  type WorkerSessionPlacementIdentity,
+  type WorkerSessionPlacementDispatchIdentity,
   type WorkerSessionPlacementRecord,
   type WorkerSessionPlacementTransitionPatch,
   type WorkerSessionTurnClaim,
@@ -47,12 +49,13 @@ import {
 } from "./placement-workspace-journal.js";
 import {
   createPlacementWorkspaceResultOps,
+  hasCurrentWorkspaceResultClaim,
   hasWorkerWorkspacePendingResult,
 } from "./placement-workspace-result.js";
 import { boundedWorkerError } from "./worker-error.js";
 import { projectWorkspaceResultConflict } from "./workspace-conflicts.js";
 
-const RETIRABLE_PLACEMENT_STATES = ["local", "reclaimed", "failed"] as const;
+const RETIRABLE_PLACEMENT_STATES = ["local", "requested", "reclaimed", "failed"] as const;
 
 export type WorkerSessionPlacementRetirement = {
   sessionId: string;
@@ -140,18 +143,11 @@ export function createWorkerSessionPlacementStore(
   };
 
   const requireClaimOwner = (claim: WorkerSessionTurnClaim): void => {
-    const current = find(read(), required(claim.sessionId, "session id"));
-    const persisted = current?.turnClaim;
+    const db = read();
+    const current = find(db, required(claim.sessionId, "session id"));
     if (
-      claim.owner.kind !== "worker" ||
-      (current?.state !== "active" && current?.state !== "draining") ||
-      current.environmentId !== claim.owner.environmentId ||
-      current.activeOwnerEpoch !== claim.owner.ownerEpoch ||
-      persisted?.owner !== "worker" ||
-      persisted.claimId !== claim.claimId ||
-      persisted.runId !== claim.runId ||
-      persisted.generation !== claim.placementGeneration ||
-      persisted.ownerEpoch !== claim.owner.ownerEpoch
+      !current ||
+      (!isCurrentPlacementTurnClaim(current, claim) && !hasCurrentWorkspaceResultClaim(db, claim))
     ) {
       throw new Error(`Session ${claim.sessionId} workspace result conflict owner changed`);
     }
@@ -242,8 +238,9 @@ export function createWorkerSessionPlacementStore(
       );
     },
 
-    startDispatch(input: WorkerSessionPlacementIdentity): WorkerSessionPlacementRecord {
+    startDispatch(input: WorkerSessionPlacementDispatchIdentity): WorkerSessionPlacementRecord {
       const identity = normalizeIdentity(input);
+      const executionMode = normalizeWorkerPlacementExecutionMode(input.executionMode);
       return write((db) => {
         const current = ensureLocal(db, identity, now());
         if (
@@ -264,6 +261,7 @@ export function createWorkerSessionPlacementStore(
             .updateTable("worker_session_placements")
             .set({
               state: "requested",
+              execution_mode: executionMode,
               environment_id: null,
               transition_generation: nextGeneration(current.generation),
               active_owner_epoch: null,
@@ -369,6 +367,7 @@ export function createWorkerSessionPlacementStore(
         }
         assertRecordShape({
           state: "draining",
+          executionMode: current.executionMode,
           environmentId,
           activeOwnerEpoch: ownerEpoch,
           workspaceBaseManifestRef: values.workspace_base_manifest_ref,

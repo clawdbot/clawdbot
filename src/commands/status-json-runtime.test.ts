@@ -55,8 +55,8 @@ function createScan() {
     pluginCompatibility: [
       {
         pluginId: "legacy",
-        code: "deprecated-memory-embedding-provider-api",
-        severity: "warn",
+        code: "hook-only",
+        severity: "info",
         message: "warn",
       },
     ],
@@ -89,7 +89,7 @@ describe("status-json-runtime", () => {
     const scan = createScan();
     const result = await resolveStatusJsonOutput({
       scan,
-      opts: { deep: true, usage: true, timeoutMs: 1234 },
+      opts: { deep: true, usage: true, agent: "beta", timeoutMs: 1234 },
       includeSecurityAudit: true,
       includePluginCompatibility: true,
     });
@@ -98,6 +98,7 @@ describe("status-json-runtime", () => {
       config: { update: { channel: "stable" }, gateway: {} },
       sourceConfig: { gateway: {} },
       timeoutMs: 1234,
+      agentId: "beta",
       usage: true,
       deep: true,
       gatewayReachable: true,
@@ -121,8 +122,8 @@ describe("status-json-runtime", () => {
     expect(payloadInput.pluginCompatibility).toStrictEqual([
       {
         pluginId: "legacy",
-        code: "deprecated-memory-embedding-provider-api",
-        severity: "warn",
+        code: "hook-only",
+        severity: "info",
         message: "warn",
       },
     ]);

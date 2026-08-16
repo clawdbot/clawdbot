@@ -152,6 +152,7 @@ function loadOpenClawPluginsInternal(
     registryBuilder = createPluginRegistry({
       logger,
       runtime,
+      allowProcessHomeSessionCatalogs: options.allowProcessHomeSessionCatalogs ?? true,
       coreGatewayHandlers: options.coreGatewayHandlers as Record<string, GatewayRequestHandler>,
       ...(options.coreGatewayMethodNames !== undefined && {
         coreGatewayMethodNames: options.coreGatewayMethodNames,

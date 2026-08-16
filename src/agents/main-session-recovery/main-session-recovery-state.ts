@@ -1,3 +1,4 @@
+import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import {
   PENDING_FINAL_DELIVERY_CLEAR_PATCH,
   sanitizePendingFinalDeliveryText,
@@ -149,6 +150,35 @@ export function isMainSessionRecoveryPending(entry: SessionEntry, sessionKey: st
     !state?.reservation &&
     !state?.tombstone
   );
+}
+
+type MainRestartRecoveryRolloverEligibility =
+  | { eligible: true }
+  | {
+      eligible: false;
+      reason: "already_recovered";
+      recoveredSessionId?: string;
+      recoveredSessionKey?: string;
+    }
+  | { eligible: false; reason: "not_tombstoned" };
+
+export function inspectMainRestartRecoveryRolloverEligibility(
+  entry: SessionEntry,
+): MainRestartRecoveryRolloverEligibility {
+  if (!entry.mainRestartRecovery?.tombstone) {
+    return { eligible: false, reason: "not_tombstoned" };
+  }
+  const recoveredSessionId = entry.mainRestartRecovery.tombstone.recoveredSessionId;
+  const recoveredSessionKey = entry.mainRestartRecovery.tombstone.recoveredSessionKey;
+  if (recoveredSessionId || recoveredSessionKey) {
+    return {
+      eligible: false,
+      reason: "already_recovered",
+      ...(recoveredSessionId ? { recoveredSessionId } : {}),
+      ...(recoveredSessionKey ? { recoveredSessionKey } : {}),
+    };
+  }
+  return { eligible: true };
 }
 
 // A healthy session can retain lifecycle fences after its final recovery owner
@@ -351,14 +381,21 @@ export function transitionMainSessionRecovery(
       if (command.attempt !== state.chargedAttempts + 1) {
         return { kind: "rejected", reason: "stale_revision" };
       }
-      const executionIdentityAdmission =
-        command.executionIdentity.state === "disabled"
-          ? undefined
-          : state.executionIdentity?.runId === command.runId
-            ? ({ kind: "retry-reference", token: state.executionIdentity } as const)
-            : undefined;
+      const retryExecutionIdentity =
+        command.executionIdentity.state === "enabled" && state.executionIdentity
+          ? state.executionIdentity.runId === command.runId
+            ? state.executionIdentity
+            : createExecutionIdentityAdmissionToken(command.runId, {
+                contextId: state.executionIdentity.contextId,
+                executionId: state.executionIdentity.executionId,
+                now: state.executionIdentity.createdAt,
+              })
+          : undefined;
+      const executionIdentityAdmission = retryExecutionIdentity
+        ? ({ kind: "retry-reference", token: retryExecutionIdentity } as const)
+        : undefined;
       updateRecoveryState(entry, state, {
-        ...(command.executionIdentity.state === "disabled" ? { executionIdentity: undefined } : {}),
+        executionIdentity: retryExecutionIdentity,
         chargedAttempts: command.attempt,
         reservation: {
           runId: command.runId,

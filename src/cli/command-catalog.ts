@@ -218,6 +218,15 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     route: { id: "health" },
   },
   {
+    commandPath: ["audit"],
+    policy: {
+      configGuard: "skip",
+      loadPlugins: "never",
+      ensureCliPath: false,
+      networkProxy: "bypass",
+    },
+  },
+  {
     commandPath: ["gateway"],
     policy: {
       networkProxy: ({ commandPath }) =>
@@ -274,8 +283,8 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   },
   {
     commandPath: ["agents", "list"],
-    // Text and JSON output are derived from config plus read-only channel
-    // metadata, so the route should not preload bundled plugin runtimes.
+    // Output combines config with shared-state provenance and optional read-only
+    // channel metadata, so the route should not preload bundled plugin runtimes.
     policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
     route: { id: "agents-list" },
   },

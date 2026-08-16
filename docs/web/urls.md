@@ -137,6 +137,7 @@ no route-specific URL parameters.
 | New session         | `/new`                      | -                         | `?agent=<agentId>`, `?catalog=<catalogId>`                     |
 | Activity            | `/activity`                 | -                         | `?view=run&run=<run-id>`, `?view=run&execution=<execution-id>` |
 | Apps                | `/apps`                     | -                         | -                                                              |
+| Portals             | `/portals`                  | -                         | -                                                              |
 | Agents              | `/settings/agents`          | `/agents`                 | `/settings/agents/<agentId>[/<panel>]`                         |
 | Channels            | `/settings/channels`        | `/channels`               | Shared settings parameters below                               |
 | Connection          | `/settings/connection`      | -                         | Shared settings parameters below                               |

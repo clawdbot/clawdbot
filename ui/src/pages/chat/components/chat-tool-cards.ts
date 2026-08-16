@@ -33,7 +33,9 @@ export {
   type WidgetPromptEventDetail,
 } from "./widget-card.ts";
 
-type FullMessageRequest = NonNullable<SidebarContent["fullMessageRequest"]>;
+type FullMessageRequest = NonNullable<
+  Extract<SidebarContent, { kind: "markdown" }>["fullMessageRequest"]
+>;
 
 export function shouldToggleSelectableDisclosure(event: MouseEvent): boolean {
   if (event.detail === 0) {
@@ -190,13 +192,13 @@ export function renderRawOutputToggle(text: string) {
   return html`
     <div class="chat-tool-card__raw">
       <button
-        class="chat-tool-card__raw-toggle"
+        class="chat-inline-disclosure chat-tool-card__raw-toggle"
         type="button"
         aria-expanded="false"
         @click=${handleRawDetailsToggle}
       >
         <span>${t("chat.toolCards.rawDetails")}</span>
-        <span class="chat-tool-card__raw-toggle-icon">${icons.chevronDown}</span>
+        <span class="chat-inline-disclosure__chevron" aria-hidden="true">${icons.chevronDown}</span>
       </button>
       <div class="chat-tool-card__raw-body" hidden>
         ${renderToolDataBlock({ label: t("chat.toolCards.toolOutput"), text })}
@@ -335,10 +337,9 @@ function renderToolRowContent(card: ToolCard, view: ToolCallView, outcome: ToolC
     card,
     displayLabel: display.label,
     displayDetail: display.detail,
-    isError: outcome === "failed",
   });
   const displayLabel = formatCollapsedToolSummaryText(summary.label) ?? summary.label;
-  const argumentPreview = outcome === "failed" ? undefined : toolArgumentPreview(card.args);
+  const argumentPreview = toolArgumentPreview(card.args);
   const displayName = distinctSummaryText(argumentPreview ?? summary.name, displayLabel);
   const aiTitle = getToolCallTitle(card.name, card.args);
   if (aiTitle) {
@@ -566,12 +567,7 @@ function resolveCollapsedToolSummaryParts(params: {
   card: ToolCard;
   displayLabel: string;
   displayDetail: string | undefined;
-  isError: boolean;
 }): { label: string; name?: string } {
-  if (params.isError) {
-    return { label: t("chat.toolCards.toolError"), name: params.displayLabel };
-  }
-
   const displayDetail = params.displayDetail?.trim();
   if (displayDetail) {
     return { label: params.displayLabel, name: displayDetail };
@@ -634,9 +630,9 @@ export function renderToolCard(
         : ""}"
     >
       <button
-        class="chat-tool-msg-summary chat-tool-row ${isError
-          ? "chat-tool-msg-summary--error"
-          : ""} ${isRunning ? "chat-tool-row--running" : ""}"
+        class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row ${isRunning
+          ? "chat-tool-row--running"
+          : ""}"
         type="button"
         aria-expanded=${String(opts.expanded)}
         @click=${(event: MouseEvent) => {
@@ -647,6 +643,7 @@ export function renderToolCard(
       >
         <span class="chat-tool-msg-summary__icon">${renderToolIcon(icon)}</span>
         ${renderToolRowContent(card, view, outcome)}
+        <span class="chat-inline-disclosure__chevron" aria-hidden="true">${icons.chevronDown}</span>
         ${isError
           ? html`<span class="chat-tool-row__badge">${t("chat.toolCards.failed")}</span>`
           : nothing}

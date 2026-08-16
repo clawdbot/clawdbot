@@ -9,10 +9,16 @@ import {
   writeFileSync,
 } from "node:fs";
 import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { FULL_RELEASE_WAIT_TIMEOUT_MINUTES } from "../../scripts/full-release-validation-at-sha.mts";
 import { createReleaseWorkflowMatrixPlan } from "../../scripts/plan-release-workflow-matrix.mjs";
+import {
+  pluginPrereleaseTimeoutComponents,
+  releaseTimeoutForProfile as timeoutForProfile,
+  releaseWorkflowJobNeeds as jobNeeds,
+} from "../helpers/release-workflow-timeouts.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const PACKAGE_ACCEPTANCE_WORKFLOW = ".github/workflows/package-acceptance.yml";
@@ -208,29 +214,6 @@ function workflowStep(job: WorkflowJob, stepName: string): WorkflowStep {
   return step;
 }
 
-function jobNeeds(job: WorkflowJob): string[] {
-  return Array.isArray(job.needs) ? job.needs : job.needs ? [job.needs] : [];
-}
-
-function timeoutForProfile(
-  timeout: number | string | undefined,
-  profile: "beta" | "stable" | "full",
-): number {
-  if (typeof timeout === "number") {
-    return timeout;
-  }
-  if (timeout === "${{ matrix.group.timeout_minutes || 60 }}") {
-    return 60;
-  }
-  const match = timeout?.match(
-    /^\$\{\{ inputs\.(?:release_profile|release_test_profile) == 'full' && ([0-9]+) \|\| ([0-9]+) \}\}$/u,
-  );
-  if (!match) {
-    throw new Error(`Unsupported release timeout expression: ${String(timeout)}`);
-  }
-  return Number(profile === "full" ? match[1] : match[2]);
-}
-
 function evaluatedJobTimeouts(path: string, jobName: string, job: WorkflowJob): number[] {
   const timeout = job["timeout-minutes"];
   if (typeof timeout === "number") {
@@ -284,41 +267,8 @@ function pluginPrereleaseTimeoutFloor(
   liveE2e: Workflow,
   profile: "beta" | "stable" | "full",
 ): number {
-  const preflight = pluginPrerelease.jobs?.preflight;
-  const dockerSuite = pluginPrerelease.jobs?.["plugin-prerelease-docker-suite"];
-  const suite = pluginPrerelease.jobs?.["plugin-prerelease-suite"];
-  const validateSelectedRef = liveE2e.jobs?.validate_selected_ref;
-  const prepareImage = liveE2e.jobs?.prepare_docker_e2e_image;
-  const imageReady = liveE2e.jobs?.docker_e2e_image_ready;
-  const dockerLanes = liveE2e.jobs?.validate_docker_lanes;
-  if (
-    !preflight ||
-    !dockerSuite ||
-    !suite ||
-    !validateSelectedRef ||
-    !prepareImage ||
-    !imageReady ||
-    !dockerLanes
-  ) {
-    throw new Error("Missing plugin prerelease timeout-chain job");
-  }
-
-  expect(jobNeeds(dockerSuite)).toContain("preflight");
-  expect(jobNeeds(prepareImage)).toEqual(["validate_selected_ref"]);
-  expect(jobNeeds(imageReady)).toEqual(["prepare_docker_e2e_image"]);
-  expect(jobNeeds(dockerLanes)).toEqual(
-    expect.arrayContaining(["prepare_docker_e2e_image", "docker_e2e_image_ready"]),
-  );
-  expect(jobNeeds(suite)).toContain("plugin-prerelease-docker-suite");
-
-  return [
-    timeoutForProfile(preflight["timeout-minutes"], profile),
-    timeoutForProfile(validateSelectedRef["timeout-minutes"], profile),
-    timeoutForProfile(prepareImage["timeout-minutes"], profile),
-    timeoutForProfile(imageReady["timeout-minutes"], profile),
-    timeoutForProfile(dockerLanes["timeout-minutes"], profile),
-    timeoutForProfile(suite["timeout-minutes"], profile),
-  ].reduce((total, value) => total + value, 0);
+  const components = pluginPrereleaseTimeoutComponents({ pluginPrerelease, liveE2e, profile });
+  return Object.values(components).reduce((total, value) => total + value, 0);
 }
 
 function runFullReleaseInputValidation(releaseProfile: string, skipTelegram: string) {
@@ -373,6 +323,48 @@ function runReleaseChecksInputValidation(
     },
   });
   return { outputPath, result };
+}
+
+function runReleaseChecksShellStep(
+  stepName: string,
+  env: Record<string, string>,
+  workdir = tempDirs.make("release-checks-shell-step-"),
+) {
+  const step = workflowStep(workflowJob(RELEASE_CHECKS_WORKFLOW, "resolve_target"), stepName);
+  const outputPath = resolve(workdir, "github-output");
+  writeFileSync(outputPath, "", "utf8");
+  const result = spawnSync("bash", ["-c", step.run ?? ""], {
+    cwd: workdir,
+    encoding: "utf8",
+    env: {
+      ...env,
+      GITHUB_OUTPUT: outputPath,
+      PATH: process.env.PATH,
+    },
+  });
+  return { output: readFileSync(outputPath, "utf8"), result };
+}
+
+function createReleaseChecksContextFixture() {
+  const root = tempDirs.make("release-checks-context-repo-");
+  const repo = resolve(root, "context-source");
+  mkdirSync(repo);
+  const git = (...args: string[]) =>
+    execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
+  git("init", "-q", "--initial-branch=release/2026.8.1");
+  git("config", "user.name", "OpenClaw Test");
+  git("config", "user.email", "openclaw-test@example.com");
+  writeFileSync(resolve(repo, "package.json"), '{"version":1}\n', "utf8");
+  git("add", "package.json");
+  git("commit", "-qm", "candidate");
+  const candidateSha = git("rev-parse", "HEAD");
+  writeFileSync(resolve(repo, "package.json"), '{"version":2}\n', "utf8");
+  git("commit", "-qam", "branch advance");
+  const branchHeadSha = git("rev-parse", "HEAD");
+  git("tag", "-a", "v2026.8.1", "-m", "release", branchHeadSha);
+  const tree = git("rev-parse", "HEAD^{tree}");
+  const unrelatedSha = git("commit-tree", tree, "-m", "unrelated root");
+  return { branchHeadSha, candidateSha, repoUrl: pathToFileURL(repo).href, unrelatedSha };
 }
 
 function runFullReleaseTargetSummary(rerunGroup: string, skipTelegram: string) {
@@ -576,6 +568,7 @@ exit 0
     PACKAGE_ACCEPTANCE_PACKAGE_SPEC: "",
     PACKAGE_SPEC: "openclaw@beta",
     PARENT_WORKFLOW_SHA: parentSha,
+    PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: "[]",
     PROVIDER: "openai",
     PROVIDER_MODE: "mock-openai",
     RELEASE_PACKAGE_SPEC: "",
@@ -1042,6 +1035,60 @@ function runReleaseChecksSummary(params: {
 }
 
 describe("package acceptance workflow", () => {
+  it("forwards Plugin SDK acknowledgement through the canonical publish dispatch", () => {
+    const workflow = readWorkflow(RELEASE_PUBLISH_WORKFLOW);
+    const input = workflow.on?.workflow_dispatch?.inputs?.plugin_sdk_api_acknowledgement;
+    const resolveJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target");
+    const downloadPreflight = workflowStep(resolveJob, "Download OpenClaw npm preflight manifest");
+    const validateEvidence = workflowStep(resolveJob, "Validate OpenClaw npm preflight manifest");
+    const publishJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
+    const dispatch = workflowStep(publishJob, "Dispatch publish workflows");
+
+    expect(readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8")).toContain(
+      "group: openclaw-release-publish-${{ inputs.npm_dist_tag }}",
+    );
+
+    expect(input).toEqual({
+      default: "",
+      description:
+        "8-character digest from the Plugin SDK API diff report when the release changes the SDK",
+      required: false,
+      type: "string",
+    });
+    expect(dispatch.env?.PLUGIN_SDK_API_ACKNOWLEDGEMENT).toBe(
+      "${{ inputs.plugin_sdk_api_acknowledgement }}",
+    );
+    expect(validateEvidence.env?.PLUGIN_SDK_API_ACKNOWLEDGEMENT).toBe(
+      "${{ inputs.plugin_sdk_api_acknowledgement }}",
+    );
+    expect(validateEvidence.env?.PLUGIN_SDK_API_VALIDATOR).toContain(
+      "plugin-sdk-api-release-evidence.mjs",
+    );
+    expect(validateEvidence.run).toContain('node "$PLUGIN_SDK_API_VALIDATOR"');
+    expect(validateEvidence.run).toContain('--acknowledge "$PLUGIN_SDK_API_ACKNOWLEDGEMENT"');
+    expect(validateEvidence.run).toContain('npm view "openclaw@${RELEASE_NPM_DIST_TAG}" version');
+    expect(validateEvidence.run).toContain('--current-selector-ref "$current_selector_ref"');
+    expect(validateEvidence.run).toContain('--current-selector-sha "$current_selector_sha"');
+    expect(validateEvidence.run).toContain("Immutable Plugin SDK API evidence artifact is missing");
+    expect(validateEvidence.run).toContain("cmp -s <(jq -S '.pluginSdkApi'");
+    expect(downloadPreflight.run).toContain('preflight_conclusion" != "success"');
+    expect(downloadPreflight.run).toContain(
+      'expected_extended_stable_branch="extended-stable/${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.33"',
+    );
+    expect(downloadPreflight.run).toContain(
+      'preflight_path" != ".github/workflows/openclaw-npm-release.yml"',
+    );
+    expect(validateEvidence.run).toContain(
+      'git merge-base --is-ancestor "$PREFLIGHT_WORKFLOW_SHA" "$WORKFLOW_SHA"',
+    );
+    expect(validateEvidence.run).toContain('"$PREFLIGHT_WORKFLOW_SHA" == "$EXPECTED_SHA"');
+    expect(validateEvidence.run).toContain('--workflow-sha "$PREFLIGHT_WORKFLOW_SHA"');
+    expect(publishJob.needs).toEqual(["resolve_release_target"]);
+    expect(dispatch.run).toContain(
+      '-f plugin_sdk_api_acknowledgement="${PLUGIN_SDK_API_ACKNOWLEDGEMENT}"',
+    );
+  });
+
   it("requires selected plugin names or complete immutable evidence for broad publication", () => {
     const selected = runReleasePublishInputValidation({
       FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "",
@@ -1514,7 +1561,6 @@ describe("package acceptance workflow", () => {
     const setupNodeAction = readFileSync(".github/actions/setup-node-env/action.yml", "utf8");
     expect(setupNodeAction).toContain("Normalize container toolcache");
     expect(setupNodeAction).toContain("ln -s /__t /opt/hostedtoolcache");
-    expect(setupNodeAction).toContain("use-actions-cache: ${{ inputs.use-actions-cache }}");
 
     for (const workflowPath of workflowPaths()) {
       const workflowText = readFileSync(workflowPath, "utf8");
@@ -1561,6 +1607,7 @@ describe("package acceptance workflow", () => {
     );
     expect(hydratePnpm.run).toContain('echo "PNPM_CONFIG_STORE_DIR=$PNPM_CONFIG_STORE_DIR"');
     expect(hydratePnpm.run).toContain('echo "PNPM_CONFIG_MODULES_DIR=$PNPM_CONFIG_MODULES_DIR"');
+    expect(hydratePnpm.run).toContain('echo "CRABBOX_PNPM_MODULES_DIR=$PNPM_CONFIG_MODULES_DIR"');
     expect(hydratePnpm.run).toContain(
       'echo "PNPM_CONFIG_PACKAGE_IMPORT_METHOD=${PNPM_CONFIG_PACKAGE_IMPORT_METHOD:-}"',
     );
@@ -1645,7 +1692,10 @@ describe("package acceptance workflow", () => {
     const markCrabboxReady = workflowStep(hydrate, "Mark Crabbox ready").run;
     expect(markCrabboxReady).toContain("COREPACK_HOME");
     expect(markCrabboxReady).toContain("OPENCLAW_CRABBOX_DOCKER_AVAILABLE");
+    expect(markCrabboxReady).toContain("CRABBOX_PNPM_MODULES_DIR");
     expect(markCrabboxReady).toContain("PNPM_CONFIG_PACKAGE_IMPORT_METHOD");
+    expect(markCrabboxReady).not.toContain("PNPM_CONFIG_MODULES_DIR");
+    expect(markCrabboxReady).not.toContain("PNPM_CONFIG_VIRTUAL_STORE_DIR");
     expect(workflowStep(hydrate, "Hydrate provider env helper").env).toBeUndefined();
 
     expect(hydrateWindowsDaemon.if).toBe("${{ inputs.crabbox_job == 'hydrate-windows-daemon' }}");
@@ -1703,9 +1753,13 @@ describe("package acceptance workflow", () => {
     );
     expect(hydrateWindowsFetch.run).toContain('"+refs/heads/main:refs/remotes/origin/main"');
     expect(workflowStep(hydrateWindowsDaemon, "Mark Crabbox ready").shell).toBe("powershell");
-    expect(workflowStep(hydrateWindowsDaemon, "Mark Crabbox ready").run).toContain('"NODE_BIN"');
-    expect(workflowStep(hydrateWindowsDaemon, "Mark Crabbox ready").run).toContain('"PNPM_HOME"');
-    expect(workflowStep(hydrateWindowsDaemon, "Mark Crabbox ready").run).toContain('"PATH"');
+    const markWindowsCrabboxReady = workflowStep(hydrateWindowsDaemon, "Mark Crabbox ready").run;
+    expect(markWindowsCrabboxReady).toContain('"NODE_BIN"');
+    expect(markWindowsCrabboxReady).toContain('"PNPM_HOME"');
+    expect(markWindowsCrabboxReady).toContain('"CRABBOX_PNPM_MODULES_DIR"');
+    expect(markWindowsCrabboxReady).not.toContain('"PNPM_CONFIG_MODULES_DIR"');
+    expect(markWindowsCrabboxReady).not.toContain('"PNPM_CONFIG_VIRTUAL_STORE_DIR"');
+    expect(markWindowsCrabboxReady).toContain('"PATH"');
     expect(workflowText).toContain("OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_TIMEOUT_SECONDS:-300");
     expect(workflowText).toContain("OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_RETRIES:-3");
     expect(workflowText).toContain("--retry-all-errors");
@@ -3580,12 +3634,9 @@ describe("package artifact reuse", () => {
     expect(workflow).not.toContain('PNPM_CONFIG_STORE_DIR: "/tmp/openclaw-pnpm-store"');
     expect(workflow).not.toContain("PNPM_CONFIG_MODULES_DIR");
     expect(workflow).not.toContain("PNPM_CONFIG_VIRTUAL_STORE_DIR");
-    expect(setupNodeWith["sticky-disk"]).toBe(
-      "${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}",
-    );
-    expect(setupNodeWith["use-actions-cache"]).toBe(
-      "${{ github.event_name == 'workflow_dispatch' && 'false' || 'true' }}",
-    );
+    expect(setupNodeWith).not.toHaveProperty("dependency-cache");
+    expect(setupNodeWith).not.toHaveProperty("sticky-disk");
+    expect(setupNodeWith["use-actions-cache"]).toBe("true");
     expect(checkTestboxJob["timeout-minutes"]).toBe(
       "${{ fromJSON(inputs.timeout_minutes || '120') }}",
     );
@@ -3602,7 +3653,9 @@ describe("package artifact reuse", () => {
       checkTestboxSteps.indexOf(runTestboxStep) + 1,
     );
     expect(runArmTestboxStep.if).toBe("always()");
-    expect(runBuildArtifactsTestboxStep.if).toBe("always()");
+    expect(runBuildArtifactsTestboxStep.if).toBe(
+      "github.event_name == 'workflow_dispatch' && always()",
+    );
     expect(runWindowsTestboxStep.if).toBe("always()");
     expect(runTestboxStep["continue-on-error"]).toBeUndefined();
   });
@@ -4147,6 +4200,157 @@ describe("package artifact reuse", () => {
       "printf 'Runtime token-efficiency lane started.\\n' > \"${output_dir}/runtime-lane-started.txt\"",
     );
     expect(reportStep.if).toBe("steps.run_lane.outcome == 'success'");
+  });
+
+  it("overlays only trusted Anthropic mock tooling for frozen-target QA parity", () => {
+    const resolveTarget = workflowJob(RELEASE_CHECKS_WORKFLOW, "resolve_target");
+    const contextValidation = workflowStep(resolveTarget, "Validate trusted QA tooling context");
+    const eligibility = workflowStep(resolveTarget, "Validate trusted QA tooling eligibility");
+    const resolveStepNames = resolveTarget.steps?.map((step) => step.name) ?? [];
+    const job = workflowJob(RELEASE_CHECKS_WORKFLOW, "qa_lab_parity_lane_release_checks");
+    const trustedCheckout = workflowStep(job, "Checkout trusted QA Anthropic mock tooling");
+    const installTooling = workflowStep(job, "Install trusted QA Anthropic mock tooling");
+    const stepNames = job.steps?.map((step) => step.name) ?? [];
+    const targetSha = "a".repeat(40);
+    const eligibilityCondition =
+      "needs.resolve_target.outputs.trusted_qa_tooling_eligible == 'true'";
+
+    expect(resolveTarget.outputs?.trusted_qa_tooling_eligible).toBe(
+      "${{ steps.trusted_qa_tooling.outputs.eligible }}",
+    );
+    expect(contextValidation.if).toBe("inputs.target_context_ref != ''");
+    expect(
+      resolveTarget.steps?.find((step) => step.name === "Checkout trusted QA tooling context"),
+    ).toBeUndefined();
+    expect(eligibility.if).toBe("steps.trusted_qa_context.outputs.fetch_ref != ''");
+    expect(resolveStepNames.indexOf("Validate trusted QA tooling context")).toBeLessThan(
+      resolveStepNames.indexOf("Validate trusted QA tooling eligibility"),
+    );
+    expect(eligibility.env?.TRUSTED_REPOSITORY_URL).toBe(
+      "https://github.com/${{ github.repository }}.git",
+    );
+    expect(eligibility.run).toContain('context_repo="$(mktemp -d)"');
+    expect(eligibility.run).toContain("git init --bare --quiet");
+    expect(eligibility.run).toContain("--filter=blob:none");
+    expect(eligibility.run).toContain("FETCH_HEAD^{commit}");
+    expect(eligibility.run).not.toContain("git checkout");
+    expect(eligibility.run).not.toContain("git worktree");
+
+    for (const contextRef of [
+      "release/2026.8.1",
+      "refs/heads/extended-stable/2026.8.33",
+      "v2026.8.1",
+      "refs/tags/v2026.8.1-alpha.2",
+      "v2026.8.1-beta.3",
+    ]) {
+      const { output, result } = runReleaseChecksShellStep("Validate trusted QA tooling context", {
+        TARGET_CONTEXT_REF: contextRef,
+        TARGET_REF: targetSha,
+      });
+      expect(result.status, `${contextRef}: ${result.stderr}`).toBe(0);
+      expect(output, contextRef).toContain(
+        `normalized_ref=${contextRef.replace(/^refs\/(heads|tags)\//u, "")}\n`,
+      );
+    }
+
+    for (const contextRef of [
+      "main",
+      "release-ci/2026.8.1-frozen",
+      "release/2026.8",
+      "v2026.8.1-rc.1",
+      "refs/heads/refs/tags/v2026.8.1",
+    ]) {
+      const { result } = runReleaseChecksShellStep("Validate trusted QA tooling context", {
+        TARGET_CONTEXT_REF: contextRef,
+        TARGET_REF: targetSha,
+      });
+      expect(result.status, contextRef).toBe(1);
+      expect(result.stderr).toContain(
+        "target_context_ref must be a canonical OpenClaw release branch or tag.",
+      );
+    }
+
+    for (const targetRef of ["release/2026.8.1", "a".repeat(39)]) {
+      const { result } = runReleaseChecksShellStep("Validate trusted QA tooling context", {
+        TARGET_CONTEXT_REF: "release/2026.8.1",
+        TARGET_REF: targetRef,
+      });
+      expect(result.status, targetRef).toBe(1);
+      expect(result.stderr).toContain(
+        "target_context_ref requires ref to be a full 40-character commit SHA.",
+      );
+    }
+
+    const fixture = createReleaseChecksContextFixture();
+    const relationshipCases = [
+      ["tag", "refs/tags/v2026.8.1", fixture.branchHeadSha, 0, ""],
+      ["tag", "refs/tags/v2026.8.1", fixture.candidateSha, 1, "does not match target"],
+      ["branch", "refs/heads/release/2026.8.1", fixture.branchHeadSha, 0, ""],
+      ["branch", "refs/heads/release/2026.8.1", fixture.candidateSha, 0, ""],
+      [
+        "branch",
+        "refs/heads/release/2026.8.1",
+        fixture.unrelatedSha,
+        1,
+        "is not reachable from branch",
+      ],
+      [
+        "tag",
+        "refs/tags/v2026.8.1-beta.99",
+        fixture.branchHeadSha,
+        1,
+        "Failed to fetch trusted QA tooling context",
+      ],
+    ] as const;
+    for (const [contextKind, fetchRef, targetRef, expectedStatus, error] of relationshipCases) {
+      const { output, result } = runReleaseChecksShellStep(
+        "Validate trusted QA tooling eligibility",
+        {
+          CONTEXT_KIND: contextKind,
+          CONTEXT_FETCH_REF: fetchRef,
+          CONTEXT_REF: fetchRef.replace(/^refs\/(heads|tags)\//u, ""),
+          TARGET_REF: targetRef,
+          TRUSTED_REPOSITORY_URL: fixture.repoUrl,
+        },
+      );
+      expect(result.status, `${contextKind} ${targetRef}: ${result.stderr}`).toBe(expectedStatus);
+      expect(output).toBe(expectedStatus === 0 ? "eligible=true\n" : "");
+      if (error) {
+        expect(result.stderr).toContain(error);
+      }
+    }
+
+    expect(trustedCheckout).toMatchObject({
+      if: eligibilityCondition,
+      uses: "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10",
+      with: {
+        "persist-credentials": false,
+        ref: "${{ github.workflow_sha }}",
+        path: ".release-qa-tooling-trusted",
+        "sparse-checkout": "extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts",
+        "sparse-checkout-cone-mode": false,
+      },
+    });
+    expect(installTooling.if).toBe(eligibilityCondition);
+    expect(installTooling.run).toContain("trap 'rm -rf -- \"$trusted_checkout\"' EXIT");
+    const installLines = (installTooling.run ?? "").split("\n").map((line) => line.trim());
+    const sourceArgument =
+      '"$trusted_checkout/extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts" \\';
+    const sourceArgumentIndex = installLines.indexOf(sourceArgument);
+    expect(sourceArgumentIndex).toBeGreaterThanOrEqual(0);
+    expect(installLines[sourceArgumentIndex + 1]).toBe(
+      "extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts",
+    );
+    expect(installTooling.run).toContain('rm -rf -- "$trusted_checkout"');
+    expect(stepNames.indexOf("Checkout selected ref")).toBeLessThan(
+      stepNames.indexOf("Checkout trusted QA Anthropic mock tooling"),
+    );
+    expect(stepNames.indexOf("Install trusted QA Anthropic mock tooling")).toBeLessThan(
+      stepNames.indexOf("Setup Node environment"),
+    );
+    expect(stepNames.indexOf("Install trusted QA Anthropic mock tooling")).toBeLessThan(
+      stepNames.indexOf("Build private QA runtime"),
+    );
   });
 
   it("runs the core gateway restart pair on its pinned live model", () => {

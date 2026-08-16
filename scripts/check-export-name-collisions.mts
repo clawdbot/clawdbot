@@ -3,7 +3,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import ts from "typescript";
-import { z } from "zod";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   collectTypeScriptFilesFromRoots,
@@ -57,17 +56,6 @@ export type ModuleExports = {
   valueDefinitions: Map<string, ExportedValueDefinition>;
 };
 
-const exportNameCollisionSchema = z
-  .object({
-    name: z.string(),
-    files: z.array(z.string()),
-    sdk: z.literal(true).optional(),
-  })
-  .strict();
-const exportNameCollisionBaselineSchema = z.array(exportNameCollisionSchema);
-
-const baselineRelativePath = "scripts/lib/export-name-collision-baseline.json";
-const baselineRegenCommand = "pnpm lint:tmp:export-name-collisions:gen";
 const failurePrefix = "check-export-name-collisions";
 const extraExcludedFileSuffixes = [".test-support.ts", ".test-helpers.ts", ".d.ts"];
 
@@ -695,51 +683,6 @@ export function findExportNameCollisions(modules: SourceModule[]): ExportNameCol
   return analyzeExportNames(modules).collisions;
 }
 
-type CollisionChange = {
-  baseline?: ExportNameCollision;
-  current?: ExportNameCollision;
-};
-
-/** Compares every collision cluster so additions fail and removals ratchet debt down. */
-export function compareExportNameCollisionDebt(
-  current: ExportNameCollision[],
-  baseline: ExportNameCollision[],
-) {
-  const currentByName = new Map(current.map((collision) => [collision.name, collision]));
-  const baselineByName = new Map(baseline.map((collision) => [collision.name, collision]));
-  const regressions: CollisionChange[] = [];
-  const improvements: CollisionChange[] = [];
-  const names = [...new Set([...currentByName.keys(), ...baselineByName.keys()])].toSorted();
-
-  for (const name of names) {
-    const currentCollision = currentByName.get(name);
-    const baselineCollision = baselineByName.get(name);
-    if (!baselineCollision) {
-      regressions.push({ current: currentCollision });
-      continue;
-    }
-    if (!currentCollision) {
-      improvements.push({ baseline: baselineCollision });
-      continue;
-    }
-    const baselineFiles = new Set(baselineCollision.files);
-    const currentFiles = new Set(currentCollision.files);
-    const hasAddedFile = currentCollision.files.some((file) => !baselineFiles.has(file));
-    const hasRemovedFile = baselineCollision.files.some((file) => !currentFiles.has(file));
-    if (hasAddedFile || (currentCollision.sdk === true && baselineCollision.sdk !== true)) {
-      regressions.push({ baseline: baselineCollision, current: currentCollision });
-    }
-    if (hasRemovedFile || (baselineCollision.sdk === true && currentCollision.sdk !== true)) {
-      improvements.push({ baseline: baselineCollision, current: currentCollision });
-    }
-  }
-  return { regressions, improvements };
-}
-
-function resolveBaselinePath(repoRoot: string) {
-  return path.join(repoRoot, ...baselineRelativePath.split("/"));
-}
-
 async function collectRepositoryModules(repoRoot: string) {
   const sourceCollectOptions = {
     fileExtensions: [".ts", ".mts", ".js", ".mjs"],
@@ -784,28 +727,6 @@ export async function collectRepositoryCollisions(repoRoot: string) {
   return (await collectRepositoryExportAnalysis(repoRoot)).collisions;
 }
 
-async function readBaseline(repoRoot: string) {
-  try {
-    return exportNameCollisionBaselineSchema.parse(
-      JSON.parse(await fs.readFile(resolveBaselinePath(repoRoot), "utf8")),
-    );
-  } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-      return null;
-    }
-    throw error;
-  }
-}
-
-async function writeBaseline(repoRoot: string, collisions: ExportNameCollision[]) {
-  await fs.writeFile(resolveBaselinePath(repoRoot), `${JSON.stringify(collisions, null, 2)}\n`);
-  return collisions.length;
-}
-
-function formatCollision(collision: ExportNameCollision | undefined) {
-  return JSON.stringify(collision);
-}
-
 function printAliasingReExports(reExports: AliasingReExport[]) {
   if (reExports.length === 0) {
     return;
@@ -818,51 +739,27 @@ function printAliasingReExports(reExports: AliasingReExport[]) {
   }
 }
 
-export async function main() {
-  const repoRoot = resolveRepoRoot(import.meta.url);
-  if (process.argv.includes("--update-debt-baseline")) {
-    const analysis = await collectRepositoryExportAnalysis(repoRoot);
-    const count = await writeBaseline(repoRoot, analysis.collisions);
-    console.log(`Wrote ${baselineRelativePath} (${count} entries)`);
-    printAliasingReExports(analysis.aliasingReExports);
-    return 0;
+export async function main(
+  repoRoot = resolveRepoRoot(import.meta.url),
+  argv = process.argv.slice(2),
+) {
+  if (argv.length > 0) {
+    console.error(`Unknown argument(s): ${argv.join(", ")}`);
+    return 2;
   }
 
-  const baseline = await readBaseline(repoRoot);
-  if (!baseline) {
-    console.error(
-      `Missing ${baselineRelativePath}; run \`${baselineRegenCommand}\` and commit it.`,
-    );
-    return 1;
-  }
   const analysis = await collectRepositoryExportAnalysis(repoRoot);
-  const debt = compareExportNameCollisionDebt(analysis.collisions, baseline);
   printAliasingReExports(analysis.aliasingReExports);
-  if (debt.regressions.length === 0 && debt.improvements.length === 0) {
+  if (analysis.collisions.length === 0) {
     console.log("export name collision guard passed.");
     return 0;
   }
 
-  if (debt.regressions.length > 0) {
-    console.error(
-      `Found new exported function/const name collisions beyond ${baselineRelativePath}:`,
-    );
-    for (const regression of debt.regressions) {
-      console.error(`- ${formatCollision(regression.current)}`);
-    }
-    console.error(
-      `Give each behavior one exported spelling. If the debt increase is intentional, run \`${baselineRegenCommand}\` and commit the generated baseline.`,
-    );
+  console.error("Found exported function/const name collisions:");
+  for (const collision of analysis.collisions) {
+    console.error(`- ${JSON.stringify(collision)}`);
   }
-  if (debt.improvements.length > 0) {
-    console.error(`Export name collision debt dropped below ${baselineRelativePath}:`);
-    for (const improvement of debt.improvements) {
-      console.error(
-        `- ${improvement.baseline?.name}: ${formatCollision(improvement.baseline)} -> ${formatCollision(improvement.current)}`,
-      );
-    }
-    console.error(`Run \`${baselineRegenCommand}\` to ratchet the baseline down and commit it.`);
-  }
+  console.error("Give each behavior one exported spelling.");
   return 1;
 }
 

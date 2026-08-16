@@ -61,13 +61,20 @@ function openBindingStore(env: NodeJS.ProcessEnv) {
 
 async function createBindingMigrationFixture(options: {
   binding?: Record<string, unknown>;
+  legacySharedRoot?: boolean;
   name: string;
   sessionIndex?: Record<string, unknown>;
+  storeRoot?: "agent" | "fixed";
   threadId: string;
 }) {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-doctor-"));
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-  const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
+  const sessionsDir =
+    options.storeRoot === "fixed"
+      ? path.join(stateDir, "fixed-sessions")
+      : options.legacySharedRoot
+        ? path.join(stateDir, "sessions")
+        : path.join(stateDir, "agents", "main", "sessions");
   const storePath = path.join(sessionsDir, "sessions.json");
   const transcriptPath = path.join(sessionsDir, `${options.name}.jsonl`);
   const sidecarPath = `${transcriptPath}.codex-app-server.json`;
@@ -209,6 +216,66 @@ describe("codex doctor contract", () => {
     expect(original.plugins.entries.codex.config).toHaveProperty("codexDynamicToolsProfile");
   });
 
+  it("preserves the fixed-store owner when it differs from the system owner", async () => {
+    const sessionKey = "legacy-fixed-store";
+    const fixture = await createBindingMigrationFixture({
+      name: "fixed-store-owner",
+      sessionIndex: {
+        [sessionKey]: {
+          sessionId: "fixed-store-owner",
+          sessionFile: "fixed-store-owner.jsonl",
+          updatedAt: 1,
+        },
+      },
+      storeRoot: "fixed",
+      threadId: "thread-fixed-store-owner",
+    });
+    const params = {
+      ...fixture.params,
+      config: {
+        session: { store: fixture.storePath },
+        agents: {
+          ownership: "explicit" as const,
+          defaults: {
+            systemAgent: { agentId: "main" },
+            sessionStore: { agentId: "ops" },
+          },
+          entries: { main: {}, ops: {} },
+        },
+      },
+    };
+
+    try {
+      await expect(fixture.migration.migrateLegacyState(params)).resolves.toMatchObject({
+        changes: [expect.stringContaining("Migrated 1")],
+        warnings: [],
+      });
+      await expect(
+        openBindingStore(fixture.env).lookup(
+          bindingStoreKey({
+            kind: "session",
+            agentId: "ops",
+            sessionId: "fixed-store-owner",
+            sessionKey,
+          }),
+        ),
+      ).resolves.toMatchObject({
+        state: "active",
+        sessionId: "fixed-store-owner",
+      });
+      expect(
+        getSessionEntry({
+          agentId: "ops",
+          env: fixture.env,
+          sessionKey,
+          storePath: fixture.storePath,
+        }),
+      ).toMatchObject({ agentHarnessId: "codex" });
+    } finally {
+      await fs.rm(fixture.stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("imports and archives shipped binding sidecars", async () => {
     const fixture = await createBindingMigrationFixture({
       name: "session-current",
@@ -289,6 +356,82 @@ describe("codex doctor contract", () => {
     await expect(
       fs.readFile(fixture.storePath, "utf8").then(JSON.parse),
     ).resolves.not.toHaveProperty("agent:main:session-1.agentHarnessId");
+
+    await fs.rm(fixture.stateDir, { recursive: true, force: true });
+  });
+
+  it("preserves ambiguous shared-root bindings for explicit multi-agent configs", async () => {
+    const fixture = await createBindingMigrationFixture({
+      legacySharedRoot: true,
+      name: "explicit-owner",
+      sessionIndex: {
+        legacy: {
+          sessionId: "explicit-owner",
+          sessionFile: "explicit-owner.jsonl",
+          updatedAt: 1,
+        },
+      },
+      threadId: "thread-explicit-owner",
+    });
+    const params = {
+      ...fixture.params,
+      config: {
+        agents: { ownership: "explicit" as const, entries: { main: {}, ops: {} } },
+      },
+    };
+
+    await expect(fixture.migration.detectLegacyState(params)).resolves.toMatchObject({
+      preview: [expect.stringContaining("legacy sidecar")],
+    });
+    const result = await fixture.migration.migrateLegacyState(params);
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      expect.stringContaining("session ownership is indeterminate"),
+    ]);
+    await expect(fs.access(fixture.sidecarPath)).resolves.toBeUndefined();
+    await expect(fs.access(`${fixture.sidecarPath}.migrated`)).rejects.toThrow();
+    await expect(openBindingStore(fixture.env).entries()).resolves.toEqual([]);
+
+    await fs.rm(fixture.stateDir, { recursive: true, force: true });
+  });
+
+  it("keeps an agent-scoped shared-root binding with its explicit owner", async () => {
+    const sessionKey = "agent:ops:legacy";
+    const fixture = await createBindingMigrationFixture({
+      legacySharedRoot: true,
+      name: "explicit-ops-owner",
+      sessionIndex: {
+        [sessionKey]: {
+          sessionId: "explicit-ops-owner",
+          sessionFile: "explicit-ops-owner.jsonl",
+          updatedAt: 1,
+        },
+      },
+      threadId: "thread-explicit-ops-owner",
+    });
+    const params = {
+      ...fixture.params,
+      config: {
+        agents: { ownership: "explicit" as const, entries: { main: {}, ops: {} } },
+      },
+    };
+
+    await expect(fixture.migration.migrateLegacyState(params)).resolves.toMatchObject({
+      changes: [expect.stringContaining("Migrated 1")],
+      warnings: [],
+    });
+    await expect(
+      openBindingStore(fixture.env).lookup(
+        bindingStoreKey({
+          kind: "session",
+          agentId: "ops",
+          sessionId: "explicit-ops-owner",
+          sessionKey,
+        }),
+      ),
+    ).resolves.toMatchObject({ sessionId: "explicit-ops-owner" });
+    await expect(fs.access(`${fixture.sidecarPath}.migrated`)).resolves.toBeUndefined();
 
     await fs.rm(fixture.stateDir, { recursive: true, force: true });
   });

@@ -19,13 +19,11 @@ import {
   type UiSettings,
 } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
-import "../../../components/tooltip.ts";
-import {
-  BROWSER_PANEL_TOGGLE_EVENT,
-  TERMINAL_PANEL_TOGGLE_EVENT,
-} from "../../../components/panel-toggle-contract.ts";
+import { renderPanelEmptyState } from "../../../components/panel-empty-state.ts";
 import { t } from "../../../i18n/index.ts";
+import "../../../components/tooltip.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
+import { formatUiError } from "../../../lib/format-error.ts";
 import { formatByteSize } from "../../../lib/format.ts";
 import { isGatewayMethodAdvertised } from "../../../lib/gateway-methods.ts";
 import {
@@ -51,11 +49,8 @@ export type SessionWorkspaceProps = {
   /** Pane too narrow for a side rail: presentation forces the bottom dock
    * (the persisted dock preference still applies once the pane widens). */
   narrowLayout: boolean;
-  dockDragging: boolean;
-  dockDragZone: ChatWorkspaceDock | null;
   onToggleCollapsed: () => void;
   onSetDock: (dock: ChatWorkspaceDock) => void;
-  onDockDragStart: (event: PointerEvent) => void;
   onRefresh: () => void;
   onBrowsePath: (path: string) => void;
   onCopyPath: (path: string) => void;
@@ -64,6 +59,8 @@ export type SessionWorkspaceProps = {
   onOpenArtifact: (artifactId: string) => void;
   onToggleTerminal?: () => void;
   onToggleBrowser?: () => void;
+  onToggleDesktop?: () => void;
+  onToggleCustodian?: () => void;
   /** Opens the session diff panel; absent until a usable checkout is known. */
   onOpenDiff?: () => void;
 };
@@ -76,8 +73,6 @@ type SessionWorkspaceState = {
   browserSearchTimer: ReturnType<typeof globalThis.setTimeout> | null;
   collapsed: boolean;
   dock: ChatWorkspaceDock;
-  dockDragging: boolean;
-  dockDragZone: ChatWorkspaceDock | null;
   error: string | null;
   list: SessionWorkspaceListResult | null;
   loading: boolean;
@@ -160,8 +155,6 @@ function getWorkspaceState(state: SessionWorkspaceHost): SessionWorkspaceState {
     // Dock preference is app-wide, seeded from the host's loaded settings;
     // per-session state just carries it forward.
     dock: current?.dock ?? normalizeChatWorkspaceDock(state.settings?.chatWorkspaceDock),
-    dockDragging: false,
-    dockDragZone: null,
     error: null,
     list: null,
     loading: false,
@@ -363,7 +356,7 @@ function loadWorkspace(
     } catch (error) {
       const current = currentWorkspaceState(state);
       if (current === workspace && current.requestId === requestId) {
-        current.error = String(error);
+        current.error = formatUiError(error);
       }
     } finally {
       const current = currentWorkspaceState(state);
@@ -452,7 +445,7 @@ function openWorkspaceItem<T>(
       }
     } catch (error) {
       if (isCurrentOpenRequest(state, request)) {
-        workspace.error = String(error);
+        workspace.error = formatUiError(error);
       }
     } finally {
       requestUpdate(state);
@@ -558,7 +551,7 @@ function openFile(
                 return {
                   ok: false as const,
                   code: "error" as const,
-                  message: error instanceof Error ? error.message : String(error),
+                  message: formatUiError(error),
                 };
               }
             },
@@ -614,7 +607,7 @@ export function openSessionWorkspaceFile(
   openFile(state, getWorkspaceState(state), target.path, { line: target.line });
 }
 
-export function toggleSessionWorkspace(state: SessionWorkspaceHost) {
+function toggleSessionWorkspace(state: SessionWorkspaceHost) {
   const workspace = getWorkspaceState(state);
   workspace.collapsed = !workspace.collapsed;
   if (!workspace.collapsed && workspace.list?.sessionKey !== state.sessionKey) {
@@ -627,82 +620,12 @@ function setSessionWorkspaceDock(state: SessionWorkspaceHost, dock: ChatWorkspac
   const workspace = getWorkspaceState(state);
   if (workspace.dock !== dock) {
     workspace.dock = dock;
-    // Keep the host's settings snapshot in step so the next session's
-    // workspace state seeds from the same dock without a storage read.
     if (state.settings) {
       state.settings = { ...state.settings, chatWorkspaceDock: dock };
     }
     patchSettings({ chatWorkspaceDock: dock });
   }
   requestUpdate(state);
-}
-
-/** Drag the rail by its header to re-dock it inside the pane: the right and
- * bottom bands of .chat-workbench are drop zones (mirrors the terminal
- * panel's right/bottom dock). A small threshold keeps plain clicks intact. */
-function startSessionWorkspaceDockDrag(state: SessionWorkspaceHost, event: PointerEvent) {
-  if (event.button !== 0) {
-    return;
-  }
-  const grip = event.currentTarget;
-  if (!(grip instanceof HTMLElement)) {
-    return;
-  }
-  const workbench = grip.closest<HTMLElement>(".chat-workbench");
-  if (!workbench) {
-    return;
-  }
-  const workspace = getWorkspaceState(state);
-  const startX = event.clientX;
-  const startY = event.clientY;
-
-  const resolveZone = (x: number, y: number): ChatWorkspaceDock | null => {
-    const rect = workbench.getBoundingClientRect();
-    if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
-      return null;
-    }
-    if (y > rect.bottom - rect.height * 0.32) {
-      return "bottom";
-    }
-    return x > rect.right - rect.width * 0.3 ? "right" : null;
-  };
-
-  const handleMove = (move: PointerEvent) => {
-    if (!workspace.dockDragging) {
-      if (Math.hypot(move.clientX - startX, move.clientY - startY) < 5) {
-        return;
-      }
-      workspace.dockDragging = true;
-      workspace.dockDragZone = resolveZone(move.clientX, move.clientY);
-      requestUpdate(state);
-      return;
-    }
-    const zone = resolveZone(move.clientX, move.clientY);
-    if (zone !== workspace.dockDragZone) {
-      workspace.dockDragZone = zone;
-      requestUpdate(state);
-    }
-  };
-  const finish = (apply: boolean) => {
-    grip.removeEventListener("pointermove", handleMove);
-    grip.removeEventListener("pointerup", handleUp);
-    grip.removeEventListener("pointercancel", handleCancel);
-    const zone = workspace.dockDragZone;
-    workspace.dockDragging = false;
-    workspace.dockDragZone = null;
-    if (apply && zone) {
-      setSessionWorkspaceDock(state, zone);
-      return;
-    }
-    requestUpdate(state);
-  };
-  const handleUp = () => finish(true);
-  const handleCancel = () => finish(false);
-
-  grip.setPointerCapture(event.pointerId);
-  grip.addEventListener("pointermove", handleMove);
-  grip.addEventListener("pointerup", handleUp);
-  grip.addEventListener("pointercancel", handleCancel);
 }
 
 export function revealSessionWorkspaceFile(state: SessionWorkspaceHost, path: string) {
@@ -749,14 +672,16 @@ function openArtifact(
 
 export function createSessionWorkspaceProps(
   state: SessionWorkspaceHost,
-  options?: { narrowLayout?: boolean; draftScope?: string },
+  options?: { narrowLayout?: boolean; draftScope?: string; expanded?: boolean },
 ): SessionWorkspaceProps {
   state.sessionWorkspaceDraftScope = options?.draftScope;
   const workspace = getWorkspaceState(state);
   if (
     // The collapsed header still renders the diff action, so load its checkout
     // capability eagerly instead of waiting for the file rail to open.
-    (!workspace.collapsed || isGatewayMethodAdvertised(state, "sessions.diff") === true) &&
+    (options?.expanded === true ||
+      !workspace.collapsed ||
+      isGatewayMethodAdvertised(state, "sessions.diff") === true) &&
     state.connected &&
     state.agentsList &&
     !workspace.loading &&
@@ -765,13 +690,9 @@ export function createSessionWorkspaceProps(
   ) {
     loadWorkspace(state, workspace);
   }
-  const canOpenDiff =
-    isGatewayMethodAdvertised(state, "sessions.diff") === true &&
-    Boolean(state.client) &&
-    workspace.list?.sessionKey === state.sessionKey &&
-    workspace.list.gitCheckout !== false;
+  const diffContent = resolveSessionDiffSidebarContent(state);
   return {
-    collapsed: workspace.collapsed,
+    collapsed: options?.expanded === true ? false : workspace.collapsed,
     sessionKey: state.sessionKey,
     list: workspace.list?.sessionKey === state.sessionKey ? workspace.list : null,
     loading: workspace.loading,
@@ -779,11 +700,8 @@ export function createSessionWorkspaceProps(
     activeId: workspace.activeId,
     dock: workspace.dock,
     narrowLayout: options?.narrowLayout === true,
-    dockDragging: workspace.dockDragging,
-    dockDragZone: workspace.dockDragZone,
     onToggleCollapsed: () => toggleSessionWorkspace(state),
     onSetDock: (dock) => setSessionWorkspaceDock(state, dock),
-    onDockDragStart: (event) => startSessionWorkspaceDockDrag(state, event),
     onRefresh: () => loadWorkspace(state, workspace, true),
     onBrowsePath: (path) => {
       clearWorkspaceSearchTimer(workspace);
@@ -812,24 +730,20 @@ export function createSessionWorkspaceProps(
       }, 160);
     },
     onOpenArtifact: (artifactId) => openArtifact(state, workspace, artifactId),
-    onToggleTerminal: state.terminalAvailable
-      ? () => {
-          window.dispatchEvent(
-            new CustomEvent(TERMINAL_PANEL_TOGGLE_EVENT, {
-              detail: { dock: "right", open: true },
-            }),
-          );
-        }
-      : undefined,
-    onToggleBrowser: state.browserPanelAvailable
-      ? () => {
-          window.dispatchEvent(new CustomEvent(BROWSER_PANEL_TOGGLE_EVENT, {}));
-        }
-      : undefined,
-    onOpenDiff: canOpenDiff
-      ? () => state.handleOpenSidebar(buildSessionDiffSidebarContent(state))
-      : undefined,
+    onOpenDiff: diffContent ? () => state.handleOpenSidebar(diffContent) : undefined,
   };
+}
+
+export function resolveSessionDiffSidebarContent(
+  state: SessionWorkspaceHost,
+): SidebarContent | null {
+  const workspace = getWorkspaceState(state);
+  const canOpenDiff =
+    isGatewayMethodAdvertised(state, "sessions.diff") === true &&
+    Boolean(state.client) &&
+    workspace.list?.sessionKey === state.sessionKey &&
+    workspace.list.gitCheckout !== false;
+  return canOpenDiff ? buildSessionDiffSidebarContent(state) : null;
 }
 
 /** Sidebar payload whose loader refetches sessions.diff for the pane's session. */
@@ -907,80 +821,73 @@ function renderWorkspaceRailSection(
   `;
 }
 
-/** Changed-file count shown on the collapsed-rail toggles (pane header /
- * floating opener); 0 until the workspace list has loaded. */
-function sessionWorkspaceModifiedCount(
-  sessionWorkspace: SessionWorkspaceProps | undefined,
-): number {
-  return sessionWorkspace?.list?.files.filter((file) => file.kind === "modified").length ?? 0;
-}
-
-/** Toggle used wherever the rail itself is not visible: the split pane header
- * and the single-pane floating opener. Collapsed rails render nothing, so
- * this button is the only pointer affordance (⇧⌘B still works). */
-export function renderSessionWorkspaceToggle(
-  sessionWorkspace: SessionWorkspaceProps | undefined,
-): TemplateResult | typeof nothing {
-  if (!sessionWorkspace) {
-    return nothing;
-  }
-  const expanded = !sessionWorkspace.collapsed;
-  const label = expanded ? t("chat.workspaceFiles.collapse") : t("chat.workspaceFiles.showFiles");
-  const modifiedCount = sessionWorkspaceModifiedCount(sessionWorkspace);
-  return html`
-    <openclaw-tooltip .content=${`${label} (⇧⌘B)`}>
-      <button
-        class="btn btn--ghost btn--icon chat-icon-btn chat-workspace-toggle"
-        type="button"
-        aria-label=${label}
-        aria-keyshortcuts="Meta+Shift+B"
-        aria-expanded=${String(expanded)}
-        @click=${sessionWorkspace.onToggleCollapsed}
-      >
-        ${icons.fileText}
-        ${!expanded && modifiedCount > 0
-          ? html`<span class="chat-workspace-toggle__badge" aria-hidden="true"
-              >${modifiedCount}</span
-            >`
-          : nothing}
-      </button>
-    </openclaw-tooltip>
-  `;
-}
-
-/** Session diff button shown beside the workspace toggle when available. */
-export function renderSessionDiffToggle(
-  sessionWorkspace: SessionWorkspaceProps | undefined,
-): TemplateResult | typeof nothing {
-  if (!sessionWorkspace?.onOpenDiff) {
-    return nothing;
-  }
-  const label = t("chat.sessionDiff.show");
-  return html`
-    <openclaw-tooltip .content=${label}>
-      <button
-        class="btn btn--ghost btn--icon chat-icon-btn chat-session-diff-toggle"
-        type="button"
-        aria-label=${label}
-        @click=${sessionWorkspace.onOpenDiff}
-      >
-        ${icons.diff}
-      </button>
-    </openclaw-tooltip>
-  `;
-}
-
 export function renderSessionWorkspaceRail(
   sessionWorkspace: SessionWorkspaceProps | undefined,
+  options: { embedded?: boolean } = {},
 ): TemplateResult | typeof nothing {
-  // Collapsed rails render nothing at all — no icon strip. Reopening happens
-  // through renderSessionWorkspaceToggle or ⇧⌘B.
-  if (!sessionWorkspace || sessionWorkspace.collapsed) {
+  // Standalone collapsed rails render nothing; the shared panel menu or ⇧⌘B reopens them.
+  if (!sessionWorkspace || (sessionWorkspace.collapsed && !options.embedded)) {
     return nothing;
   }
   // Narrow panes always present the rail as a bottom strip; a side column
   // would crush the thread below its readable minimum.
   const dock = sessionWorkspace.narrowLayout ? "bottom" : sessionWorkspace.dock;
+  const terminalButton = sessionWorkspace.onToggleTerminal
+    ? html`
+        <openclaw-tooltip .content=${t("terminal.toggle")}>
+          <button
+            type="button"
+            class="rail-header__action chat-workspace-rail__terminal"
+            aria-label=${t("terminal.toggle")}
+            @click=${sessionWorkspace.onToggleTerminal}
+          >
+            ${icons.terminal}
+          </button>
+        </openclaw-tooltip>
+      `
+    : nothing;
+  const browserButton = sessionWorkspace.onToggleBrowser
+    ? html`
+        <openclaw-tooltip .content=${t("browser.toggle")}>
+          <button
+            type="button"
+            class="rail-header__action chat-workspace-rail__terminal"
+            aria-label=${t("browser.toggle")}
+            @click=${sessionWorkspace.onToggleBrowser}
+          >
+            ${icons.globe}
+          </button>
+        </openclaw-tooltip>
+      `
+    : nothing;
+  const custodianButton = sessionWorkspace.onToggleCustodian
+    ? html`
+        <openclaw-tooltip .content=${t("custodian.panel.toggle")}>
+          <button
+            type="button"
+            class="rail-header__action chat-workspace-rail__terminal"
+            aria-label=${t("custodian.panel.toggle")}
+            @click=${sessionWorkspace.onToggleCustodian}
+          >
+            ${icons.lobster}
+          </button>
+        </openclaw-tooltip>
+      `
+    : nothing;
+  const diffButton = sessionWorkspace.onOpenDiff
+    ? html`
+        <openclaw-tooltip .content=${t("chat.sessionDiff.show")}>
+          <button
+            type="button"
+            class="rail-header__action chat-workspace-rail__terminal chat-session-diff-toggle"
+            aria-label=${t("chat.sessionDiff.show")}
+            @click=${sessionWorkspace.onOpenDiff}
+          >
+            ${icons.diff}
+          </button>
+        </openclaw-tooltip>
+      `
+    : nothing;
   const files = sessionWorkspace.list?.files ?? [];
   const modifiedFiles = files.filter((file) => file.kind === "modified");
   const readFiles = files.filter((file) => file.kind === "read");
@@ -1256,68 +1163,65 @@ export function renderSessionWorkspaceRail(
         `;
   return html`
     <aside class="chat-workspace-rail" aria-label=${t("chat.workspaceFiles.label")}>
-      <div class="chat-workspace-rail__header">
-        <!-- Grip: drag the rail onto the pane's right/bottom band to re-dock
-             it (chat-view renders the drop zones while dragging). -->
-        <div
-          class="chat-workspace-rail__title ${sessionWorkspace.narrowLayout
-            ? ""
-            : "chat-workspace-rail__grip"}"
-          title=${sessionWorkspace.narrowLayout ? nothing : t("chat.workspaceFiles.dragToDock")}
-          @pointerdown=${sessionWorkspace.narrowLayout ? nothing : sessionWorkspace.onDockDragStart}
-        >
-          <span class="chat-workspace-rail__eyebrow">${t("chat.workspaceFiles.workspace")}</span>
-          <strong>${t("chat.workspaceFiles.files")}</strong>
-        </div>
-        <div class="chat-workspace-rail__actions">
-          ${sessionWorkspace.narrowLayout
-            ? nothing
-            : html`
-                <openclaw-tooltip
-                  .content=${dock === "bottom"
-                    ? t("chat.workspaceFiles.dockRight")
-                    : t("chat.workspaceFiles.dockBottom")}
-                >
-                  <button
-                    class="btn btn--ghost btn--sm chat-workspace-rail__dock"
-                    type="button"
-                    aria-label=${dock === "bottom"
-                      ? t("chat.workspaceFiles.dockRight")
-                      : t("chat.workspaceFiles.dockBottom")}
-                    @click=${() =>
-                      sessionWorkspace.onSetDock(dock === "bottom" ? "right" : "bottom")}
-                  >
-                    ${dock === "bottom" ? icons.panelRightOpen : icons.panelBottomOpen}
-                  </button>
-                </openclaw-tooltip>
-              `}
-          <openclaw-tooltip .content=${t("chat.workspaceFiles.refresh")}>
-            <button
-              class="btn btn--ghost btn--sm chat-workspace-rail__refresh"
-              type="button"
-              aria-label=${t("chat.workspaceFiles.refresh")}
-              ?disabled=${sessionWorkspace.loading}
-              @click=${sessionWorkspace.onRefresh}
-            >
-              ${icons.refresh}
-            </button>
-          </openclaw-tooltip>
-          <openclaw-tooltip .content=${`${t("chat.workspaceFiles.collapse")} (⇧⌘B)`}>
-            <button
-              type="button"
-              class="nav-collapse-toggle chat-workspace-rail__collapse-toggle"
-              aria-label=${t("chat.workspaceFiles.collapse")}
-              aria-keyshortcuts="Meta+Shift+B"
-              aria-expanded="true"
-              @click=${sessionWorkspace.onToggleCollapsed}
-            >
-              <span class="nav-collapse-toggle__icon" aria-hidden="true"
-                >${dock === "bottom" ? icons.panelBottomClose : icons.panelRightClose}</span
+      ${options.embedded
+        ? nothing
+        : html`<div class="rail-header chat-workspace-rail__header">
+            <div class="rail-header__copy chat-workspace-rail__title">
+              <span class="rail-header__eyebrow chat-workspace-rail__eyebrow"
+                >${t("chat.workspaceFiles.workspace")}</span
               >
-            </button>
-          </openclaw-tooltip>
-        </div>
-      </div>
+              <strong class="rail-header__title">${t("chat.workspaceFiles.files")}</strong>
+            </div>
+            <div class="rail-header__actions chat-workspace-rail__actions">
+              ${diffButton} ${terminalButton} ${browserButton} ${custodianButton}
+              ${sessionWorkspace.narrowLayout
+                ? nothing
+                : html`
+                    <openclaw-tooltip
+                      .content=${dock === "bottom"
+                        ? t("chat.workspaceFiles.dockRight")
+                        : t("chat.workspaceFiles.dockBottom")}
+                    >
+                      <button
+                        class="rail-header__action chat-workspace-rail__dock"
+                        type="button"
+                        aria-label=${dock === "bottom"
+                          ? t("chat.workspaceFiles.dockRight")
+                          : t("chat.workspaceFiles.dockBottom")}
+                        @click=${() =>
+                          sessionWorkspace.onSetDock(dock === "bottom" ? "right" : "bottom")}
+                      >
+                        ${dock === "bottom" ? icons.panelRightOpen : icons.panelBottomOpen}
+                      </button>
+                    </openclaw-tooltip>
+                  `}
+              <openclaw-tooltip .content=${t("chat.workspaceFiles.refresh")}>
+                <button
+                  class="rail-header__action chat-workspace-rail__refresh"
+                  type="button"
+                  aria-label=${t("chat.workspaceFiles.refresh")}
+                  ?disabled=${sessionWorkspace.loading}
+                  @click=${sessionWorkspace.onRefresh}
+                >
+                  ${icons.refresh}
+                </button>
+              </openclaw-tooltip>
+              <openclaw-tooltip .content=${`${t("chat.workspaceFiles.collapse")} (⇧⌘B)`}>
+                <button
+                  type="button"
+                  class="rail-header__action chat-workspace-rail__collapse-toggle"
+                  aria-label=${t("chat.workspaceFiles.collapse")}
+                  aria-keyshortcuts="Meta+Shift+B"
+                  aria-expanded="true"
+                  @click=${sessionWorkspace.onToggleCollapsed}
+                >
+                  <span class="nav-collapse-toggle__icon" aria-hidden="true"
+                    >${dock === "bottom" ? icons.panelBottomClose : icons.panelRightClose}</span
+                  >
+                </button>
+              </openclaw-tooltip>
+            </div>
+          </div>`}
       ${sessionWorkspace.list?.root
         ? html`
             <openclaw-tooltip .content=${sessionWorkspace.list.root}>
@@ -1335,9 +1239,11 @@ export function renderSessionWorkspaceRail(
           : html`
               <div class="chat-workspace-rail__scroll">
                 ${!hasSessionItems
-                  ? html`<div class="chat-workspace-rail__state">
-                      ${t("chat.workspaceFiles.empty")}
-                    </div>`
+                  ? renderPanelEmptyState({
+                      icon: icons.fileText,
+                      heading: t("chat.sidePanel.files"),
+                      description: t("chat.sidePanel.filesEmpty"),
+                    })
                   : html`
                       ${renderWorkspaceRailSection(
                         t("chat.workspaceFiles.changed"),

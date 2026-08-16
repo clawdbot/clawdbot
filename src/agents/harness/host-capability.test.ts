@@ -24,7 +24,10 @@ import {
 } from "../runtime/internal-hooks.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import { callGatewayTool } from "../tools/gateway.js";
-import { createAgentHarnessHostCapabilities } from "./host-capability.js";
+import {
+  createAgentHarnessHostCapabilities,
+  retainBeforeToolCallForNativeHookRelay,
+} from "./host-capability.js";
 
 vi.mock("../agent-tools.before-tool-call.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agent-tools.before-tool-call.js")>()),
@@ -282,6 +285,30 @@ describe("agent harness host capability", () => {
     hookResult.resolve({ blocked: false, params: { command: "true" } });
 
     await expect(pending).rejects.toThrow("no longer active");
+  });
+
+  it("keeps a private native policy lease after foreground close but fences replacement", async () => {
+    const { attempt } = await admittedAttempt("run-retained-policy");
+    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+    const retained = retainBeforeToolCallForNativeHookRelay(host.capabilities.runBeforeToolCall);
+    expect(retained).toBeDefined();
+    if (!retained) {
+      throw new Error("expected retained native policy lease");
+    }
+
+    expect(closeAdmittedRunDelegatedAuthority(attempt.admittedRunContext)).toBe(true);
+    await expect(
+      host.capabilities.runBeforeToolCall({ toolName: "exec", params: { command: "true" } }),
+    ).rejects.toThrow("no longer active");
+    await expect(
+      retained.runBeforeToolCall({ toolName: "exec", params: { command: "true" } }),
+    ).resolves.toMatchObject({ blocked: false });
+
+    await admittedAttempt("run-retained-policy");
+    await expect(
+      retained.runBeforeToolCall({ toolName: "exec", params: { command: "true" } }),
+    ).rejects.toThrow("no longer active");
+    retained.release();
   });
 
   it.each([

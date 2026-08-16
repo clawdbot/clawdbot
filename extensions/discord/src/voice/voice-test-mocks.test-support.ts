@@ -282,7 +282,11 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
 });
 
 vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
-  enqueueSystemEvent: enqueueSystemEventMock,
+  enqueueRoutedSystemEvent: (
+    text: unknown,
+    route: { sessionKey: unknown },
+    options: Record<string, unknown>,
+  ) => enqueueSystemEventMock(text, { ...options, sessionKey: route.sessionKey }),
 }));
 
 vi.mock("openclaw/plugin-sdk/realtime-voice", async () => {

@@ -1,9 +1,10 @@
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import type { StatusReactionTiming } from "openclaw/plugin-sdk/channel-feedback";
 // Signal type declarations define plugin contracts.
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   DmPolicy,
   GroupPolicy,
+  OpenClawConfig,
   SignalReactionNotificationMode,
 } from "openclaw/plugin-sdk/config-contracts";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
@@ -92,6 +93,7 @@ export type SignalNativeReplyContext = {
 
 export type SignalEventHandlerDeps = {
   runtime: RuntimeEnv;
+  channelRuntime?: PluginRuntime["channel"];
   statusReactionTiming?: Required<StatusReactionTiming>;
   abortSignal?: AbortSignal;
   runTrackedTask?: (task: () => Promise<void>) => void;

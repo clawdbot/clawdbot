@@ -76,6 +76,7 @@ function resolveNonNegativeTokenCount(value: number | undefined): number | undef
 
 function estimateSessionRunCostUsd(params: {
   cfg: OpenClawConfig;
+  agentDir?: string;
   usage?: NormalizedUsage;
   providerUsed?: string;
   modelUsed?: string;
@@ -87,6 +88,7 @@ function estimateSessionRunCostUsd(params: {
     provider: params.providerUsed,
     model: params.modelUsed,
     config: params.cfg,
+    agentDir: params.agentDir,
   });
   return asNonNegativeFiniteNumber(estimateUsageCost({ usage: params.usage, cost }));
 }
@@ -96,6 +98,7 @@ export async function persistSessionUsageUpdate(params: {
   storePath?: string;
   sessionKey?: string;
   cfg?: OpenClawConfig;
+  agentDir?: string;
   usage?: NormalizedUsage;
   /**
    * Usage from the last individual API call (not accumulated). When provided,
@@ -179,6 +182,7 @@ export async function persistSessionUsageUpdate(params: {
             ? undefined
             : estimateSessionRunCostUsd({
                 cfg,
+                agentDir: params.agentDir,
                 usage: params.usage,
                 providerUsed: params.providerUsed ?? entry.modelProvider,
                 modelUsed: params.modelUsed ?? entry.model,

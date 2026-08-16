@@ -72,30 +72,33 @@ afterEach(async () => {
 
 describe("chat composer pointer activation", () => {
   it("preserves only its own textarea focus during primary pointer actions", () => {
-    const container = renderComposer({
+    const sendContainer = renderComposer({
       canAbort: true,
       draft: "Follow up",
       onAbort: vi.fn(),
       onSend: vi.fn(),
     });
-    const input = textarea(container);
-    const send = button(container, t("chat.runControls.sendMessage"));
-    const stop = button(container, t("chat.runControls.stopGenerating"));
-    markComposerAtFocusInset(container);
+    const sendInput = textarea(sendContainer);
+    const send = button(sendContainer, t("chat.runControls.sendMessage"));
+    markComposerAtFocusInset(sendContainer);
 
-    input.focus();
+    sendInput.focus();
     const sendPointerDown = primaryPointerDown();
     send.dispatchEvent(sendPointerDown);
     expect(sendPointerDown.defaultPrevented).toBe(true);
 
-    input.focus();
+    const stopContainer = renderComposer({ canAbort: true, onAbort: vi.fn() });
+    const stopInput = textarea(stopContainer);
+    const stop = button(stopContainer, t("chat.runControls.stopGenerating"));
+    markComposerAtFocusInset(stopContainer);
+    stopInput.focus();
     const stopPointerDown = primaryPointerDown();
     stop.dispatchEvent(stopPointerDown);
     expect(stopPointerDown.defaultPrevented).toBe(true);
 
-    const shell = container.querySelector<HTMLElement>(".agent-chat__composer-shell")!;
+    const shell = sendContainer.querySelector<HTMLElement>(".agent-chat__composer-shell")!;
     shell.style.marginBottom = "14px";
-    input.focus();
+    sendInput.focus();
     const stableLayoutPointerDown = primaryPointerDown();
     send.dispatchEvent(stableLayoutPointerDown);
     expect(stableLayoutPointerDown.defaultPrevented).toBe(false);
@@ -139,7 +142,6 @@ describe("chat composer pointer activation", () => {
     const onStopTypingChange = vi.fn();
     const stopContainer = renderComposer({
       canAbort: true,
-      draft: "Keep this follow-up",
       onAbort,
       onTypingChange: onStopTypingChange,
     });
@@ -147,14 +149,13 @@ describe("chat composer pointer activation", () => {
     const stop = button(stopContainer, t("chat.runControls.stopGenerating"));
     markComposerAtFocusInset(stopContainer);
     stopTextarea.focus();
-    stopTextarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
     stop.dispatchEvent(primaryPointerDown());
     stop.click();
 
     expect(onAbort).toHaveBeenCalledOnce();
-    expect(stopTextarea.value).toBe("Keep this follow-up");
+    expect(stopTextarea.value).toBe("");
     expect(document.activeElement).toBe(stopTextarea);
-    expect(onStopTypingChange).toHaveBeenLastCalledWith(true);
+    expect(onStopTypingChange).not.toHaveBeenCalled();
   });
 
   it.each([

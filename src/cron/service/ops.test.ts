@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentDeletionCommitUncertainError } from "../../agents/agent-lifecycle-registry.js";
-import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../../state/openclaw-state-db.js";
 import * as taskExecutor from "../../tasks/task-executor.js";
 import { findTaskByRunId, listTaskRecordsUnsorted } from "../../tasks/task-registry.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
@@ -16,6 +19,8 @@ import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-h
 import * as cronStoreModule from "../store.js";
 import { loadCronJobsStoreWithConfigJobs, loadCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
+import * as runReceiptStore from "../store/run-receipt-store.js";
+import { saveCronJobsStoreWithTransactionHooks } from "../store/transaction-hooks.js";
 import type { CronJob } from "../types.js";
 import { start, stop } from "./ops-lifecycle.js";
 import {
@@ -29,8 +34,9 @@ import {
 import { list, writeScratch } from "./ops-read.js";
 import { inspectManualRunDisposition } from "./ops-run-preparation.js";
 import { run } from "./ops-run.js";
+import { proposeCronRunRecovery, recoverCronRunProposal } from "./run-recovery.js";
 import { createCronServiceState, type CronAddResult, type CronEvent } from "./state.js";
-import { tryCreateCronTaskRun, tryFinishCronTaskRun } from "./task-runs.js";
+import * as taskRuns from "./task-runs.js";
 import { runMissedJobs } from "./timer.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
@@ -785,6 +791,33 @@ describe("cron service ops seam coverage", () => {
     await expect(fs.stat(`${storePath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("starts and lists future jobs after upgrading from a database without receipts", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-05-20T08:30:00.000Z");
+    const job = createFutureEveryJob({ id: "pre-receipt-upgrade", now });
+    await writeCronStoreSnapshot({ storePath, jobs: [job] });
+    openOpenClawStateDatabase().db.exec("DROP TABLE cron_run_receipts");
+    const state = createOkIsolatedCronState({ storePath, now });
+
+    try {
+      await start(state);
+
+      await expect(list(state)).resolves.toEqual([
+        expect.objectContaining({ id: job.id, enabled: true }),
+      ]);
+      expect(
+        openOpenClawStateDatabase()
+          .db.prepare(
+            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'cron_run_receipts'",
+          )
+          .get(),
+      ).toEqual({ name: "cron_run_receipts" });
+    } finally {
+      stop(state);
+      runReceiptStore.inspectActiveCronRunReceipt({ storePath, jobId: job.id });
+    }
+  });
+
   it("leaves legacy notify fallback for doctor instead of migrating during startup", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-05-20T09:00:00.000Z");
@@ -899,7 +932,7 @@ describe("cron service ops seam coverage", () => {
     stop(state);
   });
 
-  it("start persists an interrupted-run auto-disable before notifying", async () => {
+  it("commits an interrupted-run auto-disable before notifying", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-03-23T12:00:00.000Z");
     const job = createInterruptedMainJob(now);
@@ -908,17 +941,15 @@ describe("cron service ops seam coverage", () => {
 
     const order: string[] = [];
     const enqueueSystemEvent = vi.fn(() => {
-      expect(order.at(-1)).toBe("persist");
+      const row = runOpenClawStateWriteTransaction(({ db }) =>
+        db.prepare("SELECT enabled FROM cron_jobs WHERE job_id = ?").get(job.id),
+      ) as { enabled: number };
+      expect(row.enabled).toBe(0);
       order.push("notify");
     });
     const requestHeartbeat = vi.fn(() => {
       expect(order.at(-1)).toBe("notify");
       order.push("heartbeat");
-    });
-    const saveCronJobsStore = cronStoreModule.saveCronJobsStore;
-    vi.spyOn(cronStoreModule, "saveCronJobsStore").mockImplementation(async (...args) => {
-      await saveCronJobsStore(...args);
-      order.push("persist");
     });
     const state = createCronServiceState({
       storePath,
@@ -932,13 +963,82 @@ describe("cron service ops seam coverage", () => {
 
     await start(state);
 
-    expect(order.slice(0, 3)).toEqual(["persist", "notify", "heartbeat"]);
+    expect(order).toEqual(["notify", "heartbeat"]);
     expect((await loadCronStore(storePath)).jobs[0]).toMatchObject({
       enabled: false,
       state: {
         autoDisabled: { reason: "consecutive-failures", consecutiveErrors: 10 },
       },
     });
+    stop(state);
+  });
+
+  it("preserves a foreign completion committed after recovery is proposed", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const startedAt = now - 30_000;
+    const job = createInterruptedMainJob(now);
+    job.state.runningAtMs = startedAt;
+    await writeCronStoreSnapshot({ storePath, jobs: [job] });
+    const preparedReceipt = runReceiptStore.prepareCronRunReceiptClaim({
+      storePath,
+      job,
+      agentId: "main",
+      startedAtMs: startedAt,
+    });
+    const receipt = runOpenClawStateWriteTransaction(({ db }) =>
+      runReceiptStore.claimCronRunReceiptInDatabase({
+        database: db,
+        prepared: preparedReceipt,
+        resolveAgentId: (current) => current.agentId ?? "main",
+      }),
+    );
+    const completedJob = structuredClone(job);
+    delete completedJob.state.runningAtMs;
+    completedJob.state.lastRunAtMs = startedAt;
+    completedJob.state.lastRunStatus = "ok";
+    completedJob.state.lastStatus = "ok";
+    completedJob.state.nextRunAtMs = now + 60_000;
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+    const proposal = proposeCronRunRecovery(state, job.id, undefined, startedAt);
+    await saveCronJobsStoreWithTransactionHooks(
+      storePath,
+      { version: 1, jobs: [completedJob] },
+      undefined,
+      {
+        afterWrite: (db) => {
+          runReceiptStore.finishCronRunReceiptInDatabase({
+            database: db,
+            handle: receipt,
+            status: "ok",
+            finishedAtMs: now,
+          });
+        },
+      },
+    );
+    runReceiptStore.releaseLocalCronRunReceiptOwnership(receipt);
+
+    expect(recoverCronRunProposal(state, proposal)).toEqual({ kind: "superseded" });
+
+    await start(state);
+
+    const persisted = (await loadCronStore(storePath)).jobs[0];
+    expect(persisted?.state).toMatchObject({
+      lastRunAtMs: startedAt,
+      lastRunStatus: "ok",
+      lastStatus: "ok",
+    });
+    expect(persisted?.state.nextRunAtMs).toEqual(expect.any(Number));
+    expect(persisted?.state.runningAtMs).toBeUndefined();
+    expect(persisted?.state.lastError).toBeUndefined();
     stop(state);
   });
 
@@ -960,6 +1060,20 @@ describe("cron service ops seam coverage", () => {
         job.payload = { kind: "script", script: "return { state: { cursor: 'payload' } }" };
         job.state.triggerState = { cursor: "old" };
         await writeCronStoreSnapshot({ storePath, jobs: [job] });
+        const preparedReceipt = runReceiptStore.prepareCronRunReceiptClaim({
+          storePath,
+          job,
+          agentId: "main",
+          startedAtMs: startedAt,
+        });
+        const receipt = runOpenClawStateWriteTransaction(({ db }) =>
+          runReceiptStore.claimCronRunReceiptInDatabase({
+            database: db,
+            prepared: preparedReceipt,
+            resolveAgentId: (current) => current.agentId ?? "main",
+          }),
+        );
+        runReceiptStore.releaseLocalCronRunReceiptOwnership(receipt);
         const events: CronEvent[] = [];
         const state = createCronServiceState({
           storePath,
@@ -973,7 +1087,7 @@ describe("cron service ops seam coverage", () => {
         });
         const taskRunId =
           reservationOffsetMs === undefined
-            ? tryCreateCronTaskRun({ state, job, startedAt })
+            ? taskRuns.tryCreateCronTaskRun({ state, job, startedAt })
             : taskExecutor.createRunningTaskRunCore({
                 runtime: "cron",
                 sourceId: job.id,
@@ -992,7 +1106,7 @@ describe("cron service ops seam coverage", () => {
           throw new Error("expected reserved cron task run");
         }
 
-        tryFinishCronTaskRun(state, {
+        taskRuns.tryFinishCronTaskRun(state, {
           taskRunId,
           job,
           triggerEval: { fired: true, stateChanged: true, state: { cursor: "new" } },
@@ -1045,11 +1159,85 @@ describe("cron service ops seam coverage", () => {
         expect(persisted.jobs[0]?.state.runningAtMs).toBeUndefined();
         expect(persisted.jobs[0]?.state.lastError).toBeUndefined();
         expect(persisted.jobs[0]?.state.nextRunAtMs).toBeUndefined();
+        const receiptRow = runOpenClawStateWriteTransaction(({ db }) =>
+          db
+            .prepare(
+              "SELECT status, finished_at_ms AS finishedAtMs, error_text AS error FROM cron_run_receipts WHERE receipt_id = ?",
+            )
+            .get(receipt.receiptId),
+        ) as { status: string; finishedAtMs: number; error: string | null };
+        expect(receiptRow).toEqual({ status: "ok", finishedAtMs: endedAt, error: null });
         expect(events.filter((event) => event.action === "finished")).toEqual([]);
         stop(state);
       });
     },
   );
+
+  it("keeps an interrupted receipt when finalized task restoration is invalid", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const startedAt = now - 30_000;
+    await withStateDirForStorePath(storePath, async () => {
+      const job = createInterruptedMainJob(now);
+      job.id = "invalid-finalized-receipt";
+      job.state.runningAtMs = startedAt;
+      await writeCronStoreSnapshot({ storePath, jobs: [job] });
+      const preparedReceipt = runReceiptStore.prepareCronRunReceiptClaim({
+        storePath,
+        job,
+        agentId: "main",
+        startedAtMs: startedAt,
+      });
+      const receipt = runOpenClawStateWriteTransaction(({ db }) =>
+        runReceiptStore.claimCronRunReceiptInDatabase({
+          database: db,
+          prepared: preparedReceipt,
+          resolveAgentId: (current) => current.agentId ?? "main",
+        }),
+      );
+      runReceiptStore.releaseLocalCronRunReceiptOwnership(receipt);
+      const state = createCronServiceState({
+        storePath,
+        cronEnabled: true,
+        log: logger,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      });
+      const taskRunId = taskRuns.tryCreateCronTaskRun({ state, job, startedAt });
+      if (!taskRunId) {
+        throw new Error("expected invalid finalized cron task run");
+      }
+      taskRuns.tryFinishCronTaskRun(state, {
+        taskRunId,
+        job,
+        event: {
+          jobId: job.id,
+          action: "finished",
+          job,
+          status: "ok",
+          runAtMs: startedAt,
+          durationMs: 1_000,
+        },
+      });
+      runOpenClawStateWriteTransaction(({ db }) => {
+        db.prepare("UPDATE task_runs SET ended_at = -1 WHERE run_id = ?").run(taskRunId);
+      });
+
+      await start(state);
+
+      const persisted = (await loadCronStore(storePath)).jobs[0];
+      expect(persisted?.state.lastRunStatus).toBe("error");
+      const receiptRow = runOpenClawStateWriteTransaction(({ db }) =>
+        db
+          .prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
+          .get(receipt.receiptId),
+      ) as { status: string };
+      expect(receiptRow.status).toBe("interrupted");
+      stop(state);
+    });
+  });
 
   it("prunes scratch when startup deletes a finalized delete-after-run one-shot", async () => {
     const { storePath } = await makeStorePath();
@@ -1085,11 +1273,11 @@ describe("cron service ops seam coverage", () => {
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
         onEvent: (event) => events.push(structuredClone(event)),
       });
-      const taskRunId = tryCreateCronTaskRun({ state, job, startedAt });
+      const taskRunId = taskRuns.tryCreateCronTaskRun({ state, job, startedAt });
       if (!taskRunId) {
         throw new Error("expected cron task run");
       }
-      tryFinishCronTaskRun(state, {
+      taskRuns.tryFinishCronTaskRun(state, {
         taskRunId,
         job,
         event: {
@@ -1151,11 +1339,11 @@ describe("cron service ops seam coverage", () => {
         requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
       });
-      const taskRunId = tryCreateCronTaskRun({ state, job, startedAt });
+      const taskRunId = taskRuns.tryCreateCronTaskRun({ state, job, startedAt });
       if (!taskRunId) {
         throw new Error("expected cron task run");
       }
-      tryFinishCronTaskRun(state, {
+      taskRuns.tryFinishCronTaskRun(state, {
         taskRunId,
         job,
         event: {
@@ -1163,8 +1351,7 @@ describe("cron service ops seam coverage", () => {
           action: "finished",
           job,
           status: "error",
-          error:
-            'CronSessionLifecycleClaimError: Session "agent:main:cron:job-1" changed while starting work. Retry.',
+          error: 'Session "agent:main:cron:job-1" changed while starting work. Retry.',
           runAtMs: startedAt,
           durationMs: endedAt - startedAt,
         },
@@ -1226,11 +1413,11 @@ describe("cron service ops seam coverage", () => {
           requestHeartbeat: vi.fn(),
           runIsolatedAgentJob,
         });
-        const taskRunId = tryCreateCronTaskRun({ state, job: original, startedAt });
+        const taskRunId = taskRuns.tryCreateCronTaskRun({ state, job: original, startedAt });
         if (!taskRunId) {
           throw new Error("expected cron task run");
         }
-        tryFinishCronTaskRun(state, {
+        taskRuns.tryFinishCronTaskRun(state, {
           taskRunId,
           job: original,
           event: {
@@ -1262,9 +1449,7 @@ describe("cron service ops seam coverage", () => {
           expect(restored?.state.lastRunAtMs).toBe(startedAt);
           expect(restored?.state.lastRunStatus).toBe(status);
           expect(runIsolatedAgentJob).not.toHaveBeenCalled();
-          expect(findTaskByRunId(taskRunId)?.status).toBe(
-            status === "error" ? "failed" : "succeeded",
-          );
+          expect(findTaskByRunId(taskRunId)?.status).toBe(status === "ok" ? "succeeded" : "failed");
         } finally {
           stop(state);
         }
@@ -1294,7 +1479,7 @@ describe("cron service ops seam coverage", () => {
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
       });
 
-      tryFinishCronTaskRun(state, {
+      taskRuns.tryFinishCronTaskRun(state, {
         job,
         event: {
           jobId: job.id,
@@ -1518,8 +1703,7 @@ describe("cron service ops seam coverage", () => {
         requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(async () => ({
           status: "error" as const,
-          error:
-            'CronSessionLifecycleClaimError: Session "agent:main:cron:job-1" changed while starting work. Retry.',
+          error: 'Session "agent:main:cron:job-1" changed while starting work. Retry.',
           executionStarted: true,
         })),
       });
@@ -2191,37 +2375,6 @@ describe("cron service ops persist rollback", () => {
     expect(state.store?.jobs.map((entry) => entry.id)).toEqual([job.id]);
   });
 
-  it("restores read-maintenance fields in place when persist fails", async () => {
-    const { storePath } = await makeStorePath();
-    const now = Date.parse("2026-06-09T00:00:00.000Z");
-    const state = createOkIsolatedCronState({ storePath, now });
-    const job = await add(state, {
-      ...makeCreateInput("read repair"),
-      schedule: { kind: "every", everyMs: 60_000 },
-    });
-    if (state.timer) {
-      clearTimeout(state.timer);
-    }
-    job.schedule = { kind: "every", everyMs: 60_000 };
-    job.state.nextRunAtMs = Number.NaN;
-    job.state.startupCatchupAtMs = now - 1;
-    const storeIdentity = state.store;
-    const jobIdentity = job;
-    const before = structuredClone({
-      enabled: job.enabled,
-      schedule: job.schedule,
-      state: job.state,
-    });
-
-    vi.spyOn(cronStoreModule, "saveCronJobsStore").mockRejectedValueOnce(new Error("disk full"));
-
-    await expect(list(state, { includeDisabled: true })).rejects.toThrow("disk full");
-
-    expect(state.store).toBe(storeIdentity);
-    expect(state.store?.jobs[0]).toBe(jobIdentity);
-    expect({ enabled: job.enabled, schedule: job.schedule, state: job.state }).toEqual(before);
-  });
-
   it("recovers after a failed persist so the next mutation succeeds", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-06-09T00:00:00.000Z");
@@ -2244,7 +2397,7 @@ describe("cron service ops persist rollback", () => {
     expect(loaded.jobs.map((entry) => entry.id)).toEqual([job.id]);
   });
 
-  it.each(["mutation", "read maintenance"] as const)(
+  it.each(["mutation"] as const)(
     "notifies about schedule auto-disable only after %s persists",
     async (triggerPath) => {
       const { storePath } = await makeStorePath();
@@ -2288,10 +2441,7 @@ describe("cron service ops persist rollback", () => {
           await saveCronJobsStore(...args);
           order.push("persist");
         });
-      const trigger = () =>
-        triggerPath === "mutation"
-          ? add(state, makeCreateInput("trigger mutation"))
-          : list(state, { includeDisabled: true });
+      const trigger = () => add(state, makeCreateInput(`trigger ${triggerPath}`));
       await expect(trigger()).rejects.toThrow("disk full");
 
       expect(state.store?.jobs.find((job) => job.id === malformed.id)?.enabled).toBe(true);

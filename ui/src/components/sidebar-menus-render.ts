@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { DEFAULT_SIDEBAR_ENTRIES, serializeSidebarEntry } from "../app-navigation.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
+import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import { openEditor } from "../lib/editor-links.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
@@ -180,6 +181,7 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
           unread: batchRows ? allUnread : session.unread,
           archived: allArchived,
           category: batchRows ? sharedCategory : (session.category ?? null),
+          icon: batchRows ? null : (session.icon ?? null),
           categoryClearReturnsToGroups:
             sharedCategory !== null &&
             rows.every((row) => categoryClearReturnsToGroups(row, host.sessionsGrouping)),
@@ -196,6 +198,7 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
           cloudWorkerStopAction: session.cloudWorkerStopAction,
         })}
         .forkDisabled=${host.sessionData.sessionsLoading || session.modelSelectionLocked}
+        .forkFromLastCompleted=${session.gatewayHasActiveRun ?? session.hasActiveRun}
         .archiveAllowed=${archiveAllowed}
         .deleteAllowed=${deleteAllowed}
         .cloudWorkerStopAllowed=${cloudWorkerStopAllowed}
@@ -227,6 +230,9 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
               break;
             case "rename":
               void host.sessionOrganizer.renameSession(session);
+              break;
+            case "set-icon":
+              void host.sessionOrganizer.patchSession(session, { icon: action.icon });
               break;
             case "fork":
               void host.sessionOrganizer.forkSession(session);
@@ -264,7 +270,12 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
 export function renderSidebarSessionGroupMenuForController(controller: SidebarMenusController) {
   const { host } = controller;
   const menu = controller.sessionGroupMenu;
+  const groupDefaultsStatus = host.sessionDataContext?.sessions.groupsStatus() ?? "idle";
   const groupActionAccess = {
+    "group-defaults": readSessionMethodAccess(host.sessionDataContext?.gateway.snapshot, {
+      method: "sessions.groups.update",
+      requiredScope: "operator.write",
+    }),
     "rename-group": readSessionMethodAccess(host.sessionDataContext?.gateway.snapshot, {
       method: "sessions.groups.rename",
       requiredScope: "operator.write",
@@ -282,14 +293,30 @@ export function renderSidebarSessionGroupMenuForController(controller: SidebarMe
     menu,
     trigger: controller.sessionGroupMenuTrigger,
     connected: host.connected,
+    groupDefaultsUnavailable: groupDefaultsStatus === "unavailable",
     actionDisabledReasons: Object.fromEntries(
-      Object.entries(groupActionAccess).flatMap(([action, access]) =>
-        access.allowed ? [] : [[action, access.reason]],
-      ),
+      Object.entries(groupActionAccess).flatMap(([action, access]) => {
+        if (!access.allowed) {
+          return [[action, access.reason]];
+        }
+        return action === "group-defaults" &&
+          groupDefaultsStatus !== "ready" &&
+          groupDefaultsStatus !== "unavailable"
+          ? [[action, t("common.loading")]]
+          : [];
+      }),
     ),
     onAction: (action, group) => {
       controller.closeSessionGroupMenu({ restoreFocus: true });
       switch (action) {
+        case "group-defaults":
+          if (groupDefaultsStatus === "unavailable") {
+            host.sessionDataContext?.sessions.groupsInvalidate();
+            void host.sessionDataContext?.sessions.groupsLoad();
+            break;
+          }
+          void host.sessionOrganizer.editSessionGroupDefaults(group);
+          break;
         case "rename-group":
           void host.sessionOrganizer.renameSessionGroupFromMenu(group);
           break;

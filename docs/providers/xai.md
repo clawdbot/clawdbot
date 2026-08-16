@@ -115,6 +115,7 @@ see [legacy compatibility and moving aliases](#legacy-compatibility-and-moving-a
 
 | Family         | Model ids                                                    |
 | -------------- | ------------------------------------------------------------ |
+| Grok 4.6       | `grok-4.6`                                                   |
 | Grok 4.5       | `grok-4.5` (aliases: `grok-4.5-latest`, `grok-build-latest`) |
 | Grok Build 0.1 | `grok-build-0.1`                                             |
 | Grok 4.3       | `grok-4.3` (aliases: `grok-4.3-latest`, `grok-latest`)       |
@@ -122,18 +123,20 @@ see [legacy compatibility and moving aliases](#legacy-compatibility-and-moving-a
 
 <Tip>
 Use `xai/auto` to follow xAI's authenticated OAuth default, or select a concrete
-id such as `xai/grok-4.5` to remain pinned. API-key setup keeps Grok 4.3 as the
-regional-safe default; `grok-build-0.1` and both dated Grok 4.20 variants remain
-selectable.
+id such as `xai/grok-4.6` to remain pinned. API-key setup keeps Grok 4.3 as the
+regional-safe default; Grok 4.6, Grok 4.5, `grok-build-0.1`, and both dated
+Grok 4.20 variants remain selectable.
 </Tip>
 
 Catalog context and token-cost metadata follows xAI's live
 [model pages](https://docs.x.ai/developers/models) and
 [pricing page](https://docs.x.ai/developers/pricing). xAI applies higher rates
-when a request crosses its documented long-context threshold; OpenClaw's flat
-catalog cost fields record the short-context rates. Grok Build, xAI's separate
-coding-agent CLI, is available at [x.ai/cli](https://x.ai/cli) and currently
-uses Grok 4.5.
+when a request crosses its documented 200k-token long-context threshold:
+for Grok 4.5 and Grok 4.6, input, cached-input, and output rates double.
+OpenClaw's flat catalog cost fields record the short-context rates. The current
+[Grok Build](https://docs.x.ai/build/overview) coding agent uses Grok 4.6. The
+historical OpenClaw `grok-build-latest` compatibility alias remains pinned to
+Grok 4.5.
 
 ## Feature coverage
 
@@ -144,6 +147,7 @@ below or under known limits.
 | xAI capability             | OpenClaw surface                        | Status                                               |
 | -------------------------- | --------------------------------------- | ---------------------------------------------------- |
 | Chat / Responses           | `xai/<model>` model provider            | Yes                                                  |
+| Context compaction         | `/compact` and threshold compaction     | Yes via `/v1/responses/compact`                      |
 | Server-side web search     | `web_search` provider `grok`            | Yes                                                  |
 | Server-side X search       | `x_search` tool                         | Yes                                                  |
 | Server-side code execution | `code_execution` tool                   | Yes                                                  |
@@ -601,6 +605,42 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
 
   </Accordion>
 
+  <Accordion title="Context compaction">
+    Native `api.x.ai` Responses routes use xAI's server-side
+    [`/responses/compact`](https://docs.x.ai/developers/advanced-api-usage/context-compaction)
+    endpoint by default for manual `/compact` and threshold-driven preflight
+    compaction. The session keeps its OpenClaw transcript unchanged and stores
+    xAI's opaque checkpoint for the next request. Completion notices report
+    the provider's before and after token counts.
+
+    Disable the endpoint for one model with:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          models: {
+            "xai/grok-4.5": {
+              params: { responsesCompactEndpoint: false },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    Other Responses-compatible providers can opt in with
+    `params.responsesCompactEndpoint: true`; non-Responses routes ignore the
+    setting. OpenAI's native Responses API does not need this option because
+    its `context_management` compaction is already managed by
+    `responsesServerCompaction`.
+
+    Endpoint failures fall back to OpenClaw's client-side summarization.
+    Overflow recovery never calls the endpoint because xAI requires the input
+    to fit the model context window before compaction.
+
+  </Accordion>
+
   <Accordion title="Known limits">
     - xAI auth can use an API key, environment variable, plugin config
       fallback, or OAuth with an eligible xAI account. OAuth uses device-code
@@ -628,8 +668,9 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
       to disable it.
     - The bundled xAI wrapper strips unsupported contains-count schema bounds
       and unsupported reasoning *effort* payload keys before sending native
-      xAI requests. Grok 4.5 supports low, medium, and
-      high effort (default high). Grok 4.3 supports none, low, medium, and high
+      xAI requests. Grok 4.6 supports low, medium, high, and xhigh effort
+      (default high). Grok 4.5 supports low, medium, and high effort
+      (default high). Grok 4.3 supports none, low, medium, and high
       effort (default low). Other reasoning-capable xAI models do not expose a
       configurable effort control, but still request
       `include: ["reasoning.encrypted_content"]` so prior encrypted reasoning
@@ -659,7 +700,7 @@ OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_TEST_QUIET=1 pnpm test:live -- extensions/xai
 OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_XAI_VIDEO=1 pnpm test:live -- extensions/xai/xai.live.test.ts -t "classic Grok Imagine"
 OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_XAI_VIDEO=1 pnpm test:live -- extensions/xai/xai.live.test.ts -t "Grok Imagine Video 1.5"
 OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_TEST_QUIET=1 pnpm test:live -- extensions/xai/x-search.live.test.ts
-OPENCLAW_LIVE_GATEWAY_MODELS="xai/grok-4.5,xai/grok-build-0.1,xai/grok-4.3,xai/grok-4.20-0309-reasoning,xai/grok-4.20-0309-non-reasoning" OPENCLAW_LIVE_GATEWAY_MAX_MODELS=0 OPENCLAW_LIVE_GATEWAY_SMOKE=0 pnpm test:live -- src/gateway/gateway-models.profiles.live.test.ts
+OPENCLAW_LIVE_GATEWAY_MODELS="xai/grok-4.6,xai/grok-4.5,xai/grok-build-0.1,xai/grok-4.3,xai/grok-4.20-0309-reasoning,xai/grok-4.20-0309-non-reasoning" OPENCLAW_LIVE_GATEWAY_MAX_MODELS=0 OPENCLAW_LIVE_GATEWAY_SMOKE=0 pnpm test:live -- src/gateway/gateway-models.profiles.live.test.ts
 OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_TEST_QUIET=1 OPENCLAW_LIVE_IMAGE_GENERATION_PROVIDERS=xai pnpm test:live -- test/image-generation.runtime.live.test.ts
 ```
 

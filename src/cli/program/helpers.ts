@@ -7,14 +7,6 @@ export function collectOption(value: string, previous: string[] = []): string[] 
   return [...previous, value];
 }
 
-/** Parse an optional positive integer, treating empty values as unset. */
-export function parsePositiveIntOrUndefined(value: unknown): number | undefined {
-  if (value === undefined || value === null || value === "") {
-    return undefined;
-  }
-  return parseStrictPositiveInteger(value);
-}
-
 /** Commander argument parser for required positive integer options. */
 export function parseStrictPositiveIntOption(value: string, flag: string): number {
   const parsed = parseStrictPositiveInteger(value);

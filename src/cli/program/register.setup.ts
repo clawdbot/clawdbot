@@ -139,6 +139,7 @@ async function runOnboardingEntry(
   await setupWizardCommand(
     {
       workspace: readStringValue(options.workspace),
+      agentName: readStringValue(options.agentName),
       nonInteractive: Boolean(options.nonInteractive),
       acceptRisk: Boolean(options.acceptRisk),
       classic: Boolean(options.classic),
@@ -206,6 +207,7 @@ export function registerSetupCommand(program: Command): void {
       "--workspace <dir>",
       "Workspace proposal for guided setup; persisted by baseline/classic/non-interactive setup",
     )
+    .option("--agent-name <name>", "Name for the first agent (default: main)")
     .option("--wizard", "Run interactive onboarding", false)
     .option(
       "--baseline",

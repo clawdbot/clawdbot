@@ -22,11 +22,6 @@ import { setCliRunnerExecuteTestDeps } from "./execute.test-support.js";
 import { writeCliSystemPromptFile } from "./helpers.js";
 import type { PreparedCliRunContext } from "./types.js";
 
-vi.mock("../../plugin-sdk/anthropic-cli.js", () => ({
-  CLAUDE_CLI_BACKEND_ID: "claude-cli",
-  isClaudeCliProvider: (providerId: string) => providerId === "claude-cli",
-}));
-
 type ProcessSupervisor = ReturnType<typeof getProcessSupervisor>;
 type SupervisorSpawnFn = ProcessSupervisor["spawn"];
 

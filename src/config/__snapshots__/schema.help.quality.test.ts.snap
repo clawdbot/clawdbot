@@ -48,7 +48,6 @@ exports[`config tier coverage > keeps the curated common leaf set reviewable 1`]
   "agents.defaults.userTimezone",
   "agents.defaults.voiceModel.primary",
   "agents.defaults.workspace",
-  "agents.entries.*.default",
   "agents.entries.*.groupChat.mentionPatterns.*",
   "agents.entries.*.groupChat.unmentionedInbound",
   "agents.entries.*.heartbeat.model",

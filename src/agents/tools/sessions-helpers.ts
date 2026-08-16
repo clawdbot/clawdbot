@@ -1,25 +1,3 @@
-/**
- * Shared session-tool data shapes and classification helpers.
- *
- * Keeps list/send/status tools aligned on rows, visibility context, and compact kind/channel labels.
- */
-export {
-  createAgentToAgentPolicy,
-  createSessionVisibilityGuard,
-  createSessionVisibilityRowChecker,
-  resolveEffectiveSessionToolsVisibility,
-  resolveSandboxedSessionToolContext,
-} from "./sessions-access.js";
-import { resolveSandboxedSessionToolContext } from "./sessions-access.js";
-export {
-  resolveCurrentSessionClientAlias,
-  resolveDisplaySessionKey,
-  resolveInternalSessionKey,
-  resolveMainSessionAlias,
-  resolveSessionReference,
-  resolveVisibleSessionReference,
-  shouldResolveSessionIdInput,
-} from "./sessions-resolution.js";
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionRow,
@@ -29,6 +7,29 @@ import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseRawSessionConversationRef } from "../../sessions/session-key-utils.js";
 import type { FastModeSource } from "../../shared/fast-mode.js";
+/**
+ * Shared session-tool data shapes and classification helpers.
+ *
+ * Keeps list/send/status tools aligned on rows, visibility context, and compact kind/channel labels.
+ */
+import { resolveSandboxedSessionToolContext } from "./sessions-access.js";
+export {
+  createAgentToAgentPolicy,
+  createSessionVisibilityRowChecker,
+  resolveEffectiveSessionToolsVisibility,
+  resolveSandboxedSessionToolContext,
+  resolveSessionToolAccess,
+} from "./sessions-access.js";
+export {
+  resolveCurrentSessionClientAlias,
+  resolveDisplaySessionKey,
+  resolveInternalSessionKey,
+  resolveMainSessionAlias,
+  resolveSessionReference,
+  resolveVisibleSessionReference,
+  isExpectedSessionLookupMiss,
+  shouldResolveSessionIdInput,
+} from "./sessions-resolution.js";
 
 /** Coarse session category used by session list/status tools. */
 type SessionKind = "main" | "group" | "cron" | "hook" | "node" | "other";

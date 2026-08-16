@@ -660,7 +660,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
   });
 
-  it("does not treat an active-run accepted turn as an empty completion", async () => {
+  it("reports an active-run accepted turn as deferred instead of empty", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
@@ -688,6 +688,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result).toEqual({
       queuedFinal: false,
       counts: { tool: 0, block: 0, final: 0 },
+      deferredToActiveRun: "followup",
     });
   });
 
@@ -2668,6 +2669,15 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
             approvalSlug: "117ba06d",
             allowedDecisions: ["allow-once", "allow-always", "deny"],
           },
+        },
+      },
+    },
+    {
+      label: "unavailable exec approvals",
+      payload: {
+        text: "Exec approval is unavailable.",
+        channelData: {
+          execApprovalUnavailable: { reason: "no-approval-route" },
         },
       },
     },

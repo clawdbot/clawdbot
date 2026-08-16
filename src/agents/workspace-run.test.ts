@@ -189,4 +189,28 @@ describe("resolveRunWorkspaceDir", () => {
     expect(result.agentIdSource).toBe("default");
     expect(result.workspaceDir).toBe(path.resolve(fallbackWorkspace));
   });
+
+  it("uses the persisted fixed-store owner for a bare global workspace", () => {
+    const opsWorkspace = path.join(process.cwd(), "tmp", "workspace-ops-global");
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: {
+          ops: { workspace: opsWorkspace },
+          research: { workspace: path.join(process.cwd(), "tmp", "workspace-research-global") },
+        },
+      },
+      session: { scope: "global", store: "/tmp/openclaw-shared-sessions.sqlite" },
+    } satisfies OpenClawConfig;
+
+    const result = resolveRunWorkspaceDir({
+      workspaceDir: undefined,
+      sessionKey: "global",
+      config: cfg,
+    });
+
+    expect(result.agentId).toBe("ops");
+    expect(result.workspaceDir).toBe(path.resolve(opsWorkspace));
+  });
 });

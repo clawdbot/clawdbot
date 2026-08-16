@@ -161,6 +161,7 @@ function resolveRetainedTelegramMedia(params: {
 export function createTelegramMessagePipeline({
   cfg,
   accountId,
+  ownerAgentId,
   bot,
   opts,
   telegramTransport,
@@ -210,6 +211,7 @@ export function createTelegramMessagePipeline({
   } = createTelegramMessageContextRuntime({
     cfg,
     accountId,
+    ownerAgentId,
     opts,
     telegramCfg,
     telegramDeps,

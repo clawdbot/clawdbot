@@ -35,6 +35,9 @@
       "@openclaw/ai/validation": ["./packages/ai/src/validation.ts"],
       "@openclaw/ai/internal/anthropic": ["./packages/ai/src/internal/anthropic.ts"],
       "@openclaw/ai/internal/openai": ["./packages/ai/src/internal/openai.ts"],
+      "@openclaw/ai/internal/openai-responses-payload-policy": [
+        "./packages/ai/src/internal/openai-responses-payload-policy.ts"
+      ],
       "@openclaw/ai/internal/retry-after": ["./packages/ai/src/internal/retry-after.ts"],
       "@openclaw/ai/internal/runtime": ["./packages/ai/src/internal/runtime.ts"],
       "@openclaw/ai/internal/shared": ["./packages/ai/src/internal/shared.ts"],
@@ -70,6 +73,9 @@
       "@openclaw/model-catalog-core/*": ["./packages/model-catalog-core/src/*"],
       "@openclaw/gateway-client": ["./packages/gateway-client/src/index.ts"],
       "@openclaw/gateway-client/browser": ["./packages/gateway-client/src/browser.ts"],
+      "@openclaw/gateway-client/scope-upgrade": [
+        "./packages/gateway-client/src/scope-upgrade.ts"
+      ],
       "@openclaw/gateway-client/websocket-data": [
         "./packages/gateway-client/src/websocket-data.ts"
       ],

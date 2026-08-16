@@ -20,7 +20,7 @@ describe("secret store protocol schemas", () => {
     expect(
       Value.Check(SecretsStoreListResultSchema, {
         entries: [
-          { ...metadata, kind: "secret" },
+          { ...metadata, kind: "secret", allowedHosts: ["api.example.com"] },
           { ...metadata, name: "SERVICE_URL", kind: "env", value: "https://service.test" },
         ],
       }),
@@ -43,8 +43,17 @@ describe("secret store protocol schemas", () => {
         name: "SERVICE_API_KEY",
         value: "value",
         kind: "secret",
+        allowedHosts: ["api.example.com"],
       }),
     ).toBe(true);
+    expect(
+      Value.Check(SecretsStoreSetParamsSchema, {
+        name: "SERVICE_API_KEY",
+        value: "value",
+        kind: "secret",
+        allowedHosts: ["api.example.com", "api.example.com"],
+      }),
+    ).toBe(false);
     expect(
       Value.Check(SecretsStoreSetParamsSchema, {
         name: "lowercase",

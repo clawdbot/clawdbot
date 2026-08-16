@@ -7,6 +7,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../config/config.js";
 
 const getRuntimeConfig = vi.hoisted(() => vi.fn(() => ({}) as OpenClawConfig));
@@ -57,7 +58,9 @@ vi.mock("../../plugins/memory-runtime.js", () => ({
   getActiveMemorySearchManagerCore: getMemorySearchManager,
 }));
 
-vi.mock("./doctor.memory-core-runtime.js", () => ({
+import { createDoctorHandlers } from "./doctor.js";
+
+const doctorHandlers = createDoctorHandlers({
   dedupeDreamDiaryEntries,
   loadShortTermPromotionDreamingStats,
   previewGroundedRemMarkdown,
@@ -65,9 +68,7 @@ vi.mock("./doctor.memory-core-runtime.js", () => ({
   removeBackfillDiaryEntries,
   removeGroundedShortTermCandidates,
   repairDreamingArtifacts,
-}));
-
-import { doctorHandlers } from "./doctor.js";
+});
 
 const makeRuntimeContext = () => ({ getRuntimeConfig: () => getRuntimeConfig() });
 
@@ -240,6 +241,7 @@ const expectEmbeddingErrorResponse = (respond: ReturnType<typeof vi.fn>, error: 
 describe("doctor.memory agent targeting", () => {
   beforeEach(() => {
     listAgentIds.mockClear();
+    resolveDefaultAgentId.mockReset().mockReturnValue("main");
     resolveAgentWorkspaceDir.mockReset().mockReturnValue("/tmp/openclaw");
     getMemorySearchManager.mockReset().mockResolvedValue({
       manager: null,
@@ -256,6 +258,31 @@ describe("doctor.memory agent targeting", () => {
     });
     dedupeDreamDiaryEntries.mockReset().mockResolvedValue({ removed: 0, kept: 0 });
   });
+
+  it.each(DOCTOR_MEMORY_TARGET_METHODS)(
+    "%s returns typed selection-required when agentId is omitted",
+    async (method) => {
+      resolveDefaultAgentId.mockImplementationOnce(() => {
+        throw new AgentSelectionRequiredError(["ops", "research"], {
+          surface: "doctor memory",
+          hint: "Pass agentId to select a configured agent.",
+        });
+      });
+      const respond = vi.fn();
+
+      await invokeDoctorMemory(method, respond, { includeCron: true });
+
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: ErrorCodes.INVALID_REQUEST,
+          message: expect.stringContaining("agent"),
+        }),
+      );
+      expect(resolveAgentWorkspaceDir).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(DOCTOR_MEMORY_TARGET_METHODS)(
     "%s rejects an unknown agent before resolving agent state",
@@ -424,16 +451,15 @@ describe("doctor.memory.status", () => {
                 llamaCppRuntime: {
                   engine: "llama.cpp",
                   state: "ready",
-                  backend: "cuda",
-                  buildType: "prebuilt",
-                  deviceNames: ["NVIDIA Test GPU"],
-                  offload: {
-                    supported: true,
-                    offloadedLayers: 24,
-                    totalLayers: 24,
-                  },
-                  context: {
-                    requestedSize: 4096,
+                  backend: "cpu",
+                  buildInfo: "b10357 (689e227db)",
+                  model: { id: "embedding-model", path: "/models/embedding.gguf" },
+                  capabilities: { vision: false, draft: false },
+                  endpoints: {
+                    health: "ready",
+                    models: "ready",
+                    props: "ready",
+                    metrics: "ready",
                   },
                 },
               },
@@ -451,15 +477,11 @@ describe("doctor.memory.status", () => {
 
     expect(respondPayload(respond).embeddingRuntime).toMatchObject({
       state: "ready",
-      backend: "cuda",
-      deviceNames: ["NVIDIA Test GPU"],
-      offload: {
-        offloadedLayers: 24,
-        totalLayers: 24,
-      },
-      context: {
-        requestedSize: 4096,
-      },
+      backend: "cpu",
+      buildInfo: "b10357 (689e227db)",
+      model: { id: "embedding-model", path: "/models/embedding.gguf" },
+      capabilities: { vision: false, draft: false },
+      endpoints: { health: "ready", metrics: "ready" },
     });
     expect(close).toHaveBeenCalled();
   });

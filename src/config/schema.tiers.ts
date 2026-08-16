@@ -33,7 +33,7 @@ agents.defaults.subagents.model agents.defaults.subagents.model.primary
 agents.defaults.sandbox.ssh.workspaceRoot
 agents.defaults.sandbox.workspaceRoot
 agents.defaults.thinkingDefault agents.defaults.userTimezone agents.defaults.voiceModel.primary
-agents.defaults.workspace agents.entries.*.default agents.entries.*.groupChat.mentionPatterns
+agents.defaults.workspace agents.entries.*.groupChat.mentionPatterns
 agents.entries.*.groupChat.unmentionedInbound agents.entries.*.identity
 agents.entries.*.memory.search.enabled agents.entries.*.memory.search.provider
 agents.entries.*.memory.search.rememberAcrossConversations agents.entries.*.memory.search.model
@@ -166,7 +166,10 @@ wizard.accessMode wizard.appRecommendations
   .trim()
   .split(/\s+/);
 
-const ADVANCED_TUNING_PATHS = new Set(["agents.defaults.heartbeat.every"]);
+const ADVANCED_TUNING_PATHS = new Set([
+  "agents.defaults.heartbeat.every",
+  "session.maintenance.preserveRecent",
+]);
 const CHANNEL_KERNEL_TIER_PREFIXES = ["channels.defaults", "channels.modelByChannel"] as const;
 
 function isPluginOwnedChannelTierPath(path: string): boolean {

@@ -19,20 +19,26 @@ const GOOGLE_VERTEX_BASE_URL = "https://{location}-aiplatform.googleapis.com";
 const GOOGLE_GEMINI_MODELS_CACHE_TTL_MS = 60_000;
 const GOOGLE_GEMINI_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } as const;
 const GOOGLE_GEMINI_TEXT_MODEL_ROWS: ReadonlyArray<
-  readonly [id: string, name: string, prefersCodeMode: boolean]
+  readonly [
+    id: string,
+    name: string,
+    prefersCodeMode: boolean,
+    thinkingLevelMap?: ModelDefinitionConfig["thinkingLevelMap"],
+  ]
 > = [
   ["gemini-2.5-pro", "Gemini 2.5 Pro", false],
   ["gemini-2.5-flash", "Gemini 2.5 Flash", false],
   ["gemini-2.5-flash-lite", "Gemini 2.5 Flash-Lite", false],
   ["gemini-3.5-flash", "Gemini 3.5 Flash", true],
   ["gemini-3.6-flash", "Gemini 3.6 Flash", true],
+  ["gemini-3.7-flash", "Gemini 3.7 Flash", true, { minimal: null }],
   ["gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite", true],
   ["gemini-3.1-pro-preview", "Gemini 3.1 Pro Preview", true],
   ["gemini-3.1-flash-lite", "Gemini 3.1 Flash Lite", true],
   ["gemini-3-flash-preview", "Gemini 3 Flash Preview", true],
 ];
 const GOOGLE_GEMINI_TEXT_MODELS: ModelDefinitionConfig[] = GOOGLE_GEMINI_TEXT_MODEL_ROWS.map(
-  ([id, name, prefersCodeMode]): ModelDefinitionConfig => {
+  ([id, name, prefersCodeMode, thinkingLevelMap]): ModelDefinitionConfig => {
     const model: ModelDefinitionConfig = {
       id,
       name,
@@ -42,6 +48,9 @@ const GOOGLE_GEMINI_TEXT_MODELS: ModelDefinitionConfig[] = GOOGLE_GEMINI_TEXT_MO
       contextWindow: 1_048_576,
       maxTokens: 65_536,
     };
+    if (thinkingLevelMap) {
+      model.thinkingLevelMap = thinkingLevelMap;
+    }
     if (prefersCodeMode) {
       model.compat = { codeMode: "preferred" };
     }
@@ -121,6 +130,9 @@ function buildGoogleLiveModel(row: unknown): ModelDefinitionConfig | undefined {
     contextWindow,
     maxTokens,
     ...(staticModel?.compat ? { compat: { ...staticModel.compat } } : {}),
+    ...(staticModel?.thinkingLevelMap
+      ? { thinkingLevelMap: { ...staticModel.thinkingLevelMap } }
+      : {}),
   };
 }
 

@@ -314,6 +314,7 @@ export type SubagentRunReadRecord = Pick<
   | "childSessionKey"
   | "controllerSessionKey"
   | "requesterSessionKey"
+  | "requesterAgentId"
   | "model"
   | "generation"
   | "createdAt"

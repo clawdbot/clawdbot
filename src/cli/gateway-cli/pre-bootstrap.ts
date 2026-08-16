@@ -372,6 +372,17 @@ async function guardGatewayRunSelectedConfig(
       return true;
     }
     // Recovery writes audit/config state, so run it only after config and state selection is stable.
+    // It is also this startup's first state-directory write (config-health reads open the shared
+    // SQLite store, which quarantines orphaned sidecars), so a live gateway owner refuses here
+    // before any mutation instead of after the run loop's lock acquisition.
+    const { describeLiveGatewayOwnerStartupBlocker } =
+      await import("../../commands/doctor-startup-migration-refusal.js");
+    const liveOwnerBlocker = await describeLiveGatewayOwnerStartupBlocker(process.env);
+    if (liveOwnerBlocker) {
+      params.runtime.error(liveOwnerBlocker);
+      params.runtime.exit(1);
+      return false;
+    }
     const recoveredSnapshot = await recoverGuardedGatewayRunConfig(params);
     if (!recoveredSnapshot) {
       return false;

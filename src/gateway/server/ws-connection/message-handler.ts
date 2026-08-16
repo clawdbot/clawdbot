@@ -48,12 +48,14 @@ import { authenticateGatewayConnect } from "./connect-auth.js";
 import { authorizeGatewayConnectDevice } from "./connect-device-pairing.js";
 import { attachAuthenticatedGatewayConnect } from "./connect-session.js";
 import { resolveHandshakeBrowserSecurityContext } from "./handshake-auth-helpers.js";
-import type { GatewayConnectPhaseContext } from "./message-handler-types.js";
+import type {
+  GatewayConnectPhaseContext,
+  GatewayWsMessageHandlerParams,
+} from "./message-handler-types.js";
 export type {
   GatewayWsMessageHandlerParams,
   WsOriginCheckMetrics,
 } from "./message-handler-types.js";
-import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
 
 const GATEWAY_WORK_ADMISSION_RETRY_AFTER_MS = 1_000;
 const GATEWAY_WORK_ADMISSION_CLOSE_CODE = 1013;
@@ -331,6 +333,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           clientDisplayName: connectParams.client.displayName,
           mode: connectParams.client.mode,
           version: connectParams.client.version,
+          buildId: connectParams.client.buildId,
           platform: connectParams.client.platform,
           deviceFamily: connectParams.client.deviceFamily,
           modelIdentifier: connectParams.client.modelIdentifier,

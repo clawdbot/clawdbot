@@ -334,6 +334,24 @@ describe("classifyControlUiRequest", () => {
         expected: { kind: "serve" as const, spaFallback: true },
       },
       {
+        name: "keeps node workspace transfers outside the SPA catch-all",
+        pathname: "/__openclaw__/worker-transfer/v1/environments/worker%3A1/blobs/abc",
+        method: "GET",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
+        name: "keeps malformed node workspace transfer descendants outside the SPA catch-all",
+        pathname: "/__openclaw__/worker-transfer/other",
+        method: "GET",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
+        name: "preserves SPA routes that only resemble node workspace transfers",
+        pathname: "/__openclaw__/worker-transfers",
+        method: "GET",
+        expected: { kind: "serve" as const, spaFallback: true },
+      },
+      {
         name: "keeps health probe descendants outside the SPA catch-all",
         pathname: "/healthz/details",
         method: "GET",

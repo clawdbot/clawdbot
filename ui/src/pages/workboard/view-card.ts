@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import { clampText } from "../../lib/format.ts";
 import {
   isActiveWorkboardCard,
@@ -115,15 +116,21 @@ function renderCompactBadges(card: WorkboardCard, task?: WorkboardTaskSummary) {
   }
   if (latestDiagnostic) {
     badges.push(
-      html`<span class="workboard-card__badge--warning" title=${latestDiagnostic.detail}>
+      html`<span
+        class="workboard-card__badge--warning"
+        title=${formatUiExternalText(latestDiagnostic.detail)}
+      >
         ${icons.alertTriangle}${clampText(latestDiagnostic.title.trim(), 64)}
       </span>`,
     );
   }
   if (blockedReason) {
     badges.push(
-      html`<span class="workboard-card__badge--warning" title=${blockedReason}>
-        ${icons.alertTriangle}${clampText(blockedReason.trim(), 64)}
+      html`<span
+        class="workboard-card__badge--warning"
+        title=${formatUiExternalText(blockedReason)}
+      >
+        ${icons.alertTriangle}${clampText(formatUiExternalText(blockedReason), 64)}
       </span>`,
     );
   }

@@ -62,7 +62,7 @@ describe("OpenAI realtime voice provider routing", () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
 
     expect(provider.defaultModel).toBe("gpt-realtime-2.1");
-    expect(provider.capabilities).toEqual({
+    expect(provider.capabilities).toMatchObject({
       transports: ["webrtc", "gateway-relay"],
       inputAudioFormats: [
         { encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 },

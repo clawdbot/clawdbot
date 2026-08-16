@@ -85,7 +85,7 @@ A join code and a paired device have separate lifecycles:
 - Burning or expiring a join code prevents another enrollment with that code.
 - It does not disconnect or remove a node that already redeemed it.
 - To revoke an enrolled machine, remove its paired device with
-  [`openclaw devices remove <deviceId>`](/cli/devices#openclaw-devices-remove-deviceid).
+  [`openclaw devices remove <deviceId>`](/cli/devices#openclaw-devices-remove-%3Cdeviceid%3E).
 
 ## Troubleshooting
 

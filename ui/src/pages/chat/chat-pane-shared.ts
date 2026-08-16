@@ -166,6 +166,7 @@ export const boardChatDockLayout = createDockPanelLayout({
   defaultHeight: 320,
   defaultWidth: 420,
 });
+
 export const CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS = 500;
 export const CHAT_HISTORY_INTENT_EDGE_PX = 300;
 export const CHAT_HISTORY_INTENT_IDLE_MS = 200;
@@ -226,13 +227,14 @@ export type ChatPaneConnectionScope = {
   state: ChatPageHost;
   client: GatewayBrowserClient;
   generation: number;
+  headerOutcomeOwner: string;
   sessions: ChatPageContext["sessions"];
 };
 export const CHAT_OPEN_DETAILS_SELECTOR =
   ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__attach-menu[open], .chat-pr__checks[open], details.msg-meta[open]:not([data-preview])";
 export const CHAT_COMPOSER_TEXTAREA_SELECTOR = ".agent-chat__composer-combobox > textarea";
-export const CHAT_TEXT_ENTRY_SELECTOR =
-  "input, textarea, select, [contenteditable]:not([contenteditable='false']), [role='combobox'], [role='listbox'], [role='textbox']";
+export const CHAT_AUTOTYPE_EXEMPT_SELECTOR =
+  "input, textarea, select, [contenteditable]:not([contenteditable='false']), [role='combobox'], [role='listbox'], [role='textbox'], [data-chat-autotype-exempt]";
 export const CHAT_SPACE_ACTIVATION_SELECTOR =
   "a[href], button, summary, [role='button'], [role='checkbox'], [role='link'], [role='radio'], [role='switch']";
 export const CHAT_MODAL_SELECTOR = "dialog[open], [aria-modal='true']";
@@ -240,24 +242,6 @@ export const CHAT_MODAL_SELECTOR = "dialog[open], [aria-modal='true']";
 // collapsed or sparse transcript to exhaustion.
 export const CHAT_HISTORY_BOOTSTRAP_PAGE_LIMIT = 1;
 
-/* Pane-width thresholds (CSS px). Split panes and compact windows can be far
- * narrower than the viewport, so side-by-side layouts key off the pane's own
- * measured width, never viewport media queries. */
-// Side rail (230-280px) plus a readable thread; below this the rail docks bottom.
-export const WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH = 800;
-// Widest the rail's grid column gets; a side-docked rail takes this from the
-// width available to the chat + detail-panel split.
-export const WORKSPACE_RAIL_MAX_WIDTH = 280;
-// Widest the session companion's docked column gets; keep in sync with the
-// flex-basis in chat/sidebar.css. Wider than the workspace rail because it
-// hosts a reading surface, not a file list.
-const SESSION_RAIL_MAX_WIDTH = 400;
-// The companion is a side surface, not an overlay: it docks whenever its column
-// and a readable thread both fit. Measured against the width left after the
-// workspace and task rails take theirs. Below this the pane cannot hold two
-// columns, so the companion becomes a full-height sheet instead of covering
-// the thread as a floating card.
-export const SESSION_RAIL_SIDE_MIN_PANE_WIDTH = SESSION_RAIL_MAX_WIDTH + 480;
 export const NEW_SESSION_ACTIVE_RUN_MESSAGE =
   "Start a new session after the active run or queued messages finish.";
 export const NEW_SESSION_LIST_LOADING_MESSAGE =

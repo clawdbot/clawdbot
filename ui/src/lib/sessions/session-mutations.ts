@@ -3,12 +3,14 @@ import type {
   SessionsListResult,
   SessionsPatchResult,
 } from "../../api/types.ts";
+import { formatUiError } from "../format-error.ts";
 import {
   requestSessionCreate,
   resolveSessionCreateParams,
   type SessionCreateParams,
 } from "./create.ts";
 import type { SessionPatch, SessionPatchOptions } from "./patch.ts";
+import { requestSessionRecovery } from "./recover.ts";
 import type {
   SessionConnectionOwner,
   SessionCreateReconciliation,
@@ -153,7 +155,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       if (options.reconciliation === "background") {
         void reconciliation.catch((error: unknown) => {
           if (host.connection.isCurrent(scope)) {
-            host.publish({ ...host.readState(), error: String(error) }, "operation");
+            host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
           }
         });
       } else {
@@ -165,7 +167,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       return result;
     } catch (error) {
       if (host.connection.isCurrent(scope)) {
-        host.publish({ ...host.readState(), error: String(error) }, "operation");
+        host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
       }
       return null;
     }
@@ -173,6 +175,27 @@ export function createSessionMutations(host: SessionMutationsHost) {
 
   const create = async (params: SessionCreateParams = {}) =>
     (await createResult(params))?.key ?? null;
+
+  const recover = async (params: { key: string; agentId?: string }) => {
+    const scope = host.connection.capture();
+    if (!scope) {
+      return null;
+    }
+    try {
+      const result = await requestSessionRecovery(scope.client, params);
+      if (!host.connection.isCurrent(scope)) {
+        return null;
+      }
+      host.notifyCreated(result.key);
+      await host.refreshReplacement(params.agentId);
+      return host.connection.isCurrent(scope) ? result : null;
+    } catch (error) {
+      if (host.connection.isCurrent(scope)) {
+        host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
+      }
+      return null;
+    }
+  };
 
   const patch = async (
     key: string,
@@ -191,7 +214,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
     let previousModelOverride: string | null | undefined;
     let modelPatchStarted = false;
     let modelPatchRevision = 0;
-    const modelPatchToken = Symbol();
+    const modelPatchToken = Symbol("session-model-patch");
     const ownsModelOverride = () => options.ownsModelOverride?.() !== false;
     const startModelPatch = () => {
       if (!managesModelOverride || modelPatchStarted || !ownsModelOverride()) {
@@ -211,7 +234,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       modelPatchRevision = pendingModelPatches.get(normalizedKey)?.revision ?? 0;
     };
     const nextPinned = patchParams.pinned === true;
-    const pinPatchToken = Symbol();
+    const pinPatchToken = Symbol("session-pin-patch");
     let pinPatchStarted = false;
     // Sidebar rows read `pinned` straight off the snapshot, so a pin/unpin has
     // no visible outcome until this flip; the Gateway patch and its list
@@ -248,7 +271,19 @@ export function createSessionMutations(host: SessionMutationsHost) {
       if (modelPatchStarted && pendingModelPatch?.token === modelPatchToken) {
         pendingModelPatches.delete(normalizedKey);
         if (host.connection.isCurrent(scope) && ownsModelOverride()) {
-          setModelOverride(key, completed ? patchParams.model : previousModelOverride);
+          if (completed && !options.deferListRefresh) {
+            // The refreshed row already carries the Gateway-confirmed selection.
+            // Retiring the local override (instead of re-asserting it forever)
+            // lets external model changes — another window, a channel /model,
+            // a fallback rotation — reach this window; a retained entry would
+            // shadow the server row for the connection lifetime. Untouched only
+            // when a newer claim wrote the key while this patch was in flight.
+            if (pendingModelPatch.revision === modelPatchRevision) {
+              setModelOverride(key, undefined);
+            }
+          } else {
+            setModelOverride(key, completed ? patchParams.model : previousModelOverride);
+          }
         } else if (pendingModelPatch.revision === modelPatchRevision) {
           // The shared key now belongs to another agent/connection. Remove only
           // this operation's untouched optimistic value; preserve newer claims.
@@ -354,7 +389,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
         return null;
       }
       if (ownsModelOverride()) {
-        host.publish({ ...host.readState(), error: String(error) }, "operation");
+        host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
       }
       throw error;
     }
@@ -387,7 +422,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       if (!host.connection.isCurrent(scope)) {
         return { deleted: false };
       }
-      host.publish({ ...host.readState(), error: String(error) }, "operation");
+      host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
       throw error;
     }
   };
@@ -418,7 +453,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
           }
         }
       } catch (error) {
-        errors.push(String(error));
+        errors.push(formatUiError(error));
       }
     }
     if (deleted.length > 0 && host.connection.isCurrent(scope)) {
@@ -454,7 +489,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       return host.connection.isCurrent(scope) ? "completed" : "uncertain";
     } catch (error) {
       if (host.connection.isCurrent(scope)) {
-        host.publish({ ...host.readState(), error: String(error) }, "operation");
+        host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
       }
       // Reset can commit before awaited lifecycle work rejects; never infer safe retry.
       return "uncertain";
@@ -464,6 +499,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
   return {
     create,
     createResult,
+    recover,
     delete: remove,
     deleteMany: removeMany,
     patch,

@@ -41,7 +41,12 @@ struct OpenClawApp: App {
     }
 
     init() {
+        let launchPlan = AppLaunchRuntimePlan.current
         if let error = AppProfile.current.validationError {
+            if launchPlan.isElevationHost {
+                fputs("OpenClaw elevation host profile is invalid: \(error.localizedDescription)\n", stderr)
+                Darwin.exit(2)
+            }
             let alert = NSAlert()
             alert.alertStyle = .critical
             alert.messageText = "OpenClaw profile is invalid"
@@ -59,7 +64,7 @@ struct OpenClawApp: App {
         }
         OpenClawLogging.bootstrapIfNeeded()
 
-        Self.applyAttachOnlyOverrideIfNeeded()
+        Self.applyAttachOnlyOverrideIfNeeded(plan: launchPlan)
         _state = State(initialValue: AppStateStore.shared)
     }
 
@@ -113,7 +118,7 @@ struct OpenClawApp: App {
         }
         .onChange(of: self.state.connectionMode) { _, mode in
             Task { await ConnectionModeCoordinator.shared.apply(mode: mode, paused: self.state.isPaused) }
-            if AppLaunchPresentationPolicy.current.allowsAutomaticPresentation {
+            if AppLaunchRuntimePlan.current.allowsAutomaticPresentation {
                 CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "connection-mode")
             }
             BrowserProfileImportModel.shared.handleConnectionModeChange()
@@ -179,14 +184,13 @@ struct OpenClawApp: App {
             : "OpenClaw"
     }
 
-    private static func applyAttachOnlyOverrideIfNeeded() {
-        let args = CommandLine.arguments
-        guard args.contains("--attach-only") || args.contains("--no-launchd") else { return }
+    private static func applyAttachOnlyOverrideIfNeeded(plan: AppLaunchRuntimePlan) {
+        guard plan.attachOnly else { return }
         if let error = GatewayLaunchAgentManager.applyAttachOnlyRuntimeOverride() {
-            Self.logger.error("attach-only flag failed: \(error, privacy: .public)")
+            self.logger.error("attach-only flag failed: \(error, privacy: .public)")
             return
         }
-        Self.logger.info("attach-only flag enabled")
+        self.logger.info("attach-only flag enabled")
     }
 
     private var isGatewaySleeping: Bool {
@@ -402,8 +406,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var profileInstanceLock: AppInstanceLock?
     private let webChatAutoLogger = Logger(subsystem: "ai.openclaw", category: "Chat")
     var nodeTerminationCleanup: @MainActor () async -> Void = {
+        // CUA shutdown drains the worker before closing the daemon socket; run it
+        // first so other cleanup cannot consume the app termination deadline.
+        await CuaDriverHostCoordinator.shared.shutdown()
         await TalkMLXSpeechSynthesizer.shared.shutdown()
         await MacNodeModeCoordinator.shared.stopAndWait()
+    }
+
+    var peekabooBridgeTerminationCleanup: @MainActor () async -> Void = {
+        await PeekabooBridgeHostCoordinator.shared.shutdown()
     }
 
     var waitForTerminationCleanupDeadline: @MainActor () async -> Void = {
@@ -450,6 +461,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             : DisabledUpdaterController()
         super.init()
         if let instanceOwnershipFailure {
+            if AppLaunchRuntimePlan.current.isElevationHost {
+                fputs(
+                    "OpenClaw elevation host could not claim its instance lock: \(instanceOwnershipFailure)\n",
+                    stderr)
+                Darwin.exit(2)
+            }
             let alert = NSAlert()
             alert.alertStyle = .critical
             alert.messageText = "OpenClaw could not claim its instance lock"
@@ -523,6 +540,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func application(_: NSApplication, open urls: [URL]) {
+        guard !AppLaunchRuntimePlan.current.isElevationHost else { return }
         Task { @MainActor in
             for url in urls {
                 await DeepLinkHandler.shared.handle(url: url)
@@ -531,6 +549,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldHandleReopen(_: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        guard AppLaunchRuntimePlan.current.allowsAutomaticPresentation else { return false }
         if flag {
             return true
         }
@@ -547,13 +566,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         #endif
-        let launchPolicy = AppLaunchPresentationPolicy.current
-        if !AppProfile.current.isActive {
+        let launchPlan = AppLaunchRuntimePlan.current
+        if !AppProfile.current.isActive, !launchPlan.isElevationHost {
             switch ApplicationRelocator.handleLaunch() {
             case .terminating:
                 return
             case let .continueLaunch(startUpdater):
-                if startUpdater {
+                if startUpdater, launchPlan.allowsUpdater {
                     if OpenClawConfigFile.gatewayUpdateChannel() == nil {
                         self.updaterController.startAfterResolvingGatewayUpdateChannel()
                     } else {
@@ -571,10 +590,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             MacNodeModeCoordinator.prepareNodeIdentityProfile(
                 isExistingInstallation: state.onboardingSeen || state.connectionMode != .unconfigured)
         }
-        AppActivationPolicy.apply(showDockIcon: state?.showDockIcon ?? false)
+        AppActivationPolicy.apply(showDockIcon: launchPlan.allowsDockIcon && (state?.showDockIcon ?? false))
         if let state {
             let shouldWaitForConnection = state.connectionMode != .unconfigured
-            if !shouldWaitForConnection, launchPolicy.allowsAutomaticPresentation {
+            if !shouldWaitForConnection, launchPlan.allowsAutomaticPresentation {
                 Task { @MainActor in
                     await self.scheduleFirstRunOnboardingIfNeeded(gatewayConnected: false)
                 }
@@ -588,38 +607,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await ConnectionModeCoordinator.shared.apply(
                     mode: state.connectionMode,
                     paused: state.isPaused)
-                guard shouldWaitForConnection, launchPolicy.allowsAutomaticPresentation else { return }
+                guard shouldWaitForConnection, launchPlan.allowsAutomaticPresentation else { return }
                 await self.scheduleFirstRunOnboardingIfNeeded(
                     gatewayConnected: ControlChannel.shared.state == .connected)
             }
         }
         TerminationSignalWatcher.shared.start()
-        NodePairingApprovalPrompter.shared.start()
-        DevicePairingApprovalPrompter.shared.start()
-        ExecApprovalsPromptServer.shared.start()
-        ExecApprovalsGatewayPrompter.shared.start()
         MacNodeModeCoordinator.shared.start()
-        VoiceWakeGlobalSettingsSync.shared.start()
-        QuickChatController.shared.start()
+        if launchPlan.allowsInteractiveServices {
+            NodePairingApprovalPrompter.shared.start()
+            DevicePairingApprovalPrompter.shared.start()
+            ExecApprovalsPromptServer.shared.start()
+            ExecApprovalsGatewayPrompter.shared.start()
+            if let state {
+                CookieSyncManager.shared.start(state: state)
+            }
+            VoiceWakeGlobalSettingsSync.shared.start()
+            QuickChatController.shared.start()
+        }
         Task { PresenceReporter.shared.start() }
         Task { await HealthStore.shared.refresh(onDemand: true) }
         Task { await PortGuardian.shared.sweep(mode: AppStateStore.shared.connectionMode) }
-        AppStateStore.shared.applyPeekabooBridgeHostState()
-        if launchPolicy.allowsAutomaticPresentation {
+        AppStateStore.shared.applyComputerControlHostState()
+        if launchPlan.allowsAutomaticPresentation {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                 if !PostUpdateController.shared.startIfNeeded() {
                     CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
                 }
             }
         }
-        Task {
-            try? await Task.sleep(for: .seconds(2))
-            DashboardManager.shared.preloadIfConfigured()
+        if launchPlan.allowsAutomaticPresentation {
+            Task {
+                try? await Task.sleep(for: .seconds(2))
+                DashboardManager.shared.preloadIfConfigured()
+            }
         }
 
         #if DEBUG
         // Screenshot/demo helper: show the pairing panel with sample requests.
-        if launchPolicy.allowsAutomaticPresentation,
+        if launchPlan.allowsAutomaticPresentation,
            ProcessInfo.processInfo.environment["OPENCLAW_DEBUG_PAIRING_DEMO"] == "1"
         {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
@@ -628,14 +654,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         #endif
         // Developer/testing helper: auto-open chat when launched with --chat (or legacy --webchat).
-        if launchPolicy.shouldAutoOpenChat(arguments: CommandLine.arguments) {
+        if launchPlan.shouldAutoOpenChat(arguments: CommandLine.arguments) {
             self.webChatAutoLogger.debug("Auto-opening chat via CLI flag")
             Task { @MainActor in
                 let sessionKey = await WebChatManager.shared.preferredSessionKey()
                 WebChatManager.shared.show(sessionKey: sessionKey)
             }
         }
-        if launchPolicy.shouldAutoOpenDashboard(arguments: CommandLine.arguments) {
+        if launchPlan.shouldAutoOpenDashboard(arguments: CommandLine.arguments) {
             self.webChatAutoLogger.info("Auto-opening dashboard via CLI flag")
             self.openDashboardAction()
         }
@@ -649,6 +675,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ExecApprovalsPromptServer.shared.stop()
         ExecApprovalsGatewayPrompter.shared.stop()
         MacNodeModeCoordinator.shared.stop()
+        CookieSyncManager.shared.stop()
         TerminationSignalWatcher.shared.stop()
         VoiceWakeGlobalSettingsSync.shared.stop()
         DashboardManager.shared.close()
@@ -656,7 +683,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         WebChatManager.shared.resetTunnels()
         Task { await RemoteTunnelManager.shared.stopAll() }
         Task { await GatewayConnection.shared.shutdown() }
-        Task { await PeekabooBridgeHostCoordinator.shared.stop() }
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -666,9 +692,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard self.terminationCleanupTask == nil else {
             return .terminateLater
         }
-        let cleanup = self.nodeTerminationCleanup
+        let nodeCleanup = self.nodeTerminationCleanup
+        let bridgeCleanup = self.peekabooBridgeTerminationCleanup
         self.terminationCleanupTask = Task { @MainActor [weak self] in
-            await cleanup()
+            async let nodeCleanupResult: Void = nodeCleanup()
+            async let bridgeCleanupResult: Void = bridgeCleanup()
+            _ = await (nodeCleanupResult, bridgeCleanupResult)
             self?.finishTerminationCleanup(for: sender)
         }
         let waitForDeadline = self.waitForTerminationCleanupDeadline

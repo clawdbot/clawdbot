@@ -273,83 +273,7 @@ describe("Codex app-server approval bridge", () => {
     });
   });
 
-  it.each([
-    ["item/commandExecution/requestApproval", "cmd-policy-allow", { command: "gh run view 1" }],
-    [
-      "item/fileChange/requestApproval",
-      "patch-policy-allow",
-      { reason: "write memory/2026-07-29.md" },
-    ],
-  ] as const)(
-    "auto-accepts %s when the promoted OpenClaw tool policy allows it",
-    async (method, itemId, requestFields) => {
-      const params = createParams();
-
-      const result = await handleCodexAppServerApprovalRequest({
-        method,
-        requestParams: {
-          ...codexTestTurnIds(),
-          itemId,
-          ...requestFields,
-        },
-        paramsForRun: params,
-        ...codexTestTurnIds(),
-        autoApproveOpenClawToolPolicy: true,
-      });
-
-      expect(result).toEqual({ decision: "accept" });
-      expect(mockCallGatewayTool).not.toHaveBeenCalled();
-      findApprovalEvent(params, {
-        status: "approved",
-        message: "Codex app-server approval accepted by OpenClaw tool policy.",
-      });
-    },
-  );
-
-  it("preserves the initiating requester when re-running policy for a promoted file approval", async () => {
-    const params = createParams();
-    params.senderId = "owner-1";
-    params.senderIsOwner = true;
-    params.memberRoleIds = ["role-a", "role-b"];
-    mockRunBeforeToolCallHook.mockImplementation(async ({ params: hookParams, ctx }) =>
-      ctx?.requester?.senderIsOwner === true
-        ? { blocked: false, params: hookParams }
-        : { blocked: true, reason: "owner required", kind: "veto" },
-    );
-
-    const result = await handleCodexAppServerApprovalRequest({
-      method: "item/fileChange/requestApproval",
-      requestParams: {
-        ...codexTestTurnIds(),
-        itemId: "patch-owner-policy",
-      },
-      paramsForRun: params,
-      ...codexTestTurnIds(),
-      autoApproveOpenClawToolPolicy: true,
-    });
-
-    expect(result).toEqual({ decision: "accept" });
-    expect(mockRunBeforeToolCallHook).toHaveBeenCalledWith(
-      expect.objectContaining({
-        toolName: "apply_patch",
-        ctx: expect.objectContaining({
-          requester: {
-            channel: "telegram",
-            accountId: "default",
-            senderId: "owner-1",
-            senderIsOwner: true,
-            roleIds: ["role-a", "role-b"],
-          },
-        }),
-      }),
-    );
-    expect(mockCallGatewayTool).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["promoted tool policy", { autoApproveOpenClawToolPolicy: true }],
-    ["full-auto runtime policy", { autoApprove: true }],
-  ] as const)("keeps permission grants on the human path under %s", async (_label, policy) => {
+  it("keeps permission grants on the human path under full-auto runtime policy", async () => {
     const params = createParams();
     mockCallGatewayTool
       .mockResolvedValueOnce({ id: "plugin:permission-policy-allow", status: "accepted" })
@@ -370,7 +294,7 @@ describe("Codex app-server approval bridge", () => {
       },
       paramsForRun: params,
       ...codexTestTurnIds(),
-      ...policy,
+      autoApprove: true,
     });
 
     expect(result).toEqual({
@@ -2217,7 +2141,7 @@ describe("Codex app-server approval bridge", () => {
     });
 
     expect(gatewayRequestPayload().description).toBe(
-      "Command: pnpm test --watch extensions/codex/src/app-server\nSession: agent:main:session-1",
+      "Command: pnpm test --watch extensions/codex/src/app-server",
     );
     findApprovalEvent(params, {
       status: "pending",
@@ -2272,9 +2196,7 @@ describe("Codex app-server approval bridge", () => {
       ...codexTestTurnIds(),
     });
 
-    expect(gatewayRequestPayload().description).toBe(
-      "Command: prefix VISIBLE suffix\nSession: agent:main:session-1",
-    );
+    expect(gatewayRequestPayload().description).toBe("Command: prefix VISIBLE suffix");
     findApprovalEvent(params, { command: "prefix VISIBLE suffix" });
   });
 
@@ -2295,9 +2217,7 @@ describe("Codex app-server approval bridge", () => {
       ...codexTestTurnIds(),
     });
 
-    expect(gatewayRequestPayload().description).toBe(
-      "Command: echo safe cod.exe hidden done\nSession: agent:main:session-1",
-    );
+    expect(gatewayRequestPayload().description).toBe("Command: echo safe cod.exe hidden done");
     findApprovalEvent(params, { command: "echo safe cod.exe hidden done" });
   });
 
@@ -2321,7 +2241,7 @@ describe("Codex app-server approval bridge", () => {
     });
 
     expect(gatewayRequestPayload().description).toBe(
-      "Command: [preview truncated or unsafe content omitted]\nSession: agent:main:session-1",
+      "Command: [preview truncated or unsafe content omitted]",
     );
     const omittedEvent = findApprovalEvent(params, {});
     expect(omittedEvent.commandPreviewOmitted).toBe(true);
@@ -2612,9 +2532,7 @@ describe("Codex app-server approval bridge", () => {
       ...codexTestTurnIds(),
     });
 
-    expect(gatewayRequestPayload().description).toBe(
-      "Reason: needs write access for /tmp please\nSession: agent:main:session-1",
-    );
+    expect(gatewayRequestPayload().description).toBe("Reason: needs write access for /tmp please");
     findApprovalEvent(params, {
       status: "unavailable",
       reason: "needs write access for /tmp please",

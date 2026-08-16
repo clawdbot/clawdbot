@@ -331,8 +331,25 @@ describe("public worker ingress", () => {
         harness.url(),
         workerConnect(harness.credential, { environmentId: "worker-other" }),
       );
+      const staleBuild = await rejectWorker(
+        harness.url(),
+        workerConnect(harness.credential, {
+          handshake: {
+            ...BUILD,
+            bundleHash: "b".repeat(64),
+            protocolFeatures: [...BUILD.protocolFeatures],
+          },
+        }),
+      );
+      harness.credentialRecord.expiresAtMs = Date.now() - 1;
+      const expiredCredential = await rejectWorker(
+        harness.url(),
+        workerConnect(harness.credential),
+      );
 
       expect(badCredential).toEqual(wrongEnvironment);
+      expect(staleBuild).toEqual(badCredential);
+      expect(expiredCredential).toEqual(badCredential);
       expect(badCredential).toEqual({
         response: {
           type: "res",
@@ -351,6 +368,12 @@ describe("public worker ingress", () => {
       );
       expect(harness.logWsControl.warn).toHaveBeenCalledWith(
         "worker admission rejected reason=environment-mismatch",
+      );
+      expect(harness.logWsControl.warn).toHaveBeenCalledWith(
+        "worker admission rejected reason=bundle-mismatch",
+      );
+      expect(harness.logWsControl.warn).toHaveBeenCalledWith(
+        "worker admission rejected reason=credential-expired",
       );
     });
   });

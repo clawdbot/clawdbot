@@ -29,6 +29,7 @@ export {
 
 // Additive RPCs require exact build-bound features; bump only for an incompatible base set.
 export const WORKER_RPC_SET_VERSION = 1;
+export const WORKER_BUNDLE_PREWARM_VERSION = 1;
 export const WORKER_HEARTBEAT_INTERVAL_MS = 15_000;
 export const WORKER_PROTOCOL_METHODS = [
   "worker.heartbeat",
@@ -86,6 +87,7 @@ export const WorkerAdmissionHandshakeSchema = withSince(
       maxItems: WORKER_PROTOCOL_MAX_FEATURES,
       uniqueItems: true,
     }),
+    bundlePrewarm: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
   }),
 );
 

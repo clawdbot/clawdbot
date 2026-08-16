@@ -202,6 +202,21 @@ export function cronRunLogEntryToTaskDetail(
   return detail ?? { kind: CRON_TASK_DETAIL_KIND };
 }
 
+/** Stores quiet-trigger recovery facts without creating a run-history detail row. */
+export function cronQuietTriggerTaskDetail(
+  storeKey: string,
+  triggerEval: { fired: false; stateChanged: boolean; state?: unknown },
+): JsonValue {
+  return (
+    toJsonValue({
+      storeKey,
+      triggerFired: false,
+      triggerStateChanged: triggerEval.stateChanged,
+      ...(triggerEval.stateChanged ? { triggerState: triggerEval.state } : {}),
+    }) ?? { storeKey, triggerFired: false, triggerStateChanged: false }
+  );
+}
+
 /** Returns the cron store partition recorded on a task row. */
 export function cronTaskRecordStoreKey(task: TaskRecord): string | undefined {
   return isJsonObject(task.detail) && typeof task.detail.storeKey === "string"
@@ -219,12 +234,12 @@ export function resolveCronTaskRecordTimestamp(
 /** Reads internal trigger recovery data without adding it to run-history responses. */
 export function cronTaskRecordToTriggerEval(
   task: TaskRecord,
-): { fired: true; stateChanged: boolean; state?: JsonValue } | undefined {
-  if (!isJsonObject(task.detail) || task.detail.triggerFired !== true) {
+): { fired: boolean; stateChanged: boolean; state?: JsonValue } | undefined {
+  if (!isJsonObject(task.detail) || typeof task.detail.triggerFired !== "boolean") {
     return undefined;
   }
   return {
-    fired: true,
+    fired: task.detail.triggerFired,
     stateChanged: task.detail.triggerStateChanged === true,
     ...(task.detail.triggerStateChanged === true && "triggerState" in task.detail
       ? { state: task.detail.triggerState }
@@ -247,12 +262,12 @@ export function cronTaskRecordToScriptRunResult(
 
 /** Maps the cron outcome vocabulary onto generic task terminal states. */
 export function cronRunStatusToTaskStatus(
-  entry: CronRunLogEntry,
+  entry: Pick<CronRunLogEntry, "status" | "error"> & Partial<CronRunLogEntry>,
 ): Extract<TaskStatus, "succeeded" | "failed" | "timed_out"> {
-  if (entry.status === "ok" || entry.status === "skipped") {
+  if (entry.status === "ok") {
     return "succeeded";
   }
-  return isCronTimeoutErrorText(entry.error) ? "timed_out" : "failed";
+  return entry.status === "error" && isCronTimeoutErrorText(entry.error) ? "timed_out" : "failed";
 }
 
 /** Reconstructs the unchanged CronRunLogEntry wire shape from a cron task row. */

@@ -1,6 +1,7 @@
 // Slack plugin module implements auth behavior.
 import {
   type ChannelIngressEventInput,
+  type ChannelIngressContextBinding,
   type ChannelIngressIdentifierKind,
   type ChannelIngressPolicyInput,
   type ChannelIngressStateInput,
@@ -14,6 +15,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { collectSlackCursorPages } from "../cursor-pages.js";
 import { parseSlackTarget } from "../target-parsing.js";
 import {
@@ -48,6 +50,8 @@ const CHANNEL_MEMBERS_CACHE_MAX = 512;
 const SLACK_CHANNEL_ID = "slack";
 const SLACK_USER_NAME_KIND =
   "plugin:slack-user-name" as const satisfies ChannelIngressIdentifierKind;
+const SLACK_WORKSPACE_USER_ID_KIND =
+  "plugin:slack-workspace-user-id" as const satisfies ChannelIngressIdentifierKind;
 
 export class SlackSystemEventAuthRetryError extends Error {}
 function normalizeSlackUserId(raw?: string | null): string {
@@ -66,7 +70,7 @@ function isSlackStableUserId(value: string): boolean {
   return /^[ubw][a-z0-9_]+$/i.test(value);
 }
 
-function normalizeSlackStableEntry(entry: string): string | null {
+function normalizeSlackWorkspaceUserEntry(entry: string): string | null {
   const normalized = entry.trim().toLowerCase();
   if (!normalized) {
     return null;
@@ -79,8 +83,20 @@ function normalizeSlackStableEntry(entry: string): string | null {
   } catch {
     return null;
   }
+  return null;
+}
+
+function normalizeSlackBareUserEntry(entry: string): string | null {
+  const normalized = entry.trim().toLowerCase();
+  if (!normalized || normalizeSlackWorkspaceUserEntry(normalized)) {
+    return null;
+  }
   const userId = normalizeSlackUserId(normalized);
   return isSlackStableUserId(userId) ? userId : null;
+}
+
+function normalizeSlackStableEntry(entry: string): string | null {
+  return normalizeSlackBareUserEntry(entry) ?? normalizeSlackWorkspaceUserEntry(entry);
 }
 
 function normalizeSlackNameEntry(entry: string): string | null {
@@ -107,40 +123,46 @@ function normalizeSlackNameSlugEntry(entry: string): string | null {
 const slackIngressIdentity = defineStableChannelIngressIdentity({
   key: "senderId",
   kind: "stable-id",
-  normalizeEntry: normalizeSlackStableEntry,
+  normalizeEntry: normalizeSlackBareUserEntry,
   normalizeSubject: normalizeSlackUserId,
   sensitivity: "pii",
-  aliases: (
-    [
-      ["senderName", normalizeSlackNameEntry],
-      ["senderNameSlug", normalizeSlackNameSlugEntry],
-    ] as const
-  ).map(([key, normalizeEntry]) => ({
-    key,
-    kind: SLACK_USER_NAME_KIND,
-    normalizeEntry,
-    normalizeSubject: normalizeSlackNameSubject,
-    dangerous: true,
-    sensitivity: "pii" as const,
-  })),
+  aliases: [
+    {
+      key: "workspaceSenderId",
+      kind: SLACK_WORKSPACE_USER_ID_KIND,
+      normalizeEntry: normalizeSlackWorkspaceUserEntry,
+      normalizeSubject: normalizeSlackWorkspaceUserEntry,
+      sensitivity: "pii",
+    },
+    ...(
+      [
+        ["senderName", normalizeSlackNameEntry],
+        ["senderNameSlug", normalizeSlackNameSlugEntry],
+      ] as const
+    ).map(([key, normalizeEntry]) => ({
+      key,
+      kind: SLACK_USER_NAME_KIND,
+      normalizeEntry,
+      normalizeSubject: normalizeSlackNameSubject,
+      dangerous: true,
+      sensitivity: "pii" as const,
+    })),
+  ],
 });
 
 function createSlackIngressSubject(params: {
   senderId: string;
   senderName?: string;
   teamId?: string;
-  workspaceScoped?: boolean;
 }) {
-  const bareSenderId = normalizeSlackUserId(params.senderId);
-  const senderId =
-    params.workspaceScoped && params.teamId
-      ? `team:${params.teamId.toLowerCase()}:user:${bareSenderId}`
-      : bareSenderId;
+  const senderId = normalizeSlackUserId(params.senderId);
+  const teamId = normalizeOptionalLowercaseString(params.teamId);
   const senderName = params.senderName?.trim().toLowerCase();
   const senderNameSlug = senderName ? normalizeSlackSlug(senderName) : undefined;
   return {
     stableId: senderId,
     aliases: {
+      workspaceSenderId: teamId && senderId ? `team:${teamId}:user:${senderId}` : undefined,
       senderName,
       senderNameSlug,
     },
@@ -191,7 +213,6 @@ function buildBaseAllowFrom(ctx: SlackMonitorContext, teamId?: string): string[]
   return resolveSlackUserAllowListForTeam({
     allowList: ctx.allowFrom,
     teamId,
-    allowUnscoped: ctx.installationIdentity?.kind !== "enterprise",
   });
 }
 
@@ -215,28 +236,10 @@ export async function resolveSlackEffectiveAllowFrom(
   } catch {
     storeAllowFrom = [];
   }
-  if (ctx.installationIdentity?.kind !== "enterprise") {
-    return resolveSlackUserAllowListForTeam({
-      allowList: [...base, ...storeAllowFrom],
-      teamId,
-      allowUnscoped: true,
-    });
-  }
-  const normalizedTeamId = teamId?.toLowerCase();
-  if (!normalizedTeamId) {
-    return base;
-  }
-  const workspaceAllowFrom = storeAllowFrom.flatMap((entry) => {
-    try {
-      const target = parseSlackTarget(entry);
-      return target?.kind === "user" && target.teamId?.toLowerCase() === normalizedTeamId
-        ? [entry]
-        : [];
-    } catch {
-      return [];
-    }
+  return resolveSlackUserAllowListForTeam({
+    allowList: [...base, ...storeAllowFrom],
+    teamId,
   });
-  return normalizeAllowListLower([...base, ...workspaceAllowFrom]);
 }
 
 async function fetchSlackChannelMemberIds(
@@ -341,7 +344,6 @@ export async function authorizeSlackBotRoomMessage(params: {
       id: params.senderId,
       name: params.senderName,
       allowNameMatching: params.ctx.allowNameMatching,
-      allowUnscoped: params.ctx.installationIdentity?.kind !== "enterprise",
     })
   ) {
     return true;
@@ -392,6 +394,7 @@ export async function resolveSlackCommandIngress(params: {
   senderName?: string;
   channelType: SlackIngressChannelType;
   channelId: string;
+  threadId?: string;
   ownerAllowFromLower: string[];
   channelUsers?: Array<string | number>;
   allowTextCommands: boolean;
@@ -402,20 +405,18 @@ export async function resolveSlackCommandIngress(params: {
   modeWhenAccessGroupsOff?: NonNullable<
     ChannelIngressPolicyInput["command"]
   >["modeWhenAccessGroupsOff"];
+  contextBinding?: ChannelIngressContextBinding;
 }) {
   const isDirectMessage = params.channelType === "im";
   const isGroupDm = params.channelType === "mpim";
   const teamId = params.teamId ?? params.ctx.teamId;
-  const allowUnscoped = params.ctx.installationIdentity?.kind !== "enterprise";
   const ownerAllowFrom = resolveSlackUserAllowListForTeam({
     allowList: params.ownerAllowFromLower,
     teamId,
-    allowUnscoped,
   });
   const channelUsers = resolveSlackUserAllowListForTeam({
     allowList: params.channelUsers,
     teamId,
-    allowUnscoped,
   });
   const channelUsersConfigured =
     !isDirectMessage && !isGroupDm && normalizeAllowListLower(params.channelUsers).length > 0;
@@ -427,12 +428,13 @@ export async function resolveSlackCommandIngress(params: {
       senderId: params.senderId,
       senderName: params.senderName,
       teamId,
-      workspaceScoped: !allowUnscoped,
     }),
     conversation: {
       kind: slackIngressConversationKind(params.channelType),
       id: params.channelId,
+      threadId: params.threadId,
     },
+    contextBinding: params.contextBinding,
     event: {
       kind: params.eventKind ?? "message",
       authMode: "inbound",
@@ -474,16 +476,13 @@ async function decideSlackSystemIngress(params: {
   const isDirectMessage = params.channelType === "im";
   const isGroupDm = params.channelType === "mpim";
   const teamId = params.teamId ?? params.ctx.teamId;
-  const allowUnscoped = params.ctx.installationIdentity?.kind !== "enterprise";
   const ownerAllowFromLower = resolveSlackUserAllowListForTeam({
     allowList: params.ownerAllowFromLower,
     teamId,
-    allowUnscoped,
   });
   const channelUsers = resolveSlackUserAllowListForTeam({
     allowList: params.channelUsers,
     teamId,
-    allowUnscoped,
   });
   const channelUsersConfigured =
     !isDirectMessage && !isGroupDm && normalizeAllowListLower(params.channelUsers).length > 0;
@@ -512,7 +511,6 @@ async function decideSlackSystemIngress(params: {
       senderId: params.senderId,
       senderName,
       teamId,
-      workspaceScoped: !allowUnscoped,
     });
   const resolver = createSlackIngressResolver(params.ctx);
   const input: Parameters<typeof resolver.message>[0] = {

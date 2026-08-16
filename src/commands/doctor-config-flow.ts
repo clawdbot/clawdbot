@@ -1,14 +1,17 @@
 /** Main doctor config flow: preflight, migrations, previews, repairs, and final write decision. */
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { readAgentRosterProperty } from "../agents/agent-scope-config.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { readAgentRosterProperty, tryResolveSoleAgentId } from "../agents/agent-scope-config.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { withProgress } from "../cli/progress.js";
 import { configIncludeOwnsAgentRoster } from "../config/agent-roster-provenance.js";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
+import { isPathInside } from "../infra/path-guards.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   noteImplicitFallbackClobberWarnings,
@@ -30,7 +33,6 @@ import {
   type DoctorConfigMutationResult,
   type DoctorConfigMutationState,
 } from "./doctor/shared/config-mutation-state.js";
-import { materializeDefaultAgentRoles } from "./doctor/shared/default-agent-role-materialization.js";
 import { isSingleTopLevelIncludeMigration } from "./doctor/shared/include-migration-ownership.js";
 import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
 import type { DoctorPluginMetadataSnapshotState } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
@@ -48,10 +50,7 @@ function collectInvalidHookTransformsDirWarnings(
   const resolved = path.isAbsolute(transformsDir)
     ? path.resolve(transformsDir)
     : path.resolve(transformsRoot, transformsDir);
-  const relative = path.relative(transformsRoot, resolved);
-  const escapesRoot =
-    relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
-  if (!escapesRoot) {
+  if (isPathInside(transformsRoot, resolved)) {
     return [];
   }
   return [
@@ -95,20 +94,32 @@ function collectConfiguredChannelIds(cfg: OpenClawConfig): string[] {
   return Object.keys(channels).filter((channelId) => channelId !== "defaults");
 }
 
-// Past-tense "Removed X" lines must not appear under a "Doctor changes" panel
-// when the run did not write to disk; retitle to signal the preview state.
-function emitDoctorChangesPanel(
-  changeLines: ReadonlyArray<string>,
-  shouldRepair: boolean,
-  options: { sanitize?: boolean } = {},
-): void {
-  if (changeLines.length === 0) {
-    return;
-  }
-  const body = changeLines.join("\n");
-  const message = options.sanitize ? sanitizeDoctorNote(body) : body;
-  const title = shouldRepair ? "Doctor changes" : "Doctor changes preview";
-  note(message, title);
+// Repair-mode "Doctor changes" panels queue until the final candidate passes the
+// same validation the atomic writer enforces: printing "Doctor changes" and then
+// refusing the write would report repairs that never reached disk. Preview
+// panels print immediately — they promise nothing.
+type DoctorChangesPanelSink = {
+  emit: (changeLines: ReadonlyArray<string>, options?: { sanitize?: boolean }) => void;
+  drain: () => string[];
+};
+
+function createDoctorChangesPanelSink(shouldRepair: boolean): DoctorChangesPanelSink {
+  const pending: string[] = [];
+  return {
+    emit: (changeLines, options = {}) => {
+      if (changeLines.length === 0) {
+        return;
+      }
+      const body = changeLines.join("\n");
+      const message = options.sanitize ? sanitizeDoctorNote(body) : body;
+      if (shouldRepair) {
+        pending.push(message);
+        return;
+      }
+      note(message, "Doctor changes preview");
+    },
+    drain: () => pending.splice(0),
+  };
 }
 
 async function refreshGatewayAuthStateAfterAuthProfileRepair(): Promise<void> {
@@ -146,12 +157,24 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   prompter?: DoctorPrompter;
 }) {
   const shouldRepair = params.options.repair === true || params.options.yes === true;
-  const preflight = await runDoctorConfigPreflight({
-    repairPrefixedConfig: shouldRepair,
-    recoverCorruptTargetStore: shouldRepair,
-    doctorOnlyStateMigrations: shouldRepair,
-    preparePluginMetadataSnapshot: true,
-  });
+  const preflight = await withProgress(
+    {
+      label: "Checking OpenClaw state…",
+      enabled: params.options.nonInteractive !== true && params.options.json !== true,
+      delayMs: 200,
+    },
+    (progress) =>
+      runDoctorConfigPreflight({
+        repairPrefixedConfig: shouldRepair,
+        recoverCorruptTargetStore: shouldRepair,
+        doctorOnlyStateMigrations: shouldRepair,
+        preparePluginMetadataSnapshot: true,
+        measure: async (name, run) => {
+          progress.setLabel(`${name.slice(name.lastIndexOf(".") + 1).replaceAll("-", " ")}…`);
+          return await run();
+        },
+      }),
+  );
   const snapshot = preflight.snapshot;
   const baseCfg = preflight.baseConfig;
   const pluginMetadataSnapshotState: DoctorPluginMetadataSnapshotState = {
@@ -169,14 +192,16 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     pluginMetadataSnapshotState.current = undefined;
     pluginMetadataSnapshotScope.invalidate();
   };
-  const runWithCurrentPluginMetadata = <T>(config: OpenClawConfig, run: () => T): T =>
-    runWithPluginMetadataSnapshot(
+  const runWithCurrentPluginMetadata = <T>(config: OpenClawConfig, run: () => T): T => {
+    const soleAgentId = tryResolveSoleAgentId(config);
+    return runWithPluginMetadataSnapshot(
       {
         config,
-        workspaceDir: resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)),
+        workspaceDir: soleAgentId ? resolveAgentWorkspaceDir(config, soleAgentId) : undefined,
       },
       run,
     );
+  };
   let state: DoctorConfigMutationState = {
     cfg: baseCfg,
     candidate: structuredClone(baseCfg),
@@ -187,15 +212,12 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   let shouldRepairCronCodexModelRefsAfterConfigWrite = false;
   let openAICodexAuthProfileIdMap: ReadonlyMap<string, string> | undefined;
   const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
+  const changesPanelSink = createDoctorChangesPanelSink(shouldRepair);
   const applyConfigMutation = (
     mutation: DoctorConfigMutationResult & { warnings?: string[] },
     options: { fixHint: string; sanitize?: boolean; emitWarnings?: boolean },
   ): void => {
-    emitDoctorChangesPanel(
-      mutation.changes,
-      shouldRepair,
-      options.sanitize ? { sanitize: true } : {},
-    );
+    changesPanelSink.emit(mutation.changes, options.sanitize ? { sanitize: true } : {});
     if (options.emitWarnings && mutation.warnings?.length) {
       emitDoctorNotes({ note, warningNotes: mutation.warnings });
     }
@@ -210,6 +232,14 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const sourceLastTouchedVersion =
     typeof sourceMeta?.lastTouchedVersion === "string" ? sourceMeta.lastTouchedVersion : undefined;
 
+  const rawRosterMigrations = [snapshot.sourceConfigBeforeMigrations, snapshot.parsed]
+    .filter((source) => source !== undefined)
+    .map((source) => migratePersistedImplicitMainRoster(source));
+  const rosterMigrations = rawRosterMigrations.filter((migration) => migration.changed);
+  const rosterMigrationNeeded = rosterMigrations.length > 0;
+  const legacyDefaultAgentId = rawRosterMigrations
+    .map((migration) => migration.retainedLegacyDefaultAgentId)
+    .find((agentId) => agentId !== undefined);
   const legacyStep = runWithCurrentPluginMetadata(state.candidate, () =>
     applyLegacyCompatibilityStep({
       snapshot,
@@ -219,27 +249,46 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     }),
   );
   state = legacyStep.state;
+  if (legacyDefaultAgentId) {
+    retainLegacyDefaultAgentId(state.cfg, legacyDefaultAgentId);
+    retainLegacyDefaultAgentId(state.candidate, legacyDefaultAgentId);
+  }
   const legacyMigrationPartiallyValid = legacyStep.partiallyValid === true;
   const legacyMigrationBlocksWrite = legacyStep.blocksWrite === true;
-  const rosterMigrationNeeded = [snapshot.sourceConfigBeforeMigrations, snapshot.parsed].some(
-    (source) => source !== undefined && migratePersistedImplicitMainRoster(source).changed,
-  );
   const includeOwnsRoster = configIncludeOwnsAgentRoster(snapshot);
   if (snapshot.exists && rosterMigrationNeeded && !includeOwnsRoster) {
     // Runtime roster normalization is read-only; doctor --fix owns persistence.
-    const migrated = migratePersistedImplicitMainRoster(state.candidate).config as OpenClawConfig;
+    // Persist the legacy owner's workspace in doctor's canonical candidate. The writer may run
+    // again after health repairs, when the retired owner marker is no longer available to recover it.
+    const migrated = migratePersistedImplicitMainRoster(state.candidate, {
+      materializeWorkspace: true,
+    }).config as OpenClawConfig;
     const migratedRoster = readAgentRosterProperty(migrated);
     const migratedEntries = migratedRoster?.kind === "entries" ? migratedRoster.value : undefined;
-    const { list: _legacyList, ...candidateAgents } = state.candidate.agents ?? {};
+    const { list: _legacyList, ...candidateAgents } = migrated.agents ?? {};
+    const stampsExplicitOwnership =
+      legacyDefaultAgentId !== undefined && Object.keys(migratedEntries ?? {}).length > 1;
     const rosterRepair = {
       config: {
-        ...state.candidate,
+        ...migrated,
         agents: {
           ...candidateAgents,
+          ...(stampsExplicitOwnership ? { ownership: "explicit" as const } : {}),
           entries: migratedEntries as NonNullable<OpenClawConfig["agents"]>["entries"],
         },
       },
-      changes: ["Prepared agents.entries with exactly one explicit default agent for persistence."],
+      changes: [
+        ...new Set(
+          rosterMigrations
+            .flatMap((migration) => migration.diagnostics)
+            .concat(
+              "Prepared the canonical agent roster without retired default markers for persistence.",
+              ...(stampsExplicitOwnership
+                ? ["Stamped the multi-agent roster for explicit per-surface ownership."]
+                : []),
+            ),
+        ),
+      ],
     };
     applyConfigMutation(rosterRepair, {
       fixHint: `Run "${doctorFixCommand}" to persist the explicit agent roster.`,
@@ -247,10 +296,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     // Read-time normalization already exposes this roster in the runtime shape.
     // Preserve doctor's write intent so the atomic writer does not restore the authored omission.
     explicitSetPaths.push(["agents", "entries"]);
+    if (stampsExplicitOwnership) {
+      explicitSetPaths.push(["agents", "ownership"]);
+    }
   }
-  applyConfigMutation(materializeDefaultAgentRoles(state.candidate), {
-    fixHint: `Run "${doctorFixCommand}" to persist explicit ambient agent targets.`,
-  });
   const { collectBlockedLegacyOpenAICodexProviderPlan } =
     await import("./doctor/shared/legacy-config-migrations.runtime.models.js");
   const blockedCodexProviderPlan = collectBlockedLegacyOpenAICodexProviderPlan(state.candidate);
@@ -308,7 +357,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   if (legacyIssueLines.length > 0) {
     note(legacyIssueLines.join("\n"), "Legacy config keys detected");
   }
-  emitDoctorChangesPanel(legacyStep.changeLines, shouldRepair);
+  changesPanelSink.emit(legacyStep.changeLines);
   const hookTransformsDirWarnings = collectInvalidHookTransformsDirWarnings(
     state.cfg,
     snapshot.path,
@@ -329,10 +378,12 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     normalizeCompatibilityConfigValues(state.candidate, {
       blockedModelIdentities: blockedCodexModelIdentities,
       sourceRaw: snapshot.parsed,
+      sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
     }),
   );
   applyConfigMutation(normalized, {
     fixHint: `Run "${doctorFixCommand}" to apply these changes.`,
+    emitWarnings: true,
   });
 
   const { prepareRetiredPhoneControlCleanup } = await import("./doctor-retired-phone-control.js");
@@ -453,11 +504,16 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     if (repairSequence.authProfilesRepaired) {
       await refreshGatewayAuthStateAfterAuthProfileRepair();
     }
+    // Committed side-effect repairs (SQLite/filesystem) already happened; report now.
+    // Candidate-config mutations stay queued until the atomic write commits.
     emitDoctorNotes({
       note,
       changeNotes: repairSequence.changeNotes,
       warningNotes: repairSequence.warningNotes,
     });
+    for (const configChange of repairSequence.configChangeNotes ?? []) {
+      changesPanelSink.emit([configChange]);
+    }
   } else {
     const { collectDoctorPreviewNotes } = await import("./doctor/shared/preview-warnings.js");
     const collectPreviewNotes = async () =>
@@ -500,8 +556,12 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     const lines = [
       ...unknownStep.removed.map((pathLocal) => `- ${pathLocal}`),
       ...unknownStep.repairs.map((change) => `- ${change}`),
-    ].join("\n");
-    note(lines, shouldRepair ? "Doctor changes" : "Unknown config keys");
+    ];
+    if (shouldRepair) {
+      changesPanelSink.emit(lines);
+    } else {
+      note(lines.join("\n"), "Unknown config keys");
+    }
   }
   if (unknownStep.warnings.length > 0) {
     note(unknownStep.warnings.join("\n"), "Doctor warnings");
@@ -550,10 +610,16 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   noteSandboxOriginProxyWarning(cfg);
   noteMcpOriginWarning(cfg);
 
+  // Queued repair panels describe candidate mutations; the write runner prints
+  // them as "Doctor changes" only after the atomic write commits. A blocked
+  // write drops them — its blocking note already states nothing was changed.
+  const pendingChangePanels = changesPanelSink.drain();
+
   return {
     cfg,
     path: snapshot.path ?? CONFIG_PATH,
     shouldWriteConfig,
+    ...(shouldWriteConfig && pendingChangePanels.length > 0 ? { pendingChangePanels } : {}),
     sourceConfigValid: snapshot.valid,
     ...(sourceLastTouchedVersion ? { sourceLastTouchedVersion } : {}),
     ...(legacyMigrationPartiallyValid ? { skipPluginValidationOnWrite: true } : {}),

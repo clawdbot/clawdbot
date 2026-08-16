@@ -822,6 +822,24 @@ describe("gateway probe endpoints", () => {
           pendingReason: "plugin-convergence",
         });
 
+        gatewayDraining = true;
+        const drainingDuringStartup = await sendGatewayRequest(server, { path: "/startupz" });
+        expect(drainingDuringStartup.res.statusCode).toBe(503);
+        expect(JSON.parse(drainingDuringStartup.getBody())).toMatchObject({
+          ok: false,
+          status: "draining",
+          version: resolveRuntimeServiceVersion(process.env),
+          uptimeMs: expect.any(Number),
+        });
+
+        const drainingReadiness = await sendGatewayRequest(server, { path: "/readyz" });
+        expect(drainingReadiness.res.statusCode).toBe(503);
+        expect(JSON.parse(drainingReadiness.getBody())).toMatchObject({
+          ready: false,
+          failing: ["gateway-draining"],
+        });
+        gatewayDraining = false;
+
         startupPending = false;
         const started = await sendGatewayRequest(server, { path: "/startupz" });
         expect(started.res.statusCode).toBe(200);

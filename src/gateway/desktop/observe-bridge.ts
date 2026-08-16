@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
-import { connectRfbAttachment, type RfbAttachment } from "./attachment.js";
+import { connectRfbAttachment, type DesktopRfbAttachment } from "./attachment.js";
 import {
   preauthenticateRfb,
   RfbPreauthBuffer,
@@ -24,7 +24,7 @@ type DesktopObserverTokenEntry = {
   sourceKey: string;
   ownerEpoch: number;
   control: boolean;
-  attachment: RfbAttachment;
+  attachment: DesktopRfbAttachment;
   preauth?: RfbPreauthDescriptor;
   expiresAt: number;
 };
@@ -54,7 +54,7 @@ export function mintDesktopObserverToken(params: {
   sourceKey: string;
   ownerEpoch: number;
   control: boolean;
-  attachment: RfbAttachment;
+  attachment: DesktopRfbAttachment;
   preauth?: RfbPreauthDescriptor;
   nowMs?: number;
 }): { token: string; expiresAtMs: number } {
@@ -178,7 +178,7 @@ export function handleDesktopObserveUpgrade(
   socket: Duplex,
   head: Buffer,
   deps: {
-    registry: Pick<DesktopSessionRegistry, "attachObserver">;
+    registry: Pick<DesktopSessionRegistry, "attachObserver" | "claimStream">;
     getBufferedAmount?: (ws: WebSocket) => number;
   },
 ): boolean {
@@ -193,6 +193,12 @@ export function handleDesktopObserveUpgrade(
     return true;
   }
   desktopObserverWss.handleUpgrade(req, socket, head, (ws) => {
+    const claimedStream =
+      entry.attachment.kind === "stream" ? deps.registry.claimStream(entry.attachment) : undefined;
+    if (entry.attachment.kind === "stream" && !claimedStream) {
+      ws.close(1013, "desktop stream unavailable");
+      return;
+    }
     // View-only is enforced here at the RFB message boundary; the UI setting is only UX.
     const observer = deps.registry.attachObserver(entry.sourceKey, {
       control: entry.control,
@@ -200,10 +206,17 @@ export function handleDesktopObserveUpgrade(
       close: (code, reason) => ws.close(code, reason),
     });
     if (!observer) {
+      claimedStream?.destroy();
       ws.close(1013, "desktop observer limit");
       return;
     }
-    const desktopSocket = connectRfbAttachment(entry.attachment);
+    const desktopSocket =
+      entry.attachment.kind === "stream" ? claimedStream : connectRfbAttachment(entry.attachment);
+    if (!desktopSocket) {
+      observer.release();
+      ws.close(1013, "desktop stream unavailable");
+      return;
+    }
     let closed = false;
     let negotiating = Boolean(entry.preauth);
     let resumeTimer: ReturnType<typeof setInterval> | undefined;

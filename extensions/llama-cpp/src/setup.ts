@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
+import path from "node:path";
 import type {
   ProviderAppGuidedSetupContext,
   ProviderAuthContext,
@@ -10,43 +11,43 @@ import type {
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
+  DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
   DEFAULT_LLAMA_CPP_MODEL_CACHE_FILE,
   DEFAULT_LLAMA_CPP_MODEL_ID,
   DEFAULT_LLAMA_CPP_MODEL_REF,
-  DEFAULT_LLAMA_CPP_MODEL_SIZE_BYTES,
-  DEFAULT_LLAMA_CPP_MODEL_URI,
   LLAMA_CPP_PROVIDER_ID,
   buildLlamaCppProviderConfig,
   meetsLlamaCppDefaultModelRamFloor,
   resolveCachedLlamaCppModelPath,
+  resolveLegacyLlamaCppModelCacheDir,
   resolveLlamaCppModelCacheDir,
   resolveLlamaCppModelSource,
 } from "./defaults.js";
+import { resolveManagedLlamaServerPaths, selectLlamaServerAsset } from "./llama-server-install.js";
 import {
-  formatLlamaCppSetupError,
-  importNodeLlamaCpp,
-  type NodeLlamaCppModule,
-} from "./node-llama.runtime.js";
+  ensureLlamaCppModel,
+  prepareManagedLlamaServer,
+  type ManagedLlamaServer,
+} from "./managed-server.js";
 
 const BYTES_PER_GB = 1_000_000_000;
 const BYTES_PER_MB = 1_000_000;
 
-function formatLlamaCppDownloadProgress(params: {
-  downloadedSize: number;
-  totalSize: number;
-  bytesPerSecond: number;
-}): string {
+function formatDownloadProgress(
+  label: string,
+  params: { downloadedSize: number; totalSize: number; bytesPerSecond: number },
+): string {
   const downloadedSize = Math.max(0, params.downloadedSize);
   const totalSize = Math.max(1, params.totalSize);
   const percent = Math.min(100, Math.floor((downloadedSize / totalSize) * 100));
   const downloadedGb = (downloadedSize / BYTES_PER_GB).toFixed(1);
   const totalGb = (totalSize / BYTES_PER_GB).toFixed(1);
   const rateMb = Math.max(0, Math.round(params.bytesPerSecond / BYTES_PER_MB));
-  return `Downloading Gemma 4 E4B… ${percent}% (${downloadedGb}/${totalGb} GB, ${rateMb} MB/s)`;
+  return `Downloading ${label}… ${percent}% (${downloadedGb}/${totalGb} GB, ${rateMb} MB/s)`;
 }
 
 function formatRamGb(totalmemBytes: number): string {
-  return (totalmemBytes / 1024 ** 3).toFixed(1).replace(/\.0$/, "");
+  return (totalmemBytes / 1024 ** 3).toFixed(1).replace(/\.0$/u, "");
 }
 
 function readPrimaryModel(config: ProviderAppGuidedSetupContext["config"]): string | undefined {
@@ -69,57 +70,68 @@ function configuredCandidates(
 }
 
 async function isFile(filePath: string): Promise<boolean> {
-  try {
-    return (await fs.stat(filePath)).isFile();
-  } catch {
-    return false;
-  }
+  return await fs
+    .stat(filePath)
+    .then((stat) => stat.isFile())
+    .catch(() => false);
 }
 
-export async function detectLlamaCppSetup(ctx: ProviderAppGuidedSetupContext) {
-  let runtime: NodeLlamaCppModule;
-  try {
-    runtime = await importNodeLlamaCpp();
-  } catch {
-    return null;
+async function resolveCachedCandidate(candidate: {
+  model: ModelDefinitionConfig;
+  provider: ModelProviderConfig;
+}): Promise<string | undefined> {
+  const source = resolveLlamaCppModelSource(candidate.model);
+  const resolved = resolveCachedLlamaCppModelPath(candidate);
+  if (resolved && (await isFile(resolved))) {
+    return resolved;
   }
-  for (const candidate of configuredCandidates(ctx.config)) {
-    try {
-      const cachedPath = await runtime.resolveModelFile(
-        resolveLlamaCppModelSource(candidate.model),
-        {
-          directory: resolveLlamaCppModelCacheDir(candidate.provider),
-          download: false,
-          cli: false,
-        },
-      );
-      if (!(await isFile(cachedPath))) {
-        continue;
-      }
-      return {
-        modelRef: `${LLAMA_CPP_PROVIDER_ID}/${candidate.model.id}`,
-        detail: "Ready locally",
-      };
-    } catch {
-      // Discovery is read-only: a missing model or native module is not a setup error.
+  if (candidate.model.id === DEFAULT_LLAMA_CPP_MODEL_ID) {
+    const legacy = path.join(
+      resolveLegacyLlamaCppModelCacheDir(),
+      DEFAULT_LLAMA_CPP_MODEL_CACHE_FILE,
+    );
+    if (await isFile(legacy)) {
+      return legacy;
     }
   }
-  return null;
+  if (/^(?:hf|huggingface|https):/iu.test(source)) {
+    return await ensureLlamaCppModel({
+      source,
+      cacheDir: resolveLlamaCppModelCacheDir(candidate.provider),
+      download: false,
+    }).catch(() => undefined);
+  }
+  return undefined;
 }
 
-function buildSetupResult(
-  config: ProviderAppGuidedSetupContext["config"],
-  defaultModel = DEFAULT_LLAMA_CPP_MODEL_REF,
-): ProviderAuthResult {
+function readConfiguredPort(provider: ModelProviderConfig | undefined): number | undefined {
+  try {
+    const url = new URL(provider?.baseUrl ?? "");
+    if (url.hostname !== "127.0.0.1" && url.hostname !== "localhost" && url.hostname !== "[::1]") {
+      return undefined;
+    }
+    const port = Number(url.port);
+    return Number.isInteger(port) && port > 0 ? port : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function buildSetupResult(params: {
+  config: ProviderAppGuidedSetupContext["config"];
+  managed: ManagedLlamaServer;
+  defaultModel?: string;
+}): ProviderAuthResult {
   return {
     profiles: [],
-    defaultModel,
+    defaultModel: params.defaultModel ?? DEFAULT_LLAMA_CPP_MODEL_REF,
     configPatch: {
       models: {
-        mode: config.models?.mode ?? "merge",
+        mode: params.config.models?.mode ?? "merge",
         providers: {
           [LLAMA_CPP_PROVIDER_ID]: buildLlamaCppProviderConfig(
-            config.models?.providers?.[LLAMA_CPP_PROVIDER_ID],
+            params.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID],
+            params.managed,
           ),
         },
       },
@@ -127,87 +139,131 @@ function buildSetupResult(
   };
 }
 
+export async function detectLlamaCppSetup(ctx: ProviderAppGuidedSetupContext) {
+  const existing = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+  const command = existing?.localService?.command;
+  const presetPath = existing?.localService?.args?.find(
+    (_, index, args) => args[index - 1] === "--models-preset",
+  );
+  if (
+    !command ||
+    !path.isAbsolute(command) ||
+    !(await isFile(command)) ||
+    !presetPath ||
+    !(await isFile(presetPath))
+  ) {
+    return null;
+  }
+  for (const candidate of configuredCandidates(ctx.config)) {
+    if (await resolveCachedCandidate(candidate)) {
+      return {
+        modelRef: `${LLAMA_CPP_PROVIDER_ID}/${candidate.model.id}`,
+        detail: "Managed llama.cpp server ready",
+      };
+    }
+  }
+  return null;
+}
+
 export async function prepareLlamaCppSetup(
   ctx: ProviderAppGuidedSetupContext & { modelRef: string },
 ): Promise<ProviderAuthResult | null> {
   const detected = await detectLlamaCppSetup(ctx);
-  return detected?.modelRef === ctx.modelRef ? buildSetupResult(ctx.config, ctx.modelRef) : null;
+  const existing = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+  if (detected?.modelRef !== ctx.modelRef || !existing?.localService?.command) {
+    return null;
+  }
+  const baseUrl = existing.baseUrl?.replace(/\/+$/u, "") ?? "";
+  const rootUrl = baseUrl.replace(/\/v1$/u, "");
+  return buildSetupResult({
+    config: ctx.config,
+    defaultModel: ctx.modelRef,
+    managed: {
+      command: existing.localService.command,
+      presetPath:
+        existing.localService.args?.find(
+          (_, index, args) => args[index - 1] === "--models-preset",
+        ) ?? resolveManagedLlamaServerPaths(selectLlamaServerAsset()).presetPath,
+      baseUrl,
+      healthUrl: existing.localService.healthUrl ?? `${rootUrl}/health`,
+      args: existing.localService.args ?? [],
+      backend: selectLlamaServerAsset().backend,
+    },
+  });
 }
 
 export async function runLlamaCppSetup(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
   const existing = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
-  const cacheDir = resolveLlamaCppModelCacheDir(existing);
-  const cachedPath = resolveCachedLlamaCppModelPath({
-    model: {
-      id: DEFAULT_LLAMA_CPP_MODEL_ID,
-      params: { modelPath: DEFAULT_LLAMA_CPP_MODEL_URI },
-    },
-    provider: existing,
-  });
-  if (!cachedPath || !(await isFile(cachedPath))) {
+  const candidates = configuredCandidates(ctx.config);
+  let selected = candidates[0];
+  let chatModelPath = selected ? await resolveCachedCandidate(selected) : undefined;
+  if (!chatModelPath) {
+    selected = candidates.find((candidate) => candidate.model.id === DEFAULT_LLAMA_CPP_MODEL_ID);
     const totalmemBytes = os.totalmem();
-    if (!meetsLlamaCppDefaultModelRamFloor(totalmemBytes)) {
+    if (!selected || !meetsLlamaCppDefaultModelRamFloor(totalmemBytes)) {
       await ctx.prompter.note(
-        `This Gateway has ${formatRamGb(totalmemBytes)} GB RAM; the recommended model needs 16 GB+. Use Ollama or LM Studio with a smaller model, configure an existing GGUF, or choose a cloud provider.`,
+        `This Gateway has ${formatRamGb(totalmemBytes)} GB RAM; the recommended model needs 16 GB+. Configure an existing smaller GGUF, use Ollama or LM Studio, or choose a cloud provider.`,
         "Setup skipped",
       );
       return { profiles: [] };
     }
     const consent = await ctx.prompter.confirm({
       message:
-        "OpenClaw will download Gemma 4 E4B IT Q4_K_M (about 5.0 GB) and run it directly inside this Gateway. Continue?",
+        "OpenClaw will install a verified llama.cpp server and download Gemma 4 E4B IT Q4_K_M (about 5.0 GB) plus the local embedding model (about 0.3 GB). Continue?",
       initialValue: false,
     });
     if (!consent) {
-      await ctx.prompter.note("Local model download skipped.", "Setup skipped");
+      await ctx.prompter.note("Local model setup skipped.", "Setup skipped");
       return { profiles: [] };
     }
-    const progress = ctx.prompter.progress("Preparing Gemma 4 E4B model download…");
-    try {
-      const runtime = await importNodeLlamaCpp();
-      let previousDownloadedSize: number | undefined;
-      let previousProgressAtMs: number | undefined;
-      let rollingBytesPerSecond = 0;
-      const downloader = await runtime.createModelDownloader({
-        modelUri: DEFAULT_LLAMA_CPP_MODEL_URI,
-        dirPath: cacheDir,
-        fileName: DEFAULT_LLAMA_CPP_MODEL_CACHE_FILE,
-        showCliProgress: false,
-        onProgress: ({ downloadedSize, totalSize }) => {
-          const now = Date.now();
-          if (
-            previousDownloadedSize !== undefined &&
-            previousProgressAtMs !== undefined &&
-            downloadedSize >= previousDownloadedSize &&
-            now > previousProgressAtMs
-          ) {
-            const elapsedSeconds = (now - previousProgressAtMs) / 1000;
-            const currentBytesPerSecond =
-              (downloadedSize - previousDownloadedSize) / elapsedSeconds;
-            // Four-sample EWMA: a small rolling window without per-update allocations.
-            rollingBytesPerSecond =
-              rollingBytesPerSecond === 0
-                ? currentBytesPerSecond
-                : rollingBytesPerSecond * 0.75 + currentBytesPerSecond * 0.25;
-          }
-          previousDownloadedSize = downloadedSize;
-          previousProgressAtMs = now;
-          const expectedSize = totalSize || DEFAULT_LLAMA_CPP_MODEL_SIZE_BYTES;
-          progress.update(
-            formatLlamaCppDownloadProgress({
-              downloadedSize,
-              totalSize: expectedSize,
-              bytesPerSecond: rollingBytesPerSecond,
-            }),
-          );
-        },
-      });
-      await downloader.download({ signal: ctx.signal });
-      progress.stop("Gemma 4 E4B model downloaded");
-    } catch (error) {
-      progress.stop("Model download failed");
-      throw new Error(formatLlamaCppSetupError(error), { cause: error });
-    }
   }
-  return buildSetupResult(ctx.config);
+
+  if (!selected) {
+    throw new Error("llama.cpp setup could not resolve a chat model");
+  }
+
+  const progress = ctx.prompter.progress("Preparing managed llama.cpp server…");
+  try {
+    const cacheDir = resolveLlamaCppModelCacheDir(existing);
+    chatModelPath ??= await ensureLlamaCppModel({
+      source: resolveLlamaCppModelSource(selected.model),
+      cacheDir,
+      download: true,
+      signal: ctx.signal,
+      onProgress: (status) => progress.update(formatDownloadProgress("Gemma 4 E4B", status)),
+    });
+    const embeddingModelPath = await ensureLlamaCppModel({
+      source: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
+      cacheDir,
+      download: true,
+      signal: ctx.signal,
+      onProgress: (status) => progress.update(formatDownloadProgress("EmbeddingGemma", status)),
+    });
+    const configuredContext = selected.model.params?.contextSize;
+    const contextSize =
+      typeof configuredContext === "number" && configuredContext > 0
+        ? Math.floor(configuredContext)
+        : selected.model.contextTokens;
+    const managed = await prepareManagedLlamaServer({
+      chatModelId: selected.model.id,
+      chatModelPath,
+      contextSize,
+      maxTokens: selected.model.maxTokens,
+      embeddingModelPath,
+      port: readConfiguredPort(existing),
+    });
+    progress.stop("Managed llama.cpp server prepared");
+    return buildSetupResult({
+      config: ctx.config,
+      managed,
+      defaultModel: `${LLAMA_CPP_PROVIDER_ID}/${selected.model.id}`,
+    });
+  } catch (error) {
+    progress.stop("llama.cpp setup failed");
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Managed llama.cpp setup failed. Run openclaw doctor, fix the reported runtime or model issue, then retry. ${detail}`,
+      { cause: error },
+    );
+  }
 }

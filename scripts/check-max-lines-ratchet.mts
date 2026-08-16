@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import ts from "typescript";
+import { resolveRatchetBase } from "./lib/ratchet-base.mts";
 
 const BASELINE_PATH = "config/max-lines-baseline.txt";
 const GIT_MAX_BUFFER = 256 * 1024 * 1024;
@@ -287,35 +288,6 @@ function readBaselineAtRef(root: string, ref: string) {
   );
 }
 
-function resolveDefaultBase(root: string, staged: boolean) {
-  const candidates = staged ? ["HEAD"] : ["origin/main", "HEAD"];
-  const resolved = candidates.find((ref) => {
-    try {
-      execFileSync("git", ["rev-parse", "--verify", ref + "^{commit}"], {
-        cwd: root,
-        stdio: "ignore",
-      });
-      return true;
-    } catch {
-      return false;
-    }
-  });
-  if (!resolved || staged || resolved !== "origin/main") {
-    return resolved ?? null;
-  }
-  // A release or long-lived branch owns the suppression debt from its fork.
-  // Comparing against moving main would turn unrelated debt cleanup into a blocker.
-  try {
-    return execFileSync("git", ["merge-base", "HEAD", resolved], {
-      cwd: root,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-  } catch {
-    return resolved;
-  }
-}
-
 function writeBaseline(root: string, entries: string[]) {
   fs.writeFileSync(path.join(root, BASELINE_PATH), BASELINE_HEADER + entries.join("\n") + "\n");
 }
@@ -367,7 +339,7 @@ export function main(root = process.cwd(), argv: string[] = process.argv.slice(2
       staged: args.staged,
     });
     const { added, stale } = diffBaseline(current, baseline);
-    const baseRef = args.base ?? resolveDefaultBase(root, args.staged);
+    const baseRef = resolveRatchetBase(root, { base: args.base, staged: args.staged });
     const baseBaseline = baseRef ? readBaselineAtRef(root, baseRef) : null;
     const allowedBaseline =
       baseRef && baseBaseline

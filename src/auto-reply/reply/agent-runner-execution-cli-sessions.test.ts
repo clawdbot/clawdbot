@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { prepareCliPromptImagePayload } from "../../agents/cli-runner/helpers.js";
+import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
+import { detectAndLoadPromptImages } from "../../agents/embedded-agent-runner/run/images.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -23,6 +26,139 @@ const state = setupAgentRunnerExecutionTestState();
 afterEach(resetGeneratedMediaTaskActivityForTests);
 
 describe("executeAgentTurn: CLI session routing", () => {
+  it("preserves queued image fields from runs created before the prepared marker", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("claude-cli", "claude-opus-5"),
+      provider: "claude-cli",
+      model: "claude-opus-5",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "described" }],
+      meta: {},
+    });
+    const images = [
+      {
+        type: "image" as const,
+        data: "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR4nGP4z8Dwn4GBgYGJAQoAHxcCAr7cGDwAAAAASUVORK5CYII=",
+        mimeType: "image/png",
+      },
+    ];
+    const imageOrder = ["inline" as const];
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "claude-opus-5";
+    followupRun.images = images;
+    followupRun.imageOrder = imageOrder;
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(
+      createMinimalRunAgentTurnParams({
+        followupRun,
+        sessionCtx: {
+          Provider: "telegram",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      }),
+    );
+
+    expect(result.kind).toBe("success");
+    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
+      images,
+      imageOrder,
+    });
+  });
+
+  it("keeps prepared current-turn images aligned with CLI media facts", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("claude-cli", "claude-opus-5"),
+      provider: "claude-cli",
+      model: "claude-opus-5",
+      attempts: [],
+    }));
+    const images = [
+      {
+        type: "image" as const,
+        data: "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR4nGP4z8Dwn4GBgYGJAQoAHxcCAr7cGDwAAAAASUVORK5CYII=",
+        mimeType: "image/png",
+      },
+    ];
+    const imageOrder = ["inline" as const];
+    const media = [{ path: "/openclaw-test-missing/current.png", contentType: "image/png" }];
+    const mediaImageLayout = {
+      slots: [{ kind: "inline" as const, factIndex: 0 }],
+      suppressedFactIndexes: [],
+    };
+    state.runCliAgentMock.mockImplementationOnce(async (params: RunCliAgentParams) => {
+      const internalParams = params as RunCliAgentParams & {
+        mediaImageLayout?: typeof mediaImageLayout;
+      };
+      await expect(
+        prepareCliPromptImagePayload({
+          backend: { command: "claude" },
+          prompt: params.prompt,
+          imagePrompt: params.prompt,
+          workspaceDir: params.workspaceDir,
+          images: [...images, ...images],
+          imageOrder: [...imageOrder, ...imageOrder],
+          media,
+        }),
+      ).rejects.toThrow("failed to hydrate 1 structured image attachment");
+
+      const reconciled = await detectAndLoadPromptImages({
+        prompt: params.prompt,
+        media: params.media,
+        workspaceDir: params.workspaceDir,
+        model: { input: ["text", "image"] },
+        existingImages: params.images,
+        imageOrder: params.imageOrder,
+        mediaImageLayout: internalParams.mediaImageLayout,
+      });
+      expect(reconciled).toMatchObject({
+        failedMediaCount: 0,
+        images,
+      });
+      return {
+        payloads: [{ text: "described" }],
+        meta: {},
+      };
+    });
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "claude-opus-5";
+    const preparedFollowupRun = followupRun as typeof followupRun & {
+      currentTurnImagesPrepared?: true;
+      mediaImageLayout?: typeof mediaImageLayout;
+    };
+    preparedFollowupRun.currentTurnImagesPrepared = true;
+    preparedFollowupRun.mediaImageLayout = mediaImageLayout;
+    followupRun.images = images;
+    followupRun.imageOrder = imageOrder;
+    followupRun.media = media;
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(
+      createMinimalRunAgentTurnParams({
+        followupRun,
+        sessionCtx: {
+          Provider: "telegram",
+          MessageSid: "msg",
+          media,
+        } as unknown as TemplateContext,
+      }),
+    );
+
+    expect(result.kind).toBe("success");
+    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
+      images,
+      imageOrder,
+      mediaImageLayout,
+      media,
+    });
+  });
+
   it("forwards the static extra system prompt to CLI backends", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
@@ -38,6 +174,7 @@ describe("executeAgentTurn: CLI session routing", () => {
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
+    followupRun.run.agentId = "main";
     followupRun.run.provider = "codex-cli";
     followupRun.run.model = "gpt-5.4";
     followupRun.run.extraSystemPrompt = "dynamic inbound metadata\n\nstable group prompt";
@@ -193,13 +330,13 @@ describe("executeAgentTurn: CLI session routing", () => {
     expect(state.runCliAgentMock).toHaveBeenCalledOnce();
     expectMockCallArgFields(state.runCliAgentMock, 0, "CLI runtime", {
       sessionKey: "main",
-      agentId: "agent",
+      agentId: "main",
       sessionId: "session",
       suppressNextUserMessagePersistence: false,
       persistAssistantTranscript: true,
       storePath: "/tmp/sessions.json",
       sessionTarget: {
-        agentId: "agent",
+        agentId: "main",
         sessionId: "session",
         sessionKey: "main",
         storePath: "/tmp/sessions.json",

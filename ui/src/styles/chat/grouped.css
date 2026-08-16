@@ -928,7 +928,7 @@ details.msg-meta:not([open]) .msg-meta__details {
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
   background: var(--card);
-  box-shadow: 0 8px 24px color-mix(in srgb, #000 30%, transparent);
+  box-shadow: 0 8px 24px color-mix(in srgb, black 30%, transparent);
 }
 
 .chat-group.user .msg-meta__details {
@@ -980,7 +980,7 @@ details.msg-meta:not([open]) .msg-meta__details {
 
 .chat-confirm-popover {
   position: fixed;
-  background: var(--card, #1a1a1a);
+  background: var(--card);
   border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
   border-radius: var(--radius-md, 8px);
   padding: 12px;
@@ -1004,7 +1004,7 @@ details.msg-meta:not([open]) .msg-meta__details {
   align-items: center;
   gap: 6px;
   font-size: 12px; /* was 11px */
-  color: var(--muted, #888);
+  color: var(--muted);
   margin-bottom: 10px;
   user-select: none;
 }
@@ -1033,7 +1033,7 @@ details.msg-meta:not([open]) .msg-meta__details {
 
 .chat-confirm-popover__cancel {
   background: var(--bg-hover, rgba(255, 255, 255, 0.08));
-  color: var(--muted, #888);
+  color: var(--muted);
 }
 
 .chat-confirm-popover__cancel:hover {
@@ -1042,7 +1042,7 @@ details.msg-meta:not([open]) .msg-meta__details {
 
 .chat-confirm-popover__yes {
   background: var(--danger);
-  color: #fff;
+  color: var(--media-foreground);
 }
 
 :root[data-theme="dark"] .chat-confirm-popover__yes {
@@ -1057,7 +1057,7 @@ details.msg-meta:not([open]) .msg-meta__details {
 }
 
 .chat-confirm-popover__yes:hover {
-  background: #dc2626;
+  background: var(--danger-solid-hover);
 }
 
 :root[data-theme="dark"] .chat-confirm-popover__yes:hover {

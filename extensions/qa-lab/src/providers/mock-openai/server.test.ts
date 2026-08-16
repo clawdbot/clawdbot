@@ -6396,6 +6396,49 @@ Update and merge these partial structured summaries.`,
     expect(await response.text()).toContain('"name":"read"');
   });
 
+  it("routes the initial model-switch read through Anthropic guest Code Mode", async () => {
+    const server = await startMockServer();
+    const body = (await expectAnthropicMessagesJson(server, {
+      tools: [
+        {
+          name: "exec",
+          input_schema: {
+            type: "object",
+            properties: { code: { type: "string" } },
+            required: ["code"],
+          },
+        },
+        {
+          name: "wait",
+          input_schema: {
+            type: "object",
+            properties: { runId: { type: "string" } },
+            required: ["runId"],
+          },
+        },
+      ],
+      messages: [
+        makeAnthropicUserText(
+          "Read repo/qa/scenarios/index.yaml and summarize the QA scenario pack mission in one clause before any model switch.",
+        ),
+      ],
+    })) as {
+      stop_reason: string;
+      content: Array<Record<string, unknown>>;
+    };
+
+    expect(body.stop_reason).toBe("tool_use");
+    expect(body.content.find((block) => block.type === "tool_use")?.name).toBe("exec");
+
+    const debug = requireRecord(
+      await getJson(server, "/debug/last-request"),
+      "model switch Code Mode debug request",
+    );
+    expect(debug.plannedToolName).toBe("read");
+    expect(debug.plannedWireToolName).toBe("exec");
+    expect(debug.plannedToolArgs).toEqual({ path: "repo/qa/scenarios/index.yaml" });
+  });
+
   it("returns continuity language after the model-switch reread completes", async () => {
     const server = await startMockServer();
 
@@ -6604,7 +6647,7 @@ Update and merge these partial structured summaries.`,
     const toolUseBlock = body.content.find((block) => block.type === "tool_use") as
       | { id: string; name: string; input: Record<string, unknown> }
       | undefined;
-    expect(toolUseBlock?.id).toMatch(/^toolu_[A-Za-z0-9_]+$/);
+    expect(toolUseBlock?.id).toMatch(/^toolu[a-f0-9]{35}$/);
     expect(toolUseBlock?.id.length).toBeLessThanOrEqual(64);
     expect(toolUseBlock?.name).toBe("read");
     expect(toolUseBlock?.input).toEqual({ path: "repo/docs/help/testing.md" });
@@ -6622,6 +6665,7 @@ Update and merge these partial structured summaries.`,
   it("preserves already-native Anthropic tool IDs while adapting shared generated IDs", () => {
     const nativeId = "toolu_native_123";
     const generatedId = "call_mock_read_generated_1";
+    const secondGeneratedId = "call_mock_read_generated_2";
     const events: StreamEvent[] = [
       {
         type: "response.output_item.added",
@@ -6647,6 +6691,7 @@ Update and merge these partial structured summaries.`,
           output: [
             { type: "function_call", name: "read", call_id: nativeId, arguments: "{}" },
             { type: "function_call", name: "read", call_id: generatedId, arguments: "{}" },
+            { type: "function_call", name: "read", call_id: secondGeneratedId, arguments: "{}" },
           ],
           usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
         },
@@ -6687,9 +6732,13 @@ Update and merge these partial structured summaries.`,
     });
 
     expect(callIds.filter((id) => id === nativeId)).toHaveLength(3);
-    expect(new Set(adaptedGeneratedIds).size).toBe(1);
+    expect(adaptedGeneratedIds.slice(0, 3)).toEqual(
+      Array.from({ length: 3 }, () => "toolu51ca7fb8ca8ab1910ae2815b4e69a38ac71"),
+    );
+    expect(adaptedGeneratedIds[3]).toMatch(/^toolu[a-f0-9]{35}$/);
+    expect(adaptedGeneratedIds[3]).not.toBe(adaptedGeneratedIds[0]);
     expect(repeatedGeneratedIds).toEqual(adaptedGeneratedIds);
-    expect(adaptedGeneratedIds[0]).toMatch(/^toolu_[A-Za-z0-9_]+$/);
+    expect(adaptedGeneratedIds[0]).toMatch(/^toolu[a-f0-9]{35}$/);
     expect(adaptedGeneratedIds[0]?.length).toBeLessThanOrEqual(64);
   });
 
@@ -6747,7 +6796,7 @@ Update and merge these partial structured summaries.`,
       if (!toolUse || typeof toolUse.id !== "string" || typeof toolUse.name !== "string") {
         throw new Error("Expected Anthropic tool_use block");
       }
-      expect(toolUse.id).toMatch(/^toolu_[A-Za-z0-9_]+$/);
+      expect(toolUse.id).toMatch(/^toolu[a-f0-9]{35}$/);
       expect(toolUse.id.length).toBeLessThanOrEqual(64);
       emittedToolUseIds.push(toolUse.id);
       return toolUse;
@@ -7795,7 +7844,7 @@ Update and merge these partial structured summaries.`,
       toolUseStart?.content_block,
       "Anthropic SSE tool_use content block",
     );
-    expect(toolUse.id).toMatch(/^toolu_[A-Za-z0-9_]+$/);
+    expect(toolUse.id).toMatch(/^toolu[a-f0-9]{35}$/);
     expect(String(toolUse.id).length).toBeLessThanOrEqual(64);
     const debug = requireRecord(await getJson(server, "/debug/last-request"), "debug request");
     expect(debug.plannedToolCallId).toBe(toolUse.id);

@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
 import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -6,7 +7,8 @@ import { NODE_FS_LIST_DIR_COMMAND } from "../infra/node-commands.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { parseNodeList } from "../shared/node-list-parse.js";
 import type { NodeListNode } from "../shared/node-list-types.js";
-import { toCodeModeJsonSafe } from "./code-mode-json.js";
+import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
+import { boundCodeModeValue } from "./code-mode-json.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import type { PendingBridgeRequest, SettledBridgeRequest } from "./code-mode-runtime.js";
 import { readCodeModeSkill } from "./code-mode-skills.js";
@@ -30,21 +32,7 @@ import { ToolInputError } from "./tools/common.js";
 import { resolveEligibleNodeFromList } from "./tools/nodes-utils.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
 
-type CodeModeSwarmDeps = {
-  emitSessionLifecycleEvent: typeof emitSessionLifecycleEvent;
-  getSwarmRunByLaunchReplayKey: typeof getSwarmRunByLaunchReplayKey;
-  initSubagentRegistry: typeof initSubagentRegistry;
-  waitForCollectorCompletion: typeof waitForCollectorCompletion;
-};
-
-const defaultCodeModeSwarmDeps: CodeModeSwarmDeps = {
-  emitSessionLifecycleEvent,
-  getSwarmRunByLaunchReplayKey,
-  initSubagentRegistry,
-  waitForCollectorCompletion,
-};
-
-const CODE_MODE_NODES_TOOL_ID = "openclaw:core:nodes";
+export const CODE_MODE_NODES_TOOL_ID = "openclaw:core:nodes";
 
 type CodeModeNode = {
   id: string;
@@ -161,8 +149,6 @@ async function runNodesBridge(params: {
   }
   throw new ToolInputError("unsupported nodes bridge action.");
 }
-
-let codeModeSwarmDeps = defaultCodeModeSwarmDeps;
 
 export function codeModeReplayIdForToolCall(
   ctx: ToolSearchToolContext,
@@ -285,9 +271,10 @@ async function runAgentSpawnBridge(params: {
   // The registry persists this exact tuple and payload hash before launch.
   const idempotencyKey = `${params.codeModeRunId}:${params.request.id}`;
   const requesterSessionKey = resolveCodeModeRequesterSessionKey(params.ctx);
-  let existing = codeModeSwarmDeps.getSwarmRunByLaunchReplayKey(
+  let existing = getSwarmRunByLaunchReplayKey(
     idempotencyKey,
     requesterSessionKey,
+    params.ctx.agentId,
   );
   if (existing) {
     if (existing.swarmLaunchRequestFingerprint !== requestFingerprint) {
@@ -298,9 +285,9 @@ async function runAgentSpawnBridge(params: {
         throw new ToolInputError("agents.run persisted launch reservation cannot be recovered.");
       }
       // Cold-start restore idempotently re-enqueues this durable launch before agentWait parks.
-      codeModeSwarmDeps.initSubagentRegistry();
+      initSubagentRegistry();
       existing =
-        codeModeSwarmDeps.getSwarmRunByLaunchReplayKey(idempotencyKey, requesterSessionKey) ??
+        getSwarmRunByLaunchReplayKey(idempotencyKey, requesterSessionKey, params.ctx.agentId) ??
         existing;
       if (existing.swarmLaunchPending === true && !existing.queuedLaunch) {
         throw new ToolInputError("agents.run persisted launch reservation cannot be recovered.");
@@ -346,9 +333,11 @@ async function runAgentWaitBridge(params: {
     throw new ToolInputError("agents.run wait requires session identity.");
   }
   const requesterSessionKey = resolveCodeModeRequesterSessionKey(params.ctx);
-  return await codeModeSwarmDeps.waitForCollectorCompletion({
+  return await waitForCollectorCompletion({
     runId: runId.trim(),
     currentSessionKeys: new Set([rawSessionKey, requesterSessionKey]),
+    currentAgentId: params.ctx.agentId,
+    config: params.ctx.runtimeConfig ?? params.ctx.config,
     signal: params.signal,
   });
 }
@@ -368,7 +357,7 @@ function runSwarmNoteBridge(params: {
   if (!sessionKey) {
     throw new ToolInputError("swarmNote requires session identity.");
   }
-  codeModeSwarmDeps.emitSessionLifecycleEvent({
+  emitSessionLifecycleEvent({
     sessionKey,
     reason: "swarm-note",
     swarmGroupId: resolveCodeModeSwarmGroupId(params.ctx),
@@ -387,6 +376,7 @@ export async function runBridgeRequest(params: {
   namespaceRuntime: CodeModeNamespaceRuntime;
   parentToolCallId: string;
   codeModeRunId: string;
+  maxOutputBytes: number;
   ctx: ToolSearchToolContext;
   request: PendingBridgeRequest;
   signal?: AbortSignal;
@@ -531,19 +521,27 @@ export async function runBridgeRequest(params: {
         value = await readCodeModeSkill(skill, params.signal);
         break;
       }
+      case "sleep": {
+        const delay = values[0];
+        if (typeof delay !== "number" || !Number.isFinite(delay) || delay < 0) {
+          throw new ToolInputError("setTimeout delay must be a non-negative finite number.");
+        }
+        value = await sleep(resolveSafeTimeoutDelayMs(delay, { minMs: 0 }), null, {
+          signal: params.signal,
+        });
+        break;
+      }
       case "swarmNote": {
         value = runSwarmNoteBridge(params);
         break;
       }
     }
-    return { id: params.request.id, ok: true, value: toCodeModeJsonSafe(value) };
+    return {
+      id: params.request.id,
+      ok: true,
+      value: boundCodeModeValue(value, params.maxOutputBytes),
+    };
   } catch (error) {
     return { id: params.request.id, ok: false, error: formatErrorMessage(error) };
   }
-}
-
-export function setCodeModeSwarmDepsForTest(overrides?: Partial<CodeModeSwarmDeps>): void {
-  codeModeSwarmDeps = overrides
-    ? { ...defaultCodeModeSwarmDeps, ...overrides }
-    : defaultCodeModeSwarmDeps;
 }

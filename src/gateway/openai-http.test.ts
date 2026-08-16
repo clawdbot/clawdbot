@@ -168,6 +168,40 @@ function firstAgentCommandOptions() {
 }
 
 describe("OpenAI-compatible HTTP API (e2e)", () => {
+  it("returns a typed selection error unless an ownerless fleet request selects an agent", async () => {
+    try {
+      testState.agentsConfig = {
+        ownership: "explicit",
+        list: [{ id: "main" }, { id: "beta" }],
+      };
+      resetConfigRuntimeState();
+      agentCommandMock.mockClear();
+
+      const missing = await postChatCompletions(enabledPort, {
+        model: "openclaw",
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(missing.status).toBe(400);
+      const missingJson = (await missing.json()) as { error?: { message?: string; type?: string } };
+      expect(missingJson.error?.type).toBe("invalid_request_error");
+      expect(missingJson.error?.message).toContain("has no explicit owner");
+      expect(agentCommandMock).not.toHaveBeenCalled();
+
+      agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+      const selected = await postChatCompletions(
+        enabledPort,
+        { model: "openclaw/default", messages: [{ role: "user", content: "hi" }] },
+        { "x-openclaw-agent-id": "main" },
+      );
+      expect(selected.status).toBe(200);
+      expect(firstAgentCommandOptions()?.sessionKey ?? "").toMatch(/^agent:main:/);
+      await selected.text();
+    } finally {
+      testState.agentsConfig = undefined;
+      resetConfigRuntimeState();
+    }
+  });
+
   it("handles request validation and routing", async () => {
     const port = enabledPort;
     const mockAgentOnce = (payloads: Array<{ text: string }>) => {
@@ -225,7 +259,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     };
 
     try {
-      testState.agentsConfig = { list: [{ id: "main" }, { id: "beta" }] };
+      testState.agentsConfig = { list: [{ id: "main" }] };
       resetConfigRuntimeState();
 
       {
@@ -243,6 +277,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           method: "POST",
           headers: {
             "content-type": "application/json",
+            "x-openclaw-agent-id": "main",
           },
           body: JSON.stringify({ messages: [{ role: "user", content: "hi" }] }),
         });
@@ -252,6 +287,11 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         await res.text();
       }
 
+      testState.agentsConfig = {
+        ownership: "explicit",
+        list: [{ id: "main" }, { id: "beta" }],
+      };
+      resetConfigRuntimeState();
       await expectAgentSessionKeyMatch({
         body: { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
         headers: { "x-openclaw-agent-id": "beta" },
@@ -266,11 +306,15 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         matcher: /^agent:beta:/,
       });
 
+      testState.agentsConfig = { list: [{ id: "main" }] };
+      resetConfigRuntimeState();
+
       await expectAgentSessionKeyMatch({
         body: {
           model: "openclaw/default",
           messages: [{ role: "user", content: "hi" }],
         },
+        headers: { "x-openclaw-agent-id": "main" },
         matcher: /^agent:main:/,
       });
 
@@ -320,6 +364,11 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
+        testState.agentsConfig = {
+          ownership: "explicit",
+          list: [{ id: "main" }, { id: "beta" }],
+        };
+        resetConfigRuntimeState();
         mockAgentOnce([{ text: "hello" }]);
         const res = await postChatCompletions(
           port,
@@ -333,6 +382,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
         expect(firstAgentCommandOptions()?.sessionKey).toBe("agent:beta:openai:custom");
         await res.text();
+        testState.agentsConfig = { list: [{ id: "main" }] };
+        resetConfigRuntimeState();
       }
 
       {
@@ -1462,6 +1513,24 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       {
         agentCommandMock.mockClear();
         agentCommandMock.mockResolvedValueOnce({
+          payloads: [{ text: "usage last call" }],
+          meta: {
+            agentMeta: {
+              lastCallUsage: { input: 80, output: 20, total: 100 },
+            },
+          },
+        } as never);
+        const json = await postSyncUserMessage("usage");
+        expect(json.usage).toEqual({
+          prompt_tokens: 80,
+          completion_tokens: 20,
+          total_tokens: 100,
+        });
+      }
+
+      {
+        agentCommandMock.mockClear();
+        agentCommandMock.mockResolvedValueOnce({
           payloads: [{ text: "usage total" }],
           meta: {
             agentMeta: {
@@ -1926,6 +1995,40 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     expect(json.error?.code).toBe("decimal_above_max_value");
     expect(json.error?.message).toContain("Invalid 'temperature'");
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects resolved terminal agent failures without exposing provider details", async () => {
+    const privateDetail = "raw provider detail should stay private";
+    agentCommandMock.mockClear();
+    agentCommandMock.mockResolvedValueOnce({
+      payloads: [{ text: "Command may have changed state", isError: true }],
+      meta: { error: { kind: "incomplete_turn", message: privateDetail } },
+    } as never);
+
+    const res = await postChatCompletions(enabledPort, {
+      model: "openclaw",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    const body = await res.text();
+    expect(res.status).toBe(500);
+    expect(JSON.parse(body)).toEqual({
+      error: { message: "internal error", type: "api_error" },
+    });
+    expect(body).not.toContain(privateDetail);
+  });
+
+  it("rejects resolved error stop reasons", async () => {
+    agentCommandMock.mockClear();
+    agentCommandMock.mockResolvedValueOnce({
+      payloads: [{ text: "Command may have changed state", isError: true }],
+      meta: { stopReason: "error" },
+    } as never);
+
+    const res = await postChatCompletions(enabledPort, {
+      model: "openclaw",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(res.status).toBe(500);
   });
 
   it("forwards response_format into streamParams", async () => {
@@ -3164,7 +3267,29 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     expect(allContent).toBe("final answer");
   });
 
-  it("includes usage in final stream chunk when stream_options.include_usage=true", async () => {
+  it.each([
+    {
+      name: "includes aggregate usage in the final stream chunk",
+      usage: { input: 12, output: 5, cacheRead: 3, cacheWrite: 0, total: 20 },
+      lastCallUsage: undefined,
+      expected: {
+        prompt_tokens: 15,
+        completion_tokens: 5,
+        total_tokens: 20,
+        prompt_tokens_details: { cached_tokens: 3 },
+      },
+    },
+    {
+      name: "uses last-call usage when the aggregate is zero",
+      usage: { input: 0, output: 0, total: 0 },
+      lastCallUsage: { input: 55, output: 7, total: 62 },
+      expected: {
+        prompt_tokens: 55,
+        completion_tokens: 7,
+        total_tokens: 62,
+      },
+    },
+  ])("$name", async ({ usage, lastCallUsage, expected }) => {
     const port = enabledPort;
     agentCommandMock.mockClear();
     agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
@@ -3175,13 +3300,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         payloads: [{ text: "hello" }],
         meta: {
           agentMeta: {
-            usage: {
-              input: 12,
-              output: 5,
-              cacheRead: 3,
-              cacheWrite: 0,
-              total: 20,
-            },
+            usage,
+            ...(lastCallUsage ? { lastCallUsage } : {}),
           },
         },
       };
@@ -3203,12 +3323,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       .map((d) => JSON.parse(d) as Record<string, unknown>);
 
     const usageChunk = jsonChunks.find((chunk) => "usage" in chunk);
-    expect(usageChunk?.usage).toEqual({
-      prompt_tokens: 15,
-      completion_tokens: 5,
-      total_tokens: 20,
-      prompt_tokens_details: { cached_tokens: 3 },
-    });
+    expect(usageChunk?.usage).toEqual(expected);
     expect(usageChunk?.choices).toStrictEqual([]);
   });
 

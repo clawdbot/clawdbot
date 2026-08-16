@@ -1,19 +1,27 @@
+import { resolveCronJobConfigRevision } from "../config-revision.js";
+import {
+  findActiveCronRunReceiptInDatabase,
+  finishCronRunReceiptInDatabase,
+  releaseLocalCronRunReceiptOwnership,
+} from "../store/run-receipt-store.js";
+import type { CronJob } from "../types.js";
 import {
   DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
   isJobEnabled,
-  recomputeNextRunsForMaintenance,
   resolveJobErrorBackoffUntilMs,
 } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
 import {
-  clearOwnedQueuedCronRunMarkers,
   cleanupQueuedCronRunReservations,
   executeQueuedCronRun,
+  persistQueuedCronRunReservations,
   releaseQueuedCronRun,
   reserveQueuedCronRun,
 } from "./run-admission.js";
+import { recomputeUnownedCronSchedules } from "./run-recovery.js";
+import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
-import { ensureLoaded, persist, persistOrRestore, snapshotStoreForRollback } from "./store.js";
+import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
 import {
   DEFAULT_MAX_MISSED_JOBS_PER_RESTART,
   DEFAULT_MISSED_JOB_STAGGER_MS,
@@ -37,46 +45,137 @@ function deferPendingBackoffMissedCronSlots(
   if (!state.store) {
     return false;
   }
-  let changed = false;
-  for (const job of state.store.jobs) {
-    if (
-      !isJobEnabled(job) ||
-      job.schedule.kind !== "cron" ||
-      opts?.skipJobIds?.has(job.id) ||
-      typeof job.state.queuedAtMs === "number" ||
-      typeof job.state.runningAtMs === "number"
-    ) {
-      continue;
-    }
-    const backoffUntilMs = resolveJobErrorBackoffUntilMs(job, DEFAULT_ERROR_BACKOFF_SCHEDULE_MS);
-    if (backoffUntilMs === undefined || nowMs >= backoffUntilMs) {
-      continue;
-    }
-    if (!hasMissedCronSlotSinceLastRun(job, nowMs)) {
-      continue;
-    }
-    if (job.state.nextRunAtMs !== backoffUntilMs) {
-      job.state.nextRunAtMs = backoffUntilMs;
-      changed = true;
-    }
-  }
-  return changed;
+  const committedJobs = commitCronRuntimeRows({
+    state,
+    jobIds: state.store.jobs.map((job) => job.id),
+    operationLabel: "cron.startup-backoff",
+    mutate: ({ jobs }) => {
+      const committed: CronJob[] = [];
+      for (const job of jobs.values()) {
+        if (
+          !isJobEnabled(job) ||
+          job.schedule.kind !== "cron" ||
+          opts?.skipJobIds?.has(job.id) ||
+          typeof job.state.queuedAtMs === "number" ||
+          typeof job.state.runningAtMs === "number"
+        ) {
+          continue;
+        }
+        const backoffUntilMs = resolveJobErrorBackoffUntilMs(
+          job,
+          DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
+        );
+        if (
+          backoffUntilMs === undefined ||
+          nowMs >= backoffUntilMs ||
+          !hasMissedCronSlotSinceLastRun(job, nowMs) ||
+          job.state.nextRunAtMs === backoffUntilMs
+        ) {
+          continue;
+        }
+        job.state.nextRunAtMs = backoffUntilMs;
+        committed.push(job);
+      }
+      return { upsertJobIds: committed.map((job) => job.id), value: committed };
+    },
+  });
+  applyCronRuntimeRowsToState(state, committedJobs);
+  return committedJobs.length > 0;
 }
 
-async function persistStartupCatchupReservations(
-  state: CronServiceState,
-  rollbackSnapshot: ReturnType<typeof snapshotStoreForRollback>,
-  pendingReleases: readonly Pick<StartupCatchupCandidate, "jobId" | "reservationIdentity">[],
-  postPersistNotifications: DeferredCronNotifications = [],
-): Promise<void> {
-  recomputeNextRunsForMaintenance(state, {
-    repairFutureCronNextRunAtMs: false,
-    deferredNotifications: postPersistNotifications,
+function commitStartupCatchupRows(params: {
+  state: CronServiceState;
+  reservations: readonly Pick<StartupCatchupCandidate, "jobId" | "reservationIdentity">[];
+  deferredJobs?: readonly StartupDeferredJob[];
+  staggerMs?: number;
+}): void {
+  const postPersistNotifications: DeferredCronNotifications = [];
+  const deferredJobs = params.deferredJobs ?? [];
+  const reservationByJobId = new Map(
+    params.reservations.map((reservation) => [reservation.jobId, reservation] as const),
+  );
+  const deferredByJobId = new Map(deferredJobs.map((deferred) => [deferred.jobId, deferred]));
+  const baseNow = params.state.deps.nowMs();
+  let offset = params.staggerMs ?? 0;
+  const committedJobs = commitCronRuntimeRows({
+    state: params.state,
+    jobIds: [...reservationByJobId.keys(), ...deferredByJobId.keys()],
+    operationLabel: "cron.startup-catchup-state",
+    mutate: ({ database, jobs }) => {
+      const committed: CronJob[] = [];
+      for (const [jobId, job] of jobs) {
+        let changed = false;
+        const reservation = reservationByJobId.get(jobId);
+        const ownership = params.state.queuedRunReservationsByJobId.get(jobId);
+        if (reservation && ownership?.identity === reservation.reservationIdentity) {
+          finishCronRunReceiptInDatabase({
+            database,
+            handle: ownership.runReceipt,
+            status: "skipped",
+            finishedAtMs: params.state.deps.nowMs(),
+            error: "cron startup reservation abandoned before completion",
+          });
+          if (ownership.activationPreviousLastError) {
+            job.state.lastError = ownership.activationPreviousLastError.value;
+          }
+          if (ownership.markerAtMs === job.state.queuedAtMs) {
+            delete job.state.queuedAtMs;
+            changed = true;
+          }
+          if (ownership.markerAtMs === job.state.runningAtMs) {
+            delete job.state.runningAtMs;
+            changed = true;
+          }
+        }
+        const deferred = deferredByJobId.get(jobId);
+        if (
+          deferred &&
+          isJobEnabled(job) &&
+          job.state.queuedAtMs === undefined &&
+          job.state.runningAtMs === undefined &&
+          job.state.nextRunAtMs === deferred.nextRunAtMs &&
+          job.state.lastRunAtMs === deferred.lastRunAtMs &&
+          job.state.lastRunStatus === deferred.lastRunStatus &&
+          resolveCronJobConfigRevision(job) === deferred.configRevision &&
+          !findActiveCronRunReceiptInDatabase({
+            database,
+            storePath: params.state.deps.storePath,
+            jobId,
+          })
+        ) {
+          const candidate =
+            typeof deferred.delayMs === "number"
+              ? baseNow + deferred.delayMs + offset - (params.staggerMs ?? 0)
+              : baseNow + offset;
+          const runAtMs = resolveNextRunAtMsOrDisable({
+            state: params.state,
+            job,
+            candidate,
+            deferredNotifications: postPersistNotifications,
+          });
+          job.state.nextRunAtMs = runAtMs;
+          job.state.startupCatchupAtMs = runAtMs;
+          offset += params.staggerMs ?? 0;
+          changed = true;
+        }
+        if (changed) {
+          committed.push(job);
+        }
+      }
+      return {
+        upsertJobIds: committed.map((job) => job.id),
+        value: committed,
+      };
+    },
   });
-  // Notify only after durable commit, and release ownership only after both settle.
-  await persistOrRestore(state, rollbackSnapshot, { postPersistNotifications });
-  for (const pending of pendingReleases) {
-    releaseQueuedCronRun(state, pending.jobId, pending.reservationIdentity);
+  runPostPersistCronNotifications(params.state, postPersistNotifications);
+  applyCronRuntimeRowsToState(params.state, committedJobs);
+  for (const reservation of params.reservations) {
+    const ownership = params.state.queuedRunReservationsByJobId.get(reservation.jobId);
+    if (ownership?.identity === reservation.reservationIdentity) {
+      releaseLocalCronRunReceiptOwnership(ownership.runReceipt);
+    }
+    releaseQueuedCronRun(params.state, reservation.jobId, reservation.reservationIdentity);
   }
 }
 
@@ -159,7 +258,7 @@ async function planStartupCatchup(
     }
 
     const now = state.deps.nowMs();
-    const deferredBackoffMissedSlot = deferPendingBackoffMissedCronSlots(state, now, {
+    deferPendingBackoffMissedCronSlots(state, now, {
       skipJobIds: opts?.skipJobIds,
     });
     const missed = collectRunnableJobs(state, now, {
@@ -168,9 +267,6 @@ async function planStartupCatchup(
       allowCronMissedRunByLastRun: true,
     });
     if (missed.length === 0) {
-      if (deferredBackoffMissedSlot) {
-        await persist(state);
-      }
       return { candidates: [], deferredJobs: [] };
     }
     const sorted = missed.toSorted(
@@ -191,9 +287,17 @@ async function planStartupCatchup(
     );
     // Agent-turn startup catch-up is deferred by default so gateway/channel
     // startup is not blocked by model/tool bootstrap work.
+    const deferredJob = (job: CronJob, delayMs?: number): StartupDeferredJob => ({
+      jobId: job.id,
+      ...(delayMs === undefined ? {} : { delayMs }),
+      configRevision: resolveCronJobConfigRevision(job),
+      nextRunAtMs: job.state.nextRunAtMs,
+      lastRunAtMs: job.state.lastRunAtMs,
+      lastRunStatus: job.state.lastRunStatus,
+    });
     const deferred: StartupDeferredJob[] = [
-      ...deferredOverflow.map((job) => ({ jobId: job.id })),
-      ...deferredAgentJobs.map((job) => ({ jobId: job.id, delayMs: deferredAgentDelayMs })),
+      ...deferredOverflow.map((job) => deferredJob(job)),
+      ...deferredAgentJobs.map((job) => deferredJob(job, deferredAgentDelayMs)),
     ];
     if (deferred.length > 0) {
       state.deps.log.info(
@@ -221,18 +325,18 @@ async function planStartupCatchup(
         "cron: running missed jobs after restart",
       );
     }
-    const reservationRollbackSnapshot = snapshotStoreForRollback(state);
-    for (const job of startupCandidates) {
-      job.state.queuedAtMs = now;
-    }
-    await persistOrRestore(state, reservationRollbackSnapshot);
+    const reservedStartupCandidates = await persistQueuedCronRunReservations({
+      state,
+      candidates: startupCandidates,
+      reservedAtMs: now,
+    });
 
     return {
-      candidates: startupCandidates.map((job) => ({
+      candidates: reservedStartupCandidates.map(({ job, runReceipt }) => ({
         jobId: job.id,
         job,
         reservedAtMs: now,
-        reservationIdentity: reserveQueuedCronRun(state, job.id, now),
+        reservationIdentity: reserveQueuedCronRun(state, job.id, now, { runReceipt }),
       })),
       deferredJobs: deferred,
     };
@@ -259,10 +363,8 @@ async function executeStartupCatchupPlan(
           skipAtIfAlreadyRan: true,
           allowCronMissedRunByLastRun: true,
         },
-        onNotRunnable: async (job) => {
-          const rollbackSnapshot = snapshotStoreForRollback(state);
-          delete job.state.queuedAtMs;
-          await persistStartupCatchupReservations(state, rollbackSnapshot, [candidate]);
+        onNotRunnable: async () => {
+          commitStartupCatchupRows({ state, reservations: [candidate] });
         },
       });
       if (execution.kind === "stopped") {
@@ -294,61 +396,27 @@ async function applyStartupCatchupOutcomes(
     if (!state.store) {
       return;
     }
-    const rollbackSnapshot = snapshotStoreForRollback(state);
     const startedJobIds = new Set(outcomes.map((outcome) => outcome.jobId));
-    const pendingReleases = clearOwnedQueuedCronRunMarkers(
-      state,
-      plan.candidates.filter((candidate) => !startedJobIds.has(candidate.jobId)),
+    const pendingReleases = plan.candidates.filter(
+      (candidate) => !startedJobIds.has(candidate.jobId),
     );
-    const postPersistNotifications: DeferredCronNotifications = [];
     if (state.stopped || (outcomes.length === 0 && plan.deferredJobs.length === 0)) {
       if (pendingReleases.length > 0) {
-        await persistStartupCatchupReservations(state, rollbackSnapshot, pendingReleases);
+        commitStartupCatchupRows({ state, reservations: pendingReleases });
       }
       return;
     }
-
-    if (plan.deferredJobs.length > 0) {
-      const baseNow = state.deps.nowMs();
-      let offset = staggerMs;
-      for (const deferred of plan.deferredJobs) {
-        const jobId = deferred.jobId;
-        const job = state.store.jobs.find((entry) => entry.id === jobId);
-        if (!job || !isJobEnabled(job)) {
-          continue;
-        }
-        if (typeof deferred.delayMs === "number") {
-          const runAtMs = resolveNextRunAtMsOrDisable({
-            state,
-            job,
-            candidate: baseNow + deferred.delayMs + offset - staggerMs,
-            deferredNotifications: postPersistNotifications,
-          });
-          job.state.nextRunAtMs = runAtMs;
-          job.state.startupCatchupAtMs = runAtMs;
-          offset += staggerMs;
-          continue;
-        }
-        const runAtMs = resolveNextRunAtMsOrDisable({
-          state,
-          job,
-          candidate: baseNow + offset,
-          deferredNotifications: postPersistNotifications,
-        });
-        job.state.nextRunAtMs = runAtMs;
-        job.state.startupCatchupAtMs = runAtMs;
-        offset += staggerMs;
-      }
-    }
-
-    // Startup overflow owns these staggered wake times; repairing future
-    // schedules here would silently move a deferred run to its natural slot.
-    await persistStartupCatchupReservations(
+    commitStartupCatchupRows({
       state,
-      rollbackSnapshot,
-      pendingReleases,
-      postPersistNotifications,
-    );
+      reservations: pendingReleases,
+      deferredJobs: plan.deferredJobs,
+      staggerMs,
+    });
+    const maintenance = recomputeUnownedCronSchedules(state, {
+      repairFutureCronNextRunAtMs: false,
+    });
+    runPostPersistCronNotifications(state, maintenance.notifications);
+    applyCronRuntimeRowsToState(state, maintenance.jobs);
   });
   return outcomes;
 }

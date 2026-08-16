@@ -15,9 +15,17 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listNodePairing } from "../../infra/device-pairing-node.js";
 import { listDevicePairing, resolveNodePairingState } from "../../infra/device-pairing.js";
+import { NODE_DESKTOP_STREAM_COMMAND } from "../../shared/node-desktop-stream.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
-import { isHostDesktopCredentialsRequiredError } from "../desktop/host-source-errors.js";
+import { isDesktopCredentialsRequiredError } from "../desktop/host-source-errors.js";
+import { getNodeDesktopService } from "../desktop/node-source-context.js";
 import { createKnownNodeCatalog, listKnownNodes } from "../node-catalog.js";
+import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
+import {
+  collectNodeRunnerIssuesByNodeId,
+  collectNodeWorkerBundleStatusByNodeId,
+  isNodeRunnerSessionHost,
+} from "../node-registry-private.js";
 import type { WorkerEnvironmentServiceRecord } from "../worker-environments/service-contract.js";
 import type { WorkerEnvironmentState } from "../worker-environments/state.js";
 import { formatForLog } from "../ws-log.js";
@@ -57,20 +65,44 @@ function rejectInvalid(
 ) {
   return respondInvalidParams({ respond, method, validator });
 }
-function summarizeNodeEnvironment(node: NodeListNode): EnvironmentSummary {
+function summarizeNodeEnvironment(
+  node: NodeListNode,
+  config: Parameters<typeof resolveNodeCommandAllowlist>[0],
+): EnvironmentSummary {
   // Expose both declared capabilities and command names so older node
   // runtimes still advertise useful execution surfaces in one stable list.
   const capabilities = uniqueSortedStrings(node.caps, node.commands);
   const platform = node.platform?.trim();
+  const desktop =
+    node.connected === true &&
+    isNodeCommandAllowed({
+      command: NODE_DESKTOP_STREAM_COMMAND,
+      declaredCommands: node.commands,
+      allowlist: resolveNodeCommandAllowlist(config, {
+        platform: node.platform,
+        deviceFamily: node.deviceFamily,
+        commands: node.commands,
+        approvedCommands: node.commands,
+      }),
+    }).ok;
   return {
     id: `node:${node.nodeId}`,
     type: "node",
     label: node.displayName ?? node.nodeId,
     status: node.connected ? "available" : "unavailable",
     ...(platform ? { platform } : {}),
-    sessionHost: false,
+    sessionHost: node.connected === true && node.sessionHost === true,
+    ...(node.workerBundle ? { workerBundle: structuredClone(node.workerBundle) } : {}),
+    ...(node.lastConnectedAtMs !== undefined ? { lastConnectedAtMs: node.lastConnectedAtMs } : {}),
+    ...(node.lastDisconnectedAtMs !== undefined
+      ? { lastDisconnectedAtMs: node.lastDisconnectedAtMs }
+      : {}),
+    ...(node.lastSeenAtMs !== undefined ? { lastSeenAtMs: node.lastSeenAtMs } : {}),
+    ...(node.lastSeenReason ? { lastSeenReason: node.lastSeenReason } : {}),
     trust: "persistent",
+    ...(desktop ? { desktop: true } : {}),
     ...(capabilities.length > 0 ? { capabilities } : {}),
+    ...(node.issues?.length ? { issues: [...node.issues] } : {}),
   };
 }
 /** Projects a durable worker row without exposing its SSH credential reference. */
@@ -116,16 +148,41 @@ async function listEnvironments(context: GatewayRequestContext): Promise<Environ
       });
     }
   }
+  const connectedNodes = context.nodeRegistry.listConnectedForPairingStates(currentPairingStates);
+  const sessionHostNodeIds = new Set(
+    connectedNodes.flatMap((node) =>
+      isNodeRunnerSessionHost({
+        registry: context.nodeRegistry,
+        nodeId: node.nodeId,
+        connId: node.connId,
+        pairingGeneration: node.pairingGeneration,
+      })
+        ? [node.nodeId]
+        : [],
+    ),
+  );
+  const issuesByNodeId = collectNodeRunnerIssuesByNodeId(context.nodeRegistry, connectedNodes);
+  const workerBundleByNodeId = collectNodeWorkerBundleStatusByNodeId(
+    context.nodeRegistry,
+    connectedNodes,
+  );
   const catalog = createKnownNodeCatalog({
     pairedDevices: devices.paired,
     pairedNodes: nodes.paired,
-    connectedNodes: context.nodeRegistry.listConnectedForPairingStates(currentPairingStates),
+    connectedNodes,
+    sessionHostNodeIds,
+    workerBundleByNodeId,
+    issuesByNodeId,
   });
+  const config = context.getRuntimeConfig();
   const gateway =
-    context.getRuntimeConfig().desktop?.host?.enabled === true
+    config.desktop?.host?.enabled === true
       ? { ...GATEWAY_ENVIRONMENT, desktop: true }
       : GATEWAY_ENVIRONMENT;
-  return [gateway, ...listKnownNodes(catalog).map(summarizeNodeEnvironment)];
+  return [
+    gateway,
+    ...listKnownNodes(catalog).map((node) => summarizeNodeEnvironment(node, config)),
+  ];
 }
 function listWorkerEnvironments(context: GatewayRequestContext): WorkerEnvironmentServiceRecord[] {
   try {
@@ -207,7 +264,7 @@ async function respondDesktopObserve(params: {
         undefined,
       );
     } catch (error) {
-      if (isHostDesktopCredentialsRequiredError(error)) {
+      if (isDesktopCredentialsRequiredError(error)) {
         params.respond(
           false,
           undefined,
@@ -228,6 +285,54 @@ async function respondDesktopObserve(params: {
           error instanceof Error
             ? error.message
             : "gateway host desktop observe unavailable; verify the VNC server and retry",
+        ),
+      );
+    }
+    return;
+  }
+
+  if (params.request.source.kind === "node") {
+    const service = getNodeDesktopService(params.context);
+    if (!service) {
+      params.respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "node desktop is disabled; explicitly allow desktop.stream, then restart the gateway",
+        ),
+      );
+      return;
+    }
+    try {
+      params.respond(
+        true,
+        await service.observe({
+          nodeId: params.request.source.nodeId,
+          control: params.request.control ?? false,
+          ...("credentials" in params.request && params.request.credentials
+            ? { credentials: params.request.credentials }
+            : {}),
+        }),
+        undefined,
+      );
+    } catch (error) {
+      if (isDesktopCredentialsRequiredError(error)) {
+        params.respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, error.message, {
+            details: { code: error.detailCode, auth: error.auth },
+          }),
+        );
+        return;
+      }
+      params.respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          error instanceof Error ? error.message : "node desktop observe unavailable",
         ),
       );
     }

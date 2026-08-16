@@ -99,8 +99,11 @@ vi.mock("./doctor-workspace.js", async (importOriginal) => {
   };
 });
 
-import { noteMemorySearchHealth } from "./doctor-memory-search.js";
-import { maybeRepairMemoryRecallHealth, noteMemoryRecallHealth } from "./doctor-memory-search.js";
+import {
+  noteMemorySearchHealth,
+  maybeRepairMemoryRecallHealth,
+  noteMemoryRecallHealth,
+} from "./doctor-memory-search.js";
 import { formatRootMemoryFilesWarning } from "./doctor-workspace.js";
 
 function shortTermAudit(overrides: Record<string, unknown> = {}) {
@@ -340,12 +343,12 @@ describe("noteMemorySearchHealth", () => {
   });
 
   it("warns when local provider with default model but gateway probe reports not ready", async () => {
-    await runMemorySearchHealth("local", failedGatewayOptions("node-llama-cpp not installed"));
+    await runMemorySearchHealth("local", failedGatewayOptions("managed llama-server unavailable"));
 
     expect(note).toHaveBeenCalledTimes(1);
     expectFirstNoteContains(
       "local embeddings are not confirmed ready",
-      "node-llama-cpp not installed",
+      "managed llama-server unavailable",
     );
   });
 
@@ -381,23 +384,15 @@ describe("noteMemorySearchHealth", () => {
         runtimeFacts: {
           engine: "llama.cpp",
           state: "ready",
-          backend: "cuda",
-          buildType: "prebuilt",
-          deviceNames: ["NVIDIA Test GPU"],
-          memory: {
-            totalBytes: 24 * 1024 ** 3,
-            usedBytes: 8 * 1024 ** 3,
-            freeBytes: 16 * 1024 ** 3,
-            unifiedBytes: 0,
-            observedAtMs: Date.parse("2026-07-10T12:00:00.000Z"),
-          },
-          offload: {
-            supported: true,
-            offloadedLayers: 24,
-            totalLayers: 24,
-          },
-          context: {
-            requestedSize: 4096,
+          backend: "metal",
+          buildInfo: "b10357 (689e227db)",
+          model: { id: "embedding-model", path: "/models/embedding.gguf" },
+          capabilities: { vision: false, draft: false },
+          endpoints: {
+            health: "ready",
+            models: "ready",
+            props: "ready",
+            metrics: "ready",
           },
         },
       },
@@ -405,11 +400,10 @@ describe("noteMemorySearchHealth", () => {
 
     expect(note).toHaveBeenCalledWith(
       [
-        "llama.cpp runtime: cuda, prebuilt",
-        "Devices: NVIDIA Test GPU",
-        "VRAM snapshot: 8.0 GB used, 16 GB free, 24 GB total (2026-07-10T12:00:00.000Z)",
-        "GPU offload: 24/24 layers",
-        "Requested context: 4096 tokens",
+        "llama.cpp server: metal, b10357 (689e227db)",
+        "Model: embedding-model (/models/embedding.gguf)",
+        "Capabilities: text only",
+        "Endpoints: health=ready models=ready props=ready metrics=ready",
       ].join("\n"),
       "Memory search",
     );
@@ -425,12 +419,14 @@ describe("noteMemorySearchHealth", () => {
           engine: "llama.cpp",
           state: "failed",
           backend: "cpu",
-          buildType: "prebuilt",
-          offload: {
-            supported: false,
-          },
-          context: {
-            requestedSize: 512,
+          buildInfo: "b10357 (689e227db)",
+          model: { id: "embedding-model" },
+          capabilities: { vision: false, draft: false },
+          endpoints: {
+            health: "unavailable",
+            models: "unavailable",
+            props: "unavailable",
+            metrics: "unavailable",
           },
           loadError: "GGUF load failed",
         },
@@ -439,9 +435,9 @@ describe("noteMemorySearchHealth", () => {
 
     expect(note).toHaveBeenCalledTimes(1);
     expectFirstNoteContains(
-      "llama.cpp runtime: cpu, prebuilt (failed)",
-      "GPU offload: unsupported",
-      "Requested context: 512 tokens",
+      "llama.cpp server: cpu, b10357 (689e227db) (failed)",
+      "Model: embedding-model",
+      "Endpoints: health=unavailable models=unavailable props=unavailable metrics=unavailable",
       "Load error: GGUF load failed",
       "local embeddings are not confirmed ready",
     );

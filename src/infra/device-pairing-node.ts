@@ -79,6 +79,7 @@ export type PairedDeviceNode = NodeDeclaredSurface & {
   createdAtMs: number;
   approvedAtMs: number;
   lastConnectedAtMs?: number;
+  lastDisconnectedAtMs?: number;
   lastSeenAtMs?: number;
   lastSeenReason?: string;
 };
@@ -187,6 +188,7 @@ function toPairedNode(
     createdAtMs: surface.createdAtMs,
     approvedAtMs: surface.approvedAtMs,
     lastConnectedAtMs: surface.lastConnectedAtMs,
+    lastDisconnectedAtMs: surface.lastDisconnectedAtMs,
     lastSeenAtMs: device.lastSeenAtMs,
     lastSeenReason: device.lastSeenReason,
   };
@@ -698,12 +700,17 @@ export async function recordPairedNodeConnection(
         // both claim the same node's first connection and schedule duplicate alerts.
         const firstConnection = device.nodeSurface.lastConnectedAtMs === undefined;
         const previousConnectedAtMs = device.nodeSurface.lastConnectedAtMs ?? connectedAtMs;
+        const lastConnectedAtMs = Math.max(previousConnectedAtMs, connectedAtMs);
+        const clearsDisconnect =
+          device.nodeSurface.lastDisconnectedAtMs !== undefined &&
+          connectedAtMs > device.nodeSurface.lastDisconnectedAtMs;
         return {
           value: { recorded: true, firstConnection },
           persist: true,
           nodeSurface: {
             ...device.nodeSurface,
-            lastConnectedAtMs: Math.max(previousConnectedAtMs, connectedAtMs),
+            lastConnectedAtMs,
+            ...(clearsDisconnect ? { lastDisconnectedAtMs: undefined } : {}),
           },
         };
       },
@@ -711,6 +718,50 @@ export async function recordPairedNodeConnection(
     // The row-scoped transaction owns cross-process generation validation, while
     // this outer shared lock prevents local full-snapshot writers from replaying
     // node-surface state loaded before the connection metadata commit.
+    return { value, persist: false };
+  });
+}
+
+type RecordPairedNodeDisconnectionResult = { recorded: boolean };
+
+/** Persist the end of the exact successful node connection that just retired. */
+export async function recordPairedNodeDisconnection(params: {
+  nodeId: string;
+  connectedAtMs: number;
+  disconnectedAtMs: number;
+  expectedPairingGeneration: NodePairingGeneration;
+  baseDir?: string;
+}): Promise<RecordPairedNodeDisconnectionResult> {
+  return await withPairedDeviceRecords<RecordPairedNodeDisconnectionResult>(params.baseDir, () => {
+    const value = updatePairedDeviceNodeSurfaceInTransaction<RecordPairedNodeDisconnectionResult>(
+      params.nodeId,
+      params.baseDir,
+      (device) => {
+        const currentPairingGeneration = resolveNodePairingGeneration(device);
+        if (
+          !device?.nodeSurface ||
+          params.expectedPairingGeneration.nodeId !== device.deviceId ||
+          currentPairingGeneration?.key !== params.expectedPairingGeneration.key ||
+          device.nodeSurface.lastConnectedAtMs !== params.connectedAtMs ||
+          params.disconnectedAtMs < params.connectedAtMs
+        ) {
+          return { value: { recorded: false }, persist: false };
+        }
+        return {
+          value: { recorded: true },
+          persist: true,
+          nodeSurface: {
+            ...device.nodeSurface,
+            lastDisconnectedAtMs: Math.max(
+              device.nodeSurface.lastDisconnectedAtMs ?? params.disconnectedAtMs,
+              params.disconnectedAtMs,
+            ),
+          },
+        };
+      },
+    );
+    // The row-scoped transaction owns cross-process generation and connection
+    // validation; the shared lock prevents stale full-snapshot replay.
     return { value, persist: false };
   });
 }

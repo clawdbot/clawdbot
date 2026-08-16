@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
+import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type {
   InternalSessionEntry as SessionEntry,
   MainRestartRecoveryState,
 } from "../../config/sessions.js";
 import { buildMainSessionRecoveryClearPatch } from "./main-session-recovery-clear.js";
 import { projectMainSessionRecoveryLifecycle } from "./main-session-recovery-lifecycle.js";
-import { transitionMainSessionRecovery } from "./main-session-recovery-state.js";
+import {
+  inspectMainRestartRecoveryRolloverEligibility,
+  transitionMainSessionRecovery,
+} from "./main-session-recovery-state.js";
 
 const sessionKey = "agent:main:main";
 function recoveryState(
@@ -84,6 +88,47 @@ function projectLifecycle(
 }
 
 describe("main session recovery state", () => {
+  it("allows rollover until the tombstone records its successor", () => {
+    expect(
+      inspectMainRestartRecoveryRolloverEligibility(
+        interruptedEntry({
+          mainRestartRecovery: recoveryState({ tombstone: { reason: "exhausted" } }),
+        }),
+      ),
+    ).toEqual({ eligible: true });
+    expect(
+      inspectMainRestartRecoveryRolloverEligibility(
+        interruptedEntry({
+          archivedAt: 101,
+          mainRestartRecovery: recoveryState({ tombstone: { reason: "exhausted" } }),
+        }),
+      ),
+    ).toEqual({ eligible: true });
+    expect(
+      inspectMainRestartRecoveryRolloverEligibility(
+        interruptedEntry({
+          archivedAt: 101,
+          mainRestartRecovery: recoveryState({
+            tombstone: {
+              reason: "exhausted",
+              recoveredSessionId: "recovered-id",
+              recoveredSessionKey: "agent:main:dashboard:recovered",
+            },
+          }),
+        }),
+      ),
+    ).toEqual({
+      eligible: false,
+      reason: "already_recovered",
+      recoveredSessionId: "recovered-id",
+      recoveredSessionKey: "agent:main:dashboard:recovered",
+    });
+    expect(inspectMainRestartRecoveryRolloverEligibility(interruptedEntry())).toEqual({
+      eligible: false,
+      reason: "not_tombstoned",
+    });
+  });
+
   it("gives a legacy interrupted row a stable cycle before exposing it to a scan", () => {
     const entry = interruptedEntry({ mainRestartRecovery: undefined });
 
@@ -518,6 +563,79 @@ describe("main session recovery state", () => {
       chargedAttempts: 1,
     });
     expect(entry.mainRestartRecovery?.reservation).toBeUndefined();
+  });
+
+  it("rekeys stored execution identity when a new lifecycle rotates the recovery run", () => {
+    const storedToken = createExecutionIdentityAdmissionToken("recovery-old", {
+      contextId: "context-1",
+      executionId: "execution-1",
+      now: 123,
+    });
+    const entry = interruptedEntry({
+      mainRestartRecovery: recoveryState({ executionIdentity: storedToken }),
+    });
+
+    const prepared = transitionMainSessionRecovery(entry, {
+      kind: "prepare_attempt",
+      attempt: 1,
+      lifecycleGeneration: "generation-new",
+      now: 200,
+      observation: { sessionId: "session-1", cycleId: "cycle-1", revision: 1 },
+      runId: "recovery-new",
+      executionIdentity: { state: "enabled" },
+    });
+
+    expect(prepared).toMatchObject({
+      kind: "reserved",
+      reservation: {
+        executionIdentityAdmission: {
+          kind: "retry-reference",
+          token: {
+            tokenVersion: 1,
+            contextId: "context-1",
+            executionId: "execution-1",
+            runId: "recovery-new",
+            createdAt: 123,
+          },
+        },
+      },
+    });
+    expect(entry.mainRestartRecovery?.executionIdentity).toEqual({
+      tokenVersion: 1,
+      contextId: "context-1",
+      executionId: "execution-1",
+      runId: "recovery-new",
+      createdAt: 123,
+    });
+  });
+
+  it("preserves a stored execution identity when the recovery run is unchanged", () => {
+    const storedToken = createExecutionIdentityAdmissionToken("recovery-1", {
+      contextId: "context-1",
+      executionId: "execution-1",
+      now: 123,
+    });
+    const entry = interruptedEntry({
+      mainRestartRecovery: recoveryState({ executionIdentity: storedToken }),
+    });
+
+    const prepared = transitionMainSessionRecovery(entry, {
+      kind: "prepare_attempt",
+      attempt: 1,
+      lifecycleGeneration: "generation-1",
+      now: 200,
+      observation: { sessionId: "session-1", cycleId: "cycle-1", revision: 1 },
+      runId: "recovery-1",
+      executionIdentity: { state: "enabled" },
+    });
+
+    expect(prepared).toMatchObject({
+      kind: "reserved",
+      reservation: {
+        executionIdentityAdmission: { kind: "retry-reference", token: storedToken },
+      },
+    });
+    expect(entry.mainRestartRecovery?.executionIdentity).toBe(storedToken);
   });
 
   it("rejects an old observation after a healthy clear and a new interrupted cycle", () => {

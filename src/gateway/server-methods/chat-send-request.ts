@@ -85,6 +85,7 @@ type NormalizeChatSendRequestResult =
 export function normalizeChatSendRequest(params: {
   params: Record<string, unknown>;
   client: GatewayRequestHandlerOptions["client"];
+  trustedSystemInput?: boolean;
 }): NormalizeChatSendRequestResult {
   const chatSendReceivedAtMs = performance.now();
   const client = params.client;
@@ -117,6 +118,7 @@ export function normalizeChatSendRequest(params: {
       p.systemProvenanceReceipt ||
       suppressCommandInterpretation ||
       explicitOriginResult.value) &&
+    !params.trustedSystemInput &&
     !hasGatewayAdminScope(params.client)
   ) {
     return {

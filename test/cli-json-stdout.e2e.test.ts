@@ -111,7 +111,11 @@ describe("cli json stdout contract", () => {
 
         expect(result.status, result.stderr).toBe(1);
         expect(JSON.parse(result.stdout)).toMatchObject({
-          error: expect.stringContaining("Invalid path segment: __proto__"),
+          ok: false,
+          error: {
+            type: "cli_error",
+            message: expect.stringContaining("Invalid path segment: __proto__"),
+          },
         });
         expect(result.stderr).toBe("");
         await expect(
@@ -149,7 +153,11 @@ describe("cli json stdout contract", () => {
 
         expect(result.status, result.stderr).toBe(1);
         expect(JSON.parse(result.stdout)).toMatchObject({
-          error: expect.stringContaining("OpenClaw config is invalid"),
+          ok: false,
+          error: {
+            type: "cli_error",
+            message: expect.stringContaining("OpenClaw config is invalid"),
+          },
           issues: expect.arrayContaining([
             expect.objectContaining({ path: "gateway.bind", message: expect.any(String) }),
           ]),
@@ -255,10 +263,81 @@ describe("cli json stdout contract", () => {
         const result = runSourceCli(tempHome, ["update", "status", "--json", "--timeout", ""]);
 
         expect(result.status, result.stderr).toBe(1);
-        expect(result.stdout).toBe("");
+        expect(JSON.parse(result.stdout)).toEqual({
+          ok: false,
+          error: {
+            type: "cli_error",
+            message: "--timeout must be a positive integer (seconds)",
+          },
+        });
         expect(result.stderr).toContain("--timeout must be a positive integer (seconds)");
       },
       { prefix: "openclaw-update-empty-timeout-e2e-" },
+    );
+  });
+
+  it("returns one canonical document for a command that previously failed on stderr only", async () => {
+    await withTempHome(
+      async (tempHome) => {
+        const missingArchive = path.join(tempHome, "missing-backup.tar.gz");
+        const result = runSourceCli(tempHome, ["backup", "verify", missingArchive, "--json"]);
+
+        expect(result.status).toBe(1);
+        expect(JSON.parse(result.stdout)).toEqual({
+          ok: false,
+          error: {
+            type: "cli_error",
+            message: expect.stringContaining("missing-backup.tar.gz"),
+          },
+        });
+      },
+      { prefix: "openclaw-json-failure-e2e-" },
+    );
+  });
+
+  it("keeps Commander parse failures machine-readable in JSON mode", async () => {
+    await withTempHome(
+      async (tempHome) => {
+        const result = runSourceCli(tempHome, [
+          "config",
+          "get",
+          "gateway.port",
+          "--json",
+          "--not-a-real-option",
+        ]);
+
+        expect(result.status).toBe(1);
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          ok: false,
+          error: {
+            type: "cli_error",
+            message: expect.stringContaining("--not-a-real-option"),
+          },
+        });
+        expect(result.stderr).toContain("--not-a-real-option");
+      },
+      { prefix: "openclaw-json-parse-failure-e2e-" },
+    );
+  });
+
+  it("keeps representative success payload bytes unchanged", async () => {
+    await withTempHome(
+      async (tempHome) => {
+        const configPath = path.join(tempHome, "openclaw.json");
+        await fs.writeFile(configPath, '{"gateway":{"port":28789}}\n', "utf8");
+        const env = { OPENCLAW_CONFIG_PATH: configPath };
+
+        const getResult = runSourceCli(tempHome, ["config", "get", "gateway.port", "--json"], env);
+        const validateResult = runSourceCli(tempHome, ["config", "validate", "--json"], env);
+
+        expect(getResult.status, getResult.stderr).toBe(0);
+        expect(getResult.stdout).toBe("28789\n");
+        expect(validateResult.status, validateResult.stderr).toBe(0);
+        expect(validateResult.stdout).toBe(
+          `${JSON.stringify({ valid: true, path: configPath, warnings: [] })}\n`,
+        );
+      },
+      { prefix: "openclaw-json-success-bytes-e2e-" },
     );
   });
 
@@ -299,6 +378,57 @@ describe("cli json stdout contract", () => {
         expect(result.stdout).not.toContain("possibly sensitive key found");
       },
       { prefix: "openclaw-config-validate-json-e2e-" },
+    );
+  });
+
+  it("returns structured Doctor lint output when llama.cpp is not bundled", async () => {
+    await withTempHome(
+      async (tempHome) => {
+        const bundledPluginsDir = path.join(tempHome, "packaged-extensions");
+        const memoryCoreDir = path.join(bundledPluginsDir, "memory-core");
+        await fs.mkdir(memoryCoreDir, { recursive: true });
+        await fs.writeFile(
+          path.join(memoryCoreDir, "api.js"),
+          [
+            "export function registerMemoryCoreDoctorChecks(host) {",
+            "  host.registerHealthCheck({",
+            '    id: "memory-core/managed-local-embedding-setup",',
+            '    kind: "plugin",',
+            '    source: "memory-core",',
+            '    description: "packaged Memory Core readiness fixture",',
+            "    async detect() { return []; },",
+            "  });",
+            "}",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+
+        const result = runSourceCli(
+          tempHome,
+          [
+            "doctor",
+            "--lint",
+            "--only",
+            "memory-core/managed-local-embedding-setup",
+            "--severity-min",
+            "error",
+            "--json",
+          ],
+          {
+            OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
+            OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+          },
+        );
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          ok: true,
+          checksRun: 1,
+          findings: [],
+        });
+      },
+      { prefix: "openclaw-doctor-packaged-json-e2e-" },
     );
   });
 });

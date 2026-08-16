@@ -3,7 +3,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { attachToolAllowlistIntersection } from "../../agents/tool-policy.js";
+import {
+  configureChannelAdmissionEvidenceCollection,
+  consumeChannelAdmissionEvidence,
+} from "../../channels/message-access/admission-evidence.js";
 import {
   loadTranscriptEvents,
   replaceSessionEntry,
@@ -26,6 +32,14 @@ import {
 import { resolveFollowupDeliveryContextKey } from "./queue/drain.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 
+type InternalFollowupRun = FollowupRun & {
+  currentTurnImagesPrepared?: true;
+  mediaImageLayout?: {
+    slots: Array<{ kind: "inline" | "offloaded"; factIndex?: number }>;
+    suppressedFactIndexes: number[];
+  };
+};
+
 installQueueRuntimeErrorSilencer();
 
 function createQueueSettings(overrides: Partial<QueueSettings> = {}): QueueSettings {
@@ -47,7 +61,7 @@ function enqueueTestRun(
 }
 
 function createDrainRecorder(expectedCalls = 1) {
-  const calls: FollowupRun[] = [];
+  const calls: Array<FollowupRun & { currentTurnImagesPrepared?: true }> = [];
   const done = createDeferred();
   const runFollowup = async (run: FollowupRun) => {
     calls.push(run);
@@ -979,11 +993,7 @@ describe("followup queue collect routing", () => {
       2,
     );
 
-    for (const [prompt, model] of [
-      ["direct A", "model-a"],
-      ["direct B", "model-b"],
-      ["direct C", "model-c"],
-    ] as const) {
+    for (const prompt of ["direct A", "direct B", "direct C"] as const) {
       const source = createRun({
         prompt,
         originatingChannel: "slack",
@@ -996,7 +1006,7 @@ describe("followup queue collect routing", () => {
           ...source,
           run: {
             ...source.run,
-            model,
+            model: "model-c",
           },
         },
         settings,
@@ -2017,6 +2027,82 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.imageOrder).toEqual(["inline", "inline"]);
   });
 
+  it("preserves prepared empty image state across collected batches", async () => {
+    const key = `test-collect-prepared-empty-images-${Date.now()}`;
+    const { calls, done, runFollowup } = createDrainRecorder();
+    const settings = createQueueSettings();
+    const missingMedia = {
+      path: "/openclaw-test-missing/current.png",
+      contentType: "image/png",
+      hydrationSuppressed: true,
+    };
+
+    for (const prompt of ["one", "two"]) {
+      const preparedRun: InternalFollowupRun = {
+        ...createRun({
+          prompt,
+          originatingChannel: "slack",
+          originatingTo: "channel:A",
+        }),
+        currentTurnImagesPrepared: true,
+        images: [],
+        imageOrder: [],
+        media: [missingMedia],
+        mediaImageLayout: { slots: [], suppressedFactIndexes: [0] },
+      };
+      enqueueFollowupRun(key, preparedRun, settings);
+    }
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    const collected = calls[0] as InternalFollowupRun | undefined;
+    expect(collected?.currentTurnImagesPrepared).toBe(true);
+    expect(collected?.images).toEqual([]);
+    expect(collected?.imageOrder).toEqual([]);
+    expect(collected?.media).toEqual([missingMedia, missingMedia]);
+    expect(collected?.mediaImageLayout).toEqual({
+      slots: [],
+      suppressedFactIndexes: [0, 1],
+    });
+  });
+
+  it("offsets prepared media layout fact indexes across collected batches", async () => {
+    const key = `test-collect-prepared-image-layout-${Date.now()}`;
+    const { calls, done, runFollowup } = createDrainRecorder();
+    const settings = createQueueSettings();
+
+    for (const [index, prompt] of ["one", "two"].entries()) {
+      const preparedRun: InternalFollowupRun = {
+        ...createRun({
+          prompt,
+          originatingChannel: "slack",
+          originatingTo: "channel:A",
+        }),
+        currentTurnImagesPrepared: true,
+        images: [],
+        imageOrder: ["offloaded"],
+        media: [{ path: `/tmp/offloaded-${index}.png`, contentType: "image/png" }],
+        mediaImageLayout: {
+          slots: [{ kind: "offloaded", factIndex: 0 }],
+          suppressedFactIndexes: [],
+        },
+      };
+      enqueueFollowupRun(key, preparedRun, settings);
+    }
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect((calls[0] as InternalFollowupRun | undefined)?.mediaImageLayout).toEqual({
+      slots: [
+        { kind: "offloaded", factIndex: 0 },
+        { kind: "offloaded", factIndex: 1 },
+      ],
+      suppressedFactIndexes: [],
+    });
+  });
+
   it("splits collect batches when sender authorization changes", async () => {
     const { key, calls, done, runFollowup, settings } = createQueueCase(
       `test-collect-auth-split-${Date.now()}`,
@@ -2070,6 +2156,78 @@ describe("followup queue collect routing", () => {
     expect(calls[1]?.prompt).toContain("(from Owner)");
   });
 
+  it("preserves sender-scoped batching while identity collection is disabled", async () => {
+    const cleanup = configureChannelAdmissionEvidenceCollection(false);
+    try {
+      const { key, calls, done, runFollowup, settings } = createQueueCase(
+        `test-collect-identity-disabled-${Date.now()}`,
+        {},
+        2,
+      );
+      for (const senderId of ["user-1", "user-2"]) {
+        const item = createRun({
+          prompt: `from ${senderId}`,
+          originatingChannel: "slack",
+          originatingTo: "channel:A",
+        });
+        enqueueFollowupRun(
+          key,
+          {
+            ...item,
+            run: { ...item.run, senderId, senderIsOwner: false },
+          },
+          settings,
+        );
+      }
+
+      await drainRecordedQueue(key, runFollowup, done);
+      await vi.waitFor(() => expect(getExistingFollowupQueue(key)).toBeUndefined());
+
+      expect(calls.map((call) => call.run.senderId)).toEqual(["user-1", "user-2"]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("keeps same-participant evidence for a collected batch", async () => {
+    const cleanup = configureChannelAdmissionEvidenceCollection(true);
+    try {
+      const sameCase = createQueueCase(`test-collect-identity-same-${Date.now()}`);
+      for (const prompt of ["same one", "same two"]) {
+        const item = createRun({
+          prompt,
+          originatingChannel: "slack",
+          originatingTo: "channel:A",
+        });
+        enqueueFollowupRun(
+          sameCase.key,
+          {
+            ...item,
+            channelAdmissionEvidence: createChannelParticipantAdmissionEvidence({
+              channelId: "slack",
+              accountId: "default",
+              participantId: "user-1",
+            }),
+            run: { ...item.run, senderId: "user-1", senderIsOwner: false },
+          },
+          sameCase.settings,
+        );
+      }
+      await drainRecordedQueue(sameCase.key, sameCase.runFollowup, sameCase.done);
+      await vi.waitFor(() => expect(getExistingFollowupQueue(sameCase.key)).toBeUndefined());
+      expect(sameCase.calls).toHaveLength(1);
+      expect(sameCase.calls[0]?.run.senderId).toBe("user-1");
+      expect(
+        consumeChannelAdmissionEvidence(sameCase.calls[0]?.channelAdmissionEvidence),
+      ).toMatchObject({
+        ingressState: "present",
+        invoker: { state: "present", kind: "person" },
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
   it("splits collect batches when queued cancellation owners differ", async () => {
     const key = `test-collect-cancel-owner-split-${Date.now()}`;
     const { calls, done, runFollowup } = createDrainRecorder(2);
@@ -2100,6 +2258,103 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.prompt).not.toContain("second");
     expect(calls[1]?.prompt).toContain("second");
     expect(calls[1]?.prompt).not.toContain("first");
+  });
+
+  it("splits collect batches when queued authority facts change", async () => {
+    const key = `test-collect-queued-authority-split-${Date.now()}`;
+    const { calls, done, runFollowup } = createDrainRecorder(3);
+    const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
+    const route = { originatingChannel: "slack" as const, originatingTo: "channel:A" };
+    const pluginGrant = createRun({ prompt: "plugin grant", ...route });
+    pluginGrant.run.runtimePluginToolGrant = {
+      pluginId: "workboard",
+      toolNames: ["workboard_complete"],
+    };
+    const scheduled = createRun({ prompt: "scheduled authority", ...route });
+    scheduled.run.scheduledToolPolicy = { version: 1, mode: "trusted" };
+    const handoff = createRun({ prompt: "trusted handoff", ...route });
+    handoff.run.trustedInternalHandoff = {
+      kind: "subagent-completion",
+      sourceSessionKey: "agent:child",
+      targetSessionKey: "agent:parent",
+      targetSessionId: "session-1",
+      provider: "openai",
+      model: "gpt-5.6-luna",
+    };
+
+    enqueueFollowupRun(key, pluginGrant, settings);
+    enqueueFollowupRun(key, scheduled, settings);
+    enqueueFollowupRun(key, handoff, settings);
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls.map((call) => call.prompt)).toEqual([
+      expect.stringContaining("plugin grant"),
+      expect.stringContaining("scheduled authority"),
+      expect.stringContaining("trusted handoff"),
+    ]);
+    expect(calls[0]?.run.runtimePluginToolGrant).toEqual(pluginGrant.run.runtimePluginToolGrant);
+    expect(calls[1]?.run.scheduledToolPolicy).toEqual(scheduled.run.scheduledToolPolicy);
+    expect(calls[2]?.run.trustedInternalHandoff).toEqual(handoff.run.trustedInternalHandoff);
+  });
+
+  it("drains different provider and model routes under their own run snapshots", async () => {
+    const key = `test-collect-route-authority-split-${Date.now()}`;
+    const { calls, done, runFollowup } = createDrainRecorder(3);
+    const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
+    const route = { originatingChannel: "slack" as const, originatingTo: "channel:A" };
+    const first = createRun({ prompt: "first route", ...route });
+    first.run.provider = "openai";
+    first.run.model = "gpt-primary";
+    const second = createRun({ prompt: "second route", ...route });
+    second.run.provider = "openai";
+    second.run.model = "gpt-fallback";
+    const third = createRun({ prompt: "third route", ...route });
+    third.run.provider = "anthropic";
+    third.run.model = "gpt-fallback";
+
+    enqueueFollowupRun(key, first, settings);
+    enqueueFollowupRun(key, second, settings);
+    enqueueFollowupRun(key, third, settings);
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls.map((call) => [call.prompt, call.run.provider, call.run.model])).toEqual([
+      [expect.stringContaining("first route"), "openai", "gpt-primary"],
+      [expect.stringContaining("second route"), "openai", "gpt-fallback"],
+      [expect.stringContaining("third route"), "anthropic", "gpt-fallback"],
+    ]);
+  });
+
+  it("keys collect batches by turn allowlists, intersections, disablement, and roles", () => {
+    const createAuthorityRun = () =>
+      createRun({
+        prompt: "authority",
+        originatingChannel: "slack",
+        originatingTo: "channel:A",
+      });
+    const baseline = createAuthorityRun();
+    const toolsAllow = createAuthorityRun();
+    toolsAllow.toolsAllow = ["exec"];
+    const disabled = createAuthorityRun();
+    disabled.disableTools = true;
+    const roles = createAuthorityRun();
+    roles.run.memberRoleIds = ["operator"];
+    const firstIntersection = createAuthorityRun();
+    firstIntersection.toolsAllow = attachToolAllowlistIntersection(["exec"], [["exec"]]);
+    const secondIntersection = createAuthorityRun();
+    secondIntersection.toolsAllow = attachToolAllowlistIntersection(
+      ["exec"],
+      [["exec"], ["message"]],
+    );
+
+    const baselineKey = resolveFollowupDeliveryContextKey(baseline);
+    expect(resolveFollowupDeliveryContextKey(toolsAllow)).not.toBe(baselineKey);
+    expect(resolveFollowupDeliveryContextKey(disabled)).not.toBe(baselineKey);
+    expect(resolveFollowupDeliveryContextKey(roles)).not.toBe(baselineKey);
+    expect(resolveFollowupDeliveryContextKey(firstIntersection)).not.toBe(
+      resolveFollowupDeliveryContextKey(secondIntersection),
+    );
   });
 
   it("keeps one collect batch when authorization context matches", async () => {
@@ -2285,7 +2540,7 @@ describe("followup queue collect routing", () => {
           provider: "openai",
           model: "gpt-5.4",
           senderId: "user-1",
-          senderName: "Guest",
+          senderName: "First Name",
           senderIsOwner: false,
         },
       },
@@ -2297,10 +2552,10 @@ describe("followup queue collect routing", () => {
         ...second,
         run: {
           ...second.run,
-          provider: "anthropic",
-          model: "sonnet-4.6",
+          provider: "openai",
+          model: "gpt-5.4",
           senderId: "user-1",
-          senderName: "Guest",
+          senderName: "Newest Name",
           senderIsOwner: false,
         },
       },
@@ -2310,8 +2565,9 @@ describe("followup queue collect routing", () => {
     await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.run.provider).toBe("anthropic");
-    expect(calls[0]?.run.model).toBe("sonnet-4.6");
+    expect(calls[0]?.run.provider).toBe("openai");
+    expect(calls[0]?.run.model).toBe("gpt-5.4");
+    expect(calls[0]?.run.senderName).toBe("Newest Name");
   });
 
   it("delivers summary-only collect work under its source route", async () => {

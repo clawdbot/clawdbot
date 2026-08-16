@@ -1,6 +1,7 @@
 // Store entry shape normalization rejects unsafe persisted metadata before runtime use.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeSessionIconValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { validateSessionId } from "./paths.js";
 import type { PendingTranscriptRepairState, SessionEntry } from "./types.js";
@@ -39,7 +40,6 @@ function normalizeOptionalTimestamp(value: unknown): number | undefined {
 /** Removes retired runtime locator fields before a session entry is persisted or returned. */
 export function projectCanonicalSessionEntryShape(value: Record<string, unknown>): SessionEntry {
   const {
-    icon: _retiredIcon,
     sessionFile: _retiredSessionFile,
     transcriptPath: _retiredTranscriptPath,
     pendingFinalDeliveryCreatedAt,
@@ -60,6 +60,13 @@ export function projectCanonicalSessionEntryShape(value: Record<string, unknown>
     memoryFlushLastFailureError: _memoryFlushLastFailureError,
     ...canonicalValue
   } = value;
+  const icon =
+    typeof canonicalValue.icon === "string" ? normalizeSessionIconValue(canonicalValue.icon) : null;
+  if (icon) {
+    canonicalValue.icon = icon;
+  } else {
+    delete canonicalValue.icon;
+  }
   const legacyPendingText = normalizeOptionalString(pendingFinalDeliveryText);
   const legacySelectedModel = normalizeOptionalString(fallbackNoticeSelectedModel);
   const legacyActiveModel = normalizeOptionalString(fallbackNoticeActiveModel);

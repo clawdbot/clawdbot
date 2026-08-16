@@ -21,6 +21,7 @@ import {
   readSystemdUserLingerStatus,
   resolveSystemdUserServiceAccount,
 } from "../../daemon/systemd.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
@@ -147,7 +148,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch (err) {
-    fail(`Node service check failed: ${String(err)}`);
+    fail(`Node service check failed: ${formatErrorMessage(err)}`);
     return;
   }
   if (loaded && !opts.force) {
@@ -259,20 +260,22 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch (error) {
-    const message = `Node service check failed: ${String(error)}`;
+    const message = `Node service check failed: ${formatErrorMessage(error)}`;
     if (json) {
-      defaultRuntime.writeJson({ error: message });
-    } else {
-      defaultRuntime.error(message);
+      throw new Error(message, { cause: error });
     }
+    defaultRuntime.error(message);
     defaultRuntime.exit(1);
     return;
   }
   const [command, runtime] = await Promise.all([
     service.readCommand(process.env).catch(() => null),
-    service
-      .readRuntime(process.env)
-      .catch((err: unknown): GatewayServiceRuntime => ({ status: "unknown", detail: String(err) })),
+    service.readRuntime(process.env).catch(
+      (err: unknown): GatewayServiceRuntime => ({
+        status: "unknown",
+        detail: formatErrorMessage(err),
+      }),
+    ),
   ]);
 
   const payload = {

@@ -5,6 +5,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
+import { quarantineOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
 import {
   confirmSqliteFileIntegrity,
   isTerminalSqliteIntegrityError,
@@ -74,7 +75,10 @@ export {
   migrateOpenClawAgentDatabaseForMaintenance,
 } from "./openclaw-agent-db-maintenance.js";
 export { ensureOpenClawAgentDatabasePermissions } from "./openclaw-agent-db-permissions.js";
-export { listOpenClawRegisteredAgentDatabases } from "./openclaw-agent-db-registry.js";
+export {
+  listOpenClawRegisteredAgentDatabases,
+  readOpenClawAgentDatabaseRegistryToken,
+} from "./openclaw-agent-db-registry.js";
 export { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
 export {
   isIncognitoOpenClawAgentSqlitePath,
@@ -108,6 +112,7 @@ export const OPENCLAW_AGENT_DB_OPEN_HANDLE_CAP = 64;
 const agentDbLog = createSubsystemLogger("state/agent-db");
 const cachedDatabases = new Map<string, OpenClawAgentDatabase>();
 const incognitoDatabases = new WeakSet<OpenClawAgentDatabase>();
+let incognitoDatabaseGeneration = 0;
 const cachedDatabaseOpenFailures = new Map<string, unknown>();
 const cachedDatabaseLeases = new Map<
   string,
@@ -260,8 +265,10 @@ export function openOpenClawAgentDatabase(
     incognitoDatabases.add(database);
     unregisterExitClose ??= registerSqliteCacheExitClose(closeOpenClawAgentDatabases);
     cachedDatabases.set(pathname, database);
+    incognitoDatabaseGeneration += 1;
     return database;
   }
+  quarantineOrphanedSqliteSidecars(pathname);
   // Latched paths are quarantined; every fresh open fails fast here until
   // doctor repairs the file and clears the latch plus the persisted row.
   const terminalFailure = terminalOpenLatch.get(pathname);
@@ -579,6 +586,11 @@ export function listOpenIncognitoAgentDatabases(): Array<{ agentId: string; stor
     );
 }
 
+/** Return the generation of process-held incognito database membership. */
+export function readOpenIncognitoAgentDatabaseGeneration(): number {
+  return incognitoDatabaseGeneration;
+}
+
 /** Returns whether this exact process-held database is incognito/in-memory. */
 export function isIncognitoOpenClawAgentDatabase(database: OpenClawAgentDatabase): boolean {
   return incognitoDatabases.has(database);
@@ -604,9 +616,13 @@ export function closeOpenClawAgentDatabaseByPath(pathname: string): boolean {
   if (!database) {
     return false;
   }
+  const incognito = incognitoDatabases.has(database);
   closeCachedOpenClawAgentDatabase(database);
   cachedDatabases.delete(resolvedPath);
   cachedDatabaseOpenFailures.delete(resolvedPath);
+  if (incognito) {
+    incognitoDatabaseGeneration += 1;
+  }
   if (cachedDatabases.size === 0) {
     unregisterExitClose?.();
     unregisterExitClose = null;
@@ -653,11 +669,17 @@ export function disposeOpenClawAgentDatabaseByPath(
 export function closeOpenClawAgentDatabases(): void {
   unregisterExitClose?.();
   unregisterExitClose = null;
+  const removedIncognito = [...cachedDatabases.values()].some(
+    (database) => database.db.isOpen && incognitoDatabases.has(database),
+  );
   for (const database of cachedDatabases.values()) {
     closeCachedOpenClawAgentDatabase(database);
   }
   cachedDatabases.clear();
   cachedDatabaseOpenFailures.clear();
+  if (removedIncognito) {
+    incognitoDatabaseGeneration += 1;
+  }
 }
 
 /** Close cached agent handles and clear terminal failure latches for test isolation. */

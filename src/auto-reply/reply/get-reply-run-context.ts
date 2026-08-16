@@ -87,7 +87,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     sessionEntryHandle,
     sessionStore,
   } = params;
-  const runtimePolicySessionKey = resolveRuntimePolicySessionKey({ cfg, ctx, sessionKey });
+  const runtimePolicySessionKey = resolveRuntimePolicySessionKey({ agentId, cfg, ctx, sessionKey });
   const { resolvedElevatedLevel, execOverrides, abortedLastRun } = params;
   let { sessionEntry } = params;
   const isHeartbeat = opts?.isHeartbeat === true;

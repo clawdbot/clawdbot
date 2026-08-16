@@ -36,8 +36,8 @@ import {
   privateLocalOnlyPluginSdkEntrypoints,
   publicPluginSdkSubpaths as pluginSdkSubpaths,
 } from "../../../scripts/lib/plugin-sdk-entries.mts";
-import type { ChannelMessageActionContext } from "../../channels/plugins/types.public.js";
 import type {
+  ChannelMessageActionContext,
   BaseProbeResult,
   BaseTokenResolution,
   ChannelAgentTool,
@@ -140,17 +140,6 @@ const BROWSER_FACADE_SOURCE_CONTRACTS: readonly BrowserFacadeSourceContract[] = 
       "normalizeHexColor",
     ],
   },
-  {
-    subpath: "browser-host-inspection",
-    artifactBasename: "browser-host-inspection.js",
-    mentions: [
-      "loadBundledPluginPublicSurfaceModuleSyncCore",
-      "resolveGoogleChromeExecutableForPlatform",
-      "readBrowserVersion",
-      "parseBrowserMajorVersion",
-    ],
-    omits: ["findFirstChromeExecutable", "findGoogleChromeExecutableLinux", "execText"],
-  },
 ];
 
 const BROWSER_HELPER_EXPORT_PARITY_CONTRACTS: readonly BrowserHelperExportParityContract[] = [
@@ -181,16 +170,6 @@ const BROWSER_HELPER_EXPORT_PARITY_CONTRACTS: readonly BrowserHelperExportParity
       "ResolvedBrowserTabCleanupConfig",
       "resolveBrowserConfig",
       "resolveProfile",
-    ],
-  },
-  {
-    corePath: "src/plugin-sdk/browser-host-inspection.ts",
-    extensionPath: "extensions/browser/browser-host-inspection.ts",
-    expectedExports: [
-      "BrowserExecutable",
-      "parseBrowserMajorVersion",
-      "readBrowserVersion",
-      "resolveGoogleChromeExecutableForPlatform",
     ],
   },
 ];
@@ -1134,7 +1113,9 @@ describe("plugin-sdk subpath exports", () => {
       "shouldAckReaction",
       "DEFAULT_EMOJIS",
     ]);
-    expectSourceOmits("channel-feedback", [
+    // The load-only WhatsApp bridge lives in the barrel for published
+    // pre-#121257 artifacts; the owner file stays free of channel policy.
+    expectSourceMentions("channel-feedback", [
       "shouldAckReactionForWhatsApp",
       "WhatsAppAckReactionMode",
     ]);
@@ -1274,13 +1255,10 @@ describe("plugin-sdk subpath exports", () => {
     expectSourceMentions("setup-tools", ["formatCliCommand", "detectBinary", "formatDocsLink"]);
     expectSourceMentions("lazy-runtime", ["createLazyRuntimeSurface", "createLazyRuntimeModule"]);
     expectSourceMentions("agent-harness", ["./agent-harness-runtime.js"]);
-    expectSourceMentions("agent-harness-runtime", ["AgentHarness", "EmbeddedPiCompactResult"]);
+    expectSourceMentions("agent-harness-runtime", ["AgentHarness", "EmbeddedAgentCompactResult"]);
     expectSourceOmitsSnippet("agent-runtime", "./sglang.js");
     expectSourceOmitsSnippet("agent-runtime", "./vllm.js");
     expectSourceOmitsSnippet("agent-runtime", "../../extensions/");
-    expectSourceOmitsSnippet("google-model-id", "./google.js");
-    expectSourceOmitsSnippet("google-model-id", "./facade-runtime.js");
-    expectSourceOmitsSnippet("google-model-id", "../../extensions/");
     expectRepoSourceOmitsSnippet("extensions/xai/model-id.ts", "./xai.js");
     expectRepoSourceOmitsSnippet("extensions/xai/model-id.ts", "./facade-runtime.js");
     expectRepoSourceOmitsSnippet("extensions/xai/model-id.ts", "../../extensions/");

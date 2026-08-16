@@ -3,8 +3,7 @@ import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { extractLastOpenClawVersionFromLog } from "./filesystem.ts";
 import { run, say } from "./host-command.ts";
-import { resolveHostIp, resolveHostPort } from "./host-server.ts";
-import { startHostServer } from "./host-server.ts";
+import { resolveHostIp, resolveHostPort, startHostServer } from "./host-server.ts";
 import { runSmokeLane, type SmokeLane, type SmokeLaneStatus } from "./lane-runner.ts";
 import {
   packageBuildCommitFromTgz,

@@ -188,6 +188,7 @@
           "type": "string"
         },
         "cwd": {
+          "description": "Working directory for the child. With visible=true, paths outside configured agent workspaces require operator.admin; omit to use the target agent workspace.",
           "type": "string"
         },
         "label": {
@@ -782,7 +783,7 @@
       },
       {
         "deferLoading": true,
-        "description": "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing lifecycle (pending/approve/reject), notify, camera_snap/camera_list/camera_clip (with audio), camera_ptz for physical camera pan/tilt/zoom, photos_latest, screen_snapshot, screen_record video, location_get, notifications_list + notifications_action (open/dismiss/reply), device_status/device_info/device_permissions/device_health, executable lookup (which + bins), generic invoke. Files: file_fetch.",
+        "description": "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing lifecycle (pending/approve/reject), notify, camera_snap/camera_list/camera_clip (with audio), camera_ptz for physical camera pan/tilt/zoom, photos_latest, screen_snapshot, screen_record video, location_get, notifications_list + notifications_action (open/dismiss/reply), device_status/device_info/device_permissions/device_health, executable lookup (which + bins), generic invoke. File transfer is a separate capability.",
         "inputSchema": {
           "properties": {
             "action": {
@@ -1093,7 +1094,7 @@
       },
       {
         "deferLoading": true,
-        "description": "Run a visible session on this Gateway by sessionKey/label, or a configured local agent by agentId; sessionKey wins redundant label. A session identifies model context, not an external address; its reply may still announce through established delivery context. For an exact external destination, use `conversations_list` plus `conversations_send`/`conversations_turn`, or `message` with an explicit channel and target. Thread chats rejected: target parent channel. Missing configured-agent main created. Waits for reply when available. watch:true: notice arrives when others later change target session.",
+        "description": "Run a visible session on this Gateway by sessionKey/label, or a configured local agent by agentId; sessionKey wins redundant label. A session identifies model context, not an external address; its reply may still announce through established delivery context. For an exact external destination, use `conversations_list` plus `conversations_send`/`conversations_turn`. Thread chats rejected: target parent channel. Missing configured-agent main created. Waits for reply when available. watch:true: notice arrives when others later change target session.",
         "inputSchema": {
           "properties": {
             "agentId": {

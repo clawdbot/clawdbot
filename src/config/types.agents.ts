@@ -82,6 +82,7 @@ export type AgentBinding = AgentRouteBinding | AgentAcpBinding;
 
 export type AgentConfig = {
   id: string;
+  /** @deprecated Raw legacy list compatibility only; canonical agents.entries rejects this key. */
   default?: boolean;
   name?: string;
   /** Optional human-authored agent description. */
@@ -137,7 +138,6 @@ export type AgentConfig = {
   skillsLimits?: Pick<SkillsLimitsConfig, "maxSkillsPromptChars">;
   /** Optional per-agent overrides for selected context/token-heavy limits. */
   contextLimits?: AgentContextLimitsConfig;
-  contextTokens?: number;
   /** Optional per-agent heartbeat overrides. */
   heartbeat?: Omit<NonNullable<AgentDefaultsConfig["heartbeat"]>, "agentId">;
   identity?: IdentityConfig;
@@ -171,6 +171,7 @@ export type AgentConfig = {
 export type AgentEntryConfig = Omit<AgentConfig, "id">;
 
 export type AgentsConfig = {
+  ownership?: "explicit";
   defaults?: AgentDefaultsConfig;
   entries?: Record<string, AgentEntryConfig>;
   /** Internal non-serialized projection materialized by validation for ID-based runtime code. */

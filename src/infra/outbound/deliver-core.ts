@@ -72,6 +72,7 @@ export async function deliverOutboundPayloadsCore(
   const createHandler = (mediaSources: readonly string[]) =>
     createChannelHandler({
       cfg,
+      agentId: params.session?.agentId,
       channel,
       to,
       deps,

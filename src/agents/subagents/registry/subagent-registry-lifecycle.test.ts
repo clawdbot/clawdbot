@@ -3041,7 +3041,7 @@ describe("subagent registry lifecycle hardening", () => {
     expect(entry.endedReason).toBe(SUBAGENT_ENDED_REASON_COMPLETE);
   });
 
-  it("preserves a real failure after structured output was accepted", async () => {
+  it("preserves the authoritative execution failure after structured output was accepted", async () => {
     const structured = { answer: "yes" };
     const entry = createRunEntry({
       expectsCompletionMessage: false,
@@ -3060,6 +3060,10 @@ describe("subagent registry lifecycle hardening", () => {
     );
 
     await waitForLifecycleState(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
+    expect(entry.execution.outcome).toMatchObject({
+      status: "error",
+      error: "provider failed after tool output",
+    });
     expect(entry.collectorCompletion).toEqual({ status: "failed", structured });
   });
 

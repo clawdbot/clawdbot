@@ -2083,81 +2083,87 @@ describe("normalizeCompatibilityConfigValues", () => {
     ]);
   });
 
-  it("prefers provider contextWindow over model maxTokens for native Ollama params.num_ctx", () => {
+  it("bakes provider contextWindow into the model before native Ollama migration", () => {
     const modelWithoutContextWindow = ollamaModel({
       contextWindow: undefined,
       maxTokens: 4096,
     });
-    const res = normalizeCompatibilityConfigValues({
-      models: {
-        providers: {
-          ollama: {
-            baseUrl: "http://localhost:11434",
-            api: "ollama",
-            contextWindow: 65536,
-            models: [modelWithoutContextWindow],
+    const res = normalizeCompatibilityConfigValues(
+      legacyConfig({
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://localhost:11434",
+              api: "ollama",
+              contextWindow: 65536,
+              models: [modelWithoutContextWindow],
+            },
           },
         },
-      },
-    });
+      }),
+    );
 
-    expect(res.config.models?.providers?.ollama?.models?.[0]?.params).toBeUndefined();
-    expect(res.config.models?.providers?.ollama?.params).toEqual({
+    expect(res.config.models?.providers?.ollama?.models?.[0]?.params).toEqual({
       num_ctx: 65536,
     });
+    expect(res.config.models?.providers?.ollama?.params).toBeUndefined();
     expect(res.changes).toEqual([
-      "Set models.providers.ollama.params.num_ctx to 65536 for native Ollama compatibility.",
+      "models.providers.ollama.contextWindow → models.providers.ollama.models[0].contextWindow.",
+      "Removed models.providers.ollama.contextWindow after baking it into explicit model entries.",
+      "Set models.providers.ollama.models[0].params.num_ctx to 65536 for native Ollama compatibility.",
     ]);
   });
 
-  it("sets provider-level native Ollama params.num_ctx when auto-discovered models use provider budgets", () => {
-    const res = normalizeCompatibilityConfigValues({
-      models: {
-        providers: {
-          ollama: {
-            baseUrl: "http://localhost:11434",
-            api: "ollama",
-            contextWindow: 65536,
-            models: [],
+  it("removes provider contextWindow when no explicit Ollama model can receive it", () => {
+    const res = normalizeCompatibilityConfigValues(
+      legacyConfig({
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://localhost:11434",
+              api: "ollama",
+              contextWindow: 65536,
+              models: [],
+            },
           },
         },
-      },
-    });
+      }),
+    );
 
-    expect(res.config.models?.providers?.ollama?.params).toEqual({
-      num_ctx: 65536,
-    });
-    expect(res.changes).toEqual([
-      "Set models.providers.ollama.params.num_ctx to 65536 for native Ollama compatibility.",
+    expect(res.config.models?.providers?.ollama?.params).toBeUndefined();
+    expect(res.config.models?.providers?.ollama).not.toHaveProperty("contextWindow");
+    expect(res.changes).toEqual(["Removed models.providers.ollama.contextWindow."]);
+    expect(res.warnings).toEqual([
+      "models.providers.ollama.contextWindow had no explicit model entries to receive its value; use models.providers.<provider>.models[].contextTokens instead.",
     ]);
   });
 
-  it("sets provider-level native Ollama params.num_ctx when explicit model entries also exist", () => {
-    const res = normalizeCompatibilityConfigValues({
-      models: {
-        providers: {
-          ollama: {
-            baseUrl: "http://localhost:11434",
-            api: "ollama",
-            contextWindow: 65536,
-            models: [
-              ollamaModel({
-                contextWindow: 32768,
-              }),
-            ],
+  it("keeps explicit model windows ahead of retired provider defaults", () => {
+    const res = normalizeCompatibilityConfigValues(
+      legacyConfig({
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://localhost:11434",
+              api: "ollama",
+              contextWindow: 65536,
+              models: [
+                ollamaModel({
+                  contextWindow: 32768,
+                }),
+              ],
+            },
           },
         },
-      },
-    });
+      }),
+    );
 
-    expect(res.config.models?.providers?.ollama?.params).toEqual({
-      num_ctx: 65536,
-    });
+    expect(res.config.models?.providers?.ollama?.params).toBeUndefined();
     expect(res.config.models?.providers?.ollama?.models?.[0]?.params).toEqual({
       num_ctx: 32768,
     });
     expect(res.changes).toEqual([
-      "Set models.providers.ollama.params.num_ctx to 65536 for native Ollama compatibility.",
+      "Removed models.providers.ollama.contextWindow after baking it into explicit model entries.",
       "Set models.providers.ollama.models[0].params.num_ctx to 32768 for native Ollama compatibility.",
     ]);
   });
@@ -2174,24 +2180,26 @@ describe("normalizeCompatibilityConfigValues", () => {
       value: { keep_alive: "forever" },
     });
 
-    const res = normalizeCompatibilityConfigValues({
-      models: {
-        providers: {
-          ollama: {
-            baseUrl: "http://localhost:11434",
-            api: "ollama",
-            contextWindow: 65536,
-            params: providerParams,
-            models: [
-              ollamaModel({
-                contextWindow: 32768,
-                params: modelParams,
-              }),
-            ],
+    const res = normalizeCompatibilityConfigValues(
+      legacyConfig({
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://localhost:11434",
+              api: "ollama",
+              contextWindow: 65536,
+              params: providerParams,
+              models: [
+                ollamaModel({
+                  contextWindow: 32768,
+                  params: modelParams,
+                }),
+              ],
+            },
           },
         },
-      },
-    });
+      }),
+    );
 
     const nextProviderParams = res.config.models?.providers?.ollama?.params as Record<
       string,
@@ -2211,37 +2219,45 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
     expect(nextProviderParams.think).toBeUndefined();
     expect(nextModelParams.keep_alive).toBeUndefined();
-    expect(nextProviderParams.num_ctx).toBe(65536);
+    expect(nextProviderParams.num_ctx).toBeUndefined();
     expect(nextModelParams.num_ctx).toBe(32768);
   });
 
-  it("keeps existing provider-level native Ollama params.num_ctx ahead of inherited provider budgets", () => {
-    const res = normalizeCompatibilityConfigValues({
-      models: {
-        providers: {
-          ollama: {
-            baseUrl: "http://localhost:11434",
-            api: "ollama",
-            contextWindow: 65536,
-            params: {
-              num_ctx: 32768,
+  it("keeps existing provider num_ctx while materializing the model budget", () => {
+    const res = normalizeCompatibilityConfigValues(
+      legacyConfig({
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://localhost:11434",
+              api: "ollama",
+              contextWindow: 65536,
+              params: {
+                num_ctx: 32768,
+              },
+              models: [
+                ollamaModel({
+                  contextWindow: undefined,
+                  maxTokens: undefined,
+                }),
+              ],
             },
-            models: [
-              ollamaModel({
-                contextWindow: undefined,
-                maxTokens: undefined,
-              }),
-            ],
           },
         },
-      },
-    });
+      }),
+    );
 
     expect(res.config.models?.providers?.ollama?.params).toEqual({
       num_ctx: 32768,
     });
-    expect(res.config.models?.providers?.ollama?.models?.[0]?.params).toBeUndefined();
-    expect(res.changes).toEqual([]);
+    expect(res.config.models?.providers?.ollama?.models?.[0]?.params).toEqual({
+      num_ctx: 65536,
+    });
+    expect(res.changes).toEqual([
+      "models.providers.ollama.contextWindow → models.providers.ollama.models[0].contextWindow.",
+      "Removed models.providers.ollama.contextWindow after baking it into explicit model entries.",
+      "Set models.providers.ollama.models[0].params.num_ctx to 65536 for native Ollama compatibility.",
+    ]);
   });
 
   it("does not set native Ollama params for OpenAI-compatible Ollama configs", () => {
@@ -2278,8 +2294,13 @@ describe("normalizeCompatibilityConfigValues", () => {
 
     const res = normalizeCompatibilityConfigValues(input);
 
-    expect(res.config).toEqual(input);
-    expect(res.changes).toEqual([]);
+    expect(res.config.models?.providers?.ollama).not.toHaveProperty("contextWindow");
+    expect(res.config.models?.providers?.ollama?.models).toEqual(
+      input.models.providers.ollama.models,
+    );
+    expect(res.changes).toEqual([
+      "Removed models.providers.ollama.contextWindow after baking it into explicit model entries.",
+    ]);
   });
 
   it("normalizes persisted mistral model maxTokens that matched the old context-sized defaults", () => {

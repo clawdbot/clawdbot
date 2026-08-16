@@ -96,6 +96,7 @@ const queueMocks = vi.hoisted(() => ({
 }));
 const completionMocks = vi.hoisted(() => ({
   completeDurableDelivery: vi.fn(),
+  failDurableDelivery: vi.fn(),
   markDurableDeliveryQueued: vi.fn(async () => ({ state: "queued" as const })),
   rejectDurableDelivery: vi.fn(),
   suppressDurableDelivery: vi.fn(),
@@ -184,26 +185,11 @@ vi.mock("./delivery-queue-preparation.js", () => ({
   StableDeliveryPreparationLostError: class StableDeliveryPreparationLostError extends Error {},
   withStableDeliveryPreparation: queueMocks.withStableDeliveryPreparation,
 }));
-vi.mock("./delivery-queue.js", () => ({
-  enqueueDelivery: async (params: Record<string, unknown>) =>
-    queueMocks.enqueueDelivery(withoutInitialProducerClaim(params)),
-  enqueueDeliveryOnce: async (params: Record<string, unknown>, id: string) =>
-    queueMocks.enqueueDeliveryOnce(withoutInitialProducerClaim(params), id),
-  enqueuePreparedDeliveryOnce: async (params: Record<string, unknown>, id: string) =>
-    queueMocks.enqueuePreparedDeliveryOnce(withoutInitialProducerClaim(params), id),
-  ackDelivery: ackDeliveryMock,
-  failDelivery: async (id: string, error: string) => queueMocks.failDelivery(id, error),
-  failDeliveryAfterPlatformSend: async (id: string, error: string) =>
-    queueMocks.failDeliveryAfterPlatformSend(id, error),
-  failDeliveryBeforePlatformSend: async (id: string, error: string) =>
-    queueMocks.failDeliveryBeforePlatformSend(id, error),
-  markDeliveryPlatformSendDispatched: async (
-    id: string,
-    stateDir?: string,
-    route?: { replyToId?: string | null },
-  ) => queueMocks.markDeliveryPlatformSendDispatched(id, stateDir, route),
+vi.mock("./delivery-queue-platform-lease.js", () => ({
   claimReusableDeliveryPlatformSendAttempt: queueMocks.claimReusableDeliveryPlatformSendAttempt,
   renewDeliveryPlatformSendLease: queueMocks.renewDeliveryPlatformSendLease,
+}));
+vi.mock("./delivery-queue-recovery.js", () => ({
   withActiveDeliveryClaim: queueMocks.withActiveDeliveryClaim,
 }));
 vi.mock("./delivery-completion.js", () => ({
@@ -211,6 +197,16 @@ vi.mock("./delivery-completion.js", () => ({
   markDurableDeliveryQueued: completionMocks.markDurableDeliveryQueued,
   rejectDurableDelivery: completionMocks.rejectDurableDelivery,
   suppressDurableDelivery: completionMocks.suppressDurableDelivery,
+  settleDurableDelivery: (
+    completion: unknown,
+    evidence: { result: unknown } | { platformSendStarted: boolean },
+    stateDir?: string,
+  ) =>
+    "result" in evidence
+      ? completionMocks.completeDurableDelivery(completion, evidence.result, stateDir)
+      : evidence.platformSendStarted
+        ? completionMocks.failDurableDelivery(completion, stateDir)
+        : completionMocks.suppressDurableDelivery(completion, stateDir),
 }));
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => {
@@ -523,6 +519,7 @@ describe("deliverOutboundPayloads", () => {
       },
     );
     completionMocks.completeDurableDelivery.mockClear();
+    completionMocks.failDurableDelivery.mockClear();
     completionMocks.markDurableDeliveryQueued.mockClear();
     completionMocks.rejectDurableDelivery.mockClear();
     completionMocks.suppressDurableDelivery.mockClear();
@@ -1773,6 +1770,42 @@ describe("deliverOutboundPayloads", () => {
     expect(results[0]?.messageId).toBe("m1");
 
     expect(sendMatrix).toHaveBeenCalled();
+    // The lost write-ahead durability must leave a recorded reason: a crash
+    // mid-send now loses the message with no queue row to recover.
+    const warnLines = logMocks.warn.mock.calls.map((call) => String(call[0]));
+    const queueWarn = warnLines.find((line) => line.includes("outbound queue write failed"));
+    expect(queueWarn).toBeDefined();
+    expect(queueWarn).toContain("channel=matrix");
+    expect(queueWarn).toContain("queue offline");
+  });
+
+  it("emits one message_sent failure per payload when batch preparation fails", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "message_sent" || hookName === "reply_payload_sending",
+    );
+    hookMocks.runner.runReplyPayloadSending.mockRejectedValueOnce(new Error("modifier exploded"));
+    const sendMatrix = vi.fn();
+
+    await expect(
+      deliverMatrix({
+        payloads: [{ text: "first payload" }, { text: "second payload" }],
+        deps: { matrix: sendMatrix },
+        replyPayloadSendingHook: {
+          kind: "final",
+          channel: "matrix",
+          context: { channelId: "matrix", conversationId: "!room:example" },
+        },
+      }),
+    ).rejects.toThrow("modifier exploded");
+
+    expect(sendMatrix).not.toHaveBeenCalled();
+    // Preparation aborts the whole batch: hooks must see every logical
+    // payload fail, matching the per-payload audit terminals.
+    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledTimes(2);
+    const contents = hookMocks.runner.runMessageSent.mock.calls.map(
+      (call) => (call[0] as { content?: string }).content,
+    );
+    expect(contents).toEqual(["first payload", "second payload"]);
   });
 
   it("runs afterCommit hooks after best-effort queue fallback direct sends", async () => {

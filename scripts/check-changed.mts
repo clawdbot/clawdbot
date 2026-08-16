@@ -33,6 +33,7 @@ import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
 import {
   acquireLocalHeavyCheckLockSync,
   resolveLocalHeavyCheckEnv,
+  withLocalHeavyCheckLockHeld,
 } from "./lib/local-heavy-check-runtime.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { listGeneratedExtensionAssetSources } from "./lib/static-extension-assets.mts";
@@ -62,6 +63,9 @@ type ChangedCheckDelegateOptions = {
   cwd?: string;
   result?: ChangedLaneResult;
   diffRefsReady?: boolean;
+  interactive?: boolean;
+  platform?: NodeJS.Platform;
+  virtualized?: boolean;
 };
 
 type ChangedCheckRunOptions = ChangedCheckPlanOptions & {
@@ -100,18 +104,17 @@ const DOCTOR_CONTRACT_OWNER_TEST_PATH_RE =
   /^extensions\/[^/]+\/(?:openclaw\.plugin\.json$|(?!.*\.test\.).*\.(?:c|m)?[jt]s$)/u;
 const SQLITE_SESSION_SCHEMA_BASELINE_PATH_RE =
   /^(?:src\/state\/openclaw-agent-schema\.sql|scripts\/(?:generate-sqlite-session-schema-baseline\.ts|lib\/sqlite-session-schema-baseline\.ts)|test\/scripts\/sqlite-session-schema-baseline\.test\.ts|docs\/\.generated\/sqlite-session-transcript-schema-baseline\.sha256)$/u;
-const PLUGIN_SDK_API_BASELINE_PATH_RE =
-  /^(?:src\/|packages\/|extensions\/|pnpm-lock\.yaml$|tsconfig\.json$|scripts\/(?:generate-plugin-sdk-api-baseline\.ts|lib\/plugin-sdk-(?:doc-metadata\.ts|entries\.mts|entrypoints\.json|private-local-only-subpaths\.json))|docs\/\.generated\/plugin-sdk-api-baseline\/[^/]+\.json$)/u;
 const PLUGIN_SDK_SURFACE_PATH_RE =
   /^(?:package\.json$|src\/plugin-sdk\/|packages\/plugin-sdk\/|scripts\/(?:plugin-sdk-surface-report\.mts|sync-plugin-sdk-exports\.mts|lib\/plugin-sdk-(?:declaration-budget\.mts|deprecated-barrel-subpaths\.json|deprecated-public-subpaths\.json|entries\.mts|entrypoints\.json|private-local-only-subpaths\.json)))/u;
 const DEPRECATION_HYGIENE_PATH_RE =
   /^(?:package\.json$|src\/|extensions\/|packages\/|scripts\/(?:check-deprecated-api-usage\.mts$|plugin-boundary-report\.ts$|lib\/plugin-sdk))/u;
 const WRAPPER_SHADOWING_PATH_RE =
-  /^(?:package\.json$|src\/|scripts\/(?:check-(?:export-name-collisions|wrapper-shadowing)\.mts$|lib\/(?:export-name-collision-baseline\.json$|ts-guard-utils\.mts$|wrapper-shadowing-baseline\.json$)))/u;
+  /^(?:package\.json$|src\/|scripts\/(?:check-(?:export-name-collisions|wrapper-shadowing)\.mts$|lib\/ts-guard-utils\.mts$))/u;
 const CANVAS_A2UI_NATIVE_RESOURCE_PATH_RE =
   /^(?:pnpm-lock\.yaml$|apps\/(?:android\/app\/build\.gradle\.kts$|ios\/project\.yml$|linux\/src-tauri\/(?:build\.rs$|src\/canvas\.rs$)|shared\/OpenClawKit\/Sources\/OpenClawKit\/Resources\/CanvasA2UI\/)|extensions\/canvas\/(?:package\.json$|scripts\/bundle-a2ui\.mjs$|src\/host\/a2ui(?:\/(?:index\.html|a2ui\.bundle\.js|\.bundle\.hash)$|-app\/))|scripts\/(?:bundle-a2ui|sync-native-a2ui)\.mts$)/u;
 const CONTROL_UI_I18N_VERIFY_PATH_RE =
   /^(?:package\.json$|ui\/(?:src\/|config\/control-ui-locales\.ts$)|scripts\/(?:control-ui-i18n(?:-(?:report|verify))?\.ts|lib\/control-ui-i18n-[^/]+\.ts)$|test\/scripts\/control-ui-i18n[^/]*\.test\.ts$)/u;
+const RATCHET_BASE_OWNER_PATH = "scripts/lib/ratchet-base.mts";
 const CORE_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.core.json";
 const EXTENSIONS_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.extensions.json";
 const SCRIPTS_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.scripts.json";
@@ -119,9 +122,10 @@ const TARGETED_LINT_PATH_LIMIT = 8;
 const LINTABLE_CORE_PATH_RE = /^(?:src|ui|packages)\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_EXTENSION_PATH_RE = /^extensions\/[^/]+\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_SCRIPT_PATH_RE = /^scripts\/.+\.[cm]?[jt]sx?$/u;
+const LINTABLE_UI_STYLE_PATH_RE = /^ui\/src\/.+\.(?:css|ts)$/u;
 const MARKDOWN_LINT_OPTIMIZATION_NEUTRAL_PATH_RE = /^(?:docs\/|README\.md$|.*\.mdx?$)/u;
 const CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
-  /^(?:scripts|test\/scripts)\/|^\.github\/workflows\/ci\.yml$/u;
+  /^(?:scripts|test\/scripts)\/|^\.github\/workflows\/ci\.yml$|^ui\/src\/.+\.css$/u;
 const EXTENSION_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
   /^(?:test\/scripts\/|\.github\/workflows\/ci\.yml$)/u;
 const SCRIPT_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
@@ -133,7 +137,7 @@ const ANDROID_VERSION_SYNC_PATHS = new Set([
   "apps/android/version.json",
 ]);
 const MACOS_APP_CI_PATH_RE =
-  /^(?:apps\/(?:macos|macos-mlx-tts|shared|swabble)\/|Swabble\/|src\/(?:worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$|scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.sh$|scripts\/lib\/(?:plistbuddy|swift-toolchain)\.sh$|test\/scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.test\.ts$)/u;
+  /^(?:apps\/(?:macos|macos-mlx-tts|shared|swabble)\/|Swabble\/|src\/(?:shared\/worker-bundle-hash\.ts|worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$|scripts\/(?:codesign-mac-app|create-dmg|mac-elevation-host|notarize-mac-artifact|package-mac-app|package-mac-dist|stage-cua-driver-macos)\.sh$|scripts\/lib\/(?:plistbuddy|swift-toolchain)\.sh$|test\/scripts\/(?:codesign-mac-app|create-dmg|mac-elevation-host|notarize-mac-artifact|package-mac-app|package-mac-dist)\.test\.ts$)/u;
 let corepackPnpmShimDir: string | undefined;
 let corepackPnpmShimCleanupRegistered = false;
 let cachedGeneratedExtensionAssetPaths: Set<string> | undefined;
@@ -153,13 +157,7 @@ if (!isDirectRun()) {
 }
 
 export function createChangedCheckChildEnv(baseEnv: NodeJS.ProcessEnv = process.env) {
-  const resolvedBaseEnv = resolveLocalHeavyCheckEnv(baseEnv);
-  return {
-    ...resolvedBaseEnv,
-    OPENCLAW_OXLINT_SKIP_LOCK: "1",
-    OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
-    OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1",
-  };
+  return withLocalHeavyCheckLockHeld(resolveLocalHeavyCheckEnv(baseEnv));
 }
 
 function hasAndroidVersionSyncPath(paths: string[]) {
@@ -212,10 +210,7 @@ export function changedCheckRequiresRemote(result?: ChangedLaneResult) {
   if (!result || result.paths.length === 0) {
     return false;
   }
-  if (
-    shouldRunSqliteSessionSchemaBaselineCheck(result.paths) ||
-    shouldRunPluginSdkApiBaselineCheck(result.paths)
-  ) {
+  if (shouldRunSqliteSessionSchemaBaselineCheck(result.paths)) {
     return true;
   }
   if (result.docsOnly) {
@@ -224,6 +219,37 @@ export function changedCheckRequiresRemote(result?: ChangedLaneResult) {
   return Object.entries(result.lanes).some(
     ([lane, enabled]) => enabled && lane !== "docs" && lane !== "releaseMetadata",
   );
+}
+
+function isDedicatedLinuxWorker(
+  env: NodeJS.ProcessEnv,
+  options: Pick<ChangedCheckDelegateOptions, "interactive" | "platform" | "virtualized">,
+) {
+  if ((options.platform ?? process.platform) !== "linux") {
+    return false;
+  }
+  const role = env.AGENT_HOST_ROLE?.trim().toLowerCase();
+  if (role === "worker") {
+    return true;
+  }
+  if (role === "workstation") {
+    return false;
+  }
+  if (env.DISPLAY || env.WAYLAND_DISPLAY || env.SSH_TTY) {
+    return false;
+  }
+  if (options.interactive ?? process.stdin.isTTY) {
+    return false;
+  }
+  if (options.virtualized !== undefined) {
+    return options.virtualized;
+  }
+  try {
+    execFileSync("systemd-detect-virt", ["--quiet"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function shouldDelegateChangedCheckToCrabbox(
@@ -249,6 +275,9 @@ export function shouldDelegateChangedCheckToCrabbox(
   }
   if (isOpenEndedTruthyValue(env.OPENCLAW_TESTBOX)) {
     return true;
+  }
+  if (isDedicatedLinuxWorker(env, options)) {
+    return !changedCheckLocalDependenciesReady(options.cwd ?? process.cwd());
   }
   // Release metadata plans diff the supplied commits after classification. A missing
   // ref needs the hydrated remote checkout even when the explicit path itself is cheap.
@@ -357,17 +386,6 @@ export function shouldRunSqliteSessionSchemaBaselineCheck(paths: string[]) {
   return paths.some((changedPath) =>
     SQLITE_SESSION_SCHEMA_BASELINE_PATH_RE.test(normalizeChangedPath(changedPath)),
   );
-}
-
-/** Returns whether changed files can alter the published Plugin SDK API contract. */
-export function shouldRunPluginSdkApiBaselineCheck(paths: string[]) {
-  return paths.some((changedPath) => {
-    const normalizedPath = normalizeChangedPath(changedPath);
-    return (
-      !getChangedPathFacts(normalizedPath).isTestOnly &&
-      PLUGIN_SDK_API_BASELINE_PATH_RE.test(normalizedPath)
-    );
-  });
 }
 
 /** Returns whether changed files can alter Plugin SDK exports or surface budgets. */
@@ -540,6 +558,7 @@ export function createChangedCheckPlan(
     fallbackName: string,
     fallbackArgs: string[],
     ignoredPaths?: Set<string>,
+    fallbackWithoutTargets = true,
   ) => {
     const candidatePaths = ignoredPaths
       ? result.paths.filter((changedPath) => !ignoredPaths.has(changedPath))
@@ -561,8 +580,10 @@ export function createChangedCheckPlan(
     }
 
     if (targetedCommands.length === 0) {
-      addLint(fallbackName, fallbackArgs);
-      return false;
+      if (fallbackWithoutTargets) {
+        addLint(fallbackName, fallbackArgs);
+      }
+      return !fallbackWithoutTargets;
     }
     for (const command of targetedCommands) {
       addCommand(command.name, command.bin, command.args, command.env);
@@ -602,14 +623,32 @@ export function createChangedCheckPlan(
     ]);
   }
   if (
-    result.paths.some((filePath) =>
-      /^(?:src\/|ui\/src\/|packages\/|extensions\/|\.oxlintrc\.json$|config\/max-lines-baseline\.txt$|scripts\/check-max-lines-ratchet\.mts$)/u.test(
-        filePath,
-      ),
+    result.paths.some(
+      (filePath) =>
+        filePath === RATCHET_BASE_OWNER_PATH ||
+        /^(?:src\/|ui\/src\/|packages\/|extensions\/|\.oxlintrc\.json$|config\/max-lines-baseline\.txt$|scripts\/check-max-lines-ratchet\.mts$)/u.test(
+          filePath,
+        ),
     )
   ) {
     add("max-lines suppression ratchet", [
       "check:max-lines-ratchet",
+      ...(options.staged ? ["--staged"] : []),
+      "--base",
+      options.staged ? "HEAD" : (options.base ?? "origin/main"),
+    ]);
+  }
+  if (
+    result.paths.some(
+      (filePath) =>
+        filePath === RATCHET_BASE_OWNER_PATH ||
+        /^(?:src\/|ui\/src\/|packages\/|extensions\/|config\/assertion-safety-baseline\.txt$|scripts\/check-assertion-safety-ratchet\.mts$|scripts\/lib\/type-assertion-guard-scope\.mjs$|scripts\/oxlint-boundary-guards\.mjs$)/u.test(
+          filePath,
+        ),
+    )
+  ) {
+    add("assertion SAFETY comment ratchet", [
+      "check:assertion-safety",
       ...(options.staged ? ["--staged"] : []),
       "--base",
       options.staged ? "HEAD" : (options.base ?? "origin/main"),
@@ -673,9 +712,6 @@ export function createChangedCheckPlan(
   }
   if (shouldRunSqliteSessionSchemaBaselineCheck(result.paths)) {
     add("SQLite sessions/transcripts schema baseline", ["sqlite:sessions-schema:check"]);
-  }
-  if (shouldRunPluginSdkApiBaselineCheck(result.paths)) {
-    add("Plugin SDK API contract manifest", ["plugin-sdk:api:check"]);
   }
   if (!result.lanes.releaseMetadata && shouldRunPluginSdkSurfaceChecks(result.paths)) {
     add("Plugin SDK package exports", ["plugin-sdk:check-exports"]);
@@ -791,9 +827,40 @@ export function createChangedCheckPlan(
   }
 
   if (lanes.core || lanes.coreTests || lanes.ui) {
-    addTargetedLint(createTargetedCoreLintCommand, LINTABLE_CORE_PATH_RE, "lint core", [
-      "lint:core",
-    ]);
+    // CSS is covered by targeted Stylelint below. Other non-Oxlint core/UI
+    // inputs keep the full lane so changed checks do not silently drop lint.
+    const fallbackWithoutTargets = result.paths.some((changedPath) => {
+      const surface = getChangedPathFacts(changedPath).surface;
+      return (
+        (surface === "source" || surface === "package" || surface === "ui") &&
+        !CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE.test(changedPath) &&
+        !MARKDOWN_LINT_OPTIMIZATION_NEUTRAL_PATH_RE.test(changedPath)
+      );
+    });
+    addTargetedLint(
+      createTargetedCoreLintCommand,
+      LINTABLE_CORE_PATH_RE,
+      "lint core",
+      ["lint:core"],
+      undefined,
+      fallbackWithoutTargets,
+    );
+  }
+  if (lanes.ui) {
+    const targets = result.paths
+      .filter(
+        (changedPath) => LINTABLE_UI_STYLE_PATH_RE.test(changedPath) && existsSync(changedPath),
+      )
+      .toSorted((left, right) => left.localeCompare(right));
+    for (let offset = 0; offset < targets.length; offset += TARGETED_LINT_PATH_LIMIT) {
+      const batch = targets.slice(offset, offset + TARGETED_LINT_PATH_LIMIT);
+      addCommand(
+        batch.length === 1 ? "lint UI changed style file" : "lint UI changed style files",
+        "node",
+        ["--import", "tsx", "scripts/run-stylelint.mts", ...batch],
+        baseEnv,
+      );
+    }
   }
   if (
     lanes.liveDockerTooling &&

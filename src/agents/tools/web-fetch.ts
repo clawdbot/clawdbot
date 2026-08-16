@@ -454,7 +454,7 @@ async function spillWebFetchContent(
   sourceTruncated = false,
 ): Promise<WebFetchWrappedContent> {
   if (!wrapped.truncated) {
-    return wrapped;
+    return sourceTruncated ? { ...wrapped, truncated: true } : wrapped;
   }
   // maxChars/maxCharsCap bound the model-visible return text. Recoverable spill
   // uses this fixed file cap so vanished pages can still be read after truncation.

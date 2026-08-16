@@ -13,6 +13,7 @@ import { normalizeTargetForProvider } from "../../infra/outbound/target-normaliz
 import { cronFailureDetailLines } from "../failure-notification-text.js";
 import type { CronFailureNotificationDelivery, CronJob, CronMessageChannel } from "../types.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
+import { enqueueCronSystemEvent, requestCronHeartbeat } from "./wake.js";
 
 const DEFAULT_FAILURE_ALERT_AFTER = 2;
 const DEFAULT_FAILURE_ALERT_COOLDOWN_MS = 60 * 60_000; // 1 hour
@@ -232,12 +233,16 @@ function emitFailureAlert(
     return;
   }
 
-  state.deps.enqueueSystemEvent(payload.text ?? "", { agentId: params.job.agentId });
+  enqueueCronSystemEvent(state, payload.text ?? "", {
+    agentId: params.job.agentId,
+    sessionKey: params.job.sessionKey,
+  });
   if (params.job.wakeMode === "now") {
-    state.deps.requestHeartbeat({
-      source: "cron",
+    requestCronHeartbeat(state, {
       intent: "immediate",
       reason: `cron:${params.job.id}:failure-alert`,
+      agentId: params.job.agentId,
+      sessionKey: params.job.sessionKey,
     });
   }
 }

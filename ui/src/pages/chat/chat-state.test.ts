@@ -16,9 +16,9 @@ import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
 import {
-  invalidateChatMetadataCache,
   refreshChatMetadata,
   refreshChatModelAuthStatus,
+  retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
 import { resolveChatAvatarUrl, selectedChatSessionRow } from "./chat-state-route.ts";
 import { scheduleControlUiAfterPaint } from "./performance.ts";
@@ -107,6 +107,107 @@ describe("canonical session message recovery", () => {
     });
   });
 
+  it("keeps a previous run final before a newer active user turn", () => {
+    const previousUser = {
+      role: "user",
+      content: [{ type: "text", text: "What are groups?" }],
+      __openclaw: { id: "previous-user", idempotencyKey: "previous-run:user", seq: 1 },
+    };
+    const currentUser = {
+      role: "user",
+      content: [{ type: "text", text: "Why were my sessions missing?" }],
+      __openclaw: { id: "current-user", idempotencyKey: "current-run:user", seq: 3 },
+    };
+    const persistedFinal = {
+      role: "assistant",
+      content: [{ type: "text", text: "Groups organize conversations." }],
+      __openclaw: { id: "previous-final", seq: 2 },
+    };
+    const { state } = createSessionEventState({
+      chatMessages: [previousUser, currentUser],
+      chatRunId: "current-run",
+      chatStream: "Checking external sessions...",
+    });
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "session.message",
+      payload: {
+        sessionKey: state.sessionKey,
+        clientRunId: "previous-run",
+        hasActiveRun: true,
+        messageId: "previous-final",
+        messageSeq: 2,
+        message: persistedFinal,
+      },
+    });
+
+    expect(state.chatMessages.map((message) => (message as { role?: string }).role)).toEqual([
+      "user",
+      "assistant",
+      "user",
+    ]);
+    expect(state.chatMessages[1]).toMatchObject({
+      content: persistedFinal.content,
+      __openclaw: { id: "previous-final", seq: 2 },
+    });
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: state.sessionKey,
+        runId: "previous-run",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Groups organize conversations." }],
+        },
+      },
+    });
+
+    expect(state.chatMessages.map((message) => (message as { role?: string }).role)).toEqual([
+      "user",
+      "assistant",
+      "user",
+    ]);
+    expect(state.chatRunId).toBe("current-run");
+    expect(state.chatStream).toBe("Checking external sessions...");
+  });
+
+  it("leaves the active run assistant message on the terminal stream path", () => {
+    const currentUser = {
+      role: "user",
+      content: [{ type: "text", text: "Current prompt" }],
+      __openclaw: { id: "current-user", idempotencyKey: "current-run:user", seq: 1 },
+    };
+    const { state } = createSessionEventState({
+      chatMessages: [currentUser],
+      chatRunId: "current-run",
+      chatStream: "Current partial reply",
+    });
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "session.message",
+      payload: {
+        sessionKey: state.sessionKey,
+        clientRunId: "current-run",
+        hasActiveRun: true,
+        messageId: "current-final",
+        messageSeq: 2,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Current final reply" }],
+          __openclaw: { id: "current-final", seq: 2 },
+        },
+      },
+    });
+
+    expect(state.chatMessages).toEqual([currentUser]);
+    expect(state.chatStream).toBe("Current partial reply");
+  });
+
   it("renders distinct live peers immediately and coalesces their stale history", async () => {
     let resolveHistory!: (result: {
       messages: unknown[];
@@ -164,6 +265,7 @@ describe("canonical session message recovery", () => {
   });
 
   it("drops pre-reset live and pending messages before accepting a new session turn", () => {
+    const retireSessionCompanion = vi.fn();
     const pendingUser = {
       role: "user",
       content: [{ type: "text", text: "Pending before reset" }],
@@ -173,6 +275,9 @@ describe("canonical session message recovery", () => {
       connected: false,
       chatMessages: [pendingUser],
     });
+    (
+      state as ChatPageHost & { retireSessionCompanion: typeof retireSessionCompanion }
+    ).retireSessionCompanion = retireSessionCompanion;
     const deliverUser = (id: string, text: string) =>
       handlePageGatewayEvent(state, {
         type: "event",
@@ -200,6 +305,7 @@ describe("canonical session message recovery", () => {
       },
     });
     expect(state.chatMessages).toEqual([]);
+    expect(retireSessionCompanion).toHaveBeenCalledExactlyOnceWith(state.sessionKey, "main");
 
     deliverUser("post-reset-live", "Live after reset");
     expect(state.chatMessages).toHaveLength(1);
@@ -209,6 +315,7 @@ describe("canonical session message recovery", () => {
   });
 
   it("does not clear the selected transcript when another agent resets", () => {
+    const retireSessionCompanion = vi.fn();
     const selectedUser = {
       role: "user",
       content: [{ type: "text", text: "Keep this agent's conversation" }],
@@ -218,6 +325,9 @@ describe("canonical session message recovery", () => {
       connected: false,
       chatMessages: [selectedUser],
     });
+    (
+      state as ChatPageHost & { retireSessionCompanion: typeof retireSessionCompanion }
+    ).retireSessionCompanion = retireSessionCompanion;
 
     handlePageGatewayEvent(state, {
       type: "event",
@@ -230,6 +340,7 @@ describe("canonical session message recovery", () => {
     });
 
     expect(state.chatMessages).toEqual([selectedUser]);
+    expect(retireSessionCompanion).toHaveBeenCalledExactlyOnceWith("agent:other:main", "other");
   });
 
   it("keeps the routed row when a hidden pane observes its archive first", () => {
@@ -1559,57 +1670,36 @@ describe("refreshChatMetadata", () => {
     ]);
   });
 
-  it("does not let an older same-agent response overwrite the newest catalog", async () => {
-    let resolveFirst: (value: {
+  it("does not publish metadata after the pane retires its request owner", async () => {
+    let resolveMetadata: (value: {
       commands: never[];
       models: Array<{ id: string; name: string; provider: string }>;
     }) => void = () => {};
-    let resolveSecond: (value: {
-      commands: never[];
-      models: Array<{ id: string; name: string; provider: string }>;
-    }) => void = () => {};
-    const firstMetadata = new Promise<{
+    const pending = new Promise<{
       commands: never[];
       models: Array<{ id: string; name: string; provider: string }>;
     }>((resolve) => {
-      resolveFirst = resolve;
+      resolveMetadata = resolve;
     });
-    const secondMetadata = new Promise<{
-      commands: never[];
-      models: Array<{ id: string; name: string; provider: string }>;
-    }>((resolve) => {
-      resolveSecond = resolve;
-    });
-    let requestCount = 0;
-    const request = vi.fn(async () => {
-      requestCount += 1;
-      return await (requestCount === 1 ? firstMetadata : secondMetadata);
-    });
-    const state = createMetadataState(request);
+    const request = vi.fn().mockReturnValue(pending);
+    const existingCatalog = [{ id: "existing-model", name: "Existing Model", provider: "openai" }];
+    const state = createMetadataState(request, { chatModelCatalog: existingCatalog });
 
-    const firstRefresh = refreshChatMetadata(state);
-    invalidateChatMetadataCache(state);
-    const secondRefresh = refreshChatMetadata(state);
-    resolveSecond({
+    const refresh = refreshChatMetadata(state);
+    retireChatMetadataRequests(state);
+    resolveMetadata({
       commands: [],
-      models: [{ id: "new-model", name: "New Model", provider: "openai" }],
+      models: [{ id: "late-model", name: "Late Model", provider: "openai" }],
     });
-    await secondRefresh;
-    resolveFirst({
-      commands: [],
-      models: [{ id: "old-model", name: "Old Model", provider: "openai" }],
-    });
-    await firstRefresh;
+    await refresh;
 
-    expect(state.chatModelCatalog).toEqual([
-      { id: "new-model", name: "New Model", provider: "openai" },
-    ]);
+    expect(state.chatModelCatalog).toBe(existingCatalog);
   });
 
   it("loads compatibility models when the gateway does not advertise chat metadata", async () => {
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "models.list") {
-        expect(params).toEqual({ view: "configured" });
+        expect(params).toEqual({ view: "configured", agentId: "main", preparedOnly: true });
         return {
           models: [{ id: "compat-model", name: "Compat Model", provider: "openai" }],
         };
@@ -1635,33 +1725,10 @@ describe("refreshChatMetadata", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
-  it("preserves startup models when the gateway does not advertise chat metadata", async () => {
-    const request = vi.fn(async (method: string) => {
-      expect(method).toBe("commands.list");
-      return { commands: [] };
-    });
-    const startupCatalog = [
-      { id: "startup-model", name: "Startup Model", provider: "openai", available: true },
-    ];
-    const state = createMetadataState(request, {
-      chatMetadataRequestVersion: 4,
-      chatModelCatalog: startupCatalog,
-      chatModelsLoading: true,
-      hello: { features: { methods: ["chat.startup"] } },
-    });
-
-    await refreshChatMetadata(state, { preserveModelCatalogOnFallback: true });
-
-    expect(state.chatMetadataRequestVersion).toBe(5);
-    expect(state.chatModelCatalog).toBe(startupCatalog);
-    expect(state.chatModelsLoading).toBe(false);
-    expect(request).toHaveBeenCalledTimes(1);
-  });
-
   it("loads agent-scoped compatibility models for a non-default agent", async () => {
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "models.list") {
-        expect(params).toEqual({ view: "configured", agentId: "work" });
+        expect(params).toEqual({ view: "configured", agentId: "work", preparedOnly: true });
         return {
           models: [{ id: "work-model", name: "Work Model", provider: "openai" }],
         };
@@ -1754,6 +1821,23 @@ describe("refreshChatMetadata", () => {
 });
 
 describe("refreshChatModelAuthStatus", () => {
+  it("scopes auth status to the selected session agent", async () => {
+    const request = vi.fn(async () => ({ ts: 1, providers: [] }));
+    const state = {
+      client: { request },
+      connected: true,
+      connectionEpoch: 1,
+      sessionKey: "agent:work:dashboard:current",
+      assistantAgentId: "main",
+      modelAuthStatusResult: null,
+      modelAuthStatusError: null,
+    } as unknown as ChatPageHost;
+
+    await refreshChatModelAuthStatus(state);
+
+    expect(request).toHaveBeenCalledWith("models.authStatus", { agentId: "work" });
+  });
+
   it.each(["success", "failure"] as const)(
     "ignores a stale auth status %s after reconnecting the same client",
     async (outcome) => {

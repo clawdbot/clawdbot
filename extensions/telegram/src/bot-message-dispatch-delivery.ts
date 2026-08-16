@@ -119,6 +119,7 @@ async function recordPromptContextMessage(
     turn.telegramDeps.recordOutboundMessageForPromptContext ?? recordOutboundMessageForPromptContext
   )({
     cfg: turn.cfg,
+    ownerAgentId: turn.opts.ownerAgentId,
     account: {
       accountId: context.route.accountId,
       ...(turn.telegramCfg.name !== undefined ? { name: turn.telegramCfg.name } : {}),
@@ -167,6 +168,7 @@ function createDeliveryBaseOptions(turn: Turn) {
   const { context } = turn;
   return {
     cfg: turn.cfg,
+    ownerAgentId: turn.opts.ownerAgentId,
     chatId: String(context.chatId),
     accountId: context.route.accountId,
     sessionKeyForInternalHooks: context.ctxPayload.SessionKey,

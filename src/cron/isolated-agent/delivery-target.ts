@@ -1,7 +1,5 @@
 /** Resolves isolated cron delivery requests into concrete outbound targets. */
-import { normalizeOptionalThreadValue } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { resolveExplicitDeliveryTargetCompat } from "../../channels/plugins/target-parsing-loaded.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -345,6 +343,7 @@ export async function resolveDeliveryTarget(
   const targetResolution = await deliveryTargetRuntime.resolveChannelTargetForDelivery({
     cfg,
     channel,
+    agentId,
     input: toCandidate,
     accountId,
   });
@@ -402,6 +401,7 @@ export async function resolveDeliveryTarget(
   const routeCanCanonicalizeTarget = deliveryTargetRuntime.channelCanResolveOutboundSessionRoute({
     cfg,
     channel,
+    agentId,
   });
   const routeShouldCanonicalizeTarget =
     route && (route.threadId !== undefined || route.to !== routeTargetCandidate);
@@ -445,17 +445,7 @@ export async function resolveDeliveryTarget(
         })()
       : null;
 
-  const parserExplicitThreadId =
-    explicitThreadId == null && explicitTo
-      ? normalizeOptionalThreadValue(
-          resolveExplicitDeliveryTargetCompat({
-            channel,
-            rawTarget: explicitTo,
-          })?.threadId,
-        )
-      : undefined;
-  // Thread precedence is explicit config, route canonicalization, parser-derived
-  // explicit target, then same-peer session history.
+  // Thread precedence is explicit config, route canonicalization, then same-peer session history.
   const canUseSessionThread =
     options?.inheritSessionThread !== false &&
     shouldCarrySessionThread({
@@ -465,10 +455,7 @@ export async function resolveDeliveryTarget(
       lastRoute,
     });
   const threadId =
-    explicitThreadId ??
-    route?.threadId ??
-    parserExplicitThreadId ??
-    (canUseSessionThread ? resolved.threadId : undefined);
+    explicitThreadId ?? route?.threadId ?? (canUseSessionThread ? resolved.threadId : undefined);
   return {
     ok: true,
     channel,

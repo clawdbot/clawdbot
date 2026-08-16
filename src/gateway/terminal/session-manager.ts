@@ -21,8 +21,6 @@ import {
   DEFAULT_MAX_SESSIONS,
   DEFAULT_SCROLLBACK_CHARS,
 } from "./session-limits.js";
-import type { TerminalAttachSummary, TerminalSessionSummary } from "./session-types.js";
-export { DEFAULT_TERMINAL_DETACH_SECONDS } from "./session-limits.js";
 import type {
   TerminalEventSink,
   TerminalExitReason,
@@ -33,6 +31,8 @@ import type {
   TerminalSessionManagerOptions,
   TerminalOwner,
 } from "./session-manager.types.js";
+import type { TerminalAttachSummary, TerminalSessionSummary } from "./session-types.js";
+export { DEFAULT_TERMINAL_DETACH_SECONDS } from "./session-limits.js";
 
 const log = createSubsystemLogger("gateway/terminal");
 
@@ -40,11 +40,22 @@ const log = createSubsystemLogger("gateway/terminal");
 // conversation-scoped while lifecycle cleanup can target the exact producer.
 type TaskBoundAgentOwner = Extract<TerminalOwner, { kind: "agent" }> & { taskId?: string };
 
-function terminalOwnerMatches(owner: TerminalOwner | null, ownerKey: string): boolean {
+function terminalOwnerMatches(
+  owner: TerminalOwner | null,
+  ownerKey: string,
+  agentId?: string,
+): boolean {
   if (owner?.kind !== "agent") {
     return false;
   }
-  return owner.agentSessionKey === ownerKey || (owner as TaskBoundAgentOwner).taskId === ownerKey;
+  return owner.agentSessionKey === ownerKey && owner.agentId === agentId;
+}
+
+function terminalLifecycleOwnerMatches(owner: TerminalOwner | null, ownerKey: string): boolean {
+  return (
+    owner?.kind === "agent" &&
+    (owner.agentSessionKey === ownerKey || (owner as TaskBoundAgentOwner).taskId === ownerKey)
+  );
 }
 
 /**
@@ -306,8 +317,8 @@ export class TerminalSessionManager {
   }
 
   /** Writes agent input after proving session-key ownership. */
-  writeAgent(agentSessionKey: string, sessionId: string, data: string): boolean {
-    const session = this.agentOwnedSession(agentSessionKey, sessionId);
+  writeAgent(agentSessionKey: string, sessionId: string, data: string, agentId?: string): boolean {
+    const session = this.agentOwnedSession(agentSessionKey, sessionId, agentId);
     return session ? this.writeSession(session, data) : false;
   }
 
@@ -333,8 +344,14 @@ export class TerminalSessionManager {
   }
 
   /** Resizes an agent-owned PTY after proving session-key ownership. */
-  resizeAgent(agentSessionKey: string, sessionId: string, cols: number, rows: number): boolean {
-    const session = this.agentOwnedSession(agentSessionKey, sessionId);
+  resizeAgent(
+    agentSessionKey: string,
+    sessionId: string,
+    cols: number,
+    rows: number,
+    agentId?: string,
+  ): boolean {
+    const session = this.agentOwnedSession(agentSessionKey, sessionId, agentId);
     return session ? this.resizeSession(session, cols, rows) : false;
   }
 
@@ -385,8 +402,8 @@ export class TerminalSessionManager {
   }
 
   /** Closes an agent-owned PTY after proving session-key ownership. */
-  closeAgent(agentSessionKey: string, sessionId: string): boolean {
-    const session = this.agentOwnedSession(agentSessionKey, sessionId);
+  closeAgent(agentSessionKey: string, sessionId: string, agentId?: string): boolean {
+    const session = this.agentOwnedSession(agentSessionKey, sessionId, agentId);
     if (!session) {
       return false;
     }
@@ -395,14 +412,22 @@ export class TerminalSessionManager {
   }
 
   /** Closes every live or spawning PTY owned by one exact agent session or task. */
-  closeAgentSessions(agentSessionKey: string): number {
+  closeAgentSessions(agentSessionKey: string, agentId?: string): number {
     for (const [pending, owner] of this.pendingOpens) {
-      if (terminalOwnerMatches(owner, agentSessionKey)) {
+      if (
+        agentId
+          ? terminalOwnerMatches(owner, agentSessionKey, agentId)
+          : terminalLifecycleOwnerMatches(owner, agentSessionKey)
+      ) {
         pending.abort("terminal closed because its task ended");
       }
     }
     const owned = [...this.sessions.values()].filter(
-      (session) => !session.closed && terminalOwnerMatches(session.owner, agentSessionKey),
+      (session) =>
+        !session.closed &&
+        (agentId
+          ? terminalOwnerMatches(session.owner, agentSessionKey, agentId)
+          : terminalLifecycleOwnerMatches(session.owner, agentSessionKey)),
     );
     for (const session of owned) {
       this.finalize(session, "closed", {});
@@ -492,13 +517,21 @@ export class TerminalSessionManager {
   }
 
   /** Raw buffer for an agent-owned session, guarded by the caller session key. */
-  snapshotAgent(agentSessionKey: string, sessionId: string): string | undefined {
-    return this.agentOwnedSession(agentSessionKey, sessionId)?.buffer.snapshot();
+  snapshotAgent(agentSessionKey: string, sessionId: string, agentId?: string): string | undefined {
+    return this.agentOwnedSession(agentSessionKey, sessionId, agentId)?.buffer.snapshot();
   }
 
   /** Live sessions owned by one agent tool caller. */
-  listAgent(agentSessionKey: string): TerminalSessionSummary[] {
-    return this.list().filter((summary) => summary.owner === `agent:${agentSessionKey}`);
+  listAgent(agentSessionKey: string, agentId?: string): TerminalSessionSummary[] {
+    const sessionIds = new Set(
+      [...this.sessions.values()]
+        .filter(
+          (session) =>
+            !session.closed && terminalOwnerMatches(session.owner, agentSessionKey, agentId),
+        )
+        .map((session) => session.id),
+    );
+    return this.list().filter((summary) => sessionIds.has(summary.sessionId));
   }
 
   private trackPendingOpen(owner: TerminalOwner, pending: TerminalPendingOpen): void {
@@ -713,13 +746,14 @@ export class TerminalSessionManager {
   private agentOwnedSession(
     agentSessionKey: string,
     sessionId: string,
+    agentId?: string,
   ): TerminalSession | undefined {
     const session = this.sessions.get(sessionId);
     if (
       !session ||
       session.closed ||
       session.owner?.kind !== "agent" ||
-      session.owner.agentSessionKey !== agentSessionKey
+      !terminalOwnerMatches(session.owner, agentSessionKey, agentId)
     ) {
       return undefined;
     }

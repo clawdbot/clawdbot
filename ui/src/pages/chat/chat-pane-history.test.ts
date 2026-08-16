@@ -1,32 +1,23 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it, vi } from "vitest";
-import type {
-  SessionCatalogSession,
-  SessionCatalogTranscriptItem,
-} from "../../../../packages/gateway-protocol/src/index.js";
+import type { SessionCatalogTranscriptItem } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { buildCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import "./chat-pane.ts";
 import { loadChatHistory } from "./chat-history.ts";
-import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
 type TestChatPane = HTMLElement & {
+  catalogCursor: string | undefined;
   catalogMessages: unknown[];
   context: ApplicationContext;
   state: ChatPageHost;
   connectedClient: GatewayBrowserClient | null;
   connectionGeneration: number;
-  continueCatalogSession: (key: CatalogSessionKey) => Promise<void>;
-  catalogLoadGeneration: number;
-  catalogSession: SessionCatalogSession | null;
-  paneId: string;
   sessionKey: string;
-  onPaneSessionChange?: (paneId: string, sessionKey: string) => void;
   catalogItemMessage: (item: SessionCatalogTranscriptItem) => Record<string, unknown> | null;
   handleTranscriptScroll: (event: Event) => void;
   historyAutoLoadBlocked: boolean;
@@ -35,6 +26,7 @@ type TestChatPane = HTMLElement & {
   prependUniqueNativeMessages: (messages: unknown[], current: unknown[]) => unknown[];
   prependUniqueCatalogMessages: (messages: unknown[]) => unknown[];
   loadOlderMessages: () => Promise<boolean>;
+  showEarlierMessages: () => Promise<void>;
   requestReplyMessage: (messageId: string) => void;
   readReplyMessage: (messageId: string) => unknown;
   openReplyMessage: (messageId: string) => void;
@@ -49,6 +41,7 @@ type TestChatPane = HTMLElement & {
     activeSessionKey: string | null;
     pendingScrollOffsetFor: (sessionKey: string) => number | null;
     revealMessage: (messageId: string) => boolean;
+    scrollToOffset: (offset: number) => void;
   };
 };
 
@@ -79,6 +72,7 @@ function createTestChatPane(params: { client: GatewayBrowserClient; sessions: Se
   const state = {
     agentsList: null,
     assistantAgentId: null,
+    chatAttachments: [],
     chatError: null,
     chatHistoryPagination: { hasMore: false },
     chatLoading: false,
@@ -122,34 +116,6 @@ function createTestChatPane(params: { client: GatewayBrowserClient; sessions: Se
   return { pane, state, requestUpdate };
 }
 
-function createCatalogContinuationPane(request: ReturnType<typeof vi.fn>) {
-  const client = { request } as unknown as GatewayBrowserClient;
-  const sessions = {} as SessionCapability;
-  const { pane, requestUpdate, state } = createTestChatPane({ client, sessions });
-  const key = {
-    catalogId: "codex",
-    hostId: "gateway:local",
-    threadId: "thread-101",
-  } satisfies CatalogSessionKey;
-  const sourceSessionKey = buildCatalogSessionKey(key);
-  state.sessionKey = sourceSessionKey;
-  pane.sessionKey = sourceSessionKey;
-  state.chatMessage = "Continue the original catalog conversation";
-  state.handleChatDraftChange = vi.fn((draft: string) => {
-    state.chatMessage = draft;
-  });
-  state.handleSendChat = vi.fn(async () => undefined);
-  pane.catalogSession = {
-    threadId: key.threadId,
-    status: "idle",
-    archived: false,
-    canContinue: true,
-    canArchive: true,
-  };
-  pane.onPaneSessionChange = vi.fn();
-  return { client, key, pane, requestUpdate, sessions, sourceSessionKey, state };
-}
-
 function nativeHistoryMessage(seq: number, text = `message ${seq}`) {
   return {
     role: seq % 2 === 0 ? "assistant" : "user",
@@ -163,6 +129,30 @@ function nativeHistorySeq(message: unknown): number | undefined {
     | Record<string, unknown>
     | undefined;
   return typeof metadata?.seq === "number" ? metadata.seq : undefined;
+}
+
+function appendChatThread(
+  pane: TestChatPane,
+  options: { clientHeight?: number; scrollHeight?: number; scrollTop?: number } = {},
+) {
+  const thread = document.createElement("div");
+  thread.className = "chat-thread";
+  thread.scrollTop = options.scrollTop ?? 0;
+  Object.defineProperty(thread, "clientHeight", { value: options.clientHeight ?? 500 });
+  Object.defineProperty(thread, "scrollHeight", { value: options.scrollHeight ?? 2_000 });
+  pane.append(thread);
+  return thread;
+}
+
+function createNativeShowEarlierPane(request: ReturnType<typeof vi.fn>, scrollTop = 0) {
+  const client = { request } as unknown as GatewayBrowserClient;
+  const result = createTestChatPane({ client, sessions: {} as SessionCapability });
+  result.state.chatMessages = [nativeHistoryMessage(3), nativeHistoryMessage(4)];
+  result.state.chatHistoryPagination = { hasMore: true, nextOffset: 2, totalMessages: 4 };
+  const thread = appendChatThread(result.pane, { scrollTop });
+  vi.spyOn(result.pane, "updateComplete", "get").mockReturnValue(Promise.resolve(true));
+  const scrollToOffset = vi.spyOn(result.pane.transcript, "scrollToOffset");
+  return { ...result, scrollToOffset, thread };
 }
 
 describe("chat pane native history pagination", () => {
@@ -284,6 +274,124 @@ describe("chat pane native history pagination", () => {
     };
 
     expect(pane.hasOlderMessages()).toBe(false);
+  });
+
+  it("shows already-loaded earlier history one viewport up without requesting a page", async () => {
+    const request = vi.fn();
+    const { pane, thread } = createNativeShowEarlierPane(request, 1_200);
+
+    await pane.showEarlierMessages();
+
+    expect(thread.scrollTop).toBe(700);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("loads at the top through the canonical path and reveals the prepended window", async () => {
+    const request = vi.fn(async () => ({
+      messages: [nativeHistoryMessage(1), nativeHistoryMessage(2)],
+      hasMore: true,
+      nextOffset: 4,
+      totalMessages: 6,
+    }));
+    const { pane, scrollToOffset, state } = createNativeShowEarlierPane(request);
+
+    await pane.showEarlierMessages();
+
+    expect(request).toHaveBeenCalledWith("chat.history", {
+      sessionKey: state.sessionKey,
+      limit: 100,
+      offset: 2,
+    });
+    expect(state.chatMessages.map(nativeHistorySeq)).toEqual([1, 2, 3, 4]);
+    expect(scrollToOffset).toHaveBeenCalledWith(0);
+    expect(pane.transcriptScrollTop).toBe(0);
+    expect(pane.historyObserverArmed).toBe(false);
+    expect(pane.historyAutoLoadBlocked).toBe(true);
+  });
+
+  it("reveals a final catalog page even when its cursor is exhausted", async () => {
+    const request = vi.fn(async () => ({
+      hostId: "gateway:local",
+      threadId: "thread-1",
+      items: [{ id: "u1", type: "userMessage", text: "oldest catalog message" }],
+    }));
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const key = "catalog:claude:gateway%3Alocal:thread-1";
+    state.sessionKey = key;
+    pane.sessionKey = key;
+    pane.catalogCursor = "final-page";
+    appendChatThread(pane);
+    vi.spyOn(pane, "updateComplete", "get").mockReturnValue(Promise.resolve(true));
+    const scrollToOffset = vi.spyOn(pane.transcript, "scrollToOffset");
+
+    await pane.showEarlierMessages();
+
+    expect(request).toHaveBeenCalledWith(
+      "sessions.catalog.read",
+      expect.objectContaining({ cursor: "final-page" }),
+    );
+    expect(pane.catalogMessages).toHaveLength(1);
+    expect(pane.catalogCursor).toBeUndefined();
+    expect(scrollToOffset).toHaveBeenCalledWith(0);
+  });
+
+  it("keeps the viewport and pagination retryable when the older load fails", async () => {
+    const request = vi.fn(async () => {
+      throw new Error("history unavailable");
+    });
+    const { pane, scrollToOffset, state, thread } = createNativeShowEarlierPane(request);
+
+    await pane.showEarlierMessages();
+
+    expect(thread.scrollTop).toBe(0);
+    expect(state.chatHistoryPagination).toMatchObject({ hasMore: true });
+    expect(state.lastError).toBe("history unavailable");
+    expect(scrollToOffset).not.toHaveBeenCalled();
+  });
+
+  it("joins an in-flight canonical load before revealing its earlier window", async () => {
+    const deferred = createDeferred<{
+      messages: unknown[];
+      hasMore: boolean;
+      totalMessages: number;
+    }>();
+    const request = vi.fn(() => deferred.promise);
+    const { pane, scrollToOffset } = createNativeShowEarlierPane(request);
+
+    const automaticLoad = pane.loadOlderMessages();
+    const manualNavigation = pane.showEarlierMessages();
+    deferred.resolve({
+      messages: [nativeHistoryMessage(1), nativeHistoryMessage(2)],
+      hasMore: false,
+      totalMessages: 4,
+    });
+    await Promise.all([automaticLoad, manualNavigation]);
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(scrollToOffset).toHaveBeenCalledOnce();
+    expect(scrollToOffset).toHaveBeenCalledWith(0);
+  });
+
+  it("does not navigate a replacement session after an older load settles", async () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    state.chatHistoryPagination = { hasMore: true, nextOffset: 2 };
+    appendChatThread(pane);
+    const loaded = createDeferred<boolean>();
+    const committed = createDeferred<boolean>();
+    vi.spyOn(pane, "loadOlderMessages").mockReturnValue(loaded.promise);
+    vi.spyOn(pane, "updateComplete", "get").mockReturnValue(committed.promise);
+    const scrollToOffset = vi.spyOn(pane.transcript, "scrollToOffset");
+
+    const navigation = pane.showEarlierMessages();
+    loaded.resolve(true);
+    await Promise.resolve();
+    state.sessionKey = "agent:main:replacement";
+    committed.resolve(true);
+    await navigation;
+
+    expect(scrollToOffset).not.toHaveBeenCalled();
   });
 
   it("auto-loads a visible sentinel when the initial tail is not scrollable", async () => {
@@ -696,185 +804,5 @@ describe("chat pane native history pagination", () => {
     await loadChatHistory(state);
 
     expect(state.chatHistoryPagination).toBe(pagination);
-  });
-});
-
-describe("chat pane catalog continuation lifecycle", () => {
-  it("hands a continued catalog draft to the retained destination pane", async () => {
-    const request = vi.fn().mockResolvedValue({ sessionKey: "agent:main:continued" });
-    const { key, pane, state } = createCatalogContinuationPane(request);
-
-    await pane.continueCatalogSession(key);
-
-    expect(request).toHaveBeenCalledWith("sessions.catalog.continue", key);
-    expect(pane.onPaneSessionChange).toHaveBeenCalledWith("single", "agent:main:continued");
-    expect(consumePaneSessionHandoff(pane.context, pane.paneId, "agent:main:continued")).toEqual({
-      attachments: [],
-      draft: "Continue the original catalog conversation",
-      send: true,
-    });
-    expect(state.sessionKey).not.toBe("agent:main:continued");
-    expect(state.handleSendChat).not.toHaveBeenCalled();
-  });
-
-  it("does not stage or send a continuation rejected by its logical pane", async () => {
-    const request = vi.fn().mockResolvedValue({ sessionKey: "agent:main:rejected-continuation" });
-    const { key, pane, state } = createCatalogContinuationPane(request);
-    pane.onPaneSessionChange = vi.fn(() => false);
-
-    await pane.continueCatalogSession(key);
-
-    expect(
-      consumePaneSessionHandoff(pane.context, pane.paneId, "agent:main:rejected-continuation"),
-    ).toBeNull();
-    expect(state.handleSendChat).not.toHaveBeenCalled();
-    expect(state.chatSending).toBe(false);
-  });
-
-  it("does not send a stale catalog draft after the user switches conversations", async () => {
-    const continued = createDeferred<{ sessionKey: string }>();
-    const request = vi.fn(() => continued.promise);
-    const { key, pane, state } = createCatalogContinuationPane(request);
-
-    const pending = pane.continueCatalogSession(key);
-    state.sessionKey = "agent:main:different-conversation";
-    pane.sessionKey = state.sessionKey;
-    pane.catalogLoadGeneration += 1;
-    state.chatMessage = "Draft belonging to the selected conversation";
-    continued.resolve({ sessionKey: "agent:main:stale-continuation" });
-    await pending;
-
-    expect(pane.onPaneSessionChange).not.toHaveBeenCalled();
-    expect(state.handleChatDraftChange).not.toHaveBeenCalled();
-    expect(state.handleSendChat).not.toHaveBeenCalled();
-    expect(state.sessionKey).toBe("agent:main:different-conversation");
-    expect(state.chatMessage).toBe("Draft belonging to the selected conversation");
-    expect(state.chatSending).toBe(false);
-  });
-
-  it("does not send a stale catalog draft after reconnecting the same Gateway client", async () => {
-    const continued = createDeferred<{ sessionKey: string }>();
-    const request = vi.fn(() => continued.promise);
-    const { key, pane, state } = createCatalogContinuationPane(request);
-
-    const pending = pane.continueCatalogSession(key);
-    pane.connectionGeneration += 1;
-    state.connectionEpoch = pane.connectionGeneration;
-    state.chatMessage = "Draft from the reconnected conversation";
-    continued.resolve({ sessionKey: "agent:main:stale-continuation" });
-    await pending;
-
-    expect(pane.onPaneSessionChange).not.toHaveBeenCalled();
-    expect(state.handleChatDraftChange).not.toHaveBeenCalled();
-    expect(state.handleSendChat).not.toHaveBeenCalled();
-    expect(state.chatMessage).toBe("Draft from the reconnected conversation");
-    expect(state.chatSending).toBe(false);
-  });
-
-  it("does not apply an old catalog continuation after replacing the Gateway client", async () => {
-    const continued = createDeferred<{ sessionKey: string }>();
-    const request = vi.fn(() => continued.promise);
-    const { key, pane, sessions, state } = createCatalogContinuationPane(request);
-    const replacementClient = { request: vi.fn() } as unknown as GatewayBrowserClient;
-
-    const pending = pane.continueCatalogSession(key);
-    state.client = replacementClient;
-    pane.connectedClient = replacementClient;
-    pane.context = createSessionContext(replacementClient, sessions);
-    pane.connectionGeneration += 1;
-    state.connectionEpoch = pane.connectionGeneration;
-    state.chatMessage = "Draft from the replacement Gateway";
-    continued.resolve({ sessionKey: "agent:main:stale-continuation" });
-    await pending;
-
-    expect(pane.onPaneSessionChange).not.toHaveBeenCalled();
-    expect(state.handleChatDraftChange).not.toHaveBeenCalled();
-    expect(state.handleSendChat).not.toHaveBeenCalled();
-    expect(state.client).toBe(replacementClient);
-    expect(state.chatMessage).toBe("Draft from the replacement Gateway");
-    expect(state.chatSending).toBe(false);
-  });
-
-  it("does not clear a newer scoped send when a stale catalog continuation resolves", async () => {
-    const continued = createDeferred<{ sessionKey: string }>();
-    const request = vi.fn(() => continued.promise);
-    const { key, pane, state } = createCatalogContinuationPane(request);
-
-    const pending = pane.continueCatalogSession(key);
-    state.sessionKey = "agent:main:different-conversation";
-    pane.sessionKey = state.sessionKey;
-    pane.catalogLoadGeneration += 1;
-    state.chatSendingScopeKey = "newer-conversation-send";
-    state.chatSending = true;
-    continued.resolve({ sessionKey: "agent:main:stale-continuation" });
-    await pending;
-
-    expect(state.handleSendChat).not.toHaveBeenCalled();
-    expect(state.chatSendingScopeKey).toBe("newer-conversation-send");
-    expect(state.chatSending).toBe(true);
-  });
-
-  it("allows only the latest overlapping catalog continuation to adopt and send", async () => {
-    const first = createDeferred<{ sessionKey: string }>();
-    const second = createDeferred<{ sessionKey: string }>();
-    const request = vi
-      .fn()
-      .mockImplementationOnce(() => first.promise)
-      .mockImplementationOnce(() => second.promise);
-    const { key, pane, state } = createCatalogContinuationPane(request);
-
-    const staleContinuation = pane.continueCatalogSession(key);
-    state.chatMessage = "Only send the latest catalog draft";
-    const currentContinuation = pane.continueCatalogSession(key);
-    first.resolve({ sessionKey: "agent:main:stale-continuation" });
-    await staleContinuation;
-
-    expect(state.handleSendChat).not.toHaveBeenCalled();
-    expect(state.chatSending).toBe(true);
-
-    second.resolve({ sessionKey: "agent:main:latest-continuation" });
-    await currentContinuation;
-
-    expect(pane.onPaneSessionChange).toHaveBeenCalledOnce();
-    expect(
-      consumePaneSessionHandoff(pane.context, pane.paneId, "agent:main:latest-continuation"),
-    ).toEqual({
-      attachments: [],
-      draft: "Only send the latest catalog draft",
-      send: true,
-    });
-    expect(state.handleSendChat).not.toHaveBeenCalled();
-  });
-
-  it("does not display a rejected catalog continuation in a different conversation", async () => {
-    const continued = createDeferred<{ sessionKey: string }>();
-    const request = vi.fn(() => continued.promise);
-    const { key, pane, requestUpdate, state } = createCatalogContinuationPane(request);
-
-    const pending = pane.continueCatalogSession(key);
-    state.sessionKey = "agent:main:different-conversation";
-    pane.sessionKey = state.sessionKey;
-    pane.catalogLoadGeneration += 1;
-    state.lastError = "Current conversation error";
-    state.chatMessage = "Draft belonging to the selected conversation";
-    const updatesBeforeReject = requestUpdate.mock.calls.length;
-    continued.reject(new Error("Stale catalog continuation failed"));
-    await pending;
-
-    expect(state.lastError).toBe("Current conversation error");
-    expect(state.chatSending).toBe(false);
-    expect(state.handleSendChat).not.toHaveBeenCalled();
-    expect(requestUpdate).toHaveBeenCalledTimes(updatesBeforeReject + 1);
-  });
-
-  it("reports a catalog continuation failure in the original conversation", async () => {
-    const request = vi.fn().mockRejectedValue(new Error("Catalog continuation failed"));
-    const { key, pane, state } = createCatalogContinuationPane(request);
-
-    await pane.continueCatalogSession(key);
-
-    expect(state.lastError).toBe("Catalog continuation failed");
-    expect(state.chatSending).toBe(false);
-    expect(state.handleSendChat).not.toHaveBeenCalled();
   });
 });

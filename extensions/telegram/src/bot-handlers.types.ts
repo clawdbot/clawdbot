@@ -73,6 +73,7 @@ type TelegramHandlerLogger = {
 export type RegisterTelegramHandlerParams = {
   cfg: OpenClawConfig;
   accountId: string;
+  ownerAgentId: string;
   bot: Bot;
   mediaMaxBytes: number;
   opts: TelegramBotOptions;

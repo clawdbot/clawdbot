@@ -123,6 +123,7 @@ describe("buildTelegramMessageContext prompt context", () => {
     const messageContextRuntime = createTelegramMessageContextRuntime({
       cfg: registrationCfg,
       accountId: "default",
+      ownerAgentId: "main",
       opts: {
         token: "test-token",
         botInfo: { id: 7, username: "bot", first_name: "Bot" },
@@ -209,6 +210,7 @@ describe("buildTelegramMessageContext prompt context", () => {
     const messageContextRuntime = createTelegramMessageContextRuntime({
       cfg,
       accountId: "default",
+      ownerAgentId: "main",
       opts: {
         token: "test-token",
         botInfo: { id: 7, username: "bot", first_name: "Bot" },

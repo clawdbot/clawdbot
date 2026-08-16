@@ -81,7 +81,11 @@ const TRAIN_2026_7_METHODS = [
 ] as const;
 
 const CURRENT_TRAIN_METHODS = [
+  "device.pair.setupStatus",
   "sessions.patchMany",
+  "sessions.groups.update",
+  "sessions.groups.defaults",
+  "sessions.recover",
   "update.hold",
   "sessions.catalog.startTerminal",
   "worker.desktop.observe",
@@ -98,6 +102,12 @@ const CURRENT_TRAIN_METHODS = [
   "users.prefs.set",
   "desktop.observe",
   "desktop.launch",
+  "device.scopes.requestUpgrade",
+  "device.scopes.waitUpgrade",
+  "node.runnerInventory.update",
+  "portal.list",
+  "portal.open",
+  "portal.close",
 ] as const;
 
 describe("core gateway method release trains", () => {

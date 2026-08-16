@@ -6,17 +6,14 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import type { ChatRunStartupPhase } from "../../../packages/gateway-protocol/src/index.js";
-import {
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
-  type PreparedAgentRunAdmission,
-} from "../../agents/admitted-run-context.js";
+import type { PreparedAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { peekSessionMcpRuntime } from "../../agents/agent-bundle-mcp-manager-api.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import {
   classifyFailoverReason,
   isContextOverflowError,
 } from "../../agents/embedded-agent-helpers.js";
+import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import type { EmbeddedAgentExecutionPhase } from "../../agents/embedded-agent-runner/execution-phase.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
@@ -35,7 +32,9 @@ import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { recordMessageToolRunOutcome } from "../../infra/message-tool-run-outcome-store.js";
 import { logSessionTurnCreated } from "../../logging/diagnostic.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -66,8 +65,9 @@ import {
 import { createAgentTurnPresentation } from "./agent-runner-presentation.js";
 import { createAgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
 import { resolveQueuedReplyRuntimeConfig } from "./agent-runner-utils.js";
+import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 import { shouldNotifyUserAboutCompaction } from "./compaction-notice.js";
-import { resolveCurrentTurnImages } from "./current-turn-images.js";
+import { type CurrentTurnImages, resolveCurrentTurnImages } from "./current-turn-images.js";
 import type { FollowupRun } from "./queue.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
 import { createReplyMediaContext } from "./reply-media-paths.runtime.js";
@@ -76,6 +76,14 @@ import {
   isReplyOperationUserAbort,
 } from "./reply-operation-abort.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
+
+type InternalFollowupRun = FollowupRun & {
+  /** Keep admission state out of the public plugin-facing FollowupRun contract. */
+  currentTurnImagesPrepared?: true;
+  mediaImageLayout?: CurrentTurnImages["mediaImageLayout"];
+};
+
+const messageToolOutcomeLog = createSubsystemLogger("auto-reply/message-tool-outcome");
 
 function resolveRunStartupPhase(
   phase: EmbeddedAgentExecutionPhase,
@@ -183,7 +191,7 @@ async function executeAgentTurnInternalWithRetryState(
     });
   }
   let replyMediaContext: ReplyMediaContext;
-  let currentTurnImages: Awaited<ReturnType<typeof resolveCurrentTurnImages>>;
+  let currentTurnImages: CurrentTurnImages;
   try {
     replyMediaContext =
       params.replyMediaContext ??
@@ -204,14 +212,27 @@ async function executeAgentTurnInternalWithRetryState(
           requesterSenderE164: params.followupRun.run.senderE164,
         }),
       );
-    currentTurnImages = await agentTurnTiming.measure("current_turn_images", () =>
-      resolveCurrentTurnImages({
-        ctx: params.sessionCtx,
-        cfg: runtimeConfig,
-        images: params.followupRun.images ?? params.opts?.images,
-        imageOrder: params.followupRun.imageOrder ?? params.opts?.imageOrder,
-      }),
-    );
+    const internalFollowupRun = params.followupRun as InternalFollowupRun;
+    const hasQueuedCurrentTurnImages =
+      internalFollowupRun.currentTurnImagesPrepared === true ||
+      Object.hasOwn(params.followupRun, "images") ||
+      Object.hasOwn(params.followupRun, "imageOrder");
+    // Queue admission owns current-turn materialization, including empty results.
+    // Re-scanning here can resurrect suppressed media or duplicate loaded images.
+    currentTurnImages = hasQueuedCurrentTurnImages
+      ? {
+          images: params.followupRun.images,
+          imageOrder: params.followupRun.imageOrder,
+          mediaImageLayout: internalFollowupRun.mediaImageLayout,
+        }
+      : await agentTurnTiming.measure("current_turn_images", () =>
+          resolveCurrentTurnImages({
+            ctx: params.sessionCtx,
+            cfg: runtimeConfig,
+            images: params.opts?.images,
+            imageOrder: params.opts?.imageOrder,
+          }),
+        );
   } catch (error) {
     clearAgentRunContext(runId, lifecycleGeneration);
     throw error;
@@ -492,18 +513,13 @@ async function executeAgentTurnInternal(
     completed: false,
   };
   const runId = params.opts?.runId ?? crypto.randomUUID();
-  const preparedRunAdmission = prepareAgentRunAdmission({
+  const preparedRunAdmission = prepareChannelRunAdmission({
     cfg: resolveQueuedReplyRuntimeConfig(params.followupRun.run.config),
-    operationalRunInstance: createOperationalRunInstanceRef(runId),
-    facts: {
-      runId,
-      agentId: params.followupRun.run.agentId,
-      ingress: {
-        kind: "channel",
-        boundary: "auto-reply.agent-runner",
-        state: "present",
-      },
-    },
+    runId,
+    agentId: params.followupRun.run.agentId,
+    ingressKind: "channel",
+    boundary: "auto-reply.agent-runner",
+    evidence: params.followupRun.channelAdmissionEvidence,
   });
   try {
     return await executeAgentTurnInternalWithRetryState(
@@ -520,7 +536,7 @@ async function executeAgentTurnInternal(
 }
 
 /** Runs the agent turn with provider/model fallback, retry, and closed settlement. */
-export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTurnExecutionResult> {
+async function executeAgentTurnOutcome(params: AgentTurnParams): Promise<AgentTurnExecutionResult> {
   const runId = params.opts?.runId ?? crypto.randomUUID();
   const executionParams =
     params.opts?.runId === runId ? params : { ...params, opts: { ...params.opts, runId } };
@@ -631,6 +647,73 @@ export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTu
     if (isReplyOperationUserAbort(executionParams.replyOperation)) {
       return { runId, outcome: { kind: "aborted", reason: "user" } };
     }
+    throw error;
+  }
+}
+
+function recordMessageToolOnlyRunOutcome(
+  params: AgentTurnParams,
+  result: AgentTurnExecutionResult | undefined,
+): void {
+  const sourceReplyDeliveryMode =
+    params.followupRun.run.sourceReplyDeliveryMode ?? params.opts?.sourceReplyDeliveryMode;
+  if (sourceReplyDeliveryMode !== "message_tool_only") {
+    return;
+  }
+  const sessionKey = params.sessionKey ?? params.followupRun.run.sessionKey;
+  if (!sessionKey) {
+    messageToolOutcomeLog.warn("message-tool-only run outcome missing session key", {
+      runId: result?.runId ?? params.opts?.runId,
+      agentId: params.followupRun.run.agentId,
+    });
+    return;
+  }
+  const outcome = result?.outcome;
+  const resolved =
+    outcome?.kind === "settled" || outcome?.kind === "rejected" ? outcome.resolved : undefined;
+  const provider = resolved?.provider ?? params.followupRun.run.provider;
+  const model = resolved?.model ?? params.followupRun.run.model;
+  const runStatus: "completed" | "errored" | "aborted" =
+    outcome?.kind === "aborted" || (outcome?.kind === "settled" && outcome.abortReason)
+      ? "aborted"
+      : !outcome || outcome.kind === "rejected" || outcome.status === "failed"
+        ? "errored"
+        : "completed";
+  const toolDelivered =
+    outcome?.kind === "settled" && hasCompletedSourceReplyDeliveryEvidence(outcome.result);
+  const values = {
+    runId: result?.runId ?? params.opts?.runId ?? "unknown",
+    sessionKey,
+    agentId: params.followupRun.run.agentId,
+    provider,
+    model,
+    outcome: toolDelivered ? ("tool_delivered" as const) : ("mute" as const),
+    runStatus,
+    occurredAt: Date.now(),
+    storePath: params.storePath,
+  };
+  try {
+    recordMessageToolRunOutcome(values);
+    messageToolOutcomeLog.info("recorded message-tool-only run outcome", values);
+  } catch (error) {
+    messageToolOutcomeLog.warn("failed to record message-tool-only run outcome", {
+      ...values,
+      error: formatErrorMessage(error),
+    });
+  }
+}
+
+/** Runs the agent turn and records its message-tool-only visible-outcome fact once. */
+export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTurnExecutionResult> {
+  const runId = params.opts?.runId ?? crypto.randomUUID();
+  const executionParams =
+    params.opts?.runId === runId ? params : { ...params, opts: { ...params.opts, runId } };
+  try {
+    const result = await executeAgentTurnOutcome(executionParams);
+    recordMessageToolOnlyRunOutcome(executionParams, result);
+    return result;
+  } catch (error) {
+    recordMessageToolOnlyRunOutcome(executionParams, undefined);
     throw error;
   }
 }

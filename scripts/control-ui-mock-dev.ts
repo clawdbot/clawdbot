@@ -1352,6 +1352,7 @@ async function createChatPickerScenario(
     sessionRow("agent:main:home-server", "Home server migration", baseTime - 240_000, {
       execCwd: "/Users/peter/Projects",
       execNode: "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
+      hasAutomation: true,
       pinned: true,
     }),
     sessionRow("agent:main:whatsapp:group:family", "Family", baseTime - 90_000, {
@@ -1494,6 +1495,7 @@ async function createChatPickerScenario(
       "sessions.patchMany",
       "sessions.catalog.list",
       "sessions.catalog.read",
+      "sessions.create",
       "system.info",
       "terminal.open",
     ],
@@ -1577,6 +1579,8 @@ async function createChatPickerScenario(
       "sessions.groups.list": { groups: [{ name: "Research", position: 0 }] },
       // Coding session catalogs so the sidebar's catalog sections (header
       // right-click menu, hide/restore preference) are exercised in the mock.
+      // Ids must match registered plugin catalogs (`claude`, `codex`) or the
+      // sidebar cannot resolve bundled brand marks.
       "sessions.catalog.list": {
         catalogs: [
           {
@@ -1615,7 +1619,7 @@ async function createChatPickerScenario(
             ],
           },
           {
-            id: "claude-code",
+            id: "claude",
             label: "Claude Code",
             capabilities: { continueSession: true, archive: false },
             hosts: [
@@ -1678,7 +1682,7 @@ async function createChatPickerScenario(
           },
           {
             match: {
-              catalogId: "claude-code",
+              catalogId: "claude",
               hostId: "gateway",
               threadId: "claude-thread-1",
             },

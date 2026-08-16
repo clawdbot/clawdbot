@@ -173,7 +173,7 @@
   gap: var(--space-1);
 }
 
-@media (max-width: 720px) {
+@media (max-width: 768px) {
   .run-inspector__fact,
   .run-inspector__values > div {
     grid-template-columns: 1fr;

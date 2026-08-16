@@ -37,6 +37,14 @@ describe("worker environment service", () => {
     );
   });
 
+  it("prunes terminal environments after provider reconciliation", async () => {
+    const prune = vi.spyOn(support.testState.store, "pruneTerminalEnvironments");
+
+    await support.createService(support.createProvider()).reconcileOnce();
+
+    expect(prune).toHaveBeenCalledOnce();
+  });
+
   it("waits for timed-out provider work during shutdown", async () => {
     let finishProvision: (() => void) | undefined;
     const provisionPending = new Promise<void>((resolve) => {

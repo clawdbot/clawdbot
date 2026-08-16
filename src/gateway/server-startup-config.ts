@@ -2,6 +2,7 @@
 // plus secrets snapshots before the server exposes user-facing surfaces.
 import { isDeepStrictEqual } from "node:util";
 import { hasLegacyAuthProfileSourcesForStartup } from "../agents/auth-profiles/legacy-source-diagnostic.js";
+import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { applyConfigOverrides } from "../config/runtime-overrides.js";
 import type { GatewayAuthConfig, GatewayTailscaleConfig } from "../config/types.gateway.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
@@ -49,15 +50,15 @@ import {
   logPreparedSecretDegradations,
   logThrownSecretDegradations,
 } from "./server-startup-secret-diagnostics.js";
-export {
-  loadGatewayStartupConfigSnapshot,
-  type GatewayStartupConfigSnapshotLoadResult,
-} from "./server-startup-config-helpers.js";
 import {
   resolveGatewayStartupSecretProjection,
   resolveGatewayStartupSourceConfig,
 } from "./server-startup-secret-surfaces.js";
 import { ensureGatewayStartupAuth } from "./startup-auth.js";
+export {
+  loadGatewayStartupConfigSnapshot,
+  type GatewayStartupConfigSnapshotLoadResult,
+} from "./server-startup-config-helpers.js";
 
 type GatewaySecretsStateEventCode = "SECRETS_RELOADER_DEGRADED" | "SECRETS_RELOADER_RECOVERED";
 
@@ -711,6 +712,6 @@ export async function prepareGatewayStartupConfig(params: {
   ).config;
   return {
     ...authBootstrap,
-    cfg: activatedConfig,
+    cfg: inheritLegacyDefaultAgentId(params.configSnapshot.config, activatedConfig),
   };
 }

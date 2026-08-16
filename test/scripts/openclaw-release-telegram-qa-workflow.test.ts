@@ -853,4 +853,42 @@ describe("release Telegram QA workflow", () => {
       'for path in \\\n            "$temp_root/workspace" \\\n            "${OPENCLAW_HOME:?}"',
     );
   });
+
+  it("lets the SUT create suite locks without exposing the runner-owned config", () => {
+    const createSut = requireRun(
+      "run_telegram",
+      "Create isolated Telegram SUT identity and launcher",
+    );
+
+    expect(createSut).toContain('chown "$RUNNER_UID:$SUT_GID" "$temp_root"');
+    expect(createSut).toContain('chmod 1770 "$temp_root"');
+    expect(createSut).toContain(
+      '"$(stat -c \'%F:%a:%u:%g\' "$temp_root")" == "directory:1770:${RUNNER_UID}:${SUT_GID}"',
+    );
+    expect(createSut).toContain('chown "$RUNNER_UID:$SUT_GID" "$config_path"');
+    expect(createSut).toContain('chmod 0640 "$config_path"');
+    expect(createSut).toContain(
+      '"$(stat -c \'%F:%a:%u:%g\' "$config_path")" == "regular file:640:${RUNNER_UID}:${SUT_GID}"',
+    );
+    expect(createSut).not.toContain('chmod 0711 "$temp_root"');
+    expect(createSut).not.toContain('chmod 1777 "$temp_root"');
+  });
+
+  it("adds an empty PS1 only after attested runtime environment verification", () => {
+    const createSut = requireRun(
+      "run_telegram",
+      "Create isolated Telegram SUT identity and launcher",
+    );
+    const launcher = extractHereDocument(createSut, "LAUNCHER");
+    const verification = '[[ "$actual_env_keys_b64" == "$runtime_expected_env_keys_b64" ]]';
+    const ps1Export = "export PS1=";
+    const candidateExec = 'exec "$runtime_node_bin" "${runtime_node_args[@]}"';
+
+    expect(launcher.match(/export PS1=/gu)).toHaveLength(1);
+    expect(launcher.indexOf(verification)).toBeGreaterThan(-1);
+    expect(launcher.indexOf(ps1Export)).toBeGreaterThan(launcher.indexOf(verification));
+    expect(launcher.indexOf(candidateExec)).toBeGreaterThan(launcher.indexOf(ps1Export));
+    expect(launcher.match(/exec "\$runtime_node_bin"/gu)).toHaveLength(1);
+    expect(launcher).toContain('grep -Ev "^(PWD|SHLVL|_)$"');
+  });
 });

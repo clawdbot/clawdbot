@@ -30,6 +30,10 @@ import { runWorkerDescriptor } from "./worker.runtime.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const REPLACEMENT_CREDENTIAL = ["worker", "replacement", "fixture"].join("-");
 const MODEL_REF = { provider: "fake", model: "fault-model" } as const;
+const TERMINAL_EVENT = {
+  kind: "lifecycle" as const,
+  payload: { phase: "finishing" as const, startedAt: 1, endedAt: 2 },
+};
 
 function transcriptMessage(text: string) {
   return {
@@ -179,13 +183,13 @@ describe("cloud worker milestone 2 fault injection", () => {
       transcriptMessage("partitioned user"),
       { ...doneMessage("partitioned reply"), timestamp: 2 },
     ]);
-    const live = ["one", "two", "three"].map((delta) =>
-      current.live.emit(RUN_ID, {
+    for (const delta of ["one", "two", "three"]) {
+      current.live.enqueuePreview(RUN_ID, {
         kind: "assistant",
         payload: { text: delta, delta },
-      }),
-    );
-    await expect(Promise.all(live)).resolves.toHaveLength(3);
+      });
+    }
+    await expect(current.live.emitTerminal(RUN_ID, TERMINAL_EVENT)).resolves.toBeUndefined();
 
     const transcriptRequests = harness.requestParams("worker.transcript.commit");
     expect(transcriptRequests).toHaveLength(2);
@@ -198,7 +202,7 @@ describe("cloud worker milestone 2 fault injection", () => {
       harness
         .requestParams("worker.live-event")
         .map((request) => (request as WorkerLiveEventParams).seq),
-    ).toEqual([1, 2, 3, 1, 2, 3]);
+    ).toEqual([1, 2, 3, 4, 1, 2, 3, 4]);
     const transcript = SessionManager.open(harness.sessionTarget).getEntries();
     expect(transcript).toHaveLength(2);
     expect(new Set(transcript.map((entry) => entry.id)).size).toBe(2);
@@ -221,20 +225,21 @@ describe("cloud worker milestone 2 fault injection", () => {
     harness.addFault({ kind: "drop-response", method: "worker.transcript.commit", restart: true });
     await current.connection.start();
 
-    await current.live.emit(RUN_ID, {
+    current.live.enqueuePreview(RUN_ID, {
       kind: "assistant",
       payload: { text: "acked", delta: "acked" },
     });
+    await vi.waitFor(() => expect(harness.liveDeltas).toEqual(["acked"]));
     const inference = current.inference.start(inferenceRequest(harness.epoch, "restart-turn"));
     await providerStarted.promise;
     const commit = current.transcript.commit([transcriptMessage("restart transcript")]);
     await commitEntered.promise;
-    const liveTail = ["tail-a", "tail-b"].map((delta) =>
-      current.live.emit(RUN_ID, {
+    for (const delta of ["tail-a", "tail-b"]) {
+      current.live.enqueuePreview(RUN_ID, {
         kind: "assistant",
         payload: { text: delta, delta },
-      }),
-    );
+      });
+    }
     // The restart fault fires when the gated commit response drains; make sure the
     // pre-restart tail-a live request reached the gateway first or the lost-window
     // replay assertion below becomes timing-dependent.
@@ -245,7 +250,7 @@ describe("cloud worker milestone 2 fault injection", () => {
 
     await expect(commit).resolves.toMatchObject({ entryIds: [expect.any(String)] });
     await expect(inference).resolves.toMatchObject({ type: "error", reason: "provider-error" });
-    await expect(Promise.all(liveTail)).resolves.toHaveLength(2);
+    await expect(current.live.emitTerminal(RUN_ID, TERMINAL_EVENT)).resolves.toBeUndefined();
     expect(harness.providerCalls).toBe(1);
     expect(harness.replacementProviderCalls).toBe(0);
     expect(harness.admissions.at(-1)).toMatchObject({
@@ -376,20 +381,20 @@ describe("cloud worker milestone 2 fault injection", () => {
     try {
       await current.connection.start();
 
-      await expect(
-        Promise.all(
-          ["one", "two"].map((delta) =>
-            current.live.emit(RUN_ID, { kind: "assistant", payload: { text: delta, delta } }),
-          ),
-        ),
-      ).resolves.toHaveLength(2);
+      for (const delta of ["one", "two"]) {
+        current.live.enqueuePreview(RUN_ID, {
+          kind: "assistant",
+          payload: { text: delta, delta },
+        });
+      }
+      await expect(current.live.emitTerminal(RUN_ID, TERMINAL_EVENT)).resolves.toBeUndefined();
 
       expect(harness.liveDeltas).toEqual(["one", "two"]);
       expect(
         harness
           .requestParams("worker.live-event")
           .map((request) => (request as WorkerLiveEventParams).seq),
-      ).toEqual([1, 2]);
+      ).toEqual([1, 2, 3]);
       expect(getAgentRunContext(RUN_ID)?.isControlUiVisible).toBe(true);
     } finally {
       clearAgentRunContext(RUN_ID);

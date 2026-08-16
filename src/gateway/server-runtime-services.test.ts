@@ -19,9 +19,9 @@ function waitForFast<T>(
 type StartSessionDeliveryRuntime =
   typeof import("../infra/session-delivery-queue-runtime.js").startSessionDeliveryRuntime;
 type DrainPendingDeliveries =
-  typeof import("../infra/outbound/delivery-queue.js").drainPendingDeliveriesCore;
+  typeof import("../infra/outbound/delivery-queue-recovery.js").drainPendingDeliveriesCore;
 type RecoverPendingDeliveries =
-  typeof import("../infra/outbound/delivery-queue.js").recoverPendingDeliveries;
+  typeof import("../infra/outbound/delivery-queue-recovery.js").recoverPendingDeliveries;
 
 const hoisted = vi.hoisted(() => {
   const heartbeatRunner = {
@@ -75,7 +75,7 @@ vi.mock("../infra/outbound/deliver.js", () => ({
   deliverOutboundPayloadsInternal: hoisted.deliverOutboundPayloads,
 }));
 
-vi.mock("../infra/outbound/delivery-queue.js", () => ({
+vi.mock("../infra/outbound/delivery-queue-recovery.js", () => ({
   recoverPendingDeliveries: hoisted.recoverPendingDeliveries,
   drainPendingDeliveriesCore: hoisted.drainPendingDeliveries,
 }));

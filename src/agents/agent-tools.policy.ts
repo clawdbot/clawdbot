@@ -26,7 +26,7 @@ import {
 } from "../sessions/session-key-utils.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { hasAgentRosterProperty } from "./agent-scope-config.js";
-import { listAgentEntries, resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
+import { listAgentEntries, resolveAgentConfig, resolveSessionAgentIds } from "./agent-scope.js";
 import { resolveProviderToolPolicy } from "./provider-tool-policy.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
@@ -378,13 +378,16 @@ export function resolveEffectiveToolPolicy(params: {
     typeof params.agentId === "string" && params.agentId.trim()
       ? normalizeAgentId(params.agentId)
       : undefined;
-  const agentId =
-    explicitAgentId ??
-    (params.sessionKey ? parseAgentSessionKey(params.sessionKey)?.agentId : undefined) ??
-    (params.config &&
-    (!hasAgentRosterProperty(params.config) || listAgentEntries(params.config).length > 0)
-      ? resolveDefaultAgentId(params.config)
-      : undefined);
+  const canResolveConfiguredAgent =
+    params.config &&
+    (!hasAgentRosterProperty(params.config) || listAgentEntries(params.config).length > 0);
+  const agentId = canResolveConfiguredAgent
+    ? resolveSessionAgentIds({
+        config: params.config,
+        agentId: explicitAgentId,
+        sessionKey: params.sessionKey,
+      }).sessionAgentId
+    : (explicitAgentId ?? parseAgentSessionKey(params.sessionKey)?.agentId);
   const agentConfig =
     params.config && agentId ? resolveAgentConfig(params.config, agentId) : undefined;
   // Shipped pre-roster SDK inputs allowed this raw defaults shape. Runtime-loaded

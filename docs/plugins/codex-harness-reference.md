@@ -46,7 +46,7 @@ Top-level fields:
 | `codexDynamicToolsExclude` | `[]`                     | Additional OpenClaw dynamic tool names to omit from Codex app-server turns.                                                                    |
 | `codexPlugins`             | disabled                 | Native Codex plugin/app support, including opt-in access to connected account apps. See [Native Codex plugins](/plugins/codex-native-plugins). |
 | `computerUse`              | disabled                 | Codex Computer Use setup. See [Codex Computer Use](/plugins/codex-computer-use).                                                               |
-| `sessionCatalog`           | enabled                  | Native Codex session discovery for the sidebar. Set `enabled: false` to disable discovery without disabling the provider or harness.           |
+| `sessionCatalog`           | enabled                  | Native Codex session discovery for the sidebar. Set `enabled: false` to disable it, or set `homes` to include additional local Codex stores.   |
 | `supervision`              | disabled                 | Agent-facing native-session transcript and write-control policy. See [Codex supervision](/plugins/codex-supervision).                          |
 
 ## Supervision
@@ -70,6 +70,47 @@ computer and opted-in paired nodes by default. Disable only that catalog with:
   },
 }
 ```
+
+Discovery automatically covers the Gateway process Codex home (`CODEX_HOME` or
+`~/.codex`) and the Codex home of every configured OpenClaw agent. Register
+additional local Codex stores only when sessions live in a home OpenClaw does
+not already know about, for example a store created with a custom `CODEX_HOME`
+outside OpenClaw:
+
+```json5
+{
+  plugins: {
+    entries: {
+      codex: {
+        enabled: true,
+        config: {
+          sessionCatalog: {
+            homes: [
+              "/path/to/additional-codex-home",
+              { path: "/path/to/review-codex-home", label: "Review sessions" },
+            ],
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Configured stores appear in the sidebar alongside automatically discovered
+ones, labeled `Local Codex · <label>` and grouped by each session's working
+directory. String entries and objects without `label` use the basename of the
+canonicalized home directory; an explicit `label` overrides that default.
+Sessions in these stores support the same view, continue, and archive actions,
+and the selected OpenClaw agent still owns the resulting connection; `homes`
+only adds catalog sources.
+
+Only existing directories are included. Equivalent paths are canonicalized and
+deduplicated against the automatic homes, and automatic homes keep priority
+under the 100-source catalog cap. Changes require a Gateway restart.
+`sessionCatalog.homes` needs the default managed stdio app-server transport;
+Unix and WebSocket transports reject it with a visible error because they
+cannot start a source-bound app-server for each home.
 
 `supervision` separately controls agent-facing tools:
 
@@ -148,6 +189,21 @@ the desktop app binary that owns the required macOS permissions. The same
 desktop-first rule applies when an isolated agent home's effective Codex config
 enables native Computer Use. If no desktop app bundle is installed, OpenClaw
 falls back to the pinned package binary.
+
+Before cutting over a staged OpenClaw package, run the opt-in managed-binary
+check against the candidate installation:
+
+```bash
+openclaw doctor --lint --only codex/managed-app-server --json
+```
+
+The check is read-only. For every configured Codex agent it applies the same
+final command selection as a live harness turn, then verifies that a selected
+package-owned native binary exists and reports the plugin's exact pinned
+version. A selected Codex Desktop binary, an explicit custom command, and a
+remote app-server are outside this package check. The command exits nonzero on
+an error-level finding, so a deployer can reject the candidate before cutover
+without changing Codex state or app-server settings.
 
 Executable handoff and native-config fencing coordinate clients inside one
 running Gateway process. Restart the Gateway after another process changes the
@@ -275,13 +331,14 @@ structured SecretRefs fail before any token or header is sent.
 
 When native Codex plugins are configured, OpenClaw caches one
 runtime-and-workspace-scoped `plugin/installed` snapshot. This snapshot covers
-installed curated and workspace plugins, including disabled ownership;
+installed plugins from Codex-discovered marketplaces, including disabled ownership;
 `plugin/read` resolves only exact configured plugin identities. Failed or
-incomplete installed snapshots are never cached. OpenClaw uses `plugin/list`
-only to find or repair an explicitly enabled curated plugin missing from that
-installed snapshot. It calls `plugin/install` only for an explicitly configured
-enabled curated plugin; it never installs, enables, or authenticates a
-workspace plugin.
+incomplete installed snapshots are never cached. `/codex plugins available`
+queries `plugin/list` for the current conversation workspace, while
+`/codex plugins install <plugin>@<marketplace>` installs only after an owner or
+`operator.admin` explicitly authorizes that plugin. Existing explicitly
+configured curated plugins retain their automatic recovery path. The model's
+plugin-discovery tool cannot install, enable, or authenticate a plugin.
 
 `app/installed` reports installed app runtime state, and `app/read` returns
 authenticated metadata for at most 100 requested app IDs per call. OpenClaw

@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { collectManifestModelIdNormalizationPolicies } from "@openclaw/model-catalog-core/provider-model-id-normalization";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
 import { classifyOtelGrpcMigrationOwnership } from "../commands/doctor/shared/include-migration-ownership.js";
 import { applyLegacyDoctorMigrations } from "../commands/doctor/shared/legacy-config-compat.js";
@@ -11,14 +11,17 @@ import {
   shouldEnableShellEnvFallback,
 } from "../infra/shell-env.js";
 import { createConfigValidationMetadataPluginIdScope } from "../plugins/gateway-startup-plugin-ids.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
+  rebasePluginMetadataSnapshotManifestRegistry,
   resolvePluginMetadataSnapshot,
-  type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
 import { applyConfigEnvVars, cloneEnvWithPlatformSemantics } from "./config-env-vars.js";
 import { observeConfigSnapshotSync } from "./io.observe.js";
 import { retainGeneratedOwnerDisplaySecret } from "./io.owner-display-secret.js";
+import { resolveConfigWidePluginManifestRegistry } from "./io.plugin-metadata.js";
 import {
   coerceConfig,
   normalizeConfigIoDeps,
@@ -34,6 +37,8 @@ import type {
   NormalizedConfigIoDeps,
 } from "./io.types.js";
 import { formatConfigIssueSummary } from "./issue-format.js";
+import { migrateLegacyContextBudgetConfig } from "./legacy.context-budget.js";
+import { inheritLegacyDefaultAgentId } from "./legacy.default-agent-owner.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
@@ -42,7 +47,8 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
 type ValidationPluginMetadataSnapshotLoader = {
-  load: (config: OpenClawConfig) => PluginMetadataSnapshot;
+  load: (config: OpenClawConfig) => Pick<PluginMetadataSnapshot, "manifestRegistry">;
+  getManifestRegistry: () => PluginManifestRegistry | undefined;
   getSnapshot: () => PluginMetadataSnapshot | undefined;
 };
 
@@ -95,7 +101,7 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
       cfg,
       () => pendingValue ?? crypto.randomBytes(32).toString("hex"),
     );
-    return applyConfigOverrides(
+    const finalized = applyConfigOverrides(
       retainGeneratedOwnerDisplaySecret({
         config: resolvedConfig,
         configPath,
@@ -103,6 +109,7 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
         state: { pendingByPath: autoOwnerDisplaySecretByPath },
       }),
     );
+    return inheritLegacyDefaultAgentId(cfg, finalized);
   }
 
   function createValidationPluginMetadataSnapshotLoader(params: {
@@ -110,28 +117,47 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
     env: NodeJS.ProcessEnv;
     allowCurrentPluginMetadata?: boolean;
   }): ValidationPluginMetadataSnapshotLoader {
+    let metadataConfig: OpenClawConfig | undefined;
+    let manifestRegistry: PluginManifestRegistry | undefined;
     let snapshot: PluginMetadataSnapshot | undefined;
+    let configWideSnapshot: PluginMetadataSnapshot | undefined;
+    const resolvePluginIdScope = (config: OpenClawConfig) =>
+      createConfigValidationMetadataPluginIdScope({
+        config,
+        env: params.env,
+      });
     return {
       load: (config) => {
-        if (snapshot) {
-          return snapshot;
+        if (manifestRegistry) {
+          return { manifestRegistry };
         }
-        const metadataConfig = config;
-        const defaultAgentId = resolveDefaultAgentId(metadataConfig);
-        snapshot = resolvePluginMetadataSnapshot({
+        metadataConfig = config;
+        manifestRegistry = resolveConfigWidePluginManifestRegistry({
+          config,
+          env: params.env,
+          allowCurrent: params.allowCurrentPluginMetadata,
+          pluginIdScope: resolvePluginIdScope(config),
+        });
+        return { manifestRegistry };
+      },
+      getManifestRegistry: () => manifestRegistry,
+      getSnapshot: () => {
+        if (!metadataConfig) {
+          return undefined;
+        }
+        snapshot ??= resolvePluginMetadataSnapshot({
           config: metadataConfig,
-          workspaceDir: resolveAgentWorkspaceDir(metadataConfig, defaultAgentId, params.env),
+          workspaceDir: tryResolveConfiguredAgentWorkspaceDir(metadataConfig, params.env),
           env: params.env,
           allowCurrent: params.allowCurrentPluginMetadata,
           allowWorkspaceScopedCurrent: true,
-          pluginIdScope: createConfigValidationMetadataPluginIdScope({
-            config: metadataConfig,
-            env: params.env,
-          }),
+          pluginIdScope: resolvePluginIdScope(metadataConfig),
         });
-        return snapshot;
+        configWideSnapshot ??= manifestRegistry
+          ? rebasePluginMetadataSnapshotManifestRegistry(snapshot, manifestRegistry)
+          : snapshot;
+        return configWideSnapshot;
       },
-      getSnapshot: () => snapshot,
     };
   }
 
@@ -139,7 +165,10 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
     const env = { ...deps.env } as NodeJS.ProcessEnv;
     const resolvedIncludes = resolveConfigIncludesForRead(candidate, configPath, { ...deps, env });
     const resolution = resolveConfigForRead(resolvedIncludes, env, deps.lowerPrecedenceEnv);
-    return coerceConfig(migratePersistedImplicitMainRoster(resolution.resolvedConfigRaw).config);
+    const contextBudgetConfig = migrateLegacyContextBudgetConfig(
+      resolution.resolvedConfigRaw,
+    ).config;
+    return coerceConfig(migratePersistedImplicitMainRoster(contextBudgetConfig).config);
   }
 
   function prepareRecoveryBackupCandidate(
@@ -248,9 +277,9 @@ export function materializeConfigForLoad(
   _context: ConfigIoContext,
   config: OpenClawConfig,
   _effectiveConfigRaw: unknown,
-  pluginMetadata: PluginMetadataSnapshot | undefined,
+  manifestRegistry: PluginManifestRegistry | undefined,
 ): OpenClawConfig {
   return materializeRuntimeConfig(config, "load", {
-    manifestRegistry: pluginMetadata?.manifestRegistry,
+    manifestRegistry,
   });
 }

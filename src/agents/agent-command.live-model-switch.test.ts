@@ -5,7 +5,10 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
+import {
+  createUserTurnTranscriptRecorder,
+  type UserTurnTranscriptRecorder,
+} from "../sessions/user-turn-transcript.js";
 import {
   deliveryContextFromSession,
   normalizeSessionDeliveryState,
@@ -99,7 +102,12 @@ const state = vi.hoisted(() => ({
   resolveSupportedThinkingLevelMock: vi.fn(({ level }: { level?: string }) => level),
   resolveThinkingDefaultMock: vi.fn((_args: unknown) => "low"),
   loadManifestModelCatalogMock: vi.fn(() => []),
-  loadProviderScopedThinkingCatalogMock: vi.fn((_params: unknown) => undefined),
+  loadProviderScopedThinkingCatalogMock: vi.fn(
+    async (_params: unknown): Promise<ModelCatalogSnapshot["entries"] | undefined> => undefined,
+  ),
+  loadFullModelCatalogMock: vi.fn(async () => {
+    throw new Error("full model catalog should not materialize");
+  }),
   loadPreparedModelCatalogSnapshotMock: vi.fn(
     async (): Promise<ModelCatalogSnapshot> => ({
       entries: [],
@@ -574,7 +582,10 @@ vi.mock("./model-catalog.js", () => ({
 vi.mock("./model-catalog.runtime.js", () => ({
   // The scoped thinking catalog hydrates from the same runtime snapshot the test controls.
   loadProviderScopedThinkingCatalog: async (params: unknown) => {
-    state.loadProviderScopedThinkingCatalogMock(params);
+    const scoped = await state.loadProviderScopedThinkingCatalogMock(params);
+    if (scoped !== undefined) {
+      return scoped;
+    }
     return (await state.loadPreparedModelCatalogSnapshotMock()).entries;
   },
   loadPreparedModelCatalogSnapshot: state.loadPreparedModelCatalogSnapshotMock,
@@ -913,6 +924,8 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.resolveThinkingDefaultMock.mockReturnValue("low");
     state.resolveAgentSkillsFilterMock.mockReturnValue(undefined);
     state.loadManifestModelCatalogMock.mockReturnValue([]);
+    state.loadProviderScopedThinkingCatalogMock.mockReset().mockResolvedValue(undefined);
+    state.loadFullModelCatalogMock.mockClear();
     state.loadPreparedModelCatalogSnapshotMock.mockResolvedValue({
       entries: [],
       routeVariants: [],
@@ -2056,7 +2069,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       meta: Record<string, unknown> & { agentMeta: Record<string, unknown> };
     };
     result.meta.executionTrace = {
-      runner: "embedded",
+      runner: "cli",
       fallbackUsed: false,
       winnerProvider: "openai",
       winnerModel: "gpt-5.4",
@@ -2231,22 +2244,10 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(sessionStore["agent:main:main"]?.restartRecoveryDeliveryRunId).toBe("session-1");
   });
 
-  it.each([
-    {
-      name: "persists only the CLI assistant reply after the runner persists the current user turn",
-      runner: "cli",
-      canonicalUserRecorder: true,
-      embeddedAssistantGapFill: false,
-    },
-    {
-      name: "persists the full embedded turn when no canonical user recorder exists",
-      runner: "embedded",
-      canonicalUserRecorder: false,
-      embeddedAssistantGapFill: true,
-    },
-  ])("$name", async ({ runner, canonicalUserRecorder, embeddedAssistantGapFill }) => {
+  it("persists only the CLI assistant reply after the runner persists the current user turn", async () => {
     type AttemptCall = {
       onUserMessagePersisted?: () => void;
+      userTurnTranscriptRecorder: UserTurnTranscriptRecorder;
     };
     setupSingleAttemptFallback();
     setupStoredSession();
@@ -2256,12 +2257,13 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       meta: Record<string, unknown> & { executionTrace: Record<string, unknown> };
     };
     result.meta.executionTrace = {
-      runner,
+      runner: "cli",
       fallbackUsed: false,
       winnerProvider: "openai",
       winnerModel: "gpt-5.4",
     };
     state.runAgentAttemptMock.mockImplementation(async (attemptParams: AttemptCall) => {
+      attemptParams.userTurnTranscriptRecorder.markRuntimePersisted();
       attemptParams.onUserMessagePersisted?.();
       return result;
     });
@@ -2274,21 +2276,17 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       target: () => undefined,
     });
 
-    await (canonicalUserRecorder
-      ? agentCommand({
-          message: "hello",
-          to: "+1234567890",
-          userTurnTranscriptRecorder,
-        })
-      : runBasicAgentCommand());
+    await agentCommand({
+      message: "hello",
+      to: "+1234567890",
+      userTurnTranscriptRecorder,
+    });
 
-    if (canonicalUserRecorder) {
-      expect(mockCallArg(state.runAgentAttemptMock)).toMatchObject({
-        userTurnTranscriptRecorder,
-      });
-    }
-    expectRecordFields(mockCallArg(state.persistCliTurnTranscriptMock), {
-      embeddedAssistantGapFill,
+    expect(mockCallArg(state.runAgentAttemptMock)).toMatchObject({
+      userTurnTranscriptRecorder,
+    });
+    expect(mockCallArg(state.persistCliTurnTranscriptMock)).toMatchObject({
+      skipUserTurn: true,
     });
   });
 
@@ -2445,6 +2443,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         entry: expect.objectContaining({ thinkingLevel: "max" }),
       }),
     );
+    expectRecordFields(mockCallArg(state.updateSessionStoreAfterAgentRunMock), {
+      preserveRuntimeModel: true,
+    });
   });
 
   it("recomputes a model-derived thinking default for each fallback candidate", async () => {
@@ -2480,16 +2481,17 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       }
       return "low";
     });
-    state.loadPreparedModelCatalogSnapshotMock.mockResolvedValue({
-      entries: [
-        {
-          provider: "OpenAI",
-          id: "gpt-5.6-terra",
-          name: "GPT 5.6 Terra",
-          reasoning: true,
-        },
-      ],
-      routeVariants: [],
+    state.loadProviderScopedThinkingCatalogMock.mockResolvedValue([
+      {
+        provider: "OpenAI",
+        id: "gpt-5.6-terra",
+        name: "GPT 5.6 Terra",
+        reasoning: true,
+      },
+    ]);
+    state.loadPreparedModelCatalogSnapshotMock.mockImplementation(async () => {
+      await state.loadFullModelCatalogMock();
+      return { entries: [], routeVariants: [] };
     });
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
       await params.run(params.provider, params.model);
@@ -2516,7 +2518,17 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       modelOverride: "gpt-5.6-terra",
       resolvedThinkLevel: "medium",
     });
-    expect(state.loadPreparedModelCatalogSnapshotMock).toHaveBeenCalledTimes(1);
+    expect(state.loadProviderScopedThinkingCatalogMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: state.runtimeConfigMock,
+        provider: "openai",
+        model: "gpt-5.6-terra",
+        agentId: "default",
+        workspaceDir: "/tmp/workspace",
+      }),
+    );
+    expect(state.loadPreparedModelCatalogSnapshotMock).not.toHaveBeenCalled();
+    expect(state.loadFullModelCatalogMock).not.toHaveBeenCalled();
   });
 
   it("persists and clears current run delivery context for restart recovery", async () => {
@@ -3440,13 +3452,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         sessionFile: "sqlite:default:internal-session:/tmp/openclaw-session-store.json",
       }),
     );
-    expect(state.persistCliTurnTranscriptMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: "rotated-model-run-session",
-        sessionKey: "agent:default:internal-session-effects:run",
-        storePath: "/tmp/openclaw-session-store.json",
-      }),
-    );
+    expect(state.persistCliTurnTranscriptMock).not.toHaveBeenCalled();
     expect(state.removeInternalSessionEffectsSessionMock).toHaveBeenCalledWith({
       agentId: "default",
       sessionId: "rotated-model-run-session",

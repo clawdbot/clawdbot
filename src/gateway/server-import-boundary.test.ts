@@ -88,6 +88,7 @@ function readServerImplementation(): string {
   return [
     "src/gateway/server-start.ts",
     "src/gateway/server-kernel.ts",
+    "src/gateway/server-shutdown.runtime.ts",
     "src/gateway/server-startup-bootstrap.ts",
     "src/gateway/server-runtime-state-prepare.ts",
     "src/gateway/server-lifecycle.ts",
@@ -99,6 +100,14 @@ function readServerImplementation(): string {
 }
 
 describe("gateway startup import boundaries", () => {
+  it("keeps ordinary session lifecycle code out of the prepared shutdown graph", () => {
+    const graph = collectStaticValueImportGraph("src/gateway/server-close.runtime.ts");
+
+    expect([...graph.keys()].map((filePath) => path.relative(repoRoot, filePath))).not.toContain(
+      "src/gateway/session-reset-service.ts",
+    );
+  });
+
   it("keeps the kernel static import graph free of HTTP server and WebSocket construction", () => {
     const graph = collectStaticValueImportGraph("src/gateway/server-kernel.ts");
     const violations: string[] = [];
@@ -214,10 +223,13 @@ describe("gateway startup import boundaries", () => {
     const workerStartup = readSource("src/gateway/server-worker-environment-startup.ts");
     const runtimeLoad = "loadWorkerEnvironmentRuntimeModule()";
     const prepareStart = workerStartup.indexOf("const prepareInstallation = async");
-    const serviceStart = workerStartup.indexOf("const workerEnvironmentService =", prepareStart);
+    const serviceStart = workerStartup.indexOf(
+      "const workerEnvironmentServiceBase =",
+      prepareStart,
+    );
     const identityStart = workerStartup.indexOf("resolveSshIdentity: async", serviceStart);
     const bootstrapStart = workerStartup.indexOf("bootstrapWorker: async", serviceStart);
-    const loggerStart = workerStartup.indexOf("logger: params.log.child", bootstrapStart);
+    const loggerStart = workerStartup.indexOf("logger: workerEnvironmentLog", bootstrapStart);
 
     expect(prepareStart).toBeGreaterThan(-1);
     expect(serviceStart).toBeGreaterThan(prepareStart);
@@ -237,9 +249,9 @@ describe("gateway startup import boundaries", () => {
   it("fences config reload before gateway teardown and gateway_stop hooks", () => {
     const serverImpl = readServerImplementation();
     const closeStart = /close:\s*async\s*\([^)]*\)\s*=>/u.exec(serverImpl)?.index ?? -1;
-    const hookStart = serverImpl.indexOf("runGlobalGatewayStopSafely", closeStart);
-    const reloadStopStart = serverImpl.indexOf("await beginClosePrelude();", closeStart);
-    const terminalStopStart = serverImpl.indexOf("terminalSessions.disposeAll();", closeStart);
+    const hookStart = serverImpl.indexOf('name: "gateway_stop plugin hooks"', closeStart);
+    const reloadStopStart = serverImpl.indexOf('name: "close prelude fence"', closeStart);
+    const terminalStopStart = serverImpl.indexOf('name: "terminal sessions"', closeStart);
     const markHelperStart = serverImpl.indexOf("const markClosePreludeStarted = () => {");
     const markHelperEnd = serverImpl.indexOf("};", markHelperStart);
     const beginHelperStart = serverImpl.indexOf("const beginClosePrelude = async () => {");
@@ -252,6 +264,7 @@ describe("gateway startup import boundaries", () => {
     expect(reloadStopStart).toBeGreaterThan(closeStart);
     expect(reloadStopStart).toBeLessThan(terminalStopStart);
     expect(reloadStopStart).toBeLessThan(hookStart);
+    expect(serverImpl.slice(closeStart, hookStart)).not.toContain("await import(");
     expect(markHelperStart).toBeGreaterThan(-1);
     expect(serverImpl.slice(markHelperStart, markHelperEnd)).toContain(
       "clearPostReadyMaintenanceTimer();",

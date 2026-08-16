@@ -1,5 +1,4 @@
 import {
-  buildChannelInboundEventContext,
   formatAgentEnvelope,
   formatInboundMediaUnavailableText,
   recordChannelBotPairLoopAndCheckSuppression,
@@ -66,6 +65,8 @@ import {
 } from "./dedup.js";
 import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
+import type { FeishuMessageEvent } from "./event-types.js";
+import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
 import {
   extractMentionTargets,
   isFeishuBroadcastMention,
@@ -85,15 +86,13 @@ import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, listFeishuThreadMessages, sendMessageFeishu } from "./send.js";
 import { getFeishuSyntheticDirectPreDispatchTarget } from "./synthetic-event-target.js";
-export type { FeishuBotAddedEvent, FeishuMessageEvent } from "./event-types.js";
-import type { FeishuMessageEvent } from "./event-types.js";
-import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
 import {
   isFeishuGroupChatType,
   type FeishuMessageContext,
   type FeishuMediaInfo,
   type FeishuMessageInfo,
 } from "./types.js";
+export type { FeishuBotAddedEvent, FeishuMessageEvent } from "./event-types.js";
 
 // Cache permission errors to avoid spamming the user with repeated notifications.
 // Key: appId or "default", Value: timestamp of last notification
@@ -1368,7 +1367,40 @@ export async function handleFeishuMessage(params: {
     ) => {
       const groupName = await resolveGroupNameForLabel();
       const threadContext = await resolveThreadContextForAgent(agentId, agentSessionKey, groupName);
-      return buildChannelInboundEventContext({
+      const contextBinding = {
+        agentId,
+        sessionKey: agentSessionKey,
+        messageId: ctx.messageId,
+        inboundEventKind: "user_request" as const,
+      };
+      // Broadcast fan-out has one final session per agent; each context needs its own bound result.
+      const boundChannelIngress = isGroup
+        ? await resolveFeishuGroupSenderActivationIngressAccess({
+            cfg: effectiveCfg,
+            accountId: account.accountId,
+            chatId: ctx.chatId,
+            allowFrom: effectiveGroupSenderAllowFrom,
+            senderOpenId: ctx.senderOpenId,
+            senderUserId,
+            requireMention,
+            mentionedBot: ctx.mentionedBot,
+            contextBinding,
+            threadId: ctx.rootId && isTopicSessionForThread ? ctx.rootId : undefined,
+          })
+        : await resolveFeishuDmIngressAccess({
+            cfg: effectiveCfg,
+            accountId: account.accountId,
+            dmPolicy: effectiveDmPolicy,
+            allowFrom: effectiveConfigAllowFrom,
+            readAllowFromStore: pairing.readAllowFromStore,
+            senderOpenId: ctx.senderOpenId,
+            senderUserId,
+            conversationId: ctx.senderOpenId,
+            mayPair: false,
+            contextBinding,
+          });
+      return core.channel.inbound.buildContext({
+        channelIngress: boundChannelIngress,
         channel: "feishu",
         supplemental: {
           quote: quotedContent ? { id: ctx.parentId, body: quotedContent } : undefined,

@@ -25,6 +25,17 @@ const grantOpts = (sessionKey: string, respond: ReturnType<typeof vi.fn>) =>
     context: { getRuntimeConfig: () => ({}) },
   }) as unknown as GatewayRequestHandlerOptions;
 
+const grantWithAgentOpts = (agentId: string, respond: ReturnType<typeof vi.fn>) =>
+  ({
+    params: { agentId },
+    respond,
+    context: {
+      getRuntimeConfig: () => ({
+        agents: { ownership: "explicit", list: [{ id: agentId }, { id: "other" }] },
+      }),
+    },
+  }) as unknown as GatewayRequestHandlerOptions;
+
 describe("attach gateway methods", () => {
   beforeEach(() => {
     loadSessionEntryMock.mockReset();
@@ -62,42 +73,17 @@ describe("attach gateway methods", () => {
     expect(resolveAttachGrant(body.token)?.sessionKey).toBe("agent:main:attach-method");
   });
 
-  it("preserves explicit ownership only for canonical global sessions", async () => {
+  it("uses an explicit agent for an omitted session key", async () => {
     const respond = vi.fn();
     await expectDefined(
       attachHandlers["attach.grant"],
       'attachHandlers["attach.grant"] test invariant',
-    )({
-      params: { sessionKey: "global", agentId: "ops" },
-      respond,
-      context: { getRuntimeConfig: () => ({}) },
-    } as unknown as GatewayRequestHandlerOptions);
+    )(grantWithAgentOpts("research", respond));
 
-    const grant = resolveAttachGrant(
-      (expectDefined(respond.mock.calls[0], "respond call invariant")[1] as { token: string })
-        .token,
-    );
-    expect(grant).toMatchObject({ sessionKey: "global", agentId: "ops" });
-
-    const scopedRespond = vi.fn();
-    await expectDefined(
-      attachHandlers["attach.grant"],
-      'attachHandlers["attach.grant"] test invariant',
-    )({
-      params: { sessionKey: "agent:main:attach-method", agentId: "ops" },
-      respond: scopedRespond,
-      context: { getRuntimeConfig: () => ({}) },
-    } as unknown as GatewayRequestHandlerOptions);
-    const scopedGrant = resolveAttachGrant(
-      (
-        expectDefined(scopedRespond.mock.calls[0], "scoped respond call invariant")[1] as {
-          token: string;
-        }
-      ).token,
-    );
-    expect(scopedGrant?.agentId).toBeUndefined();
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    const result = respond.mock.calls[0]?.[1] as { sessionKey?: string } | undefined;
+    expect(result?.sessionKey).toBe("agent:research:main");
   });
-
   it("rejects attach grants for reserved harness sessions", async () => {
     const respond = vi.fn();
     await expectDefined(

@@ -19,7 +19,7 @@ import type { SessionOrganizerControllerHost } from "./session-organizer-control
 export type SessionActionRow = Pick<
   SidebarRecentSession,
   "key" | "sessionId" | "label" | "pinned" | "archived" | "active"
->;
+> & { gatewayHasActiveRun?: boolean; hasActiveRun?: boolean };
 
 export type SessionActionHost = Pick<
   SessionOrganizerControllerHost,
@@ -198,7 +198,7 @@ export async function patchSessionRows(
   const successful = dispatched.flatMap(({ rows: chunkRows, result }) =>
     result.outcomes.flatMap((outcome, index) => {
       if (!outcome.ok) {
-        errors.push(`${outcome.key}: ${outcome.error.message}`);
+        errors.push(`${outcome.key}: ${formatUiError(outcome.error.message)}`);
         return [];
       }
       const row = chunkRows[index];

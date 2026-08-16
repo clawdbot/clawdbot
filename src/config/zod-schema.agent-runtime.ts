@@ -885,7 +885,6 @@ export const AgentModelPolicySchema = z
 export const AgentEntrySchema = z
   .object({
     id: z.string(),
-    default: z.boolean().optional(),
     name: z.string().optional(),
     description: z.string().optional(),
     workspace: z.string().optional(),
@@ -924,7 +923,6 @@ export const AgentEntrySchema = z
     tts: AgentTtsConfigSchema,
     skillsLimits: AgentSkillsLimitsSchema,
     contextLimits: AgentContextLimitsSchema,
-    contextTokens: z.number().int().positive().optional(),
     heartbeat: HeartbeatSchema,
     identity: IdentitySchema,
     groupChat: GroupChatSchema.unwrap().omit({ visibleReplies: true }).optional(),

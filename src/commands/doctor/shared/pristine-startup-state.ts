@@ -263,16 +263,20 @@ export function planPristineStartupStateMigrations(
   if (!homeDir) {
     return { skipAllStateMigrations: false, skipCoreStateMigrations: false };
   }
-  const legacyStateAbsent = resolveLegacyStateDirs(() => homeDir).every((legacyDir) => {
-    if (path.resolve(legacyDir) === path.resolve(stateDir)) {
-      return false;
-    }
-    return !fs.existsSync(legacyDir);
-  });
+  const explicitStateDir = env.OPENCLAW_STATE_DIR?.trim();
+  const legacyStateAbsent =
+    Boolean(explicitStateDir) ||
+    resolveLegacyStateDirs(() => homeDir).every((legacyDir) => {
+      if (path.resolve(legacyDir) === path.resolve(stateDir)) {
+        return false;
+      }
+      return !fs.existsSync(legacyDir);
+    });
   if (!legacyStateAbsent) {
     return { skipAllStateMigrations: false, skipCoreStateMigrations: false };
   }
-  const configPlan = planPristineStartupConfigMigrations(tryReadJsonSync(configPath), env);
+  const config = fs.existsSync(configPath) ? tryReadJsonSync(configPath) : {};
+  const configPlan = planPristineStartupConfigMigrations(config, env);
   return {
     skipAllStateMigrations: configPlan.skipAllStateMigrations,
     skipCoreStateMigrations: configPlan.skipCoreStateMigrations,

@@ -1,18 +1,53 @@
 import Foundation
 
-struct AppLaunchPresentationPolicy: Equatable {
-    let backgroundOnly: Bool
+struct AppLaunchRuntimePlan: Equatable {
+    enum Mode: Equatable {
+        case interactive
+        case background
+        case elevationHost
+    }
+
+    let mode: Mode
+    let attachOnly: Bool
 
     init(arguments: [String]) {
-        self.backgroundOnly = arguments.contains("--background-only")
+        if arguments.contains("--elevation-host") {
+            self.mode = .elevationHost
+            self.attachOnly = true
+        } else {
+            self.mode = arguments.contains("--background-only") ? .background : .interactive
+            self.attachOnly = arguments.contains("--attach-only") || arguments.contains("--no-launchd")
+        }
     }
 
     static var current: Self {
         Self(arguments: CommandLine.arguments)
     }
 
+    var isElevationHost: Bool {
+        self.mode == .elevationHost
+    }
+
     var allowsAutomaticPresentation: Bool {
-        !self.backgroundOnly
+        self.mode == .interactive
+    }
+
+    /// GUI-owned Keychain items may present SecurityAgent when a newly signed build is not in an item's ACL.
+    /// Background hosts keep that state cold; config and environment still own their primary Gateway route.
+    var allowsGatewayUIKeychainAccess: Bool {
+        self.mode == .interactive
+    }
+
+    var allowsUpdater: Bool {
+        !self.isElevationHost
+    }
+
+    var allowsDockIcon: Bool {
+        !self.isElevationHost
+    }
+
+    var allowsInteractiveServices: Bool {
+        !self.isElevationHost
     }
 
     func shouldAutoOpenChat(arguments: [String]) -> Bool {

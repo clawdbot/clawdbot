@@ -1,9 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -16,6 +20,7 @@ import {
   reconcileSkillCollection,
   restoreLatestSkillCollectionBackup,
 } from "./collection-reconcile.js";
+import { stageSkillCollectionDrop } from "./collection-rollback.js";
 import { getArchivedSkillFiles } from "./curator.js";
 import { readSkillProposalTargetTreeSha256 } from "./proposal-bundle.js";
 import { inspectSkillProposal, listSkillProposals, proposeCreateSkill } from "./service.js";
@@ -69,12 +74,118 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  __setFsSafeTestHooksForTest(undefined);
   closeOpenClawStateDatabaseForTest();
   await testState.cleanup();
   await tempDirs.cleanup();
 });
 
 describe("skill collection reconciliation", () => {
+  it.runIf(process.platform !== "win32")(
+    "keeps trusted external symlink targets outside the autonomous collection",
+    async () => {
+      const targetSkillsDir = await tempDirs.make("openclaw-skill-collection-readonly-target-");
+      const targetSkillDir = path.join(targetSkillsDir, "shared-skill");
+      await writeSkill({
+        dir: targetSkillDir,
+        name: "shared-skill",
+        description: "Shared read-only procedure",
+        body: "# Shared\n\nDo not rewrite this target.\n",
+      });
+      await fs.mkdir(path.join(workspaceDir, "skills"), { recursive: true });
+      await fs.symlink(targetSkillDir, path.join(workspaceDir, "skills", "shared-skill"), "dir");
+      const config = {
+        skills: {
+          load: { allowSymlinkTargets: [targetSkillsDir] },
+          workshop: { allowSymlinkTargetWrites: true },
+        },
+      };
+
+      expect(listWritableSkillCollection(workspaceDir, { config })).toEqual([]);
+      await expect(
+        stageSkillCollectionDrop({
+          workspaceDir,
+          name: "shared-skill",
+          baseDir: path.join(workspaceDir, "skills", "shared-skill"),
+        }),
+      ).rejects.toMatchObject({ code: "path-alias" });
+      await expect(fs.readFile(path.join(targetSkillDir, "SKILL.md"), "utf8")).resolves.toContain(
+        "Do not rewrite this target.",
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects a collection drop before traversing a trusted external skills root",
+    async () => {
+      const targetSkillsDir = await tempDirs.make("openclaw-skill-collection-external-root-");
+      const targetSkillDir = path.join(targetSkillsDir, "shared-skill");
+      await writeSkill({
+        dir: targetSkillDir,
+        name: "shared-skill",
+        description: "Shared external procedure",
+        body: "# Shared\n\nCanonical procedure.\n",
+      });
+      await fs.symlink(targetSkillsDir, path.join(workspaceDir, "skills"), "dir");
+      const config = {
+        skills: {
+          load: { allowSymlinkTargets: [targetSkillsDir] },
+          workshop: { allowSymlinkTargetWrites: true },
+        },
+      };
+
+      await expect(
+        reconcileSkillCollection({
+          workspaceDir,
+          config,
+          env: testState.env,
+          ...(await readCollectionReceipt(config)),
+          plan: [{ action: "drop", name: "shared-skill", reason: "must stay external" }],
+        }),
+      ).rejects.toThrow("Cannot drop a skill that does not exist");
+      await expect(fs.readFile(path.join(targetSkillDir, "SKILL.md"), "utf8")).resolves.toContain(
+        "Canonical procedure.",
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects a skills-root swap at the drop mutation boundary",
+    async () => {
+      await writeWorkspaceSkills(workspaceDir, [
+        { name: "procedure", description: "Workspace procedure" },
+      ]);
+      const outsideWorkspace = await tempDirs.make("openclaw-skill-collection-swap-target-");
+      await writeWorkspaceSkills(outsideWorkspace, [
+        { name: "procedure", description: "External procedure" },
+      ]);
+      const skillsDir = path.join(workspaceDir, "skills");
+      const displacedSkillsDir = path.join(workspaceDir, "skills-before-swap");
+      let swapped = false;
+      __setFsSafeTestHooksForTest({
+        beforeRootFallbackMutation: async (operation) => {
+          if (operation !== "move" || swapped) {
+            return;
+          }
+          swapped = true;
+          await fs.rename(skillsDir, displacedSkillsDir);
+          await fs.symlink(path.join(outsideWorkspace, "skills"), skillsDir, "dir");
+        },
+      });
+
+      await expect(
+        stageSkillCollectionDrop({
+          workspaceDir,
+          name: "procedure",
+          baseDir: path.join(skillsDir, "procedure"),
+        }),
+      ).rejects.toBeTruthy();
+      await expect(
+        fs.readFile(path.join(outsideWorkspace, "skills", "procedure", "SKILL.md"), "utf8"),
+      ).resolves.toContain("External procedure");
+    },
+  );
+
   it("consolidates a collection atomically and preserves one recoverable backup", async () => {
     await writeWorkspaceSkills(workspaceDir, [
       { name: "deploy-one", description: "First deploy notes", body: "# Deploy one\n" },
@@ -733,6 +844,13 @@ describe("skill collection reconciliation", () => {
       { env: testState.env },
     );
     await acquired;
+    const startedAt = performance.now();
+    const clockSpy = vi
+      .spyOn(performance, "now")
+      .mockReturnValueOnce(startedAt)
+      .mockReturnValueOnce(startedAt + 5_001)
+      .mockReturnValueOnce(startedAt)
+      .mockReturnValue(startedAt + 5_001);
 
     try {
       await Promise.all([
@@ -749,6 +867,7 @@ describe("skill collection reconciliation", () => {
         }),
       ]);
     } finally {
+      clockSpy.mockRestore();
       releaseLock?.();
       await heldLock;
     }
@@ -818,8 +937,8 @@ describe("skill collection reconciliation", () => {
   });
 });
 
-async function readCollectionReceipt() {
-  const skills = listWritableSkillCollection(workspaceDir);
+async function readCollectionReceipt(config?: OpenClawConfig) {
+  const skills = listWritableSkillCollection(workspaceDir, { config });
   return {
     readSkillHashes: new Map(
       await Promise.all(

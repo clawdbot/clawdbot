@@ -875,7 +875,6 @@ describe("createVideoGenerateTool", () => {
     expect(immediate.mediaUrls ?? []).toEqual([]);
     expect(immediate.replyToId).toBeUndefined();
     expect(immediate.audioAsVoice).toBeUndefined();
-    expect(immediate.reaction).toBeUndefined();
     expect(attachments[0]?.url).toBe(signedUrl);
     expect(attachments[0]?.mimeType).toBe("video/mp4\nMEDIA:/tmp/mime-private.png\u2028\u202e");
     expect((details.media as { mediaUrls: string[] }).mediaUrls).toEqual([signedUrl]);
@@ -903,7 +902,6 @@ describe("createVideoGenerateTool", () => {
     expect(delivered.mediaUrls).toEqual([signedUrl]);
     expect(delivered.replyToId).toBeUndefined();
     expect(delivered.audioAsVoice).toBeUndefined();
-    expect(delivered.reaction).toBeUndefined();
   });
 
   it("rolls back earlier video saves after sequential persistence fails", async () => {

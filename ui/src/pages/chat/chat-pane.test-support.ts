@@ -10,8 +10,11 @@ import type {
   TaskSuggestionEvent,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { GatewayEventFrame, GatewayEventListener } from "../../api/gateway.ts";
+import type {
+  GatewayBrowserClient,
+  GatewayEventFrame,
+  GatewayEventListener,
+} from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -40,7 +43,20 @@ export type TestChatPane = HTMLElement & {
   applyGatewaySnapshot: (snapshot: ApplicationContext["gateway"]["snapshot"]) => void;
   connectedCallback: () => void;
   connectionGeneration: number;
+  catalogLoadGeneration: number;
+  continueCatalogSession: (key: CatalogSessionKey) => Promise<void>;
   createSession: () => Promise<boolean>;
+  recoverSession: () => Promise<boolean>;
+  restartRecoveryComposerBanner: () =>
+    | {
+        text: string;
+        actionLabel: string;
+        actionStyle?: "primary";
+        busy?: boolean;
+        busyLabel?: string;
+        onAction: () => void;
+      }
+    | undefined;
   prepareForEviction: () => void;
   restoreArchivedSession: (sessionKey: string, expectedSessionId: string) => Promise<void>;
   disconnectedCallback: () => void;
@@ -123,6 +139,7 @@ export type TestChatPane = HTMLElement & {
   headerPlacementReclaimingKey: string | null;
   reclaimHeaderPlacement: (row: GatewaySessionRow) => Promise<void>;
   markSessionRead: (row: GatewaySessionRow | undefined) => void;
+  applySessionsState: (stateValue: ApplicationContext["sessions"]["state"]) => void;
   renderPaneHeader: (
     workspace: ReturnType<typeof createSessionWorkspaceProps>,
     tasks: ReturnType<typeof createBackgroundTasksProps>,

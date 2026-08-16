@@ -94,14 +94,24 @@ vi.mock("../../channels/plugins/message-action-dispatch.js", () => ({
 const TEST_AGENT_WORKSPACE = "/tmp/openclaw-test-workspace";
 let sendHandlers: typeof import("./send.js").sendHandlers;
 
-function resolveAgentIdFromSessionKeyForTests(params: { sessionKey?: string }): string {
+function resolveAgentIdFromSessionKeyForTests(params: {
+  sessionKey?: string;
+  agentId?: string;
+}): string {
+  const explicitAgentId = params.agentId?.trim().toLowerCase();
   if (typeof params.sessionKey === "string") {
     const match = params.sessionKey.match(/^agent:([^:]+)/i);
     if (match?.[1]) {
-      return match[1];
+      const sessionAgentId = match[1].toLowerCase();
+      if (explicitAgentId && explicitAgentId !== sessionAgentId) {
+        throw new Error(
+          `agent "${explicitAgentId}" does not match session key agent "${sessionAgentId}"`,
+        );
+      }
+      return sessionAgentId;
     }
   }
-  return "main";
+  return explicitAgentId ?? "main";
 }
 
 function messageActionContextFromSessionKeyForTests(sessionKey: string): {
@@ -135,14 +145,16 @@ function messageActionContextFromSessionKeyForTests(sessionKey: string): {
   };
 }
 
-vi.mock("../../agents/agent-scope.js", () => ({
+vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
   resolveSessionAgentId: ({
     sessionKey,
+    agentId,
   }: {
     sessionKey?: string;
     config?: unknown;
     agentId?: string;
-  }) => resolveAgentIdFromSessionKeyForTests({ sessionKey }),
+  }) => resolveAgentIdFromSessionKeyForTests({ sessionKey, agentId }),
   resolveAgentConfig: () => undefined,
   resolveDefaultAgentId: () => "main",
   resolveAgentWorkspaceDir: () => TEST_AGENT_WORKSPACE,
@@ -1392,8 +1404,8 @@ describe("gateway send mirroring", () => {
   });
 
   it("does not send after delegated authority closes during session preparation", async () => {
-    const preparation = createDeferred<undefined>();
-    mocks.ensureOutboundSessionEntry.mockReturnValueOnce(preparation.promise);
+    const preparation = createDeferred<null>();
+    mocks.resolveOutboundSessionRoute.mockReturnValueOnce(preparation.promise);
     let authorityActive = true;
     const context = {
       ...makeContext(),
@@ -1410,14 +1422,15 @@ describe("gateway send mirroring", () => {
       agentRuntimeClient("agent:main:slack:channel:C1"),
       context,
     );
-    await vi.waitFor(() => expect(mocks.ensureOutboundSessionEntry).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(mocks.resolveOutboundSessionRoute).toHaveBeenCalledOnce());
     authorityActive = false;
-    preparation.resolve(undefined);
+    preparation.resolve(null);
 
     const { respond } = await request;
     expect(firstRespondCall(respond)[0]).toBe(false);
     expect(firstRespondCall(respond)[2]?.message).toContain("authority is no longer active");
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(mocks.ensureOutboundSessionEntry).not.toHaveBeenCalled();
   });
 
   it("cancels a prepared terminal receipt when authority closes before action dispatch", async () => {
@@ -2282,6 +2295,36 @@ describe("gateway send mirroring", () => {
     });
   });
 
+  it("uses the persisted fixed-store owner for a bare send session key", async () => {
+    mockDeliverySuccess("m-persisted-owner");
+    const context = {
+      ...makeContext(),
+      getRuntimeConfig: () => ({
+        session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
+        agents: {
+          ownership: "explicit",
+          list: [{ id: "ops" }, { id: "research" }],
+          defaults: { sessionStore: { agentId: "ops" } },
+        },
+      }),
+    } as unknown as GatewayRequestContext;
+
+    const { respond } = await runSendWithClient(
+      {
+        to: "channel:C1",
+        message: "hello",
+        channel: "slack",
+        sessionKey: "global",
+        idempotencyKey: "idem-persisted-owner",
+      },
+      null,
+      context,
+    );
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(deliveryCall()?.session?.agentId).toBe("ops");
+  });
+
   it("rejects a missing reserved agent-harness session before persistence or delivery", async () => {
     const sessionKey = "agent:main:harness:codex:supervision:missing";
 
@@ -2378,22 +2421,30 @@ describe("gateway send mirroring", () => {
     expect(deliveryCall()?.mirror?.agentId).toBe("work");
   });
 
-  it("prefers explicit agentId over sessionKey agent for delivery and mirror", async () => {
+  it("rejects an explicit agentId that conflicts with the session key owner", async () => {
     mockDeliverySuccess("m-agent-precedence");
 
-    await runSend({
-      to: "channel:C1",
-      message: "hello",
-      channel: "slack",
-      agentId: "work",
-      sessionKey: "agent:main:slack:channel:c1",
-      idempotencyKey: "idem-agent-precedence",
-    });
+    const { respond } = await runSendWithClient(
+      {
+        to: "channel:C1",
+        message: "hello",
+        channel: "slack",
+        agentId: "work",
+        sessionKey: "agent:main:slack:channel:c1",
+        idempotencyKey: "idem-agent-precedence",
+      },
+      null,
+      {
+        ...makeContext(),
+        getRuntimeConfig: () => ({ agents: { list: [{ id: "main" }, { id: "work" }] } }),
+      } as GatewayRequestContext,
+    );
 
-    expect(deliveryCall()?.session?.agentId).toBe("work");
-    expect(deliveryCall()?.session?.key).toBe("agent:main:slack:channel:c1");
-    expect(deliveryCall()?.mirror?.sessionKey).toBe("agent:main:slack:channel:c1");
-    expect(deliveryCall()?.mirror?.agentId).toBe("work");
+    expect(firstRespondCall(respond)[0]).toBe(false);
+    expect(firstRespondCall(respond)[2]?.message).toBe(
+      'agent "work" does not match session key agent "main"',
+    );
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
   it("ignores blank explicit agentId and falls back to sessionKey agent", async () => {
@@ -2878,6 +2929,44 @@ describe("gateway send mirroring", () => {
     );
   });
 
+  it("rejects a message action whose bare key conflicts with the persisted owner", async () => {
+    registerMessageActionPlugin({
+      id: "whatsapp",
+      action: "send",
+      registrySuffix: "persisted-owner-conflict",
+    });
+    const context = {
+      ...makeContext(),
+      getRuntimeConfig: () => ({
+        session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
+        agents: {
+          ownership: "explicit",
+          list: [{ id: "ops" }, { id: "research" }],
+          defaults: { sessionStore: { agentId: "ops" } },
+        },
+      }),
+    } as unknown as GatewayRequestContext;
+
+    const { respond } = await runMessageActionRequest(
+      {
+        channel: "whatsapp",
+        action: "send",
+        params: { to: "alice", message: "hello" },
+        sessionKey: "global",
+        agentId: "research",
+        idempotencyKey: "idem-message-action-owner-conflict",
+      },
+      agentRuntimeClient("global", "research"),
+      context,
+    );
+
+    expect(firstRespondCall(respond)[0]).toBe(false);
+    expect(firstRespondCall(respond)[2]?.message).toBe(
+      'agent "research" does not match session key agent "ops"',
+    );
+    expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
+  });
+
   it("rejects ingress-issued message action context for a different session", async () => {
     const { respond } = await runMessageActionRequest(
       {
@@ -2917,10 +3006,8 @@ describe("gateway send mirroring", () => {
     expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { name: "another agent", sourceReplySessionKey: "agent:other:main" },
-    { name: "a malformed key", sourceReplySessionKey: "not-a-session-key" },
-  ])("rejects a signed source-reply session for $name", async ({ sourceReplySessionKey }) => {
+  it("rejects a signed source-reply session for another agent", async () => {
+    const sourceReplySessionKey = "agent:other:main";
     const sessionKey = "agent:main:whatsapp:direct:alice";
     const { respond } = await runMessageActionRequest(
       {
@@ -4064,7 +4151,10 @@ describe("gateway send mirroring", () => {
       },
       {
         ...makeContext(),
-        getRuntimeConfig: () => ({ tools: { allow: ["read"] } }),
+        getRuntimeConfig: () => ({
+          agents: { list: [{ id: "main" }, { id: "work" }] },
+          tools: { allow: ["read"] },
+        }),
       } as GatewayRequestContext,
     );
 

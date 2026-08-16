@@ -13,8 +13,7 @@ import {
 } from "../config/io.invalid-config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
 import { containsConfigIncludeDirective } from "../config/io.read-helpers.js";
-import { createMergePatch } from "../config/merge-patch.js";
-import { applyMergePatch } from "../config/merge-patch.js";
+import { createMergePatch, applyMergePatch } from "../config/merge-patch.js";
 import { ConfigMutationConflictError } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -59,6 +58,7 @@ import {
 import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
 import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
+import { resolveInstallPolicyWarningAcknowledgementCliOptions } from "./install-policy-warning-acknowledgement.js";
 import { notifyGatewayPluginMetadataChanged } from "./plugins-update-gateway-signal.js";
 import { logPluginUpdateOutcomes } from "./plugins-update-outcomes.js";
 import {
@@ -127,15 +127,12 @@ function projectUpdaterResultOntoSourceConfig(params: {
 }
 
 function assertWriteOptionRecordFresh(params: {
-  currentHash: string | null;
   current?: Record<string, string>;
   expected?: Record<string, string>;
   message: string;
 }): void {
   if (!isDeepStrictEqual(params.current ?? {}, params.expected ?? {})) {
-    throw new ConfigMutationConflictError(params.message, {
-      currentHash: params.currentHash,
-    });
+    throw new ConfigMutationConflictError(params.message);
   }
 }
 
@@ -156,23 +153,18 @@ async function assertRecordsOnlyUpdateConfigFresh(params: {
     writeOptions.expectedConfigPath !== prepared.snapshot.path
   ) {
     throw new ConfigMutationConflictError("config path changed since last load", {
-      currentHash,
       retryable: false,
     });
   }
   if (params.baseHash !== undefined && params.baseHash !== currentHash) {
-    throw new ConfigMutationConflictError("config changed since last load", {
-      currentHash,
-    });
+    throw new ConfigMutationConflictError("config changed since last load");
   }
   assertWriteOptionRecordFresh({
-    currentHash,
     current: prepared.writeOptions.includeFileTargetsForWrite,
     expected: params.writeOptions?.includeFileTargetsForWrite,
     message: "included config target changed since last load",
   });
   assertWriteOptionRecordFresh({
-    currentHash,
     current: prepared.writeOptions.includeFileHashesForWrite,
     expected: params.writeOptions?.includeFileHashesForWrite,
     message: "included config changed since last load",
@@ -190,6 +182,7 @@ type RunPluginUpdateCommandParams = {
   opts: {
     all?: boolean;
     acknowledgeClawHubRisk?: boolean;
+    acknowledgeInstallPolicyWarning?: boolean;
     dryRun?: boolean;
     dangerouslyForceUnsafeInstall?: boolean;
   };
@@ -399,6 +392,11 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
     }
   }
 
+  const installPolicyWarningAcknowledgement = resolveInstallPolicyWarningAcknowledgementCliOptions({
+    acknowledgeInstallPolicyWarning: params.opts.acknowledgeInstallPolicyWarning,
+    dangerouslyForceUnsafeInstall: params.opts.dangerouslyForceUnsafeInstall,
+    allowPrompt: !params.opts.dryRun,
+  });
   const deferredPluginTransactions: PluginInstallTransaction[] = [];
   let pluginResult;
   try {
@@ -415,7 +413,7 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
                 officialPluginUpdateChannel,
                 syncOfficialPluginInstalls: params.opts.all ? true : undefined,
                 coreVersion: VERSION,
-                dangerouslyForceUnsafeInstall: params.opts.dangerouslyForceUnsafeInstall,
+                ...installPolicyWarningAcknowledgement,
                 ...resolveClawHubRiskAcknowledgementCliOptions({
                   acknowledgeClawHubRisk: params.opts.acknowledgeClawHubRisk,
                   action: "updating",
@@ -479,6 +477,7 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
             hookIds: hookSelection.hookIds,
             specOverrides: hookSelection.specOverrides,
             dryRun: params.opts.dryRun,
+            ...installPolicyWarningAcknowledgement,
             logger,
             onIntegrityDrift: async (drift) => {
               const specLabel = drift.resolvedSpec ?? drift.spec;

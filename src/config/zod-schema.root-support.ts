@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { GatewayRemoteConfig } from "./types.gateway.js";
 import { MemorySearchSchema } from "./zod-schema.agent-runtime.js";
 import { SecretInputSchema } from "./zod-schema.core.js";
-import { NodeHostAgentRunsSchema } from "./zod-schema.node-host.js";
+import { NodeHostAgentRunsSchema, NodeHostWorkerRunsSchema } from "./zod-schema.node-host.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
 type ConfigSchemaShape<T extends object> = {
@@ -467,6 +467,7 @@ export const McpConfigSchema = z
 export const NodeHostSchema = z
   .strictObject({
     agentRuns: NodeHostAgentRunsSchema,
+    workerRuns: NodeHostWorkerRunsSchema,
     browserProxy: z
       .strictObject({
         enabled: z.boolean().optional(),

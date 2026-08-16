@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { resolveMemorySearchConfig } from "../../agents/memory-search.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MemorySearchConfig } from "../../config/types.tools.js";
-import { buildCronAgentDefaultsConfig } from "./run-config.js";
+import { resolveCronAgentConfig } from "./run-config.js";
 
-describe("buildCronAgentDefaultsConfig memory search preservation", () => {
+describe("resolveCronAgentConfig memory search preservation", () => {
   it("keeps global memory search defaults when the agent override is partial", () => {
     const defaultMemorySearch = {
       enabled: true,
@@ -18,8 +18,8 @@ describe("buildCronAgentDefaultsConfig memory search preservation", () => {
       rememberAcrossConversations: true,
       query: { maxResults: 10 },
     } satisfies MemorySearchConfig;
-    const agentDefaults = buildCronAgentDefaultsConfig({
-      defaults: {},
+    const { agentDefaults } = resolveCronAgentConfig({
+      config: {},
       agentConfigOverride: { memory: { search: agentMemorySearch } },
     });
     const runCfg: OpenClawConfig = {

@@ -81,6 +81,7 @@ enum PairingPromptSupport {
     }
 
     static func notificationsAuthorized() async -> Bool {
+        guard PermissionManager.notificationCenterAvailable else { return false }
         let settings = await UNUserNotificationCenter.current().notificationSettings()
         let status = settings.authorizationStatus
         return PermissionManager.isNotificationAuthorized(status: status)

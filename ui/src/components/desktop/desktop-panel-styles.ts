@@ -1,6 +1,11 @@
 import { css } from "lit";
 
 export const desktopPanelStyles = css`
+  .bp--embedded {
+    position: relative;
+    width: 100%;
+    height: 100%;
+  }
   .bp--bottom {
     left: var(--shell-nav-width, 0);
     right: calc(var(--oc-terminal-reserve-right, 0px) + var(--oc-browser-reserve-right, 0px));
@@ -13,13 +18,19 @@ export const desktopPanelStyles = css`
   }
   .bp-title {
     min-width: 0;
-    padding-left: 8px;
-    font-size: 13px;
-    font-weight: 600;
   }
-  .bp-icon.is-active {
-    color: var(--accent, #ff5c5c);
-    background: color-mix(in srgb, var(--accent, #ff5c5c) 14%, transparent);
+  .bp-icon[aria-disabled="true"] {
+    opacity: 0.4;
+  }
+  .desktop-fullscreen-icon > svg {
+    width: 15px;
+    height: 15px;
+  }
+  .bp:fullscreen {
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border: 0;
   }
   .desktop-content {
     display: flex;
@@ -160,5 +171,18 @@ export const desktopPanelStyles = css`
     position: absolute;
     inset: 0;
     background: var(--bg);
+  }
+  /* View-only affordance: clicking anywhere on the desktop takes control. */
+  .desktop-stage__take-control {
+    position: absolute;
+    inset: 0;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    cursor: var(--cursor-action, pointer);
+  }
+  .desktop-stage__take-control:focus-visible {
+    outline: 2px solid var(--accent, #ff5c5c);
+    outline-offset: -2px;
   }
 `;

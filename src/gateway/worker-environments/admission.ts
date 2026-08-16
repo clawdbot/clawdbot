@@ -7,17 +7,20 @@ import {
   WORKER_RPC_SET_VERSION,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { safeEqualSecret } from "../../security/secret-equal.js";
+import {
+  sameWorkerBuild,
+  sameWorkerProtocolFeatures,
+  type ExpectedWorkerBuild,
+} from "../../worker/worker-build-identity.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { hashWorkerCredential } from "./credential.js";
 import type { WorkerEnvironmentStore } from "./store.js";
 
 export type { WorkerConnectionIdentity } from "./connection-identity.js";
+export type { ExpectedWorkerBuild } from "../../worker/worker-build-identity.js";
 
-export type ExpectedWorkerBuild = {
-  bundleHash: string;
-  openclawVersion: string;
-  protocolFeatures: readonly string[];
-};
+export const STALE_WORKER_BUILD_REASON =
+  "Worker build does not match the current Gateway build; redispatch the session so its worker can bootstrap the current build before retrying.";
 
 /** True only for bundles that accept the exact admitted execution carrier. */
 export function supportsWorkerExecutionContextLaunch(
@@ -30,25 +33,12 @@ type WorkerConnectionAdmissionResult =
   | { ok: true; identity: WorkerConnectionIdentity }
   | { ok: false; reason: WorkerAdmissionFailureReason };
 
-function sameStrings(left: readonly string[], right: readonly string[]): boolean {
-  const normalizedLeft = left.toSorted();
-  const normalizedRight = right.toSorted();
-  return (
-    normalizedLeft.length === normalizedRight.length &&
-    normalizedLeft.every((value, index) => value === normalizedRight[index])
-  );
-}
-
 /** Admits only the exact build selected for this worker environment. */
 export function verifyWorkerAdmissionHandshake(
   handshake: WorkerAdmissionHandshake,
   expected: ExpectedWorkerBuild,
 ): boolean {
-  return (
-    handshake.bundleHash === expected.bundleHash &&
-    handshake.openclawVersion === expected.openclawVersion &&
-    sameStrings(handshake.protocolFeatures, expected.protocolFeatures)
-  );
+  return sameWorkerBuild(handshake, expected);
 }
 
 /** Validate an opaque credential and every server-owned worker admission binding. */
@@ -119,11 +109,14 @@ export function admitWorkerConnection(params: {
     return { ok: false, reason: "rpc-set-mismatch" };
   }
   if (
-    !sameStrings(
+    !sameWorkerProtocolFeatures(
       admission.handshake.protocolFeatures,
       environment.bootstrapReceipt.protocolFeatures,
     ) ||
-    !sameStrings(admission.handshake.protocolFeatures, params.expectedBuild.protocolFeatures)
+    !sameWorkerProtocolFeatures(
+      admission.handshake.protocolFeatures,
+      params.expectedBuild.protocolFeatures,
+    )
   ) {
     return { ok: false, reason: "protocol-features-mismatch" };
   }

@@ -75,8 +75,11 @@ openclaw gateway run   # equivalent, explicit form
 <ParamField path="--dev" type="boolean">
   Create a dev config + workspace if missing (skips `BOOTSTRAP.md`).
 </ParamField>
+<ParamField path="--ambient-channels" type="boolean">
+  Allow the Gateway to auto-configure channels from ambient environment variables. By default, channels require an explicit `channels.<id>` config block.
+</ParamField>
 <ParamField path="--dev-ambient-channels" type="boolean">
-  Allow a dev Gateway to auto-configure channels from ambient environment variables. Requires `--dev`.
+  Deprecated alias for `--ambient-channels`.
 </ParamField>
 <ParamField path="--reset" type="boolean">
   Reset dev config, credentials, sessions, and workspace. Requires `--dev`.
@@ -155,7 +158,7 @@ Named profiles must also use the native service identity derived from `OPENCLAW_
 
 Set `OPENCLAW_SUPERVISOR_MODE=external` only when another process manager owns the Gateway lifecycle. In this mode:
 
-- `openclaw gateway restart` preserves the existing safe, forced, and bounded-wait behavior while targeting the verified running Gateway instead of launchd, systemd, or Task Scheduler.
+- `openclaw gateway restart` preserves the existing safe, forced, and bounded-wait behavior while targeting the verified running Gateway instead of launchd, systemd, or Task Scheduler. Exact-lock restart delivery runs inside that Gateway, so a replacement CLI does not migrate shared state before the old process hands off.
 - Native service install, start, stop, and uninstall operations are refused with guidance to use the external supervisor.
 - OpenClaw self-update is refused so the supervisor can stop the Gateway, replace and finalize the runtime, and restart it safely.
 - A fresh-process restart writes a bounded SQLite handoff before clean exit. If persistence fails, the Gateway falls back to an in-process restart instead of exiting without a consumable handoff.
@@ -597,6 +600,7 @@ openclaw gateway restart
   </Accordion>
   <Accordion title="Lifecycle behavior">
     - `gateway start` is idempotent: when the managed service is already running, it reports the running process and leaves it untouched. A loaded but stopped service is started as before.
+    - If no managed service is installed, `gateway start` prints install hints and exits nonzero. `gateway restart` can first recover an installed-but-unloaded LaunchAgent or a verified unmanaged Gateway; if neither a managed service nor recovery handles the action, it prints the same hints and exits nonzero. Stopping an absent service remains a successful no-op.
     - If `gateway start` or `gateway restart` needs to repair a stale service definition, the command refuses when the invoking shell resolves a different state directory, config path, or port than the installed service. Match or unset the conflicting environment overrides, or use `openclaw gateway install --force` to retarget the service intentionally.
     - Use `gateway restart` to restart a managed service. Do not chain `gateway stop` and `gateway start` as a restart substitute.
     - In a non-interactive shell, `gateway stop` requires `--force`. Interactive terminals keep the existing prompt-free behavior. For automation and tests, prefer `gateway run --dev` or an isolated `--profile` with a free port.

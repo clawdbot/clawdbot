@@ -25,6 +25,7 @@ import {
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { toolPolicyRestrictsTools } from "../../agents/tool-policy.js";
 import type { ChatType } from "../../channels/chat-type.js";
+import { readChannelContextAdmissionEvidence } from "../../channels/message-access/admission-evidence.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
@@ -52,6 +53,7 @@ import {
   resolveAgentTurnAttachments,
   resolveInlineAgentImageAttachments,
 } from "./agent-turn-attachments.js";
+import { consumeChannelRunAdmission } from "./channel-run-admission.js";
 import {
   createAcpDispatchDeliveryCoordinator,
   type AcpDispatchDeliveryCoordinator,
@@ -407,6 +409,7 @@ async function finalizeAcpTurnOutput(params: {
     const currentMeta = readAcpSessionEntry({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
+      agentId: params.agentId,
     })?.acp;
     const identityAfterTurn = resolveSessionIdentityFromMeta(currentMeta);
     if (!isSessionIdentityPending(identityAfterTurn)) {
@@ -801,14 +804,23 @@ export async function tryDispatchAcpReplyCore(params: {
     }
 
     turnDispatched = true;
+    const channelAdmission = consumeChannelRunAdmission(
+      readChannelContextAdmissionEvidence(params.ctx),
+    );
     admittedRunContext = await prepareAgentRunAdmission({
       cfg: params.cfg,
       operationalRunInstance: createOperationalRunInstanceRef(requestId),
       facts: {
         runId: requestId,
         agentId: acpAgentId,
-        ingress: { kind: "acp", boundary: "auto-reply.acp", state: "present" },
+        ingress: {
+          kind: "acp",
+          boundary: "auto-reply.acp",
+          state: channelAdmission.ingressState,
+        },
+        ...channelAdmission.facts,
       },
+      onAdmitted: channelAdmission.onAdmitted,
     }).admit("acp");
     await acpManager.runTurn({
       admittedRunContext,

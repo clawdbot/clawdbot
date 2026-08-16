@@ -19,7 +19,6 @@ import { isCloudWorkerPlacementState } from "../../../components/session-row-bad
 import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
 import "../../../components/tooltip.ts";
 import "../../../components/workspace-icon.ts";
-import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
 import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
@@ -44,6 +43,7 @@ type ChatPaneHeaderProps = {
   title: string;
   session: GatewaySessionRow | undefined;
   showOwnerChip?: boolean;
+  ownerViewing?: boolean;
   catalog: boolean;
   editing: boolean;
   renameValue: string;
@@ -446,6 +446,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         props.showOwnerChip ? props.session?.createdActor : undefined,
         "header",
         "created",
+        props.ownerViewing,
       )}
       ${renderChatPanePlacement(props)} ${props.presence ?? nothing} ${props.faceControl ?? nothing}
       ${props.sharingControl ?? nothing}
@@ -519,7 +520,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         : nothing}
       ${renderGatewayPicker(props)}
       <div class="chat-pane__actions">
-        ${compactSessionActions ? nothing : html`${props.panelActions} ${props.discussionAction}`}
+        ${props.panelActions} ${compactSessionActions ? nothing : props.discussionAction}
         ${props.catalog || compactSessionActions
           ? nothing
           : html`${props.diffAction} ${props.backgroundTasksAction} ${props.workspaceAction}

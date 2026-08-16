@@ -209,11 +209,7 @@ describe("sessions_history redaction", () => {
       messages: [],
       bytes: 2,
     });
-    expect(requests.map((request) => request.method)).toEqual([
-      "sessions.resolve",
-      "sessions.list",
-      "chat.history",
-    ]);
+    expect(requests.map((request) => request.method)).toEqual(["sessions.resolve", "chat.history"]);
   });
 
   it("redacts recalled session text even when log redaction is disabled", async () => {
@@ -515,11 +511,7 @@ describe("sessions_history redaction", () => {
         sessionKey: targetSessionKey,
         messages: [{ role: "assistant", content: "visible" }],
       });
-      expect(requests.map((request) => request.method)).toEqual([
-        "sessions.resolve",
-        "sessions.list",
-        "chat.history",
-      ]);
+      expect(requests.map((request) => request.method)).toEqual(["chat.history"]);
     } finally {
       unregister();
     }
@@ -542,7 +534,7 @@ describe("sessions_history redaction", () => {
         return undefined;
       }
       grantChecks += 1;
-      if (grantChecks === 2) {
+      if (grantChecks === 1) {
         replaceSessionEntrySync(
           { storePath, sessionKey: targetSessionKey },
           { sessionId: "replacement-incarnation", updatedAt: 2 },
@@ -596,7 +588,7 @@ describe("sessions_history redaction", () => {
         return undefined;
       }
       grantChecks += 1;
-      if (grantChecks === 2) {
+      if (grantChecks === 1) {
         replaceSessionEntrySync(
           { storePath, sessionKey: targetSessionKey },
           { sessionId: expectedSessionId, updatedAt: 2, archivedAt: 2 },
@@ -628,5 +620,59 @@ describe("sessions_history redaction", () => {
     } finally {
       unregister();
     }
+  });
+
+  it("carries the persisted fixed-store owner for a bare history key", async () => {
+    const requests: CallGatewayRequest[] = [];
+    const tool = createSessionsHistoryTool({
+      agentSessionKey: "global",
+      config: {
+        session: { store: path.join(tempDir!, "owned-shared.sqlite"), scope: "global" },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
+      },
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        return { messages: [] } as T;
+      },
+    });
+
+    await tool.execute("owned-global", { sessionKey: "global" });
+
+    expect(requests).toContainEqual({
+      method: "chat.history",
+      params: expect.objectContaining({ sessionKey: "global", agentId: "ops" }),
+    });
+  });
+
+  it("resolves current history under the requester instead of the fixed-store owner", async () => {
+    const requests: CallGatewayRequest[] = [];
+    const tool = createSessionsHistoryTool({
+      agentSessionKey: "agent:research:main",
+      requesterAgentIdOverride: "research",
+      config: {
+        session: { store: path.join(tempDir!, "owned-current.sqlite"), scope: "global" },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
+      },
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        return { messages: [] } as T;
+      },
+    });
+
+    await tool.execute("research-current-history", { sessionKey: "current" });
+
+    expect(requests).toContainEqual({
+      method: "chat.history",
+      params: expect.objectContaining({ sessionKey: "agent:research:main", agentId: "research" }),
+    });
+    expect(requests.some((request) => request.method === "sessions.resolve")).toBe(false);
   });
 });

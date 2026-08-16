@@ -346,13 +346,16 @@ conversation bindings, or any non-Codex harness.
   Default: `true` for explicit entries.
 - `plugins.entries.codex.config.codexPlugins.plugins.<key>.marketplaceName`:
   stable marketplace identity, required with `pluginName` for every resolved
-  entry. Supports `"openai-curated"` and `"workspace-directory"`. Entries
-  missing either identity field are ignored.
+  entry. Supports any valid marketplace already discoverable by Codex,
+  including `"openai-curated"`, `"openai-bundled"`,
+  `"openai-primary-runtime"`, `"workspace-directory"`, and repository-local
+  marketplace identities. Entries missing either identity field are ignored.
 - `plugins.entries.codex.config.codexPlugins.plugins.<key>.pluginName`: stable
-  Codex plugin identity, required with `marketplaceName`. A
-  `workspace-directory` entry must use the exact marketplace-qualified
-  `summary.id` returned by `plugin/list`, for example
-  `"example-plugin@workspace-directory"`.
+  Codex plugin identity, required with `marketplaceName`. Use the exact
+  identity reported by Codex for marketplaces whose plugin identifiers are
+  marketplace-qualified. `/codex plugins available` lists discoverable
+  identities, and an owner or `operator.admin` can install one with
+  `/codex plugins install <plugin>@<marketplace>`.
 - `plugins.entries.codex.config.codexPlugins.plugins.<key>.allow_destructive_actions`:
   per-plugin destructive-action override. When omitted, the global
   `allow_destructive_actions` value is used. The per-plugin value accepts the
@@ -363,15 +366,13 @@ to the human reviewer. Other apps and non-app thread approvals keep their
 configured reviewer, so mixed plugin policies do not inherit `"ask"` behavior.
 
 `codexPlugins.enabled` is the global enablement directive. Explicit plugin
-entries written by migration are the durable curated install and repair
-eligibility set. Manually configured `workspace-directory` entries must already
-be installed and enabled, and their owned apps must be accessible; OpenClaw
-does not install or authenticate them. If Codex rejects the explicit workspace
-catalog request, enabled workspace entries fail closed with
-`marketplace_missing` while curated entries from the default catalog remain
-available. `plugins["*"]` is not supported, there is no `install` switch, and
-local `marketplacePath` values are intentionally not config fields because they
-are host-specific. See
+entries written by migration preserve durable curated install and repair
+eligibility. An owner or `operator.admin` can add other discovered plugins with
+`/codex plugins install <plugin>@<marketplace>`; Codex still controls upstream
+installation and connector authentication. Plugins without exact identity,
+installation, or accessible app ownership fail closed. `plugins["*"]` is not
+supported, and local `marketplacePath` values are intentionally not config
+fields because they are host-specific. See
 [Native Codex plugins](/plugins/codex-native-plugins) for app-server version and
 readiness requirements.
 
@@ -619,6 +620,70 @@ or logs. `openclaw doctor` can offer an explicitly confirmed `sudo launchctl`
 repair when Screen Sharing is off; enabling the macOS system service may expose
 it on other network interfaces according to macOS Sharing settings.
 
+### Paired node desktops
+
+A paired macOS, Windows, or Linux node can expose its own desktop in the same
+Control UI Desktop panel. This path is intentionally off by default and always
+uses an existing node-local RFB server on `127.0.0.1`; the Gateway never asks a
+node to connect to a caller-selected host or port.
+
+On the node machine, enable the desktop source and configure attach mode:
+
+```json5
+{
+  desktop: {
+    host: {
+      enabled: true,
+      port: 5900,
+      // passwordFile: "/path/to/vnc-password.txt",
+    },
+  },
+}
+```
+
+Restart the node host after changing this config. `managed: true` is a Gateway
+host feature and does not start a managed desktop inside a node host; paired
+nodes must already have a loopback RFB server.
+
+On the Gateway, explicitly arm the dangerous command and restart:
+
+```json5
+{
+  gateway: {
+    nodes: {
+      commands: {
+        allow: ["desktop.stream"],
+        // deny: ["desktop.stream"], // deny always wins
+      },
+    },
+  },
+}
+```
+
+The node reconnect advertises `desktop.stream` as a pairing-surface upgrade.
+Inspect `openclaw nodes pending`, then approve the new request with
+`openclaw nodes approve <requestId>`. The node appears in the Desktop picker
+only while it is connected and the effective approved command remains allowed.
+
+For VncAuth, `desktop.host.passwordFile` stays on the node and is delivered only
+to the Gateway's authenticated relay. Without a password file, the Control UI
+prompts for the VNC password. macOS ARD credentials are always prompted per
+observation. The Gateway completes ARD or VNC authentication before exposing a
+no-auth RFB handshake to the browser, so credentials are not returned in URLs,
+logs, or RPC results.
+
+Desktop bytes use a dedicated outbound binary WebSocket from the node. The
+normal node invoke remains only as the cancellable lifecycle handle and never
+carries framebuffer data. Reconnecting or changing the node's pairing
+generation closes active relays. To disarm the feature, remove
+`desktop.stream` from `commands.allow` or add it to `commands.deny`, restart the
+Gateway, and reconnect the node.
+
+If the node is missing from the picker, verify all four gates: the node-local
+desktop config, the loopback RFB listener, the approved pairing update, and the
+Gateway allow/deny policy. After changing any of them, restart the affected
+Gateway or node host and check `openclaw nodes pending` again.
+
 ---
 
 ## Gateway
@@ -778,10 +843,10 @@ it on other network interfaces according to macOS Sharing settings.
 - If `gateway.auth.token` / `gateway.auth.password` is explicitly configured via SecretRef and unresolved, resolution fails closed (no remote fallback masking).
 - `trustedProxies`: reverse proxy IPs that terminate TLS or inject forwarded-client headers. Only list proxies you control. Loopback entries are still valid for same-host proxy/local-detection setups (for example Tailscale Serve or a local reverse proxy), but they do **not** make loopback requests eligible for `gateway.auth.mode: "trusted-proxy"`.
 - `allowRealIpFallback`: when `true`, the gateway accepts `X-Real-IP` if `X-Forwarded-For` is missing. Default `false` for fail-closed behavior.
-- `gateway.nodes.pairing.autoApproveLocal`: silently approves pairing, role upgrades, and scope upgrades from trusted local connections (default: `true`). Set `false` to require explicit approval for every device; metadata-only reconnect refreshes remain automatic.
+- `gateway.nodes.pairing.autoApproveLocal`: silently approves pairing, role upgrades, and scope upgrades from trusted local connections (default: `true`). Scope upgrades additionally require the connection itself to prove local-grade credentials (auth mode `none`, or the shared token/password); Tailscale, trusted-proxy, and device-token connects keep their paired scopes as a durable cap. Set `false` to require explicit approval for every device; metadata-only reconnect refreshes remain automatic.
 - `gateway.nodes.pairing.autoApproveCidrs`: optional CIDR/IP allowlist for auto-approving first-time node device pairing with no requested scopes. It is disabled when unset. This does not auto-approve operator/browser/Control UI/WebChat pairing, and it does not auto-approve role, scope, metadata, or public-key upgrades.
 - `gateway.nodes.pairing.sshVerify`: SSH-verified auto-approval for first-time node device pairing (default: enabled). The gateway SSHes back to the pairing host (BatchMode, strict host keys) and approves only on an exact `openclaw node identity` device-key match. Same eligibility floor as `autoApproveCidrs`; probes are limited to private/CGNAT source addresses unless `cidrs` overrides them. Set `false` to disable, or `{ user, identity, timeoutMs, cidrs }` to tune. See [Node pairing](/gateway/pairing#ssh-verified-device-auto-approval-default).
-- `gateway.nodes.commands.allow` / `gateway.nodes.commands.deny`: global allow/deny shaping for declared node commands after pairing and platform allowlist evaluation. `commands.allow` is the one-time persistent enable for classified commands such as `camera.snap`, `camera.clip`, `screen.record`, `health.summary`, `sms.search`, and `sms.send`; `commands.deny` removes a command even if a platform default or explicit allow would otherwise include it. Computer and mobile UI control instead rely on default-off node-local enablement plus pairing. iOS Health permission, Android SMS permission, and Gateway command authorization are independent. After a node changes its declared command list, reject and re-approve that device pairing so the gateway stores the updated command snapshot.
+- `gateway.nodes.commands.allow` / `gateway.nodes.commands.deny`: global allow/deny shaping for declared node commands after pairing and platform allowlist evaluation. `commands.allow` is the one-time persistent enable for classified commands such as `camera.snap`, `camera.clip`, `desktop.stream`, `screen.record`, `health.summary`, `sms.search`, and `sms.send`; `commands.deny` removes a command even if a platform default or explicit allow would otherwise include it. Computer and mobile UI control instead rely on default-off node-local enablement plus pairing. iOS Health permission, Android SMS permission, and Gateway command authorization are independent. After a node changes its declared command list, reject and re-approve that device pairing so the gateway stores the updated command snapshot.
 - `gateway.tools.deny`: extra tool names blocked for HTTP `POST /tools/invoke` (extends default deny list).
 - `gateway.tools.allow`: remove tool names from the default HTTP deny list for
   owner/admin callers. This does not upgrade identity-bearing `operator.write`
@@ -1045,7 +1110,7 @@ Validation and safety notes:
 
 - The built-in Gmail preset uses `sessionKey: "hook:gmail:{{messages[0].id}}"`.
 - This per-message key isolates conversation context, not tools or workspace access. Without a custom mapping that sets `agentId`, the preset uses the default agent.
-- For untrusted inboxes, route Gmail to a dedicated reader agent and restrict that agent with [per-agent sandbox and tool policy](/tools/multi-agent-sandbox-tools). If the reader must notify the main agent, constrain the handoff with [`tools.agentToAgent`](/gateway/config-tools#toolsagenttoagent). See [Prompt injection](/gateway/security#prompt-injection) for the recommended threat model and model tier.
+- For untrusted inboxes, route Gmail to a dedicated reader agent and restrict that agent with [per-agent sandbox and tool policy](/tools/multi-agent-sandbox-tools). If the reader must notify the main agent, constrain the handoff with [`tools.agentToAgent`](/gateway/config-tools#tools-agenttoagent). See [Prompt injection](/gateway/security#prompt-injection) for the recommended threat model and model tier.
 - The setup wizard configures Gmail transport but does not create the reader agent or required session-key policy. Apply the complete [restricted Gmail reader configuration](/automation/cron-jobs#configure-a-restricted-gmail-reader-recommended) before running setup for untrusted mail.
 - If you keep that per-message routing, set `hooks.allowRequestSessionKey: true` and constrain `hooks.allowedSessionKeyPrefixes` to match the Gmail namespace, for example `["hook:", "hook:gmail:"]`.
 - If you need `hooks.allowRequestSessionKey: false`, override the preset with a static `sessionKey` instead of the templated default.
@@ -1194,6 +1259,26 @@ Reference env vars in any config string with `${VAR_NAME}`:
 ## Secrets
 
 Secret refs are additive: plaintext values still work.
+
+### `secrets.egressProxy`
+
+Default-off Gateway-owned substitution for shared-store `secret` entries used by agent exec subprocesses:
+
+```json5
+{
+  secrets: {
+    egressProxy: {
+      enabled: false,
+      bypassHosts: ["pinned-api.example.com"],
+    },
+  },
+}
+```
+
+- `enabled`: starts the loopback proxy and ephemeral CA at Gateway startup. Default: `false`. Changing it requires a Gateway restart.
+- `bypassHosts`: optional exact-hostname list for authenticated blind CONNECT tunnels used by certificate-pinned clients. Sentinels are not substituted on bypassed hosts and fail vendor authentication without exposing plaintext.
+
+See [Secret egress proxy](/gateway/secrets#secret-egress-proxy) for subprocess environment wiring, authentication, fail-closed behavior, and limitations.
 
 ### `SecretRef`
 

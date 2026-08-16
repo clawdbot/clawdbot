@@ -15,6 +15,7 @@ import {
   closeStagedPane,
   discardStateStagedAttachments,
   preparePaneStagedAttachments,
+  replacePaneStagedAttachmentGatewayOwner,
   restorePaneStagedAttachments,
 } from "./chat-pane-attachment-handoff.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
@@ -178,6 +179,37 @@ describe("staged chat attachment pane handoff", () => {
     expect(getChatAttachmentDataUrl(fallback)).toBeNull();
     expect(current.chatAttachments).toEqual([]);
     expect(current.chatComposerFallbackByScope.fallback?.attachments).toEqual([]);
+  });
+
+  it("keeps plain staged attachments across a gateway client rotation", () => {
+    const previousOwner = {} as GatewayBrowserClient;
+    const nextOwner = {} as GatewayBrowserClient;
+    const handoff = createChatAttachmentHandoff();
+    const context = { chatAttachmentHandoff: handoff } as unknown as ApplicationContext;
+    const plainImage = storedAttachment("rotation-image");
+    const plainFile = storedAttachment("rotation-file", "application/pdf");
+    const annotated: ChatAttachment = {
+      ...storedAttachment("rotation-annotation"),
+      browserAnnotation: { pageUrl: "https://example.test" } as never,
+    };
+    const current = state([plainImage, plainFile, annotated]);
+
+    const returned = replacePaneStagedAttachmentGatewayOwner(
+      context,
+      "p1",
+      current,
+      previousOwner,
+      nextOwner,
+    );
+
+    expect(returned).toBe(nextOwner);
+    // Plain payloads are client-local; rotation must not silently discard them.
+    expect(current.chatAttachments).toEqual([plainImage, plainFile]);
+    expect(getChatAttachmentDataUrl(plainImage)).not.toBeNull();
+    expect(getChatAttachmentDataUrl(plainFile)).not.toBeNull();
+    // Annotation Undo context dies with the old client; its payload is released.
+    expect(getChatAttachmentDataUrl(annotated)).toBeNull();
+    discardStateStagedAttachments(current);
   });
 
   it("restores a mixed package only to the exact mounted owner", () => {

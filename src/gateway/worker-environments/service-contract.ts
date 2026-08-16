@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import type { WorkerDesktopApp, WorkerProfile } from "../../plugins/capability-provider.types.js";
-import type { WorkerSessionPlacementRecord } from "./placement-record.js";
+import type {
+  WorkerSessionPlacementRecord,
+  WorkerPlacementExecutionMode,
+} from "./placement-record.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import type {
   WorkerTunnelHandle,
@@ -73,6 +76,8 @@ export type WorkerPlacementDispatchRequest = {
   sessionKey: string;
   agentId: string;
   profileId: string;
+  executionMode: WorkerPlacementExecutionMode;
+  deviceId?: string;
   inheritedProfile?: {
     providerId: string;
     profileSnapshot: WorkerProfile;
@@ -93,7 +98,7 @@ export type WorkerPlacementDispatchContract = {
   ): Promise<Extract<WorkerSessionPlacementRecord, { state: "active" }>>;
   reclaim?(
     request: WorkerPlacementReclaimRequest,
-  ): Promise<Extract<WorkerSessionPlacementRecord, { state: "reclaimed" }>>;
+  ): Promise<Extract<WorkerSessionPlacementRecord, { state: "local" | "reclaimed" }>>;
   forceDestroyEnvironment?(
     environmentId: string,
     onCleanupError?: (error: unknown) => void,

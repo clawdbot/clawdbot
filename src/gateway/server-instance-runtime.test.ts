@@ -28,6 +28,7 @@ function createContext(): GatewayRequestContext {
       error: vi.fn(),
     },
     chatAbortControllers: new Map(),
+    chatQueuedTurns: new Map(),
     dedupe: new Map(),
   } as unknown as GatewayRequestContext;
 }

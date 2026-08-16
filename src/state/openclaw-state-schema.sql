@@ -564,6 +564,7 @@ CREATE INDEX IF NOT EXISTS idx_device_pairing_paired_approved
 CREATE TABLE IF NOT EXISTS device_bootstrap_tokens (
   token_key TEXT NOT NULL PRIMARY KEY,
   token TEXT NOT NULL,
+  setup_id TEXT,
   ts INTEGER NOT NULL,
   device_id TEXT,
   public_key TEXT,
@@ -576,6 +577,22 @@ CREATE TABLE IF NOT EXISTS device_bootstrap_tokens (
 
 CREATE INDEX IF NOT EXISTS idx_device_bootstrap_tokens_ts
   ON device_bootstrap_tokens(ts);
+
+-- Terminal outcome of a redeemed setup credential. The bootstrap row is deleted
+-- on redemption, so this is the only durable proof a setup code succeeded; the
+-- presenting client reconciles it when the completion broadcast is missed.
+-- Non-secret only: never the bootstrap token or anything derived from it.
+-- Bounded by retention to a handful of live rows, so the primary key is the
+-- only access path worth having.
+CREATE TABLE IF NOT EXISTS device_pair_setup_completions (
+  setup_id TEXT NOT NULL PRIMARY KEY,
+  device_id TEXT NOT NULL,
+  device_name TEXT,
+  access TEXT NOT NULL,
+  completed_at_ms INTEGER NOT NULL,
+  delivery_state TEXT NOT NULL CHECK (delivery_state IN ('uncertain', 'confirmed')),
+  retain_until_ms INTEGER NOT NULL
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS device_pairing_join_codes (
   shortcode TEXT,
@@ -854,6 +871,85 @@ CREATE TABLE IF NOT EXISTS node_host_config (
   updated_at_ms INTEGER NOT NULL
 ) STRICT;
 
+-- Node-host-owned launch journal. The descriptor and its credential remain
+-- process memory only; this table records bounded supervision facts.
+CREATE TABLE IF NOT EXISTS node_worker_launches (
+  launch_id TEXT NOT NULL PRIMARY KEY
+    CHECK (length(launch_id) BETWEEN 1 AND 256 AND instr(launch_id, char(0)) = 0),
+  plan_hash TEXT NOT NULL
+    CHECK (length(plan_hash) = 64 AND plan_hash NOT GLOB '*[^0-9a-f]*'),
+  gateway_namespace TEXT NOT NULL
+    CHECK (
+      length(gateway_namespace) BETWEEN 1 AND 128
+      AND gateway_namespace NOT GLOB '*[^A-Za-z0-9._-]*'
+      AND gateway_namespace GLOB '[A-Za-z0-9]*'
+    ),
+  environment_id TEXT NOT NULL
+    CHECK (length(environment_id) BETWEEN 1 AND 256 AND instr(environment_id, char(0)) = 0),
+  session_id TEXT NOT NULL
+    CHECK (length(session_id) BETWEEN 1 AND 256 AND instr(session_id, char(0)) = 0),
+  owner_epoch INTEGER NOT NULL CHECK (owner_epoch BETWEEN 1 AND 9007199254740991),
+  placement_generation INTEGER NOT NULL
+    CHECK (placement_generation BETWEEN 0 AND 9007199254740991),
+  run_id TEXT NOT NULL
+    CHECK (length(run_id) BETWEEN 1 AND 256 AND instr(run_id, char(0)) = 0),
+  state TEXT NOT NULL
+    CHECK (state IN ('pending', 'running', 'completed', 'failed', 'interrupted', 'cancelled')),
+  supervisor_pid INTEGER NOT NULL CHECK (supervisor_pid BETWEEN 1 AND 2147483647),
+  supervisor_start_time INTEGER NOT NULL
+    CHECK (supervisor_start_time BETWEEN 0 AND 9007199254740991),
+  worker_pid INTEGER CHECK (worker_pid IS NULL OR worker_pid BETWEEN 1 AND 2147483647),
+  worker_start_time INTEGER CHECK (
+    worker_start_time IS NULL OR worker_start_time BETWEEN 0 AND 9007199254740991
+  ),
+  result_json TEXT CHECK (
+    result_json IS NULL
+    OR (
+      length(CAST(result_json AS BLOB)) BETWEEN 1 AND 65536
+      AND instr(result_json, char(0)) = 0
+      AND json_valid(result_json)
+    )
+  ),
+  error_text TEXT CHECK (
+    error_text IS NULL
+    OR (
+      length(CAST(error_text AS BLOB)) BETWEEN 1 AND 4096
+      AND instr(error_text, char(0)) = 0
+      AND instr(error_text, char(10)) = 0
+      AND instr(error_text, char(13)) = 0
+    )
+  ),
+  completed_at_ms INTEGER CHECK (
+    completed_at_ms IS NULL OR completed_at_ms BETWEEN 0 AND 9007199254740991
+  ),
+  created_at_ms INTEGER NOT NULL CHECK (created_at_ms BETWEEN 0 AND 9007199254740991),
+  updated_at_ms INTEGER NOT NULL CHECK (
+    updated_at_ms BETWEEN created_at_ms AND 9007199254740991
+  ),
+  CHECK ((worker_pid IS NULL) = (worker_start_time IS NULL)),
+  CHECK (
+    (state = 'pending'
+      AND worker_pid IS NULL AND result_json IS NULL AND error_text IS NULL
+      AND completed_at_ms IS NULL)
+    OR
+    (state = 'running'
+      AND worker_pid IS NOT NULL AND result_json IS NULL AND error_text IS NULL
+      AND completed_at_ms IS NULL)
+    OR
+    (state = 'completed'
+      AND result_json IS NOT NULL AND error_text IS NULL
+      AND completed_at_ms BETWEEN created_at_ms AND updated_at_ms)
+    OR
+    (state IN ('failed', 'interrupted', 'cancelled')
+      AND result_json IS NULL AND error_text IS NOT NULL
+      AND completed_at_ms BETWEEN created_at_ms AND updated_at_ms)
+  )
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_node_worker_launches_terminal_completed
+  ON node_worker_launches(completed_at_ms, launch_id)
+  WHERE completed_at_ms IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS voicewake_triggers (
   config_key TEXT NOT NULL,
   position INTEGER NOT NULL,
@@ -941,6 +1037,7 @@ CREATE TABLE IF NOT EXISTS installed_plugin_index (
   migration_version INTEGER NOT NULL,
   policy_hash TEXT NOT NULL,
   generated_at_ms INTEGER NOT NULL,
+  workspace_dir TEXT,
   refresh_reason TEXT,
   install_records_json TEXT NOT NULL,
   plugins_json TEXT NOT NULL,
@@ -1115,6 +1212,13 @@ CREATE TABLE IF NOT EXISTS agent_deletion_journal (
   created_at INTEGER NOT NULL,
   cleanup_completed INTEGER NOT NULL DEFAULT 0,
   delete_files INTEGER NOT NULL DEFAULT 1
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS agent_provenance (
+  agent_id TEXT PRIMARY KEY,
+  created_via TEXT NOT NULL CHECK (created_via IN ('operator', 'agent', 'claw')),
+  creator_agent_id TEXT,
+  created_at_ms INTEGER NOT NULL
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS agent_database_leases (
@@ -1323,54 +1427,6 @@ CREATE INDEX IF NOT EXISTS idx_sandbox_registry_last_used
   ON sandbox_registry_entries(registry_kind, last_used_at_ms DESC, container_name)
   WHERE last_used_at_ms IS NOT NULL;
 
-CREATE TABLE IF NOT EXISTS commitments (
-  id TEXT NOT NULL PRIMARY KEY,
-  agent_id TEXT NOT NULL,
-  session_key TEXT NOT NULL,
-  channel TEXT NOT NULL,
-  account_id TEXT,
-  recipient_id TEXT,
-  thread_id TEXT,
-  sender_id TEXT,
-  kind TEXT NOT NULL,
-  sensitivity TEXT NOT NULL,
-  source TEXT NOT NULL,
-  status TEXT NOT NULL,
-  reason TEXT NOT NULL,
-  suggested_text TEXT NOT NULL,
-  dedupe_key TEXT NOT NULL,
-  confidence REAL NOT NULL,
-  due_earliest_ms INTEGER NOT NULL,
-  due_latest_ms INTEGER NOT NULL,
-  due_timezone TEXT NOT NULL,
-  source_message_id TEXT,
-  source_run_id TEXT,
-  created_at_ms INTEGER NOT NULL,
-  updated_at_ms INTEGER NOT NULL,
-  attempts INTEGER NOT NULL,
-  last_attempt_at_ms INTEGER,
-  sent_at_ms INTEGER,
-  dismissed_at_ms INTEGER,
-  snoozed_until_ms INTEGER,
-  expired_at_ms INTEGER,
-  record_json TEXT NOT NULL
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_commitments_scope_due
-  ON commitments(agent_id, session_key, status, due_earliest_ms, due_latest_ms);
-
-CREATE INDEX IF NOT EXISTS idx_commitments_status_due
-  ON commitments(status, due_earliest_ms, due_latest_ms);
-
-CREATE INDEX IF NOT EXISTS idx_commitments_scope_dedupe
-  ON commitments(agent_id, session_key, channel, dedupe_key, status);
-
-CREATE INDEX IF NOT EXISTS idx_commitments_agent_due
-  ON commitments(agent_id, status, due_earliest_ms, due_latest_ms, session_key);
-
-CREATE INDEX IF NOT EXISTS idx_commitments_agent_sent
-  ON commitments(agent_id, status, sent_at_ms, session_key);
-
 CREATE TABLE IF NOT EXISTS cron_jobs (
   store_key TEXT NOT NULL,
   job_id TEXT NOT NULL,
@@ -1450,6 +1506,11 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
   PRIMARY KEY (store_key, job_id)
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS cron_store_epochs (
+  store_key TEXT PRIMARY KEY,
+  store_epoch INTEGER NOT NULL DEFAULT 0
+) STRICT;
+
 CREATE INDEX IF NOT EXISTS idx_cron_jobs_store_updated
   ON cron_jobs(store_key, sort_order ASC, updated_at DESC, job_id);
 
@@ -1463,6 +1524,36 @@ CREATE INDEX IF NOT EXISTS idx_cron_jobs_enabled_next_run
 CREATE INDEX IF NOT EXISTS idx_cron_jobs_agent_session
   ON cron_jobs(agent_id, session_key, updated_at DESC, job_id)
   WHERE agent_id IS NOT NULL OR session_key IS NOT NULL;
+
+-- One owner-native receipt is also the durable execution fence. Receipts
+-- survive job deletion so operators can distinguish a run from log inference.
+CREATE TABLE IF NOT EXISTS cron_run_receipts (
+  receipt_id TEXT PRIMARY KEY,
+  store_key TEXT NOT NULL,
+  job_id TEXT NOT NULL,
+  config_revision TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  request_run_id TEXT,
+  status TEXT NOT NULL,
+  owner_pid INTEGER NOT NULL,
+  owner_start_time INTEGER,
+  started_at_ms INTEGER NOT NULL,
+  finished_at_ms INTEGER,
+  error_text TEXT,
+  CHECK (status IN ('running', 'ok', 'error', 'skipped', 'interrupted', 'superseded')),
+  CHECK (
+    (status = 'running' AND finished_at_ms IS NULL)
+    OR
+    (status != 'running' AND finished_at_ms IS NOT NULL)
+  )
+) STRICT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cron_run_receipts_active_job
+  ON cron_run_receipts(store_key, job_id)
+  WHERE status = 'running';
+
+CREATE INDEX IF NOT EXISTS idx_cron_run_receipts_job_history
+  ON cron_run_receipts(store_key, job_id, started_at_ms DESC, receipt_id DESC);
 
 -- Runtime-private authority is independent of job_json so downgraded writers
 -- can rewrite recognized job config without erasing or silently widening it.
@@ -1918,7 +2009,9 @@ CREATE TABLE IF NOT EXISTS user_preferences (
 CREATE TABLE IF NOT EXISTS session_groups (
   name TEXT NOT NULL PRIMARY KEY,
   position INTEGER NOT NULL,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  cwd TEXT,
+  worktree INTEGER
 ) STRICT;
 
 -- Gateway-owned sidebar section layout. IDs are ungrouped, groups, work, or
@@ -1961,6 +2054,7 @@ CREATE TABLE IF NOT EXISTS worker_environments (
   bootstrap_bundle_hash TEXT,
   bootstrap_openclaw_version TEXT,
   bootstrap_protocol_features_json TEXT,
+  bootstrap_install_kind TEXT,
   owner_epoch INTEGER NOT NULL DEFAULT 0 CHECK (owner_epoch >= 0),
   teardown_terminal_state TEXT CHECK (teardown_terminal_state IN ('destroyed', 'failed')),
   attached_session_ids_json TEXT NOT NULL DEFAULT '[]',
@@ -1976,6 +2070,9 @@ CREATE TABLE IF NOT EXISTS worker_environments (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_environments_provider_lease
   ON worker_environments(provider_id, lease_id)
   WHERE lease_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_worker_environments_terminal_changed
+  ON worker_environments(state_changed_at_ms, environment_id);
 
 -- Provider-advertised fallback ports preserve stable retry order separately
 -- from the downgrade-sensitive canonical worker environment row.
@@ -1994,6 +2091,7 @@ CREATE TABLE IF NOT EXISTS worker_session_placements (
   session_id TEXT NOT NULL PRIMARY KEY,
   agent_id TEXT NOT NULL,
   session_key TEXT NOT NULL,
+  execution_mode TEXT CHECK (execution_mode IN ('worker-turn', 'remote-exec')),
   state TEXT NOT NULL CHECK (
     state IN (
       'local',
@@ -2093,9 +2191,13 @@ CREATE TABLE IF NOT EXISTS worker_session_placements (
   CHECK (
     turn_claim_owner IS NULL
     OR
-    (turn_claim_owner IS 'local' AND state IN ('local', 'requested', 'failed'))
+    (turn_claim_owner IS 'local' AND (
+      state IN ('local', 'requested', 'failed')
+      OR (state IN ('active', 'draining') AND execution_mode IS 'remote-exec')
+    ))
     OR
     (turn_claim_owner IS 'worker' AND state IN ('active', 'draining')
+      AND (execution_mode IS NULL OR execution_mode IS 'worker-turn')
       AND turn_claim_owner_epoch IS active_owner_epoch)
   )
 ) STRICT;
@@ -2379,6 +2481,7 @@ CREATE TABLE IF NOT EXISTS secret_store_entries (
   updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= 0),
   updated_by TEXT,
   deleted_at_ms INTEGER,
+  allowed_hosts TEXT,
   CHECK ((scope_kind = 'team' AND scope_id = '') OR (scope_kind = 'identity' AND length(scope_id) > 0)),
   PRIMARY KEY (scope_kind, scope_id, name)
 ) STRICT;

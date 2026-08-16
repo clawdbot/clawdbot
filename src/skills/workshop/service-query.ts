@@ -49,16 +49,17 @@ export async function listSkillProposals(
   const store = storeOptions(options.env);
   const scope = proposalScope(options);
   const manifest = await readSkillProposalManifest(store, scope);
-  await Promise.all(
-    manifest.proposals
-      .filter((proposal) => proposal.kind === "create" && proposal.status === "pending")
-      .map(async (proposal) => {
-        const read = await readSkillProposal(proposal.id, store, scope);
-        if (read) {
-          await reconcilePendingCreateProposal(read, options);
-        }
-      }),
-  );
+  // Every reconciliation takes the same collection lease. Serialize them so a
+  // large manifest cannot make its own waiters exhaust the bounded lease wait.
+  for (const proposal of manifest.proposals) {
+    if (proposal.kind !== "create" || proposal.status !== "pending") {
+      continue;
+    }
+    const read = await readSkillProposal(proposal.id, store, scope);
+    if (read) {
+      await reconcilePendingCreateProposal(read, options);
+    }
+  }
   return await readSkillProposalManifest(store, scope);
 }
 
