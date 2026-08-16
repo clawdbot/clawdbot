@@ -3500,7 +3500,7 @@ src/node-host/invoke-file-commands.ts	1
 src/node-host/invoke-payload.ts	5
 src/node-host/invoke-system-run-plan.ts	3
 src/node-host/invoke.ts	8
-src/node-host/mcp.ts	4
+src/node-host/mcp.ts	3
 src/node-host/node-worker-bundle-installer.ts	1
 src/node-host/node-worker-supervisor.ts	1
 src/node-host/node-worker-transfer-client.ts	3

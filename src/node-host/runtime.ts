@@ -211,22 +211,20 @@ function ensureNodePathEnv(): string {
   return DEFAULT_NODE_PATH;
 }
 
-function createInventory(params: {
-  skills: unknown[] | null;
-  pluginTools: unknown[];
-  mcpManager?: NodeHostMcpManager;
-}): NodeHostInventory {
-  const pluginTools = [...params.pluginTools, ...(params.mcpManager?.descriptors ?? [])].toSorted(
-    (left, right) => {
-      const a = left as { pluginId?: string; name?: string };
-      const b = right as { pluginId?: string; name?: string };
-      return (
-        (a.pluginId ?? "").localeCompare(b.pluginId ?? "") ||
-        (a.name ?? "").localeCompare(b.name ?? "")
-      );
-    },
-  );
-  return { skills: params.skills, pluginTools };
+function createInventory(
+  skills: unknown[] | null,
+  pluginTools: unknown[],
+  mcpDescriptors: readonly unknown[] = [],
+): NodeHostInventory {
+  const sortedPluginTools = [...pluginTools, ...mcpDescriptors].toSorted((left, right) => {
+    const a = left as { pluginId?: string; name?: string };
+    const b = right as { pluginId?: string; name?: string };
+    return (
+      (a.pluginId ?? "").localeCompare(b.pluginId ?? "") ||
+      (a.name ?? "").localeCompare(b.name ?? "")
+    );
+  });
+  return { skills, pluginTools: sortedPluginTools };
 }
 
 function sameStringList(left: string[], right: string[]): boolean {
@@ -309,10 +307,7 @@ export async function prepareNodeHostRuntime(params?: {
     pathEnv,
   });
   const manifest = buildManifest(pluginNodeHost);
-  const initialInventory = createInventory({
-    skills,
-    pluginTools: pluginNodeHost.nodePluginTools,
-  });
+  const initialInventory = createInventory(skills, pluginNodeHost.nodePluginTools);
 
   return {
     manifest,
@@ -351,18 +346,21 @@ export async function prepareNodeHostRuntime(params?: {
       let manager: NodeHostMcpManager | undefined;
       let closing = false;
       let closePromise: Promise<void> | undefined;
+      const publishInventory = () =>
+        onInventoryChanged?.(
+          createInventory(skills, currentPluginNodeHost.nodePluginTools, manager?.descriptors),
+        );
       const startup = startNodeHostMcpManager(config.nodeHost?.mcp?.servers, {
         signal: mcpAbort.signal,
+        onDescriptorsChanged: () => {
+          if (!closing && manager) {
+            publishInventory();
+          }
+        },
       }).then((resolved) => {
         manager = resolved;
         if (!closing) {
-          onInventoryChanged?.(
-            createInventory({
-              skills,
-              pluginTools: currentPluginNodeHost.nodePluginTools,
-              mcpManager: manager,
-            }),
-          );
+          publishInventory();
         }
         return resolved;
       });
@@ -374,13 +372,7 @@ export async function prepareNodeHostRuntime(params?: {
           currentManifest = nextManifest;
           onManifestChanged?.(nextManifest);
         }
-        onInventoryChanged?.(
-          createInventory({
-            skills,
-            pluginTools: currentPluginNodeHost.nodePluginTools,
-            mcpManager: manager,
-          }),
-        );
+        publishInventory();
       };
       const stopAvailabilityWatch = onManifestChanged
         ? watchRegisteredNodeHostCommandAvailability(availabilityContext, refreshAvailability)
