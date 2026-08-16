@@ -657,6 +657,15 @@ describe("derived mention matching with decorated identity names", () => {
     );
   });
 
+  it("rejects a long joined suffix without quadratic stripping", () => {
+    const cfg = configForName("Bot🦋");
+    const message = `Bot${"\u200D".repeat(32_768)}X /status`;
+    const startedAt = performance.now();
+
+    expect(stripMentions(message, {} as MsgContext, cfg, "decorated-agent")).toBe(message);
+    expect(performance.now() - startedAt).toBeLessThan(500);
+  });
+
   it("strips spaced edge decoration together with its spacing", () => {
     // Matching resumes at the bare core either way; if the strip pattern left
     // the edge's inner space out, the emoji would survive in front of the

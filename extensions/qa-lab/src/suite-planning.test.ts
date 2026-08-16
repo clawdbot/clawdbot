@@ -614,7 +614,7 @@ describe("qa suite planning helpers", () => {
     ];
 
     expect(
-      applyQaSuiteGatewayConfigPatches({}, collectQaSuiteGatewayConfigPatches(scenarios) ?? []),
+      applyQaSuiteGatewayConfigPatches({}, collectQaSuiteGatewayConfigPatches(scenarios)),
     ).toEqual({
       agents: {
         defaults: {
@@ -646,7 +646,7 @@ describe("qa suite planning helpers", () => {
 
     const patch = applyQaSuiteGatewayConfigPatches(
       {},
-      collectQaSuiteGatewayConfigPatches(scenarios) ?? [],
+      collectQaSuiteGatewayConfigPatches(scenarios),
     );
 
     expect(patch).toEqual({ plugins: { entries: {} } });
@@ -667,10 +667,7 @@ describe("qa suite planning helpers", () => {
     const baseline = { tools: { profile: "coding", deny: ["shell"] } };
 
     expect(
-      applyQaSuiteGatewayConfigPatches(
-        baseline,
-        collectQaSuiteGatewayConfigPatches(scenarios) ?? [],
-      ),
+      applyQaSuiteGatewayConfigPatches(baseline, collectQaSuiteGatewayConfigPatches(scenarios)),
     ).toEqual({ tools: { web: { search: { enabled: true } } } });
   });
 
@@ -686,7 +683,7 @@ describe("qa suite planning helpers", () => {
 
     expect(collectQaSuiteGatewayConfigPatches(scenarios)).toHaveLength(2);
     expect(
-      applyQaSuiteGatewayConfigPatches({}, collectQaSuiteGatewayConfigPatches(scenarios) ?? []),
+      applyQaSuiteGatewayConfigPatches({}, collectQaSuiteGatewayConfigPatches(scenarios)),
     ).toEqual({ agents: { defaults: { thinkingDefault: "medium" } } });
   });
 
@@ -696,7 +693,7 @@ describe("qa suite planning helpers", () => {
     expect(
       applyQaSuiteGatewayConfigPatches(
         {},
-        collectQaSuiteGatewayConfigPatches(scenarios, "whatsapp-alt") ?? [],
+        collectQaSuiteGatewayConfigPatches(scenarios, "whatsapp-alt"),
       ),
     ).toEqual({
       channels: {

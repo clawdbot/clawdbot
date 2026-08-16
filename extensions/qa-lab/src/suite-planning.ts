@@ -219,7 +219,7 @@ function resolveQaGatewayConfigPatchSelectedAccount(
 function collectQaSuiteGatewayConfigPatches(
   scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"],
   selectedAccountId = "sut",
-): Record<string, unknown>[] | undefined {
+): Record<string, unknown>[] {
   const resolvedSelectedAccountId = selectedAccountId.trim() || "sut";
   const patches: Record<string, unknown>[] = [];
   for (const scenario of scenarios) {
@@ -234,7 +234,7 @@ function collectQaSuiteGatewayConfigPatches(
       patches.push(resolvedPatch);
     }
   }
-  return patches.length > 0 ? patches : undefined;
+  return patches;
 }
 
 /** Applies collected scenario patches to a gateway config in scenario order. */

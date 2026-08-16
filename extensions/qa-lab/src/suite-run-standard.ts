@@ -65,7 +65,7 @@ export async function runQaFlowSuiteStandard(
     alternateModel,
     fastMode,
     enabledPluginIds,
-    gatewayConfigPatch,
+    gatewayConfigPatches,
     gatewayRuntimeOptions,
     concurrency,
     progressEnabled,
@@ -142,10 +142,10 @@ export async function runQaFlowSuiteStandard(
       allowUnhealthyStartup: gatewayRuntimeOptions?.allowUnhealthyStartup,
       forwardHostHome: gatewayRuntimeOptions?.forwardHostHome,
       mutateConfig:
-        gatewayConfigPatch || params?.mutateConfig
+        gatewayConfigPatches.length > 0 || params?.mutateConfig
           ? (cfg) => {
-              const patchedConfig = gatewayConfigPatch
-                ? (applyQaSuiteGatewayConfigPatches(cfg, gatewayConfigPatch) as OpenClawConfig)
+              const patchedConfig = gatewayConfigPatches.length
+                ? (applyQaSuiteGatewayConfigPatches(cfg, gatewayConfigPatches) as OpenClawConfig)
                 : cfg;
               return params?.mutateConfig ? params.mutateConfig(patchedConfig) : patchedConfig;
             }

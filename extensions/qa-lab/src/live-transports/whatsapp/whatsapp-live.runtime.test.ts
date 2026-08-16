@@ -1191,7 +1191,7 @@ describe("WhatsApp QA live runtime", () => {
         const startupPatches = collectQaSuiteGatewayConfigPatches([scenario], accountId);
         const patchedConfig = applyQaSuiteGatewayConfigPatches(
           initialConfig,
-          startupPatches ?? [],
+          startupPatches,
         ) as WhatsAppQaConfigBase;
         const effective = resolveWhatsAppAccount({ cfg: patchedConfig, accountId });
         expect(

@@ -25,62 +25,22 @@ type ResolvedMentionPatterns = {
   unicode: boolean;
 };
 
-// Word runs carry a name's identity. ZWJ/ZWNJ are word characters for the
-// boundary assertions below but stay out of the token class: mention text is
-// normalized with those characters stripped, so a derived name may never
-// require them.
 const NAME_IDENTITY_CHARS = String.raw`\p{L}\p{N}\p{Pc}`;
 const NAME_TOKEN_CHARS = String.raw`${NAME_IDENTITY_CHARS}\p{M}`;
 const JOINER_CHARS = String.raw`\u200C\u200D`;
-// Decoration is written with the joiners normalization strips, and between two
-// word runs also with the spacing members put around it, so both stay optional
-// where they can appear.
-const JOINER_SPACING = String.raw`[${JOINER_CHARS}]*`;
 const DECORATION_SPACING = String.raw`[${JOINER_CHARS}\s]*`;
-// A digit that heads a keycap sequence is an identity character spelling a
-// pictograph: the token split must not consume it into a word run, or
-// "Bot1️⃣" would demand its keycap. The guard stays out of the boundary
-// word class -- there it would excuse every message keycap for every
-// identity, handing a plain "Bot" the trigger "bot1️⃣" -- so a keycap the
-// name itself spells is instead accepted at the trailing seam, where the
-// full spelling and the boundary after it are both checked. A bare digit
-// stays a word character: "Bot1" keeps requiring its 1, and a name matched
-// inside "bot1x" stays rejected.
-const KEYCAP_HEAD_GUARD = String.raw`(?![0-9]\u{FE0F}?\u{20E3})`;
+const OPTIONAL_JOINER_GAP = String.raw`[${JOINER_CHARS}]*`;
 const UNICODE_WORD_CHAR = String.raw`[${NAME_TOKEN_CHARS}${JOINER_CHARS}]`;
 const JOINER_RUN = new RegExp(`[${JOINER_CHARS}]+`, "u");
-// A token starts at an identity character: marks attach to the character
-// before them, they never stand for one. So a mark run that trails decoration
-// is decoration too -- the variation selector U+FE0F an emoji carries, the
-// enclosing keycap U+20E3 -- while a mark on a letter stays part of its token.
-// Deriving a bare mark run as the token would both require decoration nobody
-// types and match every unrelated emoji carrying the same mark.
-const NAME_TOKEN_SPLIT = new RegExp(
-  `(${KEYCAP_HEAD_GUARD}[${NAME_IDENTITY_CHARS}](?:${KEYCAP_HEAD_GUARD}[${NAME_TOKEN_CHARS}])*)`,
-  "gu",
-);
-// Decoration is what a member may leave out when typing the name: symbol and
-// mark code points (emoji, flags, dingbats), the skin-tone modifiers, the tag
-// characters a subdivision flag spells its region with, and the invisible
-// format characters normalization strips. Everything else a name spells stays
-// literal -- punctuation such as "-", "/", or "." separates, it does not
-// decorate, and making it omittable would hand every existing name like
-// "foo-bar" a new bare spelling and with it a new implicit trigger.
-// The tag range is the one an emoji sequence uses (see POLL_ECHO_EMOJI_SEQUENCE):
-// on their own the tags are invisible, so a flag whose base is decoration but
-// whose tags are not would leave the name requiring characters nobody types.
-const DECORATION_CHAR = new RegExp(
+const JOINER_ONLY = new RegExp(`^[${JOINER_CHARS}]+$`, "u");
+const OMISSIBLE_DECORATION_CHAR = new RegExp(
   String.raw`[\p{So}\p{M}\u{1F3FB}-\u{1F3FF}\u200B-\u200F\u202A-\u202E\u2060-\u206F\u{E0020}-\u{E007F}]`,
   "u",
 );
-// U+FE0F requests emoji presentation and U+20E3 encloses a keycap: a character
-// carrying either is typed as a pictograph even when, like the "#" in a
-// keycap, it is punctuation on its own. Only a character Unicode admits at
-// the head of such a sequence reads that way; after anything else the mark
-// changes no presentation, and the character stays a literal separator --
-// excused anyway, "$\uFE0F" in a name would hand it a new bare trigger.
 const EMOJI_PRESENTATION_MARKS = new Set(["\uFE0F", "\u20E3"]);
 const EMOJI_PRESENTATION_BASE = /\p{Emoji}/u;
+const NAME_IDENTITY_GRAPHEME = new RegExp(`[${NAME_IDENTITY_CHARS}]`, "u");
+const NAME_GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 type DerivedNameParts = {
   leading: string;
@@ -89,30 +49,21 @@ type DerivedNameParts = {
 };
 
 function wrapDerivedMentionPattern(parts: DerivedNameParts): string {
-  // JavaScript \b is ASCII-oriented. Derived identity names need Unicode word
-  // boundaries so a name is neither missed nor matched inside another word.
-  // Edge decoration is optional, so each assertion has to reach across it, or
-  // the decoration satisfies the boundary itself and the name matches while
-  // glued to another word. The decoration is one optional occurrence of what
-  // the name carries: repeating it would consume decoration a member typed
-  // beyond the identity, and stripping would take that away with the mention.
-  // Joiners sit in the word class, so raw text carrying one right against the
-  // core would satisfy the trailing assertion's word character and block the
-  // match stripping needs; each seam takes the joiners first. Backtracking
-  // cannot cheat past that: a joiner the seam leaves behind is itself the
-  // word character the assertion refuses.
-  // The trailing seam is an exhaustive alternation rather than an assertion
-  // over an optional group: either the name's full trailing decoration is
-  // present with a clean boundary after it, or nothing of it is taken and
-  // both original boundary checks hold. The first branch is what accepts a
-  // spelled keycap whose digit is itself a word character; every other text
-  // falls through to the second branch, which is the unchanged pair of
-  // assertions, so a keycap the name does not spell stays a foreign word.
-  const leading = parts.leading ? `(?:${parts.leading}|)` : "";
+  // Boundaries reach across optional edge decoration. Each branch owns its
+  // spacing seam because overlapping repetitions make raw stripping quadratic.
+  const leading = parts.leading ? `(?:${parts.leading}${DECORATION_SPACING}|)` : "";
   const trailing = parts.trailing
-    ? `(?:${parts.trailing}(?!${UNICODE_WORD_CHAR})|(?!${parts.trailing}${UNICODE_WORD_CHAR})(?!${UNICODE_WORD_CHAR}))`
+    ? `(?:${DECORATION_SPACING}${parts.trailing}(?!${UNICODE_WORD_CHAR})|(?!${UNICODE_WORD_CHAR})(?!${DECORATION_SPACING}${parts.trailing}${UNICODE_WORD_CHAR}))`
     : `(?!${UNICODE_WORD_CHAR})`;
-  return `(?:@|(?<!${UNICODE_WORD_CHAR}${leading}))${leading}${JOINER_SPACING}${parts.core}${JOINER_SPACING}${trailing}`;
+  return `(?:@|(?<!${UNICODE_WORD_CHAR}${leading}))${leading}${parts.core}${trailing}`;
+}
+
+function encodeOptionalJoiners(literal: string): string {
+  return literal
+    .split(/([\u200C\u200D]+)/u)
+    .filter(Boolean)
+    .map((part) => (JOINER_ONLY.test(part) ? `(?:${escapeRegExp(part)}|)` : escapeRegExp(part)))
+    .join("");
 }
 
 function escapeJoinerTolerantLiteral(literal: string): string {
@@ -120,13 +71,12 @@ function escapeJoinerTolerantLiteral(literal: string): string {
   // stripping runs on the raw text that still carries them. A literal has to
   // accept both forms or an identity built only from a ZWJ sequence can be
   // stripped but never matched.
-  const parts = literal.split(JOINER_RUN);
-  if (parts.every((part) => part === "")) {
+  if (Array.from(literal).every((character) => JOINER_ONLY.test(character))) {
     // Nothing survives normalization. Emitting the optional joiner class alone
     // would match the empty string, i.e. every message.
     return "";
   }
-  return parts.map(escapeRegExp).join(JOINER_SPACING);
+  return encodeOptionalJoiners(literal);
 }
 
 // A name reads as word runs with decoration or separators around and between
@@ -141,56 +91,68 @@ function escapeJoinerTolerantLiteral(literal: string): string {
 type NameUnit =
   | { kind: "token"; literal: string }
   | { kind: "separator"; literal: string }
-  | { kind: "decoration"; marks: string[]; spaced: boolean };
+  | { kind: "decoration"; literal: string; spellings: string[]; spaced: boolean };
 type DecorationUnit = Extract<NameUnit, { kind: "decoration" }>;
 type SeparatorUnit = Extract<NameUnit, { kind: "separator" }>;
 
-function parseNameUnits(name: string): NameUnit[] {
-  const units: NameUnit[] = [];
-  // Odd indices are captured word tokens; even indices are the gaps around them.
-  for (const [index, segment] of name.split(NAME_TOKEN_SPLIT).entries()) {
-    if (index % 2 === 1) {
-      units.push({ kind: "token", literal: segment });
-      continue;
-    }
-    if (!segment) {
-      continue;
-    }
-    const marks: string[] = [];
-    let decorative = true;
-    // A non-decoration character that can head an emoji or keycap sequence is
-    // decoration after all when the character following it requests emoji
-    // presentation, so its verdict stays pending until the next character
-    // either excuses it or confirms it.
-    let pending = false;
-    for (const char of segment) {
-      // Whitespace is spacing, and joiners do not survive normalization: what a
-      // typed mention has to carry is the decoration left between them.
-      if (/\s/u.test(char) || JOINER_RUN.test(char)) {
-        continue;
-      }
-      if (pending && !EMOJI_PRESENTATION_MARKS.has(char)) {
-        decorative = false;
-      }
-      if (DECORATION_CHAR.test(char)) {
-        pending = false;
-      } else if (EMOJI_PRESENTATION_BASE.test(char)) {
-        pending = true;
-      } else {
-        // No presentation mark can excuse this character, so the verdict is
-        // final: the segment spells a separator.
-        decorative = false;
-        pending = false;
-      }
-      marks.push(escapeRegExp(char));
-    }
-    units.push(
-      decorative && !pending
-        ? { kind: "decoration", marks, spaced: /\s/u.test(segment) }
-        : { kind: "separator", literal: segment },
-    );
+function isEmojiPresentationGrapheme(grapheme: string): boolean {
+  const characters = Array.from(grapheme);
+  const first = characters[0];
+  return Boolean(
+    first &&
+    EMOJI_PRESENTATION_BASE.test(first) &&
+    characters.some((character) => EMOJI_PRESENTATION_MARKS.has(character)),
+  );
+}
+
+function isIdentityGrapheme(grapheme: string): boolean {
+  return NAME_IDENTITY_GRAPHEME.test(grapheme) && !isEmojiPresentationGrapheme(grapheme);
+}
+
+function isDecorationGrapheme(grapheme: string): boolean {
+  if (isEmojiPresentationGrapheme(grapheme)) {
+    return true;
   }
-  return units;
+  return Array.from(grapheme).every(
+    (character) =>
+      /\s/u.test(character) ||
+      JOINER_RUN.test(character) ||
+      OMISSIBLE_DECORATION_CHAR.test(character),
+  );
+}
+
+function parseNameUnits(name: string): NameUnit[] {
+  const graphemes = Array.from(NAME_GRAPHEME_SEGMENTER.segment(name), (part) => part.segment);
+  const runs: Array<{ identity: boolean; literal: string }> = [];
+  for (const grapheme of graphemes) {
+    const identity = isIdentityGrapheme(grapheme);
+    const previous = runs.at(-1);
+    if (previous?.identity === identity) {
+      previous.literal += grapheme;
+    } else {
+      runs.push({ identity, literal: grapheme });
+    }
+  }
+  return runs.map((run) => {
+    if (run.identity) {
+      return { kind: "token", literal: run.literal };
+    }
+    const gapGraphemes = Array.from(
+      NAME_GRAPHEME_SEGMENTER.segment(run.literal),
+      (part) => part.segment,
+    );
+    if (!gapGraphemes.every(isDecorationGrapheme)) {
+      return { kind: "separator", literal: run.literal };
+    }
+    return {
+      kind: "decoration",
+      literal: run.literal,
+      spellings: gapGraphemes
+        .filter((grapheme) => !/^\s+$/u.test(grapheme) && !JOINER_ONLY.test(grapheme))
+        .map(escapeJoinerTolerantLiteral),
+      spaced: /\s/u.test(run.literal),
+    };
+  });
 }
 
 // A separator is typed as the name spells it. Whitespace inside it stays
@@ -198,30 +160,33 @@ function parseNameUnits(name: string): NameUnit[] {
 // raw text still carries for stripping stay reachable without being required.
 function encodeSeparator(unit: SeparatorUnit): string {
   return unit.literal
-    .split(/(\s+)/u)
+    .split(/(\s+|[\u200C\u200D]+)/u)
     .filter(Boolean)
-    .map((piece) => (/^\s+$/u.test(piece) ? String.raw`\s+` : escapeJoinerTolerantLiteral(piece)))
-    .join(JOINER_SPACING);
+    .map((piece) =>
+      /^\s+$/u.test(piece)
+        ? String.raw`\s+`
+        : JOINER_ONLY.test(piece)
+          ? encodeOptionalJoiners(piece)
+          : escapeRegExp(piece),
+    )
+    .join("");
 }
 
-// Decoration at the name's edge. It is offered to the boundary assertions and
-// to the match as the sequence the name spells, once, together with the
-// spacing that sits between it and the word runs: left out, the bare core
-// matches while the decoration stands and stripping takes the name but leaves
-// its decoration behind in the command text. The edge never reaches for the
-// whitespace on its far side: with no word run there, that whitespace is the
-// member's own text rather than part of the name.
-function encodeEdgeDecoration(unit: NameUnit | undefined, side: "leading" | "trailing"): string {
+function encodeEdgeDecorationLiteral(unit: NameUnit | undefined): string {
   if (unit?.kind !== "decoration") {
     return "";
   }
-  const spelled = unit.marks.join(JOINER_SPACING);
+  const spelled = unit.spellings.join(OPTIONAL_JOINER_GAP);
   if (!spelled) {
     // A markless edge is spelled with joiners and spacing alone. The joiners
     // are taken at the core's seam, and the whitespace is the member's own.
-    return "";
+    return encodeOptionalJoiners(
+      Array.from(unit.literal)
+        .filter((character) => JOINER_ONLY.test(character))
+        .join(""),
+    );
   }
-  return side === "leading" ? `${spelled}${DECORATION_SPACING}` : `${DECORATION_SPACING}${spelled}`;
+  return spelled;
 }
 
 // Decoration between two word runs (emoji, flags, symbols) may be typed as
@@ -231,14 +196,19 @@ function encodeEdgeDecoration(unit: NameUnit | undefined, side: "leading" | "tra
 // too. Only code points the name itself carries are accepted, so neither path
 // ever consumes unrelated punctuation beside a mention.
 function encodeInteriorDecoration(unit: DecorationUnit): string {
-  const spelled = unit.marks.join(DECORATION_SPACING);
+  const spelled = unit.spellings.join(DECORATION_SPACING);
   if (!spelled) {
     // Joiners vanish from normalized text while whitespace survives it. So a
     // gap spelled with joiners alone may be omitted but never replaced by
     // whitespace -- the spaced spelling normalizes to a different name -- and
     // a spaced gap keeps its separator required while reaching across the
     // joiners the raw text still carries for stripping.
-    return unit.spaced ? String.raw`${JOINER_SPACING}\s${DECORATION_SPACING}` : JOINER_SPACING;
+    const joiners = encodeOptionalJoiners(
+      Array.from(unit.literal)
+        .filter((character) => JOINER_ONLY.test(character))
+        .join(""),
+    );
+    return unit.spaced ? String.raw`${joiners}\s${DECORATION_SPACING}` : joiners;
   }
   // A gap carrying whitespace keeps a one-separator floor so the bare
   // concatenation of the surrounding words never matches.
@@ -261,15 +231,15 @@ function deriveNameParts(name: string): DerivedNameParts {
   for (const unit of units.slice(start, end)) {
     core +=
       unit.kind === "token"
-        ? escapeRegExp(unit.literal)
+        ? escapeJoinerTolerantLiteral(unit.literal)
         : unit.kind === "separator"
           ? encodeSeparator(unit)
           : encodeInteriorDecoration(unit);
   }
   return {
-    leading: encodeEdgeDecoration(units[0], "leading"),
+    leading: encodeEdgeDecorationLiteral(units[0]),
     core,
-    trailing: encodeEdgeDecoration(units.at(-1), "trailing"),
+    trailing: encodeEdgeDecorationLiteral(units.at(-1)),
   };
 }
 
