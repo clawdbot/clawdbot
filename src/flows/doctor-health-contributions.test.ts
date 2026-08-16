@@ -172,6 +172,7 @@ const mocks = vi.hoisted(() => ({
       requirement: hit.reason,
     }),
   ),
+  collectBundledChannelPackageStateLoadFailures: vi.fn(() => [] as unknown[]),
   collectStalePluginRuntimeSymlinkHealthFindings: vi.fn(async () => [] as unknown[]),
   collectChannelPreviewWarningHealthFindings: vi.fn(
     async (): Promise<readonly HealthFinding[]> => [],
@@ -514,6 +515,12 @@ vi.mock("../commands/doctor/shared/channel-plugin-blockers.js", () => ({
   channelPluginBlockerHitToHealthFinding: mocks.channelPluginBlockerHitToHealthFinding,
 }));
 
+vi.mock("../channels/plugins/package-state-probes.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../channels/plugins/package-state-probes.js")>()),
+  collectBundledChannelPackageStateLoadFailures:
+    mocks.collectBundledChannelPackageStateLoadFailures,
+}));
+
 vi.mock("./doctor-startup-channel-maintenance.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./doctor-startup-channel-maintenance.js")>();
   return {
@@ -805,6 +812,8 @@ describe("doctor health contributions", () => {
     mocks.scanConfiguredChannelPluginBlockers.mockReset();
     mocks.scanConfiguredChannelPluginBlockers.mockReturnValue([]);
     mocks.channelPluginBlockerHitToHealthFinding.mockClear();
+    mocks.collectBundledChannelPackageStateLoadFailures.mockReset();
+    mocks.collectBundledChannelPackageStateLoadFailures.mockReturnValue([]);
     mocks.collectStalePluginRuntimeSymlinkHealthFindings.mockReset();
     mocks.collectStalePluginRuntimeSymlinkHealthFindings.mockResolvedValue([]);
     mocks.collectChannelPreviewWarningHealthFindings.mockReset();
@@ -2341,6 +2350,7 @@ describe("doctor health contributions", () => {
     expect(contributionIds).toContain("core/doctor/whatsapp-responsiveness");
     expect(contributionIds).toContain("core/doctor/device-pairing");
     expect(contributionIds).toContain("core/doctor/channel-plugin-blockers");
+    expect(contributionIds).toContain("core/doctor/channel-package-state-capabilities");
     expect(contributionIds).toContain("core/doctor/channel-preview-warnings");
     expect(contributionIds).toContain("core/doctor/systemd-linger");
     expect(contributionChecks.map((check) => check.id)).toEqual(contributionIds);
@@ -3056,6 +3066,41 @@ describe("doctor health contributions", () => {
       ],
     });
     expect(mocks.scanConfiguredChannelPluginBlockers).toHaveBeenCalledWith(ctx.cfg, process.env);
+  });
+
+  it("reports channel package-state capability load failures by default", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const capabilityCheck = contributionChecks.find(
+      (check) => check.id === "core/doctor/channel-package-state-capabilities",
+    );
+    expect(capabilityCheck).toMatchObject({ defaultEnabled: true });
+    expect(capabilityCheck).toBeDefined();
+    mocks.collectBundledChannelPackageStateLoadFailures.mockReturnValue([
+      {
+        detail: "plugin module path not found: /plugins/example-chat/auth-presence",
+        metadataKey: "persistedAuthState",
+        pluginId: "example-chat",
+      },
+    ]);
+
+    const ctx = {
+      cfg: {},
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+
+    await expect(runDoctorLintChecks(ctx, { checks: [capabilityCheck!] })).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [
+        expect.objectContaining({
+          checkId: "core/doctor/channel-package-state-capabilities",
+          severity: "warning",
+          target: "example-chat",
+          requirement: "declared-channel-package-state-capability-loadable",
+        }),
+      ],
+    });
   });
 
   it("keeps channel preview warnings opt-in for default lint selection", async () => {
