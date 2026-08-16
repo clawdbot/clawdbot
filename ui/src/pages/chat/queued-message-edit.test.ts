@@ -149,10 +149,10 @@ describe("queued message edit round-trip", () => {
     unsubscribe();
   });
 
-  it.each(["/stop", "/compact"])(
+  it.each(["/stop", "/compact", "stop"])(
     "keeps the source row and rejects a command-like inline edit: %s",
     async (command) => {
-      const { host, unsubscribe } = queueHost([{}]);
+      const { host, unsubscribe } = queueHost([{}], { chatRunId: "run-active" });
       expect(beginQueuedMessageEdit(host as never, "queued-1")).toBe("started");
 
       await handleSendChat(host as never, command, {
@@ -165,7 +165,7 @@ describe("queued message edit round-trip", () => {
       expect(host.request?.mock.calls.some(([method]) => method === "chat.send") ?? false).toBe(
         false,
       );
-      expect(host.chatError).toContain("Queued-row edits cannot run slash commands");
+      expect(host.chatError).toContain("Queued-row edits cannot run commands or stop aliases");
       unsubscribe();
     },
   );

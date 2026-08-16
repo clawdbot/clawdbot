@@ -224,10 +224,10 @@ export async function handleSendChat(
   }
   const isInlineEditSubmission = requestedEditId != null && inlineEdit?.id === requestedEditId;
   const parsedCommand = !skillWorkshopRevision ? parseSlashCommand(message) : null;
-  if (isInlineEditSubmission && parsedCommand) {
+  if (isInlineEditSubmission && (parsedCommand || isChatStopCommand(message))) {
     setChatError(
       host,
-      "Queued-row edits cannot run slash commands. Cancel this edit and send the command from the composer.",
+      "Queued-row edits cannot run commands or stop aliases. Cancel this edit and send the command from the composer.",
     );
     return;
   }
