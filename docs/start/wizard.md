@@ -114,12 +114,22 @@ asks how to continue. Run `openclaw channels add` or `openclaw configure` for
 later non-inference additions; use `openclaw onboard` for provider or auth route
 changes.
 
-## Classic wizard: QuickStart vs Advanced
+## Classic wizard setup modes
 
-Run `openclaw onboard --classic` to open the full wizard. It starts with a
-choice between **QuickStart** (defaults) and **Advanced** (full control). Pass
-`--flow quickstart` or `--flow advanced` (alias `manual`) to select the classic
-flow and skip that prompt.
+Run `openclaw onboard --classic` to open the full wizard. Its **Setup mode**
+menu is built from the current installation:
+
+- With no configured default model, **QuickStart (recommended)** is selected by
+  default, followed by **Manual setup**.
+- With a configured default model, **Keep existing model config** appears first
+  and is selected by default, followed by **QuickStart (recommended)** and
+  **Manual setup**.
+- Each detected migration source adds an **Import from &lt;source&gt;** choice
+  after the setup choices.
+
+Pass `--flow quickstart` or `--flow manual` (alias `advanced`) to select a
+classic setup flow and skip that prompt. Import flags select the import flow
+directly instead of showing a menu that could discard the requested import.
 
 <Tabs>
   <Tab title="QuickStart (defaults)">
@@ -133,13 +143,13 @@ flow and skip that prompt.
     - Telegram and WhatsApp DMs default to **allowlist**: Telegram asks for a numeric Telegram user ID, WhatsApp asks for a phone number
 
   </Tab>
-  <Tab title="Advanced (full control)">
+  <Tab title="Manual setup (full control)">
     - Exposes every step: mode, workspace, gateway, channels, daemon, skills
 
   </Tab>
 </Tabs>
 
-Remote mode (`--mode remote`) always uses the advanced flow; it only
+Remote mode (`--mode remote`) always uses the manual flow; it only
 configures this machine to connect to a Gateway elsewhere and never installs
 or changes anything on the remote host.
 
@@ -147,7 +157,8 @@ or changes anything on the remote host.
 
 Local mode (default) walks through these steps:
 
-1. **Model/Auth** - pick a provider auth flow (API key, OAuth, or
+1. **Workspace** - directory for agent files (default `~/.openclaw/workspace`). Seeds bootstrap files.
+2. **Model/Auth** - pick a provider auth flow (API key, OAuth, or
    provider-specific manual auth), including Custom Provider
    (OpenAI-compatible, OpenAI Responses-compatible, Anthropic-compatible, or
    Unknown auto-detect). Pick a default model.
@@ -171,7 +182,6 @@ Local mode (default) walks through these steps:
    model/auth setup once or be ignored without blocking the rest of the
    classic wizard. Ignoring it does not unlock OpenClaw; conversational setup
    still requires a passing inference check.
-2. **Workspace** - directory for agent files (default `~/.openclaw/workspace`). Seeds bootstrap files.
 3. **Gateway** - port, bind address, auth mode, Tailscale exposure. In
    interactive token mode, choose plaintext token storage (default) or opt
    into a SecretRef. Non-interactive SecretRef path: `--gateway-token-ref-env <ENV_VAR>`.
@@ -191,11 +201,15 @@ Local mode (default) walks through these steps:
 7. **Skills** - installs recommended skills and their optional dependencies.
 
 <Note>
-Re-running onboarding does **not** wipe anything unless you explicitly choose
-**Reset** (or pass `--reset`). CLI `--reset` defaults to config, credentials,
-and sessions; use `--reset-scope full` to also remove the workspace. If the
-config is invalid or contains legacy keys, onboarding asks you to run
-`openclaw doctor` first.
+Re-running onboarding does **not** wipe anything unless you pass `--reset`.
+Reset is a command flag, not a **Setup mode** menu choice. It defaults to
+config, credentials, and sessions; use `--reset-scope full` to also remove the
+workspace. The command validates TTY availability and rejectable CLI options
+before moving state to Trash; non-interactive setup also requires
+`--accept-risk` first. Interactive classic setup performs reset before showing
+its risk acknowledgement, and declining that prompt does not undo the reset.
+Without `--reset`, an invalid config or legacy keys make onboarding ask you to
+run `openclaw doctor` first.
 </Note>
 
 `--flow import` runs a detected migration flow (for example Hermes) in the

@@ -90,8 +90,8 @@ not overwrite the existing skill.
   `--gateway-port`, `--gateway-bind`, `--gateway-auth`, and `--tailscale`
   override the corresponding stored or default quickstart values; omitted
   options keep their current values.
-- `--flow manual` (alias `advanced`): opens the classic wizard with full prompts
-  for port, bind, and auth.
+- `--flow manual` (alias `advanced`): opens the classic wizard's **Manual
+  setup** flow with full prompts for port, bind, and auth.
 - `--flow import`: runs a detected migration provider (for example Hermes via `--import-from hermes`) against a fresh setup. After confirmation, onboarding stages config, credentials, workspace files, memory, and skills under private temporary targets; imported inference must pass a live completion before workspace and agent state are promoted and configuration is committed. Failure or cancellation before promotion leaves the live target untouched. External activation steps that cannot be rolled back, such as Codex plugin installation, run afterward and remain retryable from the migration report. Reset config, credentials, sessions, and workspace state first if any exist. Use [`openclaw migrate`](/cli/migrate) for dry-run plans, overwrite mode, verified backups, reports, and exact mappings.
 - `--remote-url` and `--remote-token`: prefill the classic remote Gateway step and override stored remote values for this run. Changing the URL does not reuse stored credentials unless you also pass a token. The token stays masked in prompts and follows the wizard's existing plaintext or SecretRef storage choice.
 - `--tailscale-reset-on-exit` and `--no-tailscale-reset-on-exit`: explicitly control whether Tailscale Serve or Funnel configuration is reset when the Gateway exits. Omitting both preserves the current setting during non-interactive reruns.
@@ -204,7 +204,17 @@ openclaw onboard --reset
 openclaw onboard --reset --reset-scope full
 ```
 
-`--reset` wipes state before running setup. `--reset-scope` controls how much: `config` (config only), `config+creds+sessions` (default when `--reset` is passed without a scope), or `full` (also resets the workspace). Workspace reset only happens with `--reset-scope full`.
+`--reset` is a destructive pre-dispatch flag, not a choice in the classic
+wizard's **Setup mode** menu. `--reset-scope` controls how much it removes:
+`config` (config only), `config+creds+sessions` (default when `--reset` is
+passed without a scope), or `full` (also resets the workspace). Before moving
+state to Trash, onboarding validates TTY availability, the reset scope, auth
+and Gateway options, migration import options, and the workspace target for a
+full reset. Non-interactive setup also requires `--accept-risk` before reset.
+Interactive classic setup performs reset before showing its risk
+acknowledgement, so invoking `--reset` can move state to Trash before you can
+decline that prompt. After reset, the command runs guided, classic, or
+non-interactive onboarding according to the other flags.
 
 ## Locale
 

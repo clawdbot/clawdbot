@@ -16,8 +16,8 @@ commands), see [`openclaw onboard`](/cli/onboard).
 
 Local mode (default) walks you through:
 
-- Model and auth setup (Anthropic, OpenAI Code subscription OAuth, xAI, OpenCode, custom endpoints, and more provider-owned auth flows)
 - Workspace location and bootstrap files
+- Model and auth setup (Anthropic, OpenAI Code subscription OAuth, xAI, OpenCode, custom endpoints, and more provider-owned auth flows)
 - Gateway settings (port, bind, auth, Tailscale)
 - Channels and providers (Discord, Feishu, Google Chat, iMessage, Mattermost, Microsoft Teams, QQ Bot, Signal, Slack, Telegram, WhatsApp, and other bundled or plugin channels)
 - Web search provider (optional)
@@ -31,19 +31,25 @@ not install or modify anything on the remote host.
 ## Local flow details
 
 <Steps>
-  <Step title="Existing config detection">
-    - If `~/.openclaw/openclaw.json` exists, choose **Keep current values**, **Review and update**, or **Reset before setup**.
-    - Re-running the wizard does not wipe anything unless you explicitly choose Reset (or pass `--reset`).
-    - CLI `--reset` defaults to `config+creds+sessions`; use `--reset-scope full` to also remove the workspace.
-    - If config is invalid or contains legacy keys, the wizard stops and asks you to run `openclaw doctor` before continuing.
-    - Reset moves state to Trash (never deletes directly) and offers scopes:
-      - Config only
-      - Config + credentials + sessions
-      - Full reset (also removes the workspace)
-
-  </Step>
-  <Step title="Model and auth">
-    - Full option matrix is in [Auth and model options](#auth-and-model-options).
+  <Step title="Setup mode">
+    - With no configured default model, the menu contains **QuickStart
+      (recommended)** (default) followed by **Manual setup**.
+    - With a configured default model, **Keep existing model config** appears
+      first and becomes the default, followed by **QuickStart (recommended)**
+      and **Manual setup**.
+    - Each detected migration source adds an **Import from &lt;source&gt;** choice
+      after those setup choices. Explicit import flags dispatch the import
+      directly and skip this menu.
+    - Re-running the wizard does not wipe anything unless you pass `--reset`.
+      Reset is a command flag, not a setup-mode choice.
+    - `--reset` defaults to `config+creds+sessions`; use `--reset-scope full` to
+      also remove the workspace. Before moving state to Trash, the command
+      validates TTY availability and rejectable CLI options. Non-interactive
+      setup also requires `--accept-risk` before reset. Interactive classic
+      setup performs reset before showing its risk acknowledgement; declining
+      that prompt does not undo the reset.
+    - Without `--reset`, invalid config or legacy keys stop the wizard and ask
+      you to run `openclaw doctor` before continuing.
 
   </Step>
   <Step title="Workspace">
@@ -53,6 +59,10 @@ not install or modify anything on the remote host.
       you explicitly confirm the move. Non-interactive reruns warn and preserve
       the current value.
     - Workspace layout: [Agent workspace](/concepts/agent-workspace).
+
+  </Step>
+  <Step title="Model and auth">
+    - Full option matrix is in [Auth and model options](#auth-and-model-options).
 
   </Step>
   <Step title="Gateway">
