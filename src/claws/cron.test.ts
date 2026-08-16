@@ -222,4 +222,20 @@ describe("installClawCronJobs", () => {
     expect(first[0]).toMatchObject({ schedulerJobId: "scheduler-converged", status: "complete" });
     expect(second[0]).toMatchObject({ schedulerJobId: "scheduler-converged", status: "complete" });
   });
+
+  it("throws a descriptive error when job_json is malformed", async () => {
+    const current = await fixture();
+    const { openOpenClawStateDatabase } = await import("../state/openclaw-state-db.js");
+    const database = openOpenClawStateDatabase({ env: current.env });
+    database.db
+      .prepare(
+        `INSERT INTO claw_cron_refs (agent_id, manifest_id, schema_version, declaration_key, status, job_json, created_at_ms, updated_at_ms)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run("worker-two", "bad-job", "openclaw.clawCronRef.v1", "claw:worker-two:bad-job", "pending", "not-valid-json", 1, 1);
+    const { readClawCronRefs: readRefs } = await import("./cron.js");
+    expect(() => readRefs("worker-two", { env: current.env })).toThrow(
+      /Failed to parse cron job JSON/,
+    );
+  });
 });

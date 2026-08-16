@@ -59,6 +59,12 @@ export class ClawCronInstallError extends Error {
 }
 
 function rowToRef(row: CronRefRow): PersistedClawCronRef {
+  let job: ClawCronJob;
+  try {
+    job = JSON.parse(row.job_json) as ClawCronJob;
+  } catch {
+    throw new Error(`Failed to parse cron job JSON for row ${row.declaration_key}`);
+  }
   return {
     schemaVersion: CLAW_CRON_REF_SCHEMA_VERSION,
     agentId: row.agent_id,
@@ -66,7 +72,7 @@ function rowToRef(row: CronRefRow): PersistedClawCronRef {
     declarationKey: row.declaration_key,
     ...(row.scheduler_job_id ? { schedulerJobId: row.scheduler_job_id } : {}),
     status: row.status,
-    job: JSON.parse(row.job_json) as ClawCronJob,
+    job,
     ...(row.error ? { error: row.error } : {}),
     createdAtMs: Number(row.created_at_ms),
     updatedAtMs: Number(row.updated_at_ms),
