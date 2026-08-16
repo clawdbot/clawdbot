@@ -54,6 +54,7 @@ import type {
   RequesterMcpConnect,
   SessionMcpRequestRuntime,
   SessionMcpRequesterScope,
+  SessionMcpRuntime,
   SessionMcpRuntimeManager,
 } from "./agent-bundle-mcp-types.js";
 import {
@@ -411,7 +412,7 @@ export function createSessionMcpRuntime(params: {
   requesterConnect?: RequesterMcpConnect;
   configFingerprint?: string;
   toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
-}): SessionMcpRequestRuntime {
+}): SessionMcpRuntime {
   const { loaded, fingerprint: computedFingerprint } = loadSessionMcpConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
@@ -1240,7 +1241,7 @@ export function createSessionMcpRuntime(params: {
       sessions.clear();
       await Promise.allSettled(sessionsToClose.map((session) => disposeSession(session)));
     },
-  };
+  } satisfies SessionMcpRequestRuntime;
 }
 
 setDefaultCreateSessionMcpRuntime(createSessionMcpRuntime);
