@@ -1932,6 +1932,25 @@ describe("reply run registry", () => {
     ).resolves.toEqual({ status: "accepted" });
   });
 
+  it("rejects inbound steering when no authority fingerprint can be proven", async () => {
+    const queueMessage = vi.fn(async () => {});
+    const operation = createTestReplyOperation({ sessionId: "session-missing-authority" });
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: vi.fn(),
+      isStreaming: () => true,
+      queueMessage,
+    });
+    operation.setPhase("running");
+
+    await expect(
+      queueCurrentReplyRunMessage("session-missing-authority", "legacy inbound steer", {
+        isInboundUserMessage: true,
+      }),
+    ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
+    expect(queueMessage).not.toHaveBeenCalled();
+  });
+
   it("projects inbound authority before backend admission without forwarding the overlay", async () => {
     const run = createQueueTestRun({ prompt: "projected inbound" });
     const route = { provider: "openai", model: "gpt-primary" };

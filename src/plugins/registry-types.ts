@@ -506,6 +506,7 @@ export type PluginRecord = {
   configUiHints?: Record<string, PluginConfigUiHint>;
   configJsonSchema?: JsonSchemaObject;
   contracts?: PluginManifestContracts;
+  channelConfigs?: PluginManifestRecord["channelConfigs"];
   dashboard?: PluginManifestDashboard;
   mcpServers?: Record<string, PluginManifestMcpServer>;
   memorySlotSelected?: boolean;

@@ -185,6 +185,7 @@ export function collectBundledChannelConfigsCore(params: {
       ...((surface?.runtime ?? existing?.runtime)
         ? { runtime: surface?.runtime ?? existing?.runtime }
         : {}),
+      ...(existing?.reload ? { reload: existing.reload } : {}),
       ...((trimBundledPluginString(existing?.label) ?? trimBundledPluginString(channelMeta?.label))
         ? {
             label:

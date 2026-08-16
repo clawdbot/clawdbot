@@ -401,6 +401,7 @@ export function normalizeChannelConfigs(
       isRecord(rawEntry.runtime) && typeof rawEntry.runtime.safeParse === "function"
         ? (rawEntry.runtime as ChannelConfigRuntimeSchema)
         : undefined;
+    const reload = normalizeChannelReload(rawEntry.reload, channelId);
     const label = normalizeOptionalString(rawEntry.label) ?? "";
     const description = normalizeOptionalString(rawEntry.description) ?? "";
     const preferOver = normalizeTrimmedStringList(rawEntry.preferOver);
@@ -409,6 +410,7 @@ export function normalizeChannelConfigs(
       schema,
       ...(uiHints ? { uiHints } : {}),
       ...(runtime ? { runtime } : {}),
+      ...(reload ? { reload } : {}),
       ...(label ? { label } : {}),
       ...(description ? { description } : {}),
       ...(preferOver.length > 0 ? { preferOver } : {}),
@@ -416,6 +418,40 @@ export function normalizeChannelConfigs(
     };
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function isOwnedChannelConfigPath(path: string, channelId: string): boolean {
+  return path.startsWith(`channels.${channelId}.`);
+}
+
+function normalizeChannelReload(
+  value: unknown,
+  channelId: string,
+): PluginManifestChannelConfig["reload"] | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const configPrefixes = normalizeTrimmedStringList(value.configPrefixes);
+  const noopPrefixes = normalizeTrimmedStringList(value.noopPrefixes);
+  const accountIndexReloadPaths = normalizeTrimmedStringList(value.accountIndexReloadPaths).filter(
+    (path) => isOwnedChannelConfigPath(path, channelId),
+  );
+  const accountScopedRestart =
+    typeof value.accountScopedRestart === "boolean" ? value.accountScopedRestart : undefined;
+  if (
+    configPrefixes.length === 0 &&
+    noopPrefixes.length === 0 &&
+    accountIndexReloadPaths.length === 0 &&
+    accountScopedRestart === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    ...(configPrefixes.length > 0 ? { configPrefixes } : {}),
+    ...(noopPrefixes.length > 0 ? { noopPrefixes } : {}),
+    ...(accountIndexReloadPaths.length > 0 ? { accountIndexReloadPaths } : {}),
+    ...(accountScopedRestart !== undefined ? { accountScopedRestart } : {}),
+  };
 }
 
 export function normalizeManifestChannelCommandDefaults(

@@ -1104,14 +1104,23 @@ describe("server-channels auto restart", () => {
     const replacement = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
     expect(replacement?.running).toBe(true);
 
-    // The abandoned stop settles late and tries to repaint the replacement.
+    // The abandoned stop writes after the gateway has already timed it out; that
+    // plugin-authored stale patch must not repaint the still-running runtime.
     lateSetStatus?.({ accountId: DEFAULT_ACCOUNT_ID, running: false, lifecycle: "stopped" });
-    releaseStop?.();
     await flushMicrotasks();
 
-    const after = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
-    expect(after?.running).toBe(true);
-    expect(after?.lifecycle).not.toBe("stopped");
+    const afterLateWrite =
+      manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(afterLateWrite?.running).toBe(true);
+    expect(afterLateWrite?.lifecycle).not.toBe("stopped");
+
+    releaseStop?.();
+    await waitForMicrotaskCondition(
+      () =>
+        manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID]?.running ===
+        false,
+      "expected settled stopAccount timeout to finalize stopped runtime",
+    );
   });
 
   it("stops thaw restarts once admission closes mid-pass", async () => {
@@ -1153,9 +1162,11 @@ describe("server-channels auto restart", () => {
     expect(starts).toEqual([]);
   });
 
-  it("bounds a hung stopAccount so a host-thaw restart still completes", async () => {
+  it("defers host-thaw replacements while stopAccount remains timed out", async () => {
+    const onError = vi.fn();
     const stopAccount = vi.fn(async () => {
-      // A pathological plugin stop that never settles must not wedge recovery.
+      // A plugin stop hook that never settles may still own account-keyed state;
+      // replacement must wait for a later recovery pass instead of racing it.
       await new Promise<void>(() => {});
     });
     const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
@@ -1170,15 +1181,562 @@ describe("server-channels auto restart", () => {
 
     const restartTask = restartRunningChannelAccounts(manager, {
       shouldContinue: () => true,
-      onError: () => {},
+      onError,
     });
-    await vi.advanceTimersByTimeAsync(11_000);
+    await vi.advanceTimersByTimeAsync(5_000);
     await restartTask;
 
     const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
     expect(stopAccount).toHaveBeenCalledTimes(1);
-    expect(startAccount.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(startAccount).toHaveBeenCalledTimes(1);
     expect(account?.running).toBe(true);
+    expect(account?.lastError).toContain("stopAccount timed out");
+    expect(onError.mock.calls[0]?.[0]).toContain("stopAccount timed out");
+  });
+
+  it("retries host-thaw replacement after a timed-out stopAccount later settles", async () => {
+    const releaseFirstStop = createDeferred();
+    const stopAccount = vi.fn(async () => {
+      if (stopAccount.mock.calls.length === 1) {
+        await releaseFirstStop.promise;
+      }
+    });
+    const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+      await new Promise<void>((resolve) => {
+        abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    installTestRegistry(createTestPlugin({ startAccount, stopAccount }));
+    const manager = createManager();
+    await manager.startChannels();
+    await vi.waitFor(() => expect(startAccount).toHaveBeenCalledTimes(1));
+
+    const firstRestart = restartRunningChannelAccounts(manager, {
+      shouldContinue: () => true,
+      onError: () => {},
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await firstRestart;
+    expect(startAccount).toHaveBeenCalledTimes(1);
+
+    releaseFirstStop.resolve();
+    await flushMicrotasks();
+    let account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(false);
+    expect(account?.restartPending).toBe(true);
+
+    const secondRestart = restartRunningChannelAccounts(manager, {
+      shouldContinue: () => true,
+      onError: () => {},
+    });
+    await secondRestart;
+
+    expect(stopAccount).toHaveBeenCalledTimes(1);
+    expect(startAccount).toHaveBeenCalledTimes(2);
+    account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(true);
+    expect(account?.restartPending).toBe(false);
+  });
+
+  it("lets ordinary start recover when manual stopAccount succeeds during fence wait", async () => {
+    const releaseStopAccount = createDeferred();
+    const stopAccount = vi.fn(async () => {
+      await releaseStopAccount.promise;
+    });
+    const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+      await new Promise<void>((resolve) => {
+        abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    installTestRegistry(createTestPlugin({ startAccount, stopAccount }));
+    const manager = createManager();
+    await manager.startChannels();
+    await vi.waitFor(() => expect(startAccount).toHaveBeenCalledTimes(1));
+
+    const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+    const stopTimedOut = expect(stopTask).rejects.toThrow("stopAccount timed out");
+    await vi.advanceTimersByTimeAsync(5_000);
+    await stopTimedOut;
+
+    const startTask = manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    await flushMicrotasks();
+    expect(startAccount).toHaveBeenCalledTimes(1);
+
+    releaseStopAccount.resolve();
+    await startTask;
+
+    expect(stopAccount).toHaveBeenCalledTimes(1);
+    expect(startAccount).toHaveBeenCalledTimes(2);
+    const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(true);
+    expect(account?.restartPending).toBe(false);
+    expect(account?.lastError).toBeNull();
+  });
+
+  it("waits for the aborted task after a successful manual stopAccount fence", async () => {
+    const releaseStopAccount = createDeferred();
+    const releaseAbortedTask = createDeferred();
+    let firstTaskStarted = false;
+    const stopAccount = vi.fn(async () => {
+      await releaseStopAccount.promise;
+    });
+    const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+      const isFirstTask = !firstTaskStarted;
+      firstTaskStarted = true;
+      await new Promise<void>((resolve) => {
+        abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+      if (isFirstTask) {
+        await releaseAbortedTask.promise;
+      }
+    });
+    installTestRegistry(createTestPlugin({ startAccount, stopAccount }));
+    const manager = createManager();
+    await manager.startChannels();
+    await vi.waitFor(() => expect(startAccount).toHaveBeenCalledTimes(1));
+
+    const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+    const stopTimedOut = expect(stopTask).rejects.toThrow("stopAccount timed out");
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(stopAccount).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await stopTimedOut;
+
+    const startTask = manager.startChannel("discord", DEFAULT_ACCOUNT_ID, { manual: true });
+    let startSettled = false;
+    void startTask.then(() => {
+      startSettled = true;
+    });
+    await flushMicrotasks();
+    expect(startAccount).toHaveBeenCalledTimes(1);
+
+    releaseStopAccount.resolve();
+    await flushMicrotasks();
+    expect(startSettled).toBe(false);
+    expect(startAccount).toHaveBeenCalledTimes(1);
+
+    releaseAbortedTask.resolve();
+    await startTask;
+
+    expect(stopAccount).toHaveBeenCalledTimes(1);
+    expect(startAccount).toHaveBeenCalledTimes(2);
+    const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(true);
+    expect(account?.restartPending).toBe(false);
+    expect(account?.lastError).toBeNull();
+    expect(manager.isManuallyStopped("discord", DEFAULT_ACCOUNT_ID)).toBe(false);
+  });
+
+  it("lets ordinary start recover after a timed-out stopAccount succeeds late", async () => {
+    const releaseStopAccount = createDeferred();
+    const releaseAbortedTask = createDeferred();
+    const stopAccount = vi.fn(async () => {
+      await releaseStopAccount.promise;
+    });
+    const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+      await new Promise<void>((resolve) => {
+        abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+      await releaseAbortedTask.promise;
+    });
+    installTestRegistry(createTestPlugin({ startAccount, stopAccount }));
+    const manager = createManager();
+    await manager.startChannels();
+    await vi.waitFor(() => expect(startAccount).toHaveBeenCalledTimes(1));
+
+    const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+      manual: false,
+      preserveKnownAccount: true,
+      restartPending: false,
+    });
+    const stopTimedOut = expect(stopTask).rejects.toThrow("stopAccount timed out");
+    await vi.advanceTimersByTimeAsync(5_000);
+    await stopTimedOut;
+
+    releaseStopAccount.resolve();
+    await flushMicrotasks();
+    releaseAbortedTask.resolve();
+    await flushMicrotasks();
+
+    await manager.startChannel("discord");
+
+    expect(stopAccount).toHaveBeenCalledTimes(1);
+    expect(startAccount).toHaveBeenCalledTimes(2);
+    const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(true);
+    expect(account?.restartPending).toBe(false);
+    expect(account?.lastError).toBeNull();
+  });
+
+  it("reuses a successfully settled stopAccount fence for queued stops", async () => {
+    const releaseStopAccount = createDeferred();
+    const releaseAbortedTask = createDeferred();
+    const stopAccount = vi.fn(async () => {
+      await releaseStopAccount.promise;
+    });
+    const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+      await new Promise<void>((resolve) => {
+        abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+      await releaseAbortedTask.promise;
+    });
+    installTestRegistry(createTestPlugin({ startAccount, stopAccount }));
+    const manager = createManager();
+    await manager.startChannels();
+    await vi.waitFor(() => expect(startAccount).toHaveBeenCalledTimes(1));
+
+    const firstStop = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+      manual: false,
+      preserveKnownAccount: true,
+      restartPending: false,
+    });
+    const firstStopTimedOut = expect(firstStop).rejects.toThrow("stopAccount timed out");
+    await vi.advanceTimersByTimeAsync(5_000);
+    await firstStopTimedOut;
+
+    const secondStop = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+      manual: false,
+      preserveKnownAccount: true,
+      restartPending: false,
+    });
+    const thirdStop = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+      manual: false,
+      preserveKnownAccount: true,
+      restartPending: false,
+    });
+    await flushMicrotasks();
+    expect(stopAccount).toHaveBeenCalledTimes(1);
+
+    releaseStopAccount.resolve();
+    await flushMicrotasks();
+    expect(stopAccount).toHaveBeenCalledTimes(1);
+
+    releaseAbortedTask.resolve();
+    await Promise.all([secondStop, thirdStop]);
+
+    expect(stopAccount).toHaveBeenCalledTimes(1);
+    const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(false);
+    expect(account?.restartPending).toBe(false);
+  });
+
+  it("clears a queued stop timeout when the original stopAccount fence settles", async () => {
+    const releaseStopAccount = createDeferred();
+    const releaseAbortedTask = createDeferred();
+    const stopAccount = vi.fn(async () => {
+      await releaseStopAccount.promise;
+    });
+    const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+      await new Promise<void>((resolve) => {
+        abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+      await releaseAbortedTask.promise;
+    });
+    installTestRegistry(createTestPlugin({ startAccount, stopAccount }));
+    const manager = createManager();
+    await manager.startChannels();
+    await vi.waitFor(() => expect(startAccount).toHaveBeenCalledTimes(1));
+
+    const firstStop = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+      manual: false,
+      preserveKnownAccount: true,
+      restartPending: false,
+    });
+    const firstStopTimedOut = expect(firstStop).rejects.toThrow("stopAccount timed out");
+    await vi.advanceTimersByTimeAsync(5_000);
+    await firstStopTimedOut;
+
+    const queuedStop = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+      manual: false,
+      preserveKnownAccount: true,
+      restartPending: false,
+    });
+    const queuedStopTimedOut = expect(queuedStop).rejects.toThrow("stopAccount timed out");
+    await vi.advanceTimersByTimeAsync(5_000);
+    await queuedStopTimedOut;
+
+    releaseStopAccount.resolve();
+    await flushMicrotasks();
+    releaseAbortedTask.resolve();
+    await flushMicrotasks();
+
+    await manager.startChannel("discord");
+
+    expect(stopAccount).toHaveBeenCalledTimes(1);
+    expect(startAccount).toHaveBeenCalledTimes(2);
+    const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(true);
+    expect(account?.restartPending).toBe(false);
+    expect(account?.lastError).toBeNull();
+  });
+
+  it("uses a queued manual stop policy when a timed-out stopAccount settles late", async () => {
+    const releaseStopAccount = createDeferred();
+    const stopAccount = vi.fn(async () => {
+      await releaseStopAccount.promise;
+    });
+    const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+      await new Promise<void>((resolve) => {
+        abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    installTestRegistry(createTestPlugin({ startAccount, stopAccount }));
+    const manager = createManager();
+    await manager.startChannels();
+    await vi.waitFor(() => expect(startAccount).toHaveBeenCalledTimes(1));
+
+    const firstStop = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false });
+    const firstStopTimedOut = expect(firstStop).rejects.toThrow("stopAccount timed out");
+    await vi.advanceTimersByTimeAsync(5_000);
+    await firstStopTimedOut;
+
+    const queuedManualStop = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+    const queuedManualStopTimedOut =
+      expect(queuedManualStop).rejects.toThrow("stopAccount timed out");
+    await vi.advanceTimersByTimeAsync(5_000);
+    await queuedManualStopTimedOut;
+
+    releaseStopAccount.resolve();
+    await waitForMicrotaskCondition(
+      () =>
+        manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID]?.running ===
+        false,
+      "expected late successful stopAccount timeout to honor queued manual stop policy",
+    );
+
+    expect(stopAccount).toHaveBeenCalledTimes(1);
+    const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(false);
+    expect(account?.restartPending).toBe(false);
+    expect(manager.isManuallyStopped("discord", DEFAULT_ACCOUNT_ID)).toBe(true);
+  });
+
+  it("uses a queued recovery stop policy when a timed-out stopAccount settles late", async () => {
+    const releaseStopAccount = createDeferred();
+    const stopAccount = vi.fn(async () => {
+      await releaseStopAccount.promise;
+    });
+    const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+      await new Promise<void>((resolve) => {
+        abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    installTestRegistry(createTestPlugin({ startAccount, stopAccount }));
+    const manager = createManager();
+    await manager.startChannels();
+    await vi.waitFor(() => expect(startAccount).toHaveBeenCalledTimes(1));
+
+    const firstStop = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+      manual: false,
+      restartPending: false,
+    });
+    const firstStopTimedOut = expect(firstStop).rejects.toThrow("stopAccount timed out");
+    await vi.advanceTimersByTimeAsync(5_000);
+    await firstStopTimedOut;
+
+    const queuedRecoveryStop = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+      manual: false,
+    });
+    const queuedRecoveryStopTimedOut =
+      expect(queuedRecoveryStop).rejects.toThrow("stopAccount timed out");
+    await vi.advanceTimersByTimeAsync(5_000);
+    await queuedRecoveryStopTimedOut;
+
+    releaseStopAccount.resolve();
+    await waitForMicrotaskCondition(
+      () =>
+        manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID]?.running ===
+        false,
+      "expected late successful stopAccount timeout to honor queued recovery stop policy",
+    );
+
+    expect(stopAccount).toHaveBeenCalledTimes(1);
+    const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(false);
+    expect(account?.restartPending).toBe(true);
+    expect(account?.lifecycle).toBe("recovering");
+  });
+
+  it("does not start a replacement while a queued stop owns the settled fence", async () => {
+    const releaseStopAccount = createDeferred();
+    const stopAccount = vi.fn(async () => {
+      await releaseStopAccount.promise;
+    });
+    const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+      await new Promise<void>((resolve) => {
+        abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    installTestRegistry(createTestPlugin({ startAccount, stopAccount }));
+    const manager = createManager();
+    await manager.startChannels();
+    await vi.waitFor(() => expect(startAccount).toHaveBeenCalledTimes(1));
+
+    const firstStop = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+      manual: false,
+      preserveKnownAccount: true,
+      restartPending: false,
+    });
+    const firstStopTimedOut = expect(firstStop).rejects.toThrow("stopAccount timed out");
+    await vi.advanceTimersByTimeAsync(5_000);
+    await firstStopTimedOut;
+    await flushMicrotasks();
+
+    const startWhileFenceIsPending = manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    await flushMicrotasks();
+    const queuedManualStop = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+    await flushMicrotasks();
+
+    releaseStopAccount.resolve();
+    await Promise.all([startWhileFenceIsPending, queuedManualStop]);
+
+    expect(stopAccount).toHaveBeenCalledTimes(1);
+    expect(startAccount).toHaveBeenCalledTimes(1);
+    const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(false);
+    expect(account?.restartPending).toBe(false);
+    expect(manager.isManuallyStopped("discord", DEFAULT_ACCOUNT_ID)).toBe(true);
+  });
+
+  it("marks a late successful stopAccount timeout as stopped after task teardown", async () => {
+    const releaseStopAccount = createDeferred();
+    const stopAccount = vi.fn(async () => {
+      await releaseStopAccount.promise;
+    });
+    const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+      await new Promise<void>((resolve) => {
+        abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    installTestRegistry(createTestPlugin({ startAccount, stopAccount }));
+    const manager = createManager();
+    await manager.startChannels();
+    await vi.waitFor(() => expect(startAccount).toHaveBeenCalledTimes(1));
+
+    const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false });
+    const stopTaskRejected = expect(stopTask).rejects.toThrow("stopAccount timed out");
+    await vi.advanceTimersByTimeAsync(5_000);
+    await stopTaskRejected;
+
+    let account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(true);
+    expect(account?.lastError).toContain("stopAccount timed out");
+
+    releaseStopAccount.resolve();
+    await waitForMicrotaskCondition(
+      () =>
+        manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID]?.running ===
+        false,
+      "expected late successful stopAccount timeout to finalize stopped runtime",
+    );
+
+    account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(false);
+    expect(account?.restartPending).toBe(true);
+    expect(account?.lifecycle).toBe("recovering");
+
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID, { preserveManualStop: true });
+
+    expect(startAccount).toHaveBeenCalledTimes(2);
+    account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(true);
+    expect(account?.restartPending).toBe(false);
+    expect(account?.lastError).toBeNull();
+  });
+
+  it("preserves recovery when stopAccount settles before task teardown", async () => {
+    const releaseStopAccount = createDeferred();
+    const releaseAbortedTask = createDeferred();
+    const stopAccount = vi.fn(async () => {
+      await releaseStopAccount.promise;
+    });
+    let firstTaskStarted = false;
+    const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+      const isFirstTask = !firstTaskStarted;
+      firstTaskStarted = true;
+      await new Promise<void>((resolve) => {
+        abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+      if (isFirstTask) {
+        await releaseAbortedTask.promise;
+      }
+    });
+    installTestRegistry(createTestPlugin({ startAccount, stopAccount }));
+    const manager = createManager();
+    await manager.startChannels();
+    await vi.waitFor(() => expect(startAccount).toHaveBeenCalledTimes(1));
+
+    const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false });
+    const stopTaskRejected = expect(stopTask).rejects.toThrow("stopAccount timed out");
+    await vi.advanceTimersByTimeAsync(10_000);
+    await stopTaskRejected;
+
+    releaseStopAccount.resolve();
+    await flushMicrotasks();
+    let account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(true);
+    expect(account?.lastError).toContain("stopAccount timed out");
+
+    releaseAbortedTask.resolve();
+    await waitForMicrotaskCondition(
+      () =>
+        manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID]?.running ===
+        false,
+      "expected task teardown to finish deferred stopAccount recovery",
+    );
+
+    account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(false);
+    expect(account?.restartPending).toBe(true);
+    expect(account?.lifecycle).toBe("recovering");
+
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID, { preserveManualStop: true });
+    expect(startAccount).toHaveBeenCalledTimes(2);
+    account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(true);
+    expect(account?.restartPending).toBe(false);
+    expect(account?.lastError).toBeNull();
+  });
+
+  it("blocks paired include-known restart when timed-out stopAccount rejects late", async () => {
+    const releaseStopAccount = createDeferred();
+    const stopAccount = vi.fn(async () => {
+      await releaseStopAccount.promise;
+      throw new Error("late stop hook failed");
+    });
+    const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+      await new Promise<void>((resolve) => {
+        abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    installTestRegistry(createTestPlugin({ startAccount, stopAccount }));
+    const manager = createManager();
+    await manager.startChannels();
+    await vi.waitFor(() => expect(startAccount).toHaveBeenCalledTimes(1));
+
+    const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+      manual: false,
+      preserveKnownAccount: true,
+      restartPending: false,
+    });
+    const stopTaskRejected = expect(stopTask).rejects.toThrow("stopAccount timed out");
+    await vi.advanceTimersByTimeAsync(5_000);
+    await stopTaskRejected;
+
+    const restartTask = manager.startChannel("discord", undefined, { includeKnownAccounts: true });
+    await flushMicrotasks();
+    expect(startAccount).toHaveBeenCalledTimes(1);
+
+    releaseStopAccount.resolve();
+    await expect(restartTask).rejects.toThrow("late stop hook failed");
+    expect(startAccount).toHaveBeenCalledTimes(1);
+
+    await manager.startChannel("discord", undefined, { includeKnownAccounts: true });
+    expect(startAccount).toHaveBeenCalledTimes(1);
+    const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(true);
+    expect(account?.restartPending).toBe(false);
+    expect(account?.lastError).toBe("late stop hook failed");
   });
 
   it("does not auto-restart a channel task exit marked as terminal disconnect", async () => {
@@ -1534,6 +2092,241 @@ describe("server-channels auto restart", () => {
 
     expect(startAccount).toHaveBeenCalledTimes(2);
     expect(hoisted.sleepWithAbort).not.toHaveBeenCalled();
+  });
+
+  it("records timed-out private plugin handoffs for the paired include-known restart", async () => {
+    const releaseFirstTask = createDeferred();
+    const startAccount = vi.fn(
+      async ({ abortSignal }: { abortSignal: AbortSignal }) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => {}, { once: true });
+          void releaseFirstTask.promise.then(resolve);
+        }),
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannels();
+    const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+      manual: false,
+      restartPending: false,
+      preserveKnownAccount: true,
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await stopTask;
+
+    let snapshot = manager.getRuntimeSnapshot();
+    let account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(startAccount).toHaveBeenCalledTimes(1);
+    expect(account?.running).toBe(false);
+    expect(account?.restartPending).toBe(false);
+    expect(account?.lastError).toContain("channel stop timed out");
+
+    await manager.startChannel("discord", undefined, { includeKnownAccounts: true });
+    expect(startAccount).toHaveBeenCalledTimes(1);
+
+    releaseFirstTask.resolve();
+    await waitForMicrotaskCondition(
+      () => startAccount.mock.calls.length === 2,
+      "expected private timed-out handoff to restart after the old task settled",
+    );
+
+    snapshot = manager.getRuntimeSnapshot();
+    account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(true);
+    expect(account?.restartPending).toBe(false);
+    expect(hoisted.sleepWithAbort).not.toHaveBeenCalled();
+  });
+
+  it("retains timed-out private handoffs until the paired include-known restart", async () => {
+    let accountIds = [DEFAULT_ACCOUNT_ID];
+    const releaseFirstTask = createDeferred();
+    let startCount = 0;
+    let firstTaskSettled = false;
+    const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+      startCount += 1;
+      abortSignal.addEventListener("abort", () => {}, { once: true });
+      if (startCount === 1) {
+        await releaseFirstTask.promise;
+        firstTaskSettled = true;
+        return;
+      }
+      await new Promise<void>(() => {});
+    });
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        listAccountIds: () => accountIds,
+        resolveAccount: () => ({ enabled: true, configured: true }),
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannels();
+    accountIds = [];
+    const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+      manual: false,
+      restartPending: false,
+      preserveKnownAccount: true,
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await stopTask;
+
+    releaseFirstTask.resolve();
+    await waitForMicrotaskCondition(
+      () => firstTaskSettled,
+      "expected stale private handoff task to settle before paired restart",
+    );
+    expect(startAccount).toHaveBeenCalledTimes(1);
+
+    await manager.startChannel("discord", undefined, { includeKnownAccounts: true });
+    await waitForMicrotaskCondition(
+      () => startAccount.mock.calls.length === 2,
+      "expected include-known restart to retain the omitted private handoff account",
+    );
+
+    const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(true);
+    expect(account?.restartPending).toBe(false);
+    expect(hoisted.sleepWithAbort).not.toHaveBeenCalled();
+  });
+
+  it("retains private handoffs when paired include-known startup fails before handoff", async () => {
+    let accountIds = ["account-a"];
+    let failNextResolve = false;
+    const startAccount = vi.fn(
+      async ({ abortSignal, accountId, setStatus }: ChannelGatewayContext<TestAccount>) => {
+        setStatus({ accountId, running: true, connected: true });
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        listAccountIds: () => accountIds,
+        resolveAccount: () => {
+          if (failNextResolve) {
+            failNextResolve = false;
+            throw new Error("temporary account store unavailable");
+          }
+          return { enabled: true, configured: true };
+        },
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+
+    accountIds = [];
+    await manager.stopChannel("discord", "account-a", {
+      manual: false,
+      restartPending: false,
+      preserveKnownAccount: true,
+    });
+    expect(manager.isHealthMonitorEnabled("discord", "account-a")).toBe(false);
+
+    failNextResolve = true;
+    await expect(
+      manager.startChannel("discord", undefined, { includeKnownAccounts: true }),
+    ).rejects.toThrow("temporary account store unavailable");
+
+    expect(startAccount.mock.calls.map(([ctx]) => ctx?.accountId)).toEqual(["account-a"]);
+    expect(manager.isHealthMonitorEnabled("discord", "account-a")).toBe(false);
+
+    await manager.startChannel("discord", undefined, { includeKnownAccounts: true });
+
+    expect(startAccount.mock.calls.map(([ctx]) => ctx?.accountId)).toEqual([
+      "account-a",
+      "account-a",
+    ]);
+    expect(manager.isHealthMonitorEnabled("discord", "account-a")).toBe(true);
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.["account-a"]?.running).toBe(true);
+  });
+
+  it("records timed-out caller-owned reload stops for the paired restart", async () => {
+    const releaseFirstTask = createDeferred();
+    const startAccount = vi.fn(
+      async ({ abortSignal }: { abortSignal: AbortSignal }) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => {}, { once: true });
+          void releaseFirstTask.promise.then(resolve);
+        }),
+    );
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.startChannels();
+    const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+      manual: false,
+      restartPending: false,
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await stopTask;
+
+    let account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(startAccount).toHaveBeenCalledTimes(1);
+    expect(account?.running).toBe(false);
+    expect(account?.restartPending).toBe(false);
+    expect(account?.lastError).toContain("channel stop timed out");
+
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    expect(startAccount).toHaveBeenCalledTimes(1);
+
+    releaseFirstTask.resolve();
+    await waitForMicrotaskCondition(
+      () => startAccount.mock.calls.length === 2,
+      "expected caller-owned timed-out reload stop to restart after the old task settled",
+    );
+
+    account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(true);
+    expect(account?.restartPending).toBe(false);
+    expect(hoisted.sleepWithAbort).not.toHaveBeenCalled();
+  });
+
+  it("hides unlisted timed-out reload stops from runtime snapshots", async () => {
+    let accountIds = [DEFAULT_ACCOUNT_ID];
+    const releaseFirstTask = createDeferred();
+    const startAccount = vi.fn(
+      async ({ abortSignal }: { abortSignal: AbortSignal }) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => {}, { once: true });
+          void releaseFirstTask.promise.then(resolve);
+        }),
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        listAccountIds: () => accountIds,
+        resolveAccount: () => ({ enabled: true, configured: true }),
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannels();
+    accountIds = ["account-b"];
+    const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+      manual: false,
+      restartPending: false,
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await stopTask;
+
+    await manager.startChannel("discord");
+    await waitForMicrotaskCondition(
+      () => startAccount.mock.calls.length === 2,
+      "expected the listed replacement account to start",
+    );
+
+    const snapshot = manager.getRuntimeSnapshot();
+    expect(snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID]).toBeUndefined();
+    expect(snapshot.channelAccounts.discord?.["account-b"]?.running).toBe(true);
   });
 
   it("does not restart when a timed-out recovery stop settles as terminal", async () => {
@@ -3021,6 +3814,1044 @@ describe("server-channels auto restart", () => {
     expect(account?.lastStopAt).toBeUndefined();
 
     await manager.stopChannel("discord");
+  });
+
+  it("can include already-known accounts during channel hot reload", async () => {
+    let accountIds = ["account-a"];
+    const startAccount = vi.fn(
+      async ({ abortSignal }: { accountId: string; abortSignal: AbortSignal }) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        listAccountIds: () => accountIds,
+        resolveAccount: () => ({ enabled: true, configured: true }),
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+
+    accountIds = ["account-b"];
+    await manager.stopChannel("discord", undefined, { manual: false });
+    await manager.startChannel("discord", undefined, { includeKnownAccounts: true });
+
+    const startedAccountIds = startAccount.mock.calls.map(([ctx]) => ctx?.accountId);
+    expect(startedAccountIds).toEqual(["account-a", "account-b", "account-a"]);
+
+    const snapshot = manager.getRuntimeSnapshot();
+    expect(snapshot.channelAccounts.discord?.["account-a"]?.running).toBe(true);
+    expect(snapshot.channelAccounts.discord?.["account-b"]?.running).toBe(true);
+    expect(manager.isManuallyStopped("discord", "account-a")).toBe(false);
+
+    await manager.stopChannel("discord");
+  });
+
+  it("retries a hot-reload handoff that stopped while the account was still starting", async () => {
+    let accountIds = ["account-a"];
+    let configuredCalls = 0;
+    const firstConfiguredGate = createDeferred();
+    const startAccount = vi.fn(
+      async ({ abortSignal }: { accountId: string; abortSignal: AbortSignal }) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        listAccountIds: () => accountIds,
+        resolveAccount: () => ({ enabled: true, configured: true }),
+        isConfigured: async () => {
+          configuredCalls += 1;
+          if (configuredCalls === 1) {
+            await firstConfiguredGate.promise;
+          }
+          return true;
+        },
+      }),
+    );
+    const manager = createManager();
+
+    const initialStart = manager.startChannel("discord");
+    await waitForMicrotaskCondition(
+      () => configuredCalls === 1,
+      "expected account-a to pause during configuration",
+    );
+
+    accountIds = ["account-b"];
+    await manager.stopChannel("discord", undefined, { manual: false });
+    const reloadStart = manager.startChannel("discord", undefined, { includeKnownAccounts: true });
+
+    firstConfiguredGate.resolve();
+    await Promise.all([initialStart, reloadStart]);
+
+    const startedAccountIds = startAccount.mock.calls.map(([ctx]) => ctx?.accountId);
+    expect(startedAccountIds).toEqual(["account-b", "account-a"]);
+
+    const snapshot = manager.getRuntimeSnapshot();
+    expect(snapshot.channelAccounts.discord?.["account-a"]?.running).toBe(true);
+    expect(snapshot.channelAccounts.discord?.["account-b"]?.running).toBe(true);
+
+    await manager.stopChannel("discord");
+  });
+
+  it("retries a private plugin handoff that aborts before startup handoff", async () => {
+    let accountIds = ["account-a"];
+    let runtimeMeasureCalls = 0;
+    const firstRuntimeGate = createDeferred();
+    const startupTrace = {
+      measure: async <T>(name: string, run: () => T | Promise<T>): Promise<T> => {
+        if (name === "channels.discord.runtime" && runtimeMeasureCalls === 0) {
+          runtimeMeasureCalls += 1;
+          await firstRuntimeGate.promise;
+        }
+        return await run();
+      },
+    };
+    const startAccount = vi.fn(
+      async ({ abortSignal }: { accountId: string; abortSignal: AbortSignal }) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        listAccountIds: () => accountIds,
+        resolveAccount: () => ({ enabled: true, configured: true }),
+      }),
+    );
+    const manager = createManager({ startupTrace });
+
+    const initialStart = manager.startChannel("discord").catch(() => {});
+    await waitForMicrotaskCondition(
+      () => runtimeMeasureCalls === 1,
+      "expected account-a startup to pause with a starting gate",
+    );
+
+    accountIds = ["account-b"];
+    await manager.stopChannel("discord", undefined, {
+      manual: false,
+      restartPending: false,
+      preserveKnownAccount: true,
+    });
+    const reloadStart = manager.startChannel("discord", undefined, { includeKnownAccounts: true });
+
+    firstRuntimeGate.resolve();
+    await Promise.all([initialStart, reloadStart]);
+    await waitForImmediate();
+    await waitForImmediate();
+    await flushMicrotasks();
+    await waitForMicrotaskCondition(
+      () => startAccount.mock.calls.length === 2,
+      "expected the paired reload start to include the private handoff account",
+    );
+
+    const startedAccountIds = startAccount.mock.calls.map(([ctx]) => ctx?.accountId);
+    expect(startedAccountIds).toEqual(["account-b", "account-a"]);
+
+    const snapshot = manager.getRuntimeSnapshot();
+    expect(snapshot.channelAccounts.discord?.["account-a"]?.running).toBe(true);
+    expect(snapshot.channelAccounts.discord?.["account-a"]?.restartPending).toBe(false);
+    expect(snapshot.channelAccounts.discord?.["account-b"]?.running).toBe(true);
+
+    await manager.stopChannel("discord");
+  });
+
+  it("defers include-known retry when a stop queues during an existing start wait", async () => {
+    let runtimeMeasureCalls = 0;
+    const replacementRuntimeGate = createDeferred();
+    const releaseQueuedStopAccount = createDeferred();
+    const startupTrace = {
+      measure: async <T>(name: string, run: () => T | Promise<T>): Promise<T> => {
+        if (name === "channels.discord.runtime") {
+          runtimeMeasureCalls += 1;
+          if (runtimeMeasureCalls === 2) {
+            await replacementRuntimeGate.promise;
+          }
+        }
+        return await run();
+      },
+    };
+    const startAccount = vi.fn(
+      async ({ abortSignal }: { accountId: string; abortSignal: AbortSignal }) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+    );
+    const stopAccount = vi.fn(async () => {
+      if (stopAccount.mock.calls.length === 2) {
+        await releaseQueuedStopAccount.promise;
+      }
+    });
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        stopAccount,
+        resolveAccount: () => ({ enabled: true, configured: true }),
+      }),
+    );
+    const manager = createManager({ startupTrace });
+
+    await manager.startChannel("discord");
+    await waitForImmediate();
+    await flushMicrotasks();
+    await waitForMicrotaskCondition(
+      () => startAccount.mock.calls.length === 1,
+      "expected the initial account task to start",
+    );
+
+    await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+      manual: false,
+      preserveKnownAccount: true,
+    });
+    const replacementStart = manager.startChannel("discord", DEFAULT_ACCOUNT_ID, {
+      preserveManualStop: true,
+    });
+    await waitForMicrotaskCondition(
+      () => runtimeMeasureCalls === 2,
+      "expected replacement startup to pause at the manager boundary",
+    );
+
+    const includeKnownStart = manager.startChannel("discord", undefined, {
+      includeKnownAccounts: true,
+    });
+    await flushMicrotasks();
+    const queuedStop = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+      manual: false,
+      restartPending: false,
+      preserveKnownAccount: true,
+    });
+    await waitForMicrotaskCondition(
+      () => stopAccount.mock.calls.length === 2,
+      "expected queued stop to own teardown while include-known waits",
+    );
+
+    replacementRuntimeGate.resolve();
+    await Promise.all([replacementStart, includeKnownStart]);
+    await flushMicrotasks();
+
+    expect(startAccount).toHaveBeenCalledTimes(1);
+    releaseQueuedStopAccount.resolve();
+    await queuedStop;
+    expect(stopAccount).toHaveBeenCalledTimes(2);
+    expect(startAccount).toHaveBeenCalledTimes(1);
+    const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(false);
+    expect(account?.restartPending).toBe(false);
+  });
+
+  it("waits for aborted private handoff tasks before retrying rollback starts", async () => {
+    let accountIds = ["account-a"];
+    let accountAStarts = 0;
+    const firstTaskSettled = createDeferred();
+    const startAccount = vi.fn(
+      async ({ accountId, abortSignal }: { accountId: string; abortSignal: AbortSignal }) => {
+        if (accountId === "account-a") {
+          accountAStarts += 1;
+          if (accountAStarts === 1) {
+            await new Promise<void>((resolve) => {
+              abortSignal.addEventListener("abort", () => resolve(), { once: true });
+            });
+            await firstTaskSettled.promise;
+            return;
+          }
+        }
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+    );
+    const stopAccount = vi.fn(async () => {
+      if (stopAccount.mock.calls.length === 1) {
+        throw new Error("stop failed during drain");
+      }
+    });
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        stopAccount,
+        listAccountIds: () => accountIds,
+        resolveAccount: () => ({ enabled: true, configured: true }),
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+    await waitForMicrotaskCondition(
+      () => startAccount.mock.calls.length === 1,
+      "expected account-a to be running before failed stop",
+    );
+
+    accountIds = ["account-b"];
+    await expect(
+      manager.stopChannel("discord", undefined, {
+        manual: false,
+        restartPending: false,
+        preserveKnownAccount: true,
+      }),
+    ).rejects.toThrow("stop failed during drain");
+    const reloadStart = manager.startChannel("discord", undefined, { includeKnownAccounts: true });
+    let reloadSettled = false;
+    void reloadStart.then(() => {
+      reloadSettled = true;
+    });
+
+    await flushMicrotasks();
+    expect(reloadSettled).toBe(false);
+    expect(startAccount.mock.calls.filter(([ctx]) => ctx?.accountId === "account-a")).toHaveLength(
+      1,
+    );
+
+    firstTaskSettled.resolve();
+    await reloadStart;
+    await waitForMicrotaskCondition(
+      () => startAccount.mock.calls.length === 3,
+      "expected the rollback start to retry account-a after the aborted task settled",
+    );
+
+    expect(startAccount.mock.calls.map(([ctx]) => ctx?.accountId)).toEqual([
+      "account-a",
+      "account-b",
+      "account-a",
+    ]);
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.["account-a"]?.running).toBe(true);
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.["account-b"]?.running).toBe(true);
+
+    await manager.stopChannel("discord");
+  });
+
+  it("retries rollback starts after a failed stop settles the private handoff task", async () => {
+    let accountIds = ["account-a"];
+    let accountAStarts = 0;
+    const releaseFirstTask = createDeferred();
+    const firstTaskSettled = createDeferred();
+    const startAccount = vi.fn(
+      async ({ accountId, abortSignal }: { accountId: string; abortSignal: AbortSignal }) => {
+        if (accountId === "account-a") {
+          accountAStarts += 1;
+          if (accountAStarts === 1) {
+            await new Promise<void>((resolve) => {
+              abortSignal.addEventListener("abort", () => resolve(), { once: true });
+            });
+            await releaseFirstTask.promise;
+            firstTaskSettled.resolve();
+            return;
+          }
+        }
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+    );
+    const stopAccount = vi.fn(async () => {
+      if (stopAccount.mock.calls.length === 1) {
+        releaseFirstTask.resolve();
+        await firstTaskSettled.promise;
+        throw new Error("stop failed after task settled");
+      }
+    });
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        stopAccount,
+        listAccountIds: () => accountIds,
+        resolveAccount: () => ({ enabled: true, configured: true }),
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+    await waitForMicrotaskCondition(
+      () => startAccount.mock.calls.length === 1,
+      "expected account-a to be running before failed stop",
+    );
+
+    accountIds = ["account-b"];
+    await expect(
+      manager.stopChannel("discord", undefined, {
+        manual: false,
+        restartPending: false,
+        preserveKnownAccount: true,
+      }),
+    ).rejects.toThrow("stop failed after task settled");
+    await manager.startChannel("discord", undefined, { includeKnownAccounts: true });
+    await waitForMicrotaskCondition(
+      () => startAccount.mock.calls.length === 3,
+      "expected the rollback start to retry account-a after the failed stop settled",
+    );
+
+    expect(startAccount.mock.calls.map(([ctx]) => ctx?.accountId)).toEqual([
+      "account-a",
+      "account-b",
+      "account-a",
+    ]);
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.["account-a"]?.running).toBe(true);
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.["account-b"]?.running).toBe(true);
+
+    await manager.stopChannel("discord");
+  });
+
+  it("keeps aborted starting accounts known when startup cleanup settles before reload start", async () => {
+    let accountIds = ["account-a"];
+    let configuredCalls = 0;
+    const firstConfiguredGate = createDeferred();
+    const startAccount = vi.fn(
+      async ({ abortSignal }: { accountId: string; abortSignal: AbortSignal }) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        listAccountIds: () => accountIds,
+        resolveAccount: () => ({ enabled: true, configured: true }),
+        isConfigured: async () => {
+          configuredCalls += 1;
+          if (configuredCalls === 1) {
+            await firstConfiguredGate.promise;
+          }
+          return true;
+        },
+      }),
+    );
+    const manager = createManager();
+
+    const initialStart = manager.startChannel("discord");
+    await waitForMicrotaskCondition(
+      () => configuredCalls === 1,
+      "expected account-a to pause during configuration",
+    );
+
+    accountIds = ["account-b"];
+    await manager.stopChannel("discord", undefined, { manual: false });
+    firstConfiguredGate.resolve();
+    await initialStart;
+
+    expect(
+      manager.getRuntimeSnapshot().channelAccounts.discord?.["account-a"]?.restartPending,
+    ).toBe(true);
+
+    await manager.startChannel("discord", undefined, { includeKnownAccounts: true });
+
+    const startedAccountIds = startAccount.mock.calls.map(([ctx]) => ctx?.accountId);
+    expect(startedAccountIds).toEqual(["account-b", "account-a"]);
+
+    const snapshot = manager.getRuntimeSnapshot();
+    expect(snapshot.channelAccounts.discord?.["account-a"]?.running).toBe(true);
+    expect(snapshot.channelAccounts.discord?.["account-b"]?.running).toBe(true);
+
+    await manager.stopChannel("discord");
+  });
+
+  it("lets manual stops cancel pending hot-reload handoffs before paired starts", async () => {
+    let accountIds = ["account-a"];
+    const startAccount = vi.fn(
+      async ({ abortSignal }: { accountId: string; abortSignal: AbortSignal }) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        listAccountIds: () => accountIds,
+        resolveAccount: () => ({ enabled: true, configured: true }),
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+
+    accountIds = [];
+    await manager.stopChannel("discord", undefined, { manual: false });
+    expect(
+      manager.getRuntimeSnapshot().channelAccounts.discord?.["account-a"]?.restartPending,
+    ).toBe(true);
+
+    await manager.stopChannel("discord", "account-a");
+
+    let snapshot = manager.getRuntimeSnapshot();
+    expect(snapshot.channelAccounts.discord?.["account-a"]?.restartPending).not.toBe(true);
+    expect(manager.isManuallyStopped("discord", "account-a")).toBe(true);
+
+    await manager.startChannel("discord", undefined, { includeKnownAccounts: true });
+
+    expect(startAccount.mock.calls.map(([ctx]) => ctx?.accountId)).toEqual(["account-a"]);
+    snapshot = manager.getRuntimeSnapshot();
+    expect(snapshot.channelAccounts.discord?.["account-a"]).toBeUndefined();
+  });
+
+  it("does not mark inactive listed accounts as restart candidates during hot reload", async () => {
+    let accountIds = ["account-a"];
+    const startAccount = vi.fn(
+      async ({ abortSignal, accountId, setStatus }: ChannelGatewayContext<TestAccount>) => {
+        setStatus({ accountId, running: true, connected: true });
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+    );
+    const stopAccount = vi.fn(
+      async ({ accountId, setStatus }: ChannelGatewayContext<TestAccount>) => {
+        setStatus({ accountId, running: false, connected: false });
+      },
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        stopAccount,
+        listAccountIds: () => accountIds,
+        resolveAccount: () => ({ enabled: true, configured: true }),
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+
+    accountIds = ["account-a", "account-b"];
+    await manager.stopChannel("discord", undefined, { manual: false });
+
+    let snapshot = manager.getRuntimeSnapshot();
+    expect(stopAccount.mock.calls.map(([ctx]) => ctx?.accountId)).toEqual([
+      "account-a",
+      "account-b",
+    ]);
+    expect(snapshot.channelAccounts.discord?.["account-b"]?.restartPending).toBe(false);
+
+    accountIds = ["account-a"];
+    await manager.startChannel("discord", undefined, { includeKnownAccounts: true });
+
+    const startedAccountIds = startAccount.mock.calls.map(([ctx]) => ctx?.accountId);
+    expect(startedAccountIds).toEqual(["account-a", "account-a"]);
+    snapshot = manager.getRuntimeSnapshot();
+    expect(snapshot.channelAccounts.discord?.["account-a"]?.running).toBe(true);
+    expect(snapshot.channelAccounts.discord?.["account-b"]).toBeUndefined();
+
+    await manager.stopChannel("discord");
+  });
+
+  it("does not keep no-restart caller handoffs in the known-account safety net", async () => {
+    let accountIds = ["account-a"];
+    const startAccount = vi.fn(
+      async ({ abortSignal }: { accountId: string; abortSignal: AbortSignal }) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        listAccountIds: () => accountIds,
+        resolveAccount: () => ({ enabled: true, configured: true }),
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+
+    accountIds = [];
+    await manager.stopChannel("discord", undefined, { manual: false, restartPending: false });
+
+    let snapshot = manager.getRuntimeSnapshot();
+    expect(snapshot.channelAccounts.discord?.["account-a"]).toBeUndefined();
+
+    await manager.startChannel("discord", undefined, { includeKnownAccounts: true });
+
+    const startedAccountIds = startAccount.mock.calls.map(([ctx]) => ctx?.accountId);
+    expect(startedAccountIds).toEqual(["account-a"]);
+    snapshot = manager.getRuntimeSnapshot();
+    expect(snapshot.channelAccounts.discord?.["account-a"]).toBeUndefined();
+  });
+
+  it("filters stale known accounts from runtime snapshots when config removes them", async () => {
+    let accountIds = ["account-a"];
+    const startAccount = vi.fn(
+      async ({ abortSignal, accountId, setStatus }: ChannelGatewayContext<TestAccount>) => {
+        setStatus({ accountId, running: true, connected: true });
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        listAccountIds: () => accountIds,
+        resolveAccount: (_cfg, accountId) => {
+          if (typeof accountId !== "string" || !accountIds.includes(accountId)) {
+            throw new Error(`unknown account ${accountId}`);
+          }
+          return { enabled: true, configured: true };
+        },
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+
+    accountIds = ["account-b"];
+    const snapshot = manager.getRuntimeSnapshot();
+
+    expect(snapshot.channelAccounts.discord?.["account-a"]).toBeUndefined();
+    expect(snapshot.channelAccounts.discord?.["account-b"]).toMatchObject({
+      accountId: "account-b",
+    });
+
+    await manager.stopChannel("discord", "account-a");
+  });
+
+  it("hides unlisted private reload handoffs from runtime snapshots while stop is in progress", async () => {
+    let accountIds = ["account-a"];
+    const stopGate = createDeferred();
+    const startAccount = vi.fn(
+      async ({ abortSignal, accountId, setStatus }: ChannelGatewayContext<TestAccount>) => {
+        setStatus({ accountId, running: true, connected: true });
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+    );
+    const stopAccount = vi.fn(
+      async ({ accountId, setStatus }: ChannelGatewayContext<TestAccount>) => {
+        setStatus({ accountId, running: false, connected: false });
+        await stopGate.promise;
+      },
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        stopAccount,
+        listAccountIds: () => accountIds,
+        resolveAccount: () => ({ enabled: true, configured: true }),
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+
+    accountIds = [];
+    const stopPromise = manager.stopChannel("discord", undefined, {
+      manual: false,
+      restartPending: false,
+      preserveKnownAccount: true,
+    });
+    await waitForMicrotaskCondition(
+      () => stopAccount.mock.calls.length === 1,
+      "expected reload stop to enter plugin shutdown",
+    );
+
+    const snapshot = manager.getRuntimeSnapshot();
+    expect(snapshot.channelAccounts.discord?.["account-a"]).toBeUndefined();
+    expect(manager.isHealthMonitorEnabled("discord", "account-a")).toBe(false);
+
+    stopGate.resolve();
+    await stopPromise;
+    await manager.startChannel("discord", undefined, { includeKnownAccounts: true });
+
+    expect(startAccount.mock.calls.map(([ctx]) => ctx?.accountId)).toEqual([
+      "account-a",
+      "account-a",
+    ]);
+    await manager.stopChannel("discord", "account-a");
+  });
+
+  it("preserves manual stops for still-listed accounts during paired reload starts", async () => {
+    const accountIds = ["account-a"];
+    const startAccount = vi.fn(
+      async ({ abortSignal, accountId, setStatus }: ChannelGatewayContext<TestAccount>) => {
+        setStatus({ accountId, running: true, connected: true });
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+    );
+    const stopAccount = vi.fn(
+      async ({ accountId, setStatus }: ChannelGatewayContext<TestAccount>) => {
+        setStatus({ accountId, running: false, connected: false });
+      },
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        stopAccount,
+        listAccountIds: () => accountIds,
+        resolveAccount: () => ({ enabled: true, configured: true }),
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+    await manager.stopChannel("discord", undefined, {
+      manual: false,
+      restartPending: false,
+      preserveKnownAccount: true,
+    });
+    await manager.stopChannel("discord", "account-a");
+    await manager.startChannel("discord", undefined, {
+      includeKnownAccounts: true,
+      preserveManualStop: true,
+    });
+
+    expect(startAccount.mock.calls.map(([ctx]) => ctx?.accountId)).toEqual(["account-a"]);
+    expect(manager.isManuallyStopped("discord", "account-a")).toBe(true);
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.["account-a"]?.running).toBe(
+      false,
+    );
+  });
+
+  it("pauses health recovery for private plugin-reload handoffs that remain configured", async () => {
+    const accountIds = ["account-a"];
+    const startAccount = vi.fn(
+      async ({ abortSignal, accountId, setStatus }: ChannelGatewayContext<TestAccount>) => {
+        setStatus({ accountId, running: true, connected: true });
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+    );
+    const stopAccount = vi.fn(
+      async ({ accountId, setStatus }: ChannelGatewayContext<TestAccount>) => {
+        setStatus({ accountId, running: false, connected: false });
+      },
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        stopAccount,
+        listAccountIds: () => accountIds,
+        resolveAccount: () => ({ enabled: true, configured: true }),
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+    await manager.stopChannel("discord", undefined, {
+      manual: false,
+      restartPending: false,
+      preserveKnownAccount: true,
+    });
+
+    const stoppedSnapshot = manager.getRuntimeSnapshot();
+    expect(stoppedSnapshot.channelAccounts.discord?.["account-a"]).toMatchObject({
+      running: false,
+      restartPending: false,
+    });
+    expect(manager.isHealthMonitorEnabled("discord", "account-a")).toBe(false);
+
+    await manager.startChannel("discord", undefined, { includeKnownAccounts: true });
+
+    expect(startAccount.mock.calls.map(([ctx]) => ctx?.accountId)).toEqual([
+      "account-a",
+      "account-a",
+    ]);
+    expect(manager.isHealthMonitorEnabled("discord", "account-a")).toBe(true);
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.["account-a"]?.running).toBe(true);
+
+    await manager.stopChannel("discord");
+  });
+
+  it("keeps no-restart plugin handoffs in include-known-account restarts", async () => {
+    let accountIds = ["account-a"];
+    const startAccount = vi.fn(
+      async ({ abortSignal, accountId, setStatus }: ChannelGatewayContext<TestAccount>) => {
+        setStatus({ accountId, running: true, connected: true });
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+    );
+    const stopAccount = vi.fn(
+      async ({ accountId, setStatus }: ChannelGatewayContext<TestAccount>) => {
+        setStatus({ accountId, running: false, connected: false });
+      },
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        stopAccount,
+        listAccountIds: () => accountIds,
+        resolveAccount: () => ({ enabled: true, configured: true }),
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+
+    accountIds = [];
+    await manager.stopChannel("discord", undefined, {
+      manual: false,
+      restartPending: false,
+      preserveKnownAccount: true,
+    });
+
+    let snapshot = manager.getRuntimeSnapshot();
+    expect(snapshot.channelAccounts.discord?.["account-a"]).toBeUndefined();
+
+    await manager.startChannel("discord", undefined, { includeKnownAccounts: true });
+
+    const startedAccountIds = startAccount.mock.calls.map(([ctx]) => ctx?.accountId);
+    expect(startedAccountIds).toEqual(["account-a", "account-a"]);
+    snapshot = manager.getRuntimeSnapshot();
+    expect(snapshot.channelAccounts.discord?.["account-a"]?.running).toBe(true);
+    expect(snapshot.channelAccounts.discord?.["account-a"]?.restartPending).toBe(false);
+
+    await manager.stopChannel("discord");
+  });
+
+  it("lets manual stops cancel private known-account handoffs without plugin stop hooks", async () => {
+    let accountIds = ["account-a"];
+    const startAccount = vi.fn(
+      async ({ abortSignal, accountId, setStatus }: ChannelGatewayContext<TestAccount>) => {
+        setStatus({ accountId, running: true, connected: true });
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        listAccountIds: () => accountIds,
+        resolveAccount: () => ({ enabled: true, configured: true }),
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+
+    accountIds = [];
+    await manager.stopChannel("discord", undefined, {
+      manual: false,
+      restartPending: false,
+      preserveKnownAccount: true,
+    });
+    await manager.stopChannel("discord", "account-a");
+    await manager.startChannel("discord", undefined, { includeKnownAccounts: true });
+
+    const startedAccountIds = startAccount.mock.calls.map(([ctx]) => ctx?.accountId);
+    expect(startedAccountIds).toEqual(["account-a"]);
+    const snapshot = manager.getRuntimeSnapshot();
+    expect(snapshot.channelAccounts.discord?.["account-a"]).toBeUndefined();
+  });
+
+  it("lets manual stops cancel ordinary reload handoffs without plugin stop hooks", async () => {
+    const accountIds = ["account-a"];
+    const startAccount = vi.fn(
+      async ({ abortSignal, accountId, setStatus }: ChannelGatewayContext<TestAccount>) => {
+        setStatus({ accountId, running: true, connected: true });
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        listAccountIds: () => accountIds,
+        resolveAccount: () => ({ enabled: true, configured: true }),
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+
+    await manager.stopChannel("discord", undefined, {
+      manual: false,
+      restartPending: false,
+    });
+    await manager.stopChannel("discord", "account-a");
+    await manager.startChannel("discord", undefined, {
+      includeKnownAccounts: true,
+      preserveManualStop: true,
+    });
+
+    const startedAccountIds = startAccount.mock.calls.map(([ctx]) => ctx?.accountId);
+    expect(startedAccountIds).toEqual(["account-a"]);
+    expect(manager.isManuallyStopped("discord", "account-a")).toBe(true);
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.["account-a"]?.running).toBe(
+      false,
+    );
+  });
+
+  it("records manual stops for inactive listed accounts without plugin stop hooks", async () => {
+    const accountIds = ["account-a", "account-b"];
+    const startAccount = vi.fn(
+      async ({ abortSignal, accountId, setStatus }: ChannelGatewayContext<TestAccount>) => {
+        setStatus({ accountId, running: true, connected: true });
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        listAccountIds: () => accountIds,
+        resolveAccount: (_cfg, accountId) => ({
+          enabled: true,
+          configured: accountId !== "account-b",
+        }),
+        isConfigured: (account) => account.configured !== false,
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.["account-b"]).toMatchObject({
+      running: false,
+      configured: false,
+    });
+
+    await manager.stopChannel("discord", "account-b");
+
+    expect(manager.isManuallyStopped("discord", "account-b")).toBe(true);
+    expect(startAccount.mock.calls.map(([ctx]) => ctx?.accountId)).toEqual(["account-a"]);
+  });
+
+  it("clears private known-account handoffs when autostart suppression rejects the paired start", async () => {
+    let accountIds = ["account-a"];
+    const startAccount = vi.fn(
+      async ({ abortSignal, accountId, setStatus }: ChannelGatewayContext<TestAccount>) => {
+        setStatus({ accountId, running: true, connected: true });
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+    );
+    const stopAccount = vi.fn(
+      async ({ accountId, setStatus }: ChannelGatewayContext<TestAccount>) => {
+        setStatus({ accountId, running: false, connected: false });
+      },
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        stopAccount,
+        listAccountIds: () => accountIds,
+        resolveAccount: () => ({ enabled: true, configured: true }),
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+
+    accountIds = [];
+    await manager.stopChannel("discord", undefined, {
+      manual: false,
+      restartPending: false,
+      preserveKnownAccount: true,
+    });
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.["account-a"]).toBeUndefined();
+
+    manager.setAutostartSuppression({ reason: "crash-loop-breaker", message: "safe mode" });
+    await manager.startChannel("discord", undefined, { includeKnownAccounts: true });
+
+    const snapshot = manager.getRuntimeSnapshot();
+    expect(snapshot.channelAccounts.discord?.["account-a"]).toBeUndefined();
+    expect(startAccount.mock.calls.map(([ctx]) => ctx?.accountId)).toEqual(["account-a"]);
+  });
+
+  it("clears private known-account handoffs when ambient suppression rejects the paired start", async () => {
+    let accountIds = ["account-a"];
+    const startAccount = vi.fn(
+      async ({ abortSignal, accountId, setStatus }: ChannelGatewayContext<TestAccount>) => {
+        setStatus({ accountId, running: true, connected: true });
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+    );
+    const stopAccount = vi.fn(
+      async ({ accountId, setStatus }: ChannelGatewayContext<TestAccount>) => {
+        setStatus({ accountId, running: false, connected: false });
+      },
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        stopAccount,
+        listAccountIds: () => accountIds,
+        resolveAccount: () => ({ enabled: true, configured: true }),
+      }),
+    );
+    const manager = createManager({ ambientAutostartSuppressedChannelIds: new Set(["discord"]) });
+
+    await manager.startChannel("discord", "account-a", { manual: true });
+
+    accountIds = [];
+    await manager.stopChannel("discord", undefined, {
+      manual: false,
+      restartPending: false,
+      preserveKnownAccount: true,
+    });
+    expect(manager.isHealthMonitorEnabled("discord", "account-a")).toBe(false);
+
+    await manager.startChannel("discord", undefined, { includeKnownAccounts: true });
+    manager.setAmbientAutostartSuppressedChannelIds(new Set());
+
+    const snapshot = manager.getRuntimeSnapshot();
+    expect(snapshot.channelAccounts.discord?.["account-a"]).toBeUndefined();
+    expect(manager.isHealthMonitorEnabled("discord", "account-a")).toBe(true);
+    expect(startAccount.mock.calls.map(([ctx]) => ctx?.accountId)).toEqual(["account-a"]);
+  });
+
+  it("does not include known accounts on ordinary caller-owned restarts", async () => {
+    let accountIds = ["account-a"];
+    const startAccount = vi.fn(
+      async ({ abortSignal, accountId, setStatus }: ChannelGatewayContext<TestAccount>) => {
+        setStatus({ accountId, running: true, connected: true });
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+    );
+    installTestRegistry(createTestPlugin({ startAccount, listAccountIds: () => accountIds }));
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+
+    accountIds = ["account-b"];
+    await manager.stopChannel("discord", undefined, { manual: false });
+    await manager.startChannel("discord");
+
+    const startedAccountIds = startAccount.mock.calls.map(([ctx]) => ctx?.accountId);
+    expect(startedAccountIds).toEqual(["account-a", "account-b"]);
+
+    const snapshot = manager.getRuntimeSnapshot();
+    expect(snapshot.channelAccounts.discord?.["account-a"]).toBeUndefined();
+    expect(snapshot.channelAccounts.discord?.["account-b"]?.running).toBe(true);
+
+    await manager.stopChannel("discord");
+  });
+
+  it("does not resurrect stopped stale accounts from the known-account safety net", async () => {
+    let accountIds = ["account-a"];
+    const startAccount = vi.fn(
+      async ({ abortSignal, accountId, setStatus }: ChannelGatewayContext<TestAccount>) => {
+        setStatus({ accountId, running: true, connected: true });
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+    );
+    installTestRegistry(createTestPlugin({ startAccount, listAccountIds: () => accountIds }));
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+    await manager.stopChannel("discord");
+
+    accountIds = [];
+    await manager.startChannel("discord", undefined, { includeKnownAccounts: true });
+
+    expect(startAccount).toHaveBeenCalledTimes(1);
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.["account-a"]).toBeUndefined();
   });
 
   it("reuses plugin account resolution for health monitor overrides", () => {

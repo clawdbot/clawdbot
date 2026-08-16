@@ -52,6 +52,35 @@ function resolveMissingSetupEnvMessage(plugin: ChannelPlugin, input: unknown): s
     : `Set these environment variables before using --use-env: ${missing.join(", ")}.`;
 }
 
+function resolveMissingEnvAccountScopeValidationError(params: {
+  cfg: OpenClawConfig;
+  setup: ChannelSetupExecutionAdapter;
+  accountId: string;
+  input: unknown;
+}): string | undefined {
+  if (params.accountId === DEFAULT_ACCOUNT_ID || !isRecord(params.input)) {
+    return undefined;
+  }
+  const scopedInput: Record<string, unknown> = { useEnv: true };
+  if (typeof params.input.name === "string") {
+    scopedInput.name = params.input.name;
+  }
+  const accountScopedError = params.setup.validateInput?.({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    input: scopedInput,
+  });
+  if (!accountScopedError) {
+    return undefined;
+  }
+  const defaultScopedError = params.setup.validateInput?.({
+    cfg: params.cfg,
+    accountId: DEFAULT_ACCOUNT_ID,
+    input: scopedInput,
+  });
+  return defaultScopedError === accountScopedError ? undefined : accountScopedError;
+}
+
 export async function prepareChannelAccountConfiguration(params: {
   cfg: OpenClawConfig;
   plugin: ChannelPlugin;
@@ -85,6 +114,19 @@ export async function prepareChannelAccountConfiguration(params: {
       accountId: params.requestedAccountId,
       input,
     }) ?? normalizeAccountId(params.requestedAccountId);
+  const missingEnvMessage = resolveMissingSetupEnvMessage(params.plugin, input);
+  if (missingEnvMessage) {
+    const accountScopeValidationError = resolveMissingEnvAccountScopeValidationError({
+      cfg: params.cfg,
+      setup,
+      accountId,
+      input,
+    });
+    if (accountScopeValidationError) {
+      return resultError({ kind: "invalid-input", message: accountScopeValidationError });
+    }
+    return resultError({ kind: "invalid-input", message: missingEnvMessage });
+  }
   if (setup.prepareAccountConfigInput) {
     await params.beforePersistentEffect?.();
     input = await setup.prepareAccountConfigInput({
@@ -102,10 +144,6 @@ export async function prepareChannelAccountConfiguration(params: {
   });
   if (validationError) {
     return resultError({ kind: "invalid-input", message: validationError });
-  }
-  const missingEnvMessage = resolveMissingSetupEnvMessage(params.plugin, input);
-  if (missingEnvMessage) {
-    return resultError({ kind: "invalid-input", message: missingEnvMessage });
   }
 
   return ok({

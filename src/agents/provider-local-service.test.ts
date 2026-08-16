@@ -31,20 +31,41 @@ const ONE_SHOT_HOST_READY_KIND = "ready-for-exit";
 
 async function freePort(): Promise<number> {
   // Allocate a real loopback port to exercise child process health probes.
-  return await new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      server.close(() => {
-        if (address && typeof address === "object") {
-          resolve(address.port);
-        } else {
-          reject(new Error("missing test port"));
-        }
+  const [port] = await freePorts(1);
+  if (port === undefined) {
+    throw new Error("missing test port");
+  }
+  return port;
+}
+
+async function freePorts(count: number): Promise<number[]> {
+  const servers: net.Server[] = [];
+  try {
+    for (let index = 0; index < count; index += 1) {
+      const server = net.createServer();
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", () => resolve());
       });
+      servers.push(server);
+    }
+    return servers.map((server) => {
+      const address = server.address();
+      if (address && typeof address === "object") {
+        return address.port;
+      }
+      throw new Error("missing test port");
     });
-  });
+  } finally {
+    await Promise.all(
+      servers.map(
+        (server) =>
+          new Promise<void>((resolve) => {
+            server.close(() => resolve());
+          }),
+      ),
+    );
+  }
 }
 
 async function waitForProbeFailure(url: string): Promise<void> {
@@ -578,8 +599,10 @@ describe("provider local service", () => {
   });
 
   it("keeps configured provider aliases on different local endpoints independent", async () => {
-    const firstPort = await freePort();
-    const secondPort = await freePort();
+    const [firstPort, secondPort] = await freePorts(2);
+    if (firstPort === undefined || secondPort === undefined) {
+      throw new Error("missing test ports");
+    }
     const firstHealthUrl = `http://127.0.0.1:${firstPort}/v1/models`;
     const secondHealthUrl = `http://127.0.0.1:${secondPort}/v1/models`;
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-service-key-"));

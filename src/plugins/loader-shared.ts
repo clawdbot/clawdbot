@@ -321,6 +321,7 @@ export function createManifestPluginRecord(params: {
     channelIds: manifestRecord.channels,
     providerIds: manifestRecord.providers,
     configSchema: Boolean(manifestRecord.configSchema),
+    channelConfigs: manifestRecord.channelConfigs,
     contracts: manifestRecord.contracts,
     dashboard: manifestRecord.dashboard,
     mcpServers: manifestRecord.mcpServers,

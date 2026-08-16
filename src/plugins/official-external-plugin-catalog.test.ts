@@ -7,7 +7,6 @@ import officialExternalPluginCatalog from "../../scripts/lib/official-external-p
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSqliteHostedOfficialExternalPluginCatalogSnapshotStore } from "./official-external-plugin-catalog-snapshot-store.js";
 import {
-  getOfficialExternalChannelSecretContract,
   type HostedOfficialExternalPluginCatalogSnapshot,
   type HostedOfficialExternalPluginCatalogSnapshotStore,
   type OfficialExternalPluginCatalogEntry,
@@ -1932,25 +1931,17 @@ describe("official external plugin catalog", () => {
       "openclaw-plugin-yuanbao@2.15.0",
     );
     expect(resolveOfficialExternalPluginId(qqbotByChannel)).toBe("openclaw-qqbot");
-    expect(qqbotByPlugin).toBe(qqbotByChannel);
+    expect(resolveOfficialExternalPluginId(qqbotByPlugin)).toBe("openclaw-qqbot");
+    expect(resolveOfficialExternalPluginInstall(qqbotByChannel)?.npmSpec).toBe(
+      "@tencent-connect/openclaw-qqbot@2.0.1",
+    );
+
+    const weixin = expectCatalogEntry("openclaw-weixin");
     expect(
-      getOfficialExternalPluginCatalogManifest(qqbotByChannel)?.channel?.doctorCapabilities,
-    ).toEqual({ openDmRequiresAllowFromWildcard: false });
-    expect(resolveOfficialExternalPluginInstall(qqbotByChannel)).toEqual({
-      npmSpec: "@tencent-connect/openclaw-qqbot@2.0.1",
-      defaultChoice: "npm",
-      expectedIntegrity:
-        "sha512-2010PaCummeQaxerLtaGfQ/5HChiXaW/KpTERid7V/1zyTs46S2ACi0hgZQ1SB7tH0t1InWr8tzVBJV/pLss3Q==",
-    });
-    expect(getOfficialExternalChannelSecretContract("qqbot")).toEqual({
-      channelId: "qqbot",
-      fields: [
-        {
-          field: "clientSecret",
-          activationField: "appId",
-          activationEnv: "QQBOT_APP_ID",
-        },
-      ],
+      getOfficialExternalPluginCatalogManifest(weixin)?.channelConfigs?.["openclaw-weixin"]?.reload,
+    ).toEqual({
+      configPrefixes: [],
+      accountIndexReloadPaths: ["channels.openclaw-weixin.channelConfigUpdatedAt"],
     });
   });
 

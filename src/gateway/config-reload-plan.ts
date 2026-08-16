@@ -51,6 +51,7 @@ export function isNoopGatewayReloadPlan(plan: GatewayReloadPlan): boolean {
 
 type ReloadRule = {
   prefix: string;
+  match?: "prefix" | "exact";
   kind: "restart" | "hot" | "none";
   actions?: ReloadAction[];
   accountScopedPlugin?: ChannelPlugin;
@@ -160,6 +161,10 @@ let cachedReloadRules: ReloadRule[] | null = null;
 let cachedRegistry: ReturnType<typeof getActivePluginHttpRouteRegistry> | null = null;
 let cachedGatewayRegistryVersion = -1;
 
+function isOwnedChannelConfigPath(path: string, channelId: ChannelId): boolean {
+  return path.startsWith(`channels.${channelId}.`);
+}
+
 function listReloadRules(): ReloadRule[] {
   // Reload metadata is gateway policy owned by the process-root registry.
   const registry = getActivePluginHttpRouteRegistry();
@@ -179,10 +184,23 @@ function listReloadRules(): ReloadRule[] {
     const restartAction = plugin.reload?.accountScopedRestart
       ? (`restart-channel-account:${plugin.id}` as ReloadAction)
       : (`restart-channel:${plugin.id}` as ReloadAction);
-    return (plugin.reload?.configPrefixes ?? [])
+    const hotPrefixRules = (plugin.reload?.configPrefixes ?? []).map((prefix): ReloadRule => {
+      const rule: ReloadRule = {
+        prefix,
+        kind: "hot",
+        actions: [restartAction],
+      };
+      if (plugin.reload?.accountScopedRestart) {
+        rule.accountScopedPlugin = plugin;
+      }
+      return rule;
+    });
+    const accountIndexRules = (plugin.reload?.accountIndexReloadPaths ?? [])
+      .filter((prefix) => isOwnedChannelConfigPath(prefix, plugin.id))
       .map((prefix): ReloadRule => {
         const rule: ReloadRule = {
           prefix,
+          match: "exact",
           kind: "hot",
           actions: [restartAction],
         };
@@ -190,15 +208,15 @@ function listReloadRules(): ReloadRule[] {
           rule.accountScopedPlugin = plugin;
         }
         return rule;
-      })
-      .concat(
-        (plugin.reload?.noopPrefixes ?? []).map(
-          (prefix): ReloadRule => ({
-            prefix,
-            kind: "none",
-          }),
-        ),
-      );
+      });
+    return hotPrefixRules.concat(accountIndexRules).concat(
+      (plugin.reload?.noopPrefixes ?? []).map(
+        (prefix): ReloadRule => ({
+          prefix,
+          kind: "none",
+        }),
+      ),
+    );
   });
   const channelPluginStateRules: ReloadRule[] = listChannelPlugins().flatMap((plugin) => [
     {
@@ -250,7 +268,8 @@ function listReloadRules(): ReloadRule[] {
 
 function matchRule(path: string): ReloadRule | null {
   for (const rule of listReloadRules()) {
-    if (path === rule.prefix || path.startsWith(`${rule.prefix}.`)) {
+    const exactOnly = rule.match === "exact";
+    if (path === rule.prefix || (!exactOnly && path.startsWith(`${rule.prefix}.`))) {
       return rule;
     }
   }

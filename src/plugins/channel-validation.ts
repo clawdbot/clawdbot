@@ -3,6 +3,7 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { listChatChannels } from "../channels/chat-meta.js";
 import { normalizeChannelMeta } from "../channels/plugins/meta-normalization.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
@@ -49,6 +50,42 @@ function collectMissingChannelMetaFields(meta?: Partial<ChannelMeta> | null): st
     missing.push("blurb");
   }
   return missing;
+}
+
+function isOwnedChannelConfigPath(path: string, channelId: string): boolean {
+  return path.startsWith(`channels.${channelId}.`);
+}
+
+function normalizeRegisteredChannelReload(params: {
+  pluginId: string;
+  source: string;
+  channelId: string;
+  reload: ChannelPlugin["reload"] | undefined;
+  pushDiagnostic: (diag: PluginDiagnostic) => void;
+}): ChannelPlugin["reload"] | undefined {
+  if (!params.reload) {
+    return undefined;
+  }
+  const { accountIndexReloadPaths: _accountIndexReloadPaths, ...reload } = params.reload;
+  const accountIndexReloadPaths = normalizeTrimmedStringList(_accountIndexReloadPaths).filter(
+    (path) => {
+      if (isOwnedChannelConfigPath(path, params.channelId)) {
+        return true;
+      }
+      pushPluginValidationDiagnostic({
+        level: "warn",
+        pluginId: params.pluginId,
+        source: params.source,
+        message: `channel "${params.channelId}" account-index reload path ignored outside owning config: ${path}`,
+        pushDiagnostic: params.pushDiagnostic,
+      });
+      return false;
+    },
+  );
+  return {
+    ...reload,
+    ...(accountIndexReloadPaths.length > 0 ? { accountIndexReloadPaths } : {}),
+  };
 }
 
 /** Validates and normalizes a channel plugin registration before runtime catalog insertion. */
@@ -109,6 +146,14 @@ export function normalizeRegisteredChannelPlugin(params: {
     });
   }
 
+  const reload = normalizeRegisteredChannelReload({
+    pluginId: params.pluginId,
+    source: params.source,
+    channelId: id,
+    reload: params.plugin.reload,
+    pushDiagnostic: params.pushDiagnostic,
+  });
+
   return {
     ...params.plugin,
     id,
@@ -117,5 +162,6 @@ export function normalizeRegisteredChannelPlugin(params: {
       meta: rawMeta,
       existing: resolveBundledChannelMeta(id),
     }),
+    ...(reload ? { reload } : {}),
   };
 }

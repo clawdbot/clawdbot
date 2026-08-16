@@ -9,6 +9,13 @@ export type ChannelRuntimeSnapshot = {
 };
 
 export type StartChannelOptions = {
+  /**
+   * Include accounts that the manager already knows about in addition to the
+   * plugin's current account listing.
+   *
+   * Channel hot reload uses this as a safety net for externally managed account stores.
+   */
+  includeKnownAccounts?: boolean;
   preserveRestartAttempts?: boolean;
   preserveManualStop?: boolean;
   deferAccountStartUntil?: Promise<void>;

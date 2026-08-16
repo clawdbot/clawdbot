@@ -136,6 +136,42 @@ describe("plugin registry channel guard", () => {
     expect(record.channelIds).toEqual(["telegram"]);
   });
 
+  it("merges manifest reload metadata into runtime channel registrations", () => {
+    const pluginRegistry = createTestRegistry();
+    const config = {} as OpenClawConfig;
+    const record = createPluginRecord({
+      id: "official-weixin-owner",
+      source: "/plugins/official-weixin-owner/index.ts",
+      origin: "global",
+      enabled: true,
+      channelConfigs: {
+        "openclaw-weixin": {
+          schema: { type: "object" },
+          reload: {
+            accountIndexReloadPaths: ["channels.openclaw-weixin.channelConfigUpdatedAt"],
+            accountScopedRestart: true,
+          },
+        },
+      },
+    });
+
+    pluginRegistry.registry.plugins.push(record);
+    pluginRegistry.createApi(record, { config, registrationMode: "full" }).registerChannel({
+      plugin: createChannelPlugin("openclaw-weixin", "Official Weixin"),
+    });
+
+    expect(pluginRegistry.registry.channelSetups[0]?.plugin.reload).toEqual({
+      configPrefixes: [],
+      accountIndexReloadPaths: ["channels.openclaw-weixin.channelConfigUpdatedAt"],
+      accountScopedRestart: true,
+    });
+    expect(pluginRegistry.registry.channels[0]?.plugin.reload).toEqual({
+      configPrefixes: [],
+      accountIndexReloadPaths: ["channels.openclaw-weixin.channelConfigUpdatedAt"],
+      accountScopedRestart: true,
+    });
+  });
+
   it.each(["bundled", "global", "workspace", "config"] as const)(
     "copies loader-owned %s provenance into channel registrations",
     (origin) => {

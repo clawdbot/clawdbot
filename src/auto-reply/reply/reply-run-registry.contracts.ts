@@ -143,9 +143,9 @@ export type ReplyMessageInjectionTarget = {
   /** Legacy targets stay leaf-bound even when their backend exposes a run id. */
   readonly identity: "leaf" | "run";
   readonly runId?: string;
-  readonly originatingLeafEntryId: string | null | undefined;
-  /** Tool authority captured with the exact active operation. */
+  /** Tool authority proven when the active owner was captured for injection. */
   readonly toolAuthorityFingerprint?: string;
+  readonly originatingLeafEntryId: string | null | undefined;
 };
 
 type ReplyMessageInjectionRejectionReason =

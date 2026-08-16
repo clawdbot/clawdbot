@@ -81,6 +81,16 @@ type BundledChannelArtifactValues = {
 
 type BundledChannelArtifactKind = keyof BundledChannelArtifactValues;
 type BundledChannelEntryKind = "entry" | "setupEntry";
+type ManifestSetupFieldEnvMetadata = {
+  key?: string;
+  envVars?: readonly string[];
+  envVarMode?: "all" | "any";
+};
+type ManifestChannelSetupMetadata = {
+  setup?: {
+    fields?: readonly ManifestSetupFieldEnvMetadata[];
+  };
+};
 type BundledChannelArtifacts = Partial<{
   [Kind in BundledChannelArtifactKind]: BundledChannelArtifactValues[Kind] | null;
 }>;
@@ -461,6 +471,53 @@ function rememberBundledChannelArtifact<TKind extends BundledChannelArtifactKind
   loadContext.artifactsById.set(id, artifacts);
 }
 
+function mergeManifestChannelSetupContractMetadata(
+  plugin: ChannelPlugin,
+  channelMetadata: ManifestChannelSetupMetadata,
+): ChannelPlugin {
+  const setupContract = plugin.setupContract;
+  const manifestFields = channelMetadata.setup?.fields;
+  if (!setupContract || !manifestFields?.length) {
+    return plugin;
+  }
+  const manifestFieldsByKey = new Map(
+    manifestFields
+      .filter((field) => field.key && field.envVars?.length)
+      .map((field) => [field.key as string, field]),
+  );
+  if (manifestFieldsByKey.size === 0) {
+    return plugin;
+  }
+  const fields: (typeof setupContract.metadata.fields)[number][] = [];
+  for (const field of setupContract.metadata.fields) {
+    const manifestField = manifestFieldsByKey.get(field.key);
+    if (!manifestField || field.kind !== "boolean") {
+      fields.push(field);
+      continue;
+    }
+    const mergedField: typeof field = {
+      kind: field.kind,
+      cli: field.cli,
+      key: field.key,
+      envVars: Array.from(manifestField.envVars ?? []),
+    };
+    if (manifestField.envVarMode) {
+      mergedField.envVarMode = manifestField.envVarMode;
+    }
+    fields.push(mergedField);
+  }
+  return {
+    ...plugin,
+    setupContract: {
+      ...setupContract,
+      metadata: {
+        ...setupContract.metadata,
+        fields,
+      },
+    },
+  };
+}
+
 function getBundledChannelArtifactForRoot<TKind extends BundledChannelArtifactKind>(
   kind: TKind,
   id: ChannelId,
@@ -555,12 +612,16 @@ const bundledChannelArtifactLoaders: {
       : undefined;
   },
   setupPlugin({ id, rootScope, loadContext }) {
-    return getBundledChannelArtifactForRoot(
+    const plugin = getBundledChannelArtifactForRoot(
       "setupEntry",
       id,
       rootScope,
       loadContext,
     )?.loadSetupPlugin();
+    const metadata = resolveBundledChannelMetadata(id, rootScope, loadContext);
+    return plugin && metadata?.packageManifest?.channel
+      ? mergeManifestChannelSetupContractMetadata(plugin, metadata.packageManifest.channel)
+      : plugin;
   },
   secrets({ id, rootScope, loadContext }) {
     const entry = getBundledChannelArtifactForRoot("entry", id, rootScope, loadContext);

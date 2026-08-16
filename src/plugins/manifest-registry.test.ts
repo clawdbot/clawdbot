@@ -1974,6 +1974,53 @@ describe("loadPluginManifestRegistry", () => {
     });
   });
 
+  it("merges official catalog reload arrays into partial npm channel configs", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "openclaw-weixin",
+      channels: ["openclaw-weixin"],
+      configSchema: { type: "object" },
+      channelConfigs: {
+        "openclaw-weixin": {
+          schema: {
+            type: "object",
+            additionalProperties: false,
+          },
+          reload: {
+            configPrefixes: ["channels.openclaw-weixin"],
+            accountScopedRestart: true,
+          },
+        },
+      },
+    });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "openclaw-weixin",
+        rootDir: dir,
+        origin: "global",
+        packageName: "@tencent-weixin/openclaw-weixin",
+      }),
+    ]);
+
+    const weixinConfig = expectRecordFields(
+      registry.plugins[0]?.channelConfigs?.["openclaw-weixin"],
+      "weixin config",
+      {
+        label: "Weixin",
+        description: "Personal WeChat conversation channel.",
+      },
+    );
+    expectRecordFields(weixinConfig.schema, "weixin schema", {
+      additionalProperties: false,
+    });
+    expect(weixinConfig.reload).toEqual({
+      configPrefixes: ["channels.openclaw-weixin"],
+      accountIndexReloadPaths: ["channels.openclaw-weixin.channelConfigUpdatedAt"],
+      accountScopedRestart: true,
+    });
+  });
+
   it("drops prototype-polluting channel config keys from plugin manifests", () => {
     const dir = makeTempDir();
     writeTextFile(
@@ -2681,6 +2728,44 @@ describe("loadPluginManifestRegistry", () => {
         description: "Matrix config",
         preferOver: ["matrix-legacy"],
       },
+    });
+  });
+
+  it("drops account-index reload markers outside the owning channel config", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "matrix",
+      channels: ["matrix"],
+      configSchema: { type: "object" },
+      channelConfigs: {
+        matrix: {
+          schema: { type: "object" },
+          reload: {
+            configPrefixes: ["channels.matrix"],
+            accountIndexReloadPaths: [
+              "channels.matrix.channelConfigUpdatedAt",
+              "channels.matrix.accounts",
+              "channels.telegram.channelConfigUpdatedAt",
+              "gateway.auth",
+              "channels.matrixish.channelConfigUpdatedAt",
+            ],
+          },
+        },
+      },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "matrix",
+      rootDir: dir,
+      origin: "workspace",
+    });
+
+    expect(registry.plugins[0]?.channelConfigs?.matrix?.reload).toEqual({
+      configPrefixes: ["channels.matrix"],
+      accountIndexReloadPaths: [
+        "channels.matrix.channelConfigUpdatedAt",
+        "channels.matrix.accounts",
+      ],
     });
   });
 

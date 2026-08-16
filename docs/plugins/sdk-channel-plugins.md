@@ -258,6 +258,19 @@ resolved config unchanged, stopping one account settles only that account's
 monitor and drain, and a fresh monitor recovers that account's rows exactly
 once. If any guarantee cannot be proved, omit the flag.
 
+#### Account-index reload paths
+
+If a channel keeps a channel-owned account index outside `channels.<channel>.accounts`,
+declare each exact reload marker in `reload.accountIndexReloadPaths`. The Gateway
+treats those plugin-declared paths as channel hot-reload triggers and, when no
+other `channels.<channel>.*` config path changed in the same diff, restarts the
+channel with the known-account safety net so existing runtimes are not dropped
+while the refreshed index is reconciled.
+
+Do not use this for ordinary account config edits. Account edits belong under
+`reload.configPrefixes` and should restart from the candidate config without
+unioning stale known accounts.
+
 ### Runtime lifecycle status
 
 For channel-authored runtime state, `ChannelAccountSnapshot.lifecycle` is the

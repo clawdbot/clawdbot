@@ -447,6 +447,50 @@ function mergeManifestContracts(
   return Object.keys(contracts).length > 0 ? contracts : undefined;
 }
 
+function mergeCatalogStringList(
+  catalogValues: string[] | undefined,
+  manifestValues: string[] | undefined,
+): string[] | undefined {
+  const merged = [...(catalogValues ?? []), ...(manifestValues ?? [])].filter(
+    (value, index, values) => values.indexOf(value) === index,
+  );
+  return merged.length > 0 ? merged : undefined;
+}
+
+function mergeCatalogChannelReloads(params: {
+  manifestReload?: PluginManifestChannelConfig["reload"];
+  catalogReload?: PluginManifestChannelConfig["reload"];
+}): PluginManifestChannelConfig["reload"] | undefined {
+  const configPrefixes = mergeCatalogStringList(
+    params.catalogReload?.configPrefixes,
+    params.manifestReload?.configPrefixes,
+  );
+  const noopPrefixes = mergeCatalogStringList(
+    params.catalogReload?.noopPrefixes,
+    params.manifestReload?.noopPrefixes,
+  );
+  const accountIndexReloadPaths = mergeCatalogStringList(
+    params.catalogReload?.accountIndexReloadPaths,
+    params.manifestReload?.accountIndexReloadPaths,
+  );
+  const accountScopedRestart =
+    params.manifestReload?.accountScopedRestart ?? params.catalogReload?.accountScopedRestart;
+  if (
+    !configPrefixes &&
+    !noopPrefixes &&
+    !accountIndexReloadPaths &&
+    accountScopedRestart === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    ...(configPrefixes ? { configPrefixes } : {}),
+    ...(noopPrefixes ? { noopPrefixes } : {}),
+    ...(accountIndexReloadPaths ? { accountIndexReloadPaths } : {}),
+    ...(accountScopedRestart !== undefined ? { accountScopedRestart } : {}),
+  };
+}
+
 function mergeCatalogChannelConfigs(params: {
   manifestChannelConfigs?: Record<string, PluginManifestChannelConfig>;
   catalogChannelConfigs?: Record<string, PluginManifestChannelConfig>;
@@ -463,6 +507,12 @@ function mergeCatalogChannelConfigs(params: {
   for (const [key, value] of Object.entries(params.manifestChannelConfigs ?? {})) {
     if (!isBlockedObjectKey(key)) {
       const catalogValue = merged[key];
+      const reload = catalogValue
+        ? mergeCatalogChannelReloads({
+            manifestReload: value.reload,
+            catalogReload: catalogValue.reload,
+          })
+        : undefined;
       merged[key] = catalogValue
         ? {
             ...catalogValue,
@@ -479,6 +529,7 @@ function mergeCatalogChannelConfigs(params: {
             ...((value.runtime ?? catalogValue.runtime)
               ? { runtime: value.runtime ?? catalogValue.runtime }
               : {}),
+            ...(reload ? { reload } : {}),
             ...((value.label ?? catalogValue.label)
               ? { label: value.label ?? catalogValue.label }
               : {}),

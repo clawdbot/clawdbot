@@ -118,10 +118,13 @@ export const replyRunRegistry: ReplyRunRegistry = {
     if (!("injection" in resolved)) {
       return undefined;
     }
+    const toolAuthorityFingerprint =
+      resolved.backend.toolAuthorityFingerprint ?? operation?.toolAuthorityFingerprint;
     const target: ReplyMessageInjectionTarget = {
       [replyMessageInjectionTargetOperation]: operation!,
       identity: normalizeOptionalString(expectedRunId) ? "run" : "leaf",
       ...(resolved.backend.runId ? { runId: resolved.backend.runId } : {}),
+      ...(toolAuthorityFingerprint ? { toolAuthorityFingerprint } : {}),
       originatingLeafEntryId,
       ...(operation?.toolAuthorityFingerprint
         ? { toolAuthorityFingerprint: operation.toolAuthorityFingerprint }

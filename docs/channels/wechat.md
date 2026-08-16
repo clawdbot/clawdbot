@@ -76,8 +76,10 @@ openclaw channels login --channel openclaw-weixin
 Scan the QR code with WeChat on your phone and confirm the login. The plugin saves
 the account token locally after a successful scan.
 
-To add another WeChat account, run the same login command again. For multiple
-accounts, isolate direct-message sessions by account, channel, and sender:
+To add another WeChat account, run the same login command again. The Gateway
+hot-reload reconciles the new login with accounts that are already running, so
+adding account B should not leave account A offline. For multiple accounts,
+isolate direct-message sessions by account, channel, and sender:
 
 ```bash
 openclaw config set session.dmScope per-account-channel-peer
