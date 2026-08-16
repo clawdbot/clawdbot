@@ -664,22 +664,37 @@ export default {
         "extensions/zalo",
         "extensions/zalouser",
         "packages/ai",
-        "src/runtime.ts",
-        "src/acp",
+        "src/acp/client.ts", // Node and Web ReadableStream types live in separate namespaces.
+        "src/acp/server.ts", // Node and Web ReadableStream types live in separate namespaces.
         "src/agents",
-        "src/channels",
-        "src/commands",
-        "src/config",
-        "src/gateway",
-        "src/infra",
-        "src/media",
+        "src/channels/plugins/config-schema.ts", // Public SDK Zod generics preserve caller schema identity.
+        "src/commands/channel-test-registry.ts", // Test support.
+        "src/commands/doctor/cron/legacy-repair.ts", // Partially validated legacy rows cross the canonical cron store type.
+        "src/commands/doctor/cron/legacy-store-migration.ts", // Legacy loader carries partial rows in the canonical store envelope.
+        "src/commands/doctor/cron/warnings.ts", // Doctor inspects partially parsed cron rows.
+        "src/config/schema.hints.ts", // Zod pipe internals cross its public type namespace.
+        "src/config/sessions/store-entry-shape.ts", // Legacy projection accepts partially validated session records.
+        "src/gateway/cli-session-history.claude.ts", // External CLI messages cross the canonical transcript redactor.
+        "src/gateway/mcp-app-standalone.ts", // Generated standalone browser code bridges the DOM namespace.
+        "src/gateway/server-methods/chat-transcript-inject.ts", // Gateway media blocks exceed the canonical message content union.
+        "src/gateway/test-http-response.ts", // Test support.
+        "src/infra/backup-volatile-stat-cache.ts", // node-tar's cache expects full Stats for a synthetic sentinel.
+        "src/infra/diagnostic-trace-propagation.ts", // Global symbol registry crosses module copies.
+        "src/infra/net/runtime-fetch.ts", // Undici and DOM fetch types live in separate namespaces.
+        "src/infra/state-migrations.meeting-transcripts-files.ts", // Legacy summary validation does not prove element types.
+        "src/infra/unhandled-rejections.ts", // Global symbol registry crosses module copies.
         "src/meeting-bot",
-        "src/plugin-sdk",
-        "src/plugins",
-        "src/process",
-        "src/proxy-capture",
-        "src/shared",
-        "src/trajectory",
+        "src/plugin-sdk/channel-config-helpers.ts", // Public SDK accessor generics are intentionally decoupled.
+        "src/plugin-sdk/provider-stream-shared.ts", // Untyped normalizer events need a transport stream API redesign.
+        "src/plugin-sdk/qa-runtime.ts", // Public SDK lazy module exposes a narrower runtime surface.
+        "src/plugins/hook-isolation.ts", // Optional WebAssembly globals bridge runtime type namespaces.
+        "src/plugins/interactive.ts", // Dynamic plugin context keys cross the generic handler seam.
+        "src/plugins/loader-runtime-load.ts", // Discovery-only runtime is widened by the registry proxy.
+        "src/plugins/registry-runtime.ts", // Bundled owner wrapper crosses the public inbound generic.
+        "src/plugins/runtime/index.ts", // Lazy assembly adds required runtime capabilities after construction.
+        "src/process/exec-spawn.ts", // Rebuilt Execa options cross its result generic.
+        "src/proxy-capture/store.sqlite.ts", // Implementation preserves overloaded shipped constructor contracts.
+        "src/trajectory/export.ts", // Legacy migration mutates pre-canonical transcript entries.
         "ui/src",
       ],
     }),
