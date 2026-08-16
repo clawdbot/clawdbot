@@ -4,6 +4,7 @@ import {
   AUDIT_ACTIVITY_KINDS,
   AUDIT_ACTIVITY_STATUSES,
 } from "../../packages/gateway-protocol/src/schema/audit-activity.js";
+import { runCommandWithRuntime } from "../cli/cli-utils.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { auditListCommand } from "./audit.js";
 
@@ -195,6 +196,8 @@ describe("audit command gateway compatibility", () => {
   beforeEach(() => {
     callGateway.mockReset();
     callGateway.mockResolvedValue({ events: [] });
+    vi.mocked(runtime.error).mockClear();
+    vi.mocked(runtime.exit).mockClear();
   });
 
   it("forwards all filters to audit.activity.list", async () => {
@@ -316,13 +319,13 @@ describe("audit command gateway compatibility", () => {
     });
     callGateway.mockRejectedValueOnce(error);
 
-    const rejection = await auditListCommand({ limit: "10" }, runtime).catch(
-      (caught: unknown) => caught,
-    );
+    await runCommandWithRuntime(runtime, () => auditListCommand({ limit: "10" }, runtime));
 
-    expect(rejection).toBeInstanceOf(Error);
-    expect(String(rejection)).toBe("Error: invalid audit activity params");
-    expect(String(rejection)).not.toContain("GatewayClientRequestError");
+    expect(runtime.error).toHaveBeenCalledWith("Error: invalid audit activity params");
+    expect(String(vi.mocked(runtime.error).mock.calls[0]?.[0])).not.toContain(
+      "GatewayClientRequestError",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(callGateway).toHaveBeenCalledTimes(1);
   });
 
@@ -334,9 +337,15 @@ describe("audit command gateway compatibility", () => {
       }),
     );
 
-    await expect(auditListCommand({ cursor: "abc" }, runtime)).rejects.toThrow(
-      "--cursor must be a continuation token returned by a previous audit result.",
+    await runCommandWithRuntime(runtime, () => auditListCommand({ cursor: "abc" }, runtime));
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Error: --cursor must be a continuation token returned by a previous audit result.",
     );
+    expect(String(vi.mocked(runtime.error).mock.calls[0]?.[0])).not.toContain(
+      "audit.activity.list",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 });
 

@@ -184,7 +184,7 @@ function formatAuditGatewayError(error: unknown): Error {
     message === "invalid audit.activity.list range or cursor"
       ? "--cursor must be a continuation token returned by a previous audit result."
       : message;
-  return new Error(operatorMessage, { cause: error });
+  return new Error(operatorMessage);
 }
 
 function toLegacyAuditListParams(params: AuditActivityListParams): AuditListParams {
