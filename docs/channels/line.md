@@ -235,7 +235,7 @@ types are `media_player`, `event`, `agenda`, `device`, and `appletv_remote`.
 
 Other card shapes:
 
-```json5
+```json5 validate=false
 { type: "media_player", title: "Song", artist: "Artist", source: "Living Room", status: "playing", imageUrl: "https://example.com/cover.jpg" }
 { type: "agenda", title: "Today", events: [{ title: "Standup", time: "09:00", location: "Online" }] }
 { type: "device", name: "TV", deviceType: "Streaming box", status: "Playing", controls: [{ label: "Pause", action: "pause" }] }
