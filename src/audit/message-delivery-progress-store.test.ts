@@ -21,7 +21,7 @@ import {
 } from "./message-delivery-progress-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const PINNED_PRE_C04_READER_SHA = "65922f95070abd58684675349593a217b193fe0f";
+const PINNED_PRE_C04_READER_SHA = "5dc4cf602bc5e263e83cd16a12bb1e100544f4c3";
 
 function ensurePinnedReaderCommit(repositoryRoot: string): void {
   try {

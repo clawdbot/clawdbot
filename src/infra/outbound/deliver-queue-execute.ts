@@ -37,7 +37,6 @@ import {
   emitOutboundAuditLifecycle,
   emitOutboundAuditTerminals,
   failedOutboundAuditTerminals,
-  uniformOutboundAuditTerminals,
 } from "./outbound-audit.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 
@@ -397,12 +396,8 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
             "platform send returned no delivery identity",
           );
           queuedPostSendState = "failed";
-          emitTerminals(() =>
-            uniformOutboundAuditTerminals(payloadCount, {
-              outcome: "unknown",
-              failureStage: "platform_send",
-            }),
-          );
+          // Durable custody remains with recovery. Publishing a terminal here
+          // would make a later reconciliation reuse the same audit identity.
           return results;
         }
         const acked =
@@ -494,12 +489,6 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
             );
             queuedPostSendState = "failed";
           }
-          emitTerminals(() =>
-            uniformOutboundAuditTerminals(payloadCount, {
-              outcome: "unknown",
-              failureStage: "platform_send",
-            }),
-          );
         } else if (params.abortSignal?.aborted !== true) {
           await recordOwnedQueueFailure(failDelivery, formatErrorMessage(err)).catch(
             (failErr: unknown) => {
