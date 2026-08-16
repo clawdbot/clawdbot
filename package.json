@@ -1848,7 +1848,7 @@
     "test:docker:plugin-lifecycle-matrix": "bash scripts/e2e/plugin-lifecycle-matrix-docker.sh",
     "test:docker:plugin-update": "bash scripts/e2e/plugin-update-unchanged-docker.sh",
     "test:docker:plugins": "bash scripts/e2e/plugins-docker.sh",
-    "test:docker:published-upgrade-survivor": "env OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest} OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT=${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s} bash scripts/e2e/upgrade-survivor-docker.sh",
+    "test:docker:published-upgrade-survivor": "node --import tsx scripts/run-with-env.mts OPENCLAW_DOCKER_ALL_LANES=published-upgrade-survivor -- node scripts/test-docker-all.mjs",
     "test:docker:qr": "bash scripts/e2e/qr-import-docker.sh",
     "test:docker:rerun": "node --import tsx scripts/docker-e2e-rerun.mts",
     "test:docker:root-managed-vps-upgrade": "env OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS=1 OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@2026.5.7} OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT=${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s} bash scripts/e2e/upgrade-survivor-docker.sh",
