@@ -60,6 +60,7 @@ export function resolveAndApplyOutboundThreadId(
       threadId: resolvedThreadId,
       replyToId,
       replyToIsExplicit: context.replyToIsExplicit,
+      toolContext: context.toolContext,
     })?.replyToId;
     // Providers that use one canonical root for reply and thread routing opt in
     // through resolveReplyTransport. Other transports keep message replies intact.

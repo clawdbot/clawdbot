@@ -63,6 +63,19 @@ function normalizeBuzzThreadingTarget(target: string | undefined): string | unde
   }
 }
 
+function matchesBuzzThreadingTarget(
+  target: string,
+  toolContext: { currentChannelId?: string; currentMessagingTarget?: string },
+): boolean {
+  const normalizedTarget = normalizeBuzzThreadingTarget(target);
+  return Boolean(
+    normalizedTarget &&
+    [toolContext.currentChannelId, toolContext.currentMessagingTarget].some(
+      (currentTarget) => normalizeBuzzThreadingTarget(currentTarget) === normalizedTarget,
+    ),
+  );
+}
+
 export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbeResult>({
   base: {
     id: "buzz",
@@ -186,14 +199,34 @@ export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbe
     },
     threading: {
       resolveReplyToMode: () => "all",
-      matchesToolContextTarget: ({ target, toolContext }) => {
-        const normalizedTarget = normalizeBuzzThreadingTarget(target);
-        return Boolean(
-          normalizedTarget &&
-          [toolContext.currentChannelId, toolContext.currentMessagingTarget].some(
-            (currentTarget) => normalizeBuzzThreadingTarget(currentTarget) === normalizedTarget,
-          ),
+      matchesToolContextTarget: ({ target, toolContext }) =>
+        matchesBuzzThreadingTarget(target, toolContext),
+      resolveAutoThreadId: ({ to, toolContext }) =>
+        toolContext && matchesBuzzThreadingTarget(to, toolContext)
+          ? toolContext.currentThreadTs
+          : undefined,
+      resolveReplyTransport: (params) => {
+        const { threadId, replyToId, replyToIsExplicit } = params;
+        // Keep package-boundary compatibility with hosts whose public type predates
+        // the optional toolContext field while using it when the current host supplies it.
+        const toolContext = (
+          params as typeof params & {
+            toolContext?: { currentMessageId?: string | number };
+          }
+        ).toolContext;
+        const rootId = threadId == null ? undefined : String(threadId);
+        const currentMessageId =
+          toolContext?.currentMessageId == null ? undefined : String(toolContext.currentMessageId);
+        const isCurrentTrigger = Boolean(
+          replyToId && currentMessageId && replyToId === currentMessageId,
         );
+        const shouldCollapseToRoot = Boolean(
+          rootId && (replyToIsExplicit === false || isCurrentTrigger),
+        );
+        return {
+          replyToId: shouldCollapseToRoot ? rootId : (replyToId ?? rootId),
+          threadId: rootId ?? null,
+        };
       },
       buildToolContext: ({ context, hasRepliedRef }) => {
         const currentMessagingTarget = normalizeOptionalString(context.To);
@@ -205,7 +238,7 @@ export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbe
           currentMessagingTarget,
           currentThreadTs:
             context.MessageThreadId == null ? undefined : String(context.MessageThreadId),
-          currentMessageId: normalizeOptionalString(context.ReplyToId) ?? context.CurrentMessageId,
+          currentMessageId: context.CurrentMessageId,
           replyToMode: context.ReplyToMode ?? "all",
           hasRepliedRef,
         };

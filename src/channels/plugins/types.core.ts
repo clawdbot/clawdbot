@@ -433,6 +433,8 @@ export type ChannelThreadingAdapter = {
     replyToId?: string | null;
     /** True when replyToId came from an explicit payload target or reply tag. */
     replyToIsExplicit?: boolean;
+    /** Active inbound tool context for provider-specific reply canonicalization. */
+    toolContext?: ChannelThreadingToolContext;
     replyDelivery?: ReplyDeliveryContext;
   }) => ChannelReplyTransport | null;
   resolveFocusedBinding?: (params: {

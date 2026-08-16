@@ -1,6 +1,7 @@
 // Covers core message-action send fallback, TTS application, and durable send
 // policy after plugin preparation is absent.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ChannelThreadingAdapter } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -214,6 +215,110 @@ describe("runMessageAction core send routing", () => {
     expect(firstMockArg(sendText, "send text")).toMatchObject({
       replyToId: "child-1",
       threadId: "root-1",
+    });
+  });
+
+  it.each([
+    {
+      name: "collapses the current trigger to the root",
+      target: "channel:C1",
+      replyToId: "trigger-child",
+      threadId: "root-1",
+      expectedReplyToId: "root-1",
+      expectedThreadId: "root-1",
+    },
+    {
+      name: "preserves a deliberate reply to another child",
+      target: "channel:C1",
+      replyToId: "other-child",
+      threadId: "root-1",
+      expectedReplyToId: "other-child",
+      expectedThreadId: "root-1",
+    },
+    {
+      name: "inherits the root for an implicit current-room reply",
+      target: "channel:C1",
+      replyToId: undefined,
+      threadId: undefined,
+      expectedReplyToId: "root-1",
+      expectedThreadId: "root-1",
+    },
+    {
+      name: "does not inherit threading in another room",
+      target: "channel:C2",
+      replyToId: undefined,
+      threadId: undefined,
+      expectedReplyToId: undefined,
+      expectedThreadId: undefined,
+    },
+  ])("passes tool context to reply transport and $name", async (testCase) => {
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "testchat",
+      messageId: "m1",
+      chatId: "C1",
+    });
+    const threading: ChannelThreadingAdapter = {
+      matchesToolContextTarget: ({ target }) => target === "channel:C1",
+      resolveAutoThreadId: ({ to, toolContext }) =>
+        to === "channel:C1" ? toolContext?.currentThreadTs : undefined,
+      resolveReplyTransport: ({ threadId, replyToId, toolContext }) => ({
+        replyToId:
+          replyToId === toolContext?.currentMessageId
+            ? threadId == null
+              ? replyToId
+              : String(threadId)
+            : replyToId,
+        threadId: threadId ?? null,
+      }),
+    };
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "testchat",
+          source: "test",
+          plugin: {
+            ...createOutboundTestPlugin({
+              id: "testchat",
+              outbound: {
+                deliveryMode: "direct",
+                sendText,
+              },
+            }),
+            threading,
+          },
+        },
+      ]),
+    );
+
+    await runMessageAction({
+      cfg: {
+        channels: {
+          testchat: {
+            enabled: true,
+          },
+        },
+      } as OpenClawConfig,
+      action: "send",
+      params: {
+        channel: "testchat",
+        target: testCase.target,
+        message: "threaded",
+        ...(testCase.replyToId ? { replyTo: testCase.replyToId } : {}),
+        ...(testCase.threadId ? { threadId: testCase.threadId } : {}),
+      },
+      toolContext: {
+        currentChannelProvider: "testchat",
+        currentChannelId: "channel:C1",
+        currentThreadTs: "root-1",
+        currentMessageId: "trigger-child",
+        replyToMode: "all",
+      },
+      dryRun: false,
+    });
+
+    expect(firstMockArg(sendText, "send text")).toMatchObject({
+      replyToId: testCase.expectedReplyToId,
+      threadId: testCase.expectedThreadId,
     });
   });
 
