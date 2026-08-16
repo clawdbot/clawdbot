@@ -678,26 +678,14 @@ describe("runCliAgent spawn path", () => {
     expect(invokeNode).not.toHaveBeenCalled();
   });
 
-  it("allows non-hydratable image facts on a text-only node turn", async () => {
-    const invokeNode = vi.fn(async (params: Parameters<typeof invokeNodeClaudeCliRun>[0]) => {
-      params.onProgress(
-        [
-          JSON.stringify({ type: "system", subtype: "init", session_id: "node-text-only" }),
-          JSON.stringify({ type: "result", session_id: "node-text-only", result: "ok" }),
-          "",
-        ].join("\n"),
-      );
-      return {
-        ok: true,
-        payloadJSON: JSON.stringify({ exitCode: 0, stderrTail: "", truncated: false }),
-      };
-    });
+  it("rejects prepared offloaded images before invoking a node-placed Claude session", async () => {
+    const invokeNode = vi.fn();
     setCliRunnerExecuteTestDeps({ invokeNodeClaudeCliRun: invokeNode });
     const context = buildPreparedCliRunContext({
       provider: "claude-cli",
       model: "claude-opus-4-8",
-      runId: "run-node-text-only-media-facts",
-      prompt: "already described",
+      runId: "run-node-offloaded-media-facts",
+      prompt: "describe the attachment",
       sessionEntry: {
         sessionId: "openclaw-session",
         updatedAt: 1,
@@ -705,13 +693,24 @@ describe("runCliAgent spawn path", () => {
         execNode: "node-a",
       },
     });
-    context.params.media = [
-      { kind: "image" },
-      { kind: "image", url: "https://example.test/described.png" },
-    ];
+    const preparedParams = context.params as typeof context.params & {
+      mediaImageLayout?: {
+        slots: Array<{ kind: "inline" | "offloaded"; factIndex?: number }>;
+        suppressedFactIndexes: number[];
+      };
+    };
+    preparedParams.mediaImageLayout = {
+      slots: [{ kind: "offloaded", factIndex: 0 }],
+      suppressedFactIndexes: [],
+    };
+    context.params.images = [];
+    context.params.imageOrder = ["offloaded"];
+    context.params.media = [{ kind: "image", path: "/tmp/offloaded.png" }];
 
-    await expect(executePreparedCliRun(context)).resolves.toMatchObject({ text: "ok" });
-    expect(invokeNode).toHaveBeenCalledOnce();
+    await expect(executePreparedCliRun(context)).rejects.toThrow(
+      "paired-node Claude CLI sessions do not support attachments or images",
+    );
+    expect(invokeNode).not.toHaveBeenCalled();
   });
 
   it("does not inject hardcoded 'Tools are disabled' text into CLI arguments", async () => {

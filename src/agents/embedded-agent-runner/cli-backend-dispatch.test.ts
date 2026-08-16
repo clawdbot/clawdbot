@@ -411,13 +411,17 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
     expect(onExecutionStarted).toHaveBeenCalledWith({ lifecycleGeneration: "gen-1" });
   });
 
-  it("retains prompt media facts through the embedded-to-CLI bridge", async () => {
+  it("retains ordered prompt images and media facts through the embedded-to-CLI bridge", async () => {
+    const images = [{ type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" }];
+    const imageOrder = ["inline" as const];
     const media = [{ path: "/tmp/recall.png", contentType: "image/png" }];
 
-    await runEmbeddedAgentViaCliBackendIfEligible(baseRunParams({ media }));
+    await runEmbeddedAgentViaCliBackendIfEligible(baseRunParams({ images, imageOrder, media }));
 
     expect(runCliAgent.mock.calls[0]?.[0]).toMatchObject({
       prompt: "recall prompt",
+      images,
+      imageOrder,
       media,
     });
   });

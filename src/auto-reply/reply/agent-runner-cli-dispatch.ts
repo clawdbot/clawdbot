@@ -4,6 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { runCliAgent } from "../../agents/cli-runner.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import { clearCliSession, getCliSessionBinding } from "../../agents/cli-session.js";
+import type { MediaImageLayout } from "../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import { extractToolResultText } from "../../agents/embedded-agent-tool-results.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent.js";
 import {
@@ -33,6 +34,10 @@ import {
   createAgentEventDeliveryStartOrder,
 } from "./agent-event-bridge.js";
 import { resolveAgentLifecycleTerminalMetadata } from "./agent-lifecycle-terminal.js";
+
+type RunCliAgentInternalParams = RunCliAgentParams & {
+  mediaImageLayout?: MediaImageLayout;
+};
 
 type AgentEventBridge = {
   unsubscribe: () => void;
@@ -422,7 +427,7 @@ type RunCliAgentWithLifecycleParams = {
   runId: string;
   lifecycleGeneration?: string;
   provider: string;
-  runParams: RunCliAgentParams;
+  runParams: RunCliAgentInternalParams;
   startedAt?: number;
   emitLifecycleTerminal?: boolean;
   onAgentRunStart?: () => void;

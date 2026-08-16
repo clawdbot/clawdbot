@@ -418,6 +418,7 @@ export async function runCliFallbackCandidate(params: {
               ],
             images: params.currentTurnImages.images,
             imageOrder: params.currentTurnImages.imageOrder,
+            mediaImageLayout: params.currentTurnImages.mediaImageLayout,
             skillsSnapshot: turn.followupRun.run.skillsSnapshot,
             messageChannel: turn.followupRun.originatingChannel ?? undefined,
             messageProvider: hookMessageProvider,
