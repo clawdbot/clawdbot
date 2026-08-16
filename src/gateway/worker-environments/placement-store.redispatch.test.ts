@@ -8,7 +8,10 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
+import type {
+  WorkerSessionPlacementIdentity,
+  WorkerSessionPlacementRecord,
+} from "./placement-record.js";
 import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
@@ -65,7 +68,7 @@ describe("failed worker placement redispatch", () => {
     return placement;
   }
 
-  function advanceToActive() {
+  function advanceToActive(): Extract<WorkerSessionPlacementRecord, { state: "active" }> {
     const placement = advanceToStarting();
     const active = store.transition({
       sessionId: SESSION.sessionId,
