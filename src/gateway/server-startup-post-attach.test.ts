@@ -293,7 +293,7 @@ function composeTrackedPublisher(
 ): SidecarPublisher {
   return (sidecars) => {
     adoptSidecars(publishedSidecars, sidecars);
-    publisher?.(sidecars);
+    return publisher?.(sidecars);
   };
 }
 
@@ -317,6 +317,23 @@ function transferBeforeStop(sidecar: SidecarHandle): void {
 async function stopTrackedSidecar(sidecar: SidecarHandle): Promise<void> {
   transferBeforeStop(sidecar);
   await sidecar.stop();
+}
+
+async function stopTrackedSidecars(sidecars: Set<SidecarHandle>): Promise<void> {
+  const stopping = [...sidecars];
+  const results = await Promise.allSettled(stopping.map(async (sidecar) => await sidecar.stop()));
+  results.forEach((result, index) => {
+    const sidecar = stopping[index];
+    if (sidecar && result.status === "fulfilled") {
+      transferBeforeStop(sidecar);
+    }
+  });
+  const failure = results.find(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  if (failure) {
+    throw failure.reason;
+  }
 }
 
 async function cleanupGatewayTestState(): Promise<void> {
@@ -615,7 +632,7 @@ describe("startGatewayPostAttachRuntime", () => {
 
     expect(hoisted.scheduleRestartAbortedMainSessionRecovery).toHaveBeenCalledOnce();
     expect(recoverySidecar.stop).toHaveBeenCalledOnce();
-    expect(onGatewayLifetimeSidecars).not.toHaveBeenCalled();
+    expect(onGatewayLifetimeSidecars).toHaveBeenCalledWith([recoverySidecar]);
   });
 
   it("gates main-session recovery behind post-ready work", async () => {
@@ -944,10 +961,12 @@ describe("startGatewayPostAttachRuntime", () => {
       createPostAttachParams({ sidecarStartup: "defer", onPostReadySidecars }),
       createPostAttachRuntimeDeps({
         logGatewayStartup: vi.fn().mockRejectedValue(startupError),
-        startGatewaySidecars: vi.fn(async () => ({
-          pluginServices: null,
-          postReadySidecars: [postReadySidecar],
-        })),
+        startGatewaySidecars: vi.fn(
+          async (params: Parameters<typeof startGatewaySidecarsImpl>[0]) => {
+            params.onPostReadySidecars?.([postReadySidecar]);
+            return { pluginServices: null, postReadySidecars: [postReadySidecar] };
+          },
+        ),
       }),
     );
 
@@ -2451,6 +2470,7 @@ describe("startGatewayPostAttachRuntime", () => {
           resolveWatcher = resolve;
         }),
     );
+    let sidecarStartReturned = false;
     const onPostReadySidecars = vi.fn();
     const log = { warn: vi.fn() };
 
@@ -2462,6 +2482,10 @@ describe("startGatewayPostAttachRuntime", () => {
       defaultWorkspaceDir: "/tmp/openclaw-workspace",
       deps: {} as never,
       startChannels: vi.fn(async () => {}),
+      onPostReadySidecars: (sidecars) => {
+        expect(sidecarStartReturned).toBe(false);
+        onPostReadySidecars(sidecars);
+      },
       log,
       logHooks: {
         info: vi.fn(),
@@ -2473,10 +2497,10 @@ describe("startGatewayPostAttachRuntime", () => {
         error: vi.fn(),
       },
     });
+    sidecarStartReturned = true;
 
     expect(result.postReadySidecars).toHaveLength(2);
     expect(hoisted.startGmailWatcherWithLogs).not.toHaveBeenCalled();
-    onPostReadySidecars(result.postReadySidecars);
     expect(onPostReadySidecars).toHaveBeenCalledWith(result.postReadySidecars);
 
     await waitForGatewayTestState(() => {
@@ -2493,6 +2517,52 @@ describe("startGatewayPostAttachRuntime", () => {
     }
     expect(watcherSignal?.aborted).toBe(true);
     resolveWatcher();
+  });
+
+  it("does not create post-ready sidecars after close begins during channel startup", async () => {
+    let releaseChannels: (() => void) | undefined;
+    let closeStarted = false;
+    const startChannels = vi.fn(
+      async () =>
+        await new Promise<void>((resolve) => {
+          releaseChannels = resolve;
+        }),
+    );
+    const onPostReadySidecars = vi.fn();
+
+    const sidecarsPromise = startGatewaySidecars({
+      cfg: {
+        hooks: { enabled: true, internal: { enabled: false }, gmail: { account: "me" } },
+      } as never,
+      pluginRegistry: createPostAttachParams().pluginRegistry,
+      defaultWorkspaceDir: "/tmp/openclaw-workspace",
+      deps: {} as never,
+      startChannels,
+      shouldCreatePostReadySidecars: () => !closeStarted,
+      onPostReadySidecars,
+      log: { warn: vi.fn() },
+      logHooks: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+      logChannels: {
+        info: vi.fn(),
+        error: vi.fn(),
+      },
+    });
+
+    await waitForGatewayTestState(() => {
+      expect(startChannels).toHaveBeenCalledTimes(1);
+      expect(releaseChannels).toBeDefined();
+    });
+    closeStarted = true;
+    releaseChannels?.();
+
+    const result = await sidecarsPromise;
+    expect(result.postReadySidecars).toEqual([]);
+    expect(onPostReadySidecars).toHaveBeenCalledWith([]);
+    expect(hoisted.startGmailWatcherWithLogs).not.toHaveBeenCalled();
   });
 
   it("logs post-ready Gmail watcher failures without delaying sidecar readiness", async () => {
@@ -3001,10 +3071,12 @@ describe("startGatewayPostAttachRuntime", () => {
         onPluginServices,
       },
       createPostAttachRuntimeDeps({
-        startGatewaySidecars: vi.fn(async () => ({
-          pluginServices,
-          postReadySidecars: [postReadySidecar],
-        })),
+        startGatewaySidecars: vi.fn(
+          async (params: Parameters<typeof startGatewaySidecarsImpl>[0]) => {
+            params.onPostReadySidecars?.([postReadySidecar]);
+            return { pluginServices, postReadySidecars: [postReadySidecar] };
+          },
+        ),
         loadSubagentRegistrySweep: vi.fn(async () => {
           markRecoveryLoadStarted?.();
           await recoveryLoadReady;
@@ -3431,6 +3503,9 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
     residentRegistry: createGatewayResidentRegistry(),
     providerAuthPrewarm: { enabled: false },
     registerGatewayLifetimeSidecar: async () => ({ release: () => {} }),
+    stopRegisteredPostReadySidecars: () => stopTrackedSidecars(publishedPostReadySidecars),
+    stopRegisteredGatewayLifetimeSidecars: () =>
+      stopTrackedSidecars(publishedGatewayLifetimeSidecars),
     ...overrides,
   };
 }

@@ -3,9 +3,27 @@ import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach
 export function createGatewaySidecarStopOwner(params: {
   getRegistered: () => GatewayPostReadySidecarHandle[];
   setRegistered: (sidecars: GatewayPostReadySidecarHandle[]) => void;
-}): () => Promise<void> {
+}) {
   let activeStop: Promise<void> | null = null;
-  return () => {
+  let phase: "open" | "closing" | "sealed" = "open";
+  const publish = (sidecars: readonly GatewayPostReadySidecarHandle[]) => {
+    params.setRegistered(
+      mergeGatewaySidecarOwners({ registered: params.getRegistered(), published: sidecars }),
+    );
+    if (phase === "sealed") {
+      return false;
+    }
+    if (phase === "closing") {
+      void stop().catch(() => {});
+    }
+    return true;
+  };
+  const beginClose = () => {
+    if (phase === "open") {
+      phase = "closing";
+    }
+  };
+  const stop = () => {
     if (activeStop) {
       return activeStop;
     }
@@ -56,8 +74,30 @@ export function createGatewaySidecarStopOwner(params: {
       }
     });
     activeStop = stopping;
+    void stopping.catch(() => {});
     return stopping;
   };
+
+  const sealAndJoin = async () => {
+    let failure: Error | undefined;
+    while (true) {
+      const stopping = activeStop;
+      if (!stopping) {
+        phase = "sealed";
+        break;
+      }
+      try {
+        await stopping;
+      } catch (error) {
+        failure ??= error instanceof Error ? error : new Error(String(error));
+      }
+    }
+    if (failure) {
+      throw failure;
+    }
+  };
+
+  return { publish, beginClose, stop, sealAndJoin };
 }
 
 export function mergeGatewaySidecarOwners(params: {

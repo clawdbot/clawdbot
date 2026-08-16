@@ -567,6 +567,8 @@ export async function startGatewaySidecars(params: {
   onChannelsStarted?: () => Awaitable<void>;
   prewarmPrimaryModel?: typeof prewarmConfiguredPrimaryModel;
   onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
+  onPostReadySidecars?: (sidecars: GatewayPostReadySidecarHandle[]) => void;
+  shouldCreatePostReadySidecars?: () => boolean;
   shouldStartPluginServices?: () => boolean;
   broadcastPluginEvent?: import("./server-broadcast-types.js").GatewayPluginEventBroadcastFn;
   log: { warn: (msg: string) => void };
@@ -710,6 +712,10 @@ export async function startGatewaySidecars(params: {
 
   const shouldDispatchGatewayStartupInternalHook =
     internalHooksConfigured || (await hasGatewayStartupInternalHookListeners());
+  if (params.shouldCreatePostReadySidecars?.() === false) {
+    params.onPostReadySidecars?.(postReadySidecars);
+    return { pluginServices, postReadySidecars };
+  }
   if (shouldDispatchGatewayStartupInternalHook) {
     params.startupOutcomes?.record({
       subsystem: "internal-startup-hook",
@@ -877,6 +883,9 @@ export async function startGatewaySidecars(params: {
     );
   }
 
+  // These handles schedule later tasks but do not yield after creation. Transfer
+  // ownership in the same turn so close cannot seal between creation and publication.
+  params.onPostReadySidecars?.(postReadySidecars);
   return { pluginServices, postReadySidecars };
 }
 
@@ -1088,8 +1097,10 @@ export async function startGatewayPostAttachRuntime(
     getCronService?: () => PluginHookGatewayCronService | null | undefined;
     onChannelsStarted?: () => Awaitable<void>;
     onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
-    onPostReadySidecars?: (postReadySidecars: GatewayPostReadySidecarHandle[]) => void;
-    onGatewayLifetimeSidecars?: (sidecars: GatewayPostReadySidecarHandle[]) => void;
+    onPostReadySidecars?: (postReadySidecars: GatewayPostReadySidecarHandle[]) => boolean | void;
+    onGatewayLifetimeSidecars?: (sidecars: GatewayPostReadySidecarHandle[]) => boolean | void;
+    stopRegisteredPostReadySidecars: () => Promise<void>;
+    stopRegisteredGatewayLifetimeSidecars: () => Promise<void>;
     registerGatewayLifetimeSidecar: (
       sidecar: GatewayPostReadySidecarHandle,
     ) => Promise<{ release: () => void } | null>;
@@ -1346,6 +1357,10 @@ export async function startGatewayPostAttachRuntime(
                   startupTrace: params.startupTrace,
                   onChannelsStarted: params.onChannelsStarted,
                   onPluginServices: reportPluginServices,
+                  onPostReadySidecars: (sidecars) => {
+                    params.onPostReadySidecars?.(sidecars);
+                  },
+                  shouldCreatePostReadySidecars: () => params.isClosing?.() !== true,
                   shouldStartPluginServices: () => params.isClosing?.() !== true,
                   broadcastPluginEvent: params.broadcastPluginEvent,
                   startupOutcomes,
@@ -1364,27 +1379,21 @@ export async function startGatewayPostAttachRuntime(
               throw error;
             }
           })();
-          const stopUnpublishedSidecars = async (
+          const stopStartupSidecars = async (
             mainSessionRecoverySidecar?: GatewayPostReadySidecarHandle,
           ) => {
+            if (mainSessionRecoverySidecar) {
+              params.onGatewayLifetimeSidecars?.([mainSessionRecoverySidecar]);
+            }
             const cleanupResults = await Promise.allSettled(
               [
-                () => mainSessionRecoverySidecar?.stop(),
+                params.stopRegisteredGatewayLifetimeSidecars,
                 () => result.pluginServices?.stop(),
-                ...result.postReadySidecars.map((sidecar) => () => sidecar.stop()),
+                params.stopRegisteredPostReadySidecars,
               ].map(async (stop) => await stop()),
             );
             if (result.pluginServices && cleanupResults[1]?.status === "fulfilled") {
               reportPluginServices(null);
-            }
-            if (mainSessionRecoverySidecar && cleanupResults[0]?.status === "rejected") {
-              params.onGatewayLifetimeSidecars?.([mainSessionRecoverySidecar]);
-            }
-            const failedPostReadySidecars = result.postReadySidecars.filter(
-              (_sidecar, index) => cleanupResults[index + 2]?.status === "rejected",
-            );
-            if (failedPostReadySidecars.length > 0) {
-              params.onPostReadySidecars?.(failedPostReadySidecars);
             }
             const cleanupFailure = cleanupResults.find(
               (cleanupResult): cleanupResult is PromiseRejectedResult =>
@@ -1396,7 +1405,7 @@ export async function startGatewayPostAttachRuntime(
             return emptySidecarResult();
           };
           if (params.isClosing?.()) {
-            return await stopUnpublishedSidecars();
+            return await stopStartupSidecars();
           }
           const loaderStatsAfter = getPluginModuleLoaderStats();
           params.startupTrace?.detail("sidecars.plugin-loader", [
@@ -1415,25 +1424,6 @@ export async function startGatewayPostAttachRuntime(
           ]);
           let mainSessionRecoverySidecar: GatewayPostReadySidecarHandle | undefined;
           try {
-            if (params.isClosing?.() !== true) {
-              const { scheduleRestartAbortedMainSessionRecovery } =
-                await loadMainSessionRestartRecoveryModule();
-              // Closing can begin while the runtime module is loading; a late owner
-              // would miss lifetime registration and race the replacement gateway.
-              if (params.isClosing?.() !== true) {
-                mainSessionRecoverySidecar = scheduleRestartAbortedMainSessionRecovery({
-                  delayMs: 0,
-                  getConfig: params.getConfig,
-                  shouldContinue: () => params.isClosing?.() !== true,
-                  waitForStart: params.waitForPostReadyWork,
-                  gatewayRuntime: params.recoveryRuntime,
-                });
-              }
-            }
-          } catch (err) {
-            params.log.warn(`main-session restart recovery failed to schedule: ${String(err)}`);
-          }
-          try {
             const scheduleSubagentRegistrySweep = await runtimeDeps.loadSubagentRegistrySweep();
             if (params.isClosing?.() !== true) {
               scheduleSubagentRegistrySweep();
@@ -1442,13 +1432,13 @@ export async function startGatewayPostAttachRuntime(
             params.log.warn(`subagent restart recovery failed to schedule: ${String(err)}`);
           }
           if (params.isClosing?.()) {
-            return await stopUnpublishedSidecars(mainSessionRecoverySidecar);
+            return await stopStartupSidecars(mainSessionRecoverySidecar);
           }
           try {
             await startupLog;
           } catch (error) {
             try {
-              await stopUnpublishedSidecars(mainSessionRecoverySidecar);
+              await stopStartupSidecars(mainSessionRecoverySidecar);
             } catch (cleanupError) {
               params.log.warn(
                 `sidecar cleanup after startup logging failure failed: ${String(cleanupError)}`,
@@ -1457,7 +1447,25 @@ export async function startGatewayPostAttachRuntime(
             throw error;
           }
           if (params.isClosing?.()) {
-            return await stopUnpublishedSidecars(mainSessionRecoverySidecar);
+            return await stopStartupSidecars(mainSessionRecoverySidecar);
+          }
+          try {
+            const { scheduleRestartAbortedMainSessionRecovery } =
+              await loadMainSessionRestartRecoveryModule();
+            if (params.isClosing?.() !== true) {
+              mainSessionRecoverySidecar = scheduleRestartAbortedMainSessionRecovery({
+                delayMs: 0,
+                getConfig: params.getConfig,
+                shouldContinue: () => params.isClosing?.() !== true,
+                waitForStart: params.waitForPostReadyWork,
+                gatewayRuntime: params.recoveryRuntime,
+              });
+            }
+          } catch (err) {
+            params.log.warn(`main-session restart recovery failed to schedule: ${String(err)}`);
+          }
+          if (params.isClosing?.()) {
+            return await stopStartupSidecars(mainSessionRecoverySidecar);
           }
           // Capture the orphan-recovery cutoff before new startup-gated agent
           // work can create sessions that the recovery scan must leave alone.
@@ -1495,7 +1503,6 @@ export async function startGatewayPostAttachRuntime(
               }),
             );
           }
-          params.onPostReadySidecars?.(postReadySidecars);
           params.onGatewayLifetimeSidecars?.(gatewayLifetimeSidecars);
           params.log.info(formatGatewayStartupOutcomes(startupOutcomes.snapshot()));
           params.onSidecarsReady?.();

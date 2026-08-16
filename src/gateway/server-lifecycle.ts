@@ -441,6 +441,8 @@ export async function prepareGatewayLifecycle(params: {
   };
   const markClosePreludeStarted = () => {
     lifecycle.closePreludeStarted = true;
+    postReadySidecarStopOwner.beginClose();
+    gatewayLifetimeSidecarStopOwner.beginClose();
     // Fence background owners before any awaited close step can tear down the
     // plugin/channel or shared-state runtime they still need.
     void stopOutboundDeliveryRecoveryForClose();
@@ -512,18 +514,32 @@ export async function prepareGatewayLifecycle(params: {
       getEventLoopHealth: readinessEventLoopHealth.snapshot,
       getConfigReloaderHotReloadStatus: kernel.getConfigReloaderHotReloadStatus,
     });
-  const stopRegisteredPostReadySidecars = createGatewaySidecarStopOwner({
+  const postReadySidecarStopOwner = createGatewaySidecarStopOwner({
     getRegistered: () => runtimeState.postReadySidecars,
     setRegistered: (sidecars) => {
       runtimeState.postReadySidecars = sidecars;
     },
   });
-  const stopRegisteredGatewayLifetimeSidecars = createGatewaySidecarStopOwner({
+  const gatewayLifetimeSidecarStopOwner = createGatewaySidecarStopOwner({
     getRegistered: () => runtimeState.gatewayLifetimeSidecars,
     setRegistered: (sidecars) => {
       runtimeState.gatewayLifetimeSidecars = sidecars;
     },
   });
+  const stopRegisteredPostReadySidecars = postReadySidecarStopOwner.stop;
+  const stopRegisteredGatewayLifetimeSidecars = gatewayLifetimeSidecarStopOwner.stop;
+  const sealAndJoinRegisteredSidecarStops = async () => {
+    const results = await Promise.allSettled([
+      postReadySidecarStopOwner.sealAndJoin(),
+      gatewayLifetimeSidecarStopOwner.sealAndJoin(),
+    ]);
+    const failure = results.find(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
+    if (failure) {
+      throw failure.reason;
+    }
+  };
   const createCloseHandler = () => async (optsValue?: GatewayCloseOptions) => {
     const channelIds = listLoadedChannelPlugins().map((plugin) => plugin.id as ChannelId);
     const transport = transportBridge.current();
@@ -605,6 +621,7 @@ export async function prepareGatewayLifecycle(params: {
         { name: "gateway lifetime sidecars", run: stopRegisteredGatewayLifetimeSidecars },
         { name: "post-ready sidecars", run: stopRegisteredPostReadySidecars },
         { name: "gateway close prelude", run: runClosePrelude },
+        { name: "late sidecar cleanup", run: sealAndJoinRegisteredSidecarStops },
         {
           name: "gateway close",
           run: () => createCloseHandler()({ reason: "gateway startup failed" }),
@@ -684,6 +701,9 @@ export async function prepareGatewayLifecycle(params: {
     refreshGatewayHealthSnapshotWithRuntime,
     stopRegisteredPostReadySidecars,
     stopRegisteredGatewayLifetimeSidecars,
+    registerPostReadySidecars: postReadySidecarStopOwner.publish,
+    registerGatewayLifetimeSidecars: gatewayLifetimeSidecarStopOwner.publish,
+    sealAndJoinRegisteredSidecarStops,
     createCloseHandler,
     clearFallbackGatewayContextForServer: {
       get: () => clearFallbackGatewayContextForServer,

@@ -15,7 +15,7 @@ import { collectGatewayProcessMemoryUsageMb, finishGatewayRestartTrace } from ".
 import type { GatewayKernelRuntime } from "./server-kernel-request-runtime.js";
 import { GATEWAY_EVENTS } from "./server-methods-list.js";
 import { getRequiredSharedGatewaySessionGeneration } from "./server-shared-auth-generation.js";
-import { mergeGatewaySidecarOwners } from "./server-sidecar-owners.js";
+import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
 import type { GatewayHttpTransport } from "./server-transport-bridge.js";
 
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
@@ -125,11 +125,27 @@ export async function finishGatewayStartup(params: {
     resolveSharedGatewaySessionGenerationForConfig,
     stopRegisteredGatewayLifetimeSidecars,
     stopRegisteredPostReadySidecars,
+    registerPostReadySidecars,
+    registerGatewayLifetimeSidecars,
     chatMetadataLifecycle,
     gatewayRequestContext,
     gatewayInstanceRuntime,
     residentRegistry,
   } = runtime;
+  const publishSidecars = (paramsLocal: {
+    sidecars: GatewayPostReadySidecarHandle[];
+    register: (sidecars: GatewayPostReadySidecarHandle[]) => boolean;
+    stop: () => Promise<void>;
+    label: string;
+  }) => {
+    if (paramsLocal.register(paramsLocal.sidecars)) {
+      return true;
+    }
+    void paramsLocal.stop().catch((error: unknown) => {
+      log.warn(`${paramsLocal.label} published after close: ${String(error)}`);
+    });
+    return false;
+  };
   const [{ attachGatewayWsHandlers }, { listPluginNodeCapabilities }] = await startupTrace.measure(
     "gateway.ws-imports",
     () =>
@@ -302,37 +318,34 @@ export async function finishGatewayStartup(params: {
           kernel.setPluginServices(pluginServices);
         },
         onPostReadySidecars: (postReadySidecars) => {
-          kernel.setPostReadySidecars(
-            mergeGatewaySidecarOwners({
-              registered: runtimeState.postReadySidecars,
-              published: postReadySidecars,
-            }),
-          );
-          if (lifecycle.closePreludeStarted) {
-            void stopRegisteredPostReadySidecars().catch((error: unknown) => {
-              log.warn(`post-ready sidecar stop after close failed: ${String(error)}`);
-            });
-          }
+          return publishSidecars({
+            sidecars: postReadySidecars,
+            register: registerPostReadySidecars,
+            stop: stopRegisteredPostReadySidecars,
+            label: "post-ready sidecar",
+          });
         },
         onGatewayLifetimeSidecars: (gatewayLifetimeSidecars) => {
-          kernel.setGatewayLifetimeSidecars(
-            mergeGatewaySidecarOwners({
-              registered: runtimeState.gatewayLifetimeSidecars,
-              published: gatewayLifetimeSidecars,
-            }),
-          );
-          if (lifecycle.closePreludeStarted) {
-            void stopRegisteredGatewayLifetimeSidecars().catch((error: unknown) => {
-              log.warn(`gateway lifetime sidecar stop after close failed: ${String(error)}`);
-            });
-          }
+          return publishSidecars({
+            sidecars: gatewayLifetimeSidecars,
+            register: registerGatewayLifetimeSidecars,
+            stop: stopRegisteredGatewayLifetimeSidecars,
+            label: "gateway lifetime sidecar",
+          });
         },
+        stopRegisteredPostReadySidecars,
+        stopRegisteredGatewayLifetimeSidecars,
         registerGatewayLifetimeSidecar: async (sidecar) => {
-          if (lifecycle.closePreludeStarted) {
-            await sidecar.stop();
+          if (
+            !publishSidecars({
+              sidecars: [sidecar],
+              register: registerGatewayLifetimeSidecars,
+              stop: stopRegisteredGatewayLifetimeSidecars,
+              label: "gateway lifetime sidecar",
+            })
+          ) {
             return null;
           }
-          kernel.addGatewayLifetimeSidecar(sidecar);
           return {
             release: () => {
               kernel.setGatewayLifetimeSidecars(
@@ -351,7 +364,12 @@ export async function finishGatewayStartup(params: {
                   isClosePreludeStarted: () => lifecycle.closePreludeStarted,
                   // Close must see the drain handle before reconciliation can yield.
                   registerSidecar: (sidecar) => {
-                    kernel.addGatewayLifetimeSidecar(sidecar);
+                    publishSidecars({
+                      sidecars: [sidecar],
+                      register: registerGatewayLifetimeSidecars,
+                      stop: stopRegisteredGatewayLifetimeSidecars,
+                      label: "gateway lifetime sidecar",
+                    });
                   },
                 });
               },
