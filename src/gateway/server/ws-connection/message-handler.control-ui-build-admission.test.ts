@@ -85,13 +85,15 @@ import { attachGatewayWsMessageHandler } from "./message-handler.js";
 
 // A stale Control UI browser still owns a device identity; the build check is
 // only reachable once the device passes connect auth and silent local pairing.
+const temporaryIdentityPaths: string[] = [];
+
 async function buildSignedControlUiDevice(nonce: string) {
   const { buildDeviceAuthPayload } = await import("../../device-auth.js");
   const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem, signDevicePayload } =
     await import("../../../infra/device-identity.js");
-  const identity = loadOrCreateDeviceIdentity({
-    path: path.join(tmpdir(), `openclaw-build-admission-${randomUUID()}.sqlite`),
-  });
+  const identityPath = path.join(tmpdir(), `openclaw-build-admission-${randomUUID()}.sqlite`);
+  temporaryIdentityPaths.push(identityPath);
+  const identity = loadOrCreateDeviceIdentity({ path: identityPath });
   const signedAtMs = Date.now();
   const payload = buildDeviceAuthPayload({
     deviceId: identity.deviceId,
@@ -126,9 +128,19 @@ function withDeadline<T>(promise: Promise<T>, label: string): Promise<T> {
   ]);
 }
 
-afterEach(() => {
+afterEach(async () => {
   vi.clearAllMocks();
   resolveRuntimeServiceBuildIdMock.mockReturnValue("gateway-build");
+  const { rm } = await import("node:fs/promises");
+  await Promise.all(
+    temporaryIdentityPaths
+      .splice(0)
+      .flatMap((identityPath) =>
+        [identityPath, `${identityPath}-wal`, `${identityPath}-shm`].map((file) =>
+          rm(file, { force: true }),
+        ),
+      ),
+  );
 });
 
 describe("Control UI build admission over WebSocket", () => {

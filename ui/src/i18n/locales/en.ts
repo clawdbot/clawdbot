@@ -1501,7 +1501,6 @@ export const en: TranslationMap = {
       title: "Security",
       gatewayAuth: "Gateway auth",
       execPolicy: "Exec policy",
-      deviceAuth: "Device auth",
       browserEnabled: "Browser enabled",
       toolProfile: "Tool profile",
     },
