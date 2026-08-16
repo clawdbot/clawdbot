@@ -221,7 +221,6 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
   };
 
   const suspendStatesWithoutAudience = () => {
-    // Map iteration tolerates suspendState deleting the current entry.
     for (const state of states.values()) {
       if (!audience.has(state.sessionKey, state.agentId)) {
         suspendState(state);
@@ -636,6 +635,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
         }
         for (const run of superseded) {
           markSessionObserverRunSuperseded(supersededRuns, run.runId, event.ts);
+          clearPendingTerminalError(run.runId);
           dormantRuns.delete(run.runId);
         }
       }

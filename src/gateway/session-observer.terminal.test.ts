@@ -644,7 +644,7 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
     expect(terminalBroadcasts).toHaveLength(0);
   });
 
-  it("invalidates the persist-time guard when a newer run replaces the digest's run", async () => {
+  it("invalidates the persist-time guard when a newer run replaces a dormant run", async () => {
     useFakeTime();
     const persistDigest = vi.fn(async (_params: PersistDigestParams) => undefined);
     const harness = createHarness({ persistDigest });
@@ -653,6 +653,7 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
     expect(persistDigest).toHaveBeenCalledOnce();
     const guard = persistGuard(harness);
     expect(guard?.()).toBe(true);
+    harness.observer.setConnectionVisibility("conn-1", false);
 
     harness.observer.handleEvent(
       lifecycleEvent({ phase: "error", error: "retryable provider failure" }),
