@@ -51,7 +51,7 @@ function validateExplicitSessionStorePath(params: {
   try {
     stat = fs.statSync(resolvedPath);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
       throw new Error(
         `Session store target does not exist: ${displayTarget}. Pass a selector whose resolved SQLite target exists.`,
         { cause: error },
@@ -73,7 +73,7 @@ function validateExplicitSessionStorePath(params: {
     database = openNodeSqliteDatabase(resolvedPath, { readOnly: true });
     const applicationTables = database
       .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
-      .all() as Array<{ name?: unknown }>;
+      .all();
     if (
       applicationTables.length > 0 &&
       !applicationTables.some((row) => row.name === "schema_meta")
