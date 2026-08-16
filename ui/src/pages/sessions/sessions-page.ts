@@ -100,7 +100,7 @@ type SessionsPageMutationResult = "completed" | "failed" | "stale";
 /** Type-only, so the dialog itself stays behind its lazy boundary. */
 type InputDialogOpener = (typeof import("../../components/input-dialog.ts"))["showInputDialog"];
 
-type SessionDeleteRow = Pick<GatewaySessionRow, "key" | "archived">;
+type SessionDeleteRow = Pick<GatewaySessionRow, "key" | "archived" | "sessionId">;
 
 class SessionsPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -780,6 +780,7 @@ class SessionsPage extends OpenClawLightDomElement {
       key: row.key,
       agentId: this.sessionAgentId(row.key, scope.context),
       ...options,
+      ...(row.sessionId ? { expectedSessionId: row.sessionId } : {}),
       ...(row.archived === true ? { archivedOnly: true } : {}),
     }));
     for (const params of requests) {
@@ -1487,6 +1488,7 @@ class SessionsPage extends OpenClawLightDomElement {
           unread: row.unread === true,
           archived: row.archived === true,
           category: normalizeOptionalString(row.category) ?? null,
+          icon: normalizeOptionalString(row.icon) ?? null,
         }}
         .anchor=${menu}
         .trigger=${this.sessionMenuTrigger}
@@ -1526,6 +1528,9 @@ class SessionsPage extends OpenClawLightDomElement {
               break;
             case "rename":
               void this.renameSession(row);
+              break;
+            case "set-icon":
+              void this.patchSession(row.key, { icon: action.icon });
               break;
             case "fork":
               void this.forkSession(row.key, row.hasActiveRun === true);

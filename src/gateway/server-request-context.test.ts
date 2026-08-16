@@ -19,17 +19,31 @@ import type { GatewayServerLiveState } from "./server-live-state.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 
 type GatewayRequestContextParams = Parameters<typeof createGatewayRequestContext>[0];
+type TestCronState = GatewayServerLiveState["cronState"];
+
+function makeCronState(overrides: Partial<TestCronState> = {}): TestCronState {
+  return {
+    cron: { start: vi.fn(), stop: vi.fn() } as never,
+    storePath: "/tmp/cron",
+    cronEnabled: true,
+    reconcileExitWatchers: vi.fn(async () => {}),
+    stopExitWatchers: vi.fn(),
+    reconcileStreamWatchers: vi.fn(async () => {}),
+    stopStreamWatchers: vi.fn(async () => {}),
+    reconcileHeartbeatJobs: vi.fn(async () => {}),
+    ...overrides,
+  };
+}
 
 function makeContextParams(
   overrides: Partial<GatewayRequestContextParams> = {},
 ): GatewayRequestContextParams {
   const config = {} as never;
   const runtimeState: Pick<GatewayServerLiveState, "cronState"> = {
-    cronState: {
+    cronState: makeCronState({
       cron: { start: vi.fn(), stop: vi.fn() } as never,
       storePath: "/tmp/cron",
-      cronEnabled: true,
-    },
+    }),
   };
   return {
     deps: {} as never,
@@ -161,11 +175,7 @@ describe("createGatewayRequestContext", () => {
     const cronA = { start: vi.fn(), stop: vi.fn() } as never;
     const cronB = { start: vi.fn(), stop: vi.fn() } as never;
     const runtimeState: Pick<GatewayServerLiveState, "cronState"> = {
-      cronState: {
-        cron: cronA,
-        storePath: "/tmp/cron-a",
-        cronEnabled: true,
-      },
+      cronState: makeCronState({ cron: cronA, storePath: "/tmp/cron-a" }),
     };
 
     const context = createGatewayRequestContext(makeContextParams({ runtimeState }));
@@ -173,11 +183,7 @@ describe("createGatewayRequestContext", () => {
     expect(context.cron).toBe(cronA);
     expect(context.cronStorePath).toBe("/tmp/cron-a");
 
-    runtimeState.cronState = {
-      cron: cronB,
-      storePath: "/tmp/cron-b",
-      cronEnabled: true,
-    };
+    runtimeState.cronState = makeCronState({ cron: cronB, storePath: "/tmp/cron-b" });
 
     expect(context.cron).toBe(cronB);
     expect(context.cronStorePath).toBe("/tmp/cron-b");

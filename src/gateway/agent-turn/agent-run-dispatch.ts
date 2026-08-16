@@ -16,7 +16,7 @@ import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-termi
 import { agentCommandFromGatewayIngress } from "../../commands/agent.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
-import { readErrorName } from "../../infra/errors.js";
+import { formatErrorMessageWithCode, readErrorName } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createRunningTaskRun } from "../../tasks/detached-task-runtime.js";
 import { mapAgentRunTerminalOutcomeToTaskStatus } from "../../tasks/task-registry-common.js";
@@ -173,7 +173,10 @@ export function dispatchAgentRunFromGateway(params: {
     }
   };
   const cronCreatorAuthorityCapability = params.cronCreatorAuthority
-    ? createCronCreatorAuthorityCapability(params.cronCreatorAuthority.runId)
+    ? createCronCreatorAuthorityCapability(
+        params.cronCreatorAuthority.runId,
+        params.cronCreatorAuthority.callerOrigin,
+      )
     : undefined;
   const runAgent = () =>
     agentCommandFromGatewayIngress(
@@ -293,7 +296,7 @@ export function dispatchAgentRunFromGateway(params: {
     })
     .catch(async (err: unknown) => {
       const aborted = isGatewayAgentAbortRejection(err, params.abortController.signal);
-      const renderedErr = formatForLog(err);
+      const renderedErr = formatErrorMessageWithCode(err);
       const stopReason = aborted
         ? resolveGatewayAgentAbortStopReason(params.abortController.signal)
         : isAbortError(err)
@@ -349,7 +352,7 @@ export function dispatchAgentRunFromGateway(params: {
       persistTerminalDedupe(settled);
       params.io.emitFinal([aborted && settled, payload, aborted && settled ? undefined : error], {
         runId: params.runId,
-        ...(aborted ? {} : { error: formatForLog(err) }),
+        ...(aborted ? {} : { error: renderedErr }),
       });
     })
     .finally(() => {

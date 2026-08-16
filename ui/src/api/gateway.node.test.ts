@@ -173,6 +173,16 @@ type ConnectFrame = {
   };
 };
 
+const REQUEST_FRAME_ID = "00000000-0000-4000-8000-000000000000";
+
+function requestFrameBytes(method: string, params?: unknown): number {
+  const frame =
+    params === undefined
+      ? { type: "req", id: REQUEST_FRAME_ID, method }
+      : { type: "req", id: REQUEST_FRAME_ID, method, params };
+  return new TextEncoder().encode(JSON.stringify(frame)).byteLength;
+}
+
 type RequestTimingPayload = {
   id?: string;
   method?: string;
@@ -1121,6 +1131,69 @@ describe("GatewayBrowserClient", () => {
       client.stop();
       consoleError.mockRestore();
     }
+  });
+
+  it.each([
+    { name: "defined params exactly at the limit", method: "status.get", params: {}, delta: 0 },
+    { name: "defined params one byte over", method: "status.get", params: {}, delta: -1 },
+    { name: "undefined params exactly at the limit", method: "status.get", delta: 0 },
+    { name: "undefined params one byte over", method: "status.get", delta: -1 },
+    {
+      name: "UTF-8 method and params exactly at the limit",
+      method: "méthod.界",
+      params: { value: "🦞" },
+      delta: 0,
+    },
+    {
+      name: "UTF-8 method and params one byte over",
+      method: "méthod.界",
+      params: { value: "🦞" },
+      delta: -1,
+    },
+  ])("enforces $name", async ({ method, params, delta }) => {
+    const maxPayload = requestFrameBytes(method, params) + delta;
+    const onHello = vi.fn();
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+      onHello,
+    });
+    const { ws, connectFrame } = await startConnect(client, `nonce-${method}-${delta}`);
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: { role: "operator", scopes: [] },
+        policy: { maxPayload, maxBufferedBytes: maxPayload * 2, tickIntervalMs: 30_000 },
+      },
+    });
+    await vi.waitFor(() => expect(onHello).toHaveBeenCalledOnce());
+
+    const sentBefore = ws.sent.length;
+    const request = client.request(method, params);
+    if (delta < 0) {
+      await expect(request).rejects.toThrow("Request exceeds the Gateway payload limit");
+      expect(ws.sent).toHaveLength(sentBefore);
+    } else {
+      const frame = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string; method?: string };
+      expect(frame.method).toBe(method);
+      expect(new TextEncoder().encode(ws.sent.at(-1)).byteLength).toBe(maxPayload);
+      ws.emitMessage({ type: "res", id: frame.id, ok: true, payload: { ok: true } });
+      await expect(request).resolves.toEqual({ ok: true });
+    }
+    if (method.includes("界")) {
+      expect(maxPayload).toBeGreaterThan(
+        JSON.stringify(
+          params === undefined
+            ? { type: "req", id: REQUEST_FRAME_ID, method }
+            : { type: "req", id: REQUEST_FRAME_ID, method, params },
+        ).length + delta,
+      );
+    }
+    client.stop();
   });
 
   it("does not let a stale hello runtime import publish or migrate recovery", async () => {

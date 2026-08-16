@@ -1,7 +1,10 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS } from "./openclaw-state-db-additive-columns.js";
+import {
+  CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS,
+  CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS,
+} from "./openclaw-state-db-additive-columns.js";
 import {
   backfillAcpReplayEstimatedBytes,
   backfillCronJobsFromJobJson,
@@ -208,6 +211,27 @@ function ensureWorkerSessionToolStateSchema(db: DatabaseSync): void {
         REFERENCES worker_session_placements(session_id) ON DELETE CASCADE
     ) STRICT;
   `);
+}
+
+/**
+ * Add the feature-owned first-use columns that a STRICT rebuild cannot skip.
+ *
+ * These columns normally stay absent until their owning feature first writes
+ * them, and the persistent schema contract accepts that shape. The STRICT
+ * table rebuild is the one caller that cannot: it recreates each table from
+ * canonical SQL, which already declares these columns, so a database missing
+ * them fails the canonical column check and rolls the entire repair back.
+ * Ensuring them immediately before that rebuild matches the shape the rebuild
+ * produces anyway, and stays scoped to databases old enough to need it.
+ */
+export function ensureFirstUseAdditiveStateColumnsForStrictMigration(db: DatabaseSync): void {
+  for (const {
+    columnName,
+    dataType,
+    tableName,
+  } of CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS) {
+    ensureColumn(db, tableName, `${columnName} ${dataType}`);
+  }
 }
 
 export function ensureAdditiveStateColumns(db: DatabaseSync): void {

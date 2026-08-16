@@ -830,7 +830,6 @@ export const testing = {
   sanitizedEnv,
   stopChild,
   summarizeCase,
-  validateCliArgs,
   waitForProbe,
   waitForStartupTracePhase,
   writeConfig,

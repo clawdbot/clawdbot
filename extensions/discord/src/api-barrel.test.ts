@@ -66,7 +66,6 @@ describe("discord API barrel", () => {
       "buildDiscordComponentMessageFlags",
       "createDiscordFormModal",
       "handleDiscordMessageAction",
-      "handleDiscordSubagentSpawning",
       "listEnabledDiscordAccounts",
       "parseDiscordComponentCustomIdForCarbon",
       "parseDiscordModalCustomIdForCarbon",

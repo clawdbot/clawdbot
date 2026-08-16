@@ -448,9 +448,12 @@ function normalizeLegacyBindingFingerprint(value: unknown): unknown {
   return hashCodexAppServerBindingFingerprint(value);
 }
 
-function normalizeLegacyBindingFingerprints(
-  record: Record<string, unknown>,
-): Record<string, unknown> {
+function normalizeLegacyBindingFingerprints<
+  T extends {
+    dynamicToolsFingerprint?: unknown;
+    userMcpServersFingerprint?: unknown;
+  },
+>(record: T): T {
   // Shipped sidecars can contain unbounded canonical JSON fingerprints. Bound
   // them at the legacy encoder so plugin-state registration cannot reject the row.
   let normalized = record;
@@ -463,7 +466,7 @@ function normalizeLegacyBindingFingerprints(
     if (normalized === record) {
       normalized = { ...record };
     }
-    normalized[key] = next;
+    Object.assign(normalized, { [key]: next });
   }
   return normalized;
 }
@@ -475,9 +478,7 @@ export function normalizeStoredCodexAppServerBindingFingerprints(
   if (!stored || stored.state !== "active") {
     return stored;
   }
-  const binding = normalizeLegacyBindingFingerprints(
-    stored.binding as unknown as Record<string, unknown>,
-  );
+  const binding = normalizeLegacyBindingFingerprints(stored.binding);
   return binding === stored.binding
     ? stored
     : readStoredCodexAppServerBinding({ ...stored, binding });

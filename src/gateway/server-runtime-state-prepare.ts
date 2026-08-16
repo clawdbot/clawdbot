@@ -211,9 +211,9 @@ export async function prepareGatewayKernelState(params: {
   const channelLogs = Object.fromEntries(
     listGatewayStartupChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
   ) as Record<ChannelId, ReturnType<typeof createSubsystemLogger>>;
-  const channelRuntimeEnvs = Object.fromEntries(
+  const channelRuntimeEnvs: Partial<Record<ChannelId, RuntimeEnv>> = Object.fromEntries(
     Object.entries(channelLogs).map(([id, logger]) => [id, runtimeForLogger(logger)]),
-  ) as unknown as Record<ChannelId, RuntimeEnv>;
+  );
   const listStartupChannelGatewayMethods = () => {
     const methods: string[] = [];
     for (const plugin of listGatewayStartupChannelPlugins()) {

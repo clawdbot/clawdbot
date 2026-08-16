@@ -341,14 +341,6 @@ struct ComputerControlPermissionSnapshot: Equatable, Sendable {
         case missing([Bucket])
         case accessibilityGrantMayBeStale
 
-        var statusText: String {
-            switch self {
-            case .granted: "Granted"
-            case .missing: "Missing permission"
-            case .accessibilityGrantMayBeStale: "Accessibility grant may be stale"
-            }
-        }
-
         var detailText: String {
             switch self {
             case .granted:
@@ -494,7 +486,7 @@ final class ComputerActionService {
             case .eventCreationFailed:
                 "Failed to synthesize input event"
             case .lifecycleChanged:
-                "Computer control lifecycle changed while the action was pending"
+                "COMPUTER_STALE_OBSERVATION: provider generation changed; take a fresh observation and retry"
             case let .invalidV2Request(message):
                 "COMPUTER_INVALID_REQUEST: \(message)"
             case .staleObservation:

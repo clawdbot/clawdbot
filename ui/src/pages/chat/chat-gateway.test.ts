@@ -2737,7 +2737,42 @@ describe("loadChatHistory filtering", () => {
     expect(state.chatMessagesBySession?.has("agent:main:main")).toBe(false);
   });
 
+  it("rejects a stale startup roster before mutating chat-local selection", async () => {
+    const currentRoster = {
+      agents: [{ id: "research", name: "Research" }],
+      defaultId: "research",
+      mainKey: "main",
+      scope: "per-sender" as const,
+    };
+    const onAgentsList = vi.fn(() => false);
+    const { state } = createResolvedHistoryState(
+      {
+        agentsList: {
+          agents: [{ id: "main", name: "Stale Main" }],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "per-sender",
+        },
+        messages: [],
+      },
+      {
+        agentsError: "keep newer roster status",
+        agentsList: currentRoster,
+        agentsSelectedId: "research",
+        onAgentsList,
+      },
+    );
+
+    await loadChatHistory(state, { startup: true });
+
+    expect(onAgentsList).toHaveBeenCalledOnce();
+    expect(state.agentsError).toBe("keep newer roster status");
+    expect(state.agentsList).toBe(currentRoster);
+    expect(state.agentsSelectedId).toBe("research");
+  });
+
   it("loads startup history with agents in one request", async () => {
+    const onAgentsList = vi.fn(() => true);
     const { request, state } = createResolvedHistoryState(
       {
         messages: [{ role: "assistant", content: [{ type: "text", text: "ready" }] }],
@@ -2748,7 +2783,11 @@ describe("loadChatHistory filtering", () => {
           scope: "agent",
         },
       },
-      { agentsError: "previous agents.list failure", sessionKey: "global" },
+      {
+        agentsError: "previous agents.list failure",
+        onAgentsList,
+        sessionKey: "global",
+      },
     );
 
     await loadChatHistory(state, { startup: true });
@@ -2763,6 +2802,7 @@ describe("loadChatHistory filtering", () => {
     expect(state.agentsError).toBeNull();
     expect(state.agentsList?.defaultId).toBe("ops");
     expect(state.agentsSelectedId).toBe("ops");
+    expect(onAgentsList).toHaveBeenCalledOnce();
   });
 
   it.each([

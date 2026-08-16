@@ -1808,6 +1808,36 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects resolved terminal agent failures without exposing provider details", async () => {
+    const privateDetail = "raw provider detail should stay private";
+    agentCommandMock.mockClear();
+    agentCommandMock.mockResolvedValueOnce({
+      payloads: [{ text: "Command may have changed state", isError: true }],
+      meta: { error: { kind: "incomplete_turn", message: privateDetail } },
+    } as never);
+
+    const res = await postResponses(enabledPort, { model: "openclaw", input: "hi" });
+    const body = await res.text();
+    expect(res.status).toBe(500);
+    expect(JSON.parse(body)).toMatchObject({
+      status: "failed",
+      output: [],
+      error: { code: "api_error", message: "internal error" },
+    });
+    expect(body).not.toContain(privateDetail);
+  });
+
+  it("rejects resolved error stop reasons", async () => {
+    agentCommandMock.mockClear();
+    agentCommandMock.mockResolvedValueOnce({
+      payloads: [{ text: "Command may have changed state", isError: true }],
+      meta: { stopReason: "error" },
+    } as never);
+
+    const res = await postResponses(enabledPort, { model: "openclaw", input: "hi" });
+    expect(res.status).toBe(500);
+  });
+
   it.each(
     STREAM_FAILURE_CASES.flatMap((failure) =>
       [false, true].map((emitErrorLifecycle) => ({

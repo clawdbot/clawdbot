@@ -1,6 +1,7 @@
 // Memory Core tests cover manager search orchestration behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import {
   createManagerIndexFixture,
@@ -193,6 +194,81 @@ describe("memory index", () => {
     await expect(manager.search("alpha")).resolves.not.toStrictEqual([]);
     expect(queryCalls).toBe(1);
     expect(close).not.toHaveBeenCalled();
+  });
+
+  it("rejects caller cancellation during hybrid fallback scanning", async () => {
+    const manager = await getPersistentManager(
+      createCfg({
+        minScore: 0,
+        hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+      }),
+    );
+    await manager.sync({ reason: "test" });
+
+    const fields = manager as unknown as {
+      db: DatabaseSync;
+      ensureVectorReady: (dimensions?: number) => Promise<boolean>;
+    };
+    fields.ensureVectorReady = async () => false;
+    const insertChunk = fields.db.prepare(
+      "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    );
+    for (let index = 0; index < 4096; index += 1) {
+      insertChunk.run(
+        `cancel-scan-${index}`,
+        `memory/cancel-scan-${index}.md`,
+        "memory",
+        1,
+        1,
+        `cancel-scan-hash-${index}`,
+        "mock-embed",
+        `fallback scan row ${index}`,
+        JSON.stringify([0, 1, 0, 0]),
+        index,
+      );
+    }
+
+    const originalPrepare = fields.db.prepare.bind(fields.db);
+    let scannedBatches = 0;
+    const prepareSpy = vi.spyOn(fields.db, "prepare").mockImplementation((sql: string) => {
+      const statement = originalPrepare(sql);
+      if (!sql.includes("SELECT rowid, id, path")) {
+        return statement;
+      }
+      return {
+        all: (...args: Parameters<typeof statement.all>) => {
+          scannedBatches += 1;
+          return statement.all(...args);
+        },
+      } as unknown as typeof statement;
+    });
+
+    try {
+      const caller = new AbortController();
+      const abortReason = new Error("caller stopped hybrid memory search");
+      const pending = manager.search("alpha", { signal: caller.signal });
+      setImmediate(() => caller.abort(abortReason));
+
+      await expect(pending).rejects.toBe(abortReason);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(scannedBatches).toBe(1);
+
+      const healthyResults = await manager.search("alpha");
+      expect(healthyResults.some((result) => result.path === "memory/2026-01-12.md")).toBe(true);
+
+      fields.ensureVectorReady = async () => {
+        throw new Error("vector store unavailable");
+      };
+      const degradedResults = await manager.search("alpha");
+      expect(degradedResults.some((result) => result.path === "memory/2026-01-12.md")).toBe(true);
+    } finally {
+      prepareSpy.mockRestore();
+    }
   });
 
   it("supplements thin strict FTS results for conversational queries", async () => {

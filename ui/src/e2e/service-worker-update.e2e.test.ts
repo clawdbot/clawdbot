@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   buildProductionControlUiE2e,
   canRunPlaywrightChromium,
+  captureControlUiE2eFailureDiagnostics,
   controlUiE2eWaitTimeoutMs,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
@@ -163,10 +164,11 @@ async function ensureControlledPage(page: Page, pageErrors: string[], expectedBu
     return value.active?.state === "activated";
   });
   if (!registration.controlled) {
-    // The production preview serves static assets directly. Canonicalize the
-    // first controlled reload so Vite's portable relative asset URLs do not
-    // resolve beneath a client-side deep link such as /chat/research.
-    await page.evaluate(() => window.history.replaceState(window.history.state, "", "/"));
+    // Reload once so the freshly activated worker controls the page. The
+    // reload may land on a router deep link like /chat/research; the preview
+    // server mirrors the Gateway's depth-insensitive /assets/ resolution, so
+    // that boots correctly. (A racy replaceState("/") used to canonicalize
+    // the URL here and could interleave with the router's own redirect.)
     await page.reload();
   }
   await page.waitForFunction(() => navigator.serviceWorker?.controller?.state === "activated");
@@ -220,6 +222,40 @@ async function fetchControlledAsset(
 }
 
 describe("Control UI service-worker production update E2E", () => {
+  it("boots a document loaded on a deep link (Gateway asset-path contract)", async () => {
+    // The built index.html references ./assets/* relatively, so a document at
+    // /chat/research requests /chat/assets/*. The Gateway resolves /assets/
+    // at any depth (src/gateway/control-ui.ts); the preview server must honor
+    // the same contract or reloads on deep links serve HTML as the module and
+    // the app silently never boots.
+    const context = await browser.newContext({ serviceWorkers: "block" });
+    const page = await context.newPage();
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(`${error.name}:${error.message}`));
+    await installMockGateway(page, {
+      assistantAgentId: "research",
+      defaultAgentId: "research",
+      serverBuildId: buildA,
+    });
+    try {
+      expect((await page.goto(`${server.baseUrl}chat/research`))?.status()).toBe(200);
+      await page.waitForFunction(() => Boolean(customElements.get("openclaw-app")), undefined, {
+        timeout: controlUiE2eWaitTimeoutMs,
+      });
+    } catch (error) {
+      if (error instanceof Error) {
+        await captureControlUiE2eFailureDiagnostics(page, {
+          error,
+          label: "deep-link-boot",
+          pageErrors,
+        });
+      }
+      throw error;
+    } finally {
+      await context.close();
+    }
+  }, 60_000);
+
   beforeAll(async () => {
     if (!canRunPlaywrightChromium(chromiumExecutablePath)) {
       throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
@@ -407,7 +443,7 @@ describe("Control UI service-worker production update E2E", () => {
       await ensureControlledPage(page, pageErrors, buildB);
       await expect.poll(() => readWorkerUpdateVersions(page)).toContain(buildB);
 
-      const terminal = page.locator("openclaw-terminal-panel");
+      const terminal = page.locator("openclaw-terminal-panel[embedded]");
       await terminal.waitFor({ state: "attached" });
       await expect
         .poll(() =>
@@ -454,6 +490,17 @@ describe("Control UI service-worker production update E2E", () => {
           path: path.join(artifactDir, "updated-worker-controlled-page.png"),
         });
       }
+    } catch (error) {
+      // Boot/readiness stalls otherwise fail as all-null poll snapshots with
+      // no CI evidence; capture page state before the context closes.
+      if (error instanceof Error) {
+        await captureControlUiE2eFailureDiagnostics(page, {
+          error,
+          label: "service-worker-update-reconnect",
+          pageErrors,
+        });
+      }
+      throw error;
     } finally {
       await installGate?.close();
       await context.close();

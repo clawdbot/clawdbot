@@ -64,8 +64,17 @@ function syncScalarInputIdentity(
       previous.presentationIdentity !== presentationIdentity ||
       previous.renderedValue !== renderedValue
     ) {
-      element.value = renderedValue;
-      setControlValidity(element, "");
+      // A focused input whose DOM value drifted from the last render holds an
+      // in-flight edit the model has not committed yet (mid-keystroke or
+      // mid-automation fill). Resetting it here silently eats that input when
+      // a background config refresh lands; blurred fields keep the
+      // authoritative-reset contract.
+      if (element.matches(":focus") && element.value !== previous.renderedValue) {
+        revalidate(element);
+      } else {
+        element.value = renderedValue;
+        setControlValidity(element, "");
+      }
     } else if (!Object.is(previous.controlIdentity, controlIdentity)) {
       revalidate(element);
     }

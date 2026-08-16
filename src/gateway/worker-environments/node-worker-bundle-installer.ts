@@ -69,7 +69,3 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
     }
   };
 }
-
-export type GatewayNodeWorkerBundleInstaller = ReturnType<
-  typeof createGatewayNodeWorkerBundleInstaller
->;

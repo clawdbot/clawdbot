@@ -162,7 +162,7 @@ export function createService(
       | "executeInference"
       | "providerCallTimeoutMs"
       | "resolveSshIdentity"
-      | "resolveNodeWorkerBuild"
+      | "ensureNodeWorkerBundle"
       | "resolveWorkerGateway"
       | "tunnelManager"
       | "generateWorkerCredential"

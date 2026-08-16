@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { runCommandWithTimeout } from "../process/exec.js";
 import {
   DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
   readWorkerBundleDirectoryManifest,
@@ -33,29 +32,33 @@ describe("node worker bundle installer", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  async function bundleFixture(): Promise<{
+  async function bundleFixture(options: { packageShell?: boolean } = {}): Promise<{
     archive: Buffer;
     input: NodeWorkerBundleInstallInput;
   }> {
     const source = path.join(root, "source");
     const archivePath = path.join(root, "bundle.tgz");
-    await fs.mkdir(path.join(source, "dist"), { recursive: true });
-    await fs.writeFile(path.join(source, "openclaw.mjs"), "#!/usr/bin/env node\n");
-    await fs.chmod(path.join(source, "openclaw.mjs"), 0o700);
-    await fs.writeFile(path.join(source, "package.json"), '{"name":"openclaw"}\n');
-    await fs.chmod(path.join(source, "package.json"), 0o600);
-    await fs.writeFile(path.join(source, "dist", "worker.js"), "export {};\n");
-    await fs.chmod(path.join(source, "dist", "worker.js"), 0o600);
+    await fs.mkdir(source, { recursive: true });
+    await fs.writeFile(path.join(source, "worker.mjs"), "export {};\n", { mode: 0o700 });
+    const archiveEntries = ["worker.mjs"];
+    if (options.packageShell) {
+      await fs.mkdir(path.join(source, "dist"));
+      await fs.writeFile(path.join(source, "openclaw.mjs"), "#!/usr/bin/env node\n", {
+        mode: 0o700,
+      });
+      await fs.writeFile(path.join(source, "package.json"), '{"name":"openclaw"}\n');
+      await fs.writeFile(path.join(source, "dist", "worker.js"), "export {};\n");
+      archiveEntries.push("dist/worker.js", "openclaw.mjs", "package.json");
+    }
     const manifest = await readWorkerBundleDirectoryManifest({
       root: source,
       limits: DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
     });
     const bundleHash = hashWorkerBundleManifest(manifest);
-    await tar.create({ cwd: source, file: archivePath, gzip: true, noDirRecurse: true }, [
-      "dist/worker.js",
-      "openclaw.mjs",
-      "package.json",
-    ]);
+    await tar.create(
+      { cwd: source, file: archivePath, gzip: true, noDirRecurse: true },
+      archiveEntries,
+    );
     const archive = await fs.readFile(archivePath);
     return {
       archive,
@@ -106,15 +109,7 @@ describe("node worker bundle installer", () => {
     );
     await fs.mkdir(staleStaging, { recursive: true });
     const served = await serve(fixture.archive, fixture.input.archive.token);
-    const runCommand = vi.fn<typeof runCommandWithTimeout>(async () => ({
-      stdout: "",
-      stderr: "",
-      code: 0,
-      signal: null,
-      killed: false,
-      termination: "exit" as const,
-    }));
-    const installer = new NodeWorkerBundleInstaller({ root, runCommand });
+    const installer = new NodeWorkerBundleInstaller({ root });
 
     await expect(
       installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl }),
@@ -124,9 +119,7 @@ describe("node worker bundle installer", () => {
     ).resolves.toEqual(fixture.input.build);
 
     expect(served.requests).toHaveBeenCalledOnce();
-    expect(runCommand).toHaveBeenCalledOnce();
     await expect(fs.access(staleStaging)).rejects.toThrow();
-    expect(runCommand.mock.calls[0]?.[0]).toContain("--ignore-scripts");
     await expect(
       fs.readFile(
         path.join(
@@ -141,18 +134,36 @@ describe("node worker bundle installer", () => {
     ).resolves.toContain(fixture.input.build.bundleHash);
   });
 
+  it("reinstalls when executable dependency material appears outside the bundle hash", async () => {
+    const fixture = await bundleFixture({ packageShell: true });
+    const served = await serve(fixture.archive, fixture.input.archive.token);
+    const installer = new NodeWorkerBundleInstaller({ root });
+    const bundleDir = path.join(
+      root,
+      fixture.input.gatewayNamespace,
+      "bundles",
+      fixture.input.build.bundleHash,
+    );
+    const tamperedDependency = path.join(bundleDir, "node_modules", "tampered", "index.js");
+
+    await installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl });
+    await fs.mkdir(path.dirname(tamperedDependency), { recursive: true });
+    await fs.writeFile(tamperedDependency, "export const trusted = false;\n");
+    await installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl });
+
+    expect(served.requests).toHaveBeenCalledTimes(2);
+    await expect(fs.access(tamperedDependency)).rejects.toThrow();
+  });
+
   it("rejects archive digest mismatch without publishing a bundle", async () => {
     const fixture = await bundleFixture();
     fixture.input.archive.sha256 = "f".repeat(64);
     const served = await serve(fixture.archive, fixture.input.archive.token);
-    const installer = new NodeWorkerBundleInstaller({
-      root,
-      runCommand: vi.fn(),
-    });
+    const installer = new NodeWorkerBundleInstaller({ root });
 
     await expect(
       installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl }),
-    ).rejects.toThrow("bundle installation did not complete");
+    ).rejects.toThrow("worker bundle download failed integrity validation");
     await expect(
       fs.access(
         path.join(root, fixture.input.gatewayNamespace, "bundles", fixture.input.build.bundleHash),
@@ -167,10 +178,10 @@ describe("node worker bundle installer", () => {
       fixture.input.archive.token,
       fixture.archive.byteLength + 1,
     );
-    const installer = new NodeWorkerBundleInstaller({ root, runCommand: vi.fn() });
+    const installer = new NodeWorkerBundleInstaller({ root });
 
     await expect(
       installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl }),
-    ).rejects.toThrow("bundle installation did not complete");
+    ).rejects.toThrow("gateway returned an unexpected worker bundle length");
   });
 });

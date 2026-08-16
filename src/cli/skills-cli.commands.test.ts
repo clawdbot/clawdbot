@@ -211,6 +211,14 @@ function expectLogger(value: unknown): void {
   }
 }
 
+function requireCommand(parent: Command, name: string): Command {
+  const command = parent.commands.find((candidate) => candidate.name() === name);
+  if (!command) {
+    throw new Error(`missing command: ${name}`);
+  }
+  return command;
+}
+
 function expectStatusWorkspaceCall(workspaceDir: string): void {
   const [actualWorkspaceDir, options] = mockCall(buildWorkspaceSkillStatusMock);
   expect(actualWorkspaceDir).toBe(workspaceDir);
@@ -286,6 +294,7 @@ vi.mock("../skills/lifecycle/clawhub.js", () => ({
 }));
 
 vi.mock("../infra/clawhub-skills.js", () => ({
+  CLAWHUB_SKILLS_SH_REF_PREFIX: "skills-sh:",
   CLAWHUB_SKILLS_SH_TRUST_LABEL: "Not scanned by ClawHub",
   CLAWHUB_SKILLS_SH_TRUST_STATE: "not-scanned-by-clawhub",
   fetchClawHubSkillVerification: (...args: unknown[]) =>
@@ -756,6 +765,27 @@ describe("skills cli commands", () => {
       spec: "./local-skill",
       slug: "custom-name",
     });
+  });
+
+  it("declares inherited options on every applicable nested leaf", () => {
+    const program = new Command().enablePositionalOptions();
+    registerSkillsCli(program);
+    const skills = requireCommand(program, "skills");
+    const workshop = requireCommand(skills, "workshop");
+    const curator = requireCommand(skills, "curator");
+
+    for (const command of workshop.commands) {
+      expect(
+        command.options.some((option) => option.long === "--agent"),
+        command.name(),
+      ).toBe(true);
+    }
+    for (const command of curator.commands) {
+      expect(
+        command.options.some((option) => option.long === "--json"),
+        command.name(),
+      ).toBe(true);
+    }
   });
 
   it("rejects --version for git and local source installs", async () => {

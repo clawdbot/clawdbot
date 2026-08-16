@@ -294,7 +294,6 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
             context.previousHash !== params.expectedConfigHash
           ) {
             throw new ConfigMutationConflictError("config changed before first-agent creation", {
-              currentHash: context.previousHash,
               retryable: false,
             });
           }

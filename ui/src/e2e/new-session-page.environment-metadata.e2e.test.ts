@@ -29,6 +29,20 @@ suite.define(() => {
               commands: ["system.run"],
             },
             {
+              nodeId: "outdated-mac",
+              displayName: "Outdated build Mac",
+              connected: true,
+              commands: ["system.run"],
+              issues: [
+                {
+                  code: "update-required",
+                  action: "update-and-reconnect",
+                  updateCommand: "openclaw update",
+                  headlessReconnectCommand: "openclaw node restart",
+                },
+              ],
+            },
+            {
               nodeId: "offline-rich",
               displayName: "Offline rich device",
               connected: false,
@@ -74,6 +88,23 @@ suite.define(() => {
               ],
             },
             {
+              id: "node:outdated-mac",
+              type: "node",
+              status: "available",
+              platform: "darwin",
+              sessionHost: false,
+              trust: "persistent",
+              capabilities: ["system.run"],
+              issues: [
+                {
+                  code: "update-required",
+                  action: "update-and-reconnect",
+                  updateCommand: "openclaw update",
+                  headlessReconnectCommand: "openclaw node restart",
+                },
+              ],
+            },
+            {
               id: "node:offline-rich",
               type: "node",
               status: "unavailable",
@@ -112,6 +143,15 @@ suite.define(() => {
       await expect
         .poll(() => device.locator(".new-session-page__menu-fact").allTextContents())
         .toEqual(["macOS", "Camera", "Screen capture", "Voice"]);
+      const outdated = place.locator('[data-value="node:outdated-mac"]');
+      expect(await outdated.count()).toBe(1);
+      expect(await outdated.isDisabled()).toBe(true);
+      await expect
+        .poll(() => outdated.locator(".new-session-page__menu-fact").allTextContents())
+        .toEqual([
+          "Update required: run openclaw update, then reconnect. For a headless node, run openclaw node restart.",
+        ]);
+      expect(await outdated.getAttribute("title")).toContain("openclaw update");
       await expect
         .poll(() =>
           place

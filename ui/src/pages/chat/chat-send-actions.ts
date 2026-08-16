@@ -19,7 +19,7 @@ import {
   readChatQueueForScope,
   readQueuedMessageById,
   updateQueuedMessage,
-  updateQueuedMessageForSession,
+  updateQueuedMessagesForSession,
   updateVolatileQueuedMessage,
 } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
@@ -111,7 +111,7 @@ const resetRetryState = (
 });
 
 export const steerSendDependencies: SteerSendDependencies = {
-  loadChatHistory: (host) => void loadChatHistory(host as unknown as ChatState),
+  loadChatHistory: (host) => void loadChatHistory(host),
   resumeRestoredOutbox: (host, itemId) => {
     const restoredOutbox = findStoredOutbox(host as ChatHost, itemId);
     if (!host.chatRunId && restoredOutbox) {
@@ -123,7 +123,7 @@ export const steerSendDependencies: SteerSendDependencies = {
     }
   },
   sendChatMessage: (host, message, attachments, options) =>
-    sendChatMessageWithGeneratedRunId(host as unknown as ChatState, message, attachments, options),
+    sendChatMessageWithGeneratedRunId(host, message, attachments, options),
 };
 
 export const steerQueuedChatMessage = (host: ChatHost, id: string) =>
@@ -140,9 +140,9 @@ export const retryReconnectableQueuedChatSends = resumeStoredChatOutboxes;
 /**
  * Moves a queued row to `toIndex` within its own movable segment. A locked row
  * ends that segment, so the move can never carry a message past work the drain
- * is still waiting on. Each changed row is persisted individually so a partial
- * storage failure leaves a readable queue and a visible error instead of a
- * silent reshuffle.
+ * is still waiting on. Every changed row commits as one durable unit, so a
+ * storage failure mid-permutation leaves the prior order intact instead of a
+ * partially reshuffled queue.
  */
 export function moveQueuedChatMessage(host: ChatHost, id: string, toIndex: number): void {
   const item = readQueuedMessageById(host, id);
@@ -152,18 +152,19 @@ export function moveQueuedChatMessage(host: ChatHost, id: string, toIndex: numbe
   const sessionKey = item.sessionKey ?? host.sessionKey;
   const scope = readChatQueueForScope(host, sessionKey, item.agentId);
   const segment = chatQueueMovableSegments(scope).find((rows) => rows.some((row) => row.id === id));
-  for (const moved of reorderChatQueueItems(segment ?? [], id, toIndex)) {
-    const applied = updateQueuedMessageForSession(
-      host,
-      moved.sessionKey ?? sessionKey,
-      moved.id,
-      (entry) => ({ ...entry, orderKey: moved.orderKey }),
-      moved.agentId,
-    );
-    if (!applied) {
-      setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
-      return;
-    }
+  const moves = reorderChatQueueItems(segment ?? [], id, toIndex);
+  if (moves.length === 0) {
+    return;
+  }
+  const applied = updateQueuedMessagesForSession(
+    host,
+    moves.map((moved) => ({
+      id: moved.id,
+      update: (entry: ChatQueueItem) => ({ ...entry, orderKey: moved.orderKey }),
+    })),
+  );
+  if (!applied) {
+    setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
   }
 }
 

@@ -6,7 +6,6 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { beginNativeWindowDragFromTopInset } from "../../app/native-window-drag.ts";
 import { loadSettings } from "../../app/settings.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
-import "../../components/tooltip.ts";
 import "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { normalizeAgentTargetLabel } from "../../lib/agents/display.ts";
@@ -31,6 +30,7 @@ import { restoreDraft, retainDraft } from "./draft-navigation-handoff.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftPlaceState } from "./draft-place-state.ts";
 import { DraftSubmissionFlow } from "./draft-submission-flow.ts";
+import { renderNewSessionIncognitoControl } from "./incognito-control.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import {
   closeAgentPicker,
@@ -602,7 +602,6 @@ class NewSessionPage extends OpenClawLightDomElement {
           submitting: this.submission.submitting,
           textareaController: this.submission.composerTextarea,
           messageLocked: Boolean(this.submission.pendingCloud.sessionKey),
-          incognitoDisabledReason: this.submission.incognitoDisabledReason(),
           terminalAction: this.submission.showStartInTerminal()
             ? {
                 canStart: this.submission.canSubmit("terminal"),
@@ -682,6 +681,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   override render() {
     return html`
       <div class="new-session-page">
+        ${renderNewSessionIncognitoControl(this.submission)}
         <div
           class="new-session-page__scroll"
           ?inert=${this.submission.submitting}

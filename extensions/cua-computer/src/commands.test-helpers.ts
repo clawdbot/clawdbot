@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { vi } from "vitest";
 import { createCuaComputerProvider } from "./commands.js";
 import type { CuaDriverSession, CuaToolResult } from "./driver-client.js";
@@ -140,5 +141,5 @@ export async function execution(session: CuaDriverSession) {
     imageProcessor: {
       encode: vi.fn(async () => ({ data: Buffer.from("jpeg"), width: 100, height: 50 })),
     },
-  }).openExecution({});
+  }).openExecution({ executionId: randomUUID() });
 }

@@ -169,6 +169,32 @@ describe("agent runtime identity token", () => {
     });
   });
 
+  it("round-trips explicit local turn provenance without inferring it from the session key", async () => {
+    useTempHome();
+    const runtimeToken = await importRuntimeTokenModule();
+    const run = operationalRun();
+    const token = await runtimeToken.mintAgentRuntimeIdentityToken({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      operationalRunInstance: run.operationalRunInstance,
+      turnSourceLocal: true,
+    });
+
+    await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toMatchObject({
+      sessionKey: "agent:main:main",
+      turnSourceLocal: true,
+    });
+    await expect(
+      runtimeToken.mintAgentRuntimeIdentityToken({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        operationalRunInstance: run.operationalRunInstance,
+        turnSourceChannel: "discord",
+        turnSourceLocal: true,
+      }),
+    ).rejects.toThrow("cannot be both local and channel-bound");
+  });
+
   it("omits execution identity from a different operational run", async () => {
     useTempHome();
     const runtimeToken = await importRuntimeTokenModule();

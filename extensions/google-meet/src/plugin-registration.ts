@@ -282,5 +282,4 @@ export const testing = {
     googleMeetToolDeps.platform = next ?? (() => process.platform);
   },
   isGoogleMeetAgentToolActionUnsupportedOnHost,
-  resolveGoogleMeetGatewayOperationTimeoutMs,
 };

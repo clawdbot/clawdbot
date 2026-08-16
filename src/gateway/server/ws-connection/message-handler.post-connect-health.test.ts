@@ -269,7 +269,7 @@ function attachGatewayHarness(options: {
       return socket;
     }),
   } as unknown as WebSocket;
-  const send = vi.fn();
+  const send = vi.fn((_frame: unknown) => ({ kind: "sent" }) as const);
   let client: unknown = options.client ?? null;
   const requestHost = options.requestHost ?? "127.0.0.1:19001";
   const remoteAddr = options.remoteAddr ?? "127.0.0.1";
@@ -1210,7 +1210,10 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       isOneShotModelRun: false,
       isRestartRecoveryResumeRun: false,
     });
-    expect(admission).toEqual({ runId: "local-operator-run" });
+    expect(admission).toEqual({
+      runId: "local-operator-run",
+      callerOrigin: { kind: "local" },
+    });
   });
 
   it("does not carry local operator authority for an authenticated remote client", async () => {

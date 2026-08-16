@@ -351,7 +351,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
 
     const send = (obj: unknown) => {
       if (closed) {
-        return;
+        return { kind: "unavailable" } as const;
       }
       if (socket.bufferedAmount > MAX_BUFFERED_BYTES) {
         logRejectedLargePayload({
@@ -365,12 +365,19 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
           limitBytes: MAX_BUFFERED_BYTES,
         });
         close(1008, connectionKind === "worker" ? "slow-consumer" : "slow consumer");
-        return;
+        return { kind: "unavailable" } as const;
+      }
+      let encoded: string;
+      try {
+        encoded = JSON.stringify(obj);
+      } catch (error) {
+        return { kind: "serialization", error } as const;
       }
       try {
-        socket.send(JSON.stringify(obj));
+        socket.send(encoded);
+        return { kind: "sent" } as const;
       } catch {
-        /* ignore */
+        return { kind: "unavailable" } as const;
       }
     };
 

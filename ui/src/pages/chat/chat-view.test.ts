@@ -28,7 +28,6 @@ import {
   createSessionsListResult,
   DEFAULT_CHAT_MODEL_CATALOG,
 } from "../../test-helpers/chat-model.ts";
-import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   getChatAttachmentDataUrl,
@@ -50,7 +49,6 @@ import { ChatAttachmentReadLifecycle } from "./components/chat-attachments.ts";
 import { resetChatComposerState } from "./components/chat-composer.ts";
 import * as chatMessage from "./components/chat-message.ts";
 import { renderChatModelControls } from "./components/chat-model-controls.ts";
-import { ChatSessionRailElement } from "./components/chat-session-rail.ts";
 import {
   resetThreadPresentation,
   resetTranscriptSession,
@@ -797,30 +795,6 @@ describe("chat typing status", () => {
     expect(container.querySelector(".agent-chat__typing-indicator--outside")).toBeNull();
   });
 });
-
-function createSessionWorkspace(
-  overrides: Partial<NonNullable<ChatProps["sessionWorkspace"]>> = {},
-): NonNullable<ChatProps["sessionWorkspace"]> {
-  return {
-    collapsed: false,
-    sessionKey: "agent:main",
-    list: null,
-    loading: false,
-    error: null,
-    activeId: null,
-    dock: "right",
-    narrowLayout: false,
-    onToggleCollapsed: () => undefined,
-    onSetDock: () => undefined,
-    onRefresh: () => undefined,
-    onBrowsePath: () => undefined,
-    onCopyPath: () => undefined,
-    onOpenFile: () => undefined,
-    onSearch: () => undefined,
-    onOpenArtifact: () => undefined,
-    ...overrides,
-  };
-}
 
 function createBackgroundTasks(
   overrides: Partial<NonNullable<ChatProps["backgroundTasks"]>> = {},
@@ -1765,55 +1739,9 @@ describe("chat composer workbench", () => {
     ).toBe(true);
   });
 
-  it("renders session controls in the composer and workspace files in the expanded rail", () => {
-    const onToggleCollapsed = vi.fn();
-    const onRefresh = vi.fn();
-    const onBrowsePath = vi.fn();
-    const onCopyPath = vi.fn();
-    const onOpenFile = vi.fn();
-    const onSearch = vi.fn();
+  it("renders session controls in the composer without owning side-panel content", () => {
     const container = renderChatView({
       composerControls: html`<button class="test-composer-control">Model</button>`,
-      sessionWorkspace: createSessionWorkspace({
-        list: {
-          sessionKey: "agent:main",
-          root: "/workspace",
-          files: [
-            {
-              name: "AGENTS.md",
-              path: "/workspace/AGENTS.md",
-              kind: "modified",
-              missing: false,
-              size: 2048,
-            },
-          ],
-          browser: {
-            path: "",
-            entries: [
-              {
-                name: "ui",
-                path: "ui",
-                kind: "directory",
-                sessionKind: "modified",
-              },
-              {
-                name: "package.json",
-                path: "package.json",
-                kind: "file",
-                size: 4096,
-              },
-            ],
-          },
-          artifacts: [],
-        },
-        activeId: "file:/workspace/AGENTS.md",
-        onToggleCollapsed,
-        onRefresh,
-        onBrowsePath,
-        onCopyPath,
-        onOpenFile,
-        onSearch,
-      }),
     });
 
     const composerControl = container.querySelector(
@@ -1822,54 +1750,7 @@ describe("chat composer workbench", () => {
     expect(composerControl).not.toBeNull();
     expect(composerControl?.closest(".agent-chat__composer-footer")).not.toBeNull();
     expect(container.querySelector(".agent-chat__composer-header")).toBeNull();
-    const workbench = container.querySelector(".chat-workbench");
-    const main = container.querySelector(".chat-workbench__main");
-    const rail = container.querySelector(".chat-workspace-rail");
-    expect(main?.parentElement).toBe(workbench);
-    expect(rail?.parentElement).toBe(workbench);
-    expect(Array.from(workbench?.children ?? []).map((child) => child.className)).toEqual([
-      "chat-workbench__main",
-      "chat-workspace-rail",
-    ]);
-    expect(container.querySelector(".chat-workspace-rail__path")?.textContent?.trim()).toBe(
-      "/workspace",
-    );
-    const file = container.querySelector<HTMLDivElement>(".chat-workspace-rail__file");
-    expect(file?.textContent).toContain("AGENTS.md");
-    expect(file?.textContent).toContain("2 KB");
-    expect(container.querySelector(".chat-workspace-rail__summary")?.textContent).toContain(
-      "1 changed",
-    );
-    expect(container.querySelector(".chat-workspace-rail__browser")?.textContent).toContain(
-      "package.json",
-    );
-
-    file?.querySelector<HTMLButtonElement>(".chat-workspace-rail__file-open")?.click();
-    file?.querySelector<HTMLButtonElement>('button[aria-label="Copy path"]')?.click();
-    const browserDirectory = Array.from(
-      container.querySelectorAll<HTMLDivElement>(".chat-workspace-rail__file"),
-    ).find((row) => row.textContent?.includes("ui"));
-    browserDirectory?.querySelector<HTMLButtonElement>(".chat-workspace-rail__file-open")?.click();
-    const browserFile = Array.from(
-      container.querySelectorAll<HTMLDivElement>(".chat-workspace-rail__file"),
-    ).find((row) => row.textContent?.includes("package.json"));
-    const browserFileButton = browserFile?.querySelector<HTMLButtonElement>(
-      ".chat-workspace-rail__file-open",
-    );
-    expect(browserFileButton?.disabled).toBe(false);
-    browserFileButton?.click();
-    const collapseToggle = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Collapse session workspace"]',
-    );
-    expect(collapseToggle?.getAttribute("aria-keyshortcuts")).toBe("Meta+Shift+B");
-    collapseToggle?.click();
-
-    expect(onOpenFile).toHaveBeenCalledWith("/workspace/AGENTS.md", "session");
-    expect(onOpenFile).toHaveBeenCalledWith("package.json", "workspace");
-    expect(onCopyPath).toHaveBeenCalledWith("/workspace/AGENTS.md");
-    expect(onBrowsePath).toHaveBeenCalledWith("ui");
-    expect(onToggleCollapsed).toHaveBeenCalledTimes(1);
-    expect(container.querySelector('button[aria-label="Session workspace"]')).toBeNull();
+    expect(container.querySelector(".chat-workspace-rail")).toBeNull();
   });
 
   it("opens inline Markdown images", () => {
@@ -1895,75 +1776,6 @@ describe("chat composer workbench", () => {
     fallbackTrigger.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(openSpy).toHaveBeenCalledWith(src, "_blank", "noopener,noreferrer");
     openSpy.mockRestore();
-  });
-
-  it("forces the workspace rail to the bottom dock on narrow panes", () => {
-    const container = renderChatView({
-      sessionWorkspace: createSessionWorkspace({
-        narrowLayout: true,
-        onToggleTerminal: vi.fn(),
-        onToggleBrowser: vi.fn(),
-        onOpenDiff: vi.fn(),
-      }),
-    });
-
-    const workbench = container.querySelector(".chat-workbench");
-    expect(workbench?.classList.contains("chat-workbench--dock-bottom")).toBe(true);
-    expect(container.querySelector(".chat-workspace-rail")).not.toBeNull();
-    expect(container.querySelector(".chat-workspace-rail__dock")).toBeNull();
-    expect(container.querySelector(".chat-workspace-rail__grip")).toBeNull();
-    expect(container.querySelector('button[aria-label="Toggle terminal"]')).not.toBeNull();
-    expect(container.querySelector('button[aria-label="Toggle browser panel"]')).not.toBeNull();
-    expect(container.querySelector(".chat-session-diff-toggle")).not.toBeNull();
-  });
-
-  it("keeps a preferred bottom workspace below a side-docked Tasks rail", () => {
-    const container = renderChatView({
-      sessionWorkspace: createSessionWorkspace({ dock: "bottom" }),
-      workspaceRail: [820, html`<div class="chat-workspace-rail-resizer"></div>`],
-      backgroundTasks: createBackgroundTasks(),
-      tasksRail: [330, html`<div class="chat-tasks-rail-resizer"></div>`],
-    });
-
-    const workbench = container.querySelector(".chat-workbench");
-    expect(workbench?.classList.contains("chat-workbench--dock-bottom")).toBe(true);
-    expect(workbench?.classList.contains("chat-workbench--workspace-open")).toBe(false);
-    expect(workbench?.classList.contains("chat-workbench--tasks-open")).toBe(true);
-    expect(workbench?.querySelector(".chat-workspace-rail-resizer")).toBeNull();
-    expect(workbench?.querySelector(".chat-tasks-rail-resizer")).not.toBeNull();
-    expect(
-      (workbench as HTMLElement | null)?.style.getPropertyValue("--chat-workspace-rail-width"),
-    ).toBe("820px");
-  });
-
-  it("keeps the pane header in the conversation column while rails span the workbench", () => {
-    const container = renderChatView({
-      header: html`<header class="chat-pane__header">Session</header>`,
-      sessionWorkspace: createSessionWorkspace(),
-      workspaceRail: [344, html`<div class="chat-workspace-rail-resizer"></div>`],
-    });
-
-    const workbench = container.querySelector<HTMLElement>(".chat-workbench");
-    const column = container.querySelector(".chat-main__conversation-column");
-    expect(column?.firstElementChild?.classList.contains("chat-pane__header")).toBe(true);
-    expect(container.querySelector(".chat-workspace-rail")?.contains(column)).toBe(false);
-    expect(workbench?.style.getPropertyValue("--chat-workspace-rail-width")).toBe("344px");
-    expect(workbench?.querySelector(".chat-workspace-rail-resizer")).not.toBeNull();
-  });
-
-  it("moves the background-tasks rail to a bottom strip on narrow panes", () => {
-    const backgroundTasks = createBackgroundTasks();
-
-    const wide = renderChatView({ backgroundTasks });
-    const wideWorkbench = wide.querySelector(".chat-workbench");
-    expect(wideWorkbench?.classList.contains("chat-workbench--tasks-open")).toBe(true);
-    expect(wideWorkbench?.classList.contains("chat-workbench--tasks-dock-bottom")).toBe(false);
-
-    const narrow = renderChatView({ backgroundTasks: { ...backgroundTasks, narrowLayout: true } });
-    const narrowWorkbench = narrow.querySelector(".chat-workbench");
-    expect(narrowWorkbench?.classList.contains("chat-workbench--tasks-open")).toBe(false);
-    expect(narrowWorkbench?.classList.contains("chat-workbench--tasks-dock-bottom")).toBe(true);
-    expect(narrow.querySelector(".chat-tasks-rail")).not.toBeNull();
   });
 
   it("shows the running-tasks status row after the turn settles, not while working", () => {
@@ -2032,131 +1844,6 @@ afterEach(() => {
   replaceSlashCommands(buildFallbackSlashCommands());
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
-});
-
-describe("session rail pane commands", () => {
-  it("does not replay the pane's retained generation after an A-B-A round trip", async () => {
-    vi.stubGlobal("localStorage", createStorageMock());
-    localStorage.setItem("openclaw.chat.observerHud.display", "pill");
-    const container = document.createElement("div");
-    document.body.append(container);
-    let consumedGeneration = 0;
-    const onSessionRailCommandConsumed = vi.fn((generation: number) => {
-      consumedGeneration = generation;
-    });
-    const onObserverVisibilityChange = vi.fn();
-    const companion = {
-      exchanges: [],
-      pendingQuestion: null,
-      failedQuestion: null,
-      hint: null,
-      draft: "What changed?",
-    };
-    const renderSession = async (sessionKey: string, generation: number) => {
-      render(
-        renderChat(
-          createChatProps({
-            sessionKey,
-            sessionRailReady: true,
-            sessionRailCommand: generation > 0 ? { generation, intent: "open" } : null,
-            sessionRailConsumedCommandGeneration: consumedGeneration,
-            sessionRailCompanion: companion,
-            onSessionRailCommandConsumed,
-            onObserverVisibilityChange,
-          }),
-        ),
-        container,
-      );
-      const rail = container.querySelector(
-        "openclaw-chat-session-rail",
-      ) as ChatSessionRailElement | null;
-      expect(rail).not.toBeNull();
-      await rail?.updateComplete;
-      return rail;
-    };
-
-    try {
-      let rail = await renderSession("agent:main:a", 1);
-      expect(rail?.querySelector(".chat-session-rail--expanded")).not.toBeNull();
-      expect(consumedGeneration).toBe(1);
-
-      rail = await renderSession("agent:main:b", 0);
-      expect(rail?.querySelector(".chat-session-rail--pill")).not.toBeNull();
-
-      rail = await renderSession("agent:main:a", 1);
-      expect(rail?.querySelector(".chat-session-rail--pill")).not.toBeNull();
-      expect(onObserverVisibilityChange).toHaveBeenCalledOnce();
-
-      rail = await renderSession("agent:main:a", 2);
-      expect(rail?.querySelector(".chat-session-rail--expanded")).not.toBeNull();
-      expect(onSessionRailCommandConsumed).toHaveBeenCalledTimes(2);
-      expect(onObserverVisibilityChange).toHaveBeenCalledTimes(2);
-      expect(localStorage.getItem("openclaw.chat.observerHud.display")).toBe("pill");
-    } finally {
-      container.remove();
-    }
-  });
-
-  it("does not replay a consumed generation after the rail unmounts and remounts", async () => {
-    vi.stubGlobal("localStorage", createStorageMock());
-    localStorage.setItem("openclaw.chat.observerHud.display", "pill");
-    const container = document.createElement("div");
-    document.body.append(container);
-    let consumedGeneration = 0;
-    const onSessionRailCommandConsumed = vi.fn((generation: number) => {
-      consumedGeneration = generation;
-    });
-    const onObserverVisibilityChange = vi.fn();
-    const renderRail = async (sessionRailReady: boolean, generation: number) => {
-      render(
-        renderChat(
-          createChatProps({
-            sessionKey: "agent:main:a",
-            sessionRailReady,
-            sessionRailCommand: generation > 0 ? { generation, intent: "open" } : null,
-            sessionRailConsumedCommandGeneration: consumedGeneration,
-            sessionRailCompanion: {
-              exchanges: [],
-              pendingQuestion: null,
-              failedQuestion: null,
-              hint: null,
-              draft: "What changed?",
-            },
-            onSessionRailCommandConsumed,
-            onObserverVisibilityChange,
-          }),
-        ),
-        container,
-      );
-      const rail = container.querySelector(
-        "openclaw-chat-session-rail",
-      ) as ChatSessionRailElement | null;
-      await rail?.updateComplete;
-      return rail;
-    };
-
-    try {
-      let rail = await renderRail(true, 1);
-      expect(rail?.querySelector(".chat-session-rail--expanded")).not.toBeNull();
-      expect(consumedGeneration).toBe(1);
-
-      rail = await renderRail(false, 1);
-      expect(rail).toBeNull();
-
-      rail = await renderRail(true, 1);
-      expect(rail?.querySelector(".chat-session-rail--pill")).not.toBeNull();
-      expect(onSessionRailCommandConsumed).toHaveBeenCalledOnce();
-      expect(onObserverVisibilityChange).toHaveBeenCalledOnce();
-
-      rail = await renderRail(true, 2);
-      expect(rail?.querySelector(".chat-session-rail--expanded")).not.toBeNull();
-      expect(onSessionRailCommandConsumed).toHaveBeenCalledTimes(2);
-      expect(onObserverVisibilityChange).toHaveBeenCalledTimes(2);
-      expect(localStorage.getItem("openclaw.chat.observerHud.display")).toBe("pill");
-    } finally {
-      container.remove();
-    }
-  });
 });
 
 describe("per-pane chat presentation state", () => {
@@ -5831,7 +5518,45 @@ describe("chat model controls", () => {
     expect(container.querySelector('[data-chat-model-provider-group="moonshotai"]')).toBeNull();
   });
 
-  it("shows model context size inline without a redundant tooltip", () => {
+  it("keeps active context in picker details without crowding the compact trigger", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.6-sol",
+      modelProvider: "openai",
+      models: [
+        {
+          id: "gpt-5.6-sol",
+          name: "GPT-5.6 Sol",
+          provider: "openai",
+          contextWindow: 1_050_000,
+          agentRuntime: { id: "openclaw", source: "model" },
+        },
+      ],
+    });
+    state.sessionsResult = createSessionsResultFromRows([
+      {
+        key: "main",
+        kind: "direct",
+        updatedAt: 1,
+        model: "gpt-5.6-sol",
+        modelProvider: "openai",
+        agentRuntime: { id: "openclaw", source: "model" },
+        contextTokens: 1_000_000,
+      },
+    ]);
+    const container = renderModelControls(state);
+    const modelOption = container.querySelector<HTMLButtonElement>(
+      '[data-chat-model-option="openai/gpt-5.6-sol"]',
+    );
+
+    expect(modelOption?.querySelector(".chat-controls__model-option-meta")?.textContent).toBe(
+      "1M active · 1M max · OpenClaw",
+    );
+    expect(modelOption?.textContent).not.toContain("700k");
+    expect(getChatModelSelect(container).querySelector(".chat-controls__trigger-meta")).toBeNull();
+    expect(modelOption?.closest("openclaw-tooltip")).toBeNull();
+  });
+
+  it("uses the default selection runtime for an implicit Codex model", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.6-sol",
       modelProvider: "openai",
@@ -5844,17 +5569,145 @@ describe("chat model controls", () => {
         },
       ],
     });
+    state.sessionsResult = createSessionsResultFromRows([
+      {
+        key: "main",
+        kind: "direct",
+        updatedAt: 1,
+        model: "gpt-5.6-sol",
+        modelProvider: "openai",
+        agentRuntime: { id: "codex", source: "implicit" },
+        contextTokens: 1_000_000,
+      },
+    ]);
+    state.sessionsResult.defaults = {
+      modelProvider: "openai",
+      model: "gpt-5.6-sol",
+      contextTokens: 1_000_000,
+      agentRuntime: { id: "codex", source: "implicit" },
+    };
+
+    const container = renderModelControls(state);
+    const modelOption = container.querySelector<HTMLButtonElement>(
+      '[data-chat-model-option="openai/gpt-5.6-sol"]',
+    );
+
+    expect(modelOption?.querySelector(".chat-controls__model-option-meta")?.textContent).toBe(
+      "1M active · 1M max",
+    );
+    expect(modelOption?.textContent).not.toContain("700k");
+  });
+
+  it("rejects stale active context after an implicit default runtime change", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.6-sol",
+      modelProvider: "openai",
+      models: [
+        {
+          id: "gpt-5.6-sol",
+          name: "GPT-5.6 Sol",
+          provider: "openai",
+          contextWindow: 1_050_000,
+        },
+      ],
+    });
+    state.sessionsResult = createSessionsResultFromRows([
+      {
+        key: "main",
+        kind: "direct",
+        updatedAt: 1,
+        model: "gpt-5.6-sol",
+        modelProvider: "openai",
+        agentRuntime: { id: "openclaw", source: "session" },
+        contextTokens: 272_000,
+      },
+    ]);
+    state.sessionsResult.defaults = {
+      modelProvider: "openai",
+      model: "gpt-5.6-sol",
+      contextTokens: 1_000_000,
+      agentRuntime: { id: "codex", source: "implicit" },
+    };
+
     const container = renderModelControls(state);
     const modelOption = container.querySelector<HTMLButtonElement>(
       '[data-chat-model-option="openai/gpt-5.6-sol"]',
     );
 
     expect(modelOption?.querySelector(".chat-controls__model-option-meta")?.textContent).toBe("1M");
-    expect(
-      getChatModelSelect(container).querySelector(".chat-controls__trigger-meta")?.textContent,
-    ).toBe("1M");
-    expect(modelOption?.closest("openclaw-tooltip")).toBeNull();
+    expect(modelOption?.textContent).not.toContain("272k active");
   });
+
+  it.each([
+    {
+      name: "a pending same-model switch",
+      modelSwitching: true,
+      sessionRuntimeId: "codex",
+      optionRuntimeId: "codex",
+    },
+    {
+      name: "a different session runtime",
+      modelSwitching: false,
+      sessionRuntimeId: "openclaw",
+      optionRuntimeId: "codex",
+    },
+    {
+      name: "missing session runtime provenance",
+      modelSwitching: false,
+      sessionRuntimeId: undefined,
+      optionRuntimeId: "codex",
+    },
+    {
+      name: "missing catalog runtime provenance",
+      modelSwitching: false,
+      sessionRuntimeId: "codex",
+      optionRuntimeId: undefined,
+    },
+  ])(
+    "does not pair a stale session budget with $name",
+    ({ modelSwitching, optionRuntimeId, sessionRuntimeId }) => {
+      const { state } = createChatHeaderState({
+        model: "gpt-5.6-sol",
+        modelProvider: "openai",
+        models: [
+          {
+            id: "gpt-5.6-sol",
+            name: "GPT-5.6 Sol",
+            provider: "openai",
+            contextWindow: 1_050_000,
+            ...(optionRuntimeId
+              ? { agentRuntime: { id: optionRuntimeId, source: "model" as const } }
+              : {}),
+          },
+        ],
+      });
+      state.sessionsResult = createSessionsResultFromRows([
+        {
+          key: "main",
+          kind: "direct",
+          updatedAt: 1,
+          model: "gpt-5.6-sol",
+          modelProvider: "openai",
+          ...(sessionRuntimeId
+            ? { agentRuntime: { id: sessionRuntimeId, source: "session" as const } }
+            : {}),
+          contextTokens: 272_000,
+        },
+      ]);
+
+      const container = renderModelControls(state, {
+        modelOverrides: { main: "openai/gpt-5.6-sol" },
+        modelSwitching,
+      });
+      const selectedModelOption = container.querySelector<HTMLButtonElement>(
+        '[data-chat-model-option="openai/gpt-5.6-sol"]',
+      );
+
+      expect(
+        selectedModelOption?.querySelector(".chat-controls__model-option-meta")?.textContent,
+      ).toBe(optionRuntimeId ? "1M · Codex" : "1M");
+    },
+  );
 
   it("synthesizes a selectable row for a persisted override missing from the catalog", () => {
     const { state } = createChatHeaderState({
@@ -6098,18 +5951,21 @@ describe("chat model controls", () => {
     });
   });
 
-  it("uses the session provider for slash-containing raw model ids without metadata", () => {
+  it("uses the session provider for slash-containing raw model ids", () => {
     const { state } = createChatHeaderState();
     state.chatModelCatalog = [
       {
         id: "google/gemma-4-26b-a4b-it",
         name: "Gemma 4",
         provider: "google",
+        agentRuntime: { id: "openclaw", source: "implicit" },
       },
       {
         id: "google/gemma-4-26b-a4b-it",
         name: "Gemma 4",
         provider: "openrouter",
+        contextWindow: 1_000_000,
+        agentRuntime: { id: "openclaw", source: "implicit" },
       },
     ];
     state.sessionsResult = createSessionsListResult({
@@ -6118,6 +5974,11 @@ describe("chat model controls", () => {
       defaultsModel: "google/gemma-4-26b-a4b-it",
       defaultsProvider: "openrouter",
     });
+    state.sessionsResult.sessions[0]!.agentRuntime = {
+      id: "openclaw",
+      source: "implicit",
+    };
+    state.sessionsResult.sessions[0]!.contextTokens = 272_000;
     const container = renderModelControls(state);
 
     const providerButtons = Array.from(
@@ -6134,7 +5995,7 @@ describe("chat model controls", () => {
     expect(
       container.querySelector<HTMLElement>('[data-chat-model-provider-group="openrouter"]')
         ?.textContent,
-    ).toContain("Gemma 4");
+    ).toContain("272k active · 1M max");
   });
 
   it("uses a unique catalog provider before an unrelated stale session hint", () => {

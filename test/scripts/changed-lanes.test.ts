@@ -1453,6 +1453,7 @@ describe("scripts/changed-lanes", () => {
       "conflict markers",
       "environment variable count ratchet",
       "max-lines suppression ratchet",
+      "assertion SAFETY comment ratchet",
       "changelog attributions",
       "doctor deprecation registry",
       "guarded extension wildcard re-exports",
@@ -2042,6 +2043,7 @@ describe("scripts/changed-lanes", () => {
 
   it("runs macOS CI tests for workspace rsync receiver owners", () => {
     for (const changedPath of [
+      "src/shared/worker-bundle-hash.ts",
       "src/worker/workspace-rsync-receiver.ts",
       "src/gateway/worker-environments/workspace-sync.ts",
       "src/gateway/worker-environments/workspace-sync-helpers.ts",
@@ -2314,6 +2316,15 @@ describe("scripts/changed-lanes", () => {
       expected: {
         worktree: ["check:env-var-count", "--base", "main"],
         staged: ["check:env-var-count", "--staged", "--base", "HEAD"],
+      },
+    },
+    {
+      name: "adds the assertion SAFETY comment ratchet for production source",
+      commandName: "assertion SAFETY comment ratchet",
+      worktreeOptions: { base: "main" },
+      expected: {
+        worktree: ["check:assertion-safety", "--base", "main"],
+        staged: ["check:assertion-safety", "--staged", "--base", "HEAD"],
       },
     },
   ])("$name", ({ commandName, worktreeOptions, expected }) => {

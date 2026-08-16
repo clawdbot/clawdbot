@@ -35,13 +35,11 @@ export type {
 
 export const HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT = "requests-in-flight";
 export const HEARTBEAT_SKIP_CRON_IN_PROGRESS = "cron-in-progress";
-export const HEARTBEAT_SKIP_LANES_BUSY = "lanes-busy";
 export const HEARTBEAT_SKIP_NO_PENDING_EVENT = "no-pending-event";
 export const HEARTBEAT_SKIP_PREEMPTED = "preempted";
 const RETRYABLE_HEARTBEAT_SKIP_REASONS = new Set([
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
-  HEARTBEAT_SKIP_LANES_BUSY,
   HEARTBEAT_SKIP_PREEMPTED,
 ]);
 const RETRYABLE_GUARD_SKIP_REASONS = new Set(["not-due", "min-spacing", "flood"]);

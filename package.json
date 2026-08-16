@@ -1180,10 +1180,6 @@
       "types": "./dist/plugin-sdk/media-understanding-runtime.d.ts",
       "default": "./dist/plugin-sdk/media-understanding-runtime.js"
     },
-    "./plugin-sdk/messaging-targets": {
-      "types": "./dist/plugin-sdk/messaging-targets.d.ts",
-      "default": "./dist/plugin-sdk/messaging-targets.js"
-    },
     "./plugin-sdk/request-url": {
       "default": "./dist/plugin-sdk/request-url.js"
     },
@@ -1512,6 +1508,7 @@
     "changed:lanes": "node scripts/changed-lanes.mjs",
     "check": "node --import tsx scripts/check.mts",
     "check:architecture": "pnpm check:import-cycles && pnpm check:madge-import-cycles && pnpm check:deprecated-api-usage && pnpm check:wrapper-shadowing && pnpm check:deprecated-jsdoc && pnpm db:kysely:check && pnpm lint:kysely && pnpm check:database-first-legacy-stores",
+    "check:assertion-safety": "node --import tsx scripts/check-assertion-safety-ratchet.mts",
     "check:base-config-schema": "node --import tsx scripts/generate-base-config-schema.ts --check",
     "check:bundled-channel-config-metadata": "node --import tsx scripts/generate-bundled-channel-config-metadata.ts --check",
     "check:changed": "node scripts/check-changed.mjs",
@@ -1657,6 +1654,7 @@
     "lint:plugins:no-monolithic-plugin-sdk-entry-imports": "node --import tsx scripts/check-no-monolithic-plugin-sdk-entry-imports.ts",
     "lint:plugins:no-register-http-handler": "node scripts/run-oxlint.mjs --openclaw-focused-config --config config/oxlint/boundary-guards.json src extensions",
     "lint:plugins:plugin-sdk-subpaths-exported": "node --import tsx scripts/check-plugin-sdk-subpath-exports.mts",
+    "lint:no-chained-type-assertions": "node scripts/run-oxlint.mjs --openclaw-focused-config --config config/oxlint/boundary-guards.json src extensions packages ui/src",
     "lint:no-widen-then-assert": "node scripts/run-oxlint.mjs --openclaw-focused-config --config config/oxlint/boundary-guards.json src extensions packages ui/src",
     "lint:scripts": "pnpm lint:docker-e2e && pnpm lint:tmp:no-raw-http2-imports && node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.scripts.json scripts",
     "lint:swift": "./scripts/lint-swift.sh",

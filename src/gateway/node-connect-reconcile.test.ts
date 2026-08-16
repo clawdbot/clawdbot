@@ -10,10 +10,8 @@ import type { ConnectParams } from "../../packages/gateway-protocol/src/index.js
 import type { NodePairingRequestInput, PairedDeviceNode } from "../infra/device-pairing-node.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import {
-  reconcileNodePairingOnConnect,
-  resolveEffectiveComputerUseDescriptor,
-} from "./node-connect-reconcile.js";
+import { resolveEffectiveComputerUseDescriptor } from "./node-computer-use-descriptor.js";
+import { reconcileNodePairingOnConnect } from "./node-connect-reconcile.js";
 
 function makeNodeConnectParams(overrides?: Partial<ConnectParams>): ConnectParams {
   return {

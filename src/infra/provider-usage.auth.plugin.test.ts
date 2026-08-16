@@ -152,6 +152,17 @@ describe("resolveProviderAuths plugin boundary", () => {
     expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
   });
 
+  it("preserves exact plugin auth failures for direct callers", async () => {
+    const authError = new Error("plugin auth failed");
+    resolveProviderUsageAuthWithPluginMock.mockRejectedValueOnce(authError);
+
+    await expect(
+      resolveProviderAuthsForTest({
+        providers: ["anthropic"],
+      }),
+    ).rejects.toBe(authError);
+  });
+
   it("resolves SecretRef-backed profiles before provider credential classification", async () => {
     const store = {
       profiles: {

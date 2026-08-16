@@ -14,6 +14,7 @@ import {
 
 export type CuaComputerActParams = {
   action: ComputerActParams["action"];
+  executionId?: string;
   displayFrameId?: string;
   x?: number;
   y?: number;
@@ -51,8 +52,11 @@ export type CuaComputerActParams = {
   dialogAction?: "inspect" | "accept" | "dismiss";
   dialogRef?: string;
   promptText?: string;
-  files?: string[];
-  destinationRoot?: string;
+  resourceHandle?: string;
+  resourceHandles?: string[];
+  recordVideo?: boolean;
+  delayMs?: number;
+  stopOnError?: boolean;
   pointerAction?: "hover" | "right_click" | "double_click" | "scroll" | "drag";
   destinationElementRef?: string;
   toX?: number;

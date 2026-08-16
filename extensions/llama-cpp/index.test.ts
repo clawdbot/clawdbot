@@ -9,7 +9,6 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import {
   clearEmbeddingProviders,
-  clearMemoryEmbeddingProviders,
   createEmptyPluginRegistry,
   getActivePluginRegistry,
   getRegisteredEmbeddingProvider,
@@ -74,7 +73,7 @@ beforeEach(() => {
 
 afterEach(() => {
   clearEmbeddingProviders();
-  clearMemoryEmbeddingProviders();
+  clearEmbeddingProviders();
   setActivePluginRegistry(previousPluginRegistry ?? createEmptyPluginRegistry());
   vi.clearAllMocks();
 });
@@ -172,6 +171,27 @@ describe("llama.cpp provider plugin", () => {
         transport: "local",
       },
     });
+  });
+
+  it("requires managed setup when local memory retains a remote SecretRef", async () => {
+    await expect(
+      llamaCppEmbeddingProviderAdapter.create({
+        config: {
+          memory: {
+            search: {
+              provider: "local",
+              remote: {
+                apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+              },
+            },
+          },
+        },
+        provider: "local",
+        model: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
+      }),
+    ).rejects.toThrow("Local embeddings need the managed llama.cpp server config");
+    expect(mocks.ensureModel).not.toHaveBeenCalled();
+    expect(mocks.prepareServer).not.toHaveBeenCalled();
   });
 
   it("routes embeddings through the managed server and reports endpoint facts", async () => {

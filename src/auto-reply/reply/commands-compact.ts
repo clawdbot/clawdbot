@@ -295,6 +295,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   }
   const result = await runtime.compactEmbeddedAgentSession({
     abortSignal: params.opts?.abortSignal,
+    contextEngineAgentId: sessionAgentId,
     sessionId,
     sessionKey: params.sessionKey,
     sessionTarget: {

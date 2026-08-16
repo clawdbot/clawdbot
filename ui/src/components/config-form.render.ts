@@ -30,6 +30,8 @@ type ConfigFormProps = {
   onHideAdvanced?: () => void;
   /** Inline actions rendered next to the active section heading (e.g. env peek). */
   sectionActions?: TemplateResult;
+  /** A Control UI-owned row rendered before common schema rows in the active section. */
+  sectionPrelude?: TemplateResult;
   /** Composite pages render custom rows above the form; an empty schema
    *  section must stay silent there instead of claiming the page is empty. */
   embedded?: boolean;
@@ -68,6 +70,7 @@ export function renderConfigTierGroups(params: {
    *  divider remains the single inverse of the collapsed ghost action. */
   onHideAdvanced?: () => void;
   renderTier: (node: JsonSchema) => TemplateResult | typeof nothing;
+  commonPrelude?: TemplateResult;
 }) {
   const split = splitConfigSchemaByTier({
     schema: params.schema,
@@ -81,8 +84,12 @@ export function renderConfigTierGroups(params: {
   // parent (the channel forms) do not render the tiers flush against each other.
   return html`
     <div class="config-tier-groups">
-      ${split.common
-        ? html`<div class="settings-group">${params.renderTier(split.common)}</div>`
+      ${split.common || params.commonPrelude
+        ? html`<div class="settings-group">
+            ${params.commonPrelude ?? nothing}${split.common
+              ? params.renderTier(split.common)
+              : nothing}
+          </div>`
         : nothing}
       ${split.advanced && split.advancedLeafCount > 0
         ? params.revealAdvanced
@@ -296,6 +303,7 @@ export function renderConfigForm(props: ConfigFormProps) {
               ? props.onHideAdvanced
               : undefined,
           renderTier,
+          commonPrelude: props.sectionPrelude,
         })}
       </section>
     `;

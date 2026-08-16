@@ -1,12 +1,11 @@
 // Plugin release pretag pack check tests cover its script-local target and command routing.
-import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { OPENCLAW_PLUGIN_NPM_REPOSITORY_URL } from "../../scripts/lib/plugin-npm-release.ts";
 import {
   collectPluginReleasePretagPackTargets,
   runPluginReleasePretagPackCheck,
 } from "../../scripts/plugin-release-pretag-pack-check.ts";
+import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fixture.js";
 import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "../helpers/temp-repo.js";
 
 const { execFileSyncMock } = vi.hoisted(() => ({
@@ -36,37 +35,11 @@ afterEach(() => {
 
 function createDualPublishPluginRepo() {
   const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-pretag-pack-");
-  const packageDir = join(repoDir, "extensions", "demo-plugin");
-  mkdirSync(packageDir, { recursive: true });
   writeJsonFile(join(repoDir, "package.json"), { name: "openclaw-test-root", type: "module" });
-  writeJsonFile(join(packageDir, "package.json"), {
-    name: "@openclaw/demo-plugin",
+  writePublishablePluginFixture(repoDir, {
     version: "2026.4.10",
-    type: "module",
-    repository: {
-      type: "git",
-      url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
-    },
-    openclaw: {
-      extensions: ["./index.ts"],
-      compat: {
-        pluginApi: ">=2026.4.10",
-      },
-      build: {
-        openclawVersion: "2026.4.10",
-      },
-      install: {
-        npmSpec: "@openclaw/demo-plugin",
-      },
-      release: {
-        publishToClawHub: true,
-        publishToNpm: true,
-      },
-    },
+    publishTo: "both",
   });
-  writeFileSync(join(packageDir, "README.md"), "# Demo plugin\n");
-  writeFileSync(join(packageDir, "index.ts"), "export const demo = 1;\n");
-
   return repoDir;
 }
 

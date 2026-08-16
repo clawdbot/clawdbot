@@ -1,12 +1,17 @@
 import type {
+  EmbeddingInput,
+  EmbeddingProvider,
+  EmbeddingProviderAdapter,
+  EmbeddingProviderCallOptions,
+  EmbeddingProviderCreateOptions,
+} from "./embedding-provider-types.js";
+import type {
+  MemoryEmbeddingProvider,
   MemoryEmbeddingProviderAdapter,
-  RegisteredMemoryEmbeddingProvider,
+  MemoryEmbeddingProviderCreateOptions,
 } from "./registry-contribution-types.js";
-import {
-  assertDirectPluginRegistrationReplacement,
-  requireActivePluginRegistry,
-  resolveDirectPluginRegistrationOwner,
-} from "./runtime.js";
+
+const LOCAL_EMBEDDING_RUNTIME_FACTS = Symbol.for("openclaw.localEmbeddingRuntimeFacts");
 
 export type {
   MemoryEmbeddingBatchChunk,
@@ -18,64 +23,94 @@ export type {
   MemoryEmbeddingProviderCreateResult,
   MemoryEmbeddingProviderIndexIdentity,
   MemoryEmbeddingProviderRuntime,
-  RegisteredMemoryEmbeddingProvider,
 } from "./registry-contribution-types.js";
 
-function getMemoryEmbeddingProviders(): RegisteredMemoryEmbeddingProvider[] {
-  return requireActivePluginRegistry().memoryEmbeddingProviders.map((entry) => ({
-    adapter: entry.provider,
-    ownerPluginId: entry.pluginId || undefined,
-  }));
+function embeddingInputText(input: EmbeddingInput): string {
+  return typeof input === "string" ? input : input.text;
 }
 
-export function registerMemoryEmbeddingProvider(
-  adapter: MemoryEmbeddingProviderAdapter,
-  options?: { ownerPluginId?: string },
-): void {
-  const registry = requireActivePluginRegistry();
-  const pluginId = resolveDirectPluginRegistrationOwner(options?.ownerPluginId) ?? "";
-  const entry = {
-    pluginId,
-    provider: adapter,
-    source: "runtime",
+function memoryCreateOptions(
+  options: EmbeddingProviderCreateOptions,
+): Parameters<MemoryEmbeddingProviderAdapter["create"]>[0] {
+  // Runtime callers may carry memory-owner extensions such as acquireLocalService.
+  // Preserve them while translating the two fields renamed by the generic contract.
+  const { dimensions, taskType, ...base } = options;
+  return {
+    ...base,
+    fallback: "none",
+    ...(typeof dimensions === "number" ? { outputDimensionality: dimensions } : {}),
+    taskType: taskType as MemoryEmbeddingProviderCreateOptions["taskType"],
   };
-  const index = registry.memoryEmbeddingProviders.findIndex(
-    (registration) => registration.provider.id === adapter.id,
-  );
-  if (index !== -1) {
-    assertDirectPluginRegistrationReplacement(
-      registry.memoryEmbeddingProviders[index]?.pluginId || undefined,
-      `memory embedding provider ${adapter.id}`,
-    );
-  }
-  if (index === -1) {
-    registry.memoryEmbeddingProviders.push(entry);
-  } else {
-    registry.memoryEmbeddingProviders.splice(index, 1, entry);
-  }
 }
 
-export function getRegisteredMemoryEmbeddingProvider(
-  id: string,
-): RegisteredMemoryEmbeddingProvider | undefined {
-  return getMemoryEmbeddingProviders().find((entry) => entry.adapter.id === id);
+type MemoryEmbeddingInput = Parameters<
+  NonNullable<MemoryEmbeddingProvider["embedBatchInputs"]>
+>[0][number];
+
+function memoryEmbeddingInput(input: EmbeddingInput): MemoryEmbeddingInput {
+  return typeof input === "string" ? { text: input } : input;
 }
 
-export function listRegisteredMemoryEmbeddingProviders(): RegisteredMemoryEmbeddingProvider[] {
-  return getMemoryEmbeddingProviders();
-}
+function adaptMemoryEmbeddingProvider(provider: MemoryEmbeddingProvider): EmbeddingProvider {
+  const embedBatch = async (
+    inputs: EmbeddingInput[],
+    options?: EmbeddingProviderCallOptions,
+  ): Promise<number[][]> => {
+    if (options?.inputType === "query") {
+      return await Promise.all(
+        inputs.map((input) => provider.embedQuery(embeddingInputText(input), options)),
+      );
+    }
+    if (provider.embedBatchInputs) {
+      return await provider.embedBatchInputs(inputs.map(memoryEmbeddingInput), options);
+    }
+    return await provider.embedBatch(inputs.map(embeddingInputText), options);
+  };
 
-export function restoreRegisteredMemoryEmbeddingProviders(
-  entries: RegisteredMemoryEmbeddingProvider[],
-): void {
-  clearMemoryEmbeddingProviders();
-  for (const entry of entries) {
-    registerMemoryEmbeddingProvider(entry.adapter, {
-      ownerPluginId: entry.ownerPluginId,
+  const adapted: EmbeddingProvider = {
+    id: provider.id,
+    model: provider.model,
+    ...(typeof provider.maxInputTokens === "number"
+      ? { maxInputTokens: provider.maxInputTokens }
+      : {}),
+    embed: async (input, options) => {
+      if (options?.inputType === "query") {
+        return await provider.embedQuery(embeddingInputText(input), options);
+      }
+      return (await embedBatch([input], options))[0] ?? [];
+    },
+    embedBatch,
+    ...(provider.close ? { close: async () => await provider.close?.() } : {}),
+  };
+  const getRuntimeFacts = Reflect.get(provider, LOCAL_EMBEDDING_RUNTIME_FACTS);
+  if (typeof getRuntimeFacts === "function") {
+    Object.defineProperty(adapted, LOCAL_EMBEDDING_RUNTIME_FACTS, {
+      enumerable: false,
+      value: getRuntimeFacts,
     });
   }
+  return adapted;
 }
 
-export function clearMemoryEmbeddingProviders(): void {
-  requireActivePluginRegistry().memoryEmbeddingProviders.length = 0;
+/** Adapt a memory-aware provider implementation to the generic registration contract. */
+export function adaptMemoryEmbeddingProviderAdapter(
+  adapter: MemoryEmbeddingProviderAdapter,
+): EmbeddingProviderAdapter {
+  const { create: _create, resolveIndexIdentity, ...metadata } = adapter;
+  return {
+    ...metadata,
+    ...(resolveIndexIdentity
+      ? {
+          resolveIndexIdentity: (options: EmbeddingProviderCreateOptions) =>
+            resolveIndexIdentity(memoryCreateOptions(options)),
+        }
+      : {}),
+    create: async (options) => {
+      const result = await adapter.create(memoryCreateOptions(options));
+      return {
+        ...result,
+        provider: result.provider ? adaptMemoryEmbeddingProvider(result.provider) : null,
+      };
+    },
+  };
 }

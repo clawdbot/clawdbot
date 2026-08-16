@@ -1113,7 +1113,9 @@ describe("plugin-sdk subpath exports", () => {
       "shouldAckReaction",
       "DEFAULT_EMOJIS",
     ]);
-    expectSourceOmits("channel-feedback", [
+    // The load-only WhatsApp bridge lives in the barrel for published
+    // pre-#121257 artifacts; the owner file stays free of channel policy.
+    expectSourceMentions("channel-feedback", [
       "shouldAckReactionForWhatsApp",
       "WhatsAppAckReactionMode",
     ]);
@@ -1253,7 +1255,7 @@ describe("plugin-sdk subpath exports", () => {
     expectSourceMentions("setup-tools", ["formatCliCommand", "detectBinary", "formatDocsLink"]);
     expectSourceMentions("lazy-runtime", ["createLazyRuntimeSurface", "createLazyRuntimeModule"]);
     expectSourceMentions("agent-harness", ["./agent-harness-runtime.js"]);
-    expectSourceMentions("agent-harness-runtime", ["AgentHarness", "EmbeddedPiCompactResult"]);
+    expectSourceMentions("agent-harness-runtime", ["AgentHarness", "EmbeddedAgentCompactResult"]);
     expectSourceOmitsSnippet("agent-runtime", "./sglang.js");
     expectSourceOmitsSnippet("agent-runtime", "./vllm.js");
     expectSourceOmitsSnippet("agent-runtime", "../../extensions/");

@@ -487,11 +487,10 @@ export abstract class AgentSessionBase {
       return;
     }
 
-    const targetRecord = target as unknown as Record<string, unknown>;
-    for (const key of Object.keys(targetRecord)) {
-      delete targetRecord[key];
+    for (const key of Object.keys(target)) {
+      Reflect.deleteProperty(target, key);
     }
-    Object.assign(targetRecord, replacement);
+    Object.assign(target, replacement);
   }
 
   /** Emit extension events based on agent events */

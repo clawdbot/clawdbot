@@ -12,6 +12,7 @@ import type {
   TaskSuggestionDeliveryMode,
 } from "../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
+import type { CronScheduledToolCallerOrigin } from "../cron/scheduled-tool-policy.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 
@@ -50,6 +51,8 @@ export type McpLoopbackRequestContext = {
    */
   toolsAllow?: string[];
   scheduledToolPolicy?: ScheduledToolPolicyContext;
+  /** Host-owned creator origin; child MCP request fields cannot widen it. */
+  cronCreatorCallerOrigin?: CronScheduledToolCallerOrigin;
   senderIsOwner: boolean;
   /** Capability minted only for Gateway-launched CLI backends. */
   nodeExecAllowed?: boolean;

@@ -1787,6 +1787,13 @@ jobs:
           --configLoader runner
           ui/src/e2e/control-ui-auth-transports.e2e.test.ts
 
+      - name: Test Control UI Logs lifecycle with a real Gateway
+        run: >-
+          node scripts/run-vitest.mjs run
+          --config test/vitest/vitest.ui-e2e.config.ts
+          --configLoader runner
+          ui/src/e2e/logs-lifecycle.e2e.test.ts
+
   control-ui-i18n:
     permissions:
       contents: read

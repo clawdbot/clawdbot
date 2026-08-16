@@ -18,7 +18,10 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeCronScheduledToolPolicy } from "../../cron/scheduled-tool-policy.js";
+import {
+  normalizeCronScheduledToolCallerOrigin,
+  normalizeCronScheduledToolPolicy,
+} from "../../cron/scheduled-tool-policy.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { recordSessionCreated } from "../../sessions/session-state-events.js";
@@ -236,6 +239,13 @@ export async function persistAgentSessionPhase(params: {
                   ? {
                       scheduledToolPolicy: normalizeCronScheduledToolPolicy(
                         marker.scheduledToolPolicy,
+                      ),
+                    }
+                  : {}),
+                ...(normalizeCronScheduledToolPolicy(marker.scheduledToolPolicy)?.mode === "account"
+                  ? {
+                      scheduledToolCallerOrigin: normalizeCronScheduledToolCallerOrigin(
+                        marker.scheduledToolCallerOrigin,
                       ),
                     }
                   : {}),

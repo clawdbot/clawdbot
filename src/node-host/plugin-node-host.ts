@@ -122,6 +122,33 @@ export function watchRegisteredNodeHostCommandAvailability(
     });
 }
 
+/** Release plugin command state before a reconnected Gateway can invoke it again. */
+export async function notifyRegisteredNodeHostCommandDisconnect(): Promise<void> {
+  const registry = resolveNodeHostPluginRegistry();
+  const callbacks = new Set(
+    (registry?.nodeHostCommands ?? [])
+      .map((entry) => entry.command.onDisconnect)
+      .filter((callback): callback is () => Promise<void> | void => callback !== undefined),
+  );
+  await withPluginRuntimeRegistryScope(registry, async () => {
+    const results = await Promise.allSettled(
+      [...callbacks].map(async (callback) => await callback()),
+    );
+    const failures = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (failures.length === 1) {
+      const failure = failures[0];
+      throw failure instanceof Error
+        ? failure
+        : new Error("node-host plugin disconnect cleanup failed", { cause: failure });
+    }
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "node-host plugin disconnect cleanup failed");
+    }
+  });
+}
+
 function isProviderSafeToolName(value: string): boolean {
   return /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(value);
 }

@@ -4,7 +4,10 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { PairedDevice } from "../../infra/device-pairing.types.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
+import {
+  NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
+  NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+} from "../../infra/node-runner-inventory.js";
 import { WorkerProviderError } from "../../plugins/types.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
 import {
@@ -64,6 +67,7 @@ function connectedNode(
 function deviceRuntime(params: {
   getPairedDevice: (deviceId: string) => Promise<PairedDevice | null>;
   listCurrentNodes?: () => Promise<readonly NodeWorkerSupervisorNodeProof[]>;
+  getIssue?: () => typeof NODE_RUNNER_UPDATE_REQUIRED_ISSUE | undefined;
   now?: () => number;
 }) {
   const runtime = createDeviceWorkerRuntime({
@@ -73,6 +77,7 @@ function deviceRuntime(params: {
   if (params.listCurrentNodes) {
     runtime.bindNodeTransport({
       listCurrentNodes: params.listCurrentNodes,
+      ...(params.getIssue ? { getIssue: params.getIssue } : {}),
       isCurrent: () => true,
       invoke: async () => ({ ok: false }),
     });
@@ -116,22 +121,40 @@ describe("device worker provider", () => {
       name: "missing pairing",
       getPairedDevice: async () => null,
       listCurrentNodes: async () => [connectedNode()],
+      expectedMessage: `device worker is not a paired node host: ${DEVICE_ID}`,
     },
     {
       name: "offline device",
       getPairedDevice: async () => pairedDevice(),
       listCurrentNodes: async () => [],
+      expectedMessage: `device worker node is not connected: ${DEVICE_ID}`,
     },
     {
-      name: "connected node without worker session hosting",
+      name: "connected node at capacity",
       getPairedDevice: async () => pairedDevice(),
       listCurrentNodes: async () => [connectedNode(DEVICE_ID, null)],
+      expectedMessage: `device worker is at capacity (all worker slots in use): ${DEVICE_ID}; retry after a running turn completes`,
     },
-  ])("rejects $name during provision", async ({ getPairedDevice, listCurrentNodes }) => {
-    const provider = deviceRuntime({ getPairedDevice, listCurrentNodes }).provider;
+  ])(
+    "rejects $name during provision",
+    async ({ getPairedDevice, listCurrentNodes, expectedMessage }) => {
+      const provider = deviceRuntime({ getPairedDevice, listCurrentNodes }).provider;
+      const provision = provider.provision({ device: DEVICE_ID }, "operation");
 
-    await expect(provider.provision({ device: DEVICE_ID }, "operation")).rejects.toBeInstanceOf(
-      WorkerProviderError,
+      await expect(provision).rejects.toBeInstanceOf(WorkerProviderError);
+      await expect(provision).rejects.toMatchObject({ message: expectedMessage });
+    },
+  );
+
+  it("returns the exact update-and-reconnect recovery for an outdated connected node", async () => {
+    const provider = deviceRuntime({
+      getPairedDevice: async () => pairedDevice(),
+      listCurrentNodes: async () => [],
+      getIssue: () => NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
+    }).provider;
+
+    await expect(provider.provision({ device: DEVICE_ID }, "operation")).rejects.toThrow(
+      `device worker node ${DEVICE_ID} requires an update before it can host sessions; run openclaw update, then reconnect it (for a headless node, run openclaw node restart)`,
     );
   });
 

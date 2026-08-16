@@ -6,7 +6,7 @@ import { createServer as createNetServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
-import type { ConsoleMessage, Locator, Page, Request } from "playwright";
+import type { ConsoleMessage, Frame, Locator, Page, Request } from "playwright";
 import type { InlineConfig, Plugin, PreviewServer, ViteDevServer } from "vite";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
@@ -243,6 +243,7 @@ export type MockGatewayRequest = {
 };
 
 export type ControlUiMockGatewayScenario = {
+  attachmentMaxBytes?: number;
   agentModel?: string | null;
   assistantAgentId?: string;
   assistantName?: string;
@@ -277,6 +278,7 @@ export type ControlUiMockGatewayScenario = {
   /** Simulate a legacy Gateway that predates the advertised method catalog. */
   omitFeatureMethods?: boolean;
   historyMessages?: unknown[];
+  maxPayload?: number;
   /** Static payloads, parameter-matched cases, or call-ordered sequences. */
   methodResponses?: Record<string, unknown>;
   /** URL prefixes that retain the browser's real WebSocket transport. */
@@ -325,6 +327,11 @@ export type ControlUiMockGatewayScenario = {
 
 type NormalizedControlUiMockGatewayScenario = Required<ControlUiMockGatewayScenario>;
 
+const DEFAULT_MOCK_MAX_PAYLOAD_BYTES = 25 * 1024 * 1024;
+const DEFAULT_MOCK_ATTACHMENT_MAX_BYTES = Math.floor(
+  ((DEFAULT_MOCK_MAX_PAYLOAD_BYTES - 256 * 1024) * 3) / 4,
+);
+
 export type ControlUiE2eServer = {
   baseUrl: string;
   close: () => Promise<void>;
@@ -355,7 +362,7 @@ let controlUiE2eDiagnosticSequence = 0;
 type ControlUiE2eDiagnosticEvent = {
   at: string;
   details: Record<string, unknown>;
-  source: "console" | "pageerror" | "requestfailed";
+  source: "console" | "framenavigated" | "pageerror" | "requestfailed";
 };
 
 function installControlUiE2ePageDiagnosticRing(page: Page): ControlUiE2eDiagnosticEvent[] {
@@ -400,11 +407,25 @@ function installControlUiE2ePageDiagnosticRing(page: Page): ControlUiE2eDiagnost
       source: "requestfailed",
     });
   };
+  const onFrameNavigated = (frame: Frame) => {
+    // Main-frame navigations order boot/reload sequences in failure reports;
+    // subframes are noise.
+    if (frame !== page.mainFrame()) {
+      return;
+    }
+    push({
+      at: new Date().toISOString(),
+      details: { url: frame.url() },
+      source: "framenavigated",
+    });
+  };
   page.on("console", onConsole);
+  page.on("framenavigated", onFrameNavigated);
   page.on("pageerror", onPageError);
   page.on("requestfailed", onRequestFailed);
   page.once("close", () => {
     page.off("console", onConsole);
+    page.off("framenavigated", onFrameNavigated);
     page.off("pageerror", onPageError);
     page.off("requestfailed", onRequestFailed);
     controlUiE2ePageDiagnostics.delete(page);
@@ -608,6 +629,28 @@ export async function startControlUiE2eServer(
   };
 }
 
+// Mirror the Gateway's depth-insensitive asset resolution
+// (src/gateway/control-ui.ts): any "/assets/" segment serves the bundled
+// asset. The built index.html uses portable relative asset URLs, so a
+// document reloaded on a deep link like /chat/research requests
+// /chat/assets/*.js; without this contract Vite's SPA fallback answers with
+// index.html and the module never executes, bricking the page.
+function controlUiE2eGatewayAssetPathPlugin(): Plugin {
+  return {
+    name: "control-ui-e2e-gateway-asset-paths",
+    configurePreviewServer(server) {
+      server.middlewares.use((req, _res, next) => {
+        const url = req.url ?? "";
+        const assetsIndex = url.indexOf("/assets/");
+        if (assetsIndex > 0) {
+          req.url = url.slice(assetsIndex);
+        }
+        next();
+      });
+    },
+  };
+}
+
 function controlUiE2ePreviewConfigPlugin(
   bootstrapConfig: Record<string, unknown> = {
     basePath: "/",
@@ -704,7 +747,11 @@ async function startBuiltControlUiE2eServer(
   const sharedConfig = createBundledControlUiE2eConfig(controlUiViteConfig, outDir);
   const server = await preview({
     ...sharedConfig,
-    plugins: [...(sharedConfig.plugins ?? []), controlUiE2ePreviewConfigPlugin(bootstrapConfig)],
+    plugins: [
+      ...(sharedConfig.plugins ?? []),
+      controlUiE2eGatewayAssetPathPlugin(),
+      controlUiE2ePreviewConfigPlugin(bootstrapConfig),
+    ],
     preview: {
       host: "127.0.0.1",
       port,
@@ -785,6 +832,7 @@ function normalizeScenario(
       ? basePathWithSlash.slice(0, -1)
       : basePathWithSlash;
   return {
+    attachmentMaxBytes: scenario.attachmentMaxBytes ?? DEFAULT_MOCK_ATTACHMENT_MAX_BYTES,
     agentModel:
       scenario.agentModel === undefined ? "openai/gpt-5.5" : scenario.agentModel?.trim() || null,
     assistantAgentId: scenario.assistantAgentId?.trim() || defaultAgentId,
@@ -813,6 +861,7 @@ function normalizeScenario(
     featureMethods: scenario.featureMethods ?? [...defaultControlUiFeatureMethods],
     omitFeatureMethods: scenario.omitFeatureMethods ?? false,
     historyMessages: scenario.historyMessages ?? [],
+    maxPayload: scenario.maxPayload ?? DEFAULT_MOCK_MAX_PAYLOAD_BYTES,
     methodResponses: scenario.methodResponses ?? {},
     webSocketPassthroughPrefixes: scenario.webSocketPassthroughPrefixes ?? [],
     inFlightRun: scenario.inFlightRun ?? null,
@@ -1623,9 +1672,13 @@ function installControlUiMockGateway(
             version: scenario.serverVersion,
           },
           policy: {
-            maxPayload: 1_048_576,
+            maxPayload: scenario.maxPayload,
             maxBufferedBytes: 1_048_576,
             tickIntervalMs: 30_000,
+            attachments: {
+              maxBytes: scenario.attachmentMaxBytes,
+              maxImageBytes: Math.min(scenario.attachmentMaxBytes, 5 * 1024 * 1024),
+            },
             allowedSessionVisibilities: scenario.allowedSessionVisibilities,
             hasMultipleSessionSharingIdentities: scenario.hasMultipleSessionSharingIdentities,
           },
@@ -2511,14 +2564,11 @@ function createMockGatewayControls(
             continue;
           }
           if (error instanceof Error && error.name === "TimeoutError") {
-            try {
-              await captureControlUiE2eRequestTimeout(page, method, error, diagnosticEvents);
-            } catch (captureError) {
-              console.error("[control-ui-e2e] failed to capture request-timeout diagnostics", {
-                captureError,
-                method,
-              });
-            }
+            await captureControlUiE2eFailureDiagnostics(page, {
+              error,
+              label: method,
+              pageEvents: diagnosticEvents,
+            });
           }
           throw error;
         }
@@ -2528,18 +2578,53 @@ function createMockGatewayControls(
   };
 }
 
-async function captureControlUiE2eRequestTimeout(
+/**
+ * Capture a screenshot plus a browser/app-state report for a failed E2E wait.
+ * Wired into mock-Gateway request timeouts automatically; boot/readiness waits
+ * in individual tests should call this from their failure path so CI artifacts
+ * explain stalls instead of surfacing all-null poll snapshots.
+ */
+export async function captureControlUiE2eFailureDiagnostics(
   page: Page,
-  method: string,
-  timeoutError: Error,
-  diagnosticEvents: ControlUiE2eDiagnosticEvent[],
+  options: {
+    error: Error;
+    label: string;
+    pageErrors?: string[];
+    pageEvents?: ControlUiE2eDiagnosticEvent[];
+  },
+): Promise<void> {
+  try {
+    await captureControlUiE2eFailureDiagnosticsUnsafe(page, options);
+  } catch (captureError) {
+    console.error("[control-ui-e2e] failed to capture failure diagnostics", {
+      captureError,
+      label: options.label,
+    });
+  }
+}
+
+async function captureControlUiE2eFailureDiagnosticsUnsafe(
+  page: Page,
+  {
+    error,
+    label,
+    pageErrors = [],
+    // The mock-Gateway installer keeps a per-page diagnostic ring; default to
+    // it so ad-hoc test callers get console/navigation history for free.
+    pageEvents = controlUiE2ePageDiagnostics.get(page) ?? [],
+  }: {
+    error: Error;
+    label: string;
+    pageErrors?: string[];
+    pageEvents?: ControlUiE2eDiagnosticEvent[];
+  },
 ): Promise<void> {
   const configuredDir = process.env.OPENCLAW_UI_E2E_DIAGNOSTIC_DIR?.trim();
   const artifactDir = path.resolve(
     configuredDir || path.join(resolveRepoRoot(), ".artifacts", "control-ui-e2e-timeouts", "local"),
   );
   mkdirSync(artifactDir, { recursive: true });
-  const safeMethod = method.replaceAll(/[^a-zA-Z0-9_.-]+/gu, "-");
+  const safeMethod = label.replaceAll(/[^a-zA-Z0-9_.-]+/gu, "-");
   const captureId = `${new Date().toISOString().replaceAll(/[:.]/gu, "-")}-${String(++controlUiE2eDiagnosticSequence).padStart(2, "0")}-${safeMethod}`;
   const screenshotName = `${captureId}.png`;
   const screenshotPath = path.join(artifactDir, screenshotName);
@@ -2645,6 +2730,18 @@ async function captureControlUiE2eRequestTimeout(
           hasApp: Boolean(app),
           hasShell: Boolean(shell),
           readyState: document.readyState,
+          // A stalled or failed bundle fetch shows as a script src with no
+          // matching completed resource entry (resource timing only records
+          // finished requests).
+          completedResources: performance
+            .getEntriesByType("resource")
+            .filter((entry) => /\.(?:js|css)(?:\?|$)/u.test(entry.name))
+            .map((entry) => ({
+              duration: Math.round(entry.duration),
+              name: entry.name,
+            })),
+          scripts: [...document.scripts].map((script) => script.src || "(inline)"),
+          serviceWorkerController: navigator.serviceWorker?.controller?.state ?? null,
           title: document.title,
           url: window.location.href,
         },
@@ -2659,19 +2756,19 @@ async function captureControlUiE2eRequestTimeout(
         ),
       };
     });
-  } catch (error) {
-    captureErrors.push(`page.evaluate: ${String(error)}`);
+  } catch (evaluateError) {
+    captureErrors.push(`page.evaluate: ${String(evaluateError)}`);
   }
   let screenshotWritten = false;
   try {
     await page.screenshot({ fullPage: true, path: screenshotPath });
     screenshotWritten = true;
-  } catch (error) {
-    captureErrors.push(`page.screenshot: ${String(error)}`);
+  } catch (screenshotError) {
+    captureErrors.push(`page.screenshot: ${String(screenshotError)}`);
   }
   const report = {
-    schemaVersion: 1,
-    awaitedMethod: method,
+    schemaVersion: 2,
+    label,
     browserState,
     captureErrors,
     capturedAt: new Date().toISOString(),
@@ -2682,22 +2779,23 @@ async function captureControlUiE2eRequestTimeout(
       shardIndex: process.env.SHARD_INDEX ?? null,
       vitestShardCount: process.env.VITEST_SHARD_COUNT ?? null,
     },
-    pageEvents: [...diagnosticEvents],
+    pageEvents: [...pageEvents],
+    pageErrors: [...pageErrors],
     page: {
       closed: page.isClosed(),
       url: page.url(),
     },
     screenshot: screenshotWritten ? screenshotName : null,
-    timeout: {
-      message: timeoutError.message,
-      name: timeoutError.name,
-      stack: timeoutError.stack ?? null,
+    failure: {
+      message: error.message,
+      name: error.name,
+      stack: error.stack ?? null,
     },
   };
   writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
-  console.error(`[control-ui-e2e] request timeout diagnostics: ${reportPath}`);
+  console.error(`[control-ui-e2e] failure diagnostics: ${reportPath}`);
   if (screenshotWritten) {
-    console.error(`[control-ui-e2e] request timeout screenshot: ${screenshotPath}`);
+    console.error(`[control-ui-e2e] failure screenshot: ${screenshotPath}`);
   }
 }
 

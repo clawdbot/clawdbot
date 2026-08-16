@@ -521,6 +521,7 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
           runtimeSettings: contextParams.runtimeSettings,
           config: attempt.config,
           agentId: input.sessionAgentId,
+          contextEngineAgentId: attempt.contextEngineAgentId,
         }),
       warn: (message) => log.warn(message),
     });

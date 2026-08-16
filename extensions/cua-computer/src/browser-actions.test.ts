@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { driver, execution } from "./commands.test-helpers.js";
 import {
@@ -9,6 +11,7 @@ import type { CuaToolResult } from "./driver-client.js";
 describe("cua-computer browser actions", () => {
   it("maps every browser action to the pinned driver tool contract", async () => {
     const { session, callTool } = driver();
+    let downloadedFile = "";
     callTool.mockImplementation(async (name, args) => {
       switch (name) {
         case "list_windows":
@@ -29,6 +32,8 @@ describe("cua-computer browser actions", () => {
         case "browser_set_input_files":
           return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.browserFiles);
         case "browser_download":
+          downloadedFile = path.join(String(args.destination_root), "download.txt");
+          await fs.writeFile(downloadedFile, "download");
           return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.browserDownload);
         case "browser_click":
         case "browser_type":
@@ -119,6 +124,21 @@ describe("cua-computer browser actions", () => {
       ),
     ) as { details: { dialogRef: string } };
     expect(dialog.details.dialogRef).toMatch(/^cua:v2:dialog:/);
+    const downloadJson = await computer.act(
+      JSON.stringify({
+        action: "browser_download",
+        browserRef,
+        pageRef,
+        observationId,
+        elementRef: firstElement,
+      }),
+    );
+    expect(downloadJson).not.toContain(path.dirname(downloadedFile));
+    const download = JSON.parse(downloadJson) as {
+      details: { fileResourceHandles: string[]; resourceHandle: string };
+    };
+    expect(download.details.resourceHandle).toMatch(/^openclaw:computer-resource:v1:/u);
+    expect(download.details.fileResourceHandles[0]).toMatch(/^openclaw:computer-resource:v1:/u);
     await computer.act(
       JSON.stringify({
         action: "browser_set_input_files",
@@ -126,17 +146,7 @@ describe("cua-computer browser actions", () => {
         pageRef,
         observationId,
         elementRef: secondElement,
-        files: ["/tmp/input.txt"],
-      }),
-    );
-    await computer.act(
-      JSON.stringify({
-        action: "browser_download",
-        browserRef,
-        pageRef,
-        observationId,
-        elementRef: firstElement,
-        destinationRoot: "/tmp/downloads",
+        resourceHandles: download.details.fileResourceHandles,
       }),
     );
     await computer.act(
@@ -214,22 +224,22 @@ describe("cua-computer browser actions", () => {
         undefined,
       ],
       [
-        "browser_set_input_files",
-        {
-          target_id: "native-browser-target-1",
-          tab_id: "native-page-1",
-          ref: "p7:1",
-          files: ["/tmp/input.txt"],
-        },
-        undefined,
-      ],
-      [
         "browser_download",
         {
           target_id: "native-browser-target-1",
           tab_id: "native-page-1",
           ref: "p7:0",
-          destination_root: "/tmp/downloads",
+          destination_root: path.dirname(downloadedFile),
+        },
+        undefined,
+      ],
+      [
+        "browser_set_input_files",
+        {
+          target_id: "native-browser-target-1",
+          tab_id: "native-page-1",
+          ref: "p7:1",
+          files: [downloadedFile],
         },
         undefined,
       ],
@@ -255,6 +265,9 @@ describe("cua-computer browser actions", () => {
         undefined,
       ],
     ]);
+
+    await computer.close("cancel");
+    await expect(fs.access(downloadedFile)).rejects.toThrow();
   });
 
   it("invalidates browser capabilities across navigation, generation, and execution", async () => {
@@ -299,6 +312,19 @@ describe("cua-computer browser actions", () => {
       observationId: observed.observation.observationId,
       elementRef: observed.details.elements[0]!.elementRef,
     };
+
+    const callsBeforeForgedRefs = first.callTool.mock.calls.length;
+    for (const forged of [
+      { ...staleAction, browserRef: "/tmp/native-browser-target" },
+      { ...staleAction, pageRef: "../native-page" },
+      { ...staleAction, observationId: "/tmp/native-observation" },
+      { ...staleAction, elementRef: "p7:0" },
+    ]) {
+      await expect(computer.act(JSON.stringify(forged))).rejects.toThrow(
+        "COMPUTER_STALE_OBSERVATION",
+      );
+    }
+    expect(first.callTool).toHaveBeenCalledTimes(callsBeforeForgedRefs);
 
     await computer.act(
       JSON.stringify({ action: "browser_navigate", browserRef, pageRef, url: "about:blank" }),

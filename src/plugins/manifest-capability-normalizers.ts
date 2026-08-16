@@ -346,7 +346,6 @@ const MANIFEST_CONTRACT_KEYS = [
   "trustedToolPolicies",
   "externalAuthProviders",
   "embeddingProviders",
-  "memoryEmbeddingProviders",
   "speechProviders",
   "realtimeTranscriptionProviders",
   "realtimeVoiceProviders",

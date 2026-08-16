@@ -8,11 +8,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { resolveModelAgentRuntimeMetadata } from "../agent-runtime-metadata.js";
 import { listAgentEntries, listAgentIds } from "../agent-scope-config.js";
-import {
-  resolveAgentConfig,
-  resolveAgentEffectiveModelPrimary,
-  resolveSessionAgentIds,
-} from "../agent-scope.js";
+import { resolveAgentConfig, resolveSessionAgentIds } from "../agent-scope.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
 import { resolveSubagentAllowedTargetIds } from "../subagents/spawn/subagent-target-policy.js";
 import type { AnyAgentTool } from "./common.js";
@@ -132,8 +128,10 @@ export function createAgentsListTool(opts?: {
         .toSorted((a, b) => a.localeCompare(b));
       const ordered = all.includes(requesterAgentId) ? [requesterAgentId, ...rest] : rest;
       const agents: AgentListEntry[] = ordered.map((id) => {
-        const model = resolveAgentEffectiveModelPrimary(cfg, id);
         const resolvedModel = resolveDefaultModelForAgent({ cfg, agentId: id });
+        // Publish the resolved identity (aliases are routing-only) so the model
+        // field matches the agentRuntime derived from the same resolvedModel.
+        const model = `${resolvedModel.provider}/${resolvedModel.model}`;
         const agentRuntime = resolveModelAgentRuntimeMetadata({
           cfg,
           agentId: id,

@@ -598,14 +598,14 @@ private fun ClawHubSkillSearchPanel(
   }
   if (state.results.isNotEmpty()) {
     ClawListPanel(items = state.results) { skill ->
-      val installed =
-        skill.version?.let { version -> isClawHubSkillInstalled(installedSkills, skill.reference, version) }
-          ?: isClawHubSkillInstalled(installedSkills, skill.reference)
+      val installed = isClawHubSkillInstalled(installedSkills, skill)
       val subtitleParts =
         listOfNotNull(
           skill.summary,
           skill.reference,
           skill.version?.let { nativeString("Version \$it", it) },
+          // An install-only row never opens a review dialog, so the warning has to show here.
+          nativeString("Not scanned by ClawHub").takeIf { skill.isUnscannedSource },
         )
       ClawDetailRow(
         title = skill.displayName,
@@ -614,16 +614,27 @@ private fun ClawHubSkillSearchPanel(
         trailing = {
           val reviewing = state.reviewingSlug == skill.reference
           val installing = isClawHubSkillOperationActive(state.installingSlugs, skill.reference)
+          val canActOnResult =
+            isConnected &&
+              methodsAvailable &&
+              !installed &&
+              !reviewing &&
+              !installing &&
+              (skill.canReadDetails || canManageSkills)
           ClawSecondaryButton(
             text =
               when {
                 installed -> nativeString("Installed")
                 installing -> nativeString("Installing")
                 reviewing -> nativeString("Loading")
-                else -> nativeString("Review")
+                // The Gateway cannot answer detail for install-only sources, so no Review offer.
+                skill.canReadDetails -> nativeString("Review")
+                else -> nativeString("Install")
               },
             onClick = { onReviewInstall(skill) },
-            enabled = isConnected && methodsAvailable && !installed && !reviewing && !installing,
+            // Reviewing only needs read access, but an install-only row installs on the first tap,
+            // so it stays disabled without admin instead of erroring after the tap.
+            enabled = canActOnResult,
           )
         },
       )

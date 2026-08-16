@@ -681,8 +681,11 @@ function readCanonicalWorkspaceStateSnapshot(
   return snapshot;
 }
 
-export async function isWorkspaceSetupCompleted(dir: string): Promise<boolean> {
-  const state = readCanonicalWorkspaceStateSnapshot(dir).setup;
+export async function isWorkspaceSetupCompleted(
+  dir: string,
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<boolean> {
+  const state = readCanonicalWorkspaceStateSnapshot(dir, options).setup;
   return typeof state.setupCompletedAt === "string" && state.setupCompletedAt.trim().length > 0;
 }
 
