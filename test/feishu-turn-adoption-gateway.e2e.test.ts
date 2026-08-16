@@ -281,6 +281,48 @@ async function postFeishuMessage(
   });
 }
 
+// Drive comment notices (drive.notice.comment_add_v1) ride the same signed
+// webhook transport and durable drain as messages; the handler receives the
+// inner event object (parseFeishuDriveCommentNoticeEventPayload). notice_meta
+// identifies the document lane (comment-doc:<file_type>:<file_token>), which
+// the durable ingress, the plugin's sequential queue, and the core session
+// key all share.
+function buildFeishuCommentEvent(params: {
+  eventId: string;
+  commentId: string;
+}): Record<string, unknown> {
+  return {
+    schema: "2.0",
+    header: { event_type: "drive.notice.comment_add_v1", event_id: params.eventId },
+    event: {
+      type: "drive.notice.comment_add_v1",
+      event_id: params.eventId,
+      comment_id: params.commentId,
+      is_mentioned: true,
+      notice_meta: {
+        file_token: "docx_harness_token",
+        file_type: "docx",
+        from_user_id: { open_id: FEISHU_SENDER_OPEN_ID },
+        to_user_id: { open_id: "ou_harness_bot" },
+        notice_type: "add_comment",
+      },
+      timestamp: "1711111111000",
+    },
+  };
+}
+
+async function postFeishuComment(
+  webhookUrl: string,
+  params: { eventId: string; commentId: string },
+): Promise<Response> {
+  const rawBody = JSON.stringify(buildFeishuCommentEvent(params));
+  return await fetch(webhookUrl, {
+    method: "POST",
+    headers: signFeishuPayload(rawBody),
+    body: rawBody,
+  });
+}
+
 async function waitForWebhookListening(
   fixture: GatewayFixture,
   port: number,
@@ -325,6 +367,7 @@ function createConfig(params: {
   modelServer: MockModelServer;
   feishuWebhookPort: number;
   queueMode: QueueMode;
+  feishuApiDomain?: string;
 }): OpenClawConfig {
   const provider = buildMockOpenAiResponsesProvider(
     `${params.modelServer.baseUrl}/v1`,
@@ -382,6 +425,7 @@ function createConfig(params: {
             webhookPath: FEISHU_WEBHOOK_PATH,
             verificationToken: FEISHU_VERIFY_TOKEN,
             encryptKey: FEISHU_ENCRYPT_KEY,
+            ...(params.feishuApiDomain ? { domain: params.feishuApiDomain } : {}),
           },
         },
       },
@@ -438,7 +482,11 @@ async function connectDiagnosticsClient(instance: OpenClawTestInstance): Promise
   return client;
 }
 
-async function createGatewayFixture(name: string, queueMode: QueueMode): Promise<GatewayFixture> {
+async function createGatewayFixture(
+  name: string,
+  queueMode: QueueMode,
+  feishuApiDomain?: string,
+): Promise<GatewayFixture> {
   const fixtureDir = await mkdtemp(path.join(tmpdir(), `openclaw-${name}-`));
   cleanupDirs.push(fixtureDir);
   const modelServer = await startMockModelServer();
@@ -447,7 +495,13 @@ async function createGatewayFixture(name: string, queueMode: QueueMode): Promise
   const instance = await createOpenClawTestInstance({
     name,
     gatewayToken: GATEWAY_TOKEN,
-    config: createConfig({ fixtureDir, modelServer, feishuWebhookPort, queueMode }),
+    config: createConfig({
+      fixtureDir,
+      modelServer,
+      feishuWebhookPort,
+      queueMode,
+      feishuApiDomain,
+    }),
     env: {
       OPENCLAW_LOG_LEVEL: "debug",
       OPENCLAW_SKIP_CHANNELS: undefined,
@@ -622,6 +676,118 @@ describe("Feishu adoption gate at the gateway boundary (#54409)", () => {
 
       // The run finishes and the session returns to idle with an empty queue;
       // message 2 never starts its own concurrent run (no third model request).
+      await vi.waitFor(async () => {
+        const idleEvents = await stabilityEvents(fixture, "session.state");
+        expect(
+          idleEvents.some(
+            (event) =>
+              event.type === "session.state" && event.outcome === "idle" && event.queueDepth === 0,
+          ),
+        ).toBe(true);
+      }, WAIT_OPTS);
+      expect(fixture.modelServer.requests).toHaveLength(2);
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
+
+describe("Feishu comment adoption gate at the gateway boundary (#54409)", () => {
+  it.each(["steer", "collect", "followup"] as QueueMode[])(
+    "releases the same-document comment lane at adoption so a second notice reaches the %s queue policy while run 1 is active",
+    async (queueMode) => {
+      // Drive comment context resolution calls the Feishu Open API for
+      // document meta and comment thread text. Point the account domain at a
+      // dead local port so those calls fail instantly (requestFeishuOpenApi
+      // degrades to an empty context and never throws) instead of waiting on
+      // real network timeouts; the changed path under test is the document
+      // queue lane, not the drive context fetch.
+      const fixture = await createGatewayFixture(
+        `feishu-comment-gate-${queueMode}`,
+        queueMode,
+        `https://127.0.0.1:${await getFreePort()}`,
+      );
+
+      // The feishu channel webhook server binds during channel startup, after
+      // the gateway reports ready; wait for the listener before injecting.
+      await waitForWebhookListening(fixture, fixture.webhookPort, 30_000);
+
+      // Comment 1 arrives via the real webhook transport; the durable ack
+      // proves signed admission completed end-to-end.
+      const ackOne = await postFeishuComment(fixture.webhookUrl, {
+        eventId: "evt_comment_1",
+        commentId: "comment_harness_1",
+      });
+      expect(ackOne.status).toBe(200);
+      expect(ackOne.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
+
+      // Run 1 reaches the mock provider and is held there (turn active).
+      try {
+        await vi.waitFor(() => expect(fixture.modelServer.requests).toHaveLength(1), WAIT_OPTS);
+      } catch (error) {
+        throw new Error(
+          `first feishu comment notice did not reach the mock provider\n` +
+            redactedFixtureLogs(fixture.instance),
+          { cause: error },
+        );
+      }
+
+      // CHANGED-PATH PROOF: the second same-document notice reaches core's
+      // queue policy while run 1 is still active. Baseline the stability seq
+      // BEFORE the POST, exactly as in the message harness — the document
+      // lane is already free (adoption), so comment 2's dispatch can complete
+      // during the POST itself. Pre-fix, the notice is not even dispatched
+      // until run 1 completes and no `message.queued` event can exist during
+      // the hold.
+      const baseline = await fixture.diagnosticsClient.request<{ lastSeq?: number }>(
+        "diagnostics.stability",
+        { type: "message.queued", limit: 1 },
+      );
+      const baselineSeq = baseline.lastSeq ?? 0;
+
+      // Comment 2 on the same document arrives while run 1 is still held.
+      const ackTwo = await postFeishuComment(fixture.webhookUrl, {
+        eventId: "evt_comment_2",
+        commentId: "comment_harness_2",
+      });
+      expect(ackTwo.status).toBe(200);
+      expect(ackTwo.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
+      const queuedSource = queueMode === "steer" ? "followup-queue-steer" : "dispatch";
+      try {
+        await vi.waitFor(async () => {
+          const queuedEvents = (
+            await stabilityEvents(fixture, "message.queued", baselineSeq)
+          ).filter((event) => event.type === "message.queued" && event.source === queuedSource);
+          expect(queuedEvents).not.toHaveLength(0);
+          expect(fixture.modelServer.requests).toHaveLength(1);
+        }, WAIT_OPTS);
+      } catch (error) {
+        throw new Error(
+          `second comment notice was not queued while run 1 stayed active\n` +
+            redactedFixtureLogs(fixture.instance),
+          { cause: error },
+        );
+      }
+
+      // Release run 1: the queued comment is handled by the mode's policy
+      // without starting a concurrent run — the follow-up model request must
+      // carry comment 2's event identity (the drive context fetch is degraded
+      // in this harness, so the prompt itself only carries the boilerplate
+      // surface; the event identity is the durable discriminator).
+      fixture.modelServer.releaseFirst();
+      try {
+        await vi.waitFor(() => expect(fixture.modelServer.requests).toHaveLength(2), WAIT_OPTS);
+      } catch (error) {
+        throw new Error(
+          `no follow-up model request reached the mock provider\n` +
+            redactedFixtureLogs(fixture.instance),
+          { cause: error },
+        );
+      }
+      const handled = userInputs(fixture.modelServer.requests[1]).join("\n");
+      expect(handled).toContain("evt_comment_2");
+
+      // The run finishes and the session returns to idle with an empty queue;
+      // comment 2 never starts its own concurrent run (no third model request).
       await vi.waitFor(async () => {
         const idleEvents = await stabilityEvents(fixture, "session.state");
         expect(
