@@ -371,7 +371,7 @@ extensions/discord/src/internal/gateway-dispatch.ts	7
 extensions/discord/src/internal/gateway-payload.ts	1
 extensions/discord/src/internal/gateway-voice-state-cache.ts	4
 extensions/discord/src/internal/gateway.ts	9
-extensions/discord/src/internal/interaction-dispatch.ts	14
+extensions/discord/src/internal/interaction-dispatch.ts	12
 extensions/discord/src/internal/interaction-options.ts	2
 extensions/discord/src/internal/interaction-response.ts	2
 extensions/discord/src/internal/interactions.ts	8
@@ -2898,7 +2898,7 @@ src/flows/doctor-core-checks.ts	4
 src/flows/doctor-health-contributions-final.ts	1
 src/flows/doctor-health-contributions.ts	2
 src/flows/doctor-removed-workspaces-state-check.ts	2
-src/flows/health-check-adapter.ts	2
+src/flows/health-check-adapter.ts	1
 src/flows/search-setup.ts	6
 src/gateway/agent-runtime-identity-token.ts	6
 src/gateway/agent-turn/agent-dedupe.ts	3
