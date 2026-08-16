@@ -198,13 +198,20 @@ compiled_peekaboo_commit() {
     echo "ERROR: Resolved Peekaboo checkout not found at $checkout" >&2
     return 1
   }
-  local commit
-  commit="$(git -C "$checkout" rev-parse HEAD)"
+  local commit checkout_status
+  if ! commit="$(git -C "$checkout" rev-parse HEAD)"; then
+    echo "ERROR: Could not inspect compiled Peekaboo checkout revision" >&2
+    return 1
+  fi
   [[ "$commit" == "$expected" ]] || {
     echo "ERROR: Compiled Peekaboo checkout '$commit' does not match locked source '$expected'" >&2
     return 1
   }
-  [[ -z "$(git -C "$checkout" status --porcelain --untracked-files=all)" ]] || {
+  if ! checkout_status="$(git -C "$checkout" status --porcelain --untracked-files=all)"; then
+    echo "ERROR: Could not inspect compiled Peekaboo checkout cleanliness" >&2
+    return 1
+  fi
+  [[ -z "$checkout_status" ]] || {
     echo "ERROR: Compiled Peekaboo checkout contains uncommitted changes" >&2
     return 1
   }

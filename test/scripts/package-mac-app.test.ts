@@ -272,7 +272,12 @@ function getCompiledPeekabooHelperBlock(): string {
   return script.slice(start, end);
 }
 
-function runCompiledPeekabooHarness(options: { head: string; expected: string; status?: string }) {
+function runCompiledPeekabooHarness(options: {
+  head: string;
+  expected: string;
+  status?: string;
+  statusExit?: number;
+}) {
   const root = tempDirs.make("openclaw-compiled-peekaboo-");
   const binDir = path.join(root, "bin");
   const buildPath = path.join(root, "build");
@@ -286,7 +291,9 @@ function runCompiledPeekabooHarness(options: { head: string; expected: string; s
       "set -euo pipefail",
       'case "$*" in',
       "  *'rev-parse HEAD'*) printf '%s\\n' \"$MOCK_HEAD\" ;;",
-      "  *'status --porcelain'*) printf '%s' \"$MOCK_STATUS\" ;;",
+      "  *'status --porcelain'*)",
+      '    [[ "$MOCK_STATUS_EXIT" == "0" ]] || exit "$MOCK_STATUS_EXIT"',
+      "    printf '%s' \"$MOCK_STATUS\" ;;",
       "  *) exit 2 ;;",
       "esac",
       "",
@@ -299,6 +306,7 @@ function runCompiledPeekabooHarness(options: { head: string; expected: string; s
     PATH=${JSON.stringify(`${binDir}:/usr/bin:/bin`)}
     export MOCK_HEAD=${JSON.stringify(options.head)}
     export MOCK_STATUS=${JSON.stringify(options.status ?? "")}
+    export MOCK_STATUS_EXIT=${JSON.stringify(String(options.statusExit ?? 0))}
     ${getCompiledPeekabooHelperBlock()}
     compiled_peekaboo_commit ${JSON.stringify(buildPath)} ${JSON.stringify(options.expected)}
   `);
@@ -1426,6 +1434,16 @@ describe("package-mac-app plist stamping", () => {
     });
     expect(dirty.status).toBe(1);
     expect(dirty.stderr).toContain("contains uncommitted changes");
+
+    const inspectionFailure = runCompiledPeekabooHarness({
+      head: revision,
+      expected: revision,
+      statusExit: 2,
+    });
+    expect(inspectionFailure.status).toBe(1);
+    expect(inspectionFailure.stderr).toContain(
+      "Could not inspect compiled Peekaboo checkout cleanliness",
+    );
   });
 
   it("restores and rejects a Swift package resolution that changes the lockfile", () => {
