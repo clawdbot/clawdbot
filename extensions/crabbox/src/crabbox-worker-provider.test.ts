@@ -1426,12 +1426,15 @@ describe("Crabbox worker provider", () => {
   });
 
   it.each([
-    { idleTimeout: "12s", intervalMs: 5_000 },
-    { idleTimeout: "30s", intervalMs: 10_000 },
-    { idleTimeout: "6m", intervalMs: 60_000 },
+    { idleTimeout: "1s", idleTimeoutMs: 1_000, intervalMs: 500 },
+    { idleTimeout: "2s", idleTimeoutMs: 2_000, intervalMs: 1_000 },
+    { idleTimeout: "5s", idleTimeoutMs: 5_000, intervalMs: 2_500 },
+    { idleTimeout: "12s", idleTimeoutMs: 12_000, intervalMs: 5_000 },
+    { idleTimeout: "30s", idleTimeoutMs: 30_000, intervalMs: 10_000 },
+    { idleTimeout: "6m", idleTimeoutMs: 360_000, intervalMs: 60_000 },
   ])(
     "heartbeats an active lease every $intervalMs ms for idleTimeout=$idleTimeout",
-    async ({ idleTimeout, intervalMs }) => {
+    async ({ idleTimeout, idleTimeoutMs, intervalMs }) => {
       vi.useFakeTimers();
       const calls: string[][] = [];
       const profile = { ...PROFILE, idleTimeout };
@@ -1464,6 +1467,7 @@ describe("Crabbox worker provider", () => {
 
         await vi.advanceTimersByTimeAsync(intervalMs - 1);
         expect(heartbeatCalls()).toHaveLength(1);
+        expect(intervalMs).toBeLessThan(idleTimeoutMs);
         await vi.advanceTimersByTimeAsync(1);
         expect(heartbeatCalls()).toHaveLength(2);
       } finally {

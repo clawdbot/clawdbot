@@ -86,8 +86,11 @@ function heartbeatIntervalMs(idleTimeout: string): number {
   if (idleNanoseconds === undefined) {
     throw new Error("Crabbox heartbeat requires a positive idle timeout");
   }
-  const intervalNanoseconds = idleNanoseconds / 3n;
-  return Math.max(5_000, Math.min(60_000, Number(intervalNanoseconds) / 1_000_000));
+  const idleTimeoutMs = Number(idleNanoseconds) / 1_000_000;
+  const referenceIntervalMs = Math.max(5_000, Math.min(60_000, idleTimeoutMs / 3));
+  // Crabbox's floor can exceed short accepted timeouts. Keep renewal ahead of
+  // coordinator idle expiry without changing the profile contract.
+  return Math.min(referenceIntervalMs, Math.max(1, Math.floor(idleTimeoutMs / 2)));
 }
 
 export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
