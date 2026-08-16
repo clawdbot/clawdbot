@@ -135,6 +135,33 @@ describe("Control Model conversations", () => {
     model.dispose();
   });
 
+  it("counts repeated shared metadata against the retention bound", async () => {
+    const harness = createHarness({ status: "connected", epoch: 1 });
+    const shared = { model: "x".repeat(100) };
+    harness.queue("chat.startup", {
+      messages: [],
+      defaults: shared,
+      metadata: { shared },
+      completeSnapshot: true,
+    });
+    const model = createControlModel({
+      gateway: harness.gateway,
+      autoRefreshSessionCatalog: false,
+      autoLoadConversationHistory: false,
+      bounds: { maxConversationStartupMetadataBytes: 160 },
+    });
+    model.start();
+    const conversation = model.conversation("agent:main:one");
+
+    await conversation.refreshHistory(undefined, "chat.startup");
+
+    expect(
+      new TextEncoder().encode(JSON.stringify(conversation.getSnapshot().metadata)).byteLength,
+    ).toBeLessThanOrEqual(160);
+    expect(conversation.getSnapshot().partialReasons).toContain("startup-metadata-truncated");
+    model.dispose();
+  });
+
   it("refreshes returned metadata with ordinary history snapshots", async () => {
     const harness = createHarness({ status: "connected", epoch: 1 });
     harness.queue("chat.startup", {

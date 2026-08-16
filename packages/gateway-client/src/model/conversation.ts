@@ -268,16 +268,20 @@ function stableStringify(value: unknown, seen = new WeakSet<object>()): string {
     return "[cycle]";
   }
   seen.add(value);
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => stableStringify(item, seen)).join(",")}]`;
-  }
-  return `{${Object.keys(value as Record<string, unknown>)
-    .toSorted()
-    .map(
-      (key) =>
-        `${JSON.stringify(key)}:${stableStringify((value as Record<string, unknown>)[key], seen)}`,
-    )
-    .join(",")}}`;
+  const serialized = Array.isArray(value)
+    ? `[${value.map((item) => stableStringify(item, seen)).join(",")}]`
+    : `{${Object.keys(value as Record<string, unknown>)
+        .toSorted()
+        .map(
+          (key) =>
+            `${JSON.stringify(key)}:${stableStringify(
+              (value as Record<string, unknown>)[key],
+              seen,
+            )}`,
+        )
+        .join(",")}}`;
+  seen.delete(value);
+  return serialized;
 }
 function hash(value: string): string {
   let result = 2166136261;
