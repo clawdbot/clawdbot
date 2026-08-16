@@ -300,7 +300,7 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
           setTimeout(() => {
             fs.writeSync(1, "graceful stdout\\n");
             fs.writeSync(2, "graceful stderr\\n");
-            process.exit(0);
+            process.exit(23);
           }, 1500);
         });
         child.once("message", () => {
@@ -336,7 +336,7 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
 
     expect(exit).toMatchObject({
       reason: "manual-cancel",
-      exitCode: 0,
+      exitCode: 23,
       exitSignal: null,
     });
     expect(exit.stdout).toContain("graceful stdout\n");
