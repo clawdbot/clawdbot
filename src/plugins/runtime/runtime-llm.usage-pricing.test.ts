@@ -232,7 +232,9 @@ describe("runtime.llm.complete pricing provenance", () => {
   it("omits costUsd for a configured model whose cost block is omitted", async () => {
     // The model schema permits an omitted cost block; materialization fills
     // all-zero defaults. Those defaults are unknown pricing, not a confirmed
-    // $0, so the runtime completion path must omit costUsd.
+    // $0, so the runtime completion path must omit costUsd. The cast keeps
+    // the pre-materialization shape (ModelDefinitionConfig types cost as
+    // required, while the zod schema and real configs allow omitting it).
     const cfgWithOmittedCost = applyModelDefaults({
       ...cfg,
       models: {
@@ -252,7 +254,7 @@ describe("runtime.llm.complete pricing provenance", () => {
           },
         },
       },
-    } satisfies OpenClawConfig);
+    } as unknown as OpenClawConfig);
     hoisted.prepareSimpleCompletionModelForAgent.mockResolvedValue(
       createPreparedModel("unpriced-config-model"),
     );
