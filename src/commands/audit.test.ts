@@ -321,7 +321,7 @@ describe("audit command gateway compatibility", () => {
 
     await runCommandWithRuntime(runtime, () => auditListCommand({ limit: "10" }, runtime));
 
-    expect(runtime.error).toHaveBeenCalledWith("Error: invalid audit activity params");
+    expect(runtime.error).toHaveBeenCalledWith("invalid audit activity params");
     expect(String(vi.mocked(runtime.error).mock.calls[0]?.[0])).not.toContain(
       "GatewayClientRequestError",
     );
@@ -340,7 +340,7 @@ describe("audit command gateway compatibility", () => {
     await runCommandWithRuntime(runtime, () => auditListCommand({ cursor: "abc" }, runtime));
 
     expect(runtime.error).toHaveBeenCalledWith(
-      "Error: --cursor must be a continuation token returned by a previous audit result.",
+      "--cursor must be a continuation token returned by a previous audit result.",
     );
     expect(String(vi.mocked(runtime.error).mock.calls[0]?.[0])).not.toContain(
       "audit.activity.list",
