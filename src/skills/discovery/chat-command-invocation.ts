@@ -79,8 +79,7 @@ function isShellVariableReference(name: string): boolean {
   return !/[a-z]/u.test(name);
 }
 
-/** Returns true when text may contain an explicit `$skill-name` reference. */
-export function hasSkillReferenceCandidate(text: string): boolean {
+function* skillReferenceNames(text: string): IterableIterator<string> {
   for (const match of skillReferenceMatches(text)) {
     const name = match[1]?.replace(/:+$/gu, "");
     const index = match.index;
@@ -90,10 +89,14 @@ export function hasSkillReferenceCandidate(text: string): boolean {
       !isEscapedReference(text, index) &&
       !isShellVariableReference(name)
     ) {
-      return true;
+      yield name;
     }
   }
-  return false;
+}
+
+/** Returns true when text may contain an explicit `$skill-name` reference. */
+export function hasSkillReferenceCandidate(text: string): boolean {
+  return !skillReferenceNames(text).next().done;
 }
 
 /** Resolves explicit `$skill-name` references against the current eligible skill commands. */
@@ -103,17 +106,7 @@ function resolveSkillReferenceInvocations(params: {
 }): SkillCommandSpec[] {
   const resolved: SkillCommandSpec[] = [];
   const seen = new Set<string>();
-  for (const match of skillReferenceMatches(params.text)) {
-    const name = match[1]?.replace(/:+$/gu, "");
-    const index = match.index;
-    if (
-      !name ||
-      index === undefined ||
-      isEscapedReference(params.text, index) ||
-      isShellVariableReference(name)
-    ) {
-      continue;
-    }
+  for (const name of skillReferenceNames(params.text)) {
     const command = findSkillCommand(params.skillCommands, name);
     if (!command || seen.has(command.name)) {
       continue;
@@ -166,10 +159,6 @@ export function resolveSkillCommandInvocation(params: {
   return { command, args: args || undefined };
 }
 
-function skillCommandIdentity(command: SkillCommandSpec): string {
-  return normalizeSkillCommandLookup(command.skillName);
-}
-
 function resolveExplicitSkillCommands(text: string, skillCommands: SkillCommandSpec[]) {
   if (!text.trimStart().startsWith("/")) {
     return resolveSkillReferenceInvocations({ text, skillCommands });
@@ -181,6 +170,29 @@ function resolveExplicitSkillCommands(text: string, skillCommands: SkillCommandS
   return invocation ? [invocation.command] : [];
 }
 
+function resolveUnavailableExplicitSkillCommand(params: {
+  text: string;
+  skillCommands: SkillCommandSpec[];
+  allSkillCommands: SkillCommandSpec[];
+}): SkillCommandSpec | undefined {
+  if (params.text.trimStart().startsWith("/")) {
+    if (resolveExplicitSkillCommands(params.text, params.skillCommands).length > 0) {
+      return undefined;
+    }
+    return resolveExplicitSkillCommands(params.text, params.allSkillCommands)[0];
+  }
+  for (const name of skillReferenceNames(params.text)) {
+    if (findSkillCommand(params.skillCommands, name)) {
+      continue;
+    }
+    const unavailable = findSkillCommand(params.allSkillCommands, name);
+    if (unavailable) {
+      return unavailable;
+    }
+  }
+  return undefined;
+}
+
 /** Expands model-routed skill references while leaving unknown slash commands untouched. */
 export function expandExplicitSkillReferences(params: {
   text: string;
@@ -189,15 +201,14 @@ export function expandExplicitSkillReferences(params: {
 }): { body: string; error?: string; skills: SkillCommandSpec[] } {
   const available = resolveExplicitSkillCommands(params.text, params.skillCommands);
   const allCommands = params.allSkillCommands ?? params.skillCommands;
-  const allResolved =
+  const unavailable =
     allCommands === params.skillCommands
-      ? available
-      : resolveExplicitSkillCommands(params.text, allCommands);
-
-  const availableIdentities = new Set(available.map(skillCommandIdentity));
-  const unavailable = allResolved.find(
-    (command) => !availableIdentities.has(skillCommandIdentity(command)),
-  );
+      ? undefined
+      : resolveUnavailableExplicitSkillCommand({
+          text: params.text,
+          skillCommands: params.skillCommands,
+          allSkillCommands: allCommands,
+        });
   const error = unavailable
     ? `Skill "${unavailable.skillName}" is not available for this agent. Update the skill allowlist or choose an allowed skill.`
     : available.length > MAX_EXPLICIT_SKILL_REFERENCES

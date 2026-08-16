@@ -322,6 +322,43 @@ describe("expandExplicitSkillReferences", () => {
     ).toEqual({ body: text, skills: [] });
   });
 
+  it.each([
+    {
+      label: "slash command",
+      text: "/foo run it",
+      available: { name: "foo", skillName: "foo?", description: "Allowed skill" },
+      hidden: { name: "foo", skillName: "foo!", description: "Hidden skill" },
+      allAvailableName: "foo_2",
+    },
+    {
+      label: "dollar reference",
+      text: "Run it with $foo_bar.",
+      available: { name: "foo_bar", skillName: "foo-bar", description: "Allowed skill" },
+      hidden: { name: "foo_bar", skillName: "foo:bar", description: "Hidden skill" },
+      allAvailableName: "foo_bar_2",
+    },
+  ])(
+    "prefers an available $label when hidden skill names collide",
+    ({ text, available, hidden, allAvailableName }) => {
+      expect(
+        expandExplicitSkillReferences({
+          text,
+          skillCommands: [available],
+          allSkillCommands: [hidden, { ...available, name: allAvailableName }],
+        }),
+      ).toEqual({
+        body: [
+          "Use the following explicitly referenced skills for this request. Read each skill's SKILL.md before acting:",
+          `- ${available.skillName}`,
+          "",
+          "User request:",
+          text,
+        ].join("\n"),
+        skills: [available],
+      });
+    },
+  );
+
   it("rejects a rendered skill reference that exceeds its prompt budget", () => {
     const text = "/demo_skill";
     expect(
