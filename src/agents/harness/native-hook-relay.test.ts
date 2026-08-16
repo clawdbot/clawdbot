@@ -32,8 +32,8 @@ import {
   writeNativeHookRelayBridgeRecord,
   type NativeHookRelayBridgeRecord,
 } from "./native-hook-relay-store.js";
-import { registerRetainedNativeHookRelay } from "./native-hook-relay.js";
 import {
+  registerRetainedNativeHookRelay,
   testing,
   buildNativeHookRelayCommand,
   hasNativeHookRelayInvocation,

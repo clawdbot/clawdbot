@@ -706,7 +706,6 @@ src/infra/backup-create.ts
 src/infra/clawhub-install-trust.ts
 src/infra/command-explainer/extract.ts
 src/infra/device-pairing.test.ts
-src/infra/device-pairing.ts
 src/infra/diagnostic-events.ts
 src/infra/exec-approval-forwarder.ts
 src/infra/exec-approvals-allow-always.test.ts

@@ -10,12 +10,6 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { parseCliEnumFilter } from "../cli/enum-filter.js";
 import { formatLookupMiss } from "../cli/error-format.js";
 import { getRuntimeConfig } from "../config/config.js";
-import {
-  resolveAllAgentSessionStoreTargetsSync,
-  runSessionRegistryMaintenanceForStore,
-} from "../config/sessions.js";
-import { normalizeCronLaneSegment } from "../cron/service/task-runs.js";
-import { loadCronJobsStoreSync, resolveCronJobsStorePath } from "../cron/store.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { getTaskById, updateTaskNotifyPolicyById } from "../tasks/runtime-internal.js";
 import { cancelDetachedTaskRunById } from "../tasks/task-executor.js";
@@ -61,14 +55,13 @@ import {
   buildTaskSystemAuditFindings,
   type TaskSystemAuditFinding,
 } from "./tasks-audit-system.js";
+import { runSessionRegistryMaintenance } from "./tasks-session-registry-maintenance.js";
 
 const RUNTIME_PAD = 8;
 const STATUS_PAD = 10;
 const DELIVERY_PAD = 14;
 const ID_PAD = 10;
 const RUN_PAD = 10;
-const SESSION_REGISTRY_RETENTION_MS = 7 * 24 * 60 * 60_000;
-
 const info = theme.info;
 
 function formatTaskLookupMiss(lookup: string): string {
@@ -131,85 +124,6 @@ async function tryCancelGatewayOwnedTaskViaGateway(
 
 function configureTaskMaintenanceFromConfig(): void {
   configureTaskRegistryMaintenance();
-}
-
-type SessionRegistryMaintenanceStoreSummary = {
-  agentId: string;
-  storePath: string;
-  beforeCount: number;
-  afterCount: number;
-  pruned: number;
-  preservedRunning: number;
-};
-
-type SessionRegistryMaintenanceSummary = {
-  retentionMs: number;
-  runningCronJobs: number;
-  pruned: number;
-  stores: SessionRegistryMaintenanceStoreSummary[];
-};
-
-function resolveExplicitCronSessionSegment(sessionKey: string | undefined): string | undefined {
-  const match = /^(?:agent:[^:]+:)?cron:([^:]+)$/u.exec(sessionKey?.trim() ?? "");
-  return match?.[1]?.toLowerCase();
-}
-
-function readRunningCronJobIds(): { ids: Set<string>; count: number } {
-  try {
-    const cronStorePath = resolveCronJobsStorePath();
-    const runningJobs = loadCronJobsStoreSync(cronStorePath).jobs.filter(
-      (job) => typeof job.state?.runningAtMs === "number",
-    );
-    return {
-      // A running job may have been retargeted after its session was created. Keep both historical
-      // shapes; the registry has no producer metadata, so retaining an ambiguous alias is safer
-      // than pruning a live transcript.
-      ids: new Set(
-        runningJobs.flatMap((job) => [
-          job.id.toLowerCase(),
-          normalizeCronLaneSegment(job.id, "job"),
-          ...(job.sessionTarget !== "main" && job.sessionKey
-            ? [resolveExplicitCronSessionSegment(job.sessionKey)].filter(
-                (segment): segment is string => segment !== undefined,
-              )
-            : []),
-        ]),
-      ),
-      count: runningJobs.length,
-    };
-  } catch {
-    return { ids: new Set(), count: 0 };
-  }
-}
-
-async function runSessionRegistryMaintenance(params: {
-  apply: boolean;
-}): Promise<SessionRegistryMaintenanceSummary> {
-  const cfg = getRuntimeConfig();
-  const runningCronJobs = readRunningCronJobIds();
-  const stores: SessionRegistryMaintenanceStoreSummary[] = [];
-  for (const target of resolveAllAgentSessionStoreTargetsSync(cfg)) {
-    const result = await runSessionRegistryMaintenanceForStore({
-      apply: params.apply,
-      retentionMs: SESSION_REGISTRY_RETENTION_MS,
-      runningCronJobIds: runningCronJobs.ids,
-      storePath: target.storePath,
-    });
-    stores.push({
-      agentId: target.agentId,
-      storePath: target.storePath,
-      beforeCount: result.beforeCount,
-      afterCount: result.afterCount,
-      pruned: result.pruned,
-      preservedRunning: result.preservedRunning,
-    });
-  }
-  return {
-    retentionMs: SESSION_REGISTRY_RETENTION_MS,
-    runningCronJobs: runningCronJobs.count,
-    pruned: stores.reduce((total, store) => total + store.pruned, 0),
-    stores,
-  };
 }
 
 function truncate(value: string, maxChars: number) {
@@ -720,7 +634,9 @@ export async function tasksMaintenanceCommand(
   );
   runtime.log(
     info(
-      `Session registry: ${sessionMaintenance.pruned} prune · ${sessionMaintenance.runningCronJobs} running automations`,
+      sessionMaintenance.skippedReason
+        ? `Session registry: sweep skipped (${sessionMaintenance.skippedReason})`
+        : `Session registry: ${sessionMaintenance.pruned} prune · ${sessionMaintenance.runningCronJobs} running automations`,
     ),
   );
   runtime.log(

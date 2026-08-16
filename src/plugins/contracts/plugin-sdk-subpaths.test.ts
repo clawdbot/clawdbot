@@ -36,8 +36,8 @@ import {
   privateLocalOnlyPluginSdkEntrypoints,
   publicPluginSdkSubpaths as pluginSdkSubpaths,
 } from "../../../scripts/lib/plugin-sdk-entries.mts";
-import type { ChannelMessageActionContext } from "../../channels/plugins/types.public.js";
 import type {
+  ChannelMessageActionContext,
   BaseProbeResult,
   BaseTokenResolution,
   ChannelAgentTool,

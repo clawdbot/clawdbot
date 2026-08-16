@@ -122,7 +122,8 @@ export const seedApprovedOperatorReadPairing = async (params: {
   scopes?: string[];
 }): Promise<{ identityPath: string; identity: { deviceId: string } }> => {
   const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
-  const { approveDevicePairing, requestDevicePairing } = await import("../infra/device-pairing.js");
+  const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
+  const { requestDevicePairing } = await import("../infra/device-pairing.js");
   const { identityPath, identity } = await createOperatorIdentityFixture(params.identityPrefix);
   const scopes = params.scopes ?? ["operator.read"];
   const devicePublicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);

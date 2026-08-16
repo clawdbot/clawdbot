@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import {
   resolveAcpSessionCwd,
   resolveAcpThreadSessionDetailLines,
@@ -273,4 +274,3 @@ export async function bindPreparedAcpThread(params: {
 
   return { binding, sessionEntry };
 }
-import fs from "node:fs/promises";

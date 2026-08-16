@@ -29,7 +29,6 @@ import {
   resolveSafeTimeoutDelayMs,
   shouldPauseGatewayReconnect,
 } from "@openclaw/gateway-client/browser";
-export type { EventFrame as GatewayEventFrame } from "@openclaw/gateway-client/browser";
 import type {
   GatewayScopeUpgrade,
   ScopeUpgradeBinding,
@@ -57,6 +56,7 @@ import {
   enrichProtocolMismatchDetails,
   resolveGatewayErrorDetailCode,
 } from "./gateway-connect-errors.ts";
+export type { EventFrame as GatewayEventFrame } from "@openclaw/gateway-client/browser";
 
 export { resolveGatewayErrorDetailCode };
 

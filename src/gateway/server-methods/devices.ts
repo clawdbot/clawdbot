@@ -13,17 +13,21 @@ import {
 import {
   approveDevicePairing,
   formatDevicePairingForbiddenMessage,
+} from "../../infra/device-pairing-approval.js";
+import {
+  type RevokeDeviceTokenDenyReason,
+  type RotateDeviceTokenDenyReason,
+  revokeDeviceToken,
+  rotateDeviceToken,
+  summarizeDeviceTokens,
+} from "../../infra/device-pairing-tokens.js";
+import {
   getPairedDevice,
   getPendingDevicePairing,
   listDevicePairing,
   removePairedDevice,
   type DeviceAuthToken,
-  type RevokeDeviceTokenDenyReason,
-  type RotateDeviceTokenDenyReason,
   rejectDevicePairing,
-  revokeDeviceToken,
-  rotateDeviceToken,
-  summarizeDeviceTokens,
   updatePairedDeviceMetadata,
 } from "../../infra/device-pairing.js";
 import type { DiagnosticSecurityEventInput } from "../../infra/diagnostic-events.js";

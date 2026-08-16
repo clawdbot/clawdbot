@@ -1,7 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
-import type { BoardTab } from "../../lib/board/types.ts";
-import type { BoardWidget } from "../../lib/board/types.ts";
+import type { BoardTab, BoardWidget } from "../../lib/board/types.ts";
 import type { BoardGrantDecision } from "../../lib/board/view-types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { renderBoardPendingCapabilities } from "./board-widget-capabilities.ts";

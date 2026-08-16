@@ -174,7 +174,7 @@ export function registerControlUiDeviceTokenSuite(): void {
   });
 
   test("rejects revoked device token", async () => {
-    const { revokeDeviceToken } = await import("../infra/device-pairing.js");
+    const { revokeDeviceToken } = await import("../infra/device-pairing-tokens.js");
     const { server, ws, port, prevToken } = await startControlUiServerWithClient("secret");
     const { identity, deviceToken, deviceIdentityPath } =
       await ensurePairedDeviceTokenForCurrentIdentity(ws);

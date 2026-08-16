@@ -7,8 +7,9 @@ import {
   extractTraceDirective,
   extractThinkDirective,
   extractVerboseDirective,
+  extractFastDirective,
+  extractStatusDirective,
 } from "./reply/directives.js";
-import { extractFastDirective, extractStatusDirective } from "./reply/directives.js";
 import { extractExecDirective } from "./reply/exec/directive.js";
 import { extractQueueDirective } from "./reply/queue/directive.js";
 import { extractReplyToTag } from "./reply/reply-tags.js";

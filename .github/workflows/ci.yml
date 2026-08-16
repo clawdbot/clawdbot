@@ -639,9 +639,9 @@ jobs:
             runNode && !frozenTarget
               ? [
                   {
-                    check_name: "checks-fast-max-lines-ratchet",
+                    check_name: "checks-fast-baseline-ratchets",
                     runtime: "node",
-                    task: "max-lines-ratchet",
+                    task: "baseline-ratchets",
                   },
                   {
                     check_name: "checks-fast-coercion-helpers",
@@ -1194,7 +1194,7 @@ jobs:
 
             fetch_refs=("+${CHECKOUT_SHA}:refs/remotes/origin/ci-target")
             if [ -n "${CHECKOUT_BASE_SHA:-}" ]; then
-              fetch_refs+=("+${CHECKOUT_BASE_SHA}:refs/remotes/origin/ci-max-lines-base")
+              fetch_refs+=("+${CHECKOUT_BASE_SHA}:refs/remotes/origin/ci-ratchet-base")
             fi
 
             timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
@@ -1737,7 +1737,9 @@ jobs:
     if: needs.preflight.outputs.run_ui_tests == 'true' && needs.preflight.outputs.compatibility_target != 'true'
     # First-attempt same-repo runs use Blacksmith unless the backend breaker is
     # set; manual dispatches, forks, and same-repo PR retries also use GitHub-hosted capacity.
-    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    # This lane owns the same serial Chromium workload as checks-ui-e2e, so it
+    # follows that job's hybrid routing: Blacksmith on attempt 1, hosted on rerun.
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     steps:
       - *linux_node_checkout_step
@@ -1746,8 +1748,8 @@ jobs:
         with:
           node-version: "24.x"
           install-bun: "false"
-          # Hosted paths use the pnpm store cache; first-attempt same-repo
-          # Blacksmith runs restore the preflight-published dependency tree.
+          # The github/hybrid planner profile uses the Actions pnpm-store cache
+          # on either runner backend; all-Blacksmith mode restores preflight's tree.
           dependency-cache: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
           use-actions-cache: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'true' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true') }}
 
@@ -1828,11 +1830,11 @@ jobs:
       max-parallel: 12
       matrix: ${{ fromJson(needs.preflight.outputs.checks_fast_core_matrix) }}
     env:
-      CHECKOUT_BASE_SHA: ${{ matrix.task == 'max-lines-ratchet' && needs.preflight.outputs.diff_base_revision || '' }}
+      CHECKOUT_BASE_SHA: ${{ matrix.task == 'baseline-ratchets' && needs.preflight.outputs.diff_base_revision || '' }}
     steps:
       - *linux_node_checkout_step
-      - name: Prepare release-gate max-lines merge tree
-        if: matrix.task == 'max-lines-ratchet' && github.event_name == 'workflow_dispatch' && inputs.release_gate
+      - name: Prepare release-gate ratchet merge tree
+        if: matrix.task == 'baseline-ratchets' && github.event_name == 'workflow_dispatch' && inputs.release_gate
         env:
           GH_TOKEN: ${{ github.token }}
           PULL_REQUEST_NUMBER: ${{ inputs.pull_request_number }}
@@ -1856,8 +1858,8 @@ jobs:
           prepared=false
           for attempt in {1..6}; do
             if timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=2 origin \
-              "+refs/pull/${PULL_REQUEST_NUMBER}/merge:refs/remotes/origin/ci-max-lines-merge"; then
-              merge_sha="$(git rev-parse refs/remotes/origin/ci-max-lines-merge)"
+              "+refs/pull/${PULL_REQUEST_NUMBER}/merge:refs/remotes/origin/ci-ratchet-merge"; then
+              merge_sha="$(git rev-parse refs/remotes/origin/ci-ratchet-merge)"
               read -r frozen_base_sha merge_head extra_parent <<<"$(git show -s --format=%P "$merge_sha")"
               if [[ "$merge_head" == "$TARGET_SHA" && -z "$extra_parent" ]]; then
                 prepared=true
@@ -1918,14 +1920,16 @@ jobs:
             coercion-helpers)
               pnpm check:coercion-helpers
               ;;
-            max-lines-ratchet)
-              if ! has_package_script "check:max-lines-ratchet"; then
-                echo "Current CI targets must provide check:max-lines-ratchet." >&2
-                exit 1
-              fi
-              base_ref="${RATCHET_BASE_REF:-refs/remotes/origin/ci-max-lines-base}"
+            baseline-ratchets)
+              for required_script in check:max-lines-ratchet check:assertion-safety; do
+                if ! has_package_script "$required_script"; then
+                  echo "Current CI targets must provide ${required_script}." >&2
+                  exit 1
+                fi
+              done
+              base_ref="${RATCHET_BASE_REF:-refs/remotes/origin/ci-ratchet-base}"
               if ! git cat-file -e "${base_ref}^{commit}" 2>/dev/null; then
-                echo "Prepared max-lines base ${base_ref} is unavailable." >&2
+                echo "Prepared ratchet base ${base_ref} is unavailable." >&2
                 exit 1
               fi
               if [[ -n "${RATCHET_PR_HEAD_SHA:-}" ]]; then
@@ -1941,6 +1945,7 @@ jobs:
                 fi
               fi
               pnpm check:max-lines-ratchet --base "$base_ref"
+              pnpm check:assertion-safety --base "$base_ref"
               if [[ "${RATCHET_RELEASE_MERGE_TREE:-}" == "true" ]]; then
                 node --import tsx scripts/run-oxlint-shards.mts --only=core --only=extensions --threads=1
               fi

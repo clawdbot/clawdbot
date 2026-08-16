@@ -12,10 +12,14 @@ import {
   resolvePublicAgentAvatarSource,
 } from "../agents/identity-avatar.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { matchRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
-import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
+import {
+  matchRootFileOpenFailure,
+  openRootFileSync,
+  readFileDescriptorBounded,
+} from "../infra/boundary-file-read.js";
 import { resolveDevInstallGitBranch } from "../infra/dev-install-branch.js";
-import { listDevicePairing, verifyDeviceToken } from "../infra/device-pairing.js";
+import { verifyDeviceToken } from "../infra/device-pairing-tokens.js";
+import { listDevicePairing } from "../infra/device-pairing.js";
 import { readFileWindowFully } from "../infra/file-read.js";
 import { openLocalFileSafely, FsSafeError } from "../infra/fs-safe.js";
 import { safeFileURLToPath } from "../infra/local-file-access.js";

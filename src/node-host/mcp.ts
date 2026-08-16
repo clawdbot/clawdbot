@@ -7,10 +7,10 @@ import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
-import { matchesMcpToolFilterPattern } from "../agents/agent-bundle-mcp-filter.js";
 import { createMcpJsonSchemaValidator } from "../agents/mcp-json-schema-validator.js";
 import { sanitizeMcpMetadataText } from "../agents/mcp-metadata.js";
 import { collectMcpPaginatedItems } from "../agents/mcp-pagination.js";
+import { isMcpToolAllowed } from "../agents/mcp-tool-filter.js";
 import { resolveMcpRequestTimeoutMs } from "../agents/mcp-transport-config.js";
 import { resolveMcpTransport } from "../agents/mcp-transport.js";
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
@@ -197,18 +197,6 @@ function buildNodeMcpToolDescriptors(
   return descriptors;
 }
 
-function shouldExposeTool(config: McpServerConfig, toolName: string): boolean {
-  const include = config.toolFilter?.include ?? [];
-  const exclude = config.toolFilter?.exclude ?? [];
-  if (
-    include.length > 0 &&
-    !include.some((pattern) => matchesMcpToolFilterPattern(pattern, toolName))
-  ) {
-    return false;
-  }
-  return !exclude.some((pattern) => matchesMcpToolFilterPattern(pattern, toolName));
-}
-
 async function connectWithTimeout(
   client: NodeHostMcpClient,
   transport: Transport,
@@ -350,7 +338,7 @@ export async function startNodeHostMcpManager(
         const tools = await listAllTools(
           client,
           resolved.requestTimeoutMs,
-          (toolName) => shouldExposeTool(config, toolName),
+          (toolName) => isMcpToolAllowed(config.toolFilter, toolName),
           deps.signal,
         );
         if (session.connected) {

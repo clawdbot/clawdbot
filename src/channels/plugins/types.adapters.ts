@@ -24,15 +24,6 @@ import type { SecurityAuditFinding } from "../../security/audit.types.js";
 import type { ChannelApprovalNativeAdapter } from "./approval-native.types.js";
 import type { ChannelRuntimeSurface } from "./channel-runtime-surface.types.js";
 import type { ConfigWriteTarget } from "./config-writes.js";
-export type { ChannelSetupAdapter } from "./setup-adapter.types.js";
-export type {
-  ChannelOutboundAdapter,
-  ChannelOutboundContext,
-  ChannelOutboundPayloadContext,
-  ChannelOutboundPayloadHint,
-  ChannelOutboundTargetRef,
-  ChannelDeliveryCapabilities,
-} from "./outbound.types.js";
 import type {
   ChannelAccountSnapshot,
   ChannelAccountState,
@@ -45,6 +36,15 @@ import type {
   ChannelSecurityDmPolicy,
   ChannelStatusIssue,
 } from "./types.core.js";
+export type { ChannelSetupAdapter } from "./setup-adapter.types.js";
+export type {
+  ChannelOutboundAdapter,
+  ChannelOutboundContext,
+  ChannelOutboundPayloadContext,
+  ChannelOutboundPayloadHint,
+  ChannelOutboundTargetRef,
+  ChannelDeliveryCapabilities,
+} from "./outbound.types.js";
 export type { ChannelPairingAdapter } from "./pairing.types.js";
 
 type ConfiguredBindingRule = AgentBinding;

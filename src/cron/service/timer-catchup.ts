@@ -4,6 +4,7 @@ import {
   finishCronRunReceiptInDatabase,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
+import type { CronJob } from "../types.js";
 import {
   DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
   isJobEnabled,
@@ -419,4 +420,3 @@ async function applyStartupCatchupOutcomes(
   });
   return outcomes;
 }
-import type { CronJob } from "../types.js";

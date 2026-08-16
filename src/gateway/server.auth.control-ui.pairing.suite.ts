@@ -374,7 +374,8 @@ export function registerControlUiPairingSuite(): void {
 
   test("allows operator shared auth with legacy paired metadata", async () => {
     const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
-    const { approveDevicePairing, getPairedDevice, listDevicePairing, requestDevicePairing } =
+    const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
+    const { getPairedDevice, listDevicePairing, requestDevicePairing } =
       await import("../infra/device-pairing.js");
     const { identityPath, identity } = await createOperatorIdentityFixture(
       "openclaw-device-legacy-meta-",

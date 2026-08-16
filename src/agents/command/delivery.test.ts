@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { buildRestartRecoveryTerminalDeliveryEvidence } from "../agent-command-restart-recovery.js";
 import { createAgentRunRestartAbortError } from "../run-termination.js";
 import { deliverAgentCommandResult } from "./delivery.js";
 import type { AgentCommandOpts } from "./types.js";
@@ -764,6 +765,48 @@ describe("deliverAgentCommandResult payload normalization", () => {
       },
     ]);
     expect(deliverOutboundPayloadsMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "deterministic approval prompt",
+      result: { didSendDeterministicApprovalPrompt: true },
+      field: "didSendDeterministicApprovalPrompt",
+      expected: true,
+    },
+    {
+      name: "accepted session spawn",
+      result: {
+        acceptedSessionSpawns: [
+          { runId: "child-run", childSessionKey: "agent:main:subagent:child" },
+        ],
+      },
+      field: "acceptedSessionSpawns",
+      expected: [{ runId: "child-run", childSessionKey: "agent:main:subagent:child" }],
+    },
+    {
+      name: "successful cron add",
+      result: { successfulCronAdds: 1 },
+      field: "successfulCronAdds",
+      expected: 1,
+    },
+  ])("preserves $name as restart-unsafe delivery evidence", async ({ result, field, expected }) => {
+    const onDeliveryResult = vi.fn();
+    const delivered = await deliverAgentCommandResultForTest({
+      omitReplyTarget: true,
+      opts: { deliver: false },
+      payloads: [],
+      result,
+      onDeliveryResult,
+    });
+
+    expect(delivered).toHaveProperty(field, expected);
+    expect(onDeliveryResult).toHaveBeenCalledOnce();
+    expect(onDeliveryResult).toHaveBeenCalledWith(delivered);
+    expect(buildRestartRecoveryTerminalDeliveryEvidence(delivered)).toEqual({
+      captured: true,
+      restartUnsafeSideEffectsDetected: true,
+    });
   });
 
   it("does not automatically redeliver text and media already sent to the same target", async () => {

@@ -41,7 +41,6 @@ import { VERSION } from "../version.js";
 import { clearOpenClawDatabaseQuarantine } from "./openclaw-quarantine-store.js";
 import { repairAuditEventsSchema } from "./openclaw-state-db-audit-migration.js";
 import { openClawStateDatabaseCache as stateDbCache } from "./openclaw-state-db-cache.js";
-export { registerOpenClawStateDatabaseLifecycleListener } from "./openclaw-state-db-cache.js";
 import {
   OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
   LAZY_ADDITIVE_STATE_TABLES,
@@ -85,6 +84,7 @@ import {
 } from "./openclaw-state-ownership.js";
 import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+export { registerOpenClawStateDatabaseLifecycleListener } from "./openclaw-state-db-cache.js";
 
 const STATE_MIGRATION_ASSERTIONS = {
   5: assertOpenClawStateDatabaseV5ForMigration,

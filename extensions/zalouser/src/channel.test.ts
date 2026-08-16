@@ -1,7 +1,13 @@
 // Zalouser tests cover channel plugin behavior.
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import "./zalo-js.test-mocks.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  listZaloFriendsMatchingMock,
+  startZaloQrLoginMock,
+  waitForZaloQrLoginMock,
+} from "./zalo-js.test-mocks.js";
 import {
   zalouserAuthAdapter,
   zalouserGroupsAdapter,
@@ -21,11 +27,6 @@ describe("zalouser target classification", () => {
 });
 import { setZalouserRuntime } from "./runtime.js";
 import { sendMessageZalouser, sendReactionZalouser } from "./send.js";
-import {
-  listZaloFriendsMatchingMock,
-  startZaloQrLoginMock,
-  waitForZaloQrLoginMock,
-} from "./zalo-js.test-mocks.js";
 
 vi.mock("./qr-temp-file.js", () => ({
   writeQrDataUrlToTempFile: vi.fn(async () => null),
