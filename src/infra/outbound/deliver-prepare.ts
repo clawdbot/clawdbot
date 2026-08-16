@@ -21,7 +21,7 @@ import {
 } from "./prepared-batch.js";
 import { createReplyToDeliveryPolicy } from "./reply-policy.js";
 
-export class OutboundPayloadPreparationError extends Error {
+class OutboundPayloadPreparationError extends Error {
   readonly sourceIndex: number;
   readonly payload: ReplyPayload;
 
