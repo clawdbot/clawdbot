@@ -198,7 +198,7 @@ export async function patchSessionRows(
   const successful = dispatched.flatMap(({ rows: chunkRows, result }) =>
     result.outcomes.flatMap((outcome, index) => {
       if (!outcome.ok) {
-        errors.push(`${outcome.key}: ${formatUiError(outcome.error)}`);
+        errors.push(`${outcome.key}: ${formatUiError(outcome.error.message)}`);
         return [];
       }
       const row = chunkRows[index];

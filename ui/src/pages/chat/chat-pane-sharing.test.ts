@@ -481,7 +481,7 @@ describe.each(mutations)("chat pane $name mutation connection ownership", (mutat
 
     expect(pane.sessionSharingStates.get(pane.sessionSharingCacheKey(previous.key))).toMatchObject({
       loading: false,
-      error: `Error: ${mutation.name} failed after session switch`,
+      error: `${mutation.name} failed after session switch`,
     });
     expect(state.lastError).toBeNull();
     expect(state.chatError).toBeNull();
@@ -539,7 +539,7 @@ describe.each(mutations)("chat pane $name mutation connection ownership", (mutat
 
     expect(pane.sessionSharingStates.get(pane.sessionSharingCacheKey(row.key))).toMatchObject({
       loading: false,
-      error: `Error: ${mutation.name} failed`,
+      error: `${mutation.name} failed`,
     });
     expect(state.lastError).toBe(`${mutation.name} failed`);
     expect(state.chatError).toBe(state.lastError);

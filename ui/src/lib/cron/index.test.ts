@@ -1952,7 +1952,7 @@ describe("cron controller", () => {
 
     const olderLoad = loadCronRuns(state, null);
     await expect(loadCronRuns(state, null)).resolves.toBe("error");
-    expect(state.cronError).toBe("Error: current cron history unavailable");
+    expect(state.cronError).toBe("current cron history unavailable");
 
     olderOverview.resolve({
       entries: [{ ts: 1, jobId: "stale-job", status: "ok", summary: "stale" }],
@@ -1963,7 +1963,7 @@ describe("cron controller", () => {
 
     await expect(olderLoad).resolves.toBe("skipped");
     expect(state.cronRuns).toEqual([]);
-    expect(state.cronError).toBe("Error: current cron history unavailable");
+    expect(state.cronError).toBe("current cron history unavailable");
   });
 
   it("scopes jobs and run history requests to the selected agent", async () => {
@@ -1997,7 +1997,7 @@ describe("cron controller", () => {
 
     await expect(loadCronRuns(state, null)).resolves.toBe("error");
 
-    expect(state.cronError).toBe("Error: cron.runs unavailable");
+    expect(state.cronError).toBe("cron.runs unavailable");
   });
 
   it("runs cron job in due mode when requested", async () => {

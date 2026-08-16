@@ -449,8 +449,8 @@ export function createApplicationGateway(
           hello: null,
           canvasPluginSurfaceUrl: null,
           selfUser: null,
-          lastError: error
-            ? formatUiError(error)
+          lastError: error?.message
+            ? formatUiError(error.message)
             : `disconnected (${code}): ${reason || "no reason"}`,
           lastErrorCode: resolveGatewayErrorDetailCode(error) ?? error?.code ?? null,
         });

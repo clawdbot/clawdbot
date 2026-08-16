@@ -155,7 +155,7 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
         return false;
       }
       if (recovery.continuation.status === "rejected") {
-        setChatError(state, formatUiError(recovery.continuation.error));
+        setChatError(state, formatUiError(recovery.continuation.error.message));
         state.requestUpdate?.();
         return false;
       }
