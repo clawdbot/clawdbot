@@ -370,22 +370,8 @@ export async function setupChannels(
     if (!adapter) {
       return;
     }
-    try {
-      const status = await adapter.getStatus({ cfg: next, options, accountOverrides });
-      statusByChannel.set(channel, status);
-    } catch (error) {
-      const detail = sanitizeTerminalText(formatErrorMessage(error));
-      statusByChannel.set(channel, {
-        channel,
-        configured: isChannelConfigured(next, channel),
-        statusLines: [],
-        selectionHint: "status unavailable",
-      });
-      await prompter.note(
-        `Status unavailable (${detail}).\nRetry: ${formatCliCommand(`openclaw channels status --channel ${channel}`)}`,
-        t("wizard.channels.statusTitle"),
-      );
-    }
+    const status = await adapter.getStatus({ cfg: next, options, accountOverrides });
+    statusByChannel.set(channel, status);
   };
 
   const enableBundledPluginForSetup = async (channel: ChannelChoice): Promise<boolean> => {
@@ -473,7 +459,21 @@ export async function setupChannels(
     if (channel === targetedChannel) {
       finishSetupRequested = true;
     }
-    await refreshStatus(channel);
+    try {
+      await refreshStatus(channel);
+    } catch (error) {
+      const detail = sanitizeTerminalText(formatErrorMessage(error));
+      statusByChannel.set(channel, {
+        channel,
+        configured: isChannelConfigured(next, channel),
+        statusLines: [],
+        selectionHint: "status unavailable",
+      });
+      await prompter.note(
+        `Status unavailable (${detail}).\nRetry: ${formatCliCommand(`openclaw channels status --channel ${channel}`)}`,
+        t("wizard.channels.statusTitle"),
+      );
+    }
   };
 
   const applyCustomSetupResult = async (
