@@ -42,7 +42,9 @@ function metadataEntryFor(
 }
 
 function waitForMetadataRetry(delayMs: number): Promise<void> {
-  return new Promise((resolve) => globalThis.setTimeout(resolve, delayMs));
+  return new Promise((resolve) => {
+    globalThis.setTimeout(resolve, delayMs);
+  });
 }
 
 async function requestChatMetadata(
