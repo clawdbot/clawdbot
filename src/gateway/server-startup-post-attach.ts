@@ -513,20 +513,28 @@ async function publishConfiguredModelRuntimeSnapshots(params: {
   const [
     { refreshPreparedModelRuntimeSnapshots },
     { modelCatalogBrowseRequiresFullDiscovery },
+    { listAgentIds },
   ] = await Promise.all([
     import("../agents/prepared-model-runtime.js"),
     import("../agents/model-catalog-browse.js"),
+    import("../agents/agent-scope.js"),
   ]);
+  const catalogModeForAgent = (agentId: string | undefined) =>
+    modelCatalogBrowseRequiresFullDiscovery({
+      cfg: params.cfg,
+      agentId,
+      view: "default",
+    })
+      ? "live"
+      : "static";
+  const catalogModes = new Set(listAgentIds(params.cfg).map(catalogModeForAgent));
+  const catalogModeOptions =
+    catalogModes.size <= 1
+      ? { catalogMode: [...catalogModes][0] ?? "static" }
+      : { catalogModeForAgent };
   await refreshPreparedModelRuntimeSnapshots(params.cfg, {
     gatewayLifecycle: true,
-    catalogModeForAgent: (agentId) =>
-      modelCatalogBrowseRequiresFullDiscovery({
-        cfg: params.cfg,
-        agentId,
-        view: "default",
-      })
-        ? "live"
-        : "static",
+    ...catalogModeOptions,
     allowGatewaySubagentBinding: true,
     ...(params.pluginMetadataSnapshot
       ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
