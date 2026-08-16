@@ -19,13 +19,9 @@
   background: color-mix(in srgb, var(--card, var(--bg)) 55%, transparent);
 }
 
-.plan-checklist--card .plan-checklist__summary {
-  cursor: default;
-  user-select: text;
-}
-
 .plan-checklist--card .plan-checklist__body {
-  border-top-color: color-mix(in srgb, var(--border) 62%, transparent);
+  padding: 10px 11px 11px;
+  border-top: 0;
 }
 
 .agent-chat__composer-status-stack:has(.plan-checklist) {
