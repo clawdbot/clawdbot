@@ -1290,10 +1290,12 @@ export async function startGatewayPostAttachRuntime(
           try {
             await startupPluginsResident.start();
           } catch (error) {
-            if (params.sidecarStartup !== "defer") {
-              throw error;
+            if (params.sidecarStartup === "defer") {
+              params.log.warn(`optional startup plugin load failed: ${String(error)}`);
             }
-            params.log.warn(`optional startup plugin load failed: ${String(error)}`);
+            // A deferred plugin failure is not an owner-approved degraded state. Keep the
+            // shared sidecar sequence failed so startup-gated methods remain unavailable.
+            throw error;
           }
           const sidecarStartupOutcomes = ensureStartupOutcomes();
           let workerEnvironmentSidecar: GatewayPostReadySidecarHandle | null = null;

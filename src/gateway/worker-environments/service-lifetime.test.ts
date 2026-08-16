@@ -49,12 +49,37 @@ describe("worker environment service", () => {
     const prune = vi
       .spyOn(support.testState.store, "pruneTerminalEnvironments")
       .mockImplementation(() => {
-        throw new Error("SQLite transaction lock wait failed");
+        throw Object.assign(new Error("SQLite transaction lock wait failed"), {
+          code: "SQLITE_BUSY",
+        });
       });
 
     await expect(
       support.createService(support.createProvider()).reconcileOnce(),
     ).resolves.toBeUndefined();
+    expect(prune).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["schema", new Error("no such table: worker_environments")],
+    ["I/O", Object.assign(new Error("disk I/O error"), { code: "SQLITE_IOERR" })],
+    [
+      "corruption",
+      Object.assign(new Error("database disk image is malformed"), {
+        code: "SQLITE_CORRUPT",
+        errcode: 11,
+      }),
+    ],
+  ])("propagates terminal cleanup %s failures", async (_kind, error) => {
+    const prune = vi
+      .spyOn(support.testState.store, "pruneTerminalEnvironments")
+      .mockImplementation(() => {
+        throw error;
+      });
+
+    await expect(support.createService(support.createProvider()).reconcileOnce()).rejects.toBe(
+      error,
+    );
     expect(prune).toHaveBeenCalledOnce();
   });
 

@@ -11,6 +11,7 @@ import { onSessionIdentityMutation } from "../../config/sessions/session-accesso
 import type { OpenClawConfig } from "../../config/types.js";
 import type { SecretRef } from "../../config/types.secrets.js";
 import { withTimeout } from "../../infra/fs-safe.js";
+import { isSqliteLockError } from "../../infra/sqlite-transaction.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type {
   WorkerProfile,
@@ -352,7 +353,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     try {
       store.pruneTerminalEnvironments();
     } catch (error) {
-      warn(`Worker environment terminal cleanup failed: ${String(error)}`);
+      if (!isSqliteLockError(error)) {
+        throw error;
+      }
     }
   };
 

@@ -2887,21 +2887,24 @@ describe("startGatewayPostAttachRuntime", () => {
     });
   });
 
-  it("keeps core startup available when deferred startup plugin loading fails", async () => {
+  it("keeps core startup unavailable when deferred startup plugin loading fails", async () => {
     const unavailableGatewayMethods = new Set<string>(STARTUP_UNAVAILABLE_GATEWAY_METHODS);
     const startGatewaySidecarsLocal = vi.fn(async () => ({
       pluginServices: null,
       postReadySidecars: [],
     }));
     const onSidecarsReady = vi.fn();
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const loadStartupPlugins = vi.fn(async () => {
+      throw new Error("bundled plugin dependencies unavailable");
+    });
 
     await startGatewayPostAttachRuntime(
       {
         ...createPostAttachParams({
           sidecarStartup: "defer",
-          loadStartupPlugins: vi.fn(async () => {
-            throw new Error("bundled plugin dependencies unavailable");
-          }),
+          log,
+          loadStartupPlugins,
           unlockStartupMethods: () => unavailableGatewayMethods.clear(),
           onSidecarsReady,
         }),
@@ -2910,10 +2913,17 @@ describe("startGatewayPostAttachRuntime", () => {
     );
 
     await waitForGatewayTestState(() => {
-      expect(startGatewaySidecarsLocal).toHaveBeenCalledTimes(1);
-      expect(unavailableGatewayMethods).toEqual(new Set());
-      expect(onSidecarsReady).toHaveBeenCalledTimes(1);
+      expect(loadStartupPlugins).toHaveBeenCalledOnce();
+      expect(log.warn).toHaveBeenCalledWith(
+        "optional startup plugin load failed: Error: bundled plugin dependencies unavailable",
+      );
+      expect(log.warn).toHaveBeenCalledWith(
+        "gateway sidecars failed to start: Error: bundled plugin dependencies unavailable",
+      );
     });
+    expect(startGatewaySidecarsLocal).not.toHaveBeenCalled();
+    expect(unavailableGatewayMethods).toEqual(new Set(STARTUP_UNAVAILABLE_GATEWAY_METHODS));
+    expect(onSidecarsReady).not.toHaveBeenCalled();
   });
 
   it("dispatches registered gateway startup internal hooks without configured hook packs", async () => {
