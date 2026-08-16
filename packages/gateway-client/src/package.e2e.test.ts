@@ -133,9 +133,9 @@ describe("@openclaw/gateway-client packed package", () => {
     if (!nodeTypesVersion) {
       throw new Error("root package is missing the @types/node version used by package checks");
     }
-    const tempRoot = path.join(repoRoot, ".tmp");
-    await fs.mkdir(tempRoot, { recursive: true });
-    const tempDir = tempDirs.make("openclaw-gateway-client-consumer-", tempRoot);
+    const tempDir = tempDirs.make("openclaw-gateway-client-consumer-");
+    await runPnpmCommand(["build"], protocolRoot);
+    await runPnpmCommand(["build"], clientRoot);
     const protocolTarball = await packPackage(protocolRoot, tempDir);
     const clientTarball = await packPackage(clientRoot, tempDir);
 
@@ -201,7 +201,10 @@ describe("@openclaw/gateway-client packed package", () => {
     await runCommand(
       process.execPath,
       ["scripts/run-tsgo.mjs", "-p", path.join(tempDir, "tsconfig.json")],
-      { cwd: repoRoot },
+      {
+        cwd: repoRoot,
+        env: { ...process.env, OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
+      },
     );
 
     await build({

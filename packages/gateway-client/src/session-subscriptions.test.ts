@@ -462,6 +462,32 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
+  it("retries a rejected final unsubscribe before reacquiring the observer", async () => {
+    let unsubscribeAttempts = 0;
+    const { client, request } = createClient(async (method, params) => {
+      if (method === "sessions.messages.subscribe") {
+        return { key: params.key };
+      }
+      unsubscribeAttempts += 1;
+      if (unsubscribeAttempts === 1) {
+        throw new Error("temporary unsubscribe failure");
+      }
+      return {};
+    });
+    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
+
+    const first = await coordinator.acquire("main");
+    await expect(coordinator.release(first)).rejects.toThrow("temporary unsubscribe failure");
+
+    const second = await coordinator.acquire("main");
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.messages.unsubscribe", { key: "main" });
+    expect(request).toHaveBeenNthCalledWith(3, "sessions.messages.unsubscribe", { key: "main" });
+    expect(request).toHaveBeenNthCalledWith(4, "sessions.messages.subscribe", { key: "main" });
+
+    await coordinator.release(second);
+    expect(request).toHaveBeenNthCalledWith(5, "sessions.messages.unsubscribe", { key: "main" });
+  });
+
   it("retires an old generation without unsubscribing a replacement connection", async () => {
     const { client, request } = createClient();
     const firstCoordinator = getGatewaySessionMessageSubscriptionCoordinator(client);

@@ -171,6 +171,20 @@ describe("Control Model conversations", () => {
     model.dispose();
   });
 
+  it("releases the final observer when a connected model is disposed", async () => {
+    const harness = createHarness({ status: "connected", epoch: 1 });
+    const model = createControlModel({ gateway: harness.gateway });
+    model.start();
+    model.conversation("agent:main:one");
+
+    await vi.waitFor(() => expect(harness.callsFor("sessions.messages.subscribe")).toHaveLength(2));
+    model.dispose();
+
+    await vi.waitFor(() =>
+      expect(harness.callsFor("sessions.messages.unsubscribe")).toHaveLength(1),
+    );
+  });
+
   it("retries a failed observer activation within the same connection epoch", async () => {
     const harness = createHarness({ status: "connected", epoch: 1 });
     harness.queue(

@@ -233,7 +233,6 @@ class ControlModelImpl implements ControlModel {
     this.#unsubscribeEvents?.();
     this.#unsubscribeConnection = null;
     this.#unsubscribeEvents = null;
-    resetGatewaySessionMessageSubscriptionCoordinator(this.#gateway);
     for (const conversation of this.#conversations.values()) {
       conversation.dispose();
     }

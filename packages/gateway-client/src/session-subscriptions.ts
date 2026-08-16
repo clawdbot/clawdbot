@@ -31,6 +31,7 @@ type SessionMessageSubscriptionEntry = {
   handles: Set<GatewaySessionMessageSubscription>;
   pendingOwners: number;
   release: Promise<void> | null;
+  releaseRetry: GatewaySessionMessageSubscription | null;
 };
 
 type SessionMessageSubscriptionOwner = {
@@ -116,6 +117,10 @@ export class GatewaySessionMessageSubscriptionCoordinator {
         entry = this.#createEntry(normalizedKey, agentId, options.includeApprovals === true);
         break;
       }
+      if (existing.releaseRetry) {
+        await this.release(existing.releaseRetry);
+        continue;
+      }
       if (!existing.release) {
         entry = existing;
         entry.requestedKeys.add(normalizedKey);
@@ -188,6 +193,7 @@ export class GatewaySessionMessageSubscriptionCoordinator {
 
     // Retain both the handle and its wire entry until the Gateway acknowledges
     // the last release. A rejected unsubscribe must remain genuinely retryable.
+    entry.releaseRetry = subscription;
     const request = this.#client
       .request("sessions.messages.unsubscribe", sessionSubscriptionParams(entry.key, entry.agentId))
       .then(() => {
@@ -233,6 +239,7 @@ export class GatewaySessionMessageSubscriptionCoordinator {
       handles: new Set(),
       pendingOwners: 0,
       release: null,
+      releaseRetry: null,
     };
     entry.ready = this.#requestSubscribe(entry, includeApprovals).then((result) => {
       entry.key = result.key;
@@ -332,6 +339,9 @@ export class GatewaySessionMessageSubscriptionCoordinator {
     }
     sessionMessageSubscriptionOwners.delete(subscription);
     owner.entry.handles.delete(subscription);
+    if (owner.entry.releaseRetry === subscription) {
+      owner.entry.releaseRetry = null;
+    }
     if (removeEntry) {
       this.#entries.delete(owner.entry);
     }
