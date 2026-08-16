@@ -112,9 +112,9 @@ async function uploadToSharePoint(params: {
 
   if (
     !isRecord(data) ||
-    typeof data.id !== "string" ||
-    typeof data.webUrl !== "string" ||
-    typeof data.name !== "string"
+    typeof data.id !== "string" || !data.id ||
+    typeof data.webUrl !== "string" || !data.webUrl ||
+    typeof data.name !== "string" || !data.name
   ) {
     throw new Error("SharePoint upload response missing required fields");
   }
@@ -183,9 +183,9 @@ export async function getDriveItemProperties(params: {
 
   if (
     !isRecord(data) ||
-    typeof data.eTag !== "string" ||
-    typeof data.webDavUrl !== "string" ||
-    typeof data.name !== "string"
+    typeof data.eTag !== "string" || !data.eTag ||
+    typeof data.webDavUrl !== "string" || !data.webDavUrl ||
+    typeof data.name !== "string" || !data.name
   ) {
     throw new Error("DriveItem response missing required properties (eTag, webDavUrl, or name)");
   }
