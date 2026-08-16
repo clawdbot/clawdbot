@@ -5345,6 +5345,9 @@ export const en: TranslationMap = {
       searchPlaceholder: "Search messages...",
       closeSearch: "Close search",
       loading: "Loading chat",
+      earlierHistoryAvailable: "Earlier history available",
+      showEarlier: "Show earlier",
+      loadingEarlier: "Loading earlier history…",
       noMatches: "No matching messages",
     },
     pairingQrExpired: {

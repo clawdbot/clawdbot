@@ -441,6 +441,40 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
     this.syncHistoryObserver();
   }
 
+  protected async showEarlierMessages(): Promise<void> {
+    const state = this.state;
+    const root = this.querySelector<HTMLElement>(".chat-thread");
+    if (!state || !root) {
+      return;
+    }
+    if (root.scrollTop > CHAT_HISTORY_INTENT_EDGE_PX) {
+      const nextScrollTop = Math.max(0, root.scrollTop - root.clientHeight);
+      // Keep the observer's intent tracker aligned so this explicit page-up
+      // cannot masquerade as a user scroll and trigger an older-page load.
+      this.transcriptScrollTop = nextScrollTop;
+      root.scrollTop = nextScrollTop;
+      return;
+    }
+    const sessionKey = state.sessionKey;
+    const sessionStillCurrent = () =>
+      this.state === state && areUiSessionKeysEquivalent(state.sessionKey, sessionKey);
+    const loaded = await this.loadOlderMessages();
+    if (!loaded || !sessionStillCurrent()) {
+      return;
+    }
+    await this.updateComplete;
+    if (!sessionStillCurrent()) {
+      return;
+    }
+    // The explicit reveal can leave the sentinel visible. Disarm it before the
+    // programmatic jump so one click cannot chain another automatic page load.
+    this.transcriptScrollTop = 0;
+    this.historyObserverArmed = false;
+    this.historyAutoLoadBlocked = this.hasOlderMessages();
+    this.clearHistoryObserver();
+    this.transcript.scrollToOffset(0);
+  }
+
   protected async loadOlderMessages(): Promise<boolean> {
     if (this.activeOlderLoad) {
       return this.activeOlderLoad;
@@ -468,7 +502,9 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
     let prepended = false;
     try {
       if (catalogKey) {
-        prepended = await this.loadCatalogSession(catalogKey, true);
+        const previousCount = this.catalogMessages.length;
+        const progressed = await this.loadCatalogSession(catalogKey, true);
+        prepended = progressed || this.catalogMessages.length > previousCount;
       } else {
         const pagination = state.chatHistoryPagination;
         if (!pagination?.hasMore) {

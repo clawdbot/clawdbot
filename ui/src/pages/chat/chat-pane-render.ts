@@ -283,6 +283,9 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
     });
     const attachmentReads = this.chatState.attachmentReads;
     const attachmentReadSignal = attachmentReads.readSignal;
+    const historyHasMore = catalogKey
+      ? Boolean(this.catalogCursor)
+      : state.chatHistoryPagination?.hasMore === true;
     const sessionActionCallbacks = createChatPaneSessionActionCallbacks({
       getSnapshot: () => this.context.gateway.snapshot,
       hasLocalRun: () => Boolean(state.chatRunId),
@@ -334,9 +337,11 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       onGatewayQuestionSkip: (id) => cancelQuestionPrompt(this.questionPromptState, id),
       messages: catalogKey ? this.catalogMessages : state.chatMessages,
       historyPagination:
-        catalogKey || state.chatHistoryPagination?.hasMore || this.loadingOlder
+        historyHasMore || this.loadingOlder
           ? {
+              hasMore: historyHasMore,
               loading: this.loadingOlder,
+              onShowEarlier: () => void this.showEarlierMessages(),
             }
           : undefined,
       toolMessages: catalogKey ? [] : state.chatToolMessages,

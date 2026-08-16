@@ -458,6 +458,23 @@ openclaw-chat-page {
   font-size: 12px;
 }
 
+.chat-history-available {
+  position: absolute;
+  z-index: 10;
+  top: 10px;
+  left: 50%;
+  max-width: calc(100% - 2 * var(--chat-thread-gutter));
+  border-radius: var(--radius-full);
+  background: var(--panel-strong);
+  box-shadow: var(--shadow-sm);
+  color: var(--muted);
+  transform: translateX(-50%);
+}
+
+.chat-history-available strong {
+  color: var(--text);
+}
+
 /* The zero-height anchor keeps the affordance out of the flex flow so showing
    it never shrinks the transcript or moves the composer. */
 .chat-scroll-to-bottom-wrap {

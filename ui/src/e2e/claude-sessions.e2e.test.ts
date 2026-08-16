@@ -717,7 +717,7 @@ suite.define(() => {
               response: {
                 hostId: "node:devbox",
                 threadId: "remote-thread",
-                items: [{ id: "u1", type: "userMessage", text: "older question" }],
+                items: [{ id: "a0", type: "agentMessage", text: "older question" }],
               },
             },
             {
@@ -789,7 +789,9 @@ suite.define(() => {
       .poll(() => gateway.getRequests("sessions.catalog.read").then((requests) => requests.length))
       .toBe(initialReadCount + 1);
     await catalogPane.locator(".chat-history-loading").waitFor();
-    expect(await catalogPane.getByRole("button", { name: "Load older" }).count()).toBe(0);
+    const showEarlier = catalogPane.getByRole("button", { name: "Show earlier" });
+    await showEarlier.waitFor();
+    expect(await showEarlier.getAttribute("aria-busy")).toBe("true");
     const anchor = await captureTopVisibleVirtualRow(thread);
     await startVirtualRowPaintProbe(thread, anchor);
     let paintResult: VirtualRowPaintResult;
@@ -804,6 +806,7 @@ suite.define(() => {
         )
         .toBe(41);
       await page.clock.runFor(100);
+      await waitForPaintedVirtualRowAnchor(thread, anchor);
     } finally {
       paintResult = await stopVirtualRowPaintProbe(thread);
     }
@@ -854,12 +857,12 @@ suite.define(() => {
     await expect.poll(() => page.getByText("older question", { exact: true }).count()).toBe(1);
     await page.clock.runFor(500);
     expect(await catalogPane.locator(".chat-history-loading").count()).toBe(0);
-    expect(await catalogPane.getByRole("button", { name: "Load older" }).count()).toBe(0);
+    expect(await catalogPane.getByRole("button", { name: "Show earlier" }).count()).toBe(0);
     expect(await gateway.getRequests("sessions.catalog.read")).toHaveLength(exhaustedReadCount);
     await page.close();
   });
 
-  it("auto-loads older native history with a spinner and stable viewport", async () => {
+  it("shows loaded native history before fetching and revealing an earlier page", async () => {
     const page = await suite.browser.newPage({ viewport: { width: 1280, height: 800 } });
     const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const historyMessage = (seq: number, prefix: string) => ({
@@ -917,45 +920,76 @@ suite.define(() => {
       element.scrollTop = element.scrollHeight;
       element.dispatchEvent(new Event("scroll"));
     });
+    const showEarlier = page.getByRole("button", { name: "Show earlier" });
+    if (artifactDir) {
+      await fs.mkdir(artifactDir, { recursive: true });
+      await page.screenshot({
+        path: path.join(artifactDir, "00-native-history-available.png"),
+        fullPage: true,
+      });
+    }
+    const initialRequestCount = (await gateway.getRequests("chat.history")).length;
+    const tailAnchor = await captureTopVisibleVirtualRow(thread);
+    const initialScrollTop = await thread.evaluate((element) => element.scrollTop);
+    await showEarlier.click();
+    await expect
+      .poll(() => thread.evaluate((element) => element.scrollTop))
+      .toBeLessThan(initialScrollTop);
+    const earlierAnchor = await captureTopVisibleVirtualRow(thread);
+    expect(earlierAnchor.index).toBeLessThan(tailAnchor.index);
+    expect(await gateway.getRequests("chat.history")).toHaveLength(initialRequestCount);
     await gateway.deferNext("chat.history");
     await thread.evaluate((element) => {
       element.scrollTop = 0;
-      element.dispatchEvent(new Event("scroll"));
+      element.parentElement?.querySelector<HTMLButtonElement>(".chat-history-available")?.click();
     });
-    await page.locator('.chat-virtual-row:not([data-virtual-row-key="history"])').first().waitFor();
     await gateway.waitForRequest("chat.history");
     await page.locator(".chat-history-loading").waitFor();
+    expect(await showEarlier.getAttribute("aria-busy")).toBe("true");
     if (artifactDir) {
-      await fs.mkdir(artifactDir, { recursive: true });
       await page.screenshot({
         path: path.join(artifactDir, "01-native-history-loading.png"),
         fullPage: true,
       });
     }
-    const anchor = await captureTopVisibleVirtualRow(thread);
-    await startVirtualRowPaintProbe(thread, anchor);
-    let paintResult: VirtualRowPaintResult;
-    try {
-      await gateway.resolveDeferred("chat.history");
-      await expect
-        .poll(() =>
-          page
-            .locator("openclaw-chat-pane")
-            .evaluate(
-              (element) =>
-                (element as HTMLElement & { state: { chatMessages: unknown[] } }).state.chatMessages
-                  .length,
-            ),
-        )
-        .toBe(140);
-      await waitForPaintedVirtualRowAnchor(thread, anchor);
-    } finally {
-      paintResult = await stopVirtualRowPaintProbe(thread);
-    }
-    expectPaintedVirtualRowAnchor(anchor, paintResult);
+    await gateway.rejectDeferred("chat.history", {
+      code: "UNAVAILABLE",
+      message: "history unavailable",
+      retryable: true,
+    });
+    await expect.poll(() => page.locator(".chat-history-loading").count()).toBe(0);
+    expect(await showEarlier.getAttribute("aria-busy")).toBe("false");
+    const failedRequestCount = (await gateway.getRequests("chat.history")).length;
+    await gateway.deferNext("chat.history");
+    await showEarlier.click();
+    await gateway.waitForRequest("chat.history");
+    await page.locator(".chat-history-loading").waitFor();
+    expect(await gateway.getRequests("chat.history")).toHaveLength(failedRequestCount + 1);
+    await gateway.resolveDeferred("chat.history", {
+      messages: older,
+      hasMore: true,
+      nextOffset: 140,
+      totalMessages: 180,
+      sessionId: "native-scrollback",
+      thinkingLevel: null,
+    });
+    await expect
+      .poll(() =>
+        page
+          .locator("openclaw-chat-pane")
+          .evaluate(
+            (element) =>
+              (element as HTMLElement & { state: { chatMessages: unknown[] } }).state.chatMessages
+                .length,
+          ),
+      )
+      .toBe(140);
+    const firstOlderMessage = page.getByText(/^older native message 1\n/);
+    await firstOlderMessage.waitFor();
+    await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBeLessThanOrEqual(1);
     if (artifactDir) {
       await page.screenshot({
-        path: path.join(artifactDir, "02-native-history-prepended-stable.png"),
+        path: path.join(artifactDir, "02-native-history-prepended-visible.png"),
         fullPage: true,
       });
     }
@@ -963,15 +997,32 @@ suite.define(() => {
       limit: 100,
       offset: 100,
     });
-    const exhaustedRequestCount = (await gateway.getRequests("chat.history")).length;
-    await thread.evaluate((element) => {
-      element.scrollTop = 0;
-      element.dispatchEvent(new Event("scroll"));
+    const firstPageRequestCount = (await gateway.getRequests("chat.history")).length;
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        ),
+    );
+    expect(await gateway.getRequests("chat.history")).toHaveLength(firstPageRequestCount);
+    await gateway.deferNext("chat.history");
+    await showEarlier.click();
+    await gateway.waitForRequest("chat.history");
+    expect((await gateway.getRequests("chat.history")).at(-1)?.params).toMatchObject({
+      limit: 100,
+      offset: 140,
     });
-    await page.getByText(/^older native message 1\n/).waitFor();
+    await gateway.resolveDeferred("chat.history", {
+      messages: [],
+      hasMore: false,
+      totalMessages: 180,
+      sessionId: "native-scrollback",
+      thinkingLevel: null,
+    });
     await expect.poll(() => page.locator(".chat-history-sentinel").count()).toBe(0);
+    expect(await page.getByRole("button", { name: "Show earlier" }).count()).toBe(0);
     expect(await page.locator(".chat-history-loading").count()).toBe(0);
-    expect(await gateway.getRequests("chat.history")).toHaveLength(exhaustedRequestCount);
+    expect(await gateway.getRequests("chat.history")).toHaveLength(firstPageRequestCount + 1);
     await page.close();
   });
 
