@@ -75,6 +75,7 @@ describe("GatewayChatClient", () => {
         preauthHandshakeTimeoutMs: 30_000,
         tlsFingerprint: "sha256:11:22:33:44",
         deviceAuthScope: "wss://remote.example/rpc",
+        notifyOnStartupRetry: true,
       });
       expect(constructedOptions[0]).not.toHaveProperty("deviceIdentity");
       const onConnectError = vi.fn();

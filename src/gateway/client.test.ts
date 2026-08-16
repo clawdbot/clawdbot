@@ -645,7 +645,7 @@ describe("GatewayClient request errors", () => {
     client.stop();
   });
 
-  it("reports startup-unavailable connect failures while retaining automatic reconnect", async () => {
+  it("retries startup-unavailable connect failures without terminal callbacks", async () => {
     vi.useFakeTimers();
     wsInstances.length = 0;
     logDebugMock.mockClear();
@@ -694,17 +694,7 @@ describe("GatewayClient request errors", () => {
       }
 
       expect(onConnectError).not.toHaveBeenCalled();
-      expect(onClose).toHaveBeenCalledWith(
-        1013,
-        "gateway starting",
-        expect.objectContaining({
-          connectError: expect.objectContaining({
-            code: "UNAVAILABLE",
-            message: "gateway starting; retry shortly",
-          }),
-        }),
-      );
-      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(onClose).not.toHaveBeenCalled();
       expect(ws.lastClose).toEqual({ code: 1013, reason: "gateway starting" });
       expect(logDebugMock).toHaveBeenCalledWith(expect.stringContaining("gateway connect failed:"));
       expect(logErrorMock).not.toHaveBeenCalledWith(

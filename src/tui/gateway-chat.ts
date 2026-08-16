@@ -210,6 +210,7 @@ export class GatewayChatClient implements TuiBackend {
       instanceId: randomUUID(),
       minProtocol: MIN_CLIENT_PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
+      notifyOnStartupRetry: true,
       onHelloOk: (hello) => {
         this.pendingConnectError = undefined;
         this.hello = hello;
