@@ -303,9 +303,7 @@ describe("session menu", () => {
     (submenu as SessionMenuItem & { submenuOpen: boolean }).submenuOpen = true;
 
     const choices = iconChoices(submenu);
-    expect(submenu.querySelector(".session-menu__icon-grid")?.getAttribute("role")).toBe(
-      "radiogroup",
-    );
+    expect(submenu.querySelector(".session-menu__icon-grid")?.getAttribute("role")).toBe("group");
     expect(choices.map((choice) => choice.textContent?.trim())).toEqual([
       "🦞",
       "🚀",
@@ -324,8 +322,10 @@ describe("session menu", () => {
     if (!current) {
       throw new Error("Expected the first icon choice");
     }
-    expect(current.getAttribute("role")).toBe("radio");
-    expect(current.getAttribute("aria-checked")).toBe("true");
+    // Click/Enter-only activation: pressed-state action grid, not radio semantics,
+    // so arrow keys may move focus without changing the persisted selection.
+    expect(current.getAttribute("role")).toBeNull();
+    expect(current.getAttribute("aria-pressed")).toBe("true");
     expect(choices.filter((choice) => choice.tabIndex === 0)).toEqual([current]);
 
     choices[1]?.click();

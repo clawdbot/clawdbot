@@ -2849,7 +2849,7 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   outline-offset: -2px;
 }
 
-.session-menu__icon-choice[aria-checked="true"] {
+.session-menu__icon-choice[aria-pressed="true"] {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
 }

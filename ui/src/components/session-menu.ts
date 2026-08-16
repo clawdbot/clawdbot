@@ -294,7 +294,7 @@ class SessionMenu extends OpenClawLightDomElement {
       <div slot="submenu" class="session-menu__icon-picker">
         <div
           class="session-menu__icon-grid"
-          role="radiogroup"
+          role="group"
           aria-label=${t("sessionsView.setIconMenu")}
           @keydown=${this.handleIconGridKeydown}
         >
@@ -304,8 +304,7 @@ class SessionMenu extends OpenClawLightDomElement {
               <button
                 type="button"
                 class="session-menu__icon-choice"
-                role="radio"
-                aria-checked=${String(checked)}
+                aria-pressed=${String(checked)}
                 tabindex=${icon === tabStop ? "0" : "-1"}
                 ?disabled=${this.actionDisabled("set-icon")}
                 title=${this.actionTitle("set-icon")}
