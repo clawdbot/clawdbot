@@ -286,23 +286,6 @@ export async function cleanupClawAgentFilesystem(params: {
   return errors;
 }
 
-/** Release deleted-agent database discovery only after Claw filesystem cleanup succeeds. */
-export function releaseClawAgentDatabaseRegistry(
-  agentId: string,
-  cleanupErrors: string[],
-  env?: NodeJS.ProcessEnv,
-): void {
-  if (cleanupErrors.length > 0) {
-    return;
-  }
-  try {
-    unregisterOpenClawAgentDatabases({ agentId, env });
-  } catch (error) {
-    // The partial install record owns retry, so a registry failure must keep removal incomplete.
-    cleanupErrors.push(coerceErrorMessage(error));
-  }
-}
-
 export const clawRemoveQuietRuntime: RuntimeEnv = {
   log: (..._args: unknown[]) => undefined,
   error: (..._args: unknown[]) => undefined,
@@ -479,6 +462,10 @@ export function releaseClawRemoveRows(
   complete: boolean,
   options: OpenClawStateDatabaseOptions,
 ): void {
+  if (complete) {
+    // Keep the install record as the retry owner until database discovery is released.
+    unregisterOpenClawAgentDatabases({ agentId, env: options.env });
+  }
   runOpenClawStateWriteTransaction(({ db }) => {
     if (clawStateTableExists(db, "claw_workspace_files")) {
       for (const file of files.filter((candidate) => candidate.action !== "error")) {

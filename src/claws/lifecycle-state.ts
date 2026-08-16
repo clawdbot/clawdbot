@@ -31,7 +31,6 @@ import {
   cleanupClawAgentFilesystem,
   deletionEffects,
   readAttachedCronJobs,
-  releaseClawAgentDatabaseRegistry,
   releaseClawRemoveRows,
   removeClawWorkspaceFile,
   workspaceContainsUntrackedEntries,
@@ -676,7 +675,6 @@ export async function applyClawRemovePlan(
       })),
     );
   }
-  releaseClawAgentDatabaseRegistry(agentId, cleanupErrors, options.env);
   const complete = cleanupErrors.length === 0;
   if (!complete) {
     updateClawInstallRecordStatus(agentId, "partial", options);
