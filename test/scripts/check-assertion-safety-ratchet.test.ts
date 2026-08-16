@@ -55,13 +55,14 @@ describe("check-assertion-safety-ratchet", () => {
       "// SAFETY: the schema parser established Shape.",
       "const safe = value as Shape;",
       "const inlineSafe = value as Shape; // SAFETY: the schema parser established Shape.",
+      "const afterInline = value as Shape;",
       "const present = value!;",
       'const note = "// SAFETY: string content is not a comment.";',
       "const unsafe = value as Shape;",
       "const angle = <Shape>value;",
     ].join("\n");
 
-    expect(countUnsafeAssertions(source, "src/example.ts")).toBe(2);
+    expect(countUnsafeAssertions(source, "src/example.ts")).toBe(3);
     expect(
       countUnsafeAssertions("value as unknown as Shape;", "src/agents/agent-model-discovery.ts"),
     ).toBe(1);

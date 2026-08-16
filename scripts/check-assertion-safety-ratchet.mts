@@ -52,7 +52,8 @@ function collectSafetyCommentLines(sourceFile: ts.SourceFile, source: string) {
     sourceFile.languageVariant,
     source,
   );
-  const lines = new Set<number>();
+  const sameLine = new Set<number>();
+  const standalone = new Set<number>();
   for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
     if (token !== ts.SyntaxKind.SingleLineCommentTrivia) {
       continue;
@@ -61,9 +62,15 @@ function collectSafetyCommentLines(sourceFile: ts.SourceFile, source: string) {
     if (!/^\/\/\s*SAFETY:\s*\S/u.test(comment)) {
       continue;
     }
-    lines.add(sourceFile.getLineAndCharacterOfPosition(scanner.getTokenPos()).line);
+    const position = scanner.getTokenPos();
+    const line = sourceFile.getLineAndCharacterOfPosition(position).line;
+    sameLine.add(line);
+    const lineStart = sourceFile.getPositionOfLineAndCharacter(line, 0);
+    if (source.slice(lineStart, position).trim() === "") {
+      standalone.add(line);
+    }
   }
-  return lines;
+  return { sameLine, standalone };
 }
 
 function assertionOperatorPosition(sourceFile: ts.SourceFile, node: AssertionNode) {
@@ -118,7 +125,10 @@ export function countUnsafeAssertions(source: string, filePath = "src/source.ts"
         const operatorLine = sourceFile.getLineAndCharacterOfPosition(
           assertionOperatorPosition(sourceFile, node),
         ).line;
-        if (!safetyCommentLines.has(operatorLine) && !safetyCommentLines.has(operatorLine - 1)) {
+        if (
+          !safetyCommentLines.sameLine.has(operatorLine) &&
+          !safetyCommentLines.standalone.has(operatorLine - 1)
+        ) {
           count += 1;
         }
       }
