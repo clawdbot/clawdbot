@@ -1,7 +1,6 @@
 import { projectPluginMetadataSnapshotWorkspace } from "../plugins/plugin-metadata-snapshot.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
-import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.facts.js";
 import type {
   PreparedModelRuntimeCatalogMode,
   PreparedModelRuntimeInput,
@@ -49,7 +48,10 @@ export function createPreparedPluginGeneration(params: {
 }
 
 export async function buildPreparedPluginModelCatalog(params: {
-  agentFacts: Pick<PreparedModelRuntimeAgentFacts, "credentials" | "env" | "input">;
+  agentFacts: {
+    credentials: Parameters<typeof buildPreparedModelCatalogSnapshot>[0]["authCredentials"];
+    input: PreparedModelRuntimeInput;
+  };
   catalogMode: PreparedModelRuntimeCatalogMode;
   modelRegistry: Parameters<typeof buildPreparedModelCatalogSnapshot>[0]["modelRegistry"];
   pluginGeneration: PreparedModelRuntimePluginGeneration;
