@@ -1,4 +1,8 @@
-import { markReplyPayloadAsTtsSupplement, type ReplyPayload } from "../auto-reply/reply-payload.js";
+import {
+  getReplyPayloadMetadata,
+  markReplyPayloadAsTtsSupplement,
+  type ReplyPayload,
+} from "../auto-reply/reply-payload.js";
 import { getChannelPlugin } from "../channels/plugins/registry.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { isVerbose, logVerbose } from "../globals.js";
@@ -6,7 +10,7 @@ import { resolveSendableOutboundReplyParts } from "../infra/outbound/reply-paylo
 import { hasReplyPayloadContent } from "../interactive/payload.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
-import { parseTtsDirectives } from "./directives.js";
+import { parseTtsDirectives, resolveTtsDirectiveFacts } from "./directives.js";
 import { canonicalizeSpeechProviderId, getSpeechProvider } from "./provider-registry.js";
 import type { SpeechVoiceOption } from "./provider-types.js";
 import { assertSpeechRuntimeAvailable, isSpeechRuntimeAvailable } from "./runtime-availability.js";
@@ -106,18 +110,26 @@ export async function maybeApplyTtsToPayloadCore(
     channelId: params.channel,
     accountId: params.accountId,
   });
-  if (autoMode === "off") {
+  const ttsMetadata = getReplyPayloadMetadata(params.payload);
+  const explicitTts = ttsMetadata?.ttsExplicit === true;
+  if (autoMode === "off" && !explicitTts) {
     return params.payload;
   }
   const activeProvider = resolveTtsProvider(config, prefsPath);
 
   const reply = resolveSendableOutboundReplyParts(params.payload);
   const text = reply.text;
-  const directives = parseTtsDirectives(text, config.modelOverrides, {
+  const directiveOptions = {
     cfg,
     providerConfigs: config.providerConfigs,
     preferredProviderId: activeProvider,
-  });
+  };
+  const directives = ttsMetadata?.tts
+    ? {
+        cleanedText: text,
+        ...resolveTtsDirectiveFacts(ttsMetadata.tts, config.modelOverrides, directiveOptions),
+      }
+    : parseTtsDirectives(text, config.modelOverrides, directiveOptions);
   if (directives.warnings.length > 0) {
     logVerbose(`TTS: ignored directive overrides (${directives.warnings.join("; ")})`);
   }
@@ -145,10 +157,10 @@ export async function maybeApplyTtsToPayloadCore(
           text: visibleText.length > 0 ? visibleText : undefined,
         };
 
-  if (autoMode === "tagged" && !directives.hasDirective) {
+  if (!explicitTts && autoMode === "tagged" && !directives.hasDirective) {
     return nextPayload;
   }
-  if (autoMode === "inbound" && params.inboundAudio !== true) {
+  if (!explicitTts && autoMode === "inbound" && params.inboundAudio !== true) {
     return nextPayload;
   }
 

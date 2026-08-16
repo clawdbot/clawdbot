@@ -48,12 +48,20 @@ describe("SessionManager persistence compatibility", () => {
 
     const manager = SessionManager.open(scope, dir);
     const tagged = buildAssistantMessage(
-      "[[reply_to_current]]\n[[reply_to:message-7]]\n[[audio_as_voice]]\nFinal answer",
+      [
+        "[[reply_to_current]]",
+        "[[reply_to:message-7]]",
+        "[[audio_as_voice]]",
+        "[[tts:provider=mock voiceId=voice-7]]",
+        "Final answer [[tts:text]]Spoken answer[[/tts:text]]",
+      ].join("\n"),
     );
     const codeExampleText = [
       "Use `[[reply_to_current]]` literally.",
+      "Use `[[tts:text]]spoken[[/tts:text]]` literally.",
       "```text",
       "[[audio_as_voice]]",
+      "[[tts:provider=mock voiceId=voice-7]]",
       "```",
     ].join("\n");
     const codeExample = buildAssistantMessage(codeExampleText);
@@ -68,6 +76,16 @@ describe("SessionManager persistence compatibility", () => {
         audioAsVoice: true,
         replyToCurrent: true,
         replyToId: "message-7",
+        tts: {
+          tagged: true,
+          text: "Spoken answer",
+          directives: [
+            {
+              provider: "mock",
+              values: { voiceid: "voice-7" },
+            },
+          ],
+        },
       },
     });
     expect(codeExample.content).toEqual([{ type: "text", text: codeExampleText }]);

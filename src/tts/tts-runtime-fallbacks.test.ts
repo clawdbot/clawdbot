@@ -1,6 +1,7 @@
 import { rmSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import { routeReply } from "../auto-reply/reply/route-reply.js";
 import * as bundledChannelPlugins from "../channels/plugins/bundled.js";
@@ -98,6 +99,35 @@ describe("TTS runtime provider fallback and delivery behavior", () => {
     transcodeAudioBufferMock.mockClear();
     routedPayloads.length = 0;
     installSpeechProviders([createMockSpeechProvider()]);
+  });
+
+  it("synthesizes persisted TTS facts after the visible text has been stripped", async () => {
+    const payload = setReplyPayloadMetadata(
+      { text: "Visible answer" },
+      {
+        tts: {
+          tagged: true,
+          text: "Spoken answer",
+          directives: [{ provider: "mock", values: {} }],
+        },
+      },
+    );
+
+    const result = await maybeApplyTtsToPayload({
+      payload,
+      cfg: createTtsConfig("openclaw-speech-core-persisted-facts"),
+      channel: "telegram",
+      kind: "final",
+      ttsAuto: "tagged",
+    });
+
+    expect(requireFirstSynthesisRequest("persisted TTS facts")).toMatchObject({
+      text: "Spoken answer",
+    });
+    expect(result).toMatchObject({
+      text: "Visible answer",
+      spokenText: "Spoken answer",
+    });
   });
 
   it("ignores voiceModel refs that are not speech models", async () => {
