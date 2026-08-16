@@ -206,9 +206,12 @@ function configureFakeMcp(params: ReturnType<typeof createParams>): void {
 }
 
 function admitLocalOperatorCronAuthority(params: ReturnType<typeof createParams>): void {
+  // Capability fixtures mirror the gateway-minted run scope: callerOrigin is
+  // contractually present since #118579, and transcript tool wiring reads it.
   params.cronCreatorAuthorityCapability = {
     active: true,
     runId: params.runId,
+    callerOrigin: { kind: "local" },
     signal: new AbortController().signal,
   } as never;
 }
