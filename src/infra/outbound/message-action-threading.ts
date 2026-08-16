@@ -180,12 +180,6 @@ export async function prepareOutboundMirrorRoute(params: {
   resolveOutboundSessionRoute: (
     params: ResolveOutboundSessionRouteParams,
   ) => Promise<OutboundSessionRoute | null>;
-  ensureOutboundSessionEntry: (params: {
-    cfg: OpenClawConfig;
-    channel: ChannelId;
-    accountId?: string | null;
-    route: OutboundSessionRoute;
-  }) => Promise<void>;
 }): Promise<{
   resolvedThreadId?: string;
   outboundRoute: OutboundSessionRoute | null;
@@ -200,6 +194,9 @@ export async function prepareOutboundMirrorRoute(params: {
     replyToIsExplicit: params.replyToIsExplicit,
   });
   const replyToId = readToolStringParam(params.actionParams, "replyTo");
+  // Route resolution is read-only here; the durable session/route write happens
+  // in ensureOutboundSessionEntry only after the send succeeds. Persisting
+  // before delivery let a failed CLI probe rebind the main session's route.
   const outboundRoute =
     params.agentId && !params.dryRun
       ? await params.resolveOutboundSessionRoute({
@@ -214,14 +211,6 @@ export async function prepareOutboundMirrorRoute(params: {
           threadId: resolvedThreadId,
         })
       : null;
-  if (outboundRoute && params.agentId && !params.dryRun) {
-    await params.ensureOutboundSessionEntry({
-      cfg: params.cfg,
-      channel: params.channel,
-      accountId: params.accountId,
-      route: outboundRoute,
-    });
-  }
   if (outboundRoute && !params.dryRun) {
     params.actionParams["__sessionKey"] = outboundRoute.sessionKey;
   }

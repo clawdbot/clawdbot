@@ -1393,8 +1393,8 @@ describe("gateway send mirroring", () => {
   });
 
   it("does not send after delegated authority closes during session preparation", async () => {
-    const preparation = createDeferred<undefined>();
-    mocks.ensureOutboundSessionEntry.mockReturnValueOnce(preparation.promise);
+    const preparation = createDeferred<null>();
+    mocks.resolveOutboundSessionRoute.mockReturnValueOnce(preparation.promise);
     let authorityActive = true;
     const context = {
       ...makeContext(),
@@ -1411,14 +1411,15 @@ describe("gateway send mirroring", () => {
       agentRuntimeClient("agent:main:slack:channel:C1"),
       context,
     );
-    await vi.waitFor(() => expect(mocks.ensureOutboundSessionEntry).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(mocks.resolveOutboundSessionRoute).toHaveBeenCalledOnce());
     authorityActive = false;
-    preparation.resolve(undefined);
+    preparation.resolve(null);
 
     const { respond } = await request;
     expect(firstRespondCall(respond)[0]).toBe(false);
     expect(firstRespondCall(respond)[2]?.message).toContain("authority is no longer active");
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(mocks.ensureOutboundSessionEntry).not.toHaveBeenCalled();
   });
 
   it("cancels a prepared terminal receipt when authority closes before action dispatch", async () => {
