@@ -32,6 +32,12 @@ describe("scripts/test-live-cli-backend-docker.sh", () => {
     expect(forwardedVars).toContain("OPENCLAW_TEST_CONSOLE");
   });
 
+  it("forwards the Claude prompt-cache probe into the Docker container", () => {
+    const forwardedVars = readForwardedDockerEnvVars();
+
+    expect(forwardedVars).toContain("OPENCLAW_LIVE_CLI_BACKEND_CACHE_PROBE");
+  });
+
   it("forwards advisory provider-skip controls into the Docker container", () => {
     const forwardedVars = readForwardedDockerEnvVars();
 
