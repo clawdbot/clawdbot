@@ -14,7 +14,12 @@ const node = {
   clientId: "node-host",
   clientMode: "node",
   protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-  commands: [NODE_WORKER_WORKSPACE_RETAIN_COMMAND],
+  commands: ["system.run"],
+  workerBuild: {
+    bundleHash: "a".repeat(64),
+    openclawVersion: "1.0.0",
+    protocolFeatures: [],
+  },
 } as const;
 
 function environment(overrides: Record<string, unknown> = {}) {
@@ -165,12 +170,12 @@ describe("node workspace retain coordinator", () => {
     await coordinator.stop();
   });
 
-  it("skips nodes that do not advertise the workspace retain command", async () => {
+  it("skips nodes that are not worker hosts", async () => {
     const { coordinator, invoke } = createHarness({
       results: [{ applied: true, deleted: 0, hasMore: false }],
     });
 
-    // Replace the transport with a node that omits the retain command.
+    // Replace the transport with a node that is not a worker host (no workerBuild)
     const invokeFiltered = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async () => ({
       ok: true,
       payloadJSON: JSON.stringify({ applied: true, deleted: 0, hasMore: false }),
@@ -179,7 +184,7 @@ describe("node workspace retain coordinator", () => {
       listCurrentNodes: async () => [
         {
           ...node,
-          commands: ["system.run", "system.which"],
+          workerBuild: undefined,
         },
       ],
       isCurrent: () => true,

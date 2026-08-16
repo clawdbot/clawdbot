@@ -163,7 +163,7 @@ export function createNodeWorkspaceRetainCoordinator(
         : currentNodes.filter((node) => requestedNodes.has(node.nodeId));
       await Promise.all(
         targets
-          .filter((node) => node.commands.includes(NODE_WORKER_WORKSPACE_RETAIN_COMMAND))
+          .filter((node) => node.workerBuild != null)
           .map(async (node) => {
             try {
               await publishSnapshot(currentTransport, node);
