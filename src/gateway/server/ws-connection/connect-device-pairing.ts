@@ -21,6 +21,7 @@ import {
   listDevicePairing,
   requestDevicePairing,
   resolveEffectiveOperatorDeviceIdentity,
+  updatePairedDeviceMetadata,
 } from "../../../infra/device-pairing.js";
 import {
   resolveBootstrapProfileScopesForRole,
@@ -121,7 +122,7 @@ export async function authorizeGatewayConnectDevice(
     bootstrapTokenCandidate,
     pairingLocality,
     skipLocalBackendSelfPairing,
-    skipControlUiPairingForDevice,
+    controlUiPairingKind,
     allowControlUiDeviceAuthMigration,
   } = state;
   let hasServerApprovedDeviceTokenBaseline = false;
@@ -631,8 +632,25 @@ export async function authorizeGatewayConnectDevice(
 
     const paired = await getPairedDevice(device.id);
     const isPaired = paired?.publicKey === devicePublicKey;
-    if (!isPaired) {
-      if (!(skipLocalBackendSelfPairing || skipControlUiPairingForDevice)) {
+    const pairingRecordDoesNotAuthorizeSession =
+      skipLocalBackendSelfPairing || controlUiPairingKind === "auth-none";
+    if (pairingRecordDoesNotAuthorizeSession) {
+      if (isPaired) {
+        // Locality plus auth mode authorizes this session; the pairing row only
+        // bounds durable grants and owns last-seen diagnostics. Reapplying its
+        // scope cap here would make an unrelated narrow row deny local access.
+        pairedClientId = paired.clientId;
+        pairedBrowserOrigin = paired.browserOrigin;
+        hasServerApprovedDeviceTokenBaseline = true;
+        await updatePairedDeviceMetadata(device.id, clientAccessMetadata);
+      } else if (
+        controlUiPairingKind === "auth-none" ||
+        (skipLocalBackendSelfPairing && authMethod !== "device-token")
+      ) {
+        hasServerApprovedDeviceTokenBaseline = true;
+      }
+    } else if (!isPaired) {
+      if (controlUiPairingKind === null) {
         const ok = await requirePairing("not-paired", paired);
         if (!ok) {
           return undefined;
@@ -647,10 +665,7 @@ export async function authorizeGatewayConnectDevice(
               : undefined;
           hasServerApprovedDeviceTokenBaseline = true;
         }
-      } else if (
-        skipControlUiPairingForDevice ||
-        (skipLocalBackendSelfPairing && authMethod !== "device-token")
-      ) {
+      } else {
         hasServerApprovedDeviceTokenBaseline = true;
       }
     } else {

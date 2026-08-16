@@ -202,52 +202,6 @@ describe("gateway silent scope-upgrade reconnect", () => {
     }
   });
 
-  test("does not let backend reconnect bypass the paired scope baseline", async () => {
-    const started = await startServerWithClient("secret");
-    const paired = await issueReadScopedOperatorToken({
-      name: "backend-scope-upgrade-reconnect-poc",
-      clientId: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-      clientMode: GATEWAY_CLIENT_MODES.BACKEND,
-    });
-
-    let watcherWs: WebSocket | undefined;
-    let backendReconnectWs: WebSocket | undefined;
-    let requestedEvent: Promise<unknown>;
-
-    try {
-      ({ ws: watcherWs, requestedEvent } = await watchScopeUpgradeRequests(started.port));
-
-      backendReconnectWs = await openTrackedWs(started.port);
-      const reconnectAttempt = await connectReq(backendReconnectWs, {
-        token: "secret",
-        deviceIdentityPath: paired.identityPath,
-        client: {
-          id: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-          version: "1.0.0",
-          platform: "node",
-          mode: GATEWAY_CLIENT_MODES.BACKEND,
-        },
-        role: "operator",
-        scopes: ["operator.admin"],
-      });
-      expect(reconnectAttempt.ok).toBe(false);
-      expect(reconnectAttempt.error?.message).toBe(
-        "pairing required: device is asking for more scopes than currently approved",
-      );
-
-      await expectRejectedScopeUpgradeAttempt({
-        attempt: reconnectAttempt,
-        requestedEvent,
-        deviceId: paired.deviceId,
-        token: paired.token,
-      });
-    } finally {
-      watcherWs?.close();
-      backendReconnectWs?.close();
-      await closeStartedGateway(started);
-    }
-  });
-
   test("keeps direct-local backend callGateway scoped calls off stale paired CLI baseline", async () => {
     const started = await startServerWithClient("secret");
     const identity = await approveReadScopedDevice({

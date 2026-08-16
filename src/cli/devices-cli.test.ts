@@ -208,7 +208,7 @@ describe("devices cli approve", () => {
     await runDevicesApprove(["req-123"]);
 
     expect(callGateway).toHaveBeenCalledTimes(2);
-    expectGatewayCall(0, { method: "device.pair.list" });
+    expectGatewayCall(0, { method: "device.pair.list", scopes: ["operator.pairing"] });
     expectGatewayCall(1, {
       method: "device.pair.approve",
       params: { requestId: "req-123" },

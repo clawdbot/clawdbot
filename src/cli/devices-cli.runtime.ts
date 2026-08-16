@@ -368,7 +368,9 @@ function redactLocalPairedDevice(device: InfraPairedDevice): PairedDevice {
 
 async function listPairingWithFallback(opts: DevicesRpcOpts): Promise<DevicePairingList> {
   try {
-    return parseDevicePairingList(await callGatewayCli("device.pair.list", opts, {}));
+    return parseDevicePairingList(
+      await callGatewayCli("device.pair.list", opts, {}, { scopes: [PAIRING_SCOPE] }),
+    );
   } catch (error) {
     const fallback = resolveLocalPairingFallback(opts, error);
     if (!fallback) {

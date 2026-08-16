@@ -1,0 +1,174 @@
+// Gateway connect pairing tests protect session exemptions and durable device grant bounds.
+import { describe, expect, test } from "vitest";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../../../packages/gateway-protocol/src/client-info.js";
+import { replaceConfigFile } from "../../../config/config.js";
+import type { GatewayAuthConfig } from "../../../config/types.gateway.js";
+import { ensureDeviceToken, getPairedDevice } from "../../../infra/device-pairing.js";
+import {
+  loadDeviceIdentity,
+  openTrackedWs,
+  pairDeviceIdentity,
+} from "../../device-authz.test-helpers.js";
+import { CONTROL_UI_CLIENT, openTailscaleWs } from "../../server.auth.test-helpers.js";
+import {
+  connectReq,
+  installGatewayTestHooks,
+  startServer,
+  startServerWithClient,
+  testState,
+  testTailscaleWhois,
+} from "../../test-helpers.js";
+
+installGatewayTestHooks({ scope: "suite" });
+
+await import("../../server.js");
+
+const BACKEND_CLIENT = {
+  id: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+  version: "1.0.0",
+  platform: "node",
+  mode: GATEWAY_CLIENT_MODES.BACKEND,
+} as const;
+
+const TUI_CLIENT = {
+  id: GATEWAY_CLIENT_NAMES.TUI,
+  version: "1.0.0",
+  platform: "test",
+  mode: GATEWAY_CLIENT_MODES.CLI,
+} as const;
+
+describe("gateway connect pairing exemptions", () => {
+  test.each([
+    {
+      name: "local backend self-call",
+      client: BACKEND_CLIENT,
+      approvedScopes: ["operator.pairing"],
+      pairingClientId: GATEWAY_CLIENT_NAMES.CLI,
+      pairingClientMode: GATEWAY_CLIENT_MODES.CLI,
+    },
+    {
+      name: "TUI operator client",
+      client: TUI_CLIENT,
+      approvedScopes: ["operator.read"],
+      pairingClientId: GATEWAY_CLIENT_NAMES.TUI,
+      pairingClientMode: GATEWAY_CLIENT_MODES.CLI,
+    },
+  ])(
+    "admits an auth-none $name before and after a narrower pairing row exists",
+    async ({ name, client, approvedScopes, pairingClientId, pairingClientMode }) => {
+      const started = await startServerWithClient(undefined, { auth: { mode: "none" } });
+      const identityName = `auth-none-${name.replaceAll(" ", "-")}`;
+      const loaded = loadDeviceIdentity(identityName);
+      let pairedWs: Awaited<ReturnType<typeof openTrackedWs>> | undefined;
+
+      try {
+        const unpaired = await connectReq(started.ws, {
+          client,
+          role: "operator",
+          scopes: ["operator.write"],
+          deviceIdentityPath: loaded.identityPath,
+          skipDefaultAuth: true,
+          prePairDevice: false,
+        });
+        expect(unpaired.ok, JSON.stringify(unpaired)).toBe(true);
+        started.ws.close();
+
+        await pairDeviceIdentity({
+          name: identityName,
+          role: "operator",
+          scopes: approvedScopes,
+          clientId: pairingClientId,
+          clientMode: pairingClientMode,
+        });
+        const tokenBefore = await ensureDeviceToken({
+          deviceId: loaded.identity.deviceId,
+          role: "operator",
+          scopes: approvedScopes,
+        });
+        expect(tokenBefore?.scopes).toEqual(approvedScopes);
+
+        pairedWs = await openTrackedWs(started.port);
+        const pairedConnect = await connectReq(pairedWs, {
+          client,
+          role: "operator",
+          scopes: ["operator.write"],
+          deviceIdentityPath: loaded.identityPath,
+          skipDefaultAuth: true,
+          prePairDevice: false,
+        });
+        expect(pairedConnect.ok, JSON.stringify(pairedConnect)).toBe(true);
+
+        const paired = await getPairedDevice(loaded.identity.deviceId);
+        expect(paired?.approvedScopes).toEqual(approvedScopes);
+        expect(paired?.tokens?.operator).toMatchObject({
+          token: tokenBefore?.token,
+          scopes: approvedScopes,
+        });
+        expect(paired?.lastSeenReason).toBe("connect");
+      } finally {
+        pairedWs?.close();
+        started.ws.close();
+        await started.server.close();
+        started.envSnapshot.restore();
+      }
+    },
+  );
+
+  test("keeps a narrow pairing row as the Tailscale Control UI scope cap", async () => {
+    const tailscaleOrigin = "https://gateway.tailnet.ts.net";
+    const auth = {
+      mode: "token",
+      token: "secret",
+      allowTailscale: true,
+    } satisfies GatewayAuthConfig;
+    testState.gatewayAuth = auth;
+    testState.gatewayControlUi = { allowedOrigins: [tailscaleOrigin] };
+    testTailscaleWhois.value = { login: "peter", name: "Peter" };
+    await replaceConfigFile({
+      nextConfig: {
+        gateway: {
+          auth,
+          controlUi: { allowedOrigins: [tailscaleOrigin] },
+        },
+      },
+      afterWrite: { mode: "auto" },
+    });
+    const started = await startServer(undefined, { auth, controlUiEnabled: true });
+    const identityName = "tailscale-control-ui-scope-cap";
+    const paired = await pairDeviceIdentity({
+      name: identityName,
+      role: "operator",
+      scopes: ["operator.read"],
+      clientId: CONTROL_UI_CLIENT.id,
+      clientMode: CONTROL_UI_CLIENT.mode,
+    });
+    let ws: Awaited<ReturnType<typeof openTailscaleWs>> | undefined;
+
+    try {
+      ws = await openTailscaleWs(started.port, { origin: tailscaleOrigin });
+      const response = await connectReq(ws, {
+        skipDefaultAuth: true,
+        prePairDevice: false,
+        scopes: ["operator.write"],
+        client: CONTROL_UI_CLIENT,
+        deviceIdentityPath: paired.identityPath,
+      });
+      expect(response.ok).toBe(false);
+      expect(response.error?.details).toMatchObject({
+        reason: "scope-upgrade",
+        approvedScopes: ["operator.read"],
+      });
+      expect((await getPairedDevice(paired.identity.deviceId))?.approvedScopes).toEqual([
+        "operator.read",
+      ]);
+    } finally {
+      ws?.close();
+      await started.server.close();
+      started.envSnapshot.restore();
+      testTailscaleWhois.value = null;
+    }
+  });
+});
