@@ -324,6 +324,48 @@ describe("worker tunnel manager", () => {
     await expect(stateful).rejects.toThrow("Worker tunnel owner is no longer connected");
   });
 
+  it("does not dispatch a stateful command cancelled during reconnect", async () => {
+    const fake = fakeRunner();
+    const releaseReconnect = deferred<void>();
+    const { handle, manager } = await startConnectedTunnel(fake, "worker:cancel-reconnect", 1, {
+      manager: {
+        sleep: async () => await releaseReconnect.promise,
+      },
+    });
+    const controller = new AbortController();
+    const onDispatchReady = vi.fn();
+
+    try {
+      fake.starts[0]!.process.exit(255);
+      await waitForFast(() =>
+        expect(manager.status("worker:cancel-reconnect")).toBe("reconnecting"),
+      );
+      const command = handle.runWorkspaceCommand({
+        ...PWD_COMMAND,
+        transportRetry: "never",
+        signal: controller.signal,
+        onDispatchReady,
+      });
+      const settled = vi.fn();
+      void command.then(settled, settled);
+
+      controller.abort(new Error("turn cancelled"));
+      await waitForFast(() => expect(settled).toHaveBeenCalledOnce(), { timeout: 100 });
+      await expect(command).rejects.toThrow("turn cancelled");
+
+      releaseReconnect.resolve();
+      await waitForStarts(fake.starts, 2);
+      fake.starts[1]!.process.becomeReady();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(onDispatchReady).not.toHaveBeenCalled();
+      expect(fake.runs.filter((run) => run.argv.at(-1)?.includes("'pwd'"))).toHaveLength(0);
+    } finally {
+      releaseReconnect.resolve();
+      await handle.stop();
+    }
+  });
+
   it("does not replay a stateful command after an ambiguous transport exit", async () => {
     const fake = fakeRunner((argv) =>
       argv.at(-1)?.includes("'pwd'") ? { ...success(), code: 255 } : undefined,

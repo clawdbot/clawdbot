@@ -122,6 +122,48 @@ describe("worker workspace reconnect", () => {
     }
   });
 
+  it("waits for a same-owner reconnect before initial workspace sync", async () => {
+    const root = tempDirs.make("openclaw-worker-sync-reconnect-");
+    const localPath = path.join(root, "local");
+    const remoteHome = path.join(root, "remote-home");
+    await Promise.all([fs.mkdir(localPath), fs.mkdir(remoteHome)]);
+    await fs.writeFile(path.join(localPath, "input.txt"), "ready\n");
+
+    const releaseReconnect = deferred<void>();
+    const fake = localWorkspaceRunner(remoteHome);
+    const { handle, manager } = await startConnectedTunnel(fake, "worker:sync-reconnect", 15, {
+      manager: {
+        sleep: async () => await releaseReconnect.promise,
+      },
+    });
+
+    try {
+      fake.starts[0]!.process.exit(255);
+      await waitForFast(() => expect(manager.status("worker:sync-reconnect")).toBe("reconnecting"));
+      const syncing = handle.syncWorkspace({
+        localPath,
+        sessionId: "session:sync-reconnect",
+        generation: 1,
+      });
+      const syncSettled = vi.fn();
+      void syncing.then(syncSettled, syncSettled);
+      await new Promise<void>((resolve) => setTimeout(resolve, 100));
+      expect(syncSettled).not.toHaveBeenCalled();
+
+      releaseReconnect.resolve();
+      await waitForStarts(fake.starts, 2);
+      fake.starts[1]!.process.becomeReady();
+      await expect(syncing).resolves.toMatchObject({
+        mode: "plain",
+        remoteWorkspaceDir: expect.any(String),
+        manifestRef: expect.stringMatching(/^sha256:/u),
+      });
+    } finally {
+      releaseReconnect.resolve();
+      await handle.stop();
+    }
+  });
+
   it("logs an in-flight child exit and the reconnect attempt before readiness", async () => {
     const commandStarted = deferred<void>();
     const releaseCommand = deferred<void>();

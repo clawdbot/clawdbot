@@ -54,7 +54,6 @@ export type WorkerWorkspaceActionsOptions = {
   environmentId: string;
   sharedHost?: boolean;
   ownerSignal: AbortSignal;
-  getPrepared: () => PreparedWorkerSsh | undefined;
   waitForPrepared: () => Promise<PreparedWorkerSsh>;
   runner: { run(argv: string[], options: CommandOptions): Promise<SpawnResult> };
   tasks: Set<Promise<unknown>>;

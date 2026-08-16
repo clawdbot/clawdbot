@@ -264,7 +264,6 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
       environmentId: entry.environmentId,
       sharedHost: entry.sharedHost,
       ownerSignal: entry.abortController.signal,
-      getPrepared,
       waitForPrepared,
       runner,
       tasks: entry.workspaceTasks,
