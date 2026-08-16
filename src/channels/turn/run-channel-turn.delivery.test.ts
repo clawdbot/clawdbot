@@ -136,6 +136,15 @@ function createReceipt(
   return { counts: receipt, anyVisibleDelivered };
 }
 
+function expectNonVisibleFinalReceipt(result: unknown) {
+  expect(result).toMatchObject({
+    settledReceipt: {
+      anyVisibleDelivered: false,
+      counts: { final: { deliveredNotVisible: 1 } },
+    },
+  });
+}
+
 function createDispatch(
   events: string[] = [],
   deliverPayload: { text: string } = { text: "reply" },
@@ -437,12 +446,7 @@ describe("channel turn delivery", () => {
       },
     );
     expectDispatched(result);
-    expect(result.dispatchResult).toMatchObject({
-      settledReceipt: {
-        anyVisibleDelivered: false,
-        counts: { final: { deliveredNotVisible: 1 } },
-      },
-    });
+    expectNonVisibleFinalReceipt(result.dispatchResult);
   });
 
   it("suppresses routed direct delivery and visible counts when message hooks cancel", async () => {
@@ -480,12 +484,7 @@ describe("channel turn delivery", () => {
     );
     expect(emitMessageSent).not.toHaveBeenCalled();
     expectDispatched(result);
-    expect(result.dispatchResult).toMatchObject({
-      settledReceipt: {
-        anyVisibleDelivered: false,
-        counts: { final: { deliveredNotVisible: 1 } },
-      },
-    });
+    expectNonVisibleFinalReceipt(result.dispatchResult);
     expect(hasVisibleChannelTurnDispatch(result.dispatchResult)).toBe(false);
   });
 
@@ -799,12 +798,7 @@ describe("channel turn delivery", () => {
       }),
     );
     expectDispatched(result);
-    expect(result.dispatchResult).toMatchObject({
-      settledReceipt: {
-        anyVisibleDelivered: false,
-        counts: { final: { deliveredNotVisible: 1 } },
-      },
-    });
+    expectNonVisibleFinalReceipt(result.dispatchResult);
   });
 
   it("keeps no-identity durable sends visible through lifecycle settlement", async () => {
