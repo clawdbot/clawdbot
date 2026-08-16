@@ -675,6 +675,7 @@ void renew().catch((error) => {
 export const REMOTE_WORKSPACE_RESUME_JS = createWorkspaceQuiescenceResumeScript({
   processScript: REMOTE_QUIESCENCE_PS_JS,
   leaseScript: REMOTE_QUIESCENCE_LEASE_JS,
+  processRecoveryTimeoutMs: REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS,
   processProbeConcurrency: REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY,
   operatorRecoveryExitCode: WORKER_WORKSPACE_OPERATOR_RECOVERY_EXIT_CODE,
 });

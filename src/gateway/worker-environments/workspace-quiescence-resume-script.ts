@@ -1,6 +1,7 @@
 type WorkspaceQuiescenceResumeScriptOptions = {
   processScript: string;
   leaseScript: string;
+  processRecoveryTimeoutMs: number;
   processProbeConcurrency: number;
   operatorRecoveryExitCode: number;
 };
@@ -33,17 +34,12 @@ async function resume() {
     ...(input.watchdog === null ? [] : [{ ...input.watchdog, signal: "SIGTERM" }]),
     ...input.processes.map((entry) => ({ ...entry, signal: "SIGCONT" })),
   ];
-  let recovery = { remaining: references, failed: false };
-  while (recovery.remaining.length > 0) {
-    const priorCount = recovery.remaining.length;
-    recovery = await recoverProcessReferences(
-      recovery.remaining,
-      ${options.processProbeConcurrency},
-    );
-    // Continue only while a fixed-budget pass shrinks the lease. A fully stalled
-    // pass still reaches operator recovery within the default five-second deadline.
-    if (recovery.failed || recovery.remaining.length === priorCount) break;
-  }
+  const recoveryDeadlineMs = Date.now() + ${options.processRecoveryTimeoutMs};
+  const recovery = await recoverProcessReferences(
+    references,
+    ${options.processProbeConcurrency},
+    recoveryDeadlineMs,
+  );
   if (recovery.remaining.length > 0) {
     const watchdog = recovery.remaining.find((entry) => entry.signal === "SIGTERM") ?? null;
     const processes = recovery.remaining
