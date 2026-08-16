@@ -37,7 +37,8 @@ function isUnavailableApprovalError(error: unknown): boolean {
   const reason = isRecord(error.details) ? error.details.reason : undefined;
   return (
     reason === "APPROVAL_NOT_FOUND" ||
-    ["APPROVAL_NOT_FOUND", "INVALID_REQUEST"].includes(error.gatewayCode ?? "")
+    error.gatewayCode === "APPROVAL_NOT_FOUND" ||
+    error.gatewayCode === "INVALID_REQUEST"
   );
 }
 
@@ -49,25 +50,28 @@ function formatApprovalTime(timestampMs: number): string {
 }
 
 function decisionLabel(decision: ApprovalDecision): string {
-  return t(
-    decision === "allow-once"
-      ? "execApproval.allowOnce"
-      : decision === "allow-always"
-        ? "execApproval.alwaysAllow"
-        : "execApproval.deny",
-  );
+  switch (decision) {
+    case "allow-once":
+      return t("execApproval.allowOnce");
+    case "allow-always":
+      return t("execApproval.alwaysAllow");
+    case "deny":
+      return t("execApproval.deny");
+  }
+  const unreachable: never = decision;
+  return unreachable;
 }
 
 function appliedDecisionMatches(
   result: ApprovalResolveResult,
   decision: ApprovalDecision,
 ): boolean {
-  return (
-    !result.applied ||
-    (decision === "deny"
-      ? result.approval.status === "denied"
-      : result.approval.status === "allowed" && result.approval.decision === decision)
-  );
+  if (!result.applied) {
+    return true;
+  }
+  return decision === "deny"
+    ? result.approval.status === "denied"
+    : result.approval.status === "allowed" && result.approval.decision === decision;
 }
 
 function renderMetaRow(label: string, value?: string | null) {
@@ -138,7 +142,8 @@ function terminalTitle(approval: ApprovalSnapshot, origin: ResolutionOrigin): st
     case "pending":
       return t("approvalPage.pending");
   }
-  return status satisfies never;
+  const unreachable: never = status;
+  return unreachable;
 }
 
 function terminalDescription(approval: ApprovalSnapshot, origin: ResolutionOrigin): string {
@@ -160,7 +165,8 @@ function terminalDescription(approval: ApprovalSnapshot, origin: ResolutionOrigi
     case "pending":
       return t("approvalPage.pendingDescription");
   }
-  return status satisfies never;
+  const unreachable: never = status;
+  return unreachable;
 }
 
 export class ApprovalPage extends OpenClawLightDomElement {
@@ -683,9 +689,9 @@ export class ApprovalPage extends OpenClawLightDomElement {
     const rawSeverity = active?.kind === "plugin" ? active.severity?.trim().toLowerCase() : null;
     // Keep this mapping aligned with the sibling exec-approval-card.ts surface.
     const severity =
-      active?.kind === "exec" || ["warning", "warn"].includes(rawSeverity ?? "")
+      active?.kind === "exec" || rawSeverity === "warning" || rawSeverity === "warn"
         ? "warning"
-        : ["danger", "critical", "error"].includes(rawSeverity ?? "")
+        : rawSeverity === "danger" || rawSeverity === "critical" || rawSeverity === "error"
           ? "danger"
           : "info";
     return html`
