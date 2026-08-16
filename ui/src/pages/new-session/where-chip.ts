@@ -7,6 +7,7 @@ import {
   renderSessionMenuItem,
 } from "./cloud-target.ts";
 import type { DraftCloudProfile, DraftEnvironment, DraftNode } from "./discovery.ts";
+import { draftNodeUpdateIssue, isDraftNodeSessionEligible } from "./discovery.ts";
 import { disambiguate, isPhoneFamily, nodeTooltip } from "./place-labels.ts";
 import { resolvePlacePickerSections } from "./place-picker-sections.ts";
 
@@ -17,6 +18,16 @@ type WhereChipState = Readonly<{
   deviceFacts: ReadonlyMap<string, readonly string[]>;
   cloudProfiles: readonly DraftCloudProfile[];
 }>;
+
+function nodeUpdateIssueCopy(node: DraftNode): string | undefined {
+  const issue = draftNodeUpdateIssue(node);
+  return issue
+    ? t("newSession.nodeUpdateRequired", {
+        updateCommand: issue.updateCommand,
+        restartCommand: issue.headlessReconnectCommand,
+      })
+    : undefined;
+}
 
 export function resolveWhereChip(params: {
   execNodes: readonly DraftNode[];
@@ -132,8 +143,9 @@ export function renderWhereChip(params: {
         ${params.state.deviceNodes.length > 0
           ? html`
               <div class="new-session-page__menu-title">${t("newSession.yourDevices")}</div>
-              ${params.state.deviceNodes.map((node, index) =>
-                renderSessionMenuItem(
+              ${params.state.deviceNodes.map((node, index) => {
+                const updateIssue = nodeUpdateIssueCopy(node);
+                return renderSessionMenuItem(
                   {
                     value: `node:${node.nodeId}`,
                     label: node.displayName,
@@ -141,15 +153,15 @@ export function renderWhereChip(params: {
                       ? icons.monitorSmartphone
                       : icons.monitor,
                     sub: nodeSuffixes[index],
-                    facts: params.state.deviceFacts.get(node.nodeId),
+                    facts: updateIssue ? [updateIssue] : params.state.deviceFacts.get(node.nodeId),
                     checked: params.execNode === node.nodeId,
-                    disabled: !node.connected,
-                    title: nodeTooltip(node),
+                    disabled: !isDraftNodeSessionEligible(node),
+                    title: updateIssue ?? nodeTooltip(node),
                     onSelect: () => params.onSelectExecNode(node.nodeId),
                   },
                   params.submitting,
-                ),
-              )}
+                );
+              })}
             `
           : nothing}
         ${params.state.cloudProfiles.length > 0 || params.cloudProfileId

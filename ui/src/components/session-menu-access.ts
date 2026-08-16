@@ -63,7 +63,11 @@ export function sessionMenuReasons(params: {
     .map((row) =>
       reason({
         method: "sessions.delete",
-        params: { key: row.key, ...(row.archived ? { archivedOnly: true } : {}) },
+        params: {
+          key: row.key,
+          ...(row.sessionId ? { expectedSessionId: row.sessionId } : {}),
+          ...(row.archived ? { archivedOnly: true } : {}),
+        },
       }),
     )
     .find((value): value is string => Boolean(value));

@@ -5,8 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
-import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
@@ -77,6 +78,8 @@ let compactEmbeddedAgentSession: typeof import("./compact.queued.js").compactEmb
 let compactTesting: typeof import("./compact.js").testing;
 let onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
 let onInternalSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onInternalSessionTranscriptUpdate;
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const TEST_SESSION_ID = "session-1";
 const TEST_SESSION_KEY = "agent:main:session-1";
@@ -2793,7 +2796,9 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(result.result).not.toHaveProperty("summary");
   });
 
-  it("binds context-engine compaction runtime LLM to the session agent", async () => {
+  it("fails closed for a fallback-owned legacy compaction target", async () => {
+    const legacySessionId = "legacy-session-47";
+    const legacyStorePath = join(tempDirs.make("openclaw-legacy-compaction-"), "openclaw.sqlite");
     resolveSessionAgentIdsMock.mockReturnValueOnce({
       defaultAgentId: "main",
       sessionAgentId: "lossless-agent",
@@ -2808,7 +2813,14 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
             },
           },
         },
+        sessionId: legacySessionId,
         sessionKey: "legacy-topic-47",
+        sessionTarget: {
+          agentId: "lossless-agent",
+          sessionId: legacySessionId,
+          sessionKey: "legacy-topic-47",
+          storePath: legacyStorePath,
+        },
       }),
     );
 
@@ -2834,6 +2846,46 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
 
     await expect(
       runtimeContext.llm?.complete?.({
+        messages: [{ role: "user", content: "summarize" }],
+      }),
+    ).rejects.toThrow("not bound to an active session agent");
+  });
+
+  it("binds a queued legacy compaction from its explicit owner field", async () => {
+    const legacySessionId = "explicit-legacy-session-48";
+    await compactEmbeddedAgentSession(
+      wrappedCompactionArgs({
+        config: { agents: { defaults: { model: "openai/gpt-5.5" } } },
+        contextEngineAgentId: "lossless-agent",
+        sessionId: legacySessionId,
+        sessionKey: "legacy-topic-48",
+        sessionTarget: {
+          agentId: "lossless-agent",
+          sessionId: legacySessionId,
+          sessionKey: "legacy-topic-48",
+          storePath: join(tempDirs.make("openclaw-explicit-legacy-compaction-"), "openclaw.sqlite"),
+        },
+      }),
+    );
+
+    const compactInput = (
+      contextEngineCompactMock.mock.calls as unknown as Array<
+        [
+          {
+            runtimeContext?: {
+              llm?: {
+                complete?: (params: {
+                  messages: Array<{ role: "user"; content: string }>;
+                  agentId?: string;
+                }) => Promise<unknown>;
+              };
+            };
+          },
+        ]
+      >
+    )[0]?.[0];
+    await expect(
+      compactInput?.runtimeContext?.llm?.complete?.({
         messages: [{ role: "user", content: "summarize" }],
         agentId: "other-agent",
       }),

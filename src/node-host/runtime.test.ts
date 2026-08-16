@@ -139,6 +139,18 @@ function holdInvoke() {
   };
 }
 
+describe("node-host worker manifest", () => {
+  it("advertises the supported bundle prewarm form from the node build", async () => {
+    const prepared = await prepareNodeHostRuntime({
+      config: { nodeHost: { skills: { enabled: false }, workerRuns: { enabled: true } } },
+      env: { PATH: "/usr/bin" },
+      enableWorkerRuns: true,
+    });
+
+    expect(prepared.manifest.workerRuns).toMatchObject({ bundlePrewarm: 1 });
+  });
+});
+
 describe("node-host invocation cancellation", () => {
   it("cancels ordinary node invocations", async () => {
     const held = holdInvoke();

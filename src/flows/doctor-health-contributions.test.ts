@@ -1091,6 +1091,7 @@ describe("doctor health contributions", () => {
       ),
     );
 
+    // Untyped write errors still propagate; only typed validation refusals render notes.
     await expect(
       requireDoctorContribution("doctor:write-config-migrations").run(ctx),
     ).rejects.toThrow("Config validation failed");
@@ -1098,6 +1099,158 @@ describe("doctor health contributions", () => {
     expect(ctx.configResultWriteCommitted).not.toBe(true);
     expect(ctx.cfgForPersistence).toEqual(cfg);
     expect(mocks.collectActiveToolSchemaProjectionWarnings).not.toHaveBeenCalled();
+  });
+
+  it("reports unapplied fixes and holds change panels when write validation refuses the candidate", async () => {
+    // Regression: unknown root key repaired + type error elsewhere. Doctor used to
+    // print "Doctor changes — gatway", then crash with a raw Error and persist nothing.
+    const cfg = {
+      agents: { defaults: { heartbeat: { every: 5 } } },
+    } as unknown as OpenClawConfig;
+    const ctx = {
+      cfg,
+      cfgForPersistence: structuredClone(cfg),
+      configResult: {
+        cfg,
+        shouldWriteConfig: true,
+        pendingChangePanels: ["- gatway"],
+      },
+      configPath: "/tmp/fake-openclaw.json",
+      sourceConfigValid: false,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      env: {},
+    } as DoctorContributionRunContext;
+    mocks.replaceConfigFile.mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          "Config validation failed: agents.defaults.heartbeat.every: Invalid input: expected string, received number",
+        ),
+        {
+          code: "CONFIG_VALIDATION_FAILED",
+          issues: [
+            {
+              path: "agents.defaults.heartbeat.every",
+              message: "Invalid input: expected string, received number",
+            },
+          ],
+        },
+      ),
+    );
+
+    const laterRun = vi.fn(async () => undefined);
+    await runDoctorHealthContributionList(ctx, [
+      requireDoctorContribution("doctor:write-config-migrations"),
+      createDoctorHealthContribution({
+        id: "doctor:test-later",
+        label: "Test later",
+        run: laterRun,
+      }),
+    ]);
+
+    // The refusal is a rendered warning, not a crash. Later repairs consume the
+    // candidate config, so the loop stops before they persist state derived
+    // from a config that never reached disk (same invariant as cron deferral).
+    expect(laterRun).not.toHaveBeenCalled();
+    expect(ctx.configWriteBlockedByValidation).toBe(true);
+    expect(ctx.configResultWriteCommitted).not.toBe(true);
+    expect(ctx.cfgForPersistence).toEqual(cfg);
+    // Never print "Doctor changes" for changes that were not persisted.
+    expect(mocks.note).not.toHaveBeenCalledWith(expect.anything(), "Doctor changes");
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("No config changes were written"),
+      "Doctor warnings",
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("agents.defaults.heartbeat.every"),
+      "Doctor warnings",
+    );
+
+    // A later write pass must not retry the identical candidate or duplicate the warning.
+    mocks.note.mockClear();
+    mocks.replaceConfigFile.mockClear();
+    await requireDoctorContribution("doctor:write-config").run(ctx);
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    expect(mocks.note).not.toHaveBeenCalled();
+  });
+
+  it("describes only the failed later write after an earlier pass committed", async () => {
+    // First write pass commits; a later health repair then produces a candidate the
+    // writer refuses. The warning must not claim the whole run wrote nothing.
+    const cfg = { gateway: { mode: "local" } } as OpenClawConfig;
+    const ctx = {
+      cfg,
+      cfgForPersistence: structuredClone(cfg),
+      configResult: { cfg, shouldWriteConfig: true },
+      configPath: "/tmp/fake-openclaw.json",
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      env: {},
+    } as DoctorContributionRunContext;
+
+    await requireDoctorContribution("doctor:write-config-migrations").run(ctx);
+    expect(ctx.configResultWriteCommitted).toBe(true);
+
+    // A later repair mutates the candidate; the final write pass is refused.
+    ctx.cfg = {
+      ...ctx.cfg,
+      agents: { defaults: { heartbeat: { every: 5 } } },
+    } as unknown as OpenClawConfig;
+    mocks.note.mockClear();
+    mocks.replaceConfigFile.mockRejectedValueOnce(
+      Object.assign(new Error("Config validation failed: agents.defaults.heartbeat.every"), {
+        code: "CONFIG_VALIDATION_FAILED",
+        issues: [
+          {
+            path: "agents.defaults.heartbeat.every",
+            message: "Invalid input: expected string, received number",
+          },
+        ],
+      }),
+    );
+    await requireDoctorContribution("doctor:write-config").run(ctx);
+
+    expect(ctx.configWriteBlockedByValidation).toBe(true);
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Earlier config fixes were already saved"),
+      "Doctor warnings",
+    );
+    expect(mocks.note).not.toHaveBeenCalledWith(
+      expect.stringContaining("No config changes were written"),
+      "Doctor warnings",
+    );
+  });
+
+  it("prints held change panels as Doctor changes only after the write commits", async () => {
+    const cfg = { gateway: { mode: "local" } } as OpenClawConfig;
+    const ctx = {
+      cfg,
+      cfgForPersistence: structuredClone(cfg),
+      configResult: {
+        cfg,
+        shouldWriteConfig: true,
+        pendingChangePanels: ["- gatway"],
+      },
+      configPath: "/tmp/fake-openclaw.json",
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      env: {},
+    } as DoctorContributionRunContext;
+
+    await requireDoctorContribution("doctor:write-config-migrations").run(ctx);
+
+    expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
+    expect(mocks.note).toHaveBeenCalledWith("- gatway", "Doctor changes");
+    expect(ctx.configResultWriteCommitted).toBe(true);
+    // Panels print exactly once even when the final writer runs again.
+    mocks.note.mockClear();
+    await requireDoctorContribution("doctor:write-config").run(ctx);
+    expect(mocks.note).not.toHaveBeenCalledWith(expect.anything(), "Doctor changes");
   });
 
   it("defers every config write after a cron ownership handoff refusal", async () => {

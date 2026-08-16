@@ -1,4 +1,5 @@
 import type {
+  AssistantMessageEvent,
   AssistantMessageDiagnostic,
   Context,
   ImageContent,
@@ -1171,7 +1172,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
       // Classifier refusals can invalidate partial output, so no event is safe
       // to expose until the terminal stop reason is known.
       const refusalBuffer = usesClaudeStreamingRefusalContract(model)
-        ? createDeferredEventBuffer<unknown>(stream, () =>
+        ? createDeferredEventBuffer<AssistantMessageEvent>(stream, () =>
             notifyLlmRequestActivity(options?.signal),
           )
         : undefined;
@@ -1260,6 +1261,9 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               partial: output as never,
             });
           }
+          if (contentIndex === undefined) {
+            return false;
+          }
           block.thinking += text;
           block.thinkingSignature = "reasoning_content";
           eventSink.push({
@@ -1297,6 +1301,9 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               contentIndex,
               partial: output as never,
             });
+          }
+          if (contentIndex === undefined) {
+            return false;
           }
           block.text += text;
           eventSink.push({
@@ -1553,7 +1560,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               ) {
                 const text = sanitizeTransportPayloadText(delta.content);
                 if (text.length > 0) {
-                  if (block?.type === "text") {
+                  if (block?.type === "text" && index !== undefined) {
                     block.text += text;
                     eventSink.push({
                       type: "text_delta",
@@ -1584,6 +1591,9 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 contentIndex: index,
                 partial: output as never,
               });
+            }
+            if (index === undefined) {
+              continue;
             }
             if (
               block?.type === "text" &&

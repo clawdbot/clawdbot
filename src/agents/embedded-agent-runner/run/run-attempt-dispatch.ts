@@ -34,6 +34,7 @@ type InternalRunParams = RunEmbeddedAgentParams & {
 };
 
 type AttemptRuntime = {
+  contextEngineAgentId?: string;
   sessionId: string;
   sessionFile: string;
   sessionKey?: string;
@@ -241,6 +242,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
   }
   const attemptParams: EmbeddedRunAttemptParams = {
     admittedRunContext: params.admittedRunContext,
+    contextEngineAgentId: runtime.contextEngineAgentId,
     ...(control.pluginHarnessOwnsTransport ? { sandbox: pluginSandbox } : {}),
     operation: "attempt",
     sessionId: runtime.sessionId,

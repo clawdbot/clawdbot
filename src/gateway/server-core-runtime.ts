@@ -372,14 +372,16 @@ export async function startGatewayCoreRuntime(input: {
     for (const sessionKey of keys) {
       revokeAttachGrantsForSession(sessionKey);
     }
-    for (const record of execApprovalManager.listPendingRecords()) {
-      if (approvalRequestTargetsSession(record.request, keys, sessionId)) {
-        execApprovalManager.expire(record.id, "worker-dispatch");
-      }
-    }
-    for (const record of pluginApprovalManager.listPendingRecords()) {
-      if (approvalRequestTargetsSession(record.request, keys, sessionId)) {
-        pluginApprovalManager.expire(record.id, "worker-dispatch");
+    // Dispatch fencing closes approval authority deliberately: record it as a
+    // run-aborted cancellation, not a timeout, so ask-fallback replay cannot
+    // re-admit through the fenced record (consumeAskFallback admits only
+    // expired/no-route terminals).
+    const fenceResolver = { kind: "system", id: "worker-dispatch" } as const;
+    for (const manager of [execApprovalManager, pluginApprovalManager]) {
+      for (const record of manager.listPendingRecords()) {
+        if (approvalRequestTargetsSession(record.request, keys, sessionId)) {
+          manager.forceDenyDetailed(record.id, "run-aborted", fenceResolver, "cancelled");
+        }
       }
     }
   };

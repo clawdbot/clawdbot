@@ -30,7 +30,7 @@ import { clearChatHistory } from "./chat-history.ts";
 import { enqueuePendingRunMessage } from "./chat-queue.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { handleAbortChat } from "./run-lifecycle.ts";
-import { scheduleChatScroll } from "./scroll.ts";
+import { scheduleChatScroll, type ChatScrollHost } from "./scroll.ts";
 
 let refreshSeq = 0;
 const REMOTE_SLASH_COMMAND_CACHE_TTL_MS = 60_000;
@@ -77,7 +77,8 @@ export type ChatCommandHost = Parameters<typeof handleAbortChat>[0] &
     exportCurrentChat?: () => Promise<void> | void;
     refreshCurrentSessionTools?: () => Promise<void>;
     refreshCurrentChat?: () => Promise<void>;
-  } & UiSessionDefaultsHost;
+  } & UiSessionDefaultsHost &
+  ChatScrollHost;
 
 function setChatCommandError(
   host: { lastError?: string | null; chatError?: string | null },
@@ -401,7 +402,7 @@ export async function dispatchChatSlashCommand(
       host,
       `Cannot run \`/${name}\`: Control UI is not connected to the Gateway.`,
     );
-    scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0], false, false, {
+    scheduleChatScroll(host, false, false, {
       contentChanged: true,
     });
     return "failed";
@@ -430,14 +431,9 @@ export async function dispatchChatSlashCommand(
     if (targetIsCurrent()) {
       setChatCommandError(host, String(err));
       injectCommandResult(host, `Command \`/${name}\` failed unexpectedly.`);
-      scheduleChatScroll(
-        host as unknown as Parameters<typeof scheduleChatScroll>[0],
-        false,
-        false,
-        {
-          contentChanged: true,
-        },
-      );
+      scheduleChatScroll(host, false, false, {
+        contentChanged: true,
+      });
     }
     return "failed";
   }
@@ -448,14 +444,9 @@ export async function dispatchChatSlashCommand(
   if (result.failed) {
     if (targetIsCurrent()) {
       setChatCommandError(host, result.content || `Command /${name} failed.`);
-      scheduleChatScroll(
-        host as unknown as Parameters<typeof scheduleChatScroll>[0],
-        false,
-        false,
-        {
-          contentChanged: Boolean(result.content),
-        },
-      );
+      scheduleChatScroll(host, false, false, {
+        contentChanged: Boolean(result.content),
+      });
     }
     return "failed";
   }
@@ -487,7 +478,7 @@ export async function dispatchChatSlashCommand(
   }
 
   if (targetIsCurrent()) {
-    scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0], false, false, {
+    scheduleChatScroll(host, false, false, {
       contentChanged: Boolean(result.content),
     });
   }

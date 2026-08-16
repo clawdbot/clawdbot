@@ -156,7 +156,20 @@ describe("gateway-cli coverage", () => {
     await expectGatewayExit(["gateway", "call", "health", "--timeout", "1000ms", "--json"]);
 
     expect(callGateway).not.toHaveBeenCalled();
-    expect(runtimeErrors.join("\n")).toContain("Gateway call failed: Error: Invalid --timeout");
+    expect(runtimeErrors.join("\n")).toContain("Gateway call failed: Invalid --timeout");
+  });
+
+  it("renders gateway request failures without the client error class in human mode", async () => {
+    const error = Object.assign(new Error("invalid audit.activity.list params"), {
+      name: "GatewayClientRequestError",
+      gatewayCode: "INVALID_REQUEST",
+    });
+    callGateway.mockRejectedValueOnce(error);
+
+    await expectGatewayExit(["gateway", "call", "audit.activity.list"]);
+
+    expect(runtimeErrors.join("\n")).toContain("invalid audit.activity.list params");
+    expect(runtimeErrors.join("\n")).not.toContain("GatewayClientRequestError");
   });
 
   it("registers gateway probe and routes to gatewayStatusCommand", async () => {

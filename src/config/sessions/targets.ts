@@ -575,6 +575,12 @@ export function resolveAgentSessionStoreTargetsSync(
     }
   }
 
+  // Configured agents own canonical direct paths; broad discovery is retired/manual-only.
+  // Falling through here makes per-agent Gateway prewarm scan the full roster quadratically.
+  if (isConfiguredSessionStoreAgentId(cfg, requested)) {
+    return dedupeTargetsByStorePath(targets);
+  }
+
   const { agentsRoots } = resolveSessionStoreDiscoveryState(cfg, env);
   for (const agentsDir of agentsRoots) {
     try {

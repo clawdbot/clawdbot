@@ -102,6 +102,26 @@ describe("security audit rosterless configs", () => {
     );
   });
 
+  it("accepts a fresh-install sole-agent roster without a default marker", async () => {
+    const { stateDir, workspaceDir } = makeAuditPaths("fresh-install-roster");
+
+    // `openclaw onboard` and `agents add` write markerless entries; runtime
+    // resolves the sole agent as default, so the audit must not warn.
+    const report = await runSecurityAuditCore({
+      config: { agents: { entries: { main: {} } } } as never,
+      stateDir,
+      configPath: path.join(stateDir, "openclaw.json"),
+      workspaceDir,
+      env: {},
+      includeFilesystem: true,
+      includeChannelSecurity: false,
+    });
+
+    expect(report.findings).not.toContainEqual(
+      expect.objectContaining({ checkId: "config.agent_roster.invalid_default_count" }),
+    );
+  });
+
   it.each([
     {
       label: "an explicitly empty roster",

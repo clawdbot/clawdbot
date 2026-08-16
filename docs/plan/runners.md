@@ -25,7 +25,7 @@ advances a milestone.
 | F   | Real-wire session boundary harness                         | landed      | #121212                                                                                                                                                                   |
 | 5   | Public worker ingress path                                 | landed      | #122578, #122643                                                                                                                                                          |
 | 6   | Node worker provider (device runners)                      | in progress | #122683, #122769, #122829, #122939, #123013, #123033, #122966, #123157, #123280, #123612, #123641, #123665, #123673, #123700, #123696, #123785, #123859, #123889, #123901 |
-| 7   | Bundle push consent + runner updates                       | in progress | #123985                                                                                                                                                                   |
+| 7   | Bundle push consent + runner updates                       | in progress | #123985, #124037                                                                                                                                                          |
 | 8   | Stop-and-continue moves                                    | not started | —                                                                                                                                                                         |
 | 9   | Deletions (ssh sandbox, openshell, exec-host clones, …)    | not started | —                                                                                                                                                                         |
 | 10  | Cloud convergence (provisioners run `openclaw connect`)    | not started | —                                                                                                                                                                         |
@@ -230,16 +230,15 @@ box (the machine is the boundary).
 Milestone 6 now has the public worker ingress, transport-neutral launch
 descriptor, durable node-host supervisor, private launch/status/cancel dialect,
 bounded terminal receipts, and the Gateway launch replay/poll/cancel adapter.
-A node freezes its optional local worker build in the connection handshake and
-repeats it in one atomic, reconnect-scoped private runner inventory with the
-supervisor dialect. The Gateway requires those semantic build identities to
-match. Public node and environment projections expose only `sessionHost`; a
-read-scoped topology invalidation makes clients refetch without exposing the
-build. Provider eligibility and new launch selection require the exact handshake,
-while status and cancellation reacquire only the current supervisor proof and use
-the durable launch identity so an upgrade cannot strand an existing worker.
-Node-local opt-in advertises the current installation; default nodes remain
-non-hosts. The supervisor now owns two atomic durable capacity slots, bounded
+A node publishes one atomic, reconnect-scoped private runner inventory with the
+supervisor dialect and current capacity. The temporary local build claim remains
+inventory metadata only; milestone 7 makes the durable Gateway bundle receipt
+the sole execution authority. Public node and environment projections expose
+only `sessionHost`; a read-scoped topology invalidation makes clients refetch
+without exposing build identity. Status and cancellation reacquire the current
+supervisor proof and use the durable launch identity so an upgrade cannot strand
+an existing worker. Node-local opt-in advertises capacity; default nodes remain
+non-hosts. The supervisor owns two atomic durable capacity slots, bounded
 10-second admission, restart reconciliation, and full/free inventory edges.
 Device dormancy expiry and terminal launch/environment retention bound durable
 rows. Node workspace cleanup waits for a full reconnect-scoped Gateway retain
@@ -247,9 +246,9 @@ snapshot, unions that authority with node-local launch and operation ownership,
 and then removes retired generations, transfer siblings, unreachable manifests,
 and empty workspace parents in bounded passes. The Gateway bundle producer
 also prunes unreferenced local tarballs only after a successful current build,
-while preserving hashes named by durable environments and placements. Milestone
-7 upgrades this to Gateway-pinned, namespaced bundle bytes. Isolation, checkout ownership, and
-durable offline recovery actions remain milestone 6 work.
+while preserving hashes named by durable environments and placements. Isolation,
+checkout ownership, and durable offline recovery actions remain milestone 6
+work.
 
 ### Trust model (operator-decided, v1)
 
@@ -318,10 +317,15 @@ it cannot rot into approval fatigue or silent surprise:
   silently.
 
 The first milestone 7 slice (#123985) adds the private paired-channel install
-command, one-use Gateway download capability, bounded archive validation,
-script-disabled dependency materialization, and atomic namespaced publication.
-Device provisioning continues to use the local-build claim until the next slice
-cuts it over and removes that temporary path.
+command, one-use Gateway download capability, bounded archive validation, and
+atomic namespaced publication. The cutover slice (#124037) packages the complete
+worker JavaScript dependency closure into one dedicated, hash-covered executable,
+installs that exact Gateway artifact before device environments become ready,
+requires its durable receipt across attach, admission, placement, tunnel, and
+launch, retires stale environments for idempotent reprovisioning, and removes
+local-package execution. The remaining
+slice separates inventory consent/capacity from installed bundle status, exposes
+the installed version on the devices page, and bounds superseded node bundle GC.
 
 ### Projects read model (milestone 4 foundation)
 

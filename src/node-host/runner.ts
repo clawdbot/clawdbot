@@ -5,6 +5,7 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import type { WorkerAdmissionHandshake } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 import { GatewayClientRequestError, type GatewayReconnectPausedInfo } from "../gateway/client.js";
@@ -119,6 +120,18 @@ const NODE_PLUGIN_TOOLS_UPDATE_METHOD = "node.pluginTools.update";
 const NODE_SKILLS_UPDATE_METHOD = "node.skills.update";
 const NODE_OPTIONAL_PUBLICATION_RETRY_INITIAL_MS = 250;
 const NODE_OPTIONAL_PUBLICATION_RETRY_MAX_MS = 5_000;
+
+function nodeWorkerBuildIdentity(
+  manifest: WorkerAdmissionHandshake | undefined,
+): WorkerAdmissionHandshake | undefined {
+  return manifest
+    ? {
+        bundleHash: manifest.bundleHash,
+        openclawVersion: manifest.openclawVersion,
+        protocolFeatures: [...manifest.protocolFeatures],
+      }
+    : undefined;
+}
 
 function isExactUnknownMethodError(error: unknown, method: string): boolean {
   return (
@@ -462,16 +475,28 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const publishRunnerInventory = () => {
     // The handshake keeps the immutable build ceiling. Live inventory withdraws
     // only new-launch eligibility while full, leaving status/cancel negotiated.
+    const workerRuns = workerRunsAvailable ? preparedRuntime.manifest.workerRuns : undefined;
+    const workerBuild = nodeWorkerBuildIdentity(workerRuns);
     queueOptionalPublication(
       NODE_RUNNER_INVENTORY_UPDATE_METHOD,
       {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        ...(workerRunsAvailable && preparedRuntime.manifest.workerRuns
-          ? { workerRuns: preparedRuntime.manifest.workerRuns }
-          : {}),
+        ...(workerBuild ? { workerRuns: workerBuild } : {}),
       },
       "runner inventory",
     );
+    if (workerRuns?.bundlePrewarm !== undefined) {
+      // Publish the old closed build shape first so a prior Gateway keeps the
+      // session host. Its rejection of this additive follow-up leaves that path intact.
+      queueOptionalPublication(
+        NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+        {
+          protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+          workerRuns,
+        },
+        "runner inventory",
+      );
+    }
   };
 
   const persistWinningGateway = (winningGateway: NodeHostGatewayConfig) => {
@@ -507,7 +532,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       caps: preparedRuntime.manifest.caps,
       commands: preparedRuntime.manifest.commands,
       computerUse: preparedRuntime.manifest.computerUse,
-      workerRuns: preparedRuntime.manifest.workerRuns,
+      workerRuns: nodeWorkerBuildIdentity(preparedRuntime.manifest.workerRuns),
       pathEnv: preparedRuntime.manifest.pathEnv,
       permissions: undefined,
       deviceIdentity: loadOrCreateDeviceIdentity(),

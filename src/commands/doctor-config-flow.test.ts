@@ -1686,10 +1686,12 @@ describe("doctor config flow", () => {
     expect(result.cfg.agents?.entries).toEqual({
       main: { workspace: "/tmp/migrated-main" },
     });
-    expect(terminalNoteMock).toHaveBeenCalledWith(
+    // Repair panels defer to the atomic write runner; the flow itself must not
+    // claim the roster change happened before anything reached disk.
+    expect(result.pendingChangePanels).toContain(
       "Prepared the canonical agent roster without retired default markers for persistence.",
-      "Doctor changes",
     );
+    expect(terminalNoteMock.mock.calls.some(([, title]) => title === "Doctor changes")).toBe(false);
     expect(terminalNoteMock.mock.calls.some(([message]) => message.includes("Persisted"))).toBe(
       false,
     );
@@ -2885,7 +2887,7 @@ describe("doctor config flow", () => {
   it("sanitizes config-derived doctor warnings and changes before logging", async () => {
     const noteSpy = resetTerminalNoteMock();
     try {
-      await runDoctorConfigWithInput({
+      const result = await runDoctorConfigWithInput({
         repair: true,
         config: {
           channels: {
@@ -2919,9 +2921,14 @@ describe("doctor config flow", () => {
         run: loadAndMaybeMigrateDoctorConfig,
       });
 
-      const outputs = noteSpy.mock.calls
-        .filter((call) => call[1] === "Doctor warnings" || call[1] === "Doctor changes")
-        .map((call) => call[0]);
+      // Repair-mode change panels defer to the write runner; sanitized change
+      // text travels through pendingChangePanels instead of immediate notes.
+      const outputs = [
+        ...noteSpy.mock.calls
+          .filter((call) => call[1] === "Doctor warnings" || call[1] === "Doctor changes")
+          .map((call) => call[0]),
+        ...(result.pendingChangePanels ?? []),
+      ];
       const joinedOutputs = outputs.join("\n");
       expect(outputs.some((line) => line.includes("\u001b"))).toBe(false);
       expect(outputs.some((line) => line.includes("\nforged"))).toBe(false);
@@ -3570,11 +3577,11 @@ describe("doctor config flow", () => {
   });
 
   it.each([
-    [false, "Doctor changes preview", false],
-    [true, "Doctor changes", true],
+    [false, false],
+    [true, true],
   ] as const)(
     "previews and repairs retired internal hook registrations (repair=%s)",
-    async (repair, panelTitle, shouldWriteConfig) => {
+    async (repair, shouldWriteConfig) => {
       const noteSpy = resetTerminalNoteMock();
       try {
         const result = await runDoctorConfigWithInput({
@@ -3595,13 +3602,21 @@ describe("doctor config flow", () => {
         ).toBeUndefined();
         expect(result.cfg.hooks?.internal?.enabled).toBeUndefined();
         expect(result.shouldWriteConfig).toBe(shouldWriteConfig);
-        expect(
-          noteSpy.mock.calls.some(
-            ([message, title]) =>
-              title === panelTitle &&
-              message.includes("Removed retired hooks.internal.handlers registrations"),
-          ),
-        ).toBe(true);
+        const removalLine = "Removed retired hooks.internal.handlers registrations";
+        if (repair) {
+          // Repair panels defer until the atomic write commits.
+          expect(
+            (result.pendingChangePanels ?? []).some((panel) => panel.includes(removalLine)),
+          ).toBe(true);
+          expect(noteSpy.mock.calls.some(([, title]) => title === "Doctor changes")).toBe(false);
+        } else {
+          expect(
+            noteSpy.mock.calls.some(
+              ([message, title]) =>
+                title === "Doctor changes preview" && message.includes(removalLine),
+            ),
+          ).toBe(true);
+        }
       } finally {
         noteSpy.mockClear();
       }
@@ -3633,10 +3648,10 @@ describe("doctor config flow", () => {
     }
   });
 
-  it("titles the legacy migration panel as applied when --fix is passed (#80817)", async () => {
+  it("defers the applied panel to the config write when --fix is passed (#80817)", async () => {
     const noteSpy = resetTerminalNoteMock();
     try {
-      await runDoctorConfigWithInput({
+      const result = await runDoctorConfigWithInput({
         repair: true,
         config: {
           heartbeat: {
@@ -3647,8 +3662,11 @@ describe("doctor config flow", () => {
         run: loadAndMaybeMigrateDoctorConfig,
       });
       const changeTitles = noteSpy.mock.calls.map(([, title]) => title);
-      expect(changeTitles).toContain("Doctor changes");
+      // The flow itself prints nothing as applied; the write runner reports
+      // "Doctor changes" only after the atomic write commits.
+      expect(changeTitles).not.toContain("Doctor changes");
       expect(changeTitles).not.toContain("Doctor changes preview");
+      expect(result.pendingChangePanels?.length).toBeGreaterThan(0);
     } finally {
       noteSpy.mockClear();
     }
@@ -3731,14 +3749,16 @@ describe("doctor config flow", () => {
           });
           noteSpy.mockClear();
 
-          await loadAndMaybeMigrateDoctorConfig({
+          const secondRun = await loadAndMaybeMigrateDoctorConfig({
             options: { nonInteractive: true, repair: true },
             confirm: async () => false,
           });
-          const secondRunTalkNormalizationLines = noteSpy.mock.calls
-            .filter((call) => call[1] === "Doctor changes")
-            .map((call) => call[0])
-            .filter((line) => line.includes("Normalized talk.provider/providers shape"));
+          const secondRunTalkNormalizationLines = [
+            ...noteSpy.mock.calls
+              .filter((call) => call[1] === "Doctor changes")
+              .map((call) => call[0]),
+            ...(secondRun.pendingChangePanels ?? []),
+          ].filter((line) => line.includes("Normalized talk.provider/providers shape"));
           expect(secondRunTalkNormalizationLines).toStrictEqual([]);
         } finally {
           noteSpy.mockClear();

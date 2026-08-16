@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { NODE_WORKER_WORKSPACE_RETAIN_COMMAND } from "../../infra/node-commands.js";
+import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
 import { createNodeWorkspaceRetainCoordinator } from "./node-workspace-retain-coordinator.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
@@ -12,7 +13,7 @@ const node = {
   pairingGeneration: "generation-1",
   clientId: "node-host",
   clientMode: "node",
-  protocolFeature: "node-worker-supervisor-v1",
+  protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
   commands: [],
 } as const;
 

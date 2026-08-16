@@ -113,6 +113,9 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
 }
 
 export function showToast(options: ToastOptions): boolean {
+  if (typeof document === "undefined") {
+    return false;
+  }
   const host = document.querySelector<OpenClawToastHost>("openclaw-toast-host");
   if (!host) {
     queuedToast = options;
@@ -136,7 +139,8 @@ export function showToast(options: ToastOptions): boolean {
   return true;
 }
 
-if (!customElements.get("openclaw-toast-host")) {
+// Guarded so DOM-free (node) consumers of send-failure surfacing can load this module.
+if (typeof customElements !== "undefined" && !customElements.get("openclaw-toast-host")) {
   customElements.define("openclaw-toast-host", OpenClawToastHost);
 }
 

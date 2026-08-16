@@ -133,7 +133,10 @@ describe("Control UI build admission over WebSocket", () => {
     let closeRequested = false;
 
     wss.on("connection", (socket, request) => {
-      const send = (value: unknown) => socket.send(JSON.stringify(value));
+      const send = (value: unknown) => {
+        socket.send(JSON.stringify(value));
+        return { kind: "sent" } as const;
+      };
       attachGatewayWsMessageHandler({
         socket,
         upgradeReq: request as IncomingMessage,

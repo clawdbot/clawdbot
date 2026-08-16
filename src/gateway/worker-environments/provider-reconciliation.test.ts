@@ -171,6 +171,37 @@ describe("worker environment service", () => {
     });
   });
 
+  it("retires a node environment whose installed Gateway bundle is stale", async () => {
+    const destroy = vi.fn(async () => {});
+    const provider = support.createProvider({
+      provisionBeforeInstallation: true,
+      provision: async () => ({
+        leaseId: "device-lease-stale",
+        node: { deviceId: "device-1" },
+        sharedHost: true,
+      }),
+      inspect: async () => ({ status: "active", sharedHost: true }),
+      destroy,
+    });
+    const workerService = support.createService(provider, {
+      ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT),
+    });
+    const environment = await workerService.create("development", "request-stale-node-bundle");
+    support.testState.stateDb.db
+      .prepare(
+        "UPDATE worker_environments SET bootstrap_bundle_hash = ?, bootstrap_install_kind = 'local' WHERE environment_id = ?",
+      )
+      .run("b".repeat(64), environment.environmentId);
+
+    await workerService.reconcileOnce();
+
+    expect(destroy).toHaveBeenCalledOnce();
+    expect(support.testState.store.get(environment.environmentId)).toMatchObject({
+      state: "destroyed",
+      attachedSessionIds: [],
+    });
+  });
+
   it("does not resolve npm while an admitted receipt matches the local bundle", async () => {
     const environmentId = "worker-current-npm";
     support.seedReady(environmentId, "npm");

@@ -29,6 +29,24 @@ const artifact = {
   tarballPath: "/gateway/bundle.tgz",
 };
 
+function nodeProof(nodeId: string, bundlePrewarm?: number): NodeWorkerSupervisorNodeProof {
+  return {
+    ...node,
+    nodeId,
+    connId: `conn-${nodeId}`,
+    ...(bundlePrewarm === undefined
+      ? {}
+      : {
+          workerRuns: {
+            bundleHash: artifact.bundleHash,
+            openclawVersion: artifact.openclawVersion,
+            protocolFeatures: artifact.protocolFeatures,
+            bundlePrewarm,
+          },
+        }),
+  };
+}
+
 describe("Gateway node worker bundle installer", () => {
   it("binds install dispatch to the current node proof and exact receipt", async () => {
     const transfer = createNodeWorkerBundleTransferService({
@@ -95,5 +113,38 @@ describe("Gateway node worker bundle installer", () => {
     });
 
     await expect(ensure({ deviceId: node.nodeId })).rejects.toThrow("mismatched build receipt");
+  });
+
+  it("negotiates prewarming independently across a mixed node fleet", async () => {
+    const transfer = createNodeWorkerBundleTransferService({
+      generateToken: () => String.fromCharCode(65 + invoke.mock.calls.length).repeat(43),
+    });
+    const advertising = nodeProof("advertising", 7);
+    const legacy = nodeProof("legacy");
+    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => ({
+      ok: true,
+      payloadJSON: JSON.stringify((request.params as { build: typeof artifact }).build),
+    }));
+    const transport: NodeWorkerSupervisorTransport = {
+      listCurrentNodes: async () => [advertising, legacy],
+      isCurrent: () => true,
+      invoke,
+    };
+    const ensure = createGatewayNodeWorkerBundleInstaller({
+      gatewayNamespace: "gateway-test",
+      getTransport: () => transport,
+      prepareBundle: async () => artifact,
+      transfer,
+    });
+
+    await expect(ensure({ deviceId: advertising.nodeId })).resolves.toMatchObject({
+      bundleHash: artifact.bundleHash,
+    });
+    await expect(ensure({ deviceId: legacy.nodeId })).resolves.toMatchObject({
+      bundleHash: artifact.bundleHash,
+    });
+
+    expect(invoke.mock.calls[0]?.[0].params).toMatchObject({ bundlePrewarm: 1 });
+    expect(invoke.mock.calls[1]?.[0].params).not.toHaveProperty("bundlePrewarm");
   });
 });

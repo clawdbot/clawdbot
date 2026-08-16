@@ -20,7 +20,7 @@ import { storedChatOutboxScopeKey, type StoredChatOutboxScope } from "./composer
 import { controlUiNowMs } from "./performance.ts";
 import { hasAbortableSessionRun, isChatBusy } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
-import { OFFLINE_QUEUE_STORAGE_ERROR } from "./steer-lifecycle.ts";
+import { OFFLINE_QUEUE_STORAGE_ERROR, surfaceChatDeliveryFailure } from "./steer-lifecycle.ts";
 
 const SKILL_WORKSHOP_CONNECTION_CHANGED_ERROR =
   "Skill Workshop revision request cancelled because the Gateway connection changed.";
@@ -83,7 +83,7 @@ export function enqueuePendingSendMessage(
     recordChatSendTiming(host, pending, sendState, submittedAtMs);
   }
   schedulePendingSendPaintTiming(host, pending, submittedAtMs);
-  scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0], true, false, {
+  scheduleChatScroll(host, true, false, {
     source: "manual",
   });
   return pending;
@@ -132,9 +132,12 @@ export function failSkillWorkshopRevisionConnectionChange(
     sessionKey,
     item.id,
   )("failed", SKILL_WORKSHOP_CONNECTION_CHANGED_ERROR);
-  if (visibleSessionMatches(host, sessionKey, item.agentId)) {
-    setChatError(host, SKILL_WORKSHOP_CONNECTION_CHANGED_ERROR);
-  }
+  surfaceChatDeliveryFailure(
+    host,
+    sessionKey,
+    item.agentId,
+    SKILL_WORKSHOP_CONNECTION_CHANGED_ERROR,
+  );
   return "failed";
 }
 

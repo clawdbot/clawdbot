@@ -160,7 +160,6 @@ type ExecApprovalDurableLookup =
 type PendingEntry<TPayload = ExecApprovalRequestPayload> = {
   record: ExecApprovalRecord<TPayload>;
   resolve: (decision: ExecApprovalDecision | null) => void;
-  reject: (err: Error) => void;
   timer: ReturnType<typeof setTimeout> | null;
   cleanupTimer: ReturnType<typeof setTimeout> | null;
   handoffRetainCount: number;
@@ -357,16 +356,13 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     }
 
     let resolvePromise: (decision: ExecApprovalDecision | null) => void;
-    let rejectPromise: (err: Error) => void;
-    const promise = new Promise<ExecApprovalDecision | null>((resolve, reject) => {
+    const promise = new Promise<ExecApprovalDecision | null>((resolve) => {
       resolvePromise = resolve;
-      rejectPromise = reject;
     });
     // Create entry first so we can capture it in the closure (not re-fetch from map)
     const entry: PendingEntry<TPayload> = {
       record,
       resolve: resolvePromise!,
-      reject: rejectPromise!,
       timer: null,
       cleanupTimer: null,
       handoffRetainCount: 0,
@@ -1020,7 +1016,11 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
       record.resolvedAtMs === undefined ||
       record.decision !== undefined ||
       record.consumedDecision !== undefined ||
-      record.askFallbackConsumed === true
+      record.askFallbackConsumed === true ||
+      // Only unanswered approvals (timeout or no delivery route) are
+      // re-admissible. Cancelled/fenced records also end decision-less, but
+      // their authority closed deliberately — never replay through them.
+      (record.status !== "expired" && record.terminalReason !== "no-route")
     ) {
       return false;
     }
@@ -1255,10 +1255,6 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
       return { kind: "ambiguous", ids: matches };
     }
     return { kind: "none" };
-  }
-
-  lookupPendingId(input: string): ExecApprovalIdLookupResult {
-    return this.lookupApprovalId(input);
   }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

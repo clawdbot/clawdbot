@@ -4,7 +4,7 @@ export type ImageFactIndex = number | null;
 
 export type MediaImageLayout = {
   slots: Array<{ kind: "inline" | "offloaded"; factIndex?: number }>;
-  suppressedFactIndexes: number[];
+  suppressedFactIndexes?: number[];
 };
 
 export function readPersistedImageBlockFactIndexes(

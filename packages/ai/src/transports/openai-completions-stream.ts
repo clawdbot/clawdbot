@@ -34,6 +34,17 @@ import {
   type OpenAIModeModel,
 } from "./openai-transport-shared.js";
 
+type OpenAICompatibleChoice = ChatCompletionChunk["choices"][number] & {
+  // Some compatible providers attach usage per choice instead of per chunk.
+  usage?: ChatCompletionChunk["usage"];
+  // Some compatible providers stream a complete message in place of delta.
+  message?: ChatCompletionChunk["choices"][number]["delta"];
+};
+
+type OpenAICompatibleChatCompletionChunk = Omit<ChatCompletionChunk, "choices"> & {
+  choices: OpenAICompatibleChoice[];
+};
+
 function extractToolCallThoughtSignature(toolCall: unknown): string | undefined {
   const tc = toolCall as Record<string, unknown> | undefined;
   if (!tc) {
@@ -328,7 +339,7 @@ export async function processCompletionsStream(
     }
     // Hidden reasoning is still provider progress; keep the idle watchdog alive without exposing it.
     notifyLlmRequestActivity(options?.signal);
-    const chunk = rawChunk as ChatCompletionChunk;
+    const chunk = rawChunk as OpenAICompatibleChatCompletionChunk;
     output.responseId ||= chunk.id;
     let hasReasoningUsageActivity = false;
     if (chunk.usage) {
@@ -341,7 +352,7 @@ export async function processCompletionsStream(
       await cooperativeScheduler.afterEvent();
       continue;
     }
-    const choiceUsage = (choice as unknown as { usage?: ChatCompletionChunk["usage"] }).usage;
+    const choiceUsage = choice.usage;
     if (!chunk.usage && choiceUsage) {
       output.usage = parseOpenAICompletionsUsage(choiceUsage, model);
       hasReasoningUsageActivity = hasOpenAICompletionsReasoningUsageActivity(choiceUsage);
@@ -358,9 +369,7 @@ export async function processCompletionsStream(
         output.errorMessage = finishReasonResult.errorMessage;
       }
     }
-    const rawChoiceDelta =
-      choice.delta ??
-      (choice as unknown as { message?: ChatCompletionChunk["choices"][number]["delta"] }).message;
+    const rawChoiceDelta = choice.delta ?? choice.message;
     if (!rawChoiceDelta) {
       emitReasoningUsageActivity(hasReasoningUsageActivity);
       await cooperativeScheduler.afterEvent();

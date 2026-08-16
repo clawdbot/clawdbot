@@ -625,7 +625,7 @@ describe("runNodeHost", () => {
     expect(lastCapturedOptions()?.workerRuns).toBeUndefined();
   });
 
-  it("advertises the local worker build only after node-local opt-in", async () => {
+  it("keeps the initial worker build compatible before post-hello negotiation", async () => {
     mocks.getRuntimeConfig.mockReturnValue({
       gateway: { handshakeTimeoutMs: 1_000 },
       nodeHost: { workerRuns: { enabled: true } },
@@ -636,6 +636,7 @@ describe("runNodeHost", () => {
     );
 
     expect(lastCapturedOptions()?.workerRuns).toEqual(mocks.nodeWorkerBuild);
+    expect(lastCapturedOptions()?.workerRuns).not.toHaveProperty("bundlePrewarm");
   });
 
   it("advertises Claude agent runs only after node-local opt-in and binary resolution", async () => {
@@ -704,9 +705,27 @@ describe("runNodeHost", () => {
       features: { methods: [], events: [] },
     } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
 
-    expect(client?.request).toHaveBeenCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
-      protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-      workerRuns: mocks.nodeWorkerBuild,
+    await vi.waitFor(() => {
+      expect(
+        client?.request.mock.calls.filter(
+          ([method]) => method === NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+        ),
+      ).toEqual([
+        [
+          NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+          {
+            protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+            workerRuns: mocks.nodeWorkerBuild,
+          },
+        ],
+        [
+          NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+          {
+            protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+            workerRuns: { ...mocks.nodeWorkerBuild, bundlePrewarm: 1 },
+          },
+        ],
+      ]);
     });
   });
 

@@ -395,6 +395,7 @@ export async function executeDownloadAction(params: {
   baseUrl?: string;
   profile?: string;
   proxyRequest: BrowserProxyRequest | null;
+  signal?: AbortSignal;
   onTabActivity?: (targetId: string | undefined) => void;
 }): Promise<AgentToolResult<unknown>> {
   const { action, input, baseUrl, profile, proxyRequest } = params;
@@ -419,12 +420,14 @@ export async function executeDownloadAction(params: {
           targetId,
           timeoutMs,
           profile,
+          signal: params.signal,
         })
       : await browserToolActionDeps.browserWaitForDownload(baseUrl, {
           path: request.path,
           targetId,
           timeoutMs,
           profile,
+          signal: params.signal,
         });
   params.onTabActivity?.(readStringValue((result as { targetId?: unknown }).targetId) ?? targetId);
   return formatBrowserExternalToolResult({ kind: "download", payload: result });

@@ -48,7 +48,6 @@ function launchInput(): NodeWorkerLaunchInput {
   return {
     launchId: "turn-1",
     gatewayNamespace: "gateway-1",
-    installKind: "local",
     expectedBundleHash: WORKER_RUNS.bundleHash,
     placementGeneration: 4,
     descriptor: {

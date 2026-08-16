@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import { registerExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-tools.exec-approval-followup-state.js";
+import { FailoverError } from "../../agents/failover-error.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import {
   addSubagentRunForTests,
@@ -694,7 +695,7 @@ describe("gateway agent handler", () => {
           runtime: "cli",
           childSessionKey: "agent:main:main",
           status: "failed",
-          error: "Error: agent unavailable",
+          error: "agent unavailable",
         });
       });
     });
@@ -1077,7 +1078,7 @@ describe("gateway agent handler", () => {
           runtime: "cli",
           childSessionKey: "agent:main:main",
           status: "cancelled",
-          error: "AbortError: This operation was aborted",
+          error: "This operation was aborted",
         });
         expectRecordFields(
           context.dedupe.get("agent:task-registry-agent-run-abort-error")?.payload,
@@ -1095,7 +1096,7 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("classifies an unsignaled AbortError task as cancelled without changing the error wire", async () => {
+  it("classifies an unsignaled AbortError task as cancelled without changing failure status", async () => {
     await withTestDir({ prefix: "openclaw-gateway-agent-task-plain-abort-" }, async (root) => {
       useTestStateDir(root);
       resetAgentTaskRegistryForTests();
@@ -1120,12 +1121,12 @@ describe("gateway agent handler", () => {
           runtime: "cli",
           childSessionKey: "agent:main:main",
           status: "cancelled",
-          error: "AbortError: This operation was aborted",
+          error: "This operation was aborted",
         });
         expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
           runId,
           status: "error",
-          summary: "AbortError: This operation was aborted",
+          summary: "This operation was aborted",
         });
         expect(context.dedupe.get(`agent:${runId}`)?.ok).toBe(false);
       });
@@ -1201,7 +1202,7 @@ describe("gateway agent handler", () => {
           runtime: "cli",
           childSessionKey: "agent:main:main",
           status: "timed_out",
-          error: "TimeoutError: chat run timed out",
+          error: "chat run timed out",
         });
         expectRecordFields(
           context.dedupe.get("agent:task-registry-agent-run-timeout-error")?.payload,
@@ -1251,7 +1252,7 @@ describe("gateway agent handler", () => {
             runtime: "cli",
             childSessionKey: "agent:main:main",
             status: "timed_out",
-            error: "FailoverError: fallback result classified terminal abort",
+            error: "fallback result classified terminal abort",
           });
           expectRecordFields(
             context.dedupe.get("agent:task-registry-agent-run-wrapped-timeout-error")?.payload,
@@ -1294,14 +1295,14 @@ describe("gateway agent handler", () => {
           runtime: "cli",
           childSessionKey: "agent:main:main",
           status: "timed_out",
-          error: "TimeoutError: provider request timed out",
+          error: "provider request timed out",
         });
         expectRecordFields(
           context.dedupe.get("agent:task-registry-agent-run-provider-timeout")?.payload,
           {
             runId: "task-registry-agent-run-provider-timeout",
             status: "error",
-            summary: "TimeoutError: provider request timed out",
+            summary: "provider request timed out",
           },
         );
         expect(context.dedupe.get("agent:task-registry-agent-run-provider-timeout")?.ok).toBe(
@@ -1442,11 +1443,51 @@ describe("gateway agent handler", () => {
         terminalOutcome: {
           reason: "failed",
           status: "error",
-          error: "Error: provider request failed",
+          error: "provider request failed",
         },
         onRecovered: expect.any(Function),
       });
       expect(respond).toHaveBeenCalled();
+    });
+  });
+
+  it("emits provider failure messages without the internal error class name", async () => {
+    const message =
+      "The selected model was not found by the provider. Check the model id or choose a different model.";
+    mocks.agentCommand.mockRejectedValueOnce(
+      new FailoverError(message, {
+        reason: "model_not_found",
+        provider: "ollama",
+        model: "definitely-not-a-real-model:latest",
+      }),
+    );
+    const context = makeContext();
+    const respond = vi.fn();
+    const runId = "agent-run-model-not-found";
+
+    dispatchAgentRunFromGateway({
+      ingressOpts: {
+        message: "hi",
+        sessionKey: "agent:badmodel:main",
+        allowModelOverride: false,
+      },
+      runId,
+      dedupeKeys: [`agent:${runId}`],
+      abortController: new AbortController(),
+      cleanupAbortController: vi.fn(),
+      io: createAgentTurnIo(respond),
+      context,
+      taskTrackingMode: "none",
+    });
+
+    await waitForAssertion(() => {
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        { runId, status: "error", summary: message },
+        expect.objectContaining({ code: ErrorCodes.UNAVAILABLE, message }),
+        { runId, error: message },
+      );
+      expect(context.dedupe.get(`agent:${runId}`)?.error?.message).toBe(message);
     });
   });
 

@@ -1,6 +1,9 @@
 /** Transport-independent CLI node-host runtime shared by Gateway and app workers. */
 import fs from "node:fs";
-import type { WorkerAdmissionHandshake } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WORKER_BUNDLE_PREWARM_VERSION,
+  type WorkerAdmissionHandshake,
+} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
@@ -283,11 +286,12 @@ export async function prepareNodeHostRuntime(params?: {
     params?.enableAgentRuns === true && config.nodeHost?.agentRuns?.claude?.enabled === true
       ? resolveExecutableTrustPathFromEnv("claude", pathEnv)
       : null;
-  const workerInstallation =
-    params?.enableWorkerRuns === true && config.nodeHost?.workerRuns?.enabled === true
-      ? await resolveNodeWorkerInstallation()
-      : undefined;
-  const workerRuns = workerInstallation?.build;
+  const workerRunsEnabled =
+    params?.enableWorkerRuns === true && config.nodeHost?.workerRuns?.enabled === true;
+  const workerInstallation = workerRunsEnabled ? await resolveNodeWorkerInstallation() : undefined;
+  const workerRuns = workerInstallation
+    ? { ...workerInstallation.build, bundlePrewarm: WORKER_BUNDLE_PREWARM_VERSION }
+    : undefined;
   const skills = config.nodeHost?.skills?.enabled === false ? null : scanNodeHostedSkills();
   const buildManifest = (pluginManifest: typeof pluginNodeHost): NodeHostManifest => ({
     caps: [
@@ -326,16 +330,15 @@ export async function prepareNodeHostRuntime(params?: {
     initialInventory,
     start({ client, onInventoryChanged, onManifestChanged, onRunnerAvailabilityChanged }) {
       const mcpAbort = new AbortController();
-      const workerWorkspace = workerInstallation
+      const workerWorkspace = workerRunsEnabled
         ? new NodeWorkerWorkspaceRuntime({ env })
         : undefined;
-      const workerBundleInstaller = workerInstallation
+      const workerBundleInstaller = workerRunsEnabled
         ? new NodeWorkerBundleInstaller({ env })
         : undefined;
-      const workerSupervisor = workerInstallation
+      const workerSupervisor = workerRunsEnabled
         ? createNodeWorkerSupervisor({
             env,
-            localInstallation: workerInstallation,
             onAvailabilityChanged: onRunnerAvailabilityChanged,
             workspace: workerWorkspace,
           })
