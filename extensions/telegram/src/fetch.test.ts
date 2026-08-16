@@ -931,53 +931,60 @@ describe("resolveTelegramFetch", () => {
     );
   });
 
-  it("keeps a late canceled fallback response out of sticky transport health", async () => {
-    const lateResponse = createDeferred<Response>();
-    undiciFetch.mockRejectedValueOnce(buildFetchFallbackError("ETIMEDOUT"));
-    for (let i = 0; i < 4; i += 1) {
-      undiciFetch.mockResolvedValueOnce({ ok: true } as Response);
-    }
-    undiciFetch.mockReturnValueOnce(lateResponse.promise);
-    undiciFetch.mockResolvedValueOnce({ ok: true } as Response);
-    undiciFetch.mockResolvedValueOnce({ ok: true } as Response);
-
-    const transport = resolveTelegramTransport(undefined, {
-      network: {
-        autoSelectFamily: true,
-      },
-    });
-    const controller = new AbortController();
-    const reason = new Error("telegram fetch canceled after response headers");
-
-    try {
-      await transport.fetch("https://api.telegram.org/botx/sendMessage");
-      for (let i = 0; i < 3; i += 1) {
-        await transport.fetch(`https://api.telegram.org/botx/sendChatAction?healthy=${i}`);
+  it.each(["init", "request"] as const)(
+    "keeps a late canceled fallback response out of sticky transport health with signal on %s",
+    async (signalSource) => {
+      const lateResponse = createDeferred<Response>();
+      undiciFetch.mockRejectedValueOnce(buildFetchFallbackError("ETIMEDOUT"));
+      for (let i = 0; i < 4; i += 1) {
+        undiciFetch.mockResolvedValueOnce({ ok: true } as Response);
       }
+      undiciFetch.mockReturnValueOnce(lateResponse.promise);
+      undiciFetch.mockResolvedValueOnce({ ok: true } as Response);
+      undiciFetch.mockResolvedValueOnce({ ok: true } as Response);
 
-      const canceled = transport.fetch("https://api.telegram.org/botx/getMe", {
-        signal: controller.signal,
+      const transport = resolveTelegramTransport(undefined, {
+        network: {
+          autoSelectFamily: true,
+        },
       });
-      lateResponse.resolve({ ok: true } as Response);
-      controller.abort(reason);
+      const controller = new AbortController();
+      const reason = new Error("telegram fetch canceled after response headers");
 
-      await expect(canceled).rejects.toBe(reason);
-      await expect(transport.fetch("https://api.telegram.org/botx/getMe?retry=1")).resolves.toEqual(
-        { ok: true },
-      );
-      await expect(transport.fetch("https://api.telegram.org/botx/getMe?probe=1")).resolves.toEqual(
-        { ok: true },
-      );
+      try {
+        await transport.fetch("https://api.telegram.org/botx/sendMessage");
+        for (let i = 0; i < 3; i += 1) {
+          await transport.fetch(`https://api.telegram.org/botx/sendChatAction?healthy=${i}`);
+        }
 
-      const primaryDispatcher = getDispatcherFromUndiciCall(1);
-      const fallbackDispatcher = getDispatcherFromUndiciCall(2);
-      expect(getDispatcherFromUndiciCall(6)).toBe(fallbackDispatcher);
-      expect(getDispatcherFromUndiciCall(7)).toBe(fallbackDispatcher);
-      expect(getDispatcherFromUndiciCall(8)).toBe(primaryDispatcher);
-    } finally {
-      await transport.close();
-    }
-  });
+        const requestUrl = "https://api.telegram.org/botx/getMe";
+        const input =
+          signalSource === "request"
+            ? new Request(requestUrl, { signal: controller.signal })
+            : requestUrl;
+        const init = signalSource === "init" ? { signal: controller.signal } : undefined;
+        const canceled = transport.fetch(input, init);
+        lateResponse.resolve({ ok: true } as Response);
+        controller.abort(reason);
+
+        await expect(canceled).rejects.toBe(reason);
+        await expect(
+          transport.fetch("https://api.telegram.org/botx/getMe?retry=1"),
+        ).resolves.toEqual({ ok: true });
+        await expect(
+          transport.fetch("https://api.telegram.org/botx/getMe?probe=1"),
+        ).resolves.toEqual({ ok: true });
+
+        const primaryDispatcher = getDispatcherFromUndiciCall(1);
+        const fallbackDispatcher = getDispatcherFromUndiciCall(2);
+        expect(getDispatcherFromUndiciCall(6)).toBe(fallbackDispatcher);
+        expect(getDispatcherFromUndiciCall(7)).toBe(fallbackDispatcher);
+        expect(getDispatcherFromUndiciCall(8)).toBe(primaryDispatcher);
+      } finally {
+        await transport.close();
+      }
+    },
+  );
 
   it("escalates from IPv4 fallback to pinned Telegram IP and recovers to primary", async () => {
     undiciFetch
@@ -1210,41 +1217,49 @@ describe("resolveTelegramFetch", () => {
     expectCallerDispatcherPreserved([1, 2], callerDispatcher);
   });
 
-  it("lets caller cancellation beat a late retryable dispatcher failure", async () => {
-    const lateFailure = createDeferred<Response>();
-    undiciFetch.mockReturnValueOnce(lateFailure.promise);
-    undiciFetch.mockResolvedValueOnce({ ok: true } as Response);
+  it.each(["init", "request"] as const)(
+    "lets caller cancellation beat a late retryable dispatcher failure with signal on %s",
+    async (signalSource) => {
+      const lateFailure = createDeferred<Response>();
+      undiciFetch.mockReturnValueOnce(lateFailure.promise);
+      undiciFetch.mockResolvedValueOnce({ ok: true } as Response);
 
-    const transport = resolveTelegramTransport(undefined, {
-      network: {
-        autoSelectFamily: true,
-      },
-    });
-    const callerDispatcher = { name: "caller" };
-    const controller = new AbortController();
-    const reason = new Error("telegram fetch canceled before retry classification");
+      const transport = resolveTelegramTransport(undefined, {
+        network: {
+          autoSelectFamily: true,
+        },
+      });
+      const callerDispatcher = { name: "caller" };
+      const controller = new AbortController();
+      const reason = new Error("telegram fetch canceled before retry classification");
 
-    try {
-      const canceled = transport.fetch("https://api.telegram.org/botx/sendMessage", {
-        dispatcher: callerDispatcher,
-        signal: controller.signal,
-      } as RequestInit);
-      lateFailure.reject(buildFetchFallbackError("EHOSTUNREACH"));
-      controller.abort(reason);
-
-      await expect(canceled).rejects.toBe(reason);
-      expect(undiciFetch).toHaveBeenCalledTimes(1);
-
-      await expect(
-        transport.fetch("https://api.telegram.org/botx/sendMessage?retry=1", {
+      try {
+        const requestUrl = "https://api.telegram.org/botx/sendMessage";
+        const input =
+          signalSource === "request"
+            ? new Request(requestUrl, { signal: controller.signal })
+            : requestUrl;
+        const canceled = transport.fetch(input, {
           dispatcher: callerDispatcher,
-        } as RequestInit),
-      ).resolves.toEqual({ ok: true });
-      expectCallerDispatcherPreserved([1, 2], callerDispatcher);
-    } finally {
-      await transport.close();
-    }
-  });
+          ...(signalSource === "init" ? { signal: controller.signal } : {}),
+        } as RequestInit);
+        lateFailure.reject(buildFetchFallbackError("EHOSTUNREACH"));
+        controller.abort(reason);
+
+        await expect(canceled).rejects.toBe(reason);
+        expect(undiciFetch).toHaveBeenCalledTimes(1);
+
+        await expect(
+          transport.fetch("https://api.telegram.org/botx/sendMessage?retry=1", {
+            dispatcher: callerDispatcher,
+          } as RequestInit),
+        ).resolves.toEqual({ ok: true });
+        expectCallerDispatcherPreserved([1, 2], callerDispatcher);
+      } finally {
+        await transport.close();
+      }
+    },
+  );
 
   it("does not arm sticky fallback from caller-provided dispatcher failures", async () => {
     primeStickyFallbackRetry();
