@@ -16,7 +16,6 @@ import { CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
 import { createGatewayKernel } from "./server-kernel.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
-import { mergeGatewaySidecarOwners } from "./server-sidecar-owners.js";
 
 describe("createGatewayKernel", () => {
   it("keeps startup readiness and sidecar shutdown at their lifecycle boundaries", async () => {
@@ -102,12 +101,7 @@ describe("createGatewayKernel", () => {
       let reentrantStop!: Promise<void>;
       const lifetimeSidecar = {
         stop: vi.fn<() => Promise<void>>().mockImplementationOnce(() => {
-          activeKernel.kernel.setGatewayLifetimeSidecars(
-            mergeGatewaySidecarOwners({
-              registered: activeKernel.runtimeState.gatewayLifetimeSidecars,
-              published: [lifetimeSidecar, reentrantSidecar],
-            }),
-          );
+          activeKernel.registerGatewayLifetimeSidecars([lifetimeSidecar, reentrantSidecar]);
           reentrantStop = activeKernel.stopRegisteredGatewayLifetimeSidecars();
           return firstStop;
         }),
@@ -133,12 +127,7 @@ describe("createGatewayKernel", () => {
         expect(lifetimeSidecar.stop).toHaveBeenCalledOnce();
       });
       const lateSidecar = { stop: vi.fn(async () => {}) };
-      kernel.kernel.setGatewayLifetimeSidecars(
-        mergeGatewaySidecarOwners({
-          registered: kernel.runtimeState.gatewayLifetimeSidecars,
-          published: [lifetimeSidecar, lateSidecar],
-        }),
-      );
+      kernel.registerGatewayLifetimeSidecars([lifetimeSidecar, lateSidecar]);
       const lateStop = kernel.stopRegisteredGatewayLifetimeSidecars();
       rejectFirstStop(cleanupError);
 

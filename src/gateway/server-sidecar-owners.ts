@@ -99,7 +99,7 @@ export function createGatewaySidecarStopOwner(params: {
   return { publish, beginClose, stop, sealAndJoin };
 }
 
-export function mergeGatewaySidecarOwners(params: {
+function mergeGatewaySidecarOwners(params: {
   registered: readonly GatewayPostReadySidecarHandle[];
   published: readonly GatewayPostReadySidecarHandle[];
 }): GatewayPostReadySidecarHandle[] {
