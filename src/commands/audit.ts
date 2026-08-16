@@ -4,11 +4,6 @@ import {
   timestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import {
-  AUDIT_ACTIVITY_DIRECTIONS,
-  AUDIT_ACTIVITY_KINDS,
-  AUDIT_ACTIVITY_STATUSES,
-} from "../../packages/gateway-protocol/src/index.js";
 import type {
   AuditActivityListParams,
   AuditActivityListResult,
@@ -20,6 +15,11 @@ import type {
   ExecutionIdentityContextV1,
   PrincipalRefV1,
 } from "../../packages/gateway-protocol/src/index.js";
+import {
+  AUDIT_ACTIVITY_DIRECTIONS,
+  AUDIT_ACTIVITY_KINDS,
+  AUDIT_ACTIVITY_STATUSES,
+} from "../../packages/gateway-protocol/src/schema/audit-activity.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { parsePositiveAuditCursor } from "../audit/audit-cursor.js";
 import { parseAbsoluteTimeMs } from "../cron/parse.js";

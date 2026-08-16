@@ -3,7 +3,7 @@ import {
   AUDIT_ACTIVITY_DIRECTIONS,
   AUDIT_ACTIVITY_KINDS,
   AUDIT_ACTIVITY_STATUSES,
-} from "../../packages/gateway-protocol/src/index.js";
+} from "../../packages/gateway-protocol/src/schema/audit-activity.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { auditListCommand } from "./audit.js";
 

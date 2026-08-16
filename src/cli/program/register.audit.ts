@@ -4,7 +4,7 @@ import {
   AUDIT_ACTIVITY_DIRECTIONS,
   AUDIT_ACTIVITY_KINDS,
   AUDIT_ACTIVITY_STATUSES,
-} from "../../../packages/gateway-protocol/src/index.js";
+} from "../../../packages/gateway-protocol/src/schema/audit-activity.js";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { auditListCommand, type AuditListCommandOptions } from "../../commands/audit.js";
