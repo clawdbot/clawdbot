@@ -750,7 +750,12 @@ export async function processGatewayAllowlist(
     };
   }
   let mutableFileBinding: SystemRunMutableFileBinding | undefined;
-  const durableApprovalRequiresBinding = hostSecurity === "allowlist" && durableApprovalSatisfied;
+  const durableApprovalRequiresBinding =
+    hostSecurity === "allowlist" &&
+    durableApprovalSatisfied &&
+    (!analysisOk ||
+      !allowlistSatisfied ||
+      (exactCommandDurableApprovalSatisfied && allowlistPlanUnavailableReason !== null));
   if (policyRequiresAsk || durableApprovalRequiresBinding) {
     // Durable text grants cannot authorize future bytes. Prepare before they
     // suppress prompting so mutable operands always return to one-shot review.
