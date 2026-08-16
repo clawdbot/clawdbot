@@ -1,23 +1,11 @@
 import path from "node:path";
-import {
-  GATEWAY_SERVICE_KIND,
-  GATEWAY_SERVICE_MARKER,
-  GATEWAY_SERVICE_SELECTOR_ENV_KEYS,
-} from "../../daemon/constants.js";
+import { GATEWAY_SERVICE_SELECTOR_ENV_KEYS } from "../../daemon/constants.js";
 
 const SERVICE_REFRESH_PATH_ENV_KEYS = [
   "OPENCLAW_HOME",
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
 ] as const;
-
-export function isGatewayServiceEnv(env: Record<string, string | undefined>): boolean {
-  if (env.OPENCLAW_SERVICE_MARKER?.trim() !== GATEWAY_SERVICE_MARKER) {
-    return false;
-  }
-  const serviceKind = env.OPENCLAW_SERVICE_KIND?.trim();
-  return !serviceKind || serviceKind === GATEWAY_SERVICE_KIND;
-}
 
 function applyManagedServiceSelectorEnv(params: {
   baseEnv: NodeJS.ProcessEnv;

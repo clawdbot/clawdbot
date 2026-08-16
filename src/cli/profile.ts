@@ -4,6 +4,7 @@ import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   GATEWAY_SERVICE_SELECTOR_ENV_KEYS,
+  isGatewayServiceEnv,
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
@@ -13,7 +14,6 @@ import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { isValidProfileName, resolveProfileStateDir } from "./profile-utils.js";
 import { scanCliRootOptions } from "./root-option-scan.js";
 import { takeCliRootOptionValue } from "./root-option-value.js";
-import { isGatewayServiceEnv } from "./update-cli/update-command-service-env.js";
 
 type CliProfileParseResult =
   | { ok: true; profile: string | null; argv: string[] }

@@ -17,6 +17,15 @@ export const GATEWAY_SERVICE_SELECTOR_ENV_KEYS = [
   "OPENCLAW_SYSTEMD_UNIT",
   "OPENCLAW_WINDOWS_TASK_NAME",
 ] as const;
+
+export function isGatewayServiceEnv(env: Record<string, string | undefined>): boolean {
+  if (env.OPENCLAW_SERVICE_MARKER?.trim() !== GATEWAY_SERVICE_MARKER) {
+    return false;
+  }
+  const serviceKind = env.OPENCLAW_SERVICE_KIND?.trim();
+  return !serviceKind || serviceKind === GATEWAY_SERVICE_KIND;
+}
+
 const NODE_LAUNCH_AGENT_LABEL = "ai.openclaw.node";
 const NODE_SYSTEMD_SERVICE_NAME = "openclaw-node";
 const NODE_WINDOWS_TASK_NAME = "OpenClaw Node";
