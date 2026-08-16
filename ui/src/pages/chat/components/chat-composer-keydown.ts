@@ -210,11 +210,12 @@ export function createComposerKeyDownHandler({
     if (event.key === "Enter" && !event.shiftKey && sendShortcutMatches) {
       const attachments = props.getAttachments?.() ?? props.attachments ?? [];
       if (!target.value.trim() && attachments.length === 0) {
+        // Mirror the queue chip's Steer availability exactly (visible surface,
+        // connected + composable gate), or offline Enter would swallow the key
+        // and invoke a lifecycle that returns with no visible outcome.
         const queued =
-          showAbortableUi && props.onQueueSteer
-            ? steerableQueuedMessage(
-                props.queue.filter((item) => item.sessionKey === props.sessionKey),
-              )
+          showAbortableUi && props.connected && props.canSend && props.onQueueSteer
+            ? steerableQueuedMessage(props.queue)
             : undefined;
         if (queued) {
           event.preventDefault();

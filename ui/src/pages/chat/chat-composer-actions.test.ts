@@ -164,7 +164,7 @@ describe("renderChatComposer controls", () => {
     expect(onQueueSteer.mock.calls).toEqual([["queued-1"], ["waiting-idle-1"]]);
   });
 
-  it("steers the oldest eligible current-session message when Enter is pressed on empty", () => {
+  it("steers the oldest visible-queue message when Enter is pressed on empty", () => {
     const onQueueSteer = vi.fn();
     const onSend = vi.fn();
     const { container } = renderComposer({
@@ -174,8 +174,9 @@ describe("renderChatComposer controls", () => {
       onSend,
       queue: [
         { id: "later", text: "later", createdAt: 30, sessionKey: "main" },
-        { id: "other-session", text: "other", createdAt: 1, sessionKey: "other" },
-        { id: "oldest", text: "oldest", createdAt: 20, sessionKey: "main" },
+        // Pending rows may omit sessionKey; the Enter path matches the queue
+        // chip's visible surface, so this row stays eligible.
+        { id: "pending-unscoped", text: "pending", createdAt: 10 },
         {
           id: "failed",
           text: "failed",
@@ -190,8 +191,26 @@ describe("renderChatComposer controls", () => {
     container.querySelector("textarea")?.dispatchEvent(event);
 
     expect(event.defaultPrevented).toBe(true);
-    expect(onQueueSteer).toHaveBeenCalledWith("oldest");
+    expect(onQueueSteer).toHaveBeenCalledWith("pending-unscoped");
     expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("does not steer from Enter while offline, matching the hidden Steer chip", () => {
+    const onQueueSteer = vi.fn();
+    const { container } = renderComposer({
+      canAbort: true,
+      connected: false,
+      onAbort: vi.fn(),
+      onQueueSteer,
+      queue: [{ id: "queued", text: "queued", createdAt: 1, sessionKey: "main" }],
+    });
+
+    container
+      .querySelector("textarea")
+      ?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+      );
+    expect(onQueueSteer).not.toHaveBeenCalled();
   });
 
   it("keeps empty Enter inert when no queued message can be steered", () => {
