@@ -209,6 +209,7 @@ function admitLocalOperatorCronAuthority(params: ReturnType<typeof createParams>
   params.cronCreatorAuthorityCapability = {
     active: true,
     runId: params.runId,
+    callerOrigin: { kind: "local" },
     signal: new AbortController().signal,
   } as never;
 }
