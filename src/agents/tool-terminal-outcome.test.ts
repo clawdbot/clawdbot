@@ -148,9 +148,6 @@ describe("tool terminal outcome observer", () => {
       failure: { error: "429 insufficient_quota" },
       ownerMutation: {
         ownerKey: '["memory-lancedb","memory_store"]',
-        mutatingAction: true,
-        replaySafe: false,
-        actionFingerprint: "memory-store:metric-units",
       },
     } as const;
     const terminal = createToolTerminalObserver("run-memory-store")(observation);
@@ -182,34 +179,31 @@ describe("tool terminal outcome observer", () => {
   it("clears a failed persistence action only after the same fact succeeds", () => {
     const observe = createToolTerminalObserver("run-memory-store-retry");
     const ownerKey = '["memory-lancedb","memory_store"]';
-    const ownerMutation = (actionFingerprint: string) => ({
-      ownerKey,
-      mutatingAction: true as const,
-      replaySafe: false as const,
-      actionFingerprint,
-    });
+    const ownerMutation = { ownerKey };
 
     observe({
       toolName: "memory_store",
       arguments: { text: "The user prefers metric units." },
       outcome: "failure",
       failure: { error: "store unavailable" },
-      ownerMutation: ownerMutation("fact:metric"),
+      ownerMutation,
     });
     expect(
       observe({
         toolName: "memory_store",
         arguments: { text: "The user prefers imperial units." },
         outcome: "success",
-        ownerMutation: ownerMutation("fact:imperial"),
+        ownerMutation,
       }).lastToolError,
-    ).toMatchObject({ actionFingerprint: "fact:metric" });
+    ).toMatchObject({
+      actionFingerprint: expect.stringContaining(`owner=${ownerKey}|args=`),
+    });
     expect(
       observe({
         toolName: "memory_store",
         arguments: { text: "The user prefers metric units." },
         outcome: "success",
-        ownerMutation: ownerMutation("fact:metric"),
+        ownerMutation,
       }).lastToolError,
     ).toBeUndefined();
   });

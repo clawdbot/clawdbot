@@ -1,4 +1,4 @@
-import { buildPluginToolMetadataKey, getPluginToolMeta } from "../../../plugins/tools.js";
+import { getPluginToolMeta, getPluginToolSideEffectOwnerKey } from "../../../plugins/tools.js";
 import {
   createClientToolNameConflictError,
   findClientToolNameConflicts,
@@ -7,7 +7,6 @@ import {
 import { resolveToolLoopDetectionConfig } from "../../agent-tools.js";
 import { addClientToolsToCodeModeCatalog } from "../../code-mode.js";
 import type { AgentTool } from "../../runtime/index.js";
-import { normalizeToolPolicyName } from "../../tool-policy-shared.js";
 import {
   collectReplaySafeToolNames,
   collectSideEffectToolOwners,
@@ -83,13 +82,10 @@ export function prepareEmbeddedAttemptClientTools(params: {
     params.replaySafetyOptions,
   );
   const sideEffectToolOwners = collectSideEffectToolOwners(params.uncompactedEffectiveTools, {
-    declaredOwner: (tool) => {
-      const meta = getPluginToolMeta(tool as Parameters<typeof getPluginToolMeta>[0]);
-      const toolName = normalizeToolPolicyName(tool.name ?? "");
-      return meta?.sideEffecting && toolName
-        ? buildPluginToolMetadataKey(meta.pluginId, toolName)
-        : undefined;
-    },
+    declaredOwner: (tool) =>
+      getPluginToolSideEffectOwnerKey(
+        tool as Parameters<typeof getPluginToolSideEffectOwnerKey>[0],
+      ),
   });
   const clientConflictToolNames = params.deferredDirectoryToolsCallable
     ? builtinToolNames

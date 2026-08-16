@@ -46,10 +46,12 @@ export function createToolTerminalObserver(
     const executionStarted =
       (trackedExecutionStarted ?? observation.executionStarted ?? true) && !executionPrevented;
     const executedArguments = asRecord(trackedArguments) ?? asRecord(observation.arguments);
-    const mutation =
-      observation.ownerMutation ??
-      observation.nativeMutation ??
-      buildToolMutationState(observation.toolName, executedArguments, observation.meta);
+    const mutation = observation.ownerMutation
+      ? buildToolMutationState(observation.toolName, executedArguments, observation.meta, {
+          ownerKey: observation.ownerMutation.ownerKey,
+        })
+      : (observation.nativeMutation ??
+        buildToolMutationState(observation.toolName, executedArguments, observation.meta));
     const fileTargets =
       extractPatchFileTargets(observation.toolName, executedArguments) ??
       (mutation.fileTarget ? [mutation.fileTarget] : undefined);

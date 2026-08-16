@@ -217,15 +217,7 @@ export async function handleToolExecutionEnd(
     outcome: isToolError ? "failure" : "success",
     ...(callSummary.ownerKey
       ? {
-          ownerMutation: {
-            ownerKey: callSummary.ownerKey,
-            mutatingAction: callSummary.mutatingAction,
-            replaySafe: callSummary.replaySafe,
-            ...(callSummary.actionFingerprint
-              ? { actionFingerprint: callSummary.actionFingerprint }
-              : {}),
-            ...(callSummary.fileTarget ? { fileTarget: callSummary.fileTarget } : {}),
-          },
+          ownerMutation: { ownerKey: callSummary.ownerKey },
         }
       : {}),
     ...(isToolError

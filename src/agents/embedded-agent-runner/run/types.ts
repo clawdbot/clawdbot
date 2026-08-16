@@ -79,13 +79,9 @@ type EmbeddedRunAttemptToolTerminalObservation = {
     actionFingerprint?: string;
     fileTarget?: ToolErrorSummary["fileTarget"];
   };
-  /** Host-prepared mutation facts bound to one concrete plugin tool owner. */
+  /** Concrete plugin owner; the terminal observer derives mutation facts from executed args. */
   ownerMutation?: {
     ownerKey: string;
-    mutatingAction: boolean;
-    replaySafe: boolean;
-    actionFingerprint?: string;
-    fileTarget?: ToolErrorSummary["fileTarget"];
   };
 };
 
