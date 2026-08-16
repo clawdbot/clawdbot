@@ -10,6 +10,7 @@ export type ExecContainerRawOptions = {
   allowFailure?: boolean;
   input?: Buffer | string;
   signal?: AbortSignal;
+  timeoutMs?: number;
 };
 
 export type SandboxContainerEngine = {
@@ -48,6 +49,15 @@ type ExecDockerRawError = Error & {
   stderr: Buffer;
 };
 
+function unresponsiveContainerEngineMessage(
+  engine: SandboxContainerEngine,
+  args: string[],
+  timeoutMs: number,
+): string {
+  const command = [engine.command, ...args.slice(0, 2)].join(" ");
+  return `${engine.displayName} did not respond within ${timeoutMs}ms (\`${command}\`). Check that ${engine.displayName} is healthy (restart it if needed), or set \`agents.defaults.sandbox.mode=off\` to disable sandboxing.`;
+}
+
 function missingContainerEngineMessage(engine: SandboxContainerEngine): string {
   if (engine.id === "docker") {
     return 'Sandbox mode requires Docker, but the "docker" command was not found in PATH. Install Docker (and ensure "docker" is available), or set `agents.defaults.sandbox.mode=off` to disable sandboxing.';
@@ -69,6 +79,8 @@ export async function execContainerRaw(
       maxBuffer: SANDBOX_COMMAND_MAX_BUFFER_BYTES,
       reject: false,
       stripFinalNewline: false,
+      // execa escalates SIGTERM to SIGKILL after its default 5s grace on expiry.
+      timeout: opts?.timeoutMs,
     });
   } catch (error) {
     if (opts?.signal?.aborted) {
@@ -84,6 +96,14 @@ export async function execContainerRaw(
   }
   if (opts?.signal?.aborted || result.isCanceled) {
     throw createAbortError("Aborted");
+  }
+  // Must precede the generic failed branch: a timed-out result is also failed,
+  // and provisioning callers rely on this typed code to fail closed.
+  if (opts?.timeoutMs !== undefined && result.timedOut) {
+    throw Object.assign(
+      new Error(unresponsiveContainerEngineMessage(engine, args, opts.timeoutMs)),
+      { code: "SANDBOX_CONTAINER_TIMEOUT", cause: result },
+    );
   }
   if (result.failed && !isPlainCommandExitFailure(result)) {
     if (result.code === "ENOENT") {

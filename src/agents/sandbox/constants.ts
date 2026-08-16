@@ -67,6 +67,11 @@ export const DEFAULT_SANDBOX_BROWSER_VNC_PORT = 5900;
 export const DEFAULT_SANDBOX_BROWSER_NOVNC_PORT = 6080;
 export const DEFAULT_SANDBOX_BROWSER_AUTOSTART_TIMEOUT_MS = 12_000;
 
+// Bounds container control-plane calls (inspect/create/start/rm) during sandbox
+// provisioning so a wedged engine fails the run instead of hanging it forever.
+// Long-running sandboxed commands and setupCommand execs stay unbounded.
+export const DEFAULT_SANDBOX_PROVISION_TIMEOUT_MS = 60_000;
+
 export const SANDBOX_AGENT_WORKSPACE_MOUNT = "/agent";
 
 export const SANDBOX_STATE_DIR = path.join(STATE_DIR, "sandbox");

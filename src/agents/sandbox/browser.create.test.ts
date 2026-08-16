@@ -12,6 +12,7 @@ import {
 } from "./config-hash.js";
 import { resolveSandboxBrowserDockerCreateConfig } from "./config.js";
 import {
+  DEFAULT_SANDBOX_PROVISION_TIMEOUT_MS,
   SANDBOX_BROWSER_IMAGE_CONTRACT_EPOCH,
   SANDBOX_BROWSER_SECURITY_HASH_EPOCH,
   SANDBOX_DOCKER_CREATE_ARGS_EPOCH,
@@ -437,7 +438,7 @@ describe("ensureSandboxBrowser create args", () => {
 
     expect(dockerMocks.execDocker).toHaveBeenCalledWith(
       ["rm", "-f", "openclaw-sbx-browser-session-test-0661d10a"],
-      { allowFailure: true },
+      { allowFailure: true, timeoutMs: DEFAULT_SANDBOX_PROVISION_TIMEOUT_MS },
     );
     const rmCallIndex = dockerMocks.execDocker.mock.calls.findIndex(([args]) => args[0] === "rm");
     expect(bridgeMocks.stopBrowserBridgeServer.mock.invocationCallOrder[0]).toBeLessThan(
@@ -813,7 +814,7 @@ describe("ensureSandboxBrowser create args", () => {
 
     expect(dockerMocks.execDocker).toHaveBeenCalledWith(
       ["rm", "-f", "openclaw-sbx-browser-session-test-0661d10a"],
-      { allowFailure: true },
+      { allowFailure: true, timeoutMs: DEFAULT_SANDBOX_PROVISION_TIMEOUT_MS },
     );
   });
 
@@ -1003,7 +1004,7 @@ describe("ensureSandboxBrowser create args", () => {
 
     expect(dockerMocks.execDocker).toHaveBeenCalledWith(
       ["rm", "-f", "openclaw-sbx-browser-session-test-0661d10a"],
-      { allowFailure: true },
+      { allowFailure: true, timeoutMs: DEFAULT_SANDBOX_PROVISION_TIMEOUT_MS },
     );
     requireDockerCreateArgs();
   });

@@ -11,6 +11,7 @@ import type {
   SandboxBackendManager,
 } from "./backend.types.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
+import { DEFAULT_SANDBOX_PROVISION_TIMEOUT_MS } from "./constants.js";
 import {
   containerState,
   bindPodmanSandboxEngine,
@@ -207,7 +208,7 @@ function createContainerSandboxBackendManager(
               runtimeEngine.id === "podman" ? "{{.ImageName}}\t{{.Image}}" : "{{.Config.Image}}",
               entry.containerName,
             ],
-            { allowFailure: true },
+            { allowFailure: true, timeoutMs: DEFAULT_SANDBOX_PROVISION_TIMEOUT_MS },
           );
           if (result.code === 0) {
             const inspected = result.stdout.trim();
@@ -234,7 +235,7 @@ function createContainerSandboxBackendManager(
           const result = await execContainer(
             runtimeEngine,
             ["image", "inspect", "-f", "{{.Id}}", configuredImage],
-            { allowFailure: true },
+            { allowFailure: true, timeoutMs: DEFAULT_SANDBOX_PROVISION_TIMEOUT_MS },
           );
           if (result.code === 0) {
             const normalizeImageId = (value: string) => value.trim().replace(/^sha256:/u, "");
@@ -256,6 +257,7 @@ function createContainerSandboxBackendManager(
       const runtimeEngine = podmanTarget ? bindPodmanSandboxEngine(podmanTarget) : engine;
       const result = await execContainer(runtimeEngine, ["rm", "-f", entry.containerName], {
         allowFailure: true,
+        timeoutMs: DEFAULT_SANDBOX_PROVISION_TIMEOUT_MS,
       });
       if (result.code !== 0) {
         const detail = result.stderr.trim() || result.stdout.trim() || `exit ${result.code}`;

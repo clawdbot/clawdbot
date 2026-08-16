@@ -30,6 +30,7 @@ import { computeSandboxBrowserConfigHash } from "./config-hash.js";
 import { resolveSandboxBrowserDockerCreateConfig } from "./config.js";
 import {
   DEFAULT_SANDBOX_BROWSER_IMAGE,
+  DEFAULT_SANDBOX_PROVISION_TIMEOUT_MS,
   SANDBOX_BROWSER_IMAGE_CONTRACT_EPOCH,
   SANDBOX_BROWSER_SECURITY_HASH_EPOCH,
   SANDBOX_DOCKER_CREATE_ARGS_EPOCH,
@@ -185,7 +186,7 @@ async function ensureSandboxBrowserImage(image: string) {
       `{{ index .Config.Labels "${SANDBOX_BROWSER_IMAGE_CONTRACT_LABEL}" }}`,
       image,
     ],
-    { allowFailure: true },
+    { allowFailure: true, timeoutMs: DEFAULT_SANDBOX_PROVISION_TIMEOUT_MS },
   );
   if (result.code === 0) {
     const contract = result.stdout.trim();
@@ -218,11 +219,16 @@ async function ensureDockerNetwork(
     return;
   }
   await browserNetworkLifecycleQueue.enqueue(normalized, async () => {
-    const inspect = await execDocker(["network", "inspect", network], { allowFailure: true });
+    const inspect = await execDocker(["network", "inspect", network], {
+      allowFailure: true,
+      timeoutMs: DEFAULT_SANDBOX_PROVISION_TIMEOUT_MS,
+    });
     if (inspect.code === 0) {
       return;
     }
-    await execDocker(["network", "create", "--driver", "bridge", network]);
+    await execDocker(["network", "create", "--driver", "bridge", network], {
+      timeoutMs: DEFAULT_SANDBOX_PROVISION_TIMEOUT_MS,
+    });
   });
 }
 
@@ -330,7 +336,10 @@ async function ensureSandboxBrowserContainer(
         `Removing stale sandbox browser container ${containerName} because it lacks the current CDP relay auth contract; it will be recreated.`,
       );
       await stopExistingForContainer();
-      await execDocker(["rm", "-f", containerName], { allowFailure: true });
+      await execDocker(["rm", "-f", containerName], {
+        allowFailure: true,
+        timeoutMs: DEFAULT_SANDBOX_PROVISION_TIMEOUT_MS,
+      });
       hasContainer = false;
       running = false;
     }
@@ -365,7 +374,10 @@ async function ensureSandboxBrowserContainer(
         );
       } else {
         await stopExistingForContainer();
-        await execDocker(["rm", "-f", containerName], { allowFailure: true });
+        await execDocker(["rm", "-f", containerName], {
+          allowFailure: true,
+          timeoutMs: DEFAULT_SANDBOX_PROVISION_TIMEOUT_MS,
+        });
         hasContainer = false;
         running = false;
       }
@@ -448,10 +460,10 @@ async function ensureSandboxBrowserContainer(
       args.push("-e", `${NOVNC_PASSWORD_ENV_KEY}=${noVncPassword}`);
     }
     args.push(browserImage);
-    await execDocker(args);
-    await execDocker(["start", containerName]);
+    await execDocker(args, { timeoutMs: DEFAULT_SANDBOX_PROVISION_TIMEOUT_MS });
+    await execDocker(["start", containerName], { timeoutMs: DEFAULT_SANDBOX_PROVISION_TIMEOUT_MS });
   } else if (!running) {
-    await execDocker(["start", containerName]);
+    await execDocker(["start", containerName], { timeoutMs: DEFAULT_SANDBOX_PROVISION_TIMEOUT_MS });
   }
 
   const mappedCdp = await readDockerPort(containerName, params.cfg.browser.cdpPort);
@@ -518,7 +530,9 @@ async function ensureSandboxBrowserContainer(
       ? async () => {
           const currentState = await dockerContainerState(containerName);
           if (currentState.exists && !currentState.running) {
-            await execDocker(["start", containerName]);
+            await execDocker(["start", containerName], {
+              timeoutMs: DEFAULT_SANDBOX_PROVISION_TIMEOUT_MS,
+            });
           }
           const ok = await waitForSandboxCdp({
             cdpPort: mappedCdp,
@@ -526,7 +540,10 @@ async function ensureSandboxBrowserContainer(
             timeoutMs: params.cfg.browser.autoStartTimeoutMs,
           });
           if (!ok) {
-            await execDocker(["rm", "-f", containerName], { allowFailure: true });
+            await execDocker(["rm", "-f", containerName], {
+              allowFailure: true,
+              timeoutMs: DEFAULT_SANDBOX_PROVISION_TIMEOUT_MS,
+            });
             throw new Error(
               `Sandbox browser CDP did not become reachable on 127.0.0.1:${mappedCdp} within ${params.cfg.browser.autoStartTimeoutMs}ms. The hung container has been forcefully removed.`,
             );
