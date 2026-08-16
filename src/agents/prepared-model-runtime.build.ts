@@ -4,7 +4,6 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import pLimit from "p-limit";
 import { runAbortableTimeout } from "../node-host/with-timeout.js";
-import { projectPluginMetadataSnapshotWorkspace } from "../plugins/plugin-metadata-snapshot.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolveUsableAgentCredentialModes } from "./agent-auth-credentials.js";
 import { getPreparedRuntimeAuthMaterializations } from "./auth-profiles/runtime-materializations.js";
@@ -35,6 +34,7 @@ import {
   createPreparedInboundRegistryLoader,
   preparedModelRuntimeWorkspaceFactsKey,
 } from "./prepared-model-runtime.inbound-registry.js";
+import { projectPreparedPluginGeneration } from "./prepared-model-runtime.plugin-generation.js";
 import type {
   PreparedModelRuntimeBuildStats,
   PreparedModelRuntimeCatalogMode,
@@ -233,14 +233,6 @@ function createSnapshot(
   const { credentials, input } = agentFacts;
   const { mediaCapabilityProviders, messageToolCatalog, pluginMetadataSnapshot, pluginRegistry } =
     pluginGeneration;
-  const metadataSnapshot = input.workspaceDir
-    ? projectPluginMetadataSnapshotWorkspace({
-        snapshot: pluginMetadataSnapshot,
-        config: input.config,
-        env: input.env,
-        workspaceDir: input.workspaceDir,
-      })
-    : pluginMetadataSnapshot;
   const { configuredRuntimeModels, inlineProviderModels, modelCatalog, templateModelRegistry } =
     catalogFacts;
   const createStores = (): PreparedModelRuntimeStores => {
@@ -257,7 +249,7 @@ function createSnapshot(
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     config: input.config,
     authModes: resolveUsableAgentCredentialModes(credentials),
-    metadataSnapshot,
+    metadataSnapshot: pluginMetadataSnapshot,
     allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,
     ...(pluginRegistry ? { pluginRegistry } : {}),
     ...(messageToolCatalog ? { messageToolCatalog } : {}),
@@ -364,7 +356,13 @@ async function buildSnapshotBatch(
     configuredProjectionMs += prepared.buildStats.configuredProjectionMs;
     for (const agentFacts of prepared.agentFacts) {
       preparedInputs.set(agentFacts.input, agentFacts);
-      pluginGenerations.set(agentFacts.input, prepared.pluginGeneration);
+      pluginGenerations.set(
+        agentFacts.input,
+        projectPreparedPluginGeneration({
+          input: agentFacts.input,
+          pluginGeneration: prepared.pluginGeneration,
+        }),
+      );
     }
   }
   const workspaceFactsMs = performance.now() - workspaceFactsStartedAt;
