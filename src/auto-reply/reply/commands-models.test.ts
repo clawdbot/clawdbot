@@ -344,21 +344,8 @@ describe("handleModelsCommand", () => {
     expect(authCheckerParams?.allowPreparedRuntimeAuth).toBe(true);
   });
 
-  it("uses the complete catalog for default browse with provider wildcards", async () => {
-    await handleModelsCommand(
-      buildParams("/models", {
-        agents: {
-          defaults: {
-            model: { primary: "anthropic/claude-opus-4-5" },
-            modelPolicy: { allow: ["openai/*"] },
-          },
-        },
-      }),
-      true,
-    );
-
-    expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.readOnly).toBe(false);
-  });
+  // oxfmt-ignore
+  it("uses the complete catalog for default browse with provider wildcards", async () => { await handleModelsCommand(buildParams("/models", { agents: { defaults: { modelPolicy: { allow: ["openai/*"] } } } }), true); expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.readOnly).toBe(false); });
 
   it("does not block default browse when read-only catalog loading is slow", async () => {
     vi.useFakeTimers();
