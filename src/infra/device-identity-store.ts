@@ -246,6 +246,22 @@ function readStoredIdentityFromDatabase(
   return row ? rowToStoredIdentity(row, identityKey) : null;
 }
 
+function isEmptyBootstrapIdentityTableMiss(
+  database: { db: Parameters<typeof getNodeSqliteKysely>[0] },
+  error: unknown,
+): boolean {
+  if (
+    !(error instanceof Error) ||
+    (error as NodeJS.ErrnoException).code !== "ERR_SQLITE_ERROR" ||
+    !/\bno such table: device_identities\b/iu.test(error.message)
+  ) {
+    return false;
+  }
+  return !database.db
+    .prepare("SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1")
+    .get();
+}
+
 /** Resolve the concrete database and row identity used by process caches and diagnostics. */
 export function resolveDeviceIdentityStore(options: DeviceIdentityStoreOptions = {}): {
   databasePath: string;
@@ -283,7 +299,17 @@ export function readStoredDeviceIdentityReadOnly(
   return (
     withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
       (database) => {
-        const stored = readStoredIdentityFromDatabase(database, resolved.identityKey);
+        let stored: StoredDeviceIdentity | null;
+        try {
+          stored = readStoredIdentityFromDatabase(database, resolved.identityKey);
+        } catch (error) {
+          // A creator publishes the SQLite file before its schema transaction commits.
+          // Only that empty bootstrap snapshot is a read miss; partial schemas still fail closed.
+          if (isEmptyBootstrapIdentityTableMiss(database, error)) {
+            return null;
+          }
+          throw error;
+        }
         if (stored) {
           validateStoredDeviceIdentity(stored, resolved.identityKey);
         }
