@@ -3269,7 +3269,7 @@ describe("handleSendChat", () => {
 
     expect(executeSlashCommandMock).toHaveBeenCalledTimes(1);
     expect(host.chatMessage).toBe("");
-    expect(host.lastError).toBe("Error: dispatch failed");
+    expect(host.lastError).toBe("dispatch failed");
     expect(host.chatMessages).toHaveLength(1);
     const feedback = requireRecord(host.chatMessages[0], "feedback message");
     expect(feedback.role).toBe("system");

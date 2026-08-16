@@ -1,6 +1,7 @@
 import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
 import type { ReactiveController } from "lit";
 import { t } from "../../i18n/index.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import {
   TerminalConnection,
   type TerminalGatewayClient,
@@ -665,7 +666,7 @@ export class TerminalPanelSessionController
     tab.exitReason = info.reason;
     tab.exitCode = info.exitCode;
     if (info.error?.trim()) {
-      this.host.terminalPanelErrorText = info.error.trim();
+      this.host.terminalPanelErrorText = formatUiExternalText(info.error);
     }
     // The connection drops its own sink on exit delivery, so no release() here —
     // the session id may not be recorded yet when an early exit is replayed.

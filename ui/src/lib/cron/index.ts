@@ -21,6 +21,7 @@ import type {
 } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveCronJobLastRunStatus } from "../cron-status.ts";
+import { formatUiError } from "../format-error.ts";
 import { toNumber } from "../format.ts";
 import {
   formatMissingOperatorReadScopeMessage,
@@ -384,7 +385,7 @@ export async function loadCronStatus(state: CronState) {
       state.cronStatus = null;
       state.cronError = formatMissingOperatorReadScopeMessage("cron status");
     } else {
-      state.cronError = String(err);
+      state.cronError = formatUiError(err);
     }
   }
 }
@@ -504,7 +505,7 @@ async function withCronBusy(
   try {
     await run(client);
   } catch (err) {
-    state.cronError = String(err);
+    state.cronError = formatUiError(err);
   } finally {
     state.cronBusy = false;
   }
@@ -677,7 +678,7 @@ export async function loadCronJobsPage(
       clearCronEditState(state);
     }
   } catch (err) {
-    state.cronError = String(err);
+    state.cronError = formatUiError(err);
   } finally {
     if (append) {
       state.cronJobsLoadingMore = false;
@@ -1401,7 +1402,7 @@ export async function loadCronRuns(
     if (!ownsCronRunsRequest(state, request)) {
       return "skipped";
     }
-    state.cronError = String(err);
+    state.cronError = formatUiError(err);
     return "error";
   } finally {
     if (append && activeCronRunsRequests.get(state) === request) {

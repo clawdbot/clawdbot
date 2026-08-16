@@ -105,7 +105,7 @@ describe("agent file lifecycle", () => {
     page.saveSelectedAgentFile("main", "AGENTS.md", "updated");
 
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    await vi.waitFor(() => expect(page.agentFilesError).toBe("Error: workspace write failed"));
+    await vi.waitFor(() => expect(page.agentFilesError).toBe("workspace write failed"));
     expect(refreshFiles).not.toHaveBeenCalled();
   });
 });

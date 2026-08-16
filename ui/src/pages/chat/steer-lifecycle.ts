@@ -4,6 +4,7 @@ import type { SessionsListResult } from "../../api/types.ts";
 import { setLastActiveSessionKey } from "../../app/settings.ts";
 import { compareChatQueueOrder } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
 import {
@@ -316,8 +317,9 @@ export function retirePersistedSteeredChips(state: SteerLifecycleHost): void {
 }
 
 function setChatError(host: SteerLifecycleHost, error: string | null): void {
-  host.lastError = error;
-  host.chatError = error;
+  const message = error === null ? null : formatUiError(error);
+  host.lastError = message;
+  host.chatError = message;
 }
 
 type ChatDeliveryFailureHost = Parameters<typeof visibleSessionMatches>[0] & {
@@ -339,9 +341,10 @@ export function surfaceChatDeliveryFailure(
   agentId: string | undefined,
   error: string,
 ): void {
+  const message = formatUiError(error);
   if (visibleSessionMatches(host, sessionKey, agentId)) {
-    host.lastError = error;
-    host.chatError = error;
+    host.lastError = message;
+    host.chatError = message;
     return;
   }
   // Global rows are agent-scoped while sharing one "global" key, so an
@@ -354,7 +357,7 @@ export function surfaceChatDeliveryFailure(
         !scopedAgentId ||
         (session.agentId !== undefined && normalizeAgentId(session.agentId) === scopedAgentId)),
   );
-  showToast({ message: `${resolveSessionDisplayName(sessionKey, row)}: ${error}` });
+  showToast({ message: `${resolveSessionDisplayName(sessionKey, row)}: ${message}` });
 }
 
 export async function sendQueuedChatMessageWithQueueMode(

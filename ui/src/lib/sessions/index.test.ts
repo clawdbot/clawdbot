@@ -179,7 +179,7 @@ describe("createSessionCapability", () => {
     const sessions = createSessionCapability(gateway);
 
     await expect(sessions.groupsRename("Alpha", "Beta")).rejects.toThrow("rename failed");
-    expect(sessions.state.error).toBe("Error: rename failed");
+    expect(sessions.state.error).toBe("rename failed");
     sessions.dispose();
   });
 
@@ -195,7 +195,7 @@ describe("createSessionCapability", () => {
     const sessions = createSessionCapability(gateway);
 
     await expect(sessions.groupsPut(["Alpha"])).rejects.toThrow("group catalog rejected");
-    expect(sessions.state.error).toBe("Error: group catalog rejected");
+    expect(sessions.state.error).toBe("group catalog rejected");
     sessions.dispose();
   });
 
@@ -211,7 +211,7 @@ describe("createSessionCapability", () => {
     const sessions = createSessionCapability(gateway);
 
     await expect(sessions.groupsDelete("Alpha")).rejects.toThrow("delete failed");
-    expect(sessions.state.error).toBe("Error: delete failed");
+    expect(sessions.state.error).toBe("delete failed");
     sessions.dispose();
   });
 

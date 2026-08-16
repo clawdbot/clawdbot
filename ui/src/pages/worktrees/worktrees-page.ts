@@ -21,6 +21,7 @@ import {
 } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { repoName } from "../../lib/session-display.ts";
@@ -82,7 +83,7 @@ class WorktreesPage extends OpenClawLightDomElement {
       this.records = result.worktrees.toSorted((a, b) => b.lastActiveAt - a.lastActiveAt);
     },
     onError: (error) => {
-      this.error = String(error);
+      this.error = formatUiError(error);
     },
   });
 
@@ -195,12 +196,12 @@ class WorktreesPage extends OpenClawLightDomElement {
         }
       } catch (forceError) {
         if (this.gateway.isCurrent(scope)) {
-          this.error = String(forceError);
+          this.error = formatUiError(forceError);
         }
       }
     } catch (error) {
       if (this.gateway.isCurrent(scope)) {
-        this.error = String(error);
+        this.error = formatUiError(error);
       }
     } finally {
       if (this.gateway.isCurrent(scope)) {
@@ -221,7 +222,7 @@ class WorktreesPage extends OpenClawLightDomElement {
       await scope.client.request("worktrees.restore", { id: record.id });
     } catch (error) {
       if (this.gateway.isCurrent(scope)) {
-        this.error = String(error);
+        this.error = formatUiError(error);
       }
     } finally {
       if (this.gateway.isCurrent(scope)) {
@@ -242,7 +243,7 @@ class WorktreesPage extends OpenClawLightDomElement {
       await scope.client.request("worktrees.gc", {});
     } catch (error) {
       if (this.gateway.isCurrent(scope)) {
-        this.error = String(error);
+        this.error = formatUiError(error);
       }
     } finally {
       if (this.gateway.isCurrent(scope)) {
@@ -296,7 +297,7 @@ class WorktreesPage extends OpenClawLightDomElement {
       }
     } catch (error) {
       if (this.gateway.isCurrent(scope)) {
-        this.error = String(error);
+        this.error = formatUiError(error);
       }
     } finally {
       if (this.gateway.isCurrent(scope)) {

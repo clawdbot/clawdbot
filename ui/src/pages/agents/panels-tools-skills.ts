@@ -27,6 +27,7 @@ import {
   resolveToolProfile,
   resolveToolSections,
 } from "../../lib/agents/display.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import type { SkillGroup } from "../../lib/skills-grouping.ts";
 import { groupSkills } from "../../lib/skills-grouping.ts";
 import {
@@ -192,7 +193,7 @@ function renderEffectiveToolNotices(result: ToolsEffectiveResult | null) {
             class="callout ${notice.severity === "warning" ? "warning" : "info"}"
             style="margin-top: 12px"
           >
-            ${notice.message}
+            ${formatUiExternalText(notice.message)}
           </div>
         `,
       )}

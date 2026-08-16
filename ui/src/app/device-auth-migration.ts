@@ -1,5 +1,6 @@
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { t } from "../i18n/index.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { peekStoredDeviceIdentityId } from "../lib/nodes/index.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import "../components/device-auth-migration-banner.ts";
@@ -70,7 +71,7 @@ export function createDeviceAuthMigrationController(params: {
         });
       } catch (error) {
         if (refreshGeneration === generation && params.isCurrent(client, epoch)) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message = formatUiError(error);
           update({
             error: t("login.deviceAuthMigration.loadFailed", {
               error: message,
@@ -103,7 +104,7 @@ export function createDeviceAuthMigrationController(params: {
         params.gateway.connect();
       } catch (error) {
         if (!disposed && params.isCurrent(client, epoch)) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message = formatUiError(error);
           update({
             busy: false,
             error: t("login.deviceAuthMigration.approvalFailed", {

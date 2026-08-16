@@ -14,6 +14,7 @@ import type {
 } from "../../api/types.ts";
 import { hasMultiplePresenceIdentities } from "../../components/viewer-facepile.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
@@ -155,7 +156,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
         }
         return;
       }
-      this.setSessionSharingState(cacheKey, { loading: false, error: String(error) });
+      this.setSessionSharingState(cacheKey, { loading: false, error: formatUiError(error) });
     }
   }
 
@@ -166,7 +167,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
     this.setSessionSharingState(key, {
       ...(this.sessionSharingStates.get(key) ?? { loading: false }),
       loading: false,
-      error: String(error),
+      error: formatUiError(error),
     });
     // Sharing errors stay with their session; the visible slot belongs only to the selected session.
     if (areUiSessionKeysEquivalent(this.state?.sessionKey, session)) {
@@ -528,7 +529,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
         this.sessionSuggestionAddOperation === operation &&
         this.isConnectionScopeCurrent(scope)
       ) {
-        scope.state.chatError = error instanceof Error ? error.message : String(error);
+        scope.state.chatError = formatUiError(error);
         scope.state.lastError = scope.state.chatError;
       }
     } finally {
@@ -611,7 +612,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
         ) {
           scope.state.handleChatDraftChange(previousEditDraft);
         }
-        scope.state.chatError = error instanceof Error ? error.message : String(error);
+        scope.state.chatError = formatUiError(error);
         scope.state.lastError = scope.state.chatError;
       }
     } finally {

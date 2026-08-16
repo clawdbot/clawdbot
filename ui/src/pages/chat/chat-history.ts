@@ -1,4 +1,3 @@
-// Control UI page module owns Chat transcript loading and selected-session message subscription.
 import {
   readSessionMessageIdentity,
   readSessionMessageSequence,
@@ -19,6 +18,8 @@ import {
   stripHeartbeatTokenForDisplay,
 } from "../../lib/chat/heartbeat-display.ts";
 import { extractText, isEmptyUserTextOnlyMessage } from "../../lib/chat/message-extract.ts";
+// Control UI page module owns Chat transcript loading and selected-session message subscription.
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
@@ -591,8 +592,9 @@ export type ChatEventPayload = {
 };
 
 function setChatError(state: ChatState, error: string | null) {
-  state.lastError = error;
-  state.chatError = error;
+  const message = error === null ? null : formatUiError(error);
+  state.lastError = message;
+  state.chatError = message;
 }
 
 function chatScopedEventAgentScopeMatches(
@@ -812,7 +814,7 @@ export async function syncSelectedSessionMessageSubscription(
             }
             state.chatSessionMessageSubscriptionRequestedKey = nextKey;
             state.chatSessionMessageSubscription = subscribeResult.value;
-            state.sessionsError = `${String(unsubscribeResult.reason)}; replacement release failed: ${String(replacementReleaseError)}`;
+            state.sessionsError = `${formatUiError(unsubscribeResult.reason)}; replacement release failed: ${formatUiError(replacementReleaseError)}`;
           } else {
             paneRequests.pendingSubscriptionReleases.add(subscribeResult.value);
           }
@@ -820,7 +822,7 @@ export async function syncSelectedSessionMessageSubscription(
         }
       }
       if (isCurrent()) {
-        state.sessionsError = String(unsubscribeResult.reason);
+        state.sessionsError = formatUiError(unsubscribeResult.reason);
       }
       return;
     }
@@ -854,7 +856,7 @@ export async function syncSelectedSessionMessageSubscription(
     state.chatSessionMessageSubscription = subscribed;
   } catch (err) {
     if (isCurrent()) {
-      state.sessionsError = String(err);
+      state.sessionsError = formatUiError(err);
     }
   }
 }
@@ -1201,7 +1203,7 @@ export async function clearChatHistory(
     }
   } catch (err) {
     if (ownsClearChatView(state, originalViewOwner)) {
-      setChatError(state, String(err));
+      setChatError(state, formatUiError(err));
       scheduleChatScroll(state);
     }
     return "failed";
@@ -1273,7 +1275,7 @@ export async function rewindChatHistory(
     state.handleChatDraftChange(editorText);
     return result;
   } catch (error) {
-    setChatError(state, error instanceof Error ? error.message : String(error));
+    setChatError(state, formatUiError(error));
     scheduleChatScroll(state);
     return null;
   }
@@ -1303,7 +1305,7 @@ export async function switchChatHistoryBranch(
     await Promise.all([loadChatHistory(state), loadChatBranches(state)]);
     return visibleSessionMatches(state, sessionKey, agentParams.agentId);
   } catch (error) {
-    setChatError(state, error instanceof Error ? error.message : String(error));
+    setChatError(state, formatUiError(error));
     scheduleChatScroll(state);
     return false;
   }
@@ -1794,7 +1796,7 @@ async function loadChatHistoryUncached(
       state.chatVerboseLevel = null;
       setChatError(state, formatMissingOperatorReadScopeMessage("existing chat history"));
     } else {
-      setChatError(state, String(err));
+      setChatError(state, formatUiError(err));
     }
   } finally {
     if (ownsChatHistoryRequest(state, ownership)) {

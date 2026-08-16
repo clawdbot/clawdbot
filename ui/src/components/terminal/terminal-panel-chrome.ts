@@ -1,5 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import type { DockPanelPlacement } from "../dock-panel-layout.ts";
 import { icons } from "../icons.ts";
 import { renderPanelEmptyState } from "../panel-empty-state.ts";
@@ -106,5 +107,5 @@ export function terminalOpenErrorText(error: unknown): string {
   if (error instanceof TerminalOpenUnusableSessionError) {
     return t("terminal.unavailable");
   }
-  return error instanceof Error ? error.message : String(error);
+  return formatUiError(error);
 }
