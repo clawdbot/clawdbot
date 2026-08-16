@@ -174,18 +174,11 @@ export async function prepareAgentRunUserTurn(params: {
             agentId: params.activeSessionAgentId,
             clone: false,
           });
-          const loadedSessionId = loaded.entry?.sessionId?.trim();
-          if (loadedSessionId && loadedSessionId !== params.admittedSessionId) {
-            return undefined;
-          }
+          const latestEntry = loaded.entry;
+          const loadedSessionId = latestEntry?.sessionId?.trim();
           // Session creation is persisted before this phase. No matching entry
           // means the admitted lifecycle instance changed and must fail closed.
-          const latestEntry = loadedSessionId
-            ? loaded.entry
-            : params.sessionEntry?.sessionId?.trim() === params.admittedSessionId
-              ? params.sessionEntry
-              : undefined;
-          if (!latestEntry) {
+          if (!latestEntry || loadedSessionId !== params.admittedSessionId) {
             return undefined;
           }
           return {
