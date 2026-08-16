@@ -52,6 +52,7 @@ export async function prepareGatewayLifecycle(params: {
     workerGatewayEndpoint,
     transportBridge,
     sessionMessageSubscribers,
+    isConnectionActive,
     clients,
     broadcast,
     cfgAtStart,
@@ -322,8 +323,10 @@ export async function prepareGatewayLifecycle(params: {
   };
   runtimeState.controlUiSessionPullRequests = createControlUiSessionPullRequestSubscriptions({
     broadcastToConnIds,
+    isConnectionActive,
   });
   runtimeState.sessionViewerPresence = createSessionViewerPresenceDeclarations({
+    isConnectionActive,
     onReplace: (connId, sessionKeys) => {
       const client = [...clients].find((candidate) => candidate.connId === connId);
       if (!client?.presenceKey) {

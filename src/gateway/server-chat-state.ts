@@ -368,14 +368,16 @@ const TOOL_EVENT_RECIPIENT_TTL_MS = 10 * 60 * 1000;
 const TOOL_EVENT_RECIPIENT_FINAL_GRACE_MS = 30 * 1000;
 
 /** Create the broad sessions.changed subscriber registry. */
-export function createSessionEventSubscriberRegistry(): SessionEventSubscriberRegistry {
+export function createSessionEventSubscriberRegistry(
+  isConnectionActive?: (connId: string) => boolean,
+): SessionEventSubscriberRegistry {
   const connIds = new Set<string>();
   const empty = new Set<string>();
 
   return {
     subscribe: (connId: string) => {
       const normalized = connId.trim();
-      if (!normalized) {
+      if (!normalized || isConnectionActive?.(normalized) === false) {
         return;
       }
       connIds.add(normalized);
@@ -392,7 +394,9 @@ export function createSessionEventSubscriberRegistry(): SessionEventSubscriberRe
 }
 
 /** Create the per-session message subscriber registry. */
-export function createSessionMessageSubscriberRegistry(): SessionMessageSubscriberRegistry {
+export function createSessionMessageSubscriberRegistry(
+  isConnectionActive?: (connId: string) => boolean,
+): SessionMessageSubscriberRegistry {
   const sessionToConnIds = new Map<string, Set<string>>();
   // The final state after overlapping replays settles to their latest success
   // or the original committed base; failed provisionals cannot leave ghosts.
@@ -456,7 +460,11 @@ export function createSessionMessageSubscriberRegistry(): SessionMessageSubscrib
     subscribe: (connId: string, sessionKey: string, opts) => {
       const normalizedConnId = normalize(connId);
       const normalizedSessionKey = normalize(sessionKey);
-      if (!normalizedConnId || !normalizedSessionKey) {
+      if (
+        !normalizedConnId ||
+        !normalizedSessionKey ||
+        isConnectionActive?.(normalizedConnId) === false
+      ) {
         return undefined;
       }
       const hadApprovals =
