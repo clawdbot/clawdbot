@@ -110,6 +110,10 @@ function createContext() {
     snapshot,
     context: {
       gateway,
+      agentSelection: {
+        state: { selectedId: "main", scopeId: "main" },
+        subscribe: () => () => undefined,
+      },
       basePath: "/openclaw",
       navigate: vi.fn(),
       runtimeConfig,
@@ -124,7 +128,14 @@ async function mountPage(
   const provider = createApplicationContextProvider(context);
   const page = document.createElement("openclaw-model-setup-page") as TestModelSetupPage;
   const { client, ...data } = routeData;
-  page.routeData = { ...data, connection: { client, hello: context.gateway.snapshot.hello } };
+  page.routeData = {
+    ...data,
+    connection: {
+      client,
+      hello: context.gateway.snapshot.hello,
+      agentId: context.agentSelection.state.selectedId,
+    },
+  };
   provider.append(page);
   document.body.append(provider);
   await page.updateComplete;
@@ -292,7 +303,7 @@ describe("ModelSetupPage catalog icons", () => {
     await vi.waitFor(() => {
       expect(request).toHaveBeenCalledWith(
         "openclaw.setup.prepare.start",
-        { sessionId: expect.any(String), authChoice: "llama-cpp" },
+        { sessionId: expect.any(String), agentId: "main", authChoice: "llama-cpp" },
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
       expect(page.querySelector("openclaw-modal-dialog")).not.toBeNull();
@@ -379,6 +390,7 @@ describe("ModelSetupPage catalog icons", () => {
       expect(request).toHaveBeenCalledWith(
         "openclaw.setup.activate",
         {
+          agentId: "main",
           kind: "provider-auto:vendor%2Flocal%3Av1%25beta%3Fx%23y",
           modelRef: "llama-cpp/gemma-4-e4b-it-q4_k_m",
         },

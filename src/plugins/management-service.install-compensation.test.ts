@@ -1,9 +1,14 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveDefaultPluginNpmDir, resolvePluginNpmProjectDir } from "./install-paths.js";
 
 const mocks = vi.hoisted(() => ({
   applyUninstall: vi.fn(),
   clawhubInstall: vi.fn(),
   installRecords: vi.fn(),
+  npmInstall: vi.fn(),
   pathInstall: vi.fn(),
   persistInstall: vi.fn(),
   planUninstall: vi.fn(),
@@ -15,6 +20,7 @@ vi.mock("./clawhub.js", () => ({
 
 vi.mock("./install.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./install.js")>()),
+  installPluginFromNpmSpec: (...args: unknown[]) => mocks.npmInstall(...args),
   installPluginFromPath: (...args: unknown[]) => mocks.pathInstall(...args),
 }));
 
@@ -35,6 +41,7 @@ vi.mock("./uninstall.js", async (importOriginal) => ({
 }));
 
 const { installManagedPluginSource } = await import("./management-service.js");
+const actualUninstall = await vi.importActual<typeof import("./uninstall.js")>("./uninstall.js");
 
 function installPersistSnapshot() {
   return {
@@ -95,6 +102,58 @@ describe("managed plugin install compensation", () => {
 
     expect(mocks.installRecords).toHaveBeenCalledWith({ env });
     expect(mocks.applyUninstall).toHaveBeenCalledWith({ target: targetDir });
+  });
+
+  it("removes a planner-validated isolated npm project after persistence conflicts", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-managed-npm-conflict-"));
+    const env = { HOME: home };
+    const packageName = "@openclaw/demo";
+    const npmRoot = resolvePluginNpmProjectDir({
+      npmDir: resolveDefaultPluginNpmDir(env),
+      packageName,
+    });
+    const targetDir = path.join(npmRoot, "node_modules", "@openclaw", "demo");
+    const packArchive = path.join(npmRoot, "_openclaw-pack-archives", "demo.tgz");
+    const conflict = new Error("config changed during npm plugin install");
+
+    try {
+      await fs.mkdir(targetDir, { recursive: true });
+      await fs.mkdir(path.dirname(packArchive), { recursive: true });
+      await fs.writeFile(packArchive, "packed plugin");
+      mocks.npmInstall.mockResolvedValue({
+        ok: true,
+        pluginId: "demo",
+        targetDir,
+        extensions: ["index.js"],
+        manifestName: packageName,
+      });
+      mocks.persistInstall.mockRejectedValue(conflict);
+      mocks.planUninstall.mockImplementation((params) =>
+        actualUninstall.planPluginUninstall(
+          params as Parameters<typeof actualUninstall.planPluginUninstall>[0],
+        ),
+      );
+      mocks.applyUninstall.mockImplementation(async (removal: { target: string }) => {
+        await fs.rm(removal.target, { recursive: true, force: true });
+        return { directoryRemoved: true, warnings: [] };
+      });
+
+      await expect(
+        installManagedPluginSource({
+          request: { source: "npm", spec: packageName, mode: "install" },
+          snapshot: installPersistSnapshot(),
+          env,
+        }),
+      ).rejects.toBe(conflict);
+
+      expect(mocks.applyUninstall).toHaveBeenCalledWith({
+        target: npmRoot,
+        cleanup: { kind: "npm", npmRoot, packageName },
+      });
+      await expect(fs.access(npmRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
   });
 
   it("never deletes an operator-owned source when link persistence fails", async () => {

@@ -24,7 +24,12 @@ describe("gateway concurrency benchmark script", () => {
         "/tmp/gateway-cpu-profiles",
         "--plugin-count",
         "50",
+        "--max-control-ms",
+        "2000",
+        "--max-handshake-ms",
+        "2000",
         "--tool-events",
+        "--workspace-fanout",
         "--output",
         "concurrency.json",
         "--json",
@@ -34,12 +39,15 @@ describe("gateway concurrency benchmark script", () => {
       concurrency: 12,
       cpuProfDir: "/tmp/gateway-cpu-profiles",
       json: true,
+      maxControlMs: 2_000,
+      maxHandshakeMs: 2_000,
       output: "concurrency.json",
       pluginCount: 50,
       runs: 2,
       timeoutMs: 90_000,
       toolEvents: true,
       warmup: 0,
+      workspaceFanout: true,
     });
     expect(() => testing.parseOptions(["--concurrency", "65"])).toThrow(
       "--concurrency must be at most 64",
@@ -71,6 +79,7 @@ describe("gateway concurrency benchmark script", () => {
     const createRun = (count: number, durations: number[]) => ({
       controlUi: [],
       durationMs: 10,
+      freshConnection: { error: null, latencyMs: 25, ok: true },
       probeWarmup: { durationMs: 2, samples: [] },
       pluginMetadataScans: {
         count,
@@ -128,6 +137,7 @@ describe("gateway concurrency benchmark script", () => {
     const sample = {
       controlUi: [],
       durationMs: 10,
+      freshConnection: { error: null, latencyMs: 25, ok: true },
       pluginMetadataScans: { count: 0, durationMs: null, totalDurationMs: 0 },
       probeWarmup: { durationMs: 2, samples: [] },
       readyz: [],

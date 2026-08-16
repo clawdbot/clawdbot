@@ -21,10 +21,10 @@ type TransportUsage = {
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
 };
 
-export type WritableTransportStream = {
-  push(event: unknown): void;
-  end(): void;
-};
+export type WritableTransportStream = Pick<
+  ReturnType<typeof createAssistantMessageEventStream>,
+  "push" | "end"
+>;
 
 type TransportOutputShape = Partial<Omit<ProviderErrorProjection, "stopReason">> & {
   stopReason: string;
@@ -106,7 +106,7 @@ export function createWritableTransportEventStream() {
   const eventStream = createAssistantMessageEventStream();
   return {
     eventStream,
-    stream: eventStream as unknown as WritableTransportStream,
+    stream: eventStream,
   };
 }
 

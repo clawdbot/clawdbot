@@ -2,7 +2,10 @@ import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gatewa
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
-import { isUiGlobalSessionKey } from "../../lib/sessions/session-key.ts";
+import {
+  areUiSessionKeysEquivalent,
+  isUiGlobalSessionKey,
+} from "../../lib/sessions/session-key.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import {
   captureChatCommandTarget,
@@ -12,7 +15,7 @@ import {
   type ChatCommandTarget,
   type ChatCommandResetOptions,
 } from "./chat-commands.ts";
-import { loadChatHistory, type ChatHistoryResult, type ChatState } from "./chat-history.ts";
+import { loadChatHistory, type ChatHistoryResult } from "./chat-history.ts";
 import {
   excludeComposerAttachments,
   readQueuedMessageById,
@@ -205,7 +208,7 @@ async function readCurrentStoredChatHistory(
     }
     releaseChatAttachmentPayloads(excludeComposerAttachments(host, removed.attachments));
     if (visibleSessionMatches(host, outbox.sessionKey, outbox.agentId)) {
-      void loadChatHistory(host as unknown as ChatState);
+      void loadChatHistory(host);
     }
     return "continue";
   }
@@ -230,10 +233,30 @@ async function reconcileStoredChatOutboxHead(
   if (!client || !host.connected) {
     return "blocked";
   }
+  // A never-attempted head cannot be in server history, so its reconcile only
+  // needs the active-run answer — which the event that woke this drain already
+  // recorded into the session row. Skipping the 1000-message chat.history here
+  // stops one full-history RPC per transcript event while a run streams.
+  // Attempted items keep the fetch: delivered-detection must retire their
+  // bubbles even mid-run, and a missing row falls through conservatively.
+  const neverAttempted =
+    (item.sendAttempts ?? 0) === 0 && item.sendRequestStartedAtMs === undefined;
+  if (neverAttempted) {
+    const row =
+      !isUiGlobalSessionKey(outbox.sessionKey) || host.sessions.state.agentId === outbox.agentId
+        ? host.sessions.state.result?.sessions.find((session) =>
+            areUiSessionKeysEquivalent(session.key, outbox.sessionKey),
+          )
+        : undefined;
+    if (row && isSessionRunActive(row)) {
+      return "blocked";
+    }
+  }
   const historyArgs = [host, outbox, item, client, connectionEpoch, dependencies] as const;
   const history = await readCurrentStoredChatHistory(...historyArgs);
-  if (history === "blocked" || history === "continue") {
-    return history;
+  // Keyed unknown sends reach history only for exact proof; absence stays blocked.
+  if (history === "blocked" || history === "continue" || item.sendState === "unconfirmed") {
+    return history === "continue" ? "continue" : "blocked";
   }
   if (visibleSessionMatches(host, outbox.sessionKey, outbox.agentId) && isChatBusy(host)) {
     return "blocked";
@@ -285,7 +308,7 @@ async function drainStoredChatOutbox(
       return "empty";
     }
     if (
-      item.sendState === "unconfirmed" ||
+      (item.sendState === "unconfirmed" && (!item.sendRunId || item.localCommandName)) ||
       (item.sendState === "waiting-model" && !lane.pendingOptions.has(item.id)) ||
       // An open edit owns this row: sending the superseded text would deliver a
       // message the operator is visibly rewriting. The queue behind it waits,

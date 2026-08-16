@@ -28,6 +28,7 @@ describe("resolveAssistantIdentity", () => {
     const identity = resolveAssistantIdentity({ cfg, agentId: "main", workspaceDir: "" });
     expect(identity.agentId).toBe("main");
     expect(identity.name).toBe("Main assistant");
+    expect(identity.nameSource).toBe("config");
     expect(identity.avatar).toBe("M");
   });
 
@@ -47,6 +48,7 @@ describe("resolveAssistantIdentity", () => {
     const identity = resolveAssistantIdentity({ cfg, agentId: "fs-daying", workspaceDir: "" });
     expect(identity.agentId).toBe("fs-daying");
     expect(identity.name).toBe("大颖");
+    expect(identity.nameSource).toBe("agent");
     expect(identity.avatar).toBe("D");
   });
 
@@ -66,6 +68,7 @@ describe("resolveAssistantIdentity", () => {
     const identity = resolveAssistantIdentity({ cfg, agentId: "worker", workspaceDir: "" });
     expect(identity.agentId).toBe("worker");
     expect(identity.name).toBe("Main assistant");
+    expect(identity.nameSource).toBe("config");
     expect(identity.avatar).toBe("M");
   });
 
@@ -75,7 +78,11 @@ describe("resolveAssistantIdentity", () => {
       workspaceDir: "",
     });
 
-    expect(identity).toEqual({ ...DEFAULT_ASSISTANT_IDENTITY, agentId: "ops" });
+    expect(identity).toEqual({
+      ...DEFAULT_ASSISTANT_IDENTITY,
+      agentId: "ops",
+      nameSource: "default",
+    });
   });
 
   it("applies ui.assistant identity only as authoritative for the retained owner", () => {
@@ -97,6 +104,7 @@ describe("resolveAssistantIdentity", () => {
     ).toEqual({
       agentId: "ops",
       name: "Shared assistant",
+      nameSource: "config",
       avatar: "S",
       emoji: undefined,
     });
@@ -106,6 +114,17 @@ describe("resolveAssistantIdentity", () => {
     expect(
       resolveAssistantIdentity({ cfg: ownerlessCfg, agentId: "ops", workspaceDir: "" }),
     ).toMatchObject({ name: "Ops agent", avatar: "O" });
+  });
+
+  it("identifies workspace and synthesized default names", async () => {
+    await withTestDir({ prefix: "openclaw-assistant-identity-name-source-" }, async (workspace) => {
+      await fs.writeFile(path.join(workspace, "IDENTITY.md"), "- Name: Pacino\n");
+
+      expect(resolveAssistantIdentity({ cfg: {}, workspaceDir: workspace }).nameSource).toBe(
+        "workspace",
+      );
+      expect(resolveAssistantIdentity({ cfg: {}, workspaceDir: "" }).nameSource).toBe("default");
+    });
   });
 
   it("drops sentence-like avatar placeholders", () => {

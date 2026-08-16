@@ -4,6 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   abortActiveReplyRuns,
   abortReplyRunBySessionId,
@@ -75,6 +76,7 @@ type EmbeddedAgentQueueFailureReason =
   | "not_streaming"
   | "stale_run"
   | "compacting"
+  | "tool_authority_mismatch"
   | "image_input_unsupported"
   | "source_reply_delivery_mode_mismatch"
   | "task_suggestion_delivery_mode_mismatch"
@@ -474,6 +476,59 @@ export async function queueEmbeddedAgentMessageWithOutcomeAsync(
 ): Promise<EmbeddedAgentQueueMessageOutcome> {
   const prepared = prepareEmbeddedAgentQueueMessage(sessionId, options);
   if (prepared.kind === "complete") {
+    const activeToolAuthorityFingerprint = normalizeOptionalString(
+      ACTIVE_EMBEDDED_RUNS.get(sessionId)?.toolAuthorityFingerprint,
+    );
+    const pendingInputAuthorityProven = Boolean(
+      activeToolAuthorityFingerprint &&
+      (normalizeOptionalString(options?.toolAuthorityFingerprint) ===
+        activeToolAuthorityFingerprint ||
+        normalizeOptionalString(options?.pendingInputAuthorityFingerprint) ===
+          activeToolAuthorityFingerprint),
+    );
+    if (
+      !prepared.outcome.queued &&
+      (prepared.outcome.reason === "tool_authority_mismatch" ||
+        prepared.outcome.reason === "image_input_unsupported") &&
+      options?.isInboundUserMessage === true &&
+      options.images?.length &&
+      pendingInputAuthorityProven
+    ) {
+      try {
+        await ACTIVE_EMBEDDED_RUNS.get(sessionId)?.cancelPendingUserInput?.("image-reply");
+      } catch (err) {
+        diag.warn(
+          `failed to cancel pending user input before queued image fallback: sessionId=${sessionId} err=${formatErrorMessage(err)}`,
+        );
+      }
+    }
+    if (
+      !prepared.outcome.queued &&
+      prepared.outcome.reason === "tool_authority_mismatch" &&
+      options?.isInboundUserMessage === true &&
+      !options.images?.length &&
+      pendingInputAuthorityProven
+    ) {
+      const claimPendingUserInputAnswer =
+        ACTIVE_EMBEDDED_RUNS.get(sessionId)?.claimPendingUserInputAnswer;
+      if (claimPendingUserInputAnswer) {
+        try {
+          if (await claimPendingUserInputAnswer(text, options)) {
+            options.onQueueAccepted?.(true);
+            logActiveRunMessageAccepted(sessionId);
+            return {
+              queued: true,
+              sessionId,
+              target: "embedded_run",
+              gatewayHealth: "live",
+              enqueuedAtMs: Date.now(),
+            };
+          }
+        } catch (err) {
+          return createQueueFailureOutcome(sessionId, "runtime_rejected", formatErrorMessage(err));
+        }
+      }
+    }
     return prepared.outcome;
   }
   const enqueuedAtMs = Date.now();
@@ -561,7 +616,11 @@ function prepareEmbeddedAgentQueueMessage(
       outcome: createQueueFailureOutcome(sessionId, "transcript_commit_wait_unsupported"),
     };
   }
-  const deliveryModeMismatch = resolveReplyBackendQueueMessageMismatch(handle, options);
+  const deliveryModeMismatch = resolveReplyBackendQueueMessageMismatch(
+    handle,
+    options,
+    resolveActiveReplyOperationForSessionId(sessionId),
+  );
   if (deliveryModeMismatch) {
     diag.debug(`queue message failed: sessionId=${sessionId} reason=${deliveryModeMismatch}`);
     return {
@@ -669,6 +728,25 @@ export function abortEmbeddedAgentRun(
   }
 
   return false;
+}
+
+type EmbeddedHeartbeatPreemptionResult = "not-heartbeat" | "drained" | "timed-out";
+
+export async function preemptAndDrainEmbeddedHeartbeatRun(
+  sessionId: string,
+  timeoutMs: number,
+): Promise<EmbeddedHeartbeatPreemptionResult> {
+  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  if (!handle?.preemptByVisibleTurn) {
+    return "not-heartbeat";
+  }
+  const drainPromise = waitForCurrentEmbeddedAgentRunEnd(sessionId, timeoutMs, handle);
+  try {
+    handle.preemptByVisibleTurn();
+  } catch (err) {
+    diag.warn(`heartbeat preemption failed: sessionId=${sessionId} err=${String(err)}`);
+  }
+  return (await drainPromise) ? "drained" : "timed-out";
 }
 
 export function isEmbeddedAgentRunActive(sessionId: string): boolean {
@@ -807,8 +885,14 @@ export async function waitForActiveEmbeddedRuns(
 function waitForCurrentEmbeddedAgentRunEnd(
   sessionId: string,
   timeoutMs: number | null,
+  handle?: EmbeddedAgentQueueHandle,
 ): Promise<boolean> {
-  if (!ACTIVE_EMBEDDED_RUNS.has(sessionId)) {
+  const isHandleActive = () =>
+    handle ? ACTIVE_EMBEDDED_RUNS.get(sessionId) === handle : ACTIVE_EMBEDDED_RUNS.has(sessionId);
+  if (!isHandleActive()) {
+    if (handle) {
+      return Promise.resolve(true);
+    }
     return waitForReplyRunEndBySessionId(sessionId, timeoutMs);
   }
   const timeoutLabel = timeoutMs === null ? "none" : String(timeoutMs);
@@ -817,6 +901,7 @@ function waitForCurrentEmbeddedAgentRunEnd(
     const waiters = EMBEDDED_RUN_WAITERS.get(sessionId) ?? new Set();
     const waiter: EmbeddedRunWaiter = {
       resolve,
+      handle,
     };
     if (timeoutMs !== null) {
       waiter.timer = setTimeout(
@@ -833,7 +918,7 @@ function waitForCurrentEmbeddedAgentRunEnd(
     }
     waiters.add(waiter);
     EMBEDDED_RUN_WAITERS.set(sessionId, waiters);
-    if (!ACTIVE_EMBEDDED_RUNS.has(sessionId)) {
+    if (!isHandleActive()) {
       waiters.delete(waiter);
       if (waiters.size === 0) {
         EMBEDDED_RUN_WAITERS.delete(sessionId);
@@ -1052,18 +1137,25 @@ async function persistForceClearedEmbeddedRunTerminalState(params: {
   }
 }
 
-function notifyEmbeddedRunEnded(sessionId: string) {
+function notifyEmbeddedRunEnded(sessionId: string, endedHandle: EmbeddedAgentQueueHandle) {
   const waiters = EMBEDDED_RUN_WAITERS.get(sessionId);
   if (!waiters || waiters.size === 0) {
     return;
   }
-  EMBEDDED_RUN_WAITERS.delete(sessionId);
+  const sessionIdle = !ACTIVE_EMBEDDED_RUNS.has(sessionId);
   diag.debug(`notifying waiters: sessionId=${sessionId} waiterCount=${waiters.size}`);
   for (const waiter of waiters) {
+    if (waiter.handle ? waiter.handle !== endedHandle : !sessionIdle) {
+      continue;
+    }
+    waiters.delete(waiter);
     if (waiter.timer) {
       clearTimeout(waiter.timer);
     }
     waiter.resolve(true);
+  }
+  if (waiters.size === 0) {
+    EMBEDDED_RUN_WAITERS.delete(sessionId);
   }
 }
 
@@ -1134,9 +1226,6 @@ export function clearActiveEmbeddedRun(
   reason = "run_completed",
 ) {
   const activeHandle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
-  if (activeHandle === undefined) {
-    return;
-  }
   if (activeHandle === handle) {
     ACTIVE_EMBEDDED_RUNS.delete(sessionId);
     clearEmbeddedRunAbortability(handle, { retainFinalizing: true });
@@ -1154,10 +1243,11 @@ export function clearActiveEmbeddedRun(
     if (!sessionId.startsWith("probe-")) {
       diag.debug(`run cleared: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
     }
-    notifyEmbeddedRunEnded(sessionId);
-  } else {
+  } else if (activeHandle !== undefined) {
     diag.debug(`run clear skipped: sessionId=${sessionId} reason=handle_mismatch`);
   }
+  // Exact-handle waiters own teardown even after another run takes the session slot.
+  notifyEmbeddedRunEnded(sessionId, handle);
 }
 
 function forceClearEmbeddedAgentRun(
@@ -1177,7 +1267,7 @@ function forceClearEmbeddedAgentRun(
     clearActiveRunSessionFiles(sessionId);
     logSessionStateChange({ sessionId, sessionKey, state: "idle", reason });
     markDiagnosticEmbeddedRunEnded({ sessionId, sessionKey });
-    notifyEmbeddedRunEnded(sessionId);
+    notifyEmbeddedRunEnded(sessionId, handle);
     cleared = true;
   }
   const cause = new Error(`Embedded run force-cleared by ${reason}`);
@@ -1195,7 +1285,7 @@ const testing = {
         if (waiter.timer) {
           clearTimeout(waiter.timer);
         }
-        waiter.resolve(true);
+        waiter.resolve(!waiter.handle);
       }
     }
     EMBEDDED_RUN_WAITERS.clear();

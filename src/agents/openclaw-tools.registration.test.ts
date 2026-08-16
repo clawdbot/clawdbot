@@ -6,6 +6,10 @@ import { withEnv } from "../test-utils/env.js";
 import { isToolWrappedWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { resolveCoreToolFactoryFamily } from "./core-tool-factory-descriptors.js";
+import {
+  createCronCreatorAuthorityCapability,
+  runWithCronCreatorAuthorityCapability,
+} from "./cron-creator-authority-context.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import {
   collectPresentOpenClawTools,
@@ -202,13 +206,21 @@ describe("openclaw-tools update_plan gating", () => {
     expect(embedded).not.toContain("openclaw");
   });
 
-  it("registers transcripts by default with an explicit global opt-out", () => {
-    const defaultTools = createFastToolNames({
-      config: {} as OpenClawConfig,
-    });
-    const disabledTools = createFastToolNames({
-      config: { transcripts: { enabled: false } } as OpenClawConfig,
-    });
+  it("registers transcripts for an active local operator with an explicit global opt-out", () => {
+    const capability = createCronCreatorAuthorityCapability("run-local", { kind: "local" })!;
+    const { defaultTools, disabledTools } = runWithCronCreatorAuthorityCapability(
+      capability,
+      () => ({
+        defaultTools: createFastToolNames({
+          config: {} as OpenClawConfig,
+          runId: "run-local",
+        }),
+        disabledTools: createFastToolNames({
+          config: { transcripts: { enabled: false } } as OpenClawConfig,
+          runId: "run-local",
+        }),
+      }),
+    );
 
     expect(defaultTools).toContain("transcripts");
     expect(disabledTools).not.toContain("transcripts");

@@ -37,6 +37,7 @@ import {
 } from "./openclaw-state-ownership.js";
 import {
   getOpenClawStateRuntimeSchema,
+  isOpenClawStateFirstUseSchemaIssue,
   isOpenClawStateStartupRepairableSchemaIssue,
   OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
   STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
@@ -256,7 +257,9 @@ export async function preflightOpenClawStateDatabasePath(
       OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
     );
     const blockingIssues = maintenanceIssues.filter(
-      (issue) => !isOpenClawStateStartupRepairableSchemaIssue(issue),
+      (issue) =>
+        !isOpenClawStateStartupRepairableSchemaIssue(issue) &&
+        !isOpenClawStateFirstUseSchemaIssue(issue),
     );
     if (blockingIssues.length > 0) {
       return result("incompatible", { issues: deduplicateSchemaIssues(blockingIssues) });
@@ -267,7 +270,9 @@ export async function preflightOpenClawStateDatabasePath(
       STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
     );
     const projectedRuntimeBlockingIssues = projectedRuntimeIssues.filter(
-      (issue) => !isOpenClawStateStartupRepairableSchemaIssue(issue),
+      (issue) =>
+        !isOpenClawStateStartupRepairableSchemaIssue(issue) &&
+        !isOpenClawStateFirstUseSchemaIssue(issue),
     );
     if (projectedRuntimeBlockingIssues.length > 0) {
       return result("incompatible", {
@@ -275,8 +280,8 @@ export async function preflightOpenClawStateDatabasePath(
       });
     }
     const startupRepairableIssues = deduplicateSchemaIssues([
-      ...maintenanceIssues,
-      ...projectedRuntimeIssues,
+      ...maintenanceIssues.filter(isOpenClawStateStartupRepairableSchemaIssue),
+      ...projectedRuntimeIssues.filter(isOpenClawStateStartupRepairableSchemaIssue),
     ]);
     return result(startupRepairableIssues.length > 0 ? "startup-repairable" : "exact", {
       issues: startupRepairableIssues,

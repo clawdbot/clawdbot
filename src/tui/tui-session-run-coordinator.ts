@@ -65,14 +65,12 @@ export class TuiSessionRunCoordinator {
   pendingHistoryRefresh = false;
 
   private readonly historyReloadRuns = new Map<string, TuiHistoryReloadRun>();
-  private readonly sessionMessagePersistenceRunIds = new Set<string>();
   private readonly confirmedStreamRunIds = new Set<string>();
   private readonly retiredOrphanRunIds = new Map<string, number>();
   private rejectUnconfirmedRuns = false;
   private historyReloadInFlight = false;
   private historyReloadQueued = false;
   private historyReloadGeneration = 0;
-  private sessionMessageRefreshPending = false;
 
   constructor(private readonly context: TuiSessionRunCoordinatorContext) {
     this.streamAssembler = new TuiStreamAssembler((runId) => {
@@ -205,9 +203,6 @@ export class TuiSessionRunCoordinator {
     this.noteCompletedRun(runId);
     if (options?.displayedFinal) {
       this.finalizedRunsWithDisplay.set(runId, Date.now());
-      if (this.sessionMessageRefreshPending && !this.persistedTerminalRunIds.has(runId)) {
-        this.sessionMessagePersistenceRunIds.add(runId);
-      }
     }
     this.dropSessionRun(runId);
     this.pruneRunMap(this.finalizedRuns);
@@ -216,11 +211,6 @@ export class TuiSessionRunCoordinator {
     for (const retainedRunId of this.liveTerminalErrorMessages.keys()) {
       if (!this.finalizedRunsWithDisplay.has(retainedRunId)) {
         this.liveTerminalErrorMessages.delete(retainedRunId);
-      }
-    }
-    for (const retainedRunId of this.sessionMessagePersistenceRunIds) {
-      if (!this.finalizedRunsWithDisplay.has(retainedRunId) && retainedRunId !== runId) {
-        this.sessionMessagePersistenceRunIds.delete(retainedRunId);
       }
     }
   }
@@ -233,50 +223,18 @@ export class TuiSessionRunCoordinator {
   notePersistedRun(runId: string): void {
     this.persistedTerminalRunIds.set(runId, Date.now());
     this.pruneRunMap(this.persistedTerminalRunIds);
-    this.sessionMessagePersistenceRunIds.delete(runId);
   }
 
-  bindRegisteredPendingRun(runId: string): void {
-    if (
-      this.sessionMessageRefreshPending &&
-      this.context.state.pendingSubmit?.runId === runId &&
-      !this.persistedTerminalRunIds.has(runId)
-    ) {
-      // A transcript event may precede submit acceptance and its visible final.
-      this.sessionMessagePersistenceRunIds.add(runId);
+  routeSessionMessageRefresh(projected: boolean): boolean {
+    if (projected) {
+      return true;
     }
-  }
-
-  deferSessionMessageRefresh(): boolean {
-    this.sessionMessageRefreshPending = true;
-    const activeRunId = this.context.state.activeChatRunId;
-    if (activeRunId && !this.persistedTerminalRunIds.has(activeRunId)) {
-      this.sessionMessagePersistenceRunIds.add(activeRunId);
+    if (this.context.state.activeChatRunId || hasPendingSubmit(this.context.state)) {
+      this.pendingHistoryRefresh = true;
+      return true;
     }
-    // All already-visible finals must be durable before a destructive rebuild.
-    for (const runId of this.finalizedRunsWithDisplay.keys()) {
-      if (!this.persistedTerminalRunIds.has(runId)) {
-        this.sessionMessagePersistenceRunIds.add(runId);
-      }
-    }
-    return Boolean(
-      activeRunId ||
-      hasPendingSubmit(this.context.state) ||
-      this.sessionMessagePersistenceRunIds.size,
-    );
-  }
-
-  get hasPendingSessionMessageRefresh(): boolean {
-    return this.sessionMessageRefreshPending;
-  }
-
-  get isSessionMessagePersistencePending(): boolean {
-    return this.sessionMessagePersistenceRunIds.size > 0;
-  }
-
-  consumeSessionMessageRefresh(): void {
-    this.sessionMessageRefreshPending = false;
-    this.sessionMessagePersistenceRunIds.clear();
+    this.queueHistoryReload();
+    return false;
   }
 
   isHistoryReloadingRun(runId: string): boolean {
@@ -440,7 +398,6 @@ export class TuiSessionRunCoordinator {
     this.rejectUnconfirmedRuns = false;
     this.historyReloadQueued = false;
     this.pendingHistoryRefresh = false;
-    this.consumeSessionMessageRefresh();
     this.streamAssembler.clear();
   }
 }

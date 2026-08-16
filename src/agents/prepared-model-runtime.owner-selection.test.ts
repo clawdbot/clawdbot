@@ -97,10 +97,13 @@ describe("prepared model runtime owner selection", () => {
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
   });
 
-  it("resolves a gateway-published owner only for requests carrying the binding flag", async () => {
+  it("resolves a gateway-published owner for readers that omit the binding flag", async () => {
     // Gateway startup publishes configured owners with allowGatewaySubagentBinding,
-    // and that flag is part of the owner key. A request that omits it matches no
-    // owner, and standalone activation stays refused while the lifecycle is active.
+    // a publication-time build capability. Readers (models.list, catalog loads)
+    // cannot know it, so an absent flag is a wildcard in fallback resolution;
+    // requiring equality made every flagless read miss the configured owner and
+    // rebuild a live ephemeral catalog per request. A reader that explicitly
+    // demands binding still never receives a non-binding owner.
     mocks.configuredAgentIds = ["default"];
     const config = retainLegacyDefaultAgentId(
       { agents: { defaults: { model: "openai/gpt-5.5" }, entries: { default: {} } } },
@@ -123,9 +126,54 @@ describe("prepared model runtime owner selection", () => {
     await expect(
       loadPreparedModelRuntimeSnapshot({ ...request, allowGatewaySubagentBinding: true }),
     ).resolves.toMatchObject({ config });
-    await expect(loadPreparedModelRuntimeSnapshot(request)).rejects.toThrow(
-      "prepared model runtime owner was not published",
+    await expect(loadPreparedModelRuntimeSnapshot(request)).resolves.toMatchObject({ config });
+  });
+
+  it("does not resolve a binding-demanding reader against a non-binding owner", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const config = retainLegacyDefaultAgentId(
+      { agents: { defaults: { model: "openai/gpt-5.5" }, entries: { default: {} } } },
+      "default",
     );
+    await refreshPreparedModelRuntimeSnapshots(config, {
+      catalogMode: "static",
+      gatewayLifecycle: true,
+      defaultWorkspaceDir: "/tmp/gateway-launch-workspace",
+    });
+
+    await expect(
+      prepareModelRuntimeSnapshot({
+        config,
+        agentId: "default",
+        agentDir: "/tmp/unused-agent",
+        inheritedAuthDir: "/tmp/unused-agent",
+        workspaceDir: "/tmp/gateway-launch-workspace",
+        allowGatewaySubagentBinding: true,
+      }),
+    ).rejects.toThrow("prepared model runtime owner was not published");
+  });
+
+  it("publishes provider selections kept on the core runtime by request parameters", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const config = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5",
+          models: {
+            "openai/gpt-5": { params: { transport: "sse", openaiWsWarmup: false } },
+          },
+        },
+      },
+    };
+
+    await refreshPreparedModelRuntimeSnapshots(config, {
+      catalogMode: "static",
+      gatewayLifecycle: true,
+    });
+
+    expect(
+      mocks.loadAgentRuntimePluginRegistryHandle.mock.calls.map((call) => call[0].selections),
+    ).toContainEqual([{ provider: "openai", modelId: "gpt-5", runtime: "openclaw" }]);
   });
 
   it("reuses the configured owner for its prepared plugin harness selections", async () => {

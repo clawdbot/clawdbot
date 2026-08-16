@@ -141,7 +141,7 @@ function projectCodexThreadHistory(params: {
   let itemOffset = 0;
   for (const turn of selectTurnsThroughBoundary(params.thread, params.throughTurnId)) {
     for (const value of turn.items) {
-      const item = value as unknown as Record<string, unknown>;
+      const item = value;
       const itemId = normalizeOptionalString(item.id);
       const identity = `${turn.id}:${itemId ?? itemOffset}`;
       const timestampSeconds =

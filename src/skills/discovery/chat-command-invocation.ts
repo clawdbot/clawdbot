@@ -111,7 +111,7 @@ export function resolveSkillReferenceInvocations(params: {
       continue;
     }
     const command = findSkillCommand(params.skillCommands, name);
-    if (!command || command.modelVisible === false || seen.has(command.name)) {
+    if (!command || seen.has(command.name)) {
       continue;
     }
     seen.add(command.name);

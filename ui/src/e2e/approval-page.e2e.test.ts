@@ -6,7 +6,11 @@ import type {
   AllowedApprovalSnapshot,
   PendingApprovalSnapshot,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { installMockGateway, type MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiE2eWaitTimeoutMs,
+  installMockGateway,
+  type MockGatewayControls,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -109,7 +113,7 @@ async function createSurface(params: {
   });
   openContexts.add(context);
   const page = await context.newPage();
-  page.setDefaultTimeout(10_000);
+  page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
   await page.clock.setFixedTime(new Date(APPROVAL_NOW_MS));
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(String(error)));

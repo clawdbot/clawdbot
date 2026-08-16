@@ -14,7 +14,7 @@ import {
   formatDurationHuman,
   formatRelativeTimestamp,
   formatMs,
-  formatTokens,
+  formatCompactTokenCount,
 } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
@@ -319,9 +319,9 @@ function renderRun(
   const usage = entry.usage;
   const usageSummary =
     usage && typeof usage.total_tokens === "number"
-      ? `${formatTokens(usage.total_tokens)} ${t("usage.metrics.tokens")}`
+      ? `${formatCompactTokenCount(usage.total_tokens)} ${t("usage.metrics.tokens")}`
       : usage && typeof usage.input_tokens === "number" && typeof usage.output_tokens === "number"
-        ? `${formatTokens(usage.input_tokens)} in / ${formatTokens(usage.output_tokens)} out`
+        ? `${formatCompactTokenCount(usage.input_tokens)} in / ${formatCompactTokenCount(usage.output_tokens)} out`
         : null;
   const bodySource = entry.summary || entry.error || t("cron.runEntry.noSummary");
   const showErrorInMeta = Boolean(entry.error) && Boolean(entry.summary);

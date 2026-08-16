@@ -17,6 +17,7 @@ import {
   providerHasGenericConfig,
   providerSummaryText,
   requireProviderModelOverride,
+  resolveCapabilityProviderAgentId,
   resolveLocalCapabilityRuntimeConfig,
 } from "./shared.js";
 
@@ -122,11 +123,12 @@ export function registerEmbeddingCapabilityCommands(capability: Command): void {
   embedding
     .command("providers")
     .description("List embedding providers")
+    .option("--agent <id>", "Agent whose provider state should be inspected")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const cfg = getRuntimeConfig();
-        const agentId = resolveDefaultAgentId(cfg);
+        const agentId = resolveCapabilityProviderAgentId(cfg, opts.agent as string | undefined);
         const resolvedMemory = resolveMemorySearchConfig(cfg, agentId);
         const selectedProvider = resolvedMemory?.provider;
         const providers = new Map(
@@ -155,7 +157,7 @@ export function registerEmbeddingCapabilityCommands(capability: Command): void {
           providers.set(selectedProvider, {
             id: selectedProvider,
             defaultModel: resolvedMemory?.model || undefined,
-            transport: providerHasGenericConfig({ cfg, providerId: selectedProvider })
+            transport: providerHasGenericConfig({ cfg, providerId: selectedProvider, agentId })
               ? "remote"
               : undefined,
             autoSelectPriority: undefined,
@@ -168,6 +170,7 @@ export function registerEmbeddingCapabilityCommands(capability: Command): void {
             providerHasGenericConfig({
               cfg,
               providerId: provider.id,
+              agentId,
             }),
           selected: provider.id === selectedProvider,
           id: provider.id,

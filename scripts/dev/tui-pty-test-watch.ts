@@ -524,5 +524,4 @@ export const testing = {
   parseOptions,
   readNewMirrorData,
   signalChildProcessTree,
-  usage,
 };

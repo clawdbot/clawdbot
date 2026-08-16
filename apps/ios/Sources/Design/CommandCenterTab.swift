@@ -668,7 +668,9 @@ struct CommandCenterTab: View {
     private func forkSession(_ session: OpenClawChatSessionEntry) {
         Task {
             do {
-                let key = try await self.appModel.makeChatTransport().forkSession(parentKey: session.key)
+                let key = try await self.appModel.makeChatTransport().forkSession(
+                    parentKey: session.key,
+                    fromLastCompleted: session.hasActiveRun == true)
                 if let dashboardModel {
                     await dashboardModel.refreshSessions(appModel: self.appModel)
                 } else {
@@ -1346,7 +1348,9 @@ struct CommandSessionsScreen: View {
     private func forkSession(_ session: OpenClawChatSessionEntry) {
         Task {
             do {
-                let key = try await self.appModel.makeChatTransport().forkSession(parentKey: session.key)
+                let key = try await self.appModel.makeChatTransport().forkSession(
+                    parentKey: session.key,
+                    fromLastCompleted: session.hasActiveRun == true)
                 await self.refreshSessions()
                 self.openSessionKey(key)
             } catch {

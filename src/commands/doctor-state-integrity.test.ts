@@ -11,6 +11,7 @@ import {
 } from "../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { writeConfigMachineState } from "../state/config-machine-state.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
@@ -396,8 +397,23 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(text).not.toContain("Examples: main");
   });
 
+  it("reports a removed main directory once shared auth ownership is relocated", async () => {
+    createAgentDir("main");
+    writeConfigMachineState("auth.sharedStore", { location: "state-db" });
+
+    const text = await runStateIntegrityText({
+      agents: {
+        entries: { ops: { default: true } },
+      },
+    });
+
+    expect(text).toContain("without a matching agents.list entry");
+    expect(text).toContain("Examples: main");
+  });
+
   it("does not let OPENCLAW_AGENT_DIR hide an unconfigured agent dir", async () => {
     createAgentDir("legacy");
+    writeConfigMachineState("auth.sharedStore", { location: "state-db" });
     const legacyAgentDir = path.join(
       process.env.OPENCLAW_STATE_DIR ?? "",
       "agents",

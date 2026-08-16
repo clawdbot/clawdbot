@@ -9,7 +9,7 @@ sidebarTitle: "CLI automation"
 
 Use `openclaw onboard --non-interactive` to script setup. It requires `--accept-risk`: non-interactive setup can write credentials and daemon config without a confirmation prompt, so the flag is the explicit risk acknowledgement.
 
-Each command must install a managed Gateway with `--install-daemon`, use `--skip-health` for config-only setup, or run with an already-running compatible Gateway.
+Each command can install a managed Gateway with `--install-daemon`, require an already-running compatible Gateway by omitting daemon flags, explicitly leave the Gateway stopped with `--skip-daemon`, or use `--skip-health` for config-only setup. The explicit skip still probes for an existing Gateway and reports whether one is reachable, but an absent listener is informational rather than a setup failure.
 
 <Note>
 `--json` does not imply non-interactive mode. Pass `--non-interactive --accept-risk` explicitly for scripts.
@@ -202,7 +202,9 @@ Notes:
 
 - Default workspace (when `--workspace` is omitted in the interactive wizard): `~/.openclaw/workspace-<agentId>`.
 - `--bind <channel[:accountId]>` is repeatable; add bindings to route inbound messages to the new agent (the wizard can also do this interactively).
-- The agent name is normalized to a valid agent id; `main` is reserved.
+- The agent name is normalized to a valid agent id. `main` is allowed, but an
+  existing named installation may require `openclaw doctor --fix` to finish
+  legacy-session and shared-auth ownership migrations before creating it.
 
 ## Related docs
 

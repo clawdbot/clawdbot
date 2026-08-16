@@ -184,26 +184,11 @@ vi.mock("./delivery-queue-preparation.js", () => ({
   StableDeliveryPreparationLostError: class StableDeliveryPreparationLostError extends Error {},
   withStableDeliveryPreparation: queueMocks.withStableDeliveryPreparation,
 }));
-vi.mock("./delivery-queue.js", () => ({
-  enqueueDelivery: async (params: Record<string, unknown>) =>
-    queueMocks.enqueueDelivery(withoutInitialProducerClaim(params)),
-  enqueueDeliveryOnce: async (params: Record<string, unknown>, id: string) =>
-    queueMocks.enqueueDeliveryOnce(withoutInitialProducerClaim(params), id),
-  enqueuePreparedDeliveryOnce: async (params: Record<string, unknown>, id: string) =>
-    queueMocks.enqueuePreparedDeliveryOnce(withoutInitialProducerClaim(params), id),
-  ackDelivery: ackDeliveryMock,
-  failDelivery: async (id: string, error: string) => queueMocks.failDelivery(id, error),
-  failDeliveryAfterPlatformSend: async (id: string, error: string) =>
-    queueMocks.failDeliveryAfterPlatformSend(id, error),
-  failDeliveryBeforePlatformSend: async (id: string, error: string) =>
-    queueMocks.failDeliveryBeforePlatformSend(id, error),
-  markDeliveryPlatformSendDispatched: async (
-    id: string,
-    stateDir?: string,
-    route?: { replyToId?: string | null },
-  ) => queueMocks.markDeliveryPlatformSendDispatched(id, stateDir, route),
+vi.mock("./delivery-queue-platform-lease.js", () => ({
   claimReusableDeliveryPlatformSendAttempt: queueMocks.claimReusableDeliveryPlatformSendAttempt,
   renewDeliveryPlatformSendLease: queueMocks.renewDeliveryPlatformSendLease,
+}));
+vi.mock("./delivery-queue-recovery.js", () => ({
   withActiveDeliveryClaim: queueMocks.withActiveDeliveryClaim,
 }));
 vi.mock("./delivery-completion.js", () => ({

@@ -251,7 +251,7 @@ describe("installed plugin index persistence", () => {
   it("writes and reads the installed plugin index atomically", async () => {
     const stateDir = makeTempDir();
     const filePath = resolveInstalledPluginIndexStorePath({ stateDir });
-    const index = createIndex();
+    const index = createIndex({ workspaceDir: "/agents/gadget/workspace" });
 
     await expect(writePersistedInstalledPluginIndex(index, { stateDir })).resolves.toBe(filePath);
 
@@ -262,8 +262,17 @@ describe("installed plugin index persistence", () => {
     expect(persisted.version).toBe(index.version);
     expect(persisted.warning).toContain("DO NOT EDIT.");
     expect(persisted.policyHash).toBe(index.policyHash);
+    expect(persisted.workspaceDir).toBe("/agents/gadget/workspace");
     expectPluginIds(persisted, ["demo"]);
     expectPluginFields(persisted, "demo", { packageBuild: { bundledDist: false } });
+  });
+
+  it("reads indexes written before workspace identity was persisted", async () => {
+    const stateDir = makeTempDir();
+    insertPersistedIndexRow(stateDir, {});
+
+    const persisted = requirePersisted(await readPersistedInstalledPluginIndex({ stateDir }));
+    expect(persisted.workspaceDir).toBeUndefined();
   });
 
   it("atomically captures the predecessor and revision for a leased install-record write", async () => {

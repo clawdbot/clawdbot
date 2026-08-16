@@ -31,6 +31,14 @@ export class NewSessionAttachmentDraft {
     this.reads.abortReads();
   }
 
+  take(): ChatAttachment[] {
+    this.abortReads();
+    const attachments = this.attachments;
+    this.attachments = [];
+    this.notify();
+    return attachments;
+  }
+
   reset(options: { release: boolean }) {
     this.abortReads();
     if (options.release) {

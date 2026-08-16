@@ -7,7 +7,7 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { NODE_WORKER_SUPERVISOR_COMMANDS } from "../infra/node-commands.js";
+import { NODE_WORKER_PRIVATE_COMMANDS } from "../infra/node-commands.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
@@ -112,20 +112,20 @@ describe("gateway/node-command-policy", () => {
 
   it("keeps private worker supervisor commands outside public policy", () => {
     const cfg = {
-      gateway: { nodes: { commands: { allow: [...NODE_WORKER_SUPERVISOR_COMMANDS] } } },
+      gateway: { nodes: { commands: { allow: [...NODE_WORKER_PRIVATE_COMMANDS] } } },
     } as OpenClawConfig;
     const node = {
       platform: "linux",
       deviceFamily: "Linux",
-      commands: [...NODE_WORKER_SUPERVISOR_COMMANDS],
-      approvedCommands: [...NODE_WORKER_SUPERVISOR_COMMANDS],
+      commands: [...NODE_WORKER_PRIVATE_COMMANDS],
+      approvedCommands: [...NODE_WORKER_PRIVATE_COMMANDS],
     };
 
     expect([...resolveNodeCommandAllowlist(cfg, node)]).not.toEqual(
-      expect.arrayContaining([...NODE_WORKER_SUPERVISOR_COMMANDS]),
+      expect.arrayContaining([...NODE_WORKER_PRIVATE_COMMANDS]),
     );
     expect([...resolveNodePairingCommandAllowlist(cfg, node)]).not.toEqual(
-      expect.arrayContaining([...NODE_WORKER_SUPERVISOR_COMMANDS]),
+      expect.arrayContaining([...NODE_WORKER_PRIVATE_COMMANDS]),
     );
   });
 

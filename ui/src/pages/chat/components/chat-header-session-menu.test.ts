@@ -51,6 +51,7 @@ async function mountMenu(
     layoutActions?: HeaderMenuQuickAction[];
     actionDisabledReasons?: Partial<Record<HeaderMenuActionKind, string>>;
     forkDisabled?: boolean;
+    forkFromLastCompleted?: boolean;
     archiveAllowed?: boolean;
     deleteAllowed?: boolean;
     onOpen?: () => void;
@@ -74,6 +75,7 @@ async function mountMenu(
       .layoutActions=${options.layoutActions ?? []}
       .actionDisabledReasons=${options.actionDisabledReasons ?? {}}
       .forkDisabled=${options.forkDisabled ?? false}
+      .forkFromLastCompleted=${options.forkFromLastCompleted ?? false}
       .archiveAllowed=${options.archiveAllowed ?? true}
       .deleteAllowed=${options.deleteAllowed ?? true}
       .onOpen=${options.onOpen ?? (() => {})}
@@ -296,6 +298,12 @@ describe("chat header session menu", () => {
       new KeyboardEvent("keydown", { key: "r", bubbles: true, cancelable: true }),
     );
     expect(onAction).not.toHaveBeenCalled();
+  });
+
+  it("names the stable fork boundary for an active session", async () => {
+    const menu = await mountMenu({ forkFromLastCompleted: true });
+
+    expect(item(menu, "Fork from last completed message")).toBeDefined();
   });
 
   it("emits terminal continuation only while the current Gateway is connected", async () => {

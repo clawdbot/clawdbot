@@ -53,7 +53,7 @@ async function listFilesystemLeafEntries(root: string, relative = ""): Promise<s
 function encodeTarEntry(params: {
   path: string;
   contents?: string;
-  type?: "File" | "Directory" | "Link";
+  type?: "File" | "Directory" | "Link" | "SymbolicLink";
   linkpath?: string;
 }): Buffer {
   const body = Buffer.from(params.contents ?? "", "utf8");
@@ -126,6 +126,18 @@ describe("backupRestoreCommand", () => {
         const targetPath = state.path("restored");
         await fs.mkdir(outputDir, { recursive: true });
         await state.writeText("operator-note.txt", "restore me\n");
+        const pluginSkillTarget = state.statePath("plugin-source", "canvas");
+        if (process.platform !== "win32") {
+          await fs.mkdir(pluginSkillTarget, { recursive: true });
+          await fs.writeFile(path.join(pluginSkillTarget, "SKILL.md"), "# Canvas\n", "utf8");
+          const pluginSkillsDir = state.statePath("plugin-skills");
+          await fs.mkdir(pluginSkillsDir, { recursive: true });
+          await fs.symlink(
+            await fs.realpath(pluginSkillTarget),
+            path.join(pluginSkillsDir, "canvas"),
+            "dir",
+          );
+        }
         openOpenClawStateDatabase({ env: state.env });
 
         try {
@@ -152,8 +164,20 @@ describe("backupRestoreCommand", () => {
           expect(restored.warnings.join("\n")).toMatch(/WhatsApp/iu);
           expect(restored.warnings.join("\n")).toMatch(/pending approvals/iu);
           expect(restored.warnings.join("\n")).toMatch(/plugins install <spec> --force/iu);
+          expect(restored.warnings.join("\n")).toMatch(/openclaw skills list/iu);
           expect(runtime.log).toHaveBeenCalledOnce();
           expect(JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0]))).toEqual(restored);
+          if (process.platform !== "win32") {
+            expect(backup.skipped).toContainEqual(
+              expect.objectContaining({
+                sourcePath: state.statePath("plugin-skills"),
+                reason: "regenerable",
+              }),
+            );
+            expect(await listArchiveLeafEntries(backup.archivePath)).not.toContainEqual(
+              expect.stringContaining("/plugin-skills/"),
+            );
+          }
 
           expect(await listFilesystemLeafEntries(targetPath)).toEqual(
             await listArchiveLeafEntries(backup.archivePath),
@@ -239,6 +263,57 @@ describe("backupRestoreCommand", () => {
     );
   });
 
+  it.each([
+    {
+      label: "absolute",
+      linkpath: "/private/tmp/outside-restore",
+      error: /symbolic link target must be relative/iu,
+    },
+    {
+      label: "archive-escaping",
+      linkpath: "../../outside-restore",
+      error: /symbolic link target is outside the declared archive root/iu,
+    },
+  ])(
+    "rejects $label symlink targets before touching the restore target",
+    async ({ linkpath, error }) => {
+      await withOpenClawTestState(
+        {
+          layout: "state-only",
+          prefix: "openclaw-backup-restore-absolute-symlink-",
+          scenario: "minimal",
+        },
+        async (state) => {
+          const archivePath = state.path("absolute-symlink.tar.gz");
+          const targetPath = state.path("restore-target");
+          const archiveRoot = "2026-08-12T00-00-00.000Z-openclaw-backup";
+          const payloadPath = buildBackupArchivePath(archiveRoot, "/tmp/openclaw.json");
+          await writeArchive({
+            archivePath,
+            archiveRoot,
+            payloadPath,
+            extraEntries: [
+              encodeTarEntry({
+                path: `${archiveRoot}/payload/absolute-link`,
+                type: "SymbolicLink",
+                linkpath,
+              }),
+            ],
+          });
+
+          await expect(
+            backupRestoreCommand(createRuntime(), { archive: archivePath, target: targetPath }),
+          ).rejects.toThrow(error);
+          await expect(fs.lstat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+          await expect(fs.lstat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+        },
+      );
+    },
+  );
+
   it("cleans an incomplete fresh target when extraction fails", async () => {
     await withOpenClawTestState(
       {
@@ -270,6 +345,56 @@ describe("backupRestoreCommand", () => {
           backupRestoreCommand(createRuntime(), { archive: archivePath, target: targetPath }),
         ).rejects.toThrow(/incomplete target was cleaned/iu);
         await expect(fs.lstat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        await expect(fs.lstat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+      },
+    );
+  });
+
+  it("preserves the extraction error when cleanup also fails", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-restore-double-failure-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const archivePath = state.path("unextractable.tar.gz");
+        const targetPath = state.path("restore-target");
+        const archiveRoot = "2026-08-12T00-00-00.000Z-openclaw-backup";
+        const assetPath = buildBackupArchivePath(archiveRoot, "/tmp/openclaw.json");
+        const directoryPath = `${archiveRoot}/payload/invalid-hardlink-target`;
+        await writeArchive({
+          archivePath,
+          archiveRoot,
+          payloadPath: assetPath,
+          extraEntries: [
+            encodeTarEntry({ path: directoryPath, type: "Directory" }),
+            encodeTarEntry({
+              path: `${archiveRoot}/payload/directory-hardlink`,
+              type: "Link",
+              linkpath: directoryPath,
+            }),
+          ],
+        });
+        const cleanupError = new Error("cleanup denied");
+        vi.spyOn(fs, "rm").mockRejectedValueOnce(cleanupError);
+
+        const restoreError = await backupRestoreCommand(createRuntime(), {
+          archive: archivePath,
+          target: targetPath,
+        }).catch((error: unknown) => error);
+
+        expect(restoreError).toBeInstanceOf(Error);
+        expect((restoreError as Error).message).toMatch(/cleanup denied/iu);
+        expect((restoreError as Error).cause).toBeInstanceOf(Error);
+        expect((restoreError as Error).cause).not.toBe(cleanupError);
+        expect((restoreError as AggregateError).errors).toEqual([
+          (restoreError as Error).cause,
+          cleanupError,
+        ]);
       },
     );
   });

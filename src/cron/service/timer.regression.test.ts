@@ -11,7 +11,12 @@ import {
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
-import { HEARTBEAT_SKIP_LANES_BUSY, type HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
+import {
+  HEARTBEAT_IDLE_RETRY_GRACE_MS,
+  HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
+  HEARTBEAT_SKIP_PREEMPTED,
+  type HeartbeatRunResult,
+} from "../../infra/heartbeat-wake.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { CRON_TASK_KIND } from "../../tasks/cron-task-contract.js";
 import { cancelTaskById, listTaskRecords } from "../../tasks/task-registry.js";
@@ -1278,6 +1283,60 @@ describe("cron service timer regressions", () => {
     expect(requestHeartbeat).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { label: "retries after idle grace", staysPreempted: false, expectedCalls: 2 },
+    { label: "requeues at the wait budget", staysPreempted: true, expectedCalls: 3 },
+  ])("$label for a preempted wake-now heartbeat", async ({ staysPreempted, expectedCalls }) => {
+    vi.useFakeTimers();
+    try {
+      let heartbeatAttempt = 0;
+      const runHeartbeatOnce = vi.fn<() => Promise<HeartbeatRunResult>>(async () =>
+        staysPreempted || ++heartbeatAttempt === 1
+          ? { status: "skipped", reason: HEARTBEAT_SKIP_PREEMPTED }
+          : { status: "ran", durationMs: 1 },
+      );
+      const requestHeartbeat = vi.fn();
+      const mainJob: CronJob = {
+        id: "main-preempted",
+        name: "main preempted",
+        enabled: true,
+        createdAtMs: Date.now(),
+        updatedAtMs: Date.now(),
+        schedule: { kind: "at", at: new Date(Date.now() + 60_000).toISOString() },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "tick" },
+        state: {},
+      };
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: "/tmp/openclaw-cron-preempted-test/jobs.json",
+        log: noopLogger,
+        nowMs: () => Date.now(),
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat,
+        runHeartbeatOnce,
+        wakeNowHeartbeatBusyMaxWaitMs: 2 * HEARTBEAT_IDLE_RETRY_GRACE_MS,
+        wakeNowHeartbeatBusyRetryDelayMs: 1,
+        runIsolatedAgentJob: createDefaultIsolatedRunner(),
+      });
+
+      const resultPromise = executeJobCore(state, mainJob);
+      await vi.advanceTimersByTimeAsync(HEARTBEAT_IDLE_RETRY_GRACE_MS - 1);
+      expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      if (staysPreempted) {
+        await vi.advanceTimersByTimeAsync(HEARTBEAT_IDLE_RETRY_GRACE_MS);
+      }
+      await expect(resultPromise).resolves.toMatchObject({ status: "ok" });
+      expect(runHeartbeatOnce).toHaveBeenCalledTimes(expectedCalls);
+      expect(requestHeartbeat).toHaveBeenCalledTimes(staysPreempted ? 1 : 0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps user cancellation disabled for main-session cron wrappers", async () => {
     vi.useFakeTimers();
     try {
@@ -1351,7 +1410,7 @@ describe("cron service timer regressions", () => {
       );
 
       now = scheduledAt + 2_000;
-      heartbeatResult.resolve({ status: "skipped", reason: HEARTBEAT_SKIP_LANES_BUSY });
+      heartbeatResult.resolve({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT });
       await vi.advanceTimersByTimeAsync(0);
       await timerPromise;
 
@@ -1534,7 +1593,7 @@ describe("cron service timer regressions", () => {
       expect(isCronJobActive(cronJob.id)).toBe(true);
 
       now = scheduledAt + 2_000;
-      heartbeatResult.resolve({ status: "skipped", reason: HEARTBEAT_SKIP_LANES_BUSY });
+      heartbeatResult.resolve({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT });
       await vi.advanceTimersByTimeAsync(0);
       await timerPromise;
 
@@ -1725,7 +1784,7 @@ describe("cron service timer regressions", () => {
     };
     const runHeartbeatOnce = vi
       .fn<() => Promise<HeartbeatRunResult>>()
-      .mockResolvedValueOnce({ status: "skipped", reason: HEARTBEAT_SKIP_LANES_BUSY })
+      .mockResolvedValueOnce({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT })
       .mockResolvedValueOnce({ status: "ran", durationMs: 12 });
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
@@ -2763,7 +2822,7 @@ describe("cron service timer regressions", () => {
       outcome: "skip",
       status: "skipped",
       error: "agent skipped after removal",
-      taskStatus: "succeeded",
+      taskStatus: "failed",
     },
   ] as const)(
     "finalizes a removed job's $outcome outcome in operator history",

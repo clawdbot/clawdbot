@@ -27,6 +27,7 @@ import {
 } from "./pending-final-delivery.js";
 import type { FollowupRun } from "./queue.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
+import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-agent-turn-state.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
@@ -393,13 +394,22 @@ export async function executePreparedReplyAgentRun(
         }),
       ),
   );
+  const operationSuperseded = isReplyOperationSuperseded(replyOperation);
   recordReplyOperationAgentTurn(
     resolveReplyOperationRunState(opts),
-    runOutcome.outcome.kind === "settled" ? runOutcome.outcome.status : "failed",
+    operationSuperseded
+      ? "superseded"
+      : runOutcome.outcome.kind === "settled"
+        ? runOutcome.outcome.status
+        : "failed",
+    replyOperation,
   );
   activeSessionEntry = getActiveSessionEntry();
   activeIsNewSession = getActiveIsNewSession();
 
+  if (operationSuperseded) {
+    return { text: SILENT_REPLY_TOKEN };
+  }
   if (runOutcome.outcome.kind !== "settled") {
     if (runOutcome.outcome.kind === "rejected" && !replyOperation.result) {
       replyOperation.fail("run_failed", new Error("reply operation exited with final payload"));

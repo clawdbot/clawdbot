@@ -17,7 +17,10 @@ import {
   areUiSessionKeysEquivalent,
   parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
-import { replaceChatAttachmentsFromEditor } from "./attachment-payload-store.ts";
+import {
+  cloneChatAttachmentsForIndependentOwner,
+  replaceChatAttachmentsFromEditor,
+} from "./attachment-payload-store.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import {
   loadChatHistory,
@@ -37,6 +40,7 @@ import {
   preparePaneSessionHandoff,
 } from "./chat-pane-shared.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { resolveChatAgentId } from "./chat-state-route.ts";
 import { persistedMessageEntryId } from "./chat-thread.ts";
 import { persistChatComposerState } from "./composer-persistence.ts";
 import {
@@ -535,11 +539,18 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
     const scope = this.captureConnectionScope();
     const state = scope?.state;
     const client = scope?.client;
-    const draft = state?.chatMessage.trim();
-    if (!scope || !state || !client || !draft || !this.catalogSession?.canContinue) {
+    const draft = state?.chatMessage.trim() ?? "";
+    // Attachments count as composed content: an image-only continuation must
+    // send, not silently no-op while the send button looks live.
+    if (!scope || !state || !client || !this.catalogSession?.canContinue) {
+      return;
+    }
+    const attachments = cloneChatAttachmentsForIndependentOwner(state.chatAttachments);
+    if (!draft && attachments.length === 0) {
       return;
     }
     const sourceSessionKey = state.sessionKey;
+    const sourceAgentId = resolveChatAgentId(state);
     const sourceCatalogGeneration = this.catalogLoadGeneration;
     const continuation = Symbol("catalog-continuation");
     this.activeCatalogContinuation = continuation;
@@ -559,7 +570,13 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
     try {
       const result = await client.request<SessionsCatalogContinueResult>(
         "sessions.catalog.continue",
-        key,
+        {
+          ...key,
+          agentId: sourceAgentId,
+          ...(this.catalogSession.sourceHomeId
+            ? { sourceHomeId: this.catalogSession.sourceHomeId }
+            : {}),
+        },
       );
       // A catalog adoption must not navigate or send into a pane that switched
       // sessions or reconnected while its original continuation was in flight.
@@ -567,13 +584,14 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
         this.activeCatalogContinuation !== continuation ||
         !this.isConnectionScopeCurrent(scope) ||
         this.catalogLoadGeneration !== sourceCatalogGeneration ||
-        state.sessionKey !== sourceSessionKey
+        state.sessionKey !== sourceSessionKey ||
+        resolveChatAgentId(state) !== sourceAgentId
       ) {
         releaseStaleContinuation();
         return;
       }
       preparePaneSessionHandoff(this.context, this.paneId, result.sessionKey, {
-        attachments: [],
+        attachments,
         draft,
         send: true,
       });
@@ -582,7 +600,11 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
         releaseStaleContinuation();
         return;
       }
-      announceCatalogSessionContinued({ ...key, sessionKey: result.sessionKey });
+      announceCatalogSessionContinued({
+        ...key,
+        agentId: sourceAgentId,
+        sessionKey: result.sessionKey,
+      });
       this.activeCatalogContinuation = null;
       state.chatSending = false;
       state.requestUpdate();
@@ -591,7 +613,8 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
         this.activeCatalogContinuation !== continuation ||
         !this.isConnectionScopeCurrent(scope) ||
         this.catalogLoadGeneration !== sourceCatalogGeneration ||
-        state.sessionKey !== sourceSessionKey
+        state.sessionKey !== sourceSessionKey ||
+        resolveChatAgentId(state) !== sourceAgentId
       ) {
         releaseStaleContinuation();
         return;

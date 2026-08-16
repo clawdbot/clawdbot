@@ -23,6 +23,7 @@ describe("models.list provider catalog outcomes", () => {
     const snapshot = {
       agentId: "main",
       agentDir: "/tmp/models-list-provider-outcomes-agent",
+      catalogComplete: true,
       workspaceDir: "/tmp/models-list-provider-outcomes-workspace",
       config,
       authModes: {},

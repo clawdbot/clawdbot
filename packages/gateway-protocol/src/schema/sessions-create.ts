@@ -9,6 +9,7 @@ export const SessionsCreateParamsSchema = closedObject({
   key: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
   label: Type.Optional(SessionLabelString),
+  category: Type.Optional(SessionLabelString),
   model: Type.Optional(NonEmptyString),
   thinkingLevel: Type.Optional(NonEmptyString),
   incognito: Type.Optional(Type.Boolean()),
@@ -24,6 +25,12 @@ export const SessionsCreateParamsSchema = closedObject({
   ),
   fork: Type.Optional(
     Type.Boolean({ description: "Fork the parent transcript; requires parentSessionKey." }),
+  ),
+  forkFrom: Type.Optional(
+    Type.Literal("last-completed", {
+      description:
+        "Fork through the parent's last completed assistant message; requires fork=true.",
+    }),
   ),
   emitCommandHooks: Type.Optional(Type.Boolean()),
   succeedsParent: Type.Optional(

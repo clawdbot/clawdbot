@@ -11,7 +11,6 @@ import {
 } from "../../plugins/provider-runtime.js";
 import type { ProviderToolSchemaDiagnostic } from "../../plugins/types.js";
 import type { AgentTool } from "../runtime/index.js";
-import type { AnyAgentTool } from "../tools/common.js";
 import { log } from "./logger.js";
 
 type ProviderToolSchemaParams<TSchemaType extends TSchema = TSchema, TResult = unknown> = {
@@ -39,7 +38,7 @@ function buildProviderToolSchemaContext<TSchemaType extends TSchema = TSchema, T
     modelId: params.modelId,
     modelApi: params.modelApi,
     model: params.model,
-    tools: params.tools as unknown as AnyAgentTool[],
+    tools: params.tools,
   };
 }
 

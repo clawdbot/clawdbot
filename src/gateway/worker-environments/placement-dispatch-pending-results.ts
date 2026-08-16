@@ -91,6 +91,7 @@ function pendingWorkerLossError(
 export async function recoverPendingWorkspaceResults(
   deps: PlacementRecoveryDeps,
   cleanupOrphans: boolean,
+  environmentId?: string,
 ): Promise<Set<string>> {
   const { environments, failure, placements } = deps;
   const stagedResultOwners = new Set<string>();
@@ -104,6 +105,9 @@ export async function recoverPendingWorkspaceResults(
       continue;
     }
     const placement = placements.get(pending.sessionId);
+    if (environmentId !== undefined && placement?.environmentId !== environmentId) {
+      continue;
+    }
     try {
       const claim = placement?.turnClaim;
       if (

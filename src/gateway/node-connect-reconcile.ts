@@ -9,6 +9,10 @@ import type {
 } from "../infra/device-pairing-node.js";
 import { normalizeNodeApprovalSurfaceList } from "../infra/node-pairing-surface.js";
 import {
+  parseComputerUseCapabilityDescriptor,
+  type ComputerUseCapabilityDescriptor,
+} from "../plugins/computer-use-contract.js";
+import {
   normalizeDeclaredNodeCommands,
   resolveNodePairingCommandAllowlist,
 } from "./node-command-policy.js";
@@ -22,6 +26,7 @@ type NodeConnectPairingReconcileResult = {
   effectiveCaps: string[];
   declaredCommands: string[];
   effectiveCommands: string[];
+  declaredComputerUse?: ComputerUseCapabilityDescriptor;
   declaredPermissions?: Record<string, boolean>;
   effectivePermissions?: Record<string, boolean>;
   pendingPairing?: RequestNodePairingResult;
@@ -145,6 +150,10 @@ export async function reconcileNodePairingOnConnect(params: {
   });
   const declaredCaps = normalizeNodeApprovalSurfaceList(params.connectParams.caps);
   const declaredPermissions = normalizePermissionMap(params.connectParams.permissions);
+  const declaredComputerUse =
+    params.connectParams.computerUse === undefined
+      ? undefined
+      : parseComputerUseCapabilityDescriptor(params.connectParams.computerUse);
 
   if (!params.pairedNode) {
     const pendingPairing = await params.requestPairing(
@@ -167,6 +176,7 @@ export async function reconcileNodePairingOnConnect(params: {
       effectiveCaps: [],
       declaredCommands: declared,
       effectiveCommands: [],
+      ...(declaredComputerUse ? { declaredComputerUse } : {}),
       declaredPermissions,
       effectivePermissions: undefined,
       pendingPairing,
@@ -222,6 +232,7 @@ export async function reconcileNodePairingOnConnect(params: {
       effectiveCaps: effectiveApprovedDeclaredCaps,
       declaredCommands: declared,
       effectiveCommands: effectiveApprovedDeclaredCommands,
+      ...(declaredComputerUse ? { declaredComputerUse } : {}),
       declaredPermissions,
       effectivePermissions: effectiveApprovedDeclaredPermissions,
       ...(pendingPairing ? { pendingPairing } : {}),
@@ -234,6 +245,7 @@ export async function reconcileNodePairingOnConnect(params: {
     effectiveCaps: declaredCaps,
     declaredCommands: declared,
     effectiveCommands: declared,
+    ...(declaredComputerUse ? { declaredComputerUse } : {}),
     declaredPermissions,
     effectivePermissions: declaredPermissions,
     shouldClearPendingPairings: true,

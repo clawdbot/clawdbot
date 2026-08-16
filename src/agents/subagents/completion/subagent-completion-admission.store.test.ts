@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
+  moveSessionDeliveryToFailed,
   prepareClaimedSessionDelivery,
   SessionDeliveryDeadLetteredError,
   SessionDeliveryDeferredError,
@@ -28,9 +29,11 @@ import {
   settleSubagentCompletionDelivery,
 } from "./subagent-completion-admission.store.js";
 import {
+  admitCorrelatedSubagentSessionDelivery,
   dismissSubagentCompletionDelivery,
   resolveCorrelatedSubagentDelivery,
   retrySubagentCompletionDelivery,
+  settleCorrelatedSubagentDelivery,
 } from "./subagent-completion-delivery.js";
 
 const resumeSubagentRun = vi.hoisted(() => vi.fn());
@@ -238,6 +241,86 @@ describe("atomic subagent completion admission store", () => {
     expect(() => resolveCorrelatedSubagentDelivery(queueEntry)).toThrow(
       SessionDeliveryDeferredError,
     );
+  });
+
+  it("keeps canonical owner payload through failure and clears it after redrive success", async () => {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, async () => {
+      closeOpenClawStateDatabaseForTest();
+      database = openOpenClawStateDatabase();
+      const input = records();
+      input.subagent.delivery = {
+        status: "pending",
+        generation: 1,
+        windowStartedAt: Date.now(),
+        deadlineAt: Date.now() + 30 * 60_000,
+      };
+      input.task.deliveryStatus = "pending";
+      subagentRuns.set(input.subagent.runId, input.subagent);
+      ensureTaskRegistryReady();
+      publishTaskRecordAfterAtomicStore(input.task);
+      const payload = {
+        kind: "agentTurn" as const,
+        sessionKey: input.task.requesterSessionKey,
+        message: "placeholder",
+        messageId: "completion-owner-state",
+        idempotencyKey: "completion-owner-state",
+      };
+
+      const first = admitCorrelatedSubagentSessionDelivery({
+        runId: input.subagent.runId,
+        payload,
+      });
+      expect(first).toMatchObject({ claimed: true, status: "pending" });
+      expect(subagentRuns.get(input.subagent.runId)?.delivery?.payload).toMatchObject({
+        childRunId: input.subagent.runId,
+        task: input.subagent.task,
+      });
+      const firstQueue = database.db
+        .prepare("SELECT entry_json FROM delivery_queue_entries WHERE id = ?")
+        .get(first.id) as { entry_json: string };
+      expect(JSON.parse(firstQueue.entry_json)).toMatchObject({
+        retainOnFailure: true,
+        messageId: payload.messageId,
+      });
+
+      const queued = JSON.parse(firstQueue.entry_json) as ReturnType<typeof records>["queueEntry"];
+      await settleCorrelatedSubagentDelivery(queued, "moved-to-failed");
+      expect(subagentRuns.get(input.subagent.runId)?.delivery).toMatchObject({
+        status: "suspended",
+        queueId: undefined,
+        payload: expect.objectContaining({ childRunId: input.subagent.runId }),
+      });
+      await moveSessionDeliveryToFailed(first.id, tempDir);
+
+      await expect(
+        retrySubagentCompletionDelivery(input.task.taskId, { database }),
+      ).resolves.toMatchObject({
+        ok: true,
+        duplicateRisk: true,
+      });
+      const second = admitCorrelatedSubagentSessionDelivery({
+        runId: input.subagent.runId,
+        payload,
+      });
+      expect(second.id).not.toBe(first.id);
+      const secondQueue = database.db
+        .prepare("SELECT entry_json FROM delivery_queue_entries WHERE id = ?")
+        .get(second.id) as { entry_json: string };
+      const secondEntry = JSON.parse(secondQueue.entry_json) as ReturnType<
+        typeof records
+      >["queueEntry"];
+      expect(secondEntry).toMatchObject({
+        messageId: `${payload.messageId}:generation:2`,
+        retainOnFailure: true,
+      });
+
+      await settleCorrelatedSubagentDelivery(secondEntry, "recovered");
+      expect(subagentRuns.get(input.subagent.runId)?.delivery).toMatchObject({
+        status: "delivered",
+        queueId: undefined,
+        payload: undefined,
+      });
+    });
   });
 
   it("reloads a blocked text completion from SQLite before canonical owner redrive", async () => {

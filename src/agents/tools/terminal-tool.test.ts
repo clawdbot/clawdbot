@@ -326,6 +326,26 @@ describe("terminal tool", () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
+  it("preserves an explicit-owner launch failure", async () => {
+    const manager = new TerminalSessionManager({ emit: vi.fn(), spawn: vi.fn() });
+    const tool = createTerminalTool({
+      agentId: "main",
+      agentSessionKey: "agent:main:main",
+      getGatewayContext: () => ({
+        terminalSessions: manager,
+        isTerminalEnabled: () => true,
+        resolveTerminalLaunchPolicy: () => ({
+          ok: false,
+          block: { kind: "owner-required", message: "select an agent explicitly" },
+        }),
+      }),
+    });
+
+    await expect(tool.execute("open", { action: "open" })).rejects.toThrow(
+      "select an agent explicitly",
+    );
+  });
+
   it("does not open while the terminal surface is disabled", async () => {
     const spawn = vi.fn(async () => makeBackend());
     const manager = new TerminalSessionManager({ emit: vi.fn(), spawn });

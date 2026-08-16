@@ -42,6 +42,8 @@ export type AgentRuntimeIdentity = {
   approvalOwnerPluginId?: string;
   executionIdentity?: ExecutionIdentityAdmissionToken;
   turnSourceChannel?: string;
+  /** Explicit admission fact; omission is unknown, never inferred from session routing. */
+  turnSourceLocal?: true;
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
@@ -79,6 +81,7 @@ type AgentRuntimeIdentityTokenPayload = {
   approvalOwnerPluginId?: string;
   executionIdentity?: ExecutionIdentityAdmissionToken;
   turnSourceChannel?: string;
+  turnSourceLocal?: true;
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
@@ -330,6 +333,7 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
       operationalRunInstance?: unknown;
       approvalOwnerPluginId?: unknown;
       turnSourceChannel?: unknown;
+      turnSourceLocal?: unknown;
       turnSourceTo?: unknown;
       turnSourceAccountId?: unknown;
       turnSourceThreadId?: unknown;
@@ -366,6 +370,13 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
     const turnSourceChannel = normalizeOptionalString(
       typeof raw.turnSourceChannel === "string" ? raw.turnSourceChannel : undefined,
     );
+    const turnSourceLocal = raw.turnSourceLocal === true ? true : undefined;
+    if (raw.turnSourceLocal !== undefined && turnSourceLocal !== true) {
+      return undefined;
+    }
+    if (turnSourceLocal && turnSourceChannel) {
+      return undefined;
+    }
     const turnSourceTo = normalizeOptionalString(
       typeof raw.turnSourceTo === "string" ? raw.turnSourceTo : undefined,
     );
@@ -458,6 +469,7 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
       delegatedAuthority,
       ...(approvalOwnerPluginId ? { approvalOwnerPluginId } : {}),
       ...(turnSourceChannel ? { turnSourceChannel } : {}),
+      ...(turnSourceLocal ? { turnSourceLocal } : {}),
       ...(turnSourceTo ? { turnSourceTo } : {}),
       ...(turnSourceAccountId ? { turnSourceAccountId } : {}),
       ...(turnSourceThreadId !== undefined ? { turnSourceThreadId } : {}),
@@ -480,6 +492,7 @@ export type AgentRuntimeIdentityTokenParams = {
   approvalOwnerPluginId?: string;
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
   turnSourceChannel?: string;
+  turnSourceLocal?: true;
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
@@ -539,6 +552,9 @@ function prepareAgentRuntimeIdentityTokenPayload(params: AgentRuntimeIdentityTok
     : undefined;
   const turnSourceAccountId = normalizeOptionalAccountId(params.turnSourceAccountId);
   const turnSourceChannel = normalizeOptionalString(params.turnSourceChannel);
+  if (params.turnSourceLocal === true && turnSourceChannel) {
+    throw new Error("agent runtime turn source cannot be both local and channel-bound");
+  }
   const turnSourceTo = normalizeOptionalString(params.turnSourceTo);
   const turnSourceThreadId =
     typeof params.turnSourceThreadId === "string"
@@ -564,6 +580,7 @@ function prepareAgentRuntimeIdentityTokenPayload(params: AgentRuntimeIdentityTok
       ? { approvalOwnerPluginId: normalizeOptionalString(params.approvalOwnerPluginId) }
       : {}),
     ...(turnSourceChannel ? { turnSourceChannel } : {}),
+    ...(params.turnSourceLocal === true ? { turnSourceLocal: true } : {}),
     ...(turnSourceTo ? { turnSourceTo } : {}),
     ...(turnSourceAccountId ? { turnSourceAccountId } : {}),
     ...(turnSourceThreadId !== undefined ? { turnSourceThreadId } : {}),
@@ -631,6 +648,7 @@ export async function verifyAgentRuntimeIdentityToken(
       : {}),
     ...(payload.executionIdentity ? { executionIdentity: payload.executionIdentity } : {}),
     ...(payload.turnSourceChannel ? { turnSourceChannel: payload.turnSourceChannel } : {}),
+    ...(payload.turnSourceLocal === true ? { turnSourceLocal: true } : {}),
     ...(payload.turnSourceTo ? { turnSourceTo: payload.turnSourceTo } : {}),
     ...(payload.turnSourceAccountId ? { turnSourceAccountId: payload.turnSourceAccountId } : {}),
     ...(payload.turnSourceThreadId !== undefined

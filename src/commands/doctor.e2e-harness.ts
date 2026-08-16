@@ -615,6 +615,7 @@ vi.mock("./doctor-state-migrations.js", () => ({
   autoMigrateLegacyStateDir,
   autoMigrateLegacyTaskStateSidecars,
   detectLegacyStateMigrations,
+  migrateLegacyConfigMachineState: vi.fn(() => ({ changes: [], warnings: [] })),
   runLegacyStateMigrations,
 }));
 

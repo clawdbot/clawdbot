@@ -23,8 +23,9 @@ import {
   sanitizeOpenClawGlobalStateSnapshot,
   sanitizeOpenClawStateLeaseRows,
 } from "../state/openclaw-state-snapshot-sanitizer.js";
-import { resolveHomeDir, resolveUserPath } from "../utils.js";
+import { resolveHomeDir, resolveUserPath, shortenHomePath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
+import { assertArchiveSymbolicLinkTarget } from "./backup-archive-path-policy.js";
 import {
   cleanupBackupArchivePublication,
   createBackupArchivePublication,
@@ -748,6 +749,10 @@ export async function createBackupArchive(
   }
 
   const createdAt = new Date(nowMs).toISOString();
+  const stateAsset = plan.included.find((asset) => asset.kind === "state");
+  const pluginSkillsPath = stateAsset
+    ? path.join(stateAsset.sourcePath, "plugin-skills")
+    : undefined;
   const result: BackupCreateResult = {
     createdAt,
     archiveRoot,
@@ -778,7 +783,6 @@ export async function createBackupArchive(
     throw error;
   }
   const tempArchivePath = publication.tempArchivePath;
-  const stateAsset = result.assets.find((asset) => asset.kind === "state");
   const preservedStatePaths = [
     plan.configPath,
     plan.oauthDir,
@@ -851,9 +855,11 @@ export async function createBackupArchive(
     const gatewayLockDir = resolveGatewayLockDir(plan.stateDir);
     const volatilePlan = { stateDirs: [stateAsset?.sourcePath ?? plan.stateDir] };
     let skippedVolatileCount = 0;
-    // node-tar invokes filters from async stat callbacks, so throwing inside
-    // the filter is uncaught. Omit unexpected SQLite and reject after tar settles.
+    let skippedPluginSkills = false;
+    // node-tar invokes filter/onWriteEntry from async filesystem callbacks, so
+    // collect violations there and reject only after tar settles.
     const unexpectedSqliteSourcePaths: string[] = [];
+    let archiveSymlinkViolation: Error | undefined;
     const tarFilter = (
       entryPath: string,
       entryStat: import("node:fs").Stats | import("tar").ReadEntry,
@@ -863,6 +869,12 @@ export async function createBackupArchive(
       const resolvedEntryPath = path.resolve(entryPath);
       if (resolvedEntryPath === manifestPath) {
         return true;
+      }
+      // This OpenClaw-owned symlink index is rebuilt from plugin metadata.
+      // Archiving it would preserve host-specific absolute targets.
+      if (pluginSkillsPath && isPathWithin(resolvedEntryPath, pluginSkillsPath)) {
+        skippedPluginSkills = true;
+        return false;
       }
       if (stateFilter && !stateFilter(entryPath)) {
         return false;
@@ -909,7 +921,9 @@ export async function createBackupArchive(
         // attempt, so reset the closure counter here or retries would report
         // cumulative skip counts across attempts instead of the final one.
         skippedVolatileCount = 0;
+        skippedPluginSkills = false;
         unexpectedSqliteSourcePaths.length = 0;
+        archiveSymlinkViolation = undefined;
         const prepared = await writeArchiveStreamToFile({
           archivePath: attemptTempArchivePath,
           createArchiveStream: (reportProgress) =>
@@ -932,12 +946,25 @@ export async function createBackupArchive(
                       reportProgress({ phase: "raw", entryPath: sourceEntryPath, bytes });
                     });
                   }
-                  entry.path = remapArchiveEntryPath({
+                  const archiveEntryPath = remapArchiveEntryPath({
                     entryPath: entry.path,
                     manifestPath,
                     archiveRoot,
                     sourcePathRemaps,
                   });
+                  if (entry.type === "SymbolicLink" && !archiveSymlinkViolation) {
+                    try {
+                      assertArchiveSymbolicLinkTarget({
+                        archiveRoot,
+                        entryPath: archiveEntryPath,
+                        linkpath: entry.linkpath,
+                      });
+                    } catch (error) {
+                      archiveSymlinkViolation =
+                        error instanceof Error ? error : new Error(String(error));
+                    }
+                  }
+                  entry.path = archiveEntryPath;
                 },
               },
               [
@@ -952,18 +979,29 @@ export async function createBackupArchive(
           },
         });
         const unexpectedSqliteSourcePath = unexpectedSqliteSourcePaths[0];
-        if (unexpectedSqliteSourcePath) {
+        const archiveValidationError = unexpectedSqliteSourcePath
+          ? new Error(
+              `SQLite state appeared after snapshot discovery: ${unexpectedSqliteSourcePath}. Retry backup so it can be snapshotted.`,
+            )
+          : archiveSymlinkViolation;
+        if (archiveValidationError) {
           if (!removePreparedBackupArchive(prepared)) {
             publication.pendingCleanupArchives.push(prepared);
           }
-          throw new Error(
-            `SQLite state appeared after snapshot discovery: ${unexpectedSqliteSourcePath}. Retry backup so it can be snapshotted.`,
-          );
+          throw archiveValidationError;
         }
         return prepared;
       },
     });
     result.skippedVolatileCount = skippedVolatileCount;
+    if (pluginSkillsPath && skippedPluginSkills) {
+      result.skipped.push({
+        kind: "plugin skills",
+        sourcePath: pluginSkillsPath,
+        displayPath: shortenHomePath(pluginSkillsPath),
+        reason: "regenerable",
+      });
+    }
     if (skippedVolatileCount > 0) {
       opts.log?.(
         `Backup skipped ${skippedVolatileCount} volatile file${

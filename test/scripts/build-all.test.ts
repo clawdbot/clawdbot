@@ -9,7 +9,6 @@ import {
   BUILD_ALL_PROFILES,
   BUILD_ALL_PROFILE_STEP_ENV,
   BUILD_ALL_STEPS,
-  buildAllUsage,
   finalizeBuildAllStepCache,
   formatBuildAllDuration,
   formatBuildAllTimingSummary,
@@ -351,7 +350,8 @@ describe("resolveBuildAllSteps", () => {
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("unknown argument: --bogus");
-    expect(result.stderr).toContain(buildAllUsage());
+    expect(result.stderr).toContain("Usage: node --import tsx scripts/build-all.mts [profile]");
+    expect(result.stderr).toContain("Profiles:");
     expect(result.stderr).not.toContain("[build-all]");
     expect(result.stderr).not.toContain("at ");
   });

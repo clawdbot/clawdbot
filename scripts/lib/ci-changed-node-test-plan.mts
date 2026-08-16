@@ -15,8 +15,10 @@ import {
   resolvePolicyTestTargets,
 } from "./ci-node-test-plan.mts";
 import {
-  createExtensionTestProcessTargetChunks,
+  listExtensionTestFilesForRoots,
   resolveExtensionTestConfig,
+  shouldSplitExtensionTestProcesses,
+  splitExtensionTestJobTargets,
 } from "./extension-test-plan.mts";
 import { buildPluginSdkEntrySources, publicPluginSdkEntrypoints } from "./plugin-sdk-entries.mts";
 
@@ -85,41 +87,24 @@ export function hasBuildArtifactAffectingChange(changedPaths: string[]) {
   );
 }
 
-// Surfaces the CI smoke scenarios exercise outside the core runtime import
-// graph: the qa-lab harness and scenario data, the packaged-CLI build inputs,
-// the control UI (playwright scenario), the two channels the smoke profile
-// drives (matrix, telegram), and workspace packages whose package-specifier
-// imports the relative import graph cannot see. The QA lane's own
-// orchestration (this planner, the CI workflow, composite actions) is also
-// QA-impacting: changes to the gate must not be able to skip the gated lane.
+// QA-owned surfaces that keep the smoke lane on pull requests: the qa-lab
+// harness and scenario data, the two channels the smoke profile drives
+// (matrix, telegram), the packaged-CLI docker packaging scripts, and the QA
+// lane's own orchestration (this planner, the CI workflow, composite
+// actions) — changes to the gate must not be able to skip the gated lane.
 const QA_SMOKE_SURFACE_RE =
-  /^(?:extensions\/(?:matrix|qa-lab|telegram)|packages|qa|ui)\/|^scripts\/(?:build-all\.mts|package-openclaw-for-docker\.mts)$|^scripts\/lib\/ci-changed-node-test-plan\.mts$|^\.github\/(?:workflows\/ci\.yml$|actions\/)|^(?:openclaw\.mjs|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|tsdown\.config\.ts)$/u;
-// The smoke profile runs the packaged CLI end to end, so its runtime blast
-// radius is exactly the CLI entry's import graph (dynamic imports included).
-const QA_SMOKE_RUNTIME_ENTRY = "src/index.ts";
+  /^(?:extensions\/(?:matrix|qa-lab|telegram)|qa)\/|^scripts\/(?:build-all\.mts|package-openclaw-for-docker\.mts)$|^scripts\/lib\/ci-changed-node-test-plan\.mts$|^\.github\/(?:workflows\/ci\.yml$|actions\/)/u;
 
 /**
- * True when a changed path can influence the QA smoke scenarios: it touches
- * the smoke surface directly, or the packaged CLI's import graph reaches it.
- * Diffs outside both are invisible to the smoke profile, so the manifest may
- * skip that lane regardless of whether test targeting fired.
+ * True when a pull request diff touches a QA-owned smoke surface. Broad
+ * runtime changes (src/ui/packages/dependency manifests) deliberately no
+ * longer select the smoke lane on pull requests: every canonical `main` push
+ * and release validation still runs the full profile set, so runtime
+ * regressions surface one push later instead of taxing every PR with the
+ * six-part smoke matrix (~5 hosted-runner minutes each).
  */
-export function hasQaSmokeAffectingChange(changedPaths: string[], options: CwdOptions = {}) {
-  const cwd = options.cwd ?? process.cwd();
-  if (changedPaths.some((changedPath) => QA_SMOKE_SURFACE_RE.test(changedPath))) {
-    return true;
-  }
-  const sourcePaths = changedPaths.filter(
-    (changedPath) => changedPath.startsWith("src/") && !isTestFileTarget(changedPath),
-  );
-  if (sourcePaths.length === 0) {
-    return false;
-  }
-  // Deleted sources cannot be graphed; fail safe to running the smoke lane.
-  if (sourcePaths.some((changedPath) => !existsSync(path.join(cwd, changedPath)))) {
-    return true;
-  }
-  return hasImportGraphImpactOnTargets(sourcePaths, [QA_SMOKE_RUNTIME_ENTRY], cwd);
+export function hasQaSmokeAffectingChange(changedPaths: string[]) {
+  return changedPaths.some((changedPath) => QA_SMOKE_SURFACE_RE.test(changedPath));
 }
 
 // Surfaces the prompt-snapshot check exercises outside its generator's
@@ -329,7 +314,10 @@ function createChangedExtensionConfigShards(extensionRoots: string[]) {
   const plans: Array<{ config: string; includePatterns?: string[]; roots: string[] }> = [
     ...rootsByConfig,
   ].flatMap(([config, roots]) => {
-    const chunks = createExtensionTestProcessTargetChunks(config, roots);
+    const testFiles = shouldSplitExtensionTestProcesses(config)
+      ? listExtensionTestFilesForRoots(roots)
+      : [];
+    const chunks = testFiles.length > 0 ? splitExtensionTestJobTargets(config, testFiles) : [roots];
     return chunks.length > 1
       ? chunks.map((includePatterns) => ({ config, includePatterns, roots }))
       : [{ config, roots }];

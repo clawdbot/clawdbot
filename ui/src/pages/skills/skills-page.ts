@@ -127,6 +127,7 @@ class SkillsPage extends OpenClawLightDomElement {
     (agents) => {
       const cleanup = agents.subscribe(() => {
         this.reconcileAgentState();
+        this.ensureInitialData();
         this.requestUpdate();
       });
       this.reconcileAgentState();
@@ -218,19 +219,22 @@ class SkillsPage extends OpenClawLightDomElement {
   }
 
   private ensureInitialData() {
-    if (!this.gateway.connected || !this.gateway.client) {
-      return;
-    }
     if (
-      this.routeDataEnabled &&
-      (this.routeData?.agentsList || this.routeData?.report || this.routeData?.error)
+      this.routeDataEnabled ||
+      !this.routeDataInitialized ||
+      !this.gateway.connected ||
+      !this.gateway.client
     ) {
       return;
     }
     const agents = this.context.agents.state;
-    if (!agents.agentsList && !agents.agentsLoading) {
-      void this.loadAgents();
+    if (!agents.agentsList) {
+      if (!agents.agentsLoading) {
+        void this.loadAgents();
+      }
+      return;
     }
+    this.reconcileAgentState();
     if (!this.skillsReport && !this.skillsLoading) {
       void loadSkills(this);
     }
@@ -254,6 +258,7 @@ class SkillsPage extends OpenClawLightDomElement {
     }
     if (this.context.agents === agentsSource) {
       this.reconcileAgentState();
+      this.ensureInitialData();
     }
   }
 

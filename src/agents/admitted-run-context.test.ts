@@ -11,6 +11,7 @@ import {
   createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
+  retainAdmittedRunDelegatedAuthority,
   resolvePreparedRunAdmission,
 } from "./admitted-run-context.js";
 
@@ -206,6 +207,28 @@ describe("prepared run admission", () => {
     expect(validateAgentRunDelegatedAuthority(first)).toBe(false);
     expect(closeAdmittedRunDelegatedAuthority(admitted)).toBe(false);
     await expect(prepared.admit(runtime.kind)).rejects.toThrow("already closed");
+  });
+
+  it("keeps one private lease through foreground close and releases it exactly once", async () => {
+    const { runtime, ...admissionFacts } = facts;
+    const prepared = prepareAgentRunAdmission({
+      cfg: {},
+      facts: { ...admissionFacts, runId: "run-private-lease" },
+      operationalRunInstance: createOperationalRunInstanceRef("run-private-lease"),
+    });
+    const admitted = await prepared.admit(runtime.kind);
+    const authority = getAdmittedRunDelegatedAuthority(admitted);
+    const release = retainAdmittedRunDelegatedAuthority(admitted);
+
+    expect(authority).toBeDefined();
+    expect(release).toEqual(expect.any(Function));
+    expect(closeAdmittedRunDelegatedAuthority(admitted)).toBe(true);
+    expect(getAdmittedRunDelegatedAuthority(admitted)).toBeUndefined();
+    expect(validateAgentRunDelegatedAuthority(authority!)).toBe(true);
+
+    release?.();
+    expect(validateAgentRunDelegatedAuthority(authority!)).toBe(false);
+    release?.();
   });
 
   it("closes admitted authority when the owner binding hook fails", async () => {

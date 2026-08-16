@@ -305,7 +305,7 @@ Bundled provider catalogs currently flag these models as `"preferred"`:
 | moonshot  | `kimi-k3`                                                                                                                                                        |
 | openai    | `gpt-5.6`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.5-pro`                                                                              |
 | xiaomi    | `mimo-v2.5`                                                                                                                                                      |
-| zai       | `glm-5.2`, `glm-5.1`                                                                                                                                             |
+| zai       | `glm-5.3`, `glm-5.2`, `glm-5.1`                                                                                                                                  |
 
 Everything else, including all Ollama-served local models, stays unflagged and
 keeps normal tool exposure under `"auto"`.

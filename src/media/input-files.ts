@@ -105,7 +105,6 @@ type InputFileSource =
 /** Guarded URL fetch result before final MIME allowlist validation. */
 type InputFetchResult = {
   buffer: Buffer;
-  mimeType: string;
   contentType?: string;
 };
 
@@ -238,10 +237,8 @@ async function fetchWithGuard(params: {
 
     const buffer = await readResponseWithLimit(response, params.maxBytes);
 
-    const contentType = response.headers.get("content-type") || undefined;
-    const parsed = parseContentType(contentType);
-    const mimeType = parsed.mimeType ?? "application/octet-stream";
-    return { buffer, mimeType, contentType };
+    const contentType = response.headers.get("content-type") ?? undefined;
+    return { buffer, contentType };
   } finally {
     await release();
   }
@@ -374,7 +371,7 @@ export async function extractImageContentFromSource(
     });
     return await normalizeInputImage({
       buffer: result.buffer,
-      mimeType: result.mimeType,
+      mimeType: parseContentType(result.contentType).mimeType,
       limits,
     });
   }
@@ -422,7 +419,7 @@ export async function extractFileContentFromSource(params: {
       auditContext: "openresponses.input_file",
     });
     const parsed = parseContentType(result.contentType);
-    mimeType = parsed.mimeType ?? normalizeMimeType(result.mimeType);
+    mimeType = parsed.mimeType;
     charset = parsed.charset;
     buffer = result.buffer;
   }

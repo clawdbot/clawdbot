@@ -475,6 +475,8 @@ internal fun OpenClawWearApp(
           leaveConversationContext()
           viewModel.selectModel(modelRef)
         },
+        onAgentPulseVisibilityChanged = viewModel::setAgentPulseVisible,
+        onAgentPulseRefresh = viewModel::refreshAgentPulse,
         onRefresh = viewModel::refresh,
         onGatewayEnabledChange = { enabled ->
           speaker.stop()

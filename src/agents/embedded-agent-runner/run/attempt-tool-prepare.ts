@@ -122,6 +122,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
   const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
   const cronCreatorToolAllowlistCaptureRef: CronToolsAllowCaptureRef = {};
   const inheritedToolAllowlist: string[] = [];
+  const runCleanups: Array<(reason: string) => Promise<void>> = [];
   const spawnWorkspaceDir =
     params.effectiveCwd !== params.effectiveWorkspace
       ? params.resolvedWorkspace
@@ -249,6 +250,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
               : undefined,
           sessionId: attempt.sessionId,
           runId: attempt.runId,
+          operationalRunInstance: attempt.admittedRunContext.operationalRunInstance,
           conversationRecall: attempt.conversationRecall,
           approvalReviewerDeviceId: attempt.approvalReviewerDeviceId,
           oneShotCliRun: attempt.oneShotCliRun,
@@ -300,6 +302,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
           hasRepliedRef: attempt.hasRepliedRef,
           modelHasVision: attempt.model.input?.includes("image") ?? false,
           computerContextEpoch,
+          registerRunCleanup: (cleanup) => runCleanups.push(cleanup),
           requireExplicitMessageTarget:
             attempt.requireExplicitMessageTarget ?? isSubagentSessionKey(attempt.sessionKey),
           sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
@@ -360,6 +363,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     localModelLeanPreserveToolNames,
     replaySafetyOptions,
     runtimeCapabilityProfile,
+    runCleanups,
     toolSearchCatalogRef,
     toolSearchConfig,
     toolSearchControlsEnabledForRun,

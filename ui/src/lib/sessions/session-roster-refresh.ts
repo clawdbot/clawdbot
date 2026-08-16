@@ -283,6 +283,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
           error,
           deletedSessions: [],
           groups: state.groups,
+          groupSettings: state.groupSettings,
           sectionOrder: state.sectionOrder,
         },
         error ? "session-observer" : undefined,

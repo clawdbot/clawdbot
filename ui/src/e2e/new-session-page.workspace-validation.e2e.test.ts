@@ -285,12 +285,13 @@ suite.define(() => {
       await expect.poll(() => start.isDisabled()).toBe(true);
       await whereTrigger.click();
       const cloud = where.getByRole("button", { name: "Cloud · aws" });
-      await detailTrigger.click();
-      const worktree = detail.getByRole("button", { name: "Worktree" });
       expect(await cloud.isDisabled()).toBe(true);
       expect(await cloud.getAttribute("title")).toBe(
         "Couldn't verify Git for this folder. Choose it again to retry.",
       );
+      await page.keyboard.press("Escape");
+      await detailTrigger.click();
+      const worktree = detail.getByRole("button", { name: "Worktree" });
       expect(await worktree.getAttribute("aria-pressed")).toBe("true");
       expect(await worktree.isDisabled()).toBe(true);
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);

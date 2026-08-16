@@ -889,7 +889,7 @@ describe("handleInlineActions", () => {
     expect(handleCommandsMock).not.toHaveBeenCalled();
   });
 
-  it("keeps $ skill references literal on message channels", async () => {
+  it("resolves authorized $ skill references on message channels", async () => {
     const typing = createTypingController();
     const original = "Review with $office_hours.";
     const ctx = buildTestCtx({ Body: original, CommandBody: original });
@@ -911,7 +911,8 @@ describe("handleInlineActions", () => {
             name: "office_hours",
             skillName: "office-hours",
             description: "Engineering office hours",
-            modelVisible: true,
+            modelVisible: false,
+            skillFile: "/tmp/skills/office-hours/SKILL.md",
           },
         ],
       },
@@ -919,10 +920,21 @@ describe("handleInlineActions", () => {
 
     expect(result.kind).toBe("continue");
     if (result.kind !== "continue") {
-      throw new Error("expected message-channel text to continue unchanged");
+      throw new Error("expected referenced skill to continue to the model");
     }
-    expect(result.cleanedBody).toBe(original);
-    expect(ctx.Body).toBe(original);
+    expect(result.cleanedBody).toBe(
+      [
+        "Use the following explicitly referenced skills for this request. Read each skill's SKILL.md before acting:",
+        "- office-hours (SKILL.md: /tmp/skills/office-hours/SKILL.md)",
+        "",
+        "User request:",
+        original,
+      ].join("\n"),
+    );
+    expect(ctx.Body).toBe(result.cleanedBody);
+    expect(result.explicitSkillSelections).toEqual([
+      { name: "office_hours", path: "/tmp/skills/office-hours/SKILL.md" },
+    ]);
   });
 
   it("reloads preloaded skill commands when final exec overrides are present", async () => {

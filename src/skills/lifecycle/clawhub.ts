@@ -8,8 +8,10 @@ import type {
   ClawHubRiskAcknowledgementRequest,
   ClawHubTrustErrorCode,
 } from "../../infra/clawhub-install-trust.js";
+import { CLAWHUB_SKILLS_SH_REF_PREFIX } from "../../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { pathExists } from "../../infra/fs-safe.js";
+import type { InstallSafetyOverrides } from "../../plugins/install-security-scan.types.js";
 import { withClawPackageLifecycleLease } from "../../state/claw-package-lifecycle-lease.js";
 import {
   normalizeTrackedSkillSlug,
@@ -87,7 +89,7 @@ async function resolveRequestedUpdateSlug(params: {
 }): Promise<string> {
   const requested = params.requestedSlug.trim();
   const requestedRef =
-    requested.startsWith("@") || requested.startsWith("skills-sh:")
+    requested.startsWith("@") || requested.startsWith(CLAWHUB_SKILLS_SH_REF_PREFIX)
       ? parseRequestedClawHubSkillRef(requested)
       : { slug: normalizeTrackedSkillSlug(requested) };
   const trackedSlug = requestedRef.slug;
@@ -315,6 +317,7 @@ export async function installSkillFromClawHub(params: {
   onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
   logger?: Logger;
   config?: OpenClawConfig;
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   /** True when a Claw lifecycle caller already owns package coordination. */
   clawManaged?: boolean;
 }): Promise<InstallClawHubSkillResult> {
@@ -336,6 +339,7 @@ export async function updateSkillsFromClawHub(params: {
   onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
   logger?: Logger;
   config?: OpenClawConfig;
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
 }): Promise<UpdateClawHubSkillResult[]> {
   const lock = await readClawHubSkillsLockfile(params.workspaceDir);
   const slugs = params.slug
@@ -375,6 +379,7 @@ export async function updateSkillsFromClawHub(params: {
           onClawHubRisk: params.onClawHubRisk,
           logger: params.logger,
           config: params.config,
+          onInstallPolicyWarning: params.onInstallPolicyWarning,
         }),
       { required: true },
     );

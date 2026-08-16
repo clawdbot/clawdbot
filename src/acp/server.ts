@@ -21,6 +21,7 @@ import { getRuntimeConfig } from "../config/config.js";
 import { resolveGatewayClientBootstrap } from "../gateway/client-bootstrap.js";
 import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 import { GatewayClient } from "../gateway/client.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { isMainModule } from "../infra/is-main.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -137,7 +138,7 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     try {
       closeOpenClawStateDatabase();
     } catch (err) {
-      console.warn(`acp: state database close failed during shutdown: ${String(err)}`);
+      console.warn(`acp: state database close failed during shutdown: ${formatErrorMessage(err)}`);
     }
   };
 
@@ -161,7 +162,9 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
       void agent?.handleGatewayEvent(evt).catch((err: unknown) => {
         process.stderr.write(`openclaw acp: gateway event ${evt.event} failed\n`);
         if (opts.verbose) {
-          process.stderr.write(`openclaw acp: gateway event ${evt.event} error: ${String(err)}\n`);
+          process.stderr.write(
+            `openclaw acp: gateway event ${evt.event} error: ${formatErrorMessage(err)}\n`,
+          );
         }
       });
     },
@@ -200,9 +203,9 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     // events can both resume asynchronously, and must not reopen the shared DB.
     const activeAgent = agent;
     agent = null;
-    activeAgent?.shutdown();
+    await activeAgent?.shutdown();
     const gatewayStop = gateway.stopAndWait().catch((err: unknown) => {
-      console.warn(`acp: gateway stop failed during shutdown: ${String(err)}`);
+      console.warn(`acp: gateway stop failed during shutdown: ${formatErrorMessage(err)}`);
     });
     await gatewayStop;
     closeStateDatabase();
@@ -420,7 +423,7 @@ if (isMainModule({ currentFile: fileURLToPath(import.meta.url) })) {
   }
   const opts = parseArgs(argv);
   serveAcpGateway(opts).catch((err: unknown) => {
-    console.error(String(err));
+    console.error(formatErrorMessage(err));
     process.exit(1);
   });
 }

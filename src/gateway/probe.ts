@@ -47,6 +47,7 @@ export type GatewayProbeAuthSummary = {
 
 export type GatewayProbeServerSummary = {
   version: string | null;
+  buildId?: string;
   connId: string | null;
 };
 
@@ -440,6 +441,9 @@ export async function probeGateway(opts: {
           authMetadataPresent = typeof hello?.auth === "object" && hello.auth !== null;
           server = {
             version: typeof hello?.server?.version === "string" ? hello.server.version : null,
+            ...(typeof hello?.server?.buildId === "string"
+              ? { buildId: hello.server.buildId }
+              : {}),
             connId: typeof hello?.server?.connId === "string" ? hello.server.connId : null,
           };
           auth = resolveProbeAuthSummary({

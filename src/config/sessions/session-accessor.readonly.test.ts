@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
+import {
+  cleanupTempDirs,
+  makeTempDir,
+  useAutoCleanupTempDirTracker,
+} from "../../../test/helpers/temp-dir.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   isOpenClawAgentDatabaseOpen,
@@ -15,11 +19,13 @@ import {
   hasSessionEntriesByStatusReadOnly,
   listSessionEntriesCore,
   listSessionEntriesReadOnly,
+  readSessionIdentityEvidence,
   resolveTranscriptSessionKeyBySessionId,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 
 const tempDirs: string[] = [];
+const autoTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function countRegisteredAgentDatabases(env: NodeJS.ProcessEnv): number {
   const row = openOpenClawStateDatabase({ env })
@@ -136,6 +142,75 @@ describe("session accessor readonly listing", () => {
       sessionKey,
     );
     expect(countRegisteredAgentDatabases(env)).toBe(0);
+  });
+
+  it("probes session identity by exact key and indexed current session id", async () => {
+    const stateDir = autoTempDirs.make("openclaw-session-readonly-evidence-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const agentId = "worker-1";
+    const sessionKey = "agent:worker-1:moved";
+    const sessionId = "session-1";
+    await upsertSessionEntryCore({ agentId, env, sessionKey }, { sessionId, updatedAt: 1 });
+    const storePath = resolveOpenClawAgentSqlitePath({ agentId, env });
+    closeOpenClawAgentDatabasesForTest();
+
+    expect(readSessionIdentityEvidence({ agentId, sessionId, sessionKey, storePath })).toEqual({
+      status: "current",
+      sessionKey,
+    });
+    expect(
+      readSessionIdentityEvidence({
+        agentId,
+        sessionId,
+        sessionKey: "agent:worker-1:old-key",
+        storePath,
+      }),
+    ).toEqual({ status: "current", sessionKey });
+    expect(
+      readSessionIdentityEvidence({
+        agentId,
+        sessionId: "missing-session",
+        sessionKey,
+        storePath,
+      }),
+    ).toEqual({ status: "absent" });
+  });
+
+  it("reports migration-invalid session evidence as unknown", async () => {
+    const stateDir = autoTempDirs.make("openclaw-session-readonly-evidence-invalid-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const agentId = "worker-1";
+    const sessionKey = "agent:worker-1:main";
+    const sessionId = "session-1";
+    await upsertSessionEntryCore({ agentId, env, sessionKey }, { sessionId, updatedAt: 1 });
+    const database = openOpenClawAgentDatabase({ agentId, env });
+    database.db.exec("PRAGMA user_version = 999;");
+    const storePath = database.path;
+    closeOpenClawAgentDatabasesForTest();
+
+    expect(readSessionIdentityEvidence({ agentId, sessionId, sessionKey, storePath })).toEqual({
+      status: "unknown",
+      reason: "read-failed",
+    });
+  });
+
+  it("uses the current-session-id index for fallback identity probes", async () => {
+    const stateDir = autoTempDirs.make("openclaw-session-readonly-evidence-index-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const agentId = "worker-1";
+    const database = openOpenClawAgentDatabase({ agentId, env });
+    const detail = database.db
+      .prepare(
+        "EXPLAIN QUERY PLAN SELECT session_key FROM session_nodes WHERE current_session_id = ? LIMIT 2",
+      )
+      .all("session-1")
+      .map((row) => {
+        const rowDetail = (row as { detail?: unknown }).detail;
+        return typeof rowDetail === "string" ? rowDetail : "";
+      })
+      .join(" ");
+
+    expect(detail).toContain("idx_agent_session_nodes_current_session_id");
   });
 
   it("does not register a populated database during readonly health-style listing", async () => {

@@ -813,80 +813,98 @@ describe("runReplyAgent auto-compaction token update", () => {
     expect(scheduleFollowupDrain).toHaveBeenCalledTimes(1);
   });
 
-  it("records a settled fallback cancelled by its upstream signal as aborted", async () => {
-    const upstreamAbort = new AbortController();
-    const sessionKey = "upstream-cancelled-settled-fallback";
-    const sessionEntry = {
-      sessionId: "session-upstream-cancelled",
-      updatedAt: Date.now(),
-      totalTokens: 50_000,
-    };
-    const replyOperation = createReplyOperation({
-      sessionKey,
-      sessionId: sessionEntry.sessionId,
-      resetTriggered: false,
-      upstreamAbortSignal: upstreamAbort.signal,
-    });
-    let releaseFallback: () => void = () => undefined;
-    let markCandidateSettled: () => void = () => undefined;
-    const candidateSettled = new Promise<void>((resolve) => {
-      markCandidateSettled = resolve;
-    });
-    const fallbackRelease = new Promise<void>((resolve) => {
-      releaseFallback = resolve;
-    });
-    runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "late reply" }],
-      meta: { agentMeta: {} },
-    });
-    runWithModelFallbackMock.mockImplementationOnce(
-      async ({ provider, model, run }: RunWithModelFallbackParams) => {
-        const result = await run(provider, model);
-        markCandidateSettled();
-        await fallbackRelease;
-        return { result, provider, model };
-      },
-    );
-    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
-      storePath: "",
-      sessionEntry,
-    });
-    followupRun.run.sessionKey = sessionKey;
-
-    try {
-      const pending = runReplyAgent({
-        commandBody: "hello",
-        followupRun,
-        queueKey: sessionKey,
-        resolvedQueue,
-        shouldSteer: false,
-        shouldFollowup: false,
-        isActive: false,
-        typing,
-        sessionCtx,
-        sessionEntry,
-        sessionStore: { [sessionKey]: sessionEntry },
+  it.each([
+    {
+      label: "its upstream signal",
+      superseded: false,
+      expectedCode: "aborted_by_user" as const,
+    },
+    {
+      label: "a visible-turn supersession",
+      superseded: true,
+      expectedCode: "aborted_for_supersession" as const,
+    },
+  ])(
+    "records a settled fallback cancelled by $label as aborted",
+    async ({ superseded, expectedCode }) => {
+      const upstreamAbort = new AbortController();
+      const sessionKey = `${superseded ? "superseded" : "upstream-cancelled"}-settled-fallback`;
+      const sessionEntry = {
+        sessionId: "session-upstream-cancelled",
+        updatedAt: Date.now(),
+        totalTokens: 50_000,
+      };
+      const replyOperation = createReplyOperation({
         sessionKey,
-        defaultModel: "anthropic/claude-opus-4-6",
-        agentCfgContextTokens: 200_000,
-        resolvedVerboseLevel: "off",
-        isNewSession: false,
-        blockStreamingEnabled: false,
-        resolvedBlockStreamingBreak: "message_end",
-        shouldInjectGroupIntro: false,
-        typingMode: "instant",
-        replyOperation,
+        sessionId: sessionEntry.sessionId,
+        resetTriggered: false,
+        upstreamAbortSignal: upstreamAbort.signal,
       });
-      await candidateSettled;
-      upstreamAbort.abort(new Error("caller cancelled"));
-      releaseFallback();
+      let releaseFallback: () => void = () => undefined;
+      let markCandidateSettled: () => void = () => undefined;
+      const candidateSettled = new Promise<void>((resolve) => {
+        markCandidateSettled = resolve;
+      });
+      const fallbackRelease = new Promise<void>((resolve) => {
+        releaseFallback = resolve;
+      });
+      runEmbeddedAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "late reply" }],
+        meta: { agentMeta: {} },
+      });
+      runWithModelFallbackMock.mockImplementationOnce(
+        async ({ provider, model, run }: RunWithModelFallbackParams) => {
+          const result = await run(provider, model);
+          markCandidateSettled();
+          await fallbackRelease;
+          return { result, provider, model };
+        },
+      );
+      const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+        storePath: "",
+        sessionEntry,
+      });
+      followupRun.run.sessionKey = sessionKey;
 
-      expectReplyText(await pending, SILENT_REPLY_TOKEN);
-      expect(replyOperation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
-    } finally {
-      replyOperation.complete();
-    }
-  });
+      try {
+        const pending = runReplyAgent({
+          commandBody: "hello",
+          followupRun,
+          queueKey: sessionKey,
+          resolvedQueue,
+          shouldSteer: false,
+          shouldFollowup: false,
+          isActive: false,
+          typing,
+          sessionCtx,
+          sessionEntry,
+          sessionStore: { [sessionKey]: sessionEntry },
+          sessionKey,
+          defaultModel: "anthropic/claude-opus-4-6",
+          agentCfgContextTokens: 200_000,
+          resolvedVerboseLevel: "off",
+          isNewSession: false,
+          blockStreamingEnabled: false,
+          resolvedBlockStreamingBreak: "message_end",
+          shouldInjectGroupIntro: false,
+          typingMode: "instant",
+          replyOperation,
+        });
+        await candidateSettled;
+        if (superseded) {
+          replyOperation.supersede();
+        } else {
+          upstreamAbort.abort(new Error("caller cancelled"));
+        }
+        releaseFallback();
+
+        expectReplyText(await pending, SILENT_REPLY_TOKEN);
+        expect(replyOperation.result).toEqual({ kind: "aborted", code: expectedCode });
+      } finally {
+        replyOperation.complete();
+      }
+    },
+  );
 
   it("reports live diagnostic context from promptTokens, not provider usage totals", async () => {
     const { sessionKey, stored, usageEvent } = await runBaseReplyWithAgentMeta({

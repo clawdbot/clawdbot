@@ -2169,6 +2169,9 @@ importers:
         specifier: 1.3.6
         version: 1.3.6
     devDependencies:
+      '@openclaw/model-catalog-core':
+        specifier: workspace:*
+        version: link:../model-catalog-core
       '@openclaw/normalization-core':
         specifier: workspace:*
         version: link:../normalization-core

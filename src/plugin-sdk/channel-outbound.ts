@@ -123,6 +123,30 @@ export {
   createChannelProgressDraftCompositor,
   createChannelProgressReceiptTracker,
 } from "../channels/progress-draft-compositor.js";
+import {
+  resolveChannelProgressDraftConfig as readProgressDraftConfig,
+  type StreamingCompatEntry as ProgressDraftCompatEntry,
+} from "../channels/streaming.js";
+
+/** @deprecated The streaming.progress.render key was retired (#122927). */
+export type ChannelProgressDraftRenderMode = "rich" | "text";
+
+/**
+ * @deprecated Load-only bridge: the published Slack channel package
+ * (2026.7.2-beta.7 and earlier) imports this at module top level, so removing
+ * it makes the installed plugin fail to load after a core upgrade. The config
+ * key it read is retired and doctor strips it, so this resolves the same
+ * "text"/"rich" answer pre-doctor configs produced and the default otherwise.
+ * Remove once managed releases have replaced the old npm latest/extended-stable
+ * packages and their upgrade window has closed.
+ */
+export function resolveChannelProgressDraftRender(
+  entry: ProgressDraftCompatEntry | null | undefined,
+  defaultValue: ChannelProgressDraftRenderMode = "text",
+): ChannelProgressDraftRenderMode {
+  const configured = (readProgressDraftConfig(entry) as { render?: unknown }).render;
+  return configured === "rich" || configured === "text" ? configured : defaultValue;
+}
 export type {
   ChannelProgressDraftCompositorLine,
   ChannelProgressDraftCompositorSnapshot,

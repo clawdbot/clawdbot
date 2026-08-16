@@ -1,6 +1,6 @@
 import process from "node:process";
 import { resolveAcpSessionAvailability } from "openclaw/plugin-sdk/acp-runtime";
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   decodeNodePtyResumeParams,
@@ -12,6 +12,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type {
   SessionCatalogHost,
+  SessionCatalogEntrySnapshot,
   SessionCatalogProvider,
   SessionCatalogSession,
   SessionCatalogTerminalPlan,
@@ -147,6 +148,21 @@ function setCatalogCapabilities(
   return page;
 }
 
+function projectPiAdoptedSessions(
+  page: PiSessionPage,
+  adopted: ReadonlyMap<string, string>,
+): PiSessionPage {
+  return {
+    ...page,
+    sessions: page.sessions.map((session) => {
+      const sessionKey = adopted.get(
+        sessionCatalogAdoptedSourceKey(LOCAL_HOST_ID, session.threadId),
+      );
+      return sessionKey ? { ...session, sessionKey } : session;
+    }),
+  };
+}
+
 async function listPiNodeHost(
   runtime: PluginRuntime,
   query: Parameters<SessionCatalogProvider["list"]>[0],
@@ -246,6 +262,9 @@ async function listPiHosts(
 ): Promise<SessionCatalogHost[]> {
   const runtime = api.runtime;
   const canContinue = resolvePiContinuationAvailability(api).available;
+  const adopted = query.sessionEntries
+    ? listAdoptedPiSessions(api, query.agentId, query.sessionEntries)
+    : new Map<string, string>();
   const requested = query.hostIds ? new Set(query.hostIds) : undefined;
   const hosts: SessionCatalogHost[] = [];
   const wantsLocal = !requested || requested.has(LOCAL_HOST_ID);
@@ -266,15 +285,18 @@ async function listPiHosts(
           ...(query.search ? { searchTerm: query.search } : {}),
           cursor: query.cursors?.[LOCAL_HOST_ID],
         }).then((page) =>
-          setCatalogCapabilities(page, {
-            canContinue,
-            canOpenTerminal:
-              resolveNodeHostExecutable("pi", {
-                env: process.env,
-                pathEnv: process.env.PATH ?? "",
-                strategy: "fallback",
-              }) !== undefined,
-          }),
+          projectPiAdoptedSessions(
+            setCatalogCapabilities(page, {
+              canContinue,
+              canOpenTerminal:
+                resolveNodeHostExecutable("pi", {
+                  env: process.env,
+                  pathEnv: process.env.PATH ?? "",
+                  strategy: "fallback",
+                }) !== undefined,
+            }),
+            adopted,
+          ),
         )),
       });
     } catch {
@@ -338,11 +360,17 @@ function resolvePiContinuationAvailability(
   return executable ? { available: true } : { available: false, message: "Pi CLI is unavailable" };
 }
 
-function listAdoptedPiSessions(api: OpenClawPluginApi): Map<string, string> {
+function listAdoptedPiSessions(
+  api: OpenClawPluginApi,
+  agentId?: string,
+  sessionEntries?: SessionCatalogEntrySnapshot,
+): Map<string, string> {
   return listAdoptedSessionCatalogSessions({
+    ...(agentId ? { agentId } : {}),
     config: currentPiCatalogConfig(api),
     pluginId: api.id,
     runtime: api.runtime,
+    sessionEntries,
     sourceFromEntry: (entry) => {
       const acpx = isRecord(entry.pluginExtensions?.acpx) ? entry.pluginExtensions.acpx : undefined;
       const marker = acpx && isRecord(acpx.piSessionCatalog) ? acpx.piSessionCatalog : undefined;
@@ -355,6 +383,7 @@ function listAdoptedPiSessions(api: OpenClawPluginApi): Map<string, string> {
 
 async function continuePiSession(
   api: OpenClawPluginApi,
+  agentId: string,
   hostId: string,
   threadId: string,
 ): Promise<Awaited<ReturnType<typeof linkContinuedPiSession>>> {
@@ -371,7 +400,7 @@ async function continuePiSession(
   const sourceKey = sessionCatalogAdoptedSourceKey(hostId, threadId);
   return await continueAdoption({
     sourceKey,
-    findExisting: () => listAdoptedPiSessions(api).get(sourceKey),
+    findExisting: () => listAdoptedPiSessions(api, agentId).get(sourceKey),
     create: async () => {
       const record = await requireLocalPiSession(threadId).catch(() => undefined);
       if (!record) {
@@ -391,7 +420,7 @@ async function continuePiSession(
       const created = await api.runtime.agent.session.createSessionEntry({
         cfg: config,
         key: sessionCatalogAdoptedSessionKey(PI_ADOPTED_SESSION_KEY_PREFIX, threadId),
-        agentId: resolveDefaultAgentId(config),
+        agentId,
         recoverMatchingInitialEntry: true,
         ...(record.name ? { label: record.name } : {}),
         ...(record.cwd ? { spawnedCwd: record.cwd } : {}),
@@ -409,6 +438,7 @@ async function continuePiSession(
             threadId,
             read: async ({ cursor, limit }) =>
               await readPiTranscript(api.runtime, {
+                agentId: entry.agentId,
                 hostId,
                 threadId,
                 limit,
@@ -606,7 +636,11 @@ export function createPiSessionCatalogRuntime(api: OpenClawPluginApi) {
     read: async (request) => await readPiTranscript(api.runtime, request),
     continueSession: async (request) => {
       assertPiLocalAccess(request.hostId, request.allowProcessHomeFallback);
-      return await continuePiSession(api, request.hostId, request.threadId);
+      const agentId = resolveSessionAgentIds({
+        config: api.config,
+        agentId: request.agentId,
+      }).sessionAgentId;
+      return await continuePiSession(api, agentId, request.hostId, request.threadId);
     },
     checkUpstreamActivity: (probes, policy) =>
       checkPiUpstreamActivity(

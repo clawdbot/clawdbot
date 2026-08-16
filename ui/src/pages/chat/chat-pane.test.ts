@@ -1,33 +1,30 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type {
-  SessionCatalogSession,
-  SessionCatalogTranscriptItem,
-  SessionsCatalogListResult,
-  SessionsCatalogReadResult,
-} from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
-import { TERMINAL_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
-import { buildCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { t } from "../../i18n/index.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { showToast } from "../../lib/toast.ts";
+import {
+  installDialogPolyfill,
+  waitForConfirmDialogActions,
+} from "../../test-helpers/modal-dialog.ts";
 import {
   createSessionContext,
   createTestChatPane,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
-import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";
 import { cacheChatSessionSnapshot, type ChatMessageCache } from "./session-message-cache.ts";
 import { openSlot } from "./sidebar-layout.ts";
+
+vi.mock("../../lib/toast.ts", () => ({ showToast: vi.fn() }));
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -113,6 +110,7 @@ describe("chat pane header state", () => {
       key: "agent:main:current",
       kind: "direct",
       updatedAt: 0,
+      hasActiveRun: true,
     } satisfies GatewaySessionRow;
 
     await pane.handleHeaderSessionAction({ kind: "fork" }, session);
@@ -120,9 +118,54 @@ describe("chat pane header state", () => {
     expect(create).toHaveBeenCalledWith({
       parentSessionKey: session.key,
       fork: true,
+      forkFrom: "last-completed",
       agentId: "main",
     });
     expect(onPaneSessionChange).toHaveBeenCalledWith("single", "agent:main:forked");
+  });
+
+  it("aborts a stale header delete confirm and shows a retry notice when the connection is replaced while it is open", async () => {
+    const restoreDialogPolyfill = installDialogPolyfill();
+    try {
+      const deleteOne = vi.fn(async () => ({ deleted: true }));
+      const sessions = {
+        delete: deleteOne,
+        refreshReplacement: vi.fn(async () => undefined),
+      } as unknown as SessionCapability;
+      const client = {} as GatewayBrowserClient;
+      const { pane } = createTestChatPane({ client, sessions });
+      const session = {
+        key: "agent:main:current",
+        kind: "direct",
+        updatedAt: 0,
+        label: "Current session",
+      } satisfies GatewaySessionRow;
+
+      const pending = pane.handleHeaderSessionAction({ kind: "delete" }, session);
+      await waitForConfirmDialogActions();
+      // Mirrors a reconnect landing while the header's own confirm dialog is
+      // open: the chat header builds this scope independently of
+      // SessionDataController, so it needs its own signal retired here too.
+      pane.applyGatewaySnapshot({
+        ...pane.context.gateway.snapshot,
+        phase: "reconnecting",
+        hello: null,
+      });
+      await pending;
+
+      expect(deleteOne).not.toHaveBeenCalled();
+      // The stale dialog must dismiss itself, not merely stop sending its request.
+      expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+      // The abort resolves the dialog to `false`, same as a user cancel, so the
+      // operator needs a distinct, visible outcome or their lost intent reads
+      // as a click that simply did nothing.
+      expect(showToast).toHaveBeenCalledWith({
+        message: t("sessionsView.deleteSessionStale", { session: "Current session" }),
+      });
+    } finally {
+      document.body.replaceChildren();
+      restoreDialogPolyfill();
+    }
   });
 
   it("commits a trimmed label and clears with null", async () => {
@@ -399,6 +442,43 @@ describe("chat pane header state", () => {
     await vi.waitFor(() => expect(state.chatError).toBe("No desktop available."));
     expect(state.lastError).toBe(state.chatError);
   });
+
+  it.each([
+    {
+      name: "leaving and returning before settlement",
+      retire: (pane: TestChatPane) => {
+        pane.presented = false;
+        pane.presented = true;
+      },
+    },
+    {
+      name: "replacing the Gateway generation",
+      retire: (pane: TestChatPane) => {
+        pane.connectionGeneration += 1;
+      },
+    },
+  ])("does not resurrect a reveal failure after $name", async ({ retire }) => {
+    const revealed = createDeferred<{ ok: false; error: string }>();
+    const request = vi.fn(() => revealed.promise);
+    const { pane, state } = createTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessions: {} as SessionCapability,
+    });
+    const session = {
+      key: "agent:main:current",
+      kind: "direct",
+      updatedAt: 0,
+    } satisfies GatewaySessionRow;
+
+    pane.handleHeaderMenuAction("reveal", session, "/src/openclaw", null);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    retire(pane);
+    revealed.resolve({ ok: false, error: "No desktop available." });
+    await vi.waitFor(() => expect(request).toHaveResolved());
+
+    expect(state.chatError).toBeNull();
+    expect(state.lastError).toBeNull();
+  });
 });
 
 describe("chat pane initialization", () => {
@@ -589,19 +669,24 @@ describe("chat pane keyboard shortcuts", () => {
     state.sidebarContent = canvasContent;
     state.sidebarLayout = openSlot({ columns: [] }, "detail");
 
-    expect(createSessionWorkspaceProps(state).collapsed).toBe(true);
+    const hasWorkspace = () =>
+      state.sidebarLayout.columns[0]?.panels.some((panel) => panel.slot === "workspace") === true;
+    expect(hasWorkspace()).toBe(false);
 
     const expandEvent = dispatchSidebarShortcut(pane);
 
     expect(expandEvent.defaultPrevented).toBe(true);
-    expect(createSessionWorkspaceProps(state).collapsed).toBe(false);
-    expect(state.sidebarLayout.columns[0]?.panels[0]?.slot).toBe("detail");
+    expect(hasWorkspace()).toBe(true);
+    expect(state.sidebarLayout.columns[0]?.panels.map((panel) => panel.slot)).toEqual([
+      "detail",
+      "workspace",
+    ]);
     expect(state.sidebarContent).toBe(canvasContent);
 
     const collapseEvent = dispatchSidebarShortcut(pane);
 
     expect(collapseEvent.defaultPrevented).toBe(true);
-    expect(createSessionWorkspaceProps(state).collapsed).toBe(true);
+    expect(hasWorkspace()).toBe(false);
     expect(state.sidebarLayout.columns[0]?.panels[0]?.slot).toBe("detail");
     expect(state.sidebarContent).toBe(canvasContent);
 
@@ -611,7 +696,31 @@ describe("chat pane keyboard shortcuts", () => {
     pane.active = false;
     const inactivePaneEvent = dispatchSidebarShortcut(pane);
     expect(inactivePaneEvent.defaultPrevented).toBe(false);
-    expect(createSessionWorkspaceProps(state).collapsed).toBe(true);
+    expect(hasWorkspace()).toBe(false);
+  });
+
+  it("toggles the terminal tab in the active pane", () => {
+    const { pane, state } = createTestChatPane({
+      client: {} as GatewayBrowserClient,
+      sessions: {} as SessionCapability,
+    });
+    pane.active = true;
+    state.terminalAvailable = true;
+    const press = () => {
+      const event = new KeyboardEvent("keydown", {
+        cancelable: true,
+        code: "Backquote",
+        ctrlKey: true,
+      });
+      pane.handleDocumentKeydown(event);
+      return event;
+    };
+
+    expect(press().defaultPrevented).toBe(true);
+    expect(state.sidebarLayout.columns[0]?.panels.map((panel) => panel.slot)).toEqual(["terminal"]);
+    expect(press().defaultPrevented).toBe(true);
+    expect(state.sidebarLayout.columns).toEqual([]);
+    expect(state.sidebarLayout.open).toBe(true);
   });
 });
 
@@ -695,262 +804,7 @@ describe("chat pane session creation lifecycle", () => {
   });
 });
 
-describe("chat pane catalog session lifecycle", () => {
-  it("shows the eligible catalog terminal action and dispatches its typed reference", () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
-    const key = {
-      catalogId: "codex",
-      hostId: "gateway:local",
-      threadId: "thread-101",
-    } satisfies CatalogSessionKey;
-    state.sessionKey = buildCatalogSessionKey(key);
-    state.terminalAvailable = true;
-    pane.catalogSession = {
-      threadId: key.threadId,
-      status: "idle",
-      archived: false,
-      canContinue: true,
-      canArchive: true,
-      canOpenTerminal: true,
-    };
-    const container = document.createElement("div");
-    render(
-      pane.renderPaneHeader(
-        createSessionWorkspaceProps(state),
-        createBackgroundTasksProps(state),
-        undefined,
-        true,
-        undefined,
-        false,
-      ),
-      container,
-    );
-    let detail: unknown;
-    const listener = (event: Event) => {
-      detail = (event as CustomEvent).detail;
-    };
-    window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, listener);
-    try {
-      (container.querySelector('[aria-label="Open in terminal"]') as HTMLElement).click();
-    } finally {
-      window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, listener);
-    }
-    expect(detail).toEqual({ open: true, catalog: key });
-  });
-
-  it("finds continuation metadata on a later catalog page", async () => {
-    const key = {
-      catalogId: "codex",
-      hostId: "gateway:local",
-      threadId: "thread-101",
-    } satisfies CatalogSessionKey;
-    const selectedSession: SessionCatalogSession = {
-      threadId: key.threadId,
-      status: "idle",
-      archived: false,
-      canContinue: true,
-      canArchive: true,
-    };
-    const firstPage: SessionsCatalogListResult = {
-      catalogs: [
-        {
-          id: key.catalogId,
-          label: "Codex",
-          capabilities: { continueSession: true, archive: true },
-          hosts: [
-            {
-              hostId: key.hostId,
-              label: "Gateway",
-              kind: "gateway",
-              connected: true,
-              sessions: [],
-              nextCursor: "page-2",
-            },
-          ],
-        },
-      ],
-    };
-    const secondPage: SessionsCatalogListResult = {
-      catalogs: [
-        {
-          ...firstPage.catalogs[0]!,
-          hosts: [{ ...firstPage.catalogs[0]!.hosts[0]!, sessions: [selectedSession] }],
-        },
-      ],
-    };
-    const transcript: SessionsCatalogReadResult = {
-      hostId: key.hostId,
-      threadId: key.threadId,
-      items: [],
-    };
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce(firstPage)
-      .mockResolvedValueOnce(secondPage)
-      .mockResolvedValueOnce(transcript);
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
-    pane.sessionKey = buildCatalogSessionKey(key);
-
-    await pane.loadCatalogSession(key, false);
-
-    expect(request).toHaveBeenNthCalledWith(2, "sessions.catalog.list", {
-      catalogId: key.catalogId,
-      hostIds: [key.hostId],
-      limitPerHost: 100,
-      cursors: { [key.hostId]: "page-2" },
-    });
-    expect(request).toHaveBeenNthCalledWith(3, "sessions.catalog.read", {
-      catalogId: key.catalogId,
-      hostId: key.hostId,
-      threadId: key.threadId,
-      limit: 50,
-    });
-    expect(pane.catalogSession).toEqual(selectedSession);
-  });
-
-  it.each([
-    {
-      name: "uses a raw command for an empty tool call",
-      item: { type: "toolCall", raw: { command: "git status --short" } },
-      expected: "Tool call\n\ngit status --short",
-    },
-    {
-      name: "uses aggregated output for an empty tool result",
-      item: { type: "toolResult", raw: { aggregatedOutput: "working tree clean" } },
-      expected: "Tool result\n\nworking tree clean",
-    },
-    {
-      name: "renders an empty reasoning item as its label alone",
-      item: { type: "reasoning" },
-      expected: "Thinking",
-    },
-  ])("$name", ({ item, expected }) => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
-
-    const message = pane.catalogItemMessage(item as SessionCatalogTranscriptItem) as {
-      content: Array<{ text: string }>;
-    };
-
-    expect(message.content[0]?.text).toBe(expected);
-    expect(message.content[0]?.text).not.toContain("Unsupported external session item");
-  });
-
-  it("clamps oversized aggregated tool output before rendering", () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
-
-    const message = pane.catalogItemMessage({
-      type: "toolResult",
-      raw: { aggregatedOutput: "x".repeat(5000) },
-    } as SessionCatalogTranscriptItem) as { content: Array<{ text: string }> };
-
-    // The 500-char preview cap keeps a single huge tool result from injecting
-    // megabytes into one chat message; the "Tool result\n\n" prefix adds a bit.
-    expect(message.content[0]?.text.length).toBeLessThan(600);
-    expect(message.content[0]?.text.startsWith("Tool result")).toBe(true);
-  });
-
-  it("skips an empty unknown catalog item", () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
-
-    expect(pane.catalogItemMessage({ type: "other" })).toBeNull();
-  });
-
-  it("preserves provider order when catalog items omit timestamps", () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
-
-    expect(
-      pane.catalogItemMessage({ id: "u1", type: "userMessage", text: "older question" }),
-    ).not.toHaveProperty("timestamp");
-  });
-
-  it("exhausts pagination when an older read does not advance the cursor", async () => {
-    const readPage: SessionsCatalogReadResult = {
-      hostId: "gateway:local",
-      threadId: "thread-1",
-      items: [{ id: "u1", type: "userMessage", text: "hi" }],
-      // Same cursor the request was made with: a stale provider that would loop.
-      nextCursor: "cursor-1",
-    };
-    const client = {
-      request: vi.fn(async () => readPage),
-    } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
-    const key = "catalog:claude:gateway%3Alocal:thread-1";
-    state.sessionKey = key;
-    pane.sessionKey = key;
-    pane.catalogCursor = "cursor-1";
-
-    const progressed = await pane.loadCatalogSession(
-      { catalogId: "claude", hostId: "gateway:local", threadId: "thread-1" },
-      true,
-    );
-
-    expect(progressed).toBe(false);
-    // Cursor cleared → hasOlderMessages() is false, so the observer will not refire.
-    expect(pane.catalogCursor).toBeUndefined();
-  });
-
-  it("keeps paging when an advancing older page renders nothing new", async () => {
-    const readPage: SessionsCatalogReadResult = {
-      hostId: "gateway:local",
-      threadId: "thread-1",
-      // A page of only unsupported/empty items renders nothing but still advances
-      // the cursor: older renderable history may sit behind it, so paging continues.
-      items: [{ id: "x1", type: "other" }],
-      nextCursor: "cursor-2",
-    };
-    const client = {
-      request: vi.fn(async () => readPage),
-    } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
-    const key = "catalog:claude:gateway%3Alocal:thread-1";
-    state.sessionKey = key;
-    pane.sessionKey = key;
-    pane.catalogCursor = "cursor-1";
-
-    const progressed = await pane.loadCatalogSession(
-      { catalogId: "claude", hostId: "gateway:local", threadId: "thread-1" },
-      true,
-    );
-
-    expect(progressed).toBe(true);
-    expect(pane.catalogCursor).toBe("cursor-2");
-  });
-
-  it("exhausts pagination when an older read cycles back to a visited cursor", async () => {
-    const readPage: SessionsCatalogReadResult = {
-      hostId: "gateway:local",
-      threadId: "thread-1",
-      items: [{ id: "x1", type: "other" }],
-      // Cursor points back to one already visited this session: a c1 -> c2 -> c1
-      // cycle that would otherwise loop forever on empty pages.
-      nextCursor: "cursor-1",
-    };
-    const client = {
-      request: vi.fn(async () => readPage),
-    } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
-    const key = "catalog:claude:gateway%3Alocal:thread-1";
-    state.sessionKey = key;
-    pane.sessionKey = key;
-    pane.catalogCursor = "cursor-2";
-    pane.olderCursorsSeen.add("cursor-1");
-
-    const progressed = await pane.loadCatalogSession(
-      { catalogId: "claude", hostId: "gateway:local", threadId: "thread-1" },
-      true,
-    );
-
-    expect(progressed).toBe(false);
-    expect(pane.catalogCursor).toBeUndefined();
-  });
-
+describe("chat pane history pagination intent", () => {
   it("re-arms a failed older-page load only after another user scroll", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });

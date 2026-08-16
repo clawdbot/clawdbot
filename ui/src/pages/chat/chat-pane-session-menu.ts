@@ -28,7 +28,6 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
   private headerSessionOperationsLoad: Promise<
     typeof import("../../components/session-organizer-operations.runtime.ts")
   > | null = null;
-
   protected async loadHeaderPlatform(
     client: GatewayBrowserClient,
     generation: number,
@@ -72,6 +71,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       this.publishHeaderError(t("sessionsView.actionRequiresConnection"));
       return;
     }
+    const owner = this.headerOutcomeOwner;
     const session = {
       key: row.key,
       sessionId: row.sessionId,
@@ -80,6 +80,8 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       pinned: row.pinned === true,
       archived: row.archived === true,
       active: true,
+      hasActiveRun: row.hasActiveRun ?? row.status === "running",
+      gatewayHasActiveRun: row.hasActiveRun,
     };
     try {
       const operations = await (this.headerSessionOperationsLoad ??=
@@ -87,10 +89,10 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       const host: SessionActionHost = {
         sessionData: {
           isSessionMutationScopeCurrent: (candidate) =>
-            this.isHeaderSessionActionScopeCurrent(candidate),
+            this.isHeaderSessionActionCurrent(candidate, owner),
           publishSessionMutationError: (candidate, error) => {
-            if (this.isHeaderSessionActionScopeCurrent(candidate)) {
-              this.publishHeaderError(error);
+            if (this.isHeaderSessionActionCurrent(candidate, owner)) {
+              this.publishHeaderError(error, owner);
             }
           },
           refreshSidebarSessions: async (agentId) => {
@@ -124,8 +126,8 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
           break;
       }
     } catch (error) {
-      if (this.isHeaderSessionActionScopeCurrent(scope)) {
-        this.publishHeaderError(error);
+      if (this.isHeaderSessionActionCurrent(scope, owner)) {
+        this.publishHeaderError(error, owner);
       }
     }
   }
@@ -216,13 +218,14 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       sessions: this.context.sessions,
       client,
       selectedAgentId: this.context.agentSelection.state.selectedId ?? "main",
+      signal: this.headerSessionMutationAbortController.signal,
     };
   }
 
-  private isHeaderSessionActionScopeCurrent(scope: SidebarSessionMutationScope): boolean {
+  private isHeaderSessionActionCurrent(scope: SidebarSessionMutationScope, owner: string): boolean {
     return (
+      this.ownsHeaderOutcome(owner) &&
       this.isConnected &&
-      this.connectionGeneration === scope.epoch &&
       this.context === scope.context &&
       this.context.gateway === scope.gateway &&
       this.context.sessions === scope.sessions &&
@@ -282,8 +285,9 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       this.publishHeaderError(access.reason);
       return;
     }
+    const owner = this.headerOutcomeOwner;
     void patchChatSessionLabel(state, this.context.sessions, key, label).catch((error: unknown) =>
-      this.publishHeaderError(error),
+      this.publishHeaderError(error, owner),
     );
   }
 
@@ -385,11 +389,15 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     const copiedValue =
       action === "copy-path" ? workspaceRoot : action === "copy-branch" ? branch : null;
     if (copiedValue) {
+      const owner = this.headerOutcomeOwner;
       void copy(copiedValue).then((copied) => {
+        if (!this.ownsHeaderOutcome(owner)) {
+          return;
+        }
         if (copied) {
           this.showHeaderCopied(action);
         } else {
-          this.publishHeaderError(t("common.copyFailed"));
+          this.publishHeaderError(t("common.copyFailed"), owner);
         }
       });
       return;
@@ -399,12 +407,12 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     }
   }
 
-  protected publishHeaderError(error: unknown): void {
-    if (!this.state) {
+  protected publishHeaderError(error: unknown, owner = this.headerOutcomeOwner): void {
+    if (!this.state || !this.ownsHeaderOutcome(owner)) {
       return;
     }
-    this.state.lastError = error instanceof Error ? error.message : String(error);
-    this.state.chatError = this.state.lastError;
+    this.state.chatError = this.state.lastError =
+      error instanceof Error ? error.message : String(error);
     this.state.requestUpdate?.();
   }
 
@@ -413,6 +421,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     if (!client) {
       return;
     }
+    const owner = this.headerOutcomeOwner;
     const agentId = parseAgentSessionKey(row.key)?.agentId;
     try {
       const result = await client.request<SessionsFilesRevealResult>("sessions.files.reveal", {
@@ -420,10 +429,11 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
         ...(agentId ? { agentId } : {}),
       });
       if (!result.ok) {
-        this.publishHeaderError(result.error ?? "Failed to reveal session workspace.");
+        const error = result.error ?? "Failed to reveal session workspace.";
+        this.publishHeaderError(error, owner);
       }
     } catch (error) {
-      this.publishHeaderError(error);
+      this.publishHeaderError(error, owner);
     }
   }
 }

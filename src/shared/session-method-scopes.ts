@@ -5,6 +5,7 @@ export type SessionMutationOperatorScope = "operator.write" | "operator.admin";
 
 const SESSIONS_PATCH_WRITE_SCOPE_MUTATIONS: ReadonlySet<string> = new Set([
   "label",
+  "icon",
   "category",
   "boardFace",
   "pinned",
@@ -12,10 +13,6 @@ const SESSIONS_PATCH_WRITE_SCOPE_MUTATIONS: ReadonlySet<string> = new Set([
   "unread",
   "model",
 ]);
-
-// Beta v4 clients may still send this ignored field to sessions.patch. It is
-// not a sessions.patchMany mutation and must not gain admin scope while retiring.
-const SESSIONS_PATCH_RETIRED_COMPATIBILITY_FIELDS: ReadonlySet<string> = new Set(["icon"]);
 
 const SESSIONS_PATCH_WRITE_SCOPE_ENVELOPE_FIELDS: ReadonlySet<string> = new Set([
   "key",
@@ -28,6 +25,7 @@ const SESSIONS_DELETE_WRITE_SCOPE_FIELDS: ReadonlySet<string> = new Set([
   "key",
   "agentId",
   "deleteTranscript",
+  "expectedSessionId",
   "archivedOnly",
 ]);
 
@@ -40,8 +38,7 @@ function resolveSessionsPatchRequiredScope(params: unknown): SessionMutationOper
   return Object.keys(params).every(
     (key) =>
       SESSIONS_PATCH_WRITE_SCOPE_ENVELOPE_FIELDS.has(key) ||
-      SESSIONS_PATCH_WRITE_SCOPE_MUTATIONS.has(key) ||
-      SESSIONS_PATCH_RETIRED_COMPATIBILITY_FIELDS.has(key),
+      SESSIONS_PATCH_WRITE_SCOPE_MUTATIONS.has(key),
   )
     ? "operator.write"
     : "operator.admin";

@@ -569,7 +569,6 @@ describe("plugin registry runtime config scope", () => {
     ) as unknown as PluginRuntime["agent"]["runEmbeddedAgent"];
     Object.defineProperties(runtime.agent, {
       runEmbeddedAgent: { configurable: true, value: runEmbeddedAgent },
-      runEmbeddedPiAgent: { configurable: true, value: runEmbeddedAgent },
     });
     const gatewayRequest = vi.fn(async () => ({ ok: true }));
     runtime.gateway = {

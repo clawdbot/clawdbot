@@ -18,7 +18,8 @@ async function loadModelSetupRouteData(
   const firstRun = new URLSearchParams(location.search).get("firstRun") === "1";
   const snapshot = context.gateway.snapshot;
   const client = snapshot.phase === "connected" ? snapshot.client : null;
-  const connection = { client, hello: snapshot.hello };
+  const agentId = context.agentSelection.state.selectedId;
+  const connection = { client, hello: snapshot.hello, agentId };
   if (
     !client ||
     !hasOperatorAdminAccess(snapshot.hello?.auth ?? null) ||
@@ -32,7 +33,10 @@ async function loadModelSetupRouteData(
   }
   let state: ModelSetupRouteData["state"];
   try {
-    state = { phase: "ready", result: await detectModelSetup(client) };
+    state = {
+      phase: "ready",
+      result: await detectModelSetup(client, agentId ?? undefined),
+    };
   } catch (error) {
     const message =
       error instanceof Error && error.message.trim()
@@ -45,7 +49,8 @@ async function loadModelSetupRouteData(
   if (
     current.phase === "connected" &&
     current.client === connection.client &&
-    current.hello === connection.hello
+    current.hello === connection.hello &&
+    context.agentSelection.state.selectedId === connection.agentId
   ) {
     return { state, connection, firstRun };
   }

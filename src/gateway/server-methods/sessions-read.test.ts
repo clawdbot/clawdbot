@@ -100,6 +100,20 @@ test("agents.list reads published model facts without starting provider discover
   expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
 });
 
+test("agents.list returns the roster when optional prepared model facts are unavailable", async () => {
+  await setAgentsConfig({ ownership: "explicit", entries: { ops: {}, research: {} } });
+  const readPreparedGatewayModelCatalog = vi.fn(async () => {
+    throw new Error("prepared model catalog requires an explicit owner");
+  });
+
+  await expect(listAgentIdsViaRpc(false, { readPreparedGatewayModelCatalog })).resolves.toEqual([
+    "ops",
+    "research",
+  ]);
+
+  expect(readPreparedGatewayModelCatalog).toHaveBeenCalledOnce();
+});
+
 beforeEach(async () => {
   testState.agentConfig = undefined;
   testState.sessionStorePath = undefined;

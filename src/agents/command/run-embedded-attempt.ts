@@ -399,16 +399,16 @@ export async function runEmbeddedAgentAttempt(params: {
             })
           ) {
             attemptedThinkingCatalogHydration = true;
-            const { loadPreparedModelCatalogSnapshot } =
+            const { loadProviderScopedThinkingCatalog } =
               await import("../model-catalog.runtime.js");
             const runtimeCatalog = normalizeThinkingCatalogProviders(
-              (
-                await loadPreparedModelCatalogSnapshot({
-                  config: cfg,
-                  agentId: sessionAgentId,
-                  workspaceDir,
-                })
-              ).entries,
+              await loadProviderScopedThinkingCatalog({
+                config: cfg,
+                provider: providerOverride,
+                model: modelOverride,
+                agentId: sessionAgentId,
+                workspaceDir,
+              }),
             );
             const allowedRuntimeCatalog = createModelVisibilityPolicy({
               cfg,

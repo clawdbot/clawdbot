@@ -481,11 +481,19 @@ function hasStaleAgentRunLifecycleFailure(err: unknown): boolean {
   );
 }
 
-function hasGatewayDrainingFailure(err: unknown): boolean {
+function errorGraphHasName(err: unknown, name: string): boolean {
   return collectErrorGraphCandidates(err, (candidate) => {
     const errors = candidate.errors;
     return [candidate.error, candidate.cause, ...(Array.isArray(errors) ? errors : [])];
-  }).some((candidate) => readErrorName(candidate) === "GatewayDrainingError");
+  }).some((candidate) => readErrorName(candidate) === name);
+}
+
+function hasGatewayDrainingFailure(err: unknown): boolean {
+  return errorGraphHasName(err, "GatewayDrainingError");
+}
+
+function hasWorkerRunnerUnavailableFailure(err: unknown): boolean {
+  return errorGraphHasName(err, "WorkerRunnerUnavailableError");
 }
 
 function hasDirectProviderFailureIdentity(err: unknown): boolean {
@@ -883,7 +891,7 @@ export function resolveModelFallbackError(
   }
   // Gateway admission can fail before any provider turn starts. Preserve that
   // identity through wrappers and aggregates so fallback cannot blame a model.
-  if (hasGatewayDrainingFailure(err)) {
+  if (hasGatewayDrainingFailure(err) || hasWorkerRunnerUnavailableFailure(err)) {
     return { kind: "coordination", error: err };
   }
   const staleLifecycleFailure = hasStaleAgentRunLifecycleFailure(err);

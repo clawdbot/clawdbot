@@ -14,13 +14,15 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   writeNpmBeforePolicyFixture,
   writeNpmFreshnessConflictFixture,
 } from "./install-npm-fixtures.js";
 
 const SCRIPT_PATH = "scripts/install-cli.sh";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function runInstallCliShell(script: string, env: NodeJS.ProcessEnv = {}) {
   return spawnSync("/bin/bash", ["-c", script], {
@@ -476,6 +478,73 @@ describe("install-cli.sh", () => {
       rmSync(tmp, { force: true, recursive: true });
     }
   });
+
+  it.each([
+    { args: "--json", mode: "JSON" },
+    { args: "", mode: "human" },
+  ])(
+    "rejects a package without a runnable CLI in $mode mode before service refresh",
+    ({ args }) => {
+      const tmp = tempDirs.make("openclaw-install-cli-invalid-package-");
+      const prefix = join(tmp, "prefix");
+      const refreshLog = join(tmp, "gateway-refresh.log");
+
+      const result = runInstallCliShell(
+        [
+          "set -euo pipefail",
+          `cd ${JSON.stringify(process.cwd())}`,
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          "install_node() { :; }",
+          "ensure_git() { :; }",
+          'npm_bin() { printf "/usr/bin/true\\n"; }',
+          `refresh_gateway_service_if_loaded() { touch ${JSON.stringify(refreshLog)}; }`,
+          `main ${args} --prefix ${JSON.stringify(prefix)} --version 0.0.0`,
+        ].join("\n"),
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain("Installed OpenClaw CLI did not return a version");
+      expect(result.stdout).not.toContain('"event":"done"');
+      expect(result.stdout).not.toContain("OpenClaw installed.");
+      expect(existsSync(refreshLog)).toBe(false);
+    },
+  );
+
+  it.each([
+    { args: "--json", mode: "JSON" },
+    { args: "", mode: "human" },
+  ])(
+    "rejects a version command that prints output and fails in $mode mode before service refresh",
+    ({ args }) => {
+      const tmp = tempDirs.make("openclaw-install-cli-failed-version-");
+      const prefix = join(tmp, "prefix");
+      const bin = join(prefix, "bin");
+      const openclaw = join(bin, "openclaw");
+      const refreshLog = join(tmp, "gateway-refresh.log");
+      mkdirSync(bin, { recursive: true });
+      writeFileSync(openclaw, '#!/bin/bash\nprintf "OpenClaw 2026.8.1\\n"\nexit 1\n');
+      chmodSync(openclaw, 0o755);
+
+      const result = runInstallCliShell(
+        [
+          "set -euo pipefail",
+          `cd ${JSON.stringify(process.cwd())}`,
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          "install_node() { :; }",
+          "ensure_git() { :; }",
+          "install_openclaw() { :; }",
+          `refresh_gateway_service_if_loaded() { touch ${JSON.stringify(refreshLog)}; }`,
+          `main ${args} --prefix ${JSON.stringify(prefix)} --version 0.0.0`,
+        ].join("\n"),
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain("Installed OpenClaw CLI did not return a version");
+      expect(result.stdout).not.toContain('"event":"done"');
+      expect(result.stdout).not.toContain("OpenClaw installed.");
+      expect(existsSync(refreshLog)).toBe(false);
+    },
+  );
 
   it("keeps HOME for default prefix while OPENCLAW_HOME controls git checkout paths", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-home-"));

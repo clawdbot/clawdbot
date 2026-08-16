@@ -11,6 +11,7 @@ type SessionMenuData = {
   unread: boolean;
   archived: boolean;
   category: string | null;
+  icon: string | null;
   categoryClearReturnsToGroups: boolean;
 };
 type SessionMenuElement = HTMLElement & {
@@ -44,6 +45,7 @@ async function mountMenu(
     onAction?: (action: SessionMenuAction) => void;
     onClose?: () => void;
     actionDisabledReasons?: Partial<Record<SessionMenuActionKind, string>>;
+    forkFromLastCompleted?: boolean;
   } = {},
 ): Promise<SessionMenuElement> {
   const container = document.createElement("div");
@@ -55,6 +57,7 @@ async function mountMenu(
     unread: false,
     archived: false,
     category: null,
+    icon: null,
     categoryClearReturnsToGroups: false,
     ...options.session,
   };
@@ -68,6 +71,7 @@ async function mountMenu(
       .disabled=${false}
       .actionDisabledReasons=${options.actionDisabledReasons ?? {}}
       .forkDisabled=${false}
+      .forkFromLastCompleted=${options.forkFromLastCompleted ?? false}
       .archiveAllowed=${options.archiveAllowed ?? true}
       .deleteAllowed=${options.deleteAllowed ??
       (session.archived || (options.archiveAllowed ?? true))}
@@ -112,6 +116,10 @@ function menuItem(menu: ParentNode, label: string): SessionMenuItem {
   return item;
 }
 
+function iconChoices(menu: ParentNode): HTMLButtonElement[] {
+  return Array.from(menu.querySelectorAll<HTMLButtonElement>(".session-menu__icon-choice"));
+}
+
 describe("session menu", () => {
   it("disables only denied mutation actions and ignores forced selection", async () => {
     const onAction = vi.fn<(action: SessionMenuAction) => void>();
@@ -151,12 +159,19 @@ describe("session menu", () => {
       "Pin session",
       "Mark as unread",
       "Rename…",
+      "Set icon",
       "Fork",
       "Add to Workboard",
       "Move to group",
       "Archive session",
       "Delete…",
     ]);
+  });
+
+  it("names the stable fork boundary for an active session", async () => {
+    const menu = await mountMenu({ forkFromLastCompleted: true });
+
+    expect(menuItemLabels(menu)).toContain("Fork from last completed message");
   });
 
   it("renders only batch actions with counts for a multi-selection", async () => {
@@ -279,6 +294,72 @@ describe("session menu", () => {
 
     menuItem(menu, "New group…").click();
     expect(onAction).toHaveBeenCalledWith({ kind: "new-group" });
+  });
+
+  it("renders the icon grid, marks the current icon, and dispatches set and remove", async () => {
+    const onAction = vi.fn<(action: SessionMenuAction) => void>();
+    const menu = await mountMenu({ session: { icon: "🦞" }, onAction });
+    const submenu = menuItem(menu, "Set icon");
+    (submenu as SessionMenuItem & { submenuOpen: boolean }).submenuOpen = true;
+
+    const choices = iconChoices(submenu);
+    expect(submenu.querySelector(".session-menu__icon-grid")?.getAttribute("role")).toBe("group");
+    expect(choices.map((choice) => choice.textContent?.trim())).toEqual([
+      "🦞",
+      "🚀",
+      "🐛",
+      "✅",
+      "🔥",
+      "📦",
+      "🧪",
+      "📝",
+      "🔍",
+      "⚡",
+      "🎯",
+      "⭐",
+    ]);
+    const current = choices[0];
+    if (!current) {
+      throw new Error("Expected the first icon choice");
+    }
+    // Click/Enter-only activation: pressed-state action grid, not radio semantics,
+    // so arrow keys may move focus without changing the persisted selection.
+    expect(current.getAttribute("role")).toBeNull();
+    expect(current.getAttribute("aria-pressed")).toBe("true");
+    expect(choices.filter((choice) => choice.tabIndex === 0)).toEqual([current]);
+
+    choices[1]?.click();
+    expect(onAction).toHaveBeenCalledWith({ kind: "set-icon", icon: "🚀" });
+    const remove = submenu.querySelector<HTMLButtonElement>(".session-menu__icon-remove");
+    expect(remove?.textContent?.trim()).toBe("Remove icon");
+    remove?.click();
+    expect(onAction).toHaveBeenCalledWith({ kind: "set-icon", icon: null });
+  });
+
+  it("only renders Remove icon for a session with an icon", async () => {
+    const menu = await mountMenu();
+    const submenu = menuItem(menu, "Set icon");
+
+    expect(iconChoices(submenu)).toHaveLength(12);
+    expect(submenu.querySelector(".session-menu__icon-separator")).toBeNull();
+    expect(submenu.querySelector(".session-menu__icon-remove")).toBeNull();
+  });
+
+  it("moves icon-grid focus by cell and row with arrow keys", async () => {
+    const menu = await mountMenu({ session: { icon: "🚀" } });
+    const submenu = menuItem(menu, "Set icon");
+    const choices = iconChoices(submenu);
+    choices[1]?.focus();
+
+    choices[1]?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }),
+    );
+    expect(document.activeElement).toBe(choices[2]);
+    choices[2]?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }),
+    );
+    expect(document.activeElement).toBe(choices[8]);
+    expect(choices.filter((choice) => choice.tabIndex === 0)).toEqual([choices[8]]);
   });
 
   it("omits Remove from group when the session has no category", async () => {

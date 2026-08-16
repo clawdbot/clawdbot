@@ -21,6 +21,7 @@ import {
   listApprovedPairedDeviceRoles,
   removePairedDeviceRole,
 } from "../../infra/device-pairing.js";
+import { reconcileRevokedDeviceWorker } from "../device-worker-revocation.js";
 import {
   resolveNodePairingCommandAllowlist,
   normalizeDeclaredNodeCommands,
@@ -143,7 +144,11 @@ async function removePairedDeviceBackedNode(params: {
   client: GatewayClient | null;
   context: Pick<
     GatewayRequestContext,
-    "disconnectClientsForDevice" | "invalidateClientsForDevice" | "logGateway"
+    | "disconnectClientsForDevice"
+    | "invalidateClientsForDevice"
+    | "logGateway"
+    | "workerEnvironmentService"
+    | "workerPlacementDispatchService"
   >;
 }): Promise<
   | {
@@ -208,6 +213,7 @@ async function removePairedDeviceBackedNode(params: {
     role: "node",
     reason: "device-pair-removed",
   });
+  await reconcileRevokedDeviceWorker(params.context, removed.deviceId);
   return {
     status: "removed",
     nodeId: removed.deviceId,

@@ -1,3 +1,6 @@
+import path from "node:path";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+
 const POSIX_WORKER_ENV_KEYS = new Set([
   "PATH",
   "HOME",
@@ -47,5 +50,15 @@ export function snapshotNodeWorkerEnv(source: NodeJS.ProcessEnv): NodeJS.Process
     }
     snapshot[key] = value;
   }
+  if (source.NODE_DISABLE_COMPILE_CACHE === undefined) {
+    snapshot.NODE_COMPILE_CACHE =
+      source.NODE_COMPILE_CACHE?.trim() ||
+      path.join(resolvePreferredOpenClawTmpDir(), "node-worker-compile-cache");
+  } else {
+    snapshot.NODE_DISABLE_COMPILE_CACHE = "1";
+  }
+  // The supervised start gate is carried by Node IPC. Launcher respawns do not
+  // inherit that channel, so workers must stay in the owned child process.
+  snapshot.OPENCLAW_NO_RESPAWN = "1";
   return snapshot;
 }

@@ -1463,36 +1463,5 @@ ${channelPluginSource({
       undefined,
     ]);
   });
-
-  it("warns when plugins register deprecated subagent_spawning typed hooks", () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "legacy-subagent-spawning-hook",
-      filename: "legacy-subagent-spawning-hook.cjs",
-      body: `module.exports = { id: "legacy-subagent-spawning-hook", register(api) {
-    api.on("subagent_spawning", () => ({ status: "ok" }));
-  } };`,
-    });
-
-    const registry = loadRegistryFromSinglePlugin({
-      plugin,
-      pluginConfig: {
-        allow: ["legacy-subagent-spawning-hook"],
-      },
-    });
-
-    expect(
-      registry.plugins.find((entry) => entry.id === "legacy-subagent-spawning-hook")?.status,
-    ).toBe("loaded");
-    expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual(["subagent_spawning"]);
-    expect(
-      registry.diagnostics.some(
-        (diag) =>
-          diag.pluginId === "legacy-subagent-spawning-hook" &&
-          diag.message ===
-            'typed hook "subagent_spawning" is deprecated (legacy-subagent-spawning-hook); Core prepares thread-bound subagent bindings through channel session-binding adapters before `subagent_spawned` fires. Use `subagent_spawned` for observation; core session bindings for routing. This compatibility hook will be removed after 2026-08-30.',
-      ),
-    ).toBe(true);
-  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -175,7 +175,6 @@ export function createHarness(
   const tunnelHandle = (ownerEpoch: number): WorkerTunnelHandle => ({
     environmentId: ready.environmentId,
     ownerEpoch,
-    connectionEndpoint: { kind: "unix", socketPath: "/worker/gateway.sock" },
     launchTurn: vi.fn(),
     quiesceWorkspace: vi.fn(async () => {
       log.push("workspace:quiesce");
@@ -405,6 +404,9 @@ export function createHarness(
     },
     markEnvironmentOwnerEpoch: (ownerEpoch: number) => {
       currentEnvironment = { ...attached, ownerEpoch };
+    },
+    markEnvironmentProviderId: (providerId: string) => {
+      currentEnvironment = { ...attached, providerId };
     },
     markEnvironmentAttachments: (attachedSessionIds: string[]) => {
       currentEnvironment = { ...attached, attachedSessionIds };

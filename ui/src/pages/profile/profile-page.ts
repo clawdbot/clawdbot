@@ -14,7 +14,7 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
-import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
+import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { resolveCurrentSelfUser, userProfileAvatarUrl } from "../../app/user-profile.ts";
 import { icons } from "../../components/icons.ts";
@@ -61,7 +61,7 @@ export class ProfilePage extends OpenClawLightDomElement {
 
   private client: GatewayBrowserClient | null = null;
   private connected = false;
-  private heroAvatarAuthToken: string | null = null;
+  private heroAvatarAuthCandidates: string[] = [];
   private heroAvatarAuthReady = false;
   private readonly heroAvatarLoader = new AuthenticatedAvatarRouteLoader(() => {
     if (this.isConnected) {
@@ -88,7 +88,7 @@ export class ProfilePage extends OpenClawLightDomElement {
     this.subscriptions = [];
     this.identityRequestId += 1;
     this.heroAvatarLoader.reset();
-    this.heroAvatarAuthToken = null;
+    this.heroAvatarAuthCandidates = [];
     this.heroAvatarAuthReady = false;
     this.client = null;
     this.connected = false;
@@ -96,13 +96,17 @@ export class ProfilePage extends OpenClawLightDomElement {
   }
 
   private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
-    const nextHeroAvatarAuthToken = resolveControlUiAuthToken({
+    // The /api/users avatar route only accepts shared secrets; a single
+    // device-token candidate would 401 forever. Offer the full ordered list.
+    const nextHeroAvatarAuthCandidates = resolveControlUiAuthCandidates({
       hello: snapshot.hello,
       settings: { token: this.context.gateway.connection.token },
       password: this.context.gateway.connection.password,
     });
-    if (nextHeroAvatarAuthToken !== this.heroAvatarAuthToken) {
-      this.heroAvatarAuthToken = nextHeroAvatarAuthToken;
+    if (
+      nextHeroAvatarAuthCandidates.join("\u0000") !== this.heroAvatarAuthCandidates.join("\u0000")
+    ) {
+      this.heroAvatarAuthCandidates = nextHeroAvatarAuthCandidates;
     }
     this.heroAvatarAuthReady = Boolean(
       snapshot.hello ||
@@ -359,10 +363,7 @@ export class ProfilePage extends OpenClawLightDomElement {
   private renderAvatar(avatarUrl: string | null, textAvatar: string | null, name: string) {
     const imageUrl = avatarUrl?.startsWith("/")
       ? this.heroAvatarAuthReady
-        ? this.heroAvatarLoader.resolve(
-            avatarUrl,
-            this.heroAvatarAuthToken ? [this.heroAvatarAuthToken] : [],
-          )
+        ? this.heroAvatarLoader.resolve(avatarUrl, this.heroAvatarAuthCandidates)
         : null
       : avatarUrl;
     if (avatarUrl && avatarUrl !== this.failedHeroAvatarUrl) {

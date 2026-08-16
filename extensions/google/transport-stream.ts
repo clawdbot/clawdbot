@@ -1510,7 +1510,9 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
             for (const part of candidate.content.parts) {
               const hasThoughtSignature =
                 typeof part.thoughtSignature === "string" && part.thoughtSignature.length > 0;
-              const hasText = typeof part.text === "string";
+              const rawText = part.text;
+              const hasText = typeof rawText === "string";
+              const partText = typeof rawText === "string" ? rawText : "";
               if (hasText || (hasThoughtSignature && !part.functionCall)) {
                 if (hasThoughtSignature && !hasText && part.thought !== true) {
                   const latestBlock = output.content[output.content.length - 1];
@@ -1553,8 +1555,7 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
                 }
                 const activeBlock = output.content[currentBlockIndex];
                 if (activeBlock?.type === "thinking") {
-                  const delta = hasText ? part.text : "";
-                  activeBlock.thinking += delta;
+                  activeBlock.thinking += partText;
                   activeBlock.thinkingSignature = retainThoughtSignature(
                     activeBlock.thinkingSignature,
                     part.thoughtSignature,
@@ -1562,11 +1563,11 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
                   stream.push({
                     type: "thinking_delta",
                     contentIndex: currentBlockIndex,
-                    delta,
+                    delta: partText,
                     partial: output as never,
                   });
                 } else if (activeBlock?.type === "text") {
-                  activeBlock.text += part.text;
+                  activeBlock.text += partText;
                   activeBlock.textSignature = retainThoughtSignature(
                     activeBlock.textSignature,
                     part.thoughtSignature,
@@ -1574,7 +1575,7 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
                   stream.push({
                     type: "text_delta",
                     contentIndex: currentBlockIndex,
-                    delta: part.text,
+                    delta: partText,
                     partial: output as never,
                   });
                 }

@@ -5,6 +5,7 @@ import {
   type GatewayClientRequestOptions,
   type GatewayReconnectPausedInfo,
 } from "../gateway/client.js";
+import type { ComputerUseCapabilityDescriptor } from "../plugins/computer-use-contract.js";
 import type { NodeHostGatewayConfig } from "./config.js";
 
 type GatewayCandidateEvent = Parameters<NonNullable<GatewayClientOptions["onEvent"]>>[0];
@@ -58,7 +59,9 @@ export function createNodeHostGatewayCandidateConnection(params: GatewayCandidat
   let currentCandidateIndex = 0;
   let stopped = false;
   let winnerSelected = params.candidates.length === 1;
-  let latestManifest: { caps: string[]; commands: string[] } | undefined;
+  let latestManifest:
+    | { caps: string[]; commands: string[]; computerUse?: ComputerUseCapabilityDescriptor }
+    | undefined;
   let currentClient = createCandidateClient(currentCandidateIndex);
 
   function createCandidateClient(candidateIndex: number): GatewayClient {
@@ -142,7 +145,11 @@ export function createNodeHostGatewayCandidateConnection(params: GatewayCandidat
     ): Promise<T> {
       return currentClient.request<T>(...requestArgs);
     },
-    updateNodeManifest(manifest: { caps: string[]; commands: string[] }): void {
+    updateNodeManifest(manifest: {
+      caps: string[];
+      commands: string[];
+      computerUse?: ComputerUseCapabilityDescriptor;
+    }): void {
       // Availability may change before the first hello. Every later candidate
       // must start with the newest manifest rather than the constructor snapshot.
       latestManifest = manifest;

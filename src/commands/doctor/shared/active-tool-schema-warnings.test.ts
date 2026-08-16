@@ -181,6 +181,9 @@ describe("active tool schema doctor warnings", () => {
       expect.objectContaining({
         agentId: "main",
         workspaceDir: expect.any(String),
+        skipAgentDiscovery: true,
+        allowBundledStaticCatalogFallback: true,
+        preferBundledStaticCatalogTransport: true,
       }),
     );
     expect(toolState.createTools).toHaveBeenCalledWith(

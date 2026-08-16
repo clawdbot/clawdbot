@@ -70,18 +70,13 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
   let streamingWatchdogRunId: string | null = null;
 
   const flushPendingHistoryRefreshIfIdle = () => {
-    if (
-      state.activeChatRunId ||
-      hasPendingSubmit(state) ||
-      runCoordinator.isSessionMessagePersistencePending
-    ) {
+    if (state.activeChatRunId || hasPendingSubmit(state)) {
       return;
     }
-    if (!runCoordinator.pendingHistoryRefresh && !runCoordinator.hasPendingSessionMessageRefresh) {
+    if (!runCoordinator.pendingHistoryRefresh) {
       return;
     }
     runCoordinator.pendingHistoryRefresh = false;
-    runCoordinator.consumeSessionMessageRefresh();
     runCoordinator.queueHistoryReload();
   };
 
@@ -201,7 +196,6 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
   };
 
   const markSubmittedRunRegistered = (runId: string) => {
-    runCoordinator.bindRegisteredPendingRun(runId);
     clearPendingSubmitDraft(state, runId);
   };
 

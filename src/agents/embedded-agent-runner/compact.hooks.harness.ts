@@ -2,6 +2,7 @@
  * Test harness mocks for embedded-agent compaction hook coverage.
  */
 import { vi, type Mock } from "vitest";
+import type { CompactResult } from "../../context-engine/types.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { clearAgentHarnesses } from "../harness/registry.js";
@@ -32,13 +33,11 @@ type MockEmbeddedAgentStreamFn = Mock<
   (model?: unknown, context?: unknown, options?: unknown) => unknown
 >;
 
-export const contextEngineCompactMock = vi.fn(async () => ({
+export const contextEngineCompactMock: Mock<() => Promise<CompactResult>> = vi.fn(async () => ({
   ok: true as boolean,
   compacted: true as boolean,
   reason: undefined as string | undefined,
-  result: { summary: "engine-summary", tokensAfter: 50 } as
-    | { summary: string; tokensAfter: number }
-    | undefined,
+  result: { summary: "engine-summary", tokensBefore: 120, tokensAfter: 50 },
 }));
 
 export const hookRunner = {
@@ -77,6 +76,8 @@ export const sessionCompactImpl = vi.fn(async () => ({
 }));
 export const sessionManualCompactionMock = vi.fn();
 export const sessionAutomaticCompactionMock = vi.fn();
+export const attemptServerEndpointCompactionMock: Mock<(_params?: unknown) => Promise<unknown>> =
+  vi.fn(async () => undefined);
 export const triggerInternalHookMock: Mock<(event?: unknown) => void> = vi.fn();
 const sanitizeSessionHistoryMock = vi.fn(
   async (params: { messages: unknown[] }) => params.messages,
@@ -102,6 +103,7 @@ export const resolveSessionAgentIdsMock = vi.fn(() => ({
   defaultAgentId: "main",
   sessionAgentId: "main",
 }));
+export const resolveDefaultAgentDirMock = vi.fn(() => "/tmp/agents/main/agent");
 export const estimateTokensMock = vi.fn((_message?: unknown) => 10);
 export const resolveAgentHarnessPolicyMock = vi.fn(() => ({ runtime: "openclaw" }));
 function createSelectedAgentHarnessMock(params: {
@@ -140,6 +142,13 @@ function createDefaultSessionMessages(): unknown[] {
 }
 export const sessionMessages: unknown[] = createDefaultSessionMessages();
 export const sessionAbortCompactionMock: Mock<(reason?: unknown) => void> = vi.fn();
+export const runCliAgentMock = vi.fn(async () => ({
+  meta: {
+    durationMs: 1,
+    agentMeta: { sessionId: "native-session", provider: "claude-cli", model: "opus" },
+  },
+}));
+export const resolveCliBackendConfigMock = vi.fn(() => null as Record<string, unknown> | null);
 function createMockCompactionSession() {
   const session = {
     sessionId: "session-1",
@@ -486,6 +495,8 @@ export function resetCompactSessionStateMocks(): void {
   sessionAbortCompactionMock.mockReset();
   sessionManualCompactionMock.mockReset();
   sessionAutomaticCompactionMock.mockReset();
+  attemptServerEndpointCompactionMock.mockReset();
+  attemptServerEndpointCompactionMock.mockResolvedValue(undefined);
   resolveEffectiveCompactionModeMock.mockReset();
   resolveEffectiveCompactionModeMock.mockReturnValue("default");
   createAgentSessionMock.mockReset();
@@ -557,6 +568,9 @@ export function resetCompactSessionStateMocks(): void {
 }
 
 export function resetCompactHooksHarnessMocks(): void {
+  runCliAgentMock.mockClear();
+  resolveCliBackendConfigMock.mockReset();
+  resolveCliBackendConfigMock.mockReturnValue(null);
   clearAgentHarnesses();
   hookRunner.hasHooks.mockReset();
   hookRunner.hasHooks.mockReturnValue(false);
@@ -566,6 +580,8 @@ export function resetCompactHooksHarnessMocks(): void {
   hookRunner.runAfterCompaction.mockResolvedValue(undefined);
 
   acquireAgentRunPreparedModelRuntimeMock.mockClear();
+  resolveDefaultAgentDirMock.mockReset();
+  resolveDefaultAgentDirMock.mockReturnValue("/tmp/agents/main/agent");
   getCurrentPluginMetadataSnapshotMock.mockReset();
   getCurrentPluginMetadataSnapshotMock.mockReturnValue(emptyPluginMetadataSnapshot);
 
@@ -579,7 +595,7 @@ export function resetCompactHooksHarnessMocks(): void {
     ok: true,
     compacted: true,
     reason: undefined,
-    result: { summary: "engine-summary", tokensAfter: 50 },
+    result: { summary: "engine-summary", tokensBefore: 120, tokensAfter: 50 },
   });
   compactWithSafetyTimeoutMock.mockReset();
   compactWithSafetyTimeoutMock.mockImplementation(runCompactWithSafetyTimeoutMock);
@@ -645,6 +661,10 @@ export async function loadCompactHooksHarness(): Promise<{
   resetCompactHooksHarnessMocks();
   vi.resetModules();
 
+  vi.doMock("./server-endpoint-compaction.js", () => ({
+    attemptServerEndpointCompaction: attemptServerEndpointCompactionMock,
+  }));
+
   vi.doMock("../../plugins/hook-runner-global.js", () => ({
     getGlobalHookRunner: () => hookRunner,
     getGlobalPluginRegistry: vi.fn(() => null),
@@ -679,6 +699,11 @@ export async function loadCompactHooksHarness(): Promise<{
   vi.doMock("../harness/compaction.js", () => ({
     maybeCompactAgentHarnessSession: maybeCompactAgentHarnessSessionMock,
   }));
+  vi.doMock("../cli-runner.js", () => ({ runCliAgent: runCliAgentMock }));
+  vi.doMock("../cli-backends.js", async () => {
+    const actual = await vi.importActual<typeof import("../cli-backends.js")>("../cli-backends.js");
+    return { ...actual, resolveCliBackendConfig: resolveCliBackendConfigMock };
+  });
 
   vi.doMock("../harness/policy.js", () => ({
     resolveAgentHarnessPolicy: resolveAgentHarnessPolicyMock,
@@ -973,7 +998,7 @@ export async function loadCompactHooksHarness(): Promise<{
     resolveAgentConfig: vi.fn(() => undefined),
     resolveAgentDir: vi.fn((_cfg: unknown, agentId: string) => `/tmp/agents/${agentId}/agent`),
     resolveAgentWorkspaceDir: vi.fn(() => "/tmp"),
-    resolveDefaultAgentDir: vi.fn(() => "/tmp/agents/main/agent"),
+    resolveDefaultAgentDir: resolveDefaultAgentDirMock,
     resolveDefaultAgentId: vi.fn(() => "main"),
     resolveAgentIdFromSessionKey: vi.fn(
       (sessionKey: string) => sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main",

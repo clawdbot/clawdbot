@@ -35,6 +35,7 @@ import {
 import {
   diffInstalledPluginIndexInvalidationReasons,
   extractPluginInstallRecordsFromInstalledPluginIndex,
+  hasInstalledPluginIndexWorkspaceScopeMismatch,
   hasMissingConfigPathActivationMetadata,
   INSTALLED_PLUGIN_INDEX_WARNING,
   INSTALLED_PLUGIN_INDEX_VERSION,
@@ -149,6 +150,7 @@ const PluginDiagnosticSchema = z.object({
   message: z.string(),
   pluginId: z.string().optional(),
   source: z.string().optional(),
+  code: z.string().optional(),
 });
 
 const InstalledPluginIndexSchema = z.object({
@@ -159,6 +161,7 @@ const InstalledPluginIndexSchema = z.object({
   migrationVersion: z.literal(INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION),
   policyHash: z.string(),
   generatedAtMs: z.number(),
+  workspaceDir: z.string().optional(),
   refreshReason: z.string().optional(),
   installRecords: z.unknown().optional(),
   plugins: z.array(InstalledPluginIndexRecordSchema),
@@ -194,6 +197,7 @@ export function parseInstalledPluginIndex(value: unknown): InstalledPluginIndex 
     migrationVersion: parsed.migrationVersion,
     policyHash: parsed.policyHash,
     generatedAtMs: parsed.generatedAtMs,
+    ...(parsed.workspaceDir !== undefined ? { workspaceDir: parsed.workspaceDir } : {}),
     ...(parsed.refreshReason ? { refreshReason: parsed.refreshReason } : {}),
     installRecords,
     plugins: parsed.plugins.map(({ installOwner, installOwnerAmbiguous, ...plugin }) =>
@@ -211,6 +215,7 @@ type InstalledPluginIndexSqliteRow = {
   migration_version: number | bigint;
   policy_hash: string;
   generated_at_ms: number | bigint;
+  workspace_dir: string | null;
   refresh_reason: string | null;
   install_records_json: string;
   plugins_json: string;
@@ -242,6 +247,7 @@ function parseInstalledPluginIndexSqliteRow(
     migrationVersion: Number(row.migration_version),
     policyHash: row.policy_hash,
     generatedAtMs: Number(row.generated_at_ms),
+    ...(row.workspace_dir !== null ? { workspaceDir: row.workspace_dir } : {}),
     ...(row.refresh_reason ? { refreshReason: row.refresh_reason } : {}),
     installRecords: safeParseJson(row.install_records_json),
     plugins: safeParseJson(row.plugins_json),
@@ -272,7 +278,8 @@ function readInstalledPluginIndexRow(
     .prepare(
       `
         SELECT version, warning, host_contract_version, compat_registry_version,
-               migration_version, policy_hash, generated_at_ms, refresh_reason,
+               migration_version, policy_hash, generated_at_ms, workspace_dir,
+               refresh_reason,
                install_records_json, plugins_json, diagnostics_json, updated_at_ms
           FROM installed_plugin_index
          WHERE index_key = ?
@@ -297,11 +304,11 @@ function writePersistedInstalledPluginIndexRow(
       `
         INSERT INTO installed_plugin_index (
           index_key, version, host_contract_version, compat_registry_version,
-          migration_version, policy_hash, generated_at_ms, refresh_reason,
+          migration_version, policy_hash, generated_at_ms, workspace_dir, refresh_reason,
           install_records_json, plugins_json, diagnostics_json, warning, updated_at_ms
         ) VALUES (
           @index_key, @version, @host_contract_version, @compat_registry_version,
-          @migration_version, @policy_hash, @generated_at_ms, @refresh_reason,
+          @migration_version, @policy_hash, @generated_at_ms, @workspace_dir, @refresh_reason,
           @install_records_json, @plugins_json, @diagnostics_json, @warning, @updated_at_ms
         )
         ON CONFLICT(index_key) DO UPDATE SET
@@ -311,6 +318,7 @@ function writePersistedInstalledPluginIndexRow(
           migration_version = excluded.migration_version,
           policy_hash = excluded.policy_hash,
           generated_at_ms = excluded.generated_at_ms,
+          workspace_dir = excluded.workspace_dir,
           refresh_reason = excluded.refresh_reason,
           install_records_json = excluded.install_records_json,
           plugins_json = excluded.plugins_json,
@@ -327,6 +335,7 @@ function writePersistedInstalledPluginIndexRow(
       migration_version: index.migrationVersion,
       policy_hash: index.policyHash,
       generated_at_ms: index.generatedAtMs,
+      workspace_dir: index.workspaceDir ?? null,
       refresh_reason: index.refreshReason ?? null,
       install_records_json: serializePluginInstallRecordMap(index.installRecords),
       plugins_json: JSON.stringify(
@@ -503,6 +512,13 @@ function canRefreshPersistedPolicyState(
   params: RefreshInstalledPluginIndexParams & InstalledPluginIndexStoreOptions,
 ): persisted is InstalledPluginIndex {
   if (!persisted || params.reason !== "policy-changed") {
+    return false;
+  }
+  if (
+    (params.diagnostics?.length ?? 0) > 0 ||
+    persisted.diagnostics.some((diagnostic) => diagnostic.code === "workspace-scope-omitted") ||
+    hasInstalledPluginIndexWorkspaceScopeMismatch(persisted, params.workspaceDir)
+  ) {
     return false;
   }
   const env = params.env ?? process.env;

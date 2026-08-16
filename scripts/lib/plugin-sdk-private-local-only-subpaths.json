@@ -30,6 +30,7 @@
   "cli-backend",
   "cli-runtime",
   "codex-mcp-projection",
+  "native-hook-relay-runtime",
   "codex-session-transcript-runtime",
   "command-status-runtime",
   "command-surface",

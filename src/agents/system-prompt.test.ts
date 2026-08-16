@@ -3,6 +3,13 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 // user-visible sections for owners, tools, safety, skills, and subagents.
 import { describe, expect, it } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { CHANNEL_IDS } from "../channels/ids.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { typedCases } from "../test-utils/typed-cases.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import { resolveOwnerPromptNumbers } from "./owner-display.js";
@@ -1265,6 +1272,31 @@ describe("buildAgentSystemPrompt", () => {
       `No source default: proactive send needs \`channel\`; ids: ${channelOptions}.`,
     );
     expect(prompt).toContain(`final ONLY ${SILENT_REPLY_TOKEN}`);
+  });
+
+  it("keeps model-visible channel ids stable across external registration order", () => {
+    const activeRegistry = captureActivePluginRegistrySnapshot();
+    const registrations = ["zeta-channel", "alpha-channel"].map((id) => ({
+      pluginId: id,
+      source: "test" as const,
+      plugin: { id },
+    }));
+    const buildPrompt = () =>
+      buildAgentSystemPrompt({ workspaceDir: "/tmp/openclaw", toolNames: ["message"] });
+
+    try {
+      setActivePluginRegistry(createTestRegistry(registrations));
+      const firstPrompt = buildPrompt();
+      setActivePluginRegistry(createTestRegistry(registrations.toReversed()));
+      const secondPrompt = buildPrompt();
+
+      expect(firstPrompt).toBe(secondPrompt);
+      expect(firstPrompt).toContain(
+        `ids: ${[...CHANNEL_IDS, "alpha-channel", "zeta-channel"].join("|")}.`,
+      );
+    } finally {
+      restoreActivePluginRegistrySnapshot(activeRegistry);
+    }
   });
 
   it("keeps channel choice guidance lean when message sends have a source channel", () => {

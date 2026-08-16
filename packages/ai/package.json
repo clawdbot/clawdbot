@@ -81,6 +81,11 @@
       "import": "./dist/internal/openai.mjs",
       "default": "./dist/internal/openai.mjs"
     },
+    "./internal/openai-responses-payload-policy": {
+      "types": "./dist/internal/openai-responses-payload-policy.d.mts",
+      "import": "./dist/internal/openai-responses-payload-policy.mjs",
+      "default": "./dist/internal/openai-responses-payload-policy.mjs"
+    },
     "./internal/retry-after": {
       "types": "./dist/internal/retry-after.d.mts",
       "import": "./dist/internal/retry-after.mjs",
@@ -106,6 +111,7 @@
     "typebox": "1.3.6"
   },
   "devDependencies": {
+    "@openclaw/model-catalog-core": "workspace:*",
     "@openclaw/normalization-core": "workspace:*"
   },
   "engines": {
