@@ -5,6 +5,7 @@ import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts
 import type { ControlUiFollowUpMode } from "../../lib/chat/follow-up-mode.ts";
 import type { SessionCapability, SessionRefreshTarget } from "../../lib/sessions/index.ts";
 import type { ChatCommandHost } from "./chat-commands.ts";
+import type { ChatControlModelConversationState } from "./chat-control-model.ts";
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
 import type { ChatSendTimingEntry } from "./chat-send-ack.ts";
 import type { ChatInputHistoryState } from "./input-history.ts";
@@ -16,7 +17,8 @@ type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
 };
 
 export type ChatHost = ChatInputHistoryState &
-  ChatCommandHost & {
+  ChatCommandHost &
+  ChatControlModelConversationState & {
     sessions: SessionCapability;
     client: GatewayBrowserClient | null;
     chatStream: string | null;

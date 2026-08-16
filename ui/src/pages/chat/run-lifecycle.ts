@@ -17,6 +17,10 @@ import {
   uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import {
+  selectedControlModelConversationForRoute,
+  type ChatControlModelConversationState,
+} from "./chat-control-model.ts";
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { formatConnectError } from "./connect-error.ts";
@@ -92,14 +96,15 @@ type ReconcileOptions = {
   requestUpdate?: boolean;
 };
 
-type ChatAbortRunState = SessionScopeHost & {
-  client: GatewayBrowserClient | null;
-  connected: boolean;
-  sessionKey: string;
-  chatRunId?: string | null;
-  lastError?: string | null;
-  chatError?: string | null;
-};
+type ChatAbortRunState = SessionScopeHost &
+  ChatControlModelConversationState & {
+    client: GatewayBrowserClient | null;
+    connected: boolean;
+    sessionKey: string;
+    chatRunId?: string | null;
+    lastError?: string | null;
+    chatError?: string | null;
+  };
 
 type ChatAbortIntentBase = {
   sourceClient: GatewayBrowserClient;
@@ -226,7 +231,18 @@ async function abortChatRun(state: ChatAbortRunState): Promise<boolean> {
   if (!client || !state.connected) {
     return false;
   }
-  const result = await requestChatAbort(client, currentChatAbortIntent(state, client));
+  const intent = currentChatAbortIntent(state, client);
+  const runId = intent.runId;
+  const conversation =
+    runId !== null
+      ? selectedControlModelConversationForRoute(state, intent.sessionKey, intent.agentId)
+      : null;
+  const result = conversation
+    ? await conversation
+        .abort(runId ?? undefined)
+        .then(() => ({ ok: true }) as const)
+        .catch((error: unknown) => ({ ok: false, error }) as const)
+    : await requestChatAbort(client, intent);
   if (!result.ok) {
     setChatError(state, formatConnectError(result.error));
   }

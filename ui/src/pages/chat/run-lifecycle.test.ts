@@ -64,6 +64,46 @@ function makeAbortHost(over: Partial<AbortHost> = {}): AbortHost {
 }
 
 describe("handleAbortChat", () => {
+  it("routes an exact connected selected run through the Control Model", async () => {
+    const request = vi.fn();
+    const abort = vi.fn(async () => ({ aborted: true }));
+    const client = { request } as unknown as GatewayBrowserClient;
+    const host = makeAbortHost({
+      client,
+      chatRunId: "run-main",
+      sessionKey: "agent:main",
+      controlModelConversation: { abort } as unknown as AbortHost["controlModelConversation"],
+      controlModelConversationSessionKey: "agent:main",
+      controlModelConversationAgentId: null,
+    });
+
+    await handleAbortChat(host, { preserveDraft: true });
+
+    expect(abort).toHaveBeenCalledWith("run-main");
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("keeps session-wide aborts on the incumbent Gateway path", async () => {
+    const request = vi.fn(async () => ({ aborted: true }));
+    const abort = vi.fn();
+    const client = { request } as unknown as GatewayBrowserClient;
+    const host = makeAbortHost({
+      client,
+      sessionKey: "agent:main",
+      controlModelConversation: { abort } as unknown as AbortHost["controlModelConversation"],
+      controlModelConversationSessionKey: "agent:main",
+      controlModelConversationAgentId: null,
+    });
+
+    await handleAbortChat(host, { preserveDraft: true });
+
+    expect(abort).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledWith("sessions.abort", {
+      key: "agent:main",
+      clearQueued: true,
+    });
+  });
+
   it("shows reconnect guidance when an offline session run has no browser run identity", async () => {
     const request = vi.fn();
     const client = { request } as unknown as GatewayBrowserClient;

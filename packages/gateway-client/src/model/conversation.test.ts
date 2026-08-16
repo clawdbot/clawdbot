@@ -20,6 +20,7 @@ describe("Control Model conversations", () => {
       defaults: { model: "test" },
       completeSnapshot: true,
     });
+    harness.queue("chat.send", { runId: "run-one", status: "accepted" });
     const model = createControlModel({
       gateway: harness.gateway,
       autoRefreshSessionCatalog: false,
@@ -39,6 +40,13 @@ describe("Control Model conversations", () => {
       defaults: { model: "test" },
     });
     expect(conversation.getSnapshot().messages).toHaveLength(1);
+    await conversation.send({ message: "continue", idempotencyKey: "send-one" });
+    expect(harness.callsFor("chat.send")[0]?.params).toMatchObject({
+      sessionKey: "agent:main:one",
+      sessionId: "session-one",
+      message: "continue",
+      idempotencyKey: "send-one",
+    });
   });
 
   it("bounds malformed startup metadata without retaining raw payloads", async () => {
@@ -357,6 +365,17 @@ describe("Control Model conversations", () => {
       harness.queue("chat.send", error);
       await expect(conversation.send("test")).rejects.toMatchObject({ category });
     }
+    harness.queue(
+      "chat.send",
+      Object.assign(new Error("active leaf changed"), {
+        code: "CONFLICT",
+        details: { reason: "active-leaf-changed" },
+      }),
+    );
+    await expect(conversation.send("stale branch")).rejects.toMatchObject({
+      category: "conflict",
+      details: { reason: "active-leaf-changed" },
+    });
     await expect(conversation.abort()).rejects.toMatchObject({ category: "conflict" });
     harness.setConnection({ status: "disconnected", epoch: 1 });
     await expect(conversation.send("offline")).rejects.toMatchObject({ category: "disconnected" });

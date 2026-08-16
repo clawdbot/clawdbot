@@ -1,3 +1,7 @@
+import {
+  ControlModelCommandError,
+  type ControlModelSendInput,
+} from "../../../../packages/gateway-client/src/model/conversation.ts";
 import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
@@ -8,6 +12,7 @@ import {
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { buildChatApiAttachments } from "./attachment-api.ts";
+import { selectedControlModelConversationForRoute } from "./chat-control-model.ts";
 import type { ChatState } from "./chat-history.ts";
 import { normalizeChatSendAck, type ChatSendAck } from "./chat-send-ack.ts";
 
@@ -29,24 +34,63 @@ export async function requestChatSend(
   const controlUiReconnectResume = Boolean(
     routing.sessionId && state.reconnectResumeSessionId === routing.sessionId,
   );
-  const payload = await state.client!.request("chat.send", {
-    sessionKey: routing.sessionKey,
-    ...(isUiGlobalSessionKey(routing.sessionKey) && routing.selectedAgentId
-      ? { agentId: routing.selectedAgentId }
-      : {}),
-    ...(routing.sessionId ? { sessionId: routing.sessionId } : {}),
-    ...(controlUiReconnectResume ? { __controlUiReconnectResume: true } : {}),
-    message: params.message,
-    deliver: false,
-    ...(params.replyToId ? { replyToId: params.replyToId } : {}),
-    ...(params.queueMode ? { queueMode: params.queueMode } : {}),
-    ...(params.expectedLeafEntryId !== undefined
-      ? { expectedLeafEntryId: params.expectedLeafEntryId }
-      : {}),
-    ...(params.expectedRunId ? { expectedRunId: params.expectedRunId } : {}),
-    idempotencyKey: params.runId,
-    attachments: buildChatApiAttachments(params.attachments),
-  });
+  const attachments = buildChatApiAttachments(params.attachments);
+  const conversation =
+    !controlUiReconnectResume && params.queueMode !== "steer"
+      ? selectedControlModelConversationForRoute(
+          state,
+          routing.sessionKey,
+          isUiGlobalSessionKey(routing.sessionKey) ? routing.selectedAgentId : undefined,
+        )
+      : null;
+  let payload: unknown;
+  if (conversation) {
+    const input: ControlModelSendInput = {
+      message: params.message,
+      idempotencyKey: params.runId,
+      ...(routing.sessionId ? { sessionId: routing.sessionId } : {}),
+      ...(attachments?.length ? { attachments } : {}),
+      ...(params.replyToId ? { replyToId: params.replyToId } : {}),
+      ...(params.queueMode ? { queueMode: params.queueMode } : {}),
+      ...(params.expectedLeafEntryId !== undefined
+        ? { expectedLeafEntryId: params.expectedLeafEntryId }
+        : {}),
+      ...(params.expectedRunId ? { expectedRunId: params.expectedRunId } : {}),
+    };
+    try {
+      payload = await conversation.send(input);
+    } catch (error) {
+      if (!(error instanceof ControlModelCommandError)) {
+        throw error;
+      }
+      throw new GatewayRequestError({
+        code: error.code,
+        message: error.message,
+        details: error.details,
+        retryable: error.retryable,
+        ...(error.retryAfterMs !== undefined ? { retryAfterMs: error.retryAfterMs } : {}),
+      });
+    }
+  } else {
+    payload = await state.client!.request("chat.send", {
+      sessionKey: routing.sessionKey,
+      ...(isUiGlobalSessionKey(routing.sessionKey) && routing.selectedAgentId
+        ? { agentId: routing.selectedAgentId }
+        : {}),
+      ...(routing.sessionId ? { sessionId: routing.sessionId } : {}),
+      ...(controlUiReconnectResume ? { __controlUiReconnectResume: true } : {}),
+      message: params.message,
+      deliver: false,
+      ...(params.replyToId ? { replyToId: params.replyToId } : {}),
+      ...(params.queueMode ? { queueMode: params.queueMode } : {}),
+      ...(params.expectedLeafEntryId !== undefined
+        ? { expectedLeafEntryId: params.expectedLeafEntryId }
+        : {}),
+      ...(params.expectedRunId ? { expectedRunId: params.expectedRunId } : {}),
+      idempotencyKey: params.runId,
+      attachments,
+    });
+  }
   if (controlUiReconnectResume) {
     state.reconnectResumeSessionId = null;
   }

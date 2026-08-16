@@ -58,6 +58,7 @@ export class ControlModelCommandError extends Error {
   readonly code: string;
   readonly retryable: boolean;
   readonly retryAfterMs?: number;
+  readonly details?: DeepReadonly<unknown>;
   readonly command: string;
   constructor(options: {
     category: ControlModelCommandCategory;
@@ -66,6 +67,7 @@ export class ControlModelCommandError extends Error {
     command: string;
     retryable?: boolean;
     retryAfterMs?: number;
+    details?: unknown;
   }) {
     super(options.message);
     this.name = "ControlModelCommandError";
@@ -73,6 +75,7 @@ export class ControlModelCommandError extends Error {
     this.code = options.code;
     this.retryable = options.retryable === true;
     this.retryAfterMs = options.retryAfterMs;
+    this.details = cloneAndFreeze(options.details);
     this.command = options.command;
   }
 }
@@ -203,6 +206,7 @@ export type ControlModelSendInput =
       content?: string;
       attachments?: readonly unknown[];
       idempotencyKey?: string;
+      sessionId?: string;
       thinking?: string;
       fastMode?: boolean | "auto";
       fastAutoOnSeconds?: number;
@@ -368,6 +372,7 @@ function normalizeGatewayError(error: unknown, command: string): ControlModelCom
       category === "retryable" ||
       category === "disconnected",
     ...(retryAfterMs !== null && retryAfterMs >= 0 ? { retryAfterMs } : {}),
+    ...(source?.details !== undefined ? { details: source.details } : {}),
   });
 }
 function localError(
@@ -910,6 +915,9 @@ export class ControlModelConversation {
         {
           sessionKey: this.#sessionKey,
           ...(this.#host.agentId ? { agentId: this.#host.agentId } : {}),
+          ...(this.#historyMetadata?.sessionId
+            ? { sessionId: this.#historyMetadata.sessionId }
+            : {}),
           message: normalized.message,
           deliver: false,
           idempotencyKey,
@@ -1270,6 +1278,7 @@ export class ControlModelConversation {
   #sendOptions(input: Record<string, unknown>): Record<string, unknown> {
     const result: Record<string, unknown> = {};
     for (const key of [
+      "sessionId",
       "thinking",
       "fastMode",
       "fastAutoOnSeconds",
