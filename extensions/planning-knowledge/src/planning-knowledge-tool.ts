@@ -35,6 +35,12 @@ export const planningKnowledgeConfigSchema = Type.Object(
         description: "Explicit Planning-owned knowledge_notes.py writer path.",
       }),
     ),
+    maintenanceScriptPath: Type.Optional(
+      Type.String({
+        minLength: 1,
+        description: "Explicit read-only Planning knowledge_maintenance.py path.",
+      }),
+    ),
     pythonExecutable: Type.Optional(
       Type.String({ minLength: 1, description: "Python executable for the OneLibrary CLI." }),
     ),
@@ -126,6 +132,7 @@ type ResolvedPlanningKnowledgeConfig = {
   sourceRoot: string;
   indexPath: string;
   writerScriptPath?: string;
+  maintenanceScriptPath?: string;
   pythonExecutable: string;
   mode: "text" | "semantic" | "hybrid";
   timeoutMs: number;
@@ -201,6 +208,9 @@ export function resolvePlanningKnowledgeConfig(
   const normalizedWriterScriptPath = config.writerScriptPath
     ? resolveConfiguredPath(config.writerScriptPath, "writerScriptPath", resolvePath)
     : undefined;
+  const normalizedMaintenanceScriptPath = config.maintenanceScriptPath
+    ? resolveConfiguredPath(config.maintenanceScriptPath, "maintenanceScriptPath", resolvePath)
+    : undefined;
 
   if (!isKnowledgeRoot(normalizedSourceRoot)) {
     throw new Error("Planning Knowledge sourceRoot must end in notes/knowledge");
@@ -210,6 +220,14 @@ export function resolvePlanningKnowledgeConfig(
   }
   if (normalizedWriterScriptPath && basename(normalizedWriterScriptPath) !== "knowledge_notes.py") {
     throw new Error("Planning Knowledge writerScriptPath must be Planning knowledge_notes.py");
+  }
+  if (
+    normalizedMaintenanceScriptPath &&
+    basename(normalizedMaintenanceScriptPath) !== "knowledge_maintenance.py"
+  ) {
+    throw new Error(
+      "Planning Knowledge maintenanceScriptPath must be Planning knowledge_maintenance.py",
+    );
   }
   if (isPathInside(normalizedIndexPath, normalizedSourceRoot)) {
     throw new Error("Planning Knowledge indexPath must be outside the canonical source root");
@@ -225,6 +243,9 @@ export function resolvePlanningKnowledgeConfig(
     sourceRoot: normalizedSourceRoot,
     indexPath: normalizedIndexPath,
     ...(normalizedWriterScriptPath ? { writerScriptPath: normalizedWriterScriptPath } : {}),
+    ...(normalizedMaintenanceScriptPath
+      ? { maintenanceScriptPath: normalizedMaintenanceScriptPath }
+      : {}),
     pythonExecutable: config.pythonExecutable?.trim() || "python3",
     mode: config.mode ?? "text",
     timeoutMs,
@@ -627,6 +648,75 @@ export function createPlanningKnowledgeCaptureTool(
         },
         operational_follow_up: params.operationalFollowUp?.trim() ? "route_separately" : "none",
       });
+    },
+  };
+}
+
+export const planningKnowledgeMaintenanceParameters = Type.Object(
+  {
+    trigger: Type.Optional(
+      Type.Union([Type.Literal("manual"), Type.Literal("scheduled"), Type.Literal("openclaw")]),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+export function createPlanningKnowledgeMaintenanceTool(
+  config: ResolvedPlanningKnowledgeConfig,
+  runner: PlanningKnowledgeCommandRunner = runCommand,
+  options: { authorized?: boolean } = {},
+) {
+  return {
+    name: "planning_knowledge_maintenance",
+    label: "Planning Knowledge Maintenance",
+    description:
+      "Run bounded Level-A Planning Knowledge validation, health, quality and read-only OneLibrary audit. It cannot write canonical Notes, repair derived state, accept Candidates, migrate schemas or restore backups.",
+    parameters: planningKnowledgeMaintenanceParameters,
+    optional: true,
+    async execute(
+      _toolCallId: string,
+      params: Static<typeof planningKnowledgeMaintenanceParameters>,
+      signal?: AbortSignal,
+    ) {
+      if (options.authorized === false) {
+        throw new Error("Planning Knowledge maintenance access denied");
+      }
+      if (!config.maintenanceScriptPath) {
+        throw new Error("Planning Knowledge maintenance is not configured");
+      }
+      const result = await runner({
+        executable: config.pythonExecutable,
+        args: [
+          config.maintenanceScriptPath,
+          "run",
+          "--root",
+          dirname(dirname(config.sourceRoot)),
+          "--onelibrary-script",
+          config.scriptPath,
+          "--index",
+          config.indexPath,
+          "--python",
+          config.pythonExecutable,
+          "--trigger",
+          params.trigger ?? "openclaw",
+          "--runtime-tool-visible",
+        ],
+        timeoutMs: config.timeoutMs,
+        signal,
+      });
+      if (result.exitCode !== 0) {
+        throw new Error("Planning Knowledge maintenance failed closed");
+      }
+      const parsed = parseCommandObject(result.stdout, "maintenance");
+      if (
+        parsed.schema !== "planning_knowledge_maintenance" ||
+        parsed.schema_version !== 1 ||
+        parsed.read_only !== true
+      ) {
+        throw new Error("Planning Knowledge maintenance returned an invalid contract");
+      }
+      assertPortableCommandObject(parsed);
+      return jsonResult(parsed);
     },
   };
 }

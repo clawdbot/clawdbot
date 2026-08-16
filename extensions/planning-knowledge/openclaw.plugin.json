@@ -28,6 +28,11 @@
         "minLength": 1,
         "description": "Explicit Planning-owned knowledge_notes.py writer path."
       },
+      "maintenanceScriptPath": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Explicit read-only Planning knowledge_maintenance.py path."
+      },
       "pythonExecutable": {
         "type": "string",
         "minLength": 1,
@@ -61,7 +66,8 @@
   "contracts": {
     "tools": [
       "planning_knowledge_search",
-      "planning_knowledge_capture"
+      "planning_knowledge_capture",
+      "planning_knowledge_maintenance"
     ]
   },
   "toolMetadata": {
@@ -69,6 +75,9 @@
       "optional": true
     },
     "planning_knowledge_capture": {
+      "optional": true
+    },
+    "planning_knowledge_maintenance": {
       "optional": true
     }
   }
