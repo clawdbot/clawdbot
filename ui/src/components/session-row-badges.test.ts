@@ -75,6 +75,22 @@ describe("session row placement badges", () => {
     expect(container.querySelector(".session-row-badges")).toBeNull();
   });
 
+  it("keeps the queued-outbox glyph distinct from the automation clock", () => {
+    render(
+      renderSessionRowBadges({
+        hasAutomation: true,
+        outboxCount: 1,
+      }),
+      container,
+    );
+
+    const automation = container.querySelector("[aria-label='Automation attached'] svg");
+    const queued = container.querySelector(".session-row-badge--queued svg");
+    expect(automation).not.toBeNull();
+    expect(queued).not.toBeNull();
+    expect(queued?.innerHTML).not.toBe(automation?.innerHTML);
+  });
+
   it.each(["local", "reclaimed"] satisfies SessionPlacementState[])(
     "keeps %s placement visually quiet",
     (placementState) => {

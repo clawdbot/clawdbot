@@ -198,7 +198,7 @@ function renderChatQueueItem(
       ${reconnecting
         ? html`<span class="chat-queue__dot" aria-hidden="true"></span>`
         : html`<span class="chat-queue__icon" aria-hidden="true">
-            ${failed ? icons.alertTriangle : steered ? icons.cornerDownRight : icons.clock}
+            ${failed ? icons.alertTriangle : steered ? icons.cornerDownRight : icons.outbox}
           </span>`}
       ${renderChatAuthorAvatar(item.sender)}
       ${steered
