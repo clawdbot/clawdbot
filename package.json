@@ -1322,6 +1322,10 @@
     "./plugin-sdk/provider-http": {
       "default": "./dist/plugin-sdk/provider-http.js"
     },
+    "./plugin-sdk/provider-binary-stream": {
+      "types": "./dist/plugin-sdk/provider-binary-stream.d.ts",
+      "default": "./dist/plugin-sdk/provider-binary-stream.js"
+    },
     "./plugin-sdk/provider-model-types": {
       "default": "./dist/plugin-sdk/provider-model-types.js"
     },
@@ -1388,6 +1392,10 @@
     "./plugin-sdk/secret-input-runtime": {
       "types": "./dist/plugin-sdk/secret-input-runtime.d.ts",
       "default": "./dist/plugin-sdk/secret-input-runtime.js"
+    },
+    "./plugin-sdk/secret-ref-readonly": {
+      "types": "./dist/plugin-sdk/secret-ref-readonly.d.ts",
+      "default": "./dist/plugin-sdk/secret-ref-readonly.js"
     },
     "./plugin-sdk/channel-status": {
       "types": "./dist/plugin-sdk/channel-status.d.ts",

@@ -194,7 +194,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: registry-bound plugin command planning and exact selected execution.
       // +1: canonical Computer Use wire contract and node-host provider seam.
       // -1: retire the deprecated messaging-targets subpath.
-      144,
+      // +2: bounded provider streams and read-only SecretRef resolution.
+      146,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -289,7 +290,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: concrete plugin side-effect owner resolution for agent harness runtimes.
       // +1: strict explicit agent-id normalization without default-agent fallback.
       // +5: session-catalog paging capability, family/node-host composers, and option contracts.
-      4323,
+      // +3: two focused primitives and the closed read-only SecretRef result contract.
+      4326,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -366,7 +368,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: concrete plugin side-effect owner resolution for agent harness runtimes.
       // +1: strict explicit agent-id normalization without default-agent fallback.
       // +2: session-catalog family and node-host binding composers.
-      2568,
+      // +2: bounded provider stream and read-only SecretRef resolver.
+      2570,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
