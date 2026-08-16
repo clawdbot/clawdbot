@@ -9,7 +9,7 @@ import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 // Inline content types
 type StoryInline =
   | string
-  | { __image: { src: string; alt: string } }
+  | { imageBlock: { src: string; alt: string } }
   | { bold: StoryInline[] }
   | { italics: StoryInline[] }
   | { strike: StoryInline[] }
@@ -118,7 +118,7 @@ function parseInlineMarkdown(text: string): StoryInline[] {
     if (imageMatch) {
       // Return a special marker that will be hoisted to a block
       result.push({
-        __image: {
+        imageBlock: {
           src: expectDefined(imageMatch[2], "image URL capture"),
           alt: expectDefined(imageMatch[1], "image alt capture"),
         },
@@ -231,8 +231,8 @@ function processInlinesForImages(inlines: StoryInline[]): {
   const imageBlocks: StoryVerse[] = [];
 
   for (const inline of inlines) {
-    if (typeof inline === "object" && "__image" in inline) {
-      const img = inline.__image;
+    if (typeof inline === "object" && "imageBlock" in inline) {
+      const img = inline.imageBlock;
       imageBlocks.push(createImageBlock(img.src, img.alt));
     } else {
       cleanInlines.push(inline);
