@@ -203,7 +203,7 @@ export async function completeDurableDelivery(
 }
 
 /** Finalizes a policy-suppressed send before its durable intent is acknowledged. */
-export async function suppressDurableDelivery(
+async function suppressDurableDelivery(
   completion: DurableDeliveryCompletion,
   stateDir?: string,
 ): Promise<DurableDeliveryCompletionResult> {
