@@ -25,7 +25,7 @@ on:
       allow_failures:
         description: Allow rendering from valid incomplete QA evidence
         required: false
-        default: false
+        default: true
         type: boolean
   workflow_call:
     inputs:

@@ -623,10 +623,10 @@ esac
 
     const workflow = readQaProfileEvidenceWorkflow();
     const runProfileStep = expectDefined(
-      workflow.jobs.run_qa_profile.steps.find(
-        (step: WorkflowStep) => step.name === "Run QA profile",
+      workflow.jobs.run_qa_profile_shard.steps.find(
+        (step: WorkflowStep) => step.name === "Run QA profile shard",
       ),
-      "Run QA profile step",
+      "Run QA profile shard step",
     );
     let script = runProfileStep.run
       .replace("--kill-after=30s 110m", "--kill-after=0.05s 0.4s")
@@ -660,14 +660,17 @@ timeout_outcome="none"`,
         GITHUB_RUN_ID: "42",
         LC_ALL: "POSIX",
         PATH: fixturePath,
+        CATEGORY_IDS_JSON: '["fixture.category"]',
         PROTOCOL_SINCE_BASE_SHA: "b".repeat(40),
         QA_PROFILE: "all",
+        QA_SHARD_ID: "shard-01",
         REQUESTED_REF: "fixture",
+        SCENARIO_IDS_JSON: '["fixture-scenario"]',
         TARGET_SHA: "a".repeat(40),
         TIMEOUT_SUPERVISOR_CAPTURE: timeoutSupervisorCapture,
       },
     });
-    const outputDir = path.join(root, ".artifacts", "qa-e2e", "profile-all-42-1");
+    const outputDir = path.join(root, ".artifacts", "qa-e2e", "profile-all-42-1", "shard-01");
     const status = JSON.parse(
       readFileSync(path.join(outputDir, "qa-profile-run-status.json"), "utf8"),
     ) as {
@@ -690,20 +693,15 @@ timeout_outcome="none"`,
   }
 }
 
-function runQaProfileFailureGate(options: {
-  allowFailures: boolean;
-  evidenceValidated?: boolean;
-  qaExitCode?: string;
-}) {
+function runQaProfileFailureGate(options: { allowFailures: boolean; qaExitCode?: string }) {
   const workflow = readQaProfileEvidenceWorkflow();
-  const failStep = workflow.jobs.run_qa_profile.steps.find(
+  const failStep = workflow.jobs.aggregate_qa_profile.steps.find(
     (step: WorkflowStep) => step.name === "Fail if QA profile failed",
   );
   return spawnSync("bash", ["-c", failStep.run], {
     encoding: "utf8",
     env: {
       ALLOW_FAILURES: String(options.allowFailures),
-      EVIDENCE_VALIDATED: String(options.evidenceValidated ?? true),
       PATH: process.env.PATH ?? "",
       QA_EXIT_CODE: options.qaExitCode ?? "",
       QA_PROFILE: "all",
@@ -7228,7 +7226,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       const qaWorkflow = readQaProfileEvidenceWorkflow();
       const maturityWorkflow = readMaturityScorecardWorkflow();
       const validateJob = qaWorkflow.jobs.validate_selected_ref;
-      const runJob = qaWorkflow.jobs.run_qa_profile;
+      const runJob = qaWorkflow.jobs.run_qa_profile_shard;
+      const aggregateJob = qaWorkflow.jobs.aggregate_qa_profile;
       const stepNames = runJob.steps.map((step: WorkflowStep) => step.name);
       const buildStep = expectDefined(
         runJob.steps.find((step: WorkflowStep) => step.name === "Build private QA runtime"),
@@ -7239,12 +7238,14 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         "protocol comparison base fetch",
       );
       const runStep = expectDefined(
-        runJob.steps.find((step: WorkflowStep) => step.name === "Run QA profile"),
-        "QA profile run",
+        runJob.steps.find((step: WorkflowStep) => step.name === "Run QA profile shard"),
+        "QA profile shard run",
       );
       const evidenceStep = expectDefined(
-        runJob.steps.find((step: WorkflowStep) => step.name === "Validate QA profile evidence"),
-        "QA profile evidence validation",
+        aggregateJob.steps.find(
+          (step: WorkflowStep) => step.name === "Finalize QA profile evidence",
+        ),
+        "QA profile evidence finalization",
       );
       const protocolOutput = "${{ needs.validate_selected_ref.outputs.protocol_base_revision }}";
       const trustedInput = "${{ inputs.trusted_ref || inputs.ref }}";
@@ -7264,7 +7265,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         "Fetch protocol comparison base",
         "Setup Node environment",
         "Build private QA runtime",
-        "Run QA profile",
+        "Run QA profile shard",
       ].map((name) => stepNames.indexOf(name));
       expect(ordered.every((index, position) => index > (ordered[position - 1] ?? -1))).toBe(true);
       expect(fetchStep.env?.PROTOCOL_SINCE_BASE_SHA).toBe(protocolOutput);
@@ -7424,7 +7425,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const publisherPreflight = maturityWorkflow.jobs.publisher_preflight;
     const publishJob = maturityWorkflow.jobs.publish;
     const publishPrJob = maturityWorkflow.jobs.publish_generated_pr;
-    const qaRunJob = qaEvidenceWorkflow.jobs.run_qa_profile;
+    const qaPlanJob = qaEvidenceWorkflow.jobs.plan_qa_profile;
+    const qaShardJob = qaEvidenceWorkflow.jobs.run_qa_profile_shard;
+    const qaAggregateJob = qaEvidenceWorkflow.jobs.aggregate_qa_profile;
 
     expect(maturityWorkflow.on.workflow_call.inputs).toMatchObject({
       qa_evidence_run_id: {
@@ -7454,7 +7457,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(maturityWorkflow.on.workflow_dispatch.inputs.allow_failures).toEqual({
       description: "Allow rendering from valid incomplete QA evidence",
       required: false,
-      default: false,
+      default: true,
       type: "boolean",
     });
     expect(maturityWorkflow.on.workflow_dispatch.inputs.publish_pull_request).toEqual({
@@ -7498,24 +7501,47 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs.qa_profile).not.toHaveProperty("options");
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs.qa_profile.default).toBe("all");
     expect(qaEvidenceWorkflow.on.workflow_call.inputs.qa_profile.type).toBe("string");
-    expect(qaRunJob["timeout-minutes"]).toBe(150);
-    const validateProfileStep = qaRunJob.steps.find(
-      (step: WorkflowStep) => step.name === "Validate QA profile input",
+    for (const outputName of [
+      "artifact_name",
+      "qa_profile",
+      "qa_exit_code",
+      "qa_passed",
+      "target_sha",
+      "trusted_reason",
+      "qa_evidence_path",
+    ]) {
+      expect(qaEvidenceWorkflow.on.workflow_call.outputs[outputName].value).toContain(
+        `jobs.aggregate_qa_profile.outputs.${outputName}`,
+      );
+    }
+    expect(qaPlanJob.needs).toBe("validate_selected_ref");
+    expect(qaPlanJob.outputs).toEqual({
+      channel_driver: "${{ steps.plan.outputs.channel_driver }}",
+      matrix: "${{ steps.plan.outputs.matrix }}",
+      profile: "${{ steps.plan.outputs.profile }}",
+      shard_count: "${{ steps.plan.outputs.shard_count }}",
+    });
+    const validateProfileStep = qaPlanJob.steps.find(
+      (step: WorkflowStep) => step.name === "Resolve taxonomy profile shards",
     );
-    expect(validateProfileStep.run).toContain(
-      "readQaScorecardTaxonomyReport(readQaScenarioPack().scenarios)",
-    );
-    expect(validateProfileStep.run).toContain(
-      "taxonomy.profiles.find((entry) => entry.id === requested)",
-    );
-    expect(validateProfileStep.run).toContain("profile=${profile.id}");
-    const ensurePlaywrightStep = qaRunJob.steps.find(
+    expect(validateProfileStep.run).toContain("createQaProfileEvidenceShardPlan(requested)");
+    expect(validateProfileStep.run).toContain("matrix=${JSON.stringify({ include: plan.shards })}");
+    expect(validateProfileStep.run).toContain("shard_count=${plan.shards.length}");
+
+    expect(qaShardJob["timeout-minutes"]).toBe(150);
+    expect(qaShardJob.needs).toEqual(["validate_selected_ref", "plan_qa_profile"]);
+    expect(qaShardJob.strategy).toMatchObject({
+      "fail-fast": false,
+      "max-parallel": 8,
+      matrix: "${{ fromJSON(needs.plan_qa_profile.outputs.matrix) }}",
+    });
+    const ensurePlaywrightStep = qaShardJob.steps.find(
       (step: WorkflowStep) => step.name === "Ensure Playwright Chromium",
     );
     expect(ensurePlaywrightStep.run).toContain("scripts/ensure-playwright-chromium.mts");
     expect(ensurePlaywrightStep.run).toContain("scripts/ensure-playwright-chromium.mjs");
-    const runProfileStep = qaRunJob.steps.find(
-      (step: WorkflowStep) => step.name === "Run QA profile",
+    const runProfileStep = qaShardJob.steps.find(
+      (step: WorkflowStep) => step.name === "Run QA profile shard",
     );
     expect(runProfileStep.env?.OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF).toBe("1");
     expect(runProfileStep.env?.OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS).toBe("120000");
@@ -7567,20 +7593,63 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(runProfileStep.run).toContain("qa-profile-run-status.json");
     expect(runProfileStep.run).toContain("protocolBaseSha: process.env.PROTOCOL_SINCE_BASE_SHA");
     expect(runProfileStep.run).toContain("exitCode: Number(process.env.QA_EXIT_CODE)");
-    expect(runProfileStep.run).toContain('timedOut: timeoutOutcome !== "none"');
-    expect(runProfileStep.run).toContain("timeoutOutcome,");
+    expect(runProfileStep.run).toContain('timedOut: process.env.TIMEOUT_OUTCOME !== "none"');
+    expect(runProfileStep.run).toContain("timeoutOutcome: process.env.TIMEOUT_OUTCOME");
     expect(runProfileStep.run).toContain("completedAt: new Date().toISOString()");
+    expect(runProfileStep.run).toContain("id: process.env.QA_SHARD_ID");
+    expect(runProfileStep.run).toContain("scenarioIds: JSON.parse(process.env.SCENARIO_IDS_JSON)");
     expect(runProfileStep.run).not.toContain("--allow-failures");
-    const failProfileStep = qaRunJob.steps.find(
+
+    const shardEvidenceStep = qaShardJob.steps.find(
+      (step: WorkflowStep) => step.name === "Validate QA profile shard evidence",
+    );
+    expect(shardEvidenceStep.if).toBe("always()");
+    expect(shardEvidenceStep.run).toContain("qaProfileEvidencePlan.attest");
+    const shardUploadStep = qaShardJob.steps.find(
+      (step: WorkflowStep) => step.name === "Upload QA profile shard evidence",
+    );
+    expect(shardUploadStep.if).toBe("always()");
+    expect(shardUploadStep.with).toMatchObject({
+      name: "qa-profile-evidence-shard-${{ matrix.id }}-${{ needs.validate_selected_ref.outputs.selected_revision }}",
+      path: "${{ steps.run_profile.outputs.output_dir }}",
+      "if-no-files-found": "error",
+    });
+
+    expect(qaAggregateJob.needs).toEqual([
+      "validate_selected_ref",
+      "plan_qa_profile",
+      "run_qa_profile_shard",
+    ]);
+    expect(qaAggregateJob.if.replace(/\s+/gu, " ")).toBe(
+      "${{ always() && needs.validate_selected_ref.result == 'success' && needs.plan_qa_profile.result == 'success' }}",
+    );
+    const aggregateDownloadStep = qaAggregateJob.steps.find(
+      (step: WorkflowStep) => step.name === "Download QA profile shard evidence",
+    );
+    expect(aggregateDownloadStep.with).toMatchObject({
+      pattern:
+        "qa-profile-evidence-shard-*-${{ needs.validate_selected_ref.outputs.selected_revision }}",
+      path: ".artifacts/qa-profile-shards",
+      "merge-multiple": false,
+    });
+    const aggregateStep = qaAggregateJob.steps.find(
+      (step: WorkflowStep) => step.name === "Aggregate validated shard evidence",
+    );
+    expect(aggregateStep.run).toContain(
+      "Expected ${SHARD_COUNT} completed status and evidence files",
+    );
+    expect(aggregateStep.run).toContain("Timed-out QA shard cannot contribute partial evidence");
+    expect(aggregateStep.run).toContain("-mindepth 2 -maxdepth 2");
+    expect(aggregateStep.run).toContain("aggregateQaProfileEvidenceShards");
+    expect(aggregateStep.run).toContain("if jq -e '.timedOut == true'");
+
+    const failProfileStep = qaAggregateJob.steps.find(
       (step: WorkflowStep) => step.name === "Fail if QA profile failed",
     );
-    expect(failProfileStep.if).toBe("always()");
     expect(failProfileStep.env?.ALLOW_FAILURES).toBe("${{ inputs.allow_failures }}");
-    expect(failProfileStep.env?.EVIDENCE_VALIDATED).toBe(
-      "${{ steps.evidence.outcome == 'success' }}",
-    );
+    expect(failProfileStep.run).toContain('[[ -z "${QA_EXIT_CODE:-}" ]]');
     expect(failProfileStep.run).toContain(
-      '[[ "$ALLOW_FAILURES" == "true" && "$EVIDENCE_VALIDATED" == "true" ]]',
+      '[[ "$QA_EXIT_CODE" != "0" && "$ALLOW_FAILURES" != "true" ]]',
     );
     expect(failProfileStep.run).toContain('exit "$QA_EXIT_CODE"');
     expect(generateJob.needs).toEqual(["validate_selected_ref", "publisher_preflight"]);
@@ -7740,12 +7809,14 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(validateManifestStep.run).toContain("profilePlanSha256");
     expect(validateManifestStep.run).toContain("rerun the QA Profile Evidence workflow");
 
-    expect(qaRunJob.outputs.artifact_name).toBe("${{ steps.evidence.outputs.artifact_name }}");
-    const qaEvidenceStep = qaRunJob.steps.find(
-      (step: WorkflowStep) => step.name === "Validate QA profile evidence",
+    expect(qaAggregateJob.outputs.artifact_name).toBe(
+      "${{ steps.evidence.outputs.artifact_name }}",
+    );
+    const qaEvidenceStep = qaAggregateJob.steps.find(
+      (step: WorkflowStep) => step.name === "Finalize QA profile evidence",
     );
     expect(qaEvidenceStep.env.ARTIFACT_NAME).toBe(
-      "qa-profile-evidence-${{ steps.profile.outputs.profile }}-${{ needs.validate_selected_ref.outputs.selected_revision }}",
+      "qa-profile-evidence-${{ needs.plan_qa_profile.outputs.profile }}-${{ needs.validate_selected_ref.outputs.selected_revision }}",
     );
     expect(qaEvidenceStep.run).toContain("qa-profile-evidence-manifest.json");
     expect(qaEvidenceStep.run).toContain("validateQaEvidenceSummaryJson");
@@ -7753,7 +7824,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       /qaProfileEvidencePlan\.attest\(\s*payload\.profilePlan,\s*process\.env\.QA_EXIT_CODE === "0",?\s*\)/u,
     );
     expect(qaEvidenceStep.run).toContain("profilePlanSha256");
-    expect(qaEvidenceStep.run).toContain("rerun the QA Profile Evidence workflow");
     expect(qaEvidenceStep.env.PROTOCOL_BASE_SHA).toBe(
       "${{ needs.validate_selected_ref.outputs.protocol_base_revision }}",
     );
@@ -7763,15 +7833,14 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(qaEvidenceStep.run).toContain('qaPassed: process.env.QA_EXIT_CODE === "0"');
     expect(qaEvidenceStep.run).toContain('allowFailures: process.env.ALLOW_FAILURES === "true"');
     expect(qaEvidenceStep.run).toContain("protocolBaseSha: process.env.PROTOCOL_BASE_SHA");
-    expect(qaEvidenceStep.run).toContain("QA failures allowed:");
 
-    const qaUploadStep = qaRunJob.steps.find(
+    const qaUploadStep = qaAggregateJob.steps.find(
       (step: WorkflowStep) => step.name === "Upload QA profile evidence",
     );
-    expect(qaUploadStep.if).toBe("always()");
+    expect(qaUploadStep.if).toBe("always() && steps.evidence.outcome == 'success'");
     expect(qaUploadStep.with).toMatchObject({
-      name: "qa-profile-evidence-${{ steps.profile.outputs.profile }}-${{ needs.validate_selected_ref.outputs.selected_revision }}",
-      path: "${{ steps.run_profile.outputs.output_dir }}",
+      name: "qa-profile-evidence-${{ needs.plan_qa_profile.outputs.profile }}-${{ needs.validate_selected_ref.outputs.selected_revision }}",
+      path: "${{ steps.aggregate.outputs.output_dir }}",
       "if-no-files-found": "error",
     });
 
@@ -7897,8 +7966,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     () => {
       const qaWorkflow = readQaProfileEvidenceWorkflow();
       const maturityWorkflow = readMaturityScorecardWorkflow();
-      const producerStep = qaWorkflow.jobs.run_qa_profile.steps.find(
-        (step: WorkflowStep) => step.name === "Validate QA profile evidence",
+      const producerStep = qaWorkflow.jobs.aggregate_qa_profile.steps.find(
+        (step: WorkflowStep) => step.name === "Finalize QA profile evidence",
       );
       const consumerStep = maturityWorkflow.jobs.publish.steps.find(
         (step: WorkflowStep) => step.name === "Validate QA evidence manifest",
@@ -8040,13 +8109,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     () => {
       expect(runQaProfileFailureGate({ allowFailures: false, qaExitCode: "7" }).status).toBe(7);
       expect(runQaProfileFailureGate({ allowFailures: true, qaExitCode: "7" }).status).toBe(0);
-      expect(
-        runQaProfileFailureGate({
-          allowFailures: true,
-          evidenceValidated: false,
-          qaExitCode: "7",
-        }).status,
-      ).toBe(7);
       expect(runQaProfileFailureGate({ allowFailures: true }).status).toBe(1);
       expect(runQaProfileFailureGate({ allowFailures: false, qaExitCode: "0" }).status).toBe(0);
     },
