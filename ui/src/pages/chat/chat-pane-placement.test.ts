@@ -119,6 +119,58 @@ describe("chat pane placement", () => {
     expect(refreshReplacement).toHaveBeenCalledWith("main");
   });
 
+  it("force-destroys a terminal recovery after confirming permanent data loss", async () => {
+    const request = vi.fn(async () => ({ ok: true }));
+    const refreshReplacement = vi.fn(async () => undefined);
+    const { pane } = createTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessions: { refreshReplacement } as unknown as SessionCapability,
+    });
+    pane.context.gateway.snapshot.hello = {
+      features: { methods: ["environments.destroy"] },
+      auth: { role: "operator", scopes: ["operator.admin"] },
+    } as never;
+    const session = {
+      key: "agent:main:terminal-recovery",
+      kind: "direct",
+      updatedAt: 0,
+      hasActiveRun: true,
+      placement: {
+        state: "failed",
+        generation: 8,
+        createdAtMs: 100,
+        updatedAtMs: 300,
+        stateChangedAtMs: 300,
+        environmentId: "environment-1",
+        recoveryError: "workspace recovery requires operator action",
+        terminalRecovery: {
+          action: "force-destroy-environment",
+          dataLoss: "unreconciled-workspace-result",
+        },
+      } as GatewaySessionRow["placement"],
+    } satisfies GatewaySessionRow;
+
+    expect(
+      resolveChatPanePlacement({
+        gatewaySnapshot: pane.context.gateway.snapshot,
+        reclaimingKey: null,
+        row: session,
+      }).reclaimDisabledReason,
+    ).toBeUndefined();
+    const stop = pane.reclaimHeaderPlacement(session);
+    const actions = await waitForConfirmDialogActions();
+    expect(document.body.textContent).toContain("Permanently abandon");
+    expect(actions.textContent).toContain("Abandon changes and stop");
+    answerConfirmDialog(actions, "confirm");
+    await stop;
+
+    expect(request).toHaveBeenCalledWith("environments.destroy", {
+      environmentId: "environment-1",
+      force: true,
+    });
+    expect(refreshReplacement).toHaveBeenCalledWith("main");
+  });
+
   it("does not reclaim when the operator cancels", async () => {
     const request = vi.fn(async () => ({ ok: true }));
     const { pane } = createTestChatPane({

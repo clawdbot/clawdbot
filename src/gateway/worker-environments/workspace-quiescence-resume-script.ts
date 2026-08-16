@@ -1,7 +1,6 @@
 type WorkspaceQuiescenceResumeScriptOptions = {
   processScript: string;
   leaseScript: string;
-  recoveryTimeoutMs: number;
   processProbeConcurrency: number;
   operatorRecoveryExitCode: number;
 };
@@ -30,7 +29,6 @@ async function resume() {
     throw error;
   }
   const input = parseLease(raw, nonce); if (input.recovery !== undefined) throw new WorkspaceOperatorRecoveryError("workspace quiescence recovery " + (input.recovery.state === "recovery-failed" ? "failed" : "timed out") + "; lease retained for operator recovery");
-  const recoveryDeadlineMs = Date.now() + ${options.recoveryTimeoutMs};
   const references = [
     ...(input.watchdog === null ? [] : [{ ...input.watchdog, signal: "SIGTERM" }]),
     ...input.processes.map((entry) => ({ ...entry, signal: "SIGCONT" })),
@@ -38,7 +36,7 @@ async function resume() {
   const recovery = await recoverProcessReferences(
     references,
     ${options.processProbeConcurrency},
-    recoveryDeadlineMs,
+    processReferenceDeadlineMs(references.length),
   );
   if (recovery.remaining.length > 0) {
     const watchdog = recovery.remaining.find((entry) => entry.signal === "SIGTERM") ?? null;

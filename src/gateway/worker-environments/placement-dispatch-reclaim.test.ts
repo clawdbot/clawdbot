@@ -104,6 +104,25 @@ describe("worker placement dispatch reclaim", () => {
     ]);
   });
 
+  it("reclaims an accepted remote-exec workspace result with its local claim", async () => {
+    const harness = createHarness(placementStore);
+    await harness.service.dispatch({ ...REQUEST, executionMode: "remote-exec" });
+
+    const reclaimed = await harness.service.reclaim({
+      sessionId: REQUEST.sessionId,
+      sessionKey: REQUEST.sessionKey,
+      agentId: REQUEST.agentId,
+    });
+
+    expect(reclaimed).toMatchObject({
+      state: "reclaimed",
+      executionMode: "remote-exec",
+      turnClaim: null,
+    });
+    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(harness.environments.destroy).toHaveBeenCalledOnce();
+  });
+
   it("reclaims an environment-free failed placement back to clean local state", async () => {
     const harness = createHarness(placementStore);
     const requested = placementStore.startDispatch(REQUEST);

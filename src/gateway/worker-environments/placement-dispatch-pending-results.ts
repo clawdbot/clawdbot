@@ -6,7 +6,7 @@ import type {
   WorkerDispatchPlacementStore,
   WorkerDrainingDispatchPlacement,
 } from "./placement-dispatch-failure.js";
-import { placementTurnOwner } from "./placement-record.js";
+import { placementWorkspaceResultClaim } from "./placement-record.js";
 import { isRetainedFailedWorkspaceResultOwner } from "./placement-teardown-fence.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import { findWorkerWorkspaceOperatorRecoveryError } from "./tunnel-contract.js";
@@ -121,18 +121,7 @@ export async function recoverPendingWorkspaceResults(
     try {
       const active =
         placement?.state === "active" || placement?.state === "draining" ? placement : undefined;
-      const turnClaim =
-        active &&
-        active.environmentId === pending.environmentId &&
-        active.activeOwnerEpoch === pending.ownerEpoch
-          ? {
-              sessionId: active.sessionId,
-              claimId: pending.claimId,
-              runId: pending.runId,
-              placementGeneration: pending.placementGeneration,
-              owner: placementTurnOwner(active),
-            }
-          : undefined;
+      const turnClaim = placementWorkspaceResultClaim(active, pending);
       if (!active || !turnClaim || !placements.validateWorkspaceResultClaim(turnClaim)) {
         if (pending.stagedResultRef && pending.workspaceAcceptedAtMs === null) {
           // A staged unaccepted result outlives stale placement ownership. Only
@@ -464,13 +453,17 @@ export async function recoverPendingWorkspaceResults(
       });
     } catch (error) {
       const operatorRecoveryError = findWorkerWorkspaceOperatorRecoveryError(error);
+      const terminalRecoveryError =
+        operatorRecoveryError ??
+        (environments.isWorkerBuildMismatchError(error) ? error : undefined);
       if (
-        operatorRecoveryError &&
+        terminalRecoveryError &&
         (placement?.state === "active" || placement?.state === "draining")
       ) {
-        await failure.recordRetainedResultFailure(placement, operatorRecoveryError);
+        await failure.recordRetainedResultFailure(placement, terminalRecoveryError);
       }
-      // Keep the result, claim, and environment fenced. The next sweep retries.
+      // Retryable failures remain fenced for the next sweep; classified terminal
+      // failures retain the result behind the explicit operator recovery action.
     }
   }
   if (cleanupOrphans) {

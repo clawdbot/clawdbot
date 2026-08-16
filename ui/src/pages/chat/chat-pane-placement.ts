@@ -6,6 +6,7 @@ import {
   requestCloudWorkerStop,
   resolveCloudWorkerStopConfirmation,
   resolveCloudWorkerStopAction,
+  type CloudWorkerStopAction,
 } from "../../components/cloud-worker-stop.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
@@ -34,16 +35,13 @@ export function resolveChatPanePlacement(params: {
   row: GatewaySessionRow | undefined;
 }): { reclaimDisabledReason: string | undefined } {
   const reclaiming = params.reclaimingKey === params.row?.key;
-  const action = resolveCloudWorkerStopAction(params.row?.placement);
-  const access = readSessionMethodAccess(params.gatewaySnapshot, {
-    method: "sessions.reclaim",
-    requiredScope: "operator.admin",
-  });
+  const action: CloudWorkerStopAction | null = resolveCloudWorkerStopAction(params.row?.placement);
+  const access = action ? readSessionMethodAccess(params.gatewaySnapshot, action) : undefined;
   const reclaimDisabledReason = reclaiming
     ? t("common.loading")
-    : params.row?.hasActiveRun === true
+    : action?.method === "sessions.reclaim" && params.row?.hasActiveRun === true
       ? t("sessionsView.activeRun")
-      : action?.method !== "sessions.reclaim"
+      : !action || !access
         ? t("sessionsView.actionUnavailable")
         : access.allowed
           ? undefined
@@ -67,20 +65,17 @@ export async function reclaimChatPanePlacement(params: {
 }): Promise<void> {
   const client = params.client;
   const connectionGeneration = params.connectionGeneration;
-  const action = resolveCloudWorkerStopAction(params.row.placement);
+  const action: CloudWorkerStopAction | null = resolveCloudWorkerStopAction(params.row.placement);
   const reclaiming = params.reclaimingKey === params.row.key;
   if (
     !client ||
     reclaiming ||
-    params.row.hasActiveRun === true ||
-    action?.method !== "sessions.reclaim"
+    !action ||
+    (action.method === "sessions.reclaim" && params.row.hasActiveRun === true)
   ) {
     return;
   }
-  const access = readSessionMethodAccess(params.gatewaySnapshot, {
-    method: "sessions.reclaim",
-    requiredScope: "operator.admin",
-  });
+  const access = readSessionMethodAccess(params.gatewaySnapshot, action);
   if (!access.allowed) {
     params.publishError(access.reason);
     return;

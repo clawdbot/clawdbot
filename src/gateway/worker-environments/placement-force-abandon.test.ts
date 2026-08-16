@@ -133,6 +133,42 @@ describe("forced worker environment abandonment", () => {
     unregister();
   });
 
+  it("abandons a remote-exec pending result owned by a local claim", async () => {
+    const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
+    const harness = createHarness(store);
+    await harness.service.dispatch({ ...REQUEST, executionMode: "remote-exec" });
+    const active = store.get(REQUEST.sessionId);
+    if (active?.state !== "active") {
+      throw new Error("active remote-exec placement fixture was not active");
+    }
+    const claimId = "reclaim-forced-local-claim";
+    const claim = store.claimReclaimWorkspaceResult({
+      ...REQUEST,
+      claimId,
+      runId: claimId,
+      owner: {
+        kind: "local",
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+    });
+    store.acceptWorkspaceResult(claim);
+
+    await forceAbandonWorkerEnvironment({
+      placements: store,
+      environmentId: active.environmentId,
+      resolveWorkspacePath: async () => root,
+    });
+
+    expect(store.get(REQUEST.sessionId)).toMatchObject({
+      state: "failed",
+      executionMode: "remote-exec",
+      turnClaim: null,
+      recoveryError: FORCED_WORKER_ABANDONMENT_ERROR,
+    });
+    expect(store.listPendingWorkspaceResults()).toEqual([]);
+  });
+
   it("drains nested operations before forced teardown without a pending result", async () => {
     const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
     const { environmentId } = createDispatchEnvironmentFixtures();

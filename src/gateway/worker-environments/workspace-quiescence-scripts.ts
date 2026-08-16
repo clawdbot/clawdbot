@@ -54,7 +54,7 @@ function probeProcessIdentity(pid, timeoutMs = ${REMOTE_WATCHDOG_PROCESS_PROBE_T
     }, timeoutMs);
   });
 }
-function processEnrollmentDeadlineMs(referenceCount) {
+function processReferenceDeadlineMs(referenceCount) {
   const probeBatches = Math.ceil(referenceCount / ${REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY});
   return Date.now() + Math.max(
     ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS},
@@ -347,7 +347,7 @@ try {
       const stopped = await recoverProcessReferences(
         candidates.map(([pid, row]) => ({ pid, start: row.start, signal: "SIGSTOP" })),
         ${REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY},
-        processEnrollmentDeadlineMs(candidates.length),
+        processReferenceDeadlineMs(candidates.length),
       );
       if (stopped.remaining.length > 0) {
         throw new Error(
@@ -505,7 +505,7 @@ if (input.recovery !== undefined) {
   throw new WorkspaceOperatorRecoveryError("workspace quiescence recovery " + failure + "; lease retained for operator recovery");
 }
 const existingReferences = input.processes.map((entry) => ({ ...entry, signal: 0 }));
-const existingValidationDeadlineMs = existingReferences.length === 0 ? Date.now() : processEnrollmentDeadlineMs(existingReferences.length);
+const existingValidationDeadlineMs = existingReferences.length === 0 ? Date.now() : processReferenceDeadlineMs(existingReferences.length);
 const renewalDeadlineMs = existingValidationDeadlineMs + ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS};
 if (input.watchdog === null || input.expiresAtMs <= renewalDeadlineMs) {
   throw new Error("workspace quiescence lease is no longer active");
@@ -593,7 +593,7 @@ if (validationMode === "final" && !sharedHost) {
       const stopped = await recoverProcessReferences(
         references.map((entry) => ({ ...entry, signal: "SIGSTOP" })),
         ${REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY},
-        processEnrollmentDeadlineMs(references.length),
+        processReferenceDeadlineMs(references.length),
       );
       if (stopped.remaining.length > 0) {
         await rollbackLateProcesses(
@@ -656,7 +656,6 @@ void renew().catch((error) => {
 export const REMOTE_WORKSPACE_RESUME_JS = createWorkspaceQuiescenceResumeScript({
   processScript: REMOTE_QUIESCENCE_PS_JS,
   leaseScript: REMOTE_QUIESCENCE_LEASE_JS,
-  recoveryTimeoutMs: REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS,
   processProbeConcurrency: REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY,
   operatorRecoveryExitCode: WORKER_WORKSPACE_OPERATOR_RECOVERY_EXIT_CODE,
 });

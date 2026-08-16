@@ -58,7 +58,8 @@ type WorkerEnvironmentServiceErrorCode =
   | "unsupported_platform"
   | "launcher_failure"
   | "provider_failure"
-  | "bootstrap_failure";
+  | "bootstrap_failure"
+  | "worker_build_mismatch";
 
 class WorkerEnvironmentServiceError extends Error {
   constructor(
@@ -71,6 +72,9 @@ class WorkerEnvironmentServiceError extends Error {
 
 const serviceError = (code: WorkerEnvironmentServiceErrorCode, message: string) =>
   new WorkerEnvironmentServiceError(code, message);
+
+const isServiceError = (error: unknown, code: WorkerEnvironmentServiceErrorCode): boolean =>
+  error instanceof WorkerEnvironmentServiceError && error.code === code;
 
 type WorkerEnvironmentServiceOptions = {
   store: WorkerEnvironmentStore;
@@ -291,8 +295,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     callBootstrap,
     callProvider,
     inState,
-    isServiceError: (error, code) =>
-      error instanceof WorkerEnvironmentServiceError && error.code === code,
+    isServiceError,
     isStopping: () => stopping,
     move,
     saveError,
@@ -479,6 +482,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     takeMintedCredential: credentialBroker.takeMintedCredential,
     acquireTurnCredential: credentialBroker.acquireTurnCredential,
     acknowledgeCredentialDelivery: credentialBroker.acknowledgeCredentialDelivery,
+    isWorkerBuildMismatchError: (error: unknown) => isServiceError(error, "worker_build_mismatch"),
     startTunnel: environmentAccess.startTunnel,
     stopTunnel: environmentAccess.stopTunnel,
     reconcileEnvironment,

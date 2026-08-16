@@ -347,6 +347,7 @@ export function createHarness(
       return ready;
     }),
     get: vi.fn(() => currentEnvironment),
+    isWorkerBuildMismatchError: vi.fn(() => false),
     attachSession: vi.fn(async () => {
       fail("attach");
       currentEnvironment = attached;

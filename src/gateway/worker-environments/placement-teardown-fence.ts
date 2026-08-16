@@ -2,10 +2,11 @@ import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { ensureWorkspaceRetentionSchema } from "../../state/openclaw-state-db-schema-additive.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
-import type {
-  WorkerSessionPlacementRecord,
-  WorkerSessionTurnClaim,
-  WorkerTerminalRecovery,
+import {
+  placementWorkspaceResultClaim,
+  type WorkerSessionPlacementRecord,
+  type WorkerSessionTurnClaim,
+  type WorkerTerminalRecovery,
 } from "./placement-record.js";
 import { find as findPlacement, fromRow } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
@@ -26,7 +27,7 @@ type WorkerWorkspaceOwnerIdentity = {
   placementGeneration: number;
 };
 
-type WorkerPendingResultOwnerIdentity = WorkerWorkspaceOwnerIdentity & {
+export type WorkerPendingResultOwnerIdentity = WorkerWorkspaceOwnerIdentity & {
   claimId: string;
   runId: string;
 };
@@ -60,20 +61,7 @@ export function classifyPendingWorkspaceResultOwner(
   placement: WorkerSessionPlacementRecord | undefined,
   pending: WorkerPendingResultOwnerIdentity,
 ): WorkerEnvironmentTeardownFence["ownerState"] | undefined {
-  const claim = placement?.turnClaim;
-  const expectedGeneration =
-    pending.placementGeneration + (placement?.state === "draining" ? 1 : 0);
-  if (
-    (placement?.state === "active" || placement?.state === "draining") &&
-    placement.environmentId === pending.environmentId &&
-    placement.activeOwnerEpoch === pending.ownerEpoch &&
-    placement.generation === expectedGeneration &&
-    claim?.owner === "worker" &&
-    claim.claimId === pending.claimId &&
-    claim.runId === pending.runId &&
-    claim.generation === pending.placementGeneration &&
-    claim.ownerEpoch === pending.ownerEpoch
-  ) {
+  if (placementWorkspaceResultClaim(placement, pending)) {
     return "current";
   }
   return placement?.state === "failed" &&
@@ -271,7 +259,8 @@ function canDestroyAcceptedWorkspaceResult(
   db: DatabaseSync,
   claim: WorkerSessionTurnClaim,
 ): boolean {
-  if (claim.owner.kind !== "worker") {
+  const { environmentId, ownerEpoch } = claim.owner;
+  if (!environmentId || ownerEpoch === undefined) {
     return false;
   }
   const pending = executeSqliteQuerySync(
@@ -287,8 +276,8 @@ function canDestroyAcceptedWorkspaceResult(
         "run_id",
       ])
       .where("session_id", "=", claim.sessionId)
-      .where("environment_id", "=", claim.owner.environmentId)
-      .where("owner_epoch", "=", claim.owner.ownerEpoch)
+      .where("environment_id", "=", environmentId)
+      .where("owner_epoch", "=", ownerEpoch)
       .where("placement_generation", "=", claim.placementGeneration)
       .where("claim_id", "=", claim.claimId)
       .where("run_id", "=", claim.runId)

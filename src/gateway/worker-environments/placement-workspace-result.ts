@@ -2,8 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
-  isCurrentPlacementTurnClaim,
-  placementTurnOwner,
+  placementWorkspaceResultClaim,
   resolvePlacementTurnEnvironment,
   type WorkerSessionPlacementRecord,
   type WorkerSessionTurnClaim,
@@ -42,29 +41,23 @@ function matchesWorkspaceResultClaim(
   row: StateDatabase["worker_workspace_pending_results"],
   claim: WorkerSessionTurnClaim,
 ): boolean {
-  const recoveryOwner =
-    placement.state === "active" || placement.state === "draining"
-      ? placementTurnOwner(placement)
-      : undefined;
-  const recoveryGenerationMatches =
-    placement.state === "active"
-      ? placement.generation === claim.placementGeneration
-      : placement.state === "draining" && placement.generation === claim.placementGeneration + 1;
-  return (
-    row.session_id === claim.sessionId &&
-    row.environment_id === placement.environmentId &&
-    row.owner_epoch === placement.activeOwnerEpoch &&
-    row.placement_generation === claim.placementGeneration &&
-    row.claim_id === claim.claimId &&
-    row.run_id === claim.runId &&
-    (isCurrentPlacementTurnClaim(placement, claim) ||
-      // Restart revokes local authority; only the exact durable result may finish.
-      (recoveryGenerationMatches &&
-        placement.turnClaim === null &&
-        recoveryOwner?.kind === "local" &&
-        claim.owner.kind === "local" &&
-        claim.owner.environmentId === recoveryOwner.environmentId &&
-        claim.owner.ownerEpoch === recoveryOwner.ownerEpoch))
+  const currentClaim = placementWorkspaceResultClaim(placement, {
+    sessionId: row.session_id,
+    environmentId: row.environment_id,
+    ownerEpoch: row.owner_epoch,
+    placementGeneration: row.placement_generation,
+    claimId: row.claim_id,
+    runId: row.run_id,
+  });
+  return Boolean(
+    currentClaim &&
+    currentClaim.sessionId === claim.sessionId &&
+    currentClaim.claimId === claim.claimId &&
+    currentClaim.runId === claim.runId &&
+    currentClaim.placementGeneration === claim.placementGeneration &&
+    currentClaim.owner.kind === claim.owner.kind &&
+    currentClaim.owner.environmentId === claim.owner.environmentId &&
+    currentClaim.owner.ownerEpoch === claim.owner.ownerEpoch,
   );
 }
 
@@ -390,19 +383,8 @@ export function createPlacementWorkspaceResultOps(
       }
       const outcome = write((db) => {
         const current = getRequired(db, pending.sessionId);
-        const claim = current.turnClaim;
-        const expectedGeneration =
-          pending.placementGeneration + (current.state === "draining" ? 1 : 0);
-        const isCurrentOwner =
-          (current.state === "active" || current.state === "draining") &&
-          current.environmentId === pending.environmentId &&
-          current.activeOwnerEpoch === pending.ownerEpoch &&
-          current.generation === expectedGeneration &&
-          claim?.owner === "worker" &&
-          claim.claimId === pending.claimId &&
-          claim.runId === pending.runId &&
-          claim.generation === pending.placementGeneration &&
-          claim.ownerEpoch === pending.ownerEpoch;
+        const currentClaim = placementWorkspaceResultClaim(current, pending);
+        const isCurrentOwner = Boolean(currentClaim);
         const isRetainedFailedOwner = isRetainedFailedWorkspaceResultOwner(current, pending);
         if (!isCurrentOwner && !isRetainedFailedOwner) {
           throw new Error(
@@ -411,30 +393,38 @@ export function createPlacementWorkspaceResultOps(
         }
 
         const updatedAtMs = now();
-        const update =
-          current.state === "failed"
-            ? placementQuery(db)
-                .updateTable("worker_session_placements")
-                .set({ recovery_error: recoveryError, updated_at_ms: updatedAtMs })
-                .where("session_id", "=", pending.sessionId)
-                .where("state", "=", "failed")
-                .where("transition_generation", "=", current.generation)
-                .where("environment_id", "=", pending.environmentId)
-                .where("active_owner_epoch", "=", pending.ownerEpoch)
-                .where("turn_claim_owner", "is", null)
-            : placementQuery(db)
-                .updateTable("worker_session_placements")
-                .set(transitionValues(current, "failed", { recoveryError }, updatedAtMs))
-                .where("session_id", "=", pending.sessionId)
-                .where("state", "=", current.state)
-                .where("transition_generation", "=", current.generation)
-                .where("environment_id", "=", pending.environmentId)
-                .where("active_owner_epoch", "=", pending.ownerEpoch)
-                .where("turn_claim_owner", "=", "worker")
-                .where("turn_claim_id", "=", pending.claimId)
-                .where("turn_claim_run_id", "=", pending.runId)
-                .where("turn_claim_generation", "=", pending.placementGeneration)
-                .where("turn_claim_owner_epoch", "=", pending.ownerEpoch);
+        let update;
+        if (current.state === "failed") {
+          update = placementQuery(db)
+            .updateTable("worker_session_placements")
+            .set({ recovery_error: recoveryError, updated_at_ms: updatedAtMs })
+            .where("session_id", "=", pending.sessionId)
+            .where("state", "=", "failed")
+            .where("transition_generation", "=", current.generation)
+            .where("environment_id", "=", pending.environmentId)
+            .where("active_owner_epoch", "=", pending.ownerEpoch)
+            .where("turn_claim_owner", "is", null);
+        } else {
+          if (!currentClaim) {
+            throw new Error(`Pending worker result lost its claim for ${pending.sessionId}`);
+          }
+          const claimedUpdate = placementQuery(db)
+            .updateTable("worker_session_placements")
+            .set(transitionValues(current, "failed", { recoveryError }, updatedAtMs))
+            .where("session_id", "=", pending.sessionId)
+            .where("state", "=", current.state)
+            .where("transition_generation", "=", current.generation)
+            .where("environment_id", "=", pending.environmentId)
+            .where("active_owner_epoch", "=", pending.ownerEpoch)
+            .where("turn_claim_owner", "=", currentClaim.owner.kind)
+            .where("turn_claim_id", "=", pending.claimId)
+            .where("turn_claim_run_id", "=", pending.runId)
+            .where("turn_claim_generation", "=", pending.placementGeneration);
+          update =
+            currentClaim.owner.kind === "worker"
+              ? claimedUpdate.where("turn_claim_owner_epoch", "=", pending.ownerEpoch)
+              : claimedUpdate.where("turn_claim_owner_epoch", "is", null);
+        }
         const result = executeSqliteQuerySync(db, update);
         if (result.numAffectedRows !== 1n) {
           throw new Error(
@@ -444,19 +434,7 @@ export function createPlacementWorkspaceResultOps(
         deleteWorkerWorkspacePendingResult(db, pending);
         return {
           record: getRequired(db, pending.sessionId),
-          releasedClaim: isCurrentOwner
-            ? {
-                sessionId: pending.sessionId,
-                claimId: pending.claimId,
-                runId: pending.runId,
-                placementGeneration: pending.placementGeneration,
-                owner: {
-                  kind: "worker" as const,
-                  environmentId: pending.environmentId,
-                  ownerEpoch: pending.ownerEpoch,
-                },
-              }
-            : undefined,
+          releasedClaim: isCurrentOwner ? currentClaim : undefined,
         };
       });
       if (outcome.releasedClaim) {
@@ -472,23 +450,16 @@ export function createPlacementWorkspaceResultOps(
     }): { record: WorkerSessionPlacementRecord; stagedResultRef?: string } {
       const { claim } = input;
       const recoveryError = input.recoveryError.trim();
-      if (claim.owner.kind !== "worker" || !recoveryError) {
-        throw new Error("Forced worker turn abandonment requires a worker claim and error");
+      if (!recoveryError) {
+        throw new Error("Forced worker turn abandonment requires a turn claim and error");
       }
-      const owner = claim.owner;
       const outcome = write((db) => {
         const current = getRequired(db, claim.sessionId);
-        const persisted = current.turnClaim;
+        const environment = resolvePlacementTurnEnvironment(current, claim);
         if (
           current.state !== "draining" ||
           current.generation !== input.expectedGeneration ||
-          current.environmentId !== owner.environmentId ||
-          current.activeOwnerEpoch !== owner.ownerEpoch ||
-          persisted?.owner !== "worker" ||
-          persisted.claimId !== claim.claimId ||
-          persisted.runId !== claim.runId ||
-          persisted.generation !== claim.placementGeneration ||
-          persisted.ownerEpoch !== owner.ownerEpoch
+          !environment
         ) {
           throw new Error(`Cannot force-abandon stale worker turn for ${claim.sessionId}`);
         }
@@ -512,8 +483,8 @@ export function createPlacementWorkspaceResultOps(
         ).rows[0];
         if (
           pending &&
-          (pending.environment_id !== owner.environmentId ||
-            pending.owner_epoch !== owner.ownerEpoch ||
+          (pending.environment_id !== environment.environmentId ||
+            pending.owner_epoch !== environment.ownerEpoch ||
             pending.placement_generation !== claim.placementGeneration ||
             pending.claim_id !== claim.claimId ||
             pending.run_id !== claim.runId)
@@ -524,26 +495,27 @@ export function createPlacementWorkspaceResultOps(
         if (pending) {
           clearWorkerWorkspacePendingResult(db, claim.sessionId);
         }
-        const result = executeSqliteQuerySync(
-          db,
-          placementQuery(db)
-            .updateTable("worker_session_placements")
-            .set(
-              pending
-                ? transitionValues(current, "failed", { recoveryError }, now())
-                : transitionValues(current, "reconciling", {}, now()),
-            )
-            .where("session_id", "=", claim.sessionId)
-            .where("state", "=", "draining")
-            .where("transition_generation", "=", current.generation)
-            .where("environment_id", "=", owner.environmentId)
-            .where("active_owner_epoch", "=", owner.ownerEpoch)
-            .where("turn_claim_owner", "=", "worker")
-            .where("turn_claim_id", "=", claim.claimId)
-            .where("turn_claim_run_id", "=", claim.runId)
-            .where("turn_claim_generation", "=", claim.placementGeneration)
-            .where("turn_claim_owner_epoch", "=", owner.ownerEpoch),
-        );
+        const claimedUpdate = placementQuery(db)
+          .updateTable("worker_session_placements")
+          .set(
+            pending
+              ? transitionValues(current, "failed", { recoveryError }, now())
+              : transitionValues(current, "reconciling", {}, now()),
+          )
+          .where("session_id", "=", claim.sessionId)
+          .where("state", "=", "draining")
+          .where("transition_generation", "=", current.generation)
+          .where("environment_id", "=", environment.environmentId)
+          .where("active_owner_epoch", "=", environment.ownerEpoch)
+          .where("turn_claim_owner", "=", claim.owner.kind)
+          .where("turn_claim_id", "=", claim.claimId)
+          .where("turn_claim_run_id", "=", claim.runId)
+          .where("turn_claim_generation", "=", claim.placementGeneration);
+        const update =
+          claim.owner.kind === "worker"
+            ? claimedUpdate.where("turn_claim_owner_epoch", "=", environment.ownerEpoch)
+            : claimedUpdate.where("turn_claim_owner_epoch", "is", null);
+        const result = executeSqliteQuerySync(db, update);
         if (result.numAffectedRows !== 1n) {
           throw new Error(`Worker turn owner changed during abandonment for ${claim.sessionId}`);
         }

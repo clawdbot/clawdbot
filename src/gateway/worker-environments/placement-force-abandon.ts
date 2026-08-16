@@ -1,5 +1,9 @@
 import type { WorkerDispatchPlacementStore } from "./placement-dispatch-failure.js";
-import { placementTurnOwner, type WorkerSessionTurnClaim } from "./placement-record.js";
+import {
+  placementTurnOwner,
+  placementWorkspaceResultClaim,
+  type WorkerSessionTurnClaim,
+} from "./placement-record.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
   cleanupWorkerWorkspaceResultRef,
@@ -9,7 +13,8 @@ import {
   workerWorkspaceResultRef,
 } from "./workspace-result-staging.js";
 
-const FORCED_WORKER_ABANDONMENT_ERROR = "Cloud worker result abandoned by forced operator teardown";
+export const FORCED_WORKER_ABANDONMENT_ERROR =
+  "Cloud worker result abandoned by forced operator teardown";
 
 export class WorkerForcedAbandonmentBlockedError extends Error {
   constructor(environmentId: string) {
@@ -150,17 +155,11 @@ export async function forceAbandonWorkerEnvironment(params: {
     }
     if (fence) {
       if (fence.ownerState === "current") {
-        await placements.closeWorkerTurnToolState({
-          sessionId: pending.sessionId,
-          claimId: pending.claimId,
-          runId: pending.runId,
-          placementGeneration: pending.placementGeneration,
-          owner: {
-            kind: "worker",
-            environmentId: pending.environmentId,
-            ownerEpoch: pending.ownerEpoch,
-          },
-        });
+        const claim = placementWorkspaceResultClaim(placement, pending);
+        if (!claim || !placements.validateWorkspaceResultClaim(claim)) {
+          throw new Error(`Pending workspace result lost its claim for ${pending.sessionId}`);
+        }
+        await placements.closeWorkerTurnToolState(claim);
       }
       assertAbandonmentAllowed();
       placements.forceAbandonPendingWorkspaceResult({

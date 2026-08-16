@@ -192,6 +192,7 @@ describe("placement session retirement", () => {
     const retirement = createPlacementSessionRetirement({
       placements: {
         get: (sessionId) => placements.get(sessionId),
+        isEnvironmentTeardownFenced: () => false,
         list: () => placements.list(),
         retireSessionPlacement,
       },

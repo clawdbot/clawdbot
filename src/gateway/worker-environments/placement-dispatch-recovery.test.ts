@@ -3,6 +3,7 @@ import type { WorkerInstallationArtifact } from "./bundle.js";
 import { seedActivePlacement } from "./placement-dispatch-test-fixtures.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
@@ -98,4 +99,82 @@ describe("worker placement restart recovery", () => {
       expect(tunnelManager.start).not.toHaveBeenCalled();
     },
   );
+
+  it("projects a stale worker bundle as terminal retained-result recovery", async () => {
+    let currentBundle: WorkerInstallationArtifact = support.BUNDLE_ARTIFACT;
+    support.testState.prepareInstallation = vi.fn(async (install) =>
+      install === "bundle" ? currentBundle : support.NPM_ARTIFACT,
+    );
+    const tunnelManager = {
+      status: () => "stopped" as const,
+      start: vi.fn(),
+      stop: vi.fn(async () => {}),
+      stopAll: vi.fn(async () => {}),
+    } as unknown as WorkerTunnelManager;
+    const placements = createWorkerSessionPlacementStore({
+      database: support.testState.stateDb,
+      now: () => support.testState.nowMs,
+    });
+    const workerService = support.createService(support.createProvider(), {
+      placementStore: createWorkerSessionPlacementGate(placements),
+      tunnelManager,
+    });
+    const recovery = createWorkerPlacementDispatchService({
+      placements,
+      environments: workerService,
+      workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
+      runLocalBarrier: async ({ startDispatch }) => startDispatch(),
+      runActivationBarrier: async ({ activate }) => activate(),
+      runReclaimBarrier: async ({ reclaim }) => await reclaim("/gateway/workspace"),
+      resolveWorkspacePath: async () => "/gateway/workspace",
+      reportWorkspaceResultConflict: async () => {},
+      resolveWorkspaceResultConflict: async () => undefined,
+    });
+    const environmentId = "worker-stale-bundle-recovery";
+    support.seedReady(environmentId);
+    const attached = await workerService.attachSession({
+      environmentId,
+      ownerEpoch: 1,
+      sessionId: "session-1",
+    });
+    const active = seedActivePlacement(placements, {
+      environmentId,
+      ownerEpoch: attached.ownerEpoch,
+    });
+    if (active.state !== "active") {
+      throw new Error("active placement fixture was not active");
+    }
+    const claim = placements.claimTurn({
+      sessionId: active.sessionId,
+      sessionKey: active.sessionKey,
+      agentId: active.agentId,
+      claimId: "claim-stale-bundle-recovery",
+      runId: "run-stale-bundle-recovery",
+      owner: {
+        kind: "worker",
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+    });
+    placements.markWorkspaceResultPending(claim);
+    placements.handoffWorkspaceResultRecovery(claim);
+    currentBundle = { ...support.BUNDLE_ARTIFACT, bundleHash: "c".repeat(64) };
+
+    await recovery.reconcile();
+
+    expect(placements.get(active.sessionId)).toMatchObject({
+      state: "failed",
+      turnClaim: null,
+      terminalRecovery: {
+        action: "force-destroy-environment",
+        dataLoss: "unreconciled-workspace-result",
+      },
+    });
+    expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+    expect(workerService.get(active.environmentId)).toMatchObject({
+      state: "attached",
+      destroyRequestedAtMs: null,
+    });
+    expect(tunnelManager.start).not.toHaveBeenCalled();
+  });
 });

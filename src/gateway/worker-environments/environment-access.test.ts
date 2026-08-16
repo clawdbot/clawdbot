@@ -96,7 +96,7 @@ describe("worker environment service", () => {
 
     await expect(workerService.startTunnel({ environmentId, ownerEpoch: 1 })).rejects.toMatchObject(
       {
-        code: "invalid_state",
+        code: prepareError ? "invalid_state" : "worker_build_mismatch",
         message: prepareError
           ? "Current worker build identity is unavailable"
           : STALE_WORKER_BUILD_REASON,

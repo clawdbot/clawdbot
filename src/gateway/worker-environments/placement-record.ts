@@ -23,6 +23,15 @@ export type WorkerSessionTurnClaim = {
   owner: WorkerSessionTurnOwner;
 };
 
+export type WorkerWorkspaceResultClaimIdentity = {
+  sessionId: string;
+  environmentId: string;
+  ownerEpoch: number;
+  placementGeneration: number;
+  claimId: string;
+  runId: string;
+};
+
 export function placementTurnOwner(placement: {
   executionMode: WorkerPlacementExecutionMode;
   environmentId: string;
@@ -507,6 +516,37 @@ export function isCurrentPlacementTurnClaim(
     claim.owner.environmentId === undefined &&
     claim.owner.ownerEpoch === undefined
   );
+}
+
+export function placementWorkspaceResultClaim(
+  record: WorkerSessionPlacementRecord | undefined,
+  result: WorkerWorkspaceResultClaimIdentity,
+): WorkerSessionTurnClaim | undefined {
+  if (record?.state !== "active" && record?.state !== "draining") {
+    return undefined;
+  }
+  const expectedGeneration = result.placementGeneration + (record.state === "draining" ? 1 : 0);
+  if (
+    record.sessionId !== result.sessionId ||
+    record.environmentId !== result.environmentId ||
+    record.activeOwnerEpoch !== result.ownerEpoch ||
+    record.generation !== expectedGeneration
+  ) {
+    return undefined;
+  }
+  const claim: WorkerSessionTurnClaim = {
+    sessionId: result.sessionId,
+    claimId: result.claimId,
+    runId: result.runId,
+    placementGeneration: result.placementGeneration,
+    owner: placementTurnOwner(record),
+  };
+  if (isCurrentPlacementTurnClaim(record, claim)) {
+    return claim;
+  }
+  // Restart revokes local authority; only an exact durable workspace result
+  // may retain the remote-exec placement owner needed to finish recovery.
+  return record.turnClaim === null && claim.owner.kind === "local" ? claim : undefined;
 }
 
 export function resolvePlacementTurnEnvironment(

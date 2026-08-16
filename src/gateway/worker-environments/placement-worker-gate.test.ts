@@ -7,7 +7,10 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
+import type {
+  WorkerPlacementExecutionMode,
+  WorkerSessionPlacementIdentity,
+} from "./placement-record.js";
 import { MAX_RUNNING_WORKER_SESSION_TOOL_OPERATIONS } from "./placement-session-tool-operations.js";
 import {
   createWorkerSessionPlacementStore,
@@ -39,8 +42,8 @@ describe("worker session placement gate", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  function activate() {
-    let placement = store.startDispatch(SESSION);
+  function activate(executionMode: WorkerPlacementExecutionMode = "worker-turn") {
+    let placement = store.startDispatch({ ...SESSION, executionMode });
     placement = store.transition({
       sessionId: SESSION.sessionId,
       from: "requested",
@@ -74,15 +77,18 @@ describe("worker session placement gate", () => {
     });
   }
 
-  function preclaim(runId: string) {
-    const placement = activate();
+  function preclaim(runId: string, owner: "local" | "worker" = "worker") {
+    const placement = activate(owner === "worker" ? "worker-turn" : "remote-exec");
     return store.claimTurn({
       sessionId: placement.sessionId,
       agentId: placement.agentId,
       sessionKey: placement.sessionKey,
       claimId: `claim:${runId}`,
       runId,
-      owner: { kind: "worker", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
+      owner:
+        owner === "worker"
+          ? { kind: "worker", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH }
+          : { kind: "local", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
     });
   }
 
@@ -411,40 +417,43 @@ describe("worker session placement gate", () => {
     expect(() => restarted.releaseTurn(claim)).not.toThrow();
   });
 
-  it("fences an environment only for an exact placement-owned recovery record", async () => {
-    const claim = preclaim("run-worker-terminal");
-    store.markWorkspaceResultPending(claim);
-    const active = store.get(SESSION.sessionId);
-    if (active?.state !== "active") {
-      throw new Error("expected active placement");
-    }
-    const gate = createWorkerSessionPlacementGate(store);
-    expect(gate.isEnvironmentTeardownFenced(ENVIRONMENT_ID)).toBe(true);
-    expect(store.canDestroyAcceptedWorkspaceResult(claim)).toBe(false);
-    store.acceptWorkspaceResult(claim);
-    expect(store.canDestroyAcceptedWorkspaceResult(claim)).toBe(true);
-    const pending = store.listPendingWorkspaceResults()[0]!;
-    await store.failPendingWorkspaceResult({
-      pending,
-      recoveryError: "workspace recovery retained for operator action",
-    });
-    expect(store.get(SESSION.sessionId)).toMatchObject({
-      state: "failed",
-      terminalRecovery: {
-        action: "force-destroy-environment",
-        dataLoss: "unreconciled-workspace-result",
-      },
-    });
-    expect(gate.isEnvironmentTeardownFenced(ENVIRONMENT_ID)).toBe(true);
-    expect(store.canDestroyAcceptedWorkspaceResult(claim)).toBe(false);
-    expect(store.canDestroyForceAbandonedEnvironment(ENVIRONMENT_ID)).toBe(false);
-    expect(gate.isEnvironmentTeardownFenced("environment-other")).toBe(false);
+  it.each(["worker", "local"] as const)(
+    "fences an environment for an exact %s placement-owned recovery record",
+    async (owner) => {
+      const claim = preclaim(`run-${owner}-terminal`, owner);
+      store.markWorkspaceResultPending(claim);
+      const active = store.get(SESSION.sessionId);
+      if (active?.state !== "active") {
+        throw new Error("expected active placement");
+      }
+      const gate = createWorkerSessionPlacementGate(store);
+      expect(gate.isEnvironmentTeardownFenced(ENVIRONMENT_ID)).toBe(true);
+      expect(store.canDestroyAcceptedWorkspaceResult(claim)).toBe(false);
+      store.acceptWorkspaceResult(claim);
+      expect(store.canDestroyAcceptedWorkspaceResult(claim)).toBe(true);
+      const pending = store.listPendingWorkspaceResults()[0]!;
+      await store.failPendingWorkspaceResult({
+        pending,
+        recoveryError: "workspace recovery retained for operator action",
+      });
+      expect(store.get(SESSION.sessionId)).toMatchObject({
+        state: "failed",
+        terminalRecovery: {
+          action: "force-destroy-environment",
+          dataLoss: "unreconciled-workspace-result",
+        },
+      });
+      expect(gate.isEnvironmentTeardownFenced(ENVIRONMENT_ID)).toBe(true);
+      expect(store.canDestroyAcceptedWorkspaceResult(claim)).toBe(false);
+      expect(store.canDestroyForceAbandonedEnvironment(ENVIRONMENT_ID)).toBe(false);
+      expect(gate.isEnvironmentTeardownFenced("environment-other")).toBe(false);
 
-    store.forceAbandonPendingWorkspaceResult({
-      pending,
-      recoveryError: "forced abandonment",
-    });
-    expect(gate.isEnvironmentTeardownFenced(ENVIRONMENT_ID)).toBe(false);
-    expect(store.canDestroyForceAbandonedEnvironment(ENVIRONMENT_ID)).toBe(true);
-  });
+      store.forceAbandonPendingWorkspaceResult({
+        pending,
+        recoveryError: "forced abandonment",
+      });
+      expect(gate.isEnvironmentTeardownFenced(ENVIRONMENT_ID)).toBe(false);
+      expect(store.canDestroyForceAbandonedEnvironment(ENVIRONMENT_ID)).toBe(true);
+    },
+  );
 });
