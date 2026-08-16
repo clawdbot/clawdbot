@@ -168,6 +168,7 @@ describe("exportTrajectoryCommand", () => {
       expect(mocks.resolveStorePath).toHaveBeenCalledWith(store, { agentId: "work" });
       expect(mocks.resolveExplicitStorePath).toHaveBeenCalledWith({
         storePath: resolvedStore,
+        inputStorePath: store,
         agentId: "work",
         runtime,
         json: undefined,

@@ -15,74 +15,96 @@ import {
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 
 const SESSION_STORE_SELECTION_CONTEXT = {
   surface: "session-store selection",
   hint: "Pass --agent <id> to select one agent, or --all-agents to include every configured agent.",
 };
 
-function validateExplicitSessionStorePath(storePath: string, agentId: string): string {
-  const pathname = path.resolve(storePath);
-  if (!fs.existsSync(pathname)) {
-    throw new Error(
-      `Session store does not exist: ${pathname}. Pass an existing physical .sqlite session store file.`,
-    );
-  }
+function formatResolvedStoreTarget(params: {
+  inputStorePath: string;
+  resolvedPath: string;
+  storePath: string;
+}): string {
+  return path.resolve(params.storePath) === params.resolvedPath
+    ? params.resolvedPath
+    : `${params.resolvedPath} (resolved from --store ${JSON.stringify(params.inputStorePath)})`;
+}
+
+function validateExplicitSessionStorePath(params: {
+  agentId: string;
+  inputStorePath: string;
+  storePath: string;
+}): string {
+  const storePath = path.resolve(params.storePath);
+  const resolvedPath = resolveSqliteTargetFromSessionStorePath(storePath, {
+    agentId: params.agentId,
+  }).path;
+  const displayTarget = formatResolvedStoreTarget({
+    inputStorePath: params.inputStorePath,
+    resolvedPath,
+    storePath,
+  });
   let stat: fs.Stats;
   try {
-    stat = fs.statSync(pathname);
+    stat = fs.statSync(resolvedPath);
   } catch (error) {
-    throw new Error(`Could not inspect session store ${pathname}: ${formatErrorMessage(error)}`, {
-      cause: error,
-    });
-  }
-  if (!stat.isFile()) {
-    throw new Error(
-      `Session store is not a regular file: ${pathname}. Pass an existing physical .sqlite session store file.`,
-    );
-  }
-  if (!pathname.endsWith(".sqlite")) {
-    throw new Error(
-      `Session store must be a physical .sqlite file: ${pathname}. Configured legacy locators are normalized only when --store is omitted.`,
-    );
-  }
-
-  const target = resolveSqliteTargetFromSessionStorePath(pathname, {
-    agentId,
-    registeredDatabases: [],
-  });
-  try {
-    const opened = withOpenClawAgentDatabaseReadOnly(() => undefined, {
-      agentId: target.agentId ?? agentId,
-      path: pathname,
-    });
-    if (!opened.found) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       throw new Error(
-        opened.reason === "database-missing"
-          ? "the file disappeared while it was being opened"
-          : `the OpenClaw agent schema is unavailable (${opened.reason})`,
+        `Session store target does not exist: ${displayTarget}. Pass a selector whose resolved SQLite target exists.`,
+        { cause: error },
       );
     }
-  } catch (error) {
     throw new Error(
-      `Session store is not a readable OpenClaw SQLite database: ${pathname}. ${formatErrorMessage(error)}. Pass a database path reported by openclaw sessions or openclaw status.`,
+      `Could not inspect session store target ${displayTarget}: ${formatErrorMessage(error)}`,
       { cause: error },
     );
   }
-  return pathname;
+  if (!stat.isFile()) {
+    throw new Error(
+      `Session store target is not a regular file: ${displayTarget}. Pass a selector whose resolved SQLite target is a regular file.`,
+    );
+  }
+
+  let database;
+  try {
+    database = openNodeSqliteDatabase(resolvedPath, { readOnly: true });
+    const applicationTables = database
+      .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+      .all() as Array<{ name?: unknown }>;
+    if (
+      applicationTables.length > 0 &&
+      !applicationTables.some((row) => row.name === "schema_meta")
+    ) {
+      throw new Error("the SQLite file has application tables but no OpenClaw schema metadata");
+    }
+  } catch (error) {
+    throw new Error(
+      `Session store target is not a session store: ${displayTarget}. ${formatErrorMessage(error)}. Pass a legacy store selector or SQLite target reported by openclaw sessions or openclaw status.`,
+      { cause: error },
+    );
+  } finally {
+    database?.close();
+  }
+  return storePath;
 }
 
-/** Validates an operator-supplied physical store path without legacy locator normalization. */
+/** Resolves and validates an operator-supplied legacy selector without changing its semantics. */
 export function resolveExplicitSessionStorePathOrExit(params: {
   storePath: string;
+  inputStorePath?: string;
   agentId: string;
   runtime: RuntimeEnv;
   json?: boolean;
 }): string | null {
   try {
-    return validateExplicitSessionStorePath(params.storePath, params.agentId);
+    return validateExplicitSessionStorePath({
+      agentId: params.agentId,
+      inputStorePath: params.inputStorePath ?? params.storePath,
+      storePath: params.storePath,
+    });
   } catch (error) {
     return exitSessionStoreError(params, error);
   }
@@ -131,6 +153,7 @@ export function resolveSessionStoreTargetsOrExit(params: {
   }
   const storePath = resolveExplicitSessionStorePathOrExit({
     storePath: target.storePath,
+    inputStorePath: params.opts.store,
     agentId: target.agentId,
     runtime: params.runtime,
     json: params.json,

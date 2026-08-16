@@ -121,6 +121,7 @@ export async function exportTrajectoryCommand(
   if (resolvedOpts.store) {
     const explicitStorePath = resolveExplicitSessionStorePathOrExit({
       storePath,
+      inputStorePath: resolvedOpts.store,
       agentId: targetAgentId ?? "main",
       runtime,
       json: resolvedOpts.json,
