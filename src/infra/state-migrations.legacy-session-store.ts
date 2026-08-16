@@ -16,6 +16,7 @@ import {
 import { collectSessionMaintenancePreserveKeysForStore } from "../config/sessions/store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance-runtime.js";
 import {
+  archiveStaleDashboardEntries,
   capEntryCount,
   pruneStaleEntries,
   pruneStaleModelRunEntries,
@@ -273,6 +274,9 @@ export function loadLegacySessionStore(
       const preserveSessionKeys = collectSessionMaintenancePreserveKeysForStore({
         storePath,
         store: sessionStore,
+      });
+      archiveStaleDashboardEntries(sessionStore, maintenance.archiveDashboardAfterMs, {
+        log: false,
       });
       if (shouldRunModelRunPrune({ maintenance, entryCount: beforeCount })) {
         pruneStaleModelRunEntries(sessionStore, maintenance.modelRunPruneAfterMs, {

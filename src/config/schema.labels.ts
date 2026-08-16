@@ -760,6 +760,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "session.maintenance": "Session Maintenance",
   "session.maintenance.mode": "Session Maintenance Mode",
   "session.maintenance.pruneAfter": "Session Prune After",
+  "session.maintenance.archiveDashboardAfter": "Archive Inactive Dashboard Sessions After",
   "session.maintenance.maxEntries": "Session Max Entries",
   "session.maintenance.preserveRecent": "Preserve Recent Sessions",
   "session.maintenance.resetArchiveRetention": "Session Reset Archive Retention",

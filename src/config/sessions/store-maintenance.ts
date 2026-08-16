@@ -20,6 +20,7 @@ import type { SessionEntry } from "./types.js";
 const log = createSubsystemLogger("sessions/store");
 
 const DEFAULT_SESSION_PRUNE_AFTER_MS = 30 * 24 * 60 * 60 * 1000;
+const DEFAULT_DASHBOARD_ARCHIVE_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_MODEL_RUN_PRUNE_AFTER_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_SESSION_MAX_ENTRIES = 500;
 const DEFAULT_SESSION_MAINTENANCE_MODE: SessionMaintenanceMode = "enforce";
@@ -44,6 +45,7 @@ export type SessionMaintenanceWarning = {
 export type ResolvedSessionMaintenanceConfig = {
   mode: SessionMaintenanceMode;
   pruneAfterMs: number;
+  archiveDashboardAfterMs: number | null;
   maxEntries: number;
   modelRunPruneAfterMs: number;
   preserveRecentMs?: number | null;
@@ -54,9 +56,11 @@ export type ResolvedSessionMaintenanceConfig = {
 
 export type ResolvedSessionMaintenanceConfigInput = Omit<
   ResolvedSessionMaintenanceConfig,
-  "modelRunPruneAfterMs"
+  "archiveDashboardAfterMs" | "modelRunPruneAfterMs"
 > &
-  Partial<Pick<ResolvedSessionMaintenanceConfig, "modelRunPruneAfterMs">>;
+  Partial<
+    Pick<ResolvedSessionMaintenanceConfig, "archiveDashboardAfterMs" | "modelRunPruneAfterMs">
+  >;
 
 function resolvePruneAfterMs(maintenance?: SessionMaintenanceConfig): number {
   const raw = maintenance?.pruneAfter;
@@ -68,6 +72,23 @@ function resolvePruneAfterMs(maintenance?: SessionMaintenanceConfig): number {
     return parseDurationMs(normalized, { defaultUnit: "d" });
   } catch {
     return DEFAULT_SESSION_PRUNE_AFTER_MS;
+  }
+}
+
+function resolveArchiveDashboardAfterMs(maintenance?: SessionMaintenanceConfig): number | null {
+  const raw = maintenance?.archiveDashboardAfter;
+  if (raw === false || raw === 0) {
+    return null;
+  }
+  const normalized = normalizeStringifiedOptionalString(raw);
+  if (!normalized) {
+    return DEFAULT_DASHBOARD_ARCHIVE_AFTER_MS;
+  }
+  try {
+    const parsed = parseDurationMs(normalized, { defaultUnit: "d" });
+    return parsed > 0 ? parsed : null;
+  } catch {
+    return DEFAULT_DASHBOARD_ARCHIVE_AFTER_MS;
   }
 }
 
@@ -167,6 +188,7 @@ export function resolveMaintenanceConfigFromInput(
   return {
     mode: maintenance?.mode ?? DEFAULT_SESSION_MAINTENANCE_MODE,
     pruneAfterMs,
+    archiveDashboardAfterMs: resolveArchiveDashboardAfterMs(maintenance),
     maxEntries: maintenance?.maxEntries ?? DEFAULT_SESSION_MAX_ENTRIES,
     modelRunPruneAfterMs: DEFAULT_MODEL_RUN_PRUNE_AFTER_MS,
     preserveRecentMs: resolvePreserveRecentMs(maintenance),
@@ -181,6 +203,10 @@ export function normalizeResolvedMaintenanceConfigInput(
 ): ResolvedSessionMaintenanceConfig {
   return {
     ...maintenance,
+    archiveDashboardAfterMs:
+      maintenance.archiveDashboardAfterMs === undefined
+        ? DEFAULT_DASHBOARD_ARCHIVE_AFTER_MS
+        : maintenance.archiveDashboardAfterMs,
     modelRunPruneAfterMs: maintenance.modelRunPruneAfterMs ?? DEFAULT_MODEL_RUN_PRUNE_AFTER_MS,
     preserveRecentMs: maintenance.preserveRecentMs ?? null,
   };
@@ -390,6 +416,54 @@ function getEntryUpdatedAt(entry?: SessionEntry): number {
   return entry?.updatedAt ?? Number.NEGATIVE_INFINITY;
 }
 
+function getSessionMaintenanceActivityAt(entry: SessionEntry | undefined): number {
+  return Math.max(
+    entry?.lastInteractionAt ?? 0,
+    entry?.lastActivityAt ?? 0,
+    entry?.sessionStartedAt ?? 0,
+    entry?.updatedAt ?? 0,
+  );
+}
+
+/** Archive inactive dashboard sessions before stale-entry pruning and capping. */
+export function archiveStaleDashboardEntries(
+  store: Record<string, SessionEntry>,
+  archiveAfterMs: number | null,
+  opts: {
+    log?: boolean;
+    nowMs?: number;
+    onArchived?: (params: { key: string; entry: SessionEntry }) => void;
+  } = {},
+): number {
+  if (archiveAfterMs == null || archiveAfterMs <= 0) {
+    return 0;
+  }
+  const now = opts.nowMs ?? Date.now();
+  const cutoffMs = now - archiveAfterMs;
+  let archived = 0;
+  for (const [key, entry] of Object.entries(store)) {
+    const parsed = parseAgentSessionKey(key);
+    if (
+      !parsed?.rest.startsWith("dashboard:") ||
+      entry.pinnedAt !== undefined ||
+      entry.archivedAt !== undefined
+    ) {
+      continue;
+    }
+    const activityAt = getSessionMaintenanceActivityAt(entry);
+    if (activityAt <= 0 || activityAt >= cutoffMs) {
+      continue;
+    }
+    entry.archivedAt = now;
+    opts.onArchived?.({ key, entry });
+    archived += 1;
+  }
+  if (archived > 0 && opts.log !== false) {
+    log.info("archived stale dashboard session entries", { archived, archiveAfterMs });
+  }
+  return archived;
+}
+
 function isSyntheticSessionMaintenanceKey(sessionKey: string): boolean {
   const parsed = parseAgentSessionKey(sessionKey);
   const rest = normalizeLowercaseStringOrEmpty(parsed?.rest ?? sessionKey);
@@ -417,12 +491,7 @@ export function isRecentSessionMaintenanceEntry(params: {
   if (params.preserveRecentMs == null || isSyntheticSessionMaintenanceKey(params.key)) {
     return false;
   }
-  const activityAt = Math.max(
-    params.entry?.lastInteractionAt ?? 0,
-    params.entry?.lastActivityAt ?? 0,
-    params.entry?.sessionStartedAt ?? 0,
-    params.entry?.updatedAt ?? 0,
-  );
+  const activityAt = getSessionMaintenanceActivityAt(params.entry);
   const now = params.nowMs ?? Date.now();
   return activityAt > 0 && now - activityAt <= params.preserveRecentMs;
 }

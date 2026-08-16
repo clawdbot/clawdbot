@@ -11,7 +11,7 @@ import {
   type SessionStateDeletePlan,
 } from "./session-accessor.sqlite-archive.js";
 import type { SessionLifecycleArchivedTranscript } from "./session-accessor.sqlite-contract.js";
-import { readSessionEntryCount } from "./session-accessor.sqlite-entry-store.js";
+import { readSessionEntryCount, writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { emitCommittedSessionEntryRemovals } from "./session-accessor.sqlite-identity.js";
 import {
   assertPlannedLifecycleArtifactEntriesUnchanged,
@@ -41,13 +41,15 @@ import {
 } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
+  archiveStaleDashboardEntries,
   capEntryCount,
   pruneStaleModelRunEntries,
   pruneStaleEntries,
+  normalizeResolvedMaintenanceConfigInput,
   shouldPreserveMaintenanceEntry,
   shouldRunModelRunPrune,
   shouldRunSessionEntryMaintenance,
-  type ResolvedSessionMaintenanceConfig,
+  type ResolvedSessionMaintenanceConfigInput,
 } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
@@ -70,11 +72,10 @@ function collectSqliteSessionMaintenanceBaseKeys(
 
 function hasStaleSqliteSessionEntryCandidate(
   database: OpenClawAgentDatabase,
-  pruneAfterMs: number,
-  preserveKeys: ReadonlySet<string> | undefined,
-  preserveRecentMs: number | null,
+  maxAgeMs: number,
+  isCandidate: (key: string, entry: SessionEntry) => boolean,
 ): boolean {
-  const cutoffMs = Date.now() - pruneAfterMs;
+  const cutoffMs = Date.now() - maxAgeMs;
   const db = getSessionKysely(database.db);
   const rows = executeSqliteQuerySync(
     database.db,
@@ -90,12 +91,7 @@ function hasStaleSqliteSessionEntryCandidate(
     if (!entry) {
       return false;
     }
-    return !shouldPreserveMaintenanceEntry({
-      key: normalizeStoreSessionKey(row.session_key),
-      entry,
-      preserveKeys,
-      preserveRecentMs,
-    });
+    return isCandidate(normalizeStoreSessionKey(row.session_key), entry);
   });
 }
 
@@ -123,17 +119,33 @@ export function applySessionEntryMaintenance(
     activeSessionKey: string;
     archiveDirectory: string;
     forceMaintenance?: boolean;
-    maintenanceConfig?: ResolvedSessionMaintenanceConfig;
+    maintenanceConfig?: ResolvedSessionMaintenanceConfigInput;
     skipMaintenance?: boolean;
     storePath: string;
   },
 ): SessionEntryMaintenancePlan {
   if (params.skipMaintenance) {
-    return { entryRemovals: [], stateDeletePlans: [], modelRunPruned: 0, pruned: 0, capped: 0 };
+    return {
+      entryRemovals: [],
+      stateDeletePlans: [],
+      archived: 0,
+      modelRunPruned: 0,
+      pruned: 0,
+      capped: 0,
+    };
   }
-  const maintenance = params.maintenanceConfig ?? resolveMaintenanceConfig();
+  const maintenance = params.maintenanceConfig
+    ? normalizeResolvedMaintenanceConfigInput(params.maintenanceConfig)
+    : resolveMaintenanceConfig();
   if (maintenance.mode === "warn") {
-    return { entryRemovals: [], stateDeletePlans: [], modelRunPruned: 0, pruned: 0, capped: 0 };
+    return {
+      entryRemovals: [],
+      stateDeletePlans: [],
+      archived: 0,
+      modelRunPruned: 0,
+      pruned: 0,
+      capped: 0,
+    };
   }
 
   // Count all rows before loading their payloads. Protection controls eviction candidates, not
@@ -143,12 +155,28 @@ export function applySessionEntryMaintenance(
   const hasStaleCandidate = hasStaleSqliteSessionEntryCandidate(
     database,
     maintenance.pruneAfterMs,
-    preserveCandidateKeys,
-    maintenance.preserveRecentMs ?? null,
+    (key, entry) =>
+      !shouldPreserveMaintenanceEntry({
+        key,
+        entry,
+        preserveKeys: preserveCandidateKeys,
+        preserveRecentMs: maintenance.preserveRecentMs ?? null,
+      }),
   );
+  const hasStaleDashboardCandidate =
+    maintenance.archiveDashboardAfterMs != null &&
+    hasStaleSqliteSessionEntryCandidate(
+      database,
+      maintenance.archiveDashboardAfterMs,
+      (key, entry) =>
+        archiveStaleDashboardEntries({ [key]: entry }, maintenance.archiveDashboardAfterMs, {
+          log: false,
+        }) > 0,
+    );
   const shouldMaintainStore =
     params.forceMaintenance === true ||
     entryCount > maintenance.maxEntries ||
+    hasStaleDashboardCandidate ||
     hasStaleCandidate ||
     shouldRunModelRunPrune({
       maintenance,
@@ -161,7 +189,14 @@ export function applySessionEntryMaintenance(
       force: params.forceMaintenance,
     });
   if (!shouldMaintainStore) {
-    return { entryRemovals: [], stateDeletePlans: [], modelRunPruned: 0, pruned: 0, capped: 0 };
+    return {
+      entryRemovals: [],
+      stateDeletePlans: [],
+      archived: 0,
+      modelRunPruned: 0,
+      pruned: 0,
+      capped: 0,
+    };
   }
 
   const store = loadSqliteSessionMaintenanceStore(database);
@@ -198,6 +233,12 @@ export function applySessionEntryMaintenance(
     });
     remainingEntryCount -= modelRunPruned;
   }
+  const archived = archiveStaleDashboardEntries(store, maintenance.archiveDashboardAfterMs, {
+    log: false,
+    onArchived: ({ key, entry }) => {
+      writeSessionEntry(database, key, entry);
+    },
+  });
   let pruned = 0;
   if (
     params.forceMaintenance === true ||
@@ -254,6 +295,7 @@ export function applySessionEntryMaintenance(
       sessionKey,
     })),
     stateDeletePlans: deletePlans,
+    archived,
     modelRunPruned,
     pruned,
     capped,
@@ -298,11 +340,18 @@ async function finalizeSqliteSessionEntryMaintenancePlansWithCommit(
       sessionIds: uniqueStrings(stateDeletePlans.map((plan) => plan.sessionId)),
     });
   };
+  const committedCounts = plans.reduce(
+    (counts, plan) => ({
+      archived: counts.archived + plan.archived,
+      modelRunPruned: counts.modelRunPruned + plan.modelRunPruned,
+      pruned: counts.pruned + plan.pruned,
+      capped: counts.capped + plan.capped,
+    }),
+    { archived: 0, modelRunPruned: 0, pruned: 0, capped: 0 },
+  );
   const emptyResult: SessionEntryMaintenanceResult = {
     archivedTranscripts: [],
-    modelRunPruned: 0,
-    pruned: 0,
-    capped: 0,
+    ...committedCounts,
   };
   if (entryRemovals.length === 0 && stateDeletePlans.length === 0) {
     return emptyResult;
@@ -328,14 +377,6 @@ async function finalizeSqliteSessionEntryMaintenancePlansWithCommit(
     warn("SQLite session maintenance cleanup failed", error);
     return emptyResult;
   }
-  const committedCounts = plans.reduce(
-    (counts, plan) => ({
-      modelRunPruned: counts.modelRunPruned + plan.modelRunPruned,
-      pruned: counts.pruned + plan.pruned,
-      capped: counts.capped + plan.capped,
-    }),
-    { modelRunPruned: 0, pruned: 0, capped: 0 },
-  );
   emitCommittedSessionEntryRemovals(entryRemovals);
   try {
     return {

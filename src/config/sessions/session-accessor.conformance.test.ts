@@ -1656,6 +1656,68 @@ describe("sqlite session normalization", () => {
     ).toEqual(["agent:main:newer", "agent:main:newest"]);
   });
 
+  it("persists automatic dashboard archiving before stale-entry pruning", async () => {
+    vi.mocked(getRuntimeConfig).mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          archiveDashboardAfter: "7d",
+          pruneAfter: "30d",
+          maxEntries: 500,
+          maxDiskBytes: false,
+        },
+      },
+    });
+    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
+    const scopeFor = (sessionKey: string) => ({
+      agentId: "main",
+      env,
+      sessionKey,
+      storePath: paths.sqlitePath,
+    });
+    const dashboardKey = "agent:main:dashboard:stale-visible-session";
+    const dashboardSessionId = "stale-visible-session";
+    const oldUpdatedAt = Date.now() - 31 * 24 * 60 * 60 * 1000;
+    const transcriptEvent = {
+      id: "stale-visible-event",
+      timestamp: new Date(oldUpdatedAt).toISOString(),
+      type: "metadata",
+    };
+
+    await patchSessionEntryCore(
+      scopeFor(dashboardKey),
+      () => ({ sessionId: dashboardSessionId, updatedAt: oldUpdatedAt }),
+      {
+        fallbackEntry: { sessionId: dashboardSessionId, updatedAt: oldUpdatedAt },
+        replaceEntry: true,
+        skipMaintenance: true,
+      },
+    );
+    await appendTranscriptEvent(
+      { ...scopeFor(dashboardKey), sessionId: dashboardSessionId },
+      transcriptEvent,
+    );
+
+    await patchSessionEntryCore(
+      scopeFor("agent:main:explicit:maintenance-trigger"),
+      () => ({ sessionId: "maintenance-trigger", updatedAt: Date.now() }),
+      {
+        fallbackEntry: { sessionId: "maintenance-trigger", updatedAt: Date.now() },
+        replaceEntry: true,
+      },
+    );
+
+    expect(loadSessionEntry(scopeFor(dashboardKey))?.archivedAt).toEqual(expect.any(Number));
+    await expect(
+      loadTranscriptEvents({
+        agentId: "main",
+        env,
+        sessionId: dashboardSessionId,
+        storePath: paths.sqlitePath,
+      }),
+    ).resolves.toEqual([transcriptEvent]);
+  });
+
   it("preserves recent SQLite entries and transcripts during write-triggered capping", async () => {
     vi.mocked(getRuntimeConfig).mockReturnValue({
       session: {

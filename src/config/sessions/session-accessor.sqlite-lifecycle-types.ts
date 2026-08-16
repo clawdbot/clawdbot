@@ -11,6 +11,7 @@ export type SessionEntryRemovalPlan = {
   sessionKey: string;
 };
 type SessionEntryMaintenanceCounts = {
+  archived: number;
   modelRunPruned: number;
   pruned: number;
   capped: number;
