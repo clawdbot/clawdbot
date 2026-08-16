@@ -140,6 +140,8 @@ function resolvePreferredBuiltRuntimeArtifact(params: {
     return { source, rootDir };
   }
   const artifactRelativePath = rewriteBundledRuntimeArtifactRelativePath(relativeSource);
+  // The runtime overlay is a staging fallback. Final canonicalization maps it
+  // to the matching root build when both exist, so one build owns execution.
   for (const artifactRootName of ["dist-runtime", "dist"] as const) {
     const artifactRoot = path.join(
       packageRoot,
