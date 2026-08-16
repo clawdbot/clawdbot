@@ -20,7 +20,10 @@ describe("formatErrorMessage", () => {
       code: "REQUEST_FAILED",
     });
 
-    expect(format(outer)).toBe("request failed | REQUEST_FAILED | socket closed | ECONNRESET");
+    expect(format(outer)).toBe("request failed | socket closed | ECONNRESET");
+    expect(formatErrorMessage(outer, { includeCode: true, redact: keepText })).toBe(
+      "request failed | REQUEST_FAILED | socket closed | ECONNRESET",
+    );
   });
 
   it("formats status/code records and structured non-Error causes", () => {

@@ -442,7 +442,7 @@ describe("agent command registration", () => {
 
       await runCli(args);
 
-      expect(runtime.error).toHaveBeenCalledWith(`${message} | UNAVAILABLE`);
+      expect(runtime.error).toHaveBeenCalledWith(message);
       expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("Error:"));
       expect(runtime.exit).toHaveBeenCalledWith(1);
     },

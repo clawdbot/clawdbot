@@ -1,6 +1,7 @@
 // Structural formatting stays policy-free. Core and memory-host adapters intentionally inject
 // owner-specific redactors; bypassing them would weaken redaction and break one-argument APIs.
 export type FormatErrorMessageOptions = {
+  includeCode?: boolean;
   redact: (text: string) => string;
 };
 
@@ -79,29 +80,33 @@ export function formatErrorMessage(value: unknown, options: FormatErrorMessageOp
     let cause = readProperty(value, "cause");
     const seen = new Set<unknown>([value]);
     const seenMessages = new Set<string>([formatted]);
-    const appendDetail = (detail: unknown): void => {
-      if (typeof detail !== "string" && typeof detail !== "number") {
+    const appendCauseMessage = (message: string | undefined): void => {
+      if (!message || seenMessages.has(message)) {
         return;
       }
-      const text = String(detail);
-      if (!text || seenMessages.has(text)) {
-        return;
-      }
-      formatted += ` | ${text}`;
-      seenMessages.add(text);
+      formatted += ` | ${message}`;
+      seenMessages.add(message);
     };
-    appendDetail(readProperty(value, "code"));
+    if (options.includeCode) {
+      const code = readProperty(value, "code");
+      if (typeof code === "string" || typeof code === "number") {
+        appendCauseMessage(String(code));
+      }
+    }
     while (cause && !seen.has(cause)) {
       seen.add(cause);
       if (cause instanceof Error) {
-        appendDetail(cause.message);
-        appendDetail(readProperty(cause, "code"));
+        appendCauseMessage(cause.message);
+        const code = readProperty(cause, "code");
+        if (typeof code === "string" || typeof code === "number") {
+          appendCauseMessage(String(code));
+        }
         cause = readProperty(cause, "cause");
       } else if (typeof cause === "string") {
-        appendDetail(cause);
+        appendCauseMessage(cause);
         break;
       } else {
-        appendDetail(formatStatusAndCode(cause));
+        appendCauseMessage(formatStatusAndCode(cause));
         break;
       }
     }

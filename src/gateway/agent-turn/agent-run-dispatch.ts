@@ -296,7 +296,7 @@ export function dispatchAgentRunFromGateway(params: {
     })
     .catch(async (err: unknown) => {
       const aborted = isGatewayAgentAbortRejection(err, params.abortController.signal);
-      const renderedErr = formatErrorMessage(err);
+      const renderedErr = formatErrorMessage(err, { includeCode: true });
       const stopReason = aborted
         ? resolveGatewayAgentAbortStopReason(params.abortController.signal)
         : isAbortError(err)

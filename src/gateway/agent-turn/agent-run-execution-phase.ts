@@ -520,7 +520,7 @@ export function startAgentRunExecution(params: {
         claimId: execApprovalFollowupHandoffClaimId,
       });
     } catch (err) {
-      const renderedErr = formatErrorMessage(err);
+      const renderedErr = formatErrorMessage(err, { includeCode: true });
       const error = errorShape(ErrorCodes.UNAVAILABLE, renderedErr);
       const payload = {
         runId: params.runId,
