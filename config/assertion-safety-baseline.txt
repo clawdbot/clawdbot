@@ -3049,7 +3049,7 @@ src/gateway/server-methods/chat-transcript-persistence.ts	7
 src/gateway/server-methods/chat-tts-markers.ts	1
 src/gateway/server-methods/chat.ts	2
 src/gateway/server-methods/config-write-flow.ts	1
-src/gateway/server-methods/config.ts	9
+src/gateway/server-methods/config.ts	7
 src/gateway/server-methods/conversations.ts	4
 src/gateway/server-methods/cron.ts	20
 src/gateway/server-methods/device-scope-upgrade.ts	2
@@ -4196,7 +4196,7 @@ ui/src/lib/sessions/custom-groups.ts	5
 ui/src/lib/sessions/grouping.ts	4
 ui/src/lib/sessions/index.ts	2
 ui/src/lib/sessions/navigation.ts	1
-ui/src/lib/sessions/reconcile.ts	8
+ui/src/lib/sessions/reconcile.ts	10
 ui/src/lib/sessions/session-key.ts	4
 ui/src/lib/sessions/swarm-activity.ts	1
 ui/src/lib/skills/index.ts	1

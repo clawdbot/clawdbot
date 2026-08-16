@@ -1,6 +1,5 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -9,8 +8,9 @@ import {
   main,
   parseAssertionSafetyBaseline,
 } from "../../scripts/check-assertion-safety-ratchet.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const nestedGitEnvKeys = [
   "GIT_ALTERNATE_OBJECT_DIRECTORIES",
   "GIT_COMMON_DIR",
@@ -45,9 +45,6 @@ function git(cwd: string, args: string[]) {
 
 afterEach(() => {
   vi.restoreAllMocks();
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { force: true, recursive: true });
-  }
 });
 
 describe("check-assertion-safety-ratchet", () => {
@@ -78,8 +75,7 @@ describe("check-assertion-safety-ratchet", () => {
   });
 
   it("blocks new debt, accepts SAFETY comments, and prunes reduced counts", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-assertion-safety-"));
-    tempDirs.push(root);
+    const root = tempDirs.make("openclaw-assertion-safety-");
     fs.mkdirSync(path.join(root, "config"), { recursive: true });
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
     const baselinePath = path.join(root, "config/assertion-safety-baseline.txt");
@@ -102,6 +98,7 @@ describe("check-assertion-safety-ratchet", () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
 
     expect(main(root, ["--base", "HEAD"])).toBe(1);
+    expect(main(root, ["--base", "HEAD", "--prune"])).toBe(1);
     expect(errors.join("\n")).toContain("src/example.ts: 2 > 1");
     expect(errors.join("\n")).toContain("// SAFETY:");
 

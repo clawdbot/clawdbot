@@ -427,6 +427,13 @@ export function main(root = process.cwd(), argv: string[] = process.argv.slice(2
     }
 
     const baseline = parseAssertionSafetyBaseline(baselineSource);
+    if (args.prune && !args.staged && baseBaseline === null) {
+      writeBaseline(root, current);
+      console.log(
+        `Refreshed initial ${BASELINE_PATH}: ${current.size} files, ${totalCount(current)} assertions.`,
+      );
+      return 0;
+    }
     const allowedBaseline =
       baseRef && baseBaseline
         ? baselineWithVerifiedRenames(root, baseRef, args.staged, baseline, baseBaseline)
