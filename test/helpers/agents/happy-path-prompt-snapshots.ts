@@ -38,8 +38,6 @@ import {
 
 // Builds Codex happy-path prompt snapshot fixtures for agent prompt regression tests.
 
-export { CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR };
-
 const WORKSPACE_DIR = "/tmp/openclaw-happy-path/workspace";
 const AGENT_DIR = "/tmp/openclaw-happy-path/agent";
 const SESSION_FILE = "/tmp/openclaw-happy-path/session.jsonl";
