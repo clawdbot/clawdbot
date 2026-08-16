@@ -102,6 +102,13 @@ class ExecApproval extends OpenClawLightDomContentsElement {
     void this.updateComplete.then(() => this.dialog?.show());
   }
 
+  /** Recorded fact for shell guards (settings Escape): the dialog renders in
+   * shadow DOM, so `document.querySelector("dialog[open]")` cannot see it, and
+   * a pending queue no longer implies a visible dialog. */
+  get dialogOpen(): boolean {
+    return this.explicitlyOpen && (this.props?.queue.length ?? 0) > 0;
+  }
+
   private handleKeydown(event: KeyboardEvent, active: ExecApprovalRequest): void {
     // A held chord auto-repeats: once a decision settles and the queue
     // advances, the repeat would apply the same decision to the next request.

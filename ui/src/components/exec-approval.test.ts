@@ -314,6 +314,25 @@ describe("openclaw-exec-approval", () => {
     expect(container.querySelector("openclaw-modal-dialog")).not.toBeNull();
   });
 
+  // Settings Escape guards read this fact; a pending queue alone must not
+  // report an open dialog now that approvals surface passively.
+  it("records dialogOpen only while the dialog is explicitly open", async () => {
+    const { approval } = await renderApproval(createExecRequest());
+    const element = approval as LitElement & { show(): void; dialogOpen: boolean };
+    expect(element.dialogOpen).toBe(false);
+
+    element.show();
+    await approval.updateComplete;
+    expect(element.dialogOpen).toBe(true);
+
+    const { modal } = await getRenderedModalDialog(container);
+    modal.dispatchEvent(
+      new CustomEvent("modal-cancel", { bubbles: true, composed: true, cancelable: true }),
+    );
+    await approval.updateComplete;
+    expect(element.dialogOpen).toBe(false);
+  });
+
   it("opens the full queue only on demand", async () => {
     const queue = [
       createExecRequest({ id: "approval-inline" }),
