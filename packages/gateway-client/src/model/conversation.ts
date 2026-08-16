@@ -687,6 +687,7 @@ export class ControlModelConversation {
     }
     this.#projection = { ...this.#projection, runs: {} };
     this.#tools.clear();
+    this.#materializedViews.clear();
     this.#liveArtifacts.clear();
     this.#status = this.#projection.entries.length > 0 ? "stale" : "loading";
     this.#partialReasons.add("reconnect-awaiting-authoritative-history");
@@ -821,6 +822,7 @@ export class ControlModelConversation {
     this.#activationEpoch = null;
     this.#activation = null;
     this.#releaseLeases();
+    this.#materializedViews.clear();
     this.#status = "stale";
     this.#partialReasons.add("disconnected");
     this.#publish();

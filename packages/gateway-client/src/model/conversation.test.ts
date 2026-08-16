@@ -844,7 +844,7 @@ describe("Control Model conversations", () => {
     model.dispose();
   });
 
-  it("materializes only the selected deferred view and rejects stale revisions", async () => {
+  it("materializes only the selected view and retires its data across epochs", async () => {
     const artifact = uiArtifact(4, {
       views: [
         {
@@ -918,6 +918,15 @@ describe("Control Model conversations", () => {
     ).rejects.toMatchObject({ code: "STALE_ARTIFACT_REVISION" });
     expect(harness.callsFor("artifact.materialize")).toHaveLength(1);
 
+    harness.setConnection({ status: "disconnected", epoch: 1 });
+    await vi.waitFor(() =>
+      expect(conversation.getSnapshot().artifacts[0]?.views[1]).toMatchObject({
+        id: "list",
+        availability: "deferred",
+      }),
+    );
+    expect(conversation.getSnapshot().artifacts[0]?.views[1]).not.toHaveProperty("data");
+
     harness.setHistory(0, {
       messages: [
         {
@@ -930,13 +939,41 @@ describe("Control Model conversations", () => {
     });
     harness.setConnection({ status: "connected", epoch: 2 });
     await vi.waitFor(() => expect(harness.callsFor("chat.history")).toHaveLength(2));
-    await vi.waitFor(() =>
-      expect(conversation.getSnapshot().artifacts[0]?.views[1]).toMatchObject({
+    expect(conversation.getSnapshot().artifacts[0]?.views[1]).toMatchObject({
+      id: "list",
+      availability: "deferred",
+    });
+    expect(conversation.getSnapshot().artifacts[0]?.views[1]).not.toHaveProperty("data");
+    expect(harness.callsFor("artifact.materialize")).toHaveLength(1);
+
+    harness.queue("artifact.materialize", {
+      artifactId: "artifact-calendar",
+      artifactRevision: 4,
+      view: {
         id: "list",
         availability: "inline",
+        templateUri: "clawpilot://widgets/list",
+        dataVersion: 1,
+        data: { rows: [{ id: "two" }] },
+      },
+    });
+    await expect(
+      conversation.materializeView({
+        artifactId: "artifact-calendar",
+        artifactRevision: 4,
+        viewId: "list",
       }),
-    );
-    expect(harness.callsFor("artifact.materialize")).toHaveLength(1);
+    ).resolves.toMatchObject({
+      id: "list",
+      availability: "inline",
+      data: { rows: [{ id: "two" }] },
+    });
+    expect(harness.callsFor("artifact.materialize")).toHaveLength(2);
+    expect(conversation.getSnapshot().artifacts[0]?.views[1]).toMatchObject({
+      id: "list",
+      availability: "inline",
+      data: { rows: [{ id: "two" }] },
+    });
     model.dispose();
   });
 
