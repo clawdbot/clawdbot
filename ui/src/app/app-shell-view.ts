@@ -274,12 +274,15 @@ export function renderApplicationShell(host: ShellViewHost) {
   const custodianPanelAvailable =
     gatewayConnected && isGatewayMethodAdvertised(gatewaySnapshot, "openclaw.chat") === true;
   const activeRoute = host.routeState.routeId ?? "chat";
-  // Chat has an offline outbox, and New Session keeps a local draft while its
-  // server-backed Start action is already gated. Other pages cannot submit
-  // useful work while disconnected, so keep their visible controls honest.
+  // Chat has an offline outbox, New Session keeps a local draft, and Appearance
+  // persists local preference intent for replay. Their server actions are
+  // independently gated; other pages cannot submit useful disconnected work.
   const pageActionsBlocked =
     gatewaySnapshot.phase === "reload-required" ||
-    (!gatewayConnected && activeRoute !== "chat" && activeRoute !== "new-session");
+    (!gatewayConnected &&
+      activeRoute !== "chat" &&
+      activeRoute !== "new-session" &&
+      activeRoute !== "appearance");
   // Plugin tabs share one route; the search picks the active item.
   const activePluginRef =
     activeRoute === "plugin"
