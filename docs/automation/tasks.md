@@ -275,6 +275,7 @@ openclaw tasks notify <lookup> state_changes
     | `cancel_stuck`         | warn       | Cancel requested over 5 minutes ago, no active child tasks, still nonterminal |
     | `missing_linked_tasks` | warn/error | Stale managed flow with no linked tasks or wait state                       |
     | `blocked_task_missing` | warn       | Blocked flow points at a task id that no longer exists                      |
+    | `inconsistent_timestamps` | warn    | Flow timestamps are not in chronological order                              |
 
   </Accordion>
   <Accordion title="tasks maintenance">
