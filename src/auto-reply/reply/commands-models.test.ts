@@ -12,7 +12,8 @@ import {
 import { buildModelsProviderData, handleModelsCommand } from "./commands-models.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
-const modelCatalogMocks = vi.hoisted(() => ({ loadModelCatalog: vi.fn() }));
+// oxfmt-ignore
+const modelCatalogMocks = vi.hoisted(() => ({ loadModelCatalog: vi.fn(), isPreparedModelCatalogFull: vi.fn(() => false) }));
 
 const modelAuthLabelMocks = vi.hoisted(() => ({
   resolveModelAuthLabel: vi.fn<(params: unknown) => string | undefined>(() => undefined),
@@ -119,6 +120,9 @@ vi.mock("../../agents/prepared-model-catalog.js", () => ({
     return { entries, routeVariants: entries };
   },
 }));
+
+// oxfmt-ignore
+vi.mock("../../agents/prepared-model-runtime.facts.js", () => ({ isPreparedModelCatalogFull: modelCatalogMocks.isPreparedModelCatalogFull }));
 
 vi.mock("../../agents/model-auth-label.js", () => ({
   resolveModelAuthLabel: modelAuthLabelMocks.resolveModelAuthLabel,
@@ -345,7 +349,7 @@ describe("handleModelsCommand", () => {
   });
 
   // oxfmt-ignore
-  it("uses the complete catalog for default browse with provider wildcards", async () => { await handleModelsCommand(buildParams("/models", { agents: { defaults: { modelPolicy: { allow: ["openai/*"] } } } }), true); expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.readOnly).toBe(false); });
+  it("reuses a lifecycle-complete catalog before wildcard picker browse", async () => { modelCatalogMocks.isPreparedModelCatalogFull.mockReturnValueOnce(true); await handleModelsCommand(buildParams("/models", { agents: { defaults: { modelPolicy: { allow: ["openai/*"] } } } }), true); expect(modelCatalogMocks.loadModelCatalog).toHaveBeenCalledTimes(1); expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.readOnly).toBe(true); });
 
   it("does not block default browse when read-only catalog loading is slow", async () => {
     vi.useFakeTimers();
