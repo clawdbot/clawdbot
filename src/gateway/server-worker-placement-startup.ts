@@ -419,7 +419,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
     environments: params.environments,
     placements: params.placements,
     resolveWorkspacePath,
-    recoverPendingWorkspaceResult: async (environmentId) =>
+    reconcileActivePlacement: async (environmentId) =>
       await dispatchService.reconcileActive(environmentId),
     redispatchReclaimed: createReclaimedPlacementRedispatch({
       environments: params.environments,

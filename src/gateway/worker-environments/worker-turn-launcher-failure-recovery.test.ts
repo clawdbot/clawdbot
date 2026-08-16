@@ -7,6 +7,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
+import { STALE_WORKER_BUILD_REASON } from "./admission.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import { WorkerRunnerUnavailableError, type WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
@@ -34,6 +35,80 @@ import {
 describe("worker turn launcher failure recovery", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(cleanupWorkerTurnLauncherTest);
+
+  it("projects a stale Gateway build teardown and records its durable placement reason", async () => {
+    seedActivePlacement();
+    const terminalReason = `cloud worker disappeared: ${STALE_WORKER_BUILD_REASON}`;
+    const staleEnvironment: NonNullable<ReturnType<WorkerTurnEnvironmentService["get"]>> = {
+      ...attachedEnvironment(),
+      state: "failed" as const,
+      leaseId: null,
+      sshEndpoint: null,
+      sharedHost: null,
+      ownerEpoch: OWNER_EPOCH + 1,
+      attachedSessionIds: [],
+      tunnelStatus: "stopped",
+      error: STALE_WORKER_BUILD_REASON,
+    };
+    const environments: WorkerTurnEnvironmentService = {
+      ...unusedEnvironments(),
+      get: vi.fn(() => staleEnvironment),
+    };
+    const reconcileActivePlacement = vi.fn(async () => {
+      const active = placements.get(SESSION_ID);
+      if (active?.state !== "active") {
+        throw new Error("expected active stale-build placement");
+      }
+      const draining = placements.startDrain({
+        sessionId: active.sessionId,
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+        expectedGeneration: active.generation,
+      });
+      if (draining.state !== "draining") {
+        throw new Error("expected draining stale-build placement");
+      }
+      const reconciling = placements.startReconcile({
+        sessionId: draining.sessionId,
+        environmentId: draining.environmentId,
+        ownerEpoch: draining.activeOwnerEpoch,
+        expectedGeneration: draining.generation,
+      });
+      if (reconciling.state !== "reconciling") {
+        throw new Error("expected reconciling stale-build placement");
+      }
+      placements.fail({
+        sessionId: reconciling.sessionId,
+        expectedGeneration: reconciling.generation,
+        recoveryError: terminalReason,
+      });
+    });
+    const provider = createWorkerSessionTurnPlacementProvider({
+      environments,
+      placements,
+      reconcileActivePlacement,
+    });
+
+    await expect(
+      provider.executeTurn(
+        {
+          sessionId: SESSION_ID,
+          sessionKey: SESSION_KEY,
+          agentId: "main",
+          runId: "run-stale-worker-build",
+        },
+        turn("run-stale-worker-build"),
+        async () => ({ meta: { durationMs: 1 } }),
+      ),
+    ).rejects.toThrow(`Worker turn rejected in placement failed: ${terminalReason}`);
+    expect(reconcileActivePlacement).toHaveBeenCalledWith(ENVIRONMENT_ID);
+    expect(placements.get(SESSION_ID)).toMatchObject({
+      state: "failed",
+      recoveryError: terminalReason,
+      terminalReason,
+      turnClaim: null,
+    });
+  });
 
   it("keeps an active placement when tunnel startup fails before remote handoff", async () => {
     seedActivePlacement();
