@@ -350,7 +350,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       roster.reset();
       sessionEventSubscription.reset();
       sessionEventSubscriptionError = null;
-      operations.retireConnection(previousClient);
+      operations.retireConnection(
+        connected && previousClient === next.client ? null : previousClient,
+      );
       groups.invalidate();
       swarmActivity.clear();
       mutations.retireConnection();

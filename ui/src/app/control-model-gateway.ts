@@ -3,6 +3,7 @@ import type {
   ControlModelGatewayEventFrame,
 } from "@openclaw/gateway-client/model/catalog";
 import type { GatewayBrowserClient, GatewayEventListener } from "../api/gateway.ts";
+import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 
 const CONTROL_MODEL_EVENT_QUEUE_LIMIT = 256;
 
@@ -121,7 +122,10 @@ export function createControlModelGatewayBridge(options: {
 
   const bridge: ControlModelGatewayBridge = {
     binding: {
-      ...({ getSessionMessageSubscriptionClient: options.getClient } as object),
+      ...({
+        getSessionMessageSubscriptionClient: options.getClient,
+        sessionMessageKeysEquivalent: areUiSessionKeysEquivalent,
+      } as object),
       getConnectionSnapshot: readConnectionSnapshot,
       subscribeConnection(listener) {
         connectionListeners.add(listener);
