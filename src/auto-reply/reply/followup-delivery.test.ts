@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js";
+import { appendUsageLine } from "./agent-runner-usage-line.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js";
 import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
 import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
@@ -910,7 +911,7 @@ describe("deliverFollowupDecision", () => {
     await deliverFollowupDecision({
       decision: {
         kind: "deliver",
-        payloads: [{ text: "earlier status" }, finalPayload],
+        payloads: [{ text: "earlier status", isStatusNotice: true }, finalPayload],
       },
       turn,
       defaults: createDefaults(onBlockReply),
@@ -923,6 +924,117 @@ describe("deliverFollowupDecision", () => {
     const notice = onBlockReply.mock.calls[0]?.[0];
     expect(notice?.text).not.toContain("transcript-owned final");
     expect(notice?.text).toContain("could not deliver");
+  });
+
+  it("reports a later media-only terminal failure after an earlier status delivers", async () => {
+    const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});
+    deliveryState.routeReply.mockReset();
+    deliveryState.routeReply
+      .mockResolvedValueOnce({ ok: true, delivered: true })
+      .mockResolvedValueOnce({ ok: false, delivered: false, error: "offline" });
+    const turn = createTurn();
+    turn.queued.run.messageProvider = "slack";
+
+    await deliverFollowupDecision({
+      decision: {
+        kind: "deliver",
+        payloads: [
+          { text: "earlier status", isStatusNotice: true },
+          { mediaUrl: "file:///tmp/terminal.png" },
+        ],
+      },
+      turn,
+      defaults: createDefaults(onBlockReply),
+      runId: "run-1",
+      runFollowup: vi.fn(async () => {}),
+    });
+
+    expect(deliveryState.routeReply).toHaveBeenCalledTimes(2);
+    expect(onBlockReply).toHaveBeenCalledOnce();
+    expect(onBlockReply.mock.calls[0]?.[0]?.text).toContain("could not deliver");
+  });
+
+  it.each([
+    ["status", { text: "later status", isStatusNotice: true }],
+    ["reasoning", { text: "later reasoning", isReasoning: true }],
+    ["commentary", { text: "later commentary", isCommentary: true }],
+  ] satisfies Array<[string, ReplyPayload]>)(
+    "does not report a delivered terminal reply when later %s fails",
+    async (_name, payload) => {
+      const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});
+      deliveryState.routeReply.mockReset();
+      deliveryState.routeReply
+        .mockResolvedValueOnce({ ok: true, delivered: true })
+        .mockResolvedValueOnce({ ok: false, delivered: false, error: "offline" });
+      const turn = createTurn();
+      turn.queued.run.messageProvider = "slack";
+
+      await deliverFollowupDecision({
+        decision: { kind: "deliver", payloads: [{ text: "terminal reply" }, payload] },
+        turn,
+        defaults: createDefaults(onBlockReply),
+        runId: "run-1",
+        runFollowup: vi.fn(async () => {}),
+      });
+
+      expect(deliveryState.routeReply).toHaveBeenCalledTimes(2);
+      expect(onBlockReply).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not report a delivered media-only terminal when its standalone usage footer fails", async () => {
+    const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});
+    deliveryState.routeReply.mockReset();
+    deliveryState.routeReply
+      .mockResolvedValueOnce({ ok: true, delivered: true })
+      .mockResolvedValueOnce({ ok: false, delivered: false, error: "offline" });
+    const turn = createTurn();
+    turn.queued.run.messageProvider = "slack";
+    const payloads = appendUsageLine(
+      [{ mediaUrl: "file:///tmp/terminal.png" }],
+      "Usage: 12 in / 3 out",
+    );
+
+    await deliverFollowupDecision({
+      decision: { kind: "deliver", payloads },
+      turn,
+      defaults: createDefaults(onBlockReply),
+      runId: "run-1",
+      runFollowup: vi.fn(async () => {}),
+    });
+
+    expect(deliveryState.routeReply).toHaveBeenCalledTimes(2);
+    expect(deliveryState.routeReply.mock.calls[1]?.[0]).toMatchObject({
+      payload: { text: "Usage: 12 in / 3 out", isStatusNotice: true },
+    });
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("keeps the cross-channel diagnostic visible when every payload fails", async () => {
+    const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});
+    deliveryState.routeReply.mockReset();
+    deliveryState.routeReply.mockResolvedValue({
+      ok: false,
+      delivered: false,
+      error: "offline",
+    });
+    const turn = createTurn();
+    turn.queued.run.messageProvider = "slack";
+
+    await deliverFollowupDecision({
+      decision: {
+        kind: "deliver",
+        payloads: [{ text: "status", isStatusNotice: true }, { text: "terminal reply" }],
+      },
+      turn,
+      defaults: createDefaults(onBlockReply),
+      runId: "run-1",
+      runFollowup: vi.fn(async () => {}),
+    });
+
+    expect(deliveryState.routeReply).toHaveBeenCalledTimes(2);
+    expect(onBlockReply).toHaveBeenCalledOnce();
+    expect(onBlockReply.mock.calls[0]?.[0]?.text).toContain("could not deliver");
   });
 
   it("allows the latest same-channel dispatcher to recover a route failure", async () => {
