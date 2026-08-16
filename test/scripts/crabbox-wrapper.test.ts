@@ -488,8 +488,7 @@ function parseFakeCrabboxOutput(result: ReturnType<typeof runWrapper>): FakeCrab
 }
 
 function makeInvocationLog(): string {
-  const dir = mkdtempSync(path.join(tmpdir(), "openclaw-crabbox-invocations-"));
-  tempDirs.push(dir);
+  const dir = makeTempDir(tempDirs, "openclaw-crabbox-invocations-");
   return path.join(dir, "invocations.jsonl");
 }
 
