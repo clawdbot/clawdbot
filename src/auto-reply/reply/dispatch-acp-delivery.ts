@@ -37,7 +37,6 @@ import {
   waitForReplyDispatcherIdle,
 } from "./reply-dispatcher.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
-import { readDispatcherFailedCounts } from "./reply-dispatcher.types.js";
 import {
   createReplyDeliveryContext,
   resolveReplyDeliveryAccountId,
@@ -331,13 +330,27 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     }
     state.settledDirectVisibleText = true;
     hasPendingDirectBlockReplyDelivery = false;
-    await params.dispatcher.waitForIdle();
-    const failedCounts = readDispatcherFailedCounts(params.dispatcher);
-    const failedVisibleCount = failedCounts.block + failedCounts.final;
+    const receipt = await params.dispatcher.waitForIdle();
+    if (!receipt) {
+      return;
+    }
+    const blockCounts = receipt.counts.block;
+    const finalCounts = receipt.counts.final;
+    const failedVisibleCount =
+      blockCounts.failedBeforeSend +
+      blockCounts.failedAfterSend +
+      finalCounts.failedBeforeSend +
+      finalCounts.failedAfterSend;
     if (failedVisibleCount > 0) {
       state.failedVisibleTextDelivery = true;
     }
-    if (state.queuedDirectVisibleTextDeliveries > failedVisibleCount) {
+    if (
+      blockCounts.delivered +
+        blockCounts.failedAfterSend +
+        finalCounts.delivered +
+        finalCounts.failedAfterSend >
+      0
+    ) {
       state.deliveredVisibleText = true;
     }
   };

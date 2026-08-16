@@ -290,8 +290,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     !channelTransformSuppressed &&
     !getObservedReplyDelivery() &&
     !replyAcceptedByActiveRun &&
-    !turnLedger.hasVisibleDelivery() &&
-    !turnLedger.hasForeignQueuedAdmissions();
+    !turnLedger.hasVisibleDelivery();
   let queuedSettleResult: Awaited<ReturnType<typeof turnLedger.settleQueued>> = "settled";
   if (noVisibleReplyFallbackAllowed()) {
     // Only a turn that still looks empty pays for settlement: pending admissions

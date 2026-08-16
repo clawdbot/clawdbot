@@ -6,6 +6,11 @@ import {
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
+import type {
+  ReplyDispatchKind,
+  ReplyDispatchReceipt,
+  ReplyDispatchSettledCounts,
+} from "../../auto-reply/reply/reply-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
@@ -116,16 +121,44 @@ function createRecordInboundSession(events: string[] = []): RecordInboundSession
   }) as unknown as RecordInboundSession;
 }
 
+function createReceipt(
+  outcomes: Partial<Record<ReplyDispatchKind, Partial<ReplyDispatchSettledCounts>>>,
+): ReplyDispatchReceipt {
+  const counts = (kind: ReplyDispatchKind): ReplyDispatchSettledCounts => ({
+    delivered: 0,
+    deliveredNotVisible: 0,
+    cancelled: 0,
+    failedBeforeSend: 0,
+    failedAfterSend: 0,
+    ...outcomes[kind],
+  });
+  const receipt = { tool: counts("tool"), block: counts("block"), final: counts("final") };
+  return {
+    counts: receipt,
+    anyVisibleDelivered: Object.values(receipt).some(
+      (entry) => entry.delivered > 0 || entry.failedAfterSend > 0,
+    ),
+  };
+}
+
 function createDispatch(
   events: string[] = [],
   deliverPayload: { text: string } = { text: "reply" },
 ): DispatchReplyWithBufferedBlockDispatcher {
   return vi.fn(async (params) => {
     events.push("dispatch");
-    await params.dispatcherOptions.deliver(deliverPayload, { kind: "final" });
+    const delivery = await params.dispatcherOptions.deliver(deliverPayload, { kind: "final" });
+    const deliveredNotVisible =
+      typeof delivery === "object" &&
+      delivery !== null &&
+      "visibleReplySent" in delivery &&
+      delivery.visibleReplySent === false;
     return {
       queuedFinal: true,
       counts: { tool: 0, block: 0, final: 1 },
+      settledReceipt: createReceipt({
+        final: deliveredNotVisible ? { deliveredNotVisible: 1 } : { delivered: 1 },
+      }),
     };
   }) as DispatchReplyWithBufferedBlockDispatcher;
 }
@@ -410,8 +443,10 @@ describe("channel turn delivery", () => {
     );
     expectDispatched(result);
     expect(result.dispatchResult).toMatchObject({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
+      settledReceipt: {
+        anyVisibleDelivered: false,
+        counts: { final: { deliveredNotVisible: 1 } },
+      },
     });
   });
 
@@ -451,8 +486,10 @@ describe("channel turn delivery", () => {
     expect(emitMessageSent).not.toHaveBeenCalled();
     expectDispatched(result);
     expect(result.dispatchResult).toMatchObject({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
+      settledReceipt: {
+        anyVisibleDelivered: false,
+        counts: { final: { deliveredNotVisible: 1 } },
+      },
     });
     expect(hasVisibleChannelTurnDispatch(result.dispatchResult)).toBe(false);
   });
@@ -500,7 +537,14 @@ describe("channel turn delivery", () => {
       await params.dispatcherOptions.deliver({ text: "deliver me" }, { kind: "block" });
       await params.dispatcherOptions.deliver({ text: "cancel me" }, { kind: "final" });
       return recordAgentRunTerminalOutcome(
-        { queuedFinal: true, counts: { tool: 0, block: 1, final: 1 } },
+        {
+          queuedFinal: true,
+          counts: { tool: 0, block: 1, final: 1 },
+          settledReceipt: createReceipt({
+            block: { delivered: 1 },
+            final: { deliveredNotVisible: 1 },
+          }),
+        },
         "failed",
       );
     });
@@ -518,8 +562,13 @@ describe("channel turn delivery", () => {
     expect(deliver).toHaveBeenCalledWith({ text: "deliver me" }, { kind: "block" });
     expectDispatched(result);
     expect(result.dispatchResult).toMatchObject({
-      queuedFinal: false,
-      counts: { tool: 0, block: 1, final: 0 },
+      settledReceipt: {
+        anyVisibleDelivered: true,
+        counts: {
+          block: { delivered: 1 },
+          final: { deliveredNotVisible: 1 },
+        },
+      },
     });
     expect(hasVisibleChannelTurnDispatch(result.dispatchResult)).toBe(true);
     expect(readAgentRunTerminalOutcome(result.dispatchResult)).toBe("failed");
@@ -756,8 +805,10 @@ describe("channel turn delivery", () => {
     );
     expectDispatched(result);
     expect(result.dispatchResult).toMatchObject({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
+      settledReceipt: {
+        anyVisibleDelivered: false,
+        counts: { final: { deliveredNotVisible: 1 } },
+      },
     });
   });
 

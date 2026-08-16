@@ -30,7 +30,9 @@ import type {
   ReplyDispatchBeforeDeliver,
   ReplyDispatchBeforeDeliverOptions,
   ReplyDispatchKind,
+  ReplyDispatchReceipt,
   ReplyDispatchRuntimeInfo,
+  ReplyDispatchSettledCounts,
   ReplyDispatcher,
   ReplyFollowupAdmissionBarrierTimeoutPolicy,
 } from "./reply-dispatcher.types.js";
@@ -54,12 +56,31 @@ type ReplyDispatchCancelHandler = (
 
 export type ReplyDispatchDeliveryOutcome =
   | "delivered"
+  | "delivered-not-visible"
   | "cancelled"
   | "failed-before-deliver"
   | "failed-deliver";
 
 export function isReplyDispatchProvenInvisible(outcome: ReplyDispatchDeliveryOutcome): boolean {
-  return outcome === "cancelled" || outcome === "failed-before-deliver";
+  return (
+    outcome === "delivered-not-visible" ||
+    outcome === "cancelled" ||
+    outcome === "failed-before-deliver"
+  );
+}
+
+function isExplicitlyNonVisibleDelivery(result: unknown): boolean {
+  return isRecord(result) && result.visibleReplySent === false;
+}
+
+function createSettledCounts(): ReplyDispatchSettledCounts {
+  return {
+    delivered: 0,
+    deliveredNotVisible: 0,
+    cancelled: 0,
+    failedBeforeSend: 0,
+    failedAfterSend: 0,
+  };
 }
 
 function isRetryableNoSendFailure(error: unknown): boolean {
@@ -414,16 +435,22 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     block: 0,
     final: 0,
   };
-  const failedCounts: Record<ReplyDispatchKind, number> = {
-    tool: 0,
-    block: 0,
-    final: 0,
+  const settledCounts: Record<ReplyDispatchKind, ReplyDispatchSettledCounts> = {
+    tool: createSettledCounts(),
+    block: createSettledCounts(),
+    final: createSettledCounts(),
   };
-  const cancelledCounts: Record<ReplyDispatchKind, number> = {
-    tool: 0,
-    block: 0,
-    final: 0,
-  };
+
+  const buildReceipt = (): ReplyDispatchReceipt => ({
+    counts: {
+      tool: { ...settledCounts.tool },
+      block: { ...settledCounts.block },
+      final: { ...settledCounts.final },
+    },
+    anyVisibleDelivered: Object.values(settledCounts).some(
+      (counts) => counts.delivered > 0 || counts.failedAfterSend > 0,
+    ),
+  });
 
   // Register this dispatcher globally for gateway restart coordination.
   const { unregister } = registerDispatcher({
@@ -523,13 +550,13 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         }
       }
       deliveryStarted = true;
-      await options.deliver(deliverPayload, info);
+      const result = await options.deliver(deliverPayload, info);
       if (custody) {
         await settlePendingFinalDelivery({ kind: "pending-final", ...custody }, "delivered", [
           "queued",
         ]);
       }
-      return "delivered";
+      return isExplicitlyNonVisibleDelivery(result) ? "delivered-not-visible" : "delivered";
     } catch (error) {
       const outcome =
         deliveryStarted && !isRetryableNoSendFailure(error)
@@ -614,17 +641,21 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         if (deliveryFallback && isReplyDispatchProvenInvisible(deliveryOutcome)) {
           deliveryOutcome = await deliverOnce(deliveryFallback, dispatchInfo);
         }
-        if (deliveryOutcome === "cancelled") {
-          cancelledCounts[kind] += 1;
-        } else if (
-          deliveryOutcome === "failed-before-deliver" ||
-          deliveryOutcome === "failed-deliver"
-        ) {
-          failedCounts[kind] += 1;
+        const counts = settledCounts[kind];
+        if (deliveryOutcome === "delivered") {
+          counts.delivered += 1;
+        } else if (deliveryOutcome === "delivered-not-visible") {
+          counts.deliveredNotVisible += 1;
+        } else if (deliveryOutcome === "cancelled") {
+          counts.cancelled += 1;
+        } else if (deliveryOutcome === "failed-before-deliver") {
+          counts.failedBeforeSend += 1;
+        } else {
+          counts.failedAfterSend += 1;
         }
       })
       .catch(async (err: unknown) => {
-        failedCounts[kind] += 1;
+        settledCounts[kind].failedBeforeSend += 1;
         try {
           await options.onError?.(err, buildReplyDispatchRuntimeInfo(normalized, kind));
         } catch {}
@@ -686,10 +717,15 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         options: stageOptions,
       });
     },
-    waitForIdle: () => sendChain,
+    waitForIdle: async () => {
+      let settledChain: Promise<void>;
+      do {
+        settledChain = sendChain;
+        await settledChain;
+      } while (settledChain !== sendChain);
+      return buildReceipt();
+    },
     getQueuedCounts: () => ({ ...queuedCounts }),
-    getCancelledCounts: () => ({ ...cancelledCounts }),
-    getFailedCounts: () => ({ ...failedCounts }),
     markComplete,
     resolveFollowupAdmissionBarrierTimeoutPolicy:
       options.resolveFollowupAdmissionBarrierTimeoutPolicy
@@ -711,22 +747,21 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
 export async function waitForReplyDispatcherIdle(
   dispatcher: Pick<ReplyDispatcher, "waitForIdle">,
   abortSignal?: AbortSignal,
-): Promise<void> {
+): Promise<ReplyDispatchReceipt | undefined> {
   if (!abortSignal) {
-    await dispatcher.waitForIdle();
-    return;
+    return (await dispatcher.waitForIdle()) || undefined;
   }
   if (abortSignal.aborted) {
     return;
   }
   let removeAbortListener: (() => void) | undefined;
-  const aborted = new Promise<void>((resolve) => {
-    const onAbort = () => resolve();
+  const aborted = new Promise<undefined>((resolve) => {
+    const onAbort = () => resolve(undefined);
     abortSignal.addEventListener("abort", onAbort, { once: true });
     removeAbortListener = () => abortSignal.removeEventListener("abort", onAbort);
   });
   try {
-    await Promise.race([dispatcher.waitForIdle(), aborted]);
+    return (await Promise.race([dispatcher.waitForIdle(), aborted])) || undefined;
   } finally {
     removeAbortListener?.();
   }

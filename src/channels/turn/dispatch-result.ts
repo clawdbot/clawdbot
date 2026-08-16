@@ -6,6 +6,10 @@ export type ChannelTurnDispatchResultLike =
   | {
       queuedFinal?: boolean;
       counts?: Partial<Record<ReplyDispatchKind, number>>;
+      settledReceipt?: {
+        anyVisibleDelivered: boolean;
+        counts: Partial<Record<ReplyDispatchKind, { delivered: number; failedAfterSend: number }>>;
+      };
       observedReplyDelivery?: boolean;
       deferredToActiveRun?: "steer" | "followup";
     }
@@ -30,9 +34,11 @@ export const EMPTY_CHANNEL_TURN_DISPATCH_COUNTS: Record<ReplyDispatchKind, numbe
 export function resolveChannelTurnDispatchCounts(
   result: ChannelTurnDispatchResultLike,
 ): Record<ReplyDispatchKind, number> {
+  const receiptCounts = result?.settledReceipt?.counts;
   return {
-    ...EMPTY_CHANNEL_TURN_DISPATCH_COUNTS,
-    ...result?.counts,
+    tool: receiptCounts?.tool?.delivered ?? 0,
+    block: receiptCounts?.block?.delivered ?? 0,
+    final: receiptCounts?.final?.delivered ?? 0,
   };
 }
 
@@ -41,17 +47,12 @@ export function hasVisibleChannelTurnDispatch(
   result: ChannelTurnDispatchResultLike,
   signals: ChannelTurnVisibleDeliverySignals = {},
 ): boolean {
-  const counts = resolveChannelTurnDispatchCounts(result);
-  // Non-count signals cover delivery paths that bypass the buffered reply dispatcher.
   return (
+    result?.settledReceipt?.anyVisibleDelivered === true ||
     result?.observedReplyDelivery === true ||
     signals.observedReplyDelivery === true ||
     signals.fallbackDelivered === true ||
-    signals.deliverySummaryDelivered === true ||
-    result?.queuedFinal === true ||
-    counts.tool > 0 ||
-    counts.block > 0 ||
-    counts.final > 0
+    signals.deliverySummaryDelivered === true
   );
 }
 
@@ -63,11 +64,11 @@ export function hasFinalChannelTurnDispatch(
     "fallbackDelivered" | "deliverySummaryDelivered"
   > = {},
 ): boolean {
-  const counts = resolveChannelTurnDispatchCounts(result);
+  const finalCounts = result?.settledReceipt?.counts.final;
   return (
     signals.fallbackDelivered === true ||
     signals.deliverySummaryDelivered === true ||
-    result?.queuedFinal === true ||
-    counts.final > 0
+    (finalCounts?.delivered ?? 0) > 0 ||
+    (finalCounts?.failedAfterSend ?? 0) > 0
   );
 }

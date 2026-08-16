@@ -24,6 +24,36 @@ type ReplyOptionsWithoutModelSelected = Omit<
 >;
 type RecordInboundSessionFn = typeof import("../channels/session.js").recordInboundSession;
 
+function withLegacyDispatchCounts(
+  dispatch: DispatchReplyWithBufferedBlockDispatcher,
+): DispatchReplyWithBufferedBlockDispatcher {
+  // @deprecated Remove this receipt-to-count projection with this shim in the next Plugin SDK
+  // major. Core consumers use the settled receipt directly.
+  return async (params) => {
+    const result = await dispatch(params);
+    const receipt = result.settledReceipt;
+    if (!receipt) {
+      return result;
+    }
+    const counts = {
+      tool: receipt.counts.tool.delivered,
+      block: receipt.counts.block.delivered,
+      final: receipt.counts.final.delivered,
+    };
+    const failedCounts = {
+      tool: receipt.counts.tool.failedBeforeSend + receipt.counts.tool.failedAfterSend,
+      block: receipt.counts.block.failedBeforeSend + receipt.counts.block.failedAfterSend,
+      final: receipt.counts.final.failedBeforeSend + receipt.counts.final.failedAfterSend,
+    };
+    return {
+      ...result,
+      queuedFinal: counts.final > 0,
+      counts,
+      ...(Object.values(failedCounts).some((count) => count > 0) ? { failedCounts } : {}),
+    };
+  };
+}
+
 function buildInboundReplyDispatchBase(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -49,8 +79,9 @@ function buildInboundReplyDispatchBase(params: {
     storePath: params.storePath,
     ctxPayload: params.ctxPayload,
     recordInboundSession: params.core.channel.session.recordInboundSession,
-    dispatchReplyWithBufferedBlockDispatcher:
+    dispatchReplyWithBufferedBlockDispatcher: withLegacyDispatchCounts(
       params.core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+    ),
   };
 }
 

@@ -718,7 +718,6 @@ export function createDispatcher(): ReplyDispatcher {
       await Promise.all(beforeDeliverTasks);
     }),
     getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
-    getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
     markComplete: vi.fn(),
   };
 }

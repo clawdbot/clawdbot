@@ -11,7 +11,6 @@ function createUntrackedDispatcher(overrides: Partial<ReplyDispatcher> = {}): Re
     sendFinalReply: () => true,
     waitForIdle: async () => {},
     getQueuedCounts: () => ({ tool: 0, block: 0, final: 0 }),
-    getFailedCounts: () => ({ tool: 0, block: 0, final: 0 }),
     markComplete: () => {},
     ...overrides,
   };
@@ -97,18 +96,19 @@ describe("createReplyTurnLedger", () => {
     }
   });
 
-  it("keeps admission as the visibility fact for untracked dispatchers", () => {
+  it("does not fabricate visibility for an untracked dispatcher", async () => {
     const ledger = createReplyTurnLedger(createUntrackedDispatcher());
     const send = ledger.sendQueued("final", { text: "hello" });
     expect(send.outcome).toBeUndefined();
-    expect(ledger.hasVisibleDelivery()).toBe(true);
+    await ledger.settleQueued();
+    expect(ledger.hasVisibleDelivery()).toBe(false);
   });
 
   it("never counts contentless payloads as visible", async () => {
     const dispatcher = createReplyDispatcher({ deliver: async () => {} });
     const ledger = createReplyTurnLedger(dispatcher);
     const payload: ReplyPayload = { text: "hi" };
-    // Metadata-only admissions on untracked dispatchers stay invisible too.
+    // Untracked dispatcher admissions stay unknown and therefore invisible.
     const untracked = createReplyTurnLedger(createUntrackedDispatcher());
     untracked.sendQueued("final", { text: "   " });
     expect(untracked.hasVisibleDelivery()).toBe(false);
@@ -126,15 +126,6 @@ describe("createReplyTurnLedger", () => {
     expect(ledger.hasVisibleDelivery()).toBe(false);
     ledger.recordRoutedDelivery({ mediaUrl: "https://example.com/seatmap.png" }, true);
     expect(ledger.hasVisibleDelivery()).toBe(true);
-  });
-
-  it("reports foreign admissions the dispatch pipeline never sent", () => {
-    const dispatcher = createUntrackedDispatcher({
-      getQueuedCounts: () => ({ tool: 0, block: 1, final: 0 }),
-    });
-    const ledger = createReplyTurnLedger(dispatcher);
-    expect(ledger.hasForeignQueuedAdmissions()).toBe(true);
-    expect(ledger.hasVisibleDelivery()).toBe(false);
   });
 
   it("stops settling when the abort signal fires", async () => {

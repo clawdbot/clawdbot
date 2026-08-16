@@ -217,8 +217,6 @@ describe("createReplyDispatcher", () => {
 
       expect(delivered).toEqual(["follow-up final"]);
       expect(errors).toEqual(["beforeDeliver timed out after 15000ms"]);
-      expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 1 });
-      expect(dispatcher.getCancelledCounts?.()).toEqual({ tool: 0, block: 0, final: 0 });
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
@@ -253,8 +251,6 @@ describe("createReplyDispatcher", () => {
       await dispatcher.waitForIdle();
 
       expect(delivered).toEqual(["follow-up final"]);
-      expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 1 });
-      expect(dispatcher.getCancelledCounts?.()).toEqual({ tool: 0, block: 0, final: 0 });
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
@@ -320,7 +316,6 @@ describe("createReplyDispatcher", () => {
 
       expect(delivered).toEqual(["final:constructor:appended"]);
       expect(errors).toEqual([]);
-      expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 0 });
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
@@ -364,7 +359,6 @@ describe("createReplyDispatcher", () => {
       await dispatcher.waitForIdle();
 
       expect(delivered).toEqual(["final:owner:plugin"]);
-      expect(dispatcher.getFailedCounts()).toEqual({ tool: 0, block: 0, final: 0 });
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
@@ -398,12 +392,10 @@ describe("createReplyDispatcher", () => {
       await vi.advanceTimersByTimeAsync(10_000);
       await vi.advanceTimersByTimeAsync(5_000);
       expect(delivered).toEqual([]);
-      expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 0 });
       await vi.advanceTimersByTimeAsync(5_000);
       await dispatcher.waitForIdle();
 
       expect(delivered).toEqual(["final:first:second"]);
-      expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 0 });
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();

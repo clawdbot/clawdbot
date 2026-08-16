@@ -2,8 +2,6 @@ import type { ExecutionIdentityAdmissionToken as ExecutionToken } from "../../au
 import { dispatchInboundMessageWithRoutedChannelDispatcher } from "../../auto-reply/dispatch.js";
 import { copyReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { suppressPendingFinalDelivery } from "../../auto-reply/reply/dispatch-from-config.pending-final.js";
-import type { DispatchFromConfigResult } from "../../auto-reply/reply/dispatch-from-config.types.js";
-import type { ReplyDispatchKind } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import { runWithSessionInitConflictRetry } from "../../auto-reply/reply/session-init-conflict-retry.js";
 import { withReplySystemEventSessionKey } from "../../auto-reply/reply/system-event-session-key.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -363,22 +361,6 @@ async function applyRoutedDirectMessageSending(params: {
   return { payload: copyReplyPayloadMetadata(params.payload, payload) };
 }
 
-function reconcileNonVisibleChannelDeliveries(
-  result: DispatchFromConfigResult,
-  nonVisibleCounts: Readonly<Record<ReplyDispatchKind, number>>,
-): DispatchFromConfigResult {
-  const counts = {
-    tool: Math.max(0, result.counts.tool - nonVisibleCounts.tool),
-    block: Math.max(0, result.counts.block - nonVisibleCounts.block),
-    final: Math.max(0, result.counts.final - nonVisibleCounts.final),
-  };
-  return {
-    ...result,
-    queuedFinal: result.queuedFinal && counts.final > 0,
-    counts,
-  };
-}
-
 function createObserveOnlyDeliveryAdapter(): ChannelEventDeliveryAdapter {
   // Observe-only turns still run the agent, but transport delivery must remain impossible for
   // every assembled-turn entry point, including direct SDK dispatch.
@@ -535,7 +517,6 @@ async function dispatchChannelTurnWithDeliveryOwner(
                         info,
                         result: suppression,
                       });
-                      recordSettledDelivery(info, suppression);
                       return suppression;
                     }
                     const declaredDurable = "durable" in delivery ? delivery.durable : undefined;
@@ -564,7 +545,6 @@ async function dispatchChannelTurnWithDeliveryOwner(
                           info,
                           result: durable.delivery,
                         });
-                        recordSettledDelivery(info, durable.delivery);
                         return durable.delivery;
                       }
                     }
@@ -641,7 +621,7 @@ async function dispatchChannelTurnWithDeliveryOwner(
                         result,
                       });
                     } else {
-                      const finalized = await settleChannelDeliveryAttempt({
+                      await settleChannelDeliveryAttempt({
                         attempt: {
                           state: "fulfilled",
                           payload: effectivePayload,
@@ -653,7 +633,6 @@ async function dispatchChannelTurnWithDeliveryOwner(
                           ? getMessageSentEmitter()?.emitMessageSent
                           : undefined,
                       });
-                      recordSettledDelivery(info, finalized);
                     }
                     return result;
                   },
@@ -685,7 +664,6 @@ async function dispatchChannelTurnWithDeliveryOwner(
             attempts: pendingDeliveryAttempts,
             delivery,
             emitMessageSent: getMessageSentEmitter()?.emitMessageSent,
-            onSettled: recordSettledDelivery,
           });
         } catch (error: unknown) {
           settlementError = error;
@@ -703,9 +681,7 @@ async function dispatchChannelTurnWithDeliveryOwner(
         if (settlementError !== undefined) {
           throw toErrorObject(settlementError, "channel delivery settlement failed");
         }
-        return ownership === "routed-delivery"
-          ? reconcileNonVisibleChannelDeliveries(dispatchResult!, nonVisibleDeliveryCounts)
-          : dispatchResult!;
+        return dispatchResult!;
       },
     },
     { suppressObserveOnlyDispatch: false },

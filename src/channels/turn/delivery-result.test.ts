@@ -112,6 +112,14 @@ describe("channel turn dispatch results", () => {
         queuedFinal: false,
         counts: { tool: 1, block: 0, final: 0 },
       }),
+    ).toBe(false);
+    expect(
+      hasVisibleChannelTurnDispatch({
+        settledReceipt: {
+          anyVisibleDelivered: true,
+          counts: { tool: { delivered: 1, failedAfterSend: 0 } },
+        },
+      }),
     ).toBe(true);
     expect(
       hasVisibleChannelTurnDispatch(undefined, {
@@ -120,8 +128,10 @@ describe("channel turn dispatch results", () => {
     ).toBe(true);
     expect(
       hasFinalChannelTurnDispatch({
-        queuedFinal: false,
-        counts: { tool: 1, block: 0, final: 0 },
+        settledReceipt: {
+          anyVisibleDelivered: true,
+          counts: { tool: { delivered: 1, failedAfterSend: 0 } },
+        },
       }),
     ).toBe(false);
     expect(resolveChannelTurnDispatchCounts(undefined)).toEqual({

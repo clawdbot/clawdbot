@@ -1,7 +1,6 @@
 import { isAbortError } from "../../infra/abort-signal.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
-import { readDispatcherFailedCounts } from "./reply-dispatcher.types.js";
 
 export class DispatchReplyOperationAbortedError extends Error {
   constructor() {
@@ -76,15 +75,11 @@ export function createAbortAwareDispatcher(params: {
     sendFinalReply: sendIfActive(params.dispatcher.sendFinalReply),
     waitForIdle: () => params.dispatcher.waitForIdle(),
     getQueuedCounts: () => params.dispatcher.getQueuedCounts(),
-    getFailedCounts: () => readDispatcherFailedCounts(params.dispatcher),
     markComplete: () => {
       if (!params.isAborted()) {
         params.dispatcher.markComplete();
       }
     },
   };
-  if (params.dispatcher.getCancelledCounts) {
-    dispatcher.getCancelledCounts = () => params.dispatcher.getCancelledCounts!();
-  }
   return dispatcher;
 }
