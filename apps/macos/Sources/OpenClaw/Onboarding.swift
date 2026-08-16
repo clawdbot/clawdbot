@@ -700,7 +700,7 @@ struct OnboardingView: View {
         switch mode {
         case .remote, .local:
             // Native onboarding ends once inference works: install (when
-            // needed) plus AI setup. Successful first run lands in chat.
+            // needed) plus AI setup. Successful first run lands in the normal dashboard.
             requiresCLIInstall ? [0, 1, 2, 3] : [0, 1, 3]
         case .unconfigured:
             // "Set up later" has no gateway to hand off to; keep the native
@@ -841,7 +841,7 @@ struct OnboardingView: View {
         configuredGatewayProbeTimeoutMs: Double = 15000,
         gatewaySelectionPersister: (@MainActor () -> Bool)? = nil,
         dashboardOnboardingOpener: @escaping @MainActor () -> Void = {
-            AppNavigationActions.openChat()
+            AppNavigationActions.openDashboard()
         })
     {
         self.state = state

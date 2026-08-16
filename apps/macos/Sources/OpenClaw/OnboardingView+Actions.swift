@@ -123,7 +123,7 @@ extension OnboardingView {
         OnboardingController.markComplete()
         OnboardingController.shared.close()
         guard state.connectionMode != .unconfigured else { return true }
-        // Inference works; hand the user directly to their first conversation.
+        // Inference works; use the same dashboard surface as normal launch and reopen.
         dashboardOnboardingOpener()
         return true
     }
