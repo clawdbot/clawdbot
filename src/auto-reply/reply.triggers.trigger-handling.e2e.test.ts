@@ -99,10 +99,16 @@ vi.mock("./reply/agent-runner.runtime.js", () => ({
   },
 }));
 
-vi.mock("./reply/commands-compact.runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./reply/commands-compact.runtime.js")>()),
-  isEmbeddedAgentRunAbortableForCompaction: () => false,
-}));
+vi.mock("./reply/commands-compact.runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./reply/commands-compact.runtime.js")>();
+  return {
+    ...actual,
+    incrementCompactionCount: (params: Parameters<typeof actual.incrementCompactionCount>[0]) =>
+      actual.incrementCompactionCount({ ...params, expectedSession: undefined }),
+    isCurrentSessionEntry: () => true,
+    isEmbeddedAgentRunAbortableForCompaction: () => false,
+  };
+});
 
 let capturedGetReplyFromConfig: GetReplyFromConfig | undefined;
 installTriggerHandlingReplyHarness((impl) => {
