@@ -631,19 +631,22 @@ describe("sessions page lifecycle", () => {
 
   it("retargets the Gateway after deleting the current session", async () => {
     const key = "agent:writer:work";
+    const sessionId = "session-writer-work";
     const sessions = createSessions({
       deleteMany: vi.fn(async () => ({ deleted: [key], errors: [], preservedWorktrees: [] })),
     });
     const mutableGateway = createGateway({} as GatewayBrowserClient);
     mutableGateway.emit({ sessionKey: key });
     const page = await createPage(createContext(mutableGateway.gateway, sessions));
-    page.result = { count: 1, sessions: [{ key }] } as SessionsListResult;
+    page.result = { count: 1, sessions: [{ key, sessionId }] } as SessionsListResult;
     page.selectedKeys = new Set([key]);
     vi.mocked(showConfirmDialog).mockResolvedValue(true);
 
     await page.deleteSelected();
 
-    expect(sessions.deleteMany).toHaveBeenCalledWith([{ key, agentId: undefined }]);
+    expect(sessions.deleteMany).toHaveBeenCalledWith([
+      { key, agentId: undefined, expectedSessionId: sessionId },
+    ]);
     expect(mutableGateway.setSessionKey).toHaveBeenCalledWith("agent:writer:main");
     expect(page.result?.sessions).toEqual([]);
     expect(page.selectedKeys).toEqual(new Set());
@@ -717,10 +720,11 @@ describe("sessions page lifecycle", () => {
     const activeKey = "agent:main:active";
     const archivedKey = "agent:main:archived";
     const unknownKey = "agent:main:unknown";
+    const retryError = `Session ${archivedKey} changed before deletion. Retry.`;
     const sessions = createSessions({
       deleteMany: vi.fn(async () => ({
         deleted: [archivedKey],
-        errors: ["active denied", "unknown denied"],
+        errors: [retryError],
         preservedWorktrees: [],
       })),
     });
@@ -748,7 +752,8 @@ describe("sessions page lifecycle", () => {
       sessions: [{ key: activeKey, archived: false }],
     });
     expect(page.selectedKeys).toEqual(new Set([activeKey, unknownKey]));
-    expect(page.error).toBe("active denied; unknown denied");
+    expect(page.error).toBe(retryError);
+    expect(page.error).not.toContain("GatewayRequestError");
   });
 
   it("stops an active cloud worker and refreshes the session roster", async () => {

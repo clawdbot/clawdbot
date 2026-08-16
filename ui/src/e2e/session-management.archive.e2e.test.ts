@@ -847,6 +847,7 @@ suite.define(() => {
       expect(requireRecord(request.params)).toMatchObject({
         archivedOnly: true,
         deleteTranscript: true,
+        expectedSessionId: `session:${key}`,
         key,
       });
       await row.waitFor({ state: "visible" });

@@ -286,8 +286,18 @@ describe("AppSidebar multi-select", () => {
 
       await waitForFast(() => expect(harness.deleteMany).toHaveBeenCalledOnce());
       expect(harness.deleteMany).toHaveBeenCalledWith([
-        { key: "agent:main:a", agentId: "main", deleteTranscript: true },
-        { key: "agent:main:b", agentId: "main", deleteTranscript: true },
+        {
+          key: "agent:main:a",
+          agentId: "main",
+          deleteTranscript: true,
+          expectedSessionId: "session:agent:main:a",
+        },
+        {
+          key: "agent:main:b",
+          agentId: "main",
+          deleteTranscript: true,
+          expectedSessionId: "session:agent:main:b",
+        },
       ]);
     } finally {
       restoreDialogPolyfill();

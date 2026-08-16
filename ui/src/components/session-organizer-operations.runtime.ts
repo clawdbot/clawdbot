@@ -294,6 +294,7 @@ export async function deleteSessionsBatch(
     key: row.key,
     agentId: parseAgentSessionKey(row.key)?.agentId ?? scope.selectedAgentId,
     deleteTranscript: true,
+    ...(row.sessionId ? { expectedSessionId: row.sessionId } : {}),
     ...(row.archived === true ? { archivedOnly: true } : {}),
   }));
   for (const params of requests) {
@@ -578,6 +579,7 @@ export async function deleteSession(
   const deleteParams = {
     agentId,
     deleteTranscript: true,
+    ...(session.sessionId ? { expectedSessionId: session.sessionId } : {}),
     ...(session.archived === true ? { archivedOnly: true } : {}),
   };
   if (

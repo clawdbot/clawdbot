@@ -364,18 +364,31 @@ describe("createSessionCapability", () => {
     const { gateway } = createGatewayHarness(client);
     const sessions = createSessionCapability(gateway);
 
-    await expect(sessions.delete(key)).resolves.toEqual({ deleted: false });
+    await expect(
+      sessions.delete(key, { expectedSessionId: "session-before-replacement" }),
+    ).resolves.toEqual({ deleted: false });
     expect(sessions.state.deletedSessions).toEqual([]);
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith("sessions.delete", {
+      key,
+      deleteTranscript: true,
+      expectedSessionId: "session-before-replacement",
+    });
     sessions.dispose();
   });
 
   it("excludes lifecycle no-ops from batch deletion results", async () => {
+    const rejectedKey = "agent:main:rejected";
     const keptKey = "agent:main:kept";
     const deletedKey = "agent:main:deleted";
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "sessions.delete") {
         const key = (params as { key?: string } | undefined)?.key;
+        if (key === rejectedKey) {
+          throw new GatewayRequestError({
+            code: "INVALID_REQUEST",
+            message: `Session ${key} changed before deletion. Retry.`,
+          });
+        }
         return { ok: true, deleted: key === deletedKey };
       }
       if (method === "sessions.list") {
@@ -392,11 +405,19 @@ describe("createSessionCapability", () => {
     });
 
     await expect(
-      sessions.deleteMany([{ key: keptKey }, { key: deletedKey, archivedOnly: true }]),
-    ).resolves.toEqual({ deleted: [deletedKey], errors: [], preservedWorktrees: [] });
+      sessions.deleteMany([
+        { key: rejectedKey },
+        { key: keptKey },
+        { key: deletedKey, archivedOnly: true },
+      ]),
+    ).resolves.toEqual({
+      deleted: [deletedKey],
+      errors: [`Session ${rejectedKey} changed before deletion. Retry.`],
+      preservedWorktrees: [],
+    });
     expect(deletedSnapshots.some((keys) => keys.includes(deletedKey))).toBe(true);
     expect(deletedSnapshots.some((keys) => keys.includes(keptKey))).toBe(false);
-    expect(request).toHaveBeenCalledTimes(3);
+    expect(request).toHaveBeenCalledTimes(4);
     expect(request).toHaveBeenCalledWith("sessions.delete", {
       key: deletedKey,
       deleteTranscript: true,
