@@ -179,6 +179,8 @@ export async function readConfigFileSnapshotInternal(
     );
     const rosterMigration = migratePersistedImplicitMainRoster(contextBudgetMigration.config);
     envVarWarnings.push(
+      ...contextBudgetMigration.changes.map((message) => ({ path: "", message })),
+      ...contextBudgetMigration.warnings.map((message) => ({ path: "", message })),
       ...rosterMigration.diagnostics.map((message) => ({ path: "agents.entries", message })),
     );
     const effectiveConfigRaw = rosterMigration.config;

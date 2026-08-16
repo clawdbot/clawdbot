@@ -121,7 +121,7 @@ describe("config io paths", () => {
     });
   });
 
-  it("loads every retired context-budget shape through strict validation without rewriting", async () => {
+  it("loads retired context-budget shapes and surfaces migration guidance without rewriting", async () => {
     await withTempHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -171,7 +171,17 @@ describe("config io paths", () => {
       expect(config.agents?.entries?.ops).not.toHaveProperty("contextTokens");
       expect(resolvedBudget).toBe(64_000);
       expect(snapshot.sourceConfigBeforeMigrations).toMatchObject(authored);
-      expect(logger.warn).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining("models.providers.<provider>.models[].contextTokens"),
+      );
+      expect(snapshot.warnings).toContainEqual({
+        path: "",
+        message: "Removed agents.defaults.contextTokens.",
+      });
+      expect(snapshot.warnings).toContainEqual({
+        path: "",
+        message: expect.stringContaining("models.providers.<provider>.models[].contextTokens"),
+      });
       await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(raw);
     });
   });
