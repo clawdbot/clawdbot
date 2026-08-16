@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { bindIngressLifecycleToReplyOptions } from "./ingress-drain-lifecycle.js";
 
 describe("channel ingress drain lifecycle", () => {
-  it("binds only the reply-lane ownership surface", async () => {
+  it("binds the reply-lane ownership and pre-adoption abort surfaces", async () => {
     const abort = new AbortController();
     const calls: string[] = [];
     const bound = bindIngressLifecycleToReplyOptions({
@@ -34,7 +34,11 @@ describe("channel ingress drain lifecycle", () => {
     expect("onFailed" in bound.turnAdoptionLifecycle).toBe(false);
     expect("onCancelled" in bound.turnAdoptionLifecycle).toBe(false);
     expect("onAdopted" in bound).toBe(false);
-    expect(Object.keys(bound)).toEqual(["turnAdoptionLifecycle"]);
+    // The top-level abortSignal is the same signal core initial-dispatch
+    // cancellation reads (replyOptions.abortSignal); the drain aborts it only
+    // pre-adoption, so an adopted run is never cancelled through this surface.
+    expect(bound.abortSignal).toBe(abort.signal);
+    expect(Object.keys(bound)).toEqual(["abortSignal", "turnAdoptionLifecycle"]);
     bound.turnAdoptionLifecycle.onDeferred();
     await bound.turnAdoptionLifecycle.onAbandoned();
     expect(calls).toEqual(["deferred", "abandoned"]);

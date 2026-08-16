@@ -32,6 +32,7 @@ export type ChannelIngressDispatchLifecycle = {
 
 /** Maps a drain lifecycle onto the reply-lane ownership surface. */
 export function bindIngressLifecycleToReplyOptions(lifecycle: ChannelIngressDispatchLifecycle): {
+  abortSignal: AbortSignal;
   turnAdoptionLifecycle: {
     admission: "exclusive";
     onAdopted: () => void | Promise<void>;
@@ -41,6 +42,11 @@ export function bindIngressLifecycleToReplyOptions(lifecycle: ChannelIngressDisp
   };
 } {
   return {
+    // Core initial-dispatch cancellation reads replyOptions.abortSignal; the
+    // drain aborts it only while pre-adoption (abortActiveClaims/dispose skip
+    // adopted claims), so the dispatch cancels exactly when the claim is being
+    // reopened for replay — never an adopted run.
+    abortSignal: lifecycle.abortSignal,
     turnAdoptionLifecycle: {
       admission: "exclusive",
       onAdopted: lifecycle.onAdopted,

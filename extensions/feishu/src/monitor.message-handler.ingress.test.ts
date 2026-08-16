@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
-import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  bindIngressLifecycleToReplyOptions,
+  DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -429,6 +432,61 @@ describe("Feishu durable ingress debounce lifecycle", () => {
     expect(logicalClaim.release).toHaveBeenCalledTimes(2);
     expect(harness.runtimeError).not.toHaveBeenCalled();
     turnGate.resolve();
+  });
+
+  it("cancels the pre-adoption dispatch before the ingress claim reopens for replay", async () => {
+    const transport = createLifecycle();
+    const logicalClaim = createClaim("shutdown-cancels-dispatch");
+    const harness = createHarness({
+      lifecycles: new Map([["evt-cancel-dispatch", transport.lifecycle]]),
+      claims: [logicalClaim],
+      adoptTurn: false,
+    });
+    // The real dispatcher (bot.ts resolveTurn) binds the gated lifecycle into
+    // replyOptions with this helper; core initial-dispatch cancellation reads
+    // replyOptions.abortSignal and rejects the dispatch before any agent or
+    // tool work. The signal is the drain's own — the monitor aborts exactly
+    // this signal on shutdown, and the drain aborts only dispatching/deferred
+    // claims, so an adopted run is never cancelled through this surface.
+    let pipelineSignal: AbortSignal | undefined;
+    harness.handleMessage.mockImplementationOnce(async (turn) => {
+      const replyOptions = {
+        abortSignal: turn.turnAdoptionLifecycle
+          ? bindIngressLifecycleToReplyOptions(turn.turnAdoptionLifecycle).abortSignal
+          : undefined,
+      };
+      pipelineSignal = replyOptions.abortSignal;
+      await new Promise<void>((resolve, reject) => {
+        replyOptions.abortSignal?.addEventListener(
+          "abort",
+          () => reject(new Error("dispatch aborted: ingress claim reopened pre-adoption")),
+          { once: true },
+        );
+      });
+    });
+
+    await harness.handler(createTextEvent("evt-cancel-dispatch", "om-cancel-dispatch", "cancel"));
+    const flush = harness.flush();
+    await vi.waitFor(() => expect(harness.handleMessage).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(pipelineSignal).toBeDefined());
+    expect(pipelineSignal).toBe(transport.controller.signal);
+    transport.controller.abort(new Error("monitor shutdown"));
+    // The dispatch is cancelled through the turn leg (like the real
+    // DispatchReplyOperationAbortedError path) instead of continuing toward
+    // agent or tool work while the reopened claim waits for replay; the flush
+    // catch joins the gate's abandonment, so the row stays abandoned for the
+    // fresh drain to re-deliver — only replay executes after shutdown.
+    await expect(flush).rejects.toThrow("dispatch aborted: ingress claim reopened pre-adoption");
+
+    expect(pipelineSignal?.aborted).toBe(true);
+    expect(transport.calls.adopted).not.toHaveBeenCalled();
+    expect(transport.calls.abandoned).toHaveBeenCalledTimes(1);
+    expect(logicalClaim.commit).not.toHaveBeenCalled();
+    // Two releases by contract: the flush's replay guard plus the
+    // admission-time abandon handler on the transport — the flush catch joins
+    // the gate's in-flight abandonment instead of running a second one.
+    expect(logicalClaim.release).toHaveBeenCalledTimes(2);
+    expect(harness.runtimeError).not.toHaveBeenCalled();
   });
 
   it("does not dispatch a queued turn after its ingress claim aborts", async () => {
