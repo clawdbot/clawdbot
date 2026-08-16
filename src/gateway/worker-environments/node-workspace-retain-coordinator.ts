@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { NODE_WORKER_WORKSPACE_RETAIN_COMMAND } from "../../infra/node-commands.js";
-import { NODE_WORKER_BUNDLE_RETENTION_VERSION } from "../../infra/node-runner-inventory.js";
+import {
+  NODE_WORKER_BUNDLE_RETENTION_VERSION,
+  NODE_WORKER_BUNDLE_STATUS_VERSION,
+} from "../../infra/node-runner-inventory.js";
 import {
   NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES,
   NODE_WORKER_RETAIN_REQUEST_MAX_BYTES,
@@ -44,6 +47,20 @@ function nodeEnvironments(options: NodeWorkspaceRetainCoordinatorOptions, nodeId
         environment.providerId === DEVICE_WORKER_PROVIDER_ID &&
         environmentDeviceId(environment) === nodeId,
     );
+}
+
+function bundleStatusTargetForNode(options: NodeWorkspaceRetainCoordinatorOptions, nodeId: string) {
+  return nodeEnvironments(options, nodeId)
+    .filter(
+      (environment) =>
+        environment.bootstrapReceipt !== null &&
+        !TERMINAL_ENVIRONMENT_STATES.has(environment.state),
+    )
+    .toSorted(
+      (left, right) =>
+        right.createdAtMs - left.createdAtMs ||
+        left.environmentId.localeCompare(right.environmentId),
+    )[0]?.bootstrapReceipt;
 }
 
 function snapshotBundleHashesForNode(
@@ -135,6 +152,8 @@ export function createNodeWorkspaceRetainCoordinator(
     const retainedBundleHashes = snapshotBundleHashesForNode(options, node.nodeId);
     const bundleRetentionSupported =
       node.workerHost.bundleRetention === NODE_WORKER_BUNDLE_RETENTION_VERSION;
+    const bundleStatusSupported =
+      node.workerHost.bundleStatus === NODE_WORKER_BUNDLE_STATUS_VERSION;
     const baseInput: NodeWorkerWorkspaceRetainInput = {
       version: 1,
       gatewayNamespace: options.gatewayNamespace,
@@ -145,16 +164,39 @@ export function createNodeWorkspaceRetainCoordinator(
     const priorGeneration = acknowledgedBundleGenerationByNode.get(node.nodeId);
     const acknowledgedBundleGeneration =
       priorGeneration?.connId === node.connId ? priorGeneration.generation : undefined;
-    const candidateInput: NodeWorkerWorkspaceRetainInput = {
+    const retentionInput: NodeWorkerWorkspaceRetainInput = {
       ...baseInput,
       bundleHashes: retainedBundleHashes,
       ...(acknowledgedBundleGeneration !== undefined ? { acknowledgedBundleGeneration } : {}),
     };
     const bundleHashesFit =
       retainedBundleHashes.length <= NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES &&
-      Buffer.byteLength(JSON.stringify(candidateInput), "utf8") <=
+      Buffer.byteLength(JSON.stringify(retentionInput), "utf8") <=
         NODE_WORKER_RETAIN_REQUEST_MAX_BYTES;
-    const input = bundleRetentionSupported && bundleHashesFit ? candidateInput : baseInput;
+    const bundleStatusTarget = bundleStatusSupported
+      ? bundleStatusTargetForNode(options, node.nodeId)
+      : undefined;
+    const statusInput =
+      bundleStatusTarget && retainedBundleHashes.includes(bundleStatusTarget.bundleHash)
+        ? { ...retentionInput, bundleStatusHash: bundleStatusTarget.bundleHash }
+        : undefined;
+    const statusInputFits =
+      statusInput !== undefined &&
+      Buffer.byteLength(JSON.stringify(statusInput), "utf8") <=
+        NODE_WORKER_RETAIN_REQUEST_MAX_BYTES;
+    const input =
+      bundleRetentionSupported && bundleHashesFit
+        ? statusInput && statusInputFits
+          ? statusInput
+          : retentionInput
+        : baseInput;
+    const previousBundleStatus = currentTransport.getBundleStatus?.(node.nodeId);
+    if (
+      !input.bundleStatusHash ||
+      (previousBundleStatus && previousBundleStatus.bundleHash !== input.bundleStatusHash)
+    ) {
+      currentTransport.acceptBundleStatus?.(node, undefined);
+    }
     if (bundleRetentionSupported && !bundleHashesFit) {
       options.warn(
         `Node bundle retention skipped (${node.nodeId}): ${retainedBundleHashes.length} retained hashes exceed the bounded maintenance request`,
@@ -192,6 +234,30 @@ export function createNodeWorkspaceRetainCoordinator(
         });
       }
       if (!retained.applied || !retained.hasMore) {
+        const bundleStatus = retained.bundleStatus;
+        const requestedBundleHash = input.bundleStatusHash;
+        const currentStatusTarget = requestedBundleHash
+          ? bundleStatusTargetForNode(options, node.nodeId)
+          : undefined;
+        const statusTargetMatches =
+          currentStatusTarget != null &&
+          requestedBundleHash !== undefined &&
+          currentStatusTarget.bundleHash === requestedBundleHash;
+        const statusMatches =
+          retained.applied &&
+          statusTargetMatches &&
+          bundleStatus?.bundleHash === requestedBundleHash;
+        if (statusMatches && currentStatusTarget && bundleStatus) {
+          currentTransport.acceptBundleStatus?.(node, {
+            bundleHash: currentStatusTarget.bundleHash,
+            status:
+              bundleStatus.status === "installed"
+                ? { status: "installed", version: currentStatusTarget.openclawVersion }
+                : { status: "missing" },
+          });
+        } else if (input.bundleStatusHash) {
+          currentTransport.acceptBundleStatus?.(node, undefined);
+        }
         return;
       }
     }

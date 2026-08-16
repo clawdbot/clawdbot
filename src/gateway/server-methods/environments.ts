@@ -23,6 +23,7 @@ import { createKnownNodeCatalog, listKnownNodes } from "../node-catalog.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import {
   collectNodeRunnerIssuesByNodeId,
+  collectNodeWorkerBundleStatusByNodeId,
   isNodeRunnerSessionHost,
 } from "../node-registry-private.js";
 import type { WorkerEnvironmentServiceRecord } from "../worker-environments/service-contract.js";
@@ -91,6 +92,7 @@ function summarizeNodeEnvironment(
     status: node.connected ? "available" : "unavailable",
     ...(platform ? { platform } : {}),
     sessionHost: node.connected === true && node.sessionHost === true,
+    ...(node.workerBundle ? { workerBundle: structuredClone(node.workerBundle) } : {}),
     ...(node.lastConnectedAtMs !== undefined ? { lastConnectedAtMs: node.lastConnectedAtMs } : {}),
     ...(node.lastDisconnectedAtMs !== undefined
       ? { lastDisconnectedAtMs: node.lastDisconnectedAtMs }
@@ -160,11 +162,16 @@ async function listEnvironments(context: GatewayRequestContext): Promise<Environ
     ),
   );
   const issuesByNodeId = collectNodeRunnerIssuesByNodeId(context.nodeRegistry, connectedNodes);
+  const workerBundleByNodeId = collectNodeWorkerBundleStatusByNodeId(
+    context.nodeRegistry,
+    connectedNodes,
+  );
   const catalog = createKnownNodeCatalog({
     pairedDevices: devices.paired,
     pairedNodes: nodes.paired,
     connectedNodes,
     sessionHostNodeIds,
+    workerBundleByNodeId,
     issuesByNodeId,
   });
   const config = context.getRuntimeConfig();

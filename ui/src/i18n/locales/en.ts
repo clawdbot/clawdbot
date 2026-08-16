@@ -590,6 +590,10 @@ export const en: TranslationMap = {
       versionDrift: "version drift",
       versionDriftTitle:
         "Device {nodeVersion}; Gateway {gatewayVersion}. Update the older component to align the fleet.",
+      workerVersion: "Worker {version}",
+      workerMissing: "worker missing",
+      workerMissingTitle:
+        "The Gateway-managed worker bundle is missing. Start a new session on this device to reinstall it.",
       manualWake: "manual wake required",
       manualWakeTitle:
         "The Gateway cannot wake an offline Windows device. Start the machine or restore its network connection.",

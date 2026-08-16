@@ -36,6 +36,7 @@ export type {
   EnvironmentSelection,
   EnvironmentSummary,
   EnvironmentsListResult,
+  NodeWorkerBundleStatus,
   GatewayEvent,
   GatewayRequestOptions,
   JsonObject,

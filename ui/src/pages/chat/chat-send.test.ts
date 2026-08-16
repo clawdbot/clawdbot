@@ -8328,6 +8328,7 @@ describe("handleSendChat", () => {
         kind: "steered",
         pendingRunId: "steer-run",
         sendRunId: original.sendRunId,
+        steerTargetRunId: "active-run",
         text: original.text,
       }),
     ]);

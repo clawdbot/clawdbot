@@ -114,6 +114,42 @@ describe("worker environment protocol schemas", () => {
     ).toBe(true);
   });
 
+  it("accepts only redacted node worker bundle status", () => {
+    const node = {
+      id: "node:build-mac",
+      type: "node",
+      status: "available",
+    };
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...node,
+        workerBundle: { status: "installed", version: "2026.8.9" },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...node,
+        workerBundle: { status: "missing" },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...node,
+        workerBundle: {
+          status: "installed",
+          version: "2026.8.9",
+          bundleHash: "a".repeat(64),
+        },
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...node,
+        workerBundle: { status: "installed", version: "" },
+      }),
+    ).toBe(false);
+  });
+
   it("accepts bounded node lifecycle history and rejects malformed timestamps", () => {
     const node = {
       id: "node:build-mac",

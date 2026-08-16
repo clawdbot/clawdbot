@@ -591,28 +591,6 @@ describe("getStatusSummary", () => {
     });
   });
 
-  it("does not pass stale session contextTokens as status row overrides", async () => {
-    statusSummaryMocks.listSessionEntriesCore.mockReturnValue(
-      toSessionEntrySummaries({
-        "agent:main:main": {
-          sessionId: "stale-context",
-          updatedAt: Date.now(),
-          modelProvider: "openai",
-          model: "gpt-5.4",
-          contextTokens: 1_000_000,
-        },
-      }),
-    );
-
-    await getStatusSummary();
-
-    expect(
-      vi
-        .mocked(statusSummaryRuntime.resolveContextTokensForModel)
-        .mock.calls.some((call) => call[0]?.contextTokensOverride === 1_000_000),
-    ).toBe(false);
-  });
-
   it.each([
     {
       name: "fresh v1",

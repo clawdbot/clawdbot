@@ -322,11 +322,8 @@ export async function sessionsCommand(
   const aggregateAgents = opts.allAgents === true;
   const cfg = getRuntimeConfig();
   const displayDefaults = resolveSessionDisplayDefaults(cfg);
-  const configuredContextTokens = cfg.agents?.defaults?.contextTokens;
   const configContextTokens =
-    configuredContextTokens ??
-    (await lookupContextTokensForDisplay(displayDefaults.model)) ??
-    DEFAULT_CONTEXT_TOKENS;
+    (await lookupContextTokensForDisplay(displayDefaults.model)) ?? DEFAULT_CONTEXT_TOKENS;
   const targets = resolveSessionStoreTargetsOrExit({
     cfg,
     opts: {
@@ -459,7 +456,6 @@ export async function sessionsCommand(
             // mirrors the terminal percentage calculation.
             contextTokens:
               r.contextTokens ??
-              configuredContextTokens ??
               (await lookupContextTokensForDisplay(modelRef.model)) ??
               configContextTokens ??
               null,
@@ -513,10 +509,7 @@ export async function sessionsCommand(
   for (const row of rows) {
     const model = row.displayModelRef.model;
     const contextTokens =
-      row.contextTokens ??
-      configuredContextTokens ??
-      (await lookupContextTokensForDisplay(model)) ??
-      configContextTokens;
+      row.contextTokens ?? (await lookupContextTokensForDisplay(model)) ?? configContextTokens;
     const total = resolveSessionTotalTokens(row);
     const freshTotal = resolveFreshSessionTotalTokens(row);
 

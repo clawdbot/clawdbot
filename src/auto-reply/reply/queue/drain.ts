@@ -412,7 +412,6 @@ type FollowupRuntimeMetadata = Pick<
   | "queueAbortSignal"
   | "deliveryCorrelations"
   | "turnAdoptionLifecycle"
-  | "onReplyAdmissionWaitChange"
 >;
 
 function hasCurrentTurnRuntimeMetadata(item: FollowupRun): boolean {
@@ -642,11 +641,6 @@ function collectRuntimeMetadata(
   // Preserve the exact carrier (including hidden intersections); never derive it from identity evidence.
   const authoritySource = items.at(-1);
   const deliveryCorrelations = items.flatMap((item) => item.deliveryCorrelations ?? []);
-  const admissionWaitCallbacks = new Set(
-    items.flatMap((item) =>
-      item.onReplyAdmissionWaitChange ? [item.onReplyAdmissionWaitChange] : [],
-    ),
-  );
   const explicitSkillSelections = [
     ...new Map(
       items
@@ -669,14 +663,6 @@ function collectRuntimeMetadata(
     queueAbortSignal: items.find((item) => item.queueAbortSignal)?.queueAbortSignal,
     deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
     turnAdoptionLifecycle: items.length === 1 ? items[0]?.turnAdoptionLifecycle : undefined,
-    onReplyAdmissionWaitChange:
-      admissionWaitCallbacks.size > 0
-        ? (waiting) => {
-            for (const callback of admissionWaitCallbacks) {
-              callback(waiting);
-            }
-          }
-        : undefined,
   };
 }
 
@@ -1041,7 +1027,6 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     originatingChatType: source.originatingChatType,
     abortSignal: source.abortSignal,
     turnAdoptionLifecycle: source.turnAdoptionLifecycle,
-    onReplyAdmissionWaitChange: source.onReplyAdmissionWaitChange,
     ...(source.currentInboundEventKind === "room_event"
       ? { currentInboundEventKind: "room_event" }
       : {}),
@@ -1103,7 +1088,6 @@ async function runSyntheticOverflowSummary(params: {
     run: resolveCollectedRun(params.sources, params.source.run),
     enqueuedAt: Date.now(),
     abortSignal: params.abortSignal,
-    onReplyAdmissionWaitChange: runtimeMetadata.onReplyAdmissionWaitChange,
     explicitSkillSelections: runtimeMetadata.explicitSkillSelections,
     channelAdmissionEvidence: runtimeMetadata.channelAdmissionEvidence,
     toolsAllow: runtimeMetadata.toolsAllow,

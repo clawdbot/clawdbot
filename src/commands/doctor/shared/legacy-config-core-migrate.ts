@@ -1,3 +1,4 @@
+import { migrateLegacyContextBudgetConfig } from "../../../config/legacy.context-budget.js";
 // Core doctor compatibility migration pipeline for current config objects.
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { HeartbeatSchema } from "../../../config/zod-schema.agent-runtime.js";
@@ -122,13 +123,30 @@ export function normalizeCompatibilityConfigValues(
   options: {
     blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
     sourceRaw?: unknown;
+    sourceConfigBeforeMigrations?: unknown;
   } = {},
 ): {
   config: OpenClawConfig;
   changes: string[];
+  warnings?: string[];
 } {
   const changes: string[] = [];
-  const reservedMcpServerNames = migrateReservedMcpServerNames(cfg, options.sourceRaw);
+  let contextBudgetConfig = cfg;
+  let contextBudgetWarnings: string[];
+  if (options.sourceConfigBeforeMigrations === undefined) {
+    const migration = migrateLegacyContextBudgetConfig(cfg);
+    contextBudgetConfig = migration.config;
+    changes.push(...migration.changes);
+    contextBudgetWarnings = migration.warnings;
+  } else {
+    const migration = migrateLegacyContextBudgetConfig(options.sourceConfigBeforeMigrations);
+    changes.push(...migration.changes);
+    contextBudgetWarnings = migration.warnings;
+  }
+  const reservedMcpServerNames = migrateReservedMcpServerNames(
+    contextBudgetConfig,
+    options.sourceRaw,
+  );
   changes.push(...reservedMcpServerNames.changes);
   let next = normalizeBaseCompatibilityConfigValues(
     reservedMcpServerNames.config,
@@ -165,5 +183,9 @@ export function normalizeCompatibilityConfigValues(
   next = repairNullAgentWorkspaces(next, changes);
   next = pruneBindingsForMissingAgents(next, changes);
 
-  return { config: next, changes };
+  return {
+    config: next,
+    changes,
+    ...(contextBudgetWarnings.length > 0 ? { warnings: contextBudgetWarnings } : {}),
+  };
 }

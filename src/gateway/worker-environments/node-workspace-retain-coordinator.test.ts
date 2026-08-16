@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { NODE_WORKER_WORKSPACE_RETAIN_COMMAND } from "../../infra/node-commands.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
-import { NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES } from "../../worker/node-workspace-retain-protocol.js";
+import {
+  NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES,
+  NODE_WORKER_RETAIN_REQUEST_MAX_BYTES,
+} from "../../worker/node-workspace-retain-protocol.js";
 import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
@@ -9,6 +12,10 @@ import type {
 import { createNodeWorkspaceRetainCoordinator } from "./node-workspace-retain-coordinator.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import type { WorkerEnvironmentService } from "./service.js";
+
+type NodeWorkerBundleStatusObservation = NonNullable<
+  ReturnType<NonNullable<NodeWorkerSupervisorTransport["getBundleStatus"]>>
+>;
 
 const node = {
   nodeId: "node-1",
@@ -18,7 +25,12 @@ const node = {
   clientId: "node-host",
   clientMode: "node",
   protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-  workerHost: { enabled: true, capacity: "available", bundleRetention: 1 },
+  workerHost: {
+    enabled: true,
+    capacity: "available",
+    bundleRetention: 1,
+    bundleStatus: 1,
+  },
   commands: [],
 } as const;
 
@@ -85,17 +97,40 @@ function createHarness(
       deleted: number;
       hasMore: boolean;
       bundleGeneration?: number;
+      bundleStatus?: { bundleHash: string; status: "installed" | "missing" };
     }>;
     node?: NodeWorkerSupervisorNodeProof;
+    currentBundleStatus?: NodeWorkerBundleStatusObservation;
+    invokeError?: string;
+    onInvoke?: (index: number) => void;
   } = {},
 ) {
   const results = [...(params.results ?? [{ applied: true, deleted: 0, hasMore: false }])];
-  const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async () => ({
-    ok: true,
-    payloadJSON: JSON.stringify(results.shift() ?? { applied: true, deleted: 0, hasMore: false }),
-  }));
+  let invokeIndex = 0;
+  const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async () => {
+    params.onInvoke?.(invokeIndex++);
+    if (params.invokeError) {
+      return { ok: false, error: { code: "UNAVAILABLE", message: params.invokeError } };
+    }
+    return {
+      ok: true,
+      payloadJSON: JSON.stringify(results.shift() ?? { applied: true, deleted: 0, hasMore: false }),
+    };
+  });
+  let currentBundleStatus = params.currentBundleStatus;
+  const acceptBundleStatus = vi.fn(
+    (
+      _node: NodeWorkerSupervisorNodeProof,
+      observation: NodeWorkerBundleStatusObservation | undefined,
+    ) => {
+      currentBundleStatus = observation;
+      return true;
+    },
+  );
   const transport: NodeWorkerSupervisorTransport = {
     listCurrentNodes: async () => [params.node ?? node],
+    getBundleStatus: () => currentBundleStatus,
+    acceptBundleStatus,
     isCurrent: () => true,
     invoke,
   };
@@ -111,7 +146,7 @@ function createHarness(
     warn,
   });
   coordinator.bindTransport(transport);
-  return { coordinator, invoke, warn };
+  return { coordinator, invoke, warn, acceptBundleStatus };
 }
 
 describe("node workspace retain coordinator", () => {
@@ -152,6 +187,228 @@ describe("node workspace retain coordinator", () => {
     await coordinator.stop();
   });
 
+  it("keeps prior retention nodes compatible without sending a status query", async () => {
+    const { coordinator, invoke, acceptBundleStatus } = createHarness({
+      node: {
+        ...node,
+        workerHost: {
+          enabled: true,
+          capacity: "available",
+          bundleRetention: 1,
+        },
+      },
+      environments: [
+        environment({
+          bootstrapReceipt: {
+            bundleHash: "b".repeat(64),
+            openclawVersion: "2026.8.9",
+            protocolFeatures: [],
+            installKind: "bundle",
+          },
+        }),
+      ],
+    });
+
+    await coordinator.start();
+
+    expect(invoke.mock.calls[0]?.[0].params).toMatchObject({
+      bundleHashes: ["b".repeat(64)],
+    });
+    expect(invoke.mock.calls[0]?.[0].params).not.toHaveProperty("bundleStatusHash");
+    expect(acceptBundleStatus).toHaveBeenCalledWith(expect.any(Object), undefined);
+    await coordinator.stop();
+  });
+
+  it("accepts a validated installed bundle status with the Gateway-owned version", async () => {
+    const bundleHash = "b".repeat(64);
+    const { coordinator, invoke, acceptBundleStatus } = createHarness({
+      currentBundleStatus: {
+        bundleHash,
+        status: { status: "installed", version: "2026.8.9" },
+      },
+      environments: [
+        environment({
+          bootstrapReceipt: {
+            bundleHash,
+            openclawVersion: "2026.8.9",
+            protocolFeatures: [],
+            installKind: "bundle",
+          },
+        }),
+      ],
+      results: [
+        {
+          applied: true,
+          deleted: 0,
+          hasMore: false,
+          bundleGeneration: 3,
+          bundleStatus: { bundleHash, status: "installed" },
+        },
+      ],
+    });
+
+    await coordinator.start();
+
+    expect(invoke.mock.calls[0]?.[0].params).toMatchObject({ bundleStatusHash: bundleHash });
+    expect(acceptBundleStatus).toHaveBeenCalledWith(node, {
+      bundleHash,
+      status: { status: "installed", version: "2026.8.9" },
+    });
+    await coordinator.stop();
+  });
+
+  it("accepts status only from the final pass for the exact requested hash", async () => {
+    const bundleHash = "b".repeat(64);
+    const { coordinator, acceptBundleStatus } = createHarness({
+      environments: [
+        environment({
+          bootstrapReceipt: {
+            bundleHash,
+            openclawVersion: "2026.8.9",
+            protocolFeatures: [],
+            installKind: "bundle",
+          },
+        }),
+      ],
+      results: [
+        {
+          applied: true,
+          deleted: 1,
+          hasMore: true,
+          bundleStatus: { bundleHash, status: "installed" },
+        },
+        {
+          applied: true,
+          deleted: 0,
+          hasMore: false,
+          bundleStatus: { bundleHash, status: "missing" },
+        },
+      ],
+    });
+
+    await coordinator.start();
+
+    expect(acceptBundleStatus).toHaveBeenCalledTimes(1);
+    expect(acceptBundleStatus).toHaveBeenCalledWith(node, {
+      bundleHash,
+      status: { status: "missing" },
+    });
+    await coordinator.stop();
+  });
+
+  it("clears the previous hash before a new authoritative inspection can fail", async () => {
+    const previousHash = "b".repeat(64);
+    const currentHash = "c".repeat(64);
+    const { coordinator, acceptBundleStatus, warn } = createHarness({
+      currentBundleStatus: {
+        bundleHash: previousHash,
+        status: { status: "installed", version: "2026.8.8" },
+      },
+      environments: [
+        environment({
+          bootstrapReceipt: {
+            bundleHash: currentHash,
+            openclawVersion: "2026.8.9",
+            protocolFeatures: [],
+            installKind: "bundle",
+          },
+        }),
+      ],
+      invokeError: "maintenance unavailable",
+    });
+
+    await coordinator.start();
+
+    expect(acceptBundleStatus).toHaveBeenCalledWith(node, undefined);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("maintenance unavailable"));
+    await coordinator.stop();
+  });
+
+  it("clears status when a newer environment becomes authoritative during cleanup", async () => {
+    const bundleHash = "b".repeat(64);
+    const environments = [
+      environment({
+        bootstrapReceipt: {
+          bundleHash,
+          openclawVersion: "2026.8.9",
+          protocolFeatures: [],
+          installKind: "bundle",
+        },
+      }),
+    ];
+    const { coordinator, acceptBundleStatus } = createHarness({
+      environments,
+      results: [
+        {
+          applied: true,
+          deleted: 1,
+          hasMore: true,
+          bundleStatus: { bundleHash, status: "installed" },
+        },
+        {
+          applied: true,
+          deleted: 0,
+          hasMore: false,
+          bundleStatus: { bundleHash, status: "installed" },
+        },
+      ],
+      onInvoke: (index) => {
+        if (index !== 0) {
+          return;
+        }
+        environments.splice(
+          0,
+          1,
+          environment({
+            environmentId: "environment-new",
+            createdAtMs: 3,
+            bootstrapReceipt: {
+              bundleHash: "c".repeat(64),
+              openclawVersion: "2026.8.10",
+              protocolFeatures: [],
+              installKind: "bundle",
+            },
+          }),
+        );
+      },
+    });
+
+    await coordinator.start();
+
+    expect(acceptBundleStatus).toHaveBeenCalledTimes(1);
+    expect(acceptBundleStatus).toHaveBeenCalledWith(node, undefined);
+    await coordinator.stop();
+  });
+
+  it("clears status when the node echoes a different bundle hash", async () => {
+    const bundleHash = "b".repeat(64);
+    const { coordinator, acceptBundleStatus } = createHarness({
+      environments: [
+        environment({
+          bootstrapReceipt: {
+            bundleHash,
+            openclawVersion: "2026.8.9",
+            protocolFeatures: [],
+            installKind: "bundle",
+          },
+        }),
+      ],
+      results: [
+        {
+          applied: true,
+          deleted: 0,
+          hasMore: false,
+          bundleStatus: { bundleHash: "c".repeat(64), status: "installed" },
+        },
+      ],
+    });
+
+    await coordinator.start();
+
+    expect(acceptBundleStatus).toHaveBeenCalledWith(node, undefined);
+    await coordinator.stop();
+  });
+
   it("keeps workspace retention compatible when bundle cleanup is not advertised", async () => {
     const { coordinator, invoke } = createHarness({
       node: {
@@ -189,6 +446,62 @@ describe("node workspace retain coordinator", () => {
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining("exceed the bounded maintenance request"),
     );
+    await coordinator.stop();
+  });
+
+  it("keeps bounded bundle retention when only the status query exceeds one MiB", async () => {
+    const attachedCount = 1_241;
+    const environments = Array.from(
+      { length: NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES },
+      (_, index) => {
+        const suffix = index.toString(16).padStart(8, "0");
+        const attached = index < attachedCount;
+        const environmentPadding =
+          index < attachedCount - 1 ? 220 : index === attachedCount - 1 ? 31 : 0;
+        const sessionPadding =
+          index < attachedCount - 1 ? 224 : index === attachedCount - 1 ? 31 : 0;
+        return environment({
+          environmentId: `environment-${"e".repeat(environmentPadding)}-${suffix}`,
+          attachedSessionIds: attached ? [`session-${"s".repeat(sessionPadding)}-${suffix}`] : [],
+          createdAtMs: index === NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES - 1 ? 10 : 1,
+          bootstrapReceipt: {
+            bundleHash: index.toString(16).padStart(64, "0"),
+            openclawVersion: "2026.8.9",
+            protocolFeatures: [],
+            installKind: "bundle",
+          },
+        });
+      },
+    );
+    const placements = environments.slice(0, attachedCount).map((entry, index) =>
+      placement({
+        sessionId: entry.attachedSessionIds[0],
+        environmentId: entry.environmentId,
+        workerBundleHash: index.toString(16).padStart(64, "0"),
+      }),
+    );
+    const { coordinator, invoke, warn } = createHarness({ environments, placements });
+
+    await coordinator.start();
+
+    const input = invoke.mock.calls[0]?.[0].params as Record<string, unknown>;
+    expect(input.bundleHashes).toHaveLength(NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES);
+    expect(input).not.toHaveProperty("bundleStatusHash");
+    expect(Buffer.byteLength(JSON.stringify(input), "utf8")).toBeLessThanOrEqual(
+      NODE_WORKER_RETAIN_REQUEST_MAX_BYTES,
+    );
+    expect(
+      Buffer.byteLength(
+        JSON.stringify({
+          ...input,
+          bundleStatusHash: (NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES - 1)
+            .toString(16)
+            .padStart(64, "0"),
+        }),
+        "utf8",
+      ),
+    ).toBeGreaterThan(NODE_WORKER_RETAIN_REQUEST_MAX_BYTES);
+    expect(warn).not.toHaveBeenCalled();
     await coordinator.stop();
   });
 

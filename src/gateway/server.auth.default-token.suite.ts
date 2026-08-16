@@ -166,6 +166,9 @@ export function registerDefaultAuthTokenSuite(): void {
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION,
       );
       expect(payload?.features?.capabilities).toContain(
+        GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS,
+      );
+      expect(payload?.features?.capabilities).toContain(
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_WIZARD_CANCEL,
       );
       expect(payload?.features?.capabilities).toContain(

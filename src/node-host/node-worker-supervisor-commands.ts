@@ -187,17 +187,35 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
             : {}),
         });
       }
+      const hasMore = workspace.hasMore || bundles?.hasMore === true;
+      const inspectBundle = params.bundleInstaller?.inspect?.bind(params.bundleInstaller);
+      if (workspace.applied && input.bundleStatusHash && !hasMore && !inspectBundle) {
+        throw new Error("node worker bundle status unavailable");
+      }
+      const bundleStatus =
+        workspace.applied && input.bundleStatusHash && !hasMore && inspectBundle
+          ? await inspectBundle({
+              gatewayNamespace: input.gatewayNamespace,
+              bundleHash: input.bundleStatusHash,
+            })
+          : undefined;
       return {
         handled: true,
         ok: true,
-        payload: bundles
-          ? {
-              ...workspace,
-              bundleDeleted: bundles.deleted,
-              bundleGeneration: bundles.generation,
-              hasMore: workspace.hasMore || bundles.hasMore,
-            }
-          : workspace,
+        payload:
+          bundles || bundleStatus
+            ? {
+                ...workspace,
+                ...(bundles
+                  ? {
+                      bundleDeleted: bundles.deleted,
+                      bundleGeneration: bundles.generation,
+                      hasMore,
+                    }
+                  : {}),
+                ...(bundleStatus ? { bundleStatus } : {}),
+              }
+            : workspace,
       };
     }
     const receipt =
