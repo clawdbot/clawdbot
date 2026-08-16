@@ -903,6 +903,7 @@ type GatewayPostAttachRuntimeDeps = {
   startGatewayTailscaleExposure: (
     ...args: Parameters<typeof startGatewayTailscaleExposure>
   ) => ReturnType<typeof startGatewayTailscaleExposure>;
+  loadSubagentRegistrySweep: () => Awaitable<() => void>;
 };
 
 const defaultGatewayPostAttachRuntimeDeps: GatewayPostAttachRuntimeDeps = {
@@ -917,6 +918,9 @@ const defaultGatewayPostAttachRuntimeDeps: GatewayPostAttachRuntimeDeps = {
   warmSystemCa: warmMacOSSystemCaOffMainThread,
   startGatewayTailscaleExposure: async (...args) =>
     (await import("./server-tailscale.js")).startGatewayTailscaleExposure(...args),
+  loadSubagentRegistrySweep: async () =>
+    (await import("../agents/subagents/registry/subagent-registry.js"))
+      .scheduleSubagentRegistrySweep,
 };
 
 function createDeferredGatewayUpdateCheck(params: {
@@ -1334,13 +1338,31 @@ export async function startGatewayPostAttachRuntime(
               throw error;
             }
           })();
-          if (params.isClosing?.()) {
-            await workerEnvironmentSidecar?.stop();
-            await result.pluginServices?.stop();
-            for (const postReadySidecar of result.postReadySidecars) {
-              await postReadySidecar.stop();
+          const stopUnpublishedSidecars = async (
+            mainSessionRecoverySidecar?: GatewayPostReadySidecarHandle,
+          ) => {
+            const cleanupResults = await Promise.allSettled(
+              [
+                () => mainSessionRecoverySidecar?.stop(),
+                () => workerEnvironmentSidecar?.stop(),
+                () => result.pluginServices?.stop(),
+                ...result.postReadySidecars.map((sidecar) => () => sidecar.stop()),
+              ].map(async (stop) => await stop()),
+            );
+            if (result.pluginServices && cleanupResults[2]?.status === "fulfilled") {
+              reportPluginServices(null);
+            }
+            const cleanupFailure = cleanupResults.find(
+              (cleanupResult): cleanupResult is PromiseRejectedResult =>
+                cleanupResult.status === "rejected",
+            );
+            if (cleanupFailure) {
+              throw cleanupFailure.reason;
             }
             return emptySidecarResult();
+          };
+          if (params.isClosing?.()) {
+            return await stopUnpublishedSidecars();
           }
           const loaderStatsAfter = getPluginModuleLoaderStats();
           params.startupTrace?.detail("sidecars.plugin-loader", [
@@ -1378,11 +1400,15 @@ export async function startGatewayPostAttachRuntime(
             params.log.warn(`main-session restart recovery failed to schedule: ${String(err)}`);
           }
           try {
-            const { scheduleSubagentRegistrySweep } =
-              await import("../agents/subagents/registry/subagent-registry.js");
-            scheduleSubagentRegistrySweep();
+            const scheduleSubagentRegistrySweep = await runtimeDeps.loadSubagentRegistrySweep();
+            if (params.isClosing?.() !== true) {
+              scheduleSubagentRegistrySweep();
+            }
           } catch (err) {
             params.log.warn(`subagent restart recovery failed to schedule: ${String(err)}`);
+          }
+          if (params.isClosing?.()) {
+            return await stopUnpublishedSidecars(mainSessionRecoverySidecar);
           }
           // Capture the orphan-recovery cutoff before new startup-gated agent
           // work can create sessions that the recovery scan must leave alone.

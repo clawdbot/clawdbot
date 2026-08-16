@@ -626,13 +626,9 @@ describe("startGatewayPostAttachRuntime", () => {
       onGatewayLifetimeSidecars,
     });
 
-    await waitForGatewayTestState(() => {
-      expect(onGatewayLifetimeSidecars).toHaveBeenCalledOnce();
-    });
     expect(hoisted.scheduleRestartAbortedMainSessionRecovery).toHaveBeenCalledOnce();
-    expect(onGatewayLifetimeSidecars).toHaveBeenCalledWith(
-      expect.arrayContaining([recoverySidecar]),
-    );
+    expect(recoverySidecar.stop).toHaveBeenCalledOnce();
+    expect(onGatewayLifetimeSidecars).not.toHaveBeenCalled();
   });
 
   it("gates main-session recovery behind post-ready work", async () => {
@@ -2827,6 +2823,62 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(startWorkerEnvironmentRuntime).not.toHaveBeenCalled();
   });
 
+  it("keeps startup methods fenced when close begins during late recovery loading", async () => {
+    let closeStarted = false;
+    let releaseRecoveryLoad: (() => void) | undefined;
+    const recoveryLoadReady = new Promise<void>((resolve) => {
+      releaseRecoveryLoad = resolve;
+    });
+    let markRecoveryLoadStarted: (() => void) | undefined;
+    const recoveryLoadStarted = new Promise<void>((resolve) => {
+      markRecoveryLoadStarted = resolve;
+    });
+    const pluginServices = { stop: vi.fn(async () => {}) } as PluginServicesHandle;
+    const postReadySidecar = { stop: vi.fn(async () => {}) };
+    const cleanupError = new Error("worker cleanup failed");
+    const workerSidecar = {
+      stop: vi.fn(() => {
+        throw cleanupError;
+      }),
+    };
+    const unlockStartupMethods = vi.fn();
+    const scheduleSubagentRegistrySweep = vi.fn();
+    const onPluginServices = vi.fn();
+    const runtime = await startGatewayPostAttachRuntime(
+      {
+        ...createPostAttachParams(),
+        sidecarStartup: "defer",
+        isClosing: () => closeStarted,
+        startWorkerEnvironmentRuntime: vi.fn(() => workerSidecar),
+        unlockStartupMethods,
+        onPluginServices,
+      },
+      createPostAttachRuntimeDeps({
+        startGatewaySidecars: vi.fn(async () => ({
+          pluginServices,
+          postReadySidecars: [postReadySidecar],
+        })),
+        loadSubagentRegistrySweep: vi.fn(async () => {
+          markRecoveryLoadStarted?.();
+          await recoveryLoadReady;
+          return scheduleSubagentRegistrySweep;
+        }),
+      }),
+    );
+
+    await recoveryLoadStarted;
+    closeStarted = true;
+    releaseRecoveryLoad?.();
+    await expect(runtime.startupSettled).rejects.toBe(cleanupError);
+
+    expect(scheduleSubagentRegistrySweep).not.toHaveBeenCalled();
+    expect(unlockStartupMethods).not.toHaveBeenCalled();
+    expect(workerSidecar.stop).toHaveBeenCalledOnce();
+    expect(pluginServices.stop).toHaveBeenCalledOnce();
+    expect(postReadySidecar.stop).toHaveBeenCalledOnce();
+    expect(onPluginServices).toHaveBeenLastCalledWith(null);
+  });
+
   it("returns before loading startup plugins with deferred sidecars", async () => {
     const pluginRegistry = {
       plugins: [{ id: "lazy", status: "loaded" }],
@@ -3171,6 +3223,7 @@ function createPostAttachRuntimeDeps(
     startGatewaySidecars: vi.fn(async () => ({ pluginServices: null, postReadySidecars: [] })),
     warmSystemCa: vi.fn(async () => {}),
     startGatewayTailscaleExposure: hoisted.startGatewayTailscaleExposure,
+    loadSubagentRegistrySweep: vi.fn(async () => hoisted.scheduleSubagentRegistrySweep),
     ...overrides,
   };
 }
