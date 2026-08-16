@@ -1,8 +1,10 @@
 // CLI backend live gateway tests exercise registered backend sessions, model switching, MCP loopback, and image probes.
+import { execFile } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import {
   resolveCliBackendConfig,
@@ -76,6 +78,7 @@ const describeLive = LIVE && CLI_LIVE ? describe : describe.skip;
 const MCP_SCHEMA_PROBE_PLUGIN_ID = "mcp-schema-probe";
 const MCP_SCHEMA_PROBE_TOOL_NAME = "mcp_schema_probe_no_args";
 const CLI_CONTINUITY_PROBE_PLUGIN_ID = "cli-continuity-probe";
+const execFileAsync = promisify(execFile);
 
 type RuntimeBackendEntry = ReturnType<
   (typeof import("../plugins/cli-backends.runtime.js"))["resolveRuntimeCliBackends"]
@@ -103,6 +106,27 @@ function createFreshProcessCacheProbeBackend(backend: RuntimeBackendEntry): Runt
       return freshProcessConfig;
     },
   };
+}
+
+async function initializeCacheProbeGitWorkspace(workspaceDir: string): Promise<void> {
+  await execFileAsync("git", ["init", "--quiet", workspaceDir]);
+  await execFileAsync("git", ["-C", workspaceDir, "config", "user.name", "OpenClaw Tests"]);
+  await execFileAsync("git", [
+    "-C",
+    workspaceDir,
+    "config",
+    "user.email",
+    "openclaw-tests@localhost",
+  ]);
+  await execFileAsync("git", ["-C", workspaceDir, "add", "--all"]);
+  await execFileAsync("git", [
+    "-C",
+    workspaceDir,
+    "commit",
+    "--quiet",
+    "-m",
+    "cache probe baseline",
+  ]);
 }
 
 const DEFAULT_PROVIDER = "claude-cli";
@@ -473,6 +497,9 @@ describeLive("gateway live (cli backend)", () => {
       setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
       const bundleMcp = backendResolved.bundleMcp && !resumeContinuityProbe;
       const bootstrapWorkspace = await createBootstrapWorkspace(tempDir);
+      if (CLI_CACHE_PROBE) {
+        await initializeCacheProbeGitWorkspace(bootstrapWorkspace.workspaceRootDir);
+      }
       const disableMcpConfig = process.env.OPENCLAW_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG !== "0";
       let cliArgs = baseCliArgs;
       if (
@@ -850,11 +877,7 @@ describeLive("gateway live (cli backend)", () => {
           }
           logCliBackendLiveStep("agent-resume:done", { status: resumePayload?.status });
           if (CLI_CACHE_PROBE) {
-            const cacheHitRate = logCliCacheUsage(
-              "resume1",
-              resolveCliCacheUsage(resumePayload.result),
-            );
-            expect(cacheHitRate).toBeGreaterThanOrEqual(CLI_BACKEND_MIN_CACHE_HIT_RATE);
+            logCliCacheUsage("resume1-warmup", resolveCliCacheUsage(resumePayload.result));
           }
           const resumeText = extractPayloadText(resumePayload?.result);
           if (providerId === "codex-cli") {
@@ -874,6 +897,13 @@ describeLive("gateway live (cli backend)", () => {
 
           if (CLI_CACHE_PROBE) {
             const cacheNonce = randomBytes(3).toString("hex").toUpperCase();
+            // The compatible Claude flag excludes its native Git-status section. Dirtying an
+            // otherwise unchanged workspace makes the pre-fix process miss while the fixed one
+            // keeps the stable prompt prefix cached across this fresh-process turn.
+            await fs.writeFile(
+              path.join(bootstrapWorkspace.workspaceRootDir, ".claude-cache-git-drift"),
+              `${cacheNonce}\n`,
+            );
             logCliBackendLiveStep("agent-cache-probe:start", { sessionKey, cacheNonce });
             const cachePayload = await requestWithCodexTimeoutRetry(
               providerId,
