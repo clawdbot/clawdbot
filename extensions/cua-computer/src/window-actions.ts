@@ -214,7 +214,10 @@ async function handleTargetedAct(
 
 export type { CuaComputerActParams } from "./action-targets.js";
 
-export async function handleV2Act(
+/// Entry point for `computer.act` on the CUA driver. Owns every window- and
+/// element-scoped action (targeted input, discovery, app/window lifecycle) and
+/// hands screen-scoped desktop actions to the injected `handleDesktop`.
+export async function handleWindowAct(
   platform: NodeJS.Platform,
   driver: CuaDriverSession,
   state: CuaFrameState,

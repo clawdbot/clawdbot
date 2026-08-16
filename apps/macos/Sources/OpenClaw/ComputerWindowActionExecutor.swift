@@ -12,14 +12,19 @@ extension CGRect {
 }
 
 extension OpenClawComputerActParams {
-    var isV2Request: Bool {
-        self.action.isComputerActV2Only || self.windowRef != nil || self.elementRef != nil ||
+    /// True when the request names a window, element, or observation, or asks for
+    /// an action that has no screen-coordinate form. Such requests must run on
+    /// `ComputerWindowActionExecutor`; everything else is screen-coordinate work.
+    var isWindowScopedRequest: Bool {
+        self.action.isWindowScopedOnly || self.windowRef != nil || self.elementRef != nil ||
             self.observationId != nil
     }
 }
 
 extension OpenClawComputerAction {
-    var isComputerActV2Only: Bool {
+    /// True for actions that cannot be expressed as screen-coordinate input and
+    /// therefore always need a window/element target.
+    var isWindowScopedOnly: Bool {
         switch self {
         case .leftClick, .rightClick, .middleClick, .doubleClick, .tripleClick, .mouseMove,
              .leftClickDrag, .leftMouseDown, .leftMouseUp, .scroll, .type, .key, .holdKey:
@@ -42,11 +47,14 @@ struct ComputerActionExecutionAuthority {
     }
 }
 
-/// Implements the additive computer.act v2 surface without changing the v1
-/// coordinate path. All authority-bearing references are process-local,
-/// execution-local, and invalidated when the native lifecycle generation moves.
+/// Executes the window- and element-scoped half of `computer.act`: discovery,
+/// app/window lifecycle, and accessibility-targeted input. Its peer
+/// `ComputerScreenActionExecutor` owns the screen-coordinate half; both are
+/// routed by `ComputerActionService`. All authority-bearing references are
+/// process-local, execution-local, and invalidated when the native lifecycle
+/// generation moves.
 @MainActor
-final class ComputerActionServiceV2 {
+final class ComputerWindowActionExecutor {
     struct WindowTarget {
         let app: ServiceApplicationInfo
         let window: ServiceWindowInfo
@@ -365,7 +373,7 @@ final class ComputerActionServiceV2 {
     private func killApp(_ params: OpenClawComputerActParams) async throws -> OpenClawComputerActResult {
         let appRef = try Self.require(params.app, field: "app")
         guard let app = self.appRefs[appRef], let identity = app.processIdentity else {
-            throw ComputerActionService.ComputerActionError.invalidV2Request(
+            throw ComputerActionService.ComputerActionError.invalidRequest(
                 "kill_app requires a running app reference from list_apps")
         }
         let quit = try await self.withExecutionAuthority {
@@ -406,7 +414,7 @@ final class ComputerActionServiceV2 {
         if mode == .foreground {
             try await self.focus(target)
             guard target.window.bounds.contains(resolved.point) else {
-                throw ComputerActionService.ComputerActionError.invalidV2Request(
+                throw ComputerActionService.ComputerActionError.invalidRequest(
                     "foreground click target is outside the selected window")
             }
             try Self.postForegroundClick(
@@ -549,7 +557,7 @@ final class ComputerActionServiceV2 {
         guard let path = params.path, !path.isEmpty, path.count <= 16,
               path.allSatisfy({ !$0.isEmpty && $0.count <= 200 })
         else {
-            throw ComputerActionService.ComputerActionError.invalidV2Request(
+            throw ComputerActionService.ComputerActionError.invalidRequest(
                 "path must contain 1 to 16 non-empty menu components")
         }
         try await self.withExecutionAuthority {
@@ -567,7 +575,7 @@ final class ComputerActionServiceV2 {
         let windowRef = try Self.require(params.windowRef, field: "windowRef")
         let target = try self.resolveWindow(windowRef)
         guard let direction = params.scrollDirection else {
-            throw ComputerActionService.ComputerActionError.invalidV2Request(
+            throw ComputerActionService.ComputerActionError.invalidRequest(
                 "scrollDirection is required for scroll")
         }
         let mode = params.deliveryMode ?? .background
@@ -691,11 +699,11 @@ final class ComputerActionServiceV2 {
             return (.elementId(element.id), element.bounds.centerPoint, observation.snapshotId)
         }
         guard let x = params.x, let y = params.y else {
-            throw ComputerActionService.ComputerActionError.invalidV2Request(
+            throw ComputerActionService.ComputerActionError.invalidRequest(
                 "coordinates or elementRef are required for \(params.action.rawValue)")
         }
         guard x >= 0, y >= 0 else {
-            throw ComputerActionService.ComputerActionError.invalidV2Request(
+            throw ComputerActionService.ComputerActionError.invalidRequest(
                 "coordinates must be nonnegative")
         }
         let point = CGPoint(x: x, y: y)
@@ -711,11 +719,11 @@ final class ComputerActionServiceV2 {
         }
         if params.x == nil, params.y == nil { return nil }
         guard let x = params.x, let y = params.y else {
-            throw ComputerActionService.ComputerActionError.invalidV2Request(
+            throw ComputerActionService.ComputerActionError.invalidRequest(
                 "both x and y are required")
         }
         guard x >= 0, y >= 0 else {
-            throw ComputerActionService.ComputerActionError.invalidV2Request(
+            throw ComputerActionService.ComputerActionError.invalidRequest(
                 "coordinates must be nonnegative")
         }
         _ = try self.resolveObservation(params.observationId, windowRef: windowRef)
@@ -763,7 +771,7 @@ final class ComputerActionServiceV2 {
 
 // MARK: - Projection and outcomes
 
-extension ComputerActionServiceV2 {
+extension ComputerWindowActionExecutor {
     private static func result(
         from outcome: DesktopActionOutcome?,
         background: Bool) -> OpenClawComputerActResult
@@ -888,7 +896,7 @@ extension ComputerActionServiceV2 {
         let depth = params.depth ?? AXTraversalBudget.defaultMaxDepth
         let maxElements = params.maxElements ?? AXTraversalBudget.defaultMaxElementCount
         guard (0...64).contains(depth), (1...2000).contains(maxElements) else {
-            throw ComputerActionService.ComputerActionError.invalidV2Request(
+            throw ComputerActionService.ComputerActionError.invalidRequest(
                 "depth must be 0...64 and maxElements must be 1...2000")
         }
         return (depth, maxElements)
@@ -900,7 +908,7 @@ extension ComputerActionServiceV2 {
         allowEmpty: Bool = false) throws -> String
     {
         guard let value, allowEmpty || !value.isEmpty else {
-            throw ComputerActionService.ComputerActionError.invalidV2Request(
+            throw ComputerActionService.ComputerActionError.invalidRequest(
                 "\(field) is required")
         }
         return value
@@ -985,7 +993,7 @@ extension ComputerActionServiceV2 {
             case "alt", "option": flags.insert(.maskAlternate)
             case "fn", "function": flags.insert(.maskSecondaryFn)
             default:
-                throw ComputerActionService.ComputerActionError.invalidV2Request(
+                throw ComputerActionService.ComputerActionError.invalidRequest(
                     "unsupported modifier '\(token)'")
             }
         }
