@@ -25,6 +25,24 @@ export const UPDATE_EFFECTIVE_CHANNEL_ENV = "OPENCLAW_UPDATE_EFFECTIVE_CHANNEL";
 /** Git branch that represents the development update stream. */
 export const DEV_BRANCH = "main";
 
+/** Orders the configured Dev upstream before any detached-checkout fallbacks. */
+export function resolveDevUpstreamRefs(
+  detached: boolean,
+  fallbacks: readonly string[] = [],
+): string[] {
+  return detached ? [`${DEV_BRANCH}@{upstream}`, ...fallbacks] : ["@{upstream}"];
+}
+
+/** Builds an exact fetch from Git's normalized `<remote>/<branch>` tracking name. */
+export function resolveDevUpstreamFetchArgs(upstream: string): string[] {
+  const separator = upstream.indexOf("/");
+  return [
+    "--",
+    upstream.slice(0, separator),
+    `+refs/heads/${upstream.slice(separator + 1)}:refs/remotes/${upstream}`,
+  ];
+}
+
 /** Normalizes config or CLI channel input to a supported update channel. */
 export function normalizeUpdateChannel(value?: string | null): UpdateChannel | null {
   const normalized = normalizeOptionalLowercaseString(value);

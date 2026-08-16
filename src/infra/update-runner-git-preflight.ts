@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { trimLogTail } from "./restart-sentinel.js";
-import { DEV_BRANCH } from "./update-channels.js";
+import { DEV_BRANCH, resolveDevUpstreamRefs } from "./update-channels.js";
 import { resolveDevUpdateTargetRevision, type DevUpdateTarget } from "./update-dev-target.js";
 import {
   managerInstallArgs,
@@ -210,9 +210,7 @@ async function resolveUpstreamCandidates(params: {
       );
     }
   }
-  const upstreamRefs = params.needsCheckoutMain
-    ? [`${DEV_BRANCH}@{upstream}`, ...remoteBranchRefs]
-    : ["@{upstream}"];
+  const upstreamRefs = resolveDevUpstreamRefs(params.needsCheckoutMain, remoteBranchRefs);
   let upstreamSha: string | null = null;
   let selectedDevUpstream: string | null = null;
   let sawResolvableUpstreamRef = false;

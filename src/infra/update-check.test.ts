@@ -9,6 +9,7 @@ import { withTestDir } from "../test-helpers/temp-dir.js";
 import { useMockHttp } from "../test-utils/mock-http.js";
 import { fetchNpmPackageTargetStatus } from "./update-check-package-target.js";
 import {
+  checkUpdateStatus,
   compareSemverStrings,
   fetchNpmTagVersion,
   formatGitInstallLabel,
@@ -601,5 +602,33 @@ describe("formatGitInstallLabel", () => {
         packageManager: "pnpm",
       }),
     ).toBeNull();
+  });
+});
+
+describe("checkUpdateStatus registry behavior", () => {
+  it("reports unsupported_git_channel for Git status without querying npm", async () => {
+    await withTestDir({ prefix: "openclaw-update-check-git-channel-" }, async (root) => {
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ name: "openclaw", packageManager: "pnpm@10.0.0" }),
+        "utf8",
+      );
+      await runCommandWithTimeout(["git", "init"], { cwd: root, timeoutMs: 1000 });
+      const status = await checkUpdateStatus({
+        root,
+        includeRegistry: true,
+        registryChannel: "extended-stable",
+        fetchGit: false,
+        timeoutMs: 1000,
+      });
+
+      expect(status.registry).toEqual({
+        latestVersion: null,
+        tag: "extended-stable",
+        error: "unsupported_git_channel",
+        reason: "unsupported_git_channel",
+      });
+      expect(mockHttp.requests()).toHaveLength(0);
+    });
   });
 });

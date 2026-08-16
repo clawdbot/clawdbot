@@ -10,7 +10,13 @@ import {
 } from "./detect-package-manager.js";
 import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
 import { compareValidSemver, normalizeLegacyDotBetaVersion } from "./semver.js";
-import { channelToNpmTag, DEV_BRANCH, type UpdateChannel } from "./update-channels.js";
+import {
+  channelToNpmTag,
+  DEV_BRANCH,
+  resolveDevUpstreamFetchArgs,
+  resolveDevUpstreamRefs,
+  type UpdateChannel,
+} from "./update-channels.js";
 import {
   fetchNpmPackageTargetStatus,
   type NpmMetadataCommandRunner,
@@ -234,6 +240,8 @@ async function checkGitUpdateStatus(params: {
 }): Promise<GitUpdateStatus> {
   const timeoutMs = params.timeoutMs ?? 6000;
   const root = path.resolve(params.root);
+  const runGit = (...args: string[]) =>
+    runCommandWithTimeout(["git", "-C", root, ...args], { timeoutMs }).catch(() => null);
 
   const base: GitUpdateStatus = {
     root,
@@ -250,41 +258,33 @@ async function checkGitUpdateStatus(params: {
   };
 
   const [branchRes, shaRes, commitAtRes, tagRes, dirtyRes] = await Promise.all([
-    runCommandWithTimeout(["git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD"], {
-      timeoutMs,
-    }).catch(() => null),
-    runCommandWithTimeout(["git", "-C", root, "rev-parse", "HEAD"], {
-      timeoutMs,
-    }).catch(() => null),
-    runCommandWithTimeout(["git", "-C", root, "show", "-s", "--format=%ct", "HEAD"], {
-      timeoutMs,
-    }).catch(() => null),
-    runCommandWithTimeout(["git", "-C", root, "describe", "--tags", "--exact-match"], {
-      timeoutMs,
-    }).catch(() => null),
-    runCommandWithTimeout(
-      ["git", "-C", root, "status", "--porcelain", "--", ":!dist/control-ui/"],
-      {
-        timeoutMs,
-      },
-    ).catch(() => null),
+    runGit("rev-parse", "--abbrev-ref", "HEAD"),
+    runGit("rev-parse", "HEAD"),
+    runGit("show", "-s", "--format=%ct", "HEAD"),
+    runGit("describe", "--tags", "--exact-match"),
+    runGit("status", "--porcelain", "--", ":!dist/control-ui/"),
   ]);
   if (!branchRes || branchRes.code !== 0) {
     return { ...base, error: branchRes?.stderr?.trim() || "git unavailable" };
   }
   const branch = branchRes.stdout.trim() || null;
-  const trackingRevision =
+  const trackingRevisions =
     branch === "HEAD"
       ? params.useDetachedDevUpstream
-        ? `refs/remotes/origin/${DEV_BRANCH}`
-        : null
-      : "@{upstream}";
-  const upstreamRes = trackingRevision
-    ? await runCommandWithTimeout(
-        ["git", "-C", root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", trackingRevision],
-        { timeoutMs },
-      ).catch(() => null)
-    : null;
+        ? resolveDevUpstreamRefs(true, [`refs/remotes/origin/${DEV_BRANCH}`])
+        : []
+      : resolveDevUpstreamRefs(false);
+  let trackingRevision: string | null = null;
+  let trackingUpstream: string | null = null;
+  for (const revision of trackingRevisions) {
+    const result = await runGit("rev-parse", "--abbrev-ref", "--symbolic-full-name", revision);
+    const resolved = result?.code === 0 ? result.stdout.trim() || null : null;
+    if (resolved) {
+      trackingRevision = revision;
+      trackingUpstream = resolved;
+      break;
+    }
+  }
 
   const sha = shaRes && shaRes.code === 0 ? shaRes.stdout.trim() : null;
   const commitAtSeconds =
@@ -293,8 +293,6 @@ async function checkGitUpdateStatus(params: {
 
   const tag = tagRes && tagRes.code === 0 ? tagRes.stdout.trim() : null;
 
-  const trackingUpstream =
-    upstreamRes && upstreamRes.code === 0 ? upstreamRes.stdout.trim() || null : null;
   const receiptUpstream =
     !trackingUpstream &&
     branch === "HEAD" &&
@@ -312,15 +310,11 @@ async function checkGitUpdateStatus(params: {
   const dirty = dirtyRes && dirtyRes.code === 0 ? dirtyRes.stdout.trim().length > 0 : null;
 
   const fetchTarget =
-    branch === "HEAD" && upstreamSource === "tracking"
-      ? ["origin", `+refs/heads/${DEV_BRANCH}:refs/remotes/origin/${DEV_BRANCH}`]
+    branch === "HEAD" && trackingUpstream
+      ? resolveDevUpstreamFetchArgs(trackingUpstream)
       : ["--prune"];
   const fetchOk = params.fetch
-    ? await runCommandWithTimeout(["git", "-C", root, "fetch", "--quiet", ...fetchTarget], {
-        timeoutMs,
-      })
-        .then((r) => r.code === 0)
-        .catch(() => false)
+    ? (await runGit("fetch", "--quiet", ...fetchTarget))?.code === 0
     : null;
 
   // Freeze the post-fetch upstream for both graph queries. Active tracking wins;
@@ -328,25 +322,14 @@ async function checkGitUpdateStatus(params: {
   const upstreamRevision = `${upstreamSource === "tracking" ? trackingRevision : upstream}^{commit}`;
   const upstreamCommitRes =
     (!params.fetch || fetchOk === true) && upstream && sha
-      ? await runCommandWithTimeout(
-          ["git", "-C", root, "rev-parse", "--verify", upstreamRevision],
-          { timeoutMs },
-        ).catch(() => null)
+      ? await runGit("rev-parse", "--verify", upstreamRevision)
       : null;
   const upstreamCommit =
     upstreamCommitRes?.code === 0 ? upstreamCommitRes.stdout.trim() || null : null;
-  const mergeBase =
-    sha && upstreamCommit
-      ? await runCommandWithTimeout(["git", "-C", root, "merge-base", sha, upstreamCommit], {
-          timeoutMs,
-        }).catch(() => null)
-      : null;
+  const mergeBase = sha && upstreamCommit ? await runGit("merge-base", sha, upstreamCommit) : null;
   const counts =
     sha && upstreamCommit && mergeBase?.code === 0 && mergeBase.stdout.trim().length > 0
-      ? await runCommandWithTimeout(
-          ["git", "-C", root, "rev-list", "--left-right", "--count", `${sha}...${upstreamCommit}`],
-          { timeoutMs },
-        ).catch(() => null)
+      ? await runGit("rev-list", "--left-right", "--count", `${sha}...${upstreamCommit}`)
       : null;
 
   const parseCounts = (raw: string): { ahead: number; behind: number } | null => {
