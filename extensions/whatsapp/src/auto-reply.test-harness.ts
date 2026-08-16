@@ -10,7 +10,7 @@ import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env"
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, beforeEach, vi, type Mock } from "vitest";
 import type { WebChannelStatus } from "./auto-reply/types.js";
-import type { WebInboundMessageInput, WebListenerCloseReason } from "./inbound.js";
+import type { WebInboundCallbackMessage, WebListenerCloseReason } from "./inbound.js";
 import type { WhatsAppSendResult } from "./inbound/send-result.js";
 import { createAcceptedWhatsAppSendResult as createAcceptedWhatsAppSendResultForHarness } from "./inbound/send-result.test-helper.js";
 import { createTestWebInboundMessage } from "./inbound/test-message.test-helper.js";
@@ -252,19 +252,19 @@ export function installWebAutoReplyUnitTestHooks(opts?: { pinDns?: boolean }) {
 }
 
 export function createWebListenerFactoryCapture(): AnyExport {
-  let capturedOnMessage: ((msg: WebInboundMessageInput) => Promise<void>) | undefined;
+  let capturedOnMessage: ((msg: WebInboundCallbackMessage) => Promise<void>) | undefined;
   let capturedOptions:
     | {
-        onMessage: (msg: WebInboundMessageInput) => Promise<void>;
-        shouldDebounce?: (msg: WebInboundMessageInput) => boolean;
+        onMessage: (msg: WebInboundCallbackMessage) => Promise<void>;
+        shouldDebounce?: (msg: WebInboundCallbackMessage) => boolean;
         debounceMs?: number;
         appendReplyWindow?: { afterMs: number; untilMs: number; maxAgeMs: number };
         selfChatMode?: boolean;
       }
     | undefined;
   const listenerFactory = async (opts: {
-    onMessage: (msg: WebInboundMessageInput) => Promise<void>;
-    shouldDebounce?: (msg: WebInboundMessageInput) => boolean;
+    onMessage: (msg: WebInboundCallbackMessage) => Promise<void>;
+    shouldDebounce?: (msg: WebInboundCallbackMessage) => boolean;
     debounceMs?: number;
     appendReplyWindow?: { afterMs: number; untilMs: number; maxAgeMs: number };
     selfChatMode?: boolean;
@@ -306,12 +306,12 @@ export function createMockWebListener(): MockWebListener {
 }
 
 export function createScriptedWebListenerFactory(): AnyExport {
-  const onMessages: Array<(msg: WebInboundMessageInput) => Promise<void>> = [];
+  const onMessages: Array<(msg: WebInboundCallbackMessage) => Promise<void>> = [];
   const closeResolvers: Array<(reason: unknown) => void> = [];
   const listeners: MockWebListener[] = [];
 
   const listenerFactory = vi.fn(
-    async (opts: { onMessage: (msg: WebInboundMessageInput) => Promise<void> }) => {
+    async (opts: { onMessage: (msg: WebInboundCallbackMessage) => Promise<void> }) => {
       onMessages.push(opts.onMessage);
       let resolveClose: (reason: unknown) => void = () => {};
       const onClose = new Promise<WebListenerCloseReason>((res) => {
@@ -391,7 +391,7 @@ export function startWebAutoReplyMonitor(params: {
 }
 
 export async function sendWebGroupInboundMessage(params: {
-  onMessage: (msg: WebInboundMessageInput) => Promise<void>;
+  onMessage: (msg: WebInboundCallbackMessage) => Promise<void>;
   body: string;
   id: string;
   senderE164: string;
@@ -445,7 +445,7 @@ export async function sendWebGroupInboundMessage(params: {
 }
 
 export async function sendWebDirectInboundMessage(params: {
-  onMessage: (msg: WebInboundMessageInput) => Promise<void>;
+  onMessage: (msg: WebInboundCallbackMessage) => Promise<void>;
   body: string;
   id: string;
   from: string;

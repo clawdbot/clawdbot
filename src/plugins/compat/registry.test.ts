@@ -228,6 +228,21 @@ describe("plugin compatibility registry", () => {
     expect(record?.removeAfter).toBeUndefined();
   });
 
+  it("keeps removed WhatsApp inbound aliases as migration tombstones", () => {
+    const records = new Map(listPluginCompatRecords().map((record) => [record.code, record]));
+
+    for (const code of [
+      "whatsapp-web-inbound-flat-message-aliases",
+      "whatsapp-web-inbound-admission-top-level-fields",
+    ] as const) {
+      expect(records.get(code)).toMatchObject({
+        status: "removed",
+        releaseNote: expect.stringMatching(/\S/u),
+      });
+      expect(records.get(code)?.removeAfter).toBeUndefined();
+    }
+  });
+
   it("keeps removed channel target compatibility as migration tombstones", () => {
     const records = new Map(listPluginCompatRecords().map((record) => [record.code, record]));
 

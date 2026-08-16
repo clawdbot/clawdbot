@@ -214,12 +214,9 @@ export const PLUGIN_COMPAT_RECORDS = [
   },
   {
     code: "whatsapp-web-inbound-flat-message-aliases",
-    status: "deprecated",
+    status: "removed",
     owner: "channel",
     introduced: "2026-05-30",
-    deprecated: "2026-05-30",
-    warningStarts: "2026-05-30",
-    removeAfter: "2026-08-30",
     replacement:
       "WhatsApp `WebInboundCallbackMessage` nested contexts: `event`, `payload`, `quote`, `group`, and `platform`",
     docsPath: "/plugins/compatibility",
@@ -228,19 +225,16 @@ export const PLUGIN_COMPAT_RECORDS = [
       "WhatsApp monitorWebInbox onMessage callback",
       "WhatsApp monitorWebChannel listenerFactory injected messages",
     ],
-    diagnostics: ["TypeScript deprecated WebInboundMessage flat field annotations"],
+    diagnostics: ["plugin compatibility registry and compatibility guide"],
     tests: ["src/plugins/compat/registry.test.ts"],
     releaseNote:
-      "WhatsApp WebInboundMessage flat fields remain wired as deprecated aliases while callbacks migrate to nested inbound contexts.",
+      "WhatsApp WebInboundMessage flat fields were removed; callbacks now receive only nested inbound contexts.",
   },
   {
     code: "whatsapp-web-inbound-admission-top-level-fields",
-    status: "deprecated",
+    status: "removed",
     owner: "channel",
     introduced: "2026-06-14",
-    deprecated: "2026-06-14",
-    warningStarts: "2026-06-14",
-    removeAfter: "2026-08-30",
     replacement:
       "WhatsApp `WebInboundMessage.admission` fields: `conversation.id`, `accountId`, `ingress.decision`, and `conversation.kind`",
     docsPath: "/plugins/compatibility",
@@ -249,10 +243,10 @@ export const PLUGIN_COMPAT_RECORDS = [
       "WhatsApp monitorWebInbox onMessage callback",
       "WhatsApp monitorWebChannel listenerFactory injected messages",
     ],
-    diagnostics: ["TypeScript deprecated WebInboundMessage admission field annotations"],
+    diagnostics: ["plugin compatibility registry and compatibility guide"],
     tests: ["src/plugins/compat/registry.test.ts"],
     releaseNote:
-      "WhatsApp WebInboundMessage top-level admission fields remain available while callbacks migrate to the admission envelope.",
+      "WhatsApp WebInboundMessage top-level admission fields were removed; callbacks now read the canonical admission envelope.",
   },
   {
     code: "sdk-untrusted-context-identifier-aliases",
