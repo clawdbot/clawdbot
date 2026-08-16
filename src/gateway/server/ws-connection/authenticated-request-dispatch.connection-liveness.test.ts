@@ -18,7 +18,10 @@ vi.mock("./authenticated-request-dispatch.server-methods.runtime.js", async () =
       if (!handler) {
         throw new Error(`missing test handler for ${options.req.method}`);
       }
-      await handler({ ...options, params: options.req.params });
+      await handler({
+        ...options,
+        params: (options.req.params ?? {}) as Record<string, unknown>,
+      });
     },
   };
 });
