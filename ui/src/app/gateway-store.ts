@@ -1,7 +1,4 @@
-import {
-  ConnectErrorDetailCodes,
-  readControlUiBuildMismatchId,
-} from "@openclaw/gateway-client/browser";
+import { readControlUiBuildMismatchId } from "@openclaw/gateway-client/browser";
 import type { ControlUiBootstrapProfileHint } from "../../../src/gateway/control-ui-contract.js";
 // Control UI module owns the application gateway store: the reactive
 // snapshot around GatewayBrowserClient consumed by the app shell.
@@ -441,14 +438,10 @@ export function createApplicationGateway(
           void scheduleStaleChunkReload({ buildId: mismatchedBuildId });
         }
         const lastErrorCode = resolveGatewayErrorDetailCode(error) ?? error?.code ?? null;
-        const reloadRequired =
-          mismatchedBuildId !== null ||
-          lastErrorCode === ConnectErrorDetailCodes.PROTOCOL_MISMATCH ||
-          lastErrorCode === ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH;
         setSnapshot({
           ...snapshot,
           client: nextClient,
-          phase: reloadRequired
+          phase: mismatchedBuildId !== null
             ? "reload-required"
             : everConnected
               ? willRetry
