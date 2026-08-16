@@ -42,4 +42,24 @@ describe("clearAgentSkillFilter", () => {
     await expect(clearAgentSkillFilter(runtimeConfig, "main", () => false)).resolves.toBe(false);
     expect(patch).not.toHaveBeenCalled();
   });
+
+  it("clears a list-form allowlist without creating an entries shadow", async () => {
+    const patch = vi.fn(async () => true);
+    const runtimeConfig = {
+      agentEntry: vi.fn(() => ({
+        path: ["agents", "list", 0],
+        entry: { id: "main", skills: ["coding-agent"] },
+      })),
+      patch,
+    } as unknown as RuntimeConfigCapability;
+
+    await expect(clearAgentSkillFilter(runtimeConfig, "main")).resolves.toBe(true);
+
+    expect(patch).toHaveBeenCalledWith({
+      raw: { agents: { list: [{ id: "main", skills: null }] } },
+      note: "Enable all agent skills",
+      replacePaths: ["agents.list.main.skills"],
+      canDispatch: expect.any(Function),
+    });
+  });
 });

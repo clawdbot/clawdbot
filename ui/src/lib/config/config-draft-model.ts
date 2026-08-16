@@ -613,9 +613,27 @@ export function stageDefaultAgentConfigEntry(state: RuntimeConfigState, agentId:
   if (!target) {
     return false;
   }
-  const authoredAgentId = target.path[2];
+  const rosterKind = target.path[1];
+  const targetKey = target.path[2];
   mutateConfigForm(state, (draft) => {
     const agents = isRecord(draft.agents) ? draft.agents : null;
+    if (rosterKind === "list") {
+      const list = Array.isArray(agents?.list) ? agents.list : null;
+      if (!list || typeof targetKey !== "number") {
+        return;
+      }
+      for (const [index, entry] of list.entries()) {
+        if (!isRecord(entry)) {
+          continue;
+        }
+        if (index === targetKey) {
+          entry.default = true;
+        } else {
+          delete entry.default;
+        }
+      }
+      return;
+    }
     const entries = isRecord(agents?.entries) ? agents.entries : null;
     if (!entries) {
       return;
@@ -624,7 +642,7 @@ export function stageDefaultAgentConfigEntry(state: RuntimeConfigState, agentId:
       if (!isRecord(entry)) {
         continue;
       }
-      if (id === authoredAgentId) {
+      if (id === targetKey) {
         entry.default = true;
       } else {
         delete entry.default;

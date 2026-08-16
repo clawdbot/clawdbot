@@ -54,17 +54,36 @@ export async function clearAgentSkillFilter(
   if (!target || !Array.isArray(target.entry.skills) || !canDispatch()) {
     return false;
   }
-  const authoredAgentId = target.path[2];
+  const rosterKind = target.path[1];
+  const targetKey = target.path[2];
+  if (rosterKind === "list") {
+    if (typeof targetKey !== "number" || typeof target.entry.id !== "string") {
+      return false;
+    }
+    return runtimeConfig.patch({
+      raw: {
+        agents: {
+          list: [{ id: target.entry.id, skills: null }],
+        },
+      },
+      note: "Enable all agent skills",
+      replacePaths: [`agents.list.${target.entry.id}.skills`],
+      canDispatch,
+    });
+  }
+  if (typeof targetKey !== "string") {
+    return false;
+  }
   return runtimeConfig.patch({
     raw: {
       agents: {
         entries: {
-          [authoredAgentId]: { skills: null },
+          [targetKey]: { skills: null },
         },
       },
     },
     note: "Enable all agent skills",
-    replacePaths: [`agents.entries.${authoredAgentId}.skills`],
+    replacePaths: [`agents.entries.${targetKey}.skills`],
     canDispatch,
   });
 }
