@@ -37,6 +37,12 @@ import type { RuntimeEnv } from "../runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { interruptSessionWorkAdmissions } from "../sessions/session-lifecycle-admission.js";
+import { resolveEffectiveAgentSkillFilter } from "../skills/discovery/agent-filter.js";
+import {
+  loadVisibleSkills,
+  loadWorkspaceSkills,
+} from "../skills/loading/workspace-skill-loader.js";
+import type { SkillEntry } from "../skills/types.js";
 import {
   createDirectOutboundTestAdapter,
   createOutboundTestPlugin,
@@ -387,6 +393,46 @@ function mockConfig(
   return cfg;
 }
 
+function mockUserInvocableSkills(params: {
+  home: string;
+  skills: Array<{ name: string; disableModelInvocation?: boolean }>;
+}) {
+  const entries = params.skills.map(({ name, disableModelInvocation = false }) => {
+    const baseDir = path.join(params.home, "openclaw", "skills", name);
+    const filePath = path.join(baseDir, "SKILL.md");
+    return {
+      skill: {
+        name,
+        description: `${name} instructions`,
+        filePath,
+        baseDir,
+        source: "openclaw-workspace",
+        sourceInfo: {
+          path: filePath,
+          source: "openclaw-workspace",
+          scope: "project",
+          origin: "top-level",
+        },
+        disableModelInvocation,
+      },
+      frontmatter: {},
+      invocation: { userInvocable: true, disableModelInvocation },
+      exposure: {
+        includeInRuntimeRegistry: true,
+        includeInAvailableSkillsPrompt: !disableModelInvocation,
+        userInvocable: true,
+      },
+    } satisfies SkillEntry;
+  });
+  vi.mocked(loadVisibleSkills).mockImplementation((_workspaceDir, opts) => {
+    const filter = opts?.skillFilter;
+    return filter === undefined
+      ? entries
+      : entries.filter((entry) => filter.includes(entry.skill.name));
+  });
+  vi.mocked(loadWorkspaceSkills).mockReturnValue(entries);
+}
+
 async function writeSessionStoreSeed(
   storePath: string,
   sessions: Record<string, Record<string, unknown>>,
@@ -517,6 +563,104 @@ beforeEach(() => {
 });
 
 describe("agentCommand", () => {
+  it.each([
+    {
+      label: "dollar reference",
+      message: "Review this with $release_notes.",
+      request: "Review this with $release_notes.",
+    },
+    {
+      label: "leading slash invocation",
+      message: "/release_notes summarize the changes",
+      request: "/release_notes summarize the changes",
+    },
+  ])("expands a skill $label on Gateway ingress", async ({ message, request }) => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+      mockUserInvocableSkills({ home, skills: [{ name: "release-notes" }] });
+
+      await agentCommandFromIngress(
+        { message, agentId: "main", allowModelOverride: false },
+        runtime,
+      );
+
+      expect(getLastEmbeddedCall()?.prompt).toBe(
+        [
+          "Use the following explicitly referenced skills for this request. Read each skill's SKILL.md before acting:",
+          "- release-notes",
+          "",
+          "User request:",
+          request,
+        ].join("\n"),
+      );
+    });
+  });
+
+  it("expands an explicitly referenced skill hidden from model invocation", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+      mockUserInvocableSkills({
+        home,
+        skills: [{ name: "release-notes", disableModelInvocation: true }],
+      });
+
+      await agentCommandFromIngress(
+        {
+          message: "$release_notes draft the summary",
+          agentId: "main",
+          allowModelOverride: false,
+        },
+        runtime,
+      );
+
+      const skillFile = path.join(home, "openclaw", "skills", "release-notes", "SKILL.md");
+      expect(getLastEmbeddedCall()?.prompt).toContain(`- release-notes (SKILL.md: ${skillFile})`);
+    });
+  });
+
+  it("rejects an explicitly referenced skill hidden by the agent allowlist", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const cfg = mockConfig(home, store);
+      cfg.agents!.defaults!.skills = ["allowed-skill"];
+      vi.mocked(resolveEffectiveAgentSkillFilter).mockReturnValueOnce(["allowed-skill"]);
+      mockUserInvocableSkills({ home, skills: [{ name: "hidden-skill" }] });
+
+      await expect(
+        agentCommandFromIngress(
+          { message: "$hidden_skill", agentId: "main", allowModelOverride: false },
+          runtime,
+        ),
+      ).rejects.toThrow(
+        'Skill "hidden-skill" is not available for this agent. Update the skill allowlist or choose an allowed skill.',
+      );
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("expands an explicit reference when the skills prompt catalog is unavailable", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const cfg = mockConfig(home, store);
+      cfg.skills = { limits: { maxSkillsPromptChars: 1 } };
+      mockUserInvocableSkills({ home, skills: [{ name: "release-notes" }] });
+
+      await agentCommandFromIngress(
+        {
+          message: "Use $release_notes despite the catalog cap.",
+          agentId: "main",
+          allowModelOverride: false,
+        },
+        runtime,
+      );
+
+      expect(getLastEmbeddedCall()?.skillsSnapshot?.prompt).toBe("");
+      expect(getLastEmbeddedCall()?.prompt).toContain("- release-notes");
+    });
+  });
+
   it("enforces ingress model override authorization", async () => {
     await expect(
       // Runtime guard for non-TS callers; TS callsites are statically typed.

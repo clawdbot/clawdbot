@@ -797,7 +797,7 @@ describe("handleInlineActions", () => {
     expect(commandArgs.skillCommands).toEqual(skillCommands);
   });
 
-  it("keeps normal prompt text while making $ skill references explicit to the model", async () => {
+  it("preserves exact channel prompt bytes while expanding $ skill references", async () => {
     const typing = createTypingController();
     const original = "Review this plan with $office_hours and $release_notes.";
     const ctx = buildTestCtx({
@@ -938,6 +938,50 @@ describe("handleInlineActions", () => {
     expect(result.explicitSkillSelections).toEqual([
       { name: "office_hours", path: "/tmp/skills/office-hours/SKILL.md" },
     ]);
+  });
+
+  it("returns a visible error for an explicitly referenced allowlist-hidden skill", async () => {
+    const typing = createTypingController();
+    const original = "Review with $office_hours.";
+    const ctx = buildTestCtx({ Body: original, CommandBody: original });
+    listSkillCommandsForWorkspaceMock.mockImplementation(
+      (params: { includeAllowlistHidden?: boolean }) =>
+        params.includeAllowlistHidden
+          ? [
+              {
+                name: "office_hours",
+                skillName: "office-hours",
+                description: "Engineering office hours",
+                skillFile: "/tmp/skills/office-hours/SKILL.md",
+              },
+            ]
+          : [],
+    );
+
+    const result = await runTestInlineActions({
+      ctx,
+      typing,
+      cleanedBody: original,
+      command: {
+        isAuthorizedSender: true,
+        rawBodyNormalized: original,
+        commandBodyNormalized: original,
+      },
+      overrides: {
+        allowTextCommands: true,
+        cfg: { commands: { text: true } },
+        skillCommands: [],
+        skillFilter: ["another-skill"],
+      },
+    });
+
+    expect(result).toEqual({
+      kind: "reply",
+      reply: {
+        text: 'Skill "office-hours" is not available for this agent. Update the skill allowlist or choose an allowed skill.',
+      },
+    });
+    expect(typing.cleanup).toHaveBeenCalledOnce();
   });
 
   it("reloads preloaded skill commands when final exec overrides are present", async () => {

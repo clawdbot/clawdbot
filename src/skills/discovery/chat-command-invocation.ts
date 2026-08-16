@@ -6,6 +6,8 @@ import {
 import { getChatCommands } from "../../auto-reply/commands-registry.data.js";
 import type { SkillCommandSpec } from "../types.js";
 
+const MAX_EXPLICIT_SKILL_REFERENCES = 8;
+
 /** Lists slash command names reserved by built-in chat commands and callers. */
 export function listReservedChatSlashCommandNames(extraNames: string[] = []): Set<string> {
   const reserved = new Set<string>();
@@ -93,7 +95,7 @@ export function hasSkillReferenceCandidate(text: string): boolean {
 }
 
 /** Resolves explicit `$skill-name` references against the current eligible skill commands. */
-export function resolveSkillReferenceInvocations(params: {
+function resolveSkillReferenceInvocations(params: {
   text: string;
   skillCommands: SkillCommandSpec[];
 }): SkillCommandSpec[] {
@@ -160,4 +162,65 @@ export function resolveSkillCommandInvocation(params: {
   }
   const args = match[2]?.trim();
   return { command, args: args || undefined };
+}
+
+function skillCommandIdentity(command: SkillCommandSpec): string {
+  return normalizeSkillCommandLookup(command.skillName);
+}
+
+function resolveExplicitSkillCommands(text: string, skillCommands: SkillCommandSpec[]) {
+  if (!text.trimStart().startsWith("/")) {
+    return resolveSkillReferenceInvocations({ text, skillCommands });
+  }
+  const invocation = resolveSkillCommandInvocation({
+    commandBodyNormalized: text,
+    skillCommands,
+  });
+  return invocation ? [invocation.command] : [];
+}
+
+/** Expands model-routed skill references while leaving unknown slash commands untouched. */
+export function expandExplicitSkillReferences(params: {
+  text: string;
+  skillCommands: SkillCommandSpec[];
+  allSkillCommands?: SkillCommandSpec[];
+}): { body: string; error?: string; skills: SkillCommandSpec[] } {
+  const available = resolveExplicitSkillCommands(params.text, params.skillCommands);
+  const allCommands = params.allSkillCommands ?? params.skillCommands;
+  const allResolved =
+    allCommands === params.skillCommands
+      ? available
+      : resolveExplicitSkillCommands(params.text, allCommands);
+
+  const availableIdentities = new Set(available.map(skillCommandIdentity));
+  const unavailable = allResolved.find(
+    (command) => !availableIdentities.has(skillCommandIdentity(command)),
+  );
+  const error = unavailable
+    ? `Skill "${unavailable.skillName}" is not available for this agent. Update the skill allowlist or choose an allowed skill.`
+    : available.length > MAX_EXPLICIT_SKILL_REFERENCES
+      ? `Too many skill references. Use at most ${MAX_EXPLICIT_SKILL_REFERENCES} skills in one message.`
+      : undefined;
+  if (error) {
+    return { body: params.text, error, skills: [] };
+  }
+  if (available.length === 0) {
+    return { body: params.text, skills: [] };
+  }
+  return {
+    body: [
+      "Use the following explicitly referenced skills for this request. Read each skill's SKILL.md before acting:",
+      // Hidden skills are absent from the available-skills prompt, so explicit invocation
+      // carries the SKILL.md path the model needs to load them.
+      ...available.map((skill) =>
+        skill.modelVisible === false && skill.skillFile
+          ? `- ${skill.skillName} (SKILL.md: ${skill.skillFile})`
+          : `- ${skill.skillName}`,
+      ),
+      "",
+      "User request:",
+      params.text,
+    ].join("\n"),
+    skills: available,
+  };
 }

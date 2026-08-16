@@ -14,10 +14,10 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
+  expandExplicitSkillReferences,
   hasSkillReferenceCandidate,
   listReservedChatSlashCommandNames,
   resolveSkillCommandInvocation,
-  resolveSkillReferenceInvocations,
 } from "../../skills/discovery/chat-commands.js";
 import type { ExplicitSkillSelection, SkillCommandSpec } from "../../skills/types.js";
 import {
@@ -78,7 +78,6 @@ const commandsRuntimeLoader = createLazyImportLoader<CommandsRuntime>(
   () => import("./commands.runtime.js"),
 );
 let builtinSlashCommands: Set<string> | null = null;
-const MAX_EXPLICIT_SKILL_REFERENCES = 8;
 
 function loadSkillCommandsRuntime(): Promise<SkillCommandsRuntime> {
   return skillCommandsRuntimeLoader.load();
@@ -122,32 +121,6 @@ function resolveSlashCommandName(commandBodyNormalized: string): string | null {
   const match = trimmed.match(/^\/([^\s:]+)(?::|\s|$)/);
   const name = normalizeOptionalLowercaseString(match?.[1]) ?? "";
   return name ? name : null;
-}
-
-function applyExplicitSkillReferences(
-  body: string,
-  skillCommands: SkillCommandSpec[],
-): { body: string; overflow: boolean; skills: SkillCommandSpec[] } {
-  const resolved = resolveSkillReferenceInvocations({ text: body, skillCommands });
-  const overflow = resolved.length > MAX_EXPLICIT_SKILL_REFERENCES;
-  const skills = resolved.slice(0, MAX_EXPLICIT_SKILL_REFERENCES);
-  if (skills.length === 0) {
-    return { body, overflow, skills };
-  }
-  const instruction = [
-    "Use the following explicitly referenced skills for this request. Read each skill's SKILL.md before acting:",
-    // Hidden skills are absent from the available-skills prompt, so explicit invocation
-    // carries the SKILL.md path the model needs to load them.
-    ...skills.map((skill) =>
-      skill.modelVisible === false && skill.skillFile
-        ? `- ${skill.skillName} (SKILL.md: ${skill.skillFile})`
-        : `- ${skill.skillName}`,
-    ),
-    "",
-    "User request:",
-    body,
-  ].join("\n");
-  return { body: instruction, overflow, skills };
 }
 
 function expandBundleCommandPromptTemplate(template: string, args?: string): string {
@@ -388,6 +361,18 @@ export async function handleInlineActions(params: {
             execOverrides,
           })
         : [];
+  const allSkillCommands =
+    hasSkillReferences && skillFilter !== undefined
+      ? (await loadSkillCommandsRuntime()).listSkillCommandsForWorkspace({
+          workspaceDir,
+          cfg,
+          agentId,
+          sessionEntry: targetSessionEntry,
+          sessionKey,
+          execOverrides,
+          includeAllowlistHidden: true,
+        })
+      : skillCommands;
 
   const skillInvocation =
     allowTextCommands && skillCommands.length > 0
@@ -544,20 +529,17 @@ export async function handleInlineActions(params: {
     sessionCtx.BodyStripped = cleanedBody;
   }
 
-  if (
-    hasSkillReferences &&
-    !skillInvocation &&
-    resolveSlashCommandName(cleanedBody) === null &&
-    skillCommands.length > 0
-  ) {
-    const referenced = applyExplicitSkillReferences(cleanedBody, skillCommands);
-    if (referenced.overflow) {
+  if (hasSkillReferences && !skillInvocation && resolveSlashCommandName(cleanedBody) === null) {
+    const referenced = expandExplicitSkillReferences({
+      text: cleanedBody,
+      skillCommands,
+      allSkillCommands,
+    });
+    if (referenced.error) {
       typing.cleanup();
       return {
         kind: "reply",
-        reply: markCommandReplyForDelivery({
-          text: `Too many skill references. Use at most ${MAX_EXPLICIT_SKILL_REFERENCES} skills in one message.`,
-        }),
+        reply: markCommandReplyForDelivery({ text: referenced.error }),
       };
     }
     if (referenced.skills.length > 0) {

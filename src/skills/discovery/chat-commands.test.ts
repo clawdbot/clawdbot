@@ -6,8 +6,14 @@ import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 
 let listSkillCommandsForAgents: typeof import("./chat-commands.js").listSkillCommandsForAgents;
 let listSkillCommandsForWorkspace: typeof import("./chat-commands.js").listSkillCommandsForWorkspace;
+let expandExplicitSkillReferences: typeof import("./chat-commands.js").expandExplicitSkillReferences;
 let resolveSkillCommandInvocation: typeof import("./chat-commands.js").resolveSkillCommandInvocation;
-let resolveSkillReferenceInvocations: typeof import("./chat-commands.js").resolveSkillReferenceInvocations;
+
+function resolveSkillReferenceInvocations(
+  params: Parameters<typeof expandExplicitSkillReferences>[0],
+) {
+  return expandExplicitSkillReferences(params).skills;
+}
 
 const tempDirs = createTempDirTracker();
 const resolveNodeExecEligibilityMock = vi.hoisted(() =>
@@ -157,10 +163,10 @@ vi.mock("./agent-filter.js", () => ({
 
 beforeAll(async () => {
   ({
+    expandExplicitSkillReferences,
     listSkillCommandsForAgents,
     listSkillCommandsForWorkspace,
     resolveSkillCommandInvocation,
-    resolveSkillReferenceInvocations,
   } = await import("./chat-commands.js"));
 });
 
@@ -302,6 +308,18 @@ describe("resolveSkillReferenceInvocations", () => {
         ],
       }).map((command) => command.name),
     ).toEqual(["hidden_skill"]);
+  });
+});
+
+describe("expandExplicitSkillReferences", () => {
+  it("leaves unknown leading slash commands byte-identical", () => {
+    const text = "/compact with $demo_skill";
+    expect(
+      expandExplicitSkillReferences({
+        text,
+        skillCommands: [{ name: "demo_skill", skillName: "demo-skill", description: "Demo" }],
+      }),
+    ).toEqual({ body: text, skills: [] });
   });
 });
 
