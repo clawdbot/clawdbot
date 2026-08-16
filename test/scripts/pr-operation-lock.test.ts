@@ -27,6 +27,21 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const escapedPipeHolderPidFiles = new Set<string>();
+afterEach(async () => {
+  const failures: unknown[] = [];
+  for (const pidFile of escapedPipeHolderPidFiles) {
+    try {
+      await cleanupRecordedProcessGroup(pidFile);
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  escapedPipeHolderPidFiles.clear();
+  if (failures.length > 0) {
+    throw new AggregateError(failures, "failed to clean up escaped notification-pipe holders");
+  }
+});
 const repoRoot = process.cwd();
 const commonScript = join(repoRoot, "scripts/pr-lib/common.sh");
 const lockScript = join(repoRoot, "scripts/pr-lib/operation-lock.sh");
@@ -167,6 +182,24 @@ function writeOperationFixture(repoDir: string, name: string, commands: string[]
   );
   chmodSync(fixture, 0o755);
   return fixture;
+}
+
+function writeEscapedPipeHolderLauncher(repoDir: string, pidFile: string) {
+  const holderScript = writeFixtureFile(
+    repoDir,
+    "escaped-pipe-holder.mjs",
+    "setInterval(() => {}, 1000);\n",
+  );
+  return writeFixtureFile(repoDir, "escaped-pipe-holder-launcher.mjs", [
+    'import { spawn } from "node:child_process";',
+    'import fs from "node:fs";',
+    `const child = spawn(process.execPath, [${JSON.stringify(holderScript)}], {`,
+    "  detached: true,",
+    '  stdio: ["ignore", "ignore", "ignore", 3],',
+    "});",
+    `fs.writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));`,
+    "child.unref();",
+  ]);
 }
 
 function installPrCliFixture(repoDir: string) {
@@ -1362,31 +1395,53 @@ describePosix("scripts/pr per-PR operation lock", () => {
       await cleanupRecordedProcessGroup(nestedPidFile, nestedPgid);
     }
   });
-  it("exits after a bounded wait when a detached child keeps the notification pipe open", async () => {
+  it("warns and releases a clean-exit lock when an escaped child keeps the notification pipe open", async () => {
+    const repoDir = createRepo();
+    const operationPgidFile = join(repoDir, "clean-pipe-holder-operation-pgid");
+    const holderPidFile = join(repoDir, "clean-pipe-holder-pgid");
+    escapedPipeHolderPidFiles.add(holderPidFile);
+    const launcherScript = writeEscapedPipeHolderLauncher(repoDir, holderPidFile);
+
+    const result = await runSupervisedOperation(
+      repoDir,
+      "clean-pipe-holder-operation.sh",
+      [
+        `printf '%s\\n' "$$" >'${operationPgidFile}'`,
+        "acquire_pr_operation_lock 42",
+        `node '${launcherScript}'`,
+      ],
+      { accelerateTimeouts: true },
+    );
+
+    const operationPgid = await waitForProcessId(operationPgidFile);
+    const holderPgid = await waitForProcessId(holderPidFile);
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(operationPgid).not.toBe(holderPgid);
+    expect(processGroupExists(operationPgid)).toBe(false);
+    expect(processGroupExists(holderPgid)).toBe(true);
+    expect(refExists(repoDir)).toBe(false);
+    expect(result.stderr).toContain("Warning:");
+    expect(result.stderr).toContain("group=dead, pipe=open");
+    expect(result.stderr).toContain("#124583");
+  }, 15_000);
+  it("retains a failed side-effects lock when an escaped child keeps the notification pipe open", async () => {
     const repoDir = createRepo();
     const nestedPidFile = join(repoDir, "pipe-holder-pgid");
-    const nestedScript = writeFixtureFile(
-      repoDir,
-      "pipe-holder.mjs",
-      "setInterval(() => {}, 1000);\n",
-    );
-    const launcherScript = writeFixtureFile(repoDir, "pipe-holder-launcher.mjs", [
-      'import { spawn } from "node:child_process";',
-      'import fs from "node:fs";',
-      `const child = spawn(process.execPath, [${JSON.stringify(nestedScript)}], {`,
-      "  detached: true,",
-      '  stdio: ["ignore", "ignore", "ignore", 3],',
-      "});",
-      `fs.writeFileSync(${JSON.stringify(nestedPidFile)}, String(child.pid));`,
-      "process.exit(1);",
-    ]);
+    escapedPipeHolderPidFiles.add(nestedPidFile);
+    const launcherScript = writeEscapedPipeHolderLauncher(repoDir, nestedPidFile);
     let nestedPgid: number | undefined;
     try {
       const startedAt = Date.now();
       const result = await runSupervisedOperation(
         repoDir,
         "pipe-holder-operation.sh",
-        ["acquire_pr_operation_lock 42", `node '${launcherScript}'`],
+        [
+          "acquire_pr_operation_lock 42",
+          "begin_pr_operation_validation_phase",
+          "mark_pr_operation_side_effects_started",
+          `node '${launcherScript}'`,
+          "exit 1",
+        ],
         { accelerateTimeouts: true },
       );
       const elapsed = Date.now() - startedAt;
@@ -1396,6 +1451,9 @@ describePosix("scripts/pr per-PR operation lock", () => {
       expect(processGroupExists(nestedPgid)).toBe(true);
       expect(result.stderr).toContain("operation lifetime did not drain");
       const ownerOid = refOid(repoDir);
+      expect(result.stderr).toContain(
+        "reason: child exited with code 1; notification pipe still open after drain deadline",
+      );
       killProcessGroup(nestedPgid, "SIGKILL");
       expect(await waitFor(() => !processGroupExists(nestedPgid!))).toBe(true);
       recoverOperationLock(repoDir, ownerOid);
