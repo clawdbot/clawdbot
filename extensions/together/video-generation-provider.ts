@@ -234,8 +234,12 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
       if (size) {
         const match = /^(\d+)x(\d+)$/u.exec(size);
         if (match) {
-          body.width = Number.parseInt(match[1] ?? "", 10);
-          body.height = Number.parseInt(match[2] ?? "", 10);
+          const width = Number.parseInt(match[1] ?? "", 10);
+          const height = Number.parseInt(match[2] ?? "", 10);
+          if (width >= 1 && width <= 4096 && height >= 1 && height <= 4096) {
+            body.width = width;
+            body.height = height;
+          }
         }
       }
       if (req.inputImages?.[0]) {

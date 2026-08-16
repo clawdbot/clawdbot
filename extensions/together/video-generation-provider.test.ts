@@ -426,4 +426,33 @@ describe("together video generation provider", () => {
     expect(media.reference_images).toHaveLength(1);
     expect(body).not.toHaveProperty("reference_images");
   });
+
+  it("rejects out-of-range size dimensions", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: streamedJsonResponse({
+        id: "video_size",
+        status: "completed",
+        outputs: { video_url: "https://example.com/size.mp4" },
+      }),
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock.mockResolvedValueOnce({
+      headers: new Headers({ "content-type": "video/mp4" }),
+      arrayBuffer: async () => Buffer.from("mp4-bytes"),
+    });
+
+    const provider = buildTogetherVideoGenerationProvider();
+    await provider.generateVideo({
+      provider: "together",
+      model: "Wan-AI/Wan2.2-T2V-A14B",
+      prompt: "A test scene",
+      size: "9999x9999",
+      cfg: {},
+    });
+
+    const request = requireFirstPostJsonRequest(postJsonRequestMock, "Together request");
+    const body = requireRecord(request.body, "Together request body");
+    expect(body).not.toHaveProperty("width");
+    expect(body).not.toHaveProperty("height");
+  });
 });
