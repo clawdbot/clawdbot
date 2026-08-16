@@ -4,7 +4,11 @@ import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensit
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { hasAgentRosterProperty, listAgentEntries } from "../agents/agent-scope-config.js";
+import {
+  hasAgentRosterProperty,
+  listAgentEntries,
+  tryResolveLegacyCompatibilityAgentId,
+} from "../agents/agent-scope-config.js";
 import { tryResolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveExecDefaults } from "../agents/exec-defaults.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
@@ -955,8 +959,14 @@ function collectAgentRosterFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
     return [];
   }
   const defaultCount = agents.filter((agent) => agent?.default === true).length;
-  const expectedDefaultCount = cfg.agents?.ownership === "explicit" ? 0 : 1;
-  if (defaultCount === expectedDefaultCount) {
+  const explicitOwnership = cfg.agents?.ownership === "explicit";
+  // Mirror runtime default resolution: explicit fleets are ownerless by design,
+  // otherwise the roster is valid exactly when the canonical resolver finds an
+  // owner (sole agent, one legacy marker, or a retained migration owner).
+  const resolvable = explicitOwnership
+    ? defaultCount === 0
+    : tryResolveLegacyCompatibilityAgentId(cfg) !== undefined;
+  if (resolvable) {
     return [];
   }
   return [
@@ -964,10 +974,9 @@ function collectAgentRosterFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
       checkId: "config.agent_roster.invalid_default_count",
       severity: "warn",
       title: "Agent roster has an invalid default selection",
-      detail:
-        expectedDefaultCount === 0
-          ? `Expected no agents.entries default=true entries with agents.ownership=explicit, found ${defaultCount}.`
-          : `Expected exactly one agents.entries default=true entry, found ${defaultCount}.`,
+      detail: explicitOwnership
+        ? `Expected no agents.entries default=true entries with agents.ownership=explicit, found ${defaultCount}.`
+        : `Expected a resolvable default agent (sole entry, one default=true marker, or agents.ownership=explicit); found ${defaultCount} default markers across ${agents.length} configured agents.`,
       remediation: "Run `openclaw doctor --fix` to repair the authored agent roster.",
     },
   ];
