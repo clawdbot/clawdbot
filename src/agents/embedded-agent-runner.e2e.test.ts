@@ -189,16 +189,11 @@ let runCounter = 0;
 
 const createEmbeddedAgentRunnerOpenAiConfig = (modelIds: string[]) => {
   const config = createBaseEmbeddedAgentRunnerOpenAiConfig(modelIds);
-  return {
-    ...config,
-    agents: {
-      ...config.agents,
-      list: config.agents?.list?.map((entry) =>
-        entry.id === "main" ? { ...entry, default: true } : entry,
-      ),
-    },
-    session: { store: sessionStorePath },
-  };
+  const mainAgent = config.agents?.list?.find((entry) => entry.id === "main");
+  if (mainAgent) {
+    mainAgent.default = true;
+  }
+  return { ...config, session: { store: sessionStorePath } };
 };
 
 beforeAll(async () => {

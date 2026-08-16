@@ -157,10 +157,6 @@ const autoMigrateLegacyTaskStateSidecars = vi.fn().mockResolvedValue({
   changes: [],
   warnings: [],
 }) as unknown as MockFn;
-const migrateLegacyConfigMachineState = vi.fn(() => ({
-  changes: [],
-  warnings: [],
-})) as unknown as MockFn;
 const runChannelPluginStartupMaintenance = vi
   .fn()
   .mockResolvedValue(undefined) as unknown as MockFn;
@@ -613,21 +609,15 @@ vi.mock("./onboard-helpers.js", () => ({
   randomToken: vi.fn(() => "test-gateway-token"),
 }));
 
-vi.mock("./doctor-state-migrations.js", async () => {
-  const actual = await vi.importActual<typeof import("./doctor-state-migrations.js")>(
-    "./doctor-state-migrations.js",
-  );
-  return {
-    ...actual,
-    autoMigrateLegacyPluginDoctorState,
-    autoMigrateLegacyState,
-    autoMigrateLegacyStateDir,
-    autoMigrateLegacyTaskStateSidecars,
-    detectLegacyStateMigrations,
-    migrateLegacyConfigMachineState,
-    runLegacyStateMigrations,
-  };
-});
+vi.mock("./doctor-state-migrations.js", () => ({
+  autoMigrateLegacyPluginDoctorState,
+  autoMigrateLegacyState,
+  autoMigrateLegacyStateDir,
+  autoMigrateLegacyTaskStateSidecars,
+  detectLegacyStateMigrations,
+  migrateLegacyConfigMachineState: vi.fn(() => ({ changes: [], warnings: [] })),
+  runLegacyStateMigrations,
+}));
 
 vi.mock("../channels/plugins/lifecycle-startup.js", () => ({
   runChannelPluginStartupMaintenance,
@@ -744,7 +734,6 @@ beforeEach(() => {
   });
   autoMigrateLegacyState.mockReset().mockResolvedValue({ changes: [], warnings: [] });
   autoMigrateLegacyTaskStateSidecars.mockReset().mockResolvedValue({ changes: [], warnings: [] });
-  migrateLegacyConfigMachineState.mockReset().mockReturnValue({ changes: [], warnings: [] });
   runChannelPluginStartupMaintenance.mockReset().mockResolvedValue(undefined);
 
   originalIsTTY = process.stdin.isTTY;
