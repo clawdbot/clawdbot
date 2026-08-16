@@ -1903,6 +1903,7 @@
     "test:extensions:package-boundary:compile": "node --import tsx scripts/check-extension-package-tsc-boundary.mts --mode=compile",
     "test:gateway-client:model:perf": "node --expose-gc --import tsx scripts/bench-control-model.ts --assert",
     "test:gateway-client:model:compat": "node --import tsx scripts/check-control-model-compatibility.mts",
+    "test:gateway-client:model:lifecycle": "node --import tsx scripts/bench-control-model-lifecycle.ts --assert",
     "test:fast": "node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts",
     "test:force": "node --import tsx scripts/test-force.ts",
     "test:gateway": "node --import tsx scripts/run-with-env.mts OPENCLAW_GATEWAY_PROJECT_SHARDS=1 -- node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts",
