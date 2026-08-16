@@ -160,6 +160,11 @@ function resolveWebMediaOptions(params: {
   };
 }
 
+// Pre-compression fetch headroom for callers with an explicit delivery cap:
+// enough to pull a large phone photo (~20MB+) and compress it under the cap,
+// without letting a tight channel cap buffer up to the 100MB document bound.
+const IMAGE_OPTIMIZE_HEADROOM_FACTOR = 4;
+
 const HEIC_MIME_RE = /^image\/hei[cf]$/i;
 const HEIC_EXT_RE = /\.(heic|heif)$/i;
 const WINDOWS_DRIVE_RE = /^[A-Za-z]:[\\/]/;
@@ -1131,13 +1136,19 @@ async function loadWebMediaInternal(
   };
 
   // Bound source reads before buffering. Optimized images may exceed their
-  // delivery cap because they are compressed before the final size check.
+  // delivery cap because they are compressed before the final size check, so
+  // an explicit caller cap gets image-compression headroom — sized off the
+  // image cap, not the 100MB document cap, or a tight channel cap would still
+  // permit a 100MB buffer from a hostile URL. Accepted tradeoff: originals
+  // above the headroom fail even when they would have compressed under the
+  // cap; the error names the fetch bound so the user can shrink the source.
   const defaultSourceReadCap = maxBytesForKind("document");
+  const imageOptimizeHeadroom = IMAGE_OPTIMIZE_HEADROOM_FACTOR * maxBytesForKind("image");
   const sourceReadCap =
     maxBytes === undefined
       ? defaultSourceReadCap
       : optimizeImages
-        ? Math.max(maxBytes, defaultSourceReadCap)
+        ? Math.max(maxBytes, imageOptimizeHeadroom)
         : maxBytes;
 
   if (hasHttpUrlPrefix(mediaUrl)) {
