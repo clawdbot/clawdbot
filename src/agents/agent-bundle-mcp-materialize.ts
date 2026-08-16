@@ -18,6 +18,7 @@ import type {
   BundleMcpToolRuntime,
   McpCatalogTool,
   McpToolCatalog,
+  SessionMcpRequestRuntime,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
 import { mcpContentBlockToAgentContent } from "./mcp-content.js";
@@ -465,7 +466,7 @@ export async function materializeBundleMcpToolsForRun(params: {
   reservedToolNames?: Iterable<string>;
   disposeRuntime?: () => Promise<void>;
 }): Promise<BundleMcpToolRuntime> {
-  const runtime = params.runtime;
+  const runtime = params.runtime as SessionMcpRequestRuntime;
   let disposed = false;
   let allowedAppToolsByServer: Map<string, Set<string>> | undefined;
   const releaseLease = runtime.acquireLease?.();
@@ -492,23 +493,24 @@ export async function materializeBundleMcpToolsForRun(params: {
         }
       }
       runtime.markUsed();
-      const result = await runtime.callTool(tool.serverName, tool.toolName, input, { signal });
+      const { serverName, toolName } = tool;
+      const result = await runtime.callTool(serverName, toolName, input, { signal });
       const agentResult = toAgentToolResult({
-        serverName: tool.serverName,
-        toolName: tool.toolName,
+        serverName,
+        toolName,
         result,
       });
       // Requester-scoped servers never mint app views (outlive run; no requester id on view boundary).
-      const scopedServer = runtime.isRequesterScopedServer?.(tool.serverName) === true;
+      const scopedServer = runtime.isRequesterScopedServer?.(serverName) === true;
       if (runtime.mcpAppsEnabled && tool.uiResourceUri && !scopedServer) {
         const allowedAppToolNames = allowedAppToolsByServer
-          ? (allowedAppToolsByServer.get(tool.serverName) ?? new Set<string>())
+          ? (allowedAppToolsByServer.get(serverName) ?? new Set<string>())
           : undefined;
         const view = await fetchMcpAppView({
           runtime,
           agentId: params.agentId,
-          serverName: tool.serverName,
-          toolName: tool.toolName,
+          serverName,
+          toolName,
           uiResourceUri: tool.uiResourceUri,
           toolCallId,
           toolInput: input,

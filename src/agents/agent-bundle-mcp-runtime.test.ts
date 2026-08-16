@@ -2104,6 +2104,9 @@ process.on("SIGINT", shutdown);`,
       filePath: serverPath,
       logPath,
       callToolDelayMs: 250,
+      resourcePageDelayMs: 250,
+      promptPageDelayMs: 250,
+      capabilities: { tools: {}, resources: {}, prompts: {} },
     });
     const runtime = createSessionMcpRuntime({
       sessionId: "session-caller-cancel",
@@ -2117,20 +2120,23 @@ process.on("SIGINT", shutdown);`,
       },
     });
     const materialized = await materializeBundleMcpToolsForRun({ runtime });
-    const tool = expectDefined(
-      materialized.tools.find((entry) => entry.name === "healthy__slow_tool"),
-      "materialized MCP tool",
-    );
-
     try {
-      for (let attempt = 1; attempt <= 3; attempt += 1) {
+      const calls = [
+        { toolName: "healthy__slow_tool", method: "tools/call" },
+        { toolName: "healthy__resources_list", method: "resources/list" },
+        { toolName: "healthy__prompts_list", method: "prompts/list" },
+      ];
+      for (const [index, call] of calls.entries()) {
+        const attempt = index + 1;
         const controller = new AbortController();
-        const pending = tool.execute(`cancel-${attempt}`, {}, controller.signal);
+        const pending = expectDefined(
+          materialized.tools.find((entry) => entry.name === call.toolName),
+          call.toolName,
+        ).execute(`cancel-${attempt}`, {}, controller.signal);
         await waitForPredicate(
           async () =>
-            ((await fs.readFile(logPath, "utf8").catch(() => "")).match(/recv tools\/call/g)
-              ?.length ?? 0) >= attempt,
-          `MCP call ${attempt} to reach the server`,
+            (await fs.readFile(logPath, "utf8").catch(() => "")).includes(`recv ${call.method}`),
+          `MCP ${call.method} request to reach the server`,
           LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
         );
         controller.abort(new Error(`turn cancelled ${attempt}`));

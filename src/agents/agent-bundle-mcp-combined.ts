@@ -4,12 +4,13 @@ import type {
   McpServerCatalog,
   McpToolCatalog,
   McpToolCatalogDiagnostic,
+  SessionMcpRequestRuntime,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
 
 const COMBINED_SESSION_MCP_RUNTIME = Symbol.for("openclaw.combinedSessionMcpRuntime");
 
-type CombinedSessionMcpRuntime = SessionMcpRuntime & {
+type CombinedSessionMcpRuntime = SessionMcpRequestRuntime & {
   [COMBINED_SESSION_MCP_RUNTIME]: true;
   managedParts: readonly SessionMcpRuntime[];
 };
@@ -140,13 +141,13 @@ export function createCombinedSessionMcpRuntime(params: {
 
   // Fresh combined facades have an empty owner map until the catalog is loaded.
   // Share one in-flight getCatalog so concurrent tool/resource calls do not fan out.
-  const ownerForServer = async (serverName: string): Promise<SessionMcpRuntime> => {
+  const ownerForServer = async (serverName: string): Promise<SessionMcpRequestRuntime> => {
     if (serverOwner.size === 0) {
       await loadCatalog();
     }
     const owner = serverOwner.get(serverName);
     if (owner) {
-      return owner;
+      return owner as SessionMcpRequestRuntime;
     }
     throw new Error(`bundle-mcp server "${serverName}" is not connected`);
   };

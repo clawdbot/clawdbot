@@ -96,7 +96,7 @@ export type McpRequestOptions = {
 
 type McpServerRequest<TArgs extends unknown[], TResult> = (
   serverName: string,
-  ...args: [...TArgs, options?: McpRequestOptions]
+  ...args: TArgs
 ) => Promise<TResult>;
 type McpCursorParams = { cursor?: string };
 
@@ -147,6 +147,16 @@ export type SessionMcpRuntime = {
   listPrompts?: McpServerRequest<[], unknown>;
   getPrompt?: McpServerRequest<[name: string, args?: Record<string, string>], unknown>;
   dispose: () => Promise<void>;
+};
+
+type McpRequestMethodName = "callTool" | `list${string}` | `read${string}` | "getPrompt";
+/** Core-only request extension; the public harness runtime contract stays unchanged. */
+export type SessionMcpRequestRuntime = SessionMcpRuntime & {
+  [Key in Extract<keyof SessionMcpRuntime, McpRequestMethodName>]: NonNullable<
+    SessionMcpRuntime[Key]
+  > extends (...args: infer Args) => infer Result
+    ? (...args: [...Args, options?: McpRequestOptions]) => Result
+    : never;
 };
 
 /** Manager for session-scoped MCP runtimes and their idle lifecycle. */

@@ -52,6 +52,7 @@ import type {
   McpToolCatalog,
   McpToolCatalogDiagnostic,
   RequesterMcpConnect,
+  SessionMcpRequestRuntime,
   SessionMcpRequesterScope,
   SessionMcpRuntime,
   SessionMcpRuntimeManager,
@@ -411,7 +412,7 @@ export function createSessionMcpRuntime(params: {
   requesterConnect?: RequesterMcpConnect;
   configFingerprint?: string;
   toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
-}): SessionMcpRuntime {
+}): SessionMcpRequestRuntime {
   const { loaded, fingerprint: computedFingerprint } = loadSessionMcpConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
